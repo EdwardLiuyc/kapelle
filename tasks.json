@@ -1,0 +1,14 @@
+[
+  {
+    "agent": "opencode",
+    "cwd": ".",
+    "mode": "safe",
+    "prompt": "Summarise what this project does in three sentences."
+  },
+  {
+    "agent": "opencode",
+    "cwd": ".",
+    "mode": "safe",
+    "prompt": "List any obvious bugs or missing error handling you can see."
+  }
+]
