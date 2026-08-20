@@ -200,7 +200,11 @@ three targets are `shell: "internal"`, but they differ on something `shell` cann
 whether the harness asks permission at all. opencode never does. **Add a second field,
 `asksPermission: boolean`** (opencode `false`, the other two `true`), because the warning
 text differs in kind: against opencode the policy has *no* jurisdiction rather than reduced
-reach. Env list confirmed as `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`
+reach. **And add a third, `modeMap: { safe, ask, auto }`** — all three harnesses accept
+`session/set_mode`, negotiating `plan` is what actually stops opencode writing, and the mode
+vocabularies do not align (copilot uses spec URLs, claude-agent-acp vendor ids, opencode
+`build`/`plan` discoverable only via `configOptions`). Note opencode advertises no `modes`
+yet honours `session/set_mode`, so mode discovery must read both fields. Env list confirmed as `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`
 for claude-agent-acp. No harness M0-1 surveyed needs `unknown`; `omp`, `pi`, `gemini` and
 `claude-code` are uninstalled here and keep it.
 *Done when* `unknown` behaves as `internal` for warning purposes, so a harness M0-1 could
@@ -221,7 +225,14 @@ outside a workspace root is exactly `~/.aws/credentials`, `~/.ssh`, and the pare
 `task > run > harness > default` chain, default `false`, and have `safe` force it `false`
 regardless of what was asked for** — `safe` claiming read-only while reading an SSH key is
 precisely the overclaim M0-6 exists to stop.
-**Revised by M0-1** — two measured facts bear directly on `READ_ONLY_KINDS`. First,
+**Revised by M0-1 — `safe` gains a second half: negotiate, then filter.** Setting the
+harness's nearest restrictive mode via `session/set_mode` at session start is what gives
+`safe` any effect at all on a harness that never asks (measured: opencode wrote the file
+without negotiation, declined with it). Filtering by kind stays exactly as specified and
+runs on whatever still arrives. Mode ids come from M1a-4's `modeMap`. Defence in depth, not
+a sandbox — the refusal we measured was agent prose, so enforcement is not verifiable from
+our side.
+Two further measured facts bear directly on `READ_ONLY_KINDS`. First,
 copilot *reads* by shelling `cat`, so its reads arrive as `execute` kind and `safe` refuses
 them: safe mode does not make copilot cautious, it makes it unusable. Second, opencode
 asks nothing, so no policy value changes its behaviour at all. Keep `READ_ONLY_KINDS` as

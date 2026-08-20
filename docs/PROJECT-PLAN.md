@@ -40,7 +40,7 @@ policy across all of them and returning machine-readable results.
 | Handoff | Same worktree, sequential. Successor sees predecessor's changes on disk plus its result summary in-prompt. |
 | Policy scope | Per task, with run default, harness default, and a harness **ceiling**. Precedence `task > run > harness > safe`; exceeding the ceiling fails validation rather than downgrading silently. |
 | Cost | Duration and turn count roll up per run. Token counts stay per task, labelled with their harness, never summed across vendors. |
-| Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally. `safe` warns when it cannot actually contain. **Measured (M0-1): all three run internally, and opencode is uncontainable — it never asks permission at all.** |
+| Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally. `safe` warns when it cannot actually contain. **Measured (M0-1): all three run internally; opencode never asks permission, so the policy has no jurisdiction over it — but all three accept `session/set_mode`, so modes are a second containment channel.** |
 | Unattended `ask` | Pending decision published on the event stream; **timeout → deny**. |
 | Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. **Required, not optional: M0-1 found this is opencode's default behaviour, not an anomaly.** |
 | Terminals | Spike first (M0). Implement only for harnesses that actually call `terminal/create`. **M0-1 baseline: none does under `terminal: false`** — M0-3 tests whether flipping it changes that. |
@@ -288,7 +288,18 @@ driven from a run file, fully verifiable offline.
   harness asks permission at all. opencode never does — so it needs a second field, e.g.
   `asksPermission: false`, and a warning with real teeth (policy has *no* effect, not
   reduced effect). claude-agent-acp asks on writes; copilot asks on both reads and writes,
-  and supplies real argv when it does. Note the third-order consequence for copilot:
+  and supplies real argv when it does.
+  **Modes are the second containment channel, and change what `safe` should do.** All three
+  accept `session/set_mode` — including opencode, which advertises no `modes` and exposes
+  its ids only through `configOptions` with `category: "mode"`. Negotiating `plan` before
+  the prompt stopped opencode writing a file that the identical run without negotiation
+  wrote. So **`safe` should negotiate, then filter**: set the harness's nearest restrictive
+  mode at session start, and apply `READ_ONLY_KINDS` to whatever still arrives. That needs a
+  per-harness mode map in the registry (`modeMap: { safe, ask, auto }`), because the
+  vocabularies do not align — copilot uses the spec's mode URLs, claude-agent-acp bare
+  vendor ids, opencode `build`/`plan`. Negotiation is defence in depth, not a sandbox: the
+  one refusal we measured arrived as agent prose, so compliance and enforcement are not
+  distinguishable from outside. Note the third-order consequence for copilot:
   because it reads by shelling out, its reads are `execute` kind, so `safe` refuses them
   and the harness becomes unusable rather than cautious — an argument for `defaultMode`
   being per harness, which this design already allows.

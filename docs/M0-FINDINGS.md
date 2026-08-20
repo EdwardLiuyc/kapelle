@@ -135,6 +135,29 @@ argv in front of the policy via `session/request_permission`. Commands are execu
 internally; only the decision crosses the boundary. That is a partial answer to M0-3's
 second question, ahead of the spike.
 
+### Session modes — a second channel, missed on the first pass
+
+The original survey captured `initialize` in full but kept only `sessionId` from
+`session/new`, and the mode information lives in that result. Re-probed:
+
+| | opencode | claude-agent-acp | copilot |
+|---|---|---|---|
+| `modes` in `session/new` | **absent** | 6 modes, vendor ids | 3 modes, ids are **canonical spec URLs** |
+| mode ids | via `configOptions` (`build`, `plan`) | `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` | `#agent`, `#plan`, `#autopilot` |
+| `session/set_mode` accepted | **yes** | yes | yes |
+| other permission knobs | — | — | `configOptions.allow_all` (category `permissions`) |
+
+**All three accept `session/set_mode`, including opencode, which advertises no `modes` at
+all** — its ids are discoverable only through `configOptions` entries with
+`category: "mode"`. The acceptance is real, not a silent no-op: opencode answers
+`-32602 mode not found` for a bogus id and `OK` for `plan` and `build`. A client that
+discovers modes only through `SessionModeState` will conclude opencode has none and be
+wrong; discovery must consider both fields.
+
+Vocabulary is only partly normalized. Copilot uses the spec's own mode URLs; the other two
+use bare vendor ids with no overlap. There is enough structure to negotiate with, not
+enough to assume shared names — so a mapping belongs in the registry.
+
 ### Containment probe (beyond the story, but decisive)
 
 Each harness was asked to create a file while running under `safePolicy`, in a throwaway
@@ -150,10 +173,27 @@ workspace:
 read and write alike. It writes files with no client involvement, so `--mode safe` and
 `--mode ask` are both inert against it: nothing to refuse, nothing to prompt. This is not a
 bug in the policy; it is the policy having no jurisdiction. It confirms M0-6's correction
-in the strongest possible form and it fixes opencode's M1a-4 containment label at
-**uncontained**. It is also the plan's "silent autonomy" row (non-empty diff, zero
-permission requests) occurring by default in a supported harness, not as an anomaly —
+in the strongest possible form. It is also the plan's "silent autonomy" row (non-empty diff,
+zero permission requests) occurring by default in a supported harness, not as an anomaly —
 that detector should be treated as required, not nice-to-have.
+
+**But opencode is not uncontainable — an earlier draft of this note said so and was wrong.**
+Re-running the same probe with one line added, `session/set_mode → plan` before the prompt:
+
+| run | policy | mode negotiated | `probe.txt` written |
+|---|---|---|---|
+| control | `safe` | none | **yes** |
+| with negotiation | `safe` | `plan` | **no** |
+
+It declined in-band: *"I'm currently in plan mode, so I can't create files. Here's the
+plan: …"*. So the accurate label is **not containable through the permission channel,
+containable through session mode** — a different statement with a different remedy.
+
+One honest limit on that result: the refusal arrived as agent prose, so this test cannot
+distinguish tool-level enforcement from model compliance. opencode's own description of
+`plan` is *"Disallows all edit tools"*, which claims enforcement, but we measured the
+outcome, not the mechanism. Treat mode negotiation as defence in depth, never as a
+sandbox.
 
 The mirror-image consequence for copilot: because it reads by shelling out, `execute` is
 not in `READ_ONLY_KINDS`, so `--mode safe` refuses copilot's *reads* too. Safe mode does
