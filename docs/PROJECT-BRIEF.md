@@ -53,7 +53,7 @@ and the shape they should take will be clearer after P0 runs for a while.
 
 ## Current state — MVP exists
 
-~760 lines, zero dependencies, Node 20+. Working and tested:
+770 lines, zero dependencies, Node 20+. Working and tested:
 
 - JSON-RPC over stdio, newline-delimited
 - `initialize` handshake with capability negotiation
