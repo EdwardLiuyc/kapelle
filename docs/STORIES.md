@@ -54,7 +54,12 @@ but not past it, because M2-2's *size* depends on the answer.
 
 Builds nothing except three papercut fixes. Every M1 default depends on its findings.
 
-**M0-1 · Harness availability and handshake survey · S**
+**M0-1 · Harness availability and handshake survey · S · DONE**
+> Survey complete — `M0-FINDINGS.md`, M0-1 section. All three targets **available**
+> (opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78), none unavailable, none
+> untested. `loadSession: true` on all three. No harness calls `fs/*`. opencode never
+> sends `session/request_permission` and wrote a file under `safe`. The stories below
+> marked *(revised by M0-1)* changed as a result.
 Run the current MVP against `opencode acp`, `claude-agent-acp` and `copilot --acp`. Record
 per harness: does it spawn, does it complete a turn, which `session/update` variants arrive
 that `render.mjs:20` does not handle, which methods hit the `#handleRequest` default
@@ -74,6 +79,9 @@ it is a cheap win later.
 `copilot acp` → `copilot --acp` (`agents.mjs:32`). Bake `env -u CLAUDECODE` into the
 `claude` entry (`agents.mjs:22`) — a two-line fix for a papercut `CLAUDE.md` documents at
 length.
+**Revised by M0-1** — `copilot --acp` confirmed against `copilot --help` (1.0.78), and the
+env scrub is three variables, not one: `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`,
+`CLAUDE_CODE_ENTRYPOINT`. That is what M0-1 ran with successfully.
 *Done when* both harnesses start from a clean shell with no manual env fiddling.
 *Note* the `claude` fix needs the registry `env` field from M1a-4, or a stopgap that M1a-4
 replaces.
@@ -102,17 +110,32 @@ anything naming the model actually selected.
 *Done when* the note distinguishes occupancy from spend per harness, and states plainly
 whether a price table is possible at all — it is what unblocks the plan's first open item.
 
-**M0-6 · Correct the safety claims · XS**
+**M0-6 · Correct the safety claims · S** *(was XS; revised by M0-1)*
 `CLAUDE.md` and `README.md:143` both say "even `--mode auto` cannot write outside the
 workspace root". True of `fs/*` only; a shelling agent never touches `#guardPath`. The
 policy does still fire on the `execute` tool call, but it judges an agent-authored title
 string, not argv.
-*Done when* both files state it positively: **`safe` blocks everything that crosses the
-protocol, and nothing that doesn't.**
+**Revised by M0-1 — this is no longer XS, and the drafted wording is itself an
+overclaim.** The survey found that against opencode *nothing* crosses the protocol: no
+`fs/*` call, no `session/request_permission`, and a file written to disk while running
+under `safePolicy`. "`safe` blocks everything that crosses the protocol" is true and
+useless there, because it reads as a guarantee to anyone who has not measured what crosses.
+It also found `#guardPath` protects nothing in production — no harness calls `fs/*` at all —
+so the sentence it is correcting is wrong in a second way the story did not anticipate.
+**Decision: the claim becomes per-harness and points at the registry**, along the lines of
+*`safe` blocks what a harness routes through the protocol; a harness that routes nothing —
+opencode today — is uncontained, and the registry says which is which.*
+*Done when* `CLAUDE.md` and `README.md:143` both carry the per-harness claim, name opencode
+as uncontained, and no longer imply `#guardPath` bounds `--mode auto`.
 
 **M0-7 · Findings note · XS · needs M0-1, M0-3, M0-4, M0-5**
 `docs/M0-FINDINGS.md`. The input to M1a-4's containment labels and env list, M1c-1's TTL
 default, and M3-5's terminal scope.
+**Partially landed with M0-1** — the file exists, the M0-1 section is complete, and the
+M0-3/4/5 sections are stubbed with the partial input that survey already produced (no
+`terminal/*` traffic under `terminal: false`; copilot supplying real argv on the permission
+request; `usage_update` shapes, including `cost` on opencode alone). What remains is
+filling those three sections, not creating the note.
 
 ---
 
@@ -172,8 +195,18 @@ under the daemon: M2-8 introduces a shared secret, and a daemon holding that tok
 environment would hand it to every harness it spawns. **Decision: add
 `env?: { unset?: string[]; set?: Record<string,string> }` to registry entries**; M2-8 also
 strips `AGENT_TEAM_*` unconditionally.
+**Revised by M0-1** — the labels are measured, and one field turns out to be too few. All
+three targets are `shell: "internal"`, but they differ on something `shell` cannot express:
+whether the harness asks permission at all. opencode never does. **Add a second field,
+`asksPermission: boolean`** (opencode `false`, the other two `true`), because the warning
+text differs in kind: against opencode the policy has *no* jurisdiction rather than reduced
+reach. Env list confirmed as `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`
+for claude-agent-acp. No harness M0-1 surveyed needs `unknown`; `omp`, `pi`, `gemini` and
+`claude-code` are uninstalled here and keep it.
 *Done when* `unknown` behaves as `internal` for warning purposes, so a harness M0-1 could
-not verify produces the **conservative** claim rather than the optimistic one.
+not verify produces the **conservative** claim rather than the optimistic one — and an
+`asksPermission: false` harness warns even in `auto`, where the containment warning would
+otherwise be silent but the silent-autonomy risk is highest.
 
 **M1a-5 · `core/policy.ts` · S · needs M1a-3**
 Small in lines, load-bearing. The signature changes from `async () => boolean` to a form an
@@ -188,6 +221,13 @@ outside a workspace root is exactly `~/.aws/credentials`, `~/.ssh`, and the pare
 `task > run > harness > default` chain, default `false`, and have `safe` force it `false`
 regardless of what was asked for** — `safe` claiming read-only while reading an SSH key is
 precisely the overclaim M0-6 exists to stop.
+**Revised by M0-1** — two measured facts bear directly on `READ_ONLY_KINDS`. First,
+copilot *reads* by shelling `cat`, so its reads arrive as `execute` kind and `safe` refuses
+them: safe mode does not make copilot cautious, it makes it unusable. Second, opencode
+asks nothing, so no policy value changes its behaviour at all. Keep `READ_ONLY_KINDS` as
+it is — kind is the only thing the protocol gives us — and let M1a-4's `defaultMode` carry
+the per-harness adjustment, but say plainly in the docs that mode is advisory against a
+harness that never asks.
 *Done when* a `node:test` truth table covers precedence `task > run > harness > safe`, the
 `maxMode` ceiling raising a **validation error naming both values** rather than downgrading
 silently, and `safe` overriding a requested `allowReadOutsideRoot: true`.
@@ -310,7 +350,13 @@ ones: `stopReason`, duration, turns, tokens, permission count, `git status --por
 `policyNeverFired`. Cross-check writes `warnings[]` — status `success` with an empty diff;
 `<files>` naming paths the diff does not contain; a non-empty diff with no block at all;
 plus `policyNeverFired`. `<files>` is our extension to ensemble's schema and exists
-precisely to make this check possible. Excludes `.agent-team/` from the diff (M1b-3).
+precisely to make this check possible.
+**Revised by M0-1: `policyNeverFired` is now a required check, not a nicety.** The survey
+found opencode produces a non-empty diff with zero permission requests *by default* — the
+exact signature this warning exists to catch — so on the most-used harness it fires on
+every mutating task. Two consequences: the warning text must not read as an anomaly report,
+and it should be paired with M1a-4's `asksPermission: false` so a run says "this harness
+never asks" once, rather than crying wolf per task. Excludes `.agent-team/` from the diff (M1b-3).
 **Warnings publish on the bus and never fail the task** — a read-only stage legitimately
 produces no diff, and making disagreement fatal would turn every harness quirk into a hard
 stop and break the review stages the pipeline is built on.
@@ -469,8 +515,14 @@ retention, and leaves no harness subprocess alive.
 
 **M2-6 · Persistence · S · needs M2-1**
 JSON per run under `.agent-team/runs/<id>/`, written on state transitions. For completed-run
-history, not live recovery: ACP has no resume, so an interrupted session cannot be
-reattached. Single-process and single-writer, which is why this is JSON and not the SQLite
+history, not live recovery.
+**Revised by M0-1 — the stated reason was wrong.** "ACP has no resume" holds for the base
+protocol but not for any harness we target: all three advertise
+`agentCapabilities.loadSession: true`, and opencode and claude-agent-acp also advertise
+`sessionCapabilities.resume` and `.fork`. History-only is therefore a scope choice, not a
+protocol limit. **Persist the harness `sessionId` on the run record here** — it costs one
+field, and without it the backlog's `session/load` item cannot be picked up later without a
+migration. Actual reattachment stays out of scope and stays capability-gated. Single-process and single-writer, which is why this is JSON and not the SQLite
 ensemble needs for concurrent plugin writers — and zero runtime dependencies stays with it.
 
 **M2-7 · Config · S · needs M2-1**
@@ -618,7 +670,11 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   wait — a task re-running the same test command while iterating is a legitimate repeat, the
   default is deliberately generous, and repeats only ever warn.
 - **`session/load` where a harness advertises it.** *Trigger:* M0-1 recording a harness with
-  `agentCapabilities.loadSession`. Cheap that day.
+  `agentCapabilities.loadSession`. **Trigger fired — all three advertise it**, and opencode
+  and claude-agent-acp also advertise `sessionCapabilities.resume`/`.fork`. Still not
+  scheduled, but it is now a known-available feature rather than a hypothetical, it must
+  stay behind a per-harness capability check, and it depends on M2-6 persisting the harness
+  `sessionId`.
 - **`#send` write backpressure.** `#send` ignores the return value of `write()`
   (`acp.mjs:151`). *Trigger:* fan-out moving large file contents. The one item here that is
   genuinely "fix it when it bites" — Node buffers, so it degrades to memory growth rather
