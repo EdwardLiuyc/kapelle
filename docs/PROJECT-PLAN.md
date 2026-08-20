@@ -3,13 +3,14 @@
 Companion to `PROJECT-BRIEF.md`. The brief says what we want; this says what we're
 building and in what order. Draft — expect refinement.
 
-> Reviewed for gaps in `PLAN-GAPS.md`, and sliced into stories in `STORIES.md`. Where the
-> two disagree with this document — M1 is split three ways, `--rebase` moves to M3, and
-> `node:test` is used for pure functions — `PLAN-GAPS.md` records the reasoning.
+> Reviewed against the code and sliced into stories in `STORIES.md`, which also records
+> the gaps this document left open and how each is closed. Where the two disagree — M1 is
+> split three ways, `--rebase` moves to M3, and `node:test` is used for pure functions —
+> the owning story carries the reasoning.
 
 ## Context
 
-`agent-team` is today an ~800-line ACP **client** (`acp.mjs`, `agents.mjs`, `render.mjs`,
+`agent-team` is today a 770-line ACP **client** (`acp.mjs`, `agents.mjs`, `render.mjs`,
 `run.mjs`, `fanout.mjs`). `PROJECT-BRIEF.md` describes a **supervisor**. The gap between
 those two words is this plan.
 
@@ -60,7 +61,8 @@ booting a server, and the CLI drifts into a second implementation.
 annotations at load and executes `.ts` directly. Checking types still needs the
 `typescript` package — but so does the JSDoc alternative, so the dependency cost is a
 wash. Zero *runtime* dependencies, the property the brief calls a survival trait, is
-preserved either way. Current runtime is Node v20.20.2, EOL since April 2026.
+preserved either way. Current runtime is Node v22.22.2, which already strips types at
+load — so `.ts` runs today. The Node 24 bump is for LTS, not for the language feature.
 
 **Why an XML tag rather than a fenced JSON block.** Agents that write code emit fenced
 blocks constantly, so "the last fenced JSON block in the final message" is ambiguous
