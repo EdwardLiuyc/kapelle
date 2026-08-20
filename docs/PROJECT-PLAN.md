@@ -3,6 +3,10 @@
 Companion to `PROJECT-BRIEF.md`. The brief says what we want; this says what we're
 building and in what order. Draft — expect refinement.
 
+> Reviewed for gaps in `PLAN-GAPS.md`, and sliced into stories in `STORIES.md`. Where the
+> two disagree with this document — M1 is split three ways, `--rebase` moves to M3, and
+> `node:test` is used for pure functions — `PLAN-GAPS.md` records the reasoning.
+
 ## Context
 
 `agent-team` is today an ~800-line ACP **client** (`acp.mjs`, `agents.mjs`, `render.mjs`,
