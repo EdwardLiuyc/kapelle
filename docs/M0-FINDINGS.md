@@ -407,7 +407,10 @@ respond to the original `session/prompt` request with the `cancelled` stop reaso
 **undocumented**: GitHub's [ACP server reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server)
 names `stopReason` only inside an example (`!== "end_turn"`) and never enumerates the
 values, and [Canceling a Copilot CLI operation](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/cancel-and-roll-back)
-covers only Esc and Ctrl-C in the TUI. No issue on `github/copilot-cli` reports it.
+covers only Esc and Ctrl-C in the TUI. No issue on `github/copilot-cli` reported it either,
+so this spike filed one:
+[github/copilot-cli#4561](https://github.com/github/copilot-cli/issues/4561), with a
+standalone repro and the control run above as the evidence the turn was truncated.
 
 Worth knowing that the public record here is inverted: this exact defect was filed against
 **opencode** ([anomalyco/opencode#25899](https://github.com/anomalyco/opencode/issues/25899),
