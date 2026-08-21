@@ -34,7 +34,7 @@ policy across all of them and returning machine-readable results.
 | Result contract | A `<task-result>` block in the final message. `git status` cross-checks it; disagreement raises a task **warning**, never a failure. MCP `report_result` deferred. |
 | Worktrees | Supervisor owns fully — creates off a base ref, removes on success, **keeps worktree and branch on failure or timeout**, reaps orphans only when the run is terminal and past the retention window. |
 | Merge-back | Explicit `agent-team merge <runId>`; never automatic. `--squash` (default) lands changes **unstaged**; `--rebase` preserves per-stage commits. Aborts wholesale on overlap. |
-| Liveness | Per-task **stall → warn** (idle, or the same tool repeating) and **TTL → `session/cancel`**. Each disabled by setting `0`. |
+| Liveness | Per-task **stall → warn** (idle, or the same tool repeating) and **TTL → `session/cancel`**. Each disabled by setting `0`. **Measured (M0-4): cancellation works and is fast — every harness ended its turn within 64 ms and stopped emitting, and the session stayed usable, so the TTL rung needs a 2 s grace and no kill. But the stop reason cannot classify the outcome: copilot reports `end_turn` for a turn it cancelled, so the supervisor's own record of *did I cancel* is the authoritative half.** |
 | Crash recovery | Startup sweep plus transactional spawn. A partially-created task leaves nothing behind. |
 | Run definition | A `.ts` module default-exporting the run object; `.json` also accepted; the daemon's POST body is the same shape. One validator behind all three. |
 | Handoff | Same worktree, sequential. Successor sees predecessor's changes on disk plus its result summary in-prompt. |
@@ -205,8 +205,9 @@ internally — so for that harness we judge more than a title string even withou
 Agenda item #1 in the brief. Costs almost nothing and de-risks every design choice after.
 
 > **Status:** item 1 is done — see `M0-FINDINGS.md`. Items 2 and 7 are done — M0-2, which
-> also retired the `claude-code` registry entry. Items 3-6 and 8 are still open, and 3/5/6
-> now start from the baseline that survey recorded rather than from nothing.
+> also retired the `claude-code` registry entry. Items 3 and 4 are done — M0-3. Item 5 is
+> done — M0-4. Items 6 and 8 are still open, and 6 now starts from the baseline those
+> surveys recorded rather than from nothing.
 
 1. ~~Run today's MVP against real **opencode** and **claude-agent-acp**.~~ **Done, and
    widened to all three targets.** All spawn, all complete a turn at protocol v1, none
@@ -232,10 +233,17 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    (`terminal | notification | permission | none`). opencode shows us nothing and cannot be
    gated by argv at all; claude-agent-acp's argv arrives late, on `tool_call_update`.
    **M3-6 therefore survives without M3-5.**
-5. **Cancellation probe.** Confirm the expected result — that no harness accepts a second
-   `session/prompt` while a turn is in flight — and record what each one does with
-   `session/cancel` mid-turn: does the turn end promptly, and with what `stopReason`?
-   M1's TTL rung is only as good as this answer.
+5. ~~**Cancellation probe.**~~ **Done by M0-4, and the expectation was wrong**
+   (`docs/M0-FINDINGS.md` §M0-4). Cancellation itself is the easy half: all three end the
+   turn within 64 ms, emit nothing afterwards, and leave the session reusable — so the TTL
+   rung gets a 2 s grace and never needs to kill. Two results this plan did not anticipate.
+   **Copilot answers `end_turn` for a turn it cancelled**, contrary to ACP's MUST, so
+   `stopReason` alone cannot classify an outcome and the supervisor must carry its own
+   cancel intent. And **every harness accepts a second `session/prompt` mid-turn** — none
+   rejects it, the in-flight turn dies, both requests answer `end_turn`, and on opencode and
+   copilot the text lands in the running turn's context rather than being served
+   (`github/copilot-cli#4555` reports the mechanism: `session/prompt` aborts the session
+   unconditionally, even when idle). There is no safe way to nudge a turn in flight.
 6. **Usage reporting.** Record, per harness, whether `usage_update` arrives at all and what
    its fields actually mean. `{used, size}` is context occupancy, not spend — check whether
    anything reports cumulative or billable counts, or names the model it selected. This is
@@ -353,8 +361,12 @@ driven from a run file, fully verifiable offline.
   reuses the `toolCallId → {title, kind}` map already maintained as a protocol invariant, so
   it needs only a per-task "last title + consecutive count". Both signals emit a warning and
   the task keeps running; the separate, longer `ttlMs` calls `session/cancel`, preserves the
-  branch and marks the task `timed_out`. Every knob disabled at `0`. Best-effort throughout —
-  one task's failure must never halt the sweep. Two notes: there is no third rung, because
+  branch and marks the task `timed_out`. **M0-4 supplies the missing number: wait 2 s after
+  the cancel before force-killing** — thirty times the slowest cancel measured, and the same
+  grace `run.mjs` already uses — and expect never to reach it. `timed_out` is set from the
+  watchdog's own record, not from the stop reason, which may come back `end_turn`. Every
+  knob disabled at `0`. Best-effort throughout — one task's failure must never halt the
+  sweep. Two notes: there is no third rung, because
   ACP gives us no way to nudge a turn in flight, so detection reports rather than corrects;
   and a token-based signal was considered and dropped, because `usage_update` reports context
   occupancy in units that are not comparable between vendors.
