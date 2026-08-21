@@ -14,7 +14,7 @@ follow it. Concretely:
 |---|---|
 | any agent with a prompt | paste this file, then: `Run this procedure for issue #<N> in <repo>.` |
 | an agent working in this repo | `AGENTS.md` points here; ask for "pickup-issue #<N>" |
-| this repo's ACP client | `node run.mjs "$(cat .agent/skills/pickup-issue/SKILL.md)\n\nRun this for issue #<N>." --agent opencode --mode ask` |
+| this repo's ACP client | `node run.mjs "$(cat .agent/skills/pickup-issue/SKILL.md; printf '\n\nRun this for issue #<N>.')" --agent opencode --mode ask` |
 
 Arguments the procedure understands, however they arrive: the **issue number** (required),
 `--repo owner/name` (defaults to the `origin` remote), `--dry-run` (print the comment,
