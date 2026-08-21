@@ -20,6 +20,8 @@ export class AcpAgent {
   #pending = new Map();
   #toolCalls = new Map(); // toolCallId -> { title, kind }
   #closed = false;
+  #terminals = new Map(); // SPIKE (M0-3): terminalId -> { child, chunks, exitStatus }
+  #nextTerminalId = 1;
 
   constructor({
     name,
@@ -76,10 +78,10 @@ export class AcpAgent {
     const res = await this.request("initialize", {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {
-        // We answer fs/* ourselves. We do NOT offer terminal/*, so the agent
-        // runs shell commands in its own process instead of through us.
+        // SPIKE (M0-3, #4): terminal is normally false. Flipped here to find out
+        // whether any harness takes us up on it. Never merge this branch.
         fs: { readTextFile: true, writeTextFile: true },
-        terminal: false,
+        terminal: true,
       },
       clientInfo: { name: "acp-mvp", title: "ACP MVP client", version: "0.1.0" },
     });
@@ -201,6 +203,18 @@ export class AcpAgent {
         return this.#writeTextFile(params);
       case "session/request_permission":
         return this.#requestPermission(params);
+      // SPIKE (M0-3, #4). Observation, not containment: these really execute,
+      // and #guardPath does not apply to them. Never merge.
+      case "terminal/create":
+        return this.#terminalCreate(params);
+      case "terminal/output":
+        return this.#terminalOutput(params);
+      case "terminal/wait_for_exit":
+        return this.#terminalWaitForExit(params);
+      case "terminal/kill":
+        return this.#terminalKill(params);
+      case "terminal/release":
+        return this.#terminalRelease(params);
       default: {
         const err = new Error(`method not supported by this client: ${method}`);
         throw err;
@@ -216,6 +230,14 @@ export class AcpAgent {
     // Permission requests only carry a toolCallId, so remember the details
     // announced here — otherwise the policy has nothing to judge.
     if (update.sessionUpdate === "tool_call") {
+      // SPIKE (M0-3, #4): rawInput on the notification is a third possible argv
+      // channel, invisible to render.mjs. Log it so Q2 is measured, not assumed.
+      this.#spikeLog("session/update:tool_call", {
+        toolCallId: update.toolCallId,
+        title: update.title,
+        kind: update.kind,
+        rawInput: update.rawInput,
+      });
       this.#toolCalls.set(update.toolCallId, {
         title: update.title,
         kind: update.kind ?? "other",
@@ -223,6 +245,13 @@ export class AcpAgent {
       });
     }
     if (update.sessionUpdate === "tool_call_update") {
+      // SPIKE (M0-3, #4): argv may arrive late, on the update rather than the call.
+      if (update.rawInput !== undefined) {
+        this.#spikeLog("session/update:tool_call_update", {
+          toolCallId: update.toolCallId,
+          rawInput: update.rawInput,
+        });
+      }
       const prev = this.#toolCalls.get(update.toolCallId) ?? {};
       this.#toolCalls.set(update.toolCallId, { ...prev, ...update });
     }
@@ -265,6 +294,99 @@ export class AcpAgent {
     });
     return null;
   }
+
+  // ---------- SPIKE (M0-3, #4): terminal/* — delete with this branch ----------
+  //
+  // The story said "logging no-ops". A no-op is not a legal answer: terminal/create
+  // must return a terminalId or the harness aborts the turn, or quietly falls back to
+  // its own shell — and that fallback looks exactly like never having asked. So these
+  // really run the command. The argv log below is the evidence the spike exists for.
+
+  #spikeLog(method, params) {
+    const line = `[SPIKE ${new Date().toISOString()}] ${this.name} ${method} ${JSON.stringify(params)}`;
+    process.stderr.write(line + "\n");
+  }
+
+  async #terminalCreate(params) {
+    this.#spikeLog("terminal/create", params);
+    const { command, args = [], cwd, env, outputByteLimit } = params;
+    const id = `spike-term-${this.#nextTerminalId++}`;
+
+    // NOTE: no #guardPath here, deliberately. We are measuring what the harness
+    // asks for, not containing it. Nothing about this stub is a safety layer.
+    const child = spawn(command, args, {
+      cwd: cwd ? resolve(this.cwd, cwd) : this.cwd,
+      env: env ? { ...this.env, ...Object.fromEntries(env.map((e) => [e.name, e.value])) } : this.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+    });
+
+    const term = {
+      child,
+      chunks: [],
+      bytes: 0,
+      limit: outputByteLimit ?? 1_000_000,
+      truncated: false,
+      exitStatus: null,
+      exited: new Promise((res) => {
+        child.on("close", (exitCode, signal) => {
+          term.exitStatus = { exitCode, signal: signal ?? null };
+          res(term.exitStatus);
+        });
+      }),
+    };
+    const collect = (buf) => {
+      term.bytes += buf.length;
+      if (term.bytes > term.limit) term.truncated = true;
+      else term.chunks.push(buf);
+    };
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    child.on("error", (err) => collect(Buffer.from(`[spawn error] ${err.message}\n`)));
+
+    this.#terminals.set(id, term);
+    return { terminalId: id };
+  }
+
+  #terminal(id) {
+    const term = this.#terminals.get(id);
+    if (!term) throw new Error(`unknown terminalId: ${id}`);
+    return term;
+  }
+
+  async #terminalOutput(params) {
+    this.#spikeLog("terminal/output", params);
+    const term = this.#terminal(params.terminalId);
+    return {
+      output: Buffer.concat(term.chunks).toString("utf8"),
+      truncated: term.truncated,
+      ...(term.exitStatus ? { exitStatus: term.exitStatus } : {}),
+    };
+  }
+
+  async #terminalWaitForExit(params) {
+    this.#spikeLog("terminal/wait_for_exit", params);
+    const term = this.#terminal(params.terminalId);
+    const exitStatus = term.exitStatus ?? (await term.exited);
+    this.#spikeLog("terminal/wait_for_exit:resolved", { ...params, exitStatus });
+    return { exitStatus };
+  }
+
+  async #terminalKill(params) {
+    this.#spikeLog("terminal/kill", params);
+    this.#terminal(params.terminalId).child.kill("SIGTERM");
+    return null;
+  }
+
+  async #terminalRelease(params) {
+    this.#spikeLog("terminal/release", params);
+    const term = this.#terminal(params.terminalId);
+    if (!term.exitStatus) term.child.kill("SIGTERM");
+    this.#terminals.delete(params.terminalId);
+    return null;
+  }
+
+  // ---------- end SPIKE ----------
 
   async #requestPermission({ toolCall, options }) {
     const known = this.#toolCalls.get(toolCall?.toolCallId) ?? {};

@@ -122,6 +122,39 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     }
     update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t2", status: "completed" });
 
+    // SPIKE (M0-3, #4): drive the client's terminal/* handlers offline, so the
+    // spike code is exercised before any real harness runs. Delete with the branch.
+    update(sid, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t3",
+      title: "Run the tests",
+      kind: "execute",
+      status: "pending",
+      rawInput: { command: "node --version" },
+    });
+    const term = await callClient("terminal/create", {
+      sessionId: sid,
+      command: "node",
+      args: ["--version"],
+    });
+    const exit = await callClient("terminal/wait_for_exit", {
+      sessionId: sid,
+      terminalId: term.terminalId,
+    });
+    const out = await callClient("terminal/output", {
+      sessionId: sid,
+      terminalId: term.terminalId,
+    });
+    await callClient("terminal/release", { sessionId: sid, terminalId: term.terminalId });
+    update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t3", status: "completed" });
+    update(sid, {
+      sessionUpdate: "agent_message_chunk",
+      content: {
+        type: "text",
+        text: `\nTerminal: exit ${exit?.exitStatus?.exitCode}, output ${JSON.stringify(out?.output)}\n`,
+      },
+    });
+
     update(sid, { sessionUpdate: "usage_update", used: 1234, size: 200000 });
     reply(msg.id, { stopReason: "end_turn" });
   }
