@@ -245,7 +245,9 @@ reset between harnesses. Prompt `run the tests`, `--mode auto`, no `session/set_
 
 All three ran the tests, read the failure and diagnosed the bug correctly — through their
 own shell, ignoring the capability entirely. M0-1's zero was therefore not an artefact of
-`terminal: false`; **these harnesses do not want client-side terminals.**
+`terminal: false`. **None of these harnesses delegates command execution to the client** —
+though see below: claude-agent-acp does have a terminal-shaped path, behind a vendor flag
+this spike initially failed to offer.
 
 Note the trap in the middle column: claude-agent-acp *names its own tool* `Terminal`. It
 is a vendor tool name in a `tool_call` notification, not the ACP method. Grepping logs for
@@ -283,11 +285,57 @@ claude-agent-acp's argv is late, so a policy that reads `rawInput` at `tool_call
 sees `{}` and judges blind — the same bookkeeping trap `#toolCalls` already exists to
 avoid.
 
+### Why nothing called it — checked, not assumed
+
+The verdict above is "did not happen". Three follow-ups turn that into "does not exist,
+or is not wired to the capability we advertised".
+
+**The spec permits it.** Agents **MUST** verify `clientCapabilities.terminal` before
+calling any terminal method, but nothing obliges them to prefer terminals over their own
+shell. Advertising and being ignored is conformant, not a client bug.
+
+**opencode — capability bundled, never called.** Its binary carries the ACP SDK's five
+method constants and the SDK's `createTerminal()` wrapper
+(`sendRequest(Q.terminal_create, …)`). That wrapper appears exactly once: the definition.
+No call site anywhere in opencode's own agent code. (Its `capabilities?.terminal?.*` hits
+are xterm TUI code, and its one `_meta` capability gate is `terminal-auth`, for login.)
+
+**claude-agent-acp — never reads `clientCapabilities.terminal` at all.** It gates on a
+vendor extension instead: `clientCapabilities._meta["terminal_output"]`
+(`dist/acp-agent.js:1862`, `:3195`). **We never offered it, so this part of the spike was
+untested rather than negative.** Offering it (`spike/m0-3-terminal`, second commit)
+changes the wire immediately:
+
+```json
+{"sessionUpdate":"tool_call","toolCallId":"toolu_01FDY…","title":"Terminal","kind":"execute",
+ "_meta":{"claudeCode":{"toolName":"Bash"},"terminal_info":{"terminal_id":"toolu_01FDY…"}},
+ "content":[{"type":"terminal","terminalId":"toolu_01FDY…"}]}
+```
+
+Every Bash call now carries an ACP `type: "terminal"` content block — for a terminal that
+**was never created**, whose `terminalId` is simply the `toolCallId`. Still zero
+`terminal/*` calls, and still no command output crossing the wire. It is a rendering
+convention for a client that already displays the terminal, not delegated execution.
+
+**copilot — statically opaque.** A 177 MB bun-compiled ELF; `strings` finds no ACP method
+names at all, control strings included, so nothing can be concluded from the binary.
+GitHub's own ACP reference documents no terminal support, and its shell is a first-class
+internal tool (`--allow-tool='shell(git:*)'`, `--available-tools="bash,view"`).
+
+**The general lesson, which outlives this spike:** a capability probe that tests only the
+standard field under-reports. Harnesses gate behaviour on `_meta` extensions we do not
+advertise, and each vendor spells them differently (`terminal_output` for claude-agent-acp,
+`terminal-auth` for opencode). The registry should record per-harness `_meta` flags
+alongside the containment fields, and `render.mjs` currently drops `type: "terminal"`
+content on the floor.
+
 ### Consequences
 
-- **M3-5 (terminals) is not worth building as specified.** Nothing calls it. It becomes
-  per-harness documentation, and `terminal: false` on master is now a recorded decision
-  rather than a default.
+- **M3-5 (terminals) is not worth building as specified.** Nothing calls `terminal/create`.
+  It becomes per-harness documentation, and `terminal: false` on master is now a recorded
+  decision rather than a default. **One piece survives:** if embedded-terminal rendering is
+  ever wanted, claude-agent-acp already emits `type: "terminal"` content under
+  `_meta.terminal_output`, and `render.mjs` would need to handle it.
 - **M3-6 (command-level policy gating) survives, on a different foundation.** Its premise
   was "with `terminal/*` we hold real argv". We hold real argv for two of three harnesses
   *without* `terminal/*` — from notifications, not the permission request. What it cannot

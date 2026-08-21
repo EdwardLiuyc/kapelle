@@ -214,7 +214,10 @@ whether the harness asks permission at all. opencode never does. **Add a second 
 `asksPermission: boolean`** (opencode `false`, the other two `true`), because the warning
 text differs in kind: against opencode the policy has *no* jurisdiction rather than reduced
 reach.
-**Revised again by M0-3** — `shell` alone cannot express what we measured, so add
+**Revised again by M0-3** — record per-harness `_meta` capability flags too: harnesses gate
+behaviour on extensions we do not advertise (`terminal_output` for claude-agent-acp,
+`terminal-auth` for opencode), and a probe that tests only standard fields under-reports.
+And `shell` alone cannot express what we measured, so add
 **`argvChannel: "terminal" | "notification" | "permission" | "none"`** beside it. `shell`
 says where the command runs, `argvChannel` says whether the text reaches us and by which
 route; the two are independent. Measured: opencode `internal`/`none`, claude-agent-acp
@@ -610,9 +613,14 @@ preflight; the two modes differ only in what lands.
 
 **M3-5 · Terminals · L · needs M0-3 · conditional — CUT by M0-3**
 **M0-3 measured zero `terminal/*` calls from all three harnesses with `terminal: true`
-advertised.** This story is now the documentation alternative its own text names: an
-honest per-harness label, and `terminal: false` recorded as a decision. Reopen only if a
-harness we add later actually calls `terminal/create`.
+advertised**, and confirmed why: opencode bundles the SDK's `createTerminal()` with no call
+site, claude-agent-acp does not read `clientCapabilities.terminal` at all, copilot is
+statically opaque and documents no terminal support. This story is now the documentation
+alternative its own text names: an honest per-harness label, and `terminal: false` recorded
+as a decision. Reopen only if a harness we add later actually calls `terminal/create`.
+**Salvage:** under the vendor flag `_meta.terminal_output`, claude-agent-acp emits ACP
+`type: "terminal"` tool-call content. If embedded-terminal *rendering* is ever wanted, that
+is the path, and `render.mjs` drops that content type today.
 
 
 `terminal/create | output | wait_for_exit | kill | release`, a Terminal class with a
