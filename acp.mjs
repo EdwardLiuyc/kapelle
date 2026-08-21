@@ -82,6 +82,9 @@ export class AcpAgent {
         // whether any harness takes us up on it. Never merge this branch.
         fs: { readTextFile: true, writeTextFile: true },
         terminal: true,
+        // SPIKE follow-up: claude-agent-acp ignores clientCapabilities.terminal and
+        // reads this vendor _meta flag instead (acp-agent.js:1862, :3195).
+        _meta: { terminal_output: true },
       },
       clientInfo: { name: "acp-mvp", title: "ACP MVP client", version: "0.1.0" },
     });
@@ -232,12 +235,7 @@ export class AcpAgent {
     if (update.sessionUpdate === "tool_call") {
       // SPIKE (M0-3, #4): rawInput on the notification is a third possible argv
       // channel, invisible to render.mjs. Log it so Q2 is measured, not assumed.
-      this.#spikeLog("session/update:tool_call", {
-        toolCallId: update.toolCallId,
-        title: update.title,
-        kind: update.kind,
-        rawInput: update.rawInput,
-      });
+      this.#spikeLog("session/update:tool_call", update);
       this.#toolCalls.set(update.toolCallId, {
         title: update.title,
         kind: update.kind ?? "other",
