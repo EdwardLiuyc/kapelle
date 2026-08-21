@@ -204,9 +204,9 @@ internally — so for that harness we judge more than a title string even withou
 
 Agenda item #1 in the brief. Costs almost nothing and de-risks every design choice after.
 
-> **Status:** item 1 is done — see `M0-FINDINGS.md`. Item 2 is confirmed against
-> `copilot --help`. Items 3-6 are still open, and 3/5/6 now start from the baseline that
-> survey recorded rather than from nothing.
+> **Status:** item 1 is done — see `M0-FINDINGS.md`. Items 2 and 7 are done — M0-2, which
+> also retired the `claude-code` registry entry. Items 3-6 and 8 are still open, and 3/5/6
+> now start from the baseline that survey recorded rather than from nothing.
 
 1. ~~Run today's MVP against real **opencode** and **claude-agent-acp**.~~ **Done, and
    widened to all three targets.** All spawn, all complete a turn at protocol v1, none
@@ -214,9 +214,10 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    `session/update` variants: `available_commands_update` (all three) and
    `config_option_update` (copilot). The two results that move the plan are that **all
    three advertise `loadSession: true`** and that **none of them calls `fs/*`**.
-2. **Copilot's ACP invocation — already verified, and the registry is wrong.** It is
-   `copilot --acp` (a flag), not `copilot acp` (a subcommand) as `agents.mjs:32` guesses.
-   `opencode acp` confirmed correct. Fix the registry entry.
+2. ~~**Copilot's ACP invocation — already verified, and the registry is wrong.**~~
+   **Fixed by M0-2.** It is `copilot --acp` (a flag), not `copilot acp` (a subcommand) as
+   `agents.mjs` guessed; `opencode acp` confirmed correct. The registry now says `--acp`,
+   verified against Copilot 1.0.78 completing a turn; the old arg exits 1.
 3. **Terminal spike:** flip `clientCapabilities.terminal` to `true` (`acp.mjs:82`), add a
    logging stub for `terminal/*` in `#handleRequest`, run all three harnesses on a task
    that obviously needs a shell (`run the tests`) in a throwaway workspace under
@@ -236,10 +237,15 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    its fields actually mean. `{used, size}` is context occupancy, not spend — check whether
    anything reports cumulative or billable counts, or names the model it selected. This is
    what the cost decision rests on, and today it is an assumption.
-7. Bake `env -u CLAUDECODE` into the `claude` registry entry (`agents.mjs:22`) — a
-   two-line fix for a papercut `CLAUDE.md` documents at length. M0-1 ran with
-   `CLAUDE_CODE_SSE_PORT` and `CLAUDE_CODE_ENTRYPOINT` scrubbed as well; the registry's
-   env list should carry all three.
+7. ~~Bake `env -u CLAUDECODE` into the `claude` registry entry.~~ **Done by M0-2**, with
+   all three of `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT` and `CLAUDE_CODE_ENTRYPOINT` scrubbed
+   as M0-1 ran them. The list lives in a registry `env` field already shaped
+   `{unset?, set?}` so M1a-4 absorbs it rather than redoing it. Two notes for M1a-4: the
+   negative control **did not reproduce** — claude-agent-acp 0.49.0 completed a turn with
+   `CLAUDECODE=1` inherited, so the scrub is now insurance against a regression rather
+   than a fix for a live failure, and the `-32603` in the docs is no longer reproducible
+   on that version. And M0-2 **dropped the `claude-code` entry** (deprecated
+   `@zed-industries/claude-code-acp`), so `claude` is the single Claude harness id.
 8. Correct the safety claim in `CLAUDE.md` **and the README**: "even `--mode auto` cannot
    write outside it" is true of `fs/*` only. A shelling agent bypasses `#guardPath`
    entirely. The permission policy does still fire on the `execute` tool call — but it

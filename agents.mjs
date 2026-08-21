@@ -33,11 +33,9 @@ export const AGENTS = {
   // Agent SDK behind an ACP front end, and authenticates via whatever the
   // `claude` CLI already uses. Install with:
   //   npm i -g @agentclientprotocol/claude-agent-acp
+  // Its deprecated predecessor @zed-industries/claude-code-acp is not
+  // supported; `npm i -g` the package above rather than pinning the old name.
   claude: { command: "claude-agent-acp", args: [], env: CLAUDE_PARENT_ENV },
-
-  // The same adapter under its former name, @zed-industries/claude-code-acp.
-  // Deprecated upstream but still what's installed on a lot of machines.
-  "claude-code": { command: "claude-code-acp", args: [], env: CLAUDE_PARENT_ENV },
 
   // Gemini CLI exposes ACP behind a flag.
   gemini: { command: "gemini", args: ["--acp"] },

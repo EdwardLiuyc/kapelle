@@ -13,7 +13,7 @@ The inversion that governs every design choice: **this code is the client, the c
 ```bash
 npm run selftest            # end-to-end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
 node run.mjs "self test" --cmd "node mock-agent.mjs" --mode safe   # same run, write refused
-node run.mjs "<prompt>" [--agent opencode|omp|pi|claude|claude-code|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
+node run.mjs "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
 node fanout.mjs tasks.json  # N agents concurrently
 ```
 
@@ -21,7 +21,7 @@ There is no unit-test suite. `mock-agent.mjs` is the test harness: it implements
 
 `--mode ask` requires a TTY and silently degrades to `safe` otherwise, so piped/CI invocations never block on a prompt.
 
-**Harness spawn failures surface as opaque JSON-RPC errors** — typically `Internal error (code -32603)` on `session/new`, with the real message only on the harness's stderr under `--verbose`. Reach for `--verbose` first. The known instance is `--agent claude` from inside a Claude Code session: the adapter refuses to start a nested session, and `AcpAgent` passes its `env` through to the subprocess. The `claude` and `claude-code` registry entries now scrub the parent markers via the `env` field (`agents.mjs`), so no `env -u ...` prefix is needed.
+**Harness spawn failures surface as opaque JSON-RPC errors** — typically `Internal error (code -32603)` on `session/new`, with the real message only on the harness's stderr under `--verbose`. Reach for `--verbose` first. The known instance is `--agent claude` from inside a Claude Code session: the adapter refuses to start a nested session, and `AcpAgent` passes its `env` through to the subprocess. The `claude` entry scrubs the parent markers via the registry `env` field (`agents.mjs`), so no `env -u ...` prefix is needed. The deprecated `claude-code-acp` adapter is no longer in the registry.
 
 ## Architecture
 

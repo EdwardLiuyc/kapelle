@@ -85,6 +85,13 @@ env scrub is three variables, not one: `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`,
 *Done when* both harnesses start from a clean shell with no manual env fiddling.
 *Note* the `claude` fix needs the registry `env` field from M1a-4, or a stopgap that M1a-4
 replaces.
+**DONE** — both verified end-to-end (copilot 1.0.78, claude-agent-acp 0.49.0, each
+completing a turn from inside a Claude Code session with no `env -u` prefix). The env list
+went straight into a registry `env` field shaped `{unset?, set?}`, so M1a-4 inherits it
+rather than replacing a stopgap. Two things the story did not anticipate: the negative
+control **did not reproduce** — 0.49.0 tolerates an inherited `CLAUDECODE`, so the scrub is
+regression insurance, not a live fix — and the deprecated `claude-code` entry was
+**removed** rather than fixed alongside `claude`, leaving one Claude harness id.
 
 **M0-3 · Terminal and shell-routing spike · M · needs M0-1**
 Flip `clientCapabilities.terminal` to `true` (`acp.mjs:82`), stub `terminal/*` as logging
@@ -205,8 +212,8 @@ reach. **And add a third, `modeMap: { safe, ask, auto }`** — all three harness
 vocabularies do not align (copilot uses spec URLs, claude-agent-acp vendor ids, opencode
 `build`/`plan` discoverable only via `configOptions`). Note opencode advertises no `modes`
 yet honours `session/set_mode`, so mode discovery must read both fields. Env list confirmed as `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`
-for claude-agent-acp. No harness M0-1 surveyed needs `unknown`; `omp`, `pi`, `gemini` and
-`claude-code` are uninstalled here and keep it.
+for claude-agent-acp. No harness M0-1 surveyed needs `unknown`; `omp`, `pi` and
+`gemini` are uninstalled here and keep it. (`claude-code` was too; M0-2 removed the entry.)
 *Done when* `unknown` behaves as `internal` for warning purposes, so a harness M0-1 could
 not verify produces the **conservative** claim rather than the optimistic one — and an
 `asksPermission: false` harness warns even in `auto`, where the containment warning would
