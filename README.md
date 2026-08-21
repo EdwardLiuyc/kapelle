@@ -110,11 +110,13 @@ The adapter was previously published as `@zed-industries/claude-code-acp`
 (binary `claude-code-acp`). It's deprecated upstream and this client no longer
 carries an entry for it — install the package above.
 
-**Driving this client from inside a Claude Code session works as-is.** The
-adapter refuses to start a nested session when it sees the markers the parent
+**Driving this client from inside a Claude Code session works as-is.** Older
+adapters refused to start a nested session when they saw the markers the parent
 leaves in the environment, so the `claude` registry entry scrubs them
 (`CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`) before spawning.
-No `env -u ...` prefix needed.
+0.49.0 no longer refuses, so the scrub is insurance against a regression rather
+than a fix for a failure you'd hit today. No `env -u ...` prefix needed — though
+note that `--cmd "claude-agent-acp"` bypasses the registry, and with it the scrub.
 
 An opaque `Internal error (code -32603)` on `session/new` is the usual shape of
 a harness that refused to start; `--verbose` shows the real reason on its stderr.

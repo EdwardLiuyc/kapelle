@@ -6,11 +6,20 @@
  */
 
 /**
- * Markers a Claude Code parent session leaves in the environment. The
- * claude-agent-acp adapter refuses to start a nested session when it sees
- * them, and the refusal surfaces as an opaque `-32603` on `session/new`.
- * `CLAUDECODE` is the one documented; the other two are set by the same parent
- * and M0-1 got a clean handshake only with all three gone.
+ * Markers a Claude Code parent session leaves in the environment, scrubbed
+ * before spawning the Claude adapter. M0-1 hit an adapter that refused to
+ * start a nested session — an opaque `-32603` on `session/new` — and got a
+ * clean handshake only with all three gone. Adapter 0.49.0 no longer refuses,
+ * so this is regression insurance rather than a live fix; don't delete it on
+ * finding it does nothing today.
+ *
+ * The list is M0-1's, not a survey of the parent: a CLI parent sets neither
+ * `CLAUDE_CODE_SSE_PORT` (an IDE/SSE variable) nor several other
+ * `CLAUDE_CODE_*` markers it does export. Widening it is M1a-4/M2-8 work —
+ * see the note on always-scrubbing secrets from *every* harness's env.
+ *
+ * Only registry entries get this. `--cmd` builds its spec from the string
+ * alone, so `--cmd "claude-agent-acp"` inherits `process.env` unscrubbed.
  *
  * Shape is M1a-4's registry `env` field: `{ unset?, set? }`.
  */
