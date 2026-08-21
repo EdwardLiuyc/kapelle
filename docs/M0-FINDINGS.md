@@ -231,12 +231,20 @@ not apply: the spike observes, it does not contain.
 
 Workspace: a throwaway Node project with a genuine failing test (`sum` returning `a - b`),
 reset between harnesses. Prompt `run the tests`, `--mode auto`, no `session/set_mode`.
+Copilot self-updated to **1.0.80** between M0-1 (2026-08-20) and this run; the M0-1 rows
+above still say 1.0.78 and were correct when written.
+
+**`auto` bounds every verdict below.** It was required — under `safe`, copilot's reads go
+through `execute`, which is not in `READ_ONLY_KINDS`, so they are refused before a terminal
+call could happen. The consequence is that all of this measures what a harness does when
+**nothing is refused**. A harness that reached for `terminal/*` only after its own shell
+was denied would not appear here. Untested, and cheap to test if it ever matters.
 
 ### Question 1 — does `terminal/create` ever arrive?
 
 **No. Not once, from any harness, with the capability advertised as `true`.**
 
-| | opencode 1.18.18 | claude-agent-acp 0.49.0 | copilot 1.0.78 |
+| | opencode 1.18.18 | claude-agent-acp 0.49.0 | copilot 1.0.80 |
 |---|---|---|---|
 | `terminal/create` | never | never | never |
 | any `terminal/*` | never | never | never |
