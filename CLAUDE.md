@@ -13,7 +13,7 @@ The inversion that governs every design choice: **this code is the client, the c
 ```bash
 npm run selftest            # end-to-end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
 node run.mjs "self test" --cmd "node mock-agent.mjs" --mode safe   # same run, write refused
-node run.mjs "<prompt>" [--agent opencode|omp|pi|claude|claude-code|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
+node run.mjs "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
 node fanout.mjs tasks.json  # N agents concurrently
 ```
 
@@ -21,14 +21,14 @@ There is no unit-test suite. `mock-agent.mjs` is the test harness: it implements
 
 `--mode ask` requires a TTY and silently degrades to `safe` otherwise, so piped/CI invocations never block on a prompt.
 
-**Driving `--agent claude` from inside a Claude Code session fails** unless you unset `CLAUDECODE`. The adapter refuses to start a nested session, and `AcpAgent` passes `process.env` through to every subprocess, so the variable is inherited. The symptom is an opaque `Internal error (code -32603)` on `session/new`; the real message only appears on the adapter's stderr under `--verbose`. Use `env -u CLAUDECODE node run.mjs ... --agent claude`. This is the general shape of harness spawn failures here — reach for `--verbose` first.
+**Harness spawn failures surface as opaque JSON-RPC errors** — typically `Internal error (code -32603)` on `session/new`, with the real message only on the harness's stderr under `--verbose`. Reach for `--verbose` first. The known instance is `--agent claude` from inside a Claude Code session: the adapter refuses to start a nested session, and `AcpAgent` passes its `env` through to the subprocess. The `claude` entry scrubs the parent markers via the registry `env` field (`agents.mjs`), so no `env -u ...` prefix is needed. The deprecated `claude-code-acp` adapter is no longer in the registry.
 
 ## Architecture
 
 Five files, one direction of dependency: `run.mjs` / `fanout.mjs` → `acp.mjs` + `agents.mjs` + `render.mjs`.
 
 - **`acp.mjs`** — everything protocol. `AcpAgent` owns one subprocess: spawn, newline-delimited JSON-RPC over stdio, `initialize` handshake (hard-fails on `protocolVersion` mismatch), `session/new`, `session/prompt`, `session/cancel`. It handles exactly three inbound requests — `fs/read_text_file`, `fs/write_text_file`, `session/request_permission` — and one notification, `session/update`, which it forwards to `onEvent`.
-- **`agents.mjs`** — the entire adapter layer: a map of agent id → `{command, args}`. Supporting a new harness is one line here, not an integration. `resolveAgent` also parses `--cmd` strings and derives a readable label (`node mock-agent.mjs` → `mock-agent`).
+- **`agents.mjs`** — the entire adapter layer: a map of agent id → `{command, args, env?}`. Supporting a new harness is one line here, not an integration. `env` is `{unset?, set?}`, applied to `process.env` by `resolveEnv` at construction time — the place to put a harness's environment quirks so no caller has to remember them. `resolveAgent` also parses `--cmd` strings and derives a readable label (`node mock-agent.mjs` → `mock-agent`).
 - **`render.mjs`** — terminal formatting for `session/update`. Pure presentation; no protocol logic.
 - **`run.mjs`** — single-agent CLI, hand-rolled arg parsing, SIGINT → `session/cancel` then 2s grace before kill.
 - **`fanout.mjs`** — `Promise.allSettled` over tasks. Deliberately buffers prose per agent and prints only milestones live, because interleaved token streams are unreadable. Give each task its own `cwd` (a git worktree is the usual choice) so concurrent agents don't collide.

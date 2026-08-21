@@ -9,7 +9,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { AcpAgent, safePolicy, autoPolicy } from "./acp.mjs";
-import { resolveAgent } from "./agents.mjs";
+import { resolveAgent, resolveEnv } from "./agents.mjs";
 
 const file = process.argv[2] ?? "tasks.json";
 const tasks = JSON.parse(await readFile(file, "utf8"));
@@ -29,6 +29,7 @@ const results = await Promise.allSettled(
       name: label,
       command: spec.command,
       args: spec.args,
+      env: resolveEnv(spec.env),
       cwd: task.cwd ?? process.cwd(),
       policy: POLICIES[task.mode ?? "safe"] ?? safePolicy,
       onEvent: ({ update }) => {

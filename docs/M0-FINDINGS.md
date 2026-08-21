@@ -28,9 +28,14 @@ The registry in `agents.mjs:32` says `copilot acp`; the real flag is `copilot --
 (confirmed in `copilot --help`). M0-2 already owns that fix. `claude-agent-acp` needs
 `CLAUDECODE` unset — this survey also unset `CLAUDE_CODE_SSE_PORT` and
 `CLAUDE_CODE_ENTRYPOINT`, which is the fuller env scrub M1a-4's env list should carry.
+**Both fixed by M0-2.** Caveat recorded there: re-running the Claude handshake *without*
+the scrub also succeeded on adapter 0.49.0, so the nested-session refusal this survey hit
+is not reproducible on that version.
 
-Registry entries `omp`, `pi`, `gemini` and `claude-code` are **not installed** on this
-machine and were not surveyed. They are unavailable here, not failing.
+Registry entries `omp`, `pi` and `gemini` are **not installed** on this machine and were
+not surveyed. They are unavailable here, not failing. (`claude-code`, the deprecated
+`@zed-industries/claude-code-acp` adapter, was also uninstalled and unsurveyed; M0-2
+removed the entry, so `claude` is now the only Claude id.)
 
 ### Handshake and turn
 

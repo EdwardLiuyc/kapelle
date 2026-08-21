@@ -4,6 +4,29 @@
  * This is the whole adapter layer. Adding a harness means adding a line here,
  * not writing an integration — that is the point of ACP.
  */
+
+/**
+ * Markers a Claude Code parent session leaves in the environment, scrubbed
+ * before spawning the Claude adapter. M0-1 hit an adapter that refused to
+ * start a nested session — an opaque `-32603` on `session/new` — and got a
+ * clean handshake only with all three gone. Adapter 0.49.0 no longer refuses,
+ * so this is regression insurance rather than a live fix; don't delete it on
+ * finding it does nothing today.
+ *
+ * The list is M0-1's, not a survey of the parent: a CLI parent sets neither
+ * `CLAUDE_CODE_SSE_PORT` (an IDE/SSE variable) nor several other
+ * `CLAUDE_CODE_*` markers it does export. Widening it is M1a-4/M2-8 work —
+ * see the note on always-scrubbing secrets from *every* harness's env.
+ *
+ * Only registry entries get this. `--cmd` builds its spec from the string
+ * alone, so `--cmd "claude-agent-acp"` inherits `process.env` unscrubbed.
+ *
+ * Shape is M1a-4's registry `env` field: `{ unset?, set? }`.
+ */
+const CLAUDE_PARENT_ENV = {
+  unset: ["CLAUDECODE", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_ENTRYPOINT"],
+};
+
 export const AGENTS = {
   // Native ACP support: `opencode acp` starts it as an ACP subprocess.
   opencode: { command: "opencode", args: ["acp"] },
@@ -19,17 +42,16 @@ export const AGENTS = {
   // Agent SDK behind an ACP front end, and authenticates via whatever the
   // `claude` CLI already uses. Install with:
   //   npm i -g @agentclientprotocol/claude-agent-acp
-  claude: { command: "claude-agent-acp", args: [] },
-
-  // The same adapter under its former name, @zed-industries/claude-code-acp.
-  // Deprecated upstream but still what's installed on a lot of machines.
-  "claude-code": { command: "claude-code-acp", args: [] },
+  // Its deprecated predecessor @zed-industries/claude-code-acp is not
+  // supported; `npm i -g` the package above rather than pinning the old name.
+  claude: { command: "claude-agent-acp", args: [], env: CLAUDE_PARENT_ENV },
 
   // Gemini CLI exposes ACP behind a flag.
   gemini: { command: "gemini", args: ["--acp"] },
 
-  // Copilot CLI runs an ACP server. Check `copilot --help` if this arg drifts.
-  copilot: { command: "copilot", args: ["acp"] },
+  // Copilot CLI runs an ACP server behind a flag, not a subcommand — confirmed
+  // against `copilot --help` on 1.0.78. Re-check there if this drifts.
+  copilot: { command: "copilot", args: ["--acp"] },
 };
 
 const RUNTIMES = new Set(["node", "npx", "bun", "bunx", "deno", "python", "python3"]);
@@ -51,4 +73,18 @@ export function resolveAgent(id, customCmd) {
     );
   }
   return { name: id, ...spec };
+}
+
+/**
+ * Apply a registry `env` spec to a base environment. Returns `base` untouched
+ * when `spec` is falsy — i.e. the entry has no `env` field at all — so agents
+ * without an env spec keep sharing `process.env` rather than getting a copy.
+ * An explicit but empty spec (`{}`) still clones `base`; no registry entry
+ * does that today.
+ */
+export function resolveEnv(spec, base = process.env) {
+  if (!spec) return base;
+  const env = { ...base };
+  for (const key of spec.unset ?? []) delete env[key];
+  return Object.assign(env, spec.set ?? {});
 }

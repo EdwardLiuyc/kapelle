@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { AcpAgent, safePolicy, autoPolicy, makeAskPolicy } from "./acp.mjs";
-import { AGENTS, resolveAgent } from "./agents.mjs";
+import { AGENTS, resolveAgent, resolveEnv } from "./agents.mjs";
 import { render } from "./render.mjs";
 
 const argv = process.argv.slice(2);
@@ -71,6 +71,7 @@ const agent = new AcpAgent({
   name: spec.name,
   command: spec.command,
   args: spec.args,
+  env: resolveEnv(spec.env),
   cwd: flag("cwd", process.cwd()),
   policy,
   verbose,

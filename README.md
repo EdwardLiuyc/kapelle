@@ -107,19 +107,19 @@ your `PATH`. Check with `command -v claude-agent-acp` before debugging anything
 else.
 
 The adapter was previously published as `@zed-industries/claude-code-acp`
-(binary `claude-code-acp`). That name still works and is wired up as
-`--agent claude-code`, but it's deprecated upstream.
+(binary `claude-code-acp`). It's deprecated upstream and this client no longer
+carries an entry for it — install the package above.
 
-**If you're driving this client from inside a Claude Code session**, unset
-`CLAUDECODE` first — the adapter refuses to start a nested session and the
-variable is inherited by every subprocess we spawn:
+**Driving this client from inside a Claude Code session works as-is.** Older
+adapters refused to start a nested session when they saw the markers the parent
+leaves in the environment, so the `claude` registry entry scrubs them
+(`CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`) before spawning.
+0.49.0 no longer refuses, so the scrub is insurance against a regression rather
+than a fix for a failure you'd hit today. No `env -u ...` prefix needed — though
+note that `--cmd "claude-agent-acp"` bypasses the registry, and with it the scrub.
 
-```bash
-env -u CLAUDECODE node run.mjs "..." --agent claude --mode safe
-```
-
-Without it you get `Internal error (code -32603)` on `session/new`; `--verbose`
-shows the real reason on the adapter's stderr.
+An opaque `Internal error (code -32603)` on `session/new` is the usual shape of
+a harness that refused to start; `--verbose` shows the real reason on its stderr.
 
 ## What's deliberately missing
 
