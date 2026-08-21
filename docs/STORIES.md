@@ -102,6 +102,12 @@ terminal call would happen.
 `terminal/create` ever arrive (scopes M3-5), and does it route commands across our boundary
 with real argv or run them internally (populates the containment label). The second
 outlives the first, which is why it is recorded separately.
+**Done 2026-08-21** (`docs/M0-FINDINGS.md` §M0-3). Two corrections to this text as written:
+the stub cannot be a "logging no-op" — `terminal/create` must return a `terminalId` or the
+turn dies, so it really executes; and the answer to question 2 is not binary. **No harness
+called `terminal/create`** even with the capability advertised, and the command text
+reaches us on ordinary `session/update` notifications — a channel neither this story nor
+the plan anticipated.
 
 **M0-4 · Cancellation probe · S · needs M0-1**
 Send `session/cancel` mid-turn to each harness. Record whether the turn ends promptly and
@@ -141,8 +147,8 @@ default, and M3-5's terminal scope.
 **Partially landed with M0-1** — the file exists, the M0-1 section is complete, and the
 M0-3/4/5 sections are stubbed with the partial input that survey already produced (no
 `terminal/*` traffic under `terminal: false`; copilot supplying real argv on the permission
-request; `usage_update` shapes, including `cost` on opencode alone). What remains is
-filling those three sections, not creating the note.
+request; `usage_update` shapes, including `cost` on opencode alone).
+**M0-3 filled 2026-08-21.** Two sections remain: M0-4 and M0-5.
 
 ---
 
@@ -207,7 +213,14 @@ three targets are `shell: "internal"`, but they differ on something `shell` cann
 whether the harness asks permission at all. opencode never does. **Add a second field,
 `asksPermission: boolean`** (opencode `false`, the other two `true`), because the warning
 text differs in kind: against opencode the policy has *no* jurisdiction rather than reduced
-reach. **And add a third, `modeMap: { safe, ask, auto }`** — all three harnesses accept
+reach.
+**Revised again by M0-3** — `shell` alone cannot express what we measured, so add
+**`argvChannel: "terminal" | "notification" | "permission" | "none"`** beside it. `shell`
+says where the command runs, `argvChannel` says whether the text reaches us and by which
+route; the two are independent. Measured: opencode `internal`/`none`, claude-agent-acp
+`internal`/`notification` (**late**, on `tool_call_update`), copilot
+`internal`/`notification` (also on the permission request). `unknown` reads as
+`internal`/`none`. **And add a third, `modeMap: { safe, ask, auto }`** — all three harnesses accept
 `session/set_mode`, negotiating `plan` is what actually stops opencode writing, and the mode
 vocabularies do not align (copilot uses spec URLs, claude-agent-acp vendor ids, opencode
 `build`/`plan` discoverable only via `configOptions`). Note opencode advertises no `modes`
@@ -595,16 +608,26 @@ intact — right for a pipeline, where one inherited worktree carries several st
 on a single branch and flattening them discards which stage did what. Shares M1c-3's
 preflight; the two modes differ only in what lands.
 
-**M3-5 · Terminals · L · needs M0-3 · conditional**
+**M3-5 · Terminals · L · needs M0-3 · conditional — CUT by M0-3**
+**M0-3 measured zero `terminal/*` calls from all three harnesses with `terminal: true`
+advertised.** This story is now the documentation alternative its own text names: an
+honest per-harness label, and `terminal: false` recorded as a decision. Reopen only if a
+harness we add later actually calls `terminal/create`.
+
+
 `terminal/create | output | wait_for_exit | kill | release`, a Terminal class with a
 ring-buffered output cap, and embedded-terminal rendering. **Only build for harnesses M0-3
 showed actually call `terminal/create`.** If M0-3 shows they all ignore the capability, this
 story becomes documentation per harness instead — an honest label beats a boundary with
 holes in it.
 
-**M3-6 · Command-level policy gating · M · needs M3-5 · conditional**
-The payoff: with `terminal/*` we hold the actual argv rather than an agent-authored title
-string, so policy can judge the command. Exists only if M3-5 does.
+**M3-6 · Command-level policy gating · M · ~~needs M3-5~~ · conditional — SURVIVES, rebased by M0-3**
+The payoff: policy judges the actual argv rather than an agent-authored title string.
+**M0-3 removes the dependency on M3-5.** We already hold real argv for claude-agent-acp and
+copilot, from `rawInput` on `session/update` notifications rather than from `terminal/*`.
+Two constraints M0-3 adds: claude-agent-acp's argv arrives **late**, on `tool_call_update`,
+so the policy must not read at `tool_call` time; and opencode supplies no command text at
+all, so it cannot be gated this way and needs the mode channel instead.
 
 **M3-7 · M3 acceptance · S**
 A three-stage pipeline (opencode plans `safe` → claude-agent-acp implements `auto` → copilot
@@ -663,14 +686,16 @@ M0-1 ─┬─ M0-3 ─┬─ M0-7 ──── M1a-4 ┐
 
 Three things are worth pulling forward, because everything queues behind them:
 
-1. **M0-3.** The only story whose outcome *deletes* other stories (M3-5, M3-6), and it also
-   sets the containment labels M1a-4 ships with.
+1. ~~**M0-3.**~~ **Done 2026-08-21.** It did delete one story and rescue the other: M3-5 is
+   cut to documentation, M3-6 survives without it. The containment label M1a-4 ships is now
+   two fields, `shell` and `argvChannel`.
 2. **M1a-2.** Every later module types against it, and it is the story that earns the
    TypeScript decision.
 3. **The eleven decision halves** listed under *Decide before M1a starts*.
 
-M3-5 and M3-6 are the only stories here that may evaporate entirely. Plan M3's capacity
-assuming they might.
+~~M3-5 and M3-6 are the only stories here that may evaporate entirely.~~ **Settled:** M3-5
+evaporated, M3-6 did not — it now depends on `argvChannel` rather than on M3-5. M3's
+capacity is one large story lighter.
 
 ---
 

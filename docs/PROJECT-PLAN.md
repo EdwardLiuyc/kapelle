@@ -40,10 +40,10 @@ policy across all of them and returning machine-readable results.
 | Handoff | Same worktree, sequential. Successor sees predecessor's changes on disk plus its result summary in-prompt. |
 | Policy scope | Per task, with run default, harness default, and a harness **ceiling**. Precedence `task > run > harness > safe`; exceeding the ceiling fails validation rather than downgrading silently. |
 | Cost | Duration and turn count roll up per run. Token counts stay per task, labelled with their harness, never summed across vendors. |
-| Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally. `safe` warns when it cannot actually contain. **Measured (M0-1): all three run internally; opencode never asks permission, so the policy has no jurisdiction over it — but all three accept `session/set_mode`, so modes are a second containment channel.** |
+| Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally, **and separately whether we ever see the command text** (`argvChannel`). `safe` warns when it cannot actually contain. **Measured (M0-1, M0-3): all three run internally and none calls `terminal/*` even when offered; opencode never asks permission and never shows us a command, so the policy has no jurisdiction over it; claude-agent-acp and copilot do show real argv, on `session/update` notifications. All three accept `session/set_mode`, so modes are a second containment channel.** |
 | Unattended `ask` | Pending decision published on the event stream; **timeout → deny**. |
 | Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. **Required, not optional: M0-1 found this is opencode's default behaviour, not an anomaly.** |
-| Terminals | Spike first (M0). Implement only for harnesses that actually call `terminal/create`. **M0-1 baseline: none does under `terminal: false`** — M0-3 tests whether flipping it changes that. |
+| Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. |
 | Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency; zero runtime deps preserved. |
 | Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
 | CLI | Two front ends, one core: `run` drives in-process, `runs` talks to the daemon. |
@@ -218,17 +218,20 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    **Fixed by M0-2.** It is `copilot --acp` (a flag), not `copilot acp` (a subcommand) as
    `agents.mjs` guessed; `opencode acp` confirmed correct. The registry now says `--acp`,
    verified against Copilot 1.0.78 completing a turn; the old arg exits 1.
-3. **Terminal spike:** flip `clientCapabilities.terminal` to `true` (`acp.mjs:82`), add a
-   logging stub for `terminal/*` in `#handleRequest`, run all three harnesses on a task
-   that obviously needs a shell (`run the tests`) in a throwaway workspace under
-   `--mode auto`. Record per harness whether `terminal/create` ever arrives.
-   **This decides M3's terminal scope.** Note: it must be `auto`, because under `safe`
-   the `execute` permission is denied before any terminal call would be made.
-4. **Shell routing — the spike's second output.** For each harness, conclude one of
-   `terminal` (commands cross our boundary, with real argv) or `internal` (they don't, and
-   nothing we do can see them). This populates the registry's containment label and decides
-   what `safe` is allowed to claim. Same experiment as item 3; it just needs recording
-   separately, because it outlives the terminal decision.
+3. ~~**Terminal spike.**~~ **Done by M0-3** (`docs/M0-FINDINGS.md` §M0-3, branch
+   `spike/m0-3-terminal`, kept unmerged). **No harness called `terminal/create`** with
+   `terminal: true` advertised — opencode, claude-agent-acp and copilot all ran the tests
+   through their own shell. Two corrections to this item as written: a "logging stub" is
+   not a legal answer (`terminal/create` must return a `terminalId`, so the spike really
+   executed), and the runnable set is the three installed harnesses — `omp`, `pi` and
+   `gemini` are **unknown by absence, not by test**. **M3-5 is cut to documentation.**
+4. ~~**Shell routing — the spike's second output.**~~ **Done by M0-3, and the binary was
+   wrong.** All three execute internally, but the command text still reaches us for two of
+   them — on ordinary `session/update` notifications, a channel this plan never considered.
+   Hence two fields: `shell` (where it runs) and `argvChannel`
+   (`terminal | notification | permission | none`). opencode shows us nothing and cannot be
+   gated by argv at all; claude-agent-acp's argv arrives late, on `tool_call_update`.
+   **M3-6 therefore survives without M3-5.**
 5. **Cancellation probe.** Confirm the expected result — that no harness accepts a second
    `session/prompt` while a turn is in flight — and record what each one does with
    `session/cancel` mid-turn: does the turn end promptly, and with what `stopReason`?
@@ -283,7 +286,10 @@ driven from a run file, fully verifiable offline.
   `#guardPath` (`acp.mjs:235`). Replace the single `onEvent` callback with a typed emitter.
 - **`protocol/registry.ts`** — today's `AGENTS` map, plus three fields per entry beyond
   `{command, args}`: `defaultMode`, `maxMode`, and a containment label
-  (`shell: "terminal" | "internal" | "unknown"`, filled in from M0). Mode ordering is the
+  (`shell: "terminal" | "internal" | "unknown"`, filled in from M0) plus
+  `argvChannel: "terminal" | "notification" | "permission" | "none"` — M0-3 found the
+  command text arrives on `session/update` notifications, not through `terminal/*`, so
+  where a command runs and whether we can see it are two facts. Mode ordering is the
   total order `safe < ask < auto`. Resolution is `task ?? run ?? harness.defaultMode ??
   "safe"`, then the `maxMode` ceiling applies — and exceeding it is a **validation error
   naming both values**, never a silent downgrade. Starting a task in `safe` or `ask` against
@@ -436,7 +442,9 @@ driven from a run file, fully verifiable offline.
 - **Handoff** — predecessor's `TaskResult` injected into the successor's prompt. Worktree
   inheritance rule: **inherit if you are the only successor; fork from the predecessor's
   branch otherwise** (two tasks that both `needs: [plan]` cannot share one checkout).
-- **Terminals**, scoped by M0's findings: `terminal/create | output | wait_for_exit |
+- ~~**Terminals**~~ — **cut by M0-3**: nothing calls `terminal/create`. What remains of the
+  idea is the honest per-harness label. The original scope, kept for the record, was
+  `terminal/create | output | wait_for_exit |
   kill | release`, a Terminal class with a ring-buffered output cap, embedded-terminal
   rendering, and command-level policy gating now that we hold the actual argv rather than
   an agent-supplied title string. If M0 shows the harnesses ignore the capability,
