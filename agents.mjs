@@ -4,6 +4,20 @@
  * This is the whole adapter layer. Adding a harness means adding a line here,
  * not writing an integration — that is the point of ACP.
  */
+
+/**
+ * Markers a Claude Code parent session leaves in the environment. The
+ * claude-agent-acp adapter refuses to start a nested session when it sees
+ * them, and the refusal surfaces as an opaque `-32603` on `session/new`.
+ * `CLAUDECODE` is the one documented; the other two are set by the same parent
+ * and M0-1 got a clean handshake only with all three gone.
+ *
+ * Shape is M1a-4's registry `env` field: `{ unset?, set? }`.
+ */
+const CLAUDE_PARENT_ENV = {
+  unset: ["CLAUDECODE", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_ENTRYPOINT"],
+};
+
 export const AGENTS = {
   // Native ACP support: `opencode acp` starts it as an ACP subprocess.
   opencode: { command: "opencode", args: ["acp"] },
@@ -19,17 +33,18 @@ export const AGENTS = {
   // Agent SDK behind an ACP front end, and authenticates via whatever the
   // `claude` CLI already uses. Install with:
   //   npm i -g @agentclientprotocol/claude-agent-acp
-  claude: { command: "claude-agent-acp", args: [] },
+  claude: { command: "claude-agent-acp", args: [], env: CLAUDE_PARENT_ENV },
 
   // The same adapter under its former name, @zed-industries/claude-code-acp.
   // Deprecated upstream but still what's installed on a lot of machines.
-  "claude-code": { command: "claude-code-acp", args: [] },
+  "claude-code": { command: "claude-code-acp", args: [], env: CLAUDE_PARENT_ENV },
 
   // Gemini CLI exposes ACP behind a flag.
   gemini: { command: "gemini", args: ["--acp"] },
 
-  // Copilot CLI runs an ACP server. Check `copilot --help` if this arg drifts.
-  copilot: { command: "copilot", args: ["acp"] },
+  // Copilot CLI runs an ACP server behind a flag, not a subcommand — confirmed
+  // against `copilot --help` on 1.0.78. Re-check there if this drifts.
+  copilot: { command: "copilot", args: ["--acp"] },
 };
 
 const RUNTIMES = new Set(["node", "npx", "bun", "bunx", "deno", "python", "python3"]);
@@ -51,4 +66,16 @@ export function resolveAgent(id, customCmd) {
     );
   }
   return { name: id, ...spec };
+}
+
+/**
+ * Apply a registry `env` spec to a base environment. Returns `base` untouched
+ * when the entry declares nothing, so agents without an env spec keep sharing
+ * `process.env` rather than getting a copy.
+ */
+export function resolveEnv(spec, base = process.env) {
+  if (!spec) return base;
+  const env = { ...base };
+  for (const key of spec.unset ?? []) delete env[key];
+  return Object.assign(env, spec.set ?? {});
 }
