@@ -40,12 +40,12 @@ policy across all of them and returning machine-readable results.
 | Handoff | Same worktree, sequential. Successor sees predecessor's changes on disk plus its result summary in-prompt. |
 | Policy scope | Per task, with run default, harness default, and a harness **ceiling**. Precedence `task > run > harness > safe`; exceeding the ceiling fails validation rather than downgrading silently. |
 | Cost | Duration and turn count roll up per run. Token counts stay per task, labelled with their harness, never summed across vendors. |
-| Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally. `safe` warns when it cannot actually contain. |
+| Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally. `safe` warns when it cannot actually contain. **Measured (M0-1): all three run internally; opencode never asks permission, so the policy has no jurisdiction over it — but all three accept `session/set_mode`, so modes are a second containment channel.** |
 | Unattended `ask` | Pending decision published on the event stream; **timeout → deny**. |
-| Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. |
-| Terminals | Spike first (M0). Implement only for harnesses that actually call `terminal/create`. |
+| Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. **Required, not optional: M0-1 found this is opencode's default behaviour, not an anomaly.** |
+| Terminals | Spike first (M0). Implement only for harnesses that actually call `terminal/create`. **M0-1 baseline: none does under `terminal: false`** — M0-3 tests whether flipping it changes that. |
 | Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency; zero runtime deps preserved. |
-| Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end. |
+| Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
 | CLI | Two front ends, one core: `run` drives in-process, `runs` talks to the daemon. |
 
 ### Notes on some of these
@@ -175,7 +175,10 @@ run.ts ──▶ import, validate ──▶ Run created, tasks in DAG order
    The M4 dashboard becomes purely additive — a third subscriber.
 3. **Two independent safety layers stay separate.** `#guardPath` is unconditional and
    covers every `fs/*` call; policy is about intent and varies per task. The daemon adds
-   a third concern: the API is itself an execution surface.
+   a third concern: the API is itself an execution surface. **M0-1 qualifies the first
+   layer: no target harness ever calls `fs/*`** — all three read and write in-process — so
+   `#guardPath` is live only against `mock-agent.mjs` today. Keep it (a harness may use
+   `fs/*` tomorrow) but rest no containment claim on it.
 
 Known gap, deliberately named: **anything an agent runs through its own shell bypasses
 all three layers.** It never becomes an `fs/*` call, so `#guardPath` never sees it; and
@@ -186,15 +189,31 @@ command. If M0 says the harnesses ignore it, the gap is permanent, and the answe
 labelling rather than a boundary with holes in it: the registry records which harnesses are
 uncontainable, and `safe` says so out loud instead of overclaiming.
 
+**M0-1 already widened this gap in one direction and narrowed it in another.** Wider:
+opencode never sends `session/request_permission` at all, so against it the policy has no
+jurisdiction — `safe` and `ask` are both inert, and it wrote a file under `safe` in the
+probe. That is not a leaky boundary, it is no boundary, and honest labelling is the only
+available answer. Narrower: copilot does hand us the real argv, in
+`rawInput.command`/`commands[]` on the permission request, while still executing
+internally — so for that harness we judge more than a title string even without
+`terminal/*`. The two facts are independent and the registry needs to express both.
+
 ---
 
 ## M0 — Reconnaissance (~½ day, builds nothing)
 
 Agenda item #1 in the brief. Costs almost nothing and de-risks every design choice after.
 
-1. Run today's MVP against real **opencode** (`opencode acp`) and **claude-agent-acp**
-   (`env -u CLAUDECODE`). Record every break, every unhandled `session/update` variant,
-   every method we reject in `#handleRequest` (`acp.mjs:196`).
+> **Status:** item 1 is done — see `M0-FINDINGS.md`. Item 2 is confirmed against
+> `copilot --help`. Items 3-6 are still open, and 3/5/6 now start from the baseline that
+> survey recorded rather than from nothing.
+
+1. ~~Run today's MVP against real **opencode** and **claude-agent-acp**.~~ **Done, and
+   widened to all three targets.** All spawn, all complete a turn at protocol v1, none
+   sends a method we reject in `#handleRequest` (`acp.mjs:205`). Unhandled
+   `session/update` variants: `available_commands_update` (all three) and
+   `config_option_update` (copilot). The two results that move the plan are that **all
+   three advertise `loadSession: true`** and that **none of them calls `fs/*`**.
 2. **Copilot's ACP invocation — already verified, and the registry is wrong.** It is
    `copilot --acp` (a flag), not `copilot acp` (a subcommand) as `agents.mjs:32` guesses.
    `opencode acp` confirmed correct. Fix the registry entry.
@@ -218,15 +237,22 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    anything reports cumulative or billable counts, or names the model it selected. This is
    what the cost decision rests on, and today it is an assumption.
 7. Bake `env -u CLAUDECODE` into the `claude` registry entry (`agents.mjs:22`) — a
-   two-line fix for a papercut `CLAUDE.md` documents at length.
+   two-line fix for a papercut `CLAUDE.md` documents at length. M0-1 ran with
+   `CLAUDE_CODE_SSE_PORT` and `CLAUDE_CODE_ENTRYPOINT` scrubbed as well; the registry's
+   env list should carry all three.
 8. Correct the safety claim in `CLAUDE.md` **and the README**: "even `--mode auto` cannot
    write outside it" is true of `fs/*` only. A shelling agent bypasses `#guardPath`
    entirely. The permission policy does still fire on the `execute` tool call — but it
-   judges an agent-supplied *title string*, not the actual command line. State the corrected
-   claim positively: **`safe` blocks everything that crosses the protocol, and nothing that
-   doesn't.**
+   judges an agent-supplied *title string*, not the actual command line.
+   **M0-1 makes this correction bigger than a reword.** The positive claim drafted here —
+   "`safe` blocks everything that crosses the protocol, and nothing that doesn't" — is
+   still an overclaim, because against opencode *nothing* crosses the protocol: no `fs/*`,
+   no permission request, and a file written under `safe`. The honest statement is
+   per-harness, and it belongs next to the registry's containment label rather than in a
+   single sentence.
 
-**Output:** a short findings note. No production code beyond items 2, 7 and 8.
+**Output:** a short findings note — `M0-FINDINGS.md`, M0-1 section filled, 3/4/5 stubbed.
+No production code beyond items 2, 7 and 8.
 
 ---
 
@@ -257,6 +283,26 @@ driven from a run file, fully verifiable offline.
   naming both values**, never a silent downgrade. Starting a task in `safe` or `ask` against
   a `shell: "internal"` harness emits a one-line containment warning as a bus event, so the
   CLI and the M4 dashboard both surface it.
+  **M0-1 fills in the labels, and shows one field is not enough.** All three targets are
+  `shell: "internal"`, but they differ on something the label does not capture: whether the
+  harness asks permission at all. opencode never does — so it needs a second field, e.g.
+  `asksPermission: false`, and a warning with real teeth (policy has *no* effect, not
+  reduced effect). claude-agent-acp asks on writes; copilot asks on both reads and writes,
+  and supplies real argv when it does.
+  **Modes are the second containment channel, and change what `safe` should do.** All three
+  accept `session/set_mode` — including opencode, which advertises no `modes` and exposes
+  its ids only through `configOptions` with `category: "mode"`. Negotiating `plan` before
+  the prompt stopped opencode writing a file that the identical run without negotiation
+  wrote. So **`safe` should negotiate, then filter**: set the harness's nearest restrictive
+  mode at session start, and apply `READ_ONLY_KINDS` to whatever still arrives. That needs a
+  per-harness mode map in the registry (`modeMap: { safe, ask, auto }`), because the
+  vocabularies do not align — copilot uses the spec's mode URLs, claude-agent-acp bare
+  vendor ids, opencode `build`/`plan`. Negotiation is defence in depth, not a sandbox: the
+  one refusal we measured arrived as agent prose, so compliance and enforcement are not
+  distinguishable from outside. Note the third-order consequence for copilot:
+  because it reads by shelling out, its reads are `execute` kind, so `safe` refuses them
+  and the harness becomes unusable rather than cautious — an argument for `defaultMode`
+  being per harness, which this design already allows.
 - **`core/policy.ts`** — small in lines, load-bearing. Change the policy signature from
   `async () => boolean` to a form answerable by an external, asynchronous decider, so `ask`
   can work with no TTY in M2. Keep `READ_ONLY_KINDS`, `safePolicy`, `autoPolicy` semantics
@@ -352,8 +398,16 @@ driven from a run file, fully verifiable offline.
   that survived, reconcile `git worktree list` against persisted run records, and reap only
   those worktrees whose run is terminal *and* past the retention window (default 7 days).
 - **Persistence** — JSON per run under `.agent-team/runs/<id>/`, written on state
-  transitions. For completed-run history, not live recovery: ACP has no resume, so an
-  interrupted session cannot be reattached.
+  transitions. For completed-run history, not live recovery.
+  **The stated reason was wrong and M0-1 corrected it:** "ACP has no resume" is true of
+  the base protocol but false of every harness we target. All three advertise
+  `agentCapabilities.loadSession: true`; opencode and claude-agent-acp additionally
+  advertise `sessionCapabilities.resume` and `.fork`. So reattaching an interrupted session
+  is *available*, and history-only persistence is now a scope choice rather than a
+  protocol limit. Treat real resume as a separate follow-on: persist the harness session id
+  alongside the run record here (cheap, and useless if skipped), and gate any
+  `session/load` call on the capability, since the registry still contains harnesses that
+  lack it.
 - **Config** — `.agent-team/config.json` with `AGENT_TEAM_*` env override, layered
   env > project. Exists because the new knobs (watchdog thresholds, TTL, retention window,
   port, permission timeout) need a home other than the run file.
