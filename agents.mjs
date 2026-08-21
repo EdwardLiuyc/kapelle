@@ -77,8 +77,10 @@ export function resolveAgent(id, customCmd) {
 
 /**
  * Apply a registry `env` spec to a base environment. Returns `base` untouched
- * when the entry declares nothing, so agents without an env spec keep sharing
- * `process.env` rather than getting a copy.
+ * when `spec` is falsy — i.e. the entry has no `env` field at all — so agents
+ * without an env spec keep sharing `process.env` rather than getting a copy.
+ * An explicit but empty spec (`{}`) still clones `base`; no registry entry
+ * does that today.
  */
 export function resolveEnv(spec, base = process.env) {
   if (!spec) return base;
