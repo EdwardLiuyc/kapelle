@@ -390,8 +390,13 @@ Promptly on all three — and one of them lies about why.
 | session usable afterwards | yes (`end_turn`) | yes | yes |
 
 **Latency is not the interesting number.** Every sample landed inside 64 ms, two orders of
-magnitude below any plausible TTL, and nothing arrived on the wire after the response. The
-interesting number is the stop reason.
+magnitude below any plausible TTL, and nothing arrived on the wire after the response. **No
+harness came near the 60 s wait bound**, so there is no "did not end within N s" row to
+record. The interesting number is the stop reason.
+
+Note also what is *not* wrong here: every literal observed is inside M1b-2's set
+(`docs/STORIES.md:334-343`) — nobody invented a value. The mismatch is semantic, and that is
+worse, because a vocabulary error would have been caught by a type.
 
 **Copilot reports `end_turn` for a turn it cancelled**, in both samples. The baseline row is
 what settles it: 11 events and ~5.6 s against 69 events and 36.3 s, with the `tool_call`
