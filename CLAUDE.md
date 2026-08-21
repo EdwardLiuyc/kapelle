@@ -45,4 +45,4 @@ Five files, one direction of dependency: `run.mjs` / `fanout.mjs` → `acp.mjs` 
 
 ## Deliberately unimplemented
 
-Don't treat these as gaps to fill unless asked: `terminal/*` (we advertise `terminal: false`, so agents run shell commands internally); `session/load` / resume (check `agent.agentCapabilities` before calling); elicitation, slash commands, session modes. Cancellation is best-effort.
+Don't treat these as gaps to fill unless asked: `terminal/*` (we advertise `terminal: false` — and M0-3 measured that flipping it to `true` changes nothing: opencode, claude-agent-acp and copilot all run shell commands internally and never call `terminal/create`, so this is a recorded decision, not a gap. See `docs/M0-FINDINGS.md` §M0-3); `session/load` / resume (check `agent.agentCapabilities` before calling); elicitation, slash commands, session modes. Cancellation is best-effort.

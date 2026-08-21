@@ -217,9 +217,139 @@ other two. M0-5 owns confirming whether that amount ever becomes non-zero.
 
 ## M0-3 · Terminal and shell-routing spike
 
-Pending. Partial input already recorded above: no harness called `terminal/*` under
-`terminal: false`, and copilot surfaces real argv through `session/request_permission`
-while executing internally.
+Run 2026-08-21 on branch `spike/m0-3-terminal` (kept, never merged) against the same
+three harnesses. Method: `clientCapabilities.terminal` flipped to `true`, and all five
+`terminal/*` methods implemented as handlers that **really execute** the command and
+return true output and exit status.
+
+The story said "logging no-ops". That is not a legal answer — `terminal/create` must
+return a `terminalId`, and a harness that gets nothing either aborts the turn or falls
+back to its own shell, which in the log is indistinguishable from never having asked.
+Executing for real also keeps the turn alive long enough to see what comes *after* the
+first command. Every call was logged with full argv, and `#guardPath` deliberately did
+not apply: the spike observes, it does not contain.
+
+Workspace: a throwaway Node project with a genuine failing test (`sum` returning `a - b`),
+reset between harnesses. Prompt `run the tests`, `--mode auto`, no `session/set_mode`.
+Copilot self-updated to **1.0.80** between M0-1 (2026-08-20) and this run; the M0-1 rows
+above still say 1.0.78 and were correct when written.
+
+**`auto` bounds every verdict below.** It was required — under `safe`, copilot's reads go
+through `execute`, which is not in `READ_ONLY_KINDS`, so they are refused before a terminal
+call could happen. The consequence is that all of this measures what a harness does when
+**nothing is refused**. A harness that reached for `terminal/*` only after its own shell
+was denied would not appear here. Untested, and cheap to test if it ever matters.
+
+### Question 1 — does `terminal/create` ever arrive?
+
+**No. Not once, from any harness, with the capability advertised as `true`.**
+
+| | opencode 1.18.18 | claude-agent-acp 0.49.0 | copilot 1.0.80 |
+|---|---|---|---|
+| `terminal/create` | never | never | never |
+| any `terminal/*` | never | never | never |
+| turn completed | yes | yes | yes |
+| shell tool used instead | `bash` | `Terminal` | `shell` |
+
+All three ran the tests, read the failure and diagnosed the bug correctly — through their
+own shell, ignoring the capability entirely. M0-1's zero was therefore not an artefact of
+`terminal: false`. **None of these harnesses delegates command execution to the client** —
+though see below: claude-agent-acp does have a terminal-shaped path, behind a vendor flag
+this spike initially failed to offer.
+
+Note the trap in the middle column: claude-agent-acp *names its own tool* `Terminal`. It
+is a vendor tool name in a `tool_call` notification, not the ACP method. Grepping logs for
+"terminal" finds it and means nothing.
+
+### Question 2 — does the command text reach us, and how?
+
+Yes for two of three, and **never through the channel the plan expected**. The command
+arrives on ordinary `session/update` notifications, which `render.mjs` drops on the floor.
+
+| | opencode | claude-agent-acp | copilot |
+|---|---|---|---|
+| `shell` | internal | internal | internal |
+| `argvChannel` | **none** | **notification** (late) | **notification** + permission |
+| `rawInput` on `tool_call` | `{cwd}` only | `{}` | full `{command}` |
+| `rawInput` on `tool_call_update` | — | full `{command, description}` | — |
+| permission requests | **0** | 1 of 2 `execute` calls | 3 of 3 |
+
+Observed argv, verbatim:
+
+- **opencode** — nothing. Title is the bare string `bash`, `rawInput` carries only `cwd`.
+  Seven tool calls, zero permission requests, and it **silently edited `sum.mjs`** to fix
+  the bug under `--mode auto`. We never saw a single command it ran.
+- **claude-agent-acp** — `cat package.json 2>/dev/null; echo "---"; ls`, then
+  `node --test 2>&1`. Both arrived **on `tool_call_update`, ~0.5s after** the `tool_call`
+  that announced them with an empty `rawInput`. It asked permission for the second command
+  and not the first.
+- **copilot** — full command on the initial `tool_call`, e.g.
+  `cd <ws> && npm test`, and again on the permission request. Confirms M0-1.
+
+**`argvChannel` therefore needs four values, not the two the plan implies:**
+`terminal | notification | permission | none`. "Notification" is the one nobody planned
+for, and it is where two of three harnesses actually put the command. Timing matters too:
+claude-agent-acp's argv is late, so a policy that reads `rawInput` at `tool_call` time
+sees `{}` and judges blind — the same bookkeeping trap `#toolCalls` already exists to
+avoid.
+
+### Why nothing called it — checked, not assumed
+
+The verdict above is "did not happen". Three follow-ups turn that into "does not exist,
+or is not wired to the capability we advertised".
+
+**The spec permits it.** Agents **MUST** verify `clientCapabilities.terminal` before
+calling any terminal method, but nothing obliges them to prefer terminals over their own
+shell. Advertising and being ignored is conformant, not a client bug.
+
+**opencode — capability bundled, never called.** Its binary carries the ACP SDK's five
+method constants and the SDK's `createTerminal()` wrapper
+(`sendRequest(Q.terminal_create, …)`). That wrapper appears exactly once: the definition.
+No call site anywhere in opencode's own agent code. (Its `capabilities?.terminal?.*` hits
+are xterm TUI code, and its one `_meta` capability gate is `terminal-auth`, for login.)
+
+**claude-agent-acp — never reads `clientCapabilities.terminal` at all.** It gates on a
+vendor extension instead: `clientCapabilities._meta["terminal_output"]`
+(`dist/acp-agent.js:1862`, `:3195`). **We never offered it, so this part of the spike was
+untested rather than negative.** Offering it (`spike/m0-3-terminal`, second commit)
+changes the wire immediately:
+
+```json
+{"sessionUpdate":"tool_call","toolCallId":"toolu_01FDY…","title":"Terminal","kind":"execute",
+ "_meta":{"claudeCode":{"toolName":"Bash"},"terminal_info":{"terminal_id":"toolu_01FDY…"}},
+ "content":[{"type":"terminal","terminalId":"toolu_01FDY…"}]}
+```
+
+Every Bash call now carries an ACP `type: "terminal"` content block — for a terminal that
+**was never created**, whose `terminalId` is simply the `toolCallId`. Still zero
+`terminal/*` calls, and still no command output crossing the wire. It is a rendering
+convention for a client that already displays the terminal, not delegated execution.
+
+**copilot — statically opaque.** A 177 MB bun-compiled ELF; `strings` finds no ACP method
+names at all, control strings included, so nothing can be concluded from the binary.
+GitHub's own ACP reference documents no terminal support, and its shell is a first-class
+internal tool (`--allow-tool='shell(git:*)'`, `--available-tools="bash,view"`).
+
+**The general lesson, which outlives this spike:** a capability probe that tests only the
+standard field under-reports. Harnesses gate behaviour on `_meta` extensions we do not
+advertise, and each vendor spells them differently (`terminal_output` for claude-agent-acp,
+`terminal-auth` for opencode). The registry should record per-harness `_meta` flags
+alongside the containment fields, and `render.mjs` currently drops `type: "terminal"`
+content on the floor.
+
+### Consequences
+
+- **M3-5 (terminals) is not worth building as specified.** Nothing calls `terminal/create`.
+  It becomes per-harness documentation, and `terminal: false` on master is now a recorded
+  decision rather than a default. **One piece survives:** if embedded-terminal rendering is
+  ever wanted, claude-agent-acp already emits `type: "terminal"` content under
+  `_meta.terminal_output`, and `render.mjs` would need to handle it.
+- **M3-6 (command-level policy gating) survives, on a different foundation.** Its premise
+  was "with `terminal/*` we hold real argv". We hold real argv for two of three harnesses
+  *without* `terminal/*` — from notifications, not the permission request. What it cannot
+  do is gate opencode, which shows us nothing.
+- `unknown` reads as `internal` / `none` for warning purposes. `omp`, `pi` and `gemini`
+  are uninstalled here and are **unknown by absence, not by test**.
 
 ## M0-4 · Cancellation probe
 
