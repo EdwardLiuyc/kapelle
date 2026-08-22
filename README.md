@@ -1,3 +1,5 @@
+<img src="assets/icon.svg" alt="agent-team" width="88" align="right">
+
 # agent-team
 
 A minimal Agent Client Protocol client. ~400 lines, zero dependencies, Node 20+.
