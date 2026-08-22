@@ -45,8 +45,10 @@ opencode auth login           # opencode owns its own auth — we never see keys
 node run.mjs "summarise this repo in three sentences" --mode safe
 ```
 
-`--mode safe` allows reads, searches and fetches; it refuses every edit, delete,
-move and execute. Good first run — nothing can change.
+`--mode safe` allows reads, searches and fetches and refuses every edit, delete,
+move and execute — of the ones the harness asks about. That is per-harness, and
+opencode asks about nothing; see [the safety boundary](#two-things-worth-knowing)
+before treating `safe` as a guarantee.
 
 Then let it work:
 
@@ -54,8 +56,8 @@ Then let it work:
 node run.mjs "add a --version flag to run.mjs" --mode ask
 ```
 
-`ask` auto-approves reads and prompts you per mutation. `--mode auto` approves
-everything (the workspace-root path guard still applies).
+`ask` auto-approves reads and prompts you per mutation — again, per mutation the
+harness asks about. `--mode auto` approves everything.
 
 Point it elsewhere with `--cwd ../some-project`. Use `--verbose` to see the
 agent's stderr when something looks stuck.
@@ -140,6 +142,15 @@ a harness that refused to start; `--verbose` shows the real reason on its stderr
 The client keeps a `toolCallId → {title, kind}` map so the policy has something
 to judge — without it, every decision is blind.
 
-**The policy is the safety boundary.** One function, one place, applied
-identically to every harness. Path guards on `fs/write_text_file` run regardless
-of policy, so even `--mode auto` cannot write outside the workspace root.
+**The policy filters what a harness asks; it is not a sandbox.** One function,
+one place, applied identically to every harness — but it only ever sees what
+crosses the protocol, and how much that is differs per harness. Measured
+(`docs/M0-FINDINGS.md` §M0-1): opencode sends no `session/request_permission` at
+all and wrote a file while running under `safePolicy`, so no `--mode` value
+restrains it; copilot reads by shelling `cat`, so its reads arrive as `execute`
+and `safe` refuses them — safe mode does not make copilot cautious, it makes it
+unusable. `#guardPath` rejects any `fs/*` path outside the workspace root, but no
+surveyed harness calls `fs/*`: it bounds this client's own file service, not the
+agent. Negotiating the harness's restrictive mode at session start is what would
+reach opencode (measured: it declined with `session/set_mode → plan`), and this
+client does not do it yet.
