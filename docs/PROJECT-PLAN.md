@@ -244,10 +244,21 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    copilot the text lands in the running turn's context rather than being served
    (`github/copilot-cli#4555` reports the mechanism: `session/prompt` aborts the session
    unconditionally, even when idle). There is no safe way to nudge a turn in flight.
-6. **Usage reporting.** Record, per harness, whether `usage_update` arrives at all and what
-   its fields actually mean. `{used, size}` is context occupancy, not spend — check whether
-   anything reports cumulative or billable counts, or names the model it selected. This is
-   what the cost decision rests on, and today it is an assumption.
+6. ~~**Usage reporting.**~~ **Answered by M0-5, and refocused on the context window**
+   (`docs/M0-FINDINGS.md` §M0-5). `usage_update` arrives from all three and `used` is
+   occupancy and a snapshot, as assumed — but **`size` is not a usable denominator**:
+   claude-agent-acp reports 200k for the whole of a session's first turn whatever the real
+   window, and copilot's 200000 matches neither its own 264k window nor the ~175k it leaves
+   usable. Cadence differs too — **opencode sends one update per turn, at the end**, so it
+   gives no in-turn context signal at all — and compaction is announced only in prose.
+   **On "running out", the protocol has nothing**: no quota, credit or threshold field exists
+   in ACP, and `max_tokens` / `max_turn_requests` never appeared. Only claude-agent-acp warns,
+   through a vendor `_meta` extension (`_claude/rateLimit`, carrying `allowed_warning`,
+   `utilization`, `credits_required`) that `render.mjs` drops today. **The threshold is the
+   supervisor's to compute, per harness.** Secondary findings: `cost` is a cumulative USD
+   total on opencode and claude-agent-acp (opencode's `0` was an unmetered provider, not a
+   dead field), a per-turn token count exists on all three via the `UNSTABLE`
+   `PromptResponse.usage`, and all three name the model they ran.
 7. ~~Bake `env -u CLAUDECODE` into the `claude` registry entry.~~ **Done by M0-2**, with
    all three of `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT` and `CLAUDE_CODE_ENTRYPOINT` scrubbed
    as M0-1 ran them. The list lives in a registry `env` field already shaped
@@ -531,9 +542,21 @@ and confirm the run proceeds and a CLI observer on the same run sees the same de
 
 ## Open, deliberately unresolved
 
-- A per-harness price table converting tokens to estimated spend. Blocked on knowing which
-  model a harness actually selected — nothing reports that today, and a confidently wrong
-  dollar figure is worse than none. M0 item 6 is what would unblock it.
+- ~~A per-harness price table converting tokens to estimated spend.~~ **Unblocked and
+  reshaped by M0-5.** All three harnesses name the model they selected (`configOptions`,
+  `category: "model"`, on the `session/new` response), so the blocker is gone — but the
+  table is no longer the cheapest route to a number: opencode and claude-agent-acp report
+  cumulative USD themselves, and copilot cannot be priced in currency at all, since it
+  meters premium requests (`_meta.copilotUsage`: `"1x"`, `"15x"`, `"0.33x"`) rather than
+  tokens. The work that remains is recording each harness's self-reported unit, not
+  converting tokens for all three. **Decided 2026-08-22: nice-to-have, not scheduled** — it
+  would mostly add a second, worse number next to the one two harnesses already report. See
+  the backlog entry.
+- **Whether a context-occupancy signal can be trusted enough to act on.** M0-5 answers "not
+  on `size`": the denominator is wrong on copilot and late on claude, and opencode reports
+  only at end of turn. Left open because the remedy — per-harness trust flags, or asking each
+  harness for its own accounting — is real work that no story needs yet. M1c-1's watchdog
+  deliberately carries no context rung in the meantime.
 - Whether `stallRepeatCount` needs per-harness tuning or one default holds. A task that
   re-runs the same test command while iterating is a legitimate repeat; the default is
   deliberately generous, and repeats only ever warn.
