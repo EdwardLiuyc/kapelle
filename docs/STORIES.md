@@ -115,6 +115,15 @@ with what `stopReason`. Confirm the expectation that none accepts a second `sess
 while a turn is in flight.
 *Done when* the note states the observed stop reason and latency per harness — M1c-1's TTL
 rung is only as good as this answer.
+**Done 2026-08-21** (`docs/M0-FINDINGS.md` §M0-4). Three corrections to this text as
+written. The probe could not be a `run.mjs` run: its SIGINT path kills at 2 s
+(`run.mjs:81-88`) and `#failAll` (`acp.mjs:62-64`) would have turned any slower cancel into
+an exit error, so the answer needed tooling that cancels and waits — plus an **uninterrupted
+control run**, without which "the turn ended" cannot be told from "the turn was ending
+anyway". The expectation about a second `session/prompt` is **false on all three**: none
+rejects it, the in-flight turn dies, and both requests answer `end_turn`. And latency turned
+out not to be the interesting number — everything landed inside 64 ms — while
+**copilot reports `end_turn` for a turn it cancelled**, which is what actually moves M1b-2.
 
 **M0-5 · Usage reporting survey · S · needs M0-1**
 Per harness: does `usage_update` arrive, and what do its fields mean? `{used, size}` is
@@ -148,7 +157,7 @@ default, and M3-5's terminal scope.
 M0-3/4/5 sections are stubbed with the partial input that survey already produced (no
 `terminal/*` traffic under `terminal: false`; copilot supplying real argv on the permission
 request; `usage_update` shapes, including `cost` on opencode alone).
-**M0-3 filled 2026-08-21.** Two sections remain: M0-4 and M0-5.
+**M0-3 and M0-4 filled 2026-08-21.** One section remains: M0-5.
 
 ---
 
@@ -344,6 +353,15 @@ gates on this. **Decision — one table, in this module:**
 | `refusal` | `failed` | agent declined; `summary` carries its text |
 | `cancelled` | `timed_out` if the watchdog fired, else `cancelled` | the supervisor knows which |
 
+**Revised by M0-4** — the table stands; its input does not. `cancelled` may never arrive:
+copilot answers `end_turn` for a turn it cancelled (both samples, against a control run
+proving the turn was cut short), contrary to ACP's MUST. And `end_turn` is now known to mean
+*finished*, *I was cancelled*, or *someone sent a second prompt and killed my turn*.
+**Key the status on the triple (`stopReason`, did we send a cancel, did the watchdog fire)**,
+with the supervisor's own record authoritative and `stopReason` consulted only where the two
+agree. A cancelled turn is also truncated mid-tool-call, so the "stopped mid-edit" hazard
+recorded above for `max_tokens` applies to `timed_out` too.
+
 **Gap 2** — the plan gives no rule for what happens to dependents when a dependency fails,
 no rule for rolling task statuses into a run status, and its lifecycle
 (`pending → running → done | failed | timed_out | cancelled`) has no state for "never
@@ -446,9 +464,19 @@ already maintained as a protocol invariant, so it needs only a per-task last-tit
 count. Both signals warn and the task keeps running; the separate, longer `ttlMs` calls
 `session/cancel`, preserves the branch and marks the task `timed_out`. Every knob disabled
 at `0`. Best-effort throughout — one task's failure must never halt the sweep.
+**M0-4 fills in the TTL rung** (`docs/M0-FINDINGS.md` §M0-4): every harness ended its turn
+within 64 ms of `session/cancel`, sent nothing afterwards, and accepted a further prompt — so
+**wait 2 s after cancelling, then force-kill**, and expect never to reach it. Mark
+`timed_out` from the watchdog's own record: copilot's cancelled turns come back `end_turn`.
 *Done when* `node:test` covers the repeat counter's reset behaviour and one task throwing
 inside the sweep does not stop the others being checked. There is deliberately no third
 rung: ACP gives no way to nudge a turn in flight, so detection reports rather than corrects.
+**M0-4 turned that into a hard rule.** A second `session/prompt` is accepted by all three
+harnesses and kills the running turn; on opencode and copilot its text is merged into that
+turn's context, where both models read it as a possible prompt injection. Copilot aborts the
+session on *any* prompt, even one sent while idle
+([github/copilot-cli#4555](https://github.com/github/copilot-cli/issues/4555)). One prompt
+per session per task.
 A token-based signal was considered and dropped — `usage_update` reports context occupancy
 in units that are not comparable between vendors.
 

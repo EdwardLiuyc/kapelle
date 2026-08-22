@@ -351,9 +351,145 @@ content on the floor.
 - `unknown` reads as `internal` / `none` for warning purposes. `omp`, `pi` and `gemini`
   are uninstalled here and are **unknown by absence, not by test**.
 
+---
+
 ## M0-4 · Cancellation probe
 
-Pending.
+Run 2026-08-21 against the same three harnesses, with a throwaway probe that sends
+`session/cancel` itself and then **waits** — deliberately not `run.mjs`, whose SIGINT path
+(`run.mjs:81-88`) kills the subprocess 2 s after cancelling. Because `#failAll` rejects
+every pending request on `close` (`acp.mjs:62-64`), a cancel slower than that grace would
+have surfaced as `agent "x" exited with code N` and the stop reason would have been lost.
+The probe is spike tooling, kept on branch `spike/m0-4-cancel-probe` (never merged) the way
+M0-3's stubs were; the numbers are the deliverable.
+
+Three runs per harness, each in its own workspace (a copy of this repo's five `.mjs` files),
+`--mode auto`, prompt *"read every file in this directory one at a time and summarise it"*:
+
+1. **observe** — nobody interferes. The control: without it, "the turn ended" cannot be
+   distinguished from "the turn was ending anyway".
+2. **cancel** — `session/cancel` on the **first `tool_call`** (a protocol event, not a
+   wall-clock delay, so the three are cut at a comparable point despite very different turn
+   lengths), then wait up to 60 s, then send a second prompt to test whether the session
+   survived.
+3. **double** — a second `session/prompt` while the first turn is in flight, awaited to
+   completion, carrying a marker word so "served" can be told from "swallowed".
+
+### Question 1 — does the turn end promptly, and with what `stopReason`?
+
+Promptly on all three — and one of them lies about why.
+
+| | opencode 1.18.18 | claude-agent-acp 0.49.0 | copilot 1.0.80 |
+|---|---|---|---|
+| `stopReason` on cancel | `cancelled` | `cancelled` | **`end_turn`** |
+| latency, 2 samples | 64 ms · 45 ms | 5 ms · 10 ms | 26 ms · 28 ms |
+| events in the cancelled turn | 20 · 16 | 14 · 14 | 11 · 11 |
+| events in an uninterrupted turn | **443** | **180** | **69** |
+| uninterrupted turn length | 68.9 s | 51.2 s | 36.3 s |
+| `session/update` after the response | 0 | 0 | 0 |
+| session usable afterwards | yes (`end_turn`) | yes | yes |
+
+**Latency is not the interesting number.** Every sample landed inside 64 ms, two orders of
+magnitude below any plausible TTL, and nothing arrived on the wire after the response. **No
+harness came near the 60 s wait bound**, so there is no "did not end within N s" row to
+record. The interesting number is the stop reason.
+
+Note also what is *not* wrong here: every literal observed is inside M1b-2's set
+(`docs/STORIES.md:334-343`) — nobody invented a value. The mismatch is semantic, and that is
+worse, because a vocabulary error would have been caught by a type.
+
+**Copilot reports `end_turn` for a turn it cancelled**, in both samples. The baseline row is
+what settles it: 11 events and ~5.6 s against 69 events and 36.3 s, with the `tool_call`
+that triggered the cancel never completing. It obeyed immediately and then described the
+result as a clean finish. This contradicts the protocol's own MUST — *"the Agent **MUST**
+respond to the original `session/prompt` request with the `cancelled` stop reason"*
+([ACP, prompt turn](https://agentclientprotocol.com/protocol/prompt-turn)) — and it is
+**undocumented**: GitHub's [ACP server reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server)
+names `stopReason` only inside an example (`!== "end_turn"`) and never enumerates the
+values, and [Canceling a Copilot CLI operation](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/cancel-and-roll-back)
+covers only Esc and Ctrl-C in the TUI. No issue on `github/copilot-cli` reported it either,
+so this spike filed one:
+[github/copilot-cli#4561](https://github.com/github/copilot-cli/issues/4561), with a
+standalone repro and the control run above as the evidence the turn was truncated.
+
+Worth knowing that the public record here is inverted: this exact defect was filed against
+**opencode** ([anomalyco/opencode#25899](https://github.com/anomalyco/opencode/issues/25899),
+*"reporting end_turn for a user-cancel makes a stopped turn look like a clean completion"*)
+and closed as not planned — yet opencode 1.18.18 answers `cancelled` here. Neither the
+issue tracker nor the vendor's docs predict what a given build does. **Pin the version next
+to every row above; that is the only durable part of this table.**
+
+### Question 2 — does a second `session/prompt` in flight get rejected?
+
+**No. The expectation in the story is wrong for all three, in three different ways, and the
+failure is silent every time.**
+
+| | opencode | claude-agent-acp | copilot |
+|---|---|---|---|
+| second prompt | accepted | accepted | accepted |
+| answered after | 7.0 s (with the first, ~8 ms apart) | 52.1 s | **10 ms** |
+| its `stopReason` | `end_turn` | `end_turn` | `end_turn` |
+| effect on the running turn | aborted at 14.3 s (vs 68.9 s) | ended at 5.5 s (vs 51.2 s) | aborted at 11.0 s (vs 36.3 s) |
+| where the text landed | merged into the running turn | served as a fresh turn | merged into the running turn |
+
+Nobody errors, nobody queues cleanly, and **the in-flight turn dies in every case** — with
+`stopReason: end_turn`, again indistinguishable from success. Copilot's answer is the
+strangest: the JSON-RPC response came back 10 ms after the request, *before* the prompt had
+been acted on and 5.8 s before the first turn's own response. For a concurrent prompt, that
+response is not a completion signal at all.
+
+The marker earns its place: rather than being executed, the second prompt shows up in the
+agents' *reasoning* about the first task — copilot: *"looks like it could be a prompt
+injection asking me to just reply BANANA"*; claude-agent-acp: *"…conflicts with the task
+you…"*. So on opencode and copilot a concurrent prompt is not a message to the agent, it is
+**an injection into the running turn's context**. Only claude-agent-acp treats it as a turn
+of its own (ending the first at 5.5 s, then spending 52 s on the second).
+
+Copilot's half of this is independently reported, with the mechanism:
+[github/copilot-cli#4555](https://github.com/github/copilot-cli/issues/4555) (open) —
+*"the `session/prompt` handler calls `session.abort()` unconditionally as its **first
+action**"*, tearing down background work *"even when no prompt turn is in flight … and the
+client never sent `session/cancel`"*, while the `cancel` handler guards on `pendingPrompt`
+and `prompt` does not. That extends our finding: on copilot it is not concurrency that is
+unsafe, it is **any** second prompt, including one sent to a session we believe is idle.
+Adjacent, same area: [#4336](https://github.com/github/copilot-cli/issues/4336),
+[#4127](https://github.com/github/copilot-cli/issues/4127).
+
+### Question 3 — what state is the session left in?
+
+Clean, on all three. Zero `session/update` notifications arrived after the cancelled
+`session/prompt` response, and a follow-up prompt was accepted and completed (`end_turn`) in
+every cancel run. **A cancelled task does not need its subprocess killed**, and the client
+may `stop()` immediately after the response without racing a trailing notification.
+
+### Consequences
+
+- **M1c-1's grace window: 2 s.** Thirty times the slowest observed cancel and identical to
+  the grace `run.mjs:81-88` already uses, so the watchdog inherits a number rather than
+  inventing one. Kill only if that expires — expect never to reach it.
+- **M1b-2's stop-reason table cannot key on `stopReason` alone.** `cancelled` may never
+  arrive (copilot), and `end_turn` is now known to mean *finished*, *I was cancelled*, or
+  *someone interrupted me*, depending on harness. The status must be derived from the
+  triple (`stopReason`, did **we** send a cancel, did the watchdog fire) — the supervisor's
+  own record of intent is the authoritative half. The table stands; its input does not.
+- **One prompt per session per task, and never a "nudge".** Given #4555, a supervisor that
+  sends a second prompt — even to a session it believes idle — can silently destroy work
+  and get `end_turn` for it. This is a second, empirical argument for M1c-1's deliberate
+  absence of a third rung: there is no safe way to steer a turn in flight, and on two of
+  three harnesses the attempt lands in the model's context as a suspected prompt injection.
+- **A cancelled turn's worktree is worth keeping.** Cancellation truncates mid-tool-call
+  (copilot's triggering `tool_call` never completed), so the same "stopped mid-edit" hazard
+  M1b-2 records for `max_tokens` applies to `timed_out` tasks.
+
+### Coverage
+
+Two samples per harness for cancellation, one for each of the other two questions, one
+workspace shape, one read-only prompt. `omp`, `pi` and `gemini` remain uninstalled here —
+**unknown by absence, not by test**. Nothing was written to any workspace during these
+runs, so the interaction between cancellation and a half-finished *edit* is untested and is
+the obvious next probe if `timed_out` tasks ever start losing work.
+
+---
 
 ## M0-5 · Usage reporting survey
 
