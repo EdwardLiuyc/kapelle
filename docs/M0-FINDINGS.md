@@ -493,4 +493,235 @@ the obvious next probe if `timed_out` tasks ever start losing work.
 
 ## M0-5 · Usage reporting survey
 
-Pending. Partial input recorded above.
+Run 2026-08-22 on branch `spike/m0-5-usage-probe` (kept, never merged) against the same
+three harnesses. Method: `usage-probe.mjs` drives **one session of three prompts** — turn 1
+long and multi-tool (read five files, write `NOTES.md`, read it back and append to it),
+turns 2 and 3 trivial (`Reply with the single word OK`) — and logs every `session/update`
+verbatim, `_meta` and unknown top-level fields included. `wire-tap.mjs` tees the whole
+JSON-RPC wire in both directions, because `AcpAgent` forwards only `session/update` to
+`onEvent` (`acp.mjs:211-212`) and `prompt()` returns `res.stopReason` and throws the rest of
+the response away (`acp.mjs:120`) — which is exactly where the per-turn token count turned
+out to live. `--mode auto`, no `session/set_mode`. Workspace: a throwaway five-file JS
+project, reset per harness.
+
+M0-1's incidental note (§M0-1, "Incidental") said `{used, size}` with `size` = 200000
+everywhere and `cost` on opencode alone. **Both halves are corrected below**, and the
+sample that produced them was a turn too short to bill.
+
+### Samples
+
+| | opencode | claude-agent-acp | copilot |
+|---|---|---|---|
+| version | 1.18.18 | 0.49.0 (SDK schema 0.28.1) | 1.0.80 |
+| auth mode | opencode-login (Zen) + a DeepSeek API key | OAuth subscription (no `ANTHROPIC_API_KEY` in env) | GitHub Copilot subscription |
+| model it ran | `opencode/big-pickle`, and `deepseek/deepseek-chat` in a second run | `opus` (Opus 4.8), and `haiku` in a second run | `claude-sonnet-5`, and `claude-haiku-4.5` in a second run |
+| who chose it | harness default / our `session/set_config_option` | same | same |
+| turn-1 wall clock | 231 s | 40 s | 17 s |
+
+Every model above is **self-reported by the harness** — see "All three name the model", below.
+
+### Does `usage_update` arrive, and what is in it
+
+**Yes, from all three**, and only on `session/update`. Across six sessions no usage figure
+appeared on any other notification or on any request; the only other carrier is the
+`session/prompt` **response** (next section).
+
+| | opencode | claude-agent-acp | copilot |
+|---|---|---|---|
+| `usage_update` per turn | **1**, at end of turn | **many** (23 on turn 1), streamed | **many** (5 on turn 1), streamed |
+| `used` | yes | yes | yes |
+| `size` | yes | yes | yes |
+| `cost` | **on every one** | **on the last one of each turn only** | **never** |
+| `_meta` | never observed | never observed (but see below) | never observed |
+
+`used` is context occupancy and a **snapshot**, as the story assumed and the spec says
+("Tokens currently in context"). It climbs with the transcript and never resets: opencode
+10888 → 11063 → 11093, claude 11293 → … → 15647, copilot 13945 → … → 17197 over the same
+three turns. A trivial turn 3 does not drop it back, so it is not a per-turn count.
+
+**`size` is not a constant, and on claude it is wrong until the first turn ends.** M0-1's
+200000-everywhere reading was an artefact of one short sample:
+
+| model | reported `size` |
+|---|---|
+| `opencode/big-pickle` | 200000 |
+| `deepseek/deepseek-chat` | 1000000 |
+| claude `opus` | **200000 mid-turn, 1000000 on the turn's final update** |
+| claude `haiku` | 200000 throughout |
+| copilot `claude-sonnet-5` | 200000 |
+| copilot `claude-haiku-4.5` | 136000 |
+
+The claude flip is not a glitch, it is a warm-up: the adapter carries
+`session.contextWindowSize`, defaulted to 200k and **learned from the SDK's `modelUsage`
+only when the turn's `result` message arrives** (`acp-agent.js:1068-1078`, whose own comment
+notes that a miss would "leave the next prompt's mid-stream updates reporting 200k"). So
+`size - used` — the "remaining context" the RFD invites clients to compute — is
+**understated by 5× for the whole of a session's first turn** on claude with a 1M model.
+Anything that watches remaining context to decide when to stop feeding a task must ignore
+`size` until it has seen an end-of-turn value.
+
+### Cost: opencode's `0` was "not billed", not "always `0`"
+
+This is the question M0-1 left open, and it needed the second run rather than a longer one.
+
+| harness / model | auth | `cost.amount` after a real turn |
+|---|---|---|
+| opencode `opencode/big-pickle` | opencode Zen subscription | `0` — and still `0` after 231 s and 155 updates |
+| opencode `deepseek/deepseek-chat` | DeepSeek API key | **`0.0017770984` USD**, → `0.0018118688` after one trivial turn |
+| claude-agent-acp `opus` | OAuth subscription | **`0.2328715` USD**, → `0.2436225` → `0.2517525` |
+| copilot | Copilot subscription | field absent entirely |
+
+So opencode's `cost` is a **live, correct, cumulative session total** that reads `0` because
+the provider in effect is not metered per token — exactly the distinction the story asked
+for, and one no amount of extra work on a single provider would have settled.
+
+Two cautions on the claude figure. It is the Claude Agent SDK's `total_cost_usd` passed
+straight through (`acp-agent.js:1079-1095`); under OAuth subscription auth **nobody is
+invoiced that amount** — it is the SDK's list-price valuation of the tokens, not spend.
+And the model list this adapter offers describes some entries as "Draws from usage credits"
+(`sonnet[1m]`, Fable), so the same number means different things per entry. Treat it as
+"what these tokens would have cost at list price", which is still the right input for a
+budget guard and the wrong one for an invoice.
+
+`cost.amount` is **cumulative for the session** on both harnesses that send it (the schema
+says so, and both series above are monotone), so a per-task figure is a subtraction across
+the task's first and last `usage_update`, never a sum of them.
+
+### The per-task token count has a source — and we currently discard it
+
+Gap 3 in the pickup comment asked whether `TaskResult.tokens` has a source at all. It does,
+on **all three harnesses**, and it is not `usage_update`: it is `usage` on the
+`session/prompt` response.
+
+| field (turn 1) | opencode | claude-agent-acp | copilot |
+|---|---|---|---|
+| `inputTokens` | 264 | 2704 | 100678 |
+| `outputTokens` | 146 | 2595 | 1689 |
+| `thoughtTokens` | 17 | — | 12 |
+| `cachedReadTokens` | 10624 | 129785 | 78733 |
+| `cachedWriteTokens` | — | 8895 | 21598 |
+| `totalTokens` | 11051 | 143979 | 102367 |
+
+**Three harnesses, two meanings.** On opencode and claude-agent-acp the numbers are
+**per turn** — `inputTokens` falls 264 → 183 → 85 (opencode) and 2704 → 2 → 2 (claude) as
+the turns get trivial, which a cumulative counter cannot do. On copilot they are
+**cumulative for the session**: 100678 → 122487 → 144401 input, with `outputTokens` ticking
+1689 → 1693 → 1697 for two one-word replies. The composition differs too: copilot's
+`cachedRead + cachedWrite` ≈ `inputTokens` (cache is *inside* input, and `totalTokens` =
+input + output), while opencode and claude add all four components to reach `totalTokens`.
+
+The consequence for M1b-4 is concrete: `tokens` must be recorded **per harness with its
+semantics tagged**, a supervisor must **subtract, not sum, on copilot**, and `totalTokens`
+is not comparable across vendors — which is the plan's existing "never summed" rule
+(`STORIES.md:334`) arriving with a second, sharper reason.
+
+Two spec notes on this field. It is **`UNSTABLE`** in the schema shipped with the SDK
+("not part of the spec yet, and may be removed or changed at any point"), and the published
+prompt-turn docs still describe the response as carrying `stopReason` alone — so all three
+harnesses are ahead of the documentation here, and a client that depends on it is depending
+on an unversioned extension. And the schema's own field descriptions ("Sum of all token
+types across session", "Total input tokens across all turns") describe the *cumulative*
+reading, so **copilot is the one implementing it as written** and the other two are the
+useful outliers. Nothing in the schema says whether cached tokens are included in
+`inputTokens`; the three harnesses answer that differently, and it will bite whoever prices
+them.
+
+Our client cannot see any of this today: `AcpAgent.prompt()` returns `res.stopReason`
+(`acp.mjs:120`) and drops the rest of the response. Making `usage` reachable is a
+one-line change in `prompt()` and belongs to M1b-4, not here.
+
+### All three name the model they ran
+
+The plan's "nothing reports that today" is **false, and was already false when written**.
+Every harness reports its current model in the `session/new` response, in the spec's own
+`configOptions` shape, with the reserved `category: "model"` — so it is machine-readable
+without string-matching:
+
+| | opencode | claude-agent-acp | copilot |
+|---|---|---|---|
+| `configOptions` on `session/new` | yes | yes | yes |
+| `id: "model"`, `category: "model"` | yes | yes | yes |
+| `currentValue` observed | `opencode/big-pickle` | `opus` | `claude-sonnet-5` |
+| resolvable to a real model? | **yes** — provider-qualified | **no** — an alias; the display text says "Opus 4.8" | **yes** — `claude-sonnet-5`, `gpt-5.4`, … |
+| `config_option_update` notification | never | never | **1×**, just after `session/new` |
+| accepts `session/set_config_option` | **yes** | **yes** | **yes** |
+| re-emits `config_option_update` after we set it | no | no | **no** |
+
+So M0-1's lead — copilot's `config_option_update` — is real but is the *weakest* of the
+three channels: it repeats what `session/new` already said, and it did **not** fire again
+when we changed the model mid-session. The reliable pattern is: read `configOptions` from
+the `session/new` response, and treat the `session/set_config_option` **response** (which
+returns the full option set) as the update channel, since none of the three notifies.
+
+Model switching works on all three and takes effect immediately — the proof is `size`
+moving with it (copilot 200000 → 136000 for haiku; opencode 200000 → 1000000 for deepseek).
+
+Two extras worth keeping:
+
+- **copilot ships a price table of its own.** Each model option carries
+  `_meta: {copilotUsage, copilotPriceCategory, copilotEnablement}` — `"1x"` for
+  `claude-sonnet-5`, `"15x"` for `claude-opus-5`, `"0.33x"` for `claude-haiku-4.5`, `"0x"`
+  for `gpt-5-mini`. That is a premium-request multiplier, not currency: copilot's spend is
+  denominated in requests, and no token count converts to it.
+- **claude's `currentValue` needs a mapping table.** `opus` is an alias, and the only place
+  the concrete model appears is the human-readable `description` ("Opus 4.8 · Best for
+  everyday, complex tasks"). Parsing prose for a billing key is exactly the "confidently
+  wrong dollar figure" the plan warns about — for claude, prefer its self-reported `cost`
+  over pricing its tokens ourselves.
+
+### Verdict on the price table
+
+**A per-harness price table is possible but is no longer the cheapest route to a cost
+figure: opencode and claude-agent-acp already report cumulative USD themselves, and copilot
+cannot be priced in currency at all — it meters premium requests, not tokens — so the
+useful work is recording each harness's self-reported unit, not converting tokens.**
+
+The backlog trigger (`STORIES.md:746-748`, "any harness names the model it selected") has
+**fired — all three do**. It is recorded as fired and left unscheduled, with the scope
+changed by this survey: what M4-2 should show is a `cost` in USD for two harnesses and a
+premium-request multiplier for copilot, not one table pricing tokens for all three.
+
+### Surprises, and what the spec says about them
+
+Cross-checked against the ACP JSON schema shipped in `@agentclientprotocol/sdk` 0.28.1
+(vendored under the claude adapter) and the published docs and RFD.
+
+1. **`PromptResponse.usage` is not in the docs.** The prompt-turn page still says the
+   response carries `stopReason`; the schema carries `usage`, marked `UNSTABLE`. All three
+   harnesses populate it. Real, useful, and unversioned — pin the behaviour with a
+   `mock-agent.mjs` case rather than trusting it.
+2. **The same field means two different things across harnesses** (per-turn vs cumulative),
+   and the spec's wording endorses the reading only copilot implements. This is the finding
+   most likely to produce a wrong number quietly.
+3. **copilot answers `session/new` with a `models` object** —
+   `{availableModels, currentModelId: "claude-sonnet-5"}` — that **does not exist in
+   `NewSessionResponse` in schema 0.28.1** (there is no `SessionModelState` definition left).
+   It is a superseded field kept alive alongside the `configOptions` that replaced it.
+   Harmless, but do not build on it; it is the half that will disappear.
+4. **copilot uses documentation URLs as config value ids** —
+   `currentValue: "https://agentclientprotocol.com/protocol/session-modes#agent"`. Legal
+   (ids are opaque strings) and stable, but any code comparing mode ids across harnesses
+   must not assume short tokens.
+5. **claude-agent-acp has two vendor `_meta` extensions on `usage_update` that we never
+   saw**: `_claude/origin` on the end-of-turn update when a result has an origin, and
+   `_claude/rateLimit` carrying `rate_limit_info` on a `rate_limit_event`
+   (`acp-agent.js:1084-1095`, `:1512-1524`). The second is a rate-limit signal delivered on
+   a channel `render.mjs` currently reduces to "context N/M tokens". Worth catching before
+   M1c's retry logic guesses at it.
+6. **A stray `opencode.json` above the workspace kills the harness before `initialize`.**
+   The first attempt at the DeepSeek run wrote its probe record to the parent of the
+   workspace; opencode walks up from `cwd`, found the file, and exited 1 with
+   *"Configuration is invalid … Expected object | undefined, got \"opencode acp\" command"* —
+   surfacing to the client as the same opaque spawn failure `CLAUDE.md` already warns about.
+   A supervisor that scatters per-task state files near a worktree can brick a harness this
+   way; keep run state out of the workspace's ancestry.
+
+### Coverage
+
+Six sessions: one three-turn session per harness plus one two-turn re-run per harness with a
+different model. One machine, one workspace shape, one prompt pair. **`omp`, `pi` and
+`gemini` remain uninstalled here — unknown by absence, not by test**, and nothing in this
+section should be read as covering them. Context compaction was never triggered, so the
+behaviour of `used` across a compaction is untested — it is the one place the adapter source
+says an approximation (`used: 0`) is emitted deliberately (`acp-agent.js:835-855`), and the
+obvious next probe if a long-running task's context accounting ever matters.

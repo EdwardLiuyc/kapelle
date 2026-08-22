@@ -244,10 +244,16 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    copilot the text lands in the running turn's context rather than being served
    (`github/copilot-cli#4555` reports the mechanism: `session/prompt` aborts the session
    unconditionally, even when idle). There is no safe way to nudge a turn in flight.
-6. **Usage reporting.** Record, per harness, whether `usage_update` arrives at all and what
-   its fields actually mean. `{used, size}` is context occupancy, not spend — check whether
-   anything reports cumulative or billable counts, or names the model it selected. This is
-   what the cost decision rests on, and today it is an assumption.
+6. ~~**Usage reporting.**~~ **Answered by M0-5** (`docs/M0-FINDINGS.md` §M0-5). `usage_update`
+   arrives from all three; `used` is occupancy and a snapshot, as assumed, but `size` is
+   per-model and on claude-agent-acp reads 200k until the session's first turn ends, so
+   "remaining context" is unusable early. A **billable count exists**: `cost` is a cumulative
+   session total in USD on opencode and claude-agent-acp — opencode's `0` was the provider
+   being unmetered, not the field being dead — while copilot sends no currency at all and
+   meters premium requests. A **per-turn token count exists on all three**, on
+   `PromptResponse.usage` rather than in a notification, but it is `UNSTABLE`, undocumented,
+   and cumulative on copilot where it is per-turn on the other two. And **all three name the
+   model they ran**, in `configOptions` on the `session/new` response.
 7. ~~Bake `env -u CLAUDECODE` into the `claude` registry entry.~~ **Done by M0-2**, with
    all three of `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT` and `CLAUDE_CODE_ENTRYPOINT` scrubbed
    as M0-1 ran them. The list lives in a registry `env` field already shaped
@@ -531,9 +537,14 @@ and confirm the run proceeds and a CLI observer on the same run sees the same de
 
 ## Open, deliberately unresolved
 
-- A per-harness price table converting tokens to estimated spend. Blocked on knowing which
-  model a harness actually selected — nothing reports that today, and a confidently wrong
-  dollar figure is worse than none. M0 item 6 is what would unblock it.
+- ~~A per-harness price table converting tokens to estimated spend.~~ **Unblocked and
+  reshaped by M0-5.** All three harnesses name the model they selected (`configOptions`,
+  `category: "model"`, on the `session/new` response), so the blocker is gone — but the
+  table is no longer the cheapest route to a number: opencode and claude-agent-acp report
+  cumulative USD themselves, and copilot cannot be priced in currency at all, since it
+  meters premium requests (`_meta.copilotUsage`: `"1x"`, `"15x"`, `"0.33x"`) rather than
+  tokens. The work that remains is recording each harness's self-reported unit, not
+  converting tokens for all three. Still unscheduled; see the backlog entry.
 - Whether `stallRepeatCount` needs per-harness tuning or one default holds. A task that
   re-runs the same test command while iterating is a legitimate repeat; the default is
   deliberately generous, and repeats only ever warn.

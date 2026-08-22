@@ -131,6 +131,20 @@ context occupancy, not spend. Check specifically for cumulative or billable coun
 anything naming the model actually selected.
 *Done when* the note distinguishes occupancy from spend per harness, and states plainly
 whether a price table is possible at all — it is what unblocks the plan's first open item.
+**Done 2026-08-22** (`docs/M0-FINDINGS.md` §M0-5). Four corrections to this text as written.
+The story's `{used, size}` shape is right but **incomplete**: `cost` (cumulative USD) rides
+on the same notification from two of three harnesses, and `size` is per-model rather than the
+constant M0-1 recorded. The **cumulative-or-billable count the story went looking for is not
+on `usage_update` at all** — it is `usage` on the `session/prompt` response, populated by all
+three, `UNSTABLE` in the schema and absent from the published docs, and **cumulative on
+copilot where it is per-turn on opencode and claude-agent-acp**, which is the finding most
+likely to produce a wrong number quietly. "Anything naming the model actually selected" is
+**answered yes for all three**, in `configOptions` on the `session/new` response, not in
+copilot's `config_option_update` — that notification only repeats what `session/new` said and
+did not re-fire when we changed the model. And the survey needed a **second run per harness
+on a different model**, not a longer turn: opencode's `cost.amount: 0` is the provider being
+unmetered, proven only by switching it to a metered one, where the same field reported real
+spend.
 
 **M0-6 · Correct the safety claims · S** *(was XS; revised by M0-1)*
 `CLAUDE.md` and `README.md:143` both say "even `--mode auto` cannot write outside the
@@ -157,7 +171,10 @@ default, and M3-5's terminal scope.
 M0-3/4/5 sections are stubbed with the partial input that survey already produced (no
 `terminal/*` traffic under `terminal: false`; copilot supplying real argv on the permission
 request; `usage_update` shapes, including `cost` on opencode alone).
-**M0-3 and M0-4 filled 2026-08-21.** One section remains: M0-5.
+**M0-3 and M0-4 filled 2026-08-21; M0-5 filled 2026-08-22. No sections remain — M0-7 is
+unblocked**, and its assembly is now editorial: the note carries M0-1, M0-3, M0-4 and M0-5
+in full, and the "incidental" usage paragraph under M0-1 is superseded by §M0-5 rather than
+deleted, so the correction stays visible.
 
 ---
 
@@ -412,6 +429,14 @@ never asks" once, rather than crying wolf per task. Excludes `.agent-team/` from
 **Warnings publish on the bus and never fail the task** — a read-only stage legitimately
 produces no diff, and making disagreement fatal would turn every harness quirk into a hard
 stop and break the review stages the pipeline is built on.
+**Revised by M0-5: `tokens` has a source, and it is not the one this story assumed.** The
+per-turn count lives on the `session/prompt` **response** (`usage`), not on `usage_update`,
+and `AcpAgent.prompt()` currently discards it (`acp.mjs:120`), so reaching it is a one-line
+change here. Two constraints come with it: the field is `UNSTABLE` in the ACP schema and
+absent from the published docs, so pin it with an M1b-5 `mock-agent.mjs` case; and it is
+**cumulative on copilot where it is per-turn on opencode and claude-agent-acp**, so
+`TaskResult` must record which semantics produced the number rather than typing a bare
+`tokens`. `usage_update`'s `used` is context occupancy and cannot fill this field.
 **Gap** — the plan specifies extraction returning `null` but never says what the task's
 *status* then is, nor what M3-3 hands a successor when there is no summary to hand it.
 Warning-only is the right posture, but it leaves `TaskResult.summary` undefined for exactly
@@ -744,7 +769,13 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   radius — which is where the real risk lives, and which labelling does nothing for.
   *Trigger:* a judgement call on `auto`'s blast radius, not an event.
 - **Per-harness price table.** *Trigger:* M0-5 reporting that any harness names the model it
-  selected. Nothing does today, and a confidently wrong dollar figure is worse than none.
+  selected. **Trigger fired 2026-08-22 — all three name it**, in `configOptions` on the
+  `session/new` response with the reserved `category: "model"`. Still unscheduled, and M0-5
+  changed what it should build: opencode and claude-agent-acp already report cumulative USD
+  on `usage_update`, so pricing their tokens ourselves would only add a second, worse number;
+  copilot reports no currency and meters premium requests (`_meta.copilotUsage`), so no token
+  count converts to its spend. What is left is per-harness *unit* recording, plus an alias
+  table for claude-agent-acp, whose `currentValue` is `opus`, not a concrete model id.
 - **`stallRepeatCount` per-harness tuning.** *Trigger:* an observed false positive. Safe to
   wait — a task re-running the same test command while iterating is a legitimate repeat, the
   default is deliberately generous, and repeats only ever warn.
