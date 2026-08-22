@@ -19,7 +19,7 @@
 //   --config <id>=<value>         session/set_config_option before prompting (repeatable),
 //                                 e.g. --config model=deepseek/deepseek-chat — the only way
 //                                 to tell "cost is always 0" from "this provider is not billed"
-//   --prompt "<text>"             override turn 1 (the expensive one)
+//   --prompt "<text>"             one turn's prompt; repeatable, one per turn
 //   --wait <s>                    per-turn timeout (default 300)
 //   --json <file>                 write the full record here
 //   --wire <file>                 write the raw wire log here (default <json>.wire.jsonl)
@@ -59,7 +59,16 @@ const HEAVY =
 // transcript; if it were a per-turn count it would drop back to near nothing.
 const CHEAP = "Reply with the single word OK and nothing else.";
 
-const prompts = [flag("prompt", HEAVY), ...Array.from({ length: Math.max(0, turns - 1) }, () => CHEAP)];
+// --prompt is repeatable: each occurrence is one turn, in order. With none, turn 1
+// is HEAVY and the rest are CHEAP. Slash commands (`/context`, `/usage`) are sent
+// as ordinary prompt text — that is the only channel ACP gives a client for them.
+const explicitPrompts = argv.reduce((acc, a, i) => {
+  if (a === "--prompt" && argv[i + 1]) acc.push(argv[i + 1]);
+  return acc;
+}, []);
+const prompts = explicitPrompts.length
+  ? explicitPrompts
+  : [HEAVY, ...Array.from({ length: Math.max(0, turns - 1) }, () => CHEAP)];
 
 const spec = resolveAgent(flag("agent", "opencode"), flag("cmd"));
 let command = spec.command, args = spec.args;
