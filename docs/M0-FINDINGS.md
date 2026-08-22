@@ -530,6 +530,22 @@ everywhere and `cost` on opencode alone. **Both halves are corrected below.**
 
 ### The context window
 
+#### `usage_update` arrives from all three — and is the only notification that carries usage
+
+| | opencode | claude-agent-acp | copilot |
+|---|---|---|---|
+| `usage_update` arrives | **yes** | **yes** | **yes** |
+| `used` | always | always | always |
+| `size` | always | always | always |
+| `cost` | **on every update** | **on the last update of each turn** | **never** |
+| `_meta` | never observed | never observed (two vendor keys exist in source — see "Running out") | never observed |
+| per long turn | 1, at end | 23, streamed | 5, streamed |
+
+Across eleven sessions no usage figure appeared on any other notification or on any inbound
+request: the wire carries it in exactly two places, this notification and the
+`session/prompt` **response** (see "The per-task token count", below). 78 `usage_update`s
+were captured and **none carried `_meta`**.
+
 #### `size` is per-model, late on one harness and wrong on another
 
 | harness / model | `size` on the wire | the harness's own view | agree? |
