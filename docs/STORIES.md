@@ -864,9 +864,9 @@ Subscribes to the same bus events `core/notify.ts` uses (M1c-4).
 ## Critical path
 
 ```
-M0-1 ─┬─ M0-3 ─┬─ M0-7 ──── M1a-4 ┐
-      ├─ M0-4 ─┤                  │
-      └─ M0-5 ─┘                  │
+M0-1 ─┬─ M0-3 ─┬─ M0-7 ─ M0-8 ─ M1a-4 ┐
+      ├─ M0-4 ─┤                      │
+      └─ M0-5 ─┘                      │
                                   │
   M1a-1 ─ M1a-2 ─ M1a-3 ─┬─ M1a-5 ┴─ M1b-1 ─ M1b-2 ─ M1b-4 ─┐
                          └─ M1a-6 ─ M1a-7      M1b-3 ─┬──────┤
@@ -889,6 +889,10 @@ Three things are worth pulling forward, because everything queues behind them:
 1. ~~**M0-3.**~~ **Done 2026-08-21.** It did delete one story and rescue the other: M3-5 is
    cut to documentation, M3-6 survives without it. The containment label M1a-4 ships is now
    two fields, `shell` and `argvChannel`.
+   **Its successor M0-8 now sits in the same position** — it can add a fourth `argvChannel`
+   value, so it gates M1a-4's type for the same reason M0-3 did. Drawn after M0-7 above
+   because that is when it runs; its actual dependency is M0-3, whose baseline it diffs
+   against.
 2. **M1a-2.** Every later module types against it, and it is the story that earns the
    TypeScript decision.
 3. **The eleven decision halves** listed under *Decide before M1a starts*.
