@@ -68,26 +68,37 @@ the issue produce different deliverables?* If yes, ask.
 
 ### 4. Post the comment
 
-One comment, as short as it can be while still deciding things. Structure:
+One comment. **Two sections are mandatory; the rest appear only when they have content.**
+Budget: **200 words for an XS/S story, 350 for anything larger.** Over budget means the
+comment is carrying prose that decides nothing — cut prose, never cut a criterion.
 
 ```markdown
-## Scope of work (story + <what the comments changed>)
+## Scope (story + <what the comments changed>)
 
-**1. <imperative, one line>** — <one or two sentences, with file:line where it helps>
-**2. …**   (aim for 3–7 items; if you need more, the issue is two issues)
+<A short paragraph, or one line per distinct decision. This section answers *why this
+work and not the neighbouring stories* — the framing, the ordering, the thing a reader
+would otherwise get wrong. It does not enumerate the deliverables; the criteria do that.>
 
 ## Acceptance criteria
 
 - [ ] <checkable, observable, one line each>
 
-**Out of scope:** <the neighbouring stories this is not>
+## Out of scope        <- only if a real neighbour would otherwise be assumed in
+<one line>
 
-## Gaps with `docs/<file>.md`
-
+## Gaps with `docs/<file>.md`    <- only if a real divergence was found
 **1. <the gap in a phrase>** — <what the doc says, at file:line; what is actually true; what this issue should do about it>
 ```
 
 Rules:
+- **Scope and criteria must not restate each other.** If a scope item's content is fully
+  captured by a criterion, delete the scope item — the criterion is the one that gets
+  checked. Prefer the whole scope section to be a paragraph rather than a numbered list;
+  reach for the list only when the work has genuinely separable decisions.
+- **As few items as the work has distinct decisions. One is a valid answer.** Never pad a
+  list to look thorough. If the list passes ~7, the issue is two issues.
+- **Drop a section rather than fill it.** No neighbouring story to disclaim → no *Out of
+  scope*. No divergence → no *Gaps*, and say "docs consistent" in the closing line instead.
 - Every acceptance criterion must be checkable by looking at something — a command's output, a file, a recorded verdict. "Works correctly" is not a criterion.
 - Cite `file:line` for every claim about the code or the docs.
 - Do not restate what an existing comment already established; reference it.
