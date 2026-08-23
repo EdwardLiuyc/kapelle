@@ -33,20 +33,36 @@ Three structural deviations from the plan, each argued in the story that carries
   there is one.
 - **Done when** — the observable check. If it cannot be observed, it is not a criterion.
 
-## Decide before M1a starts
+## Decided before M1a starts
 
-Eleven of the stories below open with a decision rather than code. Settle those decision
-halves first — it is about half a day of calls, and roughly three weeks of work queues
-behind them:
+**Settled 2026-08-23 in the M0 retrospective (#62).** Eleven stories opened with a decision
+rather than code: the ten below, plus **M2-2** (event log shape and cursor semantics), which
+was and remains deferred to M2 planning — not past it, because M2-2's *size* depends on the
+answer.
 
-**M1a-3** (request timeout) · **M1a-4** (registry `env` field) · **M1a-5**
-(`allowReadOutsideRoot`) · **M1a-8** (ids and branch names) · **M1b-1** (`needs` rejected
-at M1) · **M1b-2** (`stopReason` mapping, `skipped`, roll-up ordering) · **M1b-3**
-(`.agent-team/` git-ignore) · **M1b-4** (missing result block) · **M1c-3** (`--rebase`
-deferral) · **M1a-1** (`node:test`).
+All ten are **ratified as written**, with four amendments found by walking them. They were
+ratified rather than re-opened for a reason worth keeping: every one is a convention — a
+timeout value, an id format, a status vocabulary, a git-ignore path — and M0's seven-for-seven
+correction rate was entirely against claims about *what harnesses do*. Nothing M0 measured
+touches any of these ten.
 
-**M2-2**'s decision (event log shape and cursor semantics) can wait until M2 planning —
-but not past it, because M2-2's *size* depends on the answer.
+| story | outcome |
+|---|---|
+| **M1a-1** (`node:test`) | ratified |
+| **M1a-3** (request timeout) | ratified, and the story grew three things: B3's usage capture, R4's cancel-intent event, R5's in-flight guard |
+| **M1a-4** (registry `env` field) | ratified; gains `measuredOn` (B2) and the unverified-entry notice (B5) |
+| **M1a-5** (`allowReadOutsideRoot`) | ratified; R1 resolved alongside it |
+| **M1a-8** (ids and branch names) | ratified **with amendment** — the charset produced illegal git refs |
+| **M1b-1** (`needs` rejected at M1) | ratified |
+| **M1b-2** (`stopReason` mapping, `skipped`, roll-up ordering) | ratified **with amendment** — two statuses were unplaced in the ordering |
+| **M1b-3** (`.agent-team/` git-ignore) | ratified **with amendment** — the preflight dirtied the tree it checks |
+| **M1b-4** (missing result block) | **decided** — the retro was right that only extraction had been settled, not disposition |
+| **M1c-3** (`--rebase` deferral) | ratified |
+
+**The labelling convention that stops this recurring:** text that has been decided reads
+**`Decided <date>`**; text that is still a draft reads **`Proposed`**. B1 existed because the
+two were indistinguishable. Each of the ten below now carries a date; story-local decisions
+elsewhere in this file were not in the retro's scope and are unchanged.
 
 ---
 
@@ -261,8 +277,9 @@ introduces exactly the code end-to-end runs verify badly — mode precedence and
 resolution, `<task-result>` extraction strictness, DAG toposort, merge overlap detection,
 the watchdog's consecutive-repeat counter. Each is a pure function with a truth table, and
 driving one through a subprocess handshake to check a boundary condition is slow and covers
-little. **Decision: `node:test` for pure functions in `core/` and `protocol/`;
-`mock-agent` and `hostile-agent` keep owning end-to-end and adversarial coverage.** It is
+little. **Decided 2026-08-23 (ratified, #62 B1): `node:test` for pure functions in `core/` and
+`protocol/`; `mock-agent` and `hostile-agent` keep owning end-to-end and adversarial
+coverage.** It is
 why several stories below have a truth-table criterion rather than an end-to-end one.
 *Done when* both scripts pass on an empty test set and no build step exists. Note the
 current runtime is v22.22.2 and already strips types, so this is a smaller lift than the
@@ -272,7 +289,7 @@ plan's Node 24 framing implies — the bump is for LTS, not for the language fea
 Hand-written definitions for every message we touch. The `session/update` discriminated
 union is the point of the exercise: `update.sessionUpdate` is currently a bare string
 compared in two places (`acp.mjs:218`, `render.mjs:20`) with nothing keeping them in sync.
-**Decision (2026-08-23): the types keep `_meta`, in both directions.**
+**Decided 2026-08-23 (#62 B4): the types keep `_meta`, in both directions.**
 `_meta?: Record<string, unknown>` on the **base** of the message types — inbound
 notifications and responses, outbound requests alike — not on the variants that happen to
 need it today. This answers the retro's B4. Three reasons it is decided here rather than
@@ -301,9 +318,11 @@ callback becomes a typed emitter. Applies the registry's env mutation (M1a-4).
 A harness that spawns, accepts the pipe and never answers `initialize` hangs the task
 forever. The watchdog's TTL rung covers *running* tasks, so it structurally cannot see a
 task stuck before it started — and under a daemon there is no `^C` to fall back on.
-**Decision: a per-request timeout on the handshake and session-management methods, default
-30s, explicitly not on `session/prompt`**, which is legitimately long-running and is what
-the watchdog is for.
+**Decided 2026-08-23 (ratified, #62 B1): a per-request timeout on the handshake and
+session-management methods, default 30s, explicitly not on `session/prompt`**, which is
+legitimately long-running and is what the watchdog is for. M0-1 measured the slowest
+handshake step at 3.0 s (copilot's `session/new`), so 30 s is an order of magnitude above
+the worst observed. Extend it to `session/load` if that lands — same class of call.
 **Proposed (2026-08-23), the timeout's sibling** — the timeout catches a harness that is
 *alive but silent*; nothing catches one that **dies mid-handshake**. `#failAll`
 (`acp.mjs:64`) then reports a bare exit code, and the harness's own explanation went to a
@@ -326,14 +345,48 @@ settle is that **no pluggable backend goes underneath it** — `docs/PRIOR-ART-A
 item 7 considered one and reversed itself, because an abstraction under dead code is R2
 exactly.
 
-**M1a-4 · `protocol/registry.ts` · S · needs M1a-3, M0-7**
+**Decided 2026-08-23 (#62 B3): keep the whole `session/prompt` response, not just
+`stopReason`.** `acp.mjs:120` returns `res.stopReason` and discards the rest — including
+`PromptResponse.usage`, which M0-5 found is the **only per-task token count present on all
+three harnesses**. Returning the whole response is one line, and a count nobody recorded is
+not recoverable afterwards; this is the same argument as `_meta` in M1a-2. **Capture only —
+M1 renders no token figure from it.** It is `UNSTABLE` in schema 0.28.1, absent from the
+published docs, and **cumulative on copilot where it is per-turn on the other two**, so
+M1a-4 records the semantics per harness (`usage: "per-turn" | "cumulative" | "absent"`) and
+M1b-4 renders only what the registry vouches for.
+
+**Decided 2026-08-23 (#62 R4): emit a cancel-intent event where the cancel is sent.**
+M1b-2's status keys on the triple (`stopReason`, did we cancel, did the watchdog fire)
+because copilot answers `end_turn` for a turn it cancelled — so the supervisor's own record
+is the authoritative term. `cancel()` emits `_client_cancel_requested` on the bus at the
+moment it sends `session/cancel`, using the existing `_client_` convention
+(`render.mjs:61-72`). Without it, M1b-2 retrofits an event into an already-typed bus.
+
+**Decided 2026-08-23 (#62 R5): a second prompt is made impossible, not discouraged.**
+`AcpAgent` carries an in-flight flag; `prompt()` **throws** when a turn is running rather
+than sending. M0-4 measured why: all three harnesses accept a second `session/prompt`, kill
+the running turn and answer `end_turn`; on opencode and copilot the text lands in the
+running turn's context and reads as prompt injection; copilot aborts unconditionally even
+when idle (`github/copilot-cli#4555`). AgentPool has no such guard, so there is no prior art
+to copy. **The API half is part of this decision:** M2 exposes no endpoint that messages a
+running task.
+*Done when* (in addition to the criteria below) a second `prompt()` during a live turn
+throws without a byte reaching the subprocess, covered by `node:test`.
+
+**M1a-4 · `protocol/registry.ts` · M · needs M1a-3, M0-7, M0-8**
+**Re-sized S → M, 2026-08-23.** The decision was ratified unchanged; the estimate was not.
+This entry now carries `env`, `defaultMode`, `maxMode`, `shell`, `asksPermission`,
+`argvChannel`, `modeMap`, `measuredOn` and `usage` — eight fields across six revisions, and
+M0-8 may add a ninth value to `argvChannel`. Split the launch spec from the measured labels
+if it grows again.
 Today's `AGENTS` map plus `defaultMode`, `maxMode` and the containment label
 (`shell: "terminal" | "internal" | "unknown"`, from M0-3). Mode ordering is the total order
 `safe < ask < auto`.
 **Gap** — `AcpAgent` passes `process.env` wholesale to every subprocess, and M0-2 needs
 `env -u CLAUDECODE` baked into a registry entry that has nowhere to put it. This sharpens
 under the daemon: M2-8 introduces a shared secret, and a daemon holding that token in its
-environment would hand it to every harness it spawns. **Decision: add
+environment would hand it to every harness it spawns. **Decided 2026-08-23 (ratified,
+#62 B1): add
 `env?: { unset?: string[]; set?: Record<string,string> }` to registry entries**; M2-8 also
 strips `AGENT_TEAM_*` unconditionally.
 **Revised by M0-1** — the labels are measured, and one field turns out to be too few. All
@@ -358,8 +411,9 @@ vocabularies do not align (copilot uses spec URLs, claude-agent-acp vendor ids, 
 yet honours `session/set_mode`, so mode discovery must read both fields. Env list confirmed as `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`
 for claude-agent-acp. No harness M0-1 surveyed needs `unknown`; `omp`, `pi` and
 `gemini` are uninstalled here and keep it. (`claude-code` was too; M0-2 removed the entry.)
-**Proposed (2026-08-23), two additions from the AgentPool review.** First, **`measuredOn:
-{ version, date }` beside the labels**, which is the retro's B2: every field here is a claim
+**Decided 2026-08-23 (#62 B2 and B5), two additions from the AgentPool review.** First,
+**`measuredOn: { version, date }` beside the labels**, compared at startup and **warning
+only — never failing a run**. This is the retro's B2: every field here is a claim
 about a *build*, and M0-7 watched three of them change in three days. AgentPool has no
 equivalent — but it does resolve harnesses through the ACP registry with a **pinned**
 distribution (`registry/model.py:126`, `registry/prepare.py:38`), and pinning is what would
@@ -370,6 +424,20 @@ backlog. Second, **name the `_meta` capability flags** the entries carry: AgentP
 catalogues `terminal_output` and `terminal-auth` on `ClientCapabilities`, with per-harness
 consumers (`docs/PRIOR-ART-AGENTPOOL.md`, §8c–8d). Carry the provenance caveat with them —
 those are their citations into source we have not read, and M0-8 verifies exactly one.
+**Check first whether `measuredOn` is nearly free:** `initialize` returns `agentInfo` and
+`acp.mjs:87` already stores it. If all three harnesses populate `agentInfo.version`, the
+staleness check is a string comparison at handshake and needs no probe; if not, it needs a
+`--version` call per harness. M0-1 captured `initialize` in full, so the answer is in the
+spike logs — read them before designing the field.
+**B5, decided the same day: `omp`, `pi` and `gemini` stay, and the absence of `measuredOn`
+is what marks them unverified.** One mechanism, no second flag to drift out of sync. Their
+*command lines* are real knowledge (`gemini --acp`, the `pi-acp` package); only the
+containment labels are guesses, and dropping the entries would discard the first to disown
+the second. `run` prints one line — "no measured labels for this harness" — when the
+selected entry has no `measuredOn`, and the `unknown` → `internal`/`none` rule below keeps
+the claim conservative.
+**Also carries the `usage` field decided in M1a-3 (#62 B3)**: `"per-turn" | "cumulative" |
+"absent"`, measured — copilot is cumulative, opencode and claude-agent-acp are per-turn.
 *Done when* `unknown` behaves as `internal` for warning purposes, so a harness M0-1 could
 not verify produces the **conservative** claim rather than the optimistic one — and an
 `asksPermission: false` harness warns even in `auto`, where the containment warning would
@@ -384,10 +452,21 @@ external asynchronous decider can answer, so M2-3's `ask` works with no TTY.
 read half of the path guard, and the plan's entire safety discussion never mentions it: not
 in the schema, not in the precedence chain, not under the harness ceiling. What lives
 outside a workspace root is exactly `~/.aws/credentials`, `~/.ssh`, and the parent repo's
-`.env`. **Decision: name it in the schema, resolve it through the same
+`.env`. **Decided 2026-08-23 (ratified, #62 B1): name it in the schema, resolve it through the same
 `task > run > harness > default` chain, default `false`, and have `safe` force it `false`
 regardless of what was asked for** — `safe` claiming read-only while reading an SSH key is
-precisely the overclaim M0-6 exists to stop.
+precisely the overclaim M0-6 exists to stop. (Worth knowing it binds nothing in production
+today for the same reason `#guardPath` doesn't — no harness calls `fs/*` — and is correct
+the day one does.)
+**Decided 2026-08-23 (#62 R1): the mode keeps the name `safe`; the notice carries the
+honesty.** R1's objection stands on the evidence — after negotiation and filtering, `safe`
+is defence in depth with no enforcement guarantee: against opencode the filter never fires
+because it never asks, and the one refusal we measured arrived as agent prose. Renaming it
+(`restricted` was the candidate) was considered and **rejected in favour of familiarity**.
+That choice has a consequence this story owns: **the containment notice is now the only
+thing carrying the caveat, so it must be non-suppressible** — no `--quiet` suppression, no
+"seen it once" memory — and the docs' per-harness wording from M0-6 is load-bearing rather
+than explanatory. If the notice ever becomes optional, R1 is back.
 **Revised by M0-1 — `safe` gains a second half: negotiate, then filter.** Setting the
 harness's nearest restrictive mode via `session/set_mode` at session start is what gives
 `safe` any effect at all on a harness that never asks (measured: opencode wrote the file
@@ -416,7 +495,7 @@ silently, and `safe` overriding a requested `allowReadOutsideRoot: true`.
 Typed bus carrying agent events plus supervisor events (task started, worktree created,
 permission pending, stall warning, task finished, containment warning). The `_client_`
 prefix convention is retained for client-originated events (`render.mjs:61-72`).
-**Decision (2026-08-23): the bus carries the wire object, not a rendered form** — `_meta`
+**Decided 2026-08-23 (#62 B4): the bus carries the wire object, not a rendered form** — `_meta`
 included, per M1a-2. Consumers render *from* it; nothing renders *into* it. Two things
 depend on this that are cheap now and awkward later: M2's persisted event log can only
 replay what it recorded, and `session/load` — which all three harnesses turn out to support
@@ -447,10 +526,17 @@ always survives", and worktrees live at `.agent-team/wt/<runId>/<taskId>` — ye
 gives no format for `runId`, no charset constraint for `taskId`, and **no branch naming
 convention at all**, so merge has no defined way to find the branches belonging to a run.
 Three things depend on it: filesystem path safety, git ref legality, and branch discovery.
-**Decision:** `runId` = `YYYYMMDD-HHMMSS-<4 char base36>` (sorts chronologically, readable
-in a path, collision-safe within a second); `taskId` validator-enforced
-`^[a-z0-9][a-z0-9._-]{0,63}$`; branch = `agent-team/<runId>/<taskId>`. Merge discovers
-branches by reading the run's own persisted record, **never** by reconstructing names.
+**Decided 2026-08-23 (ratified with amendment, #62 B1):** `runId` =
+`YYYYMMDD-HHMMSS-<4 char base36>` (sorts chronologically, readable in a path, collision-safe
+within a second); `taskId` validator-enforced **`^[a-z0-9][a-z0-9_-]{0,63}$`**; branch =
+`agent-team/<runId>/<taskId>`. Merge discovers branches by reading the run's own persisted
+record, **never** by reconstructing names.
+**Amendment — `.` removed from the task-id charset.** The original `[a-z0-9._-]` admitted
+ids that are illegal as git refs, which the *done when* below explicitly requires to survive
+`git check-ref-format`: `plan..impl` (refs may not contain `..`), `impl.` (may not end in a
+dot) and `build.lock` (no component may end in `.lock`) all passed the validator and would
+have failed at branch creation — after the worktree existed. Dropping the dot closes all
+three with one character and keeps ids readable; underscore remains available.
 *Done when* an illegal task id is a validation error rather than a silently sanitised one —
 the id in the run file is the id everywhere — and branch names round-trip through
 `git check-ref-format`.
@@ -472,13 +558,13 @@ starts.
 **Gap 1** — the plan puts `needs[]` in the M1 schema while stating M1 "runs the
 independent-tasks case only". So a run file with `needs: ["plan"]` validates cleanly and
 then runs its tasks in parallel: no error, no warning, just a plausible wrong answer. The
-worst failure shape available. **Decision: M1 rejects a non-empty `needs` with an explicit
+worst failure shape available. **Decided 2026-08-23 (ratified, #62 B1): M1 rejects a non-empty `needs` with an explicit
 "task dependencies land in M3" error**, and likewise a `worktree` value implying
 inheritance. The schema stays stable; the behaviour never lies. M3-1 lifts the rejection.
 **Gap 2** — nothing in the plan bounds concurrency. A parallel-split run file with twelve
 tasks spawns twelve harnesses, twelve model subscriptions and twelve worktrees at once.
-**Decision: `maxConcurrency` on the run, default from config (suggest 4)**, enforced by
-M1b-2.
+**Decided 2026-08-23 (ratified, #62 B1): `maxConcurrency` on the run, default from config
+(suggest 4)**, enforced by M1b-2.
 *Done when* each import failure mode has its own error (import throws / no default export /
 default is not an object); a `.ts` run file and its `.json` equivalent validate to the same
 object; and **the CLI imports run files while the daemon never imports a path supplied over
@@ -495,7 +581,7 @@ where there is no DAG, and awkward to retrofit into M3-1.
 a turn with `end_turn`, `max_tokens`, `max_turn_requests`, `refusal` or `cancelled`, and
 they mean very different things: `max_tokens` is a task that stopped mid-edit with a
 half-written file on disk, and today it is indistinguishable from success. The pipeline
-gates on this. **Decision — one table, in this module:**
+gates on this. **Decided 2026-08-23 (ratified, #62 B1) — one table, in this module:**
 
 | stopReason | status | note |
 |---|---|---|
@@ -518,10 +604,19 @@ recorded above for `max_tokens` applies to `timed_out` too.
 no rule for rolling task statuses into a run status, and its lifecycle
 (`pending → running → done | failed | timed_out | cancelled`) has no state for "never
 started because its dependency failed" — which is unavoidable the moment `needs` executes.
-**Decision: add `skipped` to the terminal states**; a failed, timed-out or cancelled task
-marks every transitive dependent `skipped` (M3-1); run status = worst task status, ordered
-`done < warned < skipped < failed`. Reserve the field name `continueOnFailure?: boolean`
-now — **defer the behaviour** — so adding the escape hatch later is not a schema break.
+**Decided 2026-08-23 (ratified with amendment, #62 B1): add `skipped` to the terminal
+states**; a failed, timed-out or cancelled task marks every transitive dependent `skipped`
+(M3-1); run status = worst task status, ordered
+**`done < warned < cancelled < skipped < timed_out < failed`**. Reserve the field name
+`continueOnFailure?: boolean` now — **defer the behaviour** — so adding the escape hatch
+later is not a schema break.
+**Amendment — the ordering was missing two of its own statuses.** It read
+`done < warned < skipped < failed`, while the lifecycle has five terminal states, so a run
+whose only bad task timed out had no defined run status. The two are placed by how much they
+should alarm someone reading a summary: `cancelled` is operator-intended and ranks mildest
+of the bad states; `timed_out` means the supervisor cut a task off mid-tool-call, with the
+same "half-written file on disk" hazard the table records for `max_tokens`, so it ranks just
+below outright failure.
 *Done when* `node:test` covers the stop-reason table and the roll-up ordering, and a
 six-task run file with `maxConcurrency: 2` never has three live subprocesses.
 
@@ -537,10 +632,18 @@ the plan never reconciles that with its own rules. Three consequences: the dirty
 refusal above will refuse on the supervisor's own state directory from the second run
 onward; M1b-4's `git status --porcelain` cross-check will attribute supervisor files to the
 agent; and a worktree nested inside the parent tree is inside the parent's `#guardPath`
-root when a task runs from the repo root. **Decision: a preflight step that ensures
-`.agent-team/` is git-ignored** — appending it if absent, refusing to start if the path is
-*tracked* — plus explicit exclusion from the diff cross-check (M1b-4). Keeping state
-in-repo is right, discoverable and per-project; it just has to be invisible to git.
+root when a task runs from the repo root. **Decided 2026-08-23 (ratified with amendment, #62 B1): a preflight step that requires
+`.agent-team/` to be git-ignored** — **refusing to start with an instruction if it is
+neither ignored nor tracked**, refusing to start if the path is *tracked* — plus explicit
+exclusion from the diff cross-check (M1b-4). Keeping state in-repo is right, discoverable
+and per-project; it just has to be invisible to git.
+**Amendment — the preflight cannot append it.** As written it appended `.agent-team/` to
+`.gitignore` when absent, which dirties the working tree the same preflight refuses to start
+on: the first run in a fresh repo would either refuse after having modified the user's file,
+or need an exception carved for its own edit. It is also a write to someone's repository
+that nobody asked for, on a tool whose entire posture is that it does not touch things
+without permission. So it **refuses with the fix in the message** — *"add `.agent-team/` to
+.gitignore and re-run"* — a one-time cost per repository, paid deliberately.
 *Done when* a run leaves `git worktree list` clean after success and populated after
 failure, and killing a task mid-spawn leaves no orphan worktree without a run record.
 
@@ -575,13 +678,28 @@ absent from the published docs, so pin it with an M1b-5 `mock-agent.mjs` case; a
 **Gap** — the plan specifies extraction returning `null` but never says what the task's
 *status* then is, nor what M3-3 hands a successor when there is no summary to hand it.
 Warning-only is the right posture, but it leaves `TaskResult.summary` undefined for exactly
-the handoff M3 is built on. **Decision, three steps:** (1) on `null`, send **one** bounded
-follow-up prompt in the same session — *"Reply with only the `<task-result>` block"* — which
-costs one turn and converts most misses into hits; (2) still `null` → status stays whatever
-the stop-reason table says, `warnings += "noResultBlock"`, and `summary` is synthesised from
-the tail of the final message and explicitly flagged as synthesised; (3) a successor's
-prompt states plainly that the predecessor reported nothing structured, rather than passing
-a synthesised summary off as the agent's own words (M3-3).
+the handoff M3 is built on. **Decided 2026-08-23 (#62 B1), two steps — the original first
+step is struck:** (1) status stays whatever the stop-reason table says,
+`warnings += "noResultBlock"`, and `summary` is synthesised from the tail of the final
+message and **explicitly flagged as synthesised**; (2) a successor's prompt states plainly
+that the predecessor reported nothing structured, rather than passing a synthesised summary
+off as the agent's own words (M3-3). A missing block **never fails the task** — compliance
+with a prompt preamble is not enforceable, and failing on it would make a non-compliant
+harness unusable rather than noisy, which is the shape of overclaim R1 and M0-6 exist to
+prevent.
+**Struck: the retry.** The original step (1) sent *one* bounded follow-up prompt in the same
+session — *"Reply with only the `<task-result>` block"* — on the reasoning that it costs one
+turn and converts most misses into hits. **It cannot ship.** M0-4's own recorded consequence
+is *"one prompt per session per task, and never a 'nudge'"*: on copilot the `session/prompt`
+handler calls `session.abort()` unconditionally as its first action
+([github/copilot-cli#4555](https://github.com/github/copilot-cli/issues/4555)), tearing down
+background work **even when no turn is in flight**, and on opencode a second prompt lands in
+the previous turn's context where the model reads it as a suspected prompt injection. The
+retry would silently destroy the very work whose result it was trying to recover. #62's R5
+makes this structural rather than advisory — `prompt()` throws on a second call
+(M1a-3) — so this story could not have implemented the retry even if it wanted to. The
+conflict predates today: it was written into M1b-4 before M0-4 measured the behaviour, and
+survived because nothing forced the two to be read together.
 *Done when* `node:test` covers the strictness matrix field by field, and a fixture exists
 per warning class.
 
@@ -663,7 +781,7 @@ committed — right for a parallel split, where the branches are independent.
 **Gap** — the plan ships `--rebase` in M1 and justifies it as "right for a pipeline, where
 one inherited worktree carries several stages' commits". Pipelines are M3. M1's own
 verification checklist then asks for "`--rebase` on a pipeline run preserves per-stage
-commits" — a run that cannot be authored at M1. **Decision: M1 ships the preflight (the
+commits" — a run that cannot be authored at M1. **Decided 2026-08-23 (ratified, #62 B1): M1 ships the preflight (the
 load-bearing, hard part) plus `--squash` only; `--rebase` moves to M3-4.** This also shrinks
 M1, which needs shrinking.
 *Done when* a two-task run lands as unstaged changes; the same merge with a conflicting
@@ -913,7 +1031,18 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
 - **Sandboxing (`bwrap` / `sandbox-exec`).** The only option that actually closes the shell
   gap rather than documenting it, and the only thing that bounds `auto` mode's blast
   radius — which is where the real risk lives, and which labelling does nothing for.
-  *Trigger:* a judgement call on `auto`'s blast radius, not an event.
+  ~~*Trigger:* a judgement call on `auto`'s blast radius, not an event.~~
+  **Decided 2026-08-23 (#62 R2): deferred, and the trigger is now an event — M2's daemon
+  accepting dispatch (`POST /runs`).** Until then `auto` is a human act in a terminal that
+  human is watching; an API that accepts run files and executes them under `auto` is remote
+  code execution as a service, which is a different risk arriving on a known date. What M1
+  ships instead — worktree isolation, the containment label, the silent-autonomy warning —
+  **bounds nothing about the shell**, and the docs must keep saying so. Two supporting
+  findings: AgentPool's sandboxed execution environments would bind nothing here, since they
+  contain only client-served `fs/*` and `terminal/*` operations and our harnesses use
+  neither (`docs/PRIOR-ART-AGENTPOOL.md`); and the platform matrix is real work — `bwrap` is
+  Linux-only and macOS's `sandbox-exec` is deprecated — which is a second reason not to
+  inline it into a milestone that already needs shrinking.
 - **Per-harness price table.** *Trigger:* M0-5 reporting that any harness names the model it
   selected. **Trigger fired 2026-08-22 — all three name it**, in `configOptions` on the
   `session/new` response with the reserved `category: "model"`. Still unscheduled, and M0-5

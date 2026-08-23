@@ -15,9 +15,13 @@ fourteen verdicts and reversed one outright — see [What M0 moved](#what-m0-mov
 found a whole channel the first pass missed, [`_meta`](#the-_meta-channel), and established
 that on three of the retro's risks AgentPool has [nothing to offer](#what-agentpool-does-not-answer).
 
-This file is a **findings note**. Two of its recommendations were decided in discussion and
-are marked **decided** below; every other verdict is a proposal for the retro to ratify or
-reject, and `docs/STORIES.md` carries them in that spirit.
+This file is a **findings note**, and the M0 retrospective ran against it on 2026-08-23.
+Four of its recommendations are now decisions — **8b** (`_meta` kept through the typed
+layer, #62 B4), **8c** (the `terminal_output` probe, scheduled as M0-8), **8** (the bus
+carries the wire object) and the `measuredOn` half of **2** (#62 B2). Items **1**, **5** and
+**6** remain *proposals* awaiting whoever picks up M1a; everything under Defer and Refuse is
+a recommendation, not a ruling. `docs/STORIES.md` is the authority on which is which — every
+decided half there carries a date.
 
 ---
 
@@ -162,8 +166,11 @@ target harness with no stable install path).
 **Version pinning is the half that survives, and it is worth more than the convenience
 was.** #62's B2 asks whether each registry entry records *when* its labels were measured and
 whether a mismatch warns. A pinned launch argv turns that from a warning into a property:
-we run the build we measured. Recommended for M1a-4 — `measuredOn: { version, date }`
-beside the labels, and a per-harness version probe so the check has something to compare.
+we run the build we measured. **Decided 2026-08-23 (#62 B2): `measuredOn: { version, date }`
+lands in M1a-4**, compared at startup, warning only. Pinned launch is *not* decided — it
+rides on the auto-resolve half that went to the backlog — so the comparison needs a version
+from somewhere: check whether `agentInfo` (already stored, `acp.mjs:87`) carries one before
+designing a probe.
 
 ### 3 · Filter injected MCP servers by advertised transports — defer
 
