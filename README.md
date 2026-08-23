@@ -147,9 +147,13 @@ one place, applied identically to every harness — but it only ever sees what
 crosses the protocol, and how much that is differs per harness. Measured
 (`docs/M0-FINDINGS.md` §M0-1): opencode sends no `session/request_permission` at
 all and wrote a file while running under `safePolicy`, so no `--mode` value
-restrains it; copilot reads by shelling `cat`, so its reads arrive as `execute`
-and `safe` refuses them — safe mode does not make copilot cautious, it makes it
-unusable. `#guardPath` rejects any `fs/*` path outside the workspace root, but no
+restrains it; copilot (1.0.80) reads a named file through a native `read` tool
+that `safe` allows, but still shells out to list a directory, so `safe` kills any
+task that has to explore — the turn ends in seconds with no output and a
+`stopReason` of `end_turn`. Safe mode does not make copilot cautious; it makes it
+unusable for real work while looking like a clean finish. Pin that to the build:
+on 1.0.78, three days earlier, copilot shelled `cat` to read as well and `safe`
+refused its reads outright. `#guardPath` rejects any `fs/*` path outside the workspace root, but no
 surveyed harness calls `fs/*`: it bounds this client's own file service, not the
 agent. Negotiating the harness's restrictive mode at session start is what would
 reach opencode (measured: it declined with `session/set_mode → plan`), and this

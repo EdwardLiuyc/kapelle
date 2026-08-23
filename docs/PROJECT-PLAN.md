@@ -204,10 +204,10 @@ internally — so for that harness we judge more than a title string even withou
 
 Agenda item #1 in the brief. Costs almost nothing and de-risks every design choice after.
 
-> **Status:** item 1 is done — see `M0-FINDINGS.md`. Items 2 and 7 are done — M0-2, which
-> also retired the `claude-code` registry entry. Items 3 and 4 are done — M0-3. Item 5 is
-> done — M0-4. Items 6 and 8 are still open, and 6 now starts from the baseline those
-> surveys recorded rather than from nothing.
+> **Status: M0 is complete.** Item 1 — M0-1. Items 2 and 7 — M0-2, which also retired the
+> `claude-code` registry entry. Items 3 and 4 — M0-3. Item 5 — M0-4. Item 6 — M0-5. Item 8 —
+> M0-6, corrected again by M0-7 after copilot changed behaviour between builds. The findings
+> note is assembled and carries a per-harness roll-up at the top: `M0-FINDINGS.md`.
 
 1. ~~Run today's MVP against real **opencode** and **claude-agent-acp**.~~ **Done, and
    widened to all three targets.** All spawn, all complete a turn at protocol v1, none
@@ -279,8 +279,10 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    per-harness, and it belongs next to the registry's containment label rather than in a
    single sentence.
 
-**Output:** a short findings note — `M0-FINDINGS.md`, M0-1 section filled, 3/4/5 stubbed.
-No production code beyond items 2, 7 and 8.
+**Output:** the findings note, `M0-FINDINGS.md` — all four survey sections filled, opened
+by a per-harness roll-up that answers the M0 exit criterion below in one table, and closed
+by an explicit list of what it does not cover. No production code beyond items 2, 7 and 8.
+Spike tooling lives on four unmerged `spike/*` branches, named per section in the note.
 
 ---
 
@@ -331,9 +333,13 @@ driven from a run file, fully verifiable offline.
   vendor ids, opencode `build`/`plan`. Negotiation is defence in depth, not a sandbox: the
   one refusal we measured arrived as agent prose, so compliance and enforcement are not
   distinguishable from outside. Note the third-order consequence for copilot:
-  because it reads by shelling out, its reads are `execute` kind, so `safe` refuses them
-  and the harness becomes unusable rather than cautious — an argument for `defaultMode`
-  being per harness, which this design already allows.
+  it shells out to *explore* (`ls`, `find`), so those arrive as `execute` kind and `safe`
+  refuses them, killing any task that has to look around — silently, as a clean `end_turn`.
+  Reading a file whose path is already known goes through a native `read` tool on 1.0.80
+  and `safe` allows it, so the harness is crippled rather than wholly unusable. **This is
+  build-specific**: on 1.0.78 copilot shelled `cat` for reads too, and `safe` refused those
+  as well (`M0-FINDINGS.md` §M0-1, "What re-verification changed"). Either way it is an
+  argument for `defaultMode` being per harness, which this design already allows.
 - **`core/policy.ts`** — small in lines, load-bearing. Change the policy signature from
   `async () => boolean` to a form answerable by an external, asynchronous decider, so `ask`
   can work with no TTY in M2. Keep `READ_ONLY_KINDS`, `safePolicy`, `autoPolicy` semantics

@@ -180,6 +180,13 @@ so the sentence it is correcting is wrong in a second way the story did not anti
 opencode today — is uncontained, and the registry says which is which.*
 *Done when* `CLAUDE.md` and `README.md:143` both carry the per-harness claim, name opencode
 as uncontained, and no longer imply `#guardPath` bounds `--mode auto`.
+**Done 2026-08-23** (`c4307f3`). One correction to the story as written: the claim lived at
+**four** sites, not the two it names. And one thing nobody could have scoped — **the shipped
+wording was measurably stale within hours.** M0-7 re-verified copilot on 1.0.80 and found it
+now reads a named file through a native `read` tool that `safe` allows; the "shells `cat`,
+so `safe` refuses its reads" half was true of 1.0.78 only. M0-7 carries the fix; this story
+stays closed. The durable lesson is that a per-harness safety claim is a claim about a
+**build**, and needs the version in the sentence.
 
 **M0-7 · Findings note · XS · needs M0-1, M0-3, M0-4, M0-5**
 `docs/M0-FINDINGS.md`. The input to M1a-4's containment labels and env list, M1c-1's TTL
@@ -192,6 +199,18 @@ request; `usage_update` shapes, including `cost` on opencode alone).
 unblocked**, and its assembly is now editorial: the note carries M0-1, M0-3, M0-4 and M0-5
 in full, and the "incidental" usage paragraph under M0-1 is superseded by §M0-5 rather than
 deleted, so the correction stays visible.
+**Done 2026-08-23**, and it was not purely editorial. Assembly exposed that the note had no
+cross-harness view — the plan's own M0 exit criterion (`PROJECT-PLAN.md`) asks its questions
+per harness, and the answers were spread across four sections — so the note now opens with a
+**roll-up table** (an index; the sections stay authoritative) plus a registry-evidence table
+for M1a-4, and closes with what it does not cover. Two corrections beyond the plan:
+copilot's column spanned **two builds** (M0-1 on 1.0.78, everything else on 1.0.80), which
+M0-4's "pin the version next to every row" forbids, so this story **re-verified M0-1's
+copilot checks on 1.0.80** (`spike/m0-7-reverify`) — finding three changed behaviours, one
+of which falsified a safety sentence M0-6 had shipped the same day. And the mode ids the
+M0-1 table abbreviates as `#agent`/`#plan`/`#autopilot` are **not the ids** — the full
+canonical URL is, and the bare fragment returns `-32602`, which would have gone straight
+into M1a-4's registry as a broken value.
 
 ---
 
@@ -299,8 +318,14 @@ runs on whatever still arrives. Mode ids come from M1a-4's `modeMap`. Defence in
 a sandbox — the refusal we measured was agent prose, so enforcement is not verifiable from
 our side.
 Two further measured facts bear directly on `READ_ONLY_KINDS`. First,
-copilot *reads* by shelling `cat`, so its reads arrive as `execute` kind and `safe` refuses
-them: safe mode does not make copilot cautious, it makes it unusable. Second, opencode
+copilot shells out to *explore*, so `ls`/`find` arrive as `execute` kind and `safe` refuses
+them, killing any task that has to look around — while a read of an already-known path goes
+through a native `read` tool that `safe` allows. Safe mode does not make copilot cautious;
+it cripples it, and the failure presents as a clean `end_turn` with no output.
+**Re-verified 2026-08-23 and build-specific** — on 1.0.78 copilot shelled `cat` for reads
+too and `safe` refused those as well (`M0-FINDINGS.md` §M0-1, "What re-verification
+changed"), which is the strongest available argument that `argvChannel` and the kind
+mapping must be *measured per build*, not assumed. Second, opencode
 asks nothing, so no policy value changes its behaviour at all. Keep `READ_ONLY_KINDS` as
 it is — kind is the only thing the protocol gives us — and let M1a-4's `defaultMode` carry
 the per-harness adjustment, but say plainly in the docs that mode is advisory against a
