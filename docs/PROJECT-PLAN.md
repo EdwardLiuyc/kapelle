@@ -43,7 +43,8 @@ policy across all of them and returning machine-readable results.
 | Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally, **and separately whether we ever see the command text** (`argvChannel`). `safe` warns when it cannot actually contain. **Measured (M0-1, M0-3): all three run internally and none calls `terminal/*` even when offered; opencode never asks permission and never shows us a command, so the policy has no jurisdiction over it; claude-agent-acp and copilot do show real argv, on `session/update` notifications. All three accept `session/set_mode`, so modes are a second containment channel.** |
 | Unattended `ask` | Pending decision published on the event stream; **timeout → deny**. |
 | Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. **Required, not optional: M0-1 found this is opencode's default behaviour, not an anomaly.** |
-| Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. |
+| Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. **Re-opened on one axis, 2026-08-23 (M0-8).** M0-3 varied the *method* and not the *capability*: claude-agent-acp is documented to check `clientCapabilities._meta["terminal_output"]` and, without it, to send bash output as plain text rather than as a streamed `terminal_info`/`terminal_output`/`terminal_exit` lifecycle carrying an **exit code**. The decision not to implement `terminal/*` stands either way; what M0-8 tests is whether the *visibility* M0-3 called unobtainable exists on a channel we never advertised. See `docs/PRIOR-ART-AGENTPOOL.md` §8c. |
+| Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `acp.mjs:230` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), the capability flags M0-3 found harnesses gating on, and M0-8's subject all live there. |
 | Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency; zero runtime deps preserved. |
 | Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
 | CLI | Two front ends, one core: `run` drives in-process, `runs` talks to the daemon. |
@@ -208,6 +209,13 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
 > `claude-code` registry entry. Items 3 and 4 — M0-3. Item 5 — M0-4. Item 6 — M0-5. Item 8 —
 > M0-6, corrected again by M0-7 after copilot changed behaviour between builds. The findings
 > note is assembled and carries a per-harness roll-up at the top: `M0-FINDINGS.md`.
+>
+> **One story added after that completion: M0-8**, from the AgentPool review
+> (`docs/PRIOR-ART-AGENTPOOL.md`). It re-probes M0-3's question on the capability axis
+> rather than the method axis — see the Terminals row above. It is scheduled before M1a-1
+> because a positive result adds a fourth `argvChannel` value to M1a-4's registry type, and
+> because the spike tooling that makes it ~20 minutes' work still exists on the `spike/*`
+> branches.
 
 1. ~~Run today's MVP against real **opencode** and **claude-agent-acp**.~~ **Done, and
    widened to all three targets.** All spawn, all complete a turn at protocol v1, none
@@ -563,6 +571,15 @@ and confirm the run proceeds and a CLI observer on the same run sees the same de
   only at end of turn. Left open because the remedy — per-harness trust flags, or asking each
   harness for its own accounting — is real work that no story needs yet. M1c-1's watchdog
   deliberately carries no context rung in the meantime.
+- **A pluggable backend under the `fs/*` handlers — considered and refused, 2026-08-23.**
+  AgentPool routes every client-served file operation through a swappable execution
+  environment (local, docker, an E2B sandbox), and `docs/PRIOR-ART-AGENTPOOL.md` initially
+  recommended taking the seam. It reversed itself against M0-1: **no harness calls `fs/*` at
+  all**, so the indirection would sit beneath handlers nothing reaches. `#guardPath` stays as
+  insurance; nothing is built under it until something calls `fs/*`. Recorded here so the
+  idea is not rediscovered as new. Note it never addressed the real gap either — their
+  sandbox contains only what the *client* serves, and the harness process itself is spawned
+  plainly, exactly as ours is.
 - Whether `stallRepeatCount` needs per-harness tuning or one default holds. A task that
   re-runs the same test command while iterating is a legitimate repeat; the default is
   deliberately generous, and repeats only ever warn.

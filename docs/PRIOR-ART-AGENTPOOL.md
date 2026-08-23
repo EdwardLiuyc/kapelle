@@ -6,12 +6,18 @@ implementation of the ACP client side** — the exact layer `acp.mjs` is — and
 crossed several bridges `docs/PROJECT-BRIEF.md` still lists as open questions.
 
 Read 2026-08-22 against commit `b6ddbea9` (shallow clone, last commit 2026-04-26). Every
-`path.py:NN` below is that commit; every `acp.mjs:NN` is master at `97eeb1e`. Line numbers
+`path.py:NN` below is that commit; every `acp.mjs:NN` is master at `1bfee9c`. Line numbers
 rot — re-check with `sed -n 'NNp'` before trusting one.
 
-This file is a **findings note, not a plan**. Nothing in `docs/PROJECT-PLAN.md` or
-`docs/STORIES.md` changes on account of it; the verdicts below are recommendations for a
-later session to turn into stories deliberately.
+**Re-scored 2026-08-23** against M0-5, M0-6 and M0-7 (which landed after the first pass) and
+against the retrospective's decision surface, issue #62. That second pass moved six of the
+fourteen verdicts and reversed one outright — see [What M0 moved](#what-m0-moved). It also
+found a whole channel the first pass missed, [`_meta`](#the-_meta-channel), and established
+that on three of the retro's risks AgentPool has [nothing to offer](#what-agentpool-does-not-answer).
+
+This file is a **findings note**. Two of its recommendations were decided in discussion and
+are marked **decided** below; every other verdict is a proposal for the retro to ratify or
+reject, and `docs/STORIES.md` carries them in that spirit.
 
 ---
 
@@ -19,14 +25,16 @@ later session to turn into stories deliberately.
 
 | # | What | Verdict |
 |---|---|---|
-| 1 | Race handshake RPCs against process death; keep a stderr ring buffer | **take** — M1a |
-| 2 | ACP registry resolution + zero-install spawn (`npx -y`, `uvx`, binaries) | **take, scoped** — M1a/M1b |
-| 3 | Filter injected MCP servers by the agent's advertised transports | **take** — M1a |
-| 4 | Decline elicitation and ack `_`-prefixed ext methods instead of erroring | **take** — M1a |
-| 5 | Render `locations[]` on tool calls | **take** — M1a |
-| 6 | Mock agent that can fire every `sessionUpdate` variant on demand | **take** — M1a |
-| 7 | A backend seam under `fs/*` (and later `terminal/*`) | **take the seam** — M2 |
-| 8 | Persist raw `session/update` objects as the source of truth | **take as constraint** — M2 |
+| 1 | Race handshake RPCs against process death; keep a stderr ring buffer | **take** — M1a-3, alongside its timeout |
+| 2 | ACP registry resolution + zero-install spawn (`npx -y`, `uvx`, binaries) | **split** — pin versions (M1a-4); auto-resolve to backlog |
+| 3 | Filter injected MCP servers by the agent's advertised transports | **defer** — with the first story that injects one |
+| 4 | Decline elicitation and ack `_`-prefixed ext methods instead of erroring | **backlog** — trigger: first unhandled method on the wire |
+| 5 | Render `locations[]` on tool calls | **take, verify first** — types now, render after one probe |
+| 6 | Mock agent that can fire every `sessionUpdate` variant on demand | **take** — M1a-2 needs it as its driver |
+| 7 | A backend seam under `fs/*` (and later `terminal/*`) | **refuse** — reversed; it would sit under dead code |
+| 8 | Persist raw `session/update` objects as the source of truth | **take** — decided; M1a-2 and M1a-6 |
+| 8b | Keep `_meta` through the typed layer, both directions | **take** — **decided**; answers #62 B4 |
+| 8c | Probe the `_meta.terminal_output` capability | **take** — **decided**; scheduled as M0-8 |
 | 9 | MCP tool bridge as the structured-result contract | **defer** — named M3 successor to `<task-result>` |
 | 10 | Supervisor speaks the *agent* side; permissions forward up the chain | **defer** — M4 alternative to the dashboard |
 | 11 | WebSocket transport / stdio↔ws bridge | **defer** — M2, if SSE proves insufficient |
@@ -37,6 +45,27 @@ later session to turn into stories deliberately.
 Three places where copying would be a regression are in
 [Where we are ahead](#where-we-are-ahead). Two facts I could not verify from this container
 are in [Unverified](#unverified-from-this-container).
+
+---
+
+## What M0 moved
+
+The first pass scored these against the MVP and the plan. M0-1's traffic tables, M0-5's
+usage survey and M0-7's re-verification change six of them, and the retro's own risks
+(#62, R2 especially — *"effort is pointed at a guard that binds nothing"*) supply the
+principle that decides four.
+
+| # | Change | What moved it |
+|---|---|---|
+| 1 | take → **take, strengthened** | M0-2 killed the original justification: the opaque `-32603` does not reproduce on adapter 0.49.0. M1a-3's own gap replaces it — a harness that accepts the pipe and never answers `initialize`. The decided 30 s timeout covers *alive but silent*; this covers *died with a message on stderr*. Siblings, not alternatives |
+| 2 | take, scoped → **split** | Auto-resolve drops to backlog: `npx -y` against a CDN is actively hostile to a registry of **measured** labels, when M0-7 watched copilot change three behaviours in three days. The version-**pinning** half is promoted instead — pinning is what would make #62's B2 staleness check enforceable rather than advisory |
+| 3 | take → **defer** | Nothing in M1 injects an MCP server, so the filter would guard nothing. R2's complaint, applied to this report's own recommendation |
+| 4 | take → **backlog** | M0-1: **zero** methods reached `#handleRequest`'s default across six surveyed turns. Speculative hardening. The trigger is free — the wire tap sees the first one the day it appears |
+| 6 | take → **take, load-bearing** | M1a-2's *done when* is "adding a variant makes `tsc` fail at every unhandled `switch`", which needs an offline driver. M0-1 found `available_commands_update` dropped from all three and `config_option_update` from copilot, and `plan` emitted by nobody — three render paths with no exercise outside the mock |
+| 7 | take the seam → **refuse, reversed** | **Zero `fs/*` traffic from any harness in any run.** An abstraction seam underneath dead code is R2 in its purest form. The first pass wrote this recommendation without M0-1's traffic table; it was wrong |
+| 8 | constraint for M2 → **decide in M1a** | All three advertise `loadSession: true`, two add `resume` and `fork`. The plan's "ACP has no resume" premise is dead and #62 calls resume an unscheduled cheap win. Their `is_loading` / `finish_load` split (`agents/acp_agent/session_state.py:58`, `:91`) is exactly the mechanism that stops replayed updates re-entering the live stream |
+
+Verdicts 5, 9–14 stand as written.
 
 ---
 
@@ -67,9 +96,12 @@ are not eccentric.
 
 ---
 
-## Take
+## The list, item by item
 
-### 1 · Race handshake RPCs against process death — M1a
+Headings carry the **re-scored** verdict. Where the first pass said something else, the
+change and its evidence are in [What M0 moved](#what-m0-moved).
+
+### 1 · Race handshake RPCs against process death — take, M1a-3
 
 `run_with_process_monitor` (`utils/subprocess_utils.py:126`) runs an RPC as a task racing
 `process.wait()`. If the process wins, it reads the subprocess's stderr and raises
@@ -86,7 +118,13 @@ Cost in our terms: a bounded stderr ring buffer (keep the last ~20 lines regardl
 `--verbose`) plus attaching it to the rejection in `#failAll`. ~25 lines, no dependency, no
 invariant touched. The `close` handler already exists; only the message improves.
 
-### 2 · ACP registry resolution and zero-install spawn — M1a/M1b, scoped
+**Re-scored.** That papercut is gone — M0-2 could not reproduce the `-32603` on adapter
+0.49.0. The justification is now M1a-3's own gap instead, and it is a better one: a harness
+that accepts the pipe and never answers `initialize`. M1a-3 already decided a 30 s timeout
+for it, which catches *alive but silent*; this catches *died, with a message on stderr*.
+Build them together or the second failure mode reports a bare exit code.
+
+### 2 · ACP registry resolution and zero-install spawn — split
 
 There is an official ACP registry — `REGISTRY_URL` at `registry/fetch.py:12` — publishing
 agent entries with per-platform distributions. `registry/model.py:93` models an entry;
@@ -115,7 +153,19 @@ place harness quirks live — `CLAUDE_PARENT_ENV` (`agents.mjs:26`) is exactly t
 knowledge no upstream registry will carry for us, and neither will the M0 containment
 metadata (`argvChannel`) the plan puts in the registry.
 
-### 3 · Filter injected MCP servers by advertised transports — M1a
+**Re-scored — split, and the halves go opposite ways.** M0-7 watched copilot change three
+measurable behaviours between 1.0.78 and 1.0.80, in three days. That makes M1a-4's registry
+a set of claims *about a build*, and a launcher that silently resolves "latest" from a CDN
+is the exact opposite of what such a registry needs. **Auto-resolve → backlog** (trigger: a
+target harness with no stable install path).
+
+**Version pinning is the half that survives, and it is worth more than the convenience
+was.** #62's B2 asks whether each registry entry records *when* its labels were measured and
+whether a mismatch warns. A pinned launch argv turns that from a warning into a property:
+we run the build we measured. Recommended for M1a-4 — `measuredOn: { version, date }`
+beside the labels, and a per-harness version probe so the check has something to compare.
+
+### 3 · Filter injected MCP servers by advertised transports — defer
 
 `filter_servers_by_capabilities` (`agents/acp_agent/helpers.py:17`) drops HTTP servers when
 `agentCapabilities.mcpCapabilities.http` is falsy, SSE likewise, passes stdio through
@@ -128,7 +178,13 @@ it. The moment a task wants to inject an MCP server, this filter is the differen
 and it is capability negotiation — the fourth protocol gotcha in the brief — applied
 somewhere we currently don't apply it.
 
-### 4 · Decline elicitation, ack extension methods — M1a
+**Re-scored — defer.** Read that paragraph against #62's R2, *"effort is pointed at a guard
+that binds nothing"*: no story before M3 injects an MCP server, so shipping the filter in
+M1a would add exactly the kind of code that risk is about. It belongs to whichever story
+first passes something to `mcpServers` — item 9's successor most likely — and it is 15 lines
+whenever that is.
+
+### 4 · Decline elicitation, ack extension methods — backlog
 
 Their headless client answers `elicitation` with a decline (`headless_client.py:265`),
 no-ops `elicitation_complete` (`:271`), and acks `ext_method`/`ext_notification`
@@ -141,7 +197,13 @@ brief lists as deliberately unimplemented — a hard error can end a turn that a
 convention a peer must tolerate. ~10 lines, and `mock-agent.mjs` should learn to send both
 so the path is exercised (see 6).
 
-### 5 · Render `locations[]` — M1a
+**Re-scored — backlog, with a free trigger.** M0-1 measured it: across six surveyed turns,
+**no harness sent a method outside the three we implement**, so the `-32000` default at
+`acp.mjs:205` never fired. This is hardening against traffic that does not exist. The
+trigger costs nothing to arm — the wire tap sees the first unhandled method the day one
+appears, and the change is still ~10 lines then.
+
+### 5 · Render `locations[]` — take, verify first
 
 `ToolCallState.update` (`tool_call_state.py:128`) normalizes `locations` to
 `ToolCallLocation` and forwards them. `render.mjs:37` prints title and kind only; we surface
@@ -150,7 +212,12 @@ telling us which files a call is about, *before* it happens — cheap output, an
 input to M1c's "same tool repeating" stall heuristic, which currently has only a title
 string to compare.
 
-### 6 · A mock agent that can fire every update variant — M1a
+**Re-scored — take the type, verify before spending render effort.** M0 never recorded
+whether any harness populates `locations`; it is not in M0-1's field tables either way. So:
+M1a-2's union carries it, and the render line waits on one wire-tap answer. If nobody sends
+it, the field costs nothing and the render never happens.
+
+### 6 · A mock agent that can fire every update variant — take, M1a-2
 
 Their testing rig is `src/acp/agent/implementations/debug_server/`: a mock agent plus a
 small web panel whose entire purpose is manually firing *any* notification type from the
@@ -163,7 +230,14 @@ test harness of record and says to extend it when adding client capabilities, bu
 offline drives. A `--emit <variant,variant,…>` flag on `mock-agent.mjs` makes the renderer
 verifiable with nothing installed, which is the invariant we already claim.
 
-### 7 · A backend seam under `fs/*` — M2, seam only
+**Re-scored — load-bearing, not nice-to-have.** M1a-2's *done when* is that adding a variant
+must make `tsc` fail at every unhandled `switch`; proving the runtime half of that needs
+something that emits the variant. M0-1 supplies the list: `available_commands_update` from
+all three harnesses and `config_option_update` from copilot are **dropped today**, and
+`plan` is emitted by **no** harness, so its render path has no driver but the mock. Three
+paths, one flag.
+
+### 7 · A backend seam under `fs/*` — refuse (reversed)
 
 Every filesystem and terminal request in their client handler goes through a pluggable
 *execution environment* rather than the local disk: `read_text_file` at
@@ -173,13 +247,24 @@ the environment is configurable per agent (`models/acp_agents/base.py:75`,
 the ACP session itself as a filesystem (`acp://`, `filesystem.py:73`) so an agent can be
 handed a workspace that isn't a directory at all.
 
-Worth taking as **one indirection, not a feature**: route our `fs/*` handlers through a
-tiny interface so an M1b worktree-scoped or a later container-scoped workspace can be
-substituted. Do not take the sandboxes. And note the ordering — see
-[Where we are ahead](#where-we-are-ahead): our path guard sits *in front of* the seam, not
-inside the backend.
+The first pass recommended taking this as **one indirection, not a feature** — route our
+`fs/*` handlers through a tiny interface so an M1b worktree-scoped or a later
+container-scoped workspace could be substituted.
 
-### 8 · Persist raw `session/update` objects — M2, as a design constraint
+**Re-scored — refuse. This reverses the recommendation above, and the reversal is the
+point.** M0-1 measured **zero `fs/*` traffic from any harness in any run**: all three read
+and write in-process, and files appeared on disk during the write probe without a single
+`fs/write_text_file` crossing the wire. A pluggable backend beneath handlers nothing calls
+is R2 exactly — effort pointed at a guard that binds nothing — and the first pass wrote the
+recommendation without that traffic table in front of it.
+
+`#guardPath` still stays, for the reason M0-1 gives: a harness may use `fs/*` tomorrow and
+the MCP path may. Keep it, keep its tests (the mock exercises them for free), and spend
+nothing further until something actually calls `fs/*`. Note also what this does *not*
+settle: R2's real question is sandboxing the harness process itself, which this seam would
+never have touched — see [what AgentPool does not answer](#what-agentpool-does-not-answer).
+
+### 8 · Persist raw `session/update` objects — take, decided, M1a-2 and M1a-6
 
 `ACPSessionState` (`agents/acp_agent/session_state.py`) keeps raw ACP updates in a deque as
 "the single source of truth", converting to native events lazily on consumption
@@ -190,6 +275,133 @@ Our PROJECT-PLAN already says the event bus is the single source of truth; this 
 detail worth committing to *before* M2 persistence and `session/load` get built: persist
 the wire objects, render from them, and give replay its own buffer. Reconstructing a run
 from rendered output is the mistake this avoids.
+
+**Re-scored — decide it in M1a, not M2. Decided 2026-08-23.** Two things moved it. First,
+resume is real: all three harnesses advertise `loadSession: true`, opencode and
+claude-agent-acp add `resume` and `fork` (`M0-FINDINGS.md`, roll-up), so the plan's premise
+that ACP has no resume is dead and #62 lists it as a cheap win nobody scheduled. Second,
+this is the same decision as `_meta` below — a bus carrying rendered forms cannot replay,
+and cannot carry an extension field it never modelled.
+
+What that means concretely for M1a-2 and M1a-6: the bus carries the wire object; consumers
+render *from* it; and when replay lands, it gets its own collection buffer rather than
+re-entering the live queue.
+
+---
+
+## The `_meta` channel
+
+Found on the second pass, looking specifically for answers to #62. The first pass missed it
+entirely, which is itself the finding: **the interesting, undocumented half of this
+ecosystem travels in a field our client currently ignores.**
+
+`_meta` is the spec's own extension point — every ACP message type carries an optional
+free-form object, so implementations can attach what the spec does not define. The ACP
+equivalent of `X-` headers. On the wire:
+
+```jsonc
+{"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "bash", "kind": "execute",
+ "_meta": {"terminal_info": {"terminal_id": "term_7"},
+           "claudeCode": {"toolName": "Bash"}}}
+```
+
+M0 already tripped over this twice: M0-5 found the fleet's **only** exhaustion warning there
+(claude-agent-acp's `_meta["_claude/rateLimit"]`, with `allowed_warning`, `utilization`,
+`credits_required`), and M0-3 found harnesses gating behaviour on `_meta` extensions we do
+not advertise.
+
+### 8b · Keep `_meta` through the typed layer — **decided**
+
+AgentPool puts it on the **base** model — `field_meta: dict[str, Any] | None` at
+`src/acp/schema/base.py:30`, with an alias generator mapping `field_meta ↔ _meta`
+(`base.py:12-14`) — so every request, response and notification carries it by construction
+rather than per type.
+
+**Decided 2026-08-23: we do the same, in both directions.** `_meta` on the base of the
+message types in M1a-2 — inbound notifications and responses, outbound requests alike — and
+M1a-6's bus carries the wire object with it intact. Nothing consumes it yet. **This answers
+#62's B4.**
+
+Two honest notes on the rationale. It is *preservation, not addition*: `acp.mjs:230`
+already forwards the whole update object to `onEvent`, so `_meta` reaches consumers today
+and only `render.mjs` ignores it — the typed port is where we would start losing it. And
+the cost of deferring is not a refactor, as I first claimed: adding an optional field to a
+base type later is one line. The real cost is that **every run recorded in the meantime has
+no `_meta` in its event log.** Code is recoverable; unrecorded data is not.
+
+### 8c · The `_meta.terminal_output` capability — **decided, scheduled as M0-8**
+
+`ClientCapabilitiesMeta.terminal_output` (`field_meta.py:231`), sent on `initialize`. Their
+note, citing `claude-agent-acp/src/acp-agent.ts:973`: *without* it, agents fall back to
+sending bash output as plain text content blocks; *with* it, a Bash tool call becomes a
+three-notification lifecycle (`ToolUpdateMeta`, `field_meta.py:132`):
+
+1. `tool_call` carrying `terminal_info` → the client creates a display-only terminal, no PTY
+2. `tool_call_update` carrying `terminal_output` → `{terminal_id, data}`, streamed
+3. `tool_call_update` carrying `terminal_exit` → `{terminal_id, exit_code, signal}`
+
+Their comment on why it exists: *"Claude Code and Codex execute bash commands server-side,
+but ACP normally expects the client to manage terminal processes via `terminal/create`."*
+The same convention is used by `codex-acp`.
+
+**This does not contradict M0-3 — it adds an axis M0-3 did not vary.** M0-3 asked whether
+`terminal/*` is ever called and answered no, three times, correctly. But the *visibility* it
+concluded we could not have may exist on this second channel, and it carries an exit code,
+which is more than the argv M0-1 found in `rawInput`. R3 already records that every M0-3
+verdict is bounded by `--mode auto`; this is a second bound — bounded by what we advertised.
+**Scheduled as M0-8.** If it reproduces, `shell: internal` stays true and `argvChannel`
+gains a fourth value in M1a-4.
+
+### 8d · What else is in the pocket — registry content, not client content
+
+Not scheduled; recorded so the stories that need them know where to look.
+
+- **`ClaudeCodeToolMeta`** (`field_meta.py:29`) — `toolResponse` carries structured tool
+  output (for `Edit`, the file path and structured patch), and `parentToolUseId` links a
+  tool call made *inside* a sub-agent back to what spawned it. The first is a second opinion
+  for M1b-4's `<task-result>` vs `git status` cross-check; the second bears on the
+  silent-autonomy warning — and note its converse, that a harness spawning sub-agents is
+  orchestrating inside a task we treat as one unit.
+- **Zed's `subagent_session_info`** (`field_meta.py:205`) — `{session_id,
+  message_start_index, message_end_index}` on the tool call's `meta`, which is a *different*
+  field from `_meta`.
+- **`NewSessionMeta` → `claudeCode.options`** (`field_meta.py:327-361`) — the outbound half:
+  `systemPrompt: {append}` and `disableBuiltInTools`, plus `resume`, `maxTurns`, `hooks`,
+  `mcpServers`, `disallowedTools`. `systemPrompt.append` is a per-session instruction channel
+  *outside the prompt text* — a cheaper route to M1b-4's result contract than item 9's MCP
+  server. `maxTurns` is a harness-side bound on a runaway turn, which is interesting against
+  R5 precisely because it needs no second prompt.
+
+**Provenance, and the limit on all of it.** `src/acp/schema/field_meta.py` (406 lines) and
+`acp_meta_field_reference.md` (209) are a reverse-engineered map, each entry naming producer
+and consumer with file and line into Zed and the adapters. Those are *AgentPool's* citations
+into third-party source this container cannot reach (see
+[Unverified](#unverified-from-this-container)). I have verified that AgentPool asserts them,
+not that the cited lines say so. M0-8 puts exactly one entry on the wire; the rest stays
+their claim until someone probes it, and M1a-4 should carry the caveat with the flags.
+
+---
+
+## What AgentPool does not answer
+
+Three of #62's items have no prior art here. Recorded so nobody spends a second afternoon
+looking.
+
+- **B3 — the discarded `PromptResponse.usage`.** They read `stop_reason` off the prompt
+  response and nothing else (`acp_agent.py:512`), computing usage from message parts
+  instead. M0-5's finding — that the response carries the only per-task token count present
+  on all three harnesses — is ahead of them, and its `UNSTABLE` status plus copilot's
+  cumulative-vs-per-turn difference are ours to handle alone.
+- **R5 — no safe way to nudge a turn.** They track `_prompt_task` for cancellation
+  (`acp_agent.py:199`, `:567`) and have **no in-flight guard at all**. A second `prompt()`
+  on their agent lands exactly the way M0-4 measured it landing on ours. Making a second
+  prompt structurally impossible is our design problem, unaided.
+- **R2 — sandboxing.** Their execution environments (docker, E2B) sandbox only the
+  operations *the client serves* — `fs/*` and `terminal/*`. M0-1 measured zero `fs/*`
+  traffic and M0-3 zero `terminal/*` calls, so against our three harnesses that sandbox
+  would bind **nothing**. The harness subprocess itself is spawned plainly
+  (`anyio.open_process`, `acp_agent.py:335`), exactly as we spawn it. The only sandbox that
+  binds is one around the harness process, and neither project has one.
 
 ---
 
@@ -312,3 +524,9 @@ target and ours is the honest one.
   version pinning the entries actually allow.
 - **Their published docs.** `phil65.github.io/agentpool` is blocked too; all doc quotes here
   come from the `docs/` tree inside the clone at `b6ddbea9`, which may lag the site.
+- **Every citation into Zed and the adapters.** The `_meta` catalogue's entries name lines
+  in `claude-agent-acp/src/acp-agent.ts`, `zed/crates/agent_servers/src/acp.rs` and
+  `zed/crates/acp_thread/src/acp_thread.rs`. Those repositories are unreachable from here.
+  What is verified is that AgentPool asserts them — not that the lines say so. Anything we
+  act on wants confirming on the wire first, which is what M0-8 does for the one that
+  matters most.

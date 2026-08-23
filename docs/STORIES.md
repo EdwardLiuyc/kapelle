@@ -212,6 +212,33 @@ M0-1 table abbreviates as `#agent`/`#plan`/`#autopilot` are **not the ids** — 
 canonical URL is, and the bare fragment returns `-32602`, which would have gone straight
 into M1a-4's registry as a broken value.
 
+**M0-8 · The `_meta.terminal_output` capability · S · needs M0-3**
+**Added 2026-08-23, after M0 was called complete** — `docs/PRIOR-ART-AGENTPOOL.md` found a
+second output channel that M0-3 could not have seen, because M0-3 varied the *method* and
+not the *capability*. AgentPool documents claude-agent-acp checking
+`clientCapabilities._meta["terminal_output"] === true` at `initialize` and, without it,
+falling back to sending bash output as plain text content blocks. With it, a Bash tool call
+is claimed to become a three-notification lifecycle: `tool_call` carrying `terminal_info`
+(create a display-only terminal), `tool_call_update` carrying `terminal_output`
+(`{terminal_id, data}`), and a final `tool_call_update` carrying `terminal_exit`
+(`{terminal_id, exit_code, signal}`). Same convention in `codex-acp`.
+**This does not contradict M0-3, which stands.** No harness calls `terminal/*`, measured
+three times. The question is whether the *visibility* M0-3 concluded we cannot have exists
+on a channel we never advertised — and it would carry an **exit code**, which is more than
+the argv M0-1 found in `rawInput`.
+**Method:** advertise `_meta.terminal_output: true` (and, separately, `terminal-auth`) in
+`clientCapabilities`, re-run the M0-3 prompt on all three harnesses behind the wire tap,
+and diff the notification stream against M0-3's recorded baseline. The `spike/*` branches
+still carry the tooling — M0-7 re-verified in ~20 minutes on the same basis.
+*Done when* `M0-FINDINGS.md` gains a §M0-8 saying, per harness, whether the flag changes
+what crosses the wire, and the roll-up's `do we ever see argv` row is either confirmed or
+gains a fourth `argvChannel` value for M1a-4. A null result is a real result: it gives
+M0-3's verdict a second leg (capability axis as well as method axis) and closes R3's
+narrower sibling.
+**Note the provenance** — every claim above is AgentPool's citation into
+`claude-agent-acp/src/acp-agent.ts`, which this repo has not read. The probe is what turns
+it into a finding.
+
 ---
 
 ## M1a — Toolchain and protocol core
@@ -242,7 +269,26 @@ plan's Node 24 framing implies — the bump is for LTS, not for the language fea
 Hand-written definitions for every message we touch. The `session/update` discriminated
 union is the point of the exercise: `update.sessionUpdate` is currently a bare string
 compared in two places (`acp.mjs:218`, `render.mjs:20`) with nothing keeping them in sync.
-*Done when* adding a variant to the union makes `tsc` fail at every unhandled `switch`.
+**Decision (2026-08-23): the types keep `_meta`, in both directions.**
+`_meta?: Record<string, unknown>` on the **base** of the message types — inbound
+notifications and responses, outbound requests alike — not on the variants that happen to
+need it today. This answers the retro's B4. Three reasons it is decided here rather than
+deferred. It is *preservation, not addition*: `acp.mjs:230` already hands the whole update
+object to `onEvent`, so `_meta` reaches consumers today and only `render.mjs` ignores it —
+this port is where we would start losing it. The fleet's **only** exhaustion warning lives
+there (`_meta["_claude/rateLimit"]`, `M0-FINDINGS.md` §M0-5), M0-3 found harnesses gating
+behaviour on `_meta` extensions we do not advertise, and M0-8 is probing a third use. And
+the cost of deferring is **not** a refactor — adding the field later is one line — it is
+that every run recorded in the meantime has no `_meta` in its event log. Code is
+recoverable; unrecorded data is not. Outbound is included so M1b-4 finds the door open when
+it wants `_meta.claudeCode.options.systemPrompt.append`
+(`docs/PRIOR-ART-AGENTPOOL.md`, §8d).
+*Done when* adding a variant to the union makes `tsc` fail at every unhandled `switch`, and
+a message carrying `_meta` round-trips through the types with it intact — dropping it fails
+a `node:test`, rather than passing silently.
+**Proposed, not decided** — `locations[]` on `tool_call` belongs in the union too
+(`docs/PRIOR-ART-AGENTPOOL.md`, item 5). M0 never recorded whether any harness populates
+it, so type it and let a probe decide whether `render` ever shows it.
 
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
@@ -255,10 +301,27 @@ task stuck before it started — and under a daemon there is no `^C` to fall bac
 **Decision: a per-request timeout on the handshake and session-management methods, default
 30s, explicitly not on `session/prompt`**, which is legitimately long-running and is what
 the watchdog is for.
+**Proposed (2026-08-23), the timeout's sibling** — the timeout catches a harness that is
+*alive but silent*; nothing catches one that **dies mid-handshake**. `#failAll`
+(`acp.mjs:64`) then reports a bare exit code, and the harness's own explanation went to a
+stderr we discard unless `--verbose` (`acp.mjs:73`). AgentPool races every handshake RPC
+against `process.wait()` and raises with the captured stderr
+(`utils/subprocess_utils.py:126`, used at `acp_agent.py:278`). For us that is a bounded
+stderr ring buffer — last ~20 lines, kept regardless of `--verbose` — attached to the
+rejection. ~25 lines, no dependency. Note M0-2 retired the papercut that originally
+motivated this (the `-32603` does not reproduce on 0.49.0), so the case rests on this gap
+alone, and on CI, where nobody is watching a terminal.
 *Done when* `npm run selftest` passes unchanged; a mock that accepts the pipe and never
-answers `initialize` fails the task in ~30s instead of hanging; and `node:test` covers
-`#guardPath` — in-root, escaping `../`, absolute-outside, symlink, and the read/write
-asymmetry under `allowReadOutsideRoot`.
+answers `initialize` fails the task in ~30s instead of hanging; a mock that exits during
+`initialize` fails with its own stderr in the message rather than an exit code; and
+`node:test` covers `#guardPath` — in-root, escaping `../`, absolute-outside, symlink, and
+the read/write asymmetry under `allowReadOutsideRoot`.
+**On `#guardPath`'s tests, given R2** — M0-1 measured zero `fs/*` traffic, so the guard
+binds nothing in production and the retro asks whether testing it is misplaced effort. Keep
+them: the mock drives them for free, and the cost is minutes. What that same finding does
+settle is that **no pluggable backend goes underneath it** — `docs/PRIOR-ART-AGENTPOOL.md`
+item 7 considered one and reversed itself, because an abstraction under dead code is R2
+exactly.
 
 **M1a-4 · `protocol/registry.ts` · S · needs M1a-3, M0-7**
 Today's `AGENTS` map plus `defaultMode`, `maxMode` and the containment label
@@ -292,6 +355,18 @@ vocabularies do not align (copilot uses spec URLs, claude-agent-acp vendor ids, 
 yet honours `session/set_mode`, so mode discovery must read both fields. Env list confirmed as `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`
 for claude-agent-acp. No harness M0-1 surveyed needs `unknown`; `omp`, `pi` and
 `gemini` are uninstalled here and keep it. (`claude-code` was too; M0-2 removed the entry.)
+**Proposed (2026-08-23), two additions from the AgentPool review.** First, **`measuredOn:
+{ version, date }` beside the labels**, which is the retro's B2: every field here is a claim
+about a *build*, and M0-7 watched three of them change in three days. AgentPool has no
+equivalent — but it does resolve harnesses through the ACP registry with a **pinned**
+distribution (`registry/model.py:126`, `registry/prepare.py:38`), and pinning is what would
+turn a staleness *warning* into a property, since we would run the build we measured. The
+auto-resolving half of that idea is explicitly **not** proposed — a launcher that silently
+fetches "latest" from a CDN is the opposite of what a measured registry needs; it sits in the
+backlog. Second, **name the `_meta` capability flags** the entries carry: AgentPool
+catalogues `terminal_output` and `terminal-auth` on `ClientCapabilities`, with per-harness
+consumers (`docs/PRIOR-ART-AGENTPOOL.md`, §8c–8d). Carry the provenance caveat with them —
+those are their citations into source we have not read, and M0-8 verifies exactly one.
 *Done when* `unknown` behaves as `internal` for warning purposes, so a harness M0-1 could
 not verify produces the **conservative** claim rather than the optimistic one — and an
 `asksPermission: false` harness warns even in `auto`, where the containment warning would
@@ -338,11 +413,26 @@ silently, and `safe` overriding a requested `allowReadOutsideRoot: true`.
 Typed bus carrying agent events plus supervisor events (task started, worktree created,
 permission pending, stall warning, task finished, containment warning). The `_client_`
 prefix convention is retained for client-originated events (`render.mjs:61-72`).
+**Decision (2026-08-23): the bus carries the wire object, not a rendered form** — `_meta`
+included, per M1a-2. Consumers render *from* it; nothing renders *into* it. Two things
+depend on this that are cheap now and awkward later: M2's persisted event log can only
+replay what it recorded, and `session/load` — which all three harnesses turn out to support
+(`loadSession: true`, two adding `resume` and `fork`) — needs a faithful record to replay
+*from*. When replay lands, it also needs its own collection buffer rather than pushing into
+the live queue; AgentPool's `is_loading` / `finish_load` split
+(`agents/acp_agent/session_state.py:58`, `:91`) is the shape.
 *Done when* every consumer — CLI render, and later persistence and SSE — subscribes, and
 nothing reads agent state directly. This is the invariant that makes M4 purely additive.
 
 **M1a-7 · Port `render.mjs` and `run.mjs` · S · needs M1a-6**
 `run.ts` keeps driving in-process, TTY `ask` intact.
+**Proposed (2026-08-23): give `mock-agent` a `--emit <variant,…>` flag** so every branch of
+the renderer has an offline driver. This is what makes M1a-2's discriminated union provable
+at runtime as well as at compile time, and M0-1 named the gap precisely: `plan` is emitted
+by **no** harness, while `available_commands_update` (all three) and `config_option_update`
+(copilot) arrive and are dropped. Three render paths, one flag. AgentPool ships the same
+idea as a web panel that fires any notification type at a client under test
+(`src/acp/agent/implementations/debug_server/`); we need the capability, not the panel.
 *Done when* `npm run selftest` runs `run.ts` and passes — the plan's verification section
 requires it stay green across the port, and it currently invokes `run.mjs` — and the
 containment warning from M1a-4 surfaces as a one-line notice when starting `safe`/`ask`
@@ -843,3 +933,20 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   than corruption.
 - **Composing and dispatching runs from the browser.** M5+. Named because it is the stated
   trajectory and the reason M2's API has to be complete rather than observability-only.
+- **Registry-resolved, zero-install harness spawn.** The ACP registry publishes per-platform
+  distributions and AgentPool resolves them to `npx -y <pkg>` / `uvx` / a downloaded binary
+  (`docs/PRIOR-ART-AGENTPOOL.md`, item 2), which would delete the `npm i -g` / `EACCES`
+  section of `README.md`. Deliberately **not** taken: silently resolving "latest" from a CDN
+  contradicts a registry whose labels are measured per build. The *pinning* half is proposed
+  inside M1a-4 instead. *Trigger:* a target harness with no stable install path, or a second
+  machine where the manual install is the thing that breaks.
+- **Politeness for unimplemented and extension methods.** Decline `session/request_elicitation`
+  and acknowledge `_`-prefixed extension methods instead of returning `-32000`
+  (`acp.mjs:205`), as AgentPool's headless client does. *Trigger:* the wire tap recording
+  any method reaching the `#handleRequest` default. **M0-1 measured zero across six turns**,
+  so this is currently hardening against traffic that does not exist; ~10 lines whenever the
+  trigger fires.
+- **Filtering injected MCP servers by advertised transport.** Drop HTTP/SSE servers a harness
+  cannot reach and warn, rather than failing `session/new`
+  (`agents/acp_agent/helpers.py:17`). *Trigger:* the first story that passes anything to
+  `newSession({ mcpServers })` — today nothing does, which is why it is here and not in M1a.
