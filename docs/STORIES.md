@@ -318,8 +318,14 @@ runs on whatever still arrives. Mode ids come from M1a-4's `modeMap`. Defence in
 a sandbox — the refusal we measured was agent prose, so enforcement is not verifiable from
 our side.
 Two further measured facts bear directly on `READ_ONLY_KINDS`. First,
-copilot *reads* by shelling `cat`, so its reads arrive as `execute` kind and `safe` refuses
-them: safe mode does not make copilot cautious, it makes it unusable. Second, opencode
+copilot shells out to *explore*, so `ls`/`find` arrive as `execute` kind and `safe` refuses
+them, killing any task that has to look around — while a read of an already-known path goes
+through a native `read` tool that `safe` allows. Safe mode does not make copilot cautious;
+it cripples it, and the failure presents as a clean `end_turn` with no output.
+**Re-verified 2026-08-23 and build-specific** — on 1.0.78 copilot shelled `cat` for reads
+too and `safe` refused those as well (`M0-FINDINGS.md` §M0-1, "What re-verification
+changed"), which is the strongest available argument that `argvChannel` and the kind
+mapping must be *measured per build*, not assumed. Second, opencode
 asks nothing, so no policy value changes its behaviour at all. Keep `READ_ONLY_KINDS` as
 it is — kind is the only thing the protocol gives us — and let M1a-4's `defaultMode` carry
 the per-harness adjustment, but say plainly in the docs that mode is advisory against a

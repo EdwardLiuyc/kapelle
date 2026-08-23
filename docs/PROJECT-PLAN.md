@@ -333,9 +333,13 @@ driven from a run file, fully verifiable offline.
   vendor ids, opencode `build`/`plan`. Negotiation is defence in depth, not a sandbox: the
   one refusal we measured arrived as agent prose, so compliance and enforcement are not
   distinguishable from outside. Note the third-order consequence for copilot:
-  because it reads by shelling out, its reads are `execute` kind, so `safe` refuses them
-  and the harness becomes unusable rather than cautious — an argument for `defaultMode`
-  being per harness, which this design already allows.
+  it shells out to *explore* (`ls`, `find`), so those arrive as `execute` kind and `safe`
+  refuses them, killing any task that has to look around — silently, as a clean `end_turn`.
+  Reading a file whose path is already known goes through a native `read` tool on 1.0.80
+  and `safe` allows it, so the harness is crippled rather than wholly unusable. **This is
+  build-specific**: on 1.0.78 copilot shelled `cat` for reads too, and `safe` refused those
+  as well (`M0-FINDINGS.md` §M0-1, "What re-verification changed"). Either way it is an
+  argument for `defaultMode` being per harness, which this design already allows.
 - **`core/policy.ts`** — small in lines, load-bearing. Change the policy signature from
   `async () => boolean` to a form answerable by an external, asynchronous decider, so `ask`
   can work with no TTY in M2. Keep `READ_ONLY_KINDS`, `safePolicy`, `autoPolicy` semantics
