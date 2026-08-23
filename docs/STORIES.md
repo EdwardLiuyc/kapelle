@@ -229,7 +229,10 @@ the argv M0-1 found in `rawInput`.
 **Method:** advertise `_meta.terminal_output: true` (and, separately, `terminal-auth`) in
 `clientCapabilities`, re-run the M0-3 prompt on all three harnesses behind the wire tap,
 and diff the notification stream against M0-3's recorded baseline. The `spike/*` branches
-still carry the tooling — M0-7 re-verified in ~20 minutes on the same basis.
+still carry the tooling, which is the part that is cheap. The probe itself is not a
+re-verification: it changes the `initialize` payload and asks a question none of the M0
+probes asked, so it needs its own baseline diff and its own findings section. M0-7's twenty
+minutes is not the estimate.
 *Done when* `M0-FINDINGS.md` gains a §M0-8 saying, per harness, whether the flag changes
 what crosses the wire, and the roll-up's `do we ever see argv` row is either confirmed or
 gains a fourth `argvChannel` value for M1a-4. A null result is a real result: it gives

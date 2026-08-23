@@ -214,8 +214,11 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
 > (`docs/PRIOR-ART-AGENTPOOL.md`). It re-probes M0-3's question on the capability axis
 > rather than the method axis — see the Terminals row above. It is scheduled before M1a-1
 > because a positive result adds a fourth `argvChannel` value to M1a-4's registry type, and
-> because the spike tooling that makes it ~20 minutes' work still exists on the `spike/*`
-> branches.
+> and because the spike tooling still exists on the `spike/*` branches. **Do not read that
+> as M0-7's twenty minutes** — that figure was re-running an existing probe unchanged. M0-8
+> changes what the client advertises at `initialize`, asks a question no probe has asked,
+> and needs its own findings section. M0's record on estimates is seven stories, seven
+> corrections; budget accordingly.
 
 1. ~~Run today's MVP against real **opencode** and **claude-agent-acp**.~~ **Done, and
    widened to all three targets.** All spawn, all complete a turn at protocol v1, none
