@@ -4,10 +4,69 @@ Empirical answers to the M0 spikes. This note is the input to M1a-4's containmen
 and env list, M1c-1's TTL default, and M3-5's terminal scope — where a story asks "what do
 the harnesses actually do", this file is the answer, not the plan.
 
-Surveyed 2026-08-20 on Linux (WSL2), Node 24, against the MVP client at `74f2fc2`.
-Method: each harness spawned behind a transparent stdio proxy that logged every
+All of it on Linux (WSL2), Node 24, one machine. Each section states its own date,
+client commit and spike branch — they differ, and by enough to matter:
+
+| section | run | client at | spike tooling |
+|---|---|---|---|
+| M0-1 | 2026-08-20 | `74f2fc2` | stdio proxy, not kept |
+| M0-3 | 2026-08-21 | `1f5d9ff` + `terminal/*` stubs | `spike/m0-3-terminal` |
+| M0-4 | 2026-08-21 | `ae6a885` | `spike/m0-4-cancel-probe` |
+| M0-5 | 2026-08-22 | `97eeb1e` | `spike/m0-5-usage-probe` |
+| M0-1 copilot re-verification | 2026-08-23 | `c4307f3` | `spike/m0-7-reverify` |
+
+Method throughout: each harness spawned behind a transparent stdio proxy that logged every
 JSON-RPC line in both directions, so "did not happen" below means *absent from the wire*,
 not *not noticed*.
+
+---
+
+## Roll-up — every harness, every question
+
+**This table is an index, not the record.** Every cell compresses a section below, and the
+sections win wherever they differ. It exists because the plan's M0 exit criterion
+(`docs/PROJECT-PLAN.md:512-515`) asks its questions per harness, and until now the answers
+were spread across four sections.
+
+**Versions are part of every finding.** copilot's behaviour changed measurably between
+1.0.78 and 1.0.80 in three days — see "What re-verification changed", below — so read each
+column as a claim about that build, not about that harness.
+
+| | opencode 1.18.18 | claude-agent-acp 0.49.0 | copilot 1.0.80 | measured in |
+|---|---|---|---|---|
+| starts / completes a turn | yes / yes | yes / yes | yes / yes | §M0-1 |
+| unhandled `session/update` | `available_commands_update` | `available_commands_update` | `available_commands_update`, `config_option_update` | §M0-1 |
+| calls `fs/*` | never — so `#guardPath` binds nothing here | never | never | §M0-1 |
+| `session/request_permission` | **never, ever** — the policy has no jurisdiction, and it wrote a file under `safe` | on writes; reads pass unasked | on shelled commands and writes; **file reads pass unasked** | §M0-1 |
+| calls `terminal/create` | never, even when offered `true` | never, even when offered `true` | never, even when offered `true` | §M0-3 |
+| where commands run | internal (`bash`) | internal (its tool is *named* `Terminal` — a vendor name, not the ACP method) | internal (`shell`) | §M0-3 |
+| do we ever see argv | **no** — title is the bare string `bash`, `rawInput` carries only `cwd` | yes, but **late**: on `tool_call_update` ~0.5 s after the `tool_call`, which announces `{}` | yes, on the `tool_call` and again on the permission request | §M0-3 |
+| `usage_update` cadence | **1, at end of turn** — no in-turn signal for a watchdog at all | ~23 per long turn | ~5 per long turn | §M0-5 |
+| `used` | trustworthy occupancy, agrees with the harness's own count | trustworthy, but **`0` means *unknown*, not *empty*** (compaction fallback) | trustworthy | §M0-5 |
+| `size` as a denominator | the only real per-model limit — and the one harness with no second opinion to check it against | **wrong for all of turn 1**: 200k for any window, a warm-up rather than a glitch | **wrong always**: 200000 matches neither its own 264k window nor the ~175k it leaves usable | §M0-5 |
+| `cost` | on every update, cumulative USD; `0` meant an unmetered provider, not a dead field | on the last update of each turn, cumulative USD — **list price under OAuth, which nobody is invoiced** | absent entirely | §M0-5 |
+| exhaustion warning | none — spend with nothing to compare it against | `_meta["_claude/rateLimit"]` — **read from adapter source, never observed firing**, and `render.mjs` drops `_meta` today | none | §M0-5 |
+| `session/cancel` mid-turn | `cancelled`, 45–64 ms | `cancelled`, 5–10 ms | **`end_turn` for a turn it cancelled** — 26–28 ms, contrary to the spec's MUST | §M0-4 |
+| second `session/prompt` in flight | accepted; kills the running turn; the text lands **in that turn's context**, read as injection | accepted; kills the running turn; served as a turn of its own | accepted; kills the running turn; **responds in 10 ms, before acting** | §M0-4 |
+| session usable after cancel | yes | yes | yes | §M0-4 |
+
+### What M1a-4 should put in the registry
+
+Measured fields only. The containment *label* — and what `safe` should warn about — is
+M1a-4's call, not this note's.
+
+| field | opencode | claude-agent-acp | copilot |
+|---|---|---|---|
+| `shell` | `internal` | `internal` | `internal` |
+| `argvChannel` | `none` | `notification` (late) | `notification` + `permission` |
+| mode discovery | `configOptions` with `category: "mode"` **only** — `modes` is absent, so a client that reads `SessionModeState` alone concludes it has none and is wrong | `SessionModeState`, 6 vendor ids | `SessionModeState`, 3 canonical spec URLs |
+| mode ids | `build`, `plan` | `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` | `https://agentclientprotocol.com/protocol/session-modes#agent`, `…#plan`, `…#autopilot` — **the full URL is the id; the bare `#plan` fragment returns `-32602`** |
+| `session/set_mode` | accepted — and really so: `-32602` on a bogus id | accepted | accepted, with the full URL id |
+| `env.unset` | — | `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT` | — |
+| `loadSession` | true, plus `resume` and `fork` | true, plus `resume`, `fork`, `delete` | true — but `close`/`list` only, **neither `resume` nor `fork`** |
+
+`omp`, `pi` and `gemini` are uninstalled here: **`unknown` by absence, not by test.**
+`unknown` should read as `internal` / `none` for warning purposes.
 
 ---
 
@@ -178,9 +237,11 @@ workspace:
 read and write alike. It writes files with no client involvement, so `--mode safe` and
 `--mode ask` are both inert against it: nothing to refuse, nothing to prompt. This is not a
 bug in the policy; it is the policy having no jurisdiction. It confirms M0-6's correction
-in the strongest possible form. It is also the plan's "silent autonomy" row (non-empty diff,
-zero permission requests) occurring by default in a supported harness, not as an anomaly —
-that detector should be treated as required, not nice-to-have.
+in the strongest possible form — that correction **landed 2026-08-23 in `c4307f3`**, and
+`CLAUDE.md:40` and `README.md` now carry the per-harness claim. It is also the plan's
+"silent autonomy" row (non-empty diff, zero permission requests) occurring by default in a
+supported harness, not as an anomaly — that detector should be treated as required, not
+nice-to-have.
 
 **But opencode is not uncontainable — an earlier draft of this note said so and was wrong.**
 Re-running the same probe with one line added, `session/set_mode → plan` before the prompt:
@@ -206,12 +267,72 @@ not make copilot cautious, it makes it useless. Any per-kind policy needs a per-
 notion of what a kind means, or `safe` should be documented as opencode-uncontained and
 copilot-unusable.
 
-### Incidental (belongs to M0-5, recorded here because it was on the wire)
+**That last sentence is true of 1.0.78 and only half true of 1.0.80** — on the current
+build copilot reads a named file through a native `read` tool that `safe` allows, and still
+dies on anything that has to explore. Measured below, under "What re-verification changed";
+the general point survives, the blanket "unusable" does not.
 
-`usage_update` is `{used, size}` on all three, with `size` = 200000 for each.
-**opencode alone adds `cost: {amount, currency}`** (`0`/`USD` on a trivially short turn).
-So a price table is possible for opencode directly and would have to be modelled for the
-other two. M0-5 owns confirming whether that amount ever becomes non-zero.
+### What re-verification changed (copilot 1.0.78 → 1.0.80)
+
+Everything above was measured on copilot **1.0.78**; M0-3, M0-4 and M0-5 all ran on
+**1.0.80**, which copilot self-updated to on 2026-08-21. M0-4's rule — *"pin the version
+next to every row; that is the only durable part of this table"* — means the roll-up cannot
+carry a column spanning two builds, so M0-7 re-ran this section's copilot checks on 1.0.80
+(2026-08-23, `spike/m0-7-reverify`, four runs, fresh workspace each).
+
+**Four cells above no longer describe the current build** — three because copilot's
+behaviour changed, one because the ids were recorded in abbreviated form and the
+abbreviation is not usable. All were correct as written and are left in place; this is what
+changed under them.
+
+| | 1.0.78, as recorded above | 1.0.80, measured 2026-08-23 |
+|---|---|---|
+| reading a file | kind **`execute`**, shelling `cat <path> 2>&1` | kind **`read`**, a native "Viewing …" tool with `rawInput: {path}`, and **no permission request at all** |
+| `session/request_permission` | on reads *and* writes | on **shelled commands and writes**; file reads pass unasked |
+| creating a file | asked with kind `execute` | asks with kind **`edit`**, `rawInput: {path, file_text}` — still refused under `safe` |
+| mode ids | abbreviated `#agent`, `#plan`, `#autopilot` | the **full URL is the id**; `session/set_mode` with the bare `#plan` fragment returns `-32602`, with the full URL returns OK |
+
+Re-confirmed unchanged: no `fs/*` traffic of any kind, `available_commands_update` ×2 and
+`config_option_update` ×1, `loadSession: true` with `close`/`list` and **neither `resume`
+nor `fork`**, protocol version 1, and `copilot-login` advertised while already
+authenticated.
+
+**The consequence lands on a safety claim, not a table cell.** M0-6 shipped
+*"copilot shells `cat` to read, so `safe` refuses its reads and makes it unusable"* into
+`CLAUDE.md` and `README.md` on 2026-08-23, hours before this re-run. On 1.0.80 that is half
+wrong, and both halves were measured:
+
+| prompt, under `safePolicy` | what happened |
+|---|---|
+| "Read `acp.mjs` and describe it" (names the file) | native `read` tool, **zero permission requests, turn completed, correct answer** |
+| "What files are in this directory?" (must look around) | shells `find`, kind `execute` → **refused** → turn dies in 2.3 s with **no output at all**, reporting `end_turn` |
+
+So on 1.0.80: `safe` lets copilot read a file whose path is already known, and still kills
+anything that has to explore — which is most real work, and it fails silently as a clean
+`end_turn`. The corrected wording is in `CLAUDE.md` and `README.md` as of this story;
+`#7` stays closed and points here.
+
+The wider lesson is the one M0-4 already stated and this section now demonstrates: a
+per-harness finding is a claim about a build, and three days was enough to invalidate one.
+
+### Incidental (belongs to M0-5) — **superseded by §M0-5, kept for the correction**
+
+> `usage_update` is `{used, size}` on all three, with `size` = 200000 for each.
+> **opencode alone adds `cost: {amount, currency}`** (`0`/`USD` on a trivially short turn).
+> So a price table is possible for opencode directly and would have to be modelled for the
+> other two. M0-5 owns confirming whether that amount ever becomes non-zero.
+
+Every claim in that paragraph was overtaken by the survey it was handing off to:
+
+- **`size` = 200000 for each is wrong.** It is per-model, and unusable as a denominator on
+  two harnesses — §M0-5, "`size` is per-model, late on one harness and wrong on another".
+- **"opencode alone adds `cost`" is wrong.** claude-agent-acp sends it too, on the last
+  update of each turn — §M0-5, "opencode's `cost: 0` was 'not billed', not 'always `0`'".
+- **The `0` did not mean the field was dead.** It meant the provider in effect was not
+  metered; the same field reported real spend against a metered one.
+- **The price table it proposed is deliberately not being built** — §M0-5, "Verdict on the
+  price table". The per-task token count it was reaching for exists, but on the
+  `session/prompt` response, not here.
 
 ---
 
@@ -811,3 +932,26 @@ named rather than papered over:
 - **opencode's context accounting has no second opinion.** It exposes no `/context` or
   `/usage` command over ACP, so its `size` and `used` were checked against nothing but its own
   source.
+
+---
+
+## What this note does not cover
+
+M0's questions are answered; these are the edges, collected so that no downstream story
+mistakes silence for a negative result.
+
+- **`omp`, `pi` and `gemini` were never run** — uninstalled on this machine. Every table
+  here has three columns because three harnesses exist to test, not because the registry
+  has three entries. `unknown` is the honest label, and it should read as
+  `internal` / `none` for warning purposes.
+- **Only copilot's column was re-verified.** opencode is still 1.18.18 and
+  claude-agent-acp still 0.49.0, the versions their rows were measured on, so those columns
+  are already single-build. They will decay the same way the moment either updates.
+- **Nothing was driven near a real limit**, nothing was compacted automatically, and no
+  harness was cancelled mid-*edit* — the three named gaps under §M0-5 and §M0-4 coverage.
+- **`safe` was measured, `auto` was not bounded.** §M0-3's verdicts are all under
+  `--mode auto`, so they describe what a harness does when nothing is refused. A harness
+  that reaches for `terminal/*` only after its own shell is denied would not appear here.
+- **This note records what harnesses do, not what the client should do about it.** The
+  containment labels, the warning text and the mode mapping are M1a-4's to decide; the
+  fields above are the evidence, not the design.
