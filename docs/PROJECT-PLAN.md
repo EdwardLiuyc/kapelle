@@ -27,7 +27,7 @@ policy across all of them and returning machine-readable results.
 ## Decisions
 
 | Area | Decision |
-|---|---|
+| --- | --- |
 | Workflows | Parallel split **and** pipeline handoff. Not bakeoff. |
 | Process shape | Daemon, with `core/` that has no knowledge of HTTP or of a TTY. |
 | UI | **M4**, after the daemon. Read views plus permission answering. Designed to grow into a run-dispatch front end, so the daemon API must be complete — not observability-only. |
@@ -47,8 +47,8 @@ policy across all of them and returning machine-readable results.
 | Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally, **and separately whether we ever see the command text** (`argvChannel`). `safe` warns when it cannot actually contain. **Measured (M0-1, M0-3): all three run internally and none calls `terminal/*` even when offered; opencode never asks permission and never shows us a command, so the policy has no jurisdiction over it; claude-agent-acp and copilot do show real argv, on `session/update` notifications. All three accept `session/set_mode`, so modes are a second containment channel.** |
 | Unattended `ask` | Pending decision published on the event stream; **timeout → deny**. |
 | Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. **Required, not optional: M0-1 found this is opencode's default behaviour, not an anomaly.** |
-| Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. **Re-opened on one axis, 2026-08-23 (M0-8).** M0-3 varied the *method* and not the *capability*: claude-agent-acp is documented to check `clientCapabilities._meta["terminal_output"]` and, without it, to send bash output as plain text rather than as a streamed `terminal_info`/`terminal_output`/`terminal_exit` lifecycle carrying an **exit code**. The decision not to implement `terminal/*` stands either way; what M0-8 tests is whether the *visibility* M0-3 called unobtainable exists on a channel we never advertised. See `docs/PRIOR-ART-AGENTPOOL.md` §8c. |
-| Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `acp.mjs:230` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), the capability flags M0-3 found harnesses gating on, and M0-8's subject all live there. |
+| Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. **Capability axis measured too, 2026-08-23 — parked.** M0-3's `87cbfe3` advertised `_meta.terminal_output: true`; claude-agent-acp's Bash `tool_call` then carried a `terminal_id` and `{type:"terminal"}` block for a terminal never created, with still no `terminal/*` calls, no command output, and no exit code (`M0-FINDINGS.md:433-450`). It is a rendering convention, not visibility — `argvChannel` gains no fourth value, and no follow-up is scheduled. |
+| Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `acp.mjs:230` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), and the capability flags M0-3 found harnesses gating on (measured for `terminal_output` via `87cbfe3`) all live there. |
 | Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency; zero runtime deps preserved. |
 | Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
 | CLI | Two front ends, one core: `run` drives in-process, `runs` talks to the daemon. |
@@ -214,15 +214,10 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
 > M0-6, corrected again by M0-7 after copilot changed behaviour between builds. The findings
 > note is assembled and carries a per-harness roll-up at the top: `M0-FINDINGS.md`.
 >
-> **One story added after that completion: M0-8**, from the AgentPool review
-> (`docs/PRIOR-ART-AGENTPOOL.md`). It re-probes M0-3's question on the capability axis
-> rather than the method axis — see the Terminals row above. It is scheduled before M1a-1
-> because a positive result adds a fourth `argvChannel` value to M1a-4's registry type, and
-> and because the spike tooling still exists on the `spike/*` branches. **Do not read that
-> as M0-7's twenty minutes** — that figure was re-running an existing probe unchanged. M0-8
-> changes what the client advertises at `initialize`, asks a question no probe has asked,
-> and needs its own findings section. M0's record on estimates is seven stories, seven
-> corrections; budget accordingly.
+> **One story added after that completion, and resolved rather than scheduled: M0-8**, from the AgentPool review
+> (`docs/PRIOR-ART-AGENTPOOL.md`). M0-3's `87cbfe3` had already advertised `_meta.terminal_output`;
+> the result (`M0-FINDINGS.md:433-450`) recorded no visibility and no exit code, so the story
+> closed as a docs reconciliation. **Parked, no backlog entry** — see the Terminals row above.
 
 1. ~~Run today's MVP against real **opencode** and **claude-agent-acp**.~~ **Done, and
    widened to all three targets.** All spawn, all complete a turn at protocol v1, none
@@ -307,12 +302,14 @@ Ends somewhere genuinely useful: N harnesses, isolated worktrees, structured res
 driven from a run file, fully verifiable offline.
 
 **Toolchain**
+
 - Node 24 LTS; bump `engines`.
 - `tsconfig.json` — `strict`, `erasableSyntaxOnly`, `noEmit`. Add `typescript` devDep and
   `npm run check` → `tsc --noEmit`. Files run as `node daemon.ts`; no compile step.
 - Port the five existing files. Mechanical, but do it *after* M0 findings land.
 
 **Modules**
+
 - **`protocol/types.ts`** — the item that earns the TypeScript decision. Hand-written defs
   for every message we touch, especially the `session/update` discriminated union.
   `update.sessionUpdate` is currently a bare string compared in two places (`acp.mjs:218`,
