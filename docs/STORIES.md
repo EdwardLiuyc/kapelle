@@ -47,7 +47,7 @@ correction rate was entirely against claims about *what harnesses do*. Nothing M
 touches any of these ten.
 
 | story | outcome |
-|---|---|
+| --- | --- |
 | **M1a-1** (`node:test`) | ratified |
 | **M1a-3** (request timeout) | ratified, and the story grew three things: B3's usage capture, R4's cancel-intent event, R5's in-flight guard |
 | **M1a-4** (registry `env` field) | ratified; gains `measuredOn` (B2) and the unverified-entry notice (B5) |
@@ -228,35 +228,23 @@ M0-1 table abbreviates as `#agent`/`#plan`/`#autopilot` are **not the ids** — 
 canonical URL is, and the bare fragment returns `-32602`, which would have gone straight
 into M1a-4's registry as a broken value.
 
-**M0-8 · The `_meta.terminal_output` capability · S · needs M0-3**
-**Added 2026-08-23, after M0 was called complete** — `docs/PRIOR-ART-AGENTPOOL.md` found a
-second output channel that M0-3 could not have seen, because M0-3 varied the *method* and
-not the *capability*. AgentPool documents claude-agent-acp checking
-`clientCapabilities._meta["terminal_output"] === true` at `initialize` and, without it,
-falling back to sending bash output as plain text content blocks. With it, a Bash tool call
-is claimed to become a three-notification lifecycle: `tool_call` carrying `terminal_info`
-(create a display-only terminal), `tool_call_update` carrying `terminal_output`
-(`{terminal_id, data}`), and a final `tool_call_update` carrying `terminal_exit`
-(`{terminal_id, exit_code, signal}`). Same convention in `codex-acp`.
-**This does not contradict M0-3, which stands.** No harness calls `terminal/*`, measured
-three times. The question is whether the *visibility* M0-3 concluded we cannot have exists
-on a channel we never advertised — and it would carry an **exit code**, which is more than
-the argv M0-1 found in `rawInput`.
-**Method:** advertise `_meta.terminal_output: true` (and, separately, `terminal-auth`) in
-`clientCapabilities`, re-run the M0-3 prompt on all three harnesses behind the wire tap,
-and diff the notification stream against M0-3's recorded baseline. The `spike/*` branches
-still carry the tooling, which is the part that is cheap. The probe itself is not a
-re-verification: it changes the `initialize` payload and asks a question none of the M0
-probes asked, so it needs its own baseline diff and its own findings section. M0-7's twenty
-minutes is not the estimate.
-*Done when* `M0-FINDINGS.md` gains a §M0-8 saying, per harness, whether the flag changes
-what crosses the wire, and the roll-up's `do we ever see argv` row is either confirmed or
-gains a fourth `argvChannel` value for M1a-4. A null result is a real result: it gives
-M0-3's verdict a second leg (capability axis as well as method axis) and closes R3's
-narrower sibling.
-**Note the provenance** — every claim above is AgentPool's citation into
-`claude-agent-acp/src/acp-agent.ts`, which this repo has not read. The probe is what turns
-it into a finding.
+**M0-8 · The `_meta.terminal_output` capability · S · needs M0-3 · DONE (resolved, not probed)**
+**Added 2026-08-23, closed as docs reconciliation 2026-08-23** — `docs/PRIOR-ART-AGENTPOOL.md`
+§8c found a second output channel that M0-3 could not have seen by varying only the
+*method*, not the *capability*. AgentPool documents claude-agent-acp checking
+`clientCapabilities._meta["terminal_output"] === true` at `initialize`. With it, a Bash
+tool call was claimed to become a three-notification lifecycle carrying an **exit code**.
+**Already measured — not a probe.** M0-3's own second commit, `87cbfe3` on
+`spike/m0-3-terminal`, advertised `_meta.terminal_output: true`, and the result is recorded
+at `docs/M0-FINDINGS.md:433-450`: claude-agent-acp's Bash `tool_call` gains a `terminal_id`
+and a `{type:"terminal"}` content block for a terminal that was **never created**, with
+still zero `terminal/*` calls and **no command output crossing the wire**, and **no exit
+code**. It is a rendering convention for a client that already draws the terminal, not the
+visibility M0-3 called unobtainable. `argvChannel` therefore gains no fourth value, and
+M1a-4 is not gated by this.
+**Decision (2026-08-23): park, no further action.** The capability axis is settled for the
+MVP; no backlog entry is scheduled. The record lives in §M0-3 (`M0-FINDINGS.md`), which
+already holds the finding, so no new §M0-8 is added to the findings note.
 
 ---
 
@@ -297,7 +285,8 @@ deferred. It is *preservation, not addition*: `acp.mjs:230` already hands the wh
 object to `onEvent`, so `_meta` reaches consumers today and only `render.mjs` ignores it —
 this port is where we would start losing it. The fleet's **only** exhaustion warning lives
 there (`_meta["_claude/rateLimit"]`, `M0-FINDINGS.md` §M0-5), M0-3 found harnesses gating
-behaviour on `_meta` extensions we do not advertise, and M0-8 is probing a third use. And
+behaviour on `_meta` extensions we do not advertise, and M0-3's `87cbfe3` already recorded
+the third (`terminal_output`). And
 the cost of deferring is **not** a refactor — adding the field later is one line — it is
 that every run recorded in the meantime has no `_meta` in its event log. Code is
 recoverable; unrecorded data is not. Outbound is included so M1b-4 finds the door open when
@@ -373,11 +362,11 @@ running task.
 *Done when* (in addition to the criteria below) a second `prompt()` during a live turn
 throws without a byte reaching the subprocess, covered by `node:test`.
 
-**M1a-4 · `protocol/registry.ts` · M · needs M1a-3, M0-7, M0-8**
+**M1a-4 · `protocol/registry.ts` · M · needs M1a-3, M0-7**
 **Re-sized S → M, 2026-08-23.** The decision was ratified unchanged; the estimate was not.
 This entry now carries `env`, `defaultMode`, `maxMode`, `shell`, `asksPermission`,
 `argvChannel`, `modeMap`, `measuredOn` and `usage` — eight fields across six revisions, and
-M0-8 may add a ninth value to `argvChannel`. Split the launch spec from the measured labels
+Split the launch spec from the measured labels
 if it grows again.
 Today's `AGENTS` map plus `defaultMode`, `maxMode` and the containment label
 (`shell: "terminal" | "internal" | "unknown"`, from M0-3). Mode ordering is the total order
@@ -386,7 +375,7 @@ Today's `AGENTS` map plus `defaultMode`, `maxMode` and the containment label
 `env -u CLAUDECODE` baked into a registry entry that has nowhere to put it. This sharpens
 under the daemon: M2-8 introduces a shared secret, and a daemon holding that token in its
 environment would hand it to every harness it spawns. **Decided 2026-08-23 (ratified,
-#62 B1): add
+# 62 B1): add
 `env?: { unset?: string[]; set?: Record<string,string> }` to registry entries**; M2-8 also
 strips `AGENT_TEAM_*` unconditionally.
 **Revised by M0-1** — the labels are measured, and one field turns out to be too few. All
@@ -423,7 +412,8 @@ fetches "latest" from a CDN is the opposite of what a measured registry needs; i
 backlog. Second, **name the `_meta` capability flags** the entries carry: AgentPool
 catalogues `terminal_output` and `terminal-auth` on `ClientCapabilities`, with per-harness
 consumers (`docs/PRIOR-ART-AGENTPOOL.md`, §8c–8d). Carry the provenance caveat with them —
-those are their citations into source we have not read, and M0-8 verifies exactly one.
+those are their citations into source we have not read, and `87cbfe3` already put the
+`terminal_output` one on the wire (see §M0-3).
 **Check first whether `measuredOn` is nearly free:** `initialize` returns `agentInfo` and
 `acp.mjs:87` already stores it. If all three harnesses populate `agentInfo.version`, the
 staleness check is a string comparison at handshake and needs no probe; if not, it needs a
@@ -584,7 +574,7 @@ half-written file on disk, and today it is indistinguishable from success. The p
 gates on this. **Decided 2026-08-23 (ratified, #62 B1) — one table, in this module:**
 
 | stopReason | status | note |
-|---|---|---|
+| --- | --- | --- |
 | `end_turn` | `done` | normal; result block expected |
 | `max_tokens` | `failed` | truncated mid-turn; worktree kept for inspection |
 | `max_turn_requests` | `failed` | hit the harness's own turn cap |
@@ -935,7 +925,6 @@ as a decision. Reopen only if a harness we add later actually calls `terminal/cr
 `type: "terminal"` tool-call content. If embedded-terminal *rendering* is ever wanted, that
 is the path, and `render.mjs` drops that content type today.
 
-
 `terminal/create | output | wait_for_exit | kill | release`, a Terminal class with a
 ring-buffered output cap, and embedded-terminal rendering. **Only build for harnesses M0-3
 showed actually call `terminal/create`.** If M0-3 shows they all ignore the capability, this
@@ -985,7 +974,7 @@ Subscribes to the same bus events `core/notify.ts` uses (M1c-4).
 ## Critical path
 
 ```
-M0-1 ─┬─ M0-3 ─┬─ M0-7 ─ M0-8 ─ M1a-4 ┐
+M0-1 ─┬─ M0-3 ─┬─ M0-7 ─ M1a-4 ┐
       ├─ M0-4 ─┤                      │
       └─ M0-5 ─┘                      │
                                   │
@@ -1010,10 +999,9 @@ Three things are worth pulling forward, because everything queues behind them:
 1. ~~**M0-3.**~~ **Done 2026-08-21.** It did delete one story and rescue the other: M3-5 is
    cut to documentation, M3-6 survives without it. The containment label M1a-4 ships is now
    two fields, `shell` and `argvChannel`.
-   **Its successor M0-8 now sits in the same position** — it can add a fourth `argvChannel`
-   value, so it gates M1a-4's type for the same reason M0-3 did. Drawn after M0-7 above
-   because that is when it runs; its actual dependency is M0-3, whose baseline it diffs
-   against.
+   **M0-8, its would-be successor, resolved instead of run** — `87cbfe3` had already
+   advertised the flag, and `M0-FINDINGS.md:433-450` records the result: no fourth
+   `argvChannel` value, so M1a-4's type is settled on the two fields M0-3 established.
 2. **M1a-2.** Every later module types against it, and it is the story that earns the
    TypeScript decision.
 3. **The eleven decision halves** listed under *Decide before M1a starts*.

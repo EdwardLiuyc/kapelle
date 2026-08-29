@@ -17,7 +17,7 @@ that on three of the retro's risks AgentPool has [nothing to offer](#what-agentp
 
 This file is a **findings note**, and the M0 retrospective ran against it on 2026-08-23.
 Four of its recommendations are now decisions — **8b** (`_meta` kept through the typed
-layer, #62 B4), **8c** (the `terminal_output` probe, scheduled as M0-8), **8** (the bus
+layer, #62 B4), **8c** (the `terminal_output` probe, measured by M0-3's `87cbfe3` and parked), **8** (the bus
 carries the wire object) and the `measuredOn` half of **2** (#62 B2). Items **1**, **5** and
 **6** remain *proposals* awaiting whoever picks up M1a; everything under Defer and Refuse is
 a recommendation, not a ruling. `docs/STORIES.md` is the authority on which is which — every
@@ -28,7 +28,7 @@ decided half there carries a date.
 ## Verdicts, up front
 
 | # | What | Verdict |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Race handshake RPCs against process death; keep a stderr ring buffer | **take** — M1a-3, alongside its timeout |
 | 2 | ACP registry resolution + zero-install spawn (`npx -y`, `uvx`, binaries) | **split** — pin versions (M1a-4); auto-resolve to backlog |
 | 3 | Filter injected MCP servers by the agent's advertised transports | **defer** — with the first story that injects one |
@@ -38,7 +38,7 @@ decided half there carries a date.
 | 7 | A backend seam under `fs/*` (and later `terminal/*`) | **refuse** — reversed; it would sit under dead code |
 | 8 | Persist raw `session/update` objects as the source of truth | **take** — decided; M1a-2 and M1a-6 |
 | 8b | Keep `_meta` through the typed layer, both directions | **take** — **decided**; answers #62 B4 |
-| 8c | Probe the `_meta.terminal_output` capability | **take** — **decided**; scheduled as M0-8 |
+| 8c | Probe the `_meta.terminal_output` capability | **take** — **decided**; measured by `87cbfe3`, parked |
 | 9 | MCP tool bridge as the structured-result contract | **defer** — named M3 successor to `<task-result>` |
 | 10 | Supervisor speaks the *agent* side; permissions forward up the chain | **defer** — M4 alternative to the dashboard |
 | 11 | WebSocket transport / stdio↔ws bridge | **defer** — M2, if SSE proves insufficient |
@@ -60,7 +60,7 @@ usage survey and M0-7's re-verification change six of them, and the retro's own 
 principle that decides four.
 
 | # | Change | What moved it |
-|---|---|---|
+| --- | --- | --- |
 | 1 | take → **take, strengthened** | M0-2 killed the original justification: the opaque `-32603` does not reproduce on adapter 0.49.0. M1a-3's own gap replaces it — a harness that accepts the pipe and never answers `initialize`. The decided 30 s timeout covers *alive but silent*; this covers *died with a message on stderr*. Siblings, not alternatives |
 | 2 | take, scoped → **split** | Auto-resolve drops to backlog: `npx -y` against a CDN is actively hostile to a registry of **measured** labels, when M0-7 watched copilot change three behaviours in three days. The version-**pinning** half is promoted instead — pinning is what would make #62's B2 staleness check enforceable rather than advisory |
 | 3 | take → **defer** | Nothing in M1 injects an MCP server, so the filter would guard nothing. R2's complaint, applied to this report's own recommendation |
@@ -327,7 +327,7 @@ rather than per type.
 **Decided 2026-08-23: we do the same, in both directions.** `_meta` on the base of the
 message types in M1a-2 — inbound notifications and responses, outbound requests alike — and
 M1a-6's bus carries the wire object with it intact. Nothing consumes it yet. **This answers
-#62's B4.**
+# 62's B4.**
 
 Two honest notes on the rationale. It is *preservation, not addition*: `acp.mjs:230`
 already forwards the whole update object to `onEvent`, so `_meta` reaches consumers today
@@ -336,7 +336,7 @@ the cost of deferring is not a refactor, as I first claimed: adding an optional 
 base type later is one line. The real cost is that **every run recorded in the meantime has
 no `_meta` in its event log.** Code is recoverable; unrecorded data is not.
 
-### 8c · The `_meta.terminal_output` capability — **decided, scheduled as M0-8**
+### 8c · The `_meta.terminal_output` capability — **measured, not reproduced**
 
 `ClientCapabilitiesMeta.terminal_output` (`field_meta.py:231`), sent on `initialize`. Their
 note, citing `claude-agent-acp/src/acp-agent.ts:973`: *without* it, agents fall back to
@@ -351,13 +351,15 @@ Their comment on why it exists: *"Claude Code and Codex execute bash commands se
 but ACP normally expects the client to manage terminal processes via `terminal/create`."*
 The same convention is used by `codex-acp`.
 
-**This does not contradict M0-3 — it adds an axis M0-3 did not vary.** M0-3 asked whether
-`terminal/*` is ever called and answered no, three times, correctly. But the *visibility* it
-concluded we could not have may exist on this second channel, and it carries an exit code,
-which is more than the argv M0-1 found in `rawInput`. R3 already records that every M0-3
-verdict is bounded by `--mode auto`; this is a second bound — bounded by what we advertised.
-**Scheduled as M0-8.** If it reproduces, `shell: internal` stays true and `argvChannel`
-gains a fourth value in M1a-4.
+**Already measured, not reproduced.** M0-3's second commit `87cbfe3` advertised the flag.
+claude-agent-acp's Bash `tool_call` then carried `_meta.terminal_info.terminal_id` and a
+`{type: "terminal"}` content block for a terminal that was **never created**, with still
+zero `terminal/*` calls, no command output crossing the wire, and **no exit code**
+(`docs/M0-FINDINGS.md:433-450`). It is a rendering convention for a client that already
+draws the terminal, not the visibility M0-3 called unobtainable; `argvChannel` gains no
+fourth value. The `terminal_exit` lifecycle carrying `exit_code`/`signal` is **not
+reproduced** and stays AgentPool's citation into source this repo has not read.
+**Decision 2026-08-23: parked** — no follow-up probe scheduled for the MVP.
 
 ### 8d · What else is in the pocket — registry content, not client content
 
@@ -384,8 +386,9 @@ Not scheduled; recorded so the stories that need them know where to look.
 and consumer with file and line into Zed and the adapters. Those are *AgentPool's* citations
 into third-party source this container cannot reach (see
 [Unverified](#unverified-from-this-container)). I have verified that AgentPool asserts them,
-not that the cited lines say so. M0-8 puts exactly one entry on the wire; the rest stays
-their claim until someone probes it, and M1a-4 should carry the caveat with the flags.
+not that the cited lines say so. `87cbfe3` put exactly one entry on the wire (the
+`terminal_output` flag, recorded at §M0-3); the rest stays their claim until someone probes
+it, and M1a-4 should carry the caveat with the flags.
 
 ---
 
@@ -535,5 +538,5 @@ target and ours is the honest one.
   in `claude-agent-acp/src/acp-agent.ts`, `zed/crates/agent_servers/src/acp.rs` and
   `zed/crates/acp_thread/src/acp_thread.rs`. Those repositories are unreachable from here.
   What is verified is that AgentPool asserts them — not that the lines say so. Anything we
-  act on wants confirming on the wire first, which is what M0-8 does for the one that
+  act on wants confirming on the wire first, which `87cbfe3` has done for the one that
   matters most.
