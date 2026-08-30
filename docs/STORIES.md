@@ -69,7 +69,8 @@ elsewhere in this file were not in the retro's scope and are unchanged.
 
 Builds nothing except three papercut fixes. Every M1 default depends on its findings.
 
-**M0-1 · Harness availability and handshake survey · S · DONE**
+### M0-1 · Harness availability and handshake survey · S · DONE
+
 > Survey complete — `M0-FINDINGS.md`, M0-1 section. All three targets **available**
 > (opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78), none unavailable, none
 > untested. `loadSession: true` on all three. No harness calls `fs/*`. opencode never
@@ -986,7 +987,7 @@ Subscribes to the same bus events `core/notify.ts` uses (M1c-4).
 
 ## Critical path
 
-```
+```text
 M0-1 ─┬─ M0-3 ─┬─ M0-7 ─ M1a-4 ┐
       ├─ M0-4 ─┤                      │
       └─ M0-5 ─┘                      │

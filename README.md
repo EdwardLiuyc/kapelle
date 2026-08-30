@@ -1,6 +1,7 @@
-<img src="assets/icon.svg" alt="agent-team" width="88" align="right">
-
 # agent-team
+
+<!-- markdownlint-disable MD033 -- HTML is required for the fixed-width right-aligned logo; markdown has no image sizing -->
+<img src="assets/icon.svg" alt="agent-team" width="88" align="right">
 
 A minimal Agent Client Protocol client. ~700 lines, zero runtime dependencies, Node 24+.
 

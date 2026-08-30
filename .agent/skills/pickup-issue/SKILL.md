@@ -11,9 +11,9 @@ Nothing agent-specific — no MCP server, no plugin, no particular model.
 follow it. Concretely:
 
 | context | invocation |
-|---|---|
+| --- | --- |
 | any agent with a prompt | paste this file, then: `Run this procedure for issue #<N> in <repo>.` |
-| an agent working in this repo | `AGENTS.md` points here; ask for "pickup-issue #<N>" |
+| an agent working in this repo | `AGENTS.md` points here; ask for `"pickup-issue #<N>"` |
 | this repo's ACP client | `node run.mjs "$(cat .agent/skills/pickup-issue/SKILL.md; printf '\n\nRun this for issue #<N>.')" --agent opencode --mode ask` |
 
 Arguments the procedure understands, however they arrive: the **issue number** (required),
@@ -91,6 +91,7 @@ would otherwise get wrong. It does not enumerate the deliverables; the criteria 
 ```
 
 Rules:
+
 - **Scope and criteria must not restate each other.** If a scope item's content is fully
   captured by a criterion, delete the scope item — the criterion is the one that gets
   checked. Prefer the whole scope section to be a paragraph rather than a numbered list;
@@ -111,7 +112,7 @@ Rules:
 **Not a file. Not a comment on the issue.** It is advice to the developer standing there,
 and it goes stale the moment the work starts.
 
-```
+```text
 MANUAL (developer)          — needs a human: credentials, installs, paid/irreversible
                               actions, product judgement, anything whose output is a
                               decision rather than a diff
