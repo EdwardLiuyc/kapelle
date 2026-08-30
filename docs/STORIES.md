@@ -256,6 +256,10 @@ Ends with: today's behaviour, in TypeScript, typed, both safety layers intact, a
 Node 24 in `engines`. `tsconfig.json` with `strict`, `erasableSyntaxOnly`, `noEmit`.
 `typescript` as the only devDependency. `npm run check` → `tsc --noEmit`; `npm run test` →
 `node --test`.
+**Decided 2026-08-30 (ratified on #9): add `allowImportingTsExtensions` to the tsconfig
+list.** Node type stripping requires imports to carry `.ts` extensions, and `tsc` only
+accepts those under `noEmit` with this flag — without it the first ported file fails
+`npm run check`. Scoped in the issue's comment (2026-08-23).
 **Gap** — the plan states there is no unit-test framework and that it does not add one.
 That rule predates the plan's own Node 24 decision. `node:test` and `node:assert` are
 **built into the runtime**: using them adds no dependency, no devDependency and no build
@@ -1069,3 +1073,9 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   cannot reach and warn, rather than failing `session/new`
   (`agents/acp_agent/helpers.py:17`). *Trigger:* the first story that passes anything to
   `newSession({ mcpServers })` — today nothing does, which is why it is here and not in M1a.
+- **CI workflow running `check` / `test` / `selftest`.** M1's exit bar is deliberately
+  offline — the two scripts pass locally and `npm run selftest` stays green — and the only
+  workflow in `.github/` is the agent harness, which runs no tests. *Trigger:* the first
+  milestone whose exit bar depends on a machine other than the developer's — likely M2's
+  daemon, or the first harness build that changes measured labels (M0-7's lesson: a safety
+  claim is a claim about a build, and builds change underneath you).
