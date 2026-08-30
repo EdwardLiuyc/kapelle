@@ -4,20 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`agent-team` — a minimal [Agent Client Protocol](https://agentclientprotocol.com) **client** in ~700 lines of ES modules. Zero runtime dependencies, Node ≥20, `"type": "module"`, no build step, no test framework, no linter.
+`agent-team` — a minimal [Agent Client Protocol](https://agentclientprotocol.com) **client** in ~700 lines of ES modules. Zero runtime dependencies, Node ≥24, `"type": "module"`, no build step, no linter; `node:test` covers pure functions (`npm run test`).
 
 The inversion that governs every design choice: **this code is the client, the coding harness is the agent.** We spawn the harness as a subprocess, own the workspace, serve its filesystem requests, and decide its permissions. Harnesses (opencode, gemini, copilot, …) authenticate themselves — this client never touches a key.
 
 ## Commands
 
 ```bash
+npm run check               # type-check: tsc --noEmit, guarded on .ts discovery (empty until M1a-2)
+npm run test                # node:test for pure functions in core/ and protocol/
 npm run selftest            # end-to-end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
 node run.mjs "self test" --cmd "node mock-agent.mjs" --mode safe   # same run, write refused
 node run.mjs "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
 node fanout.mjs tasks.json  # N agents concurrently
 ```
 
-There is no unit-test suite yet — M1a-1 adds `node:test` for pure functions. `mock-agent.mjs` is the end-to-end test harness: it implements the agent side of the protocol and drives every client code path (streaming, `fs/read_text_file`, `session/request_permission`, `fs/write_text_file`). **Verify changes to `acp.mjs` against it before touching a real harness** — it needs nothing installed. Extend `mock-agent.mjs` when adding client capabilities so the new path is exercisable offline. `ACP_TEST.md` in the repo root is selftest output, not source; deleting it is safe.
+`node:test` covers pure functions in `core/` and `protocol/` (M1a-1; the suite is empty until the first modules port in M1a-2) — run it with `npm run test`. `mock-agent.mjs` is the end-to-end test harness: it implements the agent side of the protocol and drives every client code path (streaming, `fs/read_text_file`, `session/request_permission`, `fs/write_text_file`). **Verify changes to `acp.mjs` against it before touching a real harness** — it needs nothing installed. Extend `mock-agent.mjs` when adding client capabilities so the new path is exercisable offline. `ACP_TEST.md` in the repo root is selftest output, not source; deleting it is safe.
 
 `--mode ask` requires a TTY and degrades to `safe` otherwise, so piped/CI invocations never block on a prompt.
 

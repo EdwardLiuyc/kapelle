@@ -23,14 +23,14 @@ Kilo as peers in one system.
 
 ## Requirements, in priority order
 
-**P0 — must have**
+### P0 — must have
 
 - **1.** Manage multiple agents/harnesses from one process
 - **2.** Talk to open-source harnesses (opencode, Pi) *and* vendor ones (Copilot,
   Claude Code)
 - **3.** Bring-your-own API keys; ability to define custom agents
 
-**P1 — nice to have, deliberately deferred**
+### P1 — nice to have, deliberately deferred
 
 - **4.** A UI or local page to monitor all running agents
 - **5.** A declared graph topology where agents pass work between each other

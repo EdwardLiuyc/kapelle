@@ -5,12 +5,16 @@
   "type": "module",
   "description": "A minimal Agent Client Protocol client — supervise coding agents from Node",
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
     "start": "node run.mjs",
     "fanout": "node fanout.mjs tasks.json",
-    "selftest": "node run.mjs \"self test\" --cmd \"node mock-agent.mjs\" --mode auto"
+    "selftest": "node run.mjs \"self test\" --cmd \"node mock-agent.mjs\" --mode auto",
+    "check": "if find . -path ./node_modules -prune -o \\( -name '*.ts' -o -name '*.mts' -o -name '*.cts' \\) -print | grep -q .; then tsc --noEmit; else echo 'check: no TypeScript files yet; tsc skipped'; fi",
+    "test": "node --test"
   },
-  "dependencies": {}
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
 }

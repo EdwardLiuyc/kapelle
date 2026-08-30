@@ -100,7 +100,7 @@ human judge.
 
 ## Target architecture
 
-```
+```text
 front ends    run.ts  (direct, in-process, TTY ask)
               runs.ts (submits run file, streams SSE, answers permissions)
               dashboard (M4 — read views + permission answering; a third subscriber)
@@ -128,7 +128,7 @@ protocol/     agent.ts (JSON-RPC/stdio, fs/* + #guardPath, permission)
 
 ### Run flow
 
-```
+```text
 run.ts ──▶ import, validate ──▶ Run created, tasks in DAG order
            (mode precedence + harness ceiling resolved here)
               ┌───────────────┼───────────────┐
@@ -302,14 +302,16 @@ Spike tooling lives on four unmerged `spike/*` branches, named per section in th
 Ends somewhere genuinely useful: N harnesses, isolated worktrees, structured results,
 driven from a run file, fully verifiable offline.
 
-**Toolchain**
+### Toolchain
 
 - Node 24 LTS; bump `engines`.
-- `tsconfig.json` — `strict`, `erasableSyntaxOnly`, `noEmit`. Add `typescript` devDep and
+- `tsconfig.json` — `strict`, `erasableSyntaxOnly`, `noEmit`, `allowImportingTsExtensions`
+  (ratified on #9: type stripping requires `.ts`-suffixed imports, and `tsc` accepts those
+  under `noEmit` only with this flag). Add `typescript` devDep and
   `npm run check` → `tsc --noEmit`. Files run as `node daemon.ts`; no compile step.
 - Port the five existing files. Mechanical, but do it *after* M0 findings land.
 
-**Modules**
+### Modules
 
 - **`protocol/types.ts`** — the item that earns the TypeScript decision. Hand-written defs
   for every message we touch, especially the `session/update` discriminated union.
@@ -516,8 +518,10 @@ The first thing here that is not a CLI. Design reference: `opencode-ensemble`'s 
 
 ## Verification
 
-**Offline, every milestone** — `mock-agent` and `hostile-agent` are the test suite; there
-is no unit-test framework and this plan does not add one.
+**Offline, every milestone** — `mock-agent` and `hostile-agent` own end-to-end and
+adversarial coverage; `node:test` covers pure functions in `core/` and `protocol/`
+(ratified #62 B1, 2026-08-23 — the earlier "no unit-test framework" rule predates the
+plan's own Node 24 decision and is superseded).
 
 ```bash
 npm run check                    # tsc --noEmit

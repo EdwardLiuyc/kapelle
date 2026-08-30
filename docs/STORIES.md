@@ -69,7 +69,8 @@ elsewhere in this file were not in the retro's scope and are unchanged.
 
 Builds nothing except three papercut fixes. Every M1 default depends on its findings.
 
-**M0-1 · Harness availability and handshake survey · S · DONE**
+### M0-1 · Harness availability and handshake survey · S · DONE
+
 > Survey complete — `M0-FINDINGS.md`, M0-1 section. All three targets **available**
 > (opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78), none unavailable, none
 > untested. `loadSession: true` on all three. No harness calls `fs/*`. opencode never
@@ -256,6 +257,10 @@ Ends with: today's behaviour, in TypeScript, typed, both safety layers intact, a
 Node 24 in `engines`. `tsconfig.json` with `strict`, `erasableSyntaxOnly`, `noEmit`.
 `typescript` as the only devDependency. `npm run check` → `tsc --noEmit`; `npm run test` →
 `node --test`.
+**Decided 2026-08-30 (ratified on #9): add `allowImportingTsExtensions` to the tsconfig
+list.** Node type stripping requires imports to carry `.ts` extensions, and `tsc` only
+accepts those under `noEmit` with this flag — without it the first ported file fails
+`npm run check`. Scoped in the issue's comment (2026-08-23).
 **Gap** — the plan states there is no unit-test framework and that it does not add one.
 That rule predates the plan's own Node 24 decision. `node:test` and `node:assert` are
 **built into the runtime**: using them adds no dependency, no devDependency and no build
@@ -270,6 +275,20 @@ coverage.** It is
 why several stories below have a truth-table criterion rather than an end-to-end one.
 *Done when* both scripts pass on an empty test set and no build step exists. Note that Node 22.18+ and 24 already strip types, so this is a smaller lift than the
 plan's Node 24 framing implies — the bump is for LTS, not for the language feature.
+**DONE 2026-08-30** — `engines` `>=24`; `tsconfig.json` with `strict`, `erasableSyntaxOnly`,
+`noEmit`, `allowImportingTsExtensions`; `typescript` the only devDependency; `npm run check`
+and `npm run test` both green on the empty set; no build step. Two things the story did not
+anticipate. **`tsc` cannot pass an empty input set** — `include` matching nothing is TS18003,
+`files: []` is TS18002 — so `check` guards on file discovery and runs `tsc --noEmit` only when
+a `.ts` file exists, printing the skip instead of failing; the mirror of `node --test`'s
+empty-set pass. Verified with a throwaway smoke test: `node --test` discovers `core/*.test.ts`
+under `type: module`, and with files present `check` runs tsc and fails when it should.
+**npm `latest` now resolves to TypeScript 7.0.2, the native (tsgo) compiler** — the flags
+behave as ratified, the lockfile is new to the repo. **Open decision flagged on #9:** TS7
+ships no Node globals, so the first real test file fails `check` until `@types/node` is
+added — the "typescript as the only devDependency" rule never anticipated the checker
+needing the runtime's types. M1a-2's `node:test` criteria trip on it; decide before that
+story starts.
 
 **M1a-2 · `protocol/types.ts` · M · needs M1a-1**
 Hand-written definitions for every message we touch. The `session/update` discriminated
@@ -968,7 +987,7 @@ Subscribes to the same bus events `core/notify.ts` uses (M1c-4).
 
 ## Critical path
 
-```
+```text
 M0-1 ─┬─ M0-3 ─┬─ M0-7 ─ M1a-4 ┐
       ├─ M0-4 ─┤                      │
       └─ M0-5 ─┘                      │
@@ -1069,3 +1088,9 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   cannot reach and warn, rather than failing `session/new`
   (`agents/acp_agent/helpers.py:17`). *Trigger:* the first story that passes anything to
   `newSession({ mcpServers })` — today nothing does, which is why it is here and not in M1a.
+- **CI workflow running `check` / `test` / `selftest`.** M1's exit bar is deliberately
+  offline — the two scripts pass locally and `npm run selftest` stays green — and the only
+  workflow in `.github/` is the agent harness, which runs no tests. *Trigger:* the first
+  milestone whose exit bar depends on a machine other than the developer's — likely M2's
+  daemon, or the first harness build that changes measured labels (M0-7's lesson: a safety
+  claim is a claim about a build, and builds change underneath you).

@@ -1,8 +1,9 @@
-<img src="assets/icon.svg" alt="agent-team" width="88" align="right">
-
 # agent-team
 
-A minimal Agent Client Protocol client. ~700 lines, zero runtime dependencies, Node 20+.
+<!-- markdownlint-disable MD033 -- HTML is required for the fixed-width right-aligned logo; markdown has no image sizing -->
+<img src="assets/icon.svg" alt="agent-team" width="88" align="right">
+
+A minimal Agent Client Protocol client. ~700 lines, zero runtime dependencies, Node 24+.
 
 You are the **client**: you spawn the harness as a subprocess, own the workspace,
 answer its file-system requests, and decide its permissions. The harness is the
