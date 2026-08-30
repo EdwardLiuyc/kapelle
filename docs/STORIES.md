@@ -274,6 +274,20 @@ coverage.** It is
 why several stories below have a truth-table criterion rather than an end-to-end one.
 *Done when* both scripts pass on an empty test set and no build step exists. Note that Node 22.18+ and 24 already strip types, so this is a smaller lift than the
 plan's Node 24 framing implies — the bump is for LTS, not for the language feature.
+**DONE 2026-08-30** — `engines` `>=24`; `tsconfig.json` with `strict`, `erasableSyntaxOnly`,
+`noEmit`, `allowImportingTsExtensions`; `typescript` the only devDependency; `npm run check`
+and `npm run test` both green on the empty set; no build step. Two things the story did not
+anticipate. **`tsc` cannot pass an empty input set** — `include` matching nothing is TS18003,
+`files: []` is TS18002 — so `check` guards on file discovery and runs `tsc --noEmit` only when
+a `.ts` file exists, printing the skip instead of failing; the mirror of `node --test`'s
+empty-set pass. Verified with a throwaway smoke test: `node --test` discovers `core/*.test.ts`
+under `type: module`, and with files present `check` runs tsc and fails when it should.
+**npm `latest` now resolves to TypeScript 7.0.2, the native (tsgo) compiler** — the flags
+behave as ratified, the lockfile is new to the repo. **Open decision flagged on #9:** TS7
+ships no Node globals, so the first real test file fails `check` until `@types/node` is
+added — the "typescript as the only devDependency" rule never anticipated the checker
+needing the runtime's types. M1a-2's `node:test` criteria trip on it; decide before that
+story starts.
 
 **M1a-2 · `protocol/types.ts` · M · needs M1a-1**
 Hand-written definitions for every message we touch. The `session/update` discriminated
