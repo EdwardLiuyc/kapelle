@@ -2,7 +2,7 @@
 
 # agent-team
 
-A minimal Agent Client Protocol client. ~700 lines, zero runtime dependencies, Node 20+.
+A minimal Agent Client Protocol client. ~700 lines, zero runtime dependencies, Node 24+.
 
 You are the **client**: you spawn the harness as a subprocess, own the workspace,
 answer its file-system requests, and decide its permissions. The harness is the
