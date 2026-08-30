@@ -18,7 +18,7 @@ export class AcpAgent {
   #proc = null;
   #nextId = 1;
   #pending = new Map();
-  #toolCalls = new Map(); // toolCallId -> { title, kind }
+  #toolCalls = new Map(); // toolCallId -> { title, kind, rawInput }
   #closed = false;
 
   constructor({
@@ -56,7 +56,9 @@ export class AcpAgent {
     });
 
     this.#proc.on("error", (err) => {
-      this.#failAll(new Error(`failed to spawn "${this.command}": ${err.message}`));
+      this.#failAll(
+        new Error(`failed to spawn "${this.command}": ${err.message}`),
+      );
     });
 
     this.#proc.on("close", (code) => {
@@ -81,7 +83,11 @@ export class AcpAgent {
         fs: { readTextFile: true, writeTextFile: true },
         terminal: false,
       },
-      clientInfo: { name: "acp-mvp", title: "ACP MVP client", version: "0.1.0" },
+      clientInfo: {
+        name: "acp-mvp",
+        title: "ACP MVP client",
+        version: "0.1.0",
+      },
     });
 
     this.agentInfo = res.agentInfo ?? null;
@@ -89,7 +95,7 @@ export class AcpAgent {
 
     if (res.protocolVersion !== PROTOCOL_VERSION) {
       throw new Error(
-        `protocol mismatch: we speak v${PROTOCOL_VERSION}, "${this.name}" answered v${res.protocolVersion}`
+        `protocol mismatch: we speak v${PROTOCOL_VERSION}, "${this.name}" answered v${res.protocolVersion}`,
       );
     }
 
@@ -97,7 +103,9 @@ export class AcpAgent {
       this.#log(
         `note: agent offers auth methods [${res.authMethods
           .map((m) => m.id ?? m.name)
-          .join(", ")}]. If prompts fail, log in via the agent's own CLI first.`
+          .join(
+            ", ",
+          )}]. If prompts fail, log in via the agent's own CLI first.`,
       );
     }
 
@@ -105,14 +113,18 @@ export class AcpAgent {
   }
 
   async newSession({ mcpServers = [] } = {}) {
-    const res = await this.request("session/new", { cwd: this.cwd, mcpServers });
+    const res = await this.request("session/new", {
+      cwd: this.cwd,
+      mcpServers,
+    });
     this.sessionId = res.sessionId;
     return this.sessionId;
   }
 
   /** Send a prompt and resolve with the stop reason once the turn ends. */
   async prompt(text) {
-    if (!this.sessionId) throw new Error("no session — call newSession() first");
+    if (!this.sessionId)
+      throw new Error("no session — call newSession() first");
     const res = await this.request("session/prompt", {
       sessionId: this.sessionId,
       prompt: [{ type: "text", text }],
@@ -121,7 +133,8 @@ export class AcpAgent {
   }
 
   cancel() {
-    if (this.sessionId) this.notify("session/cancel", { sessionId: this.sessionId });
+    if (this.sessionId)
+      this.notify("session/cancel", { sessionId: this.sessionId });
   }
 
   stop() {
@@ -237,7 +250,7 @@ export class AcpAgent {
     const inRoot = abs === this.cwd || abs.startsWith(this.cwd + sep);
     if (!inRoot && (write || !this.allowReadOutsideRoot)) {
       throw new Error(
-        `path outside workspace root refused: ${abs} (root: ${this.cwd})`
+        `path outside workspace root refused: ${abs} (root: ${this.cwd})`,
       );
     }
     return abs;
@@ -249,7 +262,7 @@ export class AcpAgent {
     if (line != null || limit != null) {
       const lines = content.split("\n");
       const start = Math.max(0, (line ?? 1) - 1);
-      const end = limit != null ? start + limit : lines.length;
+      const end = limit == null ? lines.length : start + limit;
       content = lines.slice(start, end).join("\n");
     }
     return { content };
@@ -275,7 +288,11 @@ export class AcpAgent {
       rawInput: toolCall?.rawInput ?? known.rawInput,
     };
 
-    const allow = await this.policy({ agent: this.name, toolCall: detail, options });
+    const allow = await this.policy({
+      agent: this.name,
+      toolCall: detail,
+      options,
+    });
     const optionId = pickOption(options, allow);
 
     this.onEvent({
@@ -304,7 +321,9 @@ export class AcpAgent {
 
 /** Choose an optionId matching our allow/reject decision. */
 function pickOption(options = [], allow) {
-  const want = allow ? ["allow_once", "allow_always"] : ["reject_once", "reject_always"];
+  const want = allow
+    ? ["allow_once", "allow_always"]
+    : ["reject_once", "reject_always"];
   for (const kind of want) {
     const hit = options.find((o) => o.kind === kind);
     if (hit) return hit.optionId;
@@ -333,7 +352,7 @@ export function makeAskPolicy() {
     policy: async ({ agent, toolCall }) => {
       if (READ_ONLY_KINDS.has(toolCall.kind)) return true;
       const answer = await ask(
-        `\n  ${agent} wants to run [${toolCall.kind}] ${toolCall.title}\n  allow? [y/N] `
+        `\n  ${agent} wants to run [${toolCall.kind}] ${toolCall.title}\n  allow? [y/N] `,
       );
       return /^y(es)?$/i.test(answer.trim());
     },

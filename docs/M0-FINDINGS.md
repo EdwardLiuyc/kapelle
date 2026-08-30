@@ -8,7 +8,7 @@ All of it on Linux (WSL2), Node 24, one machine. Each section states its own dat
 client commit and spike branch — they differ, and by enough to matter:
 
 | section | run | client at | spike tooling |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | M0-1 | 2026-08-20 | `74f2fc2` | stdio proxy, not kept |
 | M0-3 | 2026-08-21 | `1f5d9ff` + `terminal/*` stubs | `spike/m0-3-terminal` |
 | M0-4 | 2026-08-21 | `ae6a885` | `spike/m0-4-cancel-probe` |
@@ -25,7 +25,7 @@ not *not noticed*.
 
 **This table is an index, not the record.** Every cell compresses a section below, and the
 sections win wherever they differ. It exists because the plan's M0 exit criterion
-(`docs/PROJECT-PLAN.md:512-515`) asks its questions per harness, and until now the answers
+(`docs/PROJECT-PLAN.md`) asks its questions per harness, and until now the answers
 were spread across four sections.
 
 **Versions are part of every finding.** copilot's behaviour changed measurably between
@@ -33,7 +33,7 @@ were spread across four sections.
 column as a claim about that build, not about that harness.
 
 | | opencode 1.18.18 | claude-agent-acp 0.49.0 | copilot 1.0.80 | measured in |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | starts / completes a turn | yes / yes | yes / yes | yes / yes | §M0-1 |
 | unhandled `session/update` | `available_commands_update` | `available_commands_update` | `available_commands_update`, `config_option_update` | §M0-1 |
 | calls `fs/*` | never — so `#guardPath` binds nothing here | never | never | §M0-1 |
@@ -56,7 +56,7 @@ Measured fields only. The containment *label* — and what `safe` should warn ab
 M1a-4's call, not this note's.
 
 | field | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `shell` | `internal` | `internal` | `internal` |
 | `argvChannel` | `none` | `notification` (late) | `notification` + `permission` |
 | mode discovery | `configOptions` with `category: "mode"` **only** — `modes` is absent, so a client that reads `SessionModeState` alone concludes it has none and is wrong | `SessionModeState`, 6 vendor ids | `SessionModeState`, 3 canonical spec URLs |
@@ -68,6 +68,15 @@ M1a-4's call, not this note's.
 `omp`, `pi` and `gemini` are uninstalled here: **`unknown` by absence, not by test.**
 `unknown` should read as `internal` / `none` for warning purposes.
 
+### Containment vocabulary
+
+These terms describe what the client can see and contain; the measured values are in the table above.
+
+- **`shell`** — where the harness runs its commands: `internal` (its own shell), `terminal` (via our `terminal/*`), or `unknown`.
+- **`argvChannel`** — whether the real command text reaches us, and on which message: `none`, `notification` (on `session/update`), or `permission` (on the permission request).
+- **`asksPermission`** — whether the harness ever sends `session/request_permission`; opencode is `false`, so the policy has no jurisdiction over it.
+- **`_meta.terminal_output`** — a capability axis, not a fourth `argvChannel` value: it changes how claude-agent-acp renders a Bash call but adds no command output or exit code (§M0-3).
+
 ---
 
 ## M0-1 · Harness availability and handshake survey
@@ -78,12 +87,12 @@ All three target harnesses are **available** — installed, authenticated, and o
 completing a turn. None is recorded as unavailable, and none is untested.
 
 | Harness | Binary | Invocation | Version | Available |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | opencode | `~/.opencode/bin/opencode` | `opencode acp` | OpenCode 1.18.18 | yes |
 | claude-agent-acp | `~/.local/bin/claude-agent-acp` | `claude-agent-acp` | `@agentclientprotocol/claude-agent-acp` 0.49.0 | yes |
 | copilot | `~/.local/bin/copilot` | `copilot --acp` | GitHub Copilot CLI 1.0.78 | yes |
 
-The registry in `agents.mjs:32` says `copilot acp`; the real flag is `copilot --acp`
+The registry in `agents.mjs` says `copilot acp`; the real flag is `copilot --acp`
 (confirmed in `copilot --help`). M0-2 already owns that fix. `claude-agent-acp` needs
 `CLAUDECODE` unset — this survey also unset `CLAUDE_CODE_SSE_PORT` and
 `CLAUDE_CODE_ENTRYPOINT`, which is the fuller env scrub M1a-4's env list should carry.
@@ -99,7 +108,7 @@ removed the entry, so `claude` is now the only Claude id.)
 ### Handshake and turn
 
 | | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | spawns | yes | yes | yes |
 | `initialize` latency | 1.1 s | 0.3 s | 0.5 s |
 | `session/new` latency | 1.1 s | 0.7 s | 3.0 s |
@@ -109,10 +118,10 @@ removed the entry, so `claude` is now the only Claude id.)
 | protocol version | 1 | 1 | 1 |
 | `authMethods` at init | `opencode-login` offered | `[]` | `copilot-login` offered |
 
-All three answer `protocolVersion: 1`, so the hard-fail at `acp.mjs:91` never fires.
+All three answer `protocolVersion: 1`, so the hard-fail at `acp.mjs` never fires.
 Note that opencode and copilot advertise auth methods *even when already authenticated* —
 a non-empty `authMethods` is not a signal that login is required, and the note logged at
-`acp.mjs:96` should not be read as one.
+`acp.mjs` should not be read as one.
 
 Copilot's auth method carries `_meta["terminal-auth"]` with a real `{command, args, label}`
 for `copilot login`. That is a ready-made affordance for M2-8 and M4-3: the harness is
@@ -121,7 +130,7 @@ telling us exactly how to re-authenticate it.
 ### `agentCapabilities`
 
 | capability | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `loadSession` | **true** | **true** | **true** |
 | `sessionCapabilities.resume` | yes | yes | — |
 | `sessionCapabilities.fork` | yes | yes | — |
@@ -143,10 +152,10 @@ behind a capability check, since the registry still contains harnesses that lack
 
 ### Update variants `render.mjs` does not handle
 
-`render.mjs:20` silently drops anything not in its switch. Observed unhandled:
+`render.mjs` silently drops anything not in its switch. Observed unhandled:
 
 | variant | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `available_commands_update` | 1× | 1× | 2× |
 | `config_option_update` | — | — | 1× |
 
@@ -166,14 +175,14 @@ prompts, so its rendering path is still unexercised outside `mock-agent.mjs`.
 ### Methods reaching the `#handleRequest` default
 
 **None.** Across six surveyed turns, no harness sent a method outside the three we
-implement, so the `-32000` default at `acp.mjs:205` never fired and we returned zero
+implement, so the `-32000` default at `acp.mjs` never fired and we returned zero
 errors. In particular no harness called `terminal/*` — consistent with our advertising
 `terminal: false`, and the starting point M0-3 has to disturb.
 
 The more interesting result is what they *didn't* call:
 
 | inbound request | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `fs/read_text_file` | never | never | never |
 | `fs/write_text_file` | never | never | never |
 | `session/request_permission` | **never** | on writes only | on reads *and* writes |
@@ -182,7 +191,7 @@ The more interesting result is what they *didn't* call:
 `fs.readTextFile`/`writeTextFile: true` and all three ignore it, reading and writing
 through their own process. Files created during the write probe appeared on disk in every
 throwaway workspace without a single `fs/write_text_file` crossing the wire. Therefore
-`#guardPath` (`acp.mjs:235`) currently protects **nothing in production** — it is dead code
+`#guardPath` (`acp.mjs`) currently protects **nothing in production** — it is dead code
 against these three harnesses, live only against `mock-agent.mjs`. It should stay (a
 harness may use `fs/*` tomorrow, and the MCP path may), but no containment claim may rest
 on it.
@@ -205,7 +214,7 @@ The original survey captured `initialize` in full but kept only `sessionId` from
 `session/new`, and the mode information lives in that result. Re-probed:
 
 | | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `modes` in `session/new` | **absent** | 6 modes, vendor ids | 3 modes, ids are **canonical spec URLs** |
 | mode ids | via `configOptions` (`build`, `plan`) | `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` | `#agent`, `#plan`, `#autopilot` |
 | `session/set_mode` accepted | **yes** | yes | yes |
@@ -228,7 +237,7 @@ Each harness was asked to create a file while running under `safePolicy`, in a t
 workspace:
 
 | harness | asked permission | file created under `safe` |
-|---|---|---|
+| --- | --- | --- |
 | opencode | **no** | **YES — `blocked.txt` written** |
 | claude-agent-acp | yes (`edit`) → rejected | no |
 | copilot | yes (`execute`) → rejected | no |
@@ -238,7 +247,7 @@ read and write alike. It writes files with no client involvement, so `--mode saf
 `--mode ask` are both inert against it: nothing to refuse, nothing to prompt. This is not a
 bug in the policy; it is the policy having no jurisdiction. It confirms M0-6's correction
 in the strongest possible form — that correction **landed 2026-08-23 in `c4307f3`**, and
-`CLAUDE.md:40` and `README.md` now carry the per-harness claim. It is also the plan's
+`CLAUDE.md` and `README.md` now carry the per-harness claim. It is also the plan's
 "silent autonomy" row (non-empty diff, zero permission requests) occurring by default in a
 supported harness, not as an anomaly — that detector should be treated as required, not
 nice-to-have.
@@ -247,7 +256,7 @@ nice-to-have.
 Re-running the same probe with one line added, `session/set_mode → plan` before the prompt:
 
 | run | policy | mode negotiated | `probe.txt` written |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | control | `safe` | none | **yes** |
 | with negotiation | `safe` | `plan` | **no** |
 
@@ -286,7 +295,7 @@ abbreviation is not usable. All were correct as written and are left in place; t
 changed under them.
 
 | | 1.0.78, as recorded above | 1.0.80, measured 2026-08-23 |
-|---|---|---|
+| --- | --- | --- |
 | reading a file | kind **`execute`**, shelling `cat <path> 2>&1` | kind **`read`**, a native "Viewing …" tool with `rawInput: {path}`, and **no permission request at all** |
 | `session/request_permission` | on reads *and* writes | on **shelled commands and writes**; file reads pass unasked |
 | creating a file | asked with kind `execute` | asks with kind **`edit`**, `rawInput: {path, file_text}` — still refused under `safe` |
@@ -303,7 +312,7 @@ authenticated.
 wrong, and both halves were measured:
 
 | prompt, under `safePolicy` | what happened |
-|---|---|
+| --- | --- |
 | "Read `acp.mjs` and describe it" (names the file) | native `read` tool, **zero permission requests, turn completed, correct answer** |
 | "What files are in this directory?" (must look around) | shells `find`, kind `execute` → **refused** → turn dies in 2.3 s with **no output at all**, reporting `end_turn` |
 
@@ -366,7 +375,7 @@ was denied would not appear here. Untested, and cheap to test if it ever matters
 **No. Not once, from any harness, with the capability advertised as `true`.**
 
 | | opencode 1.18.18 | claude-agent-acp 0.49.0 | copilot 1.0.80 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `terminal/create` | never | never | never |
 | any `terminal/*` | never | never | never |
 | turn completed | yes | yes | yes |
@@ -388,7 +397,7 @@ Yes for two of three, and **never through the channel the plan expected**. The c
 arrives on ordinary `session/update` notifications, which `render.mjs` drops on the floor.
 
 | | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `shell` | internal | internal | internal |
 | `argvChannel` | **none** | **notification** (late) | **notification** + permission |
 | `rawInput` on `tool_call` | `{cwd}` only | `{}` | full `{command}` |
@@ -478,8 +487,8 @@ content on the floor.
 
 Run 2026-08-21 against the same three harnesses, with a throwaway probe that sends
 `session/cancel` itself and then **waits** — deliberately not `run.mjs`, whose SIGINT path
-(`run.mjs:81-88`) kills the subprocess 2 s after cancelling. Because `#failAll` rejects
-every pending request on `close` (`acp.mjs:62-64`), a cancel slower than that grace would
+(`run.mjs`) kills the subprocess 2 s after cancelling. Because `#failAll` rejects
+every pending request on `close` (`acp.mjs`), a cancel slower than that grace would
 have surfaced as `agent "x" exited with code N` and the stop reason would have been lost.
 The probe is spike tooling, kept on branch `spike/m0-4-cancel-probe` (never merged) the way
 M0-3's stubs were; the numbers are the deliverable.
@@ -501,7 +510,7 @@ Three runs per harness, each in its own workspace (a copy of this repo's five `.
 Promptly on all three — and one of them lies about why.
 
 | | opencode 1.18.18 | claude-agent-acp 0.49.0 | copilot 1.0.80 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `stopReason` on cancel | `cancelled` | `cancelled` | **`end_turn`** |
 | latency, 2 samples | 64 ms · 45 ms | 5 ms · 10 ms | 26 ms · 28 ms |
 | events in the cancelled turn | 20 · 16 | 14 · 14 | 11 · 11 |
@@ -516,7 +525,7 @@ harness came near the 60 s wait bound**, so there is no "did not end within N s"
 record. The interesting number is the stop reason.
 
 Note also what is *not* wrong here: every literal observed is inside M1b-2's set
-(`docs/STORIES.md:334-343`) — nobody invented a value. The mismatch is semantic, and that is
+(`docs/STORIES.md`) — nobody invented a value. The mismatch is semantic, and that is
 worse, because a vocabulary error would have been caught by a type.
 
 **Copilot reports `end_turn` for a turn it cancelled**, in both samples. The baseline row is
@@ -546,7 +555,7 @@ to every row above; that is the only durable part of this table.**
 failure is silent every time.**
 
 | | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | second prompt | accepted | accepted | accepted |
 | answered after | 7.0 s (with the first, ~8 ms apart) | 52.1 s | **10 ms** |
 | its `stopReason` | `end_turn` | `end_turn` | `end_turn` |
@@ -586,7 +595,7 @@ may `stop()` immediately after the response without racing a trailing notificati
 ### Consequences
 
 - **M1c-1's grace window: 2 s.** Thirty times the slowest observed cancel and identical to
-  the grace `run.mjs:81-88` already uses, so the watchdog inherits a number rather than
+  the grace `run.mjs` already uses, so the watchdog inherits a number rather than
   inventing one. Kill only if that expires — expect never to reach it.
 - **M1b-2's stop-reason table cannot key on `stopReason` alone.** `cancelled` may never
   arrive (copilot), and `end_turn` is now known to mean *finished*, *I was cancelled*, or
@@ -623,8 +632,8 @@ Run 2026-08-22 on branch `spike/m0-5-usage-probe` (kept, never merged) against t
 harnesses. Method: `usage-probe.mjs` drives **one session of N prompts**, logging every
 `session/update` verbatim — `_meta` and unknown top-level fields included — and keeping the
 whole `session/prompt` response. `wire-tap.mjs` tees the JSON-RPC wire in both directions,
-because `AcpAgent` forwards only `session/update` to `onEvent` (`acp.mjs:211-212`) and
-`prompt()` returns `res.stopReason` and throws the rest of the response away (`acp.mjs:120`).
+because `AcpAgent` forwards only `session/update` to `onEvent` (`acp.mjs`) and
+`prompt()` returns `res.stopReason` and throws the rest of the response away (`acp.mjs`).
 `--mode auto`, no `session/set_mode`. Workspace: a throwaway five-file JS project, reset per
 session.
 
@@ -641,7 +650,7 @@ everywhere and `cost` on opencode alone. **Both halves are corrected below.**
 ### Samples
 
 | | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | version | 1.18.18 | 0.49.0 (ACP schema 0.28.1) | 1.0.80 |
 | auth mode | opencode-login (Zen) + a DeepSeek API key | OAuth subscription (no `ANTHROPIC_API_KEY` in env) | GitHub Copilot subscription |
 | models run | `opencode/big-pickle`, `deepseek/deepseek-chat` | `opus` (= `claude-opus-4-8`), `haiku` | `claude-sonnet-5`, `claude-haiku-4.5` |
@@ -654,7 +663,7 @@ everywhere and `cost` on opencode alone. **Both halves are corrected below.**
 #### `usage_update` arrives from all three — and is the only notification that carries usage
 
 | | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `usage_update` arrives | **yes** | **yes** | **yes** |
 | `used` | always | always | always |
 | `size` | always | always | always |
@@ -670,7 +679,7 @@ were captured and **none carried `_meta`**.
 #### `size` is per-model, late on one harness and wrong on another
 
 | harness / model | `size` on the wire | the harness's own view | agree? |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | opencode `opencode/big-pickle` | 200000 | no `/context` command exists | unverifiable |
 | opencode `deepseek/deepseek-chat` | 1000000 | " | unverifiable |
 | claude `opus` | **200000 mid-turn, 1000000 from the first end-of-turn update on** | `/context`: "12.9k / 1m" | **only after the first turn** |
@@ -710,7 +719,7 @@ copilot 15742 vs "16k"). **The disagreements are all in `size`, never in `used`.
 Cadence is where they diverge, and it decides what a watchdog can do:
 
 | | updates per long turn | when |
-|---|---|---|
+| --- | --- | --- |
 | opencode | **1** | at the **end** of the turn only |
 | claude-agent-acp | 23 | roughly per assistant message, plus one at end of turn carrying `cost` |
 | copilot | 5 | roughly per tool step |
@@ -725,7 +734,7 @@ Neither harness that supports it announces compaction in-band; both say it in pr
 numbers move quietly.
 
 | | `/compact` result (prose) | `usage_update` during it | `used` after |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | claude-agent-acp | "Compacting completed." | 1 update, 13599 → **13874 (up)** | `/context` unchanged at 12.9k → 13.9k — nothing was reclaimed |
 | copilot | "Compacted conversation history and removed 10 messages and 1,256 tokens." | **none** | next turn's update: 15742 → **15165**, and `/context` confirms messages 2.4k → 1.2k |
 | opencode | no `/compact` command over ACP | — | — |
@@ -752,7 +761,7 @@ in eleven sessions**. A client that wants a "90% full" warning has to compute it
 Per harness:
 
 | | warns before it runs out? | channel | what it carries |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | claude-agent-acp | **yes** | `usage_update._meta["_claude/rateLimit"]` | `status: allowed \| allowed_warning \| rejected`, `utilization`, `surpassedThreshold`, `rateLimitType` (`five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage`), `resetsAt`, `isUsingOverage`, `errorCode: "credits_required"`, `overageDisabledReason` (including `out_of_credits`), `canUserPurchaseCredits` |
 | copilot | no | — | `/usage` reports consumption only: "Requests: 1 AI Units", input/output/cached tokens. No entitlement, no remaining, no limit |
 | opencode | no | — | its emission site builds `{used, size, cost}` with no `_meta` and no warning field; `cost` is a spend total with nothing to compare it against |
@@ -791,7 +800,7 @@ was meant to feed is deprioritised below.
 #### opencode's `cost: 0` was "not billed", not "always `0`"
 
 | harness / model | auth | `cost.amount` after a real turn |
-|---|---|---|
+| --- | --- | --- |
 | opencode `opencode/big-pickle` | opencode Zen subscription | `0` — still `0` after 231 s and 155 updates |
 | opencode `deepseek/deepseek-chat` | DeepSeek API key | **`0.0017770984` USD**, → `0.0018118688` after one trivial turn |
 | claude-agent-acp `opus` | OAuth subscription | **`0.2328715` USD**, → `0.2436225` → `0.2517525` |
@@ -815,7 +824,7 @@ It exists on **all three harnesses**, and it is not `usage_update`: it is `usage
 `session/prompt` **response**.
 
 | field (turn 1) | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `inputTokens` | 264 | 2704 | 100678 |
 | `outputTokens` | 146 | 2595 | 1689 |
 | `thoughtTokens` | 17 | — | 12 |
@@ -834,14 +843,14 @@ components.
 
 For M1b-4 that means `tokens` must be recorded **per harness with its semantics tagged**, a
 supervisor must **subtract, not sum, on copilot**, and `totalTokens` is not comparable across
-vendors — the plan's existing "never summed" rule (`STORIES.md:334`) with a sharper reason.
+vendors — the plan's existing "never summed" rule (`STORIES.md`) with a sharper reason.
 
 Two spec notes: the field is **`UNSTABLE`** in the schema ("may be removed or changed at any
 point") and the published prompt-turn docs still describe the response as carrying
 `stopReason` alone, so all three harnesses are ahead of the documentation; and the schema's
 own descriptions ("Total input tokens across all turns") describe the cumulative reading, so
 **copilot is the one implementing it as written**. Our client cannot see any of it today —
-`AcpAgent.prompt()` returns `res.stopReason` (`acp.mjs:120`) and drops the rest.
+`AcpAgent.prompt()` returns `res.stopReason` (`acp.mjs`) and drops the rest.
 
 #### All three name the model they ran
 
@@ -850,7 +859,7 @@ Every harness reports its current model in the `session/new` response, in the sp
 `configOptions` shape, with the reserved `category: "model"`:
 
 | | opencode | claude-agent-acp | copilot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `configOptions` on `session/new` | yes | yes | yes |
 | `currentValue` observed | `opencode/big-pickle` | `opus` | `claude-sonnet-5` |
 | resolvable to a real model? | **yes** — provider-qualified | **an alias**; `/context` resolves it to `claude-opus-4-8` | **yes** |
@@ -877,7 +886,7 @@ recorded as nice-to-have and left unscheduled: opencode and claude-agent-acp alr
 cumulative USD themselves, and copilot cannot be priced in currency at all, since it meters
 premium requests rather than tokens.**
 
-The backlog trigger (`STORIES.md:746-748`, "any harness names the model it selected") has
+The backlog trigger (`STORIES.md`, "any harness names the model it selected") has
 **fired**, and is recorded as fired with the decision to defer attached, so the next reader
 does not re-derive it. If it is ever picked up, the work is recording each harness's
 self-reported unit — USD, USD, premium requests — plus an alias table for claude, not

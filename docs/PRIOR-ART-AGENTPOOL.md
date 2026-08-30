@@ -3,7 +3,8 @@
 A design review of [`phil65/agentpool`](https://github.com/phil65/agentpool) against this
 project, done because it is the only prior art surveyed so far that ships **a second full
 implementation of the ACP client side** — the exact layer `acp.mjs` is — and has already
-crossed several bridges `docs/PROJECT-BRIEF.md` still lists as open questions.
+crossed several bridges this project's plan still lists as open questions
+(`docs/PROJECT-PLAN.md`, "Open, deliberately unresolved").
 
 Read 2026-08-22 against commit `b6ddbea9` (shallow clone, last commit 2026-04-26). Every
 `path.py:NN` below is that commit; every `acp.mjs:NN` is master at `1bfee9c`. Line numbers
@@ -115,8 +116,8 @@ change and its evidence are in [What M0 moved](#what-m0-moved).
 This is the direct fix for the papercut `CLAUDE.md` names: *"harness spawn failures surface
 as opaque JSON-RPC errors — typically `Internal error (code -32603)` on `session/new`, with
 the real message only on the harness's stderr under `--verbose`."* We already discard that
-stderr unless asked (`acp.mjs:73`), and a harness that dies *before* answering leaves
-`#failAll` (`acp.mjs:64`) reporting only an exit code.
+stderr unless asked (`acp.mjs`), and a harness that dies *before* answering leaves
+`#failAll` (`acp.mjs`) reporting only an exit code.
 
 Cost in our terms: a bounded stderr ring buffer (keep the last ~20 lines regardless of
 `--verbose`) plus attaching it to the rejection in `#failAll`. ~25 lines, no dependency, no
@@ -153,7 +154,7 @@ do. Recommended shape: opt-in resolver behind `agents.mjs` (`--agent registry:go
 a silent fallback for a missing local entry), version pinned in the resolved argv, response
 cached to disk with the local map as offline fallback, and the security posture stated in
 the README rather than implied. Our hand-written entries stay the default and stay the
-place harness quirks live — `CLAUDE_PARENT_ENV` (`agents.mjs:26`) is exactly the kind of
+place harness quirks live — `CLAUDE_PARENT_ENV` (`agents.mjs`) is exactly the kind of
 knowledge no upstream registry will carry for us, and neither will the M0 containment
 metadata (`argvChannel`) the plan puts in the registry.
 
@@ -169,7 +170,7 @@ whether a mismatch warns. A pinned launch argv turns that from a warning into a 
 we run the build we measured. **Decided 2026-08-23 (#62 B2): `measuredOn: { version, date }`
 lands in M1a-4**, compared at startup, warning only. Pinned launch is *not* decided — it
 rides on the auto-resolve half that went to the backlog — so the comparison needs a version
-from somewhere: check whether `agentInfo` (already stored, `acp.mjs:87`) carries one before
+from somewhere: check whether `agentInfo` (already stored, `acp.mjs`) carries one before
 designing a probe.
 
 ### 3 · Filter injected MCP servers by advertised transports — defer
@@ -179,7 +180,7 @@ designing a probe.
 always, and logs which servers were skipped and why. Called before both `session/new`
 (`acp_agent.py:374`) and `session/load` (`:694`).
 
-`newSession({ mcpServers })` already exists at `acp.mjs:107` and nothing passes anything to
+`newSession({ mcpServers })` already exists at `acp.mjs` and nothing passes anything to
 it. The moment a task wants to inject an MCP server, this filter is the difference between
 "that harness didn't get the server, here's a warning" and a failed session. ~15 lines,
 and it is capability negotiation — the fourth protocol gotcha in the brief — applied
@@ -198,7 +199,7 @@ no-ops `elicitation_complete` (`:271`), and acks `ext_method`/`ext_notification`
 (`:260`, `:274`) rather than failing.
 
 Our `#handleRequest` throws for every method outside the three we implement
-(`acp.mjs:205`). For a genuinely unknown method that is right; for elicitation — which the
+(`acp.mjs`). For a genuinely unknown method that is right; for elicitation — which the
 brief lists as deliberately unimplemented — a hard error can end a turn that a polite
 "declined" would let continue. Same for `_`-prefixed unstable extensions, which by
 convention a peer must tolerate. ~10 lines, and `mock-agent.mjs` should learn to send both
@@ -206,15 +207,15 @@ so the path is exercised (see 6).
 
 **Re-scored — backlog, with a free trigger.** M0-1 measured it: across six surveyed turns,
 **no harness sent a method outside the three we implement**, so the `-32000` default at
-`acp.mjs:205` never fired. This is hardening against traffic that does not exist. The
+`acp.mjs` never fired. This is hardening against traffic that does not exist. The
 trigger costs nothing to arm — the wire tap sees the first unhandled method the day one
 appears, and the change is still ~10 lines then.
 
 ### 5 · Render `locations[]` — take, verify first
 
 `ToolCallState.update` (`tool_call_state.py:128`) normalizes `locations` to
-`ToolCallLocation` and forwards them. `render.mjs:37` prints title and kind only; we surface
-a path only for completed `diff` content (`render.mjs:45`). `locations` is the harness
+`ToolCallLocation` and forwards them. `render.mjs` prints title and kind only; we surface
+a path only for completed `diff` content (`render.mjs`). `locations` is the harness
 telling us which files a call is about, *before* it happens — cheap output, and useful
 input to M1c's "same tool repeating" stall heuristic, which currently has only a title
 string to compare.
@@ -326,10 +327,9 @@ rather than per type.
 
 **Decided 2026-08-23: we do the same, in both directions.** `_meta` on the base of the
 message types in M1a-2 — inbound notifications and responses, outbound requests alike — and
-M1a-6's bus carries the wire object with it intact. Nothing consumes it yet. **This answers
-# 62's B4.**
+M1a-6's bus carries the wire object with it intact. Nothing consumes it yet. **This answers #62's B4.**
 
-Two honest notes on the rationale. It is *preservation, not addition*: `acp.mjs:230`
+Two honest notes on the rationale. It is *preservation, not addition*: `acp.mjs`
 already forwards the whole update object to `onEvent`, so `_meta` reaches consumers today
 and only `render.mjs` ignores it — the typed port is where we would start losing it. And
 the cost of deferring is not a refactor, as I first claimed: adding an optional field to a
@@ -355,7 +355,7 @@ The same convention is used by `codex-acp`.
 claude-agent-acp's Bash `tool_call` then carried `_meta.terminal_info.terminal_id` and a
 `{type: "terminal"}` content block for a terminal that was **never created**, with still
 zero `terminal/*` calls, no command output crossing the wire, and **no exit code**
-(`docs/M0-FINDINGS.md:433-450`). It is a rendering convention for a client that already
+(`docs/M0-FINDINGS.md`). It is a rendering convention for a client that already
 draws the terminal, not the visibility M0-3 called unobtainable; `argvChannel` gains no
 fourth value. The `terminal_exit` lifecycle carrying `exit_code`/`signal` is **not
 reproduced** and stays AgentPool's citation into source this repo has not read.
@@ -501,12 +501,12 @@ Record these so a later reader doesn't "steal" a regression.
 
 1. **No path guard on their client.** `client_handler.py:274` writes wherever the harness
    asks — `makedirs` then `pipe_file`, no root check — because containment is delegated
-   entirely to the execution environment. Our `#guardPath` (`acp.mjs:235`) is unconditional
+   entirely to the execution environment. Our `#guardPath` (`acp.mjs`) is unconditional
    and independent of policy. Keep it in front of any backend seam we add (7). Their design
    is strictly weaker whenever the environment is `local`, which is their default.
 2. **Permission option selection.** They take `params.options[0]`
    (`client_handler.py:201`, and again in `headless_client.py:94`) — whatever the agent
-   listed first, which may be `allow_always`. Our `pickOption` (`acp.mjs:306`) prefers
+   listed first, which may be `allow_always`. Our `pickOption` (`acp.mjs`) prefers
    `allow_once`, falls back to `allow_always`, and mirrors the same order for rejects.
    A one-shot approval that silently becomes a standing one is exactly the failure our
    `ask` mode exists to prevent.

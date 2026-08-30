@@ -2,7 +2,7 @@
 
 # agent-team
 
-A minimal Agent Client Protocol client. ~400 lines, zero dependencies, Node 20+.
+A minimal Agent Client Protocol client. ~700 lines, zero runtime dependencies, Node 20+.
 
 You are the **client**: you spawn the harness as a subprocess, own the workspace,
 answer its file-system requests, and decide its permissions. The harness is the
@@ -11,7 +11,7 @@ answer its file-system requests, and decide its permissions. The harness is the
 ## Files
 
 | File | What it is |
-|---|---|
+| --- | --- |
 | `acp.mjs` | The client. JSON-RPC over stdio, handshake, `fs/*`, permissions. |
 | `agents.mjs` | How to launch each harness in ACP mode. The whole adapter layer. |
 | `run.mjs` | CLI: one prompt, one agent. |
@@ -45,7 +45,7 @@ opencode auth login           # opencode owns its own auth — we never see keys
 node run.mjs "summarise this repo in three sentences" --mode safe
 ```
 
-`--mode safe` allows reads, searches and fetches and refuses every edit, delete,
+`--mode safe` allows the read-only kinds (`read`, `search`, `fetch`, `think`) and refuses every edit, delete,
 move and execute — of the ones the harness asks about. That is per-harness, and
 opencode asks about nothing; see [the safety boundary](#two-things-worth-knowing)
 before treating `safe` as a guarantee.
@@ -78,6 +78,7 @@ node run.mjs "..." --agent claude     # Claude Code, via its ACP adapter (below)
 node run.mjs "..." --agent omp        # oh-my-pi, native ACP
 node run.mjs "..." --agent gemini     # gemini --acp
 node run.mjs "..." --agent pi         # via the pi-acp adapter: npm i -g pi-acp
+node run.mjs "..." --agent copilot    # copilot --acp
 node run.mjs "..." --cmd "some-agent --acp"
 ```
 
@@ -116,8 +117,8 @@ carries an entry for it — install the package above.
 
 **Driving this client from inside a Claude Code session works as-is.** Older
 adapters refused to start a nested session when they saw the markers the parent
-leaves in the environment, so the `claude` registry entry scrubs them
-(`CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`) before spawning.
+leaves in the environment, so the `claude` registry entry scrubs them before
+spawning (the exact list lives with the registry `env` field in `CLAUDE.md`).
 0.49.0 no longer refuses, so the scrub is insurance against a regression rather
 than a fix for a failure you'd hit today. No `env -u ...` prefix needed — though
 note that `--cmd "claude-agent-acp"` bypasses the registry, and with it the scrub.
@@ -138,23 +139,16 @@ a harness that refused to start; `--verbose` shows the real reason on its stderr
 ## Two things worth knowing
 
 **Permission requests are thin.** `session/request_permission` may carry only a
-`toolCallId`. The title and kind arrive earlier, in the `tool_call` notification.
-The client keeps a `toolCallId → {title, kind}` map so the policy has something
-to judge — without it, every decision is blind.
+`toolCallId`. The title, kind and raw input arrive earlier, in the `tool_call`
+notification. The client keeps a `toolCallId → {title, kind, rawInput}` map so
+the policy has something to judge — without it, every decision is blind.
 
 **The policy filters what a harness asks; it is not a sandbox.** One function,
 one place, applied identically to every harness — but it only ever sees what
-crosses the protocol, and how much that is differs per harness. Measured
-(`docs/M0-FINDINGS.md` §M0-1): opencode sends no `session/request_permission` at
-all and wrote a file while running under `safePolicy`, so no `--mode` value
-restrains it; copilot (1.0.80) reads a named file through a native `read` tool
-that `safe` allows, but still shells out to list a directory, so `safe` kills any
-task that has to explore — the turn ends in seconds with no output and a
-`stopReason` of `end_turn`. Safe mode does not make copilot cautious; it makes it
-unusable for real work while looking like a clean finish. Pin that to the build:
-on 1.0.78, three days earlier, copilot shelled `cat` to read as well and `safe`
-refused its reads outright. `#guardPath` rejects any `fs/*` path outside the workspace root, but no
-surveyed harness calls `fs/*`: it bounds this client's own file service, not the
-agent. Negotiating the harness's restrictive mode at session start is what would
-reach opencode (measured: it declined with `session/set_mode → plan`), and this
-client does not do it yet.
+crosses the protocol, and how much that is differs per harness. What each harness
+actually lets through is measured, per build, in `docs/M0-FINDINGS.md` §M0-1:
+opencode never asks permission and still writes under `safe`; copilot's behaviour
+changed between 1.0.78 and 1.0.80. `#guardPath` rejects any `fs/*` path outside
+the workspace root, but no surveyed harness calls `fs/*`: it bounds this client's
+own file service, not the agent. Negotiating the harness's restrictive mode at
+session start would reach opencode; this client does not do it yet.
