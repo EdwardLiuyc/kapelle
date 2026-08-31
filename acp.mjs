@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
+import { createInterface } from "node:readline";
 
-export const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 1;
 
 // Tool kinds we consider non-destructive. Used by the "safe" policy.
 const READ_ONLY_KINDS = new Set(["read", "search", "fetch", "think"]);
@@ -161,7 +161,7 @@ export class AcpAgent {
   #send(msg) {
     if (this.#closed) return;
     // Messages are newline-delimited and must not contain embedded newlines.
-    this.#proc.stdin.write(JSON.stringify(msg) + "\n");
+    this.#proc.stdin.write(`${JSON.stringify(msg)}\n`);
   }
 
   #onLine(raw) {

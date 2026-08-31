@@ -1,0 +1,8 @@
+{
+  "ignore": ["assets/"],
+  "rules": {
+    "cli-output": {
+      "disable": ["no-console-except-error-js"]
+    }
+  }
+}

@@ -54,22 +54,34 @@ export const AGENTS = {
   copilot: { command: "copilot", args: ["--acp"] },
 };
 
-const RUNTIMES = new Set(["node", "npx", "bun", "bunx", "deno", "python", "python3"]);
+const RUNTIMES = new Set([
+  "node",
+  "npx",
+  "bun",
+  "bunx",
+  "deno",
+  "python",
+  "python3",
+]);
 
 export function resolveAgent(id, customCmd) {
   if (typeof customCmd === "string" && customCmd.length > 0) {
     const [command, ...args] = customCmd.split(/\s+/);
     // "node mock-agent.mjs" should read as "mock-agent", not "node".
-    const label = RUNTIMES.has(command) && args[0]
-      ? args[0].split("/").pop().replace(/\.(mjs|js|ts|py)$/, "")
-      : command;
+    const label =
+      RUNTIMES.has(command) && args[0]
+        ? args[0]
+            .split("/")
+            .pop()
+            .replace(/\.(mjs|js|ts|py)$/, "")
+        : command;
     return { name: label, command, args };
   }
   const spec = AGENTS[id];
   if (!spec) {
     throw new Error(
       `unknown agent "${id}". Known: ${Object.keys(AGENTS).join(", ")}. ` +
-        `Or pass --cmd "<command> <args>".`
+        `Or pass --cmd "<command> <args>".`,
     );
   }
   return { name: id, ...spec };

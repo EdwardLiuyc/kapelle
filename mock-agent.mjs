@@ -14,7 +14,7 @@ import { createInterface } from "node:readline";
 let nextId = 1000;
 const pending = new Map();
 
-const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
+const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
 const notify = (method, params) => send({ jsonrpc: "2.0", method, params });
 
@@ -26,11 +26,19 @@ function callClient(method, params) {
   });
 }
 
-const update = (sessionId, u) => notify("session/update", { sessionId, update: u });
+const update = (sessionId, u) =>
+  notify("session/update", { sessionId, update: u });
 
 createInterface({ input: process.stdin }).on("line", async (line) => {
   if (!line.trim()) return;
-  const msg = JSON.parse(line);
+
+  let msg;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    console.error(`[mock-agent] ignoring non-JSON line: ${line}`);
+    return;
+  }
 
   if (msg.id !== undefined && !msg.method) {
     pending.get(msg.id)?.(msg.result);
@@ -57,8 +65,16 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     update(sid, {
       sessionUpdate: "plan",
       entries: [
-        { content: "Read a file through the client", priority: "high", status: "pending" },
-        { content: "Try a write that needs permission", priority: "medium", status: "pending" },
+        {
+          content: "Read a file through the client",
+          priority: "high",
+          status: "pending",
+        },
+        {
+          content: "Try a write that needs permission",
+          priority: "medium",
+          status: "pending",
+        },
       ],
     });
 
@@ -80,11 +96,18 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       path: "package.json",
       limit: 3,
     });
-    update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" });
+    update(sid, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+    });
 
     update(sid, {
       sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: `got ${file?.content?.length ?? 0} chars.\n` },
+      content: {
+        type: "text",
+        text: `got ${file?.content?.length ?? 0} chars.\n`,
+      },
     });
 
     // Exercise the permission path with a mutating tool.
@@ -120,7 +143,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         content: { type: "text", text: "Write refused by the client policy." },
       });
     }
-    update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t2", status: "completed" });
+    update(sid, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t2",
+      status: "completed",
+    });
 
     update(sid, { sessionUpdate: "usage_update", used: 1234, size: 200000 });
     reply(msg.id, { stopReason: "end_turn" });

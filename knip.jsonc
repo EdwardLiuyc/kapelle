@@ -1,0 +1,9 @@
+{
+  // protocol/types.ts is the M1a-2 API surface: its exports are the deliverable,
+  // consumed by the M1a-3 / M1a-7 ports (not dead code), so knip's
+  // "unused export" check doesn't apply to it.
+  "ignore": ["protocol/types.ts"],
+  // mock-agent.mjs is a runnable script (`node mock-agent.mjs` in the selftest
+  // script), not an imported module.
+  "entry": ["mock-agent.mjs"]
+}

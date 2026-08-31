@@ -25,6 +25,31 @@ npx -y markdownlint-cli2 --config .markdownlint.json $(git ls-files '*.md')
 Fix findings before finishing. An inline `<!-- markdownlint-disable MD0xx -->` is allowed
 only with a comment saying why.
 
+## Format and lint (TS/JS)
+
+`biome` (config: `biome.json`) is the formatter and linter for all tracked TS/JS. After
+editing any `.ts`/`.mts`/`.cts`/`.mjs`/`.js`/`.cjs` file, run:
+
+```bash
+npx biome check --write .
+```
+
+Fix findings before finishing. Biome findings use `// biome-ignore: <rule>: reason`;
+pi-lens-native findings use `// pi-lens-ignore: <rule>` — the two do not read each
+other's comments. `tsc` stays the type checker (`npm run check`), markdownlint stays for
+`.md`.
+
+## Diagnostics (pi-lens)
+
+pi-lens is the deeper lint layer (per-edit dispatch + session scans). Before finishing a
+change, clear every finding — no blockers, no warnings. Each finding is resolved one of
+three ways: **fix** it (preferred; the fix is observed, not asserted), **suppress** it
+inline with `// pi-lens-ignore: <rule>` (bare rule-id, comma-separate several; put the
+reason in an adjacent comment — trailing text breaks the match), or **disable** the rule
+project-wide in `.pi-lens.json` (`rules.<id>.disable`), recording the reason in the commit
+message. Check with `lens_diagnostics` (mode `full`); config lives in `.pi-lens.json` and
+`knip.jsonc`.
+
 ## Skills
 
 Reusable procedures live in `.agent/skills/<name>/SKILL.md` as plain Markdown, assuming

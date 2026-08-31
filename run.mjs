@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { AcpAgent, safePolicy, autoPolicy, makeAskPolicy } from "./acp.mjs";
+import { AcpAgent, autoPolicy, makeAskPolicy, safePolicy } from "./acp.mjs";
 import { AGENTS, resolveAgent, resolveEnv } from "./agents.mjs";
 import { render } from "./render.mjs";
 
