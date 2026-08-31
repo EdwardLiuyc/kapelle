@@ -8,8 +8,8 @@
  * workspace root. They run concurrently and report back structurally.
  */
 import { readFile } from "node:fs/promises";
-import { AcpAgent, autoPolicy, safePolicy } from "./acp.mjs";
 import { resolveAgent, resolveEnv } from "./agents.mjs";
+import { AcpAgent, autoPolicy, safePolicy } from "./protocol/agent.ts";
 
 const file = process.argv[2] ?? "tasks.json";
 

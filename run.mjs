@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-import { AcpAgent, autoPolicy, makeAskPolicy, safePolicy } from "./acp.mjs";
 import { AGENTS, resolveAgent, resolveEnv } from "./agents.mjs";
+import {
+  AcpAgent,
+  autoPolicy,
+  makeAskPolicy,
+  safePolicy,
+} from "./protocol/agent.ts";
 import { render } from "./render.mjs";
 
 const argv = process.argv.slice(2);

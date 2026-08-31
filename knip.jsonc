@@ -2,8 +2,21 @@
   // protocol/types.ts is the M1a-2 API surface: its exports are the deliverable,
   // consumed by the M1a-3 / M1a-7 ports (not dead code), so knip's
   // "unused export" check doesn't apply to it.
+  //
+  // knip emits a "Remove from ignore" hint now that M1a-3's protocol/agent.ts
+  // consumes part of this file. Declined: the remaining ~50 exports are typed
+  // ahead of their consumers on purpose, and acting on the hint reports every
+  // one of them as dead code.
   "ignore": ["protocol/types.ts"],
-  // mock-agent.mjs is a runnable script (`node mock-agent.mjs` in the selftest
-  // script), not an imported module.
-  "entry": ["mock-agent.mjs"]
+  // Entry points. The `!` suffix marks a *production* entry: without it, knip's
+  // --production mode (which pi-lens runs) has no roots at all and reports every
+  // reachable file — protocol/agent.ts, render.mjs, agents.mjs — as unused.
+  //
+  // knip emits "Remove redundant entry pattern" for the two `!` entries, since
+  // package.json's `start`/`fanout` scripts already make them dev entries.
+  // Declined for the same reason: dropping them re-breaks --production.
+  //
+  // mock-agent.mjs is a runnable script (`node mock-agent.mjs`, inside the
+  // selftest script's --cmd string), not an imported module, and is dev-only.
+  "entry": ["run.mjs!", "fanout.mjs!", "mock-agent.mjs"]
 }
