@@ -14,6 +14,7 @@ import {
   assertNever,
   isSessionUpdate,
   type AgentEvent,
+  type PromptRequest,
   type SessionNotification,
   type SessionUpdate,
 } from "./types.ts";
@@ -37,7 +38,10 @@ const FIXTURES: SessionUpdate[] = [
     messageId: "m1",
   },
   {
-    // Verbatim field set from claude-agent-acp 0.49.0 (M0-FINDINGS.md §M0-3)
+    // Composite of fields claude-agent-acp 0.49.0 announces on tool_call
+    // (M0-FINDINGS.md §M0-3). The real capture (M0-FINDINGS.md:448-450) also
+    // carries a _meta terminal block; rawInput is {} here, real argv arrives
+    // on tool_call_update ~0.5s later (M0-FINDINGS.md:403-404).
     sessionUpdate: "tool_call",
     toolCallId: "toolu_01FDY",
     title: "Terminal",
@@ -45,12 +49,15 @@ const FIXTURES: SessionUpdate[] = [
     status: "in_progress",
     rawInput: { command: "ls" },
     locations: [{ path: "src/a.ts", line: 3 }],
+    _meta: { claudeCode: { toolName: "Bash" } },
   },
   {
-    // claude-agent-acp announces {} on tool_call and real argv ~0.5s later here
+    // Composite: claude-agent-acp announces {} on tool_call and the real argv
+    // arrives here ~0.5s later (M0-FINDINGS.md:403-404)
     sessionUpdate: "tool_call_update",
     toolCallId: "toolu_01FDY",
     status: "completed",
+    rawInput: { command: "ls -la" },
     content: [{ type: "diff", path: "src/a.ts", newText: "+line" }],
   },
   {
@@ -64,9 +71,20 @@ const FIXTURES: SessionUpdate[] = [
   },
   { sessionUpdate: "current_mode_update", currentModeId: "plan" },
   {
-    // Copilot only (M0-1)
+    // Copilot only (M0-1); currentValue "claude-sonnet-5" measured on the
+    // wire under category "model" (M0-FINDINGS.md:863-864) — the "which model
+    // ran" channel M1a-4 consumes.
     sessionUpdate: "config_option_update",
-    configOptions: [{ id: "model", name: "Model", category: "model" }],
+    configOptions: [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "claude-sonnet-5",
+        options: [{ value: "claude-sonnet-5", name: "Claude Sonnet 5" }],
+      },
+    ],
   },
   { sessionUpdate: "session_info_update", title: "run 42" },
   {
@@ -93,6 +111,9 @@ const CLIENT_EVENTS: AgentEvent[] = [
 /** Renders a one-line summary per variant. Every protocol variant MUST have a
  *  case; `default` is `assertNever`, so adding a variant to the union fails
  *  `npm run check` here until it is handled. */
+// The 11-case exhaustive switch IS the test's mechanism: splitting the dispatch
+// would let a new variant slip past one copy of it.
+// pi-lens-ignore: high-complexity
 function describeUpdate(u: SessionUpdate): string {
   switch (u.sessionUpdate) {
     case "user_message_chunk":
@@ -181,44 +202,44 @@ test("a message carrying _meta round-trips through the types with it intact", ()
 });
 
 test("_meta round-trips on an outbound request too (both directions)", () => {
-  const req = {
-    jsonrpc: "2.0" as const,
+  // Annotated as PromptRequest so params._meta typechecks against the real
+  // outbound type — the round-trip proves the outbound types carry it.
+  const req: PromptRequest = {
+    jsonrpc: "2.0",
     id: 1,
-    method: "session/prompt" as const,
+    method: "session/prompt",
     params: {
       sessionId: "s1",
-      prompt: [{ type: "text" as const, text: "go" }],
+      prompt: [{ type: "text", text: "go" }],
       _meta: { "claude/system": { append: "be brief" } },
     },
   };
-  const back = JSON.parse(JSON.stringify(req));
+  const back: PromptRequest = JSON.parse(JSON.stringify(req)) as PromptRequest;
   assert.deepEqual(back.params._meta, req.params._meta);
 });
 
 // --- drop guard ---------------------------------------------------------------
 
-test("a reconstruction that drops _meta is caught, not passed silently", () => {
+test("field-by-field reconstruction loses exactly _meta (the round-trip tests are the guard)", () => {
   const line =
     '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1",' +
     '"update":{"sessionUpdate":"usage_update","used":1,"size":2,' +
     '"_meta":{"_claude/rateLimit":{"utilization":0.9}}}}}';
 
   const update = forwardUpdate(line);
+  // The real guard: the typed pass-through preserves _meta on the update
+  // object, so a reconstruction that loses it is a consumer bug, not a
+  // property of the type. The round-trip tests above prove _meta survives the
+  // typed path; this asserts the field is present to drop.
   assert.ok("_meta" in update, "_meta must reach consumers");
 
-  // The mistake M1a-2 exists to prevent: rebuilding the update field-by-field.
-  // The reconstruction matches the original in every field EXCEPT _meta —
-  // identical to the eye, silent at runtime — which is why the typed path
-  // must carry the object whole and the guard above must hold.
-  const { _meta, ...withoutMeta } = update as SessionUpdate &
+  // What the mistake looks like: rebuilding the update field-by-field drops
+  // _meta silently at runtime. The round-trip tests are the contract; this
+  // documents the failure mode for reviewers.
+  const { _meta: dropped, ...withoutMeta } = update as SessionUpdate &
     Record<string, unknown>;
-  const dropped = {
-    sessionUpdate: update.sessionUpdate,
-    used: (update as { used: number }).used,
-    size: (update as { size: number }).size,
-  };
-  assert.deepEqual(dropped, withoutMeta);
-  assert.equal("_meta" in dropped, false);
+  assert.equal("_meta" in withoutMeta, false);
+  void dropped;
 });
 
 // --- misc ----------------------------------------------------------------------

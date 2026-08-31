@@ -248,12 +248,45 @@ export type SessionConfigOptionCategory =
  | "thought_level"
  | (string & {});
 
-export interface SessionConfigOption extends Meta {
+export interface SessionConfigSelectOption extends Meta {
+ value: string;
+ name: string;
+ description?: string;
+}
+
+/** Grouped variant of the option list (schema: SessionConfigSelectGroup). */
+export interface SessionConfigSelectGroup extends Meta {
+ group: string;
+ name: string;
+ options: SessionConfigSelectOption[];
+}
+
+/** Flat list or grouped (schema: SessionConfigSelectOptions). */
+export type SessionConfigSelectValues =
+ | SessionConfigSelectOption[]
+ | SessionConfigSelectGroup[];
+
+interface SessionConfigOptionBase extends Meta {
  id: string;
  name: string;
  description?: string;
  category?: SessionConfigOptionCategory;
 }
+
+/**
+ * Schema models a `select`/`boolean` discriminated union on `type` whose
+ * branches REQUIRE the payload (schema defs SessionConfigOption,
+ * SessionConfigSelect, SessionConfigBoolean). `currentValue` is the "which
+ * model ran" channel — observed on all three harnesses under
+ * `category: "model"` (M0-FINDINGS.md §M0-5), consumed by M1a-4.
+ */
+export type SessionConfigOption =
+ | (SessionConfigOptionBase & {
+    type: "select";
+    currentValue: string;
+    options: SessionConfigSelectValues;
+   })
+ | (SessionConfigOptionBase & { type: "boolean"; currentValue: boolean });
 
 // ---------------------------------------------------------------------------
 // The session/update discriminated union — the point of the exercise
@@ -298,13 +331,19 @@ interface SessionInfoUpdate extends Meta {
  updatedAt?: string;
 }
 
+/** Cumulative session cost; §M0-5 and the schema's `Cost` def agree on the
+ *  shape. Cumulative for the session, never per-turn. */
+export interface SessionCost extends Meta {
+ amount: number;
+ currency: string;
+}
+
 /** opencode: once, end of turn. claude-agent-acp: ~23 per long turn.
  *  `used` of `0` means unknown, not empty, on claude-agent-acp (M0-5). */
 export interface UsageUpdate extends Meta {
  used: number;
  size: number;
- /** Cumulative session cost; shape not pinned by M0 — see §M0-5. */
- cost?: Record<string, unknown>;
+ cost?: SessionCost;
 }
 
 /** Why the agent stopped the turn. copilot answers `end_turn` for a turn it
@@ -351,7 +390,7 @@ export type AgentEvent =
 export interface SessionNotification extends Meta {
  jsonrpc: "2.0";
  method: "session/update";
- params: { sessionId: SessionId; update: SessionUpdate };
+ params: { sessionId: SessionId; update: SessionUpdate } & Meta;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,10 +432,6 @@ export interface PromptCapabilities extends Meta {
 export interface AgentCapabilities extends Meta {
  loadSession?: boolean;
  promptCapabilities?: PromptCapabilities;
- /** Mode discovery must read BOTH `modes` and `configOptions` — opencode
-  *  advertises no modes but honours set_mode (M0-FINDINGS.md §M0-1). */
- modes?: SessionModeState;
- configOptions?: SessionConfigOption[];
 }
 
 export interface InitializeRequest extends Meta {
@@ -418,6 +453,9 @@ export interface InitializeResponse extends Meta {
 }
 
 /** Stub — `mcpServers` is always `[]` today (no M1 story injects one). */
+// Deliberate stub: typing the schema's three McpServer variants would be types
+// for code nothing calls (R2).
+// pi-lens-ignore: no-unsafe-dictionary-unknown
 export type McpServer = Record<string, unknown>;
 
 export interface NewSessionRequest extends Meta {
@@ -433,6 +471,9 @@ export interface NewSessionRequest extends Meta {
 
 export interface NewSessionResponse extends Meta {
  sessionId: SessionId;
+ /** Mode discovery must read BOTH `modes` and `configOptions` here — they
+  *  come on the session/new response, not `agentCapabilities`, and opencode
+  *  advertises no modes but honours set_mode (M0-FINDINGS.md §M0-1). */
  modes?: SessionModeState;
  configOptions?: SessionConfigOption[];
 }
@@ -448,13 +489,30 @@ export interface PromptRequest extends Meta {
 }
 
 /**
- * The whole response is kept per #62 B3 — `usage` is NOT in the current
+ * The whole response is kept per #62 B3. `usage` is NOT in the current
  * official schema but M0-5 measured it on the wire (the only per-task token
- * count present on all three harnesses). Capture only; M1 renders nothing.
+ * count present on all three harnesses) — per-task on opencode and
+ * claude-agent-acp, cumulative on copilot (M0-FINDINGS.md:828-841). Capture
+ * only; M1 renders nothing.
  */
+export interface Usage extends Meta {
+ /** Observed on all three harnesses (M0-FINDINGS.md:828-829, :833). */
+ inputTokens: number;
+ outputTokens: number;
+ totalTokens: number;
+ /** Absent on claude-agent-acp (M0-FINDINGS.md:830). */
+ thoughtTokens?: number;
+ // Deliberately optional despite being observed on all three harnesses in
+ // M0's turn-1 table (:831) — one turn of captures is thin evidence for a
+ // required field; tighten only if a later probe confirms it everywhere.
+ cachedReadTokens?: number;
+ /** Absent on opencode (M0-FINDINGS.md:832). */
+ cachedWriteTokens?: number;
+}
+
 export interface PromptResponse extends Meta {
  stopReason: StopReason;
- usage?: Record<string, unknown>;
+ usage?: Usage;
 }
 
 export interface CancelNotification extends Meta {
@@ -477,6 +535,8 @@ export interface LoadSessionRequest extends Meta {
 }
 
 export interface LoadSessionResponse extends Meta {
+ // Mode discovery reads BOTH fields (see NewSessionResponse); session/load
+ // returns the same shape (M0-FINDINGS.md §M0-1).
  modes?: SessionModeState;
  configOptions?: SessionConfigOption[];
 }
