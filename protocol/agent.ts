@@ -35,6 +35,28 @@ const PROTOCOL_VERSION = 1;
 // Tool kinds we consider non-destructive. Used by the "safe" policy.
 const READ_ONLY_KINDS = new Set<ToolKind>(["read", "search", "fetch", "think"]);
 
+/**
+ * Methods that carry a per-request deadline (#62 B1, ratified 2026-08-23).
+ *
+ * An allowlist rather than "everything except session/prompt": a long-running
+ * method added later should not inherit a deadline by accident. `session/load`
+ * is listed because the story says to extend it there when that lands, and
+ * `session/close` is the same class of call.
+ *
+ * `session/prompt` is deliberately absent — a turn is legitimately long, and
+ * bounding it is the watchdog's job, not this layer's.
+ */
+const TIMED_METHODS = new Set([
+  "initialize",
+  "session/new",
+  "session/load",
+  "session/close",
+]);
+
+// M0-1 measured the slowest handshake step at 3.0s (copilot's session/new),
+// so this is an order of magnitude above the worst observed.
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 // --- the shapes the class hands to its collaborators -------------------------
 
 /** What the policy is asked to judge — the merged view of a tool call. */
@@ -78,6 +100,9 @@ export interface AcpAgentOptions {
   onEvent?: EventSink;
   allowReadOutsideRoot?: boolean;
   verbose?: boolean;
+  /** Deadline for handshake and session-management calls. Never applied to
+   * `session/prompt`. Defaults to 30s. */
+  requestTimeoutMs?: number;
 }
 
 // --- internal wire shapes ----------------------------------------------------
@@ -153,11 +178,10 @@ function errorMessage(err: unknown): string {
  * We are the CLIENT. We spawn the agent, own the workspace, answer its
  * requests for file access, and decide its permissions.
  *
- * Ported from `acp.mjs` (M1a-3). This file is the port and nothing else — the
- * five behaviours the story also carries (request timeout, stderr ring buffer,
- * whole `PromptResponse` per #62 B3, cancel-intent event per #62 R4, in-flight
- * prompt guard per #62 R5) land on top of it, so that `npm run selftest`
- * passing unchanged still means something here.
+ * Ported from `acp.mjs` (M1a-3), then grown one behaviour at a time. Landed so
+ * far: the per-request timeout (#62 B1). Still outstanding from the story: the
+ * stderr ring buffer, the whole `PromptResponse` (#62 B3), the cancel-intent
+ * event (#62 R4), and the in-flight prompt guard (#62 R5).
  */
 // A verbatim port of acp.mjs's single class — the story is "essentially
 // intact", so splitting it is a refactor this change deliberately does not make.
@@ -172,6 +196,7 @@ export class AcpAgent {
   onEvent: EventSink;
   allowReadOutsideRoot: boolean;
   verbose: boolean;
+  requestTimeoutMs: number;
   sessionId: SessionId | null;
   agentInfo: Implementation | null;
   agentCapabilities: AgentCapabilities | null;
@@ -192,6 +217,7 @@ export class AcpAgent {
     onEvent = () => {},
     allowReadOutsideRoot = false,
     verbose = false,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   }: AcpAgentOptions) {
     this.name = name ?? command;
     this.command = command;
@@ -202,6 +228,7 @@ export class AcpAgent {
     this.onEvent = onEvent;
     this.allowReadOutsideRoot = allowReadOutsideRoot;
     this.verbose = verbose;
+    this.requestTimeoutMs = requestTimeoutMs;
     this.sessionId = null;
     this.agentInfo = null;
     this.agentCapabilities = null;
@@ -321,11 +348,49 @@ export class AcpAgent {
   request<R = unknown>(method: string, params?: unknown): Promise<R> {
     const id = this.#nextId++;
     return new Promise<R>((resolve_, reject) => {
+      const budget = TIMED_METHODS.has(method) ? this.requestTimeoutMs : 0;
+      let timer: NodeJS.Timeout | null = null;
+      const disarm = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+      };
+
       this.#pending.set(id, {
-        resolve: (value) => resolve_(value as R),
-        reject,
+        resolve: (value) => {
+          disarm();
+          resolve_(value as R);
+        },
+        reject: (reason) => {
+          disarm();
+          reject(reason);
+        },
       });
-      this.#send({ jsonrpc: "2.0", id, method, params });
+
+      if (budget > 0) {
+        timer = setTimeout(() => {
+          // Drop the entry first: a late reply must be ignored rather than
+          // resolve a promise this timer already rejected.
+          if (this.#pending.delete(id)) {
+            reject(
+              new Error(
+                `agent "${this.name}" did not answer "${method}" within ${budget}ms`,
+              ),
+            );
+          }
+        }, budget);
+        // A pending deadline must not by itself keep the process alive.
+        timer.unref();
+      }
+
+      try {
+        this.#send({ jsonrpc: "2.0", id, method, params });
+      } catch (err) {
+        // Rejects this promise. Clear the entry and the armed timer too,
+        // rather than leaving both behind as the pre-port code did.
+        disarm();
+        this.#pending.delete(id);
+        throw err;
+      }
     });
   }
 
