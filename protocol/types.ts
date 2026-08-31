@@ -58,11 +58,14 @@ export interface JsonRpcNotification<P = unknown> extends Meta {
  params?: P;
 }
 
-/** Success answer to a request, ours or the agent's. */
+/** Success answer to a request, ours or the agent's. JSON-RPC 2.0 requires
+ *  `result` on success (and forbids it on errors, see JsonRpcErrorResponse);
+ *  `null` is a valid result value — fs/write_text_file's success is exactly
+ *  that, so `R` must stay nullable-friendly. */
 export interface JsonRpcResponse<R = unknown> extends Meta {
  jsonrpc: "2.0";
  id: number | string;
- result?: R;
+ result: R;
 }
 
 export interface JsonRpcError {
@@ -113,6 +116,9 @@ export interface ResourceLink extends Meta {
 
 export interface EmbeddedResource extends Meta {
  type: "resource";
+ // Stub per decision 4 (issue #10): schema has TextResourceContents |
+ // BlobResourceContents — type them when a consumer first touches this.
+ // pi-lens-ignore: no-unsafe-dictionary-unknown
  resource: Record<string, unknown>;
 }
 
@@ -190,6 +196,9 @@ export interface ToolCall extends Meta {
  status?: ToolCallStatus;
  content?: ToolCallContent[];
  locations?: ToolCallLocation[];
+ // Free-form by protocol design — the schema constrains rawInput to "object"
+ // with no properties, so there is no shape to narrow to.
+ // pi-lens-ignore: no-unsafe-dictionary-unknown
  rawInput?: Record<string, unknown>;
  rawOutput?: unknown;
 }
@@ -204,6 +213,8 @@ export interface ToolCallUpdate extends Meta {
  title?: string;
  content?: ToolCallContent[];
  locations?: ToolCallLocation[];
+ // Free-form by protocol design — see the note on ToolCall.rawInput.
+ // pi-lens-ignore: no-unsafe-dictionary-unknown
  rawInput?: Record<string, unknown>;
  rawOutput?: unknown;
 }
@@ -221,10 +232,24 @@ export interface PlanEntry extends Meta {
  status: PlanEntryStatus;
 }
 
+/** Schema def `UnstructuredCommandInput`: the leaf of AvailableCommandInput —
+ *  text typed after the command name. */
+interface UnstructuredCommandInput extends Meta {
+ /** Required per schema — "a hint to display when the input hasn't been
+  *  provided yet". */
+ hint: string;
+}
+
+/** Schema def `AvailableCommandInput`: an extensible anyOf with exactly one
+ *  variant today (`unstructured`, above). Kept as a schema-named alias so a
+ *  second variant widens the alias without renaming the field. Official SDK
+ *  generates the same alias; internal until a consumer needs it. */
+type AvailableCommandInput = UnstructuredCommandInput;
+
 export interface AvailableCommand extends Meta {
  name: string;
  description: string;
- input?: Record<string, unknown>;
+ input?: AvailableCommandInput;
 }
 
 export interface SessionMode extends Meta {
@@ -578,7 +603,8 @@ export interface WriteTextFileRequest extends Meta {
  params: { sessionId: SessionId; path: string; content: string } & Meta;
 }
 
-/** Success is the empty object on the wire (`acp.mjs` returns null today). */
+/** Success is the empty object on the wire (schema-faithful; `acp.mjs`
+ *  historically returned null and was aligned to `{}` — M0 context on #69). */
 export interface WriteTextFileResponse extends Meta {}
 
 export type PermissionOptionKind =
