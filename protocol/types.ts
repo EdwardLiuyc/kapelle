@@ -45,17 +45,17 @@ export type ProtocolVersion = number;
 
 /** A request we send, or one the agent sends us (it answers by `id`). */
 export interface JsonRpcRequest<P = unknown> extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- method: string;
- params?: P;
+  jsonrpc: "2.0";
+  id: number | string;
+  method: string;
+  params?: P;
 }
 
 /** One-way message; the agent's `session/update` stream arrives like this. */
 export interface JsonRpcNotification<P = unknown> extends Meta {
- jsonrpc: "2.0";
- method: string;
- params?: P;
+  jsonrpc: "2.0";
+  method: string;
+  params?: P;
 }
 
 /** Success answer to a request, ours or the agent's. JSON-RPC 2.0 requires
@@ -63,22 +63,22 @@ export interface JsonRpcNotification<P = unknown> extends Meta {
  *  `null` is a valid result value — fs/write_text_file's success is exactly
  *  that, so `R` must stay nullable-friendly. */
 export interface JsonRpcResponse<R = unknown> extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- result: R;
+  jsonrpc: "2.0";
+  id: number | string;
+  result: R;
 }
 
 export interface JsonRpcError {
- code: number;
- message: string;
- data?: unknown;
+  code: number;
+  message: string;
+  data?: unknown;
 }
 
 /** Failure answer to a request (`-32602` mode not found, etc. — M0-1). */
 export interface JsonRpcErrorResponse extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- error: JsonRpcError;
+  jsonrpc: "2.0";
+  id: number | string;
+  error: JsonRpcError;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,8 +87,8 @@ export interface JsonRpcErrorResponse extends Meta {
 
 /** Text is the only block this client renders today (`render.mjs`). */
 export interface TextContent extends Meta {
- type: "text";
- text: string;
+  type: "text";
+  text: string;
 }
 
 /**
@@ -97,44 +97,44 @@ export interface TextContent extends Meta {
  * saw them on the wire).
  */
 export interface ImageContent extends Meta {
- type: "image";
- data: string;
- mimeType: string;
+  type: "image";
+  data: string;
+  mimeType: string;
 }
 
 export interface AudioContent extends Meta {
- type: "audio";
- data: string;
- mimeType: string;
+  type: "audio";
+  data: string;
+  mimeType: string;
 }
 
 export interface ResourceLink extends Meta {
- type: "resource_link";
- name: string;
- uri: string;
+  type: "resource_link";
+  name: string;
+  uri: string;
 }
 
 export interface EmbeddedResource extends Meta {
- type: "resource";
- // Stub per decision 4 (issue #10): schema has TextResourceContents |
- // BlobResourceContents — type them when a consumer first touches this.
- // pi-lens-ignore: no-unsafe-dictionary-unknown
- resource: Record<string, unknown>;
+  type: "resource";
+  // Stub per decision 4 (issue #10): schema has TextResourceContents |
+  // BlobResourceContents — type them when a consumer first touches this.
+  // pi-lens-ignore: no-unsafe-dictionary-unknown
+  resource: Record<string, unknown>;
 }
 
 /** Discriminated by `type`; MCP-compatible per the spec. */
 export type ContentBlock =
- | TextContent
- | ImageContent
- | AudioContent
- | ResourceLink
- | EmbeddedResource;
+  | TextContent
+  | ImageContent
+  | AudioContent
+  | ResourceLink
+  | EmbeddedResource;
 
 /** Base of the three chunk variants. */
 interface ContentChunk extends Meta {
- content: ContentBlock;
- /** Chunks of one message share an id; a change means a new message. */
- messageId?: MessageId;
+  content: ContentBlock;
+  /** Chunks of one message share an id; a change means a new message. */
+  messageId?: MessageId;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,80 +143,80 @@ interface ContentChunk extends Meta {
 
 /** `READ_ONLY_KINDS` in `acp.mjs` is the subset this client treats as safe. */
 export type ToolKind =
- | "read"
- | "edit"
- | "delete"
- | "move"
- | "search"
- | "execute"
- | "think"
- | "fetch"
- | "switch_mode"
- | "other";
+  | "read"
+  | "edit"
+  | "delete"
+  | "move"
+  | "search"
+  | "execute"
+  | "think"
+  | "fetch"
+  | "switch_mode"
+  | "other";
 
 export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
 
 /** File a tool call is about, announced *before* it happens. Typed per the
  *  story decision; never rendered until a probe shows a harness sends it. */
 export interface ToolCallLocation extends Meta {
- path: string;
- line?: number;
+  path: string;
+  line?: number;
 }
 
 /** Content produced by a tool call. `diff` is what `render.mjs` prints. */
 export interface ToolCallContentDiff extends Meta {
- type: "diff";
- path: string;
- oldText?: string;
- newText: string;
+  type: "diff";
+  path: string;
+  oldText?: string;
+  newText: string;
 }
 
 export interface ToolCallContentTerminal extends Meta {
- type: "terminal";
- terminalId: TerminalId;
+  type: "terminal";
+  terminalId: TerminalId;
 }
 
 export interface ToolCallContentBlock extends Meta {
- type: "content";
- content: ContentBlock;
+  type: "content";
+  content: ContentBlock;
 }
 
 export type ToolCallContent =
- | ToolCallContentBlock
- | ToolCallContentDiff
- | ToolCallContentTerminal;
+  | ToolCallContentBlock
+  | ToolCallContentDiff
+  | ToolCallContentTerminal;
 
 /** A new tool call. `kind`/`status` are optional on the wire (the schema
  *  deserializes defaults); `acp.mjs` already applies the `?? "other"` fallback. */
 export interface ToolCall extends Meta {
- sessionUpdate: "tool_call";
- toolCallId: ToolCallId;
- title: string;
- kind?: ToolKind;
- status?: ToolCallStatus;
- content?: ToolCallContent[];
- locations?: ToolCallLocation[];
- // Free-form by protocol design — the schema constrains rawInput to "object"
- // with no properties, so there is no shape to narrow to.
- // pi-lens-ignore: no-unsafe-dictionary-unknown
- rawInput?: Record<string, unknown>;
- rawOutput?: unknown;
+  sessionUpdate: "tool_call";
+  toolCallId: ToolCallId;
+  title: string;
+  kind?: ToolKind;
+  status?: ToolCallStatus;
+  content?: ToolCallContent[];
+  locations?: ToolCallLocation[];
+  // Free-form by protocol design — the schema constrains rawInput to "object"
+  // with no properties, so there is no shape to narrow to.
+  // pi-lens-ignore: no-unsafe-dictionary-unknown
+  rawInput?: Record<string, unknown>;
+  rawOutput?: unknown;
 }
 
 /** Progress on an existing call — everything but `toolCallId` is optional,
  *  only changed fields travel. `acp.mjs` merges these into its toolCall map. */
 export interface ToolCallUpdate extends Meta {
- sessionUpdate: "tool_call_update";
- toolCallId: ToolCallId;
- kind?: ToolKind;
- status?: ToolCallStatus;
- title?: string;
- content?: ToolCallContent[];
- locations?: ToolCallLocation[];
- // Free-form by protocol design — see the note on ToolCall.rawInput.
- // pi-lens-ignore: no-unsafe-dictionary-unknown
- rawInput?: Record<string, unknown>;
- rawOutput?: unknown;
+  sessionUpdate: "tool_call_update";
+  toolCallId: ToolCallId;
+  kind?: ToolKind;
+  status?: ToolCallStatus;
+  title?: string;
+  content?: ToolCallContent[];
+  locations?: ToolCallLocation[];
+  // Free-form by protocol design — see the note on ToolCall.rawInput.
+  // pi-lens-ignore: no-unsafe-dictionary-unknown
+  rawInput?: Record<string, unknown>;
+  rawOutput?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,17 +227,17 @@ export type PlanEntryPriority = "high" | "medium" | "low";
 export type PlanEntryStatus = "pending" | "in_progress" | "completed";
 
 export interface PlanEntry extends Meta {
- content: string;
- priority: PlanEntryPriority;
- status: PlanEntryStatus;
+  content: string;
+  priority: PlanEntryPriority;
+  status: PlanEntryStatus;
 }
 
 /** Schema def `UnstructuredCommandInput`: the leaf of AvailableCommandInput —
  *  text typed after the command name. */
 interface UnstructuredCommandInput extends Meta {
- /** Required per schema — "a hint to display when the input hasn't been
-  *  provided yet". */
- hint: string;
+  /** Required per schema — "a hint to display when the input hasn't been
+   *  provided yet". */
+  hint: string;
 }
 
 /** Schema def `AvailableCommandInput`: an extensible anyOf with exactly one
@@ -247,55 +247,55 @@ interface UnstructuredCommandInput extends Meta {
 type AvailableCommandInput = UnstructuredCommandInput;
 
 export interface AvailableCommand extends Meta {
- name: string;
- description: string;
- input?: AvailableCommandInput;
+  name: string;
+  description: string;
+  input?: AvailableCommandInput;
 }
 
 export interface SessionMode extends Meta {
- id: SessionModeId;
- name: string;
- description?: string;
+  id: SessionModeId;
+  name: string;
+  description?: string;
 }
 
 /** Mode vocabulary does not align across harnesses — M1a-4's `modeMap` exists
  *  because of this shape (M0-FINDINGS.md, "What M1a-4 should put in registry"). */
 export interface SessionModeState extends Meta {
- currentModeId: SessionModeId;
- availableModes: SessionMode[];
+  currentModeId: SessionModeId;
+  availableModes: SessionMode[];
 }
 
 /** Copilot's model selection travels here; dropped silently today (M0-1). */
 export type SessionConfigOptionCategory =
- | "mode"
- | "model"
- | "model_config"
- | "thought_level"
- | (string & {});
+  | "mode"
+  | "model"
+  | "model_config"
+  | "thought_level"
+  | (string & {});
 
 export interface SessionConfigSelectOption extends Meta {
- value: string;
- name: string;
- description?: string;
+  value: string;
+  name: string;
+  description?: string;
 }
 
 /** Grouped variant of the option list (schema: SessionConfigSelectGroup). */
 export interface SessionConfigSelectGroup extends Meta {
- group: string;
- name: string;
- options: SessionConfigSelectOption[];
+  group: string;
+  name: string;
+  options: SessionConfigSelectOption[];
 }
 
 /** Flat list or grouped (schema: SessionConfigSelectOptions). */
 export type SessionConfigSelectValues =
- | SessionConfigSelectOption[]
- | SessionConfigSelectGroup[];
+  | SessionConfigSelectOption[]
+  | SessionConfigSelectGroup[];
 
 interface SessionConfigOptionBase extends Meta {
- id: string;
- name: string;
- description?: string;
- category?: SessionConfigOptionCategory;
+  id: string;
+  name: string;
+  description?: string;
+  category?: SessionConfigOptionCategory;
 }
 
 /**
@@ -306,12 +306,12 @@ interface SessionConfigOptionBase extends Meta {
  * `category: "model"` (M0-FINDINGS.md §M0-5), consumed by M1a-4.
  */
 export type SessionConfigOption =
- | (SessionConfigOptionBase & {
-    type: "select";
-    currentValue: string;
-    options: SessionConfigSelectValues;
-   })
- | (SessionConfigOptionBase & { type: "boolean"; currentValue: boolean });
+  | (SessionConfigOptionBase & {
+      type: "select";
+      currentValue: string;
+      options: SessionConfigSelectValues;
+    })
+  | (SessionConfigOptionBase & { type: "boolean"; currentValue: boolean });
 
 // ---------------------------------------------------------------------------
 // The session/update discriminated union — the point of the exercise
@@ -319,66 +319,66 @@ export type SessionConfigOption =
 
 /** Base of every `session/update` variant (agent → client, one-way). */
 export type SessionUpdate =
- | (ContentChunk & { sessionUpdate: "user_message_chunk" })
- | (ContentChunk & { sessionUpdate: "agent_message_chunk" })
- | (ContentChunk & { sessionUpdate: "agent_thought_chunk" })
- | ToolCall
- | ToolCallUpdate
- | (Plan & { sessionUpdate: "plan" })
- | (AvailableCommandsUpdate & { sessionUpdate: "available_commands_update" })
- | (CurrentModeUpdate & { sessionUpdate: "current_mode_update" })
- | (ConfigOptionUpdate & { sessionUpdate: "config_option_update" })
- | (SessionInfoUpdate & { sessionUpdate: "session_info_update" })
- | (UsageUpdate & { sessionUpdate: "usage_update" });
+  | (ContentChunk & { sessionUpdate: "user_message_chunk" })
+  | (ContentChunk & { sessionUpdate: "agent_message_chunk" })
+  | (ContentChunk & { sessionUpdate: "agent_thought_chunk" })
+  | ToolCall
+  | ToolCallUpdate
+  | (Plan & { sessionUpdate: "plan" })
+  | (AvailableCommandsUpdate & { sessionUpdate: "available_commands_update" })
+  | (CurrentModeUpdate & { sessionUpdate: "current_mode_update" })
+  | (ConfigOptionUpdate & { sessionUpdate: "config_option_update" })
+  | (SessionInfoUpdate & { sessionUpdate: "session_info_update" })
+  | (UsageUpdate & { sessionUpdate: "usage_update" });
 
 interface Plan extends Meta {
- entries: PlanEntry[];
+  entries: PlanEntry[];
 }
 
 /** Arrives from all three harnesses right after `session/new` (M0-1). */
 interface AvailableCommandsUpdate extends Meta {
- availableCommands: AvailableCommand[];
+  availableCommands: AvailableCommand[];
 }
 
 /** Not observed in M0; shape from the official schema. */
 interface CurrentModeUpdate extends Meta {
- currentModeId: SessionModeId;
+  currentModeId: SessionModeId;
 }
 
 /** Observed from copilot only (M0-1); reports session config incl. models. */
 interface ConfigOptionUpdate extends Meta {
- configOptions: SessionConfigOption[];
+  configOptions: SessionConfigOption[];
 }
 
 /** Not observed in M0; shape from the official schema. */
 interface SessionInfoUpdate extends Meta {
- title?: string;
- updatedAt?: string;
+  title?: string;
+  updatedAt?: string;
 }
 
 /** Cumulative session cost; §M0-5 and the schema's `Cost` def agree on the
  *  shape. Cumulative for the session, never per-turn. */
 export interface SessionCost extends Meta {
- amount: number;
- currency: string;
+  amount: number;
+  currency: string;
 }
 
 /** opencode: once, end of turn. claude-agent-acp: ~23 per long turn.
  *  `used` of `0` means unknown, not empty, on claude-agent-acp (M0-5). */
 export interface UsageUpdate extends Meta {
- used: number;
- size: number;
- cost?: SessionCost;
+  used: number;
+  size: number;
+  cost?: SessionCost;
 }
 
 /** Why the agent stopped the turn. copilot answers `end_turn` for a turn it
  *  itself cancelled — M1b-2's status mapping keys on this unreliability. */
 export type StopReason =
- | "end_turn"
- | "max_tokens"
- | "max_turn_requests"
- | "refusal"
- | "cancelled";
+  | "end_turn"
+  | "max_tokens"
+  | "max_turn_requests"
+  | "refusal"
+  | "cancelled";
 
 // ---------------------------------------------------------------------------
 // Client-originated synthetic events — the `_client_` convention (CLAUDE.md).
@@ -386,36 +386,36 @@ export type StopReason =
 // ---------------------------------------------------------------------------
 
 export interface ClientPermissionEvent extends Meta {
- sessionUpdate: "_client_permission";
- allow: boolean;
- title: string;
- kind: ToolKind;
- optionId?: PermissionOptionId;
+  sessionUpdate: "_client_permission";
+  allow: boolean;
+  title: string;
+  kind: ToolKind;
+  optionId?: PermissionOptionId;
 }
 
 export interface ClientWroteFileEvent extends Meta {
- sessionUpdate: "_client_wrote_file";
- path: string;
+  sessionUpdate: "_client_wrote_file";
+  path: string;
 }
 
 /** Emitted at the moment `session/cancel` is sent (#62 R4, M1a-3). */
 export interface ClientCancelRequestedEvent extends Meta {
- sessionUpdate: "_client_cancel_requested";
- sessionId: SessionId;
+  sessionUpdate: "_client_cancel_requested";
+  sessionId: SessionId;
 }
 
 /** Everything `render.mjs`'s switch must tolerate. */
 export type AgentEvent =
- | SessionUpdate
- | ClientPermissionEvent
- | ClientWroteFileEvent
- | ClientCancelRequestedEvent;
+  | SessionUpdate
+  | ClientPermissionEvent
+  | ClientWroteFileEvent
+  | ClientCancelRequestedEvent;
 
 /** The `session/update` notification as it arrives. */
 export interface SessionNotification extends Meta {
- jsonrpc: "2.0";
- method: "session/update";
- params: { sessionId: SessionId; update: SessionUpdate } & Meta;
+  jsonrpc: "2.0";
+  method: "session/update";
+  params: { sessionId: SessionId; update: SessionUpdate } & Meta;
 }
 
 // ---------------------------------------------------------------------------
@@ -424,57 +424,57 @@ export interface SessionNotification extends Meta {
 // ---------------------------------------------------------------------------
 
 export interface FileSystemCapabilities extends Meta {
- readTextFile?: boolean;
- writeTextFile?: boolean;
+  readTextFile?: boolean;
+  writeTextFile?: boolean;
 }
 
 /** We answer `fs/*` and never offer `terminal/*` (`acp.mjs`). */
 export interface ClientCapabilities extends Meta {
- fs?: FileSystemCapabilities;
- terminal?: boolean;
+  fs?: FileSystemCapabilities;
+  terminal?: boolean;
 }
 
 export interface Implementation extends Meta {
- name: string;
- version: string;
- title?: string;
+  name: string;
+  version: string;
+  title?: string;
 }
 
 /** Stub — we send `authMethods` back only in a log line today. */
 export interface AuthMethod extends Meta {
- id?: string;
- name?: string;
+  id?: string;
+  name?: string;
 }
 
 export interface PromptCapabilities extends Meta {
- image?: boolean;
- audio?: boolean;
- embeddedContext?: boolean;
+  image?: boolean;
+  audio?: boolean;
+  embeddedContext?: boolean;
 }
 
 /** What we read off the handshake today: `loadSession`, `promptCapabilities`
  *  (`acp.mjs`). The schema carries more; extend when a consumer needs it. */
 export interface AgentCapabilities extends Meta {
- loadSession?: boolean;
- promptCapabilities?: PromptCapabilities;
+  loadSession?: boolean;
+  promptCapabilities?: PromptCapabilities;
 }
 
 export interface InitializeRequest extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- method: "initialize";
- params: {
-  protocolVersion: ProtocolVersion;
-  clientCapabilities?: ClientCapabilities;
-  clientInfo?: Implementation;
- } & Meta;
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "initialize";
+  params: {
+    protocolVersion: ProtocolVersion;
+    clientCapabilities?: ClientCapabilities;
+    clientInfo?: Implementation;
+  } & Meta;
 }
 
 export interface InitializeResponse extends Meta {
- protocolVersion: ProtocolVersion;
- agentCapabilities?: AgentCapabilities;
- agentInfo?: Implementation;
- authMethods?: AuthMethod[];
+  protocolVersion: ProtocolVersion;
+  agentCapabilities?: AgentCapabilities;
+  agentInfo?: Implementation;
+  authMethods?: AuthMethod[];
 }
 
 /** Stub — `mcpServers` is always `[]` today (no M1 story injects one). */
@@ -484,33 +484,33 @@ export interface InitializeResponse extends Meta {
 export type McpServer = Record<string, unknown>;
 
 export interface NewSessionRequest extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- method: "session/new";
- params: {
-  cwd: string;
-  mcpServers: McpServer[];
-  additionalDirectories?: string[];
- } & Meta;
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "session/new";
+  params: {
+    cwd: string;
+    mcpServers: McpServer[];
+    additionalDirectories?: string[];
+  } & Meta;
 }
 
 export interface NewSessionResponse extends Meta {
- sessionId: SessionId;
- /** Mode discovery must read BOTH `modes` and `configOptions` here — they
-  *  come on the session/new response, not `agentCapabilities`, and opencode
-  *  advertises no modes but honours set_mode (M0-FINDINGS.md §M0-1). */
- modes?: SessionModeState;
- configOptions?: SessionConfigOption[];
+  sessionId: SessionId;
+  /** Mode discovery must read BOTH `modes` and `configOptions` here — they
+   *  come on the session/new response, not `agentCapabilities`, and opencode
+   *  advertises no modes but honours set_mode (M0-FINDINGS.md §M0-1). */
+  modes?: SessionModeState;
+  configOptions?: SessionConfigOption[];
 }
 
 export interface PromptRequest extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- method: "session/prompt";
- params: {
-  sessionId: SessionId;
-  prompt: ContentBlock[];
- } & Meta;
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "session/prompt";
+  params: {
+    sessionId: SessionId;
+    prompt: ContentBlock[];
+  } & Meta;
 }
 
 /**
@@ -521,57 +521,57 @@ export interface PromptRequest extends Meta {
  * only; M1 renders nothing.
  */
 export interface Usage extends Meta {
- /** Observed on all three harnesses (M0-FINDINGS.md:828-829, :833). */
- inputTokens: number;
- outputTokens: number;
- totalTokens: number;
- /** Absent on claude-agent-acp (M0-FINDINGS.md:830). */
- thoughtTokens?: number;
- // Deliberately optional despite being observed on all three harnesses in
- // M0's turn-1 table (:831) — one turn of captures is thin evidence for a
- // required field; tighten only if a later probe confirms it everywhere.
- cachedReadTokens?: number;
- /** Absent on opencode (M0-FINDINGS.md:832). */
- cachedWriteTokens?: number;
+  /** Observed on all three harnesses (M0-FINDINGS.md:828-829, :833). */
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** Absent on claude-agent-acp (M0-FINDINGS.md:830). */
+  thoughtTokens?: number;
+  // Deliberately optional despite being observed on all three harnesses in
+  // M0's turn-1 table (:831) — one turn of captures is thin evidence for a
+  // required field; tighten only if a later probe confirms it everywhere.
+  cachedReadTokens?: number;
+  /** Absent on opencode (M0-FINDINGS.md:832). */
+  cachedWriteTokens?: number;
 }
 
 export interface PromptResponse extends Meta {
- stopReason: StopReason;
- usage?: Usage;
+  stopReason: StopReason;
+  usage?: Usage;
 }
 
 export interface CancelNotification extends Meta {
- jsonrpc: "2.0";
- method: "session/cancel";
- params: { sessionId: SessionId } & Meta;
+  jsonrpc: "2.0";
+  method: "session/cancel";
+  params: { sessionId: SessionId } & Meta;
 }
 
 /** Typed only — not sent until M1a-3 lands `session/load` (issue #10). */
 export interface LoadSessionRequest extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- method: "session/load";
- params: {
-  sessionId: SessionId;
-  cwd: string;
-  mcpServers: McpServer[];
-  additionalDirectories?: string[];
- } & Meta;
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "session/load";
+  params: {
+    sessionId: SessionId;
+    cwd: string;
+    mcpServers: McpServer[];
+    additionalDirectories?: string[];
+  } & Meta;
 }
 
 export interface LoadSessionResponse extends Meta {
- // Mode discovery reads BOTH fields (see NewSessionResponse); session/load
- // returns the same shape (M0-FINDINGS.md §M0-1).
- modes?: SessionModeState;
- configOptions?: SessionConfigOption[];
+  // Mode discovery reads BOTH fields (see NewSessionResponse); session/load
+  // returns the same shape (M0-FINDINGS.md §M0-1).
+  modes?: SessionModeState;
+  configOptions?: SessionConfigOption[];
 }
 
 /** Typed only — not sent; all three harnesses support close (M0 roll-up). */
 export interface CloseSessionRequest extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- method: "session/close";
- params: { sessionId: SessionId } & Meta;
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "session/close";
+  params: { sessionId: SessionId } & Meta;
 }
 
 export interface CloseSessionResponse extends Meta {}
@@ -581,26 +581,26 @@ export interface CloseSessionResponse extends Meta {}
 // ---------------------------------------------------------------------------
 
 export interface ReadTextFileRequest extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- method: "fs/read_text_file";
- params: {
-  sessionId: SessionId;
-  path: string;
-  line?: number;
-  limit?: number;
- } & Meta;
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "fs/read_text_file";
+  params: {
+    sessionId: SessionId;
+    path: string;
+    line?: number;
+    limit?: number;
+  } & Meta;
 }
 
 export interface ReadTextFileResponse extends Meta {
- content: string;
+  content: string;
 }
 
 export interface WriteTextFileRequest extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- method: "fs/write_text_file";
- params: { sessionId: SessionId; path: string; content: string } & Meta;
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "fs/write_text_file";
+  params: { sessionId: SessionId; path: string; content: string } & Meta;
 }
 
 /** Success is the empty object on the wire (schema-faithful; `acp.mjs`
@@ -608,34 +608,34 @@ export interface WriteTextFileRequest extends Meta {
 export interface WriteTextFileResponse extends Meta {}
 
 export type PermissionOptionKind =
- | "allow_once"
- | "allow_always"
- | "reject_once"
- | "reject_always";
+  | "allow_once"
+  | "allow_always"
+  | "reject_once"
+  | "reject_always";
 
 export interface PermissionOption extends Meta {
- optionId: PermissionOptionId;
- name: string;
- kind: PermissionOptionKind;
+  optionId: PermissionOptionId;
+  name: string;
+  kind: PermissionOptionKind;
 }
 
 export interface RequestPermissionRequest extends Meta {
- jsonrpc: "2.0";
- id: number | string;
- method: "session/request_permission";
- params: {
-  sessionId: SessionId;
-  toolCall?: ToolCallUpdate;
-  options: PermissionOption[];
- } & Meta;
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "session/request_permission";
+  params: {
+    sessionId: SessionId;
+    toolCall?: ToolCallUpdate;
+    options: PermissionOption[];
+  } & Meta;
 }
 
 export type RequestPermissionOutcome =
- | ({ outcome: "cancelled" } & Meta)
- | ({ outcome: "selected"; optionId: PermissionOptionId } & Meta);
+  | ({ outcome: "cancelled" } & Meta)
+  | ({ outcome: "selected"; optionId: PermissionOptionId } & Meta);
 
 export interface RequestPermissionResponse extends Meta {
- outcome: RequestPermissionOutcome;
+  outcome: RequestPermissionOutcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -644,7 +644,7 @@ export interface RequestPermissionResponse extends Meta {
 
 /** For `default:` branches of switches that must stay exhaustive. */
 export function assertNever(value: never): never {
- throw new Error(`unhandled protocol variant: ${JSON.stringify(value)}`);
+  throw new Error(`unhandled protocol variant: ${JSON.stringify(value)}`);
 }
 
 /** Type guard separating protocol updates from client-synthetic events.
@@ -652,28 +652,28 @@ export function assertNever(value: never): never {
  *  add a variant to `SessionUpdate` and this line fails to compile until the
  *  variant is classified here (and in every other unhandled switch). */
 export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
- switch (u.sessionUpdate) {
-  case "user_message_chunk":
-  case "agent_message_chunk":
-  case "agent_thought_chunk":
-  case "tool_call":
-  case "tool_call_update":
-  case "plan":
-  case "available_commands_update":
-  case "current_mode_update":
-  case "config_option_update":
-  case "session_info_update":
-  case "usage_update":
-   return true;
-  default: {
-   // Only the `_client_` events may fall through; a new SessionUpdate
-   // variant makes this assignment a type error.
-   const fallthrough:
-    | "_client_permission"
-    | "_client_wrote_file"
-    | "_client_cancel_requested" = u.sessionUpdate;
-   void fallthrough;
-   return false;
+  switch (u.sessionUpdate) {
+    case "user_message_chunk":
+    case "agent_message_chunk":
+    case "agent_thought_chunk":
+    case "tool_call":
+    case "tool_call_update":
+    case "plan":
+    case "available_commands_update":
+    case "current_mode_update":
+    case "config_option_update":
+    case "session_info_update":
+    case "usage_update":
+      return true;
+    default: {
+      // Only the `_client_` events may fall through; a new SessionUpdate
+      // variant makes this assignment a type error.
+      const fallthrough:
+        | "_client_permission"
+        | "_client_wrote_file"
+        | "_client_cancel_requested" = u.sessionUpdate;
+      void fallthrough;
+      return false;
+    }
   }
- }
 }

@@ -289,6 +289,11 @@ ships no Node globals, so the first real test file fails `check` until `@types/n
 added — the "typescript as the only devDependency" rule never anticipated the checker
 needing the runtime's types. M1a-2's `node:test` criteria trip on it; decide before that
 story starts.
+**Amended 2026-08-31 (#68): Biome format + lint lands on this toolchain.** `biome` devDep
+(pinned via lockfile), `biome.json` (2-space, `recommended` preset), `fmt` → `biome check
+--write .` and `fmt:check` → `biome check .`, an AGENTS.md rule, and CI running
+`fmt:check` + `check` + `test` on push/PR. `tsc` stays the type checker, markdownlint stays
+for `.md`, pi-lens stays the deeper session layer.
 
 **M1a-2 · `protocol/types.ts` · M · needs M1a-1**
 Hand-written definitions for every message we touch. The `session/update` discriminated

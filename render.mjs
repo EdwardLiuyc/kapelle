@@ -34,7 +34,9 @@ export function render({ agent, update }) {
     }
 
     case "tool_call":
-      line(`${tag} ${cyan("→")} ${update.title ?? "(tool)"} ${dim(`[${update.kind ?? "other"}]`)}`);
+      line(
+        `${tag} ${cyan("→")} ${update.title ?? "(tool)"} ${dim(`[${update.kind ?? "other"}]`)}`,
+      );
       break;
 
     case "tool_call_update":
@@ -63,7 +65,7 @@ export function render({ agent, update }) {
       line(
         update.allow
           ? `${tag} ${green("✓ allowed")} ${update.title}`
-          : `${tag} ${red("✗ refused")} ${update.title} ${dim(`[${update.kind}]`)}`
+          : `${tag} ${red("✗ refused")} ${update.title} ${dim(`[${update.kind}]`)}`,
       );
       break;
 

@@ -7,13 +7,14 @@
  * round-trip: a message carrying `_meta` must survive a typed pass-through
  * with it intact — dropping it fails here rather than passing silently.
  */
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
 import {
+  type AgentEvent,
   assertNever,
   isSessionUpdate,
-  type AgentEvent,
   type PromptRequest,
   type SessionNotification,
   type SessionUpdate,

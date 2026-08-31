@@ -25,6 +25,20 @@ npx -y markdownlint-cli2 --config .markdownlint.json $(git ls-files '*.md')
 Fix findings before finishing. An inline `<!-- markdownlint-disable MD0xx -->` is allowed
 only with a comment saying why.
 
+## Format and lint (TS/JS)
+
+`biome` (config: `biome.json`) is the formatter and linter for all tracked TS/JS. After
+editing any `.ts`/`.mts`/`.cts`/`.mjs`/`.js`/`.cjs` file, run:
+
+```bash
+npx biome check --write .
+```
+
+Fix findings before finishing. Biome findings use `// biome-ignore: <rule>: reason`;
+pi-lens-native findings use `// pi-lens-ignore: <rule>` — the two do not read each
+other's comments. `tsc` stays the type checker (`npm run check`), markdownlint stays for
+`.md`.
+
 ## Skills
 
 Reusable procedures live in `.agent/skills/<name>/SKILL.md` as plain Markdown, assuming

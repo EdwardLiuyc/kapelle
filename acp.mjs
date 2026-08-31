@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
+import { createInterface } from "node:readline";
 
 export const PROTOCOL_VERSION = 1;
 
