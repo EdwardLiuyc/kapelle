@@ -315,6 +315,25 @@ a `node:test`, rather than passing silently.
 **Proposed, not decided** — `locations[]` on `tool_call` belongs in the union too
 (`docs/PRIOR-ART-AGENTPOOL.md`, item 5). M0 never recorded whether any harness populates
 it, so type it and let a probe decide whether `render` ever shows it.
+**Decided 2026-08-30 (issue #10 review loop): the types stay a hand-written subset;
+full-schema coverage is deferred, and the decision fires at M1a-5.**
+`@agentclientprotocol/sdk` v1.4.0 (github.com/agentclientprotocol/typescript-sdk) ships
+schema-generated types (`types.gen.d.ts`, ~6,150 lines), zod-backed runtime
+deserialization and JSON-RPC framing — it is what `claude-agent-acp` is built on, and its
+bundled `schema.json` was already M0's cross-check source. Within the subset we type,
+everything is verified field-for-field against the schema as of the #10 review loop; the
+remaining deviations are deliberate and recorded on the issue (`toolCall?` optional where
+the schema requires it, `AvailableCommand.input` flattened, `usage` wire-measured and
+absent from the schema). The strict union also **rejects the official modeling** on one
+point: the schema's `SessionUpdate` is an extensible union with a custom catch-all, and we
+keep no catch-all so `assertNever` exhaustiveness keeps working. Accepted risk, priced:
+a harness on a newer schema sending an unlisted variant or enum value falls to `default:`
+and is silently dropped — the same class as M0-1's dropped-variant finding. Criteria when
+M1a-5 starts: (1) one small untyped surface (`session/set_mode`) argues for
+hand-extension; three or more (elicitation, `terminal/*`, v2) for SDK-types-only or
+codegen; (2) wholesale adoption costs the zero-runtime-dependency trait (zod peer dep);
+(3) adopting the official types surrenders the `assertNever` pattern. Re-checkpoint at
+M2-1 (event log) if M1a-5 hand-extends.
 
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
@@ -449,6 +468,10 @@ not verify produces the **conservative** claim rather than the optimistic one �
 otherwise be silent but the silent-autonomy risk is highest.
 
 **M1a-5 · `core/policy.ts` · S · needs M1a-3**
+**Decision trigger (2026-08-30, #10): this story is where the types-coverage decision
+fires** — `safe`'s negotiate half needs `session/set_mode`, the first surface outside
+M1a-2's types. Hand-extend if `set_mode` is the only addition M1 needs; otherwise apply
+the criteria recorded under M1a-2 (2026-08-30).
 Small in lines, load-bearing. The signature changes from `async () => boolean` to a form an
 external asynchronous decider can answer, so M2-3's `ask` works with no TTY.
 `READ_ONLY_KINDS`, `safePolicy` and `autoPolicy` semantics are unchanged (`acp.mjs`).

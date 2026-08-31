@@ -276,7 +276,9 @@ export class AcpAgent {
       agent: this.name,
       update: { sessionUpdate: "_client_wrote_file", path: abs },
     });
-    return null;
+    // Schema-faithful success payload (WriteTextFileResponse is {}): JSON-RPC
+    // still requires a `result` member — null worked, {} matches the type.
+    return {};
   }
 
   async #requestPermission({ toolCall, options }) {
