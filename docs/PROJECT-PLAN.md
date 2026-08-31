@@ -10,7 +10,7 @@ building and in what order. Draft — expect refinement.
 
 ## Context
 
-`agent-team` is today a 700-line ACP **client** (`acp.mjs`, `agents.mjs`, `render.mjs`,
+`agent-team` is today a 700-line ACP **client** (`protocol/agent.ts`, `agents.mjs`, `render.mjs`,
 `run.mjs`, `fanout.mjs`). `PROJECT-BRIEF.md` describes a **supervisor**. The gap between
 those two words is this plan.
 
@@ -42,7 +42,7 @@ policy across all of them and returning machine-readable results.
 | Handoff | Same worktree, sequential. Successor sees predecessor's changes on disk plus its result summary in-prompt. |
 | Mode naming | **`safe` keeps its name (decided 2026-08-23, #62 R1).** After M1a-5's negotiate-then-filter, `safe` is defence in depth with no enforcement guarantee — against opencode the filter never fires, and the one refusal measured arrived as agent prose. Renaming it to `restricted` was considered and rejected in favour of familiarity. The consequence is owned in M1a-5: the containment notice becomes **non-suppressible**, because it is then the only thing carrying the caveat. |
 | Sandboxing | **Deferred, with an event trigger rather than a judgement (decided 2026-08-23, #62 R2): M2's daemon accepting `POST /runs`.** Until dispatch can come from somewhere other than the operator's own terminal, `auto` is a watched human act; after it, `auto` plus an API is remote code execution as a service. M1's worktree isolation, containment label and silent-autonomy warning bound **nothing** about the harness's own shell, and the docs say so. |
-| Token accounting | **Captured in M1, rendered only where measured (decided 2026-08-23, #62 B3).** `PromptResponse.usage` is the only per-task count present on all three harnesses (M0-5) and `acp.mjs` discards it; M1a-3 keeps the whole response. No figure reaches a result block until M1a-4 records the per-harness semantics — it is `UNSTABLE` in schema 0.28.1 and **cumulative on copilot where it is per-turn elsewhere**. |
+| Token accounting | **Captured in M1, rendered only where measured (decided 2026-08-23, #62 B3).** `PromptResponse.usage` is the only per-task count present on all three harnesses (M0-5) and `protocol/agent.ts` discards it; M1a-3 keeps the whole response. No figure reaches a result block until M1a-4 records the per-harness semantics — it is `UNSTABLE` in schema 0.28.1 and **cumulative on copilot where it is per-turn elsewhere**. |
 | Registry staleness | **Every entry stamps `measuredOn: { version, date }` (decided 2026-08-23, #62 B2)**, compared at startup, **warning only, never fatal**. M0-7 measured three copilot behaviours changing in three days, so every label is a claim about a build. Entries with no `measuredOn` are unverified by that absence — which is also how `omp`, `pi` and `gemini` stay in the registry (B5) without their guessed labels reading as measured. |
 | Policy scope | Per task, with run default, harness default, and a harness **ceiling**. Precedence `task > run > harness > safe`; exceeding the ceiling fails validation rather than downgrading silently. |
 | Cost | Duration and turn count roll up per run. Token counts stay per task, labelled with their harness, never summed across vendors. |
@@ -50,7 +50,7 @@ policy across all of them and returning machine-readable results.
 | Unattended `ask` | Pending decision published on the event stream; **timeout → deny**. |
 | Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. **Required, not optional: M0-1 found this is opencode's default behaviour, not an anomaly.** |
 | Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. **Capability axis measured too, 2026-08-23 — parked.** M0-3's `87cbfe3` advertised `_meta.terminal_output: true`; claude-agent-acp's Bash `tool_call` then carried a `terminal_id` and `{type:"terminal"}` block for a terminal never created, with still no `terminal/*` calls, no command output, and no exit code (`M0-FINDINGS.md`). It is a rendering convention, not visibility — `argvChannel` gains no fourth value, and no follow-up is scheduled. |
-| Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `acp.mjs` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), and the capability flags M0-3 found harnesses gating on (measured for `terminal_output` via `87cbfe3`) all live there. |
+| Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `protocol/agent.ts` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), and the capability flags M0-3 found harnesses gating on (measured for `terminal_output` via `87cbfe3`) all live there. |
 | Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency; zero runtime deps preserved. |
 | Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
 | CLI | Two front ends, one core: `run` drives in-process, `runs` talks to the daemon. |
@@ -222,7 +222,7 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
 
 1. ~~Run today's MVP against real **opencode** and **claude-agent-acp**.~~ **Done, and
    widened to all three targets.** All spawn, all complete a turn at protocol v1, none
-   sends a method we reject in `#handleRequest` (`acp.mjs`). Unhandled
+   sends a method we reject in `#handleRequest` (`protocol/agent.ts`). Unhandled
    `session/update` variants: `available_commands_update` (all three) and
    `config_option_update` (copilot). The two results that move the plan are that **all
    three advertise `loadSession: true`** and that **none of them calls `fs/*`**.
@@ -315,11 +315,11 @@ driven from a run file, fully verifiable offline.
 
 - **`protocol/types.ts`** — the item that earns the TypeScript decision. Hand-written defs
   for every message we touch, especially the `session/update` discriminated union.
-  `update.sessionUpdate` is currently a bare string compared in two places (`acp.mjs`,
+  `update.sessionUpdate` is currently a bare string compared in two places (`protocol/agent.ts`,
   `render.mjs`) with nothing keeping them in sync.
 - **`protocol/agent.ts`** — today's `AcpAgent` essentially intact. Preserve both existing
-  invariants: the `toolCallId → {title, kind, rawInput}` map (`acp.mjs`) and
-  `#guardPath` (`acp.mjs`). Replace the single `onEvent` callback with a typed emitter.
+  invariants: the `toolCallId → {title, kind, rawInput}` map (`protocol/agent.ts`) and
+  `#guardPath` (`protocol/agent.ts`). Replace the single `onEvent` callback with a typed emitter.
 - **`protocol/registry.ts`** — today's `AGENTS` map, plus three fields per entry beyond
   `{command, args}`: `defaultMode`, `maxMode`, and a containment label
   (`shell: "terminal" | "internal" | "unknown"`, filled in from M0) plus
@@ -358,7 +358,7 @@ driven from a run file, fully verifiable offline.
 - **`core/policy.ts`** — small in lines, load-bearing. Change the policy signature from
   `async () => boolean` to a form answerable by an external, asynchronous decider, so `ask`
   can work with no TTY in M2. Keep `READ_ONLY_KINDS`, `safePolicy`, `autoPolicy` semantics
-  exactly as they are (`acp.mjs`).
+  exactly as they are (`protocol/agent.ts`).
 - **`core/run.ts`** — the new center of gravity. Run owns N Tasks; Task owns one agent, one
   worktree, one policy, one result. Lifecycle `pending → running → done | failed |
   timed_out | cancelled`. The run's roll-up is **duration and turn count** — the only units

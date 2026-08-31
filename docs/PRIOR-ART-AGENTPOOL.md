@@ -2,7 +2,7 @@
 
 A design review of [`phil65/agentpool`](https://github.com/phil65/agentpool) against this
 project, done because it is the only prior art surveyed so far that ships **a second full
-implementation of the ACP client side** — the exact layer `acp.mjs` is — and has already
+implementation of the ACP client side** — the exact layer `protocol/agent.ts` is — and has already
 crossed several bridges this project's plan still lists as open questions
 (`docs/PROJECT-PLAN.md`, "Open, deliberately unresolved").
 
@@ -89,7 +89,7 @@ parts are directly comparable and worth the read:**
 - `src/acp/**` (~11.7k lines) — a standalone ACP library: client side, agent side, schema,
   transports, an agent registry, a stdio↔WebSocket bridge, a message dispatcher.
 - `src/agentpool/agents/acp_agent/**` (~2.3k lines) — the supervisor that owns one external
-  harness subprocess. This is `acp.mjs` + `agents.mjs` in their shape.
+  harness subprocess. This is `protocol/agent.ts` + `agents.mjs` in their shape.
 
 The design inversion we describe in `CLAUDE.md` — *this code is the client, the harness is
 the agent* — is theirs too, arrived at independently. So is: the harness owns its own auth,
@@ -116,8 +116,8 @@ change and its evidence are in [What M0 moved](#what-m0-moved).
 This is the direct fix for the papercut `CLAUDE.md` names: *"harness spawn failures surface
 as opaque JSON-RPC errors — typically `Internal error (code -32603)` on `session/new`, with
 the real message only on the harness's stderr under `--verbose`."* We already discard that
-stderr unless asked (`acp.mjs`), and a harness that dies *before* answering leaves
-`#failAll` (`acp.mjs`) reporting only an exit code.
+stderr unless asked (`protocol/agent.ts`), and a harness that dies *before* answering leaves
+`#failAll` (`protocol/agent.ts`) reporting only an exit code.
 
 Cost in our terms: a bounded stderr ring buffer (keep the last ~20 lines regardless of
 `--verbose`) plus attaching it to the rejection in `#failAll`. ~25 lines, no dependency, no
@@ -170,7 +170,7 @@ whether a mismatch warns. A pinned launch argv turns that from a warning into a 
 we run the build we measured. **Decided 2026-08-23 (#62 B2): `measuredOn: { version, date }`
 lands in M1a-4**, compared at startup, warning only. Pinned launch is *not* decided — it
 rides on the auto-resolve half that went to the backlog — so the comparison needs a version
-from somewhere: check whether `agentInfo` (already stored, `acp.mjs`) carries one before
+from somewhere: check whether `agentInfo` (already stored, `protocol/agent.ts`) carries one before
 designing a probe.
 
 ### 3 · Filter injected MCP servers by advertised transports — defer
@@ -180,7 +180,7 @@ designing a probe.
 always, and logs which servers were skipped and why. Called before both `session/new`
 (`acp_agent.py:374`) and `session/load` (`:694`).
 
-`newSession({ mcpServers })` already exists at `acp.mjs` and nothing passes anything to
+`newSession({ mcpServers })` already exists at `protocol/agent.ts` and nothing passes anything to
 it. The moment a task wants to inject an MCP server, this filter is the difference between
 "that harness didn't get the server, here's a warning" and a failed session. ~15 lines,
 and it is capability negotiation — the fourth protocol gotcha in the brief — applied
@@ -199,7 +199,7 @@ no-ops `elicitation_complete` (`:271`), and acks `ext_method`/`ext_notification`
 (`:260`, `:274`) rather than failing.
 
 Our `#handleRequest` throws for every method outside the three we implement
-(`acp.mjs`). For a genuinely unknown method that is right; for elicitation — which the
+(`protocol/agent.ts`). For a genuinely unknown method that is right; for elicitation — which the
 brief lists as deliberately unimplemented — a hard error can end a turn that a polite
 "declined" would let continue. Same for `_`-prefixed unstable extensions, which by
 convention a peer must tolerate. ~10 lines, and `mock-agent.mjs` should learn to send both
@@ -207,7 +207,7 @@ so the path is exercised (see 6).
 
 **Re-scored — backlog, with a free trigger.** M0-1 measured it: across six surveyed turns,
 **no harness sent a method outside the three we implement**, so the `-32000` default at
-`acp.mjs` never fired. This is hardening against traffic that does not exist. The
+`protocol/agent.ts` never fired. This is hardening against traffic that does not exist. The
 trigger costs nothing to arm — the wire tap sees the first unhandled method the day one
 appears, and the change is still ~10 lines then.
 
@@ -329,7 +329,7 @@ rather than per type.
 message types in M1a-2 — inbound notifications and responses, outbound requests alike — and
 M1a-6's bus carries the wire object with it intact. Nothing consumes it yet. **This answers #62's B4.**
 
-Two honest notes on the rationale. It is *preservation, not addition*: `acp.mjs`
+Two honest notes on the rationale. It is *preservation, not addition*: `protocol/agent.ts`
 already forwards the whole update object to `onEvent`, so `_meta` reaches consumers today
 and only `render.mjs` ignores it — the typed port is where we would start losing it. And
 the cost of deferring is not a refactor, as I first claimed: adding an optional field to a
@@ -501,12 +501,12 @@ Record these so a later reader doesn't "steal" a regression.
 
 1. **No path guard on their client.** `client_handler.py:274` writes wherever the harness
    asks — `makedirs` then `pipe_file`, no root check — because containment is delegated
-   entirely to the execution environment. Our `#guardPath` (`acp.mjs`) is unconditional
+   entirely to the execution environment. Our `#guardPath` (`protocol/agent.ts`) is unconditional
    and independent of policy. Keep it in front of any backend seam we add (7). Their design
    is strictly weaker whenever the environment is `local`, which is their default.
 2. **Permission option selection.** They take `params.options[0]`
    (`client_handler.py:201`, and again in `headless_client.py:94`) — whatever the agent
-   listed first, which may be `allow_always`. Our `pickOption` (`acp.mjs`) prefers
+   listed first, which may be `allow_always`. Our `pickOption` (`protocol/agent.ts`) prefers
    `allow_once`, falls back to `allow_always`, and mirrors the same order for rejects.
    A one-shot approval that silently becomes a standing one is exactly the failure our
    `ask` mode exists to prevent.

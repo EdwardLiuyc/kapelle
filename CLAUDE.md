@@ -21,7 +21,7 @@ node run.mjs "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "
 node fanout.mjs tasks.json  # N agents concurrently
 ```
 
-`node:test` covers pure functions in `core/` and `protocol/` (M1a-1; `protocol/types.test.ts` is the first suite, landed with M1a-2) — run it with `npm run test`. `mock-agent.mjs` is the end-to-end test harness: it implements the agent side of the protocol and drives every client code path (streaming, `fs/read_text_file`, `session/request_permission`, `fs/write_text_file`). **Verify changes to `acp.mjs` against it before touching a real harness** — it needs nothing installed. Extend `mock-agent.mjs` when adding client capabilities so the new path is exercisable offline. `ACP_TEST.md` in the repo root is selftest output, not source; deleting it is safe.
+`node:test` covers pure functions in `core/` and `protocol/` (M1a-1; `protocol/types.test.ts` is the first suite, landed with M1a-2) — run it with `npm run test`. `mock-agent.mjs` is the end-to-end test harness: it implements the agent side of the protocol and drives every client code path (streaming, `fs/read_text_file`, `session/request_permission`, `fs/write_text_file`). **Verify changes to `protocol/agent.ts` against it before touching a real harness** — it needs nothing installed. Extend `mock-agent.mjs` when adding client capabilities so the new path is exercisable offline. `ACP_TEST.md` in the repo root is selftest output, not source; deleting it is safe.
 
 `--mode ask` requires a TTY and degrades to `safe` otherwise, so piped/CI invocations never block on a prompt.
 
@@ -29,9 +29,9 @@ node fanout.mjs tasks.json  # N agents concurrently
 
 ## Architecture
 
-Six files, one direction of dependency: `run.mjs` / `fanout.mjs` → `acp.mjs` + `agents.mjs` + `render.mjs`, typed by `protocol/types.ts`.
+Six files, one direction of dependency: `run.mjs` / `fanout.mjs` → `protocol/agent.ts` + `agents.mjs` + `render.mjs`, typed by `protocol/types.ts`.
 
-- **`acp.mjs`** — everything protocol. `AcpAgent` owns one subprocess: spawn, newline-delimited JSON-RPC over stdio, `initialize` handshake (hard-fails on `protocolVersion` mismatch), `session/new`, `session/prompt`, `session/cancel`. It handles exactly three inbound requests — `fs/read_text_file`, `fs/write_text_file`, `session/request_permission` — and one notification, `session/update`, which it forwards to `onEvent`.
+- **`protocol/agent.ts`** — everything protocol. `AcpAgent` owns one subprocess: spawn, newline-delimited JSON-RPC over stdio, `initialize` handshake (hard-fails on `protocolVersion` mismatch), `session/new`, `session/prompt`, `session/cancel`. It handles exactly three inbound requests — `fs/read_text_file`, `fs/write_text_file`, `session/request_permission` — and one notification, `session/update`, which it forwards to `onEvent`.
 - **`agents.mjs`** — the entire adapter layer: a map of agent id → `{command, args, env?}`. Supporting a new harness is one line here, not an integration. `env` is `{unset?, set?}`, applied to `process.env` by `resolveEnv` at construction time — the place to put a harness's environment quirks so no caller has to remember them. `resolveAgent` also parses `--cmd` strings and derives a readable label (`node mock-agent.mjs` → `mock-agent`).
 - **`render.mjs`** — terminal formatting for `session/update`. Pure presentation; no protocol logic.
 - **`run.mjs`** — single-agent CLI, hand-rolled arg parsing, SIGINT → `session/cancel` then 2s grace before kill.

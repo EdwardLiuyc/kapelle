@@ -13,7 +13,7 @@ answer its file-system requests, and decide its permissions. The harness is the
 
 | File | What it is |
 | --- | --- |
-| `acp.mjs` | The client. JSON-RPC over stdio, handshake, `fs/*`, permissions. |
+| `protocol/agent.ts` | The client. JSON-RPC over stdio, handshake, `fs/*`, permissions. |
 | `agents.mjs` | How to launch each harness in ACP mode. The whole adapter layer. |
 | `run.mjs` | CLI: one prompt, one agent. |
 | `fanout.mjs` | Several agents in parallel from `tasks.json`. |
