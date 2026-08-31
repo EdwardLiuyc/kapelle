@@ -39,6 +39,17 @@ pi-lens-native findings use `// pi-lens-ignore: <rule>` — the two do not read 
 other's comments. `tsc` stays the type checker (`npm run check`), markdownlint stays for
 `.md`.
 
+## Diagnostics (pi-lens)
+
+pi-lens is the deeper lint layer (per-edit dispatch + session scans). Before finishing a
+change, clear every finding — no blockers, no warnings. Each finding is resolved one of
+three ways: **fix** it (preferred; the fix is observed, not asserted), **suppress** it
+inline with `// pi-lens-ignore: <rule>` (bare rule-id, comma-separate several; put the
+reason in an adjacent comment — trailing text breaks the match), or **disable** the rule
+project-wide in `.pi-lens.json` (`rules.<id>.disable`), recording the reason in the commit
+message. Check with `lens_diagnostics` (mode `full`); config lives in `.pi-lens.json` and
+`knip.jsonc`.
+
 ## Skills
 
 Reusable procedures live in `.agent/skills/<name>/SKILL.md` as plain Markdown, assuming

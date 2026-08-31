@@ -63,7 +63,7 @@ const results = await Promise.allSettled(
   }),
 );
 
-console.log("\n" + "═".repeat(60));
+console.log(`\n${"═".repeat(60)}`);
 for (const [i, r] of results.entries()) {
   const task = tasks[i];
   if (r.status === "fulfilled") {

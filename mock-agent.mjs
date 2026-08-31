@@ -14,7 +14,7 @@ import { createInterface } from "node:readline";
 let nextId = 1000;
 const pending = new Map();
 
-const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
+const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
 const notify = (method, params) => send({ jsonrpc: "2.0", method, params });
 

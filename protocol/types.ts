@@ -21,6 +21,8 @@
  *  - Variants/fields no harness has been observed to send are marked
  *    "not observed in M0" so a reader knows the shape is schema-trusted, not
  *    wire-proven.
+ *  - `Record<string, unknown>` is the deliberate contract for free-form wire
+ *    fields; each site carries `// pi-lens-ignore: no-unsafe-dictionary-unknown`.
  */
 
 // ---------------------------------------------------------------------------
@@ -28,6 +30,7 @@
 // ---------------------------------------------------------------------------
 
 /** The spec's extension channel — free-form, no assumptions about values. */
+// pi-lens-ignore: no-unsafe-dictionary-unknown
 export type Meta = { _meta?: Record<string, unknown> };
 
 export type SessionId = string;

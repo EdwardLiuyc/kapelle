@@ -10,7 +10,7 @@ function line(s) {
     process.stdout.write("\n");
     midStream = false;
   }
-  process.stdout.write(s + "\n");
+  process.stdout.write(`${s}\n`);
 }
 
 /** Pretty-print a session/update notification. */
