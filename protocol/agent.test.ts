@@ -1,11 +1,12 @@
 /**
- * M1a-3 acceptance tests — issue #11, the per-request timeout (#62 B1).
+ * M1a-3 acceptance tests — issue #11.
  *
- * Both halves of the decision are behavioural, so both are driven by a real
- * subprocess over real stdio rather than by poking at internals: a harness
- * that accepts the pipe and never answers `initialize` must fail on a
- * deadline instead of hanging, and `session/prompt` must never be bounded by
- * that deadline because a turn is legitimately long.
+ * Everything here is driven by a real subprocess over real stdio rather than
+ * by poking at internals, because every decision under test is about what does
+ * or does not reach the wire.
+ *
+ * Covered so far: the per-request timeout (#62 B1) and the in-flight prompt
+ * guard (#62 R5).
  */
 
 import assert from "node:assert/strict";
@@ -17,32 +18,43 @@ import { AcpAgent } from "./agent.ts";
 const HANGS_FOREVER = "process.stdin.resume();";
 
 /**
- * Answers the handshake immediately but `session/prompt` only after a delay
- * longer than the deadline, so a timeout wrongly applied to a turn fires
- * before the reply can arrive. Written without imports so it runs the same
- * whether node treats `--eval` input as CommonJS or ESM.
+ * A minimal scripted harness: answers the handshake immediately, delays the
+ * turn by `promptDelayMs`, and counts every `session/prompt` it actually
+ * received so a test can prove a refused prompt never reached the wire.
+ *
+ * Written without imports so it behaves the same whether node treats `--eval`
+ * input as CommonJS or ESM.
  */
-const SLOW_TURN = [
-  'let buf = "";',
-  "const send = (id, result) =>",
-  "  process.stdout.write(",
-  '    JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n",',
-  "  );",
-  'process.stdin.on("data", (chunk) => {',
-  "  buf += chunk;",
-  "  let nl;",
-  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
-  "    const line = buf.slice(0, nl);",
-  "    buf = buf.slice(nl + 1);",
-  "    if (!line.trim()) continue;",
-  "    const msg = JSON.parse(line);",
-  '    if (msg.method === "initialize") send(msg.id, { protocolVersion: 1 });',
-  '    else if (msg.method === "session/new") send(msg.id, { sessionId: "s1" });',
-  '    else if (msg.method === "session/prompt")',
-  '      setTimeout(() => send(msg.id, { stopReason: "end_turn" }), 700);',
-  "  }",
-  "});",
-].join("\n");
+function scriptedAgent(promptDelayMs: number): string {
+  return [
+    'let buf = "";',
+    "let promptCount = 0;",
+    "const send = (id, result) =>",
+    "  process.stdout.write(",
+    '    JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n",',
+    "  );",
+    'process.stdin.on("data", (chunk) => {',
+    "  buf += chunk;",
+    "  let nl;",
+    '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+    "    const line = buf.slice(0, nl);",
+    "    buf = buf.slice(nl + 1);",
+    "    if (!line.trim()) continue;",
+    "    const msg = JSON.parse(line);",
+    '    if (msg.method === "initialize") send(msg.id, { protocolVersion: 1 });',
+    '    else if (msg.method === "session/new") send(msg.id, { sessionId: "s1" });',
+    '    else if (msg.method === "debug/prompt_count")',
+    "      send(msg.id, { count: promptCount });",
+    '    else if (msg.method === "session/prompt") {',
+    "      promptCount += 1;",
+    `      setTimeout(() => send(msg.id, { stopReason: "end_turn" }), ${promptDelayMs});`,
+    "    }",
+    "  }",
+    "});",
+  ].join("\n");
+}
+
+// --- #62 B1 · per-request timeout --------------------------------------------
 
 test("the default deadline is the story's 30s", () => {
   const agent = new AcpAgent({ command: "true" });
@@ -76,7 +88,7 @@ test("session/prompt is never bounded by the request deadline", async (t) => {
   const agent = new AcpAgent({
     name: "slow-turn",
     command: process.execPath,
-    args: ["-e", SLOW_TURN],
+    args: ["-e", scriptedAgent(700)],
     requestTimeoutMs: 400,
   });
   t.after(() => agent.stop());
@@ -89,4 +101,51 @@ test("session/prompt is never bounded by the request deadline", async (t) => {
   // session/prompt, this would reject instead of resolving.
   const stopReason = await agent.prompt("take your time");
   assert.equal(stopReason, "end_turn");
+});
+
+// --- #62 R5 · in-flight prompt guard -----------------------------------------
+
+test("a second prompt during a live turn throws without reaching the wire", async (t) => {
+  const agent = new AcpAgent({
+    name: "guarded",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(300)],
+    requestTimeoutMs: 2_000,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+
+  const firstTurn = agent.prompt("first");
+  await assert.rejects(
+    () => agent.prompt("second"),
+    /already running a turn/,
+    "a second prompt must be refused, not sent",
+  );
+  assert.equal(await firstTurn, "end_turn");
+
+  // The harness counts every session/prompt it actually received. A guard that
+  // sent first and failed afterwards would leave this at 2.
+  const seen = await agent.request<{ count: number }>("debug/prompt_count");
+  assert.equal(seen.count, 1, "the refused prompt must not reach the wire");
+});
+
+test("the guard clears once a turn ends, so later prompts still work", async (t) => {
+  const agent = new AcpAgent({
+    name: "sequential",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(50)],
+    requestTimeoutMs: 2_000,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+
+  assert.equal(await agent.prompt("first"), "end_turn");
+  assert.equal(await agent.prompt("second"), "end_turn");
+
+  const seen = await agent.request<{ count: number }>("debug/prompt_count");
+  assert.equal(seen.count, 2, "sequential turns must both reach the harness");
 });

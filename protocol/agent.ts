@@ -179,9 +179,9 @@ function errorMessage(err: unknown): string {
  * requests for file access, and decide its permissions.
  *
  * Ported from `acp.mjs` (M1a-3), then grown one behaviour at a time. Landed so
- * far: the per-request timeout (#62 B1). Still outstanding from the story: the
- * stderr ring buffer, the whole `PromptResponse` (#62 B3), the cancel-intent
- * event (#62 R4), and the in-flight prompt guard (#62 R5).
+ * far: the per-request timeout (#62 B1) and the in-flight prompt guard
+ * (#62 R5). Still outstanding from the story: the stderr ring buffer, the
+ * whole `PromptResponse` (#62 B3), and the cancel-intent event (#62 R4).
  */
 // A verbatim port of acp.mjs's single class — the story is "essentially
 // intact", so splitting it is a refactor this change deliberately does not make.
@@ -206,6 +206,7 @@ export class AcpAgent {
   #pending = new Map<number | string, PendingRequest>();
   #toolCalls = new Map<ToolCallId, RememberedToolCall>();
   #closed = false;
+  #promptInFlight = false;
 
   constructor({
     name,
@@ -316,15 +317,37 @@ export class AcpAgent {
     return this.sessionId;
   }
 
-  /** Send a prompt and resolve with the stop reason once the turn ends. */
+  /**
+   * Send a prompt and resolve with the stop reason once the turn ends.
+   *
+   * A second call while a turn is live throws rather than sending (#62 R5).
+   * M0-4 measured why: all three harnesses accept a second `session/prompt`,
+   * kill the running turn and answer `end_turn`; on opencode and copilot the
+   * text lands in the running turn's context and reads as prompt injection,
+   * and copilot aborts unconditionally even when idle
+   * (github/copilot-cli#4555). The guard is checked before anything is
+   * written, so a rejected second prompt puts no byte on the wire.
+   */
   async prompt(text: string): Promise<StopReason> {
     if (!this.sessionId)
       throw new Error("no session — call newSession() first");
-    const res = await this.request<PromptResponse>("session/prompt", {
-      sessionId: this.sessionId,
-      prompt: [{ type: "text", text }],
-    });
-    return res.stopReason;
+    if (this.#promptInFlight)
+      throw new Error(
+        `agent "${this.name}" is already running a turn; a second prompt() would kill it`,
+      );
+
+    this.#promptInFlight = true;
+    try {
+      const res = await this.request<PromptResponse>("session/prompt", {
+        sessionId: this.sessionId,
+        prompt: [{ type: "text", text }],
+      });
+      return res.stopReason;
+    } finally {
+      // Cleared on every exit, so a failed or cancelled turn does not wedge
+      // the agent into refusing all later prompts.
+      this.#promptInFlight = false;
+    }
   }
 
   cancel(): void {
