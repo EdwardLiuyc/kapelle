@@ -11,6 +11,10 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { TestContext } from "node:test";
 import { test } from "node:test";
 
 import { AcpAgent } from "./agent.ts";
@@ -91,6 +95,154 @@ function scriptedAgent(promptDelayMs: number): string {
     "});",
   ].join("\n");
 }
+
+/**
+ * A harness that turns `debug/fs` into a real `fs/*` request aimed back at us,
+ * then reports what the client answered. `#guardPath` is private, so this
+ * exercises it through the entry point that actually reaches it in production.
+ */
+const FS_PROBE = [
+  'let buf = "";',
+  "let nextId = 1000;",
+  "const pending = new Map();",
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "debug/fs") {',
+  "      const rid = nextId++;",
+  "      pending.set(rid, msg.id);",
+  '      const params = { sessionId: "s1", path: msg.params.path };',
+  '      if (msg.params.write) params.content = "written by the agent";',
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: rid,",
+  '        method: msg.params.write ? "fs/write_text_file" : "fs/read_text_file",',
+  "        params,",
+  "      });",
+  "    } else if (msg.id !== undefined && pending.has(msg.id)) {",
+  "      const probeId = pending.get(msg.id);",
+  "      pending.delete(msg.id);",
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: probeId,",
+  "        result: {",
+  "          refused: msg.error !== undefined,",
+  "          message: msg.error ? msg.error.message : null,",
+  "          content: msg.result ? msg.result.content : null,",
+  "        },",
+  "      });",
+  "    }",
+  "  }",
+  "});",
+].join("\n");
+
+type FsProbe = {
+  refused: boolean;
+  message: string | null;
+  content: string | null;
+};
+
+async function guardAgent(
+  t: TestContext,
+  root: string,
+  allowReadOutsideRoot = false,
+): Promise<AcpAgent> {
+  const agent = new AcpAgent({
+    name: "fs-probe",
+    command: process.execPath,
+    args: ["-e", FS_PROBE],
+    cwd: root,
+    allowReadOutsideRoot,
+    requestTimeoutMs: 5_000,
+  });
+  t.after(() => agent.stop());
+  await agent.start();
+  return agent;
+}
+
+function probe(agent: AcpAgent, path: string, write = false): Promise<FsProbe> {
+  return agent.request<FsProbe>("debug/fs", { path, write });
+}
+
+// --- #guardPath containment --------------------------------------------------
+
+test("in-root paths are allowed, for both read and write", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
+  await writeFile(join(root, "inside.txt"), "in-root content", "utf8");
+  const agent = await guardAgent(t, root);
+
+  const read = await probe(agent, "inside.txt");
+  assert.equal(read.refused, false);
+  assert.equal(read.content, "in-root content");
+
+  const written = await probe(agent, "nested/new.txt", true);
+  assert.equal(written.refused, false, "writing inside the root is allowed");
+});
+
+test("an escaping ../ path is refused", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
+  const agent = await guardAgent(t, root);
+
+  const read = await probe(agent, "../../etc/passwd");
+  assert.equal(read.refused, true);
+  assert.match(String(read.message), /path outside workspace root refused/);
+
+  const write = await probe(agent, "../escaped.txt", true);
+  assert.equal(write.refused, true);
+});
+
+test("an absolute path outside the root is refused", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
+  const outside = await mkdtemp(join(tmpdir(), "acp-outside-"));
+  await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
+  const agent = await guardAgent(t, root);
+
+  const read = await probe(agent, join(outside, "secret.txt"));
+  assert.equal(read.refused, true);
+  assert.match(String(read.message), /path outside workspace root refused/);
+});
+
+test("allowReadOutsideRoot lifts reads but never writes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
+  const outside = await mkdtemp(join(tmpdir(), "acp-outside-"));
+  await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
+  const agent = await guardAgent(t, root, true);
+
+  const read = await probe(agent, join(outside, "secret.txt"));
+  assert.equal(read.refused, false, "reads outside the root are permitted");
+  assert.equal(read.content, "outside content");
+
+  // The asymmetry is the whole point of the flag: it must not lift writes.
+  const write = await probe(agent, join(outside, "planted.txt"), true);
+  assert.equal(write.refused, true, "writes outside the root stay refused");
+  assert.match(String(write.message), /path outside workspace root refused/);
+});
+
+test("a symlink out of the root is NOT contained (documented gap)", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
+  const outside = await mkdtemp(join(tmpdir(), "acp-outside-"));
+  await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
+  await symlink(join(outside, "secret.txt"), join(root, "link.txt"));
+  const agent = await guardAgent(t, root);
+
+  // `#guardPath` uses path.resolve, which is pure string arithmetic and does
+  // not follow symlinks, so `link.txt` looks in-root and the read succeeds
+  // against a file outside it. This test records what the guard does today
+  // rather than what it ought to do; M1b-6 (`hostile-agent`) lists symlink
+  // escape among the attempts that must be refused with a specific error, and
+  // closing it means resolving with fs.realpath before the prefix check.
+  const read = await probe(agent, "link.txt");
+  assert.equal(read.refused, false, "today the symlink is followed");
+  assert.equal(read.content, "outside content");
+});
 
 // --- #62 B1 · per-request timeout --------------------------------------------
 
