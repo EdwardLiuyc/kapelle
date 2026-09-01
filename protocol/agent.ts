@@ -79,8 +79,11 @@ export type Policy = (req: PolicyRequest) => boolean | Promise<boolean>;
 
 /**
  * One event leaving this client, tagged with the agent that caused it.
- * Local until a consumer needs to name it — M1a-7's `render.mjs` port is the
- * first that will, and exporting it there keeps knip honest in the meantime.
+ *
+ * Deliberately not exported: `run.mjs` and `fanout.mjs` are `.mjs` and cannot
+ * import a type, and knip's --production mode rightly counts a name exported
+ * only for a test as unused. M1a-7's `render.mjs` port is the first real
+ * consumer; it can export this then.
  */
 interface AgentEventEnvelope {
   agent: string;
@@ -178,9 +181,10 @@ function errorMessage(err: unknown): string {
  * requests for file access, and decide its permissions.
  *
  * Ported from `acp.mjs` (M1a-3), then grown one behaviour at a time. Landed so
- * far: the per-request timeout (#62 B1), the in-flight prompt guard (#62 R5)
- * and the whole `PromptResponse` (#62 B3). Still outstanding from the story:
- * the stderr ring buffer and the cancel-intent event (#62 R4).
+ * far: the per-request timeout (#62 B1), the in-flight prompt guard (#62 R5),
+ * the whole `PromptResponse` (#62 B3) and the cancel-intent event (#62 R4).
+ * Still outstanding from the story: the stderr ring buffer, which is gated on
+ * measuring what a dying harness actually prints.
  */
 // A verbatim port of acp.mjs's single class — the story is "essentially
 // intact", so splitting it is a refactor this change deliberately does not make.
@@ -355,9 +359,23 @@ export class AcpAgent {
     }
   }
 
+  /**
+   * Ask the agent to end the current turn.
+   *
+   * Emits `_client_cancel_requested` on the bus at the moment the notification
+   * goes out (#62 R4). M1b-2's status keys on the triple (`stopReason`, did we
+   * cancel, did the watchdog fire) because copilot answers `end_turn` for a
+   * turn it cancelled — so our own record of having asked is the authoritative
+   * term, and it has to be recorded here, where the asking happens.
+   */
   cancel(): void {
-    if (this.sessionId)
-      this.notify("session/cancel", { sessionId: this.sessionId });
+    if (!this.sessionId) return;
+    const sessionId = this.sessionId;
+    this.notify("session/cancel", { sessionId });
+    this.onEvent({
+      agent: this.name,
+      update: { sessionUpdate: "_client_cancel_requested", sessionId },
+    });
   }
 
   stop(): void {

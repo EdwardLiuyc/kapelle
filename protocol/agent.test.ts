@@ -6,13 +6,24 @@
  * or does not reach the wire.
  *
  * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
- * (#62 R5) and the whole `PromptResponse` (#62 B3).
+ * (#62 R5), the whole `PromptResponse` (#62 B3) and the cancel-intent event
+ * (#62 R4).
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { AcpAgent } from "./agent.ts";
+
+/**
+ * The structural shape a test needs from an emitted event. Declared here
+ * rather than imported, so the client is not forced to export a name whose
+ * only consumer is this file.
+ */
+type CapturedEvent = {
+  agent: string;
+  update: { sessionUpdate: string; sessionId?: string };
+};
 
 /** Accepts the pipe, reads stdin, and answers nothing, ever. */
 const HANGS_FOREVER = "process.stdin.resume();";
@@ -29,6 +40,7 @@ function scriptedAgent(promptDelayMs: number): string {
   return [
     'let buf = "";',
     "let promptCount = 0;",
+    "let cancelCount = 0;",
     "const send = (id, result) =>",
     "  process.stdout.write(",
     '    JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n",',
@@ -45,6 +57,9 @@ function scriptedAgent(promptDelayMs: number): string {
     '    else if (msg.method === "session/new") send(msg.id, { sessionId: "s1" });',
     '    else if (msg.method === "debug/prompt_count")',
     "      send(msg.id, { count: promptCount });",
+    '    else if (msg.method === "session/cancel") cancelCount += 1;',
+    '    else if (msg.method === "debug/cancel_count")',
+    "      send(msg.id, { count: cancelCount });",
     '    else if (msg.method === "session/prompt") {',
     "      promptCount += 1;",
     "      const reply = {",
@@ -162,6 +177,59 @@ test("prompt() returns the whole response, usage and _meta intact", async (t) =>
   // The fleet's only exhaustion warning rides on _meta (M0-5), and M1a-2 put
   // _meta on the base of every message type precisely so it survives.
   assert.deepEqual(res._meta, { "_claude/rateLimit": "ok" });
+});
+
+// --- #62 R4 · cancel-intent event --------------------------------------------
+
+test("cancel() emits _client_cancel_requested and still sends the notify", async (t) => {
+  const events: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "cancels",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(10)],
+    requestTimeoutMs: 2_000,
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+  agent.cancel();
+
+  const emitted = events.filter(
+    (e) => e.update.sessionUpdate === "_client_cancel_requested",
+  );
+  assert.equal(emitted.length, 1, "exactly one cancel-intent event");
+  assert.equal(emitted[0].agent, "cancels");
+  assert.equal(emitted[0].update.sessionId, "s1");
+
+  // The event must accompany the notification, not replace it: M1b-2 reads our
+  // record of having asked, but the agent still has to be told.
+  const seen = await agent.request<{ count: number }>("debug/cancel_count");
+  assert.equal(seen.count, 1, "session/cancel must still reach the harness");
+});
+
+test("cancel() before a session exists sends nothing and emits nothing", async (t) => {
+  const events: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "idle",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(10)],
+    requestTimeoutMs: 2_000,
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  agent.cancel(); // no session yet
+
+  assert.equal(events.length, 0, "no event without a session");
+  const seen = await agent.request<{ count: number }>("debug/cancel_count");
+  assert.equal(seen.count, 0, "no session/cancel on the wire either");
 });
 
 test("the guard clears once a turn ends, so later prompts still work", async (t) => {
