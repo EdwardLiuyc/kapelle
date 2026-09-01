@@ -5,8 +5,8 @@
  * by poking at internals, because every decision under test is about what does
  * or does not reach the wire.
  *
- * Covered so far: the per-request timeout (#62 B1) and the in-flight prompt
- * guard (#62 R5).
+ * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
+ * (#62 R5) and the whole `PromptResponse` (#62 B3).
  */
 
 import assert from "node:assert/strict";
@@ -47,7 +47,12 @@ function scriptedAgent(promptDelayMs: number): string {
     "      send(msg.id, { count: promptCount });",
     '    else if (msg.method === "session/prompt") {',
     "      promptCount += 1;",
-    `      setTimeout(() => send(msg.id, { stopReason: "end_turn" }), ${promptDelayMs});`,
+    "      const reply = {",
+    '        stopReason: "end_turn",',
+    "        usage: { inputTokens: 11, outputTokens: 22, totalTokens: 33 },",
+    '        _meta: { "_claude/rateLimit": "ok" },',
+    "      };",
+    `      setTimeout(() => send(msg.id, reply), ${promptDelayMs});`,
     "    }",
     "  }",
     "});",
@@ -99,8 +104,8 @@ test("session/prompt is never bounded by the request deadline", async (t) => {
 
   // This turn takes 700ms against a 400ms budget. If the deadline applied to
   // session/prompt, this would reject instead of resolving.
-  const stopReason = await agent.prompt("take your time");
-  assert.equal(stopReason, "end_turn");
+  const res = await agent.prompt("take your time");
+  assert.equal(res.stopReason, "end_turn");
 });
 
 // --- #62 R5 · in-flight prompt guard -----------------------------------------
@@ -123,12 +128,40 @@ test("a second prompt during a live turn throws without reaching the wire", asyn
     /already running a turn/,
     "a second prompt must be refused, not sent",
   );
-  assert.equal(await firstTurn, "end_turn");
+  assert.equal((await firstTurn).stopReason, "end_turn");
 
   // The harness counts every session/prompt it actually received. A guard that
   // sent first and failed afterwards would leave this at 2.
   const seen = await agent.request<{ count: number }>("debug/prompt_count");
   assert.equal(seen.count, 1, "the refused prompt must not reach the wire");
+});
+
+// --- #62 B3 · the whole PromptResponse ---------------------------------------
+
+test("prompt() returns the whole response, usage and _meta intact", async (t) => {
+  const agent = new AcpAgent({
+    name: "counts-tokens",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(10)],
+    requestTimeoutMs: 2_000,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+  const res = await agent.prompt("how many tokens was that");
+
+  assert.equal(res.stopReason, "end_turn");
+  // M0-5: usage is the only per-task token count present on all three
+  // harnesses. Dropping it must fail here rather than pass silently.
+  assert.deepEqual(res.usage, {
+    inputTokens: 11,
+    outputTokens: 22,
+    totalTokens: 33,
+  });
+  // The fleet's only exhaustion warning rides on _meta (M0-5), and M1a-2 put
+  // _meta on the base of every message type precisely so it survives.
+  assert.deepEqual(res._meta, { "_claude/rateLimit": "ok" });
 });
 
 test("the guard clears once a turn ends, so later prompts still work", async (t) => {
@@ -143,8 +176,8 @@ test("the guard clears once a turn ends, so later prompts still work", async (t)
   await agent.start();
   await agent.newSession();
 
-  assert.equal(await agent.prompt("first"), "end_turn");
-  assert.equal(await agent.prompt("second"), "end_turn");
+  assert.equal((await agent.prompt("first")).stopReason, "end_turn");
+  assert.equal((await agent.prompt("second")).stopReason, "end_turn");
 
   const seen = await agent.request<{ count: number }>("debug/prompt_count");
   assert.equal(seen.count, 2, "sequential turns must both reach the harness");

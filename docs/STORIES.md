@@ -376,7 +376,7 @@ item 7 considered one and reversed itself, because an abstraction under dead cod
 exactly.
 
 **Decided 2026-08-23 (#62 B3): keep the whole `session/prompt` response, not just
-`stopReason`.** `protocol/agent.ts` returns `res.stopReason` and discards the rest — including
+`stopReason`.** **Landed.** The client returned `res.stopReason` and discarded the rest — including
 `PromptResponse.usage`, which M0-5 found is the **only per-task token count present on all
 three harnesses**. Returning the whole response is one line, and a count nobody recorded is
 not recoverable afterwards; this is the same argument as `_meta` in M1a-2. **Capture only —

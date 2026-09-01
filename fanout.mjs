@@ -55,7 +55,7 @@ const results = await Promise.allSettled(
     try {
       await agent.start();
       await agent.newSession();
-      const stopReason = await agent.prompt(task.prompt);
+      const { stopReason } = await agent.prompt(task.prompt);
       return { label, cwd: agent.cwd, stopReason, output: transcript.join("") };
     } finally {
       agent.stop();

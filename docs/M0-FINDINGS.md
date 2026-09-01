@@ -633,7 +633,8 @@ harnesses. Method: `usage-probe.mjs` drives **one session of N prompts**, loggin
 `session/update` verbatim — `_meta` and unknown top-level fields included — and keeping the
 whole `session/prompt` response. `wire-tap.mjs` tees the JSON-RPC wire in both directions,
 because `AcpAgent` forwards only `session/update` to `onEvent` (`protocol/agent.ts`) and
-`prompt()` returns `res.stopReason` and throws the rest of the response away (`protocol/agent.ts`).
+`prompt()` returned `res.stopReason` and threw the rest of the response away
+(resolved by M1a-3, #62 B3 — the whole response is now returned).
 `--mode auto`, no `session/set_mode`. Workspace: a throwaway five-file JS project, reset per
 session.
 
@@ -850,7 +851,9 @@ point") and the published prompt-turn docs still describe the response as carryi
 `stopReason` alone, so all three harnesses are ahead of the documentation; and the schema's
 own descriptions ("Total input tokens across all turns") describe the cumulative reading, so
 **copilot is the one implementing it as written**. Our client cannot see any of it today —
-`AcpAgent.prompt()` returns `res.stopReason` (`protocol/agent.ts`) and drops the rest.
+`AcpAgent.prompt()` returned `res.stopReason` and dropped the rest — resolved by
+M1a-3 (#62 B3), which keeps the whole response; rendering it still waits on
+M1a-4 recording the per-harness semantics.
 
 #### All three name the model they ran
 

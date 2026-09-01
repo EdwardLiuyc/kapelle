@@ -20,7 +20,6 @@ import type {
   RequestPermissionResponse,
   SessionId,
   SessionUpdate,
-  StopReason,
   ToolCallContent,
   ToolCallId,
   ToolCallLocation,
@@ -179,9 +178,9 @@ function errorMessage(err: unknown): string {
  * requests for file access, and decide its permissions.
  *
  * Ported from `acp.mjs` (M1a-3), then grown one behaviour at a time. Landed so
- * far: the per-request timeout (#62 B1) and the in-flight prompt guard
- * (#62 R5). Still outstanding from the story: the stderr ring buffer, the
- * whole `PromptResponse` (#62 B3), and the cancel-intent event (#62 R4).
+ * far: the per-request timeout (#62 B1), the in-flight prompt guard (#62 R5)
+ * and the whole `PromptResponse` (#62 B3). Still outstanding from the story:
+ * the stderr ring buffer and the cancel-intent event (#62 R4).
  */
 // A verbatim port of acp.mjs's single class — the story is "essentially
 // intact", so splitting it is a refactor this change deliberately does not make.
@@ -318,7 +317,14 @@ export class AcpAgent {
   }
 
   /**
-   * Send a prompt and resolve with the stop reason once the turn ends.
+   * Send a prompt and resolve with the whole response once the turn ends.
+   *
+   * The entire `PromptResponse` is returned rather than just `stopReason`
+   * (#62 B3). `usage` is the only per-task token count M0-5 found on all three
+   * harnesses, and a count nobody recorded is not recoverable afterwards.
+   * Capture only — M1 renders no token figure from it, because the field is
+   * cumulative on copilot where it is per-turn on the other two, and M1a-4 is
+   * where those semantics get written down.
    *
    * A second call while a turn is live throws rather than sending (#62 R5).
    * M0-4 measured why: all three harnesses accept a second `session/prompt`,
@@ -328,7 +334,7 @@ export class AcpAgent {
    * (github/copilot-cli#4555). The guard is checked before anything is
    * written, so a rejected second prompt puts no byte on the wire.
    */
-  async prompt(text: string): Promise<StopReason> {
+  async prompt(text: string): Promise<PromptResponse> {
     if (!this.sessionId)
       throw new Error("no session — call newSession() first");
     if (this.#promptInFlight)
@@ -338,11 +344,10 @@ export class AcpAgent {
 
     this.#promptInFlight = true;
     try {
-      const res = await this.request<PromptResponse>("session/prompt", {
+      return await this.request<PromptResponse>("session/prompt", {
         sessionId: this.sessionId,
         prompt: [{ type: "text", text }],
       });
-      return res.stopReason;
     } finally {
       // Cleared on every exit, so a failed or cancelled turn does not wedge
       // the agent into refusing all later prompts.

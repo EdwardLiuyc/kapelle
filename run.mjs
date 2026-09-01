@@ -104,7 +104,8 @@ try {
   await agent.newSession();
   if (!quiet) console.log(`session ${agent.sessionId}\n`);
 
-  const stopReason = await agent.prompt(promptText);
+  // The whole PromptResponse is returned (#62 B3); M1 renders only stopReason.
+  const { stopReason } = await agent.prompt(promptText);
   if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
 } catch (err) {
   console.error(`\nerror: ${err.message}`);
