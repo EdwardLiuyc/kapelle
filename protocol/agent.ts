@@ -206,7 +206,12 @@ export class AcpAgent {
   #proc: ChildProcessWithoutNullStreams | null = null;
   #nextId = 1;
   #pending = new Map<number | string, PendingRequest>();
-  #toolCalls = new Map<ToolCallId, RememberedToolCall>();
+  // Keyed by the id exactly as it arrives. `ToolCallId | undefined` rather
+  // than `ToolCallId` because `toolCallId` is a cast off the wire, never
+  // validated: a tool_call notification that omits it stores under `undefined`,
+  // and the lookup in #requestPermission has to be able to miss in the same
+  // way the pre-port code did.
+  #toolCalls = new Map<ToolCallId | undefined, RememberedToolCall>();
   #closed = false;
   #promptInFlight = false;
   #stderr: string[] = [];
@@ -510,8 +515,8 @@ export class AcpAgent {
   }
 
   // Inbound params arrive untyped and are narrowed per-branch below, which is
-  // the decode point M1a-2 chose instead of a runtime validator.
-  // pi-lens-ignore: no-unknown-parameters
+  // the decode point M1a-2 chose instead of a runtime validator. The
+  // suppression sits on the parameter itself, which is where the rule reports.
   async #handleRequest(
     method: string,
     // pi-lens-ignore: no-unknown-parameters
@@ -605,7 +610,7 @@ export class AcpAgent {
     toolCall,
     options,
   }: RequestPermissionParams): Promise<RequestPermissionResponse> {
-    const known = this.#toolCalls.get(toolCall?.toolCallId ?? "") ?? {};
+    const known = this.#toolCalls.get(toolCall?.toolCallId) ?? {};
     const detail: PolicyToolCall = {
       toolCallId: toolCall?.toolCallId,
       title: toolCall?.title ?? known.title ?? "(untitled tool call)",

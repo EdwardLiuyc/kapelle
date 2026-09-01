@@ -10,7 +10,7 @@ building and in what order. Draft — expect refinement.
 
 ## Context
 
-`agent-team` is today a 700-line ACP **client** (`protocol/agent.ts`, `agents.mjs`, `render.mjs`,
+`agent-team` is today a ~1,750-line ACP **client** (`protocol/agent.ts`, `agents.mjs`, `render.mjs`,
 `run.mjs`, `fanout.mjs`). `PROJECT-BRIEF.md` describes a **supervisor**. The gap between
 those two words is this plan.
 
@@ -315,11 +315,12 @@ driven from a run file, fully verifiable offline.
 
 - **`protocol/types.ts`** — the item that earns the TypeScript decision. Hand-written defs
   for every message we touch, especially the `session/update` discriminated union.
-  `update.sessionUpdate` is currently a bare string compared in two places (`protocol/agent.ts`,
+  `update.sessionUpdate` was a bare string compared in two places (`acp.mjs`,
   `render.mjs`) with nothing keeping them in sync.
 - **`protocol/agent.ts`** — today's `AcpAgent` essentially intact. Preserve both existing
   invariants: the `toolCallId → {title, kind, rawInput}` map (`protocol/agent.ts`) and
-  `#guardPath` (`protocol/agent.ts`). Replace the single `onEvent` callback with a typed emitter.
+  `#guardPath` (`protocol/agent.ts`). Type the single `onEvent` callback
+  (`EventSink` over the `AgentEvent` union); the multi-listener bus is M1a-6.
 - **`protocol/registry.ts`** — today's `AGENTS` map, plus three fields per entry beyond
   `{command, args}`: `defaultMode`, `maxMode`, and a containment label
   (`shell: "terminal" | "internal" | "unknown"`, filled in from M0) plus

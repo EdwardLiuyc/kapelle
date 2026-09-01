@@ -39,7 +39,7 @@ export type MessageId = string;
 export type SessionModeId = string;
 export type PermissionOptionId = string;
 export type TerminalId = string;
-/** Wire protocol version; the client hard-fails on mismatch (`acp.mjs`). */
+/** Wire protocol version; the client hard-fails on mismatch (`protocol/agent.ts`). */
 export type ProtocolVersion = number;
 
 // ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ interface ContentChunk extends Meta {
 // Tool calls
 // ---------------------------------------------------------------------------
 
-/** `READ_ONLY_KINDS` in `acp.mjs` is the subset this client treats as safe. */
+/** `READ_ONLY_KINDS` in `protocol/agent.ts` is the subset this client treats as safe. */
 export type ToolKind =
   | "read"
   | "edit"
@@ -190,7 +190,7 @@ export type ToolCallContent =
   | ToolCallContentTerminal;
 
 /** A new tool call. `kind`/`status` are optional on the wire (the schema
- *  deserializes defaults); `acp.mjs` already applies the `?? "other"` fallback. */
+ *  deserializes defaults); `protocol/agent.ts` already applies the `?? "other"` fallback. */
 export interface ToolCall extends Meta {
   sessionUpdate: "tool_call";
   toolCallId: ToolCallId;
@@ -207,7 +207,7 @@ export interface ToolCall extends Meta {
 }
 
 /** Progress on an existing call — everything but `toolCallId` is optional,
- *  only changed fields travel. `acp.mjs` merges these into its toolCall map. */
+ *  only changed fields travel. `protocol/agent.ts` merges these into its toolCall map. */
 export interface ToolCallUpdate extends Meta {
   sessionUpdate: "tool_call_update";
   toolCallId: ToolCallId;
@@ -431,7 +431,7 @@ export interface FileSystemCapabilities extends Meta {
   writeTextFile?: boolean;
 }
 
-/** We answer `fs/*` and never offer `terminal/*` (`acp.mjs`). */
+/** We answer `fs/*` and never offer `terminal/*` (`protocol/agent.ts`). */
 export interface ClientCapabilities extends Meta {
   fs?: FileSystemCapabilities;
   terminal?: boolean;
@@ -456,7 +456,7 @@ export interface PromptCapabilities extends Meta {
 }
 
 /** What we read off the handshake today: `loadSession`, `promptCapabilities`
- *  (`acp.mjs`). The schema carries more; extend when a consumer needs it. */
+ *  (`protocol/agent.ts`). The schema carries more; extend when a consumer needs it. */
 export interface AgentCapabilities extends Meta {
   loadSession?: boolean;
   promptCapabilities?: PromptCapabilities;

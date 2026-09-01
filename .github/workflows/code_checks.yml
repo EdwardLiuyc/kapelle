@@ -22,3 +22,5 @@ jobs:
             - run: npm run fmt:check
             - run: npm run check
             - run: npm run test
+            - run: npm run selftest
+            - run: npm run knip

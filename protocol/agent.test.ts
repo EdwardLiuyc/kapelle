@@ -7,7 +7,8 @@
  *
  * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
  * (#62 R5), the whole `PromptResponse` (#62 B3), the cancel-intent event
- * (#62 R4) and stderr capture on death.
+ * (#62 R4), stderr capture on death, `#guardPath` containment, and the
+ * toolCall-id lookup's parity with the pre-port client.
  */
 
 import assert from "node:assert/strict";
@@ -28,6 +29,69 @@ type CapturedEvent = {
   agent: string;
   update: { sessionUpdate: string; sessionId?: string };
 };
+
+/** What the policy is handed, structurally. Same reasoning as above. */
+type CapturedToolCall = { title: string; kind: string };
+
+/**
+ * Announces a `tool_call` that omits `toolCallId`, then asks permission with a
+ * `toolCall` that also omits it.
+ *
+ * Malformed against the schema, which requires the field — but `toolCallId` is
+ * a cast off the wire and never validated, so this is reachable from a
+ * non-conformant harness. The pre-port client stored under key `undefined` and
+ * found it again; the port briefly keyed on `""` and missed.
+ */
+const PERMISSION_WITHOUT_ID = [
+  'let buf = "";',
+  "let nextId = 2000;",
+  "const pending = new Map();",
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "session/new")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
+  '    else if (msg.method === "debug/permission") {',
+  "      write({",
+  '        jsonrpc: "2.0",',
+  '        method: "session/update",',
+  "        params: {",
+  '          sessionId: "s1",',
+  "          update: {",
+  '            sessionUpdate: "tool_call",',
+  '            title: "Read foo",',
+  '            kind: "read",',
+  "          },",
+  "        },",
+  "      });",
+  "      const rid = nextId++;",
+  "      pending.set(rid, msg.id);",
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: rid,",
+  '        method: "session/request_permission",',
+  "        params: {",
+  '          sessionId: "s1",',
+  "          toolCall: {},",
+  '          options: [{ optionId: "ok", name: "Allow", kind: "allow_once" }],',
+  "        },",
+  "      });",
+  "    } else if (msg.id !== undefined && pending.has(msg.id)) {",
+  "      const probeId = pending.get(msg.id);",
+  "      pending.delete(msg.id);",
+  '      write({ jsonrpc: "2.0", id: probeId, result: { answered: true } });',
+  "    }",
+  "  }",
+  "});",
+].join("\n");
 
 /** Accepts the pipe, reads stdin, and answers nothing, ever. */
 const HANGS_FOREVER = "process.stdin.resume();";
@@ -171,6 +235,34 @@ async function guardAgent(
 function probe(agent: AcpAgent, path: string, write = false): Promise<FsProbe> {
   return agent.request<FsProbe>("debug/fs", { path, write });
 }
+
+// --- toolCall lookup parity with the pre-port client --------------------------
+
+test("a tool_call that omits its id is still found when permission is asked", async (t) => {
+  const seen: CapturedToolCall[] = [];
+  const agent = new AcpAgent({
+    name: "no-id",
+    command: process.execPath,
+    args: ["-e", PERMISSION_WITHOUT_ID],
+    requestTimeoutMs: 5_000,
+    policy: (req) => {
+      seen.push(req.toolCall);
+      return true;
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+  await agent.request("debug/permission", {});
+
+  assert.equal(seen.length, 1, "the policy must be consulted exactly once");
+  // Keying the map on "" instead of undefined made these fall back to
+  // "(untitled tool call)" and "other", so the policy judged a call it could
+  // not see. That is the divergence this pins.
+  assert.equal(seen[0].title, "Read foo");
+  assert.equal(seen[0].kind, "read");
+});
 
 // --- #guardPath containment --------------------------------------------------
 

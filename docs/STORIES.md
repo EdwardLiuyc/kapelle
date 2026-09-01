@@ -297,8 +297,8 @@ for `.md`, pi-lens stays the deeper session layer.
 
 **M1a-2 · `protocol/types.ts` · M · needs M1a-1**
 Hand-written definitions for every message we touch. The `session/update` discriminated
-union is the point of the exercise: `update.sessionUpdate` is currently a bare string
-compared in two places (`protocol/agent.ts`, `render.mjs`) with nothing keeping them in sync.
+union is the point of the exercise: `update.sessionUpdate` was a bare string
+compared in two places (`acp.mjs`, `render.mjs`) with nothing keeping them in sync.
 **Decided 2026-08-23 (#62 B4): the types keep `_meta`, in both directions.**
 `_meta?: Record<string, unknown>` on the **base** of the message types — inbound
 notifications and responses, outbound requests alike — not on the variants that happen to
@@ -343,7 +343,10 @@ M2-1 (event log) if M1a-5 hand-extends.
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
 rawInput}` map (`protocol/agent.ts`) and `#guardPath` (`protocol/agent.ts`). The single `onEvent`
-callback becomes a typed emitter. Applies the registry's env mutation (M1a-4).
+callback becomes typed (`EventSink`, over the `AgentEvent` union) rather than an
+emitter — **amended 2026-08-31**: a multi-listener emitter has no consumer, and
+the event bus proper is M1a-6's `core/events.ts`. Applies the registry's env
+mutation (M1a-4).
 **Gap** — `AcpAgent.request()` never times out, and `#failAll` fires only on process close.
 A harness that spawns, accepts the pipe and never answers `initialize` hangs the task
 forever. The watchdog's TTL rung covers *running* tasks, so it structurally cannot see a

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`agent-team` — a minimal [Agent Client Protocol](https://agentclientprotocol.com) **client** in ~700 lines of ES modules. Zero runtime dependencies, Node ≥24, `"type": "module"`, no build step; `biome` formats and lints (`npm run fmt:check`), `node:test` covers pure functions (`npm run test`).
+`agent-team` — a minimal [Agent Client Protocol](https://agentclientprotocol.com) **client** in ~1,750 lines of TypeScript and ES modules. Zero runtime dependencies, Node ≥24, `"type": "module"`, no build step; `biome` formats and lints (`npm run fmt:check`), `node:test` covers pure functions (`npm run test`).
 
 The inversion that governs every design choice: **this code is the client, the coding harness is the agent.** We spawn the harness as a subprocess, own the workspace, serve its filesystem requests, and decide its permissions. Harnesses (opencode, gemini, copilot, …) authenticate themselves — this client never touches a key.
 
