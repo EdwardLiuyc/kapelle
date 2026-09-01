@@ -353,16 +353,37 @@ session-management methods, default 30s, explicitly not on `session/prompt`**, w
 legitimately long-running and is what the watchdog is for. M0-1 measured the slowest
 handshake step at 3.0 s (copilot's `session/new`), so 30 s is an order of magnitude above
 the worst observed. Extend it to `session/load` if that lands — same class of call.
-**Proposed (2026-08-23), the timeout's sibling** — the timeout catches a harness that is
-*alive but silent*; nothing catches one that **dies mid-handshake**. `#failAll`
-(`protocol/agent.ts`) then reports a bare exit code, and the harness's own explanation went to a
-stderr we discard unless `--verbose` (`protocol/agent.ts`). AgentPool races every handshake RPC
+**Decided 2026-08-31 (measured), the timeout's sibling** — the timeout catches a harness
+that is *alive but silent*; nothing caught one that **dies mid-handshake**. `#failAll`
+(`protocol/agent.ts`) reported a bare exit code, and the harness's own explanation went to a
+stderr we discarded unless `--verbose`. AgentPool races every handshake RPC
 against `process.wait()` and raises with the captured stderr
-(`utils/subprocess_utils.py:126`, used at `acp_agent.py:278`). For us that is a bounded
-stderr ring buffer — last ~20 lines, kept regardless of `--verbose` — attached to the
-rejection. ~25 lines, no dependency. Note M0-2 retired the papercut that originally
-motivated this (the `-32603` does not reproduce on 0.49.0), so the case rests on this gap
-alone, and on CI, where nobody is watching a terminal.
+(`utils/subprocess_utils.py:126`, used at `acp_agent.py:278`). **We now retain stderr
+unconditionally and attach all of it to the rejection.**
+
+**The measurement moved this decision twice, and is why it is no longer a ring buffer.**
+Run against all three harnesses on 2026-08-31 (raw captures on issue #11):
+
+1. **The premise was wrong.** All three complete `initialize` with an *empty home
+   directory* — credentials are not checked during the handshake, they are checked at turn
+   time. "Dies mid-handshake because it is not authenticated" is not a reachable failure.
+   The reproducible killers are a bad argv (copilot: exit 1, 3 lines) and a poisoned node
+   environment (claude: exit 1, 22 lines) — the latter being the same class of problem as
+   M0-2's `CLAUDE_PARENT_ENV` scrub. opencode survives both, being a native binary.
+2. **`~20` and *tail* were both guesses, and tail was the wrong end.** claude's actionable
+   line (`Error: Cannot find module …`) sits **17 lines from the end** of node's
+   MODULE_NOT_FOUND banner; opencode answers a bad flag with an 18-line usage dump and *no
+   error sentence at all*. A tail-10 window would have captured stack frames and
+   `Node.js v24.20.0`. Nothing in the implementation prefers the tail.
+3. **Bounding buys nothing today.** Through a complete turn, every harness in the
+   registry's configuration emits **zero** stderr bytes. Only `opencode acp --print-logs
+   --log-level DEBUG`, which we never pass, produces volume — 45 lines in 7.2 s, about
+   11 MB per agent per four hours. So retention is unbounded for now and trimming it is on
+   the backlog rather than in this story.
+
+Note M0-2 retired the papercut that originally motivated this (the `-32603` does not
+reproduce on 0.49.0), so the case rests on this gap alone, and on CI, where nobody is
+watching a terminal.
 *Done when* `npm run selftest` passes unchanged; a mock that accepts the pipe and never
 answers `initialize` fails the task in ~30s instead of hanging; a mock that exits during
 `initialize` fails with its own stderr in the message rather than an exit code; and
@@ -1057,6 +1078,20 @@ capacity is one large story lighter.
 ## Backlog — named, not scheduled
 
 Each carries its trigger, so none of these is waiting to become a blocker by accident:
+
+- **Bound the retained stderr to a head/tail window.** M1a-3 retains every stderr line for
+  the life of the agent and attaches all of it to a death rejection. The 2026-08-31
+  measurement says that costs nothing today — zero bytes per turn on all three harnesses in
+  the configuration we ship — so it was left unbounded on purpose. The shape when it is
+  wanted: keep the **first 12 and last 12 lines** with an elision marker, plus a per-line
+  byte cap. First-and-last rather than last-N because the measurement put the actionable
+  line near the head (17 lines from the end on claude); the per-line cap covers the one
+  hazard no line-count bound touches — a progress spinner writing `\r` with no `\n`
+  accumulates into a single unbounded line. *Trigger:* a harness measured emitting stderr
+  through a normal turn (`opencode --print-logs` already does ~11 MB per agent per 4 h), or
+  a rejection message large enough to be unreadable in the terminal or M2-1's event log.
+  Note M1b-7 keeps the complete record on disk regardless, so this is about what is held in
+  memory and pasted into an error, not about losing data.
 
 - **Sandboxing (`bwrap` / `sandbox-exec`).** The only option that actually closes the shell
   gap rather than documenting it, and the only thing that bounds `auto` mode's blast

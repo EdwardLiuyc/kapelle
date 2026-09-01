@@ -6,8 +6,8 @@
  * or does not reach the wire.
  *
  * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
- * (#62 R5), the whole `PromptResponse` (#62 B3) and the cancel-intent event
- * (#62 R4).
+ * (#62 R5), the whole `PromptResponse` (#62 B3), the cancel-intent event
+ * (#62 R4) and stderr capture on death.
  */
 
 import assert from "node:assert/strict";
@@ -27,6 +27,24 @@ type CapturedEvent = {
 
 /** Accepts the pipe, reads stdin, and answers nothing, ever. */
 const HANGS_FOREVER = "process.stdin.resume();";
+
+/**
+ * Accepts the pipe, explains itself on stderr, then dies during the handshake.
+ *
+ * The shape is copied from the real measurement in issue #11: node's
+ * MODULE_NOT_FOUND banner puts the actionable line near the head and leaves
+ * frames after it, which is why a tail-only window would have lost it.
+ */
+const DIES_MID_HANDSHAKE = [
+  "process.stdin.resume();",
+  "setTimeout(() => {",
+  '  console.error("node:internal/modules/cjs/loader:1568");',
+  "  console.error(\"Error: Cannot find module '/nonexistent/preload.js'\");",
+  '  console.error("    at Module._resolveFilename (node:internal/modules/cjs/loader:1564:15)");',
+  '  console.error("Node.js v24.20.0");',
+  "  process.exit(1);",
+  "}, 60);",
+].join("\n");
 
 /**
  * A minimal scripted harness: answers the handshake immediately, delays the
@@ -177,6 +195,55 @@ test("prompt() returns the whole response, usage and _meta intact", async (t) =>
   // The fleet's only exhaustion warning rides on _meta (M0-5), and M1a-2 put
   // _meta on the base of every message type precisely so it survives.
   assert.deepEqual(res._meta, { "_claude/rateLimit": "ok" });
+});
+
+// --- stderr capture on death -------------------------------------------------
+
+test("a harness that dies mid-handshake fails with its own stderr", async (t) => {
+  const agent = new AcpAgent({
+    name: "dying",
+    command: process.execPath,
+    args: ["-e", DIES_MID_HANDSHAKE],
+    requestTimeoutMs: 5_000,
+  });
+  t.after(() => agent.stop());
+
+  let err: Error | null = null;
+  try {
+    await agent.start();
+  } catch (caught) {
+    err = caught as Error;
+  }
+
+  assert.ok(err, "start() must reject when the harness dies");
+  // The bare exit code is what this replaces, so it must still be present.
+  assert.match(err.message, /exited with code 1/);
+  // ...and now the harness's own explanation comes with it.
+  assert.match(err.message, /Cannot find module '\/nonexistent\/preload\.js'/);
+  // That line sits near the head of the output; a tail-only window drops it.
+  assert.match(err.message, /node:internal\/modules\/cjs\/loader:1568/);
+});
+
+test("a silent harness produces no stderr section at all", async (t) => {
+  const agent = new AcpAgent({
+    name: "silent",
+    command: process.execPath,
+    args: ["-e", "process.exit(7);"],
+    requestTimeoutMs: 5_000,
+  });
+  t.after(() => agent.stop());
+
+  let err: Error | null = null;
+  try {
+    await agent.start();
+  } catch (caught) {
+    err = caught as Error;
+  }
+
+  assert.ok(err);
+  assert.match(err.message, /exited with code 7/);
+  // No trailing noise when the harness had nothing to say.
+  assert.doesNotMatch(err.message, /\[stderr\]/);
 });
 
 // --- #62 R4 · cancel-intent event --------------------------------------------

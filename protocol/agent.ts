@@ -182,9 +182,8 @@ function errorMessage(err: unknown): string {
  *
  * Ported from `acp.mjs` (M1a-3), then grown one behaviour at a time. Landed so
  * far: the per-request timeout (#62 B1), the in-flight prompt guard (#62 R5),
- * the whole `PromptResponse` (#62 B3) and the cancel-intent event (#62 R4).
- * Still outstanding from the story: the stderr ring buffer, which is gated on
- * measuring what a dying harness actually prints.
+ * the whole `PromptResponse` (#62 B3), the cancel-intent event (#62 R4) and
+ * stderr capture on death. Nothing from the story is outstanding.
  */
 // A verbatim port of acp.mjs's single class — the story is "essentially
 // intact", so splitting it is a refactor this change deliberately does not make.
@@ -210,6 +209,7 @@ export class AcpAgent {
   #toolCalls = new Map<ToolCallId, RememberedToolCall>();
   #closed = false;
   #promptInFlight = false;
+  #stderr: string[] = [];
 
   constructor({
     name,
@@ -258,15 +258,20 @@ export class AcpAgent {
 
     proc.on("close", (code: number | null) => {
       this.#closed = true;
-      this.#failAll(new Error(`agent "${this.name}" exited with code ${code}`));
+      this.#failAll(new Error(this.#exitMessage(code)));
     });
 
     createInterface({ input: proc.stdout }).on("line", (line: string) => {
       this.#onLine(line);
     });
 
-    // The spec allows agents to log freely on stderr. Surface it only when asked.
+    // Retained unconditionally, not only under --verbose: when a harness dies
+    // mid-handshake its own explanation is the only useful thing we have, and
+    // #failAll would otherwise report a bare exit code. Measured 2026-08-31
+    // (issue #11): every harness in the registry's configuration emits nothing
+    // at all on stderr through a normal turn, so retaining it costs nothing.
     createInterface({ input: proc.stderr }).on("line", (line: string) => {
+      this.#stderr.push(line);
       if (this.verbose) process.stderr.write(`[${this.name}:stderr] ${line}\n`);
     });
 
@@ -627,6 +632,28 @@ export class AcpAgent {
     });
 
     return { outcome: { outcome: "selected", optionId } };
+  }
+
+  /**
+   * What the death of the subprocess should say.
+   *
+   * The whole retained stderr is attached, deliberately unbounded (decided
+   * 2026-08-31 on the measurement in issue #11): a normal turn produces zero
+   * stderr bytes on every harness we ship, and the two reproducible
+   * mid-handshake deaths produced 22 and 3 lines. Trimming this to a
+   * head/tail window is on the backlog, not a live concern.
+   *
+   * Nothing here prefers the tail, because the measurement put the actionable
+   * line near the *head* on both harnesses that die — node's MODULE_NOT_FOUND
+   * banner leaves it 17 lines from the end.
+   */
+  #exitMessage(code: number | null): string {
+    const base = `agent "${this.name}" exited with code ${code}`;
+    if (this.#stderr.length === 0) return base;
+    const captured = this.#stderr
+      .map((line) => `  [stderr] ${line}`)
+      .join("\n");
+    return `${base}\n${captured}`;
   }
 
   #failAll(err: Error): void {
