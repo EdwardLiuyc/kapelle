@@ -626,6 +626,14 @@ harness that never asks.
 *Done when* a `node:test` truth table covers precedence `task > run > harness > safe`, the
 `maxMode` ceiling raising a **validation error naming both values** rather than downgrading
 silently, and `safe` overriding a requested `allowReadOutsideRoot: true`.
+**Landed 2026-09-02.** Three deviations worth knowing. (1) `autoPolicy` is *not* exported —
+`policyFor(mode)` is the only map from a mode to a decider, and a second copy of that map in
+each entry point is what the move was meant to remove. (2) `AcpAgent`'s default policy is
+deny-all, not `safePolicy`: `core/` imports `protocol/` and never the reverse, and a client
+with no decider attached should be the contained one. (3) No `--allow-read-outside-root`
+flag — the run layer resolves it, but the surface that sets it is M1b-1's run file, and a
+CLI flag now would be a second place to keep in step. Verified end to end: opencode 1.18.18
+wrote the file under `safe` before this story and declines after it, still as agent prose.
 
 **M1a-6 · `core/events.ts` · S · needs M1a-2**
 Typed bus carrying agent events plus supervisor events (task started, worktree created,

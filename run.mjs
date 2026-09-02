@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import {
-  AcpAgent,
-  autoPolicy,
   makeAskPolicy,
-  safePolicy,
-} from "./protocol/agent.ts";
+  negotiateSafeMode,
+  policyFor,
+  resolvePolicy,
+} from "./core/policy.ts";
+import { AcpAgent } from "./protocol/agent.ts";
 import {
   AGENTS,
   resolveAgent,
@@ -40,7 +41,7 @@ Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: opencode)
   --cmd "<cmd>"    custom agent command, e.g. --cmd "opencode acp"
   --cwd <dir>      workspace root (default: current directory)
-  --mode <mode>    ask | safe | auto      (default: ask)
+  --mode <mode>    ask | safe | auto      (default: the agent's own)
                      ask  = reads auto-approved, mutations prompt you
                      safe = reads only, all mutations refused
                      auto = approve everything (path guards still apply)
@@ -55,30 +56,49 @@ Examples:
   process.exit(promptText ? 0 : 1);
 }
 
-const mode = flag("mode", "ask");
 const verbose = argv.includes("--verbose");
 const quiet = argv.includes("--quiet");
 
-let policy = safePolicy;
-let closeAsk = () => {};
-// The mode the warnings describe: `ask` degrades to `safe` without a TTY.
-let effectiveMode = mode;
-if (mode === "auto") policy = autoPolicy;
-else if (mode === "ask") {
-  if (process.stdin.isTTY) {
-    const asker = makeAskPolicy();
-    policy = asker.policy;
-    closeAsk = asker.close;
-  } else {
-    console.error("! not a TTY — falling back to --mode safe");
-    effectiveMode = "safe";
+const spec = resolveAgent(flag("agent", "opencode"), flag("cmd"));
+
+// `task > run > harness > default`: run.mjs is one task, so `--mode` is the run
+// layer and the registry entry is the harness layer. An unknown mode, or one
+// above the entry's ceiling, is a validation error here rather than a silent
+// downgrade. There is no `--allow-read-outside-root` flag: the task layer that
+// carries it arrives with M1b-1's run file, and inventing a CLI surface for it
+// now would be a second place to keep in step.
+const resolveOrExit = (mode) => {
+  try {
+    return resolvePolicy({
+      run: { mode },
+      harness: {
+        name: spec.name,
+        mode: spec.defaultMode,
+        maxMode: spec.maxMode,
+      },
+    });
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
   }
-} else if (mode !== "safe") {
-  console.error(`unknown --mode ${mode}`);
-  process.exit(1);
+};
+
+let resolved = resolveOrExit(flag("mode"));
+let closeAsk = () => {};
+
+// `ask` degrades to `safe` without a TTY, and re-resolves rather than just
+// renaming itself, so `safe`'s own rules apply to the mode we actually run.
+if (resolved.mode === "ask" && !process.stdin.isTTY) {
+  console.error("! not a TTY — falling back to --mode safe");
+  resolved = resolveOrExit("safe");
 }
 
-const spec = resolveAgent(flag("agent", "opencode"), flag("cmd"));
+let policy = policyFor(resolved.mode);
+if (resolved.mode === "ask") {
+  const asker = makeAskPolicy();
+  policy = asker.policy;
+  closeAsk = asker.close;
+}
 
 const agent = new AcpAgent({
   name: spec.name,
@@ -87,6 +107,7 @@ const agent = new AcpAgent({
   env: resolveEnv(spec.launch.env),
   cwd: flag("cwd", process.cwd()),
   policy,
+  allowReadOutsideRoot: resolved.allowReadOutsideRoot,
   verbose,
   onEvent: quiet ? () => {} : render,
 });
@@ -113,13 +134,20 @@ try {
   for (const line of warningsFor(
     spec.name,
     spec,
-    effectiveMode,
+    resolved.mode,
     init.agentInfo?.version,
   )) {
     console.error(`! ${line}`);
   }
 
   await agent.newSession();
+
+  // `safe`'s other half: negotiate before the first prompt, because filtering
+  // reaches nothing on a harness that never asks. Printed like the containment
+  // lines and, like them, not suppressed by --quiet (#13): this line says how
+  // much of `safe` is actually in force.
+  const notNegotiated = await negotiateSafeMode(agent, spec, resolved.mode);
+  if (notNegotiated) console.error(`! ${notNegotiated}`);
   if (!quiet) console.log(`session ${agent.sessionId}\n`);
 
   // The whole PromptResponse is returned (#62 B3); M1 renders only stopReason.

@@ -8,7 +8,8 @@
  * workspace root. They run concurrently and report back structurally.
  */
 import { readFile } from "node:fs/promises";
-import { AcpAgent, autoPolicy, safePolicy } from "./protocol/agent.ts";
+import { negotiateSafeMode, policyFor, resolvePolicy } from "./core/policy.ts";
+import { AcpAgent } from "./protocol/agent.ts";
 import { resolveAgent, resolveEnv } from "./protocol/registry.ts";
 
 const file = process.argv[2] ?? "tasks.json";
@@ -21,12 +22,27 @@ try {
   process.exit(1);
 }
 
-const POLICIES = { safe: safePolicy, auto: autoPolicy };
-
 const results = await Promise.allSettled(
   tasks.map(async (task, i) => {
     const spec = resolveAgent(task.agent ?? "opencode", task.cmd);
     const label = `${task.agent ?? spec.name}#${i}`;
+
+    // No task has a TTY, so `ask` cannot prompt. It is resolved as `safe`
+    // rather than renamed, so safe's own rules — including forcing
+    // allowReadOutsideRoot to false — apply to the mode that actually runs.
+    const asked = task.mode ?? spec.defaultMode ?? "ask";
+    if (asked === "ask") console.log(`[${label}] no TTY — ask runs as safe`);
+    const resolved = resolvePolicy({
+      task: {
+        mode: asked === "ask" ? "safe" : asked,
+        allowReadOutsideRoot: task.allowReadOutsideRoot,
+      },
+      harness: {
+        name: spec.name,
+        mode: spec.defaultMode,
+        maxMode: spec.maxMode,
+      },
+    });
 
     // Interleaved token streams are unreadable, so buffer the prose and only
     // log milestones live.
@@ -38,7 +54,8 @@ const results = await Promise.allSettled(
       args: spec.launch.args,
       env: resolveEnv(spec.launch.env),
       cwd: task.cwd ?? process.cwd(),
-      policy: POLICIES[task.mode ?? "safe"] ?? safePolicy,
+      policy: policyFor(resolved.mode),
+      allowReadOutsideRoot: resolved.allowReadOutsideRoot,
       onEvent: ({ update }) => {
         if (
           update.sessionUpdate === "agent_message_chunk" &&
@@ -55,6 +72,8 @@ const results = await Promise.allSettled(
     try {
       await agent.start();
       await agent.newSession();
+      const notNegotiated = await negotiateSafeMode(agent, spec, resolved.mode);
+      if (notNegotiated) console.log(`[${label}] ! ${notNegotiated}`);
       const { stopReason } = await agent.prompt(task.prompt);
       return { label, cwd: agent.cwd, stopReason, output: transcript.join("") };
     } finally {
