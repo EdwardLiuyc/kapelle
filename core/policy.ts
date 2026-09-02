@@ -124,7 +124,7 @@ export function resolvePolicy({
   harness?: HarnessLayer;
 } = {}): ResolvedPolicy {
   const mode = task?.mode ?? run?.mode ?? harness?.mode ?? "ask";
-  if (!(mode in RANK)) {
+  if (!Object.hasOwn(RANK, mode)) {
     throw new Error(
       `unknown mode "${mode}". Known: ${Object.keys(RANK).join(", ")}.`,
     );

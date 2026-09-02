@@ -554,7 +554,7 @@ M1a-2's types. Hand-extend if `set_mode` is the only addition M1 needs; otherwis
 the criteria recorded under M1a-2 (2026-08-30).
 Small in lines, load-bearing. The signature changes from `async () => boolean` to a form an
 external asynchronous decider can answer, so M2-3's `ask` works with no TTY.
-`READ_ONLY_KINDS`, `safePolicy` and `autoPolicy` semantics are unchanged (`protocol/agent.ts`).
+`READ_ONLY_KINDS`, `safePolicy` and `autoPolicy` semantics are unchanged (`core/policy.ts`).
 **Gap (raised 2026-09-02, Copilot review of PR #72) — `pickOption`'s zero-match tail
 fails open.** When the policy denies but the harness's option list carries no reject kind,
 the tail `options[0]?.optionId` returns whatever sits first, which can be an
@@ -623,7 +623,7 @@ asks nothing, so no policy value changes its behaviour at all. Keep `READ_ONLY_K
 it is — kind is the only thing the protocol gives us — and let M1a-4's `defaultMode` carry
 the per-harness adjustment, but say plainly in the docs that mode is advisory against a
 harness that never asks.
-*Done when* a `node:test` truth table covers precedence `task > run > harness > safe`, the
+*Done when* a `node:test` truth table covers precedence `task > run > harness > default`, the
 `maxMode` ceiling raising a **validation error naming both values** rather than downgrading
 silently, and `safe` overriding a requested `allowReadOutsideRoot: true`.
 **Landed 2026-09-02.** Three deviations worth knowing. (1) `autoPolicy` is *not* exported —

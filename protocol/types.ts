@@ -144,7 +144,7 @@ interface ContentChunk extends Meta {
 // Tool calls
 // ---------------------------------------------------------------------------
 
-/** `READ_ONLY_KINDS` in `protocol/agent.ts` is the subset this client treats as safe. */
+/** `READ_ONLY_KINDS` in `core/policy.ts` is the subset this client treats as safe. */
 export type ToolKind =
   | "read"
   | "edit"

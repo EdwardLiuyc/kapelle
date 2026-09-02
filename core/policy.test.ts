@@ -128,12 +128,16 @@ test("a mode above maxMode is an error naming both values, not a downgrade", () 
 });
 
 test("an unknown mode is rejected rather than carried", () => {
-  assert.throws(
-    // The value arrives from a CLI flag or a JSON run file, so the compiler
-    // never saw it. That is the whole reason for a runtime check.
-    () => resolvePolicy({ run: { mode: "yolo" as "safe" } }),
-    /unknown mode "yolo"/,
-  );
+  // The value arrives from a CLI flag or a JSON run file, so the compiler
+  // never saw it. That is the whole reason for a runtime check — and it must
+  // test own properties, or Object.prototype names like "toString" slip
+  // through and silently run as safe.
+  for (const mode of ["yolo", "toString", "constructor"]) {
+    assert.throws(
+      () => resolvePolicy({ run: { mode: mode as "safe" } }),
+      new RegExp(`unknown mode "${mode}"`),
+    );
+  }
 });
 
 // --- policies ----------------------------------------------------------------
