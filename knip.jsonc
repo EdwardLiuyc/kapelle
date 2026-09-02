@@ -10,7 +10,7 @@
   "ignore": ["protocol/types.ts"],
   // Entry points. The `!` suffix marks a *production* entry: without it, knip's
   // --production mode (which pi-lens runs) has no roots at all and reports every
-  // reachable file — protocol/agent.ts, render.mjs, agents.mjs — as unused.
+  // reachable file — protocol/agent.ts, protocol/registry.ts, render.mjs — as unused.
   //
   // knip emits "Remove redundant entry pattern" for the two `!` entries, since
   // package.json's `start`/`fanout` scripts already make them dev entries.

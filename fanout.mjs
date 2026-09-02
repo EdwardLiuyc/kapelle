@@ -8,8 +8,8 @@
  * workspace root. They run concurrently and report back structurally.
  */
 import { readFile } from "node:fs/promises";
-import { resolveAgent, resolveEnv } from "./agents.mjs";
 import { AcpAgent, autoPolicy, safePolicy } from "./protocol/agent.ts";
+import { resolveAgent, resolveEnv } from "./protocol/registry.ts";
 
 const file = process.argv[2] ?? "tasks.json";
 
@@ -34,9 +34,9 @@ const results = await Promise.allSettled(
 
     const agent = new AcpAgent({
       name: label,
-      command: spec.command,
-      args: spec.args,
-      env: resolveEnv(spec.env),
+      command: spec.launch.command,
+      args: spec.launch.args,
+      env: resolveEnv(spec.launch.env),
       cwd: task.cwd ?? process.cwd(),
       policy: POLICIES[task.mode ?? "safe"] ?? safePolicy,
       onEvent: ({ update }) => {

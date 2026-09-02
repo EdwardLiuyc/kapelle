@@ -1,11 +1,16 @@
 #!/usr/bin/env node
-import { AGENTS, resolveAgent, resolveEnv } from "./agents.mjs";
 import {
   AcpAgent,
   autoPolicy,
   makeAskPolicy,
   safePolicy,
 } from "./protocol/agent.ts";
+import {
+  AGENTS,
+  resolveAgent,
+  resolveEnv,
+  warningsFor,
+} from "./protocol/registry.ts";
 import { render } from "./render.mjs";
 
 const argv = process.argv.slice(2);
@@ -56,6 +61,8 @@ const quiet = argv.includes("--quiet");
 
 let policy = safePolicy;
 let closeAsk = () => {};
+// The mode the warnings describe: `ask` degrades to `safe` without a TTY.
+let effectiveMode = mode;
 if (mode === "auto") policy = autoPolicy;
 else if (mode === "ask") {
   if (process.stdin.isTTY) {
@@ -64,6 +71,7 @@ else if (mode === "ask") {
     closeAsk = asker.close;
   } else {
     console.error("! not a TTY — falling back to --mode safe");
+    effectiveMode = "safe";
   }
 } else if (mode !== "safe") {
   console.error(`unknown --mode ${mode}`);
@@ -74,9 +82,9 @@ const spec = resolveAgent(flag("agent", "opencode"), flag("cmd"));
 
 const agent = new AcpAgent({
   name: spec.name,
-  command: spec.command,
-  args: spec.args,
-  env: resolveEnv(spec.env),
+  command: spec.launch.command,
+  args: spec.launch.args,
+  env: resolveEnv(spec.launch.env),
   cwd: flag("cwd", process.cwd()),
   policy,
   verbose,
@@ -99,6 +107,16 @@ try {
       ? `${init.agentInfo.name} ${init.agentInfo.version ?? ""}`.trim()
       : spec.name;
     console.log(`connected to ${who} (ACP v${init.protocolVersion})`);
+  }
+
+  // M1a-4: what this harness's measured labels say the mode does not bound.
+  for (const line of warningsFor(
+    spec.name,
+    spec,
+    effectiveMode,
+    init.agentInfo?.version,
+  )) {
+    console.error(`! ${line}`);
   }
 
   await agent.newSession();

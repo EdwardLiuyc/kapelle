@@ -7,7 +7,7 @@ A minimal Agent Client Protocol client. ~1,750 lines, zero runtime dependencies,
 
 You are the **client**: you spawn the harness as a subprocess, own the workspace,
 answer its file-system requests, and decide its permissions. The harness is the
-**agent**. Adding a second harness is a line in `agents.mjs`, not an integration.
+**agent**. Adding a second harness is an entry in `protocol/registry.ts`, not an integration.
 
 ## Files
 
@@ -15,7 +15,7 @@ answer its file-system requests, and decide its permissions. The harness is the
 | --- | --- |
 | `protocol/agent.ts` | The client. JSON-RPC over stdio, handshake, `fs/*`, permissions. |
 | `protocol/types.ts` | Hand-written types for every message we touch, incl. the `session/update` union. |
-| `agents.mjs` | How to launch each harness in ACP mode. The whole adapter layer. |
+| `protocol/registry.ts` | How to launch each harness in ACP mode, and what we measured when we ran it. The whole adapter layer. |
 | `run.mjs` | CLI: one prompt, one agent. |
 | `fanout.mjs` | Several agents in parallel from `tasks.json`. |
 | `render.mjs` | Terminal output for `session/update` events. |
