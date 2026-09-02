@@ -149,6 +149,38 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       status: "completed",
     });
 
+    // A harness that offers no way to say no. Every build we measured on
+    // 2026-09-02 does offer one (issue #13), so this is the unmeasured case
+    // the client must not fail open on: under --mode safe the client answers
+    // `cancelled` rather than selecting the first option in the list.
+    update(sid, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t3",
+      title: "Delete something, with no reject option offered",
+      kind: "delete",
+      status: "pending",
+    });
+    const forced = await callClient("session/request_permission", {
+      sessionId: sid,
+      toolCall: { toolCallId: "t3" },
+      options: [
+        { optionId: "always", name: "Always allow", kind: "allow_always" },
+        { optionId: "once", name: "Allow once", kind: "allow_once" },
+      ],
+    });
+    update(sid, {
+      sessionUpdate: "agent_message_chunk",
+      content: {
+        type: "text",
+        text: `\nAllow-only menu answered: ${JSON.stringify(forced?.outcome)}.`,
+      },
+    });
+    update(sid, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t3",
+      status: "completed",
+    });
+
     update(sid, { sessionUpdate: "usage_update", used: 1234, size: 200000 });
     reply(msg.id, { stopReason: "end_turn" });
   }

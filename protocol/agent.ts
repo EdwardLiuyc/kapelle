@@ -19,7 +19,9 @@ import type {
   ReadTextFileResponse,
   RequestPermissionResponse,
   SessionId,
+  SessionModeId,
   SessionUpdate,
+  SetSessionModeResponse,
   ToolCallContent,
   ToolCallId,
   ToolCallLocation,
@@ -30,9 +32,6 @@ import type {
 } from "./types.ts";
 
 const PROTOCOL_VERSION = 1;
-
-// Tool kinds we consider non-destructive. Used by the "safe" policy.
-const READ_ONLY_KINDS = new Set<ToolKind>(["read", "search", "fetch", "think"]);
 
 /**
  * Methods that carry a per-request deadline (#62 B1, ratified 2026-08-23).
@@ -50,11 +49,22 @@ const TIMED_METHODS = new Set([
   "session/new",
   "session/load",
   "session/close",
+  "session/set_mode",
 ]);
 
 // M0-1 measured the slowest handshake step at 3.0s (copilot's session/new),
 // so this is an order of magnitude above the worst observed.
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The policy a caller who supplied none gets.
+ *
+ * It is not `safePolicy`: the policies live in `core/policy.ts` since M1a-5 and
+ * the dependency runs core → protocol, never back. Refusing everything is the
+ * right shape for the gap anyway — a client with no decider attached should be
+ * the contained one, and every real caller passes a policy.
+ */
+const DENY_ALL: Policy = () => false;
 
 // --- the shapes the class hands to its collaborators -------------------------
 
@@ -222,7 +232,7 @@ export class AcpAgent {
     args = [],
     cwd = process.cwd(),
     env = process.env,
-    policy = safePolicy,
+    policy = DENY_ALL,
     onEvent = () => {},
     allowReadOutsideRoot = false,
     verbose = false,
@@ -328,6 +338,29 @@ export class AcpAgent {
     });
     this.sessionId = res.sessionId;
     return this.sessionId;
+  }
+
+  /**
+   * Ask the harness to switch its own mode.
+   *
+   * The only surface M1 needs beyond M1a-2's typed subset, which is criterion
+   * (1) recorded there for hand-extending rather than adopting the SDK's
+   * generated types: one small addition, so the hand-written union and its
+   * `assertNever` exhaustiveness stay (`docs/STORIES.md`, M1a-2, 2026-08-30).
+   *
+   * `modeId` is a harness-side id from the registry's `measured.modeMap`, not
+   * one of ours — the vocabularies do not align, and copilot's ids are whole
+   * URLs. The spec says the id must appear in `availableModes`; opencode
+   * advertises none and honours the call anyway (§M0-1), so we do not check.
+   * Who calls this, and in which modes, is `core/policy.ts`'s decision.
+   */
+  async setMode(modeId: SessionModeId): Promise<SetSessionModeResponse> {
+    if (!this.sessionId)
+      throw new Error("no session — call newSession() first");
+    return this.request<SetSessionModeResponse>("session/set_mode", {
+      sessionId: this.sessionId,
+      modeId,
+    });
   }
 
   /**
@@ -637,10 +670,15 @@ export class AcpAgent {
         allow,
         title: detail.title,
         kind: detail.kind,
-        optionId,
+        optionId: optionId ?? undefined,
       },
     });
 
+    // `cancelled` is the spec's turn-cancelled reply and it does not name this
+    // case, so it is the fallback, never the first choice. Measured against
+    // claude 0.49.0 and copilot 1.0.80: no file written, no protocol error, a
+    // clean `end_turn`.
+    if (optionId === null) return { outcome: { outcome: "cancelled" } };
     return { outcome: { outcome: "selected", optionId } };
   }
 
@@ -676,11 +714,22 @@ export class AcpAgent {
   }
 }
 
-/** Choose an optionId matching our allow/reject decision. */
+/**
+ * Choose an optionId matching our allow/reject decision, or `null`.
+ *
+ * `null` means the harness offered nothing that says what we decided. The
+ * pre-M1a-5 tail returned `options[0]` there, which fails open: measured
+ * 2026-09-02 (issue #13), claude orders its list `allow_always` first, so a
+ * *denial* with no reject option would have selected "Always Allow all Write"
+ * — a persisted grant. Every list the three harnesses actually send carries
+ * `reject_once`, so the tail never fired; nothing in the protocol promises
+ * that, and the failure would have been invisible because the denial is still
+ * what `_client_permission` records.
+ */
 function pickOption(
   options: PermissionOption[] = [],
   allow: boolean,
-): PermissionOptionId {
+): PermissionOptionId | null {
   const want: PermissionOption["kind"][] = allow
     ? ["allow_once", "allow_always"]
     : ["reject_once", "reject_always"];
@@ -688,35 +737,5 @@ function pickOption(
     const hit = options.find((o) => o.kind === kind);
     if (hit) return hit.optionId;
   }
-  return options[0]?.optionId;
-}
-
-// ---------- permission policies ----------
-
-/** Read-only work proceeds; anything that mutates is refused. */
-export async function safePolicy({
-  toolCall,
-}: PolicyRequest): Promise<boolean> {
-  return READ_ONLY_KINDS.has(toolCall.kind);
-}
-
-/** Everything allowed. Path guards still apply to fs/* requests. */
-export async function autoPolicy(): Promise<boolean> {
-  return true;
-}
-
-/** Read-only auto-approved; mutations prompt on the terminal. */
-export function makeAskPolicy(): { close: () => void; policy: Policy } {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q: string) => new Promise<string>((res) => rl.question(q, res));
-  return {
-    close: () => rl.close(),
-    policy: async ({ agent, toolCall }: PolicyRequest) => {
-      if (READ_ONLY_KINDS.has(toolCall.kind)) return true;
-      const answer = await ask(
-        `\n  ${agent} wants to run [${toolCall.kind}] ${toolCall.title}\n  allow? [y/N] `,
-      );
-      return /^y(es)?$/i.test(answer.trim());
-    },
-  };
+  return null;
 }

@@ -685,3 +685,138 @@ test("the guard clears once a turn ends, so later prompts still work", async (t)
   const seen = await agent.request<{ count: number }>("debug/prompt_count");
   assert.equal(seen.count, 2, "sequential turns must both reach the harness");
 });
+
+// --- permission outcomes (M1a-5, issue #13) ----------------------------------
+
+/**
+ * Asks permission on demand with either a normal option list or an allow-only
+ * one, and reports back what the client answered.
+ *
+ * `debug/ask` exists so the outcome is observable: the response to
+ * `session/request_permission` is the thing under test, and nothing else on
+ * the wire carries it. Also records `session/set_mode`, which is the only
+ * other new surface this story puts on the wire.
+ */
+const REPORTS_PERMISSION_OUTCOME = [
+  'let buf = "";',
+  "let nextId = 3000;",
+  "let mode = null;",
+  "const pending = new Map();",
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "session/new")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
+  '    else if (msg.method === "session/set_mode") {',
+  "      mode = msg.params;",
+  '      write({ jsonrpc: "2.0", id: msg.id, result: {} });',
+  '    } else if (msg.method === "debug/ask") {',
+  "      const rid = nextId++;",
+  "      pending.set(rid, msg.id);",
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: rid,",
+  '        method: "session/request_permission",',
+  "        params: {",
+  '          sessionId: "s1",',
+  '          toolCall: { toolCallId: "t1", title: "Write it", kind: "edit" },',
+  "          options: msg.params.allowOnly",
+  "            ? [",
+  '                { optionId: "always", name: "Always", kind: "allow_always" },',
+  '                { optionId: "once", name: "Allow", kind: "allow_once" },',
+  "              ]",
+  "            : [",
+  '                { optionId: "once", name: "Allow", kind: "allow_once" },',
+  '                { optionId: "no", name: "Reject", kind: "reject_once" },',
+  "              ],",
+  "        },",
+  "      });",
+  "    } else if (msg.id !== undefined && pending.has(msg.id)) {",
+  "      const debugId = pending.get(msg.id);",
+  "      pending.delete(msg.id);",
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: debugId,",
+  "        result: { mode, outcome: msg.result.outcome },",
+  "      });",
+  "    }",
+  "  }",
+  "});",
+].join("\n");
+
+type AskResult = {
+  mode: { sessionId: string; modeId: string } | null;
+  outcome: { outcome: string; optionId?: string };
+};
+
+async function permissionAgent(
+  t: TestContext,
+  policy: () => boolean,
+  onEvent?: (e: CapturedEvent) => void,
+): Promise<AcpAgent> {
+  const agent = new AcpAgent({
+    name: "perm",
+    command: process.execPath,
+    args: ["-e", REPORTS_PERMISSION_OUTCOME],
+    requestTimeoutMs: 5_000,
+    policy,
+    onEvent,
+  });
+  t.after(() => agent.stop());
+  await agent.start();
+  await agent.newSession();
+  return agent;
+}
+
+test("a denial with no reject option answers cancelled, not a guessed allow", async (t) => {
+  const seen: CapturedEvent[] = [];
+  const agent = await permissionAgent(
+    t,
+    () => false,
+    (e) => seen.push(e),
+  );
+
+  const res = await agent.request<AskResult>("debug/ask", { allowOnly: true });
+
+  // The pre-M1a-5 tail would have sent `always` here — claude orders
+  // allow_always first, so the denial would have become a persisted grant.
+  assert.deepEqual(res.outcome, { outcome: "cancelled" });
+  const record = seen.find(
+    (e) => e.update.sessionUpdate === "_client_permission",
+  );
+  assert.ok(record, "the decision is still recorded");
+  const decision = record.update as { allow?: boolean; optionId?: string };
+  assert.equal(decision.allow, false, "the event still records the denial");
+  assert.equal(
+    decision.optionId,
+    undefined,
+    "and records that no option carried it",
+  );
+});
+
+test("a matching reject option is preferred over cancelling", async (t) => {
+  const agent = await permissionAgent(t, () => false);
+  const res = await agent.request<AskResult>("debug/ask", { allowOnly: false });
+  assert.deepEqual(res.outcome, { outcome: "selected", optionId: "no" });
+});
+
+test("an approval takes allow_once even when allow_always is listed first", async (t) => {
+  const agent = await permissionAgent(t, () => true);
+  const res = await agent.request<AskResult>("debug/ask", { allowOnly: true });
+  assert.deepEqual(res.outcome, { outcome: "selected", optionId: "once" });
+});
+
+test("setMode sends the session id and the harness's own mode id", async (t) => {
+  const agent = await permissionAgent(t, () => false);
+  await agent.setMode("plan");
+  const res = await agent.request<AskResult>("debug/ask", { allowOnly: false });
+  assert.deepEqual(res.mode, { sessionId: "s1", modeId: "plan" });
+});

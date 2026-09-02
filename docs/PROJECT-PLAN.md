@@ -45,7 +45,7 @@ policy across all of them and returning machine-readable results.
 | Sandboxing | **Deferred, with an event trigger rather than a judgement (decided 2026-08-23, #62 R2): M2's daemon accepting `POST /runs`.** Until dispatch can come from somewhere other than the operator's own terminal, `auto` is a watched human act; after it, `auto` plus an API is remote code execution as a service. M1's worktree isolation, containment label and silent-autonomy warning bound **nothing** about the harness's own shell, and the docs say so. |
 | Token accounting | **Captured in M1, rendered only where measured (decided 2026-08-23, #62 B3).** `PromptResponse.usage` is the only per-task count present on all three harnesses (M0-5) and the client used to discard it; M1a-3 now keeps the whole response. No figure reaches a result block until M1a-4 records the per-harness semantics — it is `UNSTABLE` in schema 0.28.1 and **cumulative on copilot where it is per-turn elsewhere**. |
 | Registry staleness | **Every entry stamps `measuredOn: { version, date }` (decided 2026-08-23, #62 B2)**, compared at startup, **warning only, never fatal**. M0-7 measured three copilot behaviours changing in three days, so every label is a claim about a build. Entries with no `measuredOn` are unverified by that absence — which is also how `omp`, `pi` and `gemini` stay in the registry (B5) without their guessed labels reading as measured. |
-| Policy scope | Per task, with run default, harness default, and a harness **ceiling**. Precedence `task > run > harness > safe`; exceeding the ceiling fails validation rather than downgrading silently. |
+| Policy scope | Per task, with run default, harness default, and a harness **ceiling**. Precedence `task > run > harness > default`; exceeding the ceiling fails validation rather than downgrading silently. |
 | Cost | Duration and turn count roll up per run. Token counts stay per task, labelled with their harness, never summed across vendors. |
 | Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally, **and separately whether we ever see the command text** (`argvChannel`). `safe` warns when it cannot actually contain. **Measured (M0-1, M0-3): all three run internally and none calls `terminal/*` even when offered; opencode never asks permission and never shows us a command, so the policy has no jurisdiction over it; claude-agent-acp and copilot do show real argv, on `session/update` notifications. All three accept `session/set_mode`, so modes are a second containment channel.** |
 | Unattended `ask` | Pending decision published on the event stream; **timeout → deny**. |
@@ -329,8 +329,8 @@ driven from a run file, fully verifiable offline.
   `argvChannel: "terminal" | "notification" | "permission" | "none"` — M0-3 found the
   command text arrives on `session/update` notifications, not through `terminal/*`, so
   where a command runs and whether we can see it are two facts. Mode ordering is the
-  total order `safe < ask < auto`. Resolution is `task ?? run ?? harness.defaultMode ??
-  "safe"`, then the `maxMode` ceiling applies — and exceeding it is a **validation error
+  total order `safe < ask < auto`. Resolution is `task > run > harness > default` (the
+  default is `"ask"`), then the `maxMode` ceiling applies — and exceeding it is a **validation error
   naming both values**, never a silent downgrade. Starting a task in `safe` or `ask` against
   a `shell: "internal"` harness emits a one-line containment warning as a bus event, so the
   CLI and the M4 dashboard both surface it.
@@ -361,7 +361,7 @@ driven from a run file, fully verifiable offline.
 - **`core/policy.ts`** — small in lines, load-bearing. Change the policy signature from
   `async () => boolean` to a form answerable by an external, asynchronous decider, so `ask`
   can work with no TTY in M2. Keep `READ_ONLY_KINDS`, `safePolicy`, `autoPolicy` semantics
-  exactly as they are (`protocol/agent.ts`).
+  exactly as they are (`core/policy.ts`).
 - **`core/run.ts`** — the new center of gravity. Run owns N Tasks; Task owns one agent, one
   worktree, one policy, one result. Lifecycle `pending → running → done | failed |
   timed_out | cancelled`. The run's roll-up is **duration and turn count** — the only units

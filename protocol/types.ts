@@ -144,7 +144,7 @@ interface ContentChunk extends Meta {
 // Tool calls
 // ---------------------------------------------------------------------------
 
-/** `READ_ONLY_KINDS` in `protocol/agent.ts` is the subset this client treats as safe. */
+/** `READ_ONLY_KINDS` in `core/policy.ts` is the subset this client treats as safe. */
 export type ToolKind =
   | "read"
   | "edit"
@@ -568,6 +568,23 @@ export interface LoadSessionResponse extends Meta {
   modes?: SessionModeState;
   configOptions?: SessionConfigOption[];
 }
+
+/**
+ * Sent under `safe`, with a harness-side id from the registry's `modeMap`.
+ *
+ * Hand-extended at M1a-5 rather than replaced by the SDK's generated types:
+ * this was the single untyped surface M1 turned out to need, which is the
+ * recorded criterion for staying hand-written (M1a-2, 2026-08-30).
+ */
+export interface SetSessionModeRequest extends Meta {
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "session/set_mode";
+  params: { sessionId: SessionId; modeId: SessionModeId } & Meta;
+}
+
+/** Empty on the wire; `{}` rather than `null`, as with WriteTextFileResponse. */
+export interface SetSessionModeResponse extends Meta {}
 
 /** Typed only — not sent; all three harnesses support close (M0 roll-up). */
 export interface CloseSessionRequest extends Meta {
