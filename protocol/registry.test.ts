@@ -11,6 +11,7 @@ import { test } from "node:test";
 import {
   AGENTS,
   type AgentEntry,
+  resolveAgent,
   resolveEnv,
   warningsFor,
 } from "./registry.ts";
