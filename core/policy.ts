@@ -9,13 +9,20 @@
  * 2. **Filter.** `READ_ONLY_KINDS` decides every `session/request_permission`
  *    that still arrives.
  *
- * **Neither half is a sandbox, and against some harnesses neither half binds.**
- * Where `measured.asksPermission` is false — opencode, measured — no policy
- * value changes behaviour at all: it wrote a file under `safe` over a denial
- * (`docs/M0-FINDINGS.md` §M0-1). Mode is advisory there. The refusal we did get
- * out of opencode after negotiating came back as agent prose, not as an
- * enforced boundary, so this is defence in depth and the containment notice
- * `warningsFor` prints is the thing that says so out loud.
+ * **Neither half is a sandbox. Neither one enforces anything.** They fail
+ * differently, though, and the difference is worth keeping straight:
+ *
+ * - The **filter** has no jurisdiction wherever `measured.asksPermission` is
+ *   false. opencode never sends `session/request_permission`, so no policy
+ *   value is ever consulted and none changes what it does: it wrote the file
+ *   under `safe`, over a denial (`docs/M0-FINDINGS.md` §M0-1).
+ * - **Negotiation** did change what opencode does — measured 2026-09-02, the
+ *   same prompt wrote the file without it and was refused with it. What it
+ *   does not do is *bind*: the refusal arrived as agent prose, so the harness
+ *   chose to honour the mode and could have chosen otherwise.
+ *
+ * So `safe` is defence in depth, and the containment notice `warningsFor`
+ * prints is the thing that says so out loud.
  *
  * `READ_ONLY_KINDS` is unchanged from the pre-M1a-5 client on purpose: `kind`
  * is the only thing the protocol hands us. The known cost is copilot, which
