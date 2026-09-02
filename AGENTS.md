@@ -43,12 +43,26 @@ other's comments. `tsc` stays the type checker (`npm run check`), markdownlint s
 
 pi-lens is the deeper lint layer (per-edit dispatch + session scans). Before finishing a
 change, clear every finding — no blockers, no warnings. Each finding is resolved one of
-three ways: **fix** it (preferred; the fix is observed, not asserted), **suppress** it
+four ways: **fix** it (preferred; the fix is observed, not asserted), **suppress** it
 inline with `// pi-lens-ignore: <rule>` (bare rule-id, comma-separate several; put the
-reason in an adjacent comment — trailing text breaks the match), or **disable** the rule
+reason in an adjacent comment — trailing text breaks the match), **disable** the rule
 project-wide in `.pi-lens.json` (`rules.<id>.disable`), recording the reason in the commit
-message. Check with `lens_diagnostics` (mode `full`); config lives in `.pi-lens.json` and
-`knip.jsonc`.
+message, or **disprove** it (below). Check with `lens_diagnostics` (mode `full`); config
+lives in `.pi-lens.json` and `knip.jsonc`.
+
+**Disproving a finding.** pi-lens wraps other tools, and a wrapped tool can report
+something the tool itself does not. When a finding names an underlying tool, run that tool
+directly; if it disagrees, the finding is disproved rather than resolved. Record in the
+commit message: the exact commands run, their exit codes, and why the finding cannot be
+true (a line number that no longer exists, a symbol that is not exported, and so on).
+
+Two rules make this a real branch rather than an escape hatch. **Never change code to
+satisfy a finding you have not reproduced** — doing so once already introduced a genuine
+defect in this repo (a type exported to silence a stale knip report, which then became a
+real unused export). And **a disproved lane stops being a gate**: the failure is symmetric,
+so a lane that serves a stale finding can equally serve a stale clean result and hide a
+real one. Put the underlying tool in CI, where its verdict is reproducible — which is why
+`npm run knip` runs there.
 
 ## Skills
 

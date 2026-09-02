@@ -3,7 +3,7 @@
 <!-- markdownlint-disable MD033 -- HTML is required for the fixed-width right-aligned logo; markdown has no image sizing -->
 <img src="assets/icon.svg" alt="agent-team" width="88" align="right">
 
-A minimal Agent Client Protocol client. ~700 lines, zero runtime dependencies, Node 24+.
+A minimal Agent Client Protocol client. ~1,750 lines, zero runtime dependencies, Node 24+.
 
 You are the **client**: you spawn the harness as a subprocess, own the workspace,
 answer its file-system requests, and decide its permissions. The harness is the
@@ -13,12 +13,14 @@ answer its file-system requests, and decide its permissions. The harness is the
 
 | File | What it is |
 | --- | --- |
-| `acp.mjs` | The client. JSON-RPC over stdio, handshake, `fs/*`, permissions. |
+| `protocol/agent.ts` | The client. JSON-RPC over stdio, handshake, `fs/*`, permissions. |
+| `protocol/types.ts` | Hand-written types for every message we touch, incl. the `session/update` union. |
 | `agents.mjs` | How to launch each harness in ACP mode. The whole adapter layer. |
 | `run.mjs` | CLI: one prompt, one agent. |
 | `fanout.mjs` | Several agents in parallel from `tasks.json`. |
 | `render.mjs` | Terminal output for `session/update` events. |
 | `mock-agent.mjs` | A fake agent, so you can test with nothing installed. |
+| `protocol/*.test.ts` | `node:test` suites: type round-trips, and wire behaviour against real fixtures. |
 
 ## 1. Verify the client works (no harness needed)
 

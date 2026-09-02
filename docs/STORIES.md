@@ -7,7 +7,7 @@
 The plan was reviewed line by line against the source before being broken down. **It held
 up.** The architecture is coherent, the decisions table records *why* rather than only
 *what*, prior art is metabolised rather than copied, and every code reference in it
-(`acp.mjs`, `agents.mjs`, `render.mjs`) checks out. It was written with the code open.
+(`protocol/agent.ts`, `agents.mjs`, `render.mjs`) checks out. It was written with the code open.
 
 What it lacked was not architecture. It was a set of **contract-level decisions that
 several modules each need and none of them owns** — identifiers, terminal-state mapping,
@@ -22,7 +22,8 @@ Three structural deviations from the plan, each argued in the story that carries
    destination, unusable as a unit of work.
 2. **`--rebase` moves from M1 to M3**, landing with the pipelines that give it meaning
    (M1c-3).
-3. **`node:test` is the unit-test runner** for pure functions (M1a-1).
+3. **`node:test` is the unit-test runner** for pure functions (M1a-1), and — amended
+   2026-08-31 — for behaviour whose subject is the wire itself.
 
 ## Reading a story
 
@@ -79,7 +80,7 @@ Builds nothing except three papercut fixes. Every M1 default depends on its find
 Run the current MVP against `opencode acp`, `claude-agent-acp` and `copilot --acp`. Record
 per harness: does it spawn, does it complete a turn, which `session/update` variants arrive
 that `render.mjs` does not handle, which methods hit the `#handleRequest` default
-(`acp.mjs`), and what `agentCapabilities` it advertises.
+(`protocol/agent.ts`), and what `agentCapabilities` it advertises.
 **Gap** — the plan's decisions table asserts all three harnesses are "verified end-to-end",
 and every M0 story downstream assumes they are installed and authenticated. Nothing names
 what happens if one is not. That is the single biggest schedule risk in the plan and it is
@@ -110,7 +111,7 @@ regression insurance, not a live fix — and the deprecated `claude-code` entry 
 **removed** rather than fixed alongside `claude`, leaving one Claude harness id.
 
 **M0-3 · Terminal and shell-routing spike · M · needs M0-1**
-Flip `clientCapabilities.terminal` to `true` (`acp.mjs`), stub `terminal/*` as logging
+Flip `clientCapabilities.terminal` to `true` (`protocol/agent.ts`), stub `terminal/*` as logging
 no-ops in `#handleRequest`, and run each harness on "run the tests" in a throwaway
 workspace under `--mode auto` — under `safe` the `execute` permission is denied before any
 terminal call would happen.
@@ -133,7 +134,7 @@ while a turn is in flight.
 rung is only as good as this answer.
 **Done 2026-08-21** (`docs/M0-FINDINGS.md` §M0-4). Three corrections to this text as
 written. The probe could not be a `run.mjs` run: its SIGINT path kills at 2 s
-(`run.mjs`) and `#failAll` (`acp.mjs`) would have turned any slower cancel into
+(`run.mjs`) and `#failAll` (`protocol/agent.ts`) would have turned any slower cancel into
 an exit error, so the answer needed tooling that cancels and waits — plus an **uninterrupted
 control run**, without which "the turn ended" cannot be told from "the turn was ending
 anyway". The expectation about a second `session/prompt` is **false on all three**: none
@@ -273,6 +274,18 @@ little. **Decided 2026-08-23 (ratified, #62 B1): `node:test` for pure functions 
 `protocol/`; `mock-agent` and `hostile-agent` keep owning end-to-end and adversarial
 coverage.** It is
 why several stories below have a truth-table criterion rather than an end-to-end one.
+**Amended 2026-08-31 (M1a-3, issue #11): subprocess-driven `node:test` is in scope where
+the behaviour under test *is* the wire.** Some properties are statements about what does or
+does not reach the subprocess, and a pure function cannot express them — M1a-3's own
+ratified criteria require exactly that ("a second `prompt()` … throws **without a byte
+reaching the subprocess**"), which is provable only by counting what a real harness
+received. The pure-function rule stands everywhere else, and the boundaries are unchanged:
+`mock-agent` still owns end-to-end runs (`npm run selftest`), and `hostile-agent` (M1b-6)
+still owns adversarial coverage — M1a-3's `#guardPath` cases are the containment baseline it
+builds on, not a replacement for it. The original justification does not hold for this
+class: `protocol/agent.test.ts` runs in about six seconds (measured 2026-08-31, most of it
+deliberate waits proving deadlines fire), and every case is mutation-proven
+(the mutant is recorded in the commit that added it) rather than merely green.
 *Done when* both scripts pass on an empty test set and no build step exists. Note that Node 22.18+ and 24 already strip types, so this is a smaller lift than the
 plan's Node 24 framing implies — the bump is for LTS, not for the language feature.
 **DONE 2026-08-30** — `engines` `>=24`; `tsconfig.json` with `strict`, `erasableSyntaxOnly`,
@@ -294,16 +307,27 @@ story starts.
 --write .` and `fmt:check` → `biome check .`, an AGENTS.md rule, and CI running
 `fmt:check` + `check` + `test` on push/PR. `tsc` stays the type checker, markdownlint stays
 for `.md`, pi-lens stays the deeper session layer.
+**Amended 2026-08-31 (M1a-3, issue #11): CI gained two steps and the repo a fourth
+devDependency.** The push/PR job now runs `fmt:check` + `check` + `test` + `selftest` +
+`knip`, with `timeout-minutes: 15` and `node --test --test-timeout=30000` so a subprocess
+that goes silent fails the job instead of hanging it. `selftest` is there because
+`npm test` alone never loads `protocol/agent.ts`, leaving the `.mjs` → `.ts` type-stripping
+edge the whole client depends on with no automated cover. `knip` runs because it is the
+tool pi-lens's knip lane merely reports, and that lane was observed serving stale findings
+(see AGENTS.md, *Disproving a finding*) — the authoritative verdict belongs somewhere
+reproducible. `knip` is pinned as a devDependency rather than fetched with `npx -y`, so an
+upstream release cannot redden CI with no change here; the devDependency list is now
+`typescript`, `@types/node`, `biome`, `knip`.
 
 **M1a-2 · `protocol/types.ts` · M · needs M1a-1**
 Hand-written definitions for every message we touch. The `session/update` discriminated
-union is the point of the exercise: `update.sessionUpdate` is currently a bare string
+union is the point of the exercise: `update.sessionUpdate` was a bare string
 compared in two places (`acp.mjs`, `render.mjs`) with nothing keeping them in sync.
 **Decided 2026-08-23 (#62 B4): the types keep `_meta`, in both directions.**
 `_meta?: Record<string, unknown>` on the **base** of the message types — inbound
 notifications and responses, outbound requests alike — not on the variants that happen to
 need it today. This answers the retro's B4. Three reasons it is decided here rather than
-deferred. It is *preservation, not addition*: `acp.mjs` already hands the whole update
+deferred. It is *preservation, not addition*: `protocol/agent.ts` already hands the whole update
 object to `onEvent`, so `_meta` reaches consumers today and only `render.mjs` ignores it —
 this port is where we would start losing it. The fleet's **only** exhaustion warning lives
 there (`_meta["_claude/rateLimit"]`, `M0-FINDINGS.md` §M0-5), M0-3 found harnesses gating
@@ -342,8 +366,12 @@ M2-1 (event log) if M1a-5 hand-extends.
 
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
-rawInput}` map (`acp.mjs`) and `#guardPath` (`acp.mjs`). The single `onEvent`
-callback becomes a typed emitter. Applies the registry's env mutation (M1a-4).
+rawInput}` map (`protocol/agent.ts`) and `#guardPath` (`protocol/agent.ts`). The single `onEvent`
+callback becomes typed (`EventSink`, over an envelope wrapping the `AgentEvent` union)
+rather than an
+emitter — **amended 2026-08-31**: a multi-listener emitter has no consumer, and
+the event bus proper is M1a-6's `core/events.ts`. Applies the registry's env
+mutation (M1a-4).
 **Gap** — `AcpAgent.request()` never times out, and `#failAll` fires only on process close.
 A harness that spawns, accepts the pipe and never answers `initialize` hangs the task
 forever. The watchdog's TTL rung covers *running* tasks, so it structurally cannot see a
@@ -353,16 +381,37 @@ session-management methods, default 30s, explicitly not on `session/prompt`**, w
 legitimately long-running and is what the watchdog is for. M0-1 measured the slowest
 handshake step at 3.0 s (copilot's `session/new`), so 30 s is an order of magnitude above
 the worst observed. Extend it to `session/load` if that lands — same class of call.
-**Proposed (2026-08-23), the timeout's sibling** — the timeout catches a harness that is
-*alive but silent*; nothing catches one that **dies mid-handshake**. `#failAll`
-(`acp.mjs`) then reports a bare exit code, and the harness's own explanation went to a
-stderr we discard unless `--verbose` (`acp.mjs`). AgentPool races every handshake RPC
+**Decided 2026-08-31 (measured), the timeout's sibling** — the timeout catches a harness
+that is *alive but silent*; nothing caught one that **dies mid-handshake**. `#failAll`
+(`protocol/agent.ts`) reported a bare exit code, and the harness's own explanation went to a
+stderr we discarded unless `--verbose`. AgentPool races every handshake RPC
 against `process.wait()` and raises with the captured stderr
-(`utils/subprocess_utils.py:126`, used at `acp_agent.py:278`). For us that is a bounded
-stderr ring buffer — last ~20 lines, kept regardless of `--verbose` — attached to the
-rejection. ~25 lines, no dependency. Note M0-2 retired the papercut that originally
-motivated this (the `-32603` does not reproduce on 0.49.0), so the case rests on this gap
-alone, and on CI, where nobody is watching a terminal.
+(`utils/subprocess_utils.py:126`, used at `acp_agent.py:278`). **We now retain stderr
+unconditionally and attach all of it to the rejection.**
+
+**The measurement moved this decision twice, and is why it is no longer a ring buffer.**
+Run against all three harnesses on 2026-08-31 (raw captures on issue #11):
+
+1. **The premise was wrong.** All three complete `initialize` with an *empty home
+   directory* — credentials are not checked during the handshake, they are checked at turn
+   time. "Dies mid-handshake because it is not authenticated" is not a reachable failure.
+   The reproducible killers are a bad argv (copilot: exit 1, 3 lines) and a poisoned node
+   environment (claude: exit 1, 22 lines) — the latter being the same class of problem as
+   M0-2's `CLAUDE_PARENT_ENV` scrub. opencode survives both, being a native binary.
+2. **`~20` and *tail* were both guesses, and tail was the wrong end.** claude's actionable
+   line (`Error: Cannot find module …`) sits **17 lines from the end** of node's
+   MODULE_NOT_FOUND banner; opencode answers a bad flag with an 18-line usage dump and *no
+   error sentence at all*. A tail-10 window would have captured stack frames and
+   `Node.js v24.20.0`. Nothing in the implementation prefers the tail.
+3. **Bounding buys nothing today.** Through a complete turn, every harness in the
+   registry's configuration emits **zero** stderr bytes. Only `opencode acp --print-logs
+   --log-level DEBUG`, which we never pass, produces volume — 45 lines in 7.2 s, about
+   11 MB per agent per four hours. So retention is unbounded for now and trimming it is on
+   the backlog rather than in this story.
+
+Note M0-2 retired the papercut that originally motivated this (the `-32603` does not
+reproduce on 0.49.0), so the case rests on this gap alone, and on CI, where nobody is
+watching a terminal.
 *Done when* `npm run selftest` passes unchanged; a mock that accepts the pipe and never
 answers `initialize` fails the task in ~30s instead of hanging; a mock that exits during
 `initialize` fails with its own stderr in the message rather than an exit code; and
@@ -376,7 +425,7 @@ item 7 considered one and reversed itself, because an abstraction under dead cod
 exactly.
 
 **Decided 2026-08-23 (#62 B3): keep the whole `session/prompt` response, not just
-`stopReason`.** `acp.mjs` returns `res.stopReason` and discards the rest — including
+`stopReason`.** **Landed.** The client returned `res.stopReason` and discarded the rest — including
 `PromptResponse.usage`, which M0-5 found is the **only per-task token count present on all
 three harnesses**. Returning the whole response is one line, and a count nobody recorded is
 not recoverable afterwards; this is the same argument as `_meta` in M1a-2. **Capture only —
@@ -454,7 +503,7 @@ consumers (`docs/PRIOR-ART-AGENTPOOL.md`, §8c–8d). Carry the provenance cavea
 those are their citations into source we have not read, and `87cbfe3` already put the
 `terminal_output` one on the wire (see §M0-3).
 **Check first whether `measuredOn` is nearly free:** `initialize` returns `agentInfo` and
-`acp.mjs` already stores it. If all three harnesses populate `agentInfo.version`, the
+`protocol/agent.ts` already stores it. If all three harnesses populate `agentInfo.version`, the
 staleness check is a string comparison at handshake and needs no probe; if not, it needs a
 `--version` call per harness. M0-1 captured `initialize` in full, so the answer is in the
 spike logs — read them before designing the field.
@@ -479,8 +528,18 @@ M1a-2's types. Hand-extend if `set_mode` is the only addition M1 needs; otherwis
 the criteria recorded under M1a-2 (2026-08-30).
 Small in lines, load-bearing. The signature changes from `async () => boolean` to a form an
 external asynchronous decider can answer, so M2-3's `ask` works with no TTY.
-`READ_ONLY_KINDS`, `safePolicy` and `autoPolicy` semantics are unchanged (`acp.mjs`).
-**Gap** — `AcpAgent` takes `allowReadOutsideRoot` (`acp.mjs`), which disables the
+`READ_ONLY_KINDS`, `safePolicy` and `autoPolicy` semantics are unchanged (`protocol/agent.ts`).
+**Gap (Proposed 2026-09-02, Copilot review of PR #72) — `pickOption`'s zero-match tail
+fails open.** When the policy denies but the harness's option list carries no reject kind,
+the tail `options[0]?.optionId` can return an `allow_once`/`allow_always` id, turning a
+denial into approval on the wire. The behaviour is verbatim from `acp.mjs` — the M1a-3 port
+preserved it — so it is not introduced there, but unlike `#guardPath` this code is live:
+claude and copilot both send `session/request_permission` (M0-1). Whether any harness ever
+sends options without a reject kind is **unmeasured**. Proposed for this story: return the
+protocol's `cancelled` outcome when no option matches the decision, and only `selected`
+when a matching option exists — and first measure the option lists the three harnesses
+actually send.
+**Gap** — `AcpAgent` takes `allowReadOutsideRoot` (`protocol/agent.ts`), which disables the
 read half of the path guard, and the plan's entire safety discussion never mentions it: not
 in the schema, not in the precedence chain, not under the harness ceiling. What lives
 outside a workspace root is exactly `~/.aws/credentials`, `~/.ssh`, and the parent repo's
@@ -701,8 +760,9 @@ produces no diff, and making disagreement fatal would turn every harness quirk i
 stop and break the review stages the pipeline is built on.
 **Revised by M0-5: `tokens` has a source, and it is not the one this story assumed.** The
 per-turn count lives on the `session/prompt` **response** (`usage`), not on `usage_update`,
-and `AcpAgent.prompt()` currently discards it (`acp.mjs`), so reaching it is a one-line
-change here. Two constraints come with it: the field is `UNSTABLE` in the ACP schema and
+and `AcpAgent.prompt()` discarded it. **Landed in M1a-3 (#62 B3)** — `prompt()` now returns
+the whole `PromptResponse`, so the count is already in hand and this story only has to
+render it. Two constraints come with it: the field is `UNSTABLE` in the ACP schema and
 absent from the published docs, so pin it with an M1b-5 `mock-agent.mjs` case; and it is
 **cumulative on copilot where it is per-turn on opencode and claude-agent-acp**, so
 `TaskResult` must record which semantics produced the number rather than typing a bare
@@ -747,9 +807,12 @@ malformed JSON-RPC, oversized payload, a method we do not implement.
 *Done when* each attempt is refused with a specific error and the run continues.
 
 **M1b-7 · Per-task stderr capture · XS · needs M1b-3**
-**Gap** — harness stderr is discarded unless `--verbose` (`acp.mjs`), while `CLAUDE.md`
-documents at length that stderr is the first place to look when a spawn fails and that the
-real error is invisible without the flag. Under a daemon nobody is watching a terminal.
+**Gap, narrowed by M1a-3** — stderr was discarded unless `--verbose`. M1a-3 now retains it
+in memory and attaches it to the rejection when a harness **dies**
+(`docs/STORIES.md`, the `Decided 2026-08-31` block under M1a-3), which covers a harness that
+**dies during the handshake**. What remains for this story is the **durable**
+record: a harness that dies leaves nothing on disk, a *live* harness's stderr is still only
+mirrored under `--verbose`, and under a daemon nobody is watching a terminal.
 **Decision: capture to `.agent-team/runs/<id>/<taskId>.stderr.log` unconditionally**;
 `--verbose` continues to mirror it to the terminal.
 *Done when* a harness that fails to start leaves a log containing its real error rather than
@@ -1058,6 +1121,20 @@ capacity is one large story lighter.
 
 Each carries its trigger, so none of these is waiting to become a blocker by accident:
 
+- **Bound the retained stderr to a head/tail window.** M1a-3 retains every stderr line for
+  the life of the agent and attaches all of it to a death rejection. The 2026-08-31
+  measurement says that costs nothing today — zero bytes per turn on all three harnesses in
+  the configuration we ship — so it was left unbounded on purpose. The shape when it is
+  wanted: keep the **first 12 and last 12 lines** with an elision marker, plus a per-line
+  byte cap. First-and-last rather than last-N because the measurement put the actionable
+  line near the head (17 lines from the end on claude); the per-line cap covers the one
+  hazard no line-count bound touches — a progress spinner writing `\r` with no `\n`
+  accumulates into a single unbounded line. *Trigger:* a harness measured emitting stderr
+  through a normal turn (`opencode --print-logs` already does ~11 MB per agent per 4 h), or
+  a rejection message large enough to be unreadable in the terminal or M2-1's event log.
+  Note M1b-7 keeps the complete record on disk regardless, so this is about what is held in
+  memory and pasted into an error, not about losing data.
+
 - **Sandboxing (`bwrap` / `sandbox-exec`).** The only option that actually closes the shell
   gap rather than documenting it, and the only thing that bounds `auto` mode's blast
   radius — which is where the real risk lives, and which labelling does nothing for.
@@ -1094,7 +1171,7 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   stay behind a per-harness capability check, and it depends on M2-6 persisting the harness
   `sessionId`.
 - **`#send` write backpressure.** `#send` ignores the return value of `write()`
-  (`acp.mjs`). *Trigger:* fan-out moving large file contents. The one item here that is
+  (`protocol/agent.ts`). *Trigger:* fan-out moving large file contents. The one item here that is
   genuinely "fix it when it bites" — Node buffers, so it degrades to memory growth rather
   than corruption.
 - **Composing and dispatching runs from the browser.** M5+. Named because it is the stated
@@ -1108,7 +1185,7 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   machine where the manual install is the thing that breaks.
 - **Politeness for unimplemented and extension methods.** Decline `session/request_elicitation`
   and acknowledge `_`-prefixed extension methods instead of returning `-32000`
-  (`acp.mjs`), as AgentPool's headless client does. *Trigger:* the wire tap recording
+  (`protocol/agent.ts`), as AgentPool's headless client does. *Trigger:* the wire tap recording
   any method reaching the `#handleRequest` default. **M0-1 measured zero across six turns**,
   so this is currently hardening against traffic that does not exist; ~10 lines whenever the
   trigger fires.
@@ -1116,9 +1193,13 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   cannot reach and warn, rather than failing `session/new`
   (`agents/acp_agent/helpers.py:17`). *Trigger:* the first story that passes anything to
   `newSession({ mcpServers })` — today nothing does, which is why it is here and not in M1a.
-- **CI workflow running `check` / `test` / `selftest`.** M1's exit bar is deliberately
+- ~~**CI workflow running `check` / `test` / `selftest`.**~~ **Landed #68, extended by
+  M1a-3 (2026-08-31)** — `.github/workflows/code_checks.yml` now runs `fmt:check`, `check`,
+  `test`, `selftest` and `knip` under a 15-minute job ceiling. The trigger below fired
+  early; the entry is kept for the reasoning, not as pending work.
+  M1's exit bar was deliberately
   offline — the two scripts pass locally and `npm run selftest` stays green — and the only
-  workflow in `.github/` is the agent harness, which runs no tests. *Trigger:* the first
+  workflow in `.github/` was the agent harness, which ran no tests. *Trigger:* the first
   milestone whose exit bar depends on a machine other than the developer's — likely M2's
   daemon, or the first harness build that changes measured labels (M0-7's lesson: a safety
   claim is a claim about a build, and builds change underneath you).

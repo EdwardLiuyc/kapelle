@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-import { AcpAgent, autoPolicy, makeAskPolicy, safePolicy } from "./acp.mjs";
 import { AGENTS, resolveAgent, resolveEnv } from "./agents.mjs";
+import {
+  AcpAgent,
+  autoPolicy,
+  makeAskPolicy,
+  safePolicy,
+} from "./protocol/agent.ts";
 import { render } from "./render.mjs";
 
 const argv = process.argv.slice(2);
@@ -99,7 +104,8 @@ try {
   await agent.newSession();
   if (!quiet) console.log(`session ${agent.sessionId}\n`);
 
-  const stopReason = await agent.prompt(promptText);
+  // The whole PromptResponse is returned (#62 B3); M1 renders only stopReason.
+  const { stopReason } = await agent.prompt(promptText);
   if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
 } catch (err) {
   console.error(`\nerror: ${err.message}`);

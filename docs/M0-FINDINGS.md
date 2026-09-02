@@ -118,10 +118,10 @@ removed the entry, so `claude` is now the only Claude id.)
 | protocol version | 1 | 1 | 1 |
 | `authMethods` at init | `opencode-login` offered | `[]` | `copilot-login` offered |
 
-All three answer `protocolVersion: 1`, so the hard-fail at `acp.mjs` never fires.
+All three answer `protocolVersion: 1`, so the hard-fail at `protocol/agent.ts` never fires.
 Note that opencode and copilot advertise auth methods *even when already authenticated* —
 a non-empty `authMethods` is not a signal that login is required, and the note logged at
-`acp.mjs` should not be read as one.
+`protocol/agent.ts` should not be read as one.
 
 Copilot's auth method carries `_meta["terminal-auth"]` with a real `{command, args, label}`
 for `copilot login`. That is a ready-made affordance for M2-8 and M4-3: the harness is
@@ -175,7 +175,7 @@ prompts, so its rendering path is still unexercised outside `mock-agent.mjs`.
 ### Methods reaching the `#handleRequest` default
 
 **None.** Across six surveyed turns, no harness sent a method outside the three we
-implement, so the `-32000` default at `acp.mjs` never fired and we returned zero
+implement, so the `-32000` default at `protocol/agent.ts` never fired and we returned zero
 errors. In particular no harness called `terminal/*` — consistent with our advertising
 `terminal: false`, and the starting point M0-3 has to disturb.
 
@@ -191,7 +191,7 @@ The more interesting result is what they *didn't* call:
 `fs.readTextFile`/`writeTextFile: true` and all three ignore it, reading and writing
 through their own process. Files created during the write probe appeared on disk in every
 throwaway workspace without a single `fs/write_text_file` crossing the wire. Therefore
-`#guardPath` (`acp.mjs`) currently protects **nothing in production** — it is dead code
+`#guardPath` (`protocol/agent.ts`) currently protects **nothing in production** — it is dead code
 against these three harnesses, live only against `mock-agent.mjs`. It should stay (a
 harness may use `fs/*` tomorrow, and the MCP path may), but no containment claim may rest
 on it.
@@ -488,7 +488,7 @@ content on the floor.
 Run 2026-08-21 against the same three harnesses, with a throwaway probe that sends
 `session/cancel` itself and then **waits** — deliberately not `run.mjs`, whose SIGINT path
 (`run.mjs`) kills the subprocess 2 s after cancelling. Because `#failAll` rejects
-every pending request on `close` (`acp.mjs`), a cancel slower than that grace would
+every pending request on `close` (`protocol/agent.ts`), a cancel slower than that grace would
 have surfaced as `agent "x" exited with code N` and the stop reason would have been lost.
 The probe is spike tooling, kept on branch `spike/m0-4-cancel-probe` (never merged) the way
 M0-3's stubs were; the numbers are the deliverable.
@@ -632,8 +632,9 @@ Run 2026-08-22 on branch `spike/m0-5-usage-probe` (kept, never merged) against t
 harnesses. Method: `usage-probe.mjs` drives **one session of N prompts**, logging every
 `session/update` verbatim — `_meta` and unknown top-level fields included — and keeping the
 whole `session/prompt` response. `wire-tap.mjs` tees the JSON-RPC wire in both directions,
-because `AcpAgent` forwards only `session/update` to `onEvent` (`acp.mjs`) and
-`prompt()` returns `res.stopReason` and throws the rest of the response away (`acp.mjs`).
+because `AcpAgent` forwards only `session/update` to `onEvent` (`protocol/agent.ts`) and
+`prompt()` returned `res.stopReason` and threw the rest of the response away
+(resolved by M1a-3, #62 B3 — the whole response is now returned).
 `--mode auto`, no `session/set_mode`. Workspace: a throwaway five-file JS project, reset per
 session.
 
@@ -850,7 +851,9 @@ point") and the published prompt-turn docs still describe the response as carryi
 `stopReason` alone, so all three harnesses are ahead of the documentation; and the schema's
 own descriptions ("Total input tokens across all turns") describe the cumulative reading, so
 **copilot is the one implementing it as written**. Our client cannot see any of it today —
-`AcpAgent.prompt()` returns `res.stopReason` (`acp.mjs`) and drops the rest.
+`AcpAgent.prompt()` returned `res.stopReason` and dropped the rest — resolved by
+M1a-3 (#62 B3), which keeps the whole response; rendering it still waits on
+M1a-4 recording the per-harness semantics.
 
 #### All three name the model they ran
 

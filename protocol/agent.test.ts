@@ -1,0 +1,687 @@
+/**
+ * M1a-3 acceptance tests — issue #11.
+ *
+ * Everything here is driven by a real subprocess over real stdio rather than
+ * by poking at internals, because every decision under test is about what does
+ * or does not reach the wire.
+ *
+ * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
+ * (#62 R5), the whole `PromptResponse` (#62 B3), the cancel-intent event
+ * (#62 R4), stderr capture on death, `#guardPath` containment, and the
+ * toolCall-id lookup's parity with the pre-port client.
+ */
+
+import assert from "node:assert/strict";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { TestContext } from "node:test";
+import { test } from "node:test";
+
+import { AcpAgent } from "./agent.ts";
+
+/**
+ * The structural shape a test needs from an emitted event. Declared here
+ * rather than imported, so the client is not forced to export a name whose
+ * only consumer is this file.
+ */
+type CapturedEvent = {
+  agent: string;
+  update: { sessionUpdate: string; sessionId?: string };
+};
+
+/** What the policy is handed, structurally. Same reasoning as above. */
+type CapturedToolCall = { title: string; kind: string };
+
+/**
+ * Announces a `tool_call` that omits `toolCallId`, then asks permission with a
+ * `toolCall` that also omits it.
+ *
+ * Malformed against the schema, which requires the field — but `toolCallId` is
+ * a cast off the wire and never validated, so this is reachable from a
+ * non-conformant harness. The pre-port client stored under key `undefined` and
+ * found it again; the port briefly keyed on `""` and missed.
+ */
+const PERMISSION_WITHOUT_ID = [
+  'let buf = "";',
+  "let nextId = 2000;",
+  "const pending = new Map();",
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "session/new")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
+  '    else if (msg.method === "debug/permission") {',
+  "      write({",
+  '        jsonrpc: "2.0",',
+  '        method: "session/update",',
+  "        params: {",
+  '          sessionId: "s1",',
+  "          update: {",
+  '            sessionUpdate: "tool_call",',
+  '            title: "Read foo",',
+  '            kind: "read",',
+  "          },",
+  "        },",
+  "      });",
+  "      const rid = nextId++;",
+  "      pending.set(rid, msg.id);",
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: rid,",
+  '        method: "session/request_permission",',
+  "        params: {",
+  '          sessionId: "s1",',
+  "          toolCall: {},",
+  '          options: [{ optionId: "ok", name: "Allow", kind: "allow_once" }],',
+  "        },",
+  "      });",
+  "    } else if (msg.id !== undefined && pending.has(msg.id)) {",
+  "      const probeId = pending.get(msg.id);",
+  "      pending.delete(msg.id);",
+  '      write({ jsonrpc: "2.0", id: probeId, result: { answered: true } });',
+  "    }",
+  "  }",
+  "});",
+].join("\n");
+
+/** Accepts the pipe, reads stdin, and answers nothing, ever. */
+const HANGS_FOREVER = "process.stdin.resume();";
+
+/**
+ * Answers `initialize` immediately, then goes silent on `session/new`.
+ *
+ * `session/new` is the slowest handshake step M0-1 measured (copilot, 3.0s),
+ * so it is the call most likely to hang a task — and without this fixture the
+ * allowlist could be narrowed to `["initialize"]` with the suite still green.
+ */
+const STALLS_ON_SESSION_NEW = [
+  'let buf = "";',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  "      process.stdout.write(",
+  "        JSON.stringify({",
+  '          jsonrpc: "2.0",',
+  "          id: msg.id,",
+  "          result: { protocolVersion: 1 },",
+  '        }) + "\\n",',
+  "      );",
+  "    // session/new is deliberately ignored.",
+  "  }",
+  "});",
+].join("\n");
+
+/**
+ * Accepts the pipe, explains itself on stderr, then dies during the handshake.
+ *
+ * The shape is copied from the real measurement in issue #11: node's
+ * MODULE_NOT_FOUND banner puts the actionable line near the head and leaves
+ * frames after it, which is why a tail-only window would have lost it.
+ */
+const DIES_MID_HANDSHAKE = [
+  "process.stdin.resume();",
+  "setTimeout(() => {",
+  '  console.error("node:internal/modules/cjs/loader:1568");',
+  "  console.error(\"Error: Cannot find module '/nonexistent/preload.js'\");",
+  '  console.error("    at Module._resolveFilename (node:internal/modules/cjs/loader:1564:15)");',
+  '  console.error("Node.js v24.20.0");',
+  "  process.exit(1);",
+  "}, 60);",
+].join("\n");
+
+/**
+ * A minimal scripted harness: answers the handshake immediately, delays the
+ * turn by `promptDelayMs`, and counts every `session/prompt` it actually
+ * received so a test can prove a refused prompt never reached the wire.
+ *
+ * Written without imports so it behaves the same whether node treats `--eval`
+ * input as CommonJS or ESM.
+ */
+function scriptedAgent(promptDelayMs: number): string {
+  return [
+    'let buf = "";',
+    "let promptCount = 0;",
+    "let cancelCount = 0;",
+    "const send = (id, result) =>",
+    "  process.stdout.write(",
+    '    JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n",',
+    "  );",
+    'process.stdin.on("data", (chunk) => {',
+    "  buf += chunk;",
+    "  let nl;",
+    '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+    "    const line = buf.slice(0, nl);",
+    "    buf = buf.slice(nl + 1);",
+    "    if (!line.trim()) continue;",
+    "    const msg = JSON.parse(line);",
+    '    if (msg.method === "initialize") send(msg.id, { protocolVersion: 1 });',
+    '    else if (msg.method === "session/new") send(msg.id, { sessionId: "s1" });',
+    '    else if (msg.method === "debug/prompt_count")',
+    "      send(msg.id, { count: promptCount });",
+    '    else if (msg.method === "session/cancel") cancelCount += 1;',
+    '    else if (msg.method === "debug/cancel_count")',
+    "      send(msg.id, { count: cancelCount });",
+    '    else if (msg.method === "session/prompt") {',
+    "      promptCount += 1;",
+    "      const reply = {",
+    '        stopReason: "end_turn",',
+    "        usage: { inputTokens: 11, outputTokens: 22, totalTokens: 33 },",
+    '        _meta: { "_claude/rateLimit": "ok" },',
+    "      };",
+    `      setTimeout(() => send(msg.id, reply), ${promptDelayMs});`,
+    "    }",
+    "  }",
+    "});",
+  ].join("\n");
+}
+
+/**
+ * A harness that turns `debug/fs` into a real `fs/*` request aimed back at us,
+ * then reports what the client answered. `#guardPath` is private, so this
+ * exercises it through the entry point that actually reaches it in production.
+ */
+const FS_PROBE = [
+  'let buf = "";',
+  "let nextId = 1000;",
+  "const pending = new Map();",
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "debug/fs") {',
+  "      const rid = nextId++;",
+  "      pending.set(rid, msg.id);",
+  '      const params = { sessionId: "s1", path: msg.params.path };',
+  '      if (msg.params.write) params.content = "written by the agent";',
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: rid,",
+  '        method: msg.params.write ? "fs/write_text_file" : "fs/read_text_file",',
+  "        params,",
+  "      });",
+  "    } else if (msg.id !== undefined && pending.has(msg.id)) {",
+  "      const probeId = pending.get(msg.id);",
+  "      pending.delete(msg.id);",
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: probeId,",
+  "        result: {",
+  "          refused: msg.error !== undefined,",
+  "          message: msg.error ? msg.error.message : null,",
+  "          content: msg.result ? msg.result.content : null,",
+  "        },",
+  "      });",
+  "    }",
+  "  }",
+  "});",
+].join("\n");
+
+type FsProbe = {
+  refused: boolean;
+  message: string | null;
+  content: string | null;
+};
+
+async function guardAgent(
+  t: TestContext,
+  root: string,
+  allowReadOutsideRoot = false,
+): Promise<AcpAgent> {
+  const agent = new AcpAgent({
+    name: "fs-probe",
+    command: process.execPath,
+    args: ["-e", FS_PROBE],
+    cwd: root,
+    allowReadOutsideRoot,
+    requestTimeoutMs: 5_000,
+  });
+  t.after(() => agent.stop());
+  await agent.start();
+  return agent;
+}
+
+function probe(agent: AcpAgent, path: string, write = false): Promise<FsProbe> {
+  return agent.request<FsProbe>("debug/fs", { path, write });
+}
+
+/**
+ * A temp directory that removes itself when the test ends, however it ends.
+ * Without this the guard suite leaves `acp-guard-*` / `acp-outside-*` behind on
+ * every run.
+ */
+async function tempDir(t: TestContext, prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+// --- toolCall lookup parity with the pre-port client --------------------------
+
+test("a tool_call that omits its id is still found when permission is asked", async (t) => {
+  const seen: CapturedToolCall[] = [];
+  const agent = new AcpAgent({
+    name: "no-id",
+    command: process.execPath,
+    args: ["-e", PERMISSION_WITHOUT_ID],
+    requestTimeoutMs: 5_000,
+    policy: (req) => {
+      seen.push(req.toolCall);
+      return true;
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+  await agent.request("debug/permission", {});
+
+  assert.equal(seen.length, 1, "the policy must be consulted exactly once");
+  // Keying the map on "" instead of undefined made these fall back to
+  // "(untitled tool call)" and "other", so the policy judged a call it could
+  // not see. That is the divergence this pins.
+  assert.equal(seen[0].title, "Read foo");
+  assert.equal(seen[0].kind, "read");
+});
+
+// --- #guardPath containment --------------------------------------------------
+
+test("in-root paths are allowed, for both read and write", async (t) => {
+  const root = await tempDir(t, "acp-guard-");
+  await writeFile(join(root, "inside.txt"), "in-root content", "utf8");
+  const agent = await guardAgent(t, root);
+
+  const read = await probe(agent, "inside.txt");
+  assert.equal(read.refused, false);
+  assert.equal(read.content, "in-root content");
+
+  const written = await probe(agent, "nested/new.txt", true);
+  assert.equal(written.refused, false, "writing inside the root is allowed");
+});
+
+test("an escaping ../ path is refused", async (t) => {
+  const root = await tempDir(t, "acp-guard-");
+  const agent = await guardAgent(t, root);
+
+  const read = await probe(agent, "../../etc/passwd");
+  assert.equal(read.refused, true);
+  assert.match(String(read.message), /path outside workspace root refused/);
+
+  const write = await probe(agent, "../escaped.txt", true);
+  assert.equal(write.refused, true);
+});
+
+test("an absolute path outside the root is refused", async (t) => {
+  const root = await tempDir(t, "acp-guard-");
+  const outside = await tempDir(t, "acp-outside-");
+  await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
+  const agent = await guardAgent(t, root);
+
+  const read = await probe(agent, join(outside, "secret.txt"));
+  assert.equal(read.refused, true);
+  assert.match(String(read.message), /path outside workspace root refused/);
+});
+
+test("allowReadOutsideRoot lifts reads but never writes", async (t) => {
+  const root = await tempDir(t, "acp-guard-");
+  const outside = await tempDir(t, "acp-outside-");
+  await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
+  const agent = await guardAgent(t, root, true);
+
+  const read = await probe(agent, join(outside, "secret.txt"));
+  assert.equal(read.refused, false, "reads outside the root are permitted");
+  assert.equal(read.content, "outside content");
+
+  // The asymmetry is the whole point of the flag: it must not lift writes.
+  const write = await probe(agent, join(outside, "planted.txt"), true);
+  assert.equal(write.refused, true, "writes outside the root stay refused");
+  assert.match(String(write.message), /path outside workspace root refused/);
+});
+
+test("a symlink out of the root is NOT contained (documented gap)", async (t) => {
+  const root = await tempDir(t, "acp-guard-");
+  const outside = await tempDir(t, "acp-outside-");
+  await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
+  await symlink(join(outside, "secret.txt"), join(root, "link.txt"));
+  const agent = await guardAgent(t, root);
+
+  // `#guardPath` uses path.resolve, which is pure string arithmetic and does
+  // not follow symlinks, so `link.txt` looks in-root and the read succeeds
+  // against a file outside it. This test records what the guard does today
+  // rather than what it ought to do; M1b-6 (`hostile-agent`) lists symlink
+  // escape among the attempts that must be refused with a specific error, and
+  // closing it means resolving with fs.realpath before the prefix check.
+  const read = await probe(agent, "link.txt");
+  assert.equal(read.refused, false, "today the symlink is followed");
+  assert.equal(read.content, "outside content");
+});
+
+// --- #62 B1 · per-request timeout --------------------------------------------
+
+test("the default deadline is the story's 30s", () => {
+  const agent = new AcpAgent({ command: "true" });
+  assert.equal(agent.requestTimeoutMs, 30_000);
+});
+
+test("a harness that never answers initialize fails on the deadline", async (t) => {
+  const agent = new AcpAgent({
+    name: "hangs",
+    command: process.execPath,
+    args: ["-e", HANGS_FOREVER],
+    requestTimeoutMs: 150,
+  });
+  // Registered before the first await: a failing assertion must still reap the
+  // subprocess, or a red test leaves an orphan behind.
+  t.after(() => agent.stop());
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    () => agent.start(),
+    /did not answer "initialize" within 150ms/,
+  );
+  // The point of the story: it fails on a deadline rather than hanging.
+  assert.ok(
+    Date.now() - startedAt < 5_000,
+    "start() must reject on the deadline, not hang",
+  );
+});
+
+test("session-management calls are bounded too, not just the handshake", async (t) => {
+  const agent = new AcpAgent({
+    name: "stalls-on-new",
+    command: process.execPath,
+    args: ["-e", STALLS_ON_SESSION_NEW],
+    // Generous enough to cover process spawn and node boot, so only the
+    // deliberate stall can trip it.
+    requestTimeoutMs: 2_000,
+  });
+  t.after(() => agent.stop());
+
+  // The handshake answers, so this must not be what rejects.
+  await agent.start();
+
+  await assert.rejects(
+    () => agent.newSession(),
+    /did not answer "session\/new" within 2000ms/,
+    "session/new carries a deadline, not only initialize",
+  );
+});
+
+test("session/prompt is never bounded by the request deadline", async (t) => {
+  const agent = new AcpAgent({
+    name: "slow-turn",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(3_000)],
+    // Both numbers are well clear of process spawn: the invariant under test
+    // is only that the turn outlasts the budget, so give the handshake room
+    // rather than making a loaded CI runner the thing that fails.
+    requestTimeoutMs: 2_000,
+  });
+  t.after(() => agent.stop());
+
+  // Both of these are timed methods and must answer inside the budget.
+  await agent.start();
+  await agent.newSession();
+
+  // This turn takes 3000ms against a 2000ms budget. If the deadline applied to
+  // session/prompt, this would reject instead of resolving.
+  const res = await agent.prompt("take your time");
+  assert.equal(res.stopReason, "end_turn");
+});
+
+// --- #62 R5 · in-flight prompt guard -----------------------------------------
+
+test("a second prompt during a live turn throws without reaching the wire", async (t) => {
+  const agent = new AcpAgent({
+    name: "guarded",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(300)],
+    requestTimeoutMs: 2_000,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+
+  const firstTurn = agent.prompt("first");
+  await assert.rejects(
+    () => agent.prompt("second"),
+    /already running a turn/,
+    "a second prompt must be refused, not sent",
+  );
+  assert.equal((await firstTurn).stopReason, "end_turn");
+
+  // The harness counts every session/prompt it actually received. A guard that
+  // sent first and failed afterwards would leave this at 2.
+  const seen = await agent.request<{ count: number }>("debug/prompt_count");
+  assert.equal(seen.count, 1, "the refused prompt must not reach the wire");
+});
+
+// --- #62 B3 · the whole PromptResponse ---------------------------------------
+
+test("prompt() returns the whole response, usage and _meta intact", async (t) => {
+  const agent = new AcpAgent({
+    name: "counts-tokens",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(10)],
+    requestTimeoutMs: 2_000,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+  const res = await agent.prompt("how many tokens was that");
+
+  assert.equal(res.stopReason, "end_turn");
+  // M0-5: usage is the only per-task token count present on all three
+  // harnesses. Dropping it must fail here rather than pass silently.
+  assert.deepEqual(res.usage, {
+    inputTokens: 11,
+    outputTokens: 22,
+    totalTokens: 33,
+  });
+  // The fleet's only exhaustion warning rides on _meta (M0-5), and M1a-2 put
+  // _meta on the base of every message type precisely so it survives.
+  assert.deepEqual(res._meta, { "_claude/rateLimit": "ok" });
+});
+
+// --- stderr capture on death -------------------------------------------------
+
+test("a harness that dies mid-handshake fails with its own stderr", async (t) => {
+  const agent = new AcpAgent({
+    name: "dying",
+    command: process.execPath,
+    args: ["-e", DIES_MID_HANDSHAKE],
+    requestTimeoutMs: 5_000,
+  });
+  t.after(() => agent.stop());
+
+  let err: Error | null = null;
+  try {
+    await agent.start();
+  } catch (caught) {
+    err = caught as Error;
+  }
+
+  assert.ok(err, "start() must reject when the harness dies");
+  // The bare exit code is what this replaces, so it must still be present.
+  assert.match(err.message, /exited with code 1/);
+  // ...and now the harness's own explanation comes with it.
+  assert.match(err.message, /Cannot find module '\/nonexistent\/preload\.js'/);
+  // That line sits near the head of the output; a tail-only window drops it.
+  assert.match(err.message, /node:internal\/modules\/cjs\/loader:1568/);
+});
+
+test("a silent harness produces no stderr section at all", async (t) => {
+  const agent = new AcpAgent({
+    name: "silent",
+    command: process.execPath,
+    args: ["-e", "process.exit(7);"],
+    requestTimeoutMs: 5_000,
+  });
+  t.after(() => agent.stop());
+
+  let err: Error | null = null;
+  try {
+    await agent.start();
+  } catch (caught) {
+    err = caught as Error;
+  }
+
+  assert.ok(err);
+  // Exact, not a pattern: dropping #exitMessage's empty-buffer early return
+  // yields a trailing newline that a /exited with code 7/ match would still
+  // accept, so the assertion has to pin the whole string to be load-bearing.
+  assert.equal(err.message, 'agent "silent" exited with code 7');
+});
+
+// --- #62 R4 · cancel-intent event --------------------------------------------
+
+test("cancel() emits _client_cancel_requested and still sends the notify", async (t) => {
+  const events: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "cancels",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(10)],
+    requestTimeoutMs: 2_000,
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+  agent.cancel();
+
+  const emitted = events.filter(
+    (e) => e.update.sessionUpdate === "_client_cancel_requested",
+  );
+  assert.equal(emitted.length, 1, "exactly one cancel-intent event");
+  assert.equal(emitted[0].agent, "cancels");
+  assert.equal(emitted[0].update.sessionId, "s1");
+
+  // The event must accompany the notification, not replace it: M1b-2 reads our
+  // record of having asked, but the agent still has to be told.
+  const seen = await agent.request<{ count: number }>("debug/cancel_count");
+  assert.equal(seen.count, 1, "session/cancel must still reach the harness");
+});
+
+test("cancel() before a session exists sends nothing and emits nothing", async (t) => {
+  const events: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "idle",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(10)],
+    requestTimeoutMs: 2_000,
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  agent.cancel(); // no session yet
+
+  assert.equal(events.length, 0, "no event without a session");
+  const seen = await agent.request<{ count: number }>("debug/cancel_count");
+  assert.equal(seen.count, 0, "no session/cancel on the wire either");
+});
+
+/**
+ * Answers the handshake, then exits only when told. The deterministic exit is
+ * what lets the after-death test know death has happened without sleeping.
+ */
+const ANSWERS_THEN_EXITS = [
+  'let buf = "";',
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "session/new")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
+  '    else if (msg.method === "debug/exit") process.exit(0);',
+  "  }",
+  "});",
+].join("\n");
+
+test("cancel() after the harness has died records nothing", async (t) => {
+  const events: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "late-cancel",
+    command: process.execPath,
+    args: ["-e", ANSWERS_THEN_EXITS],
+    requestTimeoutMs: 2_000,
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+
+  // A request the fixture will never answer: #failAll rejects it when the
+  // process closes, which is how the test knows death has happened rather
+  // than guessing with a sleep.
+  const never = agent.request("debug/never");
+  agent.notify("debug/exit");
+  await assert.rejects(never, /exited with code 0/);
+
+  agent.cancel();
+
+  // Nothing was sent, so an authoritative cancel record here would be the
+  // false entry M1b-2 keys on.
+  assert.equal(
+    events.length,
+    0,
+    "no cancel-intent event for a cancel that reached nothing",
+  );
+});
+
+test("the guard clears once a turn ends, so later prompts still work", async (t) => {
+  const agent = new AcpAgent({
+    name: "sequential",
+    command: process.execPath,
+    args: ["-e", scriptedAgent(50)],
+    requestTimeoutMs: 2_000,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+
+  assert.equal((await agent.prompt("first")).stopReason, "end_turn");
+  assert.equal((await agent.prompt("second")).stopReason, "end_turn");
+
+  const seen = await agent.request<{ count: number }>("debug/prompt_count");
+  assert.equal(seen.count, 2, "sequential turns must both reach the harness");
+});
