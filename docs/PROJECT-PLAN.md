@@ -5,7 +5,8 @@ building and in what order. Draft — expect refinement.
 
 > Reviewed against the code and sliced into stories in `STORIES.md`, which also records
 > the gaps this document left open and how each is closed. Where the two disagree — M1 is
-> split three ways, `--rebase` moves to M3, and `node:test` is used for pure functions —
+> split three ways, `--rebase` moves to M3, and `node:test` is used for pure functions
+> (amended 2026-08-31 — plus behaviour whose subject is the wire) —
 > the owning story carries the reasoning.
 
 ## Context
@@ -320,7 +321,8 @@ driven from a run file, fully verifiable offline.
 - **`protocol/agent.ts`** — today's `AcpAgent` essentially intact. Preserve both existing
   invariants: the `toolCallId → {title, kind, rawInput}` map (`protocol/agent.ts`) and
   `#guardPath` (`protocol/agent.ts`). Type the single `onEvent` callback
-  (`EventSink` over the `AgentEvent` union); the multi-listener bus is M1a-6.
+  (`EventSink`, over an envelope wrapping the `AgentEvent` union) — **amended 2026-08-31**:
+  a typed callback, not a multi-listener emitter, which stays M1a-6's job.
 - **`protocol/registry.ts`** — today's `AGENTS` map, plus three fields per entry beyond
   `{command, args}`: `defaultMode`, `maxMode`, and a containment label
   (`shell: "terminal" | "internal" | "unknown"`, filled in from M0) plus
@@ -522,7 +524,9 @@ The first thing here that is not a CLI. Design reference: `opencode-ensemble`'s 
 **Offline, every milestone** — `mock-agent` and `hostile-agent` own end-to-end and
 adversarial coverage; `node:test` covers pure functions in `core/` and `protocol/`
 (ratified #62 B1, 2026-08-23 — the earlier "no unit-test framework" rule predates the
-plan's own Node 24 decision and is superseded).
+plan's own Node 24 decision and is superseded), **and, per the 2026-08-31 amendment
+(`docs/STORIES.md`, M1a-1), behaviour whose subject is the wire** — what does or does not
+reach the subprocess, which a pure function cannot express.
 
 ```bash
 npm run check                    # tsc --noEmit

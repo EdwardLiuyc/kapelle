@@ -19,7 +19,8 @@ that on three of the retro's risks AgentPool has [nothing to offer](#what-agentp
 This file is a **findings note**, and the M0 retrospective ran against it on 2026-08-23.
 Four of its recommendations are now decisions — **8b** (`_meta` kept through the typed
 layer, #62 B4), **8c** (the `terminal_output` probe, measured by M0-3's `87cbfe3` and parked), **8** (the bus
-carries the wire object) and the `measuredOn` half of **2** (#62 B2). Items **1**, **5** and
+carries the wire object) and the `measuredOn` half of **2** (#62 B2). Item **1** landed in
+M1a-3 (2026-08-31, in an amended form — see its row below). Items **5** and
 **6** remain *proposals* awaiting whoever picks up M1a; everything under Defer and Refuse is
 a recommendation, not a ruling. `docs/STORIES.md` is the authority on which is which — every
 decided half there carries a date.
@@ -30,7 +31,7 @@ decided half there carries a date.
 
 | # | What | Verdict |
 | --- | --- | --- |
-| 1 | Race handshake RPCs against process death; keep a stderr ring buffer | **take** — M1a-3, alongside its timeout |
+| 1 | Race handshake RPCs against process death; keep a stderr ring buffer | **taken, in an amended form** — M1a-3 landed the capture alongside its timeout; the *ring buffer* was superseded by unconditional unbounded retention on the 2026-08-31 measurement (see below, and M1a-3's `Decided 2026-08-31` block in `docs/STORIES.md`) |
 | 2 | ACP registry resolution + zero-install spawn (`npx -y`, `uvx`, binaries) | **split** — pin versions (M1a-4); auto-resolve to backlog |
 | 3 | Filter injected MCP servers by the agent's advertised transports | **defer** — with the first story that injects one |
 | 4 | Decline elicitation and ack `_`-prefixed ext methods instead of erroring | **backlog** — trigger: first unhandled method on the wire |
@@ -115,19 +116,31 @@ change and its evidence are in [What M0 moved](#what-m0-moved).
 
 This is the direct fix for the papercut `CLAUDE.md` names: *"harness spawn failures surface
 as opaque JSON-RPC errors — typically `Internal error (code -32603)` on `session/new`, with
-the real message only on the harness's stderr under `--verbose`."* We already discard that
-stderr unless asked (`protocol/agent.ts`), and a harness that dies *before* answering leaves
-`#failAll` (`protocol/agent.ts`) reporting only an exit code.
+the real message only on the harness's stderr under `--verbose`."* At the time of this
+review we discarded that stderr unless asked, and a harness that died *before* answering
+left `#failAll` reporting only an exit code.
 
-Cost in our terms: a bounded stderr ring buffer (keep the last ~20 lines regardless of
-`--verbose`) plus attaching it to the rejection in `#failAll`. ~25 lines, no dependency, no
-invariant touched. The `close` handler already exists; only the message improves.
+Cost in our terms, as estimated here: a bounded stderr ring buffer (keep the last ~20 lines
+regardless of `--verbose`) plus attaching it to the rejection in `#failAll`. ~25 lines, no
+dependency, no invariant touched. The `close` handler already exists; only the message
+improves.
+
+**Superseded 2026-08-31 — M1a-3 shipped the capture, but not the ring buffer.** Measuring
+all three harnesses first (raw captures on issue #11) moved two things this estimate got
+wrong. The actionable line sits near the **head** of a dying harness's output, not the tail
+— claude's `Cannot find module` is 17 lines from the end of node's MODULE_NOT_FOUND banner
+— so a tail-N window would have kept stack frames and dropped the answer. And through a
+complete turn every harness in the registry's configuration emits **zero** stderr bytes, so
+bounding buys nothing today. Retention is therefore unconditional and unbounded; trimming
+to a head/tail window with a per-line cap is a backlog entry with its trigger recorded. See
+M1a-3's `Decided 2026-08-31` block in `docs/STORIES.md`.
 
 **Re-scored.** That papercut is gone — M0-2 could not reproduce the `-32603` on adapter
 0.49.0. The justification is now M1a-3's own gap instead, and it is a better one: a harness
 that accepts the pipe and never answers `initialize`. M1a-3 already decided a 30 s timeout
 for it, which catches *alive but silent*; this catches *died, with a message on stderr*.
-Build them together or the second failure mode reports a bare exit code.
+Build them together or the second failure mode reports a bare exit code. **Both landed in
+M1a-3 (2026-08-31)**, the timeout and the capture, in the amended form recorded above.
 
 ### 2 · ACP registry resolution and zero-install spawn — split
 

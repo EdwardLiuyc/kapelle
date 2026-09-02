@@ -22,7 +22,8 @@ Three structural deviations from the plan, each argued in the story that carries
    destination, unusable as a unit of work.
 2. **`--rebase` moves from M1 to M3**, landing with the pipelines that give it meaning
    (M1c-3).
-3. **`node:test` is the unit-test runner** for pure functions (M1a-1).
+3. **`node:test` is the unit-test runner** for pure functions (M1a-1), and — amended
+   2026-08-31 — for behaviour whose subject is the wire itself.
 
 ## Reading a story
 
@@ -273,6 +274,18 @@ little. **Decided 2026-08-23 (ratified, #62 B1): `node:test` for pure functions 
 `protocol/`; `mock-agent` and `hostile-agent` keep owning end-to-end and adversarial
 coverage.** It is
 why several stories below have a truth-table criterion rather than an end-to-end one.
+**Amended 2026-08-31 (M1a-3, issue #11): subprocess-driven `node:test` is in scope where
+the behaviour under test *is* the wire.** Some properties are statements about what does or
+does not reach the subprocess, and a pure function cannot express them — M1a-3's own
+ratified criteria require exactly that ("a second `prompt()` … throws **without a byte
+reaching the subprocess**"), which is provable only by counting what a real harness
+received. The pure-function rule stands everywhere else, and the boundaries are unchanged:
+`mock-agent` still owns end-to-end runs (`npm run selftest`), and `hostile-agent` (M1b-6)
+still owns adversarial coverage — M1a-3's `#guardPath` cases are the containment baseline it
+builds on, not a replacement for it. The original justification does not hold for this
+class: `protocol/agent.test.ts` runs in about six seconds (measured 2026-08-31, most of it
+deliberate waits proving deadlines fire), and every case is mutation-proven
+(the mutant is recorded in the commit that added it) rather than merely green.
 *Done when* both scripts pass on an empty test set and no build step exists. Note that Node 22.18+ and 24 already strip types, so this is a smaller lift than the
 plan's Node 24 framing implies — the bump is for LTS, not for the language feature.
 **DONE 2026-08-30** — `engines` `>=24`; `tsconfig.json` with `strict`, `erasableSyntaxOnly`,
@@ -294,6 +307,17 @@ story starts.
 --write .` and `fmt:check` → `biome check .`, an AGENTS.md rule, and CI running
 `fmt:check` + `check` + `test` on push/PR. `tsc` stays the type checker, markdownlint stays
 for `.md`, pi-lens stays the deeper session layer.
+**Amended 2026-08-31 (M1a-3, issue #11): CI gained two steps and the repo a fourth
+devDependency.** The push/PR job now runs `fmt:check` + `check` + `test` + `selftest` +
+`knip`, with `timeout-minutes: 15` and `node --test --test-timeout=30000` so a subprocess
+that goes silent fails the job instead of hanging it. `selftest` is there because
+`npm test` alone never loads `protocol/agent.ts`, leaving the `.mjs` → `.ts` type-stripping
+edge the whole client depends on with no automated cover. `knip` runs because it is the
+tool pi-lens's knip lane merely reports, and that lane was observed serving stale findings
+(see AGENTS.md, *Disproving a finding*) — the authoritative verdict belongs somewhere
+reproducible. `knip` is pinned as a devDependency rather than fetched with `npx -y`, so an
+upstream release cannot redden CI with no change here; the devDependency list is now
+`typescript`, `@types/node`, `biome`, `knip`.
 
 **M1a-2 · `protocol/types.ts` · M · needs M1a-1**
 Hand-written definitions for every message we touch. The `session/update` discriminated
@@ -343,7 +367,8 @@ M2-1 (event log) if M1a-5 hand-extends.
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
 rawInput}` map (`protocol/agent.ts`) and `#guardPath` (`protocol/agent.ts`). The single `onEvent`
-callback becomes typed (`EventSink`, over the `AgentEvent` union) rather than an
+callback becomes typed (`EventSink`, over an envelope wrapping the `AgentEvent` union)
+rather than an
 emitter — **amended 2026-08-31**: a multi-listener emitter has no consumer, and
 the event bus proper is M1a-6's `core/events.ts`. Applies the registry's env
 mutation (M1a-4).
@@ -725,8 +750,9 @@ produces no diff, and making disagreement fatal would turn every harness quirk i
 stop and break the review stages the pipeline is built on.
 **Revised by M0-5: `tokens` has a source, and it is not the one this story assumed.** The
 per-turn count lives on the `session/prompt` **response** (`usage`), not on `usage_update`,
-and `AcpAgent.prompt()` currently discards it (`protocol/agent.ts`), so reaching it is a one-line
-change here. Two constraints come with it: the field is `UNSTABLE` in the ACP schema and
+and `AcpAgent.prompt()` discarded it. **Landed in M1a-3 (#62 B3)** — `prompt()` now returns
+the whole `PromptResponse`, so the count is already in hand and this story only has to
+render it. Two constraints come with it: the field is `UNSTABLE` in the ACP schema and
 absent from the published docs, so pin it with an M1b-5 `mock-agent.mjs` case; and it is
 **cumulative on copilot where it is per-turn on opencode and claude-agent-acp**, so
 `TaskResult` must record which semantics produced the number rather than typing a bare
@@ -771,9 +797,12 @@ malformed JSON-RPC, oversized payload, a method we do not implement.
 *Done when* each attempt is refused with a specific error and the run continues.
 
 **M1b-7 · Per-task stderr capture · XS · needs M1b-3**
-**Gap** — harness stderr is discarded unless `--verbose` (`protocol/agent.ts`), while `CLAUDE.md`
-documents at length that stderr is the first place to look when a spawn fails and that the
-real error is invisible without the flag. Under a daemon nobody is watching a terminal.
+**Gap, narrowed by M1a-3** — stderr was discarded unless `--verbose`. M1a-3 now retains it
+in memory and attaches it to the rejection when a harness **dies**
+(`docs/STORIES.md`, the `Decided 2026-08-31` block under M1a-3), which covers a harness that
+**dies during the handshake**. What remains for this story is the **durable**
+record: a harness that dies leaves nothing on disk, a *live* harness's stderr is still only
+mirrored under `--verbose`, and under a daemon nobody is watching a terminal.
 **Decision: capture to `.agent-team/runs/<id>/<taskId>.stderr.log` unconditionally**;
 `--verbose` continues to mirror it to the terminal.
 *Done when* a harness that fails to start leaves a log containing its real error rather than
@@ -1154,9 +1183,13 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   cannot reach and warn, rather than failing `session/new`
   (`agents/acp_agent/helpers.py:17`). *Trigger:* the first story that passes anything to
   `newSession({ mcpServers })` — today nothing does, which is why it is here and not in M1a.
-- **CI workflow running `check` / `test` / `selftest`.** M1's exit bar is deliberately
+- ~~**CI workflow running `check` / `test` / `selftest`.**~~ **Landed #68, extended by
+  M1a-3 (2026-08-31)** — `.github/workflows/code_checks.yml` now runs `fmt:check`, `check`,
+  `test`, `selftest` and `knip` under a 15-minute job ceiling. The trigger below fired
+  early; the entry is kept for the reasoning, not as pending work.
+  M1's exit bar was deliberately
   offline — the two scripts pass locally and `npm run selftest` stays green — and the only
-  workflow in `.github/` is the agent harness, which runs no tests. *Trigger:* the first
+  workflow in `.github/` was the agent harness, which ran no tests. *Trigger:* the first
   milestone whose exit bar depends on a machine other than the developer's — likely M2's
   daemon, or the first harness build that changes measured labels (M0-7's lesson: a safety
   claim is a claim about a build, and builds change underneath you).

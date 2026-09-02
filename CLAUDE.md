@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`agent-team` — a minimal [Agent Client Protocol](https://agentclientprotocol.com) **client** in ~1,750 lines of TypeScript and ES modules. Zero runtime dependencies, Node ≥24, `"type": "module"`, no build step; `biome` formats and lints (`npm run fmt:check`), `node:test` covers pure functions (`npm run test`).
+`agent-team` — a minimal [Agent Client Protocol](https://agentclientprotocol.com) **client** in ~1,750 lines of TypeScript and ES modules. Zero runtime dependencies, Node ≥24, `"type": "module"`, no build step; `biome` formats and lints (`npm run fmt:check`), `node:test` covers pure functions and wire behaviour (`npm run test`).
 
 The inversion that governs every design choice: **this code is the client, the coding harness is the agent.** We spawn the harness as a subprocess, own the workspace, serve its filesystem requests, and decide its permissions. Harnesses (opencode, gemini, copilot, …) authenticate themselves — this client never touches a key.
 
@@ -14,14 +14,15 @@ The inversion that governs every design choice: **this code is the client, the c
 npm run check               # type-check: tsc --noEmit, guarded on .ts discovery (protocol/ is typed since M1a-2)
 npm run fmt                 # biome format + lint autofix (biome check --write .)
 npm run fmt:check           # biome format + lint check (biome check .)
-npm run test                # node:test for pure functions in core/ and protocol/
+npm run test                # node:test: pure functions, plus wire behaviour in protocol/
+npm run knip                # dead-code / unused-export check, both dev and --production
 npm run selftest            # end-to-end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
 node run.mjs "self test" --cmd "node mock-agent.mjs" --mode safe   # same run, write refused
 node run.mjs "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
 node fanout.mjs tasks.json  # N agents concurrently
 ```
 
-`node:test` covers pure functions in `core/` and `protocol/` (M1a-1; `protocol/types.test.ts` is the first suite, landed with M1a-2) — run it with `npm run test`. `mock-agent.mjs` is the end-to-end test harness: it implements the agent side of the protocol and drives every client code path (streaming, `fs/read_text_file`, `session/request_permission`, `fs/write_text_file`). **Verify changes to `protocol/agent.ts` against it before touching a real harness** — it needs nothing installed. Extend `mock-agent.mjs` when adding client capabilities so the new path is exercisable offline. `ACP_TEST.md` in the repo root is selftest output, not source; deleting it is safe.
+`node:test` covers pure functions in `core/` and `protocol/`, and — per the 2026-08-31 amendment in `docs/STORIES.md` (M1a-1) — behaviour whose subject *is* the wire, which a pure function cannot express. Two suites today: `protocol/types.test.ts` (pure, landed with M1a-2) and `protocol/agent.test.ts` (subprocess-driven, landed with M1a-3; it spawns real harness fixtures over real stdio to prove what does and does not reach the subprocess). Run both with `npm run test`. `mock-agent.mjs` is the end-to-end test harness: it implements the agent side of the protocol and drives every client code path (streaming, `fs/read_text_file`, `session/request_permission`, `fs/write_text_file`). **Verify changes to `protocol/agent.ts` against it before touching a real harness** — it needs nothing installed. Extend `mock-agent.mjs` when adding client capabilities so the new path is exercisable offline. `ACP_TEST.md` in the repo root is selftest output, not source; deleting it is safe.
 
 `--mode ask` requires a TTY and degrades to `safe` otherwise, so piped/CI invocations never block on a prompt.
 
@@ -45,7 +46,7 @@ Six files, one direction of dependency: `run.mjs` / `fanout.mjs` → `protocol/a
 
 ### Synthetic events
 
-`render.mjs` handles `_client_permission` and `_client_wrote_file` — these are emitted by this client, not by the protocol. Prefix any new client-originated event with `_client_` so it stays distinguishable from real `sessionUpdate` values.
+This client emits three events of its own, not defined by the protocol: `_client_permission`, `_client_wrote_file` and `_client_cancel_requested` (M1a-3, #62 R4 — recorded at the moment `session/cancel` is sent, because copilot answers `end_turn` for a turn it cancelled, so our own record of having asked is the authoritative term for M1b-2). `render.mjs` draws the first two; the third is capture-only, and its switch has no `default`, so an unrendered variant is ignored rather than drawn incorrectly. Prefix any new client-originated event with `_client_` so it stays distinguishable from real `sessionUpdate` values.
 
 ## Deliberately unimplemented
 

@@ -12,7 +12,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
@@ -95,6 +95,36 @@ const PERMISSION_WITHOUT_ID = [
 
 /** Accepts the pipe, reads stdin, and answers nothing, ever. */
 const HANGS_FOREVER = "process.stdin.resume();";
+
+/**
+ * Answers `initialize` immediately, then goes silent on `session/new`.
+ *
+ * `session/new` is the slowest handshake step M0-1 measured (copilot, 3.0s),
+ * so it is the call most likely to hang a task — and without this fixture the
+ * allowlist could be narrowed to `["initialize"]` with the suite still green.
+ */
+const STALLS_ON_SESSION_NEW = [
+  'let buf = "";',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  "      process.stdout.write(",
+  "        JSON.stringify({",
+  '          jsonrpc: "2.0",',
+  "          id: msg.id,",
+  "          result: { protocolVersion: 1 },",
+  '        }) + "\\n",',
+  "      );",
+  "    // session/new is deliberately ignored.",
+  "  }",
+  "});",
+].join("\n");
 
 /**
  * Accepts the pipe, explains itself on stderr, then dies during the handshake.
@@ -236,6 +266,17 @@ function probe(agent: AcpAgent, path: string, write = false): Promise<FsProbe> {
   return agent.request<FsProbe>("debug/fs", { path, write });
 }
 
+/**
+ * A temp directory that removes itself when the test ends, however it ends.
+ * Without this the guard suite leaves `acp-guard-*` / `acp-outside-*` behind on
+ * every run.
+ */
+async function tempDir(t: TestContext, prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 // --- toolCall lookup parity with the pre-port client --------------------------
 
 test("a tool_call that omits its id is still found when permission is asked", async (t) => {
@@ -267,7 +308,7 @@ test("a tool_call that omits its id is still found when permission is asked", as
 // --- #guardPath containment --------------------------------------------------
 
 test("in-root paths are allowed, for both read and write", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
+  const root = await tempDir(t, "acp-guard-");
   await writeFile(join(root, "inside.txt"), "in-root content", "utf8");
   const agent = await guardAgent(t, root);
 
@@ -280,7 +321,7 @@ test("in-root paths are allowed, for both read and write", async (t) => {
 });
 
 test("an escaping ../ path is refused", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
+  const root = await tempDir(t, "acp-guard-");
   const agent = await guardAgent(t, root);
 
   const read = await probe(agent, "../../etc/passwd");
@@ -292,8 +333,8 @@ test("an escaping ../ path is refused", async (t) => {
 });
 
 test("an absolute path outside the root is refused", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
-  const outside = await mkdtemp(join(tmpdir(), "acp-outside-"));
+  const root = await tempDir(t, "acp-guard-");
+  const outside = await tempDir(t, "acp-outside-");
   await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
   const agent = await guardAgent(t, root);
 
@@ -303,8 +344,8 @@ test("an absolute path outside the root is refused", async (t) => {
 });
 
 test("allowReadOutsideRoot lifts reads but never writes", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
-  const outside = await mkdtemp(join(tmpdir(), "acp-outside-"));
+  const root = await tempDir(t, "acp-guard-");
+  const outside = await tempDir(t, "acp-outside-");
   await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
   const agent = await guardAgent(t, root, true);
 
@@ -319,8 +360,8 @@ test("allowReadOutsideRoot lifts reads but never writes", async (t) => {
 });
 
 test("a symlink out of the root is NOT contained (documented gap)", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "acp-guard-"));
-  const outside = await mkdtemp(join(tmpdir(), "acp-outside-"));
+  const root = await tempDir(t, "acp-guard-");
+  const outside = await tempDir(t, "acp-outside-");
   await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
   await symlink(join(outside, "secret.txt"), join(root, "link.txt"));
   const agent = await guardAgent(t, root);
@@ -366,12 +407,36 @@ test("a harness that never answers initialize fails on the deadline", async (t) 
   );
 });
 
+test("session-management calls are bounded too, not just the handshake", async (t) => {
+  const agent = new AcpAgent({
+    name: "stalls-on-new",
+    command: process.execPath,
+    args: ["-e", STALLS_ON_SESSION_NEW],
+    // Generous enough to cover process spawn and node boot, so only the
+    // deliberate stall can trip it.
+    requestTimeoutMs: 2_000,
+  });
+  t.after(() => agent.stop());
+
+  // The handshake answers, so this must not be what rejects.
+  await agent.start();
+
+  await assert.rejects(
+    () => agent.newSession(),
+    /did not answer "session\/new" within 2000ms/,
+    "session/new carries a deadline, not only initialize",
+  );
+});
+
 test("session/prompt is never bounded by the request deadline", async (t) => {
   const agent = new AcpAgent({
     name: "slow-turn",
     command: process.execPath,
-    args: ["-e", scriptedAgent(700)],
-    requestTimeoutMs: 400,
+    args: ["-e", scriptedAgent(3_000)],
+    // Both numbers are well clear of process spawn: the invariant under test
+    // is only that the turn outlasts the budget, so give the handshake room
+    // rather than making a loaded CI runner the thing that fails.
+    requestTimeoutMs: 2_000,
   });
   t.after(() => agent.stop());
 
@@ -379,7 +444,7 @@ test("session/prompt is never bounded by the request deadline", async (t) => {
   await agent.start();
   await agent.newSession();
 
-  // This turn takes 700ms against a 400ms budget. If the deadline applied to
+  // This turn takes 3000ms against a 2000ms budget. If the deadline applied to
   // session/prompt, this would reject instead of resolving.
   const res = await agent.prompt("take your time");
   assert.equal(res.stopReason, "end_turn");
@@ -485,9 +550,10 @@ test("a silent harness produces no stderr section at all", async (t) => {
   }
 
   assert.ok(err);
-  assert.match(err.message, /exited with code 7/);
-  // No trailing noise when the harness had nothing to say.
-  assert.doesNotMatch(err.message, /\[stderr\]/);
+  // Exact, not a pattern: dropping #exitMessage's empty-buffer early return
+  // yields a trailing newline that a /exited with code 7/ match would still
+  // accept, so the assertion has to pin the whole string to be load-bearing.
+  assert.equal(err.message, 'agent "silent" exited with code 7');
 });
 
 // --- #62 R4 · cancel-intent event --------------------------------------------

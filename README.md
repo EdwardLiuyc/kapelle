@@ -14,11 +14,13 @@ answer its file-system requests, and decide its permissions. The harness is the
 | File | What it is |
 | --- | --- |
 | `protocol/agent.ts` | The client. JSON-RPC over stdio, handshake, `fs/*`, permissions. |
+| `protocol/types.ts` | Hand-written types for every message we touch, incl. the `session/update` union. |
 | `agents.mjs` | How to launch each harness in ACP mode. The whole adapter layer. |
 | `run.mjs` | CLI: one prompt, one agent. |
 | `fanout.mjs` | Several agents in parallel from `tasks.json`. |
 | `render.mjs` | Terminal output for `session/update` events. |
 | `mock-agent.mjs` | A fake agent, so you can test with nothing installed. |
+| `protocol/*.test.ts` | `node:test` suites: type round-trips, and wire behaviour against real fixtures. |
 
 ## 1. Verify the client works (no harness needed)
 
