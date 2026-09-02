@@ -543,7 +543,9 @@ advertise `terminal: false`), while copilot *sends* it on its auth method with a
 only let it go stale. It belongs to M2-8 / M4-3, where a daemon with no TTY needs it.
 **The startup notice ships here, not in M1a-7.** `run.mjs` prints `warningsFor`'s lines to
 stderr after the handshake — unconditionally, `--quiet` included. M1a-7's remaining work is
-the shape: a one-line notice that honours `--quiet`, not the decision to surface.
+the shape, not the decision to surface — and per M1a-5's ratified decision (2026-09-02) the
+containment line stays `--quiet`-blind there too; only the unverified-harness and
+version-staleness lines may be quieted.
 
 **M1a-5 · `core/policy.ts` · S · needs M1a-3**
 **Decision trigger (2026-08-30, #10): this story is where the types-coverage decision
@@ -553,16 +555,34 @@ the criteria recorded under M1a-2 (2026-08-30).
 Small in lines, load-bearing. The signature changes from `async () => boolean` to a form an
 external asynchronous decider can answer, so M2-3's `ask` works with no TTY.
 `READ_ONLY_KINDS`, `safePolicy` and `autoPolicy` semantics are unchanged (`protocol/agent.ts`).
-**Gap (Proposed 2026-09-02, Copilot review of PR #72) — `pickOption`'s zero-match tail
+**Gap (raised 2026-09-02, Copilot review of PR #72) — `pickOption`'s zero-match tail
 fails open.** When the policy denies but the harness's option list carries no reject kind,
-the tail `options[0]?.optionId` can return an `allow_once`/`allow_always` id, turning a
-denial into approval on the wire. The behaviour is verbatim from `acp.mjs` — the M1a-3 port
-preserved it — so it is not introduced there, but unlike `#guardPath` this code is live:
-claude and copilot both send `session/request_permission` (M0-1). Whether any harness ever
-sends options without a reject kind is **unmeasured**. Proposed for this story: return the
-protocol's `cancelled` outcome when no option matches the decision, and only `selected`
-when a matching option exists — and first measure the option lists the three harnesses
-actually send.
+the tail `options[0]?.optionId` returns whatever sits first, which can be an
+`allow_once`/`allow_always` id, turning a denial into approval on the wire. The behaviour is
+verbatim from `acp.mjs` — the M1a-3 port preserved it — so it is not introduced there, but
+unlike `#guardPath` this code is live: claude and copilot both send
+`session/request_permission` (M0-1).
+**Decided 2026-09-02 (measured, raw captures on issue #13): return `cancelled` when no
+option matches, and `selected` only when one does.** Measured against claude-agent-acp
+0.49.0, copilot 1.0.80 and opencode 1.18.18, one `edit` request each plus one `execute`
+request from copilot:
+
+1. **The tail does not fire today.** Both asking harnesses sent exactly three options and
+   always included `reject_once`. opencode sent none at all — zero permission requests, and
+   it wrote the file over our denial, as M0-1 found.
+2. **Its worst case is worse than "allow".** claude orders the list `allow_always`,
+   `allow_once`, `reject_once`, so a zero-match denial would select *Always Allow all
+   Write* — a persisted grant, not a single approval. copilot orders it `allow_once`,
+   `allow_always`, `reject_once`. Nothing in the protocol makes reject-presence or ordering
+   a guarantee, so the tail is one harness build away from live.
+3. **`cancelled` is accepted by both.** Answering `{outcome:"cancelled"}` produced no file,
+   no protocol error, and a clean `end_turn` on claude and copilot alike. Note the spec
+   frames `cancelled` as the *turn-cancelled* response
+   (`agentclientprotocol.com/protocol/tool-calls`), so this reuses it for a case the spec
+   does not name; the measurement is what justifies it, and a matching reject option is
+   still preferred whenever one exists.
+4. **`stopReason` stayed `end_turn` in every arm** — deny, cancel and allow alike. It
+   carries no signal about refusal, which is M1b-2's premise measured a second time.
 **Gap** — `AcpAgent` takes `allowReadOutsideRoot` (`protocol/agent.ts`), which disables the
 read half of the path guard, and the plan's entire safety discussion never mentions it: not
 in the schema, not in the precedence chain, not under the harness ceiling. What lives
@@ -580,7 +600,8 @@ because it never asks, and the one refusal we measured arrived as agent prose. R
 (`restricted` was the candidate) was considered and **rejected in favour of familiarity**.
 That choice has a consequence this story owns: **the containment notice is now the only
 thing carrying the caveat, so it must be non-suppressible** — no `--quiet` suppression, no
-"seen it once" memory — and the docs' per-harness wording from M0-6 is load-bearing rather
+"seen it once" memory (re-affirmed 2026-09-02 on #13, and now recorded in M1a-4 and M1a-7 so
+the port cannot quietly drop it) — and the docs' per-harness wording from M0-6 is load-bearing rather
 than explanatory. If the notice ever becomes optional, R1 is back.
 **Revised by M0-1 — `safe` gains a second half: negotiate, then filter.** Setting the
 harness's nearest restrictive mode via `session/set_mode` at session start is what gives
@@ -633,8 +654,12 @@ idea as a web panel that fires any notification type at a client under test
 *Done when* `npm run selftest` runs `run.ts` and passes — the plan's verification section
 requires it stay green across the port, and it currently invokes `run.mjs` — and the
 notice M1a-4 already prints at startup (multi-line, `--quiet`-blind) is refined to a
-one-line notice that honours `--quiet` when starting `safe`/`ask` against a
-`shell: "internal"` harness.
+one-line notice when starting `safe`/`ask` against a `shell: "internal"` harness.
+**Decided 2026-09-02 (#13): that containment line is never silenced.** #62 R1 kept the name
+`safe` and paid for it by making the notice the only carrier of the caveat, so `--quiet` must
+not suppress it — no flag, no "seen it once" memory. `--quiet` may drop the other two lines
+`warningsFor` can emit (unverified harness, stale `measuredOn` version). If the containment
+line ever becomes optional, R1 is back and the mode needs renaming.
 
 **M1a-8 · `core/ids.ts` · XS · needs M1a-1**
 **Gap** — `agent-team merge <runId>` operates on branches, retention promises "the branch
