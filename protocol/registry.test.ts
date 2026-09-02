@@ -103,3 +103,39 @@ test("resolveEnv still applies an entry's own unset and set", () => {
   assert.equal(env.CLAUDECODE, undefined);
   assert.equal(env.X, "1");
 });
+
+test("resolveAgent returns a known entry, id as the name", () => {
+  const spec = resolveAgent("copilot");
+  assert.equal(spec.name, "copilot");
+  assert.equal(spec.launch.command, "copilot");
+  assert.deepEqual(spec.launch.args, ["--acp"]);
+  assert.equal(spec.measured?.asksPermission, true);
+});
+
+test("resolveAgent throws on an unknown id, and names the known ones", () => {
+  assert.throws(
+    () => resolveAgent("nope"),
+    (err: Error) =>
+      err.message.includes('unknown agent "nope"') &&
+      err.message.includes("copilot"),
+  );
+});
+
+test("a --cmd spec reads past the runtime for its label", () => {
+  const spec = resolveAgent("opencode", "node mock-agent.mjs");
+  assert.equal(spec.name, "mock-agent");
+  assert.equal(spec.launch.command, "node");
+  assert.deepEqual(spec.launch.args, ["mock-agent.mjs"]);
+});
+
+test("a --cmd spec has no measured half, so it warns as unverified", () => {
+  // --cmd overrides the id: nothing about `copilot` may leak into the spec.
+  const spec = resolveAgent("copilot", "some-harness --acp");
+  assert.equal(spec.name, "some-harness");
+  assert.equal(spec.measured, undefined);
+  assert.ok(
+    warningsFor(spec.name, spec, "auto").some((l) =>
+      l.includes("no measured labels"),
+    ),
+  );
+});
