@@ -11,7 +11,7 @@ building and in what order. Draft — expect refinement.
 
 ## Context
 
-`agent-team` is today a ~1,750-line ACP **client** (`protocol/agent.ts`, `agents.mjs`, `render.mjs`,
+`agent-team` is today a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `render.mjs`,
 `run.mjs`, `fanout.mjs`). `PROJECT-BRIEF.md` describes a **supervisor**. The gap between
 those two words is this plan.
 

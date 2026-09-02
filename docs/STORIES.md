@@ -520,6 +520,30 @@ the claim conservative.
 not verify produces the **conservative** claim rather than the optimistic one — and an
 `asksPermission: false` harness warns even in `auto`, where the containment warning would
 otherwise be silent but the silent-autonomy risk is highest.
+**Done 2026-09-02 (#12).** Three notes for whoever reads this next.
+**The entry is split in two**, per the re-size note above: `launch` (`command`, `args`,
+`env?`) is a recipe we choose; `measured` is a lab report about one build. The split is what
+makes B5 free rather than a rule to remember — an unverified harness simply has no
+`measured`, so it cannot be filled with plausible-looking `unknown`s, and every consumer is
+forced by the type to handle its absence. A `--cmd` spec has no measured half either, and
+warns as unverified for the same reason.
+**The `measuredOn` "check first" could not be run.** It sends the reader to M0-1's captured
+`initialize` for `agentInfo.version`; those captures are not in the repo (the `spike/m0-*`
+branches kept only their probes) and `docs/M0-FINDINGS.md` records the handshake without
+`agentInfo`. So the literal comes from the version rows in that note, and the check compares
+against `agentInfo.version` when the harness sends one and stays silent when it does not —
+warning only, never failing a run, as B2 decided.
+**M2-8's `AGENT_TEAM_*` strip collides with M0-2's identity return**, and secrecy wins:
+`resolveEnv` returns `base` by identity only when the entry declares no `env` **and** no such
+variable is set. Both properties are asserted in `protocol/registry.test.ts`.
+`terminal-auth` was deliberately **not** recorded. It is not one flag but two directions —
+opencode gates on it as a *client* capability we would have to advertise (untested, and we
+advertise `terminal: false`), while copilot *sends* it on its auth method with a real
+`copilot login` command. The second arrives fresh at every handshake, so recording it would
+only let it go stale. It belongs to M2-8 / M4-3, where a daemon with no TTY needs it.
+**The startup notice ships here, not in M1a-7.** `run.mjs` prints `warningsFor`'s lines to
+stderr after the handshake — unconditionally, `--quiet` included. M1a-7's remaining work is
+the shape: a one-line notice that honours `--quiet`, not the decision to surface.
 
 **M1a-5 · `core/policy.ts` · S · needs M1a-3**
 **Decision trigger (2026-08-30, #10): this story is where the types-coverage decision
@@ -608,8 +632,9 @@ idea as a web panel that fires any notification type at a client under test
 (`src/acp/agent/implementations/debug_server/`); we need the capability, not the panel.
 *Done when* `npm run selftest` runs `run.ts` and passes — the plan's verification section
 requires it stay green across the port, and it currently invokes `run.mjs` — and the
-containment warning from M1a-4 surfaces as a one-line notice when starting `safe`/`ask`
-against a `shell: "internal"` harness.
+notice M1a-4 already prints at startup (multi-line, `--quiet`-blind) is refined to a
+one-line notice that honours `--quiet` when starting `safe`/`ask` against a
+`shell: "internal"` harness.
 
 **M1a-8 · `core/ids.ts` · XS · needs M1a-1**
 **Gap** — `agent-team merge <runId>` operates on branches, retention promises "the branch
