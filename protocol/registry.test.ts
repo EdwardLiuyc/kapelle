@@ -15,7 +15,7 @@ import {
   warningsFor,
 } from "./registry.ts";
 
-/** A measured entry that needs no warning: it asks, and we see the argv. */
+/** A measured entry that asks permission and reports argv — silent in `auto`. */
 const contained: AgentEntry = {
   launch: { command: "fake", args: [] },
   measured: {
@@ -41,12 +41,12 @@ test("an unverified entry says so, in every mode", () => {
 
 test("an unverified entry reads as internal/none, not as contained", () => {
   const unverified: AgentEntry = { launch: { command: "fake", args: [] } };
-  const lines = warningsFor("pi", unverified, "safe").join("\n");
-  const contained_lines = warningsFor("fake", contained, "safe").join("\n");
-  assert.ok(
-    lines.length > contained_lines.length,
-    "an unmeasured harness must not warn less than a measured contained one",
-  );
+  const line = warningsFor("pi", unverified, "safe").join("\n");
+  // The conservative claim, not the optimistic one: an unmeasured harness reads
+  // as the least-contained measured one — internal / none / never-asks.
+  assert.ok(line.includes("commands run inside it"), "assumes internal");
+  assert.ok(line.includes("never see the argv"), "assumes none");
+  assert.ok(line.includes("no jurisdiction"), "assumes never-asks");
 });
 
 test("a harness that never asks permission warns even in auto", () => {

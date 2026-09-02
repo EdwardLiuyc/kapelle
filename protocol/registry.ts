@@ -173,8 +173,8 @@ export const AGENTS: Record<string, AgentEntry> = {
     maxMode: "auto",
     measured: {
       shell: "internal",
-      // On the `tool_call` and again on the permission request.
-      argvChannel: "permission",
+      // On the `tool_call` notification, and again on the permission request.
+      argvChannel: "notification",
       asksPermission: true,
       // The full URL is the id. The bare `#plan` fragment returns -32602 and
       // would go into the registry as a broken value (M0-7).
