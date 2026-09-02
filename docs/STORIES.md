@@ -529,6 +529,16 @@ the criteria recorded under M1a-2 (2026-08-30).
 Small in lines, load-bearing. The signature changes from `async () => boolean` to a form an
 external asynchronous decider can answer, so M2-3's `ask` works with no TTY.
 `READ_ONLY_KINDS`, `safePolicy` and `autoPolicy` semantics are unchanged (`protocol/agent.ts`).
+**Gap (Proposed 2026-09-02, Copilot review of PR #72) — `pickOption`'s zero-match tail
+fails open.** When the policy denies but the harness's option list carries no reject kind,
+the tail `options[0]?.optionId` can return an `allow_once`/`allow_always` id, turning a
+denial into approval on the wire. The behaviour is verbatim from `acp.mjs` — the M1a-3 port
+preserved it — so it is not introduced there, but unlike `#guardPath` this code is live:
+claude and copilot both send `session/request_permission` (M0-1). Whether any harness ever
+sends options without a reject kind is **unmeasured**. Proposed for this story: return the
+protocol's `cancelled` outcome when no option matches the decision, and only `selected`
+when a matching option exists — and first measure the option lists the three harnesses
+actually send.
 **Gap** — `AcpAgent` takes `allowReadOutsideRoot` (`protocol/agent.ts`), which disables the
 read half of the path guard, and the plan's entire safety discussion never mentions it: not
 in the schema, not in the precedence chain, not under the harness ceiling. What lives

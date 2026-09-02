@@ -377,9 +377,14 @@ export class AcpAgent {
    * cancel, did the watchdog fire) because copilot answers `end_turn` for a
    * turn it cancelled — so our own record of having asked is the authoritative
    * term, and it has to be recorded here, where the asking happens.
+   *
+   * A cancel racing with or following the harness's death records nothing:
+   * `#send` would silently drop the notification, and an authoritative record
+   * of a cancel that never reached the harness is exactly the false entry
+   * M1b-2 must not see.
    */
   cancel(): void {
-    if (!this.sessionId) return;
+    if (!this.sessionId || this.#closed) return;
     const sessionId = this.sessionId;
     this.notify("session/cancel", { sessionId });
     this.onEvent({

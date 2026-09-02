@@ -609,6 +609,64 @@ test("cancel() before a session exists sends nothing and emits nothing", async (
   assert.equal(seen.count, 0, "no session/cancel on the wire either");
 });
 
+/**
+ * Answers the handshake, then exits only when told. The deterministic exit is
+ * what lets the after-death test know death has happened without sleeping.
+ */
+const ANSWERS_THEN_EXITS = [
+  'let buf = "";',
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "session/new")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
+  '    else if (msg.method === "debug/exit") process.exit(0);',
+  "  }",
+  "});",
+].join("\n");
+
+test("cancel() after the harness has died records nothing", async (t) => {
+  const events: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "late-cancel",
+    command: process.execPath,
+    args: ["-e", ANSWERS_THEN_EXITS],
+    requestTimeoutMs: 2_000,
+    onEvent: (event) => {
+      events.push(event);
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+
+  // A request the fixture will never answer: #failAll rejects it when the
+  // process closes, which is how the test knows death has happened rather
+  // than guessing with a sleep.
+  const never = agent.request("debug/never");
+  agent.notify("debug/exit");
+  await assert.rejects(never, /exited with code 0/);
+
+  agent.cancel();
+
+  // Nothing was sent, so an authoritative cancel record here would be the
+  // false entry M1b-2 keys on.
+  assert.equal(
+    events.length,
+    0,
+    "no cancel-intent event for a cancel that reached nothing",
+  );
+});
+
 test("the guard clears once a turn ends, so later prompts still work", async (t) => {
   const agent = new AcpAgent({
     name: "sequential",
