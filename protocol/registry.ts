@@ -247,6 +247,21 @@ export function resolveEnv(
 }
 
 /**
+ * Which rule produced a warning — and therefore whether `--quiet` may drop it.
+ *
+ * `containment` is never suppressible (#13, `docs/STORIES.md` M1a-7): #62 R1
+ * kept the name `safe` and paid for it by making that line the only carrier of
+ * the caveat that `safe` is defence in depth, not a sandbox. `unverified` and
+ * `version` are advisory and may be quieted. Callers filter on this field;
+ * without it the printing side sees three indistinguishable strings and can
+ * only choose all or none.
+ */
+export interface Warning {
+  kind: "containment" | "unverified" | "version";
+  text: string;
+}
+
+/**
  * The one place an entry becomes a claim about safety.
  *
  * Every rule here is conservative: a harness we could not verify produces the
@@ -263,38 +278,46 @@ export function warningsFor(
   entry: AgentEntry,
   mode: ClientMode,
   liveVersion?: string,
-): string[] {
-  const out: string[] = [];
+): Warning[] {
+  const out: Warning[] = [];
   const m = entry.measured;
 
   if (!m) {
-    out.push(
-      `${name}: no measured labels for this harness — assuming commands run ` +
+    out.push({
+      kind: "unverified",
+      text:
+        `${name}: no measured labels for this harness — assuming commands run ` +
         `inside it, that we never see the argv, and that the policy has no ` +
         `jurisdiction. Treat any safety claim as unverified.`,
-    );
+    });
     return out;
   }
 
   if (!m.asksPermission) {
     // Louder than containment, and true in `auto` too, where the containment
     // warning stays silent but the silent-autonomy risk is highest.
-    out.push(
-      `${name}: never asks permission — the policy has no jurisdiction over ` +
+    out.push({
+      kind: "containment",
+      text:
+        `${name}: never asks permission — the policy has no jurisdiction over ` +
         `it in any mode, so --mode ${mode} does not bound what it does.`,
-    );
+    });
   } else if (mode !== "auto" && m.shell !== "terminal") {
-    out.push(
-      `${name}: runs its own commands (shell: ${m.shell}), so --mode ${mode} ` +
+    out.push({
+      kind: "containment",
+      text:
+        `${name}: runs its own commands (shell: ${m.shell}), so --mode ${mode} ` +
         `filters only what it routes through the protocol.`,
-    );
+    });
   }
 
   if (liveVersion && liveVersion !== m.measuredOn.version) {
-    out.push(
-      `${name}: labels were measured on ${m.measuredOn.version} ` +
+    out.push({
+      kind: "version",
+      text:
+        `${name}: labels were measured on ${m.measuredOn.version} ` +
         `(${m.measuredOn.date}); this build is ${liveVersion}.`,
-    );
+    });
   }
 
   return out;

@@ -668,6 +668,17 @@ one-line notice when starting `safe`/`ask` against a `shell: "internal"` harness
 not suppress it — no flag, no "seen it once" memory. `--quiet` may drop the other two lines
 `warningsFor` can emit (unverified harness, stale `measuredOn` version). If the containment
 line ever becomes optional, R1 is back and the mode needs renaming.
+**Landed 2026-09-03.** The split above needed a mechanism: `warningsFor` returned an
+untagged `string[]`, so the printing side saw three indistinguishable lines and could only
+choose all or none. It now returns `{kind, text}` with `kind` one of `containment` /
+`unverified` / `version`, and `run.ts` drops everything but `containment` under `--quiet`.
+Keeping the rule inside `warningsFor` rather than splitting it into two functions is what
+keeps "which line is silenceable" in one place. Verified both directions end to end:
+`--cmd "node mock-agent.mjs" --quiet` prints nothing, opencode 1.18.18 under
+`--mode safe --quiet` still prints its never-asks line.
+**`--emit` did not land here.** The proposal above is unclaimed by any later story —
+M1b-5 (`mock-agent` fixtures) is the natural home but lists only run-file and task-result
+paths. Left open deliberately; it can still be done under this story.
 
 **M1a-8 · `core/ids.ts` · XS · needs M1a-1**
 **Gap** — `agent-team merge <runId>` operates on branches, retention promises "the branch

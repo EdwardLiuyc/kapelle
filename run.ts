@@ -4,25 +4,36 @@ import {
   makeAskPolicy,
   negotiateSafeMode,
   policyFor,
+  type ResolvedPolicy,
   resolvePolicy,
 } from "./core/policy.ts";
 import { AcpAgent } from "./protocol/agent.ts";
+import type { ClientMode } from "./protocol/registry.ts";
 import {
   AGENTS,
   resolveAgent,
   resolveEnv,
   warningsFor,
 } from "./protocol/registry.ts";
-import { render } from "./render.mjs";
+import { render } from "./render.ts";
 
 const argv = process.argv.slice(2);
 
-function flag(name, fallback = undefined) {
+/** Value of `--name`, or `fallback` when it is absent or carries no value. */
+function flag(name: string): string | undefined;
+function flag(name: string, fallback: string): string;
+function flag(name: string, fallback?: string): string | undefined {
   const i = argv.indexOf(`--${name}`);
   if (i === -1) return fallback;
   const next = argv[i + 1];
-  return next && !next.startsWith("--") ? next : true;
+  return next && !next.startsWith("--") ? next : fallback;
 }
+
+const has = (name: string) => argv.includes(`--${name}`);
+
+/** `catch` binds `unknown`; a harness can reject with anything. */
+const messageOf = (err: unknown) =>
+  err instanceof Error ? err.message : String(err);
 
 const positional = argv.filter((a, i) => {
   if (a.startsWith("--")) return false;
@@ -32,11 +43,11 @@ const positional = argv.filter((a, i) => {
 
 const promptText = positional.join(" ").trim();
 
-if (!promptText || flag("help")) {
+if (!promptText || has("help")) {
   console.log(`
 acp-mvp — a minimal Agent Client Protocol client
 
-  node run.mjs "<prompt>" [options]
+  node run.ts "<prompt>" [options]
 
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: opencode)
@@ -47,31 +58,34 @@ Options:
                      safe = reads only, all mutations refused
                      auto = approve everything (path guards still apply)
   --verbose        show agent stderr and protocol noise
-  --quiet          only print the final assistant message
+  --quiet          suppress normal output; safety notices still print
 
 Examples:
-  node run.mjs "list the top-level files and summarise this repo"
-  node run.mjs "add a health endpoint" --cwd ../my-app --mode ask
-  node run.mjs "what does src/index.ts do" --mode safe
+  node run.ts "list the top-level files and summarise this repo"
+  node run.ts "add a health endpoint" --cwd ../my-app --mode ask
+  node run.ts "what does src/index.ts do" --mode safe
 `);
   process.exit(promptText ? 0 : 1);
 }
 
-const verbose = argv.includes("--verbose");
-const quiet = argv.includes("--quiet");
+const verbose = has("verbose");
+const quiet = has("quiet");
 
 const spec = resolveAgent(flag("agent", "opencode"), flag("cmd"));
 
-// `task > run > harness > default`: run.mjs is one task, so `--mode` is the run
+// `task > run > harness > default`: run.ts is one task, so `--mode` is the run
 // layer and the registry entry is the harness layer. An unknown mode, or one
 // above the entry's ceiling, is a validation error here rather than a silent
 // downgrade. There is no `--allow-read-outside-root` flag: the task layer that
 // carries it arrives with M1b-1's run file, and inventing a CLI surface for it
 // now would be a second place to keep in step.
-const resolveOrExit = (mode) => {
+// The cast is the boundary: argv is strings, and `resolvePolicy` is the one
+// place that validates a mode — it throws naming the known ones, which is a
+// better error than anything a second check here could produce.
+const resolveOrExit = (mode: string | undefined): ResolvedPolicy => {
   try {
     return resolvePolicy({
-      run: { mode },
+      run: { mode: mode as ClientMode | undefined },
       harness: {
         name: spec.name,
         mode: spec.defaultMode,
@@ -79,7 +93,7 @@ const resolveOrExit = (mode) => {
       },
     });
   } catch (err) {
-    console.error(err.message);
+    console.error(messageOf(err));
     process.exit(1);
   }
 };
@@ -135,14 +149,18 @@ try {
     console.log(`connected to ${who} (ACP v${init.protocolVersion})`);
   }
 
-  // M1a-4: what this harness's measured labels say the mode does not bound.
-  for (const line of warningsFor(
+  // M1a-4 decides these lines; this story decides which survive `--quiet`.
+  // Only `containment` is unsuppressible (#13): #62 R1 kept the name `safe`,
+  // so that line is the only thing carrying the caveat that `safe` filters
+  // rather than enforces. The advisory two may go.
+  for (const w of warningsFor(
     spec.name,
     spec,
     resolved.mode,
     init.agentInfo?.version,
   )) {
-    console.error(`! ${line}`);
+    if (quiet && w.kind !== "containment") continue;
+    console.error(`! ${w.text}`);
   }
 
   await agent.newSession();
@@ -159,7 +177,7 @@ try {
   const { stopReason } = await agent.prompt(promptText);
   if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
 } catch (err) {
-  console.error(`\nerror: ${err.message}`);
+  console.error(`\nerror: ${messageOf(err)}`);
   process.exitCode = 1;
 } finally {
   closeAsk();

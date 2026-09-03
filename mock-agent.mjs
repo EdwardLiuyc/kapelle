@@ -3,7 +3,7 @@
  * A fake ACP agent — the agent side of the protocol, ~80 lines.
  *
  * Lets you exercise the client with no harness installed:
- *   node run.mjs "hello" --cmd "node mock-agent.mjs" --mode safe
+ *   node run.ts "hello" --cmd "node mock-agent.mjs" --mode safe
  *
  * It answers initialize / session/new / session/prompt, streams a message,
  * calls back into the client's fs/read_text_file, and asks permission for a
