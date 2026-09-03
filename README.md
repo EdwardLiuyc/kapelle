@@ -15,7 +15,7 @@ answer its file-system requests, and decide its permissions. The harness is the
 | --- | --- |
 | `protocol/` | Everything wire-level: hand-written types for every message we touch (`types.ts`), the client itself (`agent.ts` — JSON-RPC over stdio, handshake, `fs/*`, permissions), and the adapter layer (`registry.ts` — how to launch each harness, and what we measured when we ran it). |
 | `core/` | Client-side logic that never touches the wire: the policy filter (`policy.ts`) and the event bus (`events.ts`). |
-| `*.mjs` | The entry points and terminal glue: `run.mjs` (CLI: one prompt, one agent), `fanout.mjs` (several agents in parallel from `tasks.json`), `render.mjs` (terminal output for `session/update` events), `mock-agent.mjs` (a fake agent, so you can test with nothing installed). |
+| root scripts | The entry points and terminal glue: `run.ts` (CLI: one prompt, one agent), `fanout.mjs` (several agents in parallel from `tasks.json`), `render.ts` (terminal output for `session/update` events), `mock-agent.mjs` (a fake agent, so you can test with nothing installed). |
 | `docs/` | Plans, stories and what was measured about each harness. |
 | `assets/`, config files | Logo, tool configs (`biome.json`, `tsconfig.json`, `knip.jsonc`, `.markdownlint.json`), `package.json`. |
 

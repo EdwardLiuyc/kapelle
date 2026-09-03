@@ -88,7 +88,7 @@ export interface JsonRpcErrorResponse extends Meta {
 // Content blocks — appear in prompts we send and chunks we receive
 // ---------------------------------------------------------------------------
 
-/** Text is the only block this client renders today (`render.mjs`). */
+/** Text is the only block this client renders today (`render.ts`). */
 export interface TextContent extends Meta {
   type: "text";
   text: string;
@@ -166,7 +166,7 @@ export interface ToolCallLocation extends Meta {
   line?: number;
 }
 
-/** Content produced by a tool call. `diff` is what `render.mjs` prints. */
+/** Content produced by a tool call. `diff` is what `render.ts` prints. */
 export interface ToolCallContentDiff extends Meta {
   type: "diff";
   path: string;
@@ -407,7 +407,7 @@ export interface ClientCancelRequestedEvent extends Meta {
   sessionId: SessionId;
 }
 
-/** Everything `render.mjs`'s switch must tolerate. */
+/** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
   | ClientPermissionEvent

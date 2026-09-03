@@ -1,11 +1,34 @@
-const dim = (s) => `\x1b[2m${s}\x1b[0m`;
-const green = (s) => `\x1b[32m${s}\x1b[0m`;
-const red = (s) => `\x1b[31m${s}\x1b[0m`;
-const cyan = (s) => `\x1b[36m${s}\x1b[0m`;
+/**
+ * Terminal formatting for one event off the bus — story M1a-7, issue #15.
+ *
+ * Pure presentation. It reads the wire object and writes characters; it makes
+ * no protocol decision, which is why it sits outside `protocol/` and why the
+ * dependency arrow only ever points at it.
+ *
+ * **The switch deliberately has no `default`** (CLAUDE.md). A variant nobody
+ * renders is dropped in silence rather than drawn wrong — M0-1 observed two
+ * that arrive today and have no branch here: `available_commands_update` from
+ * all three harnesses, and `config_option_update` from copilot. `assertNever`
+ * would be wrong here: it would turn an unrendered-but-valid notification into
+ * a crash. (`plan` is the mirror case — it *has* a branch, and no harness M0-1
+ * measured emits one, so `mock-agent.mjs` is the only thing that drives it.)
+ */
+
+import type { AgentEventEnvelope } from "./protocol/agent.ts";
+import type { ContentBlock } from "./protocol/types.ts";
+
+const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
+const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
+const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
+const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
 
 let midStream = false;
 
-function line(s) {
+/** Text is the only block this client draws; anything else renders as nothing. */
+const textOf = (c: ContentBlock | undefined): string | undefined =>
+  c?.type === "text" ? c.text : undefined;
+
+function line(s: string) {
   if (midStream) {
     process.stdout.write("\n");
     midStream = false;
@@ -14,12 +37,12 @@ function line(s) {
 }
 
 /** Pretty-print a session/update notification. */
-export function render({ agent, update }) {
+export function render({ agent, update }: AgentEventEnvelope): void {
   const tag = dim(`[${agent}]`);
 
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
-      const text = update.content?.text;
+      const text = textOf(update.content);
       if (text) {
         process.stdout.write(text);
         midStream = true;
@@ -28,7 +51,7 @@ export function render({ agent, update }) {
     }
 
     case "agent_thought_chunk": {
-      const text = update.content?.text;
+      const text = textOf(update.content);
       if (text) line(dim(`${tag} thinking: ${text.trim().slice(0, 120)}`));
       break;
     }

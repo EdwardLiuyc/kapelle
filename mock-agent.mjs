@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * A fake ACP agent — the agent side of the protocol, ~80 lines.
+ * A fake ACP agent — the agent side of the protocol.
  *
  * Lets you exercise the client with no harness installed:
- *   node run.mjs "hello" --cmd "node mock-agent.mjs" --mode safe
+ *   node run.ts "hello" --cmd "node mock-agent.mjs" --mode safe
  *
  * It answers initialize / session/new / session/prompt, streams a message,
  * calls back into the client's fs/read_text_file, and asks permission for a
@@ -79,6 +79,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     });
 
     update(sid, {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Deciding which file to read first." },
+    });
+
+    update(sid, {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "Reading package.json via the client… " },
     });
@@ -127,7 +132,8 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       ],
     });
 
-    if (perm?.outcome?.optionId === "yes") {
+    const wrote = perm?.outcome?.optionId === "yes";
+    if (wrote) {
       await callClient("fs/write_text_file", {
         sessionId: sid,
         path: "ACP_TEST.md",
@@ -146,7 +152,21 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     update(sid, {
       sessionUpdate: "tool_call_update",
       toolCallId: "t2",
+      // A real edit tool reports what it changed here, and `diff` is the only
+      // ToolCallContent render.ts draws (the `±` line). Refused writes changed
+      // nothing, so they report no content.
       status: "completed",
+      ...(wrote
+        ? {
+            content: [
+              {
+                type: "diff",
+                path: "ACP_TEST.md",
+                newText: "written by the mock agent through the client\n",
+              },
+            ],
+          }
+        : {}),
     });
 
     // A harness that offers no way to say no. Every build we measured on
@@ -179,6 +199,21 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       sessionUpdate: "tool_call_update",
       toolCallId: "t3",
       status: "completed",
+    });
+
+    // A tool the agent could not complete. Unconditional, so the selftest on
+    // its own reaches render.ts's failure branch — no mode, no flag needed.
+    update(sid, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t4",
+      title: "Fetch a URL that does not resolve",
+      kind: "fetch",
+      status: "pending",
+    });
+    update(sid, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t4",
+      status: "failed",
     });
 
     update(sid, { sessionUpdate: "usage_update", used: 1234, size: 200000 });

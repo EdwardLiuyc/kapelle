@@ -17,8 +17,8 @@ npm run fmt:check           # biome format + lint check (biome check .)
 npm run test                # node:test: pure functions, plus wire behaviour in protocol/
 npm run knip                # dead-code / unused-export check, both dev and --production
 npm run selftest            # end-to-end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
-node run.mjs "self test" --cmd "node mock-agent.mjs" --mode safe   # same run, write refused
-node run.mjs "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
+node run.ts "self test" --cmd "node mock-agent.mjs" --mode safe   # same run, write refused
+node run.ts "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
 node fanout.mjs tasks.json  # N agents concurrently
 ```
 
@@ -26,18 +26,18 @@ node fanout.mjs tasks.json  # N agents concurrently
 
 `--mode ask` requires a TTY and degrades to `safe` otherwise, so piped/CI invocations never block on a prompt.
 
-The containment notice `warningsFor` prints, plus the not-negotiated line, are **never suppressed by `--quiet`** (#13): `safe` keeps its name only because that notice carries the caveat.
+The containment notice `warningsFor` prints, plus the not-negotiated line, are **never suppressed by `--quiet`** (#13): `safe` keeps its name only because that notice carries the caveat. `warningsFor` returns `{kind, text}` so the call site can make that split — `containment` always prints, `unverified` and `version` are advisory and `--quiet` drops them.
 
 **Harness spawn failures surface as opaque JSON-RPC errors** — typically `Internal error (code -32603)` on `session/new`, with the real message only on the harness's stderr under `--verbose`. Reach for `--verbose` first. The `--agent claude` case is the one to know: older adapters refused to start a nested session when they saw the markers a parent Claude Code session leaves in the environment, and `AcpAgent` passes its `env` through to the subprocess. The `claude` entry scrubs those markers (`CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT`) via the registry `env` field (`protocol/registry.ts`), so no `env -u ...` prefix is needed. Adapter 0.49.0 no longer refuses, so the scrub is regression insurance rather than a fix for a live failure. The deprecated `claude-code-acp` adapter is no longer in the registry.
 
 ## Architecture
 
-One direction of dependency: `run.mjs` / `fanout.mjs` → `core/` → `protocol/agent.ts` + `protocol/registry.ts` + `render.mjs`, typed by `protocol/types.ts`. **`core/` may import `protocol/`; never the reverse** — that is why `AcpAgent`'s default policy refuses everything rather than being `safePolicy`.
+One direction of dependency: `run.ts` / `fanout.mjs` → `core/` → `protocol/agent.ts` + `protocol/registry.ts` + `render.ts`, typed by `protocol/types.ts`. **`core/` may import `protocol/`; never the reverse** — that is why `AcpAgent`'s default policy refuses everything rather than being `safePolicy`.
 
 - **`protocol/agent.ts`** — everything protocol. `AcpAgent` owns one subprocess: spawn, newline-delimited JSON-RPC over stdio, `initialize` handshake (hard-fails on `protocolVersion` mismatch), `session/new`, `session/prompt`, `session/cancel`. It handles exactly three inbound requests — `fs/read_text_file`, `fs/write_text_file`, `session/request_permission` — and one notification, `session/update`, which it forwards to `onEvent`.
 - **`protocol/registry.ts`** — the entire adapter layer (M1a-4, was `agents.mjs`). A map of agent id → `{launch, measured?}`. **The split is load-bearing.** `launch` is `{command, args, env?}` — a recipe we choose. `measured` is a lab report: `shell`, `argvChannel`, `asksPermission`, `modeMap`, `usage`, `meta?` and `measuredOn`, every field a claim about one *build*. `omp`, `pi` and `gemini` were never run here, so they carry no `measured` — its **absence is the only marker of an unverified harness**, and `warningsFor` reads that absence as the least contained harness we did measure. Supporting a new harness is still one entry, not an integration. `env` is `{unset?, set?}`, applied by `resolveEnv`, which also strips `AGENT_TEAM_*` from every harness's environment unconditionally (M2-8's shared secret must never reach a subprocess). `resolveEnv` returns `process.env` **by identity** when there is nothing to do, so quirk-free harnesses don't each get a copy. `resolveAgent` also parses `--cmd` strings and derives a readable label (`node mock-agent.mjs` → `mock-agent`); a `--cmd` spec has no `measured` half, so it warns as unverified.
-- **`render.mjs`** — terminal formatting for `session/update`. Pure presentation; no protocol logic.
-- **`run.mjs`** — single-agent CLI, hand-rolled arg parsing, SIGINT → `session/cancel` then 2s grace before kill.
+- **`render.ts`** — terminal formatting for `session/update`. Pure presentation; no protocol logic.
+- **`run.ts`** — single-agent CLI, hand-rolled arg parsing, SIGINT → `session/cancel` then 2s grace before kill.
 - **`fanout.mjs`** — `Promise.allSettled` over tasks. Deliberately buffers prose per agent and prints only milestones live, because interleaved token streams are unreadable. Give each task its own `cwd` (a git worktree is the usual choice) so concurrent agents don't collide.
 
 ### Two client invariants worth preserving
@@ -54,7 +54,7 @@ One direction of dependency: `run.mjs` / `fanout.mjs` → `core/` → `protocol/
 
 ### Synthetic events
 
-This client emits three events of its own, not defined by the protocol: `_client_permission`, `_client_wrote_file` and `_client_cancel_requested` (M1a-3, #62 R4 — recorded at the moment `session/cancel` is sent, because copilot answers `end_turn` for a turn it cancelled, so our own record of having asked is the authoritative term for M1b-2). `render.mjs` draws the first two; the third is capture-only, and its switch has no `default`, so an unrendered variant is ignored rather than drawn incorrectly. Prefix any new client-originated event with `_client_` so it stays distinguishable from real `sessionUpdate` values.
+This client emits three events of its own, not defined by the protocol: `_client_permission`, `_client_wrote_file` and `_client_cancel_requested` (M1a-3, #62 R4 — recorded at the moment `session/cancel` is sent, because copilot answers `end_turn` for a turn it cancelled, so our own record of having asked is the authoritative term for M1b-2). `render.ts` draws the first two; the third is capture-only, and its switch has no `default`, so an unrendered variant is ignored rather than drawn incorrectly. Prefix any new client-originated event with `_client_` so it stays distinguishable from real `sessionUpdate` values.
 
 ## Deliberately unimplemented
 

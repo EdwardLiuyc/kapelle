@@ -16,7 +16,7 @@
  * started, worktree created, permission pending, stall warning, task
  * finished, containment warning). Five have no producer in the tree: the
  * files that would send them are M1b-2, M1b-3 and M1c-1. The sixth, the
- * containment warning, stays on stderr at `run.mjs` — moving it onto the bus
+ * containment warning, stays on stderr at `run.ts` — moving it onto the bus
  * now would route it through a sink `--quiet` switches off, and #13 says that
  * line is never silenced. Each story widens the union when it lands its
  * producer.

@@ -11,6 +11,7 @@ import { test } from "node:test";
 import {
   AGENTS,
   type AgentEntry,
+  printableWarnings,
   resolveAgent,
   resolveEnv,
   warningsFor,
@@ -34,7 +35,9 @@ test("an unverified entry says so, in every mode", () => {
   for (const mode of ["safe", "ask", "auto"] as const) {
     const lines = warningsFor("pi", unverified, mode);
     assert.ok(
-      lines.some((l) => l.includes("no measured labels")),
+      lines.some(
+        (l) => l.kind === "unverified" && l.text.includes("no measured labels"),
+      ),
       `expected the unverified notice in ${mode}, got ${JSON.stringify(lines)}`,
     );
   }
@@ -42,7 +45,9 @@ test("an unverified entry says so, in every mode", () => {
 
 test("an unverified entry reads as internal/none, not as contained", () => {
   const unverified: AgentEntry = { launch: { command: "fake", args: [] } };
-  const line = warningsFor("pi", unverified, "safe").join("\n");
+  const line = warningsFor("pi", unverified, "safe")
+    .map((w) => w.text)
+    .join("\n");
   // The conservative claim, not the optimistic one: an unmeasured harness reads
   // as the least-contained measured one — internal / none / never-asks.
   assert.ok(line.includes("commands run inside it"), "assumes internal");
@@ -53,7 +58,10 @@ test("an unverified entry reads as internal/none, not as contained", () => {
 test("a harness that never asks permission warns even in auto", () => {
   const lines = warningsFor("opencode", AGENTS.opencode, "auto");
   assert.ok(
-    lines.some((l) => l.includes("never asks permission")),
+    lines.some(
+      (l) =>
+        l.kind === "containment" && l.text.includes("never asks permission"),
+    ),
     `expected the no-jurisdiction warning in auto, got ${JSON.stringify(lines)}`,
   );
 });
@@ -65,7 +73,12 @@ test("a harness that does ask permission stays quiet in auto", () => {
 test("measuredOn warns when the live version differs", () => {
   const lines = warningsFor("fake", contained, "auto", "1.0.1");
   assert.ok(
-    lines.some((l) => l.includes("1.0.0") && l.includes("1.0.1")),
+    lines.some(
+      (l) =>
+        l.kind === "version" &&
+        l.text.includes("1.0.0") &&
+        l.text.includes("1.0.1"),
+    ),
     `expected a staleness warning naming both builds, got ${JSON.stringify(lines)}`,
   );
 });
@@ -135,7 +148,48 @@ test("a --cmd spec has no measured half, so it warns as unverified", () => {
   assert.equal(spec.measured, undefined);
   assert.ok(
     warningsFor(spec.name, spec, "auto").some((l) =>
-      l.includes("no measured labels"),
+      l.text.includes("no measured labels"),
     ),
   );
+});
+
+test("--quiet drops the advisory lines and never the containment one", () => {
+  // The #13 rule, asserted on a run that produces both at once: opencode never
+  // asks permission (containment) and is reported on a build we did not
+  // measure (version). An inversion or removal of the filter fails here.
+  const both = warningsFor(
+    "opencode",
+    AGENTS.opencode,
+    "safe",
+    "0.0.0-not-the-measured-build",
+  );
+  assert.deepEqual(
+    both.map((w) => w.kind),
+    ["containment", "version"],
+    "the fixture must produce one of each for this test to mean anything",
+  );
+
+  assert.deepEqual(
+    printableWarnings(both, true).map((w) => w.kind),
+    ["containment"],
+    "quiet keeps containment and nothing else",
+  );
+  assert.deepEqual(
+    printableWarnings(both, false),
+    both,
+    "without --quiet every line prints",
+  );
+
+  // A run with no containment line prints nothing at all when quieted — the
+  // `--cmd` case the selftest exercises.
+  const advisoryOnly = warningsFor(
+    "mock-agent",
+    { launch: { command: "x", args: [] } },
+    "auto",
+  );
+  assert.deepEqual(
+    advisoryOnly.map((w) => w.kind),
+    ["unverified"],
+  );
+  assert.deepEqual(printableWarnings(advisoryOnly, true), []);
 });
