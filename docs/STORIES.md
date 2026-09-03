@@ -363,6 +363,16 @@ hand-extension; three or more (elicitation, `terminal/*`, v2) for SDK-types-only
 codegen; (2) wholesale adoption costs the zero-runtime-dependency trait (zod peer dep);
 (3) adopting the official types surrenders the `assertNever` pattern. Re-checkpoint at
 M2-1 (event log) if M1a-5 hand-extends.
+**Landed 2026-08-31 (#10).** The union is hand-written, `_meta` sits on the base of the
+message types in both directions, and `assertNever` makes an unhandled variant a `tsc`
+error. `locations[]` is typed on `tool_call` and `tool_call_update`
+(`protocol/types.ts:201`, `:218`) but nothing reads it — the probe that would decide
+whether `render` shows it never ran, and the type costs nothing while it waits.
+**The types-coverage decision fired at M1a-5 and the answer was hand-extend.**
+`session/set_mode` was the only surface M1 needed outside this file, which is criterion (1)
+as written — one small addition, not three. It is typed at `protocol/types.ts:582`, the SDK
+was not adopted, the zero-runtime-dependency trait is intact, and `assertNever` still works.
+Per the rule above, this hand-extension re-opens the checkpoint at **M2-1**.
 
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
@@ -451,6 +461,16 @@ to copy. **The API half is part of this decision:** M2 exposes no endpoint that 
 running task.
 *Done when* (in addition to the criteria below) a second `prompt()` during a live turn
 throws without a byte reaching the subprocess, covered by `node:test`.
+**Landed 2026-09-02 (#11).** All five behaviours are in and each has a subprocess-driven
+test in `protocol/agent.test.ts`: the 30s deadline on the handshake and session-management
+calls but never on `session/prompt`, unbounded stderr attached to a mid-handshake death,
+the in-flight guard, the whole `PromptResponse`, and `_client_cancel_requested`.
+**One `#guardPath` case does not pass, deliberately.** A symlink pointing out of the root is
+followed: `path.resolve` is string arithmetic and never touches the filesystem, so
+`link.txt` looks in-root. The test records what the guard does today rather than what it
+should do (`protocol/agent.test.ts:362`), and **M1b-6 owns closing it** — the fix is
+`fs.realpath` before the prefix check. The other four cases — in-root, escaping `../`,
+absolute-outside, and the read/write asymmetry under `allowReadOutsideRoot` — pass.
 
 **M1a-4 · `protocol/registry.ts` · M · needs M1a-3, M0-7**
 **Re-sized S → M, 2026-08-23.** The decision was ratified unchanged; the estimate was not.
@@ -649,6 +669,17 @@ the live queue; AgentPool's `is_loading` / `finish_load` split
 (`agents/acp_agent/session_state.py:58`, `:91`) is the shape.
 *Done when* every consumer — CLI render, and later persistence and SSE — subscribes, and
 nothing reads agent state directly. This is the invariant that makes M4 purely additive.
+**Landed 2026-09-03 (#14).** Both entry points subscribe and neither reads agent state:
+`run.ts` attaches `render`, `fanout.mjs` attaches its own buffering listener. **Not
+`node:events`** — `EventEmitter.emit` propagates a listener's throw and skips the listeners
+behind it, so one broken renderer would take the run down; a `Set` and a `try` is less code
+than wrapping every handler.
+**None of the six supervisor variants landed, because five have no producer.** Task started,
+worktree created, permission pending, stall warning and task finished are sent by files that
+do not exist yet (M1b-2, M1b-3, M1c-1); each story widens the union when it lands its own
+producer. The sixth, the containment warning, deliberately stays on stderr: routing it
+through the bus would put it behind a sink `--quiet` can switch off, and #13 says that line
+is never silenced.
 
 **M1a-7 · Port `render.mjs` and `run.mjs` · S · needs M1a-6**
 `run.ts` keeps driving in-process, TTY `ask` intact.
@@ -708,6 +739,11 @@ three with one character and keeps ids readable; underscore remains available.
 *Done when* an illegal task id is a validation error rather than a silently sanitised one —
 the id in the run file is the id everywhere — and branch names round-trip through
 `git check-ref-format`.
+**Landed 2026-09-04 (#16).** `newRunId`, `assertTaskId` and `branchName` in `core/ids.ts`,
+with the amended charset. An illegal id throws and is never sanitised, and minted branch
+names are fed to real `git check-ref-format` in the test rather than to a regex that agrees
+with the validator by construction (`core/ids.test.ts:69`). The three ids the dropped dot
+was removed for — `plan..impl`, `impl.`, `build.lock` — are cases in that suite.
 
 ---
 

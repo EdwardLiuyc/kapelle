@@ -11,7 +11,7 @@ import { readFile } from "node:fs/promises";
 import { createEventBus } from "./core/events.ts";
 import { negotiateSafeMode, policyFor, resolvePolicy } from "./core/policy.ts";
 import { AcpAgent } from "./protocol/agent.ts";
-import { resolveAgent, resolveEnv } from "./protocol/registry.ts";
+import { resolveAgent, resolveEnv, warningsFor } from "./protocol/registry.ts";
 
 const file = process.argv[2] ?? "tasks.json";
 
@@ -74,7 +74,20 @@ const results = await Promise.allSettled(
     });
 
     try {
-      await agent.start();
+      const init = await agent.start();
+
+      // The containment notice is never silenced (#62 R1, #13), and fanout is
+      // the second entry point that can start a harness under `safe`. No
+      // --quiet here, so every line prints; `run.ts` owns the split.
+      for (const w of warningsFor(
+        spec.name,
+        spec,
+        resolved.mode,
+        init.agentInfo?.version,
+      )) {
+        console.log(`[${label}] ! ${w.text}`);
+      }
+
       await agent.newSession();
       const notNegotiated = await negotiateSafeMode(agent, spec, resolved.mode);
       if (notNegotiated) console.log(`[${label}] ! ${notNegotiated}`);
