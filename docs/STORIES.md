@@ -676,9 +676,17 @@ Keeping the rule inside `warningsFor` rather than splitting it into two function
 keeps "which line is silenceable" in one place. Verified both directions end to end:
 `--cmd "node mock-agent.mjs" --quiet` prints nothing, opencode 1.18.18 under
 `--mode safe --quiet` still prints its never-asks line.
-**`--emit` did not land here.** The proposal above is unclaimed by any later story —
-M1b-5 (`mock-agent` fixtures) is the natural home but lists only run-file and task-result
-paths. Left open deliberately; it can still be done under this story.
+**`--emit` did not land; the coverage it was for did.** The proposal's premise was checked
+against the code and is partly stale: `plan` *is* driven offline (`mock-agent.mjs` emits it),
+and `available_commands_update` / `config_option_update` have no branch in `render.ts` at
+all, so driving them would assert only silence. The branches genuinely undriven were three
+others — `agent_thought_chunk`, `tool_call_update` with `status: "failed"`, and the `diff`
+content the `±` line is drawn from. All three are now in `mock-agent.mjs`'s ordinary script:
+a thought chunk, an unconditional failing `t4`, and a `diff` on the write's completion when
+the write actually happened. `npm run selftest` alone reaches every branch of `render.ts`
+except the refusal colours, which `--mode safe` reaches. **A flag was not needed** — the
+fixture had room, and M1b-5 rewrites this file anyway. The `--emit` proposal is therefore
+closed as answered, not deferred.
 
 **M1a-8 · `core/ids.ts` · XS · needs M1a-1**
 **Gap** — `agent-team merge <runId>` operates on branches, retention promises "the branch
