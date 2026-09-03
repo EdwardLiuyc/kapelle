@@ -8,6 +8,7 @@
  * workspace root. They run concurrently and report back structurally.
  */
 import { readFile } from "node:fs/promises";
+import { createEventBus } from "./core/events.ts";
 import { negotiateSafeMode, policyFor, resolvePolicy } from "./core/policy.ts";
 import { AcpAgent } from "./protocol/agent.ts";
 import { resolveAgent, resolveEnv } from "./protocol/registry.ts";
@@ -48,6 +49,19 @@ const results = await Promise.allSettled(
     // log milestones live.
     const transcript = [];
 
+    const bus = createEventBus();
+    bus.subscribe(({ update }) => {
+      if (
+        update.sessionUpdate === "agent_message_chunk" &&
+        update.content?.text
+      ) {
+        transcript.push(update.content.text);
+      }
+      if (update.sessionUpdate === "tool_call") {
+        console.log(`[${label}] → ${update.title}`);
+      }
+    });
+
     const agent = new AcpAgent({
       name: label,
       command: spec.launch.command,
@@ -56,17 +70,7 @@ const results = await Promise.allSettled(
       cwd: task.cwd ?? process.cwd(),
       policy: policyFor(resolved.mode),
       allowReadOutsideRoot: resolved.allowReadOutsideRoot,
-      onEvent: ({ update }) => {
-        if (
-          update.sessionUpdate === "agent_message_chunk" &&
-          update.content?.text
-        ) {
-          transcript.push(update.content.text);
-        }
-        if (update.sessionUpdate === "tool_call") {
-          console.log(`[${label}] → ${update.title}`);
-        }
-      },
+      onEvent: bus.emit,
     });
 
     try {
