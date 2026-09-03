@@ -26,6 +26,11 @@
  *  by case is two refs on Linux and one on macOS. */
 const TASK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
+/** The shape `newRunId` mints. `branchName` checks against it because merge
+ *  takes a run id from the command line — `agent-team merge <runId>` — so a
+ *  run id is user input, not only something we minted. */
+const RUN_ID_PATTERN = /^\d{8}-\d{6}-[0-9a-z]{4}$/;
+
 /** `YYYYMMDD-HHMMSS-<4 char base36>`, UTC. UTC rather than local time so the
  *  ids still sort chronologically across a DST fallback. The suffix is
  *  collision avoidance within one second, not a secret. */
@@ -44,14 +49,21 @@ export function assertTaskId(id: string): string {
   if (!TASK_ID_PATTERN.test(id)) {
     throw new Error(
       `invalid task id ${JSON.stringify(id)}: must match ${TASK_ID_PATTERN.source} ` +
-        `(lowercase letters, digits, '_' and '-'; no dots; 1-64 chars)`,
+        `(1-64 chars; lowercase letters and digits, plus '_' and '-' after ` +
+        `the first character; no dots)`,
     );
   }
   return id;
 }
 
-/** The branch a task's work lands on. Validates, so no caller can build a ref
- *  that `git check-ref-format` would reject. */
+/** The branch a task's work lands on. Validates **both** halves, so no caller
+ *  can build a ref that `git check-ref-format` would reject. */
 export function branchName(runId: string, taskId: string): string {
+  if (!RUN_ID_PATTERN.test(runId)) {
+    throw new Error(
+      `invalid run id ${JSON.stringify(runId)}: must match ${RUN_ID_PATTERN.source} ` +
+        `(YYYYMMDD-HHMMSS-<4 char base36>)`,
+    );
+  }
   return `agent-team/${runId}/${assertTaskId(taskId)}`;
 }

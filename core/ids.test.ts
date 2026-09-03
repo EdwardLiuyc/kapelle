@@ -44,8 +44,8 @@ test("illegal task ids throw rather than being sanitised", () => {
     "plan..impl", // refs may not contain '..'
     "impl.", // refs may not end in a dot
     "build.lock", // no ref component may end in '.lock'
-    "-lead", // git would read it as a flag
-    "_lead", // first character must be a letter or digit
+    "-lead", // first character must be a letter or digit
+    "_lead", // likewise
     "Plan", // uppercase: two refs on Linux, one on macOS
     "a b", // space
     "a/b", // would add a path component
@@ -61,13 +61,17 @@ test("illegal task ids throw rather than being sanitised", () => {
   }
 });
 
-test("branchName validates the task id it is given", () => {
+test("branchName validates both halves it is given", () => {
   assert.throws(() => branchName(newRunId(), "build.lock"), /invalid task id/);
+  assert.throws(() => branchName("not-a-run-id", "plan"), /invalid run id/);
 });
 
 test("minted branch names round-trip through git check-ref-format", () => {
   const branch = branchName(newRunId(), "build_step-3");
+  // No skip-if-missing: git is a hard requirement of this project (worktrees,
+  // merge), so a machine without it should fail here rather than report a
+  // green run that verified nothing.
   const git = spawnSync("git", ["check-ref-format", `refs/heads/${branch}`]);
-  if (git.error) return; // no git on this machine; nothing to prove here
+  assert.equal(git.error, undefined, `could not run git: ${git.error}`);
   assert.equal(git.status, 0, `git rejected ${branch}: ${git.stderr}`);
 });
