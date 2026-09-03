@@ -56,10 +56,9 @@ export function createEventBus(): EventBus {
           listener(event);
         } catch (err) {
           // A consumer that throws is a bug in that consumer, never a reason
-          // to lose the run or the events behind it.
-          console.error(
-            `! event listener threw: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          // to lose the run or the events behind it. The error object rather
+          // than its message: a listener bug is worth a stack trace.
+          console.error("! event listener threw:", err);
         }
       }
     },

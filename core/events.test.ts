@@ -56,11 +56,11 @@ test("the event arrives unchanged, _meta included (#62 B4)", () => {
   });
 });
 
-test("a throwing subscriber does not stop the ones behind it", () => {
+test("a throwing subscriber does not stop the ones behind it", (t) => {
   const bus = createEventBus();
-  const errors: unknown[] = [];
-  const realError = console.error;
-  console.error = (...args: unknown[]) => errors.push(args.join(" "));
+  // Scoped to this test and auto-restored, so nothing else in the file sees
+  // a patched console.
+  const errored = t.mock.method(console, "error", () => {});
 
   let reached = false;
   bus.subscribe(() => {
@@ -70,14 +70,13 @@ test("a throwing subscriber does not stop the ones behind it", () => {
     reached = true;
   });
 
-  try {
-    assert.doesNotThrow(() => bus.emit(event));
-  } finally {
-    console.error = realError;
-  }
+  assert.doesNotThrow(() => bus.emit(event));
 
   assert.equal(reached, true);
-  assert.match(String(errors[0]), /renderer is broken/);
+  // The error object travels, not its message — a listener bug keeps its stack.
+  const [, thrown] = errored.mock.calls[0].arguments;
+  assert.ok(thrown instanceof Error);
+  assert.equal(thrown.message, "renderer is broken");
 });
 
 test("emit detaches from the bus object, so it can be passed as onEvent", () => {
