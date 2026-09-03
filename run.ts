@@ -11,6 +11,7 @@ import { AcpAgent } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
 import {
   AGENTS,
+  printableWarnings,
   resolveAgent,
   resolveEnv,
   warningsFor,
@@ -163,18 +164,13 @@ try {
   }
 
   // M1a-4 decides these lines; this story decides which survive `--quiet`.
-  // Only `containment` is unsuppressible (#13): #62 R1 kept the name `safe`,
-  // so that line is the only thing carrying the caveat that `safe` filters
-  // rather than enforces. The advisory two may go.
-  for (const w of warningsFor(
-    spec.name,
-    spec,
-    resolved.mode,
-    init.agentInfo?.version,
-  )) {
-    if (quiet && w.kind !== "containment") continue;
-    console.error(`! ${w.text}`);
-  }
+  // The rule itself sits in the registry next to `warningsFor`, where it has
+  // a test — a bare `if` here is exactly what could be inverted unnoticed.
+  const warnings = printableWarnings(
+    warningsFor(spec.name, spec, resolved.mode, init.agentInfo?.version),
+    quiet,
+  );
+  for (const w of warnings) console.error(`! ${w.text}`);
 
   await agent.newSession();
 

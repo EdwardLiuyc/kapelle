@@ -262,6 +262,21 @@ export interface Warning {
 }
 
 /**
+ * Which of `warningsFor`'s lines survive `--quiet`.
+ *
+ * One line of logic, but the one #13 turns on, so it lives here as a function
+ * with a test rather than as an `if` at the call site: inverting it there
+ * would silence the containment notice and leave every suite green. #62 R1
+ * kept the name `safe` and made that notice the sole carrier of the caveat
+ * that `safe` filters rather than enforces, so it is never suppressible; the
+ * unverified and stale-version lines are advisory and may go.
+ */
+export const printableWarnings = (
+  warnings: Warning[],
+  quiet: boolean,
+): Warning[] => warnings.filter((w) => !quiet || w.kind === "containment");
+
+/**
  * The one place an entry becomes a claim about safety.
  *
  * Every rule here is conservative: a harness we could not verify produces the

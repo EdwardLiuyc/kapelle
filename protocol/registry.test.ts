@@ -11,6 +11,7 @@ import { test } from "node:test";
 import {
   AGENTS,
   type AgentEntry,
+  printableWarnings,
   resolveAgent,
   resolveEnv,
   warningsFor,
@@ -152,23 +153,43 @@ test("a --cmd spec has no measured half, so it warns as unverified", () => {
   );
 });
 
-test("--quiet's split is decidable from the kind alone", () => {
-  // The rule `run.ts` applies (#13): drop everything but `containment`. It is
-  // only a rule if a run can produce a containment line and an advisory line
-  // at once and they stay distinguishable.
-  const staleAndUncontained = warningsFor(
+test("--quiet drops the advisory lines and never the containment one", () => {
+  // The #13 rule, asserted on a run that produces both at once: opencode never
+  // asks permission (containment) and is reported on a build we did not
+  // measure (version). An inversion or removal of the filter fails here.
+  const both = warningsFor(
     "opencode",
     AGENTS.opencode,
     "safe",
     "0.0.0-not-the-measured-build",
   );
   assert.deepEqual(
-    staleAndUncontained.map((w) => w.kind),
+    both.map((w) => w.kind),
     ["containment", "version"],
+    "the fixture must produce one of each for this test to mean anything",
+  );
+
+  assert.deepEqual(
+    printableWarnings(both, true).map((w) => w.kind),
+    ["containment"],
+    "quiet keeps containment and nothing else",
   );
   assert.deepEqual(
-    staleAndUncontained.filter((w) => w.kind !== "containment").length,
-    1,
-    "exactly one line is quiet-able here",
+    printableWarnings(both, false),
+    both,
+    "without --quiet every line prints",
   );
+
+  // A run with no containment line prints nothing at all when quieted — the
+  // `--cmd` case the selftest exercises.
+  const advisoryOnly = warningsFor(
+    "mock-agent",
+    { launch: { command: "x", args: [] } },
+    "auto",
+  );
+  assert.deepEqual(
+    advisoryOnly.map((w) => w.kind),
+    ["unverified"],
+  );
+  assert.deepEqual(printableWarnings(advisoryOnly, true), []);
 });
