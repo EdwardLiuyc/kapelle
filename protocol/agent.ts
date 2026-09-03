@@ -90,12 +90,11 @@ export type Policy = (req: PolicyRequest) => boolean | Promise<boolean>;
 /**
  * One event leaving this client, tagged with the agent that caused it.
  *
- * Deliberately not exported: `run.mjs` and `fanout.mjs` are `.mjs` and cannot
- * import a type, and knip's --production mode rightly counts a name exported
- * only for a test as unused. M1a-7's `render.mjs` port is the first real
- * consumer; it can export this then.
+ * Exported at M1a-6: `core/events.ts` is the first consumer that needs the
+ * type by name. `run.mjs` and `fanout.mjs` still cannot import a type — they
+ * are `.mjs` — but they now import the bus itself, which carries it.
  */
-interface AgentEventEnvelope {
+export interface AgentEventEnvelope {
   agent: string;
   update: AgentEvent;
 }

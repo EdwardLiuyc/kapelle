@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createEventBus } from "./core/events.ts";
 import {
   makeAskPolicy,
   negotiateSafeMode,
@@ -100,6 +101,10 @@ if (resolved.mode === "ask") {
   closeAsk = asker.close;
 }
 
+// M1a-6: every consumer subscribes; nothing reads agent state directly.
+const bus = createEventBus();
+if (!quiet) bus.subscribe(render);
+
 const agent = new AcpAgent({
   name: spec.name,
   command: spec.launch.command,
@@ -109,7 +114,7 @@ const agent = new AcpAgent({
   policy,
   allowReadOutsideRoot: resolved.allowReadOutsideRoot,
   verbose,
-  onEvent: quiet ? () => {} : render,
+  onEvent: bus.emit,
 });
 
 process.on("SIGINT", () => {
