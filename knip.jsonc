@@ -7,7 +7,12 @@
   // consumes part of this file. Declined: the remaining ~50 exports are typed
   // ahead of their consumers on purpose, and acting on the hint reports every
   // one of them as dead code.
-  "ignore": ["protocol/types.ts"],
+  //
+  // core/ids.ts is M1a-8's deliverable, typed ahead of its consumers the same
+  // way: nothing imports it until M1b-1's core/runfile.ts does, so the
+  // --production pass reaches it from no entry and calls the file unused.
+  // Drop this entry when M1b-1 lands.
+  "ignore": ["protocol/types.ts", "core/ids.ts"],
   // Entry points. The `!` suffix marks a *production* entry: without it, knip's
   // --production mode (which pi-lens runs) has no roots at all and reports every
   // reachable file — protocol/agent.ts, protocol/registry.ts, render.ts — as unused.
