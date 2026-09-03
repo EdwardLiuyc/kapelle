@@ -19,14 +19,27 @@ import { render } from "./render.ts";
 
 const argv = process.argv.slice(2);
 
-/** Value of `--name`, or `fallback` when it is absent or carries no value. */
+/**
+ * Value of `--name`, or `fallback` when the flag is absent.
+ *
+ * A flag that is *present* but carries no value is a usage error, not an
+ * absence: `--cmd --mode auto` must not quietly launch the default harness
+ * under a mode the caller never meant to pair it with. Same reason
+ * `resolvePolicy` raises on a mode above the ceiling instead of downgrading —
+ * running something other than what was asked for is the failure, whichever
+ * direction it goes.
+ */
 function flag(name: string): string | undefined;
 function flag(name: string, fallback: string): string;
 function flag(name: string, fallback?: string): string | undefined {
   const i = argv.indexOf(`--${name}`);
   if (i === -1) return fallback;
   const next = argv[i + 1];
-  return next && !next.startsWith("--") ? next : fallback;
+  if (!next || next.startsWith("--")) {
+    console.error(`--${name} needs a value`);
+    process.exit(1);
+  }
+  return next;
 }
 
 const has = (name: string) => argv.includes(`--${name}`);

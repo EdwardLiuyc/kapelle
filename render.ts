@@ -7,10 +7,11 @@
  *
  * **The switch deliberately has no `default`** (CLAUDE.md). A variant nobody
  * renders is dropped in silence rather than drawn wrong — M0-1 observed two
- * that arrive today and stay unrendered (`available_commands_update` from all
- * three harnesses, `config_option_update` from copilot), and `plan` is a third
- * that no harness emits. `assertNever` would be wrong here: it would turn an
- * unrendered-but-valid notification into a crash.
+ * that arrive today and have no branch here: `available_commands_update` from
+ * all three harnesses, and `config_option_update` from copilot. `assertNever`
+ * would be wrong here: it would turn an unrendered-but-valid notification into
+ * a crash. (`plan` is the mirror case — it *has* a branch, and no harness M0-1
+ * measured emits one, so `mock-agent.mjs` is the only thing that drives it.)
  */
 
 import type { AgentEventEnvelope } from "./protocol/agent.ts";

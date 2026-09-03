@@ -674,7 +674,7 @@ choose all or none. It now returns `{kind, text}` with `kind` one of `containmen
 `unverified` / `version`, and `run.ts` drops everything but `containment` under `--quiet`.
 Keeping the rule inside `warningsFor` rather than splitting it into two functions is what
 keeps "which line is silenceable" in one place. Verified both directions end to end:
-`--cmd "node mock-agent.mjs" --quiet` prints nothing, opencode 1.18.18 under
+`--cmd "node mock-agent.mjs" --mode auto --quiet` prints nothing, opencode 1.18.18 under
 `--mode safe --quiet` still prints its never-asks line.
 **`--emit` did not land; the coverage it was for did.** The proposal's premise was checked
 against the code and is partly stale: `plan` *is* driven offline (`mock-agent.mjs` emits it),
