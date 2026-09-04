@@ -1088,6 +1088,17 @@ TTY, when `NO_COLOR` is set, or when the drawn block is taller than `process.std
 non-TTY is the common case, since CI and `npm run selftest` both pipe. The open block flushes
 before any `line()` event so a tool call never lands mid-paragraph, which the stream state
 machine added in M1a-7's follow-up already owns, and the end of a turn flushes what is left.
+**Single writer — a constraint, not an assumption.** The erase-and-redraw step moves the
+cursor up over the lines it just drew, which is only correct while one thing owns the cursor.
+`render.ts` is already a single-writer renderer: its stream state is module-level, one
+variable per process rather than one per agent. Nothing is broken today because the
+multi-agent path never subscribes it — `run.ts` drives one agent, and `fanout.mjs` keeps its
+own listener that buffers each agent's prose and prints only milestones, because interleaved
+token streams are unreadable. **Live markdown and concurrent agents on one terminal are
+therefore mutually exclusive.** Whatever replaces `fanout.mjs` (M1b-2) keeps the
+buffer-and-milestone shape, and a future multi-agent view renders per pane or after the fact.
+Do not make the stream state per-agent and assume that settles it: that stops the output
+corrupting and leaves it unreadable, which is the half that matters.
 No new flag: `NO_COLOR` and non-TTY are the escape hatches until someone asks for more.
 **Scope.** In: `agent_message_chunk`. Out: tool titles, plan entries, permission lines and
 notices — those are our formatting, not agent markdown. **Decided out: `agent_thought_chunk`
