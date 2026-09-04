@@ -1,0 +1,104 @@
+@startuml architecture-events
+' Event and handoff view. The layer/component view is architecture.puml.
+
+title agent-team — the event bus and task handoff\n//agents never talk to each other; the bus is one-way telemetry//
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 12
+skinparam ArrowColor #44546A
+skinparam ArrowFontSize 11
+skinparam ArrowFontColor #44546A
+skinparam roundCorner 10
+skinparam PackageBackgroundColor #FCFCFD
+skinparam PackageBorderColor #B4BCC8
+skinparam PackageFontStyle bold
+skinparam RectangleBackgroundColor #F4F6F9
+skinparam RectangleBorderColor #8C97A8
+skinparam NoteBackgroundColor #FFF8E1
+skinparam NoteBorderColor #D6C36B
+skinparam NoteFontSize 11
+
+package "one run — tasks ordered by needs[]" as RUNPKG {
+  rectangle "**task: plan**   needs: —\nmode: safe\nAcpAgent → opencode" as T1 #EAF5EA
+  rectangle "**task: impl**   needs: plan\nmode: auto\nAcpAgent → claude-agent-acp" as T2 #EAF5EA
+  rectangle "**task: review**  needs: impl\nmode: safe\nAcpAgent → copilot" as T3 #EAF5EA
+  T1 -[hidden]right- T2
+  T2 -[hidden]right- T3
+}
+
+package "supervisors — they publish too" as SUP {
+  rectangle "**scheduler.ts**\ntask started / finished" as SCHED
+  rectangle "**worktree.ts**\nworktree created" as WT
+  rectangle "**watchdog.ts**\nidle / repeat → stall warning\nTTL → session/cancel" as WD
+  rectangle "**policy.ts**\nsafe · ask · auto\npermission pending" as POL
+}
+
+rectangle "**core/events.ts — THE BUS**\n\n`Set<listener>`, synchronous `emit`\ncarries the **raw wire object**, `_meta` and all\nconsumers render //from// it; nothing renders //into// it\n\n**one way: in from producers, out to subscribers**" as BUS #D2E3FC
+
+package "subscribers — adding one is a subscribe() call" as SUBS {
+  rectangle "**render.ts**\nterminal output\n(//today's only one//)" as RENDER
+  rectangle "**notify.ts**\nbell + stderr" as NOTIFY
+  rectangle "**persistence**\nreplayable log  //M2//" as PERSIST
+  rectangle "**GET /runs/:id/events**\nSSE + replay  //M2//" as SSE
+  rectangle "**dashboard**\ntoasts, live timeline  //M4//" as DASH
+  RENDER -[hidden]right- NOTIFY
+  NOTIFY -[hidden]right- PERSIST
+  PERSIST -[hidden]right- SSE
+  SSE -[hidden]right- DASH
+}
+
+rectangle "**POST /permissions/:id**\nthe human answers here" as PERMAPI #FCE8E6
+
+' ── fan-in: every producer writes, none of them reads ──
+T1 -[#1A73E8,thickness=3]down-> BUS : session/update\n+ _client_* events
+T2 -[#1A73E8,thickness=3]down-> BUS
+T3 -[#1A73E8,thickness=3]down-> BUS
+SCHED -[#1A73E8]down-> BUS
+WT    -[#1A73E8]down-> BUS
+WD    -[#1A73E8]down-> BUS
+POL   -[#1A73E8]down-> BUS : permission pending
+
+' ── fan-out ──
+BUS -[#1A73E8,thickness=3]down-> RENDER  : subscribe()
+BUS -[#1A73E8,thickness=3]down-> NOTIFY
+BUS -[#1A73E8,thickness=3]down-> PERSIST
+BUS -[#1A73E8,thickness=3]down-> SSE
+BUS -[#1A73E8,thickness=3]down-> DASH
+
+' ── the only path back, and it is not the bus ──
+DASH    -[#C5221F,dashed,thickness=2]right-> PERMAPI : human clicks
+PERMAPI -[#C5221F,dashed,thickness=2]up->    POL     : **the only arrow back.**\nHTTP, never the bus.\n120 s timeout → deny
+
+' ── handoff: how work actually moves between tasks ──
+T1 -[#188038,thickness=2]right-> T2 : (1) **same git worktree** — files on disk\n(2) **<task-result>** pasted into the prompt
+T2 -[#188038,thickness=2]right-> T3 : same two channels
+
+note top of RUNPKG
+  **Agents never communicate with each other.**
+  `AcpAgent` has `onEvent` — a write. It has no `subscribe`,
+  so an agent cannot read the bus at all.
+  Tasks that run in parallel are, by definition, tasks that
+  need nothing from each other. If they needed to talk, they
+  would be linked by `needs[]` and run in order instead.
+end note
+
+note right of BUS
+  **Two known weak points, both marked in the code,**
+  **neither covered by a story yet:**
+
+  (1) `emit` is a synchronous `for` loop on the stdio
+      read path. One slow subscriber — a disk write,
+      a stalled socket — freezes **every** task's event
+      flow, not just its own.
+
+  (2) No `unsubscribe` (`core/events.ts:47`). Every
+      closed browser tab leaks a listener forever.
+
+  Fan-in is **not** the problem: 10 agents produce
+  ~2,000 events/sec; the bus measures ~22M/sec at
+  16 listeners. The subscriber side is the risk.
+end note
+
+@enduml

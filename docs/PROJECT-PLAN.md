@@ -101,6 +101,12 @@ human judge.
 
 ## Target architecture
 
+Rendered as PlantUML in two views: [`architecture.puml`](architecture.puml)
+([png](architecture.png)) is the layer stack below; [`architecture-events.puml`](architecture-events.puml)
+([png](architecture-events.png)) is the event bus and the task handoff, which the ASCII
+here cannot show. Regenerate with `plantuml -tpng docs/*.puml`. The ASCII stays authoritative —
+the diagrams are drawn from it, not the other way round.
+
 ```text
 front ends    run.ts  (direct, in-process, TTY ask)
               runs.ts (submits run file, streams SSE, answers permissions)

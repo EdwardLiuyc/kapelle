@@ -1,0 +1,110 @@
+@startuml architecture
+' Layer view. The event bus and the handoff paths are a second diagram,
+' architecture-events.puml — drawing both here produced unreadable spaghetti.
+
+title agent-team — target architecture, layer view (M2–M5)\n//this code is the client; the coding harness is the agent//
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 12
+skinparam ArrowColor #44546A
+skinparam ArrowFontSize 11
+skinparam ArrowFontColor #44546A
+skinparam roundCorner 10
+skinparam PackageBackgroundColor #FCFCFD
+skinparam PackageBorderColor #B4BCC8
+skinparam PackageFontStyle bold
+skinparam PackageFontSize 13
+skinparam RectangleBackgroundColor #F4F6F9
+skinparam RectangleBorderColor #8C97A8
+skinparam NoteBackgroundColor #FFF8E1
+skinparam NoteBorderColor #D6C36B
+skinparam NoteFontSize 11
+
+package "front ends — transport only, no orchestration" as FE {
+  rectangle "**run.ts**\ndirect, in-process\nTTY ask" as RUN
+  rectangle "**runs.ts**\nsubmits a run file\nstreams SSE\nanswers permissions" as RUNS
+  rectangle "**dashboard**  //M4//\nread views +\npermission answering" as DASH
+  RUN -[hidden]right- RUNS
+  RUNS -[hidden]right- DASH
+}
+
+package "daemon.ts — HTTP surface, outlives the terminal" as DMN {
+  rectangle "POST /runs\nGET /runs/:id" as API
+  rectangle "GET /runs/:id/events\nSSE + replay" as SSE
+  rectangle "GET/POST\n/permissions/:id" as PERMAPI
+  rectangle "pidfile · child registry\npersistence" as DSTATE
+  API -[hidden]right- SSE
+  SSE -[hidden]right- PERMAPI
+  PERMAPI -[hidden]right- DSTATE
+}
+
+package "core/ — every orchestration decision lives here" as CORE {
+  rectangle "**runfile.ts**\none validator behind all three\nentry paths; resolves mode\nprecedence + harness ceiling" as RUNFILE
+  rectangle "**run.ts**\nRun owns N Tasks\npending → running →\ndone | failed | timed_out" as CRUN
+  rectangle "**scheduler.ts**\nDAG over needs[]\nparallel where no needs" as SCHED
+  rectangle "**worktree.ts**\ngit worktree add\ntransactional spawn" as WT
+
+  rectangle "**policy.ts**\nsafe · ask · auto\nasync decider" as POL
+  rectangle "**watchdog.ts**\nidle / repeat → warn\nTTL → session/cancel" as WD
+  rectangle "**result.ts**\n<task-result> extract\n+ git diff cross-check" as RES
+  rectangle "**events.ts**\n**THE BUS**" as BUS #E8F0FE
+  rectangle "**notify.ts**\nbell + stderr" as NOTIFY
+  rectangle "**merge.ts**\npreflight, then\nsquash | rebase | refuse" as MRG
+
+  RUNFILE -[hidden]right- CRUN
+  CRUN -[hidden]right- SCHED
+  SCHED -[hidden]right- WT
+  POL -[hidden]right- WD
+  WD -[hidden]right- RES
+  RES -[hidden]right- BUS
+  BUS -[hidden]right- NOTIFY
+  NOTIFY -[hidden]right- MRG
+}
+
+package "protocol/ — everything wire, never imports core/" as PROTO {
+  rectangle "**agent.ts** · AcpAgent\none subprocess per task · initialize ·\nsession/new · session/prompt · cancel\nserves fs/* behind #guardPath" as ACP
+  rectangle "**types.ts**\nsession/update\ndiscriminated union" as TYPES
+  rectangle "**registry.ts**\n**launch** — a recipe we choose\n**measured** — a lab report\nabsence of `measured` = unverified" as REG
+  TYPES -[hidden]right- ACP
+  ACP -[hidden]right- REG
+}
+
+package "harnesses — each authenticates itself; we never hold a key" as HARN {
+  rectangle "opencode acp" as H1
+  rectangle "claude-agent-acp" as H2
+  rectangle "copilot --acp" as H3
+  H1 -[hidden]right- H2
+  H2 -[hidden]right- H3
+}
+
+' ── inter-layer wiring only; one direction, top to bottom ──
+RUN   -down-> CRUN    : in-process
+RUNS  -down-> API     : HTTP
+DASH  -down-> API     : HTTP
+
+API     -down-> RUNFILE : **objects only** —\nthe daemon never imports\na path supplied over the API
+DSTATE  -down-> CRUN
+
+SCHED -down-> ACP : **one AcpAgent per task**
+ACP   -down-> H1  : newline-delimited\nJSON-RPC over stdio
+ACP   -down-> H2
+ACP   -down-> H3
+
+note right of CORE
+  **One core, three consumers.**
+  Daemon, CLI and dashboard are transport.
+  `mock-agent.mjs` drives this core with no
+  transport at all — that is what keeps
+  everything verifiable offline.
+end note
+
+note bottom of HARN
+  **Known gap, deliberately named:** anything an agent runs through its own
+  shell bypasses every layer above. All three run commands internally and
+  none calls `terminal/*`; opencode never asks permission at all. So `safe`
+  negotiates then filters — defence in depth, never a sandbox.
+end note
+
+@enduml
