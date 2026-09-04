@@ -68,7 +68,11 @@ test("safe refuses the escape from plan mode, which is what stops the write", {
 
   assert.equal(r.code, 0);
   assert.match(r.stdout, /✗ refused/, "the policy must actually have fired");
-  assert.match(r.stdout, /\[switch_mode\]/, "and on the mode switch, not a write");
+  assert.match(
+    r.stdout,
+    /\[switch_mode\]/,
+    "and on the mode switch, not a write",
+  );
   assert.deepEqual(
     await readdir(cwd),
     [],
