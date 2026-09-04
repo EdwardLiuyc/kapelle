@@ -707,6 +707,23 @@ Keeping the rule inside `warningsFor` rather than splitting it into two function
 keeps "which line is silenceable" in one place. Verified both directions end to end:
 `--cmd "node mock-agent.mjs" --mode auto --quiet` prints nothing, opencode 1.18.18 under
 `--mode safe --quiet` still prints its never-asks line.
+**Follow-up, 2026-09-04 — thinking is streamed, not one prefixed line per chunk.**
+Found by hand against opencode, which is the only way it could have been found: the
+renderer gave every `agent_thought_chunk` its own `[agent] thinking:` line and trimmed each
+chunk, and a real harness sends one thought as a dozen small chunks. The result was a stack
+of prefixes each cut mid-sentence, with the joining spaces deleted. `mock-agent.mjs` sends a
+thought as a single chunk, so `npm run selftest` showed nothing wrong — the same blind spot
+`--emit` was proposed for, arriving from the other direction.
+Thinking now streams like prose, dim, with the prefix printed **once per run of thinking**
+rather than once per chunk; the prefix is kept, since it is what separates thinking from
+what the agent is actually saying. The renderer tracks which of the two streams is open so
+either can close the other's line.
+**This is the first `render.test.ts`.** Every other branch of the renderer is eyeballed
+through `selftest`, which is exactly why this shipped, so the state machine gets a real
+check: many chunks produce one prefix, switching between thinking and speaking closes the
+open line, and a `line()` event never lands mid-sentence. Mutation-proven — restoring the
+one-line-per-chunk form fails three of the four.
+
 **`--emit` did not land; the coverage it was for did.** The proposal's premise was checked
 against the code and is partly stale: `plan` *is* driven offline (`mock-agent.mjs` emits it),
 and `available_commands_update` / `config_option_update` have no branch in `render.ts` at

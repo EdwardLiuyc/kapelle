@@ -22,17 +22,26 @@ const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
 
-let midStream = false;
+/**
+ * Which stream is open on the current line, so the next write knows whether to
+ * continue it or close it first. Prose and thinking both arrive a few tokens at
+ * a time; the only difference is that thinking is dim and announces itself once.
+ */
+let stream: "none" | "message" | "thought" = "none";
+
+function endStream() {
+  if (stream !== "none") {
+    process.stdout.write("\n");
+    stream = "none";
+  }
+}
 
 /** Text is the only block this client draws; anything else renders as nothing. */
 const textOf = (c: ContentBlock | undefined): string | undefined =>
   c?.type === "text" ? c.text : undefined;
 
 function line(s: string) {
-  if (midStream) {
-    process.stdout.write("\n");
-    midStream = false;
-  }
+  endStream();
   process.stdout.write(`${s}\n`);
 }
 
@@ -44,15 +53,33 @@ export function render({ agent, update }: AgentEventEnvelope): void {
     case "agent_message_chunk": {
       const text = textOf(update.content);
       if (text) {
+        if (stream !== "message") endStream();
         process.stdout.write(text);
-        midStream = true;
+        stream = "message";
       }
       break;
     }
 
     case "agent_thought_chunk": {
+      // Streamed like prose, for the same reason: a real harness sends a single
+      // thought as many small chunks, and one prefixed line per chunk cut every
+      // sentence into unreadable fragments. The prefix is kept — it is what
+      // separates thinking from what the agent is actually saying — but it is
+      // printed once per run of thinking, not once per chunk.
       const text = textOf(update.content);
-      if (text) line(dim(`${tag} thinking: ${text.trim().slice(0, 120)}`));
+      if (!text) break;
+      let out = text;
+      if (stream !== "thought") {
+        endStream();
+        // Built from `agent` rather than `tag`: nesting dim inside dim ends the
+        // run at the inner reset, and the words after it lose the dimming.
+        process.stdout.write(dim(`[${agent}] thinking: `));
+        // The prefix already supplies the space, and a chunk that opens a run
+        // often starts mid-sentence with one.
+        out = text.trimStart();
+        stream = "thought";
+      }
+      process.stdout.write(dim(out));
       break;
     }
 
