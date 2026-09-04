@@ -15,7 +15,12 @@ import { needs, runCli, tempDir, WRITE_PROMPT } from "./helpers.ts";
 
 const skip = needs("copilot");
 
-test("safe refuses the write", { skip }, async (t) => {
+test("safe refuses the write, and the refusal is ours", { skip }, async (t) => {
+  // An empty directory proves nothing on its own: the harness obeying its
+  // negotiated plan mode leaves exactly the same directory as a refusal, so
+  // this asserts the client's own `_client_permission` line first. Measured
+  // 2026-09-04, three runs out of three: copilot does request an `edit` and
+  // `safePolicy` denies it — unlike claude, which never gets that far.
   const cwd = await tempDir(t);
   const r = await runCli(t, [
     WRITE_PROMPT,
@@ -28,6 +33,8 @@ test("safe refuses the write", { skip }, async (t) => {
   ]);
 
   assert.equal(r.code, 0);
+  assert.match(r.stdout, /✗ refused/, "the policy must actually have fired");
+  assert.match(r.stdout, /\[edit\]/, "and on a write, not something else");
   assert.deepEqual(
     await readdir(cwd),
     [],
