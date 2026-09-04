@@ -1028,6 +1028,87 @@ differently on Windows. **Decision: rename to `agent-team`, drop `private`, add 
 entry, and declare macOS and Linux supported with Windows explicitly unsupported** — rather
 than discovering it.
 
+**M1c-7 · `core/markdown.ts` — render agent text as Markdown · M · needs M1a-7**
+Render `agent_message_chunk` text as Markdown in the terminal, by default, using an existing
+package. Full CommonMark plus GFM — tables, nested lists, fenced code — not a subset.
+**The schema is normative here and we do not follow it.** Schema 0.28.1, on the text variant
+of `ContentBlock`: *"Text content. May be plain text or formatted with Markdown. All agents
+MUST support text content blocks in prompts. **Clients SHOULD render this text as
+Markdown.**"* We are the client and `render.ts` prints the source, so headers, tables and
+fences reach the terminal as literal `##`, `|` and backticks. The protocol *website*
+(`/protocol/content`, `/protocol/v1/content`) says nothing about markdown — only the schema
+does, which is why this went unnoticed through M1a. Found by hand against opencode on
+2026-09-04, in the same session as M1a-7's thought-chunk fix, and both bugs have one shape:
+`mock-agent.mjs` is too tidy to show what a real harness sends.
+**Gap — this is the project's first runtime dependency.** The rule is not a preference: it is
+stated in `README.md`, `CLAUDE.md` and `docs/PROJECT-PLAN.md`, traced to the brief's
+*"build thin, don't adopt a platform"* survival argument, and repeated verbatim at M4-1.
+`package.json` has no `dependencies` key at all, and `npm run knip` fails in CI on a
+dependency that is unused or unlisted. No document says when one may be added; the only
+written conditions are M1a-2's SDK checkpoint, which priced the trait as **one cost among
+three** rather than a veto, then declined on a different criterion.
+**Proposed, to be ratified when this story is picked up:** a runtime dependency is acceptable
+when it sits **entirely downstream of the bus, in presentation**, and its worst failure is
+cosmetic — it cannot change a permission decision, a path guard, a policy, a mode
+negotiation, or what reaches a subprocess. That mirrors the dependency direction the code
+already enforces (`core/` may import `protocol/`, never the reverse). Two conditions ride
+with it: the version is pinned exactly, and `core/markdown.ts` catches a renderer failure and
+falls back to raw text, so a bad release costs the screen and never the run.
+**Candidates, measured 2026-09-04 from the npm registry.** `md4x` 0.0.29, MIT, **zero own
+dependencies**, ANSI and HTML from one parser, a `heal` option, 3.76 MB unpacked, first
+published 2026-02-19 across 25 releases. `marked` 18.0.11, MIT, zero deps, parser only —
+but `marked-terminal` 7.3.0 carries seven dependencies and peers on `marked >=1 <16`, so it
+**cannot pair with marked 18** and was last published about two years ago. `cli-markdown` is
+GPL-3.0-or-later with 14 dependencies, ruled out on licence. `markdown-it-terminal` depends
+on the unmaintained `cardinal`.
+**Recommended `md4x`; the choice is deliberately left to pickup.** It is itself
+zero-dependency so the tree stays one package deep; it renders ANSI and HTML from one parser,
+which is what the shared-renderer requirement below needs; and its `heal` option exists for
+exactly our input — *"fixes incomplete markdown from streaming LLM output"*. Priced risk:
+`0.0.x`, six months old. The fallback path is what makes that affordable, since its worst
+outcome is the screen we have today.
+**One renderer for every surface.** `core/markdown.ts` is the only file that knows a markdown
+library exists: `toAnsi(md, {width})` now, `toHtml(md)` when M4 wants it. `render.ts` calls
+the first, M4-1's `dashboard-js-render` the second. M1a-6's rule is what forces this shape —
+**the bus carries the wire object, never a rendered form** (#62 B4) — so every surface
+renders from the same raw markdown string. The parser is shared; the paint is per surface.
+**This amends M4-1**, whose *"no runtime dependency"* sentence must be revised rather than
+quietly broken; with `md4x` the browser half is `md4x/standalone`, one ~140 KB self-contained
+ESM served statically, and vendoring that single file is the fallback if the sentence is
+judged load-bearing.
+**Streaming — decided 2026-09-04. Draw raw live, repaint one markdown block at a time.**
+Text arrives a few tokens at a time and markdown cannot be parsed until a construct closes,
+so `render.ts` buffers only the **current, unfinished block** — one top-level unit:
+paragraph, heading, list, table, fenced code. Chunks print raw as they arrive, exactly as
+today, so the live feel is unchanged. A block closes on a blank line, tracking whether a
+fence is open so a blank line inside one does not close it early; on close the lines just
+drawn are erased and the rendered block replaces them. Blocks already drawn are finished and
+never touched again. The repaint is **skipped** — raw printed, move on — when stdout is not a
+TTY, when `NO_COLOR` is set, or when the drawn block is taller than `process.stdout.rows`;
+non-TTY is the common case, since CI and `npm run selftest` both pipe. The open block flushes
+before any `line()` event so a tool call never lands mid-paragraph, which the stream state
+machine added in M1a-7's follow-up already owns, and the end of a turn flushes what is left.
+No new flag: `NO_COLOR` and non-TTY are the escape hatches until someone asks for more.
+**Scope.** In: `agent_message_chunk`. Out: tool titles, plan entries, permission lines and
+notices — those are our formatting, not agent markdown. **Decided out: `agent_thought_chunk`
+stays raw**, being dim and terse, where repainting two interleaved streams would double the
+state for little gain. Noted: the schema's UNSTABLE `PlanMarkdown` delivers a plan as raw
+markdown, and if it ever arrives it is a second *consumer* of `core/markdown.ts`, not a
+second renderer.
+**Measurement to run at pickup** — does any harness populate `messageId` on chunks? It is
+typed (`protocol/types.ts`, *"chunks of one message share an id"*) and **has never been
+measured**; no M0 finding covers it. This design does not need it, since block detection uses
+blank lines, but record the answer: it is the natural fallback key if blank-line detection
+proves wrong against a real harness, and it costs one run per harness.
+*Done when* a table, a nested list, a fenced code block and a header from a **real harness**
+all render formatted in a TTY; the same run piped to a file carries no repaint escapes and
+reads as plain markdown source; a fenced block containing a blank line is not split in two; a
+tool call arriving mid-paragraph does not land inside the block; `npm run selftest` and
+`npm run knip` stay green with the dependency listed; and `node:test` covers block-boundary
+detection as a truth table, a pure function separate from the drawing, per M1a-1's rule.
+*Note* `mock-agent.mjs` needs a message carrying a table, a nested list and a fence with a
+blank line inside it — coordinate with M1b-5, which rewrites that file.
+
 **M1c-6 · M1 acceptance · S · needs all M1c**
 A run file with three independent tasks against three real harnesses, each in its own
 worktree, each returning a parsed `TaskResult`; `git worktree list` clean afterwards. Kill
@@ -1190,6 +1271,14 @@ String-templated HTML/CSS/JS out of the daemon. No framework, no build step, no 
 dependency — the same constraint the rest of the project holds. Split across
 `dashboard-html`, `-js-core`, `-js-events`, `-js-render`; that split is what keeps a
 zero-build dashboard readable past a few hundred lines.
+**Amended by M1c-7 (2026-09-04): the "no runtime dependency" clause is under revision.**
+M1c-7 renders agent text as Markdown and takes the project's first runtime dependency to do
+it, and `-js-render` is the second consumer of the same `core/markdown.ts` — the parser is
+shared across surfaces, only the paint is per surface. Whichever way M1c-7 decides, this
+sentence must be revised rather than quietly broken: either it gains the same
+presentation-layer exception M1c-7 proposes, or the browser half is vendored as one
+self-contained file and the clause stands as written. Do not start M4-1 against the
+unamended text.
 
 **M4-2 · Read views · L · needs M4-1, M2-2**
 Run list; per-run task cards with status, elapsed, token count and a stall indicator; the
