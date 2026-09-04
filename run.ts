@@ -85,7 +85,25 @@ Examples:
 const verbose = has("verbose");
 const quiet = has("quiet");
 
-const spec = resolveAgent(flag("agent", "opencode"), flag("cmd"));
+/**
+ * Run `f`, or print its message and exit 1.
+ *
+ * An argv mistake is one line, never a stack trace. `resolveAgent` and
+ * `resolvePolicy` both throw a sentence written for the person who typed the
+ * flag — naming the known agents, or the known modes — and a raw throw buries
+ * that sentence in a MODULE-style banner. One wrapper rather than a `try` at
+ * each call site, so the next validator that lands cannot forget it.
+ */
+function orExit<T>(f: () => T): T {
+  try {
+    return f();
+  } catch (err) {
+    console.error(messageOf(err));
+    process.exit(1);
+  }
+}
+
+const spec = orExit(() => resolveAgent(flag("agent", "opencode"), flag("cmd")));
 
 // `task > run > harness > default`: run.ts is one task, so `--mode` is the run
 // layer and the registry entry is the harness layer. An unknown mode, or one
@@ -96,21 +114,17 @@ const spec = resolveAgent(flag("agent", "opencode"), flag("cmd"));
 // The cast is the boundary: argv is strings, and `resolvePolicy` is the one
 // place that validates a mode — it throws naming the known ones, which is a
 // better error than anything a second check here could produce.
-const resolveOrExit = (mode: string | undefined): ResolvedPolicy => {
-  try {
-    return resolvePolicy({
+const resolveOrExit = (mode: string | undefined): ResolvedPolicy =>
+  orExit(() =>
+    resolvePolicy({
       run: { mode: mode as ClientMode | undefined },
       harness: {
         name: spec.name,
         mode: spec.defaultMode,
         maxMode: spec.maxMode,
       },
-    });
-  } catch (err) {
-    console.error(messageOf(err));
-    process.exit(1);
-  }
-};
+    }),
+  );
 
 let resolved = resolveOrExit(flag("mode"));
 let closeAsk = () => {};

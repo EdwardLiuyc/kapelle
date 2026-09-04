@@ -11,7 +11,7 @@ import { readFile } from "node:fs/promises";
 import { createEventBus } from "./core/events.ts";
 import { negotiateSafeMode, policyFor, resolvePolicy } from "./core/policy.ts";
 import { AcpAgent } from "./protocol/agent.ts";
-import { resolveAgent, resolveEnv } from "./protocol/registry.ts";
+import { resolveAgent, resolveEnv, warningsFor } from "./protocol/registry.ts";
 
 const file = process.argv[2] ?? "tasks.json";
 
@@ -32,7 +32,10 @@ const results = await Promise.allSettled(
     // rather than renamed, so safe's own rules — including forcing
     // allowReadOutsideRoot to false — apply to the mode that actually runs.
     const asked = task.mode ?? spec.defaultMode ?? "ask";
-    if (asked === "ask") console.log(`[${label}] no TTY — ask runs as safe`);
+    // stderr with the `!` marker, like every other notice here and in run.ts:
+    // stdout carries results, stderr carries what the run wants you to know.
+    if (asked === "ask")
+      console.error(`[${label}] ! no TTY — ask runs as safe`);
     const resolved = resolvePolicy({
       task: {
         mode: asked === "ask" ? "safe" : asked,
@@ -74,10 +77,23 @@ const results = await Promise.allSettled(
     });
 
     try {
-      await agent.start();
+      const init = await agent.start();
+
+      // The containment notice is never silenced (#62 R1, #13), and fanout is
+      // the second entry point that can start a harness under `safe`. Like
+      // run.ts, notices go to stderr; milestones below stay on stdout.
+      for (const w of warningsFor(
+        spec.name,
+        spec,
+        resolved.mode,
+        init.agentInfo?.version,
+      )) {
+        console.error(`[${label}] ! ${w.text}`);
+      }
+
       await agent.newSession();
       const notNegotiated = await negotiateSafeMode(agent, spec, resolved.mode);
-      if (notNegotiated) console.log(`[${label}] ! ${notNegotiated}`);
+      if (notNegotiated) console.error(`[${label}] ! ${notNegotiated}`);
       const { stopReason } = await agent.prompt(task.prompt);
       return { label, cwd: agent.cwd, stopReason, output: transcript.join("") };
     } finally {

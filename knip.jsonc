@@ -12,7 +12,14 @@
   // way: nothing imports it until M1b-1's core/runfile.ts does, so the
   // --production pass reaches it from no entry and calls the file unused.
   // Drop this entry when M1b-1 lands.
-  "ignore": ["protocol/types.ts", "core/ids.ts"],
+  //
+  // integration/ is the opt-in real-harness suite (npm run test:harness). Its
+  // files are entry points by definition — a test runner invokes them — but
+  // they are not production entries, so the --production pass reaches them
+  // from nowhere and calls all four unused. knip has no notion of a second,
+  // opt-in test suite, so they are ignored rather than misdeclared as
+  // production roots. `npm run check` still type-checks them.
+  "ignore": ["protocol/types.ts", "core/ids.ts", "integration/**"],
   // Entry points. The `!` suffix marks a *production* entry: without it, knip's
   // --production mode (which pi-lens runs) has no roots at all and reports every
   // reachable file — protocol/agent.ts, protocol/registry.ts, render.ts — as unused.

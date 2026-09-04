@@ -363,6 +363,16 @@ hand-extension; three or more (elicitation, `terminal/*`, v2) for SDK-types-only
 codegen; (2) wholesale adoption costs the zero-runtime-dependency trait (zod peer dep);
 (3) adopting the official types surrenders the `assertNever` pattern. Re-checkpoint at
 M2-1 (event log) if M1a-5 hand-extends.
+**Landed 2026-08-31 (#10).** The union is hand-written, `_meta` sits on the base of the
+message types in both directions, and `assertNever` makes an unhandled variant a `tsc`
+error. `locations[]` is typed on `tool_call` and `tool_call_update`
+(`protocol/types.ts:201`, `:218`) but nothing reads it — the probe that would decide
+whether `render` shows it never ran, and the type costs nothing while it waits.
+**The types-coverage decision fired at M1a-5 and the answer was hand-extend.**
+`session/set_mode` was the only surface M1 needed outside this file, which is criterion (1)
+as written — one small addition, not three. It is typed at `protocol/types.ts:582`, the SDK
+was not adopted, the zero-runtime-dependency trait is intact, and `assertNever` still works.
+Per the rule above, this hand-extension re-opens the checkpoint at **M2-1**.
 
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
@@ -451,6 +461,16 @@ to copy. **The API half is part of this decision:** M2 exposes no endpoint that 
 running task.
 *Done when* (in addition to the criteria below) a second `prompt()` during a live turn
 throws without a byte reaching the subprocess, covered by `node:test`.
+**Landed 2026-09-02 (#11).** All five behaviours are in and each has a subprocess-driven
+test in `protocol/agent.test.ts`: the 30s deadline on the handshake and session-management
+calls but never on `session/prompt`, unbounded stderr attached to a mid-handshake death,
+the in-flight guard, the whole `PromptResponse`, and `_client_cancel_requested`.
+**One `#guardPath` case does not pass, deliberately.** A symlink pointing out of the root is
+followed: `path.resolve` is string arithmetic and never touches the filesystem, so
+`link.txt` looks in-root. The test records what the guard does today rather than what it
+should do (`protocol/agent.test.ts:362`), and **M1b-6 owns closing it** — the fix is
+`fs.realpath` before the prefix check. The other four cases — in-root, escaping `../`,
+absolute-outside, and the read/write asymmetry under `allowReadOutsideRoot` — pass.
 
 **M1a-4 · `protocol/registry.ts` · M · needs M1a-3, M0-7**
 **Re-sized S → M, 2026-08-23.** The decision was ratified unchanged; the estimate was not.
@@ -649,6 +669,17 @@ the live queue; AgentPool's `is_loading` / `finish_load` split
 (`agents/acp_agent/session_state.py:58`, `:91`) is the shape.
 *Done when* every consumer — CLI render, and later persistence and SSE — subscribes, and
 nothing reads agent state directly. This is the invariant that makes M4 purely additive.
+**Landed 2026-09-03 (#14).** Both entry points subscribe and neither reads agent state:
+`run.ts` attaches `render`, `fanout.mjs` attaches its own buffering listener. **Not
+`node:events`** — `EventEmitter.emit` propagates a listener's throw and skips the listeners
+behind it, so one broken renderer would take the run down; a `Set` and a `try` is less code
+than wrapping every handler.
+**None of the six supervisor variants landed, because five have no producer.** Task started,
+worktree created, permission pending, stall warning and task finished are sent by files that
+do not exist yet (M1b-2, M1b-3, M1c-1); each story widens the union when it lands its own
+producer. The sixth, the containment warning, deliberately stays on stderr: routing it
+through the bus would put it behind a sink `--quiet` can switch off, and #13 says that line
+is never silenced.
 
 **M1a-7 · Port `render.mjs` and `run.mjs` · S · needs M1a-6**
 `run.ts` keeps driving in-process, TTY `ask` intact.
@@ -676,6 +707,23 @@ Keeping the rule inside `warningsFor` rather than splitting it into two function
 keeps "which line is silenceable" in one place. Verified both directions end to end:
 `--cmd "node mock-agent.mjs" --mode auto --quiet` prints nothing, opencode 1.18.18 under
 `--mode safe --quiet` still prints its never-asks line.
+**Follow-up, 2026-09-04 — thinking is streamed, not one prefixed line per chunk.**
+Found by hand against opencode, which is the only way it could have been found: the
+renderer gave every `agent_thought_chunk` its own `[agent] thinking:` line and trimmed each
+chunk, and a real harness sends one thought as a dozen small chunks. The result was a stack
+of prefixes each cut mid-sentence, with the joining spaces deleted. `mock-agent.mjs` sends a
+thought as a single chunk, so `npm run selftest` showed nothing wrong — the same blind spot
+`--emit` was proposed for, arriving from the other direction.
+Thinking now streams like prose, dim, with the prefix printed **once per run of thinking**
+rather than once per chunk; the prefix is kept, since it is what separates thinking from
+what the agent is actually saying. The renderer tracks which of the two streams is open so
+either can close the other's line.
+**This is the first `render.test.ts`.** Every other branch of the renderer is eyeballed
+through `selftest`, which is exactly why this shipped, so the state machine gets a real
+check: many chunks produce one prefix, switching between thinking and speaking closes the
+open line, and a `line()` event never lands mid-sentence. Mutation-proven — restoring the
+one-line-per-chunk form fails three of the four.
+
 **`--emit` did not land; the coverage it was for did.** The proposal's premise was checked
 against the code and is partly stale: `plan` *is* driven offline (`mock-agent.mjs` emits it),
 and `available_commands_update` / `config_option_update` have no branch in `render.ts` at
@@ -708,6 +756,11 @@ three with one character and keeps ids readable; underscore remains available.
 *Done when* an illegal task id is a validation error rather than a silently sanitised one —
 the id in the run file is the id everywhere — and branch names round-trip through
 `git check-ref-format`.
+**Landed 2026-09-04 (#16).** `newRunId`, `assertTaskId` and `branchName` in `core/ids.ts`,
+with the amended charset. An illegal id throws and is never sanitised, and minted branch
+names are fed to real `git check-ref-format` in the test rather than to a regex that agrees
+with the validator by construction (`core/ids.test.ts:69`). The three ids the dropped dot
+was removed for — `plan..impl`, `impl.`, `build.lock` — are cases in that suite.
 
 ---
 
@@ -975,6 +1028,98 @@ differently on Windows. **Decision: rename to `agent-team`, drop `private`, add 
 entry, and declare macOS and Linux supported with Windows explicitly unsupported** — rather
 than discovering it.
 
+**M1c-7 · `core/markdown.ts` — render agent text as Markdown · M · needs M1a-7**
+Render `agent_message_chunk` text as Markdown in the terminal, by default, using an existing
+package. Full CommonMark plus GFM — tables, nested lists, fenced code — not a subset.
+**The schema is normative here and we do not follow it.** Schema 0.28.1, on the text variant
+of `ContentBlock`: *"Text content. May be plain text or formatted with Markdown. All agents
+MUST support text content blocks in prompts. **Clients SHOULD render this text as
+Markdown.**"* We are the client and `render.ts` prints the source, so headers, tables and
+fences reach the terminal as literal `##`, `|` and backticks. The protocol *website*
+(`/protocol/content`, `/protocol/v1/content`) says nothing about markdown — only the schema
+does, which is why this went unnoticed through M1a. Found by hand against opencode on
+2026-09-04, in the same session as M1a-7's thought-chunk fix, and both bugs have one shape:
+`mock-agent.mjs` is too tidy to show what a real harness sends.
+**Gap — this is the project's first runtime dependency.** The rule is not a preference: it is
+stated in `README.md`, `CLAUDE.md` and `docs/PROJECT-PLAN.md`, traced to the brief's
+*"build thin, don't adopt a platform"* survival argument, and repeated verbatim at M4-1.
+`package.json` has no `dependencies` key at all, and `npm run knip` fails in CI on a
+dependency that is unused or unlisted. No document says when one may be added; the only
+written conditions are M1a-2's SDK checkpoint, which priced the trait as **one cost among
+three** rather than a veto, then declined on a different criterion.
+**Proposed, to be ratified when this story is picked up:** a runtime dependency is acceptable
+when it sits **entirely downstream of the bus, in presentation**, and its worst failure is
+cosmetic — it cannot change a permission decision, a path guard, a policy, a mode
+negotiation, or what reaches a subprocess. That mirrors the dependency direction the code
+already enforces (`core/` may import `protocol/`, never the reverse). Two conditions ride
+with it: the version is pinned exactly, and `core/markdown.ts` catches a renderer failure and
+falls back to raw text, so a bad release costs the screen and never the run.
+**Candidates, measured 2026-09-04 from the npm registry.** `md4x` 0.0.29, MIT, **zero own
+dependencies**, ANSI and HTML from one parser, a `heal` option, 3.76 MB unpacked, first
+published 2026-02-19 across 25 releases. `marked` 18.0.11, MIT, zero deps, parser only —
+but `marked-terminal` 7.3.0 carries seven dependencies and peers on `marked >=1 <16`, so it
+**cannot pair with marked 18** and was last published about two years ago. `cli-markdown` is
+GPL-3.0-or-later with 14 dependencies, ruled out on licence. `markdown-it-terminal` depends
+on the unmaintained `cardinal`.
+**Recommended `md4x`; the choice is deliberately left to pickup.** It is itself
+zero-dependency so the tree stays one package deep; it renders ANSI and HTML from one parser,
+which is what the shared-renderer requirement below needs; and its `heal` option exists for
+exactly our input — *"fixes incomplete markdown from streaming LLM output"*. Priced risk:
+`0.0.x`, six months old. The fallback path is what makes that affordable, since its worst
+outcome is the screen we have today.
+**One renderer for every surface.** `core/markdown.ts` is the only file that knows a markdown
+library exists: `toAnsi(md, {width})` now, `toHtml(md)` when M4 wants it. `render.ts` calls
+the first, M4-1's `dashboard-js-render` the second. M1a-6's rule is what forces this shape —
+**the bus carries the wire object, never a rendered form** (#62 B4) — so every surface
+renders from the same raw markdown string. The parser is shared; the paint is per surface.
+**This amends M4-1**, whose *"no runtime dependency"* sentence must be revised rather than
+quietly broken; with `md4x` the browser half is `md4x/standalone`, one ~140 KB self-contained
+ESM served statically, and vendoring that single file is the fallback if the sentence is
+judged load-bearing.
+**Streaming — decided 2026-09-04. Draw raw live, repaint one markdown block at a time.**
+Text arrives a few tokens at a time and markdown cannot be parsed until a construct closes,
+so `render.ts` buffers only the **current, unfinished block** — one top-level unit:
+paragraph, heading, list, table, fenced code. Chunks print raw as they arrive, exactly as
+today, so the live feel is unchanged. A block closes on a blank line, tracking whether a
+fence is open so a blank line inside one does not close it early; on close the lines just
+drawn are erased and the rendered block replaces them. Blocks already drawn are finished and
+never touched again. The repaint is **skipped** — raw printed, move on — when stdout is not a
+TTY, when `NO_COLOR` is set, or when the drawn block is taller than `process.stdout.rows`;
+non-TTY is the common case, since CI and `npm run selftest` both pipe. The open block flushes
+before any `line()` event so a tool call never lands mid-paragraph, which the stream state
+machine added in M1a-7's follow-up already owns, and the end of a turn flushes what is left.
+**Single writer — a constraint, not an assumption.** The erase-and-redraw step moves the
+cursor up over the lines it just drew, which is only correct while one thing owns the cursor.
+`render.ts` is already a single-writer renderer: its stream state is module-level, one
+variable per process rather than one per agent. Nothing is broken today because the
+multi-agent path never subscribes it — `run.ts` drives one agent, and `fanout.mjs` keeps its
+own listener that buffers each agent's prose and prints only milestones, because interleaved
+token streams are unreadable. **Live markdown and concurrent agents on one terminal are
+therefore mutually exclusive.** Whatever replaces `fanout.mjs` (M1b-2) keeps the
+buffer-and-milestone shape, and a future multi-agent view renders per pane or after the fact.
+Do not make the stream state per-agent and assume that settles it: that stops the output
+corrupting and leaves it unreadable, which is the half that matters.
+No new flag: `NO_COLOR` and non-TTY are the escape hatches until someone asks for more.
+**Scope.** In: `agent_message_chunk`. Out: tool titles, plan entries, permission lines and
+notices — those are our formatting, not agent markdown. **Decided out: `agent_thought_chunk`
+stays raw**, being dim and terse, where repainting two interleaved streams would double the
+state for little gain. Noted: the schema's UNSTABLE `PlanMarkdown` delivers a plan as raw
+markdown, and if it ever arrives it is a second *consumer* of `core/markdown.ts`, not a
+second renderer.
+**Measurement to run at pickup** — does any harness populate `messageId` on chunks? It is
+typed (`protocol/types.ts`, *"chunks of one message share an id"*) and **has never been
+measured**; no M0 finding covers it. This design does not need it, since block detection uses
+blank lines, but record the answer: it is the natural fallback key if blank-line detection
+proves wrong against a real harness, and it costs one run per harness.
+*Done when* a table, a nested list, a fenced code block and a header from a **real harness**
+all render formatted in a TTY; the same run piped to a file carries no repaint escapes and
+reads as plain markdown source; a fenced block containing a blank line is not split in two; a
+tool call arriving mid-paragraph does not land inside the block; `npm run selftest` and
+`npm run knip` stay green with the dependency listed; and `node:test` covers block-boundary
+detection as a truth table, a pure function separate from the drawing, per M1a-1's rule.
+*Note* `mock-agent.mjs` needs a message carrying a table, a nested list and a fence with a
+blank line inside it — coordinate with M1b-5, which rewrites that file.
+
 **M1c-6 · M1 acceptance · S · needs all M1c**
 A run file with three independent tasks against three real harnesses, each in its own
 worktree, each returning a parsed `TaskResult`; `git worktree list` clean afterwards. Kill
@@ -1137,6 +1282,14 @@ String-templated HTML/CSS/JS out of the daemon. No framework, no build step, no 
 dependency — the same constraint the rest of the project holds. Split across
 `dashboard-html`, `-js-core`, `-js-events`, `-js-render`; that split is what keeps a
 zero-build dashboard readable past a few hundred lines.
+**Amended by M1c-7 (2026-09-04): the "no runtime dependency" clause is under revision.**
+M1c-7 renders agent text as Markdown and takes the project's first runtime dependency to do
+it, and `-js-render` is the second consumer of the same `core/markdown.ts` — the parser is
+shared across surfaces, only the paint is per surface. Whichever way M1c-7 decides, this
+sentence must be revised rather than quietly broken: either it gains the same
+presentation-layer exception M1c-7 proposes, or the browser half is vendored as one
+self-contained file and the clause stands as written. Do not start M4-1 against the
+unamended text.
 
 **M4-2 · Read views · L · needs M4-1, M2-2**
 Run list; per-run task cards with status, elapsed, token count and a stall indicator; the
