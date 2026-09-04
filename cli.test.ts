@@ -11,7 +11,8 @@
  * `resolveAgent` was the one validator called outside a `try`.
  *
  * The plumbing is shared with the real-harness suite (`integration/helpers.ts`)
- * rather than copied — `spawnCli` is about our CLI, not about who answers it.
+ * rather than copied — `runCli` (which wraps `spawnCli`), `tempDir`, and
+ * `MOCK_AGENT` are about our CLI, not about who answers it.
  */
 
 import assert from "node:assert/strict";
@@ -174,9 +175,12 @@ test("fanout runs every task and reports each one", async (t) => {
   assert.deepEqual(await readdir(b), ["ACP_TEST.md"]);
 });
 
-test("every fanout task carries its own containment notice", async (t) => {
+test("every fanout task carries its own advisory notice, on stderr", async (t) => {
   // fanout is the second entry point that can start a harness under `safe`,
-  // and the notice is never silenced — so it cannot be a run.ts-only feature.
+  // and its notices are never silenced — so they cannot be a run.ts-only
+  // feature. A `--cmd` spec is unmeasured, so the reachable offline notice is
+  // the advisory "no measured labels" line; the containment variant needs a
+  // measured registry entry and is not reachable from this suite.
   const file = await taskFile(t, [
     {
       cmd: `node ${MOCK_AGENT}`,
@@ -194,7 +198,8 @@ test("every fanout task carries its own containment notice", async (t) => {
 
   const r = await runCli(t, [file], "fanout.mjs");
 
-  assert.equal((r.stdout.match(/no measured labels/g) ?? []).length, 2);
+  assert.equal((r.stderr.match(/no measured labels/g) ?? []).length, 2);
+  assert.doesNotMatch(r.stdout, /no measured labels/);
 });
 
 test("a fanout task asking for ask runs as safe, since no task has a TTY", async (t) => {
@@ -205,7 +210,8 @@ test("a fanout task asking for ask runs as safe, since no task has a TTY", async
 
   const r = await runCli(t, [file], "fanout.mjs");
 
-  assert.match(r.stdout, /no TTY — ask runs as safe/);
+  assert.match(r.stderr, /! no TTY — ask runs as safe/);
+  assert.doesNotMatch(r.stdout, /no TTY/);
   assert.deepEqual(await readdir(cwd), []);
 });
 

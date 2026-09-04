@@ -3,9 +3,10 @@
  *
  * These tests drive the **actual CLI** as a subprocess against the **actual
  * harness binaries**, so they need credentials and they spend real tokens.
- * Nothing here runs in CI: `node --test` does not discover `*.itest.ts`, so
- * the default suite and the CI job are unaffected by this directory. Run them
- * with `npm run test:harness`.
+ * The `*.itest.ts` files stay out of CI: `node --test` does not discover the
+ * suffix. The generic plumbing below (spawn helpers, temp dirs, `MOCK_AGENT`)
+ * is shared with `cli.test.ts`, which *does* run in CI — keep those parts
+ * CI-safe. Run the opt-in files with `npm run test:harness`.
  *
  * **Assert on what we control, never on what the model says.** File on disk or
  * not, exit code, our own notice lines. A test that greps for the agent's prose

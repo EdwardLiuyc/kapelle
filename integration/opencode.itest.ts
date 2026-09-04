@@ -31,8 +31,9 @@ test("safe negotiates a mode, rather than skipping or failing", {
   skip,
 }, async (t) => {
   // `negotiateSafeMode` is silent on success and prints on any skip or failure,
-  // so an empty match is the whole assertion. If the registry's `modeMap.safe`
-  // ever goes stale, opencode answers -32602 and this goes red.
+  // so an empty match is the whole assertion. A missing `measured` half prints
+  // the skip sentence; a stale `modeMap.safe` makes opencode answer -32602 and
+  // prints the `session/set_mode` failure sentence. Both must make this red.
   const cwd = await tempDir(t);
   const r = await runCli(t, [
     WRITE_PROMPT,
@@ -46,6 +47,7 @@ test("safe negotiates a mode, rather than skipping or failing", {
 
   assert.equal(r.code, 0, "the turn should end cleanly, not error");
   assert.doesNotMatch(r.stderr, /safe mode was not negotiated/);
+  assert.doesNotMatch(r.stderr, /session\/set_mode/);
 });
 
 test("the never-asks notice survives --quiet", { skip }, async (t) => {
