@@ -92,6 +92,12 @@ most of what a run file contains. `satisfies Run` gets the file type-checked by
 imports run files; the *daemon* never imports a path supplied over the API — it accepts
 objects only. Importing is executing, and that boundary is the whole difference between a
 convenience and a remote-code-execution hole.
+**Amended 2026-09-05 (STORIES M1b-1): this whole rationale is retired — run files are JSON
+only, and nothing in the tool imports one.** The rule above is kept by removing the side
+that could break it, not by policing it: `JSON.parse` on both sides, so there is no
+asymmetry left between the CLI and the daemon. Multi-line prompts survive as `\n` in JSON
+strings, and `satisfies Run` while authoring survives in a generator script that emits the
+JSON.
 
 **Why the diff only warns.** A read-only stage legitimately produces no diff, so the diff
 cannot be the primary contract without breaking the plan and review stages the pipeline is

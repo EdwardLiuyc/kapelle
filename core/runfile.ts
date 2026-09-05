@@ -126,6 +126,32 @@ export function validateRun(
     );
   }
 
+  // Run-level defaults are validated here, eagerly. A task value wins via
+  // `t.x ?? run.x`, so without this a task override would hide an invalid
+  // default, and a run file carrying a bad value would pass whenever no task
+  // happened to use it. The mode ceiling is not checked here: each task may
+  // name a different agent, so resolvePolicy still applies the ceiling
+  // per task below.
+  if (run.mode !== undefined) {
+    rethrowWith("run file", () =>
+      resolvePolicy({ run: { mode: run.mode as ClientMode | undefined } }),
+    );
+  }
+  if (optionalString(run.worktree, "run file", "worktree") === "inherit") {
+    throw new Error(
+      `run file: worktree inheritance lands in M3 — "worktree" is a base ref ` +
+        `to branch from, not a task to inherit a checkout from.`,
+    );
+  }
+  void optionalString(run.cmd, "run file", "cmd");
+  const runAgent = optionalString(run.agent, "run file", "agent");
+  if (runAgent !== undefined && agents[runAgent] === undefined) {
+    throw new Error(
+      `run file: unknown agent ${JSON.stringify(runAgent)}. ` +
+        `Known: ${Object.keys(agents).join(", ")}.`,
+    );
+  }
+
   const seen = new Set<string>();
   const tasks = run.tasks.map((raw, i) =>
     validateTask(raw, i, run, agents, seen),

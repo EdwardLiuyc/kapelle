@@ -47,6 +47,49 @@ test("a JSON file and the same run as a POST body validate to one object", () =>
   assert.deepEqual(run(JSON.parse(text)), run(structuredClone(minimal)));
 });
 
+test("invalid run-level defaults are refused even when every task overrides them", () => {
+  throwsWith(
+    {
+      agent: "demo",
+      mode: "bogus",
+      tasks: [{ id: "a", prompt: "p", mode: "safe" }],
+    },
+    /run file: unknown mode "bogus"/,
+  );
+  throwsWith(
+    {
+      agent: "demo",
+      worktree: "inherit",
+      tasks: [{ id: "a", prompt: "p", worktree: "HEAD" }],
+    },
+    /run file: worktree inheritance lands in M3/,
+  );
+  throwsWith(
+    { agent: "nope", tasks: [{ id: "a", prompt: "p", agent: "demo" }] },
+    /run file: unknown agent "nope"/,
+  );
+  throwsWith(
+    {
+      cmd: " ",
+      agent: "demo",
+      tasks: [{ id: "a", prompt: "p", cmd: "node mock-agent.mjs" }],
+    },
+    /run file: "cmd" must be a non-empty string/,
+  );
+});
+
+test("valid run-level defaults still pass the eager checks and inherit", () => {
+  const out = run({
+    agent: "demo",
+    mode: "safe",
+    worktree: "HEAD",
+    tasks: [{ id: "a", prompt: "p" }],
+  });
+  assert.equal(out.tasks[0]?.agent, "demo");
+  assert.equal(out.tasks[0]?.mode, "safe");
+  assert.equal(out.tasks[0]?.worktree, "HEAD");
+});
+
 test("run-level defaults reach a task, and a task value wins", () => {
   const out = run({
     agent: "demo",

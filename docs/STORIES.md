@@ -802,11 +802,15 @@ consequences: the import failure modes in *done when* below no longer exist; the
 `.ts`/`.json` twin criterion becomes file-vs-POST-body; and M1b-1 ships no loader, which
 retires the CLI/daemon asymmetry rather than policing it. An optional `note` field on the
 run and on each task carries what JSON comments cannot.
-*Done when* each import failure mode has its own error (import throws / no default export /
-default is not an object); a `.ts` run file and its `.json` equivalent validate to the same
-object; and **the CLI imports run files while the daemon never imports a path supplied over
-the API** — importing is executing, and that boundary is the whole difference between a
-convenience and a remote-code-execution hole.
+*Done when* a non-empty `needs`, and a `worktree` value implying inheritance, are rejected
+with an error naming M3 — not ignored; a `.json` run file and the same run as a POST body
+validate to the same object; mode and ids come from `resolvePolicy` and `assertTaskId`, and
+duplicate task ids are rejected; a run file above a harness `maxMode` is rejected naming
+both values, before any subprocess starts; `maxConcurrency` defaults to 4, and a non-integer
+or a value `< 1` is a validation error; and a run file driving `mock-agent.mjs` validates
+offline, so M1b tests stay offline. Nothing in the tool imports a run file: the CLI reads a
+`.json` file and the daemon receives a POST body. Importing is executing, and that boundary
+is the whole difference between a convenience and a remote-code-execution hole.
 
 **M1b-2 · `core/run.ts` · M · needs M1b-1**
 The new centre of gravity. Run owns N Tasks; Task owns one agent, one worktree, one policy,
