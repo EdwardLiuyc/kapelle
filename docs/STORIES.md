@@ -786,6 +786,22 @@ inheritance. The schema stays stable; the behaviour never lies. M3-1 lifts the r
 tasks spawns twelve harnesses, twelve model subscriptions and twelve worktrees at once.
 **Decided 2026-08-23 (ratified, #62 B1): `maxConcurrency` on the run, default from config
 (suggest 4)**, enforced by M1b-2.
+**Amendment 2026-09-05 — run files are JSON only; the `.ts`/`.mjs` loader is dropped.**
+Of the three entry paths, only the module form executes code: `await import()` runs every
+line of the file before the validator ever sees the object it exports. Measured here against
+this repo's own modules — an imported run file read `AGENT_TEAM_*` out of `process.env` and
+added `edit` to the shared `READ_ONLY_KINDS` Set (`core/policy.ts:41`), after which
+`safePolicy` approved edits for every task in the run, while the object it exported still
+validated cleanly. A `cmd` subprocess can do neither: `resolveEnv` strips the secret
+(`protocol/registry.ts:93`) and it holds no reference to the client's own state. The two
+things the module form bought — a loop over tasks, and `satisfies Run` while authoring —
+survive without it, in a generator script the developer runs to emit the JSON; a benefit
+available on both sides was never a reason to accept the risk. So the entry paths are
+**`.json` file and POST body**, and **nothing in the tool imports a run file**. Three
+consequences: the import failure modes in *done when* below no longer exist; the
+`.ts`/`.json` twin criterion becomes file-vs-POST-body; and M1b-1 ships no loader, which
+retires the CLI/daemon asymmetry rather than policing it. An optional `note` field on the
+run and on each task carries what JSON comments cannot.
 *Done when* each import failure mode has its own error (import throws / no default export /
 default is not an object); a `.ts` run file and its `.json` equivalent validate to the same
 object; and **the CLI imports run files while the daemon never imports a path supplied over
@@ -1123,9 +1139,10 @@ blank line inside it — coordinate with M1b-5, which rewrites that file.
 **M1c-6 · M1 acceptance · S · needs all M1c**
 A run file with three independent tasks against three real harnesses, each in its own
 worktree, each returning a parsed `TaskResult`; `git worktree list` clean afterwards. Kill
-the process mid-run, restart, confirm orphans are reaped. A `.ts` run file type-checks under
-`npm run check` and validates to the same object as its `.json` twin. A run file exceeding a
-harness `maxMode` is rejected, naming both values, before any subprocess starts.
+the process mid-run, restart, confirm orphans are reaped. A `.json` run file and the same run
+as a POST body validate to the same object (amended 2026-09-05, M1b-1: run files are JSON
+only). A run file exceeding a harness `maxMode` is rejected, naming both values, before any
+subprocess starts.
 
 ---
 
