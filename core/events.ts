@@ -4,7 +4,7 @@
  * One shared line. `AcpAgent` drops events on it, consumers subscribe. The
  * point is not the fan-out itself (there is one consumer today); it is that
  * adding the next one — `core/notify.ts` (M1c-4), M2's persisted log, M4's
- * SSE stream — is a `subscribe` call and no edit to `protocol/agent.ts`.
+ * SSE stream — is an `addListener` call and no edit to `protocol/agent.ts`.
  * That is the invariant the story calls "what makes M4 purely additive".
  *
  * **Carries the wire object, `_meta` and all** (#62 B4, `docs/STORIES.md`
@@ -34,7 +34,7 @@ import type { AgentEventEnvelope } from "../protocol/agent.ts";
 type BusListener = (event: AgentEventEnvelope) => void;
 
 export interface EventBus {
-  subscribe(listener: BusListener): void;
+  addListener(listener: BusListener): void;
   /** Closure-bound, so it can be handed straight to `AcpAgent`'s `onEvent`. */
   emit: BusListener;
 }
@@ -43,10 +43,10 @@ export function createEventBus(): EventBus {
   const listeners = new Set<BusListener>();
 
   return {
-    // ponytail: no unsubscribe — nothing detaches today. Return
+    // ponytail: no removeListener — nothing detaches today. Return
     // `() => listeners.delete(listener)` when M4's SSE stream subscribes per
     // connection, or each dropped client leaks a listener.
-    subscribe(listener) {
+    addListener(listener) {
       listeners.add(listener);
     },
 

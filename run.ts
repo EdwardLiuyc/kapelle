@@ -161,7 +161,7 @@ if (resolved.mode === "ask") {
 
 // M1a-6: every consumer subscribes; nothing reads agent state directly.
 const bus = createEventBus();
-if (!quiet) bus.subscribe(render);
+if (!quiet) bus.addListener(render);
 
 const agent = new AcpAgent({
   name: spec.name,
@@ -297,7 +297,7 @@ async function runFromFile(path: string): Promise<number> {
 
   const bus = createEventBus();
   if (!quiet) {
-    bus.subscribe(({ agent: taskId, update }) => {
+    bus.addListener(({ agent: taskId, update }) => {
       // Milestones only. `render` would braid N streams into one line.
       if (update.sessionUpdate === "tool_call") {
         console.log(`[${taskId}] → ${update.title}`);

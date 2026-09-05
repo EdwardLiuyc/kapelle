@@ -680,6 +680,13 @@ do not exist yet (M1b-2, M1b-3, M1c-1); each story widens the union when it land
 producer. The sixth, the containment warning, deliberately stays on stderr: routing it
 through the bus would put it behind a sink `--quiet` can switch off, and #13 says that line
 is never silenced.
+**Renamed 2026-09-06 (M1b-2 review): `subscribe` → `addListener`.** Not a correction —
+`bus.subscribe(fn)` is RxJS's shape and reads fine on its own. It reads *backwards* in a
+sentence: `taskBus.subscribe(runBus.emit)` sounds like the task bus subscribing to the run
+bus, when the run bus is the one being added as a listener. `addListener` also matches this
+file's own `BusListener` type, which `subscribe` did not. Done now because the cost only
+grows: five production call sites today, and M2's persisted log, M4's SSE stream and
+`core/notify.ts` each add one. Mechanical — 14 sites, no behaviour change.
 
 **M1a-7 · Port `render.mjs` and `run.mjs` · S · needs M1a-6**
 `run.ts` keeps driving in-process, TTY `ask` intact.

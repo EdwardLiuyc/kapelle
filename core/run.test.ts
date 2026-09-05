@@ -261,7 +261,7 @@ test("prose is buffered per task, not interleaved", async () => {
 test("a task's events reach the run's bus, tagged with the task id", async () => {
   const bus = createEventBus();
   const seen: string[] = [];
-  bus.subscribe(({ agent }) => seen.push(agent));
+  bus.addListener(({ agent }) => seen.push(agent));
 
   const exec: TaskExecutor = async (task, ctx) => {
     ctx.bus.emit({

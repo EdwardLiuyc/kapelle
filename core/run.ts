@@ -286,13 +286,13 @@ async function runOne(
   const cwd = taskCwd(task, options.cwd);
   const started = Date.now();
 
-  // Its own bus, forwarding to the run's. One `subscribe` rather than the
+  // Its own bus, forwarding to the run's. One `addListener` rather than the
   // executor filtering the shared stream by task id — `core/events.ts` has no
-  // unsubscribe, so a per-task listener on the shared bus would pile up.
+  // removeListener, so a per-task listener on the shared bus would pile up.
   const bus = createEventBus();
-  bus.subscribe(options.bus.emit);
+  bus.addListener(options.bus.emit);
   let transcript = "";
-  bus.subscribe(({ update }) => {
+  bus.addListener(({ update }) => {
     if (update.sessionUpdate === "agent_message_chunk") {
       if (update.content?.type === "text") transcript += update.content.text;
     }
