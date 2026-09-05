@@ -858,8 +858,23 @@ should alarm someone reading a summary: `cancelled` is operator-intended and ran
 of the bad states; `timed_out` means the supervisor cut a task off mid-tool-call, with the
 same "half-written file on disk" hazard the table records for `max_tokens`, so it ranks just
 below outright failure.
-*Done when* `node:test` covers the stop-reason table and the roll-up ordering, and a
-six-task run file with `maxConcurrency: 2` never has three live subprocesses.
+**Added 2026-09-05 — a JSON Schema for the run file, as an authoring aid only.** M1b-1
+dropped the `.ts`/`.mjs` run file, and with it `satisfies Run` while writing one. A JSON
+Schema gives that back: a `$schema` line at the top of a run file, and the editor completes
+field names and marks bad ones as they are typed. It is **not** a second validator.
+`validateRun` stays the only check that runs, because a schema cannot fill defaults, cannot
+reach the agent registry for `resolvePolicy` and the `maxMode` ceiling, cannot apply
+`assertTaskId` or spot a duplicate id, and cannot say "task dependencies land in M3" — and
+checking one at runtime would need a library such as `ajv`, against the zero-runtime-
+dependency trait. Nothing in the tool loads the schema file; only an editor reads it. It
+lands here rather than in M1b-1 because this is where `--file` and the first real run file
+arrive, and a schema with nothing pointing at it is a file nobody updates. Drift is the one
+real cost, so `core/runfile.ts` exports `RUN_KEYS` and `TASK_KEYS` and one test asserts the
+schema's property names equal those Sets — the validator stays the single source of truth.
+*Done when* `node:test` covers the stop-reason table and the roll-up ordering, a six-task
+run file with `maxConcurrency: 2` never has three live subprocesses, and the run-file JSON
+Schema's property names are asserted equal to `RUN_KEYS` and `TASK_KEYS` by a test, with the
+example run file carrying a `$schema` line.
 
 **M1b-3 · `core/worktree.ts` · M · needs M1a-8**
 `git worktree add` off a base ref into `.agent-team/wt/<runId>/<taskId>`. Preflight: repo
