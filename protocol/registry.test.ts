@@ -141,6 +141,14 @@ test("a --cmd spec reads past the runtime for its label", () => {
   assert.deepEqual(spec.launch.args, ["mock-agent.mjs"]);
 });
 
+test("a padded --cmd resolves the same as an unpadded one", () => {
+  // A shell strips this; a cmd read out of a JSON run file does not, and the
+  // leading empty split element used to become the spawned command.
+  const padded = resolveAgent("opencode", "  node mock-agent.mjs  ");
+  assert.deepEqual(padded, resolveAgent("opencode", "node mock-agent.mjs"));
+  assert.equal(padded.launch.command, "node");
+});
+
 test("a --cmd spec has no measured half, so it warns as unverified", () => {
   // --cmd overrides the id: nothing about `copilot` may leak into the spec.
   const spec = resolveAgent("copilot", "some-harness --acp");

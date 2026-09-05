@@ -210,7 +210,8 @@ function validateTask(
     );
   }
 
-  const cmd = optionalString(t.cmd ?? run.cmd, where, "cmd");
+  // Trimmed, so the value stored on the Task is the one resolveAgent splits.
+  const cmd = optionalString(t.cmd ?? run.cmd, where, "cmd")?.trim();
   const named = optionalString(t.agent ?? run.agent, where, "agent");
   // An explicitly supplied agent is always validated, even when `cmd` wins:
   // a typo must not be silently dropped on the floor.

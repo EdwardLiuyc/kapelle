@@ -204,8 +204,12 @@ export interface ResolvedAgent extends AgentEntry {
 }
 
 export function resolveAgent(id: string, customCmd?: string): ResolvedAgent {
-  if (typeof customCmd === "string" && customCmd.length > 0) {
-    const [command, ...args] = customCmd.split(/\s+/);
+  // Trim before splitting: " node x.mjs" splits to ["", "node", "x.mjs"], so
+  // the command becomes the empty string and the label with it. A --cmd flag
+  // is usually stripped by the shell; a cmd read out of a JSON run file is not.
+  const trimmed = customCmd?.trim();
+  if (trimmed) {
+    const [command, ...args] = trimmed.split(/\s+/);
     // "node mock-agent.mjs" should read as "mock-agent", not "node".
     const label =
       RUNTIMES.has(command) && args[0]

@@ -222,6 +222,15 @@ test("a known task agent still loses to cmd, as resolveAgent does", () => {
   assert.equal(out.tasks[0]?.cmd, "node mock-agent.mjs");
 });
 
+test("a padded cmd is stored trimmed, so the Task matches what is spawned", () => {
+  const out = run({
+    cmd: "  node mock-agent.mjs  ",
+    tasks: [{ id: "a", prompt: "p" }],
+  });
+  assert.equal(out.tasks[0]?.cmd, "node mock-agent.mjs");
+  assert.equal(out.tasks[0]?.agent, "mock-agent");
+});
+
 test("maxConcurrency must be a whole number of one or more", () => {
   for (const bad of [0, -1, 2.5, "4"]) {
     throwsWith({ ...minimal, maxConcurrency: bad }, /"maxConcurrency"/);

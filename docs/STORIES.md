@@ -793,7 +793,7 @@ this repo's own modules — an imported run file read `AGENT_TEAM_*` out of `pro
 added `edit` to the shared `READ_ONLY_KINDS` Set (`core/policy.ts:41`), after which
 `safePolicy` approved edits for every task in the run, while the object it exported still
 validated cleanly. A `cmd` subprocess can do neither: `resolveEnv` strips the secret
-(`protocol/registry.ts:93`) and it holds no reference to the client's own state. The two
+(`protocol/registry.ts`) and it holds no reference to the client's own state. The two
 things the module form bought — a loop over tasks, and `satisfies Run` while authoring —
 survive without it, in a generator script the developer runs to emit the JSON; a benefit
 available on both sides was never a reason to accept the risk. So the entry paths are
