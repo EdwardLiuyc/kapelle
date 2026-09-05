@@ -62,6 +62,19 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (msg.method === "session/prompt") {
     const sid = msg.params.sessionId;
 
+    // A prompt containing "refuse" ends the turn with `refusal` and does
+    // nothing else. It is the offline way to reach a **failure that never
+    // throws** — M1b-2's stop-reason table says `refusal`, `max_tokens` and
+    // `max_turn_requests` all return normally, and a client that only reports
+    // exceptions goes silent on every one of them.
+    const asked = (msg.params.prompt ?? [])
+      .map((block) => block.text ?? "")
+      .join(" ");
+    if (asked.includes("refuse")) {
+      reply(msg.id, { stopReason: "refusal" });
+      return;
+    }
+
     update(sid, {
       sessionUpdate: "plan",
       entries: [

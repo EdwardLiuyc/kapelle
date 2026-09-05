@@ -249,14 +249,20 @@ test("a missing task file is a clean exit, not a stack", async (t) => {
 
 /** A run file, written where `run.ts` can read it. Separate from `taskFile`
  *  above: fanout's schema is a bare array, a run file is an object. */
-async function runFile(t: import("node:test").TestContext, run: object) {
+async function runFile(
+  t: import("node:test").TestContext,
+  run: Record<string, unknown>,
+) {
   const dir = await tempDir(t);
   const path = join(dir, "demo.run.json");
   await writeFile(path, JSON.stringify(run), "utf8");
   return path;
 }
 
-const mockRun = (tasks: object[], rest: object = {}) => ({
+const mockRun = (
+  tasks: Record<string, unknown>[],
+  rest: Record<string, unknown> = {},
+) => ({
   cmd: `node ${MOCK_AGENT}`,
   mode: "auto",
   ...rest,
@@ -410,5 +416,54 @@ test("a task whose harness cannot start fails alone, and fails the run", async (
   // "node <first arg>" — a quirk of that function, not of this run.
   assert.match(r.stdout, /▸ doomed \(.*\) failed/);
   assert.match(r.stdout, /error: agent "doomed" exited/);
-  assert.match(r.stdout, /failed — 2 tasks/);
+  // The doomed harness died before it ever sent a prompt, so only the good
+  // task counts as a turn.
+  assert.match(r.stdout, /failed — 2 tasks, 1 turn/);
+});
+
+test("--quiet still reports a task failure, on stderr", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [{ id: "doomed", prompt: "hi", cmd: "node --badflag" }],
+  });
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /error: \[doomed\] agent "doomed" exited/);
+});
+
+test("--quiet reports a task that failed without ever throwing", async (t) => {
+  // The gap the first `--quiet` fix left. `refusal` returns normally and
+  // carries no error text, so keying the quiet report on `task.error` sent
+  // this case out with exit 1 and an empty stderr — the exact failure the
+  // fix was written to remove.
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([{ id: "picky", prompt: "please refuse this" }]),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /error: \[picky\] failed/);
+});
+
+test("a refusal is a failed task, and it is not a silent one", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([{ id: "picky", prompt: "please refuse this" }]),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /▸ picky \(mock-agent\) failed/);
+  // One task, one prompt — and the summary now says so in English.
+  assert.match(r.stdout, /failed — 1 task, 1 turn,/);
 });

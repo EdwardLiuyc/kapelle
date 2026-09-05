@@ -132,7 +132,8 @@ test("a six-task run with maxConcurrency 2 never has three live at once", async 
   let live = 0;
   let peak = 0;
 
-  const exec: TaskExecutor = async () => {
+  const exec: TaskExecutor = async (_task, ctx) => {
+    ctx.onTurn();
     live += 1;
     peak = Math.max(peak, live);
     // Two turns of the event loop, so an implementation that started
@@ -181,12 +182,38 @@ test("one failed task fails the run, and the others still run", async () => {
   assert.match(failed?.error ?? "", /harness died/);
 });
 
+test("a task that fails before its prompt is not a turn", async () => {
+  const exec: TaskExecutor = async () => {
+    throw new Error("spawn failed");
+  };
+
+  const report = await runRun(runOf(1, 1), options(), exec);
+
+  assert.equal(report.turns, 0, "no prompt was sent");
+  assert.equal(report.status, "failed");
+});
+
+test("a task that sent its prompt before it threw counts one turn", async () => {
+  const exec: TaskExecutor = async (_task, ctx) => {
+    ctx.onTurn();
+    throw new Error("died mid-turn");
+  };
+
+  const report = await runRun(runOf(1, 1), options(), exec);
+
+  assert.equal(report.turns, 1);
+  assert.equal(report.status, "failed");
+});
+
 test("cancelling the run cancels what is live and what is still queued", async () => {
   const abort = new AbortController();
   const started: string[] = [];
 
-  const exec: TaskExecutor = async (task) => {
+  const exec: TaskExecutor = async (task, ctx) => {
     started.push(task.id);
+    // The live task had already sent its prompt when ^C landed; a queued
+    // task never gets here and is not a turn.
+    ctx.onTurn();
     if (task.id === "t0") abort.abort();
     await new Promise((r) => setImmediate(r));
     return { stopReason: "end_turn" };

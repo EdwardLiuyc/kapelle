@@ -333,18 +333,49 @@ async function runFromFile(path: string): Promise<number> {
     asker?.close();
   }
 
-  if (!quiet) {
+  if (quiet) {
+    // `--quiet` suppresses the summary, not the fact that a task failed.
+    // The single-agent path has always printed its error on stderr under
+    // `--quiet`; a run file must not fail silently on exit code alone.
+    //
+    // Keyed on **status**, not on `error`. `error` is set only when a task
+    // threw, and the whole point of M1b-2's stop-reason table is that a task
+    // can fail without throwing: `refusal`, `max_tokens`, `max_turn_requests`
+    // and `timed_out` all return normally and carry no error text. Keying on
+    // `error` left exactly those exiting 1 in silence.
+    for (const task of report.tasks) {
+      if (task.status === "done" || task.status === "warned") continue;
+      // The id always leads: a thrown message names the task only because
+      // `AcpAgent` happens to be named after it, and a status line has no
+      // other way to say which of six tasks this is.
+      console.error(`error: [${task.id}] ${task.error ?? task.status}`);
+    }
+  } else {
     console.log(`\n${"═".repeat(60)}`);
     for (const task of report.tasks) printTask(task);
     console.log(
-      `\n${report.status} — ${report.tasks.length} tasks, ` +
-        `${report.turns} turns, ${(report.durationMs / 1000).toFixed(1)}s`,
+      `\n${report.status} — ${plural(report.tasks.length, "task")}, ` +
+        `${plural(report.turns, "turn")}, ` +
+        `${(report.durationMs / 1000).toFixed(1)}s`,
     );
   }
 
   // `warned` is a run that finished with something worth reading, not a
   // failure. Every rung below it means at least one task did not complete.
   return report.status === "done" || report.status === "warned" ? 0 : 1;
+}
+
+/**
+ * `1 turns` was the old summary. A run of one task is common enough — a single
+ * spawn failure makes it the interesting case — to be worth this.
+ *
+ * A `function` and not a `const`: everything below `runFromFile`'s call site
+ * is still in the temporal dead zone when it runs, because that call is made
+ * from top-level code above. A `const` arrow here threw `ReferenceError` and
+ * swallowed the whole summary line.
+ */
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
 function printTask(task: TaskRun): void {

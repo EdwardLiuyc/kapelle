@@ -189,6 +189,10 @@ interface TaskContext {
    *  switches the bus's renderer off and #13 says these lines are never
    *  silenced, so they take a route `--quiet` cannot reach. */
   onNotice: (text: string) => void;
+  /** Called by the real executor immediately before `session/prompt`, so the
+   *  run's turn count counts prompts sent, not tasks attempted. A task whose
+   *  harness cannot start sends no prompt and must not count as a turn. */
+  onTurn: () => void;
 }
 
 interface TaskOutcome {
@@ -196,6 +200,13 @@ interface TaskOutcome {
   usage?: Usage;
 }
 
+/**
+ * Executes one task. The real implementation is `runTask`; tests inject this
+ * seam to observe the pool without spawning harnesses.
+ *
+ * An executor must call `ctx.onTurn()` immediately before it sends the task's
+ * prompt — the run's turn count counts prompts sent, not tasks attempted.
+ */
 export type TaskExecutor = (
   task: Task,
   ctx: TaskContext,
@@ -240,6 +251,9 @@ export async function runRun(
   const results = new Array<TaskRun>(run.tasks.length);
   const queue = run.tasks.map((task, index) => ({ task, index }));
   let turns = 0;
+  const onTurn = () => {
+    turns += 1;
+  };
 
   const worker = async (): Promise<void> => {
     for (;;) {
@@ -261,8 +275,7 @@ export async function runRun(
         continue;
       }
 
-      turns += 1;
-      results[index] = await runOne(task, exec, signal, options);
+      results[index] = await runOne(task, exec, signal, options, onTurn);
     }
   };
 
@@ -282,6 +295,7 @@ async function runOne(
   exec: TaskExecutor,
   signal: AbortSignal,
   options: RunOptions,
+  onTurn: () => void,
 ): Promise<TaskRun> {
   const cwd = taskCwd(task, options.cwd);
   const started = Date.now();
@@ -323,6 +337,7 @@ async function runOne(
           ? options.askPolicy
           : policyFor(task.mode),
       onNotice: (text) => options.onNotice?.(task.id, text),
+      onTurn,
     });
     record();
     const result: TaskRun = {
@@ -397,6 +412,9 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     const notNegotiated = await negotiateSafeMode(agent, spec, task.mode);
     if (notNegotiated) ctx.onNotice(notNegotiated);
 
+    // Count at the prompt boundary, not at spawn: a task that fails to start
+    // sends no prompt, and a task cancelled before this line sends none either.
+    ctx.onTurn();
     const { stopReason, usage } = await agent.prompt(task.prompt);
     return usage === undefined ? { stopReason } : { stopReason, usage };
   } finally {
