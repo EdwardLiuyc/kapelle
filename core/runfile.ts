@@ -145,11 +145,8 @@ export function validateRun(
   }
   void optionalString(run.cmd, "run file", "cmd");
   const runAgent = optionalString(run.agent, "run file", "agent");
-  if (runAgent !== undefined && agents[runAgent] === undefined) {
-    throw new Error(
-      `run file: unknown agent ${JSON.stringify(runAgent)}. ` +
-        `Known: ${Object.keys(agents).join(", ")}.`,
-    );
+  if (runAgent !== undefined) {
+    requireKnownAgent(runAgent, "run file", agents);
   }
 
   const seen = new Set<string>();
@@ -215,6 +212,10 @@ function validateTask(
 
   const cmd = optionalString(t.cmd ?? run.cmd, where, "cmd");
   const named = optionalString(t.agent ?? run.agent, where, "agent");
+  // An explicitly supplied agent is always validated, even when `cmd` wins:
+  // a typo must not be silently dropped on the floor.
+  const namedEntry =
+    named === undefined ? undefined : requireKnownAgent(named, where, agents);
 
   // A `cmd` carries its own launch recipe, so it needs no registry entry —
   // and has no ceiling to check, exactly as `resolveAgent` treats `--cmd`.
@@ -223,21 +224,21 @@ function validateTask(
   if (cmd !== undefined) {
     agent = resolveAgent("", cmd).name;
   } else {
-    if (named === undefined) {
+    // Only the first half is a real case: `namedEntry` is undefined exactly
+    // when `named` is, because `requireKnownAgent` threw otherwise. The
+    // second half is narrowing for tsc, not a second way to reach this error.
+    if (named === undefined || namedEntry === undefined) {
       throw new Error(
         `${where}: no "agent". Name one on the task or at run level, or ` +
           `give a "cmd". Known: ${Object.keys(agents).join(", ")}.`,
       );
     }
-    const entry = agents[named];
-    if (!entry) {
-      throw new Error(
-        `${where}: unknown agent ${JSON.stringify(named)}. ` +
-          `Known: ${Object.keys(agents).join(", ")}.`,
-      );
-    }
     agent = named;
-    harness = { name: named, mode: entry.defaultMode, maxMode: entry.maxMode };
+    harness = {
+      name: named,
+      mode: namedEntry.defaultMode,
+      maxMode: namedEntry.maxMode,
+    };
   }
 
   // `resolvePolicy` owns mode precedence and the ceiling. Its message names
@@ -310,6 +311,21 @@ function optionalString(
   key: string,
 ): string | undefined {
   return value === undefined ? undefined : requireString(value, where, key);
+}
+
+function requireKnownAgent(
+  value: string,
+  where: string,
+  agents: Record<string, AgentEntry>,
+): AgentEntry {
+  const entry = agents[value];
+  if (!entry) {
+    throw new Error(
+      `${where}: unknown agent ${JSON.stringify(value)}. ` +
+        `Known: ${Object.keys(agents).join(", ")}.`,
+    );
+  }
+  return entry;
 }
 
 function optionalBool(

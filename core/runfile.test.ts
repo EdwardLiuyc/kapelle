@@ -192,6 +192,36 @@ test("a cmd task needs no agent, and takes the command's label", () => {
   assert.equal(out.tasks[0]?.cmd, "node mock-agent.mjs");
 });
 
+test("an unknown task agent is refused even when a cmd wins", () => {
+  throwsWith(
+    {
+      agent: "demo",
+      tasks: [
+        { id: "a", prompt: "p", agent: "bogus", cmd: "node mock-agent.mjs" },
+      ],
+    },
+    /task "a": unknown agent "bogus"/,
+  );
+  throwsWith(
+    {
+      cmd: "node mock-agent.mjs",
+      tasks: [{ id: "a", prompt: "p", agent: "bogus" }],
+    },
+    /task "a": unknown agent "bogus"/,
+  );
+});
+
+test("a known task agent still loses to cmd, as resolveAgent does", () => {
+  const out = run({
+    cmd: "node mock-agent.mjs",
+    tasks: [
+      { id: "a", prompt: "p", agent: "capped", cmd: "node mock-agent.mjs" },
+    ],
+  });
+  assert.equal(out.tasks[0]?.agent, "mock-agent");
+  assert.equal(out.tasks[0]?.cmd, "node mock-agent.mjs");
+});
+
 test("maxConcurrency must be a whole number of one or more", () => {
   for (const bad of [0, -1, 2.5, "4"]) {
     throwsWith({ ...minimal, maxConcurrency: bad }, /"maxConcurrency"/);
