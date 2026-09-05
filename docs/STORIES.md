@@ -1062,6 +1062,21 @@ M1c-4 shells to `notify-send`/`osascript` and `git worktree`, paths and `sep` al
 differently on Windows. **Decision: rename to `agent-team`, drop `private`, add the `bin`
 entry, and declare macOS and Linux supported with Windows explicitly unsupported** — rather
 than discovering it.
+**Added 2026-09-06 — this story also renames the front-end file, and is the only cheap
+moment to do it.** `run.ts` (the CLI) and `core/run.ts` (the engine) share a name and differ
+only by a directory. M1b-2 made that collision live rather than theoretical: `run.ts
+--file` calls `runRun` from `core/run.ts`, so both names appear in one import block.
+**Decision: the front end becomes `cli.ts`; `core/run.ts` keeps its name.** That direction
+and not the other, for two reasons. `core/run.ts` is named as a deliverable in M1b-2 and in
+`PROJECT-PLAN.md`'s architecture, so renaming it edits many documents to fix one file; and
+`run.ts` is the one whose name stops being user-facing **here** — after the `bin` lands,
+people type `agent-team run`, never a filename, so this story is the last moment the rename
+is nearly free. It touches `package.json`, the README, `cli.test.ts`,
+`integration/helpers.ts` and `CLAUDE.md`; all mechanical, all covered by the suite.
+`fanout.mjs` needs no decision — M1b-8 deletes it.
+Coordinate with the M2-9 amendment, which drops `runs.ts` entirely, so the end state is two
+files with two jobs and two names: `cli.ts` for everything a person types, `core/run.ts` for
+the engine.
 
 **M1c-7 · `core/markdown.ts` — render agent text as Markdown · M · needs M1a-7**
 Render `agent_message_chunk` text as Markdown in the terminal, by default, using an existing
@@ -1242,9 +1257,42 @@ endpoint or exchangeable for a cookie by a login POST — decided here so M4 is 
 the localhost-only bind is unchanged. Strips `AGENT_TEAM_*` from child environments before
 spawn (M1a-4).
 
-**M2-9 · `runs.ts` CLI · M · needs M2-2, M2-3**
-Submit a run file, stream SSE, answer permissions interactively, print results. Two front
-ends, one core: `run` drives in-process, `runs` talks to the daemon.
+**M2-9 · `--detach` and `attach` · M · needs M2-2, M2-3**
+Submit a run file to the daemon, stream SSE, answer permissions interactively, print
+results.
+**Amendment 2026-09-06 — there is no second CLI. `runs.ts` is dropped.** The story read
+"two front ends, one core: `run` drives in-process, `runs` talks to the daemon". Three
+things are wrong with that, and none of them is the daemon.
+
+1. **`runs` is not a word for what it does.** The `s` came from the HTTP path `POST /runs`,
+   which is plumbing. Read as English it says "many runs", and the actual difference is
+   *local versus detached* — a run file is N tasks on both sides.
+2. **`run` and `runs` differ by one letter** for a difference that is not one letter big,
+   and `core/run.ts` already collides with the front end's `run.ts` (M1c-5 owns the file
+   names).
+3. **A second CLI is a second place to keep the flags, the notice rules and the SIGINT
+   grace in step.** That is the argument M1b-2 already used to put `--file` on `run.ts`
+   rather than in a new file, and M1b-8 uses to retire `fanout.mjs`. It does not stop being
+   true one milestone later. The CLI is already subcommand-shaped: M1c-3 adds
+   `agent-team merge`, and M1c-5 adds the `bin` that makes subcommands the surface people
+   type.
+
+**Decision: one command, and a flag for the difference.**
+
+```text
+agent-team run tasks.json             # in-process; dies with the terminal
+agent-team run tasks.json --detach    # hands it to the daemon, returns the run id
+agent-team attach <run-id>            # stream a detached run, replay included
+```
+
+`attach` is its own verb rather than a flag on `run`, because reattaching starts no work —
+it is a different job with a different argument, and M2-2's replay-from-cursor is the whole
+of it. What is dropped is the *file and the name*, not the code: submitting over HTTP,
+streaming SSE and answering permissions interactively are all still this story's
+deliverable, reached through `--detach` and `attach` instead of a second binary.
+*Done when* `agent-team run <file> --detach` returns a run id while the run continues
+without the launching terminal, and `agent-team attach <id>` on a later terminal receives
+the history and then the live tail.
 
 ---
 

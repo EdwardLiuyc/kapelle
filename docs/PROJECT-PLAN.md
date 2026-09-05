@@ -54,7 +54,7 @@ policy across all of them and returning machine-readable results.
 | Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `protocol/agent.ts` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), and the capability flags M0-3 found harnesses gating on (measured for `terminal_output` via `87cbfe3`) all live there. |
 | Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency; zero runtime deps preserved. |
 | Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
-| CLI | Two front ends, one core: `run` drives in-process, `runs` talks to the daemon. |
+| CLI | **One front end, one core (amended 2026-09-06, M2-9).** `agent-team run <file>` drives in-process; `--detach` hands the same file to the daemon; `agent-team attach <id>` streams a detached run. The original "two front ends, `run` and `runs`" is dropped: `runs` leaked the `POST /runs` path into a name people type, read as "many runs" when the difference is *local versus detached*, and a second CLI is a second place to keep the flags, notice rules and SIGINT grace in step. |
 
 ### Notes on some of these
 
@@ -108,8 +108,10 @@ human judge.
 ## Target architecture
 
 ```text
-front ends    run.ts  (direct, in-process, TTY ask)
-              runs.ts (submits run file, streams SSE, answers permissions)
+front ends    cli.ts  agent-team run <file>            direct, in-process, TTY ask
+                      agent-team run <file> --detach   submits to the daemon
+                      agent-team attach <run-id>       streams SSE, answers permissions
+                      agent-team merge ...
               dashboard (M4 — read views + permission answering; a third subscriber)
                    │
 daemon.ts     POST /runs · GET /runs/:id · GET /runs/:id/events (SSE+replay)
@@ -437,7 +439,8 @@ driven from a run file, fully verifiable offline.
   independent-tasks case only.
 - **CLIs** — `run.ts` keeps driving in-process (fast, TTY `ask` works, no daemon needed),
   plus the new `merge` subcommand. Retire `fanout.mjs`: its job becomes "a run file with N
-  independent tasks."
+  independent tasks." The file is renamed `cli.ts` at M1c-5, alongside the `bin` that makes
+  `agent-team run` — not a filename — the thing people type.
 - **Testing** — extend `mock-agent` with multiple sessions, a permission timeout, a
   malformed `<task-result>`, a **stall mode** (accepts the prompt, emits nothing, never
   returns), and a **repeat mode** (the same tool title on a loop) — one per watchdog signal.
@@ -484,8 +487,10 @@ driven from a run file, fully verifiable offline.
 - **Browser-compatible auth** — `EventSource` cannot set custom headers. The token must be
   acceptable as a query parameter on the SSE endpoint, or exchangeable for a cookie by a
   login POST. Decided here so M4 is not blocked; the localhost-only bind is unchanged.
-- `runs.ts` CLI — submit a run file, stream SSE, answer permissions interactively, print
-  results.
+- `agent-team run <file> --detach` and `agent-team attach <id>` — submit a run file, stream
+  SSE, answer permissions interactively, print results. **Amended 2026-09-06 (M2-9): no
+  `runs.ts`.** Same deliverable, reached through a flag and a second verb on the one CLI
+  rather than a second binary whose name differed by one letter.
 
 ---
 
