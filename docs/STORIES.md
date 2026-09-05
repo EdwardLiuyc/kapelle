@@ -786,11 +786,31 @@ inheritance. The schema stays stable; the behaviour never lies. M3-1 lifts the r
 tasks spawns twelve harnesses, twelve model subscriptions and twelve worktrees at once.
 **Decided 2026-08-23 (ratified, #62 B1): `maxConcurrency` on the run, default from config
 (suggest 4)**, enforced by M1b-2.
-*Done when* each import failure mode has its own error (import throws / no default export /
-default is not an object); a `.ts` run file and its `.json` equivalent validate to the same
-object; and **the CLI imports run files while the daemon never imports a path supplied over
-the API** — importing is executing, and that boundary is the whole difference between a
-convenience and a remote-code-execution hole.
+**Amendment 2026-09-05 — run files are JSON only; the `.ts`/`.mjs` loader is dropped.**
+Of the three entry paths, only the module form executes code: `await import()` runs every
+line of the file before the validator ever sees the object it exports. Measured here against
+this repo's own modules — an imported run file read `AGENT_TEAM_*` out of `process.env` and
+added `edit` to the shared `READ_ONLY_KINDS` Set (`core/policy.ts:41`), after which
+`safePolicy` approved edits for every task in the run, while the object it exported still
+validated cleanly. A `cmd` subprocess can do neither: `resolveEnv` strips the secret
+(`protocol/registry.ts`) and it holds no reference to the client's own state. The two
+things the module form bought — a loop over tasks, and `satisfies Run` while authoring —
+survive without it, in a generator script the developer runs to emit the JSON; a benefit
+available on both sides was never a reason to accept the risk. So the entry paths are
+**`.json` file and POST body**, and **nothing in the tool imports a run file**. Three
+consequences: the import failure modes in *done when* below no longer exist; the
+`.ts`/`.json` twin criterion becomes file-vs-POST-body; and M1b-1 ships no loader, which
+retires the CLI/daemon asymmetry rather than policing it. An optional `note` field on the
+run and on each task carries what JSON comments cannot.
+*Done when* a non-empty `needs`, and a `worktree` value implying inheritance, are rejected
+with an error naming M3 — not ignored; a `.json` run file and the same run as a POST body
+validate to the same object; mode and ids come from `resolvePolicy` and `assertTaskId`, and
+duplicate task ids are rejected; a run file above a harness `maxMode` is rejected naming
+both values, before any subprocess starts; `maxConcurrency` defaults to 4, and a non-integer
+or a value `< 1` is a validation error; and a run file driving `mock-agent.mjs` validates
+offline, so M1b tests stay offline. Nothing in the tool imports a run file: the CLI reads a
+`.json` file and the daemon receives a POST body. Importing is executing, and that boundary
+is the whole difference between a convenience and a remote-code-execution hole.
 
 **M1b-2 · `core/run.ts` · M · needs M1b-1**
 The new centre of gravity. Run owns N Tasks; Task owns one agent, one worktree, one policy,
@@ -838,8 +858,23 @@ should alarm someone reading a summary: `cancelled` is operator-intended and ran
 of the bad states; `timed_out` means the supervisor cut a task off mid-tool-call, with the
 same "half-written file on disk" hazard the table records for `max_tokens`, so it ranks just
 below outright failure.
-*Done when* `node:test` covers the stop-reason table and the roll-up ordering, and a
-six-task run file with `maxConcurrency: 2` never has three live subprocesses.
+**Added 2026-09-05 — a JSON Schema for the run file, as an authoring aid only.** M1b-1
+dropped the `.ts`/`.mjs` run file, and with it `satisfies Run` while writing one. A JSON
+Schema gives that back: a `$schema` line at the top of a run file, and the editor completes
+field names and marks bad ones as they are typed. It is **not** a second validator.
+`validateRun` stays the only check that runs, because a schema cannot fill defaults, cannot
+reach the agent registry for `resolvePolicy` and the `maxMode` ceiling, cannot apply
+`assertTaskId` or spot a duplicate id, and cannot say "task dependencies land in M3" — and
+checking one at runtime would need a library such as `ajv`, against the zero-runtime-
+dependency trait. Nothing in the tool loads the schema file; only an editor reads it. It
+lands here rather than in M1b-1 because this is where `--file` and the first real run file
+arrive, and a schema with nothing pointing at it is a file nobody updates. Drift is the one
+real cost, so `core/runfile.ts` exports `RUN_KEYS` and `TASK_KEYS` and one test asserts the
+schema's property names equal those Sets — the validator stays the single source of truth.
+*Done when* `node:test` covers the stop-reason table and the roll-up ordering, a six-task
+run file with `maxConcurrency: 2` never has three live subprocesses, and the run-file JSON
+Schema's property names are asserted equal to `RUN_KEYS` and `TASK_KEYS` by a test, with the
+example run file carrying a `$schema` line.
 
 **M1b-3 · `core/worktree.ts` · M · needs M1a-8**
 `git worktree add` off a base ref into `.agent-team/wt/<runId>/<taskId>`. Preflight: repo
@@ -1123,9 +1158,10 @@ blank line inside it — coordinate with M1b-5, which rewrites that file.
 **M1c-6 · M1 acceptance · S · needs all M1c**
 A run file with three independent tasks against three real harnesses, each in its own
 worktree, each returning a parsed `TaskResult`; `git worktree list` clean afterwards. Kill
-the process mid-run, restart, confirm orphans are reaped. A `.ts` run file type-checks under
-`npm run check` and validates to the same object as its `.json` twin. A run file exceeding a
-harness `maxMode` is rejected, naming both values, before any subprocess starts.
+the process mid-run, restart, confirm orphans are reaped. A `.json` run file and the same run
+as a POST body validate to the same object (amended 2026-09-05, M1b-1: run files are JSON
+only). A run file exceeding a harness `maxMode` is rejected, naming both values, before any
+subprocess starts.
 
 ---
 

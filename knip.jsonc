@@ -8,10 +8,16 @@
   // ahead of their consumers on purpose, and acting on the hint reports every
   // one of them as dead code.
   //
-  // core/ids.ts is M1a-8's deliverable, typed ahead of its consumers the same
-  // way: nothing imports it until M1b-1's core/runfile.ts does, so the
-  // --production pass reaches it from no entry and calls the file unused.
-  // Drop this entry when M1b-1 lands.
+  // core/ids.ts is M1a-8's deliverable, still typed ahead of its consumers:
+  // M1b-1's core/runfile.ts now imports it, but runfile.ts itself has no
+  // production consumer until M1b-2's core/run.ts, so the --production pass
+  // still reaches ids from no entry and calls the file unused. Drop this
+  // entry when M1b-2 lands.
+  //
+  // core/runfile.ts is M1b-1's deliverable, typed ahead of its consumers the
+  // same way: only its test imports it until M1b-2's core/run.ts does, and
+  // tests are not production roots, so knip calls it unused. Drop this entry
+  // when M1b-2 lands.
   //
   // integration/ is the opt-in real-harness suite (npm run test:harness). Its
   // files are entry points by definition — a test runner invokes them — but
@@ -19,7 +25,7 @@
   // from nowhere and calls all four unused. knip has no notion of a second,
   // opt-in test suite, so they are ignored rather than misdeclared as
   // production roots. `npm run check` still type-checks them.
-  "ignore": ["protocol/types.ts", "core/ids.ts", "integration/**"],
+  "ignore": ["protocol/types.ts", "core/ids.ts", "core/runfile.ts", "integration/**"],
   // Entry points. The `!` suffix marks a *production* entry: without it, knip's
   // --production mode (which pi-lens runs) has no roots at all and reports every
   // reachable file — protocol/agent.ts, protocol/registry.ts, render.ts — as unused.

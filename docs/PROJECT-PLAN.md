@@ -92,6 +92,12 @@ most of what a run file contains. `satisfies Run` gets the file type-checked by
 imports run files; the *daemon* never imports a path supplied over the API — it accepts
 objects only. Importing is executing, and that boundary is the whole difference between a
 convenience and a remote-code-execution hole.
+**Amended 2026-09-05 (STORIES M1b-1): this whole rationale is retired — run files are JSON
+only, and nothing in the tool imports one.** The rule above is kept by removing the side
+that could break it, not by policing it: `JSON.parse` on both sides, so there is no
+asymmetry left between the CLI and the daemon. Multi-line prompts survive as `\n` in JSON
+strings, and `satisfies Run` while authoring survives in a generator script that emits the
+JSON.
 
 **Why the diff only warns.** A read-only stage legitimately produces no diff, so the diff
 cannot be the primary contract without breaking the plan and review stages the pipeline is
@@ -420,10 +426,11 @@ driven from a run file, fully verifiable offline.
   dependency. The bus event is the real product — M4's toast subscribes to the same one.
 - **`core/runfile.ts`** — exports the `Run` / `Task` types *and* a runtime validator. Schema
   is run-level defaults plus `tasks[]` (`id`, `agent`, `prompt`, `mode`, `needs[]`,
-  `worktree`). Loading a `.ts`/`.mjs` run file is `await import(pathToFileURL(abs))` then
-  `.default`, with real errors for each way that fails: the import throws, there is no
-  default export, the default is not an object. `.json` files are `JSON.parse`. All three
-  entry paths — module, JSON file, POST body — converge on the one validator, because
+  `worktree`). **Amended 2026-09-05 (STORIES M1b-1): run files are JSON only** — the
+  `.ts`/`.mjs` loader described here is dropped, because `await import()` executes the file
+  inside the supervisor process, where it reaches the shared policy state and the
+  `AGENT_TEAM_*` secret. `.json` files are `JSON.parse`. Both remaining
+  entry paths — JSON file, POST body — converge on the one validator, because
   `satisfies Run` erases at runtime and therefore checks nothing that arrives over the wire.
   Validation is also where the mode precedence chain and the harness ceiling are resolved, so
   a bad run file fails before any subprocess starts. DAG *execution* is M3; M1 runs the
