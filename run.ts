@@ -259,22 +259,41 @@ async function runFromFile(path: string): Promise<number> {
 
   const validated = orExit(() => validateRun(parsed));
 
-  // `ask` cannot survive a run file: one readline prompt cannot serve N
-  // concurrent tasks, and every registry entry defaults to `ask`, so refusing
-  // it outright would refuse almost every run file. Re-resolved as `safe`
-  // rather than renamed — the same rule this CLI follows without a TTY — so
-  // safe's own rules, including forcing `allowReadOutsideRoot` false, apply
-  // to the mode that actually runs.
-  const tasks: Task[] = validated.tasks.map((task) => {
-    if (task.mode !== "ask") return task;
+  // **One asker can still be answered; two cannot.** `makeAskPolicy` owns a
+  // single readline over one stdin, so two tasks prompting at once would
+  // interleave two questions on one line and attribute an answer to whichever
+  // asked last — the fail-open shape #13 exists to prevent. So `ask` survives
+  // exactly when one task asks and there is a TTY to ask on; otherwise every
+  // asking task is re-resolved as `safe` — renaming it would leave `safe`'s
+  // own rules, including forcing `allowReadOutsideRoot` false, unapplied to
+  // what actually runs.
+  //
+  // It is a downgrade often, not always, because every registry entry is
+  // `defaultMode: "ask"`: a bare run file names no mode and every task inherits
+  // one. M2-3's pending-decision queue is what lifts the limit to N askers.
+  const askers = validated.tasks.filter((t) => t.mode === "ask");
+  const canAsk = askers.length === 1 && Boolean(process.stdin.isTTY);
+  if (askers.length > 1) {
     console.error(
-      `! [${task.id}] ask cannot prompt inside a run file — running as safe`,
+      `! ${askers.length} tasks ask, and one prompt cannot serve two — ` +
+        `running them as safe. Set a mode per task, or wait for the daemon.`,
     );
+  }
+
+  const tasks: Task[] = validated.tasks.map((task) => {
+    if (task.mode !== "ask" || canAsk) return task;
+    if (askers.length === 1) {
+      console.error(`! [${task.id}] not a TTY — ask runs as safe`);
+    }
     const { mode, allowReadOutsideRoot } = resolvePolicy({
       task: { mode: "safe", allowReadOutsideRoot: task.allowReadOutsideRoot },
     });
     return { ...task, mode, allowReadOutsideRoot };
   });
+
+  // Built only when it will be used, and closed however the run ends: an open
+  // readline holds stdin and the process never exits.
+  const asker = canAsk ? makeAskPolicy() : undefined;
 
   const bus = createEventBus();
   if (!quiet) {
@@ -296,17 +315,23 @@ async function runFromFile(path: string): Promise<number> {
     setTimeout(() => process.exit(130), 2000);
   });
 
-  const report = await runRun(
-    { ...validated, tasks },
-    {
-      cwd: flag("cwd", process.cwd()),
-      bus,
-      signal: canceller.signal,
-      verbose,
-      // Containment and negotiation notices are never silenced (#13).
-      onNotice: (taskId, text) => console.error(`! [${taskId}] ${text}`),
-    },
-  );
+  let report: Awaited<ReturnType<typeof runRun>>;
+  try {
+    report = await runRun(
+      { ...validated, tasks },
+      {
+        cwd: flag("cwd", process.cwd()),
+        bus,
+        signal: canceller.signal,
+        verbose,
+        askPolicy: asker?.policy,
+        // Containment and negotiation notices are never silenced (#13).
+        onNotice: (taskId, text) => console.error(`! [${taskId}] ${text}`),
+      },
+    );
+  } finally {
+    asker?.close();
+  }
 
   if (!quiet) {
     console.log(`\n${"═".repeat(60)}`);

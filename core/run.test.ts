@@ -278,6 +278,32 @@ test("a task's events reach the run's bus, tagged with the task id", async () =>
   assert.deepEqual(seen.sort(), ["t0", "t1"]);
 });
 
+test("askPolicy reaches the asking task and nothing else", async () => {
+  // `run.ts` decides *whether* one prompt can serve this run; the pool only
+  // has to hand it to the task that asks. A policy leaking onto an `auto` or
+  // `safe` task would silently change what that task may do.
+  const askPolicy = async () => true;
+  const seen = new Map<string, unknown>();
+
+  const run = validateRun({
+    cmd: "node mock-agent.mjs",
+    tasks: [
+      { id: "asker", prompt: "p", mode: "ask" },
+      { id: "quiet", prompt: "p", mode: "safe" },
+    ],
+  });
+
+  const exec: TaskExecutor = async (task, ctx) => {
+    seen.set(task.id, ctx.policy);
+    return { stopReason: "end_turn" };
+  };
+
+  await runRun(run, { ...options(), askPolicy }, exec);
+
+  assert.equal(seen.get("asker"), askPolicy);
+  assert.notEqual(seen.get("quiet"), askPolicy);
+});
+
 // --- the seam M1b-3 fills in --------------------------------------------------
 
 test("taskCwd is the run cwd until #19 lands", async () => {

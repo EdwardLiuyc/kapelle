@@ -880,12 +880,30 @@ so it costs nothing to add once a stable URL exists. One clause is struck from *
 below; the drift test — the only thing standing between the schema and a second, silently
 wrong copy of the field list — is untouched.
 
-**Amendment 2026-09-05 — `ask` inside a run file re-resolves as `safe`.** Not foreseen by
-the story: one readline prompt cannot serve N concurrent tasks, and every registry entry is
-`defaultMode: "ask"` (`protocol/registry.ts`), so refusing outright would refuse nearly every
-run file. It re-resolves rather than renaming itself — the rule `run.ts` already follows
-without a TTY — so `safe`'s own rules, including forcing `allowReadOutsideRoot` false, apply
-to what actually runs, and a notice on stderr says so per task.
+**Amendment 2026-09-05 — `ask` inside a run file survives for exactly one asker.** Not
+foreseen by the story. The limit is not "a run file", it is the **decider**: `makeAskPolicy`
+owns a single readline over one stdin, so two tasks prompting at once would interleave two
+questions on one line and attribute an answer to whichever asked last — the fail-open shape
+#13 exists to prevent. So `ask` runs as asked when **one** task asks and a TTY exists;
+otherwise every asking task re-resolves as `safe`, rather than renaming itself, so `safe`'s
+own rules — including forcing `allowReadOutsideRoot` false — apply to what actually runs.
+A notice on stderr says which case fired.
+
+It is a downgrade often but not always, because every registry entry is `defaultMode: "ask"`
+(`protocol/registry.ts`): a run file naming no mode has every task inherit one, and a
+two-task file of that shape runs as `safe`. **M2-3 is what lifts the limit to N askers** —
+its pending-decision list replaces the single readline with a queue, and its recorded
+decision (first writer wins; a second answer to a settled decision is a defined error) is
+the same collision seen from the API side. `core/run.ts` takes the decider as
+`RunOptions.askPolicy` and never builds one, so M2-3 supplies a different decider rather
+than editing the pool.
+
+The interactive half is **verified by hand, not by the suite**: a test runner has no TTY, the
+same reason `docs/STORIES.md` already records `--mode ask` as untestable in CI. Measured
+2026-09-05 against `mock-agent.mjs` under a pty — the prompt appeared, `y` was answered, and
+`ACP_TEST.md` was written. What CI does cover is the two halves that need no TTY: the
+downgrade notices, and a `node:test` case asserting `askPolicy` reaches the asking task and
+no other.
 
 **Amendment 2026-09-05 — `--agent`, `--cmd` and `--mode` are refused alongside `--file`.**
 A run file has already resolved all three per task, against each harness's ceiling. A flag

@@ -25,7 +25,7 @@
  * as `validateRun`'s injected agent map: one defaulted parameter, one caller.
  */
 
-import { AcpAgent } from "../protocol/agent.ts";
+import { AcpAgent, type Policy } from "../protocol/agent.ts";
 import { resolveAgent, resolveEnv, warningsFor } from "../protocol/registry.ts";
 import type { StopReason, Usage } from "../protocol/types.ts";
 import { createEventBus, type EventBus } from "./events.ts";
@@ -181,6 +181,10 @@ interface TaskContext {
   /** Aborted when the operator cancels the run. */
   signal: AbortSignal;
   verbose: boolean;
+  /** Already resolved for this task: the run's `askPolicy` when this task asks
+   *  and one was supplied, otherwise `policyFor(task.mode)`. Settled here so
+   *  the executor never re-decides who may approve what. */
+  policy: Policy;
   /** Containment and negotiation notices. **Not** on the bus: `--quiet`
    *  switches the bus's renderer off and #13 says these lines are never
    *  silenced, so they take a route `--quiet` cannot reach. */
@@ -204,6 +208,17 @@ export interface RunOptions {
   bus: EventBus;
   signal?: AbortSignal;
   verbose?: boolean;
+  /**
+   * An interactive decider for `ask` tasks.
+   *
+   * **One prompt cannot serve two askers**, so the caller supplies this only
+   * when it has checked that at most one task in the run asks *and* that a TTY
+   * exists — `run.ts` does both, and re-resolves the rest as `safe`. Absent,
+   * an `ask` task falls back to `policyFor("ask")`. M2-3 replaces this with a
+   * pending-decision queue over the API, which is what makes `ask` work for N
+   * tasks at once.
+   */
+  askPolicy?: Policy;
   /** Notices a run must print even under `--quiet` (#13). */
   onNotice?: (taskId: string, text: string) => void;
 }
@@ -303,6 +318,10 @@ async function runOne(
       bus,
       signal,
       verbose: options.verbose ?? false,
+      policy:
+        task.mode === "ask" && options.askPolicy
+          ? options.askPolicy
+          : policyFor(task.mode),
       onNotice: (text) => options.onNotice?.(task.id, text),
     });
     record();
@@ -350,7 +369,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     args: spec.launch.args,
     env: resolveEnv(spec.launch.env),
     cwd: ctx.cwd,
-    policy: policyFor(task.mode),
+    policy: ctx.policy,
     allowReadOutsideRoot: task.allowReadOutsideRoot,
     verbose: ctx.verbose,
     onEvent: ctx.bus.emit,

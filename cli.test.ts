@@ -343,7 +343,10 @@ test("a missing run file is a clean exit, not a stack", async (t) => {
   assert.doesNotMatch(r.stderr, /Node\.js v\d/);
 });
 
-test("ask in a run file runs as safe, and says so", async (t) => {
+test("one asking task with no TTY runs as safe, and says so", async (t) => {
+  // A test runner has no TTY, which is also every CI and piped invocation.
+  // The interactive half — one asker *with* a TTY keeps `ask` — cannot be
+  // driven from here for the same reason `--mode ask` never could.
   const cwd = await tempDir(t);
   const file = await runFile(
     t,
@@ -354,8 +357,29 @@ test("ask in a run file runs as safe, and says so", async (t) => {
 
   const r = await runCli(t, ["--file", file, "--cwd", cwd]);
 
-  assert.match(r.stderr, /\[one\] ask cannot prompt inside a run file/);
+  assert.match(r.stderr, /\[one\] not a TTY — ask runs as safe/);
   assert.deepEqual(await readdir(cwd), [], "safe refused the write");
+});
+
+test("two asking tasks are refused a prompt they would have to share", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun(
+      [
+        { id: "one", prompt: "try a write", mode: "ask" },
+        { id: "two", prompt: "try a write", mode: "ask" },
+      ],
+      { mode: undefined },
+    ),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  // The count is the point: one readline cannot attribute an answer between
+  // two askers, so the limit is on askers, not on tasks.
+  assert.match(r.stderr, /2 tasks ask, and one prompt cannot serve two/);
+  assert.deepEqual(await readdir(cwd), [], "both ran as safe");
 });
 
 test("--quiet drops the run summary but never the containment notice", async (t) => {
