@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFile } from "node:fs/promises";
 import { createEventBus } from "./core/events.ts";
 import {
   makeAskPolicy,
@@ -7,6 +8,8 @@ import {
   type ResolvedPolicy,
   resolvePolicy,
 } from "./core/policy.ts";
+import { runRun, type TaskRun } from "./core/run.ts";
+import { type Task, validateRun } from "./core/runfile.ts";
 import { AcpAgent } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
 import {
@@ -57,11 +60,18 @@ const positional = argv.filter((a, i) => {
 
 const promptText = positional.join(" ").trim();
 
-if (!promptText || has("help")) {
+// `--file` is the other half of this CLI: one prompt, or N of them from a run
+// file (M1b-2, #18). One entry point rather than two, because `fanout.mjs` is
+// retired by M1b-8 and a second CLI would only be a second place to keep the
+// notice rules, the SIGINT grace and the arg parsing in step.
+const runFilePath = flag("file");
+
+if ((!promptText && !runFilePath) || has("help")) {
   console.log(`
 acp-mvp — a minimal Agent Client Protocol client
 
   node run.ts "<prompt>" [options]
+  node run.ts --file <run.json> [--cwd dir] [--verbose] [--quiet]
 
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: opencode)
@@ -71,6 +81,9 @@ Options:
                      ask  = reads auto-approved, mutations prompt you
                      safe = reads only, all mutations refused
                      auto = approve everything (path guards still apply)
+  --file <path>    a JSON run file: N tasks, each its own agent and mode.
+                   The file carries agent and mode, so --agent, --cmd and
+                   --mode are refused alongside it. See schema/run.schema.json
   --verbose        show agent stderr and protocol noise
   --quiet          suppress normal output; safety notices still print
 
@@ -78,8 +91,9 @@ Examples:
   node run.ts "list the top-level files and summarise this repo"
   node run.ts "add a health endpoint" --cwd ../my-app --mode ask
   node run.ts "what does src/index.ts do" --mode safe
+  node run.ts --file tasks.run.json
 `);
-  process.exit(promptText ? 0 : 1);
+  process.exit(promptText || runFilePath ? 0 : 1);
 }
 
 const verbose = has("verbose");
@@ -102,6 +116,8 @@ function orExit<T>(f: () => T): T {
     process.exit(1);
   }
 }
+
+if (runFilePath) process.exit(await runFromFile(runFilePath));
 
 const spec = orExit(() => resolveAgent(flag("agent", "opencode"), flag("cmd")));
 
@@ -205,4 +221,119 @@ try {
 } finally {
   closeAsk();
   agent.stop();
+}
+
+/**
+ * The `--file` half: N tasks from a run file, at most `maxConcurrency` live.
+ *
+ * Returns the exit code rather than calling `process.exit` itself, so the one
+ * place that decides how this process ends stays the call site.
+ *
+ * **Prose is buffered and printed per task at the end**, never streamed. That
+ * is `fanout.mjs`'s hard-won lesson: N interleaved token streams are
+ * unreadable, and a summary nobody can read is the same as no summary. Only
+ * milestones — a tool call — go out live.
+ */
+async function runFromFile(path: string): Promise<number> {
+  // The file carries agent, cmd and mode per task, and `resolvePolicy` has
+  // already settled them against each harness's ceiling. A CLI flag would be
+  // a second, unresolved answer to a question the file already answered —
+  // refused rather than silently losing to the file or silently beating it.
+  for (const conflicting of ["agent", "cmd", "mode"]) {
+    if (has(conflicting)) {
+      console.error(
+        `--${conflicting} does not apply with --file: a run file sets ` +
+          `"${conflicting}" per task. Edit the file instead.`,
+      );
+      return 1;
+    }
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path, "utf8"));
+  } catch (err) {
+    console.error(`cannot read run file ${path}: ${messageOf(err)}`);
+    return 1;
+  }
+
+  const validated = orExit(() => validateRun(parsed));
+
+  // `ask` cannot survive a run file: one readline prompt cannot serve N
+  // concurrent tasks, and every registry entry defaults to `ask`, so refusing
+  // it outright would refuse almost every run file. Re-resolved as `safe`
+  // rather than renamed — the same rule this CLI follows without a TTY — so
+  // safe's own rules, including forcing `allowReadOutsideRoot` false, apply
+  // to the mode that actually runs.
+  const tasks: Task[] = validated.tasks.map((task) => {
+    if (task.mode !== "ask") return task;
+    console.error(
+      `! [${task.id}] ask cannot prompt inside a run file — running as safe`,
+    );
+    const { mode, allowReadOutsideRoot } = resolvePolicy({
+      task: { mode: "safe", allowReadOutsideRoot: task.allowReadOutsideRoot },
+    });
+    return { ...task, mode, allowReadOutsideRoot };
+  });
+
+  const bus = createEventBus();
+  if (!quiet) {
+    bus.subscribe(({ agent: taskId, update }) => {
+      // Milestones only. `render` would braid N streams into one line.
+      if (update.sessionUpdate === "tool_call") {
+        console.log(`[${taskId}] → ${update.title}`);
+      }
+    });
+  }
+
+  // Same shape as the single-agent path: cancel, then a 2s grace before the
+  // process gives up. `runRun` marks whatever was still queued `cancelled`
+  // rather than pretending it ran.
+  const canceller = new AbortController();
+  process.on("SIGINT", () => {
+    console.error("\n^C cancelling run…");
+    canceller.abort();
+    setTimeout(() => process.exit(130), 2000);
+  });
+
+  const report = await runRun(
+    { ...validated, tasks },
+    {
+      cwd: flag("cwd", process.cwd()),
+      bus,
+      signal: canceller.signal,
+      verbose,
+      // Containment and negotiation notices are never silenced (#13).
+      onNotice: (taskId, text) => console.error(`! [${taskId}] ${text}`),
+    },
+  );
+
+  if (!quiet) {
+    console.log(`\n${"═".repeat(60)}`);
+    for (const task of report.tasks) printTask(task);
+    console.log(
+      `\n${report.status} — ${report.tasks.length} tasks, ` +
+        `${report.turns} turns, ${(report.durationMs / 1000).toFixed(1)}s`,
+    );
+  }
+
+  // `warned` is a run that finished with something worth reading, not a
+  // failure. Every rung below it means at least one task did not complete.
+  return report.status === "done" || report.status === "warned" ? 0 : 1;
+}
+
+function printTask(task: TaskRun): void {
+  const secs = (task.durationMs / 1000).toFixed(1);
+  console.log(`\n▸ ${task.id} (${task.agent}) ${task.status} in ${secs}s`);
+  if (task.error) console.log(`  error: ${task.error}`);
+  // Verbatim, tagged by the task above, and never added to another task's:
+  // copilot counts cumulatively where opencode counts per turn (M0-5).
+  if (task.usage) {
+    console.log(
+      `  tokens: ${task.usage.totalTokens} total ` +
+        `(${task.usage.inputTokens} in, ${task.usage.outputTokens} out)`,
+    );
+  }
+  const prose = task.transcript.trim();
+  if (prose) console.log(prose);
 }

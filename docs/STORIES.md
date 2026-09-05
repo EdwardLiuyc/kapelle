@@ -871,10 +871,31 @@ lands here rather than in M1b-1 because this is where `--file` and the first rea
 arrive, and a schema with nothing pointing at it is a file nobody updates. Drift is the one
 real cost, so `core/runfile.ts` exports `RUN_KEYS` and `TASK_KEYS` and one test asserts the
 schema's property names equal those Sets — the validator stays the single source of truth.
+**Amendment 2026-09-05 — the `$schema` line is deferred; the schema file is not.**
+`schema/run.schema.json` ships and its drift test with it. The `$schema` line does not,
+because it has nowhere honest to point yet: a repo-relative path breaks the moment a run
+file sits in the repo being worked on, which is the normal case, and the raw URL for this
+file 404s until the branch merges. The line is an editor convenience with no runtime effect,
+so it costs nothing to add once a stable URL exists. One clause is struck from *done when*
+below; the drift test — the only thing standing between the schema and a second, silently
+wrong copy of the field list — is untouched.
+
+**Amendment 2026-09-05 — `ask` inside a run file re-resolves as `safe`.** Not foreseen by
+the story: one readline prompt cannot serve N concurrent tasks, and every registry entry is
+`defaultMode: "ask"` (`protocol/registry.ts`), so refusing outright would refuse nearly every
+run file. It re-resolves rather than renaming itself — the rule `run.ts` already follows
+without a TTY — so `safe`'s own rules, including forcing `allowReadOutsideRoot` false, apply
+to what actually runs, and a notice on stderr says so per task.
+
+**Amendment 2026-09-05 — `--agent`, `--cmd` and `--mode` are refused alongside `--file`.**
+A run file has already resolved all three per task, against each harness's ceiling. A flag
+would be a second, unresolved answer to a settled question, and either direction of silent
+precedence runs something other than what was asked for — the failure `resolvePolicy` raises
+on rather than downgrades.
+
 *Done when* `node:test` covers the stop-reason table and the roll-up ordering, a six-task
 run file with `maxConcurrency: 2` never has three live subprocesses, and the run-file JSON
-Schema's property names are asserted equal to `RUN_KEYS` and `TASK_KEYS` by a test, with the
-example run file carrying a `$schema` line.
+Schema's property names are asserted equal to `RUN_KEYS` and `TASK_KEYS` by a test.
 
 **M1b-3 · `core/worktree.ts` · M · needs M1a-8**
 `git worktree add` off a base ref into `.agent-team/wt/<runId>/<taskId>`. Preflight: repo
