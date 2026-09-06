@@ -18,7 +18,6 @@ import {
   statusFor,
   type TaskExecutor,
   type TaskStatus,
-  taskCwd,
 } from "./run.ts";
 import { type Run, validateRun } from "./runfile.ts";
 
@@ -355,10 +354,6 @@ test("askPolicy reaches the asking task and nothing else", async () => {
   assert.notEqual(seen.get("quiet"), askPolicy);
 });
 
-// --- the seam M1b-3 fills in --------------------------------------------------
-
-test("taskCwd is the run cwd until #19 lands", async () => {
-  const [task] = runOf(1, 1).tasks;
-  assert.ok(task);
-  assert.equal(taskCwd(task, "/work"), "/work");
-});
+// The worktree seam M1b-3 filled in is covered by `core/worktree.test.ts`,
+// against a real `git init` — the pool's half of it is one `acquire` before
+// the executor and one `release` after, and neither is observable from here.

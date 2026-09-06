@@ -403,7 +403,16 @@ test("--file --quiet drops the advisory line, exactly as one prompt does", async
 
   const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
   assert.equal(r.stdout, "");
-  assert.equal(r.stderr, "", "unverified is advisory, so --quiet drops it");
+  assert.doesNotMatch(
+    r.stderr,
+    /no measured labels for this harness/,
+    "unverified is advisory, so --quiet drops it",
+  );
+  // What is left is M1b-3's isolation notice, and it is the containment
+  // variant of the same rule: the temp cwd is not a repository, so the tasks
+  // share one directory. A line saying a safety property is *absent* is never
+  // silenced (#13) — the same reason `safe` keeps its caveat under `--quiet`.
+  assert.match(r.stderr, /not a git repository/);
 });
 
 test("a prompt alongside --file is refused, not silently dropped", async (t) => {

@@ -34,8 +34,10 @@ import {
 } from "../protocol/registry.ts";
 import type { StopReason, Usage } from "../protocol/types.ts";
 import { createEventBus, type EventBus } from "./events.ts";
+import { newRunId } from "./ids.ts";
 import { negotiateSafeMode, policyFor } from "./policy.ts";
 import type { Run, Task } from "./runfile.ts";
+import { openWorktrees, type Worktrees } from "./worktree.ts";
 
 /**
  * Every terminal state a task can reach.
@@ -142,24 +144,6 @@ export function runStatus(statuses: readonly TaskStatus[]): TaskStatus {
   return worst;
 }
 
-/**
- * Where a task runs. **This is the seam M1b-3 (#19) fills in.**
- *
- * Today every task runs in the run's own working directory, which is only
- * safe because M1 runs a run file whose tasks were given non-colliding work —
- * exactly the caveat `fanout.mjs` carries today. #19 replaces the body with
- * `git worktree add` off `task.worktree` (a base ref, never a path) into
- * `.agent-team/wt/<runId>/<task.id>`, and nothing else in this file moves.
- *
- * ponytail: a getter with no matching release. #19 needs teardown too — keep
- * the worktree on failure, remove it on success — and owns designing that
- * pair; inventing half of it here would be scaffolding for a story that has
- * not been written yet.
- */
-export function taskCwd(_task: Task, runCwd: string): string {
-  return runCwd;
-}
-
 /** One task's record. `usage` is per task and never summed; `agent` is the
  *  tag that says whose counting rules produced it. */
 export interface TaskRun {
@@ -236,8 +220,13 @@ export type TaskExecutor = (
 ) => Promise<TaskOutcome>;
 
 export interface RunOptions {
-  /** The run's working directory. `taskCwd` derives each task's from it. */
+  /** The run's working directory. Each task's worktree hangs off it. */
   cwd: string;
+  /** Names the run's worktrees and branches. Minted here when absent, but a
+   *  caller that has to print the id — `run.ts` does — mints it itself: a run
+   *  file may never supply one, or a re-run would rebuild branch names that
+   *  already exist (`core/runfile.ts:53`). */
+  runId?: string;
   /** Every task's events, tagged with the task id in `agent`. */
   bus: EventBus;
   signal?: AbortSignal;
@@ -271,6 +260,14 @@ export async function runRun(
 ): Promise<RunReport> {
   const started = Date.now();
   const signal = options.signal ?? new AbortController().signal;
+  const runId = options.runId ?? newRunId();
+
+  // Preflight once for the run, not once per task: every refusal it raises is
+  // a property of the repository, so N tasks would raise the same one N times
+  // — and the first worktree would already exist by then.
+  const { worktrees, notice } = await openWorktrees(options.cwd, runId);
+  if (notice) options.onNotice?.("run", notice);
+
   const results = new Array<TaskRun>(run.tasks.length);
   const queue = run.tasks.map((task, index) => ({ task, index }));
   let turns = 0;
@@ -290,7 +287,7 @@ export async function runRun(
         results[index] = {
           id: task.id,
           agent: task.agent,
-          cwd: taskCwd(task, options.cwd),
+          cwd: options.cwd,
           status: "cancelled",
           durationMs: 0,
           transcript: "",
@@ -298,7 +295,14 @@ export async function runRun(
         continue;
       }
 
-      results[index] = await runOne(task, exec, signal, options, onTurn);
+      results[index] = await runOne(
+        task,
+        exec,
+        signal,
+        options,
+        onTurn,
+        worktrees,
+      );
     }
   };
 
@@ -319,8 +323,8 @@ async function runOne(
   signal: AbortSignal,
   options: RunOptions,
   onTurn: () => void,
+  worktrees: Worktrees | null,
 ): Promise<TaskRun> {
-  const cwd = taskCwd(task, options.cwd);
   const started = Date.now();
 
   // Its own bus, forwarding to the run's. One `addListener` rather than the
@@ -342,14 +346,13 @@ async function runOne(
     cancelRequested = signal.aborted;
   };
 
-  const base = {
-    id: task.id,
-    agent: task.agent,
-    cwd,
-    transcript: "",
-  };
-
+  // Acquired inside the `try`: a base ref that does not resolve is this task's
+  // failure and nobody else's, and it has to read as `failed` rather than
+  // taking the whole run down from the pool loop.
+  let cwd = options.cwd;
+  let settled: TaskRun;
   try {
+    if (worktrees) cwd = await worktrees.acquire(task.id, task.worktree);
     const outcome = await exec(task, {
       cwd,
       bus,
@@ -364,7 +367,9 @@ async function runOne(
     });
     record();
     const result: TaskRun = {
-      ...base,
+      id: task.id,
+      agent: task.agent,
+      cwd,
       transcript,
       status: statusFor({
         stopReason: outcome.stopReason,
@@ -376,17 +381,35 @@ async function runOne(
     if (outcome.stopReason !== undefined)
       result.stopReason = outcome.stopReason;
     if (outcome.usage !== undefined) result.usage = outcome.usage;
-    return result;
+    settled = result;
   } catch (err) {
     record();
-    return {
-      ...base,
+    settled = {
+      id: task.id,
+      agent: task.agent,
+      cwd,
       transcript,
       status: statusFor({ cancelRequested, watchdogFired: false, threw: true }),
       durationMs: Date.now() - started,
       error: err instanceof Error ? err.message : String(err),
     };
   }
+
+  // Teardown never changes the verdict. A worktree that cannot be committed or
+  // removed is a mess to report, not a reason to relabel a task that finished:
+  // the failure modes here — a lock left by a killed harness, a filesystem
+  // that refuses the delete — say nothing about whether the work succeeded.
+  try {
+    await worktrees?.release(task.id, settled.status);
+  } catch (err) {
+    options.onNotice?.(
+      task.id,
+      `worktree cleanup failed, so it is still on disk: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  return settled;
 }
 
 /**
