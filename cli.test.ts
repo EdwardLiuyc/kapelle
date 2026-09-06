@@ -244,3 +244,246 @@ test("a missing task file is a clean exit, not a stack", async (t) => {
   assert.equal(r.code, 1);
   assert.match(r.stderr, /cannot read/);
 });
+
+// --- run files: `run.ts --file` (M1b-2, #18) ---------------------------------
+
+/** A run file, written where `run.ts` can read it. Separate from `taskFile`
+ *  above: fanout's schema is a bare array, a run file is an object. */
+async function runFile(
+  t: import("node:test").TestContext,
+  run: Record<string, unknown>,
+) {
+  const dir = await tempDir(t);
+  const path = join(dir, "demo.run.json");
+  await writeFile(path, JSON.stringify(run), "utf8");
+  return path;
+}
+
+const mockRun = (
+  tasks: Record<string, unknown>[],
+  rest: Record<string, unknown> = {},
+) => ({
+  cmd: `node ${MOCK_AGENT}`,
+  mode: "auto",
+  ...rest,
+  tasks,
+});
+
+test("--file runs every task and reports each one", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun(
+      [
+        { id: "one", prompt: "task one" },
+        { id: "two", prompt: "task two" },
+        { id: "three", prompt: "task three" },
+      ],
+      { maxConcurrency: 2 },
+    ),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.equal(r.code, 0);
+  for (const id of ["one", "two", "three"]) {
+    assert.match(r.stdout, new RegExp(`▸ ${id} \\(mock-agent\\) done`));
+  }
+  assert.match(r.stdout, /done — 3 tasks, 3 turns/);
+});
+
+test("prose is buffered per task, never braided together", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([
+      { id: "one", prompt: "task one" },
+      { id: "two", prompt: "task two" },
+    ]),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  // Each task's block is contiguous: its whole transcript sits between its
+  // own header and the next one. Interleaving would split it.
+  const [, first = ""] = r.stdout.split("▸ one (mock-agent)");
+  const [block = ""] = first.split("▸ two (mock-agent)");
+  assert.match(block, /Wrote ACP_TEST\.md\./);
+  assert.equal((block.match(/Wrote ACP_TEST\.md\./g) ?? []).length, 1);
+});
+
+test("a run file's own agent and mode cannot be overridden from argv", async (t) => {
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  for (const flag of [
+    ["--mode", "safe"],
+    ["--agent", "opencode"],
+    ["--cmd", "true"],
+  ]) {
+    const r = await runCli(t, ["--file", file, ...flag]);
+    assert.equal(r.code, 1, flag[0]);
+    assert.match(r.stderr, new RegExp(`${flag[0]} does not apply with --file`));
+  }
+});
+
+test("a bad run file is the validator's sentence, not a stack", async (t) => {
+  // `needs` is the one that matters: it must not validate and then run in
+  // parallel, which is a plausible wrong answer rather than an error.
+  const file = await runFile(
+    t,
+    mockRun([{ id: "one", prompt: "hi", needs: ["two"] }]),
+  );
+
+  const r = await runCli(t, ["--file", file]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /task dependencies land in M3/);
+  assert.doesNotMatch(r.stderr, /Node\.js v\d/);
+});
+
+test("a missing run file is a clean exit, not a stack", async (t) => {
+  const r = await runCli(t, ["--file", "/nope/none.run.json"]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /cannot read run file/);
+  assert.doesNotMatch(r.stderr, /Node\.js v\d/);
+});
+
+test("one asking task with no TTY runs as safe, and says so", async (t) => {
+  // A test runner has no TTY, which is also every CI and piped invocation.
+  // The interactive half — one asker *with* a TTY keeps `ask` — cannot be
+  // driven from here for the same reason `--mode ask` never could.
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([{ id: "one", prompt: "try a write", mode: "ask" }], {
+      mode: undefined,
+    }),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.match(r.stderr, /\[one\] not a TTY — ask runs as safe/);
+  assert.deepEqual(await readdir(cwd), [], "safe refused the write");
+});
+
+test("two asking tasks are refused a prompt they would have to share", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun(
+      [
+        { id: "one", prompt: "try a write", mode: "ask" },
+        { id: "two", prompt: "try a write", mode: "ask" },
+      ],
+      { mode: undefined },
+    ),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  // The count is the point: one readline cannot attribute an answer between
+  // two askers, so the limit is on askers, not on tasks.
+  assert.match(r.stderr, /2 tasks ask, and one prompt cannot serve two/);
+  assert.deepEqual(await readdir(cwd), [], "both ran as safe");
+});
+
+test("--file --quiet drops the advisory line, exactly as one prompt does", async (t) => {
+  // This test used to assert the opposite, and the opposite was a regression:
+  // `--file` forwarded every `warningsFor` result with its `kind` discarded,
+  // so `--quiet` printed the advisory `unverified` line that the single-agent
+  // path drops (#13, `printableWarnings`). A `--cmd` spec is unmeasured, so
+  // the advisory line is the only one reachable offline — the containment
+  // variant needs a measured registry entry, as the fanout tests above note.
+  const cwd = await tempDir(t);
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const loud = await runCli(t, ["--file", file, "--cwd", cwd]);
+  assert.match(loud.stderr, /no measured labels for this harness/);
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+  assert.equal(r.stdout, "");
+  assert.equal(r.stderr, "", "unverified is advisory, so --quiet drops it");
+});
+
+test("a prompt alongside --file is refused, not silently dropped", async (t) => {
+  // The dangerous shape of the same conflict `--agent`/`--cmd`/`--mode` are
+  // rejected for: this one reads as if the extra work was queued.
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const r = await runCli(t, ["--file", file, "and also do this"]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /a prompt does not apply with --file/);
+  assert.match(r.stderr, /and also do this/);
+});
+
+test("a task whose harness cannot start fails alone, and fails the run", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [
+      { id: "good", prompt: "hi", cmd: `node ${MOCK_AGENT}` },
+      { id: "doomed", prompt: "hi", cmd: "node --badflag" },
+    ],
+  });
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.equal(r.code, 1, "one failed task fails the run");
+  assert.match(r.stdout, /▸ good \(mock-agent\) done/);
+  // The label comes from `resolveAgent`'s `--cmd` parsing, which reads
+  // "node <first arg>" — a quirk of that function, not of this run.
+  assert.match(r.stdout, /▸ doomed \(.*\) failed/);
+  assert.match(r.stdout, /error: agent "doomed" exited/);
+  // The doomed harness died before it ever sent a prompt, so only the good
+  // task counts as a turn.
+  assert.match(r.stdout, /failed — 2 tasks, 1 turn/);
+});
+
+test("--quiet still reports a task failure, on stderr", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [{ id: "doomed", prompt: "hi", cmd: "node --badflag" }],
+  });
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /error: \[doomed\] agent "doomed" exited/);
+});
+
+test("--quiet reports a task that failed without ever throwing", async (t) => {
+  // The gap the first `--quiet` fix left. `refusal` returns normally and
+  // carries no error text, so keying the quiet report on `task.error` sent
+  // this case out with exit 1 and an empty stderr — the exact failure the
+  // fix was written to remove.
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([{ id: "picky", prompt: "please refuse this" }]),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /error: \[picky\] failed/);
+});
+
+test("a refusal is a failed task, and it is not a silent one", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([{ id: "picky", prompt: "please refuse this" }]),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /▸ picky \(mock-agent\) failed/);
+  // One task, one prompt — and the summary now says so in English.
+  assert.match(r.stdout, /failed — 1 task, 1 turn,/);
+});

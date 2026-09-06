@@ -23,8 +23,8 @@ test("every subscriber receives every event", () => {
   const bus = createEventBus();
   const seenA: AgentEventEnvelope[] = [];
   const seenB: AgentEventEnvelope[] = [];
-  bus.subscribe((e) => seenA.push(e));
-  bus.subscribe((e) => seenB.push(e));
+  bus.addListener((e) => seenA.push(e));
+  bus.addListener((e) => seenB.push(e));
 
   bus.emit(event);
 
@@ -44,7 +44,7 @@ test("the event arrives unchanged, _meta included (#62 B4)", () => {
     },
   };
   let seen: AgentEventEnvelope | undefined;
-  bus.subscribe((e) => {
+  bus.addListener((e) => {
     seen = e;
   });
 
@@ -63,10 +63,10 @@ test("a throwing subscriber does not stop the ones behind it", (t) => {
   const errored = t.mock.method(console, "error", () => {});
 
   let reached = false;
-  bus.subscribe(() => {
+  bus.addListener(() => {
     throw new Error("renderer is broken");
   });
-  bus.subscribe(() => {
+  bus.addListener(() => {
     reached = true;
   });
 
@@ -82,7 +82,7 @@ test("a throwing subscriber does not stop the ones behind it", (t) => {
 test("emit detaches from the bus object, so it can be passed as onEvent", () => {
   const bus = createEventBus();
   const seen: AgentEventEnvelope[] = [];
-  bus.subscribe((e) => seen.push(e));
+  bus.addListener((e) => seen.push(e));
 
   const sink = bus.emit;
   sink(event);

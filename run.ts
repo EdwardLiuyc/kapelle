@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFile } from "node:fs/promises";
 import { createEventBus } from "./core/events.ts";
 import {
   makeAskPolicy,
@@ -7,6 +8,8 @@ import {
   type ResolvedPolicy,
   resolvePolicy,
 } from "./core/policy.ts";
+import { runRun, type TaskRun } from "./core/run.ts";
+import { type Task, validateRun } from "./core/runfile.ts";
 import { AcpAgent } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
 import {
@@ -57,11 +60,18 @@ const positional = argv.filter((a, i) => {
 
 const promptText = positional.join(" ").trim();
 
-if (!promptText || has("help")) {
+// `--file` is the other half of this CLI: one prompt, or N of them from a run
+// file (M1b-2, #18). One entry point rather than two, because `fanout.mjs` is
+// retired by M1b-8 and a second CLI would only be a second place to keep the
+// notice rules, the SIGINT grace and the arg parsing in step.
+const runFilePath = flag("file");
+
+if ((!promptText && !runFilePath) || has("help")) {
   console.log(`
 acp-mvp — a minimal Agent Client Protocol client
 
   node run.ts "<prompt>" [options]
+  node run.ts --file <run.json> [--cwd dir] [--verbose] [--quiet]
 
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: opencode)
@@ -71,6 +81,9 @@ Options:
                      ask  = reads auto-approved, mutations prompt you
                      safe = reads only, all mutations refused
                      auto = approve everything (path guards still apply)
+  --file <path>    a JSON run file: N tasks, each its own agent and mode.
+                   The file carries agent and mode, so --agent, --cmd and
+                   --mode are refused alongside it. See schema/run.schema.json
   --verbose        show agent stderr and protocol noise
   --quiet          suppress normal output; safety notices still print
 
@@ -78,8 +91,9 @@ Examples:
   node run.ts "list the top-level files and summarise this repo"
   node run.ts "add a health endpoint" --cwd ../my-app --mode ask
   node run.ts "what does src/index.ts do" --mode safe
+  node run.ts --file tasks.run.json
 `);
-  process.exit(promptText ? 0 : 1);
+  process.exit(promptText || runFilePath ? 0 : 1);
 }
 
 const verbose = has("verbose");
@@ -103,106 +117,319 @@ function orExit<T>(f: () => T): T {
   }
 }
 
-const spec = orExit(() => resolveAgent(flag("agent", "opencode"), flag("cmd")));
-
-// `task > run > harness > default`: run.ts is one task, so `--mode` is the run
-// layer and the registry entry is the harness layer. An unknown mode, or one
-// above the entry's ceiling, is a validation error here rather than a silent
-// downgrade. There is no `--allow-read-outside-root` flag: the task layer that
-// carries it arrives with M1b-1's run file, and inventing a CLI surface for it
-// now would be a second place to keep in step.
-// The cast is the boundary: argv is strings, and `resolvePolicy` is the one
-// place that validates a mode — it throws naming the known ones, which is a
-// better error than anything a second check here could produce.
-const resolveOrExit = (mode: string | undefined): ResolvedPolicy =>
-  orExit(() =>
-    resolvePolicy({
-      run: { mode: mode as ClientMode | undefined },
-      harness: {
-        name: spec.name,
-        mode: spec.defaultMode,
-        maxMode: spec.maxMode,
-      },
-    }),
+// `process.exitCode`, never `process.exit()`: this path has just written buffered
+// task transcripts, and a forced exit can cut a pipe-backed stdout off mid-flush.
+// It would also beat the SIGINT handler's own 130 whenever a cancelled run
+// settles inside the two-second grace. The single-agent path below is an
+// `else` for the same reason — there is nothing left to skip past.
+if (runFilePath) {
+  process.exitCode = await runFromFile(runFilePath);
+} else {
+  const spec = orExit(() =>
+    resolveAgent(flag("agent", "opencode"), flag("cmd")),
   );
 
-let resolved = resolveOrExit(flag("mode"));
-let closeAsk = () => {};
+  // `task > run > harness > default`: run.ts is one task, so `--mode` is the run
+  // layer and the registry entry is the harness layer. An unknown mode, or one
+  // above the entry's ceiling, is a validation error here rather than a silent
+  // downgrade. There is no `--allow-read-outside-root` flag: the task layer that
+  // carries it arrives with M1b-1's run file, and inventing a CLI surface for it
+  // now would be a second place to keep in step.
+  // The cast is the boundary: argv is strings, and `resolvePolicy` is the one
+  // place that validates a mode — it throws naming the known ones, which is a
+  // better error than anything a second check here could produce.
+  const resolveOrExit = (mode: string | undefined): ResolvedPolicy =>
+    orExit(() =>
+      resolvePolicy({
+        run: { mode: mode as ClientMode | undefined },
+        harness: {
+          name: spec.name,
+          mode: spec.defaultMode,
+          maxMode: spec.maxMode,
+        },
+      }),
+    );
 
-// `ask` degrades to `safe` without a TTY, and re-resolves rather than just
-// renaming itself, so `safe`'s own rules apply to the mode we actually run.
-if (resolved.mode === "ask" && !process.stdin.isTTY) {
-  console.error("! not a TTY — falling back to --mode safe");
-  resolved = resolveOrExit("safe");
-}
+  let resolved = resolveOrExit(flag("mode"));
+  let closeAsk = () => {};
 
-let policy = policyFor(resolved.mode);
-if (resolved.mode === "ask") {
-  const asker = makeAskPolicy();
-  policy = asker.policy;
-  closeAsk = asker.close;
-}
-
-// M1a-6: every consumer subscribes; nothing reads agent state directly.
-const bus = createEventBus();
-if (!quiet) bus.subscribe(render);
-
-const agent = new AcpAgent({
-  name: spec.name,
-  command: spec.launch.command,
-  args: spec.launch.args,
-  env: resolveEnv(spec.launch.env),
-  cwd: flag("cwd", process.cwd()),
-  policy,
-  allowReadOutsideRoot: resolved.allowReadOutsideRoot,
-  verbose,
-  onEvent: bus.emit,
-});
-
-process.on("SIGINT", () => {
-  console.error("\n^C cancelling turn…");
-  agent.cancel();
-  setTimeout(() => {
-    agent.stop();
-    process.exit(130);
-  }, 2000);
-});
-
-try {
-  const init = await agent.start();
-  if (!quiet) {
-    const who = init.agentInfo
-      ? `${init.agentInfo.name} ${init.agentInfo.version ?? ""}`.trim()
-      : spec.name;
-    console.log(`connected to ${who} (ACP v${init.protocolVersion})`);
+  // `ask` degrades to `safe` without a TTY, and re-resolves rather than just
+  // renaming itself, so `safe`'s own rules apply to the mode we actually run.
+  if (resolved.mode === "ask" && !process.stdin.isTTY) {
+    console.error("! not a TTY — falling back to --mode safe");
+    resolved = resolveOrExit("safe");
   }
 
-  // M1a-4 decides these lines; this story decides which survive `--quiet`.
-  // The rule itself sits in the registry next to `warningsFor`, where it has
-  // a test — a bare `if` here is exactly what could be inverted unnoticed.
-  const warnings = printableWarnings(
-    warningsFor(spec.name, spec, resolved.mode, init.agentInfo?.version),
-    quiet,
-  );
-  for (const w of warnings) console.error(`! ${w.text}`);
+  let policy = policyFor(resolved.mode);
+  if (resolved.mode === "ask") {
+    const asker = makeAskPolicy();
+    policy = asker.policy;
+    closeAsk = asker.close;
+  }
 
-  await agent.newSession();
+  // M1a-6: every consumer subscribes; nothing reads agent state directly.
+  const bus = createEventBus();
+  if (!quiet) bus.addListener(render);
 
-  // `safe`'s other half: negotiate before the first prompt, because filtering
-  // reaches nothing on a harness that never asks. Printed like the containment
-  // lines and, like them, not suppressed by --quiet (#13): this line says how
-  // much of `safe` is actually in force.
-  const notNegotiated = await negotiateSafeMode(agent, spec, resolved.mode);
-  if (notNegotiated) console.error(`! ${notNegotiated}`);
-  if (!quiet) console.log(`session ${agent.sessionId}\n`);
+  const agent = new AcpAgent({
+    name: spec.name,
+    command: spec.launch.command,
+    args: spec.launch.args,
+    env: resolveEnv(spec.launch.env),
+    cwd: flag("cwd", process.cwd()),
+    policy,
+    allowReadOutsideRoot: resolved.allowReadOutsideRoot,
+    verbose,
+    onEvent: bus.emit,
+  });
 
-  // The whole PromptResponse is returned (#62 B3); M1 renders only stopReason.
-  const { stopReason } = await agent.prompt(promptText);
-  if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
-} catch (err) {
-  console.error(`\nerror: ${messageOf(err)}`);
-  process.exitCode = 1;
-} finally {
-  closeAsk();
-  agent.stop();
+  process.on("SIGINT", () => {
+    console.error("\n^C cancelling turn…");
+    agent.cancel();
+    setTimeout(() => {
+      agent.stop();
+      process.exit(130);
+    }, 2000);
+  });
+
+  try {
+    const init = await agent.start();
+    if (!quiet) {
+      const who = init.agentInfo
+        ? `${init.agentInfo.name} ${init.agentInfo.version ?? ""}`.trim()
+        : spec.name;
+      console.log(`connected to ${who} (ACP v${init.protocolVersion})`);
+    }
+
+    // M1a-4 decides these lines; this story decides which survive `--quiet`.
+    // The rule itself sits in the registry next to `warningsFor`, where it has
+    // a test — a bare `if` here is exactly what could be inverted unnoticed.
+    const warnings = printableWarnings(
+      warningsFor(spec.name, spec, resolved.mode, init.agentInfo?.version),
+      quiet,
+    );
+    for (const w of warnings) console.error(`! ${w.text}`);
+
+    await agent.newSession();
+
+    // `safe`'s other half: negotiate before the first prompt, because filtering
+    // reaches nothing on a harness that never asks. Printed like the containment
+    // lines and, like them, not suppressed by --quiet (#13): this line says how
+    // much of `safe` is actually in force.
+    const notNegotiated = await negotiateSafeMode(agent, spec, resolved.mode);
+    if (notNegotiated) console.error(`! ${notNegotiated}`);
+    if (!quiet) console.log(`session ${agent.sessionId}\n`);
+
+    // The whole PromptResponse is returned (#62 B3); M1 renders only stopReason.
+    const { stopReason } = await agent.prompt(promptText);
+    if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
+  } catch (err) {
+    console.error(`\nerror: ${messageOf(err)}`);
+    process.exitCode = 1;
+  } finally {
+    closeAsk();
+    agent.stop();
+  }
+}
+
+/**
+ * The `--file` half: N tasks from a run file, at most `maxConcurrency` live.
+ *
+ * Returns the exit code rather than calling `process.exit` itself, so the one
+ * place that decides how this process ends stays the call site.
+ *
+ * **Prose is buffered and printed per task at the end**, never streamed. That
+ * is `fanout.mjs`'s hard-won lesson: N interleaved token streams are
+ * unreadable, and a summary nobody can read is the same as no summary. Only
+ * milestones — a tool call — go out live.
+ */
+async function runFromFile(path: string): Promise<number> {
+  // The file carries agent, cmd and mode per task, and `resolvePolicy` has
+  // already settled them against each harness's ceiling. A CLI flag would be
+  // a second, unresolved answer to a question the file already answered —
+  // refused rather than silently losing to the file or silently beating it.
+  for (const conflicting of ["agent", "cmd", "mode"]) {
+    if (has(conflicting)) {
+      console.error(
+        `--${conflicting} does not apply with --file: a run file sets ` +
+          `"${conflicting}" per task. Edit the file instead.`,
+      );
+      return 1;
+    }
+  }
+
+  // A positional prompt is the same conflict, and the most dangerous shape of
+  // it: `run.ts --file tasks.json "and also do X"` reads like it queued the
+  // extra work. Silently dropping it would be the one failure mode the three
+  // flags above are rejected to avoid.
+  if (promptText) {
+    console.error(
+      `a prompt does not apply with --file: a run file carries one prompt ` +
+        `per task. Got ${JSON.stringify(promptText)}.`,
+    );
+    return 1;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path, "utf8"));
+  } catch (err) {
+    console.error(`cannot read run file ${path}: ${messageOf(err)}`);
+    return 1;
+  }
+
+  const validated = orExit(() => validateRun(parsed));
+
+  // **One asker can still be answered; two cannot.** `makeAskPolicy` owns a
+  // single readline over one stdin, so two tasks prompting at once would
+  // interleave two questions on one line and attribute an answer to whichever
+  // asked last — the fail-open shape #13 exists to prevent. So `ask` survives
+  // exactly when one task asks and there is a TTY to ask on; otherwise every
+  // asking task is re-resolved as `safe` — renaming it would leave `safe`'s
+  // own rules, including forcing `allowReadOutsideRoot` false, unapplied to
+  // what actually runs.
+  //
+  // It is a downgrade often, not always, because every registry entry is
+  // `defaultMode: "ask"`: a bare run file names no mode and every task inherits
+  // one. M2-3's pending-decision queue is what lifts the limit to N askers.
+  const askers = validated.tasks.filter((t) => t.mode === "ask");
+  const canAsk = askers.length === 1 && Boolean(process.stdin.isTTY);
+  if (askers.length > 1) {
+    console.error(
+      `! ${askers.length} tasks ask, and one prompt cannot serve two — ` +
+        `running them as safe. Set a mode per task, or wait for the daemon.`,
+    );
+  }
+
+  const tasks: Task[] = validated.tasks.map((task) => {
+    if (task.mode !== "ask" || canAsk) return task;
+    if (askers.length === 1) {
+      console.error(`! [${task.id}] not a TTY — ask runs as safe`);
+    }
+    const { mode, allowReadOutsideRoot } = resolvePolicy({
+      task: { mode: "safe", allowReadOutsideRoot: task.allowReadOutsideRoot },
+    });
+    return { ...task, mode, allowReadOutsideRoot };
+  });
+
+  // Built only when it will be used, and closed however the run ends: an open
+  // readline holds stdin and the process never exits.
+  const asker = canAsk ? makeAskPolicy() : undefined;
+
+  const bus = createEventBus();
+  if (!quiet) {
+    bus.addListener(({ agent: taskId, update }) => {
+      // Milestones only. `render` would braid N streams into one line.
+      if (update.sessionUpdate === "tool_call") {
+        console.log(`[${taskId}] → ${update.title}`);
+      }
+    });
+  }
+
+  // Same shape as the single-agent path: cancel, then a 2s grace before the
+  // process gives up. `runRun` marks whatever was still queued `cancelled`
+  // rather than pretending it ran.
+  const canceller = new AbortController();
+  process.on("SIGINT", () => {
+    console.error("\n^C cancelling run…");
+    canceller.abort();
+    // `unref`: the grace timer is a safety net for a harness that ignores the
+    // cancel, not a two-second pause on a run that stopped promptly. An
+    // unref'd timer still fires while the loop is alive for other reasons —
+    // it just stops being a reason of its own.
+    setTimeout(() => process.exit(130), 2000).unref();
+  });
+
+  let report: Awaited<ReturnType<typeof runRun>>;
+  try {
+    report = await runRun(
+      { ...validated, tasks },
+      {
+        cwd: flag("cwd", process.cwd()),
+        bus,
+        signal: canceller.signal,
+        verbose,
+        askPolicy: asker?.policy,
+        // The containment line and the not-negotiated line are never silenced
+        // (#13); `unverified` and `version` are advisory and `--quiet` drops
+        // them. That split is `printableWarnings`' to make — it is the one
+        // place with a test for it, and a bare `if` here is exactly what
+        // could be inverted unnoticed. A notice with no kind is not a
+        // `warningsFor` warning and always prints.
+        onNotice: (taskId, text, kind) => {
+          if (kind && printableWarnings([{ kind, text }], quiet).length === 0) {
+            return;
+          }
+          console.error(`! [${taskId}] ${text}`);
+        },
+      },
+    );
+  } finally {
+    asker?.close();
+  }
+
+  if (quiet) {
+    // `--quiet` suppresses the summary, not the fact that a task failed.
+    // The single-agent path has always printed its error on stderr under
+    // `--quiet`; a run file must not fail silently on exit code alone.
+    //
+    // Keyed on **status**, not on `error`. `error` is set only when a task
+    // threw, and the whole point of M1b-2's stop-reason table is that a task
+    // can fail without throwing: `refusal`, `max_tokens`, `max_turn_requests`
+    // and `timed_out` all return normally and carry no error text. Keying on
+    // `error` left exactly those exiting 1 in silence.
+    for (const task of report.tasks) {
+      if (task.status === "done" || task.status === "warned") continue;
+      // The id always leads: a thrown message names the task only because
+      // `AcpAgent` happens to be named after it, and a status line has no
+      // other way to say which of six tasks this is.
+      console.error(`error: [${task.id}] ${task.error ?? task.status}`);
+    }
+  } else {
+    console.log(`\n${"═".repeat(60)}`);
+    for (const task of report.tasks) printTask(task);
+    console.log(
+      `\n${report.status} — ${plural(report.tasks.length, "task")}, ` +
+        `${plural(report.turns, "turn")}, ` +
+        `${(report.durationMs / 1000).toFixed(1)}s`,
+    );
+  }
+
+  // ^C exits 130, as the single-agent path does. The grace timer reaches 130
+  // too, but only when the run is still going when it fires — a run that
+  // settles inside the grace must not report a plain failure instead.
+  if (canceller.signal.aborted) return 130;
+
+  // `warned` is a run that finished with something worth reading, not a
+  // failure. Every rung below it means at least one task did not complete.
+  return report.status === "done" || report.status === "warned" ? 0 : 1;
+}
+
+/**
+ * `1 turns` was the old summary. A run of one task is common enough — a single
+ * spawn failure makes it the interesting case — to be worth this.
+ *
+ * A `function` and not a `const`: everything below `runFromFile`'s call site
+ * is still in the temporal dead zone when it runs, because that call is made
+ * from top-level code above. A `const` arrow here threw `ReferenceError` and
+ * swallowed the whole summary line.
+ */
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function printTask(task: TaskRun): void {
+  const secs = (task.durationMs / 1000).toFixed(1);
+  console.log(`\n▸ ${task.id} (${task.agent}) ${task.status} in ${secs}s`);
+  if (task.error) console.log(`  error: ${task.error}`);
+  // Verbatim, tagged by the task above, and never added to another task's:
+  // copilot counts cumulatively where opencode counts per turn (M0-5).
+  if (task.usage) {
+    console.log(
+      `  tokens: ${task.usage.totalTokens} total ` +
+        `(${task.usage.inputTokens} in, ${task.usage.outputTokens} out)`,
+    );
+  }
+  const prose = task.transcript.trim();
+  if (prose) console.log(prose);
 }

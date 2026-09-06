@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import type { AgentEntry } from "../protocol/registry.ts";
 import {
+  RUN_KEYS,
   type Run,
   type RunInput,
+  TASK_KEYS,
   type Task,
   type TaskInput,
   validateRun,
@@ -252,4 +255,20 @@ test("the run itself must be an object with tasks", () => {
   throwsWith([], /must be a JSON object/);
   throwsWith({ agent: "demo" }, /non-empty "tasks" array/);
   throwsWith({ agent: "demo", tasks: [] }, /non-empty "tasks" array/);
+});
+
+// --- the JSON Schema is an authoring aid, and must not drift (M1b-2, #18) ----
+
+test("the run-file schema lists exactly the keys the validator knows", async () => {
+  // The one real cost of shipping a schema is that it becomes a second copy
+  // of the field list. This is the guard: the validator stays the single
+  // source of truth, and the schema is asserted equal to it.
+  const path = new URL("../schema/run.schema.json", import.meta.url);
+  const schema = JSON.parse(await readFile(path, "utf8"));
+
+  assert.deepEqual(Object.keys(schema.properties).sort(), [...RUN_KEYS].sort());
+  assert.deepEqual(
+    Object.keys(schema.$defs.task.properties).sort(),
+    [...TASK_KEYS].sort(),
+  );
 });

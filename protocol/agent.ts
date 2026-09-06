@@ -271,6 +271,23 @@ export class AcpAgent {
       );
     });
 
+    // A harness that dies at spawn leaves its stdin a broken pipe, and the
+    // write reports that **asynchronously** as an `error` event on the socket.
+    // Node throws an unhandled `error` event, so without this listener a
+    // harness that could not start takes the whole supervisor down with it —
+    // every other task in the run included. `#send`'s try/catch cannot help:
+    // the write returns normally and fails a tick later.
+    //
+    // Swallowed rather than propagated, because the reason is already covered:
+    // `close` above fails every pending request with the real exit message and
+    // the harness's own stderr, which is what the caller wants to read. Found
+    // by CI on M1b-2 (#18) — a narrow race the local suite never lost.
+    proc.stdin.on("error", (err: Error) => {
+      if (this.verbose) {
+        process.stderr.write(`[${this.name}:stdin] ${err.message}\n`);
+      }
+    });
+
     proc.on("close", (code: number | null) => {
       this.#closed = true;
       this.#failAll(new Error(this.#exitMessage(code)));
