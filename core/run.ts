@@ -26,7 +26,12 @@
  */
 
 import { AcpAgent, type Policy } from "../protocol/agent.ts";
-import { resolveAgent, resolveEnv, warningsFor } from "../protocol/registry.ts";
+import {
+  resolveAgent,
+  resolveEnv,
+  type Warning,
+  warningsFor,
+} from "../protocol/registry.ts";
 import type { StopReason, Usage } from "../protocol/types.ts";
 import { createEventBus, type EventBus } from "./events.ts";
 import { negotiateSafeMode, policyFor } from "./policy.ts";
@@ -72,7 +77,21 @@ const BY_SEVERITY: readonly TaskStatus[] = [
 export interface StopRecord {
   /** Absent when the harness died before any turn ended. */
   stopReason?: StopReason;
-  /** We sent `session/cancel` while this task was live. */
+  /**
+   * The operator cancelled the run while this task was live.
+   *
+   * **Intent, not delivery.** An earlier draft of this said "we sent
+   * `session/cancel`", which the code never measured and should not: a task
+   * still queued when ^C lands, and a task aborted before it had a session,
+   * both had no notification to send and are plainly `cancelled` rather than
+   * `failed`. Keying on the send would label those wrongly, and it is the
+   * operator's intent that M0-4 made authoritative over a `stopReason` the
+   * harness may have lied about.
+   *
+   * One consequence is deliberate: a harness that fails to spawn *during* a
+   * cancel reads as `cancelled`, not `failed`. The spawn error is not lost —
+   * it stays on `TaskRun.error` and is printed either way.
+   */
   cancelRequested: boolean;
   /** The watchdog cut it off. M1c-1 becomes the producer; today always false. */
   watchdogFired: boolean;
@@ -186,9 +205,13 @@ interface TaskContext {
    *  the executor never re-decides who may approve what. */
   policy: Policy;
   /** Containment and negotiation notices. **Not** on the bus: `--quiet`
-   *  switches the bus's renderer off and #13 says these lines are never
-   *  silenced, so they take a route `--quiet` cannot reach. */
-  onNotice: (text: string) => void;
+   *  switches the bus's renderer off and #13 says the containment line is
+   *  never silenced, so it takes a route `--quiet` cannot reach.
+   *
+   *  `kind` is carried, not decided: `printableWarnings` owns which kinds
+   *  `--quiet` may drop, and it owns that rule because it has a test for it.
+   *  A notice with no kind is unconditional. */
+  onNotice: (text: string, kind?: Warning["kind"]) => void;
   /** Called by the real executor immediately before `session/prompt`, so the
    *  run's turn count counts prompts sent, not tasks attempted. A task whose
    *  harness cannot start sends no prompt and must not count as a turn. */
@@ -231,7 +254,7 @@ export interface RunOptions {
    */
   askPolicy?: Policy;
   /** Notices a run must print even under `--quiet` (#13). */
-  onNotice?: (taskId: string, text: string) => void;
+  onNotice?: (taskId: string, text: string, kind?: Warning["kind"]) => void;
 }
 
 /**
@@ -336,7 +359,7 @@ async function runOne(
         task.mode === "ask" && options.askPolicy
           ? options.askPolicy
           : policyFor(task.mode),
-      onNotice: (text) => options.onNotice?.(task.id, text),
+      onNotice: (text, kind) => options.onNotice?.(task.id, text, kind),
       onTurn,
     });
     record();
@@ -390,10 +413,23 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     onEvent: ctx.bus.emit,
   });
 
+  // **Not `{ once: true }`.** `AcpAgent.cancel()` returns immediately when
+  // there is no session yet, so a `once` listener consumed by an abort during
+  // spawn or the handshake would be gone by the time a session exists —
+  // leaving a cancelled task with nothing left to cancel it.
   const onAbort = () => agent.cancel();
-  ctx.signal.addEventListener("abort", onAbort, { once: true });
+  ctx.signal.addEventListener("abort", onAbort);
+
+  // The listener alone is not enough for the same reason: a cancel that
+  // arrives before the session cannot be *sent*, so startup has to stop by
+  // itself. Checked at each boundary, because a task that reaches
+  // `session/prompt` after the operator pressed ^C starts mutating a
+  // workspace they already told us to leave alone. No `stopReason`: nothing
+  // ended a turn, and `statusFor` reads the abort as `cancelled`.
+  const cancelled = () => ctx.signal.aborted;
 
   try {
+    if (cancelled()) return {};
     const init = await agent.start();
 
     // The containment notice is never silenced (#13). Handed to the caller
@@ -405,15 +441,24 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
       task.mode,
       init.agentInfo?.version,
     )) {
-      ctx.onNotice(w.text);
+      // The `kind` travels with the text. Dropping it here made `--quiet`
+      // print the advisory `unverified` and `version` lines that
+      // `printableWarnings` exists to filter — the caller cannot re-derive a
+      // category from a sentence, and #13's rule must stay in the one place
+      // that has a test for it.
+      ctx.onNotice(w.text, w.kind);
     }
 
+    if (cancelled()) return {};
     await agent.newSession();
+    // No kind: the not-negotiated line is not a `warningsFor` warning and is
+    // never suppressible (#13), so it takes the unconditional route.
     const notNegotiated = await negotiateSafeMode(agent, spec, task.mode);
     if (notNegotiated) ctx.onNotice(notNegotiated);
 
     // Count at the prompt boundary, not at spawn: a task that fails to start
     // sends no prompt, and a task cancelled before this line sends none either.
+    if (cancelled()) return {};
     ctx.onTurn();
     const { stopReason, usage } = await agent.prompt(task.prompt);
     return usage === undefined ? { stopReason } : { stopReason, usage };

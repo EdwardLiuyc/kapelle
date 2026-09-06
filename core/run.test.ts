@@ -193,6 +193,30 @@ test("a task that fails before its prompt is not a turn", async () => {
   assert.equal(report.status, "failed");
 });
 
+test("a task that stops early because it was cancelled reads as cancelled", async () => {
+  // What `runTask`'s pre-session abort guards produce: no `stopReason`,
+  // because nothing ended a turn, and no `onTurn`, because no prompt went
+  // out. Without the abort that shape is a failure; with it, the operator's
+  // intent wins — which is the half of the guard the pool owns.
+  const abort = new AbortController();
+  abort.abort();
+
+  const report = await runRun(
+    runOf(1, 1),
+    { ...options(), signal: abort.signal },
+    async () => ({}),
+  );
+
+  assert.equal(report.tasks[0]?.status, "cancelled");
+  assert.equal(report.turns, 0, "a cancelled task sends no prompt");
+});
+
+test("the same early stop without a cancel is a failure", async () => {
+  const report = await runRun(runOf(1, 1), options(), async () => ({}));
+
+  assert.equal(report.tasks[0]?.status, "failed", "no turn ever ended");
+});
+
 test("a task that sent its prompt before it threw counts one turn", async () => {
   const exec: TaskExecutor = async (_task, ctx) => {
     ctx.onTurn();

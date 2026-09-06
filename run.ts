@@ -117,110 +117,119 @@ function orExit<T>(f: () => T): T {
   }
 }
 
-if (runFilePath) process.exit(await runFromFile(runFilePath));
-
-const spec = orExit(() => resolveAgent(flag("agent", "opencode"), flag("cmd")));
-
-// `task > run > harness > default`: run.ts is one task, so `--mode` is the run
-// layer and the registry entry is the harness layer. An unknown mode, or one
-// above the entry's ceiling, is a validation error here rather than a silent
-// downgrade. There is no `--allow-read-outside-root` flag: the task layer that
-// carries it arrives with M1b-1's run file, and inventing a CLI surface for it
-// now would be a second place to keep in step.
-// The cast is the boundary: argv is strings, and `resolvePolicy` is the one
-// place that validates a mode — it throws naming the known ones, which is a
-// better error than anything a second check here could produce.
-const resolveOrExit = (mode: string | undefined): ResolvedPolicy =>
-  orExit(() =>
-    resolvePolicy({
-      run: { mode: mode as ClientMode | undefined },
-      harness: {
-        name: spec.name,
-        mode: spec.defaultMode,
-        maxMode: spec.maxMode,
-      },
-    }),
+// `process.exitCode`, never `process.exit()`: this path has just written buffered
+// task transcripts, and a forced exit can cut a pipe-backed stdout off mid-flush.
+// It would also beat the SIGINT handler's own 130 whenever a cancelled run
+// settles inside the two-second grace. The single-agent path below is an
+// `else` for the same reason — there is nothing left to skip past.
+if (runFilePath) {
+  process.exitCode = await runFromFile(runFilePath);
+} else {
+  const spec = orExit(() =>
+    resolveAgent(flag("agent", "opencode"), flag("cmd")),
   );
 
-let resolved = resolveOrExit(flag("mode"));
-let closeAsk = () => {};
+  // `task > run > harness > default`: run.ts is one task, so `--mode` is the run
+  // layer and the registry entry is the harness layer. An unknown mode, or one
+  // above the entry's ceiling, is a validation error here rather than a silent
+  // downgrade. There is no `--allow-read-outside-root` flag: the task layer that
+  // carries it arrives with M1b-1's run file, and inventing a CLI surface for it
+  // now would be a second place to keep in step.
+  // The cast is the boundary: argv is strings, and `resolvePolicy` is the one
+  // place that validates a mode — it throws naming the known ones, which is a
+  // better error than anything a second check here could produce.
+  const resolveOrExit = (mode: string | undefined): ResolvedPolicy =>
+    orExit(() =>
+      resolvePolicy({
+        run: { mode: mode as ClientMode | undefined },
+        harness: {
+          name: spec.name,
+          mode: spec.defaultMode,
+          maxMode: spec.maxMode,
+        },
+      }),
+    );
 
-// `ask` degrades to `safe` without a TTY, and re-resolves rather than just
-// renaming itself, so `safe`'s own rules apply to the mode we actually run.
-if (resolved.mode === "ask" && !process.stdin.isTTY) {
-  console.error("! not a TTY — falling back to --mode safe");
-  resolved = resolveOrExit("safe");
-}
+  let resolved = resolveOrExit(flag("mode"));
+  let closeAsk = () => {};
 
-let policy = policyFor(resolved.mode);
-if (resolved.mode === "ask") {
-  const asker = makeAskPolicy();
-  policy = asker.policy;
-  closeAsk = asker.close;
-}
-
-// M1a-6: every consumer subscribes; nothing reads agent state directly.
-const bus = createEventBus();
-if (!quiet) bus.addListener(render);
-
-const agent = new AcpAgent({
-  name: spec.name,
-  command: spec.launch.command,
-  args: spec.launch.args,
-  env: resolveEnv(spec.launch.env),
-  cwd: flag("cwd", process.cwd()),
-  policy,
-  allowReadOutsideRoot: resolved.allowReadOutsideRoot,
-  verbose,
-  onEvent: bus.emit,
-});
-
-process.on("SIGINT", () => {
-  console.error("\n^C cancelling turn…");
-  agent.cancel();
-  setTimeout(() => {
-    agent.stop();
-    process.exit(130);
-  }, 2000);
-});
-
-try {
-  const init = await agent.start();
-  if (!quiet) {
-    const who = init.agentInfo
-      ? `${init.agentInfo.name} ${init.agentInfo.version ?? ""}`.trim()
-      : spec.name;
-    console.log(`connected to ${who} (ACP v${init.protocolVersion})`);
+  // `ask` degrades to `safe` without a TTY, and re-resolves rather than just
+  // renaming itself, so `safe`'s own rules apply to the mode we actually run.
+  if (resolved.mode === "ask" && !process.stdin.isTTY) {
+    console.error("! not a TTY — falling back to --mode safe");
+    resolved = resolveOrExit("safe");
   }
 
-  // M1a-4 decides these lines; this story decides which survive `--quiet`.
-  // The rule itself sits in the registry next to `warningsFor`, where it has
-  // a test — a bare `if` here is exactly what could be inverted unnoticed.
-  const warnings = printableWarnings(
-    warningsFor(spec.name, spec, resolved.mode, init.agentInfo?.version),
-    quiet,
-  );
-  for (const w of warnings) console.error(`! ${w.text}`);
+  let policy = policyFor(resolved.mode);
+  if (resolved.mode === "ask") {
+    const asker = makeAskPolicy();
+    policy = asker.policy;
+    closeAsk = asker.close;
+  }
 
-  await agent.newSession();
+  // M1a-6: every consumer subscribes; nothing reads agent state directly.
+  const bus = createEventBus();
+  if (!quiet) bus.addListener(render);
 
-  // `safe`'s other half: negotiate before the first prompt, because filtering
-  // reaches nothing on a harness that never asks. Printed like the containment
-  // lines and, like them, not suppressed by --quiet (#13): this line says how
-  // much of `safe` is actually in force.
-  const notNegotiated = await negotiateSafeMode(agent, spec, resolved.mode);
-  if (notNegotiated) console.error(`! ${notNegotiated}`);
-  if (!quiet) console.log(`session ${agent.sessionId}\n`);
+  const agent = new AcpAgent({
+    name: spec.name,
+    command: spec.launch.command,
+    args: spec.launch.args,
+    env: resolveEnv(spec.launch.env),
+    cwd: flag("cwd", process.cwd()),
+    policy,
+    allowReadOutsideRoot: resolved.allowReadOutsideRoot,
+    verbose,
+    onEvent: bus.emit,
+  });
 
-  // The whole PromptResponse is returned (#62 B3); M1 renders only stopReason.
-  const { stopReason } = await agent.prompt(promptText);
-  if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
-} catch (err) {
-  console.error(`\nerror: ${messageOf(err)}`);
-  process.exitCode = 1;
-} finally {
-  closeAsk();
-  agent.stop();
+  process.on("SIGINT", () => {
+    console.error("\n^C cancelling turn…");
+    agent.cancel();
+    setTimeout(() => {
+      agent.stop();
+      process.exit(130);
+    }, 2000);
+  });
+
+  try {
+    const init = await agent.start();
+    if (!quiet) {
+      const who = init.agentInfo
+        ? `${init.agentInfo.name} ${init.agentInfo.version ?? ""}`.trim()
+        : spec.name;
+      console.log(`connected to ${who} (ACP v${init.protocolVersion})`);
+    }
+
+    // M1a-4 decides these lines; this story decides which survive `--quiet`.
+    // The rule itself sits in the registry next to `warningsFor`, where it has
+    // a test — a bare `if` here is exactly what could be inverted unnoticed.
+    const warnings = printableWarnings(
+      warningsFor(spec.name, spec, resolved.mode, init.agentInfo?.version),
+      quiet,
+    );
+    for (const w of warnings) console.error(`! ${w.text}`);
+
+    await agent.newSession();
+
+    // `safe`'s other half: negotiate before the first prompt, because filtering
+    // reaches nothing on a harness that never asks. Printed like the containment
+    // lines and, like them, not suppressed by --quiet (#13): this line says how
+    // much of `safe` is actually in force.
+    const notNegotiated = await negotiateSafeMode(agent, spec, resolved.mode);
+    if (notNegotiated) console.error(`! ${notNegotiated}`);
+    if (!quiet) console.log(`session ${agent.sessionId}\n`);
+
+    // The whole PromptResponse is returned (#62 B3); M1 renders only stopReason.
+    const { stopReason } = await agent.prompt(promptText);
+    if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
+  } catch (err) {
+    console.error(`\nerror: ${messageOf(err)}`);
+    process.exitCode = 1;
+  } finally {
+    closeAsk();
+    agent.stop();
+  }
 }
 
 /**
@@ -247,6 +256,18 @@ async function runFromFile(path: string): Promise<number> {
       );
       return 1;
     }
+  }
+
+  // A positional prompt is the same conflict, and the most dangerous shape of
+  // it: `run.ts --file tasks.json "and also do X"` reads like it queued the
+  // extra work. Silently dropping it would be the one failure mode the three
+  // flags above are rejected to avoid.
+  if (promptText) {
+    console.error(
+      `a prompt does not apply with --file: a run file carries one prompt ` +
+        `per task. Got ${JSON.stringify(promptText)}.`,
+    );
+    return 1;
   }
 
   let parsed: unknown;
@@ -312,7 +333,11 @@ async function runFromFile(path: string): Promise<number> {
   process.on("SIGINT", () => {
     console.error("\n^C cancelling run…");
     canceller.abort();
-    setTimeout(() => process.exit(130), 2000);
+    // `unref`: the grace timer is a safety net for a harness that ignores the
+    // cancel, not a two-second pause on a run that stopped promptly. An
+    // unref'd timer still fires while the loop is alive for other reasons —
+    // it just stops being a reason of its own.
+    setTimeout(() => process.exit(130), 2000).unref();
   });
 
   let report: Awaited<ReturnType<typeof runRun>>;
@@ -325,8 +350,18 @@ async function runFromFile(path: string): Promise<number> {
         signal: canceller.signal,
         verbose,
         askPolicy: asker?.policy,
-        // Containment and negotiation notices are never silenced (#13).
-        onNotice: (taskId, text) => console.error(`! [${taskId}] ${text}`),
+        // The containment line and the not-negotiated line are never silenced
+        // (#13); `unverified` and `version` are advisory and `--quiet` drops
+        // them. That split is `printableWarnings`' to make — it is the one
+        // place with a test for it, and a bare `if` here is exactly what
+        // could be inverted unnoticed. A notice with no kind is not a
+        // `warningsFor` warning and always prints.
+        onNotice: (taskId, text, kind) => {
+          if (kind && printableWarnings([{ kind, text }], quiet).length === 0) {
+            return;
+          }
+          console.error(`! [${taskId}] ${text}`);
+        },
       },
     );
   } finally {
@@ -359,6 +394,11 @@ async function runFromFile(path: string): Promise<number> {
         `${(report.durationMs / 1000).toFixed(1)}s`,
     );
   }
+
+  // ^C exits 130, as the single-agent path does. The grace timer reaches 130
+  // too, but only when the run is still going when it fires — a run that
+  // settles inside the grace must not report a plain failure instead.
+  if (canceller.signal.aborted) return 130;
 
   // `warned` is a run that finished with something worth reading, not a
   // failure. Every rung below it means at least one task did not complete.

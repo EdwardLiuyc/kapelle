@@ -388,14 +388,34 @@ test("two asking tasks are refused a prompt they would have to share", async (t)
   assert.deepEqual(await readdir(cwd), [], "both ran as safe");
 });
 
-test("--quiet drops the run summary but never the containment notice", async (t) => {
+test("--file --quiet drops the advisory line, exactly as one prompt does", async (t) => {
+  // This test used to assert the opposite, and the opposite was a regression:
+  // `--file` forwarded every `warningsFor` result with its `kind` discarded,
+  // so `--quiet` printed the advisory `unverified` line that the single-agent
+  // path drops (#13, `printableWarnings`). A `--cmd` spec is unmeasured, so
+  // the advisory line is the only one reachable offline — the containment
+  // variant needs a measured registry entry, as the fanout tests above note.
   const cwd = await tempDir(t);
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+  const loud = await runCli(t, ["--file", file, "--cwd", cwd]);
+  assert.match(loud.stderr, /no measured labels for this harness/);
 
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
   assert.equal(r.stdout, "");
-  assert.match(r.stderr, /no measured labels for this harness/);
+  assert.equal(r.stderr, "", "unverified is advisory, so --quiet drops it");
+});
+
+test("a prompt alongside --file is refused, not silently dropped", async (t) => {
+  // The dangerous shape of the same conflict `--agent`/`--cmd`/`--mode` are
+  // rejected for: this one reads as if the extra work was queued.
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const r = await runCli(t, ["--file", file, "and also do this"]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /a prompt does not apply with --file/);
+  assert.match(r.stderr, /and also do this/);
 });
 
 test("a task whose harness cannot start fails alone, and fails the run", async (t) => {
