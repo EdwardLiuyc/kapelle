@@ -122,7 +122,7 @@ One reply per thread, posted **into the thread** rather than as a new top-level 
 
 ```bash
 gh api -X POST repos/{owner}/{repo}/pulls/<N>/comments/<comment-id>/replies \
-  --field body="$(cat reply.md)"
+  -F body=@reply.md
 ```
 
 Every reply carries three things: the **verdict**, the **commit** that acts on it, and the
@@ -154,8 +154,12 @@ Close with the CI state and the one thing that still blocks a merge.
 - **Never claim a check you have not run, or a green you have not read.**
 - **Reproduce before you fix, and say so when you could not.**
 - **Do not fix past the comment.** Extra scope is its own commit, named as such.
-- Post replies with `--field body="$(cat file)"` or a heredoc into a file — never inline,
-  because backticks and quotes will not survive the shell.
+- Write every reply to a file and post it with `-F body=@reply.md` — never inline, because
+  backticks and quotes will not survive the shell. The file form keeps the body out of the
+  shell entirely, so nothing has to survive it; it is also the form the Projects rule below
+  already uses. (`-F body="$(cat reply.md)"` does keep newlines — quoted command
+  substitution does not word-split — but it drops the trailing newline and puts the body
+  back through the shell for no gain.)
 - `gh pr edit` fails on some repos with Projects (classic) enabled. When updating a PR
   body, use `gh api -X PATCH repos/{owner}/{repo}/pulls/<N> -F body=@<file>` instead, then
   read it back to confirm it landed.
