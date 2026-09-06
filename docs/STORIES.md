@@ -680,6 +680,13 @@ do not exist yet (M1b-2, M1b-3, M1c-1); each story widens the union when it land
 producer. The sixth, the containment warning, deliberately stays on stderr: routing it
 through the bus would put it behind a sink `--quiet` can switch off, and #13 says that line
 is never silenced.
+**Renamed 2026-09-06 (M1b-2 review): `subscribe` → `addListener`.** Not a correction —
+`bus.subscribe(fn)` is RxJS's shape and reads fine on its own. It reads *backwards* in a
+sentence: `taskBus.subscribe(runBus.emit)` sounds like the task bus subscribing to the run
+bus, when the run bus is the one being added as a listener. `addListener` also matches this
+file's own `BusListener` type, which `subscribe` did not. Done now because the cost only
+grows: five production call sites today, and M2's persisted log, M4's SSE stream and
+`core/notify.ts` each add one. Mechanical — 14 sites, no behaviour change.
 
 **M1a-7 · Port `render.mjs` and `run.mjs` · S · needs M1a-6**
 `run.ts` keeps driving in-process, TTY `ask` intact.
@@ -871,10 +878,49 @@ lands here rather than in M1b-1 because this is where `--file` and the first rea
 arrive, and a schema with nothing pointing at it is a file nobody updates. Drift is the one
 real cost, so `core/runfile.ts` exports `RUN_KEYS` and `TASK_KEYS` and one test asserts the
 schema's property names equal those Sets — the validator stays the single source of truth.
+**Amendment 2026-09-05 — the `$schema` line is deferred; the schema file is not.**
+`schema/run.schema.json` ships and its drift test with it. The `$schema` line does not,
+because it has nowhere honest to point yet: a repo-relative path breaks the moment a run
+file sits in the repo being worked on, which is the normal case, and the raw URL for this
+file 404s until the branch merges. The line is an editor convenience with no runtime effect,
+so it costs nothing to add once a stable URL exists. One clause is struck from *done when*
+below; the drift test — the only thing standing between the schema and a second, silently
+wrong copy of the field list — is untouched.
+
+**Amendment 2026-09-05 — `ask` inside a run file survives for exactly one asker.** Not
+foreseen by the story. The limit is not "a run file", it is the **decider**: `makeAskPolicy`
+owns a single readline over one stdin, so two tasks prompting at once would interleave two
+questions on one line and attribute an answer to whichever asked last — the fail-open shape
+#13 exists to prevent. So `ask` runs as asked when **one** task asks and a TTY exists;
+otherwise every asking task re-resolves as `safe`, rather than renaming itself, so `safe`'s
+own rules — including forcing `allowReadOutsideRoot` false — apply to what actually runs.
+A notice on stderr says which case fired.
+
+It is a downgrade often but not always, because every registry entry is `defaultMode: "ask"`
+(`protocol/registry.ts`): a run file naming no mode has every task inherit one, and a
+two-task file of that shape runs as `safe`. **M2-3 is what lifts the limit to N askers** —
+its pending-decision list replaces the single readline with a queue, and its recorded
+decision (first writer wins; a second answer to a settled decision is a defined error) is
+the same collision seen from the API side. `core/run.ts` takes the decider as
+`RunOptions.askPolicy` and never builds one, so M2-3 supplies a different decider rather
+than editing the pool.
+
+The interactive half is **verified by hand, not by the suite**: a test runner has no TTY, the
+same reason `docs/STORIES.md` already records `--mode ask` as untestable in CI. Measured
+2026-09-05 against `mock-agent.mjs` under a pty — the prompt appeared, `y` was answered, and
+`ACP_TEST.md` was written. What CI does cover is the two halves that need no TTY: the
+downgrade notices, and a `node:test` case asserting `askPolicy` reaches the asking task and
+no other.
+
+**Amendment 2026-09-05 — `--agent`, `--cmd` and `--mode` are refused alongside `--file`.**
+A run file has already resolved all three per task, against each harness's ceiling. A flag
+would be a second, unresolved answer to a settled question, and either direction of silent
+precedence runs something other than what was asked for — the failure `resolvePolicy` raises
+on rather than downgrades.
+
 *Done when* `node:test` covers the stop-reason table and the roll-up ordering, a six-task
 run file with `maxConcurrency: 2` never has three live subprocesses, and the run-file JSON
-Schema's property names are asserted equal to `RUN_KEYS` and `TASK_KEYS` by a test, with the
-example run file carrying a `$schema` line.
+Schema's property names are asserted equal to `RUN_KEYS` and `TASK_KEYS` by a test.
 
 **M1b-3 · `core/worktree.ts` · M · needs M1a-8**
 `git worktree add` off a base ref into `.agent-team/wt/<runId>/<taskId>`. Preflight: repo

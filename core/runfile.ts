@@ -76,7 +76,10 @@ export interface RunInput {
   worktree?: string;
 }
 
-const RUN_KEYS = new Set([
+/** Exported for the run-file JSON Schema's drift test (M1b-2, #18): the
+ *  schema is an authoring aid an editor reads, never a second validator, so
+ *  its property list is asserted equal to these Sets rather than trusted. */
+export const RUN_KEYS = new Set([
   "tasks",
   "maxConcurrency",
   "note",
@@ -89,7 +92,7 @@ const RUN_KEYS = new Set([
 
 /** `needs` is listed so a dependency gets the M3 message rather than the
  *  unknown-key one. The schema stays stable; only the behaviour refuses. */
-const TASK_KEYS = new Set([
+export const TASK_KEYS = new Set([
   "id",
   "prompt",
   "agent",

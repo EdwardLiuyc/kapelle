@@ -53,7 +53,7 @@ const results = await Promise.allSettled(
     const transcript = [];
 
     const bus = createEventBus();
-    bus.subscribe(({ update }) => {
+    bus.addListener(({ update }) => {
       if (
         update.sessionUpdate === "agent_message_chunk" &&
         update.content?.text

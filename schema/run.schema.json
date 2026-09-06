@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/EdwardLiuyc/agent-team/schema/run.schema.json",
+  "title": "agent-team run file",
+  "description": "An authoring aid, not a validator. core/runfile.ts's validateRun is the only check that runs: a schema cannot fill defaults, reach the agent registry for the maxMode ceiling, spot a duplicate task id, or say \"task dependencies land in M3\". One test asserts these property names equal RUN_KEYS and TASK_KEYS, so this file cannot drift away from the validator unnoticed.",
+  "type": "object",
+  "required": ["tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/task" }
+    },
+    "maxConcurrency": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 4,
+      "description": "Most harness subprocesses alive at once."
+    },
+    "note": {
+      "type": "string",
+      "description": "What a JSON comment would have said."
+    },
+    "agent": {
+      "type": "string",
+      "description": "Run-level default. A task's own agent wins."
+    },
+    "mode": { "$ref": "#/$defs/mode" },
+    "allowReadOutsideRoot": {
+      "type": "boolean",
+      "description": "Forced to false under safe, however it was asked for."
+    },
+    "cmd": {
+      "type": "string",
+      "description": "A custom harness command, e.g. \"node mock-agent.mjs\". Wins over agent, and warns as unverified — it has no measured half."
+    },
+    "worktree": {
+      "type": "string",
+      "description": "A base ref to branch from. Never a path, and never another task's name: worktree inheritance lands in M3."
+    }
+  },
+  "$defs": {
+    "mode": {
+      "enum": ["safe", "ask", "auto"],
+      "description": "safe = reads only; ask = mutations prompt (needs a TTY, else it resolves as safe); auto = approve everything. A mode above the agent's ceiling is rejected, never downgraded."
+    },
+    "task": {
+      "type": "object",
+      "required": ["id", "prompt"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Names a git branch, so it is validated and never sanitised. Unique within the run."
+        },
+        "prompt": { "type": "string" },
+        "agent": { "type": "string" },
+        "mode": { "$ref": "#/$defs/mode" },
+        "allowReadOutsideRoot": { "type": "boolean" },
+        "cmd": { "type": "string" },
+        "worktree": { "type": "string" },
+        "note": { "type": "string" },
+        "needs": {
+          "type": "array",
+          "maxItems": 0,
+          "items": { "type": "string" },
+          "description": "Task dependencies land in M3. M1 rejects a non-empty needs rather than running the tasks in parallel and returning a plausible wrong answer."
+        }
+      }
+    }
+  }
+}
