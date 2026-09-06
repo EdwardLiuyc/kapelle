@@ -1,6 +1,6 @@
 ---
 name: pickup-issue
-description: "Pick up a GitHub issue before writing code: read the issue and every comment, cross-check against the repo's plan/story docs, post a short scope + acceptance-criteria comment that names the gaps, and print a manual-vs-agent work split to the terminal. Trigger: /pickup-issue <number>, or any request to 'pick up', 'start', 'scope', or 'break down' an issue."
+description: "Pick up a GitHub issue before writing code: read the issue and every comment, cross-check against the repo's plan/story docs, put the open decisions to the developer with context, options and a recommendation, post a short scope + acceptance-criteria comment that names the gaps and the decisions taken, and print a manual-vs-agent work split to the terminal. Trigger: /pickup-issue <number>, or any request to 'pick up', 'start', 'scope', or 'break down' an issue."
 ---
 
 # pickup-issue
