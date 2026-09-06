@@ -72,3 +72,6 @@ follow it.
 
 - **[`pickup-issue`](.agent/skills/pickup-issue/SKILL.md)** — run when asked to pick up,
   start, scope or break down a GitHub issue, before writing any code.
+- **[`address-comment`](.agent/skills/address-comment/SKILL.md)** — run when asked to
+  address, handle, triage or answer review comments on a pull request. Ends with CI read
+  and a reply on every thread, including the rejected ones.
