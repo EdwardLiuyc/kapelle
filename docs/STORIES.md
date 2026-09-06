@@ -890,8 +890,8 @@ wrong copy of the field list — is untouched.
 **Amendment 2026-09-05 — `ask` inside a run file survives for exactly one asker.** Not
 foreseen by the story. The limit is not "a run file", it is the **decider**: `makeAskPolicy`
 owns a single readline over one stdin, so two tasks prompting at once would interleave two
-questions on one line and attribute an answer to whichever asked last — the fail-open shape
-#13 exists to prevent. So `ask` runs as asked when **one** task asks and a TTY exists;
+questions on one line and attribute an answer to whichever asked last — the fail-open
+shape #13 exists to prevent. So `ask` runs as asked when **one** task asks and a TTY exists;
 otherwise every asking task re-resolves as `safe`, rather than renaming itself, so `safe`'s
 own rules — including forcing `allowReadOutsideRoot` false — apply to what actually runs.
 A notice on stderr says which case fired.
