@@ -1118,7 +1118,11 @@ and not the other, for two reasons. `core/run.ts` is named as a deliverable in M
 `run.ts` is the one whose name stops being user-facing **here** — after the `bin` lands,
 people type `agent-team run`, never a filename, so this story is the last moment the rename
 is nearly free. It touches `package.json`, the README, `cli.test.ts`,
-`integration/helpers.ts` and `CLAUDE.md`; all mechanical, all covered by the suite.
+`integration/helpers.ts`, `CLAUDE.md` and the `note` field of every file in
+`assets/example/`; all mechanical, all covered by the suite except the last, which no test
+reads. That last one is listed because it is the one that would rot quietly: the examples
+must stay copy-pasteable, so their notes name the command that works **today**, and this is
+the story that makes `node run.ts` stop being that command.
 `fanout.mjs` needs no decision — M1b-8 deletes it.
 Coordinate with the M2-9 amendment, which drops `runs.ts` entirely, so the end state is two
 files with two jobs and two names: `cli.ts` for everything a person types, `core/run.ts` for
@@ -1337,7 +1341,7 @@ of it. What is dropped is the *file and the name*, not the code: submitting over
 streaming SSE and answering permissions interactively are all still this story's
 deliverable, reached through `--detach` and `attach` instead of a second binary.
 *Done when* `agent-team run <file> --detach` returns a run id while the run continues
-without the launching terminal, and `agent-team attach <id>` on a later terminal receives
+without the launching terminal, and `agent-team attach <run-id>` on a later terminal receives
 the history and then the live tail.
 
 ---
