@@ -1,0 +1,12 @@
+{
+  "note": "Smallest run file. Needs nothing installed. Run it from the repo root and pass no --cwd: the harness is spawned in the workspace root, so a relative \"node mock-agent.mjs\" resolves only when that root is this repo. node run.ts --file assets/example/single_mock.json",
+  "cmd": "node mock-agent.mjs",
+  "mode": "ask",
+  "tasks": [
+    {
+      "id": "a",
+      "prompt": "one",
+      "note": "One asking task plus a TTY is the only shape where ask survives a run file; two askers cannot share one prompt and re-resolve as safe."
+    }
+  ]
+}

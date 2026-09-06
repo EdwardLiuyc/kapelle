@@ -1,0 +1,6 @@
+{
+  "note": "One real harness. Spends tokens and needs claude-agent-acp installed and authenticated: node run.ts --file assets/example/single_claude.json",
+  "agent": "claude",
+  "mode": "auto",
+  "tasks": [{ "id": "single-test", "prompt": "tell me one random fact" }]
+}
