@@ -1,0 +1,22 @@
+{
+  "note": "Three vendors, one run. Spends tokens on all three and needs each installed and authenticated. Token counts stay per task, tagged with their harness, and are never summed — copilot counts cumulatively where the other two count per turn (M0-5).",
+  "maxConcurrency": 3,
+  "mode": "auto",
+  "tasks": [
+    {
+      "id": "test-claude",
+      "agent": "claude",
+      "prompt": "tell me one random fact"
+    },
+    {
+      "id": "test-copilot",
+      "agent": "copilot",
+      "prompt": "tell me one random fact"
+    },
+    {
+      "id": "test-opencode",
+      "agent": "opencode",
+      "prompt": "tell me one random fact"
+    }
+  ]
+}

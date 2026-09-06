@@ -1,0 +1,12 @@
+{
+  "note": "Four tasks, at most two harnesses alive at once. Needs nothing installed. Run it from the repo root and pass no --cwd: the harness is spawned in the workspace root, so a relative \"node mock-agent.mjs\" resolves only when that root is this repo. node run.ts --file assets/example/multiple_mocks.json",
+  "maxConcurrency": 2,
+  "cmd": "node mock-agent.mjs",
+  "mode": "auto",
+  "tasks": [
+    { "id": "a", "prompt": "one" },
+    { "id": "b", "prompt": "two" },
+    { "id": "c", "prompt": "three" },
+    { "id": "d", "prompt": "four" }
+  ]
+}
