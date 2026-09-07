@@ -400,7 +400,11 @@ async function runOne(
   // the failure modes here — a lock left by a killed harness, a filesystem
   // that refuses the delete — say nothing about whether the work succeeded.
   try {
-    await worktrees?.release(task.id, settled.status);
+    // A warning, not a throw: retention that declined to act — a checkout the
+    // harness left on another branch — is a thing to tell the operator about,
+    // and the work is still on disk either way.
+    const kept = await worktrees?.release(task.id, settled.status);
+    if (kept) options.onNotice?.(task.id, kept);
   } catch (err) {
     options.onNotice?.(
       task.id,

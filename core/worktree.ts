@@ -29,7 +29,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { join, relative } from "node:path";
 import { promisify } from "node:util";
 import { branchName } from "./ids.ts";
 import type { TaskStatus } from "./run.ts";
@@ -59,6 +60,35 @@ const RELEASES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
   "warned",
 ]);
 
+/**
+ * The working-tree state, and **never** a bare `status --porcelain`.
+ *
+ * `--porcelain` fixes the *format*, not the *content*: `status.showUntrackedFiles=no`
+ * still empties the list, and a task whose whole output is new files then reads
+ * as untouched — the checkout is removed with the work in it (measured
+ * 2026-09-07, #85). `--untracked-files=all` cannot be weakened by anyone's
+ * config, which is the only property a safety check may rely on. Ignored files
+ * stay out, so `.agent-team/` is still invisible here.
+ */
+function statusOf(cwd: string): Promise<string> {
+  return git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
+}
+
+/**
+ * The tail both ignore refusals share, and the reason it is not just "re-run".
+ *
+ * Editing `.gitignore` is itself an uncommitted change, so the advice as first
+ * written led straight into the dirty-tree refusal below — a fix whose own
+ * result the next preflight rejects (#85). Committing settles it. The
+ * `.git/info/exclude` alternative is offered because it is the one that leaves
+ * no change to commit at all, which is what someone with a deliberately dirty
+ * tree actually needs.
+ */
+const COMMIT_THEN =
+  `commit that change, and re-run. To leave the working tree untouched ` +
+  `instead, put the same line in .git/info/exclude, which is local to your ` +
+  `clone and needs no commit.`;
+
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await run("git", args, { cwd });
   return stdout.trim();
@@ -76,6 +106,8 @@ async function tryGit(cwd: string, args: string[]): Promise<string | null> {
 
 /** One task's checkout, held from `acquire` to `release`. */
 interface Held {
+  /** The checkout root — what `git worktree remove` is given. Not what the
+   *  task runs in when `--cwd` named a subdirectory. */
   path: string;
   branch: string;
   /** The commit the branch started at. `release` compares against it to tell
@@ -84,12 +116,15 @@ interface Held {
 }
 
 export interface Worktrees {
-  /** Creates the worktree and its branch, and returns the path to run in.
+  /** Creates the worktree and its branch, and returns the path to run in —
+   *  the checkout root, or the same subdirectory inside it that `cwd` named.
    *  Throws — naming the ref — if `baseRef` does not resolve to a commit. */
   acquire(taskId: string, baseRef?: string): Promise<string>;
   /** Commits and removes on success, keeps on failure, and rolls back a task
-   *  that produced nothing at all. Safe to call for a task never acquired. */
-  release(taskId: string, status: TaskStatus): Promise<void>;
+   *  that produced nothing at all. Safe to call for a task never acquired.
+   *  Returns a warning to print when it kept a checkout it meant to remove,
+   *  and `null` when retention went as planned. */
+  release(taskId: string, status: TaskStatus): Promise<string | null>;
 }
 
 export interface WorktreeSetup {
@@ -141,7 +176,7 @@ export async function openWorktrees(
       `${STATE_DIR}/ is tracked by git. It holds supervisor state — worktrees, ` +
         `logs, run records — and must not be committed. Run ` +
         `\`git rm -r --cached ${STATE_DIR}\`, add \`${STATE_DIR}/\` to ` +
-        `.gitignore, and re-run.`,
+        `.gitignore, ${COMMIT_THEN}`,
     );
   }
 
@@ -151,14 +186,14 @@ export async function openWorktrees(
     throw new Error(
       `${STATE_DIR}/ is not ignored by git. Worktrees and supervisor state go ` +
         `there, and an unignored one would show up as your changes. Add ` +
-        `\`${STATE_DIR}/\` to .gitignore and re-run.`,
+        `\`${STATE_DIR}/\` to .gitignore, ${COMMIT_THEN}`,
     );
   }
 
   // `.agent-team/` is ignored by the check above, so it can never be the
   // reason this fires — the criterion that the supervisor's own state does not
   // trip its own refusal is met by ordering, not by a second exclusion list.
-  const dirty = await git(root, ["status", "--porcelain"]);
+  const dirty = await statusOf(root);
   if (dirty !== "") {
     throw new Error(
       `the working tree at ${root} has uncommitted changes, and a run branches ` +
@@ -166,6 +201,11 @@ export async function openWorktrees(
         `stash them and re-run.\n${dirty}`,
     );
   }
+
+  // Where `cwd` sits inside the repository, so each task's checkout can be
+  // entered at the same place. Empty for a run started at the repo root, which
+  // is every run today — `join(path, "")` is `path`.
+  const prefix = relative(root, cwd);
 
   const held = new Map<string, Held>();
 
@@ -191,15 +231,54 @@ export async function openWorktrees(
         const path = join(root, STATE_DIR, "wt", runId, taskId);
         await git(root, ["worktree", "add", "-b", branch, path, baseSha]);
         held.set(taskId, { path, branch, baseSha });
-        return path;
+
+        // **The workspace root keeps its shape.** `--cwd packages/app` in a
+        // monorepo asks for that subtree and nothing else, and `#guardPath`
+        // bounds this client's file service to whatever it is handed. Returning
+        // the checkout root would quietly widen that to the whole repository —
+        // a safety boundary moved by an implementation detail of where a
+        // worktree happens to live (measured 2026-09-07, #85).
+        const inside = join(path, prefix);
+        if (!existsSync(inside)) {
+          throw new Error(
+            `${prefix} does not exist at ${baseRef} — the run was asked for ` +
+              `that subdirectory as its workspace root, and the base commit ` +
+              `has no such path to give each task.`,
+          );
+        }
+        return inside;
       },
 
       async release(taskId, status) {
         const task = held.get(taskId);
-        if (!task) return;
+        if (!task) return null;
         held.delete(taskId);
 
-        const dirty = (await git(task.path, ["status", "--porcelain"])) !== "";
+        // **Retention assumes the checkout is still on the task branch, and
+        // says so out loud rather than assuming silently.** An agent that runs
+        // `git checkout -b` in its own worktree moves HEAD, and every line
+        // below would then act on the wrong ref: the commit lands elsewhere
+        // (or dangles, on a detached HEAD), the forced removal takes the
+        // checkout away, and the branch this run advertises stays at its base
+        // ref — so M1c-3 would merge nothing and call it a success (measured
+        // 2026-09-07, #85). Keeping the checkout is the only safe answer: the
+        // work is on disk, and a person can see where it went.
+        const on = await tryGit(task.path, [
+          "symbolic-ref",
+          "--quiet",
+          "--short",
+          "HEAD",
+        ]);
+        if (on !== task.branch) {
+          return (
+            `left its worktree at ${task.path}: it is on ` +
+            `${on === null ? "a detached HEAD" : `branch ${on}`}, not ` +
+            `${task.branch}, so committing there would put the work on a ref ` +
+            `this run does not track. Nothing was committed or removed.`
+          );
+        }
+
+        const dirty = (await statusOf(task.path)) !== "";
         const head = await git(task.path, ["rev-parse", "HEAD"]);
         const untouched = !dirty && head === task.baseSha;
 
@@ -213,10 +292,10 @@ export async function openWorktrees(
           if (!RELEASES.has(status)) {
             await git(root, ["branch", "-D", task.branch]);
           }
-          return;
+          return null;
         }
 
-        if (!RELEASES.has(status)) return;
+        if (!RELEASES.has(status)) return null;
 
         // The commit is what makes "remove the worktree, keep the branch"
         // coherent: without it, removal either refuses on the dirty tree or
@@ -232,6 +311,7 @@ export async function openWorktrees(
           ]);
         }
         await removeWorktree(root, task.path);
+        return null;
       },
     },
   };

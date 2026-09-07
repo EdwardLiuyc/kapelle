@@ -974,6 +974,22 @@ covers the whole `TaskStatus` union now**, including `warned` (M1b-4) and `timed
 (M1c-1), which have no producer — the reason M1b-2 gave for shipping the whole severity
 ordering early. `done` and `warned` release, matching the two statuses the CLI exits 0 for
 (`run.ts:405`); everything below keeps its worktree, uncommitted, for reading.
+**Review found three ways retention could act on the wrong thing (#85, all measured
+2026-09-07, each with a test that is red without its fix).** (a) `git status --porcelain`
+fixes the format, not the content: `status.showUntrackedFiles=no` empties it, so a task
+whose entire output was new files read as *untouched* and had its checkout removed with the
+work still in it. Every check now passes `--untracked-files=all`, which no config can
+weaken. (b) `release` assumed the checkout was still on the task branch. An agent running
+`git checkout -b` in its own worktree moved HEAD, and the commit then landed on that ref —
+or dangled, on a detached HEAD — while the branch this run advertises stayed at its base
+ref, so M1c-3 would merge nothing and call it success. It now verifies the symbolic ref and
+**keeps the checkout with a warning** rather than acting. (c) A `--cwd` naming a
+subdirectory was re-entered at the checkout *root*, handing the task the whole repository
+and widening `#guardPath` from the requested subtree — a safety boundary moved by where a
+worktree happens to live. The repo-relative prefix is preserved. Review also found that both
+ignore refusals told the operator to do something the next preflight rejects: editing
+`.gitignore` is itself an uncommitted change. They now say to commit it, and offer
+`.git/info/exclude` for a tree that must stay clean.
 **Gap found in review — nothing said who commits the work.** "Remove the worktree on
 success" and "the branch always survives" only hold together if something commits first:
 otherwise `git worktree remove` refuses on the dirty tree or discards the work, and M1c-3

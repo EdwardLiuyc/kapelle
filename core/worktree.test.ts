@@ -414,3 +414,135 @@ test("a task that throws before writing leaves no worktree and no branch through
   );
   assert.equal(await hasBranch(root, "plan"), false);
 });
+
+// --- what #85's review found -------------------------------------------------
+
+test("untracked output survives status.showUntrackedFiles=no", async (t) => {
+  const root = await repo(t);
+  // The setting is a display preference, and `--porcelain` does not override
+  // it. Before #85 this emptied the status output, so a task whose whole
+  // result was new files read as untouched and the checkout was removed with
+  // the work still in it.
+  await git(root, "config", "status.showUntrackedFiles", "no");
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+
+  const path = await worktrees.acquire("plan");
+  await writeFile(join(path, "RESULT.md"), "the whole output of the task\n");
+  assert.equal(await worktrees.release("plan", "done"), null);
+
+  assert.equal(existsSync(path), false);
+  const listed = await git(
+    root,
+    "ls-tree",
+    "-r",
+    "--name-only",
+    branchOf("plan"),
+  );
+  assert.match(listed, /RESULT\.md/);
+});
+
+test("the dirty-tree refusal survives status.showUntrackedFiles=no", async (t) => {
+  const root = await repo(t);
+  await git(root, "config", "status.showUntrackedFiles", "no");
+  await writeFile(join(root, "stray.txt"), "uncommitted\n");
+
+  await assert.rejects(openWorktrees(root, RUN_ID), (err: Error) => {
+    assert.match(err.message, /uncommitted changes/);
+    assert.match(err.message, /stray\.txt/);
+    return true;
+  });
+});
+
+test("both ignore refusals tell the operator to commit the change", async (t) => {
+  // Following "add it to .gitignore and re-run" literally left the tree dirty,
+  // so the very next preflight refused — a fix whose own result is rejected.
+  const root = await repo(t);
+  await writeFile(join(root, ".gitignore"), "node_modules/\n");
+  await git(root, "commit", "-am", "drop the ignore");
+
+  await assert.rejects(openWorktrees(root, RUN_ID), (err: Error) => {
+    assert.match(err.message, /commit that change, and re-run/);
+    assert.match(err.message, /\.git\/info\/exclude/);
+    return true;
+  });
+});
+
+test("a checkout left on another branch is kept, with a warning", async (t) => {
+  const root = await repo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+
+  // An ordinary thing for a coding agent to do inside its own checkout — and
+  // every retention step below it would have acted on the wrong ref.
+  const path = await worktrees.acquire("plan");
+  await git(path, "checkout", "-q", "-b", "the-agents-own-branch");
+  await writeFile(join(path, "RESULT.md"), "the work\n");
+
+  const warning = await worktrees.release("plan", "done");
+
+  assert.match(String(warning), /the-agents-own-branch/);
+  assert.match(String(warning), /Nothing was committed or removed/);
+  assert.equal(existsSync(path), true, "the work stays on disk");
+  // The advertised branch is untouched rather than quietly wrong.
+  assert.equal(
+    await git(root, "rev-parse", branchOf("plan")),
+    await git(root, "rev-parse", "HEAD"),
+  );
+});
+
+test("a detached HEAD is kept too, and says so", async (t) => {
+  const root = await repo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+
+  const path = await worktrees.acquire("plan");
+  await git(path, "checkout", "-q", "--detach");
+  await writeFile(join(path, "RESULT.md"), "the work\n");
+
+  const warning = await worktrees.release("plan", "done");
+
+  assert.match(String(warning), /detached HEAD/);
+  assert.equal(existsSync(path), true);
+});
+
+test("a subdirectory cwd stays the workspace root inside the worktree", async (t) => {
+  const root = await repo(t);
+  await run("mkdir", ["-p", join(root, "packages", "app")]);
+  await writeFile(join(root, "packages", "app", "a.txt"), "x\n");
+  await writeFile(join(root, "outside.txt"), "not in the requested subtree\n");
+  await git(root, "add", "-A");
+  await git(root, "commit", "-m", "monorepo");
+
+  const sub = join(root, "packages", "app");
+  const { worktrees } = await openWorktrees(sub, RUN_ID);
+  assert.ok(worktrees);
+
+  // Returning the checkout root would hand the task the whole repository, and
+  // `#guardPath` bounds this client's file service to whatever it is given —
+  // so the requested subtree would silently become the repo.
+  const path = await worktrees.acquire("plan");
+
+  assert.equal(
+    path,
+    join(root, ".agent-team", "wt", RUN_ID, "plan", "packages", "app"),
+  );
+  assert.equal(existsSync(join(path, "a.txt")), true);
+  assert.equal(existsSync(join(path, "outside.txt")), false);
+});
+
+test("a subdirectory missing at the base ref throws naming it", async (t) => {
+  const root = await repo(t);
+  const sub = join(root, "packages", "app");
+  await run("mkdir", ["-p", sub]);
+
+  // The directory exists now but not in the commit each task branches from,
+  // so there is no such workspace root to give them.
+  const { worktrees } = await openWorktrees(sub, RUN_ID);
+  assert.ok(worktrees);
+
+  await assert.rejects(worktrees.acquire("plan"), (err: Error) => {
+    assert.match(err.message, /packages\/app does not exist/);
+    return true;
+  });
+});
