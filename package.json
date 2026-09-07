@@ -9,7 +9,6 @@
   },
   "scripts": {
     "start": "node run.ts",
-    "fanout": "node fanout.mjs tasks.json",
     "fmt": "biome check --write .",
     "fmt:check": "biome check .",
     "selftest": "node run.ts \"self test\" --cmd \"node mock-agent.mjs\" --mode auto",
