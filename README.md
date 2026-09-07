@@ -19,7 +19,7 @@ answer its file-system requests, and decide its permissions. The harness is the
 | `docs/` | Plans, stories and what was measured about each harness. |
 | `assets/`, config files | Logo, tool configs (`biome.json`, `tsconfig.json`, `knip.jsonc`, `.markdownlint.json`), `package.json`. |
 
-Test suites (`*.test.ts`) live next to their sources; `npm run test` runs them all.
+Test suites (`*.test.ts`) live in a `tests/` folder beside their sources — `core/tests/`, `protocol/tests/`, and `tests/` at the root; `npm run test` runs them all.
 
 ## Run files
 

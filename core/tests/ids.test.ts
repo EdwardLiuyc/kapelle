@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
-import { assertTaskId, branchName, newRunId } from "./ids.ts";
+import { assertTaskId, branchName, newRunId } from "../ids.ts";
 
 test("newRunId is YYYYMMDD-HHMMSS-<4 char base36>, in UTC", () => {
   const id = newRunId(new Date("2026-09-03T12:34:56.789Z"));

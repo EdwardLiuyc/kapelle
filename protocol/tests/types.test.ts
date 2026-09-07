@@ -18,7 +18,7 @@ import {
   type PromptRequest,
   type SessionNotification,
   type SessionUpdate,
-} from "./types.ts";
+} from "../types.ts";
 
 // --- fixtures ---------------------------------------------------------------
 // One sample per protocol variant, taken from the M0 wire captures

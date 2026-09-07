@@ -283,7 +283,7 @@ received. The pure-function rule stands everywhere else, and the boundaries are 
 `mock-agent` still owns end-to-end runs (`npm run selftest`), and `hostile-agent` (M1b-6)
 still owns adversarial coverage — M1a-3's `#guardPath` cases are the containment baseline it
 builds on, not a replacement for it. The original justification does not hold for this
-class: `protocol/agent.test.ts` runs in about six seconds (measured 2026-08-31, most of it
+class: `protocol/tests/agent.test.ts` runs in about six seconds (measured 2026-08-31, most of it
 deliberate waits proving deadlines fire), and every case is mutation-proven
 (the mutant is recorded in the commit that added it) rather than merely green.
 *Done when* both scripts pass on an empty test set and no build step exists. Note that Node 22.18+ and 24 already strip types, so this is a smaller lift than the
@@ -294,7 +294,7 @@ and `npm run test` both green on the empty set; no build step. Two things the st
 anticipate. **`tsc` cannot pass an empty input set** — `include` matching nothing is TS18003,
 `files: []` is TS18002 — so `check` guards on file discovery and runs `tsc --noEmit` only when
 a `.ts` file exists, printing the skip instead of failing; the mirror of `node --test`'s
-empty-set pass. Verified with a throwaway smoke test: `node --test` discovers `core/*.test.ts`
+empty-set pass. Verified with a throwaway smoke test: `node --test` discovers `core/tests/*.test.ts`
 under `type: module`, and with files present `check` runs tsc and fails when it should.
 **npm `latest` now resolves to TypeScript 7.0.2, the native (tsgo) compiler** — the flags
 behave as ratified, the lockfile is new to the repo. **Open decision flagged on #9:** TS7
@@ -462,13 +462,13 @@ running task.
 *Done when* (in addition to the criteria below) a second `prompt()` during a live turn
 throws without a byte reaching the subprocess, covered by `node:test`.
 **Landed 2026-09-02 (#11).** All five behaviours are in and each has a subprocess-driven
-test in `protocol/agent.test.ts`: the 30s deadline on the handshake and session-management
+test in `protocol/tests/agent.test.ts`: the 30s deadline on the handshake and session-management
 calls but never on `session/prompt`, unbounded stderr attached to a mid-handshake death,
 the in-flight guard, the whole `PromptResponse`, and `_client_cancel_requested`.
 **One `#guardPath` case does not pass, deliberately.** A symlink pointing out of the root is
 followed: `path.resolve` is string arithmetic and never touches the filesystem, so
 `link.txt` looks in-root. The test records what the guard does today rather than what it
-should do (`protocol/agent.test.ts:362`), and **M1b-6 owns closing it** — the fix is
+should do (`protocol/tests/agent.test.ts:362`), and **M1b-6 owns closing it** — the fix is
 `fs.realpath` before the prefix check. The other four cases — in-root, escaping `../`,
 absolute-outside, and the read/write asymmetry under `allowReadOutsideRoot` — pass.
 
@@ -555,7 +555,7 @@ against `agentInfo.version` when the harness sends one and stays silent when it 
 warning only, never failing a run, as B2 decided.
 **M2-8's `AGENT_TEAM_*` strip collides with M0-2's identity return**, and secrecy wins:
 `resolveEnv` returns `base` by identity only when the entry declares no `env` **and** no such
-variable is set. Both properties are asserted in `protocol/registry.test.ts`.
+variable is set. Both properties are asserted in `protocol/tests/registry.test.ts`.
 `terminal-auth` was deliberately **not** recorded. It is not one flag but two directions —
 opencode gates on it as a *client* capability we would have to advertise (untested, and we
 advertise `terminal: false`), while copilot *sends* it on its auth method with a real
@@ -734,7 +734,7 @@ Thinking now streams like prose, dim, with the prefix printed **once per run of 
 rather than once per chunk; the prefix is kept, since it is what separates thinking from
 what the agent is actually saying. The renderer tracks which of the two streams is open so
 either can close the other's line.
-**This is the first `render.test.ts`.** Every other branch of the renderer is eyeballed
+**This is the first `tests/render.test.ts`.** Every other branch of the renderer is eyeballed
 through `selftest`, which is exactly why this shipped, so the state machine gets a real
 check: many chunks produce one prefix, switching between thinking and speaking closes the
 open line, and a `line()` event never lands mid-sentence. Mutation-proven — restoring the
@@ -775,7 +775,7 @@ the id in the run file is the id everywhere — and branch names round-trip thro
 **Landed 2026-09-04 (#16).** `newRunId`, `assertTaskId` and `branchName` in `core/ids.ts`,
 with the amended charset. An illegal id throws and is never sanitised, and minted branch
 names are fed to real `git check-ref-format` in the test rather than to a regex that agrees
-with the validator by construction (`core/ids.test.ts:69`). The three ids the dropped dot
+with the validator by construction (`core/tests/ids.test.ts:69`). The three ids the dropped dot
 was removed for — `plan..impl`, `impl.`, `build.lock` — are cases in that suite.
 
 ---
@@ -1073,7 +1073,7 @@ are published on the bus as `_client_result_warning` and never fail the task. `p
 does **not** fire where the registry already says `asksPermission: false` — `warningsFor`
 marks that containment line with `onceKey`, so the run prints it once per harness instead of
 once per task — a second per-task line would be the crying wolf M0-1 warned about rather than
-a fix for it. The dedupe is keyed, not blanket: `cli.test.ts:205` fixes the *advisory* line as
+a fix for it. The dedupe is keyed, not blanket: `tests/cli.test.ts:206` fixes the *advisory* line as
 deliberately per task, and that line carries no `onceKey`, so it still repeats. And `<status>` is kept as the
 agent's own word rather than a closed vocabulary: a harness that writes "ok" has still
 reported, and rejecting the block over a synonym would throw away a good summary.
@@ -1084,7 +1084,7 @@ read as porcelain *text*, and `git()` trims — so ` M run.ts`, the commonest sh
 lost its status column and read as the path `un.ts`, warning `filesNotInDiff` about a file
 the agent had correctly reported. It is now `changedPaths`, over `git status -z`, which
 writes paths verbatim and gives a rename's source its own entry: that deleted the unquoter
-and the quote-state scan for ` -> ` along with the bug, and `core/worktree.test.ts` proves
+and the quote-state scan for ` -> ` along with the bug, and `core/tests/worktree.test.ts` proves
 the reading against git itself rather than against fixtures. Second, the tree is read **only
 for a task with its own worktree**. In the shared-cwd fallback every task sees every other
 task's files, measured as a task that changed nothing being told it had changed the tree
@@ -1212,7 +1212,7 @@ and not the other, for two reasons. `core/run.ts` is named as a deliverable in M
 `PROJECT-PLAN.md`'s architecture, so renaming it edits many documents to fix one file; and
 `run.ts` is the one whose name stops being user-facing **here** — after the `bin` lands,
 people type `agent-team run`, never a filename, so this story is the last moment the rename
-is nearly free. It touches `package.json`, the README, `cli.test.ts`,
+is nearly free. It touches `package.json`, the README, `tests/cli.test.ts`,
 `integration/helpers.ts`, `CLAUDE.md` and the `note` field of every file in
 `assets/example/`; all mechanical, all covered by the suite except the last, which no test
 reads. That last one is listed because it is the one that would rot quietly: the examples

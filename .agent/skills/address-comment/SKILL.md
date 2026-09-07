@@ -143,7 +143,7 @@ comment              verdict                     lands in
 run.ts:120           valid                       <sha>
 core/run.ts:320      valid finding, wrong fix    <sha> (doc corrected, not the code)
 core/run.ts:408      valid                       <sha>
-cli.test.ts:44       rejected — <one line why>   —
+tests/cli.test.ts:44  rejected — <one line why>   —
 ```
 
 Close with the CI state and the one thing that still blocks a merge.

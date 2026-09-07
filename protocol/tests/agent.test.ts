@@ -18,7 +18,7 @@ import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { test } from "node:test";
 
-import { AcpAgent } from "./agent.ts";
+import { AcpAgent } from "../agent.ts";
 
 /**
  * The structural shape a test needs from an emitted event. Declared here

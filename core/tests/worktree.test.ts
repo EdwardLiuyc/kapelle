@@ -6,7 +6,7 @@
  * files sit there, that `check-ignore` never reports a tracked path, that a
  * branch outlives the worktree it was checked out in. A fake git would agree
  * with whatever this module already believes, which is the one thing a test
- * here must not do. `core/ids.test.ts:69` takes the same line with
+ * here must not do. `core/tests/ids.test.ts:69` takes the same line with
  * `check-ref-format`.
  */
 
@@ -18,10 +18,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
-import { createEventBus } from "./events.ts";
-import { runRun, type TaskExecutor, type TaskStatus } from "./run.ts";
-import { validateRun } from "./runfile.ts";
-import { changedPaths, openWorktrees, type Worktrees } from "./worktree.ts";
+import { createEventBus } from "../events.ts";
+import { runRun, type TaskExecutor, type TaskStatus } from "../run.ts";
+import { validateRun } from "../runfile.ts";
+import { changedPaths, openWorktrees, type Worktrees } from "../worktree.ts";
 
 const run = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) =>
