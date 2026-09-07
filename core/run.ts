@@ -25,7 +25,7 @@
  * as `validateRun`'s injected agent map: one defaulted parameter, one caller.
  */
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { AcpAgent, type Policy } from "../protocol/agent.ts";
 import {
@@ -39,7 +39,7 @@ import { createEventBus, type EventBus } from "./events.ts";
 import { newRunId } from "./ids.ts";
 import { negotiateSafeMode, policyFor } from "./policy.ts";
 import type { Run, Task } from "./runfile.ts";
-import { openWorktrees, type Worktrees } from "./worktree.ts";
+import { openWorktrees, STATE_DIR, type Worktrees } from "./worktree.ts";
 
 /**
  * Every terminal state a task can reach.
@@ -278,10 +278,22 @@ export async function runRun(
   // (M1b-7). A directory we cannot create is a notice and nothing more: the
   // run still has a terminal and a rejection message, and losing the durable
   // copy is not a reason to refuse to work.
-  const logDir = join(root, ".agent-team", "runs", runId);
+  const logDir = join(root, STATE_DIR, "runs", runId);
   let logs = true;
   try {
-    mkdirSync(logDir, { recursive: true });
+    // A missing root is the non-repo fallback for a typo'd `--cwd`. The
+    // log directory must not create the workspace it was asked to log —
+    // tasks then fail at spawn with the same ENOENT they always had, and
+    // the run still works, just without the durable copy.
+    if (!existsSync(root)) {
+      logs = false;
+      options.onNotice?.(
+        "run",
+        `cannot write harness stderr logs to ${logDir}: ${root} does not exist`,
+      );
+    } else {
+      mkdirSync(logDir, { recursive: true });
+    }
   } catch (err) {
     logs = false;
     options.onNotice?.(

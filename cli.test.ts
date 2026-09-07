@@ -18,12 +18,14 @@
 
 import assert from "node:assert/strict";
 import { execFile as execFileCb } from "node:child_process";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
 const execFile = promisify(execFileCb);
+const git = async (cwd: string, ...args: string[]) =>
+  (await execFile("git", args, { cwd })).stdout.trim();
 
 import { MOCK_AGENT, runCli, tempDir } from "./integration/helpers.ts";
 
@@ -421,6 +423,79 @@ test("a harness that dies leaves its own error in a per-task log", async (t) => 
   // nothing" and "the task never got here" have to look different on disk.
   assert.equal(await readFile(join(logs, "good.stderr.log"), "utf8"), "");
   assert.equal(r.code, 1);
+});
+
+test("a spawn failure is written to the per-task log, not just printed", async (t) => {
+  // `node --badflag` above is a harness that starts and then dies. This is
+  // the other fail-to-start shape: the binary never exists, so there is no
+  // harness stderr to capture — our own spawn error has to be the durable
+  // record.
+  const cwd = await tempDir(t);
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [{ id: "ghost", prompt: "hi", cmd: "definitely-not-a-real-binary" }],
+  });
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  const [runId] = await readdir(join(cwd, ".agent-team", "runs"));
+  assert.match(
+    await readFile(
+      join(cwd, ".agent-team", "runs", String(runId), "ghost.stderr.log"),
+      "utf8",
+    ),
+    /failed to spawn "definitely-not-a-real-binary"/,
+  );
+});
+
+test("a missing --cwd is not created by the stderr log directory", async (t) => {
+  // M1b-7's log directory is `mkdir -p`-shaped, which must not turn a typo'd
+  // workspace root into an empty real one. Before the log landed, each task
+  // simply failed at spawn with ENOENT — and so it must still.
+  const cwd = await tempDir(t);
+  const missing = join(cwd, "typo");
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const r = await runCli(t, ["--file", file, "--cwd", missing, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /failed to spawn/);
+  await assert.rejects(readdir(missing), /ENOENT/);
+});
+
+test("--cwd in a subdirectory logs at the repository root", async (t) => {
+  // Worktrees run each task at the same subdirectory inside its checkout,
+  // but `.agent-team/` is repository-level state. The log has to follow the
+  // root `openWorktrees` chose, not the subdirectory the task actually ran in.
+  const root = await tempDir(t);
+  await git(root, "init", "-b", "main");
+  await git(root, "config", "user.email", "test@example.invalid");
+  await git(root, "config", "user.name", "Test");
+  await writeFile(join(root, ".gitignore"), ".agent-team/\n");
+  await mkdir(join(root, "sub"));
+  await writeFile(join(root, "sub", "keep.txt"), "x\n");
+  await git(root, "add", "-A");
+  await git(root, "commit", "-m", "first");
+
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+  const r = await runCli(t, [
+    "--file",
+    file,
+    "--cwd",
+    join(root, "sub"),
+    "--quiet",
+  ]);
+
+  assert.equal(r.code, 0);
+  const [runId] = await readdir(join(root, ".agent-team", "runs"));
+  assert.equal(
+    await readFile(
+      join(root, ".agent-team", "runs", String(runId), "one.stderr.log"),
+      "utf8",
+    ),
+    "",
+  );
 });
 
 test("--quiet still reports a task failure, on stderr", async (t) => {

@@ -1082,10 +1082,12 @@ mirrored under `--verbose`, and under a daemon nobody is watching a terminal.
 *Done when* a harness that fails to start leaves a log containing its real error rather than
 only `Internal error (code -32603)`.
 **Decided 2026-09-07 (issue #23), the two forks the file name left open.**
-**Run files only** — the single-prompt CLI mints no run id and has no task id (`run.ts:343`),
+**Run files only** — the single-prompt CLI mints no run id and has no task id (`run.ts:129`),
 and the operator who typed it is watching the terminal the story says nobody watches.
-**A cwd that cannot carry worktrees still logs** — `openWorktrees` falls back to the shared
-cwd, and that fallback is the CI shape this story exists for, so the log follows it there.
+**A cwd that cannot carry worktrees still logs** — a non-repository cwd falls back to the
+shared cwd, and that fallback is the CI shape this story exists for, so the log follows it
+there. A repository with no commits falls back to the shared cwd too, but its log goes to
+the repository root `.agent-team/` beside where worktrees would have been.
 `openWorktrees` now returns the `root` it chose, because worktrees are no longer the only
 state under `.agent-team/`: a caller guessing `cwd` would split the directory in two
 whenever `--cwd` names a subdirectory.

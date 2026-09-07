@@ -274,9 +274,14 @@ export class AcpAgent {
     this.#proc = proc;
 
     proc.on("error", (err: Error) => {
-      this.#failAll(
-        new Error(`failed to spawn "${this.command}": ${err.message}`),
-      );
+      // M1b-7: the rejection message is enough while a terminal is watching,
+      // but the durable log is the daemon's only copy. The stream is assigned
+      // below before this event can fire; `close` (which follows a failed
+      // spawn on Node >=24) remains the place that ends it.
+      const message = `failed to spawn "${this.command}": ${err.message}`;
+      this.#stderr.push(message);
+      this.#stderrFile?.write(`${message}\n`);
+      this.#failAll(new Error(message));
     });
 
     // A harness that dies at spawn leaves its stdin a broken pipe, and the

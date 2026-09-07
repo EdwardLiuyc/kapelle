@@ -37,10 +37,9 @@ import type { TaskStatus } from "./run.ts";
 
 const run = promisify(execFile);
 
-/** Where supervisor state lives, relative to the repo root. Not exported —
- *  nothing outside this file names it yet; M1b-7's stderr logs will be the
- *  first, and can export it then. */
-const STATE_DIR = ".agent-team";
+/** Where supervisor state lives, relative to the repo root. Exported for
+ *  M1b-7's stderr logs, which live beside the worktrees (`core/run.ts`). */
+export const STATE_DIR = ".agent-team";
 
 /**
  * Which statuses give the worktree back.
@@ -131,11 +130,12 @@ export interface WorktreeSetup {
   /** `null` when the cwd cannot carry worktrees; `notice` says why. */
   worktrees: Worktrees | null;
   notice?: string;
-  /** Where `.agent-team/` lives for this run — the repository root, or the
-   *  cwd itself in the fallback. Returned because worktrees are not the only
-   *  supervisor state kept there: M1b-7's stderr logs go beside them, and a
-   *  caller that guessed `cwd` would split the directory in two whenever
-   *  `--cwd` named a subdirectory. */
+  /** Where `.agent-team/` lives for this run — the repository root whenever
+   *  git reports one (including the no-commit fallback), or the requested
+   *  cwd itself when there is no repository at all. Returned because
+   *  worktrees are not the only supervisor state kept there: M1b-7's stderr
+   *  logs go beside them, and a caller that guessed `cwd` would split the
+   *  directory in two whenever `--cwd` named a subdirectory. */
   root: string;
 }
 
@@ -162,23 +162,14 @@ export async function openWorktrees(
     };
   }
 
-  // An unborn HEAD is a repository with nothing to branch from. Same fallback
-  // as no repository at all: `git worktree add` would fail per task, and one
-  // notice up front beats N identical spawn failures.
-  if ((await tryGit(root, ["rev-parse", "--verify", "HEAD"])) === null) {
-    return {
-      worktrees: null,
-      root,
-      notice:
-        `${root} has no commits yet — nothing to branch from, so every task ` +
-        `runs in it directly and tasks that touch the same files will collide.`,
-    };
-  }
-
   // Tracked is checked before ignored because it is the worse diagnosis and
   // `check-ignore` never reports a tracked path: without this, a committed
   // `.agent-team/` would be reported as merely missing from `.gitignore`, and
-  // following that advice would leave it tracked *and* ignored.
+  // following that advice would leave it tracked *and* ignored. This runs
+  // before the unborn-HEAD fallback too: `core/run.ts` writes `.agent-team/`
+  // even when worktrees cannot exist, so an unignored one has to refuse here
+  // rather than let the log directory create the state the preflight exists
+  // to prevent.
   if ((await git(root, ["ls-files", "--", STATE_DIR])) !== "") {
     throw new Error(
       `${STATE_DIR}/ is tracked by git. It holds supervisor state — worktrees, ` +
@@ -196,6 +187,21 @@ export async function openWorktrees(
         `there, and an unignored one would show up as your changes. Add ` +
         `\`${STATE_DIR}/\` to .gitignore, ${COMMIT_THEN}`,
     );
+  }
+
+  // An unborn HEAD is a repository with nothing to branch from. Same fallback
+  // as no repository at all: `git worktree add` would fail per task, and one
+  // notice up front beats N identical spawn failures. The ignore/tracked
+  // refusals above still run first for the reason given there — the log
+  // directory is created no matter which fallback this ends in.
+  if ((await tryGit(root, ["rev-parse", "--verify", "HEAD"])) === null) {
+    return {
+      worktrees: null,
+      root,
+      notice:
+        `${root} has no commits yet — nothing to branch from, so every task ` +
+        `runs in it directly and tasks that touch the same files will collide.`,
+    };
   }
 
   // `.agent-team/` is ignored by the check above, so it can never be the
