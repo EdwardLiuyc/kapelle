@@ -131,6 +131,12 @@ export interface WorktreeSetup {
   /** `null` when the cwd cannot carry worktrees; `notice` says why. */
   worktrees: Worktrees | null;
   notice?: string;
+  /** Where `.agent-team/` lives for this run — the repository root, or the
+   *  cwd itself in the fallback. Returned because worktrees are not the only
+   *  supervisor state kept there: M1b-7's stderr logs go beside them, and a
+   *  caller that guessed `cwd` would split the directory in two whenever
+   *  `--cwd` named a subdirectory. */
+  root: string;
 }
 
 /**
@@ -149,6 +155,7 @@ export async function openWorktrees(
   if (root === null) {
     return {
       worktrees: null,
+      root: cwd,
       notice:
         `${cwd} is not a git repository — every task runs in it directly, ` +
         `so tasks that touch the same files will collide.`,
@@ -161,6 +168,7 @@ export async function openWorktrees(
   if ((await tryGit(root, ["rev-parse", "--verify", "HEAD"])) === null) {
     return {
       worktrees: null,
+      root,
       notice:
         `${root} has no commits yet — nothing to branch from, so every task ` +
         `runs in it directly and tasks that touch the same files will collide.`,
@@ -218,6 +226,7 @@ export async function openWorktrees(
   const held = new Map<string, Held>();
 
   return {
+    root,
     worktrees: {
       async acquire(taskId, baseRef = "HEAD") {
         const branch = branchName(runId, taskId);
