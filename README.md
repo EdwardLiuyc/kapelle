@@ -23,8 +23,9 @@ Test suites (`*.test.ts`) live next to their sources; `npm run test` runs them a
 
 ## Run files
 
-`run.ts --file` runs N independent tasks, each with its own agent, mode and
-workspace. `tasks.json` is the worked example:
+`run.ts --file` runs N independent tasks, each with its own agent and mode.
+In a git repository, each task gets its own worktree; outside one, tasks share
+the cwd and a notice says so. `tasks.json` is the worked example:
 
 ```bash
 node run.ts --file tasks.json
