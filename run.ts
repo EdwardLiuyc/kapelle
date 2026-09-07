@@ -62,9 +62,9 @@ const positional = argv.filter((a, i) => {
 const promptText = positional.join(" ").trim();
 
 // `--file` is the other half of this CLI: one prompt, or N of them from a run
-// file (M1b-2, #18). One entry point rather than two, because `fanout.mjs` is
-// retired by M1b-8 and a second CLI would only be a second place to keep the
-// notice rules, the SIGINT grace and the arg parsing in step.
+// file (M1b-2, #18). One entry point rather than two, because a second CLI
+// would only be a second place to keep the notice rules, the SIGINT grace and
+// the arg parsing in step.
 const runFilePath = flag("file");
 
 if ((!promptText && !runFilePath) || has("help")) {
@@ -239,10 +239,9 @@ if (runFilePath) {
  * Returns the exit code rather than calling `process.exit` itself, so the one
  * place that decides how this process ends stays the call site.
  *
- * **Prose is buffered and printed per task at the end**, never streamed. That
- * is `fanout.mjs`'s hard-won lesson: N interleaved token streams are
- * unreadable, and a summary nobody can read is the same as no summary. Only
- * milestones — a tool call — go out live.
+ * **Prose is buffered and printed per task at the end**, never streamed. N
+ * interleaved token streams are unreadable, and a summary nobody can read is
+ * the same as no summary. Only milestones — a tool call — go out live.
  */
 async function runFromFile(path: string): Promise<number> {
   // The file carries agent, cmd and mode per task, and `resolvePolicy` has

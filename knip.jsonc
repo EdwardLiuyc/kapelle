@@ -24,11 +24,11 @@
   // --production mode (which pi-lens runs) has no roots at all and reports every
   // reachable file — protocol/agent.ts, protocol/registry.ts, render.ts — as unused.
   //
-  // knip emits "Remove redundant entry pattern" for the two `!` entries, since
-  // package.json's `start`/`fanout` scripts already make them dev entries.
-  // Declined for the same reason: dropping them re-breaks --production.
+  // knip emits "Remove redundant entry pattern" for the `!` entry, since
+  // package.json's `start` script already makes `run.ts` a dev entry.
+  // Declined for the same reason: dropping it re-breaks --production.
   //
   // mock-agent.mjs is a runnable script (`node mock-agent.mjs`, inside the
   // selftest script's --cmd string), not an imported module, and is dev-only.
-  "entry": ["run.ts!", "fanout.mjs!", "mock-agent.mjs"]
+  "entry": ["run.ts!", "mock-agent.mjs"]
 }

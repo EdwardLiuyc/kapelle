@@ -1,5 +1,6 @@
 /**
- * The CLI surface — `run.ts` and `fanout.mjs` — driven as real subprocesses.
+ * The CLI surface — `run.ts`, one prompt or a run file — driven as a real
+ * subprocess.
  *
  * **None of this needs a harness**, so unlike `integration/`, it runs in CI on
  * every push. Everything that needs a session uses `mock-agent.mjs`; the rest
@@ -154,106 +155,9 @@ test("ask without a TTY re-resolves as safe, and says so", async (t) => {
   );
 });
 
-// --- fanout ------------------------------------------------------------------
-
-/** Writes a task file and returns its path. Every task gets its own workspace. */
-async function taskFile(t: import("node:test").TestContext, tasks: object[]) {
-  const dir = await tempDir(t);
-  const path = join(dir, "tasks.json");
-  await writeFile(path, JSON.stringify(tasks), "utf8");
-  return path;
-}
-
-test("fanout runs every task and reports each one", async (t) => {
-  const a = await tempDir(t);
-  const b = await tempDir(t);
-  const file = await taskFile(t, [
-    { cmd: `node ${MOCK_AGENT}`, prompt: "task one", mode: "auto", cwd: a },
-    { cmd: `node ${MOCK_AGENT}`, prompt: "task two", mode: "auto", cwd: b },
-  ]);
-
-  const r = await runCli(t, [file], "fanout.mjs");
-
-  assert.equal(r.code, 0);
-  assert.equal((r.stdout.match(/end_turn/g) ?? []).length, 2);
-  assert.deepEqual(await readdir(a), ["ACP_TEST.md"]);
-  assert.deepEqual(await readdir(b), ["ACP_TEST.md"]);
-});
-
-test("every fanout task carries its own advisory notice, on stderr", async (t) => {
-  // fanout is the second entry point that can start a harness under `safe`,
-  // and its notices are never silenced — so they cannot be a run.ts-only
-  // feature. A `--cmd` spec is unmeasured, so the reachable offline notice is
-  // the advisory "no measured labels" line; the containment variant needs a
-  // measured registry entry and is not reachable from this suite.
-  const file = await taskFile(t, [
-    {
-      cmd: `node ${MOCK_AGENT}`,
-      prompt: "one",
-      mode: "auto",
-      cwd: await tempDir(t),
-    },
-    {
-      cmd: `node ${MOCK_AGENT}`,
-      prompt: "two",
-      mode: "auto",
-      cwd: await tempDir(t),
-    },
-  ]);
-
-  const r = await runCli(t, [file], "fanout.mjs");
-
-  assert.equal((r.stderr.match(/no measured labels/g) ?? []).length, 2);
-  assert.doesNotMatch(r.stdout, /no measured labels/);
-});
-
-test("a fanout task asking for ask runs as safe, since no task has a TTY", async (t) => {
-  const cwd = await tempDir(t);
-  const file = await taskFile(t, [
-    { cmd: `node ${MOCK_AGENT}`, prompt: "try a write", mode: "ask", cwd },
-  ]);
-
-  const r = await runCli(t, [file], "fanout.mjs");
-
-  assert.match(r.stderr, /! no TTY — ask runs as safe/);
-  assert.doesNotMatch(r.stdout, /no TTY/);
-  assert.deepEqual(await readdir(cwd), []);
-});
-
-test("one failing task does not take the others down", async (t) => {
-  const cwd = await tempDir(t);
-  const file = await taskFile(t, [
-    { cmd: `node ${MOCK_AGENT}`, prompt: "good", mode: "auto", cwd },
-    {
-      cmd: "node --badflag",
-      prompt: "doomed",
-      mode: "auto",
-      cwd: await tempDir(t),
-    },
-  ]);
-
-  const r = await runCli(t, [file], "fanout.mjs");
-
-  assert.match(r.stdout, /end_turn/);
-  assert.match(r.stdout, /FAILED/);
-  assert.deepEqual(
-    await readdir(cwd),
-    ["ACP_TEST.md"],
-    "the good task still ran",
-  );
-});
-
-test("a missing task file is a clean exit, not a stack", async (t) => {
-  const r = await runCli(t, ["/nope/does-not-exist.json"], "fanout.mjs");
-
-  assert.equal(r.code, 1);
-  assert.match(r.stderr, /cannot read/);
-});
-
 // --- run files: `run.ts --file` (M1b-2, #18) ---------------------------------
 
-/** A run file, written where `run.ts` can read it. Separate from `taskFile`
- *  above: fanout's schema is a bare array, a run file is an object. */
+/** A run file, written where `run.ts` can read it. */
 async function runFile(
   t: import("node:test").TestContext,
   run: Record<string, unknown>,
@@ -295,6 +199,28 @@ test("--file runs every task and reports each one", async (t) => {
     assert.match(r.stdout, new RegExp(`▸ ${id} \\(mock-agent\\) done`));
   }
   assert.match(r.stdout, /done — 3 tasks, 3 turns/);
+});
+
+test("every run-file task carries its own advisory notice, on stderr", async (t) => {
+  // A `--cmd` spec is unmeasured, so the reachable offline notice is the
+  // advisory "no measured labels" line. Every task starts its own harness,
+  // so every task must report the harness it is about to trust.
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([
+      { id: "one", prompt: "task one" },
+      { id: "two", prompt: "task two" },
+    ]),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.equal(
+    (r.stderr.match(/no measured labels for this harness/g) ?? []).length,
+    2,
+  );
+  assert.doesNotMatch(r.stdout, /no measured labels/);
 });
 
 test("prose is buffered per task, never braided together", async (t) => {
@@ -399,7 +325,8 @@ test("--file --quiet drops the advisory line, exactly as one prompt does", async
   // so `--quiet` printed the advisory `unverified` line that the single-agent
   // path drops (#13, `printableWarnings`). A `--cmd` spec is unmeasured, so
   // the advisory line is the only one reachable offline — the containment
-  // variant needs a measured registry entry, as the fanout tests above note.
+  // variant needs a measured registry entry, as the unverified-harness test
+  // above notes.
   const cwd = await tempDir(t);
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 

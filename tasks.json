@@ -1,14 +1,15 @@
-[
-  {
-    "agent": "opencode",
-    "cwd": ".",
-    "mode": "safe",
-    "prompt": "Summarise what this project does in three sentences."
-  },
-  {
-    "agent": "opencode",
-    "cwd": ".",
-    "mode": "safe",
-    "prompt": "List any obvious bugs or missing error handling you can see."
-  }
-]
+{
+  "note": "A worked example: two independent tasks sharing one agent and one mode.",
+  "agent": "opencode",
+  "mode": "safe",
+  "tasks": [
+    {
+      "id": "summarise",
+      "prompt": "Summarise what this project does in three sentences."
+    },
+    {
+      "id": "look-for-bugs",
+      "prompt": "List any obvious bugs or missing error handling you can see."
+    }
+  ]
+}

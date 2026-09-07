@@ -91,9 +91,7 @@ export type Policy = (req: PolicyRequest) => boolean | Promise<boolean>;
  * One event leaving this client, tagged with the agent that caused it.
  *
  * Exported at M1a-6: `core/events.ts` is the first consumer that needs the
- * type by name. Since M1a-7 `render.ts` names it too. `fanout.mjs` still
- * cannot import a type — it is `.mjs` until M1b-8 retires it — but it imports
- * the bus itself, which carries it.
+ * type by name. Since M1a-7 `render.ts` names it too.
  */
 export interface AgentEventEnvelope {
   agent: string;
