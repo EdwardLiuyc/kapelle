@@ -323,7 +323,13 @@ export class AcpAgent {
     // terminal. Opened here rather than on the first line so that a harness
     // that said nothing still leaves a log.
     if (this.stderrLog !== null) {
-      const file = createWriteStream(this.stderrLog, { flags: "a" });
+      // `ax`, so one (runId, taskId) is written exactly once. Plain `a` mixes
+      // two executions into one file and breaks the "empty means the harness
+      // said nothing" reading above; `w` would silently destroy the earlier
+      // run's only durable record, which is the worse half of the trade. The
+      // EEXIST arrives on the handler below, so a re-run says so and keeps
+      // what is already there.
+      const file = createWriteStream(this.stderrLog, { flags: "ax" });
       // Unconditional, not `#log`: a log we cannot write is exactly the case
       // the operator has no other way to notice. It never fails the task —
       // the run is what matters, the log is how it is read afterwards.
