@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { createEventBus } from "./core/events.ts";
+import { newRunId } from "./core/ids.ts";
 import {
   makeAskPolicy,
   negotiateSafeMode,
@@ -340,12 +341,19 @@ async function runFromFile(path: string): Promise<number> {
     setTimeout(() => process.exit(130), 2000).unref();
   });
 
+  const runId = newRunId();
+  if (!quiet) console.log(`run ${runId}`);
+
   let report: Awaited<ReturnType<typeof runRun>>;
   try {
     report = await runRun(
       { ...validated, tasks },
       {
         cwd: flag("cwd", process.cwd()),
+        // Minted here rather than left to `runRun`'s default because it is
+        // printed: it names every branch the run leaves behind, and
+        // `agent-team merge <runId>` is how they are found again.
+        runId,
         bus,
         signal: canceller.signal,
         verbose,
@@ -364,6 +372,12 @@ async function runFromFile(path: string): Promise<number> {
         },
       },
     );
+  } catch (err) {
+    // The preflight's refusals land here — an unignored `.agent-team/`, a
+    // dirty tree — and each one is an instruction to the operator, not a
+    // fault. A stack trace would bury the one line that says what to do.
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
   } finally {
     asker?.close();
   }

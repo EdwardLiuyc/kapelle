@@ -677,7 +677,16 @@ than wrapping every handler.
 **None of the six supervisor variants landed, because five have no producer.** Task started,
 worktree created, permission pending, stall warning and task finished are sent by files that
 do not exist yet (M1b-2, M1b-3, M1c-1); each story widens the union when it lands its own
-producer. The sixth, the containment warning, deliberately stays on stderr: routing it
+producer.
+**Amendment 2026-09-06 (#19): the union is widened once, by the first consumer — not by
+each producer.** M1b-2 landed its two producers without adding a variant, and M1b-3 landed
+`worktree created` the same way, so "each story widens the union" had already stopped being
+true twice. Widening it costs a supervisor/agent discriminated union plus every listener
+that destructures `update` — five sites today (`run.ts:172`, `run.ts:321`, `fanout.mjs:56`,
+`core/run.ts:330`, `core/run.ts:332`) — and buys nothing while no consumer subscribes.
+Landing one of the three would not have stopped that backlog accumulating, only shortened
+it by one. The first real consumer (`core/notify.ts` M1c-4, M2's persisted log, M4's SSE
+stream) pays the cost once for all three. The sixth, the containment warning, deliberately stays on stderr: routing it
 through the bus would put it behind a sink `--quiet` can switch off, and #13 says that line
 is never silenced.
 **Renamed 2026-09-06 (M1b-2 review): `subscribe` → `addListener`.** Not a correction —
@@ -948,6 +957,50 @@ without permission. So it **refuses with the fix in the message** — *"add `.ag
 .gitignore and re-run"* — a one-time cost per repository, paid deliberately.
 *Done when* a run leaves `git worktree list` clean after success and populated after
 failure, and killing a task mid-spawn leaves no orphan worktree without a run record.
+**Landed 2026-09-06 (#19).** `core/worktree.ts`, driven by `core/run.ts`'s pool: one
+`acquire` before the executor, one `release` after, and `taskCwd` deleted. Three decisions
+were taken in scoping and are recorded on the issue. **(1) A cwd that cannot carry
+worktrees falls back with a notice** rather than refusing — not a repository, or a
+repository with no commit to branch from. Refusing would make a git repository a
+precondition of the CLI's own suite, which drives `--file` runs in `mkdtemp` directories
+(`integration/helpers.ts:36`); the notice is the containment variant and survives `--quiet`
+(#13), because it says a safety property is absent. **(2) The spawn transaction is
+in-memory.** A task whose worktree is untouched at release — no diff, HEAD still at the base
+sha — has its checkout removed either way; the branch is removed only for a non-releasing
+status, the shape a failed spawn takes today, while a `done`/`warned` task with an empty
+diff leaves its branch at the base ref without an empty commit. A `kill -9` mid-spawn can
+still orphan one; that is M2-5, which needs a persisted run record nothing writes yet. **(3) Teardown
+covers the whole `TaskStatus` union now**, including `warned` (M1b-4) and `timed_out`
+(M1c-1), which have no producer — the reason M1b-2 gave for shipping the whole severity
+ordering early. `done` and `warned` release, matching the two statuses the CLI exits 0 for
+(`run.ts:405`); everything below keeps its worktree, uncommitted, for reading.
+**Review found three ways retention could act on the wrong thing (#85, all measured
+2026-09-07, each with a test that is red without its fix).** (a) `git status --porcelain`
+fixes the format, not the content: `status.showUntrackedFiles=no` empties it, so a task
+whose entire output was new files read as *untouched* and had its checkout removed with the
+work still in it. Every check now passes `--untracked-files=all`, which no config can
+weaken. (b) `release` assumed the checkout was still on the task branch. An agent running
+`git checkout -b` in its own worktree moved HEAD, and the commit then landed on that ref —
+or dangled, on a detached HEAD — while the branch this run advertises stayed at its base
+ref, so M1c-3 would merge nothing and call it success. It now verifies the symbolic ref and
+**keeps the checkout with a warning** rather than acting. (c) A `--cwd` naming a
+subdirectory was re-entered at the checkout *root*, handing the task the whole repository
+and widening `#guardPath` from the requested subtree — a safety boundary moved by where a
+worktree happens to live. The repo-relative prefix is preserved — subtracted from the **realpath** of both sides,
+because `--show-toplevel` resolves symlinks while `--cwd` is the string that was typed, and
+a second review round measured that mismatch putting one task inside *another task's*
+checkout, its own branch left empty. A containment check on the joined path refuses
+anything outside the checkout, and is unreachable by construction once the prefix is
+honest — kept because this boundary has already moved once. Review also found that both
+ignore refusals told the operator to do something the next preflight rejects: editing
+`.gitignore` is itself an uncommitted change. They now say to commit it, and offer
+`.git/info/exclude` for a tree that must stay clean.
+**Gap found in review — nothing said who commits the work.** "Remove the worktree on
+success" and "the branch always survives" only hold together if something commits first:
+otherwise `git worktree remove` refuses on the dirty tree or discards the work, and M1c-3
+would merge a branch sitting at its own base ref. `release` now commits onto
+`agent-team/<runId>/<taskId>` before removing, and `--force`s the removal because ignored
+files a task installed would otherwise block it.
 
 **M1b-4 · `core/result.ts` · M · needs M1b-2**
 Prompt preamble requesting a `<task-result>` block with `<status>`, `<summary>`,

@@ -16,9 +16,14 @@
  */
 
 import assert from "node:assert/strict";
+import { execFile as execFileCb } from "node:child_process";
 import { readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
+
+const execFile = promisify(execFileCb);
+
 import { MOCK_AGENT, runCli, tempDir } from "./integration/helpers.ts";
 
 const MOCK = ["--cmd", `node ${MOCK_AGENT}`];
@@ -403,7 +408,16 @@ test("--file --quiet drops the advisory line, exactly as one prompt does", async
 
   const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
   assert.equal(r.stdout, "");
-  assert.equal(r.stderr, "", "unverified is advisory, so --quiet drops it");
+  assert.doesNotMatch(
+    r.stderr,
+    /no measured labels for this harness/,
+    "unverified is advisory, so --quiet drops it",
+  );
+  // What is left is M1b-3's isolation notice, and it is the containment
+  // variant of the same rule: the temp cwd is not a repository, so the tasks
+  // share one directory. A line saying a safety property is *absent* is never
+  // silenced (#13) — the same reason `safe` keeps its caveat under `--quiet`.
+  assert.match(r.stderr, /not a git repository/);
 });
 
 test("a prompt alongside --file is refused, not silently dropped", async (t) => {
@@ -486,4 +500,30 @@ test("a refusal is a failed task, and it is not a silent one", async (t) => {
   assert.match(r.stdout, /▸ picky \(mock-agent\) failed/);
   // One task, one prompt — and the summary now says so in English.
   assert.match(r.stdout, /failed — 1 task, 1 turn,/);
+});
+
+test("a preflight refusal is one actionable line, not a stack trace", async (t) => {
+  // The `catch` in `runFromFile` exists for exactly this, and nothing drove it
+  // through the CLI: `core/worktree.test.ts` only proves `openWorktrees`
+  // rejects, which says nothing about how the process reports it (#85).
+  const cwd = await tempDir(t);
+  const git = (...args: string[]) => execFile("git", args, { cwd });
+  await git("init", "-b", "main");
+  await git("config", "user.email", "test@example.invalid");
+  await git("config", "user.name", "Test");
+  await writeFile(join(cwd, "README.md"), "first\n");
+  await git("add", "-A");
+  await git("commit", "-m", "first");
+  // `.agent-team/` is neither ignored nor tracked — the refusal a first run in
+  // a fresh repository meets.
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /is not ignored by git/);
+  assert.match(r.stderr, /commit that change, and re-run/);
+  // The failure a reader meets is the instruction, not Node's internals.
+  assert.doesNotMatch(r.stderr, /\bat .*worktree\.ts/);
+  assert.doesNotMatch(r.stderr, /node:internal/);
 });
