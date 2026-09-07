@@ -49,10 +49,10 @@ import {
 } from "./result.ts";
 import type { Run, Task } from "./runfile.ts";
 import {
+  changedPaths,
   openWorktrees,
   STATE_DIR,
   type Worktrees,
-  workingTreeStatus,
 } from "./worktree.ts";
 
 /**
@@ -224,6 +224,13 @@ interface TaskContext {
    *  could not be made. Resolved here rather than in the executor so that a
    *  test executor never writes one. */
   stderrLog?: string;
+  /** True when `cwd` is this task's own worktree, and false when the run fell
+   *  back to a shared one. **Only an isolated checkout can attribute a change
+   *  to this task** — in the fallback, one task's files are in every other
+   *  task's `git status`, so a task that touched nothing was told it had
+   *  changed the tree without asking (measured 2026-09-08, #88). The executor
+   *  reads the tree only when this is true. */
+  isolated: boolean;
   /** Already resolved for this task: the run's `askPolicy` when this task asks
    *  and one was supplied, otherwise `policyFor(task.mode)`. Settled here so
    *  the executor never re-decides who may approve what. */
@@ -458,6 +465,7 @@ async function runOne(
       signal,
       verbose: options.verbose ?? false,
       stderrLog,
+      isolated: worktrees !== null,
       policy:
         task.mode === "ask" && options.askPolicy
           ? options.askPolicy
@@ -657,9 +665,10 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     if (result) outcome.result = result;
     const warnings = crossCheck({
       result,
-      // Unknown, not empty: outside a repository there is nothing to compare
-      // against, and every tree-shaped check skips itself rather than guess.
-      diff: await tryWorkingTree(ctx.cwd),
+      // Unknown, not empty: without a worktree of its own there is nothing
+      // that can attribute a change to this task, so every tree-shaped check
+      // skips itself rather than guess.
+      changed: ctx.isolated ? await tryChangedPaths(ctx.cwd) : undefined,
       permissionCount,
       ...(spec.measured
         ? { asksPermission: spec.measured.asksPermission }
@@ -673,12 +682,11 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
   }
 }
 
-/** The working tree, or `undefined` when there is no repository to read one
- *  from — the `--cwd` fallback `openWorktrees` already prints a notice for.
+/** The task's changed paths, or `undefined` when git could not answer.
  *  Never a reason to fail a task that has already finished. */
-async function tryWorkingTree(cwd: string): Promise<string | undefined> {
+async function tryChangedPaths(cwd: string): Promise<string[] | undefined> {
   try {
-    return await workingTreeStatus(cwd);
+    return await changedPaths(cwd);
   } catch {
     return undefined;
   }

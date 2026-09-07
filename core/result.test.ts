@@ -72,6 +72,17 @@ test("<files> splits on newlines and commas, and <branch> survives", () => {
   assert.equal(r?.branch, "agent-team/r1/t1");
 });
 
+// A comma only separates when whitespace follows it: agents write
+// `a.ts, b.ts`, and `docs/a,b.md` is a legal path that splitting would turn
+// into two files nothing changed (#88).
+test("<files> keeps a comma inside a path and still splits a comma list", () => {
+  const files = (body: string) =>
+    extractResult(block(`${FULL}<files>${body}</files>`))?.files;
+  assert.deepEqual(files("docs/a,b.md"), ["docs/a,b.md"]);
+  assert.deepEqual(files("a.ts, b.ts"), ["a.ts", "b.ts"]);
+  assert.deepEqual(files("a.ts,\nb.ts"), ["a.ts", "b.ts"]);
+});
+
 test("a blank <files> is undefined rather than a list of nothing", () => {
   assert.equal(
     extractResult(block(`${FULL}<files>  </files>`))?.files,
@@ -109,12 +120,12 @@ const kinds = (...args: Parameters<typeof crossCheck>) =>
   crossCheck(...args).map((w) => w.kind);
 
 test("no block at all warns, and says so differently when the tree changed", () => {
-  assert.deepEqual(kinds({ result: null, diff: "", permissionCount: 1 }), [
+  assert.deepEqual(kinds({ result: null, changed: [], permissionCount: 1 }), [
     "noResultBlock",
   ]);
   const [w] = crossCheck({
     result: null,
-    diff: " M core/run.ts",
+    changed: ["core/run.ts"],
     permissionCount: 1,
   });
   assert.equal(w?.kind, "noResultBlock");
@@ -123,22 +134,26 @@ test("no block at all warns, and says so differently when the tree changed", () 
 
 test("success with an empty diff warns", () => {
   assert.deepEqual(
-    kinds({ result: extractResult(block(FULL)), diff: "", permissionCount: 1 }),
+    kinds({
+      result: extractResult(block(FULL)),
+      changed: [],
+      permissionCount: 1,
+    }),
     ["claimedSuccessNoDiff"],
   );
 });
 
-// The diff is parsed as porcelain, not searched as prose: an exact path
-// match cannot turn `run.ts` into `core/run.ts.new`, renames contribute both
-// halves, and Git's C-quoted paths compare with what the agent reports.
-test("<files> is matched against parsed porcelain paths, not substrings", () => {
+// Exact paths, never a substring: `run.ts` must not be satisfied by a tree
+// that only changed `core/run.ts.new`. Turning git's output into paths is
+// `changedPaths`' job, and `core/worktree.test.ts` proves that against git.
+test("<files> is matched by exact path, not by substring", () => {
   const filesResult = (...files: string[]) =>
     extractResult(block(`${FULL}<files>${files.join("\n")}</files>`));
 
   assert.deepEqual(
     kinds({
       result: filesResult("run.ts"),
-      diff: " M run.ts\n?? core/run.ts.new",
+      changed: ["run.ts", "core/run.ts.new"],
       permissionCount: 1,
     }),
     [],
@@ -146,26 +161,10 @@ test("<files> is matched against parsed porcelain paths, not substrings", () => 
   assert.deepEqual(
     kinds({
       result: filesResult("run.ts"),
-      diff: "?? core/run.ts.new",
+      changed: ["core/run.ts.new"],
       permissionCount: 1,
     }),
     ["filesNotInDiff"],
-  );
-  assert.deepEqual(
-    kinds({
-      result: filesResult("src/café.ts", "src/a\tb.ts"),
-      diff: ' M "src/caf\\303\\251.ts"\n M "src/a\\tb.ts"',
-      permissionCount: 1,
-    }),
-    [],
-  );
-  assert.deepEqual(
-    kinds({
-      result: filesResult("old.ts", "new.ts"),
-      diff: "R  old.ts -> new.ts",
-      permissionCount: 1,
-    }),
-    [],
   );
 });
 
@@ -175,7 +174,7 @@ test("<files> naming a path the diff lacks warns, and names it", () => {
   );
   const [w] = crossCheck({
     result,
-    diff: " M core/run.ts",
+    changed: ["core/run.ts"],
     permissionCount: 1,
   });
   assert.equal(w?.kind, "filesNotInDiff");
@@ -187,7 +186,7 @@ test("a changed tree with no permission request warns", () => {
   assert.deepEqual(
     kinds({
       result: extractResult(block(FULL)),
-      diff: "?? new.ts",
+      changed: ["new.ts"],
       permissionCount: 0,
     }),
     ["policyNeverFired"],
@@ -201,7 +200,7 @@ test("a harness measured as never asking does not raise policyNeverFired", () =>
   assert.deepEqual(
     kinds({
       result: extractResult(block(FULL)),
-      diff: "?? new.ts",
+      changed: ["new.ts"],
       permissionCount: 0,
       asksPermission: false,
     }),
@@ -225,7 +224,7 @@ test("a clean, reported, permission-asking task warns about nothing", () => {
   assert.deepEqual(
     kinds({
       result: extractResult(block(`${FULL}<files>core/run.ts</files>`)),
-      diff: " M core/run.ts",
+      changed: ["core/run.ts"],
       permissionCount: 2,
     }),
     [],

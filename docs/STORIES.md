@@ -1079,6 +1079,17 @@ agent's own word rather than a closed vocabulary: a harness that writes "ok" has
 reported, and rejecting the block over a synonym would throw away a good summary.
 `mock-agent.mjs` now sends a compliant block, which is what keeps the happy path exercisable
 offline; M1b-5 still owns the non-compliant fixtures.
+**Review round (#88) moved the cross-check's input twice, both times measured.** The diff was
+read as porcelain *text*, and `git()` trims — so ` M run.ts`, the commonest shape there is,
+lost its status column and read as the path `un.ts`, warning `filesNotInDiff` about a file
+the agent had correctly reported. It is now `changedPaths`, over `git status -z`, which
+writes paths verbatim and gives a rename's source its own entry: that deleted the unquoter
+and the quote-state scan for ` -> ` along with the bug, and `core/worktree.test.ts` proves
+the reading against git itself rather than against fixtures. Second, the tree is read **only
+for a task with its own worktree**. In the shared-cwd fallback every task sees every other
+task's files, measured as a task that changed nothing being told it had changed the tree
+without asking permission — so isolation absent means the tree is *unknown*, which is the
+same rule the no-repository case already followed.
 
 **M1b-5 · Extend `mock-agent` · S · needs M1b-4**
 Multiple sessions, a permission timeout, a malformed `<task-result>`, a missing block that

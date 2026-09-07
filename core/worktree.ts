@@ -67,12 +67,55 @@ const RELEASES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
  * as untouched — the checkout is removed with the work in it (measured
  * 2026-09-07, #85). `--untracked-files=all` cannot be weakened by anyone's
  * config, which is the only property a safety check may rely on. Ignored files
- * stay out, so `.agent-team/` is still invisible here — which is also why
- * M1b-4's cross-check reads the tree through this function and needs no
- * exclusion list of its own.
+ * stay out, so `.agent-team/` is still invisible here.
+ *
+ * The text is for **people** — a refusal message names what is dirty. Anything
+ * that needs the paths themselves calls `changedPaths` below, because `git()`
+ * trims, and trimming eats the leading status-column space of the first entry.
  */
-export function workingTreeStatus(cwd: string): Promise<string> {
+function workingTreeStatus(cwd: string): Promise<string> {
   return git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
+}
+
+/**
+ * The paths the working tree shows as changed — M1b-4's cross-check input.
+ *
+ * `-z` rather than the text above, because the text is *lossy for machines*.
+ * Without it Git C-quotes any unusual path (`"src/caf\303\251.ts"`) and writes
+ * a rename as `old -> new`, where a path may itself contain ` -> `; with it
+ * every path is verbatim and a rename's source arrives as its own entry. That
+ * deleted a parser — unquoting, and a quote-state scan for the separator —
+ * whose bugs a reviewer found before the code shipped (#88).
+ *
+ * The rename check reads **both** status columns. Git's porcelain v1 puts `R`
+ * in the first for a staged rename (an unstaged one is reported as a delete
+ * plus an untracked file, measured 2026-09-08), but the source entry that
+ * follows must be consumed either way — reading one column would leave it to
+ * be re-read as a status line and mangled.
+ *
+ * Ignored paths stay out, exactly as above, so `.agent-team/` never reads as
+ * agent work and no exclusion list is needed here.
+ */
+export async function changedPaths(cwd: string): Promise<string[]> {
+  const { stdout } = await run(
+    "git",
+    ["status", "--porcelain", "-z", "--untracked-files=all"],
+    { cwd },
+  );
+  const entries = stdout.split("\0");
+  const paths: string[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    // "XY path": two status letters, one space, then the path. Anything
+    // shorter is the empty tail after the final NUL.
+    const entry = entries[i];
+    if (entry === undefined || entry.length < 4) continue;
+    paths.push(entry.slice(3));
+    if (/[RC]/.test(entry.slice(0, 2))) {
+      const from = entries[++i];
+      if (from) paths.push(from);
+    }
+  }
+  return paths;
 }
 
 /**

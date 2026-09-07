@@ -97,106 +97,19 @@ export function extractResult(message: string): AgentResult | null {
   if (!status || !summary || !details) return null;
 
   const out: AgentResult = { status, summary, details };
-  // One path per line is what the preamble asks for; commas are what half of
-  // them send anyway, and splitting on both costs one character.
+  // One path per line is what the preamble asks for; a comma *followed by
+  // whitespace* is what half of them send anyway. A bare comma is not a
+  // separator, because `docs/a,b.md` is a legal path and splitting it would
+  // invent two files that do not exist (#88). A trailing comma is punctuation.
   const files = field(body, "files")
-    ?.split(/[\n,]/)
-    .map((f) => f.trim())
+    ?.split(/\n|,[ \t]/)
+    .map((f) => f.trim().replace(/,$/, ""))
     .filter(Boolean);
   if (files?.length) out.files = files;
   const branch = field(body, "branch");
   if (branch) out.branch = branch;
   return out;
 }
-
-/**
- * Paths named by `git status --porcelain --untracked-files=all`.
- *
- * Renames contribute both halves: an agent may reasonably report either the
- * old path it changed or the new path it created. Quoted paths are decoded
- * with Git's C-style rules, so `"src/caf\303\251.ts"` compares equal to the
- * `src/café.ts` an agent reports. An unquoted path containing ` -> ` on a
- * rename line is ambiguous in porcelain v1; the first top-level separator is
- * the conventional reading, and this parser does not pretend to solve what
- * Git itself does not delimit.
- */
-function porcelainPaths(status: string): string[] {
-  const paths = new Set<string>();
-  for (const line of status.split("\n")) {
-    // Two status letters, one space, then the path. A shorter line carries
-    // no path and therefore says nothing about the tree.
-    if (line.length < 4) continue;
-    const body = line.slice(3);
-    const rename = /^[ACDR]/.test(line) && hasTopLevelSeparator(body);
-    if (!rename) {
-      paths.add(unquoteGitPath(body));
-      continue;
-    }
-    const at = topLevelSeparator(body);
-    if (at === undefined) continue;
-    paths.add(unquoteGitPath(body.slice(0, at)));
-    paths.add(unquoteGitPath(body.slice(at + 4)));
-  }
-  return [...paths];
-}
-
-/** The index of the first ` -> ` outside a quoted path, for rename lines. */
-function topLevelSeparator(body: string): number | undefined {
-  let quoted = false;
-  for (let i = 0; i < body.length - 3; i++) {
-    if (body[i] === '"') quoted = !quoted;
-    if (!quoted && body.startsWith(" -> ", i)) return i;
-  }
-  return undefined;
-}
-
-const hasTopLevelSeparator = (body: string): boolean =>
-  topLevelSeparator(body) !== undefined;
-
-/** Turns a possibly C-quoted porcelain path into the path Git names. */
-function unquoteGitPath(path: string): string {
-  if (!path.startsWith('"') || !path.endsWith('"') || path.length < 2) {
-    return path;
-  }
-  // Decode through bytes: Git octal-escapes UTF-8 byte by byte, so collecting
-  // the bytes and decoding once keeps a multi-byte character intact.
-  const bytes: number[] = [];
-  const escaped = path.slice(1, -1);
-  for (let i = 0; i < escaped.length; i++) {
-    if (escaped[i] !== "\\") {
-      bytes.push(...encoder.encode(escaped[i]));
-      continue;
-    }
-    const octal = /^[0-7]{1,3}/.exec(escaped.slice(i + 1));
-    if (octal) {
-      bytes.push(Number.parseInt(octal[0], 8));
-      i += octal[0].length;
-      continue;
-    }
-    const char = escaped[++i];
-    bytes.push(
-      ...encoder.encode(
-        char === "n"
-          ? "\n"
-          : char === "r"
-            ? "\r"
-            : char === "t"
-              ? "\t"
-              : char === "b"
-                ? "\b"
-                : char === "f"
-                  ? "\f"
-                  : char === "v"
-                    ? "\v"
-                    : char,
-      ),
-    );
-  }
-  return decoder.decode(new Uint8Array(bytes));
-}
-
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
 /**
  * The summary for a task that reported nothing structured.
@@ -213,13 +126,14 @@ export function synthesiseSummary(transcript: string, max = 240): string {
 
 export interface CrossCheckInput {
   result: AgentResult | null;
-  /** `git status --porcelain --untracked-files=all` for the task's checkout,
-   *  or `undefined` when there was no repository to read one from. Undefined
-   *  is *unknown*, never *empty*: every check below that compares against the
-   *  working tree is skipped rather than guessed. Ignored paths are already
+  /** What `changedPaths` saw in the task's own checkout, or `undefined` when
+   *  nothing could attribute a change to *this* task — no repository to read,
+   *  or no worktree isolating it from its siblings (#88). Undefined is
+   *  *unknown*, never *empty*: every check below that compares against the
+   *  working tree skips itself rather than guessing. Ignored paths are already
    *  out, which is what keeps `.agent-team/` from reading as agent work
    *  (M1b-3). */
-  diff?: string;
+  changed?: readonly string[];
   /** `_client_permission` events seen for this task. */
   permissionCount: number;
   /** The registry's `measured.asksPermission`, `undefined` for a harness with
@@ -233,34 +147,31 @@ export interface CrossCheckInput {
  * turn every harness quirk into a hard stop.
  */
 export function crossCheck(input: CrossCheckInput): ResultWarning[] {
-  const { result, diff, permissionCount, asksPermission } = input;
+  const { result, changed, permissionCount, asksPermission } = input;
   const out: ResultWarning[] = [];
-  const changed = diff !== undefined && diff !== "";
+  const touched = changed !== undefined && changed.length > 0;
 
   if (!result) {
     out.push({
       kind: "noResultBlock",
-      text: changed
+      text: touched
         ? `no <task-result> block, and the working tree changed — what was ` +
           `done is only in the prose.`
         : `no <task-result> block; the summary below is synthesised from the ` +
           `agent's prose, not reported by it.`,
     });
   } else {
-    if (result.status.toLowerCase() === "success" && diff === "") {
+    if (result.status.toLowerCase() === "success" && changed?.length === 0) {
       out.push({
         kind: "claimedSuccessNoDiff",
         text: `reported success, but the working tree is unchanged.`,
       });
     }
-    // Parse the porcelain paths rather than substring-search the text: a
-    // listed `run.ts` would otherwise match `core/run.ts.new`, and a quoted
-    // path would never match the name the agent reports.
-    const changedPaths = new Set(
-      diff === undefined ? [] : porcelainPaths(diff),
-    );
-    const missing = result.files?.filter((f) => !changedPaths.has(f)) ?? [];
-    if (diff !== undefined && missing.length) {
+    // Exact paths, never a substring search of the status text: a listed
+    // `run.ts` would otherwise match `core/run.ts.new`.
+    const seen = new Set(changed ?? []);
+    const missing = result.files?.filter((f) => !seen.has(f)) ?? [];
+    if (changed !== undefined && missing.length) {
       out.push({
         kind: "filesNotInDiff",
         text: `<files> names ${missing.join(", ")}, which the working tree does not show as changed.`,
@@ -272,7 +183,7 @@ export function crossCheck(input: CrossCheckInput): ResultWarning[] {
   // survey found it mutating a workspace with zero permission requests, in
   // every mode. Where the registry already says so, `warningsFor` prints its
   // containment line and this warning would only repeat it per task (#20).
-  if (changed && permissionCount === 0 && asksPermission !== false) {
+  if (touched && permissionCount === 0 && asksPermission !== false) {
     out.push({
       kind: "policyNeverFired",
       text: `changed the working tree without ever asking permission, on a harness that normally asks.`,
