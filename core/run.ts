@@ -25,6 +25,8 @@
  * as `validateRun`'s injected agent map: one defaulted parameter, one caller.
  */
 
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { AcpAgent, type Policy } from "../protocol/agent.ts";
 import {
   resolveAgent,
@@ -37,7 +39,7 @@ import { createEventBus, type EventBus } from "./events.ts";
 import { newRunId } from "./ids.ts";
 import { negotiateSafeMode, policyFor } from "./policy.ts";
 import type { Run, Task } from "./runfile.ts";
-import { openWorktrees, type Worktrees } from "./worktree.ts";
+import { openWorktrees, STATE_DIR, type Worktrees } from "./worktree.ts";
 
 /**
  * Every terminal state a task can reach.
@@ -184,6 +186,10 @@ interface TaskContext {
   /** Aborted when the operator cancels the run. */
   signal: AbortSignal;
   verbose: boolean;
+  /** Where to keep this task's harness stderr, or absent when the directory
+   *  could not be made. Resolved here rather than in the executor so that a
+   *  test executor never writes one. */
+  stderrLog?: string;
   /** Already resolved for this task: the run's `askPolicy` when this task asks
    *  and one was supplied, otherwise `policyFor(task.mode)`. Settled here so
    *  the executor never re-decides who may approve what. */
@@ -265,8 +271,38 @@ export async function runRun(
   // Preflight once for the run, not once per task: every refusal it raises is
   // a property of the repository, so N tasks would raise the same one N times
   // — and the first worktree would already exist by then.
-  const { worktrees, notice } = await openWorktrees(options.cwd, runId);
+  const { worktrees, notice, root } = await openWorktrees(options.cwd, runId);
   if (notice) options.onNotice?.("run", notice);
+
+  // Beside the worktrees, under the same root, and made once for the run
+  // (M1b-7). A directory we cannot create is a notice and nothing more: the
+  // run still has a terminal and a rejection message, and losing the durable
+  // copy is not a reason to refuse to work.
+  const logDir = join(root, STATE_DIR, "runs", runId);
+  let logs = true;
+  try {
+    // A missing root is the non-repo fallback for a typo'd `--cwd`. The
+    // log directory must not create the workspace it was asked to log —
+    // tasks then fail at spawn with the same ENOENT they always had, and
+    // the run still works, just without the durable copy.
+    if (!existsSync(root)) {
+      logs = false;
+      options.onNotice?.(
+        "run",
+        `cannot write harness stderr logs to ${logDir}: ${root} does not exist`,
+      );
+    } else {
+      mkdirSync(logDir, { recursive: true });
+    }
+  } catch (err) {
+    logs = false;
+    options.onNotice?.(
+      "run",
+      `cannot write harness stderr logs to ${logDir}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
 
   const results = new Array<TaskRun>(run.tasks.length);
   const queue = run.tasks.map((task, index) => ({ task, index }));
@@ -302,6 +338,7 @@ export async function runRun(
         options,
         onTurn,
         worktrees,
+        logs ? join(logDir, `${task.id}.stderr.log`) : undefined,
       );
     }
   };
@@ -324,6 +361,7 @@ async function runOne(
   options: RunOptions,
   onTurn: () => void,
   worktrees: Worktrees | null,
+  stderrLog: string | undefined,
 ): Promise<TaskRun> {
   const started = Date.now();
 
@@ -358,6 +396,7 @@ async function runOne(
       bus,
       signal,
       verbose: options.verbose ?? false,
+      stderrLog,
       policy:
         task.mode === "ask" && options.askPolicy
           ? options.askPolicy
@@ -437,6 +476,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     policy: ctx.policy,
     allowReadOutsideRoot: task.allowReadOutsideRoot,
     verbose: ctx.verbose,
+    stderrLog: ctx.stderrLog,
     onEvent: ctx.bus.emit,
   });
 

@@ -18,12 +18,14 @@
 
 import assert from "node:assert/strict";
 import { execFile as execFileCb } from "node:child_process";
-import { readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
 const execFile = promisify(execFileCb);
+const git = async (cwd: string, ...args: string[]) =>
+  (await execFile("git", args, { cwd })).stdout.trim();
 
 import { MOCK_AGENT, runCli, tempDir } from "./integration/helpers.ts";
 
@@ -295,7 +297,13 @@ test("one asking task with no TTY runs as safe, and says so", async (t) => {
   const r = await runCli(t, ["--file", file, "--cwd", cwd]);
 
   assert.match(r.stderr, /\[one\] not a TTY — ask runs as safe/);
-  assert.deepEqual(await readdir(cwd), [], "safe refused the write");
+  // `.agent-team/` is our own state, not the task's work: M1b-7's stderr log
+  // is written for every task of a run, refused write or not.
+  assert.deepEqual(
+    await readdir(cwd),
+    [".agent-team"],
+    "safe refused the write",
+  );
 });
 
 test("two asking tasks are refused a prompt they would have to share", async (t) => {
@@ -316,7 +324,7 @@ test("two asking tasks are refused a prompt they would have to share", async (t)
   // The count is the point: one readline cannot attribute an answer between
   // two askers, so the limit is on askers, not on tasks.
   assert.match(r.stderr, /2 tasks ask, and one prompt cannot serve two/);
-  assert.deepEqual(await readdir(cwd), [], "both ran as safe");
+  assert.deepEqual(await readdir(cwd), [".agent-team"], "both ran as safe");
 });
 
 test("--file --quiet drops the advisory line, exactly as one prompt does", async (t) => {
@@ -380,6 +388,120 @@ test("a task whose harness cannot start fails alone, and fails the run", async (
   // The doomed harness died before it ever sent a prompt, so only the good
   // task counts as a turn.
   assert.match(r.stdout, /failed — 2 tasks, 1 turn/);
+});
+
+test("a harness that dies leaves its own error in a per-task log", async (t) => {
+  // The story's whole point (M1b-7): the terminal already gets this under
+  // `--verbose`, and the rejection message carries it while the process
+  // lives. Neither survives a daemon, so the file is the durable record —
+  // written with no flag asked for, and for the task that worked too.
+  const cwd = await tempDir(t);
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [
+      { id: "good", prompt: "hi", cmd: `node ${MOCK_AGENT}` },
+      // A `cmd` is split on whitespace and never through a shell
+      // (`protocol/registry.ts:212`), so the death has to come from the
+      // runtime itself rather than from a quoted script.
+      { id: "doomed", prompt: "hi", cmd: "node --badflag" },
+    ],
+  });
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+
+  // Printed as `run <id>` on stdout, which `--quiet` silences — so the id is
+  // read off the directory, which is also how an operator finds it.
+  const [runId] = await readdir(join(cwd, ".agent-team", "runs"));
+  const logs = join(cwd, ".agent-team", "runs", String(runId));
+
+  assert.match(
+    await readFile(join(logs, "doomed.stderr.log"), "utf8"),
+    /--badflag/,
+    "the harness's own reason, not our exit code",
+  );
+  // The task that started fine is logged too, empty: "the harness said
+  // nothing" and "the task never got here" have to look different on disk.
+  assert.equal(await readFile(join(logs, "good.stderr.log"), "utf8"), "");
+  assert.equal(r.code, 1);
+});
+
+test("a spawn failure is written to the per-task log, not just printed", async (t) => {
+  // `node --badflag` above is a harness that starts and then dies. This is
+  // the other fail-to-start shape: the binary never exists, so there is no
+  // harness stderr to capture — our own spawn error has to be the durable
+  // record.
+  const cwd = await tempDir(t);
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [{ id: "ghost", prompt: "hi", cmd: "definitely-not-a-real-binary" }],
+  });
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  const [runId] = await readdir(join(cwd, ".agent-team", "runs"));
+  assert.match(
+    await readFile(
+      join(cwd, ".agent-team", "runs", String(runId), "ghost.stderr.log"),
+      "utf8",
+    ),
+    /failed to spawn "definitely-not-a-real-binary"/,
+  );
+});
+
+test("a missing --cwd is not created by the stderr log directory", async (t) => {
+  // M1b-7's log directory is `mkdir -p`-shaped, which must not turn a typo'd
+  // workspace root into an empty real one. Before the log landed, each task
+  // simply failed at spawn with ENOENT — and so it must still.
+  const cwd = await tempDir(t);
+  const missing = join(cwd, "typo");
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const r = await runCli(t, ["--file", file, "--cwd", missing, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /failed to spawn/);
+  // The other half of the same rule: a log we cannot write is a notice, never
+  // a refusal to run and never a status.
+  assert.match(
+    r.stderr,
+    /cannot write harness stderr logs to .*does not exist/,
+  );
+  await assert.rejects(readdir(missing), /ENOENT/);
+});
+
+test("--cwd in a subdirectory logs at the repository root", async (t) => {
+  // Worktrees run each task at the same subdirectory inside its checkout,
+  // but `.agent-team/` is repository-level state. The log has to follow the
+  // root `openWorktrees` chose, not the subdirectory the task actually ran in.
+  const root = await tempDir(t);
+  await git(root, "init", "-b", "main");
+  await git(root, "config", "user.email", "test@example.invalid");
+  await git(root, "config", "user.name", "Test");
+  await writeFile(join(root, ".gitignore"), ".agent-team/\n");
+  await mkdir(join(root, "sub"));
+  await writeFile(join(root, "sub", "keep.txt"), "x\n");
+  await git(root, "add", "-A");
+  await git(root, "commit", "-m", "first");
+
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+  const r = await runCli(t, [
+    "--file",
+    file,
+    "--cwd",
+    join(root, "sub"),
+    "--quiet",
+  ]);
+
+  assert.equal(r.code, 0);
+  const [runId] = await readdir(join(root, ".agent-team", "runs"));
+  assert.equal(
+    await readFile(
+      join(root, ".agent-team", "runs", String(runId), "one.stderr.log"),
+      "utf8",
+    ),
+    "",
+  );
 });
 
 test("--quiet still reports a task failure, on stderr", async (t) => {

@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
+import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
@@ -110,6 +111,11 @@ export interface AcpAgentOptions {
   onEvent?: EventSink;
   allowReadOutsideRoot?: boolean;
   verbose?: boolean;
+  /** Where to mirror the harness's stderr, line by line, for the life of the
+   * subprocess (M1b-7). Opened on `start()` whether or not the harness ever
+   * writes: an empty log means it said nothing, a missing one means the task
+   * never got this far. The caller owns the directory. */
+  stderrLog?: string;
   /** Deadline for handshake and session-management calls. Never applied to
    * `session/prompt`. Defaults to 30s. */
   requestTimeoutMs?: number;
@@ -206,6 +212,7 @@ export class AcpAgent {
   onEvent: EventSink;
   allowReadOutsideRoot: boolean;
   verbose: boolean;
+  stderrLog: string | null;
   requestTimeoutMs: number;
   sessionId: SessionId | null;
   agentInfo: Implementation | null;
@@ -223,6 +230,7 @@ export class AcpAgent {
   #closed = false;
   #promptInFlight = false;
   #stderr: string[] = [];
+  #stderrFile: WriteStream | null = null;
 
   constructor({
     name,
@@ -234,6 +242,7 @@ export class AcpAgent {
     onEvent = () => {},
     allowReadOutsideRoot = false,
     verbose = false,
+    stderrLog,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   }: AcpAgentOptions) {
     this.name = name ?? command;
@@ -245,6 +254,7 @@ export class AcpAgent {
     this.onEvent = onEvent;
     this.allowReadOutsideRoot = allowReadOutsideRoot;
     this.verbose = verbose;
+    this.stderrLog = stderrLog ?? null;
     this.requestTimeoutMs = requestTimeoutMs;
     this.sessionId = null;
     this.agentInfo = null;
@@ -264,9 +274,14 @@ export class AcpAgent {
     this.#proc = proc;
 
     proc.on("error", (err: Error) => {
-      this.#failAll(
-        new Error(`failed to spawn "${this.command}": ${err.message}`),
-      );
+      // M1b-7: the rejection message is enough while a terminal is watching,
+      // but the durable log is the daemon's only copy. The stream is assigned
+      // below before this event can fire; `close` (which follows a failed
+      // spawn on Node >=24) remains the place that ends it.
+      const message = `failed to spawn "${this.command}": ${err.message}`;
+      this.#stderr.push(message);
+      this.#stderrFile?.write(`${message}\n`);
+      this.#failAll(new Error(message));
     });
 
     // A harness that dies at spawn leaves its stdin a broken pipe, and the
@@ -288,6 +303,8 @@ export class AcpAgent {
 
     proc.on("close", (code: number | null) => {
       this.#closed = true;
+      this.#stderrFile?.end();
+      this.#stderrFile = null;
       this.#failAll(new Error(this.#exitMessage(code)));
     });
 
@@ -300,8 +317,34 @@ export class AcpAgent {
     // #failAll would otherwise report a bare exit code. Measured 2026-08-31
     // (issue #11): every harness in the registry's configuration emits nothing
     // at all on stderr through a normal turn, so retaining it costs nothing.
+    //
+    // The file is the durable half of the same record (M1b-7): the retention
+    // above dies with the process, and under a daemon nobody is reading a
+    // terminal. Opened here rather than on the first line so that a harness
+    // that said nothing still leaves a log.
+    if (this.stderrLog !== null) {
+      // `ax`, so one (runId, taskId) is written exactly once. Plain `a` mixes
+      // two executions into one file and breaks the "empty means the harness
+      // said nothing" reading above; `w` would silently destroy the earlier
+      // run's only durable record, which is the worse half of the trade. The
+      // EEXIST arrives on the handler below, so a re-run says so and keeps
+      // what is already there.
+      const file = createWriteStream(this.stderrLog, { flags: "ax" });
+      // Unconditional, not `#log`: a log we cannot write is exactly the case
+      // the operator has no other way to notice. It never fails the task —
+      // the run is what matters, the log is how it is read afterwards.
+      file.on("error", (err: Error) => {
+        this.#stderrFile = null;
+        process.stderr.write(
+          `[${this.name}] stderr log ${this.stderrLog}: ${err.message}\n`,
+        );
+      });
+      this.#stderrFile = file;
+    }
+
     createInterface({ input: proc.stderr }).on("line", (line: string) => {
       this.#stderr.push(line);
+      this.#stderrFile?.write(`${line}\n`);
       if (this.verbose) process.stderr.write(`[${this.name}:stderr] ${line}\n`);
     });
 

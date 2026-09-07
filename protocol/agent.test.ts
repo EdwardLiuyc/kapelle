@@ -12,7 +12,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
@@ -531,6 +531,55 @@ test("a harness that dies mid-handshake fails with its own stderr", async (t) =>
   assert.match(err.message, /Cannot find module '\/nonexistent\/preload\.js'/);
   // That line sits near the head of the output; a tail-only window drops it.
   assert.match(err.message, /node:internal\/modules\/cjs\/loader:1568/);
+});
+
+test("an existing log is kept whole, never appended to or truncated", async (t) => {
+  // A `runId` is minted per run, so a second harness writing an existing log
+  // needs a caller that supplied one — M2's daemon can. Neither mixing the two
+  // executions nor overwriting the first is acceptable, so the open is
+  // exclusive: the run continues, one line says the log was refused, and what
+  // is on disk stays as it was.
+  const dir = await tempDir(t, "acp-log-");
+  const log = join(dir, "taken.stderr.log");
+  await writeFile(log, "an earlier run\n", "utf8");
+
+  const agent = new AcpAgent({
+    name: "second",
+    command: process.execPath,
+    args: ["-e", DIES_MID_HANDSHAKE],
+    stderrLog: log,
+    requestTimeoutMs: 5_000,
+  });
+  t.after(() => agent.stop());
+
+  await assert.rejects(agent.start());
+
+  assert.equal(
+    await readFile(log, "utf8"),
+    "an earlier run\n",
+    "the first run's record is the one thing that must not be lost",
+  );
+});
+
+test("a fresh log holds the harness's stderr, with no flag asked for", async (t) => {
+  const dir = await tempDir(t, "acp-log-");
+  const log = join(dir, "fresh.stderr.log");
+
+  const agent = new AcpAgent({
+    name: "dying",
+    command: process.execPath,
+    args: ["-e", DIES_MID_HANDSHAKE],
+    stderrLog: log,
+    requestTimeoutMs: 5_000,
+  });
+  t.after(() => agent.stop());
+
+  await assert.rejects(agent.start());
+
+  assert.match(
+    await readFile(log, "utf8"),
+    /Cannot find module '\/nonexistent\/preload\.js'/,
+  );
 });
 
 test("a silent harness produces no stderr section at all", async (t) => {

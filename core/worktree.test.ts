@@ -96,6 +96,20 @@ test("a repository with no commits falls back with a notice", async (t) => {
   assert.match(String(notice), /no commits yet/);
 });
 
+test("a repository with no commits still refuses an unignored .agent-team", async (t) => {
+  // The unborn-HEAD fallback is not a pass around the ignore preflight:
+  // `core/run.ts` writes `.agent-team/runs/` even when worktrees cannot
+  // exist, so a fresh `git init` with no .gitignore must refuse before the
+  // run can create state that would be committed by accident.
+  const dir = await tempDir(t);
+  await git(dir, "init", "-b", "main");
+
+  await assert.rejects(openWorktrees(dir, RUN_ID), (err: Error) => {
+    assert.match(err.message, /not ignored by git/);
+    return true;
+  });
+});
+
 test("an unignored .agent-team/ refuses, and the message is the fix", async (t) => {
   const root = await repo(t);
   await writeFile(join(root, ".gitignore"), "node_modules/\n");
