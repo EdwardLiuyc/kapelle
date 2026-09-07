@@ -20,7 +20,10 @@
 /** The extracted block. `status` is the agent's own word, not our vocabulary:
  *  a harness that writes "ok" instead of "success" has still reported, and
  *  rejecting the block would throw away a good summary over a synonym. Only
- *  the cross-check reads it, and only to recognise a success claim. */
+ *  the cross-check reads it, and only to recognise a success claim.
+ *
+ *  `RESULT_PREAMBLE` below *asks* for a closed list even so — see the
+ *  asymmetry it documents, which is deliberate rather than a contradiction. */
 export interface AgentResult {
   status: string;
   summary: string;
@@ -54,6 +57,17 @@ export interface ResultWarning {
  * right and the surest way to have the agent echo it back before doing the
  * work; the shape is described in one sentence instead. `extractResult` takes
  * the *last* block anyway, so an early echo is harmless either way.
+ *
+ * **Asked strictly, accepted liberally, on purpose** (#88). This text names a
+ * closed vocabulary — `success | partial | failed` — while `AgentResult.status`
+ * accepts whatever arrives. Both halves earn their side: a model given a free
+ * choice writes "ok", "complete" or "done-ish", and `crossCheck` recognises a
+ * success claim by the word, so asking loosely would quietly cost us
+ * `claimedSuccessNoDiff` on every harness that picked a synonym. Enforcing the
+ * list on the way back in would cost more — a block rejected over one word
+ * loses its summary and its `<files>` too, and compliance with a prompt is not
+ * enforceable anyway (see the no-re-ask note at the top). So the ask is strict
+ * and the parse is forgiving.
  */
 export const RESULT_PREAMBLE =
   `When the work is done, end your final message with a task-result block, ` +
