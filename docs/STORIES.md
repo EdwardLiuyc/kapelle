@@ -1058,6 +1058,24 @@ conflict predates today: it was written into M1b-4 before M0-4 measured the beha
 survived because nothing forced the two to be read together.
 *Done when* `node:test` covers the strictness matrix field by field, and a fixture exists
 per warning class.
+**Landed 2026-09-07 (#20).** `core/result.ts` — preamble, extractor, cross-check, all pure —
+called from `runTask`, with `runOne` merging the verdict onto `TaskRun`. `TaskRun` **is** the
+story's `TaskResult`: the agent-reported half (`result`, `summary`, `summarySynthesised`,
+`warnings`) beside the observed half it already carried. Two decisions were taken in scoping
+and are recorded on the issue. **(1) A warning promotes `done` to `warned`** — the producer
+that status has been waiting for since M1b-2 — and promotes nothing else, because reading
+`warned` over a refusal would hide it behind a status the CLI exits 0 for. **(2) The preamble
+goes on every prompt**, the single-agent path included, so there is one composer rather than
+two answers to what a prompt looks like. Three things the build settled that the story did
+not. `diff: undefined` is **unknown, never empty**: outside a repository every tree-shaped
+check skips itself, or the no-repo fallback would warn on every task it ran. `policyNeverFired`
+does **not** fire where the registry already says `asksPermission: false` — `warningsFor`
+prints that containment line for the harness per task already, and `cli.test.ts:205` fixes
+that as deliberate, so a second per-task line would be the crying wolf M0-1 warned about
+rather than a fix for it. And `<status>` is kept as the agent's own word rather than a closed
+vocabulary: a harness that writes "ok" has still reported, and rejecting the block over a
+synonym would throw away a good summary. `mock-agent.mjs` now sends a compliant block, which
+is what keeps the happy path exercisable offline; M1b-5 still owns the non-compliant fixtures.
 
 **M1b-5 · Extend `mock-agent` · S · needs M1b-4**
 Multiple sessions, a permission timeout, a malformed `<task-result>`, a missing block that

@@ -38,18 +38,32 @@ import type { StopReason, Usage } from "../protocol/types.ts";
 import { createEventBus, type EventBus } from "./events.ts";
 import { newRunId } from "./ids.ts";
 import { negotiateSafeMode, policyFor } from "./policy.ts";
+import {
+  type AgentResult,
+  crossCheck,
+  extractResult,
+  type ResultWarning,
+  synthesiseSummary,
+  withResultPreamble,
+} from "./result.ts";
 import type { Run, Task } from "./runfile.ts";
-import { openWorktrees, STATE_DIR, type Worktrees } from "./worktree.ts";
+import {
+  openWorktrees,
+  STATE_DIR,
+  type Worktrees,
+  workingTreeStatus,
+} from "./worktree.ts";
 
 /**
  * Every terminal state a task can reach.
  *
  * Two have no producer in this module, deliberately and against the rule
  * `core/events.ts` follows for bus variants. `skipped` is minted by M3-1 when
- * a dependency fails; `warned` by M1b-4 when the result block and the diff
- * disagree. They are here because the *ordering* below is the thing being
- * decided, and a rung added to it later would rewrite M1b-4's table and its
- * test rather than extend them.
+ * a dependency fails. `warned` has its producer as of M1b-4: `runOne` promotes
+ * a `done` task to it when the cross-check disagrees with the block the agent
+ * sent. They are here because the *ordering* below is the thing being decided,
+ * and a rung added to it later would rewrite the table and its test rather
+ * than extend them.
  */
 export type TaskStatus =
   | "done"
@@ -162,6 +176,20 @@ export interface TaskRun {
   /** Present only when the task threw. The message, not the stack: this is
    *  printed, and M1b-7 keeps the real stderr on disk. */
   error?: string;
+  /** The `<task-result>` block the agent sent, when it sent a valid one
+   *  (M1b-4). This record *is* the story's `TaskResult`: the agent-reported
+   *  half here, the observed half in the fields above. */
+  result?: AgentResult;
+  /** Absent when the agent and the working tree agreed about everything.
+   *  Never fatal — a non-empty list promotes `done` to `warned`, and nothing
+   *  below `done` is touched. */
+  warnings?: ResultWarning[];
+  /** The block's summary, or the tail of the prose when there was no block.
+   *  M3-3 hands this to a successor, which is why the next field exists. */
+  summary?: string;
+  /** True when `summary` is our synthesis rather than the agent's own words.
+   *  A successor's prompt must say so plainly rather than quote us as it. */
+  summarySynthesised?: true;
 }
 
 export interface RunReport {
@@ -211,6 +239,12 @@ interface TaskContext {
 interface TaskOutcome {
   stopReason?: StopReason;
   usage?: Usage;
+  /** M1b-4, and produced by the *executor* rather than by `runOne`: only
+   *  something that really ran a harness has a working tree to compare a
+   *  block against. An injected test executor reports neither, and its tasks
+   *  are never promoted to `warned` for prose it was never asked to write. */
+  result?: AgentResult;
+  warnings?: ResultWarning[];
 }
 
 /**
@@ -405,21 +439,35 @@ async function runOne(
       onTurn,
     });
     record();
+    const status = statusFor({
+      stopReason: outcome.stopReason,
+      cancelRequested,
+      watchdogFired: false,
+    });
+    const warnings = outcome.warnings ?? [];
     const result: TaskRun = {
       id: task.id,
       agent: task.agent,
       cwd,
       transcript,
-      status: statusFor({
-        stopReason: outcome.stopReason,
-        cancelRequested,
-        watchdogFired: false,
-      }),
+      // A disagreement colours a task that otherwise finished; it never
+      // rescues one that did not. `warned` exits 0 and releases its worktree
+      // exactly as `done` does, so this is a thing to read, not a failure.
+      status: status === "done" && warnings.length ? "warned" : status,
       durationMs: Date.now() - started,
     };
     if (outcome.stopReason !== undefined)
       result.stopReason = outcome.stopReason;
     if (outcome.usage !== undefined) result.usage = outcome.usage;
+    if (outcome.result) result.result = outcome.result;
+    if (warnings.length) result.warnings = warnings;
+    // The block's own words when there are any, our synthesis otherwise —
+    // and never silently: M3-3 tells a successor which of the two it got.
+    const summary = outcome.result?.summary ?? synthesiseSummary(transcript);
+    if (summary) {
+      result.summary = summary;
+      if (!outcome.result) result.summarySynthesised = true;
+    }
     settled = result;
   } catch (err) {
     record();
@@ -465,6 +513,22 @@ async function runOne(
 async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
   const spec = resolveAgent(task.agent, task.cmd);
 
+  // Observed on the way past, not reconstructed afterwards. `runOne` keeps its
+  // own copy of the prose for printing; this one exists because the executor
+  // is what has to read the block back out, and a permission count has no
+  // other witness at all.
+  let prose = "";
+  let permissionCount = 0;
+  const onEvent: typeof ctx.bus.emit = (event) => {
+    const u = event.update;
+    if (u.sessionUpdate === "agent_message_chunk") {
+      if (u.content?.type === "text") prose += u.content.text;
+    } else if (u.sessionUpdate === "_client_permission") {
+      permissionCount += 1;
+    }
+    ctx.bus.emit(event);
+  };
+
   const agent = new AcpAgent({
     // The task id, not the agent id: two tasks may name the same harness, and
     // the id is what a reader needs to tell their events apart.
@@ -477,7 +541,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     allowReadOutsideRoot: task.allowReadOutsideRoot,
     verbose: ctx.verbose,
     stderrLog: ctx.stderrLog,
-    onEvent: ctx.bus.emit,
+    onEvent,
   });
 
   // **Not `{ once: true }`.** `AcpAgent.cancel()` returns immediately when
@@ -527,10 +591,42 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     // sends no prompt, and a task cancelled before this line sends none either.
     if (cancelled()) return {};
     ctx.onTurn();
-    const { stopReason, usage } = await agent.prompt(task.prompt);
-    return usage === undefined ? { stopReason } : { stopReason, usage };
+    // The preamble rides the one prompt this task gets. There is no second
+    // one to ask again with (M0-4, `protocol/agent.ts:446`), which is exactly
+    // why it is here and not held back for a follow-up.
+    const { stopReason, usage } = await agent.prompt(
+      withResultPreamble(task.prompt),
+    );
+
+    const result = extractResult(prose);
+    const outcome: TaskOutcome = { stopReason };
+    if (usage !== undefined) outcome.usage = usage;
+    if (result) outcome.result = result;
+    const warnings = crossCheck({
+      result,
+      // Unknown, not empty: outside a repository there is nothing to compare
+      // against, and every tree-shaped check skips itself rather than guess.
+      diff: await tryWorkingTree(ctx.cwd),
+      permissionCount,
+      ...(spec.measured
+        ? { asksPermission: spec.measured.asksPermission }
+        : {}),
+    });
+    if (warnings.length) outcome.warnings = warnings;
+    return outcome;
   } finally {
     ctx.signal.removeEventListener("abort", onAbort);
     agent.stop();
+  }
+}
+
+/** The working tree, or `undefined` when there is no repository to read one
+ *  from — the `--cwd` fallback `openWorktrees` already prints a notice for.
+ *  Never a reason to fail a task that has already finished. */
+async function tryWorkingTree(cwd: string): Promise<string | undefined> {
+  try {
+    return await workingTreeStatus(cwd);
+  } catch {
+    return undefined;
   }
 }

@@ -357,3 +357,66 @@ test("askPolicy reaches the asking task and nothing else", async () => {
 // The worktree seam M1b-3 filled in is covered by `core/worktree.test.ts`,
 // against a real `git init` — the pool's half of it is one `acquire` before
 // the executor and one `release` after, and neither is observable from here.
+
+// --- the cross-check's verdict, M1b-4 ----------------------------------------
+
+test("a warning promotes a done task, and the run, to warned", async () => {
+  const exec: TaskExecutor = async (task) => {
+    if (task.id !== "t1") return { stopReason: "end_turn" };
+    return {
+      stopReason: "end_turn",
+      warnings: [{ kind: "claimedSuccessNoDiff", text: "said success" }],
+    };
+  };
+
+  const report = await runRun(runOf(3, 3), options(), exec);
+
+  const warned = report.tasks.find((t) => t.id === "t1");
+  assert.equal(warned?.status, "warned");
+  assert.deepEqual(
+    warned?.warnings?.map((w) => w.kind),
+    ["claimedSuccessNoDiff"],
+  );
+  assert.equal(report.tasks.filter((t) => t.status === "done").length, 2);
+  assert.equal(report.status, "warned");
+});
+
+test("a warning never rescues a task that did not finish", async () => {
+  // The promotion is `done` → `warned` and nothing else. A refusal that also
+  // disagreed with the tree is still a failure, and reading `warned` there
+  // would hide it behind a status the CLI exits 0 for.
+  const exec: TaskExecutor = async () => ({
+    stopReason: "refusal",
+    warnings: [{ kind: "noResultBlock", text: "nothing reported" }],
+  });
+
+  const report = await runRun(runOf(1, 1), options(), exec);
+  assert.equal(report.tasks[0]?.status, "failed");
+  assert.equal(report.status, "failed");
+});
+
+test("the summary is the block's own words, or ours and flagged as ours", async () => {
+  const reported: TaskExecutor = async () => ({
+    stopReason: "end_turn",
+    result: { status: "success", summary: "Agent said this.", details: "d" },
+  });
+  const [mine] = (await runRun(runOf(1, 1), options(), reported)).tasks;
+  assert.equal(mine?.summary, "Agent said this.");
+  assert.equal(mine?.summarySynthesised, undefined);
+
+  // No block, so the summary is synthesised from whatever prose arrived on
+  // the bus — and says so, because M3-3 must not quote us as the agent.
+  const silent: TaskExecutor = async (_task, ctx) => {
+    ctx.bus.emit({
+      agent: "t0",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "I did some work." },
+      },
+    });
+    return { stopReason: "end_turn" };
+  };
+  const [ours] = (await runRun(runOf(1, 1), options(), silent)).tasks;
+  assert.equal(ours?.summary, "I did some work.");
+  assert.equal(ours?.summarySynthesised, true);
+});

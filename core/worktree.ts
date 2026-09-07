@@ -67,9 +67,11 @@ const RELEASES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
  * as untouched — the checkout is removed with the work in it (measured
  * 2026-09-07, #85). `--untracked-files=all` cannot be weakened by anyone's
  * config, which is the only property a safety check may rely on. Ignored files
- * stay out, so `.agent-team/` is still invisible here.
+ * stay out, so `.agent-team/` is still invisible here — which is also why
+ * M1b-4's cross-check reads the tree through this function and needs no
+ * exclusion list of its own.
  */
-function statusOf(cwd: string): Promise<string> {
+export function workingTreeStatus(cwd: string): Promise<string> {
   return git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
 }
 
@@ -207,7 +209,7 @@ export async function openWorktrees(
   // `.agent-team/` is ignored by the check above, so it can never be the
   // reason this fires — the criterion that the supervisor's own state does not
   // trip its own refusal is met by ordering, not by a second exclusion list.
-  const dirty = await statusOf(root);
+  const dirty = await workingTreeStatus(root);
   if (dirty !== "") {
     throw new Error(
       `the working tree at ${root} has uncommitted changes, and a run branches ` +
@@ -318,7 +320,7 @@ export async function openWorktrees(
           );
         }
 
-        const dirty = (await statusOf(task.path)) !== "";
+        const dirty = (await workingTreeStatus(task.path)) !== "";
         const head = await git(task.path, ["rev-parse", "HEAD"]);
         const untouched = !dirty && head === task.baseSha;
 
