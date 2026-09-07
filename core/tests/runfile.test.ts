@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import type { AgentEntry } from "../protocol/registry.ts";
+import type { AgentEntry } from "../../protocol/registry.ts";
 import {
   RUN_KEYS,
   type Run,
@@ -10,7 +10,7 @@ import {
   type Task,
   type TaskInput,
   validateRun,
-} from "./runfile.ts";
+} from "../runfile.ts";
 
 /** Two entries, because the ceiling is untestable against the real registry:
  *  every shipped agent is `maxMode: "auto"` (`protocol/registry.ts`). Injected
@@ -263,7 +263,7 @@ test("the run-file schema lists exactly the keys the validator knows", async () 
   // The one real cost of shipping a schema is that it becomes a second copy
   // of the field list. This is the guard: the validator stays the single
   // source of truth, and the schema is asserted equal to it.
-  const path = new URL("../schema/run.schema.json", import.meta.url);
+  const path = new URL("../../schema/run.schema.json", import.meta.url);
   const schema = JSON.parse(await readFile(path, "utf8"));
 
   assert.deepEqual(Object.keys(schema.properties).sort(), [...RUN_KEYS].sort());

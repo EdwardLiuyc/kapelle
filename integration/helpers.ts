@@ -5,7 +5,7 @@
  * harness binaries**, so they need credentials and they spend real tokens.
  * The `*.itest.ts` files stay out of CI: `node --test` does not discover the
  * suffix. The generic plumbing below (spawn helpers, temp dirs, `MOCK_AGENT`)
- * is shared with `cli.test.ts`, which *does* run in CI — keep those parts
+ * is shared with `tests/cli.test.ts`, which *does* run in CI — keep those parts
  * CI-safe. Run the opt-in files with `npm run test:harness`.
  *
  * **Assert on what we control, never on what the model says.** File on disk or

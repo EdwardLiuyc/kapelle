@@ -17,7 +17,7 @@ import {
   RESULT_PREAMBLE,
   synthesiseSummary,
   withResultPreamble,
-} from "./result.ts";
+} from "../result.ts";
 
 const block = (body: string) =>
   `Did the thing.\n<task-result>${body}</task-result>`;
@@ -145,7 +145,7 @@ test("success with an empty diff warns", () => {
 
 // Exact paths, never a substring: `run.ts` must not be satisfied by a tree
 // that only changed `core/run.ts.new`. Turning git's output into paths is
-// `changedPaths`' job, and `core/worktree.test.ts` proves that against git.
+// `changedPaths`' job, and `core/tests/worktree.test.ts` proves that against git.
 test("<files> is matched by exact path, not by substring", () => {
   const filesResult = (...files: string[]) =>
     extractResult(block(`${FULL}<files>${files.join("\n")}</files>`));

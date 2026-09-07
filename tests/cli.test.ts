@@ -27,7 +27,7 @@ const execFile = promisify(execFileCb);
 const git = async (cwd: string, ...args: string[]) =>
   (await execFile("git", args, { cwd })).stdout.trim();
 
-import { MOCK_AGENT, runCli, tempDir } from "./integration/helpers.ts";
+import { MOCK_AGENT, runCli, tempDir } from "../integration/helpers.ts";
 
 const MOCK = ["--cmd", `node ${MOCK_AGENT}`];
 
@@ -553,7 +553,7 @@ test("a refusal is a failed task, and it is not a silent one", async (t) => {
 
 test("a preflight refusal is one actionable line, not a stack trace", async (t) => {
   // The `catch` in `runFromFile` exists for exactly this, and nothing drove it
-  // through the CLI: `core/worktree.test.ts` only proves `openWorktrees`
+  // through the CLI: `core/tests/worktree.test.ts` only proves `openWorktrees`
   // rejects, which says nothing about how the process reports it (#85).
   const cwd = await tempDir(t);
   const git = (...args: string[]) => execFile("git", args, { cwd });

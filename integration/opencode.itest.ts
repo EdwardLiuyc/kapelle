@@ -18,7 +18,7 @@
  * **`--mode ask` cannot be tested from here**, and not for want of trying: a
  * test runner has no TTY, so `ask` re-resolves to `safe` before the first
  * notice is even composed. What that fallback does is covered in
- * `cli.test.ts`; the prompt itself stays a manual check.
+ * `tests/cli.test.ts`; the prompt itself stays a manual check.
  */
 
 import assert from "node:assert/strict";

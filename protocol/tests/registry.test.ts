@@ -15,7 +15,7 @@ import {
   resolveAgent,
   resolveEnv,
   warningsFor,
-} from "./registry.ts";
+} from "../registry.ts";
 
 /** A measured entry that asks permission and reports argv — silent in `auto`. */
 const contained: AgentEntry = {

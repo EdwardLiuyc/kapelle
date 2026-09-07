@@ -9,8 +9,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SessionUpdate } from "./protocol/types.ts";
-import { render } from "./render.ts";
+import type { SessionUpdate } from "../protocol/types.ts";
+import { render } from "../render.ts";
 
 /**
  * Closes whatever line the previous test left open. The renderer's stream state

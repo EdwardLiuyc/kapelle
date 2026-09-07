@@ -11,8 +11,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { AgentEventEnvelope } from "../protocol/agent.ts";
-import { createEventBus } from "./events.ts";
+import type { AgentEventEnvelope } from "../../protocol/agent.ts";
+import { createEventBus } from "../events.ts";
 
 const event: AgentEventEnvelope = {
   agent: "mock-agent",

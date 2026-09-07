@@ -10,14 +10,14 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AgentEventEnvelope } from "../protocol/agent.ts";
-import { AGENTS, resolveAgent, warningsFor } from "../protocol/registry.ts";
+import type { AgentEventEnvelope } from "../../protocol/agent.ts";
+import { AGENTS, resolveAgent, warningsFor } from "../../protocol/registry.ts";
 import type {
   ClientResultWarningEvent,
   StopReason,
   Usage,
-} from "../protocol/types.ts";
-import { createEventBus } from "./events.ts";
+} from "../../protocol/types.ts";
+import { createEventBus } from "../events.ts";
 import {
   runRun,
   runStatus,
@@ -25,8 +25,8 @@ import {
   type TaskExecutor,
   type TaskStatus,
   usageSemanticsFor,
-} from "./run.ts";
-import { type Run, validateRun } from "./runfile.ts";
+} from "../run.ts";
+import { type Run, validateRun } from "../runfile.ts";
 
 // --- the stop-reason table ---------------------------------------------------
 
@@ -427,7 +427,7 @@ test("askPolicy reaches the asking task and nothing else", async () => {
   assert.notEqual(seen.get("quiet"), askPolicy);
 });
 
-// The worktree seam M1b-3 filled in is covered by `core/worktree.test.ts`,
+// The worktree seam M1b-3 filled in is covered by `core/tests/worktree.test.ts`,
 // against a real `git init` — the pool's half of it is one `acquire` before
 // the executor and one `release` after, and neither is observable from here.
 

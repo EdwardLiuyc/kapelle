@@ -5,21 +5,21 @@
  * `task > run > harness > default`, the `maxMode` ceiling, and `safe`'s
  * override of `allowReadOutsideRoot`. Negotiation is tested against a stub
  * agent, because what is under test is *whether we call*, not what the call
- * looks like on the wire — that lives in `protocol/agent.test.ts`.
+ * looks like on the wire — that lives in `protocol/tests/agent.test.ts`.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { AcpAgent } from "../protocol/agent.ts";
-import type { AgentEntry } from "../protocol/registry.ts";
+import type { AcpAgent } from "../../protocol/agent.ts";
+import type { AgentEntry } from "../../protocol/registry.ts";
 import {
   negotiateSafeMode,
   policyFor,
   READ_ONLY_KINDS,
   resolvePolicy,
   safePolicy,
-} from "./policy.ts";
+} from "../policy.ts";
 
 // --- precedence --------------------------------------------------------------
 
