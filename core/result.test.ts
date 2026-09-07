@@ -41,12 +41,14 @@ test("no wrapper is null", () => {
 // `<summary></summary>` has filled the shape and reported nothing.
 for (const name of ["status", "summary", "details"]) {
   test(`a missing <${name}> is null`, () => {
+    // pi-lens-ignore: unsafe-regex: tag names come from a fixed local constant.
     const body = FULL.replace(new RegExp(`<${name}>[^<]*</${name}>`), "");
     assert.equal(extractResult(block(body)), null);
   });
 
   test(`a blank <${name}> is null`, () => {
     const body = FULL.replace(
+      // pi-lens-ignore: unsafe-regex: tag names come from a fixed local constant.
       new RegExp(`<${name}>[^<]*</${name}>`),
       `<${name}>   \n </${name}>`,
     );
@@ -97,7 +99,7 @@ test("the preamble is appended after the task's own prompt", () => {
 
 test("a synthesised summary is the tail of the prose, marked as cut", () => {
   assert.equal(synthesiseSummary("  did\n  a thing  "), "did a thing");
-  const long = synthesiseSummary("x".repeat(50) + "the end", 10);
+  const long = synthesiseSummary(`${`x`.repeat(50)}the end`, 10);
   assert.equal(long, "…xxxthe end");
 });
 
@@ -123,6 +125,47 @@ test("success with an empty diff warns", () => {
   assert.deepEqual(
     kinds({ result: extractResult(block(FULL)), diff: "", permissionCount: 1 }),
     ["claimedSuccessNoDiff"],
+  );
+});
+
+// The diff is parsed as porcelain, not searched as prose: an exact path
+// match cannot turn `run.ts` into `core/run.ts.new`, renames contribute both
+// halves, and Git's C-quoted paths compare with what the agent reports.
+test("<files> is matched against parsed porcelain paths, not substrings", () => {
+  const filesResult = (...files: string[]) =>
+    extractResult(block(`${FULL}<files>${files.join("\n")}</files>`));
+
+  assert.deepEqual(
+    kinds({
+      result: filesResult("run.ts"),
+      diff: " M run.ts\n?? core/run.ts.new",
+      permissionCount: 1,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    kinds({
+      result: filesResult("run.ts"),
+      diff: "?? core/run.ts.new",
+      permissionCount: 1,
+    }),
+    ["filesNotInDiff"],
+  );
+  assert.deepEqual(
+    kinds({
+      result: filesResult("src/café.ts", "src/a\tb.ts"),
+      diff: ' M "src/caf\\303\\251.ts"\n M "src/a\\tb.ts"',
+      permissionCount: 1,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    kinds({
+      result: filesResult("old.ts", "new.ts"),
+      diff: "R  old.ts -> new.ts",
+      permissionCount: 1,
+    }),
+    [],
   );
 });
 

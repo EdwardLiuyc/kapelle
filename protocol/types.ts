@@ -407,12 +407,27 @@ export interface ClientCancelRequestedEvent extends Meta {
   sessionId: SessionId;
 }
 
+/** A supervisor cross-check disagreement for one task (M1b-4, issue #20).
+ *  `kind` repeats the core result vocabulary because protocol may not depend
+ *  on core; the bus carries the same words a persisted log or SSE stream will
+ *  need to reconstruct the task's warning list. */
+export interface ClientResultWarningEvent extends Meta {
+  sessionUpdate: "_client_result_warning";
+  kind:
+    | "noResultBlock"
+    | "claimedSuccessNoDiff"
+    | "filesNotInDiff"
+    | "policyNeverFired";
+  text: string;
+}
+
 /** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
   | ClientPermissionEvent
   | ClientWroteFileEvent
-  | ClientCancelRequestedEvent;
+  | ClientCancelRequestedEvent
+  | ClientResultWarningEvent;
 
 /** The `session/update` notification as it arrives. */
 export interface SessionNotification extends Meta {
@@ -691,7 +706,8 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
       const fallthrough:
         | "_client_permission"
         | "_client_wrote_file"
-        | "_client_cancel_requested" = u.sessionUpdate;
+        | "_client_cancel_requested"
+        | "_client_result_warning" = u.sessionUpdate;
       void fallthrough;
       return false;
     }

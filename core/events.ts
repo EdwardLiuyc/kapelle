@@ -12,14 +12,14 @@
  * persisted log can only replay what it recorded, and `session/load` needs a
  * faithful record to replay from.
  *
- * **No supervisor variants yet, deliberately.** The story lists six (task
- * started, worktree created, permission pending, stall warning, task
- * finished, containment warning). Five have no producer in the tree: the
- * files that would send them are M1b-2, M1b-3 and M1c-1. The sixth, the
- * containment warning, stays on stderr at `run.ts` — moving it onto the bus
- * now would route it through a sink `--quiet` switches off, and #13 says that
- * line is never silenced. Each story widens the union when it lands its
- * producer.
+ * **Supervisor variants widen as their producers land.** The story lists six
+ * (task started, worktree created, permission pending, stall warning, task
+ * finished, containment warning). Most have no producer in the tree yet; the
+ * containment warning stays on stderr at `run.ts` — moving it onto the bus
+ * would route it through a sink `--quiet` switches off, and #13 says that
+ * line is never silenced. M1b-4 is the first producer on this side of the
+ * client: `core/run.ts` emits `_client_result_warning` for cross-check
+ * disagreements. Each story widens the union when it lands its producer.
  *
  * Not `node:events`: `EventEmitter.emit` propagates a listener's throw and
  * skips the listeners behind it, so a broken renderer would take the run down
@@ -58,7 +58,8 @@ export function createEventBus(): EventBus {
           // A consumer that throws is a bug in that consumer, never a reason
           // to lose the run or the events behind it. The error object rather
           // than its message: a listener bug is worth a stack trace.
-          console.error("! event listener threw:", err);
+          // Reason: listener exceptions must be visible; this is the intended reporting point.
+          console.error("! event listener threw:", err); // pi-lens-ignore: console-statement
         }
       }
     },

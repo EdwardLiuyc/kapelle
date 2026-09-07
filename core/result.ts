@@ -110,6 +110,95 @@ export function extractResult(message: string): AgentResult | null {
 }
 
 /**
+ * Paths named by `git status --porcelain --untracked-files=all`.
+ *
+ * Renames contribute both halves: an agent may reasonably report either the
+ * old path it changed or the new path it created. Quoted paths are decoded
+ * with Git's C-style rules, so `"src/caf\303\251.ts"` compares equal to the
+ * `src/café.ts` an agent reports. An unquoted path containing ` -> ` on a
+ * rename line is ambiguous in porcelain v1; the first top-level separator is
+ * the conventional reading, and this parser does not pretend to solve what
+ * Git itself does not delimit.
+ */
+function porcelainPaths(status: string): string[] {
+  const paths = new Set<string>();
+  for (const line of status.split("\n")) {
+    // Two status letters, one space, then the path. A shorter line carries
+    // no path and therefore says nothing about the tree.
+    if (line.length < 4) continue;
+    const body = line.slice(3);
+    const rename = /^[ACDR]/.test(line) && hasTopLevelSeparator(body);
+    if (!rename) {
+      paths.add(unquoteGitPath(body));
+      continue;
+    }
+    const at = topLevelSeparator(body);
+    if (at === undefined) continue;
+    paths.add(unquoteGitPath(body.slice(0, at)));
+    paths.add(unquoteGitPath(body.slice(at + 4)));
+  }
+  return [...paths];
+}
+
+/** The index of the first ` -> ` outside a quoted path, for rename lines. */
+function topLevelSeparator(body: string): number | undefined {
+  let quoted = false;
+  for (let i = 0; i < body.length - 3; i++) {
+    if (body[i] === '"') quoted = !quoted;
+    if (!quoted && body.startsWith(" -> ", i)) return i;
+  }
+  return undefined;
+}
+
+const hasTopLevelSeparator = (body: string): boolean =>
+  topLevelSeparator(body) !== undefined;
+
+/** Turns a possibly C-quoted porcelain path into the path Git names. */
+function unquoteGitPath(path: string): string {
+  if (!path.startsWith('"') || !path.endsWith('"') || path.length < 2) {
+    return path;
+  }
+  // Decode through bytes: Git octal-escapes UTF-8 byte by byte, so collecting
+  // the bytes and decoding once keeps a multi-byte character intact.
+  const bytes: number[] = [];
+  const escaped = path.slice(1, -1);
+  for (let i = 0; i < escaped.length; i++) {
+    if (escaped[i] !== "\\") {
+      bytes.push(...encoder.encode(escaped[i]));
+      continue;
+    }
+    const octal = /^[0-7]{1,3}/.exec(escaped.slice(i + 1));
+    if (octal) {
+      bytes.push(Number.parseInt(octal[0], 8));
+      i += octal[0].length;
+      continue;
+    }
+    const char = escaped[++i];
+    bytes.push(
+      ...encoder.encode(
+        char === "n"
+          ? "\n"
+          : char === "r"
+            ? "\r"
+            : char === "t"
+              ? "\t"
+              : char === "b"
+                ? "\b"
+                : char === "f"
+                  ? "\f"
+                  : char === "v"
+                    ? "\v"
+                    : char,
+      ),
+    );
+  }
+  return decoder.decode(new Uint8Array(bytes));
+}
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/**
  * The summary for a task that reported nothing structured.
  *
  * The *tail* of the prose, because a final message ends with what the agent
@@ -164,11 +253,13 @@ export function crossCheck(input: CrossCheckInput): ResultWarning[] {
         text: `reported success, but the working tree is unchanged.`,
       });
     }
-    // ponytail: substring match against the porcelain text, not a parse of
-    // it. Renames read as `R old -> new` and both halves are in the line, so
-    // a listed path is found either way; parse the format properly if a path
-    // that is a prefix of another ever reads as present when it is not.
-    const missing = result.files?.filter((f) => !diff?.includes(f)) ?? [];
+    // Parse the porcelain paths rather than substring-search the text: a
+    // listed `run.ts` would otherwise match `core/run.ts.new`, and a quoted
+    // path would never match the name the agent reports.
+    const changedPaths = new Set(
+      diff === undefined ? [] : porcelainPaths(diff),
+    );
+    const missing = result.files?.filter((f) => !changedPaths.has(f)) ?? [];
     if (diff !== undefined && missing.length) {
       out.push({
         kind: "filesNotInDiff",

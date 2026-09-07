@@ -322,6 +322,17 @@ async function runFromFile(path: string): Promise<number> {
   const asker = canAsk ? makeAskPolicy() : undefined;
 
   const bus = createEventBus();
+  // Result warnings are data on the bus, not a CLI-only field. Under `--quiet`
+  // there is no task card to print them from, so this subscriber is the route
+  // that keeps the disagreement visible; it is deliberately separate from the
+  // `onNotice` route, which still owns the never-suppressed #13 lines.
+  if (quiet) {
+    bus.addListener(({ agent: taskId, update }) => {
+      if (update.sessionUpdate === "_client_result_warning") {
+        console.error(`! [${taskId}] ${update.text}`);
+      }
+    });
+  }
   if (!quiet) {
     bus.addListener(({ agent: taskId, update }) => {
       // Milestones only. `render` would braid N streams into one line.
@@ -445,7 +456,8 @@ function printTask(task: TaskRun): void {
   if (task.usage) {
     console.log(
       `  tokens: ${task.usage.totalTokens} total ` +
-        `(${task.usage.inputTokens} in, ${task.usage.outputTokens} out)`,
+        `(${task.usage.inputTokens} in, ${task.usage.outputTokens} out; ` +
+        `${task.usageSemantics ?? "unknown"})`,
     );
   }
   // Before the prose, not after: the warnings are the reason to read the

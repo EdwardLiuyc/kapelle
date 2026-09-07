@@ -1068,14 +1068,17 @@ that status has been waiting for since M1b-2 — and promotes nothing else, beca
 goes on every prompt**, the single-agent path included, so there is one composer rather than
 two answers to what a prompt looks like. Three things the build settled that the story did
 not. `diff: undefined` is **unknown, never empty**: outside a repository every tree-shaped
-check skips itself, or the no-repo fallback would warn on every task it ran. `policyNeverFired`
+check skips itself, or the no-repo fallback would warn on every task it ran. Result warnings
+are published on the bus as `_client_result_warning` and never fail the task. `policyNeverFired`
 does **not** fire where the registry already says `asksPermission: false` — `warningsFor`
-prints that containment line for the harness per task already, and `cli.test.ts:205` fixes
-that as deliberate, so a second per-task line would be the crying wolf M0-1 warned about
-rather than a fix for it. And `<status>` is kept as the agent's own word rather than a closed
-vocabulary: a harness that writes "ok" has still reported, and rejecting the block over a
-synonym would throw away a good summary. `mock-agent.mjs` now sends a compliant block, which
-is what keeps the happy path exercisable offline; M1b-5 still owns the non-compliant fixtures.
+marks that containment line with `onceKey`, so the run prints it once per harness instead of
+once per task — a second per-task line would be the crying wolf M0-1 warned about rather than
+a fix for it. The dedupe is keyed, not blanket: `cli.test.ts:205` fixes the *advisory* line as
+deliberately per task, and that line carries no `onceKey`, so it still repeats. And `<status>` is kept as the
+agent's own word rather than a closed vocabulary: a harness that writes "ok" has still
+reported, and rejecting the block over a synonym would throw away a good summary.
+`mock-agent.mjs` now sends a compliant block, which is what keeps the happy path exercisable
+offline; M1b-5 still owns the non-compliant fixtures.
 
 **M1b-5 · Extend `mock-agent` · S · needs M1b-4**
 Multiple sessions, a permission timeout, a malformed `<task-result>`, a missing block that

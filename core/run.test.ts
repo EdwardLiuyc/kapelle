@@ -10,7 +10,13 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { StopReason } from "../protocol/types.ts";
+import type { AgentEventEnvelope } from "../protocol/agent.ts";
+import { AGENTS, resolveAgent, warningsFor } from "../protocol/registry.ts";
+import type {
+  ClientResultWarningEvent,
+  StopReason,
+  Usage,
+} from "../protocol/types.ts";
 import { createEventBus } from "./events.ts";
 import {
   runRun,
@@ -18,6 +24,7 @@ import {
   statusFor,
   type TaskExecutor,
   type TaskStatus,
+  usageSemanticsFor,
 } from "./run.ts";
 import { type Run, validateRun } from "./runfile.ts";
 
@@ -273,10 +280,16 @@ test("a task that finished before the cancel still reads as done", async () => {
   assert.equal(report.tasks[1]?.status, "cancelled");
 });
 
-test("usage stays on its task, tagged, and is never added up", async () => {
+test("usage stays on its task, tagged with its semantics, and is never added up", async () => {
+  const count: Usage = {
+    inputTokens: 1,
+    outputTokens: 2,
+    totalTokens: 3,
+  };
   const exec: TaskExecutor = async (task) => ({
     stopReason: "end_turn",
-    usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3, _task: task.id },
+    usage: { ...count, _task: task.id },
+    usageSemantics: "per-turn",
   });
 
   const report = await runRun(runOf(2, 2), options(), exec);
@@ -284,8 +297,68 @@ test("usage stays on its task, tagged, and is never added up", async () => {
   // No total on the report: copilot counts cumulatively where opencode counts
   // per turn (M0-5), so a sum would be a number with no meaning.
   assert.ok(!("usage" in report), "the run must not carry a token total");
-  assert.equal(report.tasks[0]?.usage?.totalTokens, 3);
+  assert.deepEqual(report.tasks[0]?.usage, { ...count, _task: "t0" });
+  assert.equal(report.tasks[0]?.usageSemantics, "per-turn");
   assert.equal(report.tasks[0]?.agent, "mock-agent");
+});
+
+test("token semantics come from the registry, or read explicitly as unknown", () => {
+  assert.equal(usageSemanticsFor(resolveAgent("opencode")), "per-turn");
+  assert.equal(usageSemanticsFor(resolveAgent("copilot")), "cumulative");
+  // A `--cmd` has no measured half, so its number must say so rather than
+  // silently borrowing the semantics of whichever harness looks similar.
+  assert.equal(
+    usageSemanticsFor(resolveAgent("", "node mock-agent.mjs")),
+    "unknown",
+  );
+  assert.ok(AGENTS.opencode?.measured, "the measured fixture exists");
+});
+
+// The never-asks line is a property of the harness, not a disagreement with
+// one task's result. It stays on the never-silenced notice route (#13), but
+// N tasks with the same registry entry are one warning, not N.
+test("a harness that never asks emits its containment notice once per run", async () => {
+  const spec = AGENTS.opencode;
+  if (!spec?.measured) throw new Error("opencode has a measured fixture");
+  const [notice] = warningsFor("opencode", spec, "auto");
+  const onceKey = notice?.onceKey;
+  if (!notice || !onceKey) throw new Error("never-asks notice fixture");
+
+  const bus = createEventBus();
+  const busWarnings: ClientResultWarningEvent[] = [];
+  bus.addListener(({ update }) => {
+    if (update.sessionUpdate === "_client_result_warning") {
+      busWarnings.push(update);
+    }
+  });
+  const notices: Array<{ taskId: string; text: string }> = [];
+
+  const exec: TaskExecutor = async (_task, ctx) => {
+    ctx.onNoticeOnce(onceKey, notice.text, notice.kind);
+    return { stopReason: "end_turn" };
+  };
+
+  const report = await runRun(
+    runOf(3, 1),
+    {
+      cwd: "/tmp/nowhere",
+      bus,
+      onNotice: (taskId, text) => notices.push({ taskId, text }),
+    },
+    exec,
+  );
+
+  const taskNotices = notices.filter((n) => n.taskId !== "run");
+  assert.deepEqual(taskNotices, [{ taskId: "t0", text: notice.text }]);
+  assert.deepEqual(
+    report.tasks.map((task) => [task.status, task.warnings]),
+    [
+      ["done", undefined],
+      ["done", undefined],
+      ["done", undefined],
+    ],
+  );
+  assert.deepEqual(busWarnings, []);
 });
 
 test("prose is buffered per task, not interleaved", async () => {
@@ -361,6 +434,14 @@ test("askPolicy reaches the asking task and nothing else", async () => {
 // --- the cross-check's verdict, M1b-4 ----------------------------------------
 
 test("a warning promotes a done task, and the run, to warned", async () => {
+  const bus = createEventBus();
+  const events: AgentEventEnvelope[] = [];
+  bus.addListener((event) => {
+    if (event.update.sessionUpdate === "_client_result_warning") {
+      events.push(event);
+    }
+  });
+
   const exec: TaskExecutor = async (task) => {
     if (task.id !== "t1") return { stopReason: "end_turn" };
     return {
@@ -369,7 +450,7 @@ test("a warning promotes a done task, and the run, to warned", async () => {
     };
   };
 
-  const report = await runRun(runOf(3, 3), options(), exec);
+  const report = await runRun(runOf(3, 3), { cwd: "/tmp/nowhere", bus }, exec);
 
   const warned = report.tasks.find((t) => t.id === "t1");
   assert.equal(warned?.status, "warned");
@@ -379,6 +460,16 @@ test("a warning promotes a done task, and the run, to warned", async () => {
   );
   assert.equal(report.tasks.filter((t) => t.status === "done").length, 2);
   assert.equal(report.status, "warned");
+  // The report is not the only publication: a bus subscriber — a quiet CLI,
+  // M2's log, M4's stream — sees the disagreement tagged with the task.
+  const warnings = events.filter(
+    (e): e is AgentEventEnvelope & { update: ClientResultWarningEvent } =>
+      e.update.sessionUpdate === "_client_result_warning",
+  );
+  assert.deepEqual(
+    warnings.map((e) => [e.agent, e.update.kind, e.update.text]),
+    [["t1", "claimedSuccessNoDiff", "said success"]],
+  );
 });
 
 test("a warning never rescues a task that did not finish", async () => {
