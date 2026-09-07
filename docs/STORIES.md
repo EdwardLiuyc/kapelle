@@ -1073,7 +1073,7 @@ are published on the bus as `_client_result_warning` and never fail the task. `p
 does **not** fire where the registry already says `asksPermission: false` — `warningsFor`
 marks that containment line with `onceKey`, so the run prints it once per harness instead of
 once per task — a second per-task line would be the crying wolf M0-1 warned about rather than
-a fix for it. The dedupe is keyed, not blanket: `tests/cli.test.ts:205` fixes the *advisory* line as
+a fix for it. The dedupe is keyed, not blanket: `tests/cli.test.ts:206` fixes the *advisory* line as
 deliberately per task, and that line carries no `onceKey`, so it still repeats. And `<status>` is kept as the
 agent's own word rather than a closed vocabulary: a harness that writes "ok" has still
 reported, and rejecting the block over a synonym would throw away a good summary.
