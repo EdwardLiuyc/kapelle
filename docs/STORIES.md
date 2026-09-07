@@ -986,7 +986,12 @@ ref, so M1c-3 would merge nothing and call it success. It now verifies the symbo
 **keeps the checkout with a warning** rather than acting. (c) A `--cwd` naming a
 subdirectory was re-entered at the checkout *root*, handing the task the whole repository
 and widening `#guardPath` from the requested subtree — a safety boundary moved by where a
-worktree happens to live. The repo-relative prefix is preserved. Review also found that both
+worktree happens to live. The repo-relative prefix is preserved — subtracted from the **realpath** of both sides,
+because `--show-toplevel` resolves symlinks while `--cwd` is the string that was typed, and
+a second review round measured that mismatch putting one task inside *another task's*
+checkout, its own branch left empty. A containment check on the joined path refuses
+anything outside the checkout, and is unreachable by construction once the prefix is
+honest — kept because this boundary has already moved once. Review also found that both
 ignore refusals told the operator to do something the next preflight rejects: editing
 `.gitignore` is itself an uncommitted change. They now say to commit it, and offer
 `.git/info/exclude` for a tree that must stay clean.

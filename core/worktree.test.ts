@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -545,4 +545,35 @@ test("a subdirectory missing at the base ref throws naming it", async (t) => {
     assert.match(err.message, /packages\/app does not exist/);
     return true;
   });
+});
+
+test("a symlinked --cwd cannot walk a task out of its own checkout", async (t) => {
+  const root = await repo(t);
+  await run("mkdir", ["-p", join(root, "packages", "app")]);
+  await writeFile(join(root, "packages", "app", "a.txt"), "x\n");
+  await git(root, "add", "-A");
+  await git(root, "commit", "-m", "monorepo");
+
+  // `git rev-parse --show-toplevel` resolves symlinks; `--cwd` is the string
+  // the operator typed. Subtracting one from the other gave a prefix full of
+  // `..`, and this exact shape — a link named like another task in the run —
+  // put `plan` inside `impl`'s checkout (#85). `process.cwd()` is already
+  // real, so only an explicit `--cwd` ever reaches this.
+  const link = join(root, "..", "impl");
+  await symlink(join(root, "packages", "app"), link);
+  t.after(() => rm(link, { force: true }));
+
+  const { worktrees } = await openWorktrees(link, RUN_ID);
+  assert.ok(worktrees);
+
+  const impl = await worktrees.acquire("impl");
+  const plan = await worktrees.acquire("plan");
+
+  assert.notEqual(impl, plan);
+  const wt = join(root, ".agent-team", "wt", RUN_ID);
+  assert.equal(plan, join(wt, "plan", "packages", "app"));
+  assert.equal(impl, join(wt, "impl", "packages", "app"));
+  // The subtree the operator asked for, and nothing above it.
+  assert.equal(existsSync(join(plan, "a.txt")), true);
+  assert.equal(existsSync(join(plan, "README.md")), false);
 });

@@ -29,8 +29,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { branchName } from "./ids.ts";
 import type { TaskStatus } from "./run.ts";
@@ -205,7 +205,15 @@ export async function openWorktrees(
   // Where `cwd` sits inside the repository, so each task's checkout can be
   // entered at the same place. Empty for a run started at the repo root, which
   // is every run today — `join(path, "")` is `path`.
-  const prefix = relative(root, cwd);
+  //
+  // **Both sides are real paths before they are subtracted** (#85). `git
+  // rev-parse --show-toplevel` resolves symlinks; `--cwd` is whatever string
+  // was typed. Subtracting a real root from a symlinked cwd yields a prefix
+  // full of `..`, and measured 2026-09-07 that walked one task into *another
+  // task's checkout* — the collision worktrees exist to prevent, with the
+  // escaping task's own branch left empty. `process.cwd()` is already real, so
+  // this only ever changes an explicit `--cwd`.
+  const prefix = relative(realpathSync(root), realpathSync(cwd));
 
   const held = new Map<string, Held>();
 
@@ -239,6 +247,23 @@ export async function openWorktrees(
         // a safety boundary moved by an implementation detail of where a
         // worktree happens to live (measured 2026-09-07, #85).
         const inside = join(path, prefix);
+
+        // Defence in depth on a boundary that has already broken once. The
+        // `realpath` pair above is what makes `prefix` relative and keeps it
+        // so; this says out loud that nothing may leave the checkout, and
+        // fails the task rather than the run if it ever does. No input reaches
+        // it today — that is the point, not an oversight.
+        if (
+          resolve(inside) !== path &&
+          !resolve(inside).startsWith(path + sep)
+        ) {
+          throw new Error(
+            `refusing to run ${taskId} at ${inside}: it is outside the ` +
+              `worktree ${path}. The workspace root must sit inside the ` +
+              `task's own checkout.`,
+          );
+        }
+
         if (!existsSync(inside)) {
           throw new Error(
             `${prefix} does not exist at ${baseRef} — the run was asked for ` +
