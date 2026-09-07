@@ -461,6 +461,12 @@ test("a missing --cwd is not created by the stderr log directory", async (t) => 
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /failed to spawn/);
+  // The other half of the same rule: a log we cannot write is a notice, never
+  // a refusal to run and never a status.
+  assert.match(
+    r.stderr,
+    /cannot write harness stderr logs to .*does not exist/,
+  );
   await assert.rejects(readdir(missing), /ENOENT/);
 });
 
