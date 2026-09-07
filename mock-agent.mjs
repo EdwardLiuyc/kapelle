@@ -229,6 +229,24 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       status: "failed",
     });
 
+    // The result block M1b-4's preamble asks for, as a compliant harness
+    // sends it: last in the final message, and `<files>` only when the write
+    // actually happened — a block that claimed ACP_TEST.md under `safe` would
+    // trip the cross-check the client is meant to keep for real disagreement.
+    // M1b-5 owns the non-compliant fixtures (malformed, missing, lying).
+    update(sid, {
+      sessionUpdate: "agent_message_chunk",
+      content: {
+        type: "text",
+        text:
+          `\n<task-result>\n<status>${wrote ? "success" : "partial"}</status>\n` +
+          `<summary>Read package.json and ${wrote ? "wrote" : "was refused"} ACP_TEST.md.</summary>\n` +
+          `<details>Exercised the read, permission and write paths of the client.</details>\n` +
+          (wrote ? "<files>ACP_TEST.md</files>\n" : "") +
+          `</task-result>\n`,
+      },
+    });
+
     update(sid, { sessionUpdate: "usage_update", used: 1234, size: 200000 });
     reply(msg.id, { stopReason: "end_turn" });
   }

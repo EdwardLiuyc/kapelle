@@ -263,6 +263,10 @@ export function resolveEnv(
 export interface Warning {
   kind: "containment" | "unverified" | "version";
   text: string;
+  /** Set only when the same line belongs once per run, not once per task.
+   *  The caller supplies the deduplication; the registry only names what is
+   *  a property of the harness rather than of one task. */
+  onceKey?: string;
 }
 
 /**
@@ -314,12 +318,15 @@ export function warningsFor(
 
   if (!m.asksPermission) {
     // Louder than containment, and true in `auto` too, where the containment
-    // warning stays silent but the silent-autonomy risk is highest.
+    // warning stays silent but the silent-autonomy risk is highest. The key
+    // is M0-1's anti-crying-wolf rule: N opencode tasks are one harness
+    // property, not N surprises.
     out.push({
       kind: "containment",
       text:
         `${name}: never asks permission — the policy has no jurisdiction over ` +
         `it in any mode, so --mode ${mode} does not bound what it does.`,
+      onceKey: `never-asks:${name}`,
     });
   } else if (mode !== "auto" && m.shell !== "terminal") {
     out.push({

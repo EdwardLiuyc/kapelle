@@ -1058,6 +1058,38 @@ conflict predates today: it was written into M1b-4 before M0-4 measured the beha
 survived because nothing forced the two to be read together.
 *Done when* `node:test` covers the strictness matrix field by field, and a fixture exists
 per warning class.
+**Landed 2026-09-07 (#20).** `core/result.ts` — preamble, extractor, cross-check, all pure —
+called from `runTask`, with `runOne` merging the verdict onto `TaskRun`. `TaskRun` **is** the
+story's `TaskResult`: the agent-reported half (`result`, `summary`, `summarySynthesised`,
+`warnings`) beside the observed half it already carried. Two decisions were taken in scoping
+and are recorded on the issue. **(1) A warning promotes `done` to `warned`** — the producer
+that status has been waiting for since M1b-2 — and promotes nothing else, because reading
+`warned` over a refusal would hide it behind a status the CLI exits 0 for. **(2) The preamble
+goes on every prompt**, the single-agent path included, so there is one composer rather than
+two answers to what a prompt looks like. Three things the build settled that the story did
+not. `diff: undefined` is **unknown, never empty**: outside a repository every tree-shaped
+check skips itself, or the no-repo fallback would warn on every task it ran. Result warnings
+are published on the bus as `_client_result_warning` and never fail the task. `policyNeverFired`
+does **not** fire where the registry already says `asksPermission: false` — `warningsFor`
+marks that containment line with `onceKey`, so the run prints it once per harness instead of
+once per task — a second per-task line would be the crying wolf M0-1 warned about rather than
+a fix for it. The dedupe is keyed, not blanket: `cli.test.ts:205` fixes the *advisory* line as
+deliberately per task, and that line carries no `onceKey`, so it still repeats. And `<status>` is kept as the
+agent's own word rather than a closed vocabulary: a harness that writes "ok" has still
+reported, and rejecting the block over a synonym would throw away a good summary.
+`mock-agent.mjs` now sends a compliant block, which is what keeps the happy path exercisable
+offline; M1b-5 still owns the non-compliant fixtures.
+**Review round (#88) moved the cross-check's input twice, both times measured.** The diff was
+read as porcelain *text*, and `git()` trims — so ` M run.ts`, the commonest shape there is,
+lost its status column and read as the path `un.ts`, warning `filesNotInDiff` about a file
+the agent had correctly reported. It is now `changedPaths`, over `git status -z`, which
+writes paths verbatim and gives a rename's source its own entry: that deleted the unquoter
+and the quote-state scan for ` -> ` along with the bug, and `core/worktree.test.ts` proves
+the reading against git itself rather than against fixtures. Second, the tree is read **only
+for a task with its own worktree**. In the shared-cwd fallback every task sees every other
+task's files, measured as a task that changed nothing being told it had changed the tree
+without asking permission — so isolation absent means the tree is *unknown*, which is the
+same rule the no-repository case already followed.
 
 **M1b-5 · Extend `mock-agent` · S · needs M1b-4**
 Multiple sessions, a permission timeout, a malformed `<task-result>`, a missing block that

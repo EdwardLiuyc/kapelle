@@ -21,7 +21,7 @@ import { promisify } from "node:util";
 import { createEventBus } from "./events.ts";
 import { runRun, type TaskExecutor, type TaskStatus } from "./run.ts";
 import { validateRun } from "./runfile.ts";
-import { openWorktrees, type Worktrees } from "./worktree.ts";
+import { changedPaths, openWorktrees, type Worktrees } from "./worktree.ts";
 
 const run = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) =>
@@ -335,8 +335,10 @@ const runOf = (ids: string[]) =>
 test("a run gives each task its own worktree and cleans up after", async (t) => {
   const root = await repo(t);
   const seen = new Map<string, string>();
+  const isolation: boolean[] = [];
   const exec: TaskExecutor = async (task, ctx) => {
     seen.set(task.id, ctx.cwd);
+    isolation.push(ctx.isolated);
     await writeFile(join(ctx.cwd, `${task.id}.txt`), "work\n");
     return { stopReason: "end_turn" };
   };
@@ -357,13 +359,17 @@ test("a run gives each task its own worktree and cleans up after", async (t) => 
   // *done when*, and it is one line rather than two `existsSync` calls.
   assert.equal((await git(root, "worktree", "list")).split("\n").length, 1);
   assert.equal(await hasBranch(root, "plan"), true);
+  // Its own checkout is what lets M1b-4 attribute a change to this task.
+  assert.deepEqual(isolation, [true, true]);
 });
 
 test("a run in a non-repo cwd still runs, and says isolation is off", async (t) => {
   const dir = await tempDir(t);
   const notices: string[] = [];
+  const isolation: boolean[] = [];
   const exec: TaskExecutor = async (_task, ctx) => {
     notices.push(ctx.cwd);
+    isolation.push(ctx.isolated);
     return { stopReason: "end_turn" };
   };
 
@@ -385,6 +391,9 @@ test("a run in a non-repo cwd still runs, and says isolation is off", async (t) 
     report.tasks.map((task) => task.cwd),
     [dir, dir],
   );
+  // And the same caveat in the form M1b-4 reads: nothing here can say which
+  // task changed what, so the cross-check is told the tree is unknown (#88).
+  assert.deepEqual(isolation, [false, false]);
 });
 
 test("a failed task keeps its worktree for reading", async (t) => {
@@ -590,4 +599,50 @@ test("a symlinked --cwd cannot walk a task out of its own checkout", async (t) =
   // The subtree the operator asked for, and nothing above it.
   assert.equal(existsSync(join(plan, "a.txt")), true);
   assert.equal(existsSync(join(plan, "README.md")), false);
+});
+
+// --- changedPaths, against git itself (#88) -----------------------------------
+
+// Every case here is one a reviewer raised or one that reached `crossCheck`
+// wrongly before `-z`: a single modified file lost its leading status column
+// to `trim()` and read as `un.ts`; quoted UTF-8, a quote in a name and a
+// rename's two halves all went through a hand-written unquoter. `-z` writes
+// paths verbatim and puts a rename's source in its own entry, so the only
+// thing left to prove is that this reading agrees with git.
+test("changedPaths reports what git changed, verbatim", async (t) => {
+  const dir = await repo(t);
+  await writeFile(join(dir, "run.ts"), "one\n");
+  await writeFile(join(dir, "café.ts"), "u\n");
+  await writeFile(join(dir, 'q"uote.ts'), "q\n");
+  await writeFile(join(dir, "old.ts"), "o\n");
+  await git(dir, "add", "-A");
+  await git(dir, "commit", "-m", "second");
+
+  // One modified file on its own: the shape whose leading space `trim()` ate.
+  await writeFile(join(dir, "run.ts"), "two\n");
+  assert.deepEqual(await changedPaths(dir), ["run.ts"]);
+
+  await writeFile(join(dir, "café.ts"), "v\n");
+  await writeFile(join(dir, 'q"uote.ts'), "r\n");
+  await writeFile(join(dir, "un tracked.ts"), "n\n");
+  await git(dir, "mv", "old.ts", "new.ts");
+  await writeFile(join(dir, ".agent-team", "state"), "s\n").catch(() => {});
+
+  const paths = await changedPaths(dir);
+  for (const path of [
+    "run.ts",
+    "café.ts",
+    'q"uote.ts',
+    "un tracked.ts",
+    "new.ts",
+    "old.ts", // a rename contributes both halves
+  ]) {
+    assert.ok(paths.includes(path), `${path} missing from ${paths.join(", ")}`);
+  }
+  // Ignored state is invisible, which is what keeps it out of the cross-check.
+  assert.ok(!paths.some((p) => p.startsWith(".agent-team")));
+});
+
+test("changedPaths is empty on a clean tree", async (t) => {
+  assert.deepEqual(await changedPaths(await repo(t)), []);
 });

@@ -29,6 +29,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { AcpAgent, type Policy } from "../protocol/agent.ts";
 import {
+  type ResolvedAgent,
   resolveAgent,
   resolveEnv,
   type Warning,
@@ -38,18 +39,32 @@ import type { StopReason, Usage } from "../protocol/types.ts";
 import { createEventBus, type EventBus } from "./events.ts";
 import { newRunId } from "./ids.ts";
 import { negotiateSafeMode, policyFor } from "./policy.ts";
+import {
+  type AgentResult,
+  crossCheck,
+  extractResult,
+  type ResultWarning,
+  synthesiseSummary,
+  withResultPreamble,
+} from "./result.ts";
 import type { Run, Task } from "./runfile.ts";
-import { openWorktrees, STATE_DIR, type Worktrees } from "./worktree.ts";
+import {
+  changedPaths,
+  openWorktrees,
+  STATE_DIR,
+  type Worktrees,
+} from "./worktree.ts";
 
 /**
  * Every terminal state a task can reach.
  *
  * Two have no producer in this module, deliberately and against the rule
  * `core/events.ts` follows for bus variants. `skipped` is minted by M3-1 when
- * a dependency fails; `warned` by M1b-4 when the result block and the diff
- * disagree. They are here because the *ordering* below is the thing being
- * decided, and a rung added to it later would rewrite M1b-4's table and its
- * test rather than extend them.
+ * a dependency fails. `warned` has its producer as of M1b-4: `runOne` promotes
+ * a `done` task to it when the cross-check disagrees with the block the agent
+ * sent. They are here because the *ordering* below is the thing being decided,
+ * and a rung added to it later would rewrite the table and its test rather
+ * than extend them.
  */
 export type TaskStatus =
   | "done"
@@ -148,6 +163,8 @@ export function runStatus(statuses: readonly TaskStatus[]): TaskStatus {
 
 /** One task's record. `usage` is per task and never summed; `agent` is the
  *  tag that says whose counting rules produced it. */
+export type UsageSemantics = "per-turn" | "cumulative" | "unknown";
+
 export interface TaskRun {
   id: string;
   agent: string;
@@ -155,6 +172,9 @@ export interface TaskRun {
   status: TaskStatus;
   stopReason?: StopReason;
   usage?: Usage;
+  /** Which counting rules produced `usage`. `unknown` is explicit for an
+   *  unmeasured `--cmd` agent; a task that produced no count has neither. */
+  usageSemantics?: UsageSemantics;
   durationMs: number;
   /** The agent's prose, buffered. Interleaving N token streams is unreadable,
    *  so nothing prints it until the task is over. */
@@ -162,6 +182,20 @@ export interface TaskRun {
   /** Present only when the task threw. The message, not the stack: this is
    *  printed, and M1b-7 keeps the real stderr on disk. */
   error?: string;
+  /** The `<task-result>` block the agent sent, when it sent a valid one
+   *  (M1b-4). This record *is* the story's `TaskResult`: the agent-reported
+   *  half here, the observed half in the fields above. */
+  result?: AgentResult;
+  /** Absent when the agent and the working tree agreed about everything.
+   *  Never fatal — a non-empty list promotes `done` to `warned`, and nothing
+   *  below `done` is touched. */
+  warnings?: ResultWarning[];
+  /** The block's summary, or the tail of the prose when there was no block.
+   *  M3-3 hands this to a successor, which is why the next field exists. */
+  summary?: string;
+  /** True when `summary` is our synthesis rather than the agent's own words.
+   *  A successor's prompt must say so plainly rather than quote us as it. */
+  summarySynthesised?: true;
 }
 
 export interface RunReport {
@@ -190,6 +224,13 @@ interface TaskContext {
    *  could not be made. Resolved here rather than in the executor so that a
    *  test executor never writes one. */
   stderrLog?: string;
+  /** True when `cwd` is this task's own worktree, and false when the run fell
+   *  back to a shared one. **Only an isolated checkout can attribute a change
+   *  to this task** — in the fallback, one task's files are in every other
+   *  task's `git status`, so a task that touched nothing was told it had
+   *  changed the tree without asking (measured 2026-09-08, #88). The executor
+   *  reads the tree only when this is true. */
+  isolated: boolean;
   /** Already resolved for this task: the run's `askPolicy` when this task asks
    *  and one was supplied, otherwise `policyFor(task.mode)`. Settled here so
    *  the executor never re-decides who may approve what. */
@@ -200,8 +241,13 @@ interface TaskContext {
    *
    *  `kind` is carried, not decided: `printableWarnings` owns which kinds
    *  `--quiet` may drop, and it owns that rule because it has a test for it.
-   *  A notice with no kind is unconditional. */
+   *  A notice with no kind is unconditional.
+   *
+   *  `onNoticeOnce` is the same route, but a key names a property of the run
+   *  rather than one task. It exists for the harness-level containment line;
+   *  it must not become a general way to hide repeated task evidence. */
   onNotice: (text: string, kind?: Warning["kind"]) => void;
+  onNoticeOnce: (key: string, text: string, kind?: Warning["kind"]) => void;
   /** Called by the real executor immediately before `session/prompt`, so the
    *  run's turn count counts prompts sent, not tasks attempted. A task whose
    *  harness cannot start sends no prompt and must not count as a turn. */
@@ -211,6 +257,13 @@ interface TaskContext {
 interface TaskOutcome {
   stopReason?: StopReason;
   usage?: Usage;
+  usageSemantics?: UsageSemantics;
+  /** M1b-4, and produced by the *executor* rather than by `runOne`: only
+   *  something that really ran a harness has a working tree to compare a
+   *  block against. An injected test executor reports neither, and its tasks
+   *  are never promoted to `warned` for prose it was never asked to write. */
+  result?: AgentResult;
+  warnings?: ResultWarning[];
 }
 
 /**
@@ -310,6 +363,9 @@ export async function runRun(
   const onTurn = () => {
     turns += 1;
   };
+  // Shared by the pool, so an N-task run prints a harness-level notice once.
+  // A Set is safe here even concurrently: checking and adding are synchronous.
+  const onceNotices = new Set<string>();
 
   const worker = async (): Promise<void> => {
     for (;;) {
@@ -339,6 +395,7 @@ export async function runRun(
         onTurn,
         worktrees,
         logs ? join(logDir, `${task.id}.stderr.log`) : undefined,
+        onceNotices,
       );
     }
   };
@@ -362,8 +419,19 @@ async function runOne(
   onTurn: () => void,
   worktrees: Worktrees | null,
   stderrLog: string | undefined,
+  onceNotices: Set<string>,
 ): Promise<TaskRun> {
   const started = Date.now();
+
+  // One label-and-filter route for both task notices and run-level notices,
+  // so the CLI's `--quiet` rules cannot fork by accident.
+  const onNotice = (text: string, kind?: Warning["kind"]) =>
+    options.onNotice?.(task.id, text, kind);
+  const onNoticeOnce = (key: string, text: string, kind?: Warning["kind"]) => {
+    if (onceNotices.has(key)) return;
+    onceNotices.add(key);
+    onNotice(text, kind);
+  };
 
   // Its own bus, forwarding to the run's. One `addListener` rather than the
   // executor filtering the shared stream by task id — `core/events.ts` has no
@@ -397,29 +465,63 @@ async function runOne(
       signal,
       verbose: options.verbose ?? false,
       stderrLog,
+      isolated: worktrees !== null,
       policy:
         task.mode === "ask" && options.askPolicy
           ? options.askPolicy
           : policyFor(task.mode),
-      onNotice: (text, kind) => options.onNotice?.(task.id, text, kind),
+      onNotice,
+      onNoticeOnce,
       onTurn,
     });
     record();
+    const status = statusFor({
+      stopReason: outcome.stopReason,
+      cancelRequested,
+      watchdogFired: false,
+    });
+    const warnings = outcome.warnings ?? [];
     const result: TaskRun = {
       id: task.id,
       agent: task.agent,
       cwd,
       transcript,
-      status: statusFor({
-        stopReason: outcome.stopReason,
-        cancelRequested,
-        watchdogFired: false,
-      }),
+      // A disagreement colours a task that otherwise finished; it never
+      // rescues one that did not. `warned` exits 0 and releases its worktree
+      // exactly as `done` does, so this is a thing to read, not a failure.
+      status: status === "done" && warnings.length ? "warned" : status,
       durationMs: Date.now() - started,
     };
     if (outcome.stopReason !== undefined)
       result.stopReason = outcome.stopReason;
-    if (outcome.usage !== undefined) result.usage = outcome.usage;
+    if (outcome.usage !== undefined) {
+      result.usage = outcome.usage;
+      result.usageSemantics = outcome.usageSemantics;
+    }
+    if (outcome.result) result.result = outcome.result;
+    if (warnings.length) {
+      result.warnings = warnings;
+      // The block's disagreement is a first-class event, not just a field on
+      // the final report: `--quiet` can drop the summary without dropping the
+      // subscriber below, and M2's log has the same replay need.
+      for (const w of warnings) {
+        options.bus.emit({
+          agent: task.id,
+          update: {
+            sessionUpdate: "_client_result_warning",
+            kind: w.kind,
+            text: w.text,
+          },
+        });
+      }
+    }
+    // The block's own words when there are any, our synthesis otherwise —
+    // and never silently: M3-3 tells a successor which of the two it got.
+    const summary = outcome.result?.summary ?? synthesiseSummary(transcript);
+    if (summary) {
+      result.summary = summary;
+      if (!outcome.result) result.summarySynthesised = true;
+    }
     settled = result;
   } catch (err) {
     record();
@@ -443,10 +545,9 @@ async function runOne(
     // harness left on another branch — is a thing to tell the operator about,
     // and the work is still on disk either way.
     const kept = await worktrees?.release(task.id, settled.status);
-    if (kept) options.onNotice?.(task.id, kept);
+    if (kept) onNotice(kept);
   } catch (err) {
-    options.onNotice?.(
-      task.id,
+    onNotice(
       `worktree cleanup failed, so it is still on disk: ${
         err instanceof Error ? err.message : String(err)
       }`,
@@ -465,6 +566,22 @@ async function runOne(
 async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
   const spec = resolveAgent(task.agent, task.cmd);
 
+  // Observed on the way past, not reconstructed afterwards. `runOne` keeps its
+  // own copy of the prose for printing; this one exists because the executor
+  // is what has to read the block back out, and a permission count has no
+  // other witness at all.
+  let prose = "";
+  let permissionCount = 0;
+  const onEvent: typeof ctx.bus.emit = (event) => {
+    const u = event.update;
+    if (u.sessionUpdate === "agent_message_chunk") {
+      if (u.content?.type === "text") prose += u.content.text;
+    } else if (u.sessionUpdate === "_client_permission") {
+      permissionCount += 1;
+    }
+    ctx.bus.emit(event);
+  };
+
   const agent = new AcpAgent({
     // The task id, not the agent id: two tasks may name the same harness, and
     // the id is what a reader needs to tell their events apart.
@@ -477,7 +594,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     allowReadOutsideRoot: task.allowReadOutsideRoot,
     verbose: ctx.verbose,
     stderrLog: ctx.stderrLog,
-    onEvent: ctx.bus.emit,
+    onEvent,
   });
 
   // **Not `{ once: true }`.** `AcpAgent.cancel()` returns immediately when
@@ -512,8 +629,13 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
       // print the advisory `unverified` and `version` lines that
       // `printableWarnings` exists to filter — the caller cannot re-derive a
       // category from a sentence, and #13's rule must stay in the one place
-      // that has a test for it.
-      ctx.onNotice(w.text, w.kind);
+      // that has a test for it. The `onceKey` marks a harness property, so it
+      // is deduped per run rather than repeated by every task.
+      if (w.onceKey) {
+        ctx.onNoticeOnce(w.onceKey, w.text, w.kind);
+      } else {
+        ctx.onNotice(w.text, w.kind);
+      }
     }
 
     if (cancelled()) return {};
@@ -527,10 +649,55 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     // sends no prompt, and a task cancelled before this line sends none either.
     if (cancelled()) return {};
     ctx.onTurn();
-    const { stopReason, usage } = await agent.prompt(task.prompt);
-    return usage === undefined ? { stopReason } : { stopReason, usage };
+    // The preamble rides the one prompt this task gets. There is no second
+    // one to ask again with (M0-4, `protocol/agent.ts:446`), which is exactly
+    // why it is here and not held back for a follow-up.
+    const { stopReason, usage } = await agent.prompt(
+      withResultPreamble(task.prompt),
+    );
+
+    const result = extractResult(prose);
+    const outcome: TaskOutcome = { stopReason };
+    if (usage !== undefined) {
+      outcome.usage = usage;
+      outcome.usageSemantics = usageSemanticsFor(spec);
+    }
+    if (result) outcome.result = result;
+    const warnings = crossCheck({
+      result,
+      // Unknown, not empty: without a worktree of its own there is nothing
+      // that can attribute a change to this task, so every tree-shaped check
+      // skips itself rather than guess.
+      changed: ctx.isolated ? await tryChangedPaths(ctx.cwd) : undefined,
+      permissionCount,
+      ...(spec.measured
+        ? { asksPermission: spec.measured.asksPermission }
+        : {}),
+    });
+    if (warnings.length) outcome.warnings = warnings;
+    return outcome;
   } finally {
     ctx.signal.removeEventListener("abort", onAbort);
     agent.stop();
   }
+}
+
+/** The task's changed paths, or `undefined` when git could not answer.
+ *  Never a reason to fail a task that has already finished. */
+async function tryChangedPaths(cwd: string): Promise<string[] | undefined> {
+  try {
+    return await changedPaths(cwd);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Registry labels describe `usage_update.used`; the prompt response's count
+ *  shares their per-turn/cumulative distinction. A harness with no measured
+ *  labels gets an explicit `unknown`, never a number readers must guess at. */
+export function usageSemanticsFor(spec: ResolvedAgent): UsageSemantics {
+  const measured = spec.measured?.usage;
+  return measured === "per-turn" || measured === "cumulative"
+    ? measured
+    : "unknown";
 }

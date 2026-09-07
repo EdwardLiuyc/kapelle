@@ -9,6 +9,7 @@ import {
   type ResolvedPolicy,
   resolvePolicy,
 } from "./core/policy.ts";
+import { withResultPreamble } from "./core/result.ts";
 import { runRun, type TaskRun } from "./core/run.ts";
 import { type Task, validateRun } from "./core/runfile.ts";
 import { AcpAgent } from "./protocol/agent.ts";
@@ -221,8 +222,12 @@ if (runFilePath) {
     if (notNegotiated) console.error(`! ${notNegotiated}`);
     if (!quiet) console.log(`session ${agent.sessionId}\n`);
 
+    // The preamble goes on every prompt, this path included (decided
+    // 2026-09-07, #20): one composer, and a one-shot run whose report can be
+    // read by eye or by the next thing that wants it. Nothing cross-checks it
+    // here — there is no worktree and no task record to hang a warning on.
     // The whole PromptResponse is returned (#62 B3); M1 renders only stopReason.
-    const { stopReason } = await agent.prompt(promptText);
+    const { stopReason } = await agent.prompt(withResultPreamble(promptText));
     if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
   } catch (err) {
     console.error(`\nerror: ${messageOf(err)}`);
@@ -317,6 +322,17 @@ async function runFromFile(path: string): Promise<number> {
   const asker = canAsk ? makeAskPolicy() : undefined;
 
   const bus = createEventBus();
+  // Result warnings are data on the bus, not a CLI-only field. Under `--quiet`
+  // there is no task card to print them from, so this subscriber is the route
+  // that keeps the disagreement visible; it is deliberately separate from the
+  // `onNotice` route, which still owns the never-suppressed #13 lines.
+  if (quiet) {
+    bus.addListener(({ agent: taskId, update }) => {
+      if (update.sessionUpdate === "_client_result_warning") {
+        console.error(`! [${taskId}] ${update.text}`);
+      }
+    });
+  }
   if (!quiet) {
     bus.addListener(({ agent: taskId, update }) => {
       // Milestones only. `render` would braid N streams into one line.
@@ -440,9 +456,14 @@ function printTask(task: TaskRun): void {
   if (task.usage) {
     console.log(
       `  tokens: ${task.usage.totalTokens} total ` +
-        `(${task.usage.inputTokens} in, ${task.usage.outputTokens} out)`,
+        `(${task.usage.inputTokens} in, ${task.usage.outputTokens} out; ` +
+        `${task.usageSemantics ?? "unknown"})`,
     );
   }
+  // Before the prose, not after: the warnings are the reason to read the
+  // prose at all, and a reader who stops at the first screen must still see
+  // that the agent and the working tree disagreed.
+  for (const w of task.warnings ?? []) console.log(`  ! ${w.text}`);
   const prose = task.transcript.trim();
   if (prose) console.log(prose);
 }

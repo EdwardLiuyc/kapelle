@@ -105,6 +105,11 @@ const CLIENT_EVENTS: AgentEvent[] = [
   },
   { sessionUpdate: "_client_wrote_file", path: "/abs/path" },
   { sessionUpdate: "_client_cancel_requested", sessionId: "sess_1" },
+  {
+    sessionUpdate: "_client_result_warning",
+    kind: "filesNotInDiff",
+    text: "<files> names ghost.ts, which the working tree does not show as changed.",
+  },
 ];
 
 // --- the exhaustive switch ---------------------------------------------------
