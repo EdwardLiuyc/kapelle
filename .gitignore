@@ -1,3 +1,6 @@
 ACP_TEST.md
 node_modules/
 .agent-team/
+
+# Agent worktrees, wherever a harness puts them (.claude/worktrees/ today).
+**/worktrees/*

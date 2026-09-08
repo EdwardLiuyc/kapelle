@@ -30,7 +30,7 @@ const SCENARIOS = {
 
 const at = process.argv.indexOf("--scenario");
 const scenario = at === -1 ? null : process.argv[at + 1];
-if (scenario !== null && !(scenario in SCENARIOS)) {
+if (scenario !== null && !Object.hasOwn(SCENARIOS, scenario)) {
   // Louder than a fallback to the default path: a typo'd scenario that ran
   // the compliant fixture would make a test pass for the wrong reason.
   console.error(
@@ -66,11 +66,16 @@ const FINAL_MESSAGE = {
     "Edited one file.",
     "ghost.md",
   ),
+  // **No `<files>`, deliberately.** The write lands in the process cwd, but
+  // `changedPaths` reads `git status`, which reports paths from the repository
+  // root — so under a `--cwd` naming a subdirectory the tree says
+  // `sub/sneaky.txt` and any cwd-relative `<files>` here would trip
+  // `filesNotInDiff` alongside the `policyNeverFired` this fixture is for.
+  // Reporting nothing is also what a real agent that forgot the field does.
   "unasked-write": result(
     "success",
     "Wrote a file.",
     "Wrote it directly, never through the client.",
-    "sneaky.txt",
   ),
 };
 

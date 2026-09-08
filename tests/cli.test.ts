@@ -661,6 +661,41 @@ test("each cross-check fixture trips its own warning, and only its own", async (
   assert.match(card("unasked-write"), /without ever asking permission/);
 });
 
+test("unasked-write trips only policyNeverFired from a repository subdirectory", async (t) => {
+  // The fixture must remain a one-warning story when the task runs inside a
+  // subdirectory of the repo too. In that shape git reports changed paths
+  // relative to the repository root (e.g. `sub/sneaky.txt`), so advertising a
+  // cwd-relative `<files>sneaky.txt</files>` would also trip filesNotInDiff.
+  const root = await gitRepo(t);
+  await mkdir(join(root, "sub"));
+  await writeFile(join(root, "sub", "keep.txt"), "x\n");
+  await git(root, "add", "-A");
+  await git(root, "commit", "-m", "add sub");
+
+  const file = await runFile(
+    t,
+    mockRun([
+      {
+        id: "unasked-write",
+        prompt: "hi",
+        cmd: `node ${MOCK_AGENT} --scenario unasked-write`,
+      },
+    ]),
+  );
+  const r = await runCli(t, ["--file", file, "--cwd", join(root, "sub")]);
+
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /▸ unasked-write \(mock-agent\) warned/);
+  const card = r.stdout.split("▸ unasked-write (mock-agent) warned")[1] ?? "";
+  assert.equal(
+    (card.match(/^ {2}! /gm) ?? []).length,
+    1,
+    "expected only the policyNeverFired cross-check",
+  );
+  assert.match(card, /without ever asking permission/);
+  assert.doesNotMatch(card, /<files> names/);
+});
+
 test("the prompt response's usage is captured, not just usage_update", async (t) => {
   // M0-5's pin: `usage` on the `session/prompt` reply is the only per-task
   // token count all three harnesses send, and the mock never sent it.
@@ -674,9 +709,22 @@ test("the prompt response's usage is captured, not just usage_update", async (t)
 
 test("an unknown --scenario is a loud exit, not the default fixture", async (t) => {
   // The fixture selector's own guard: a typo that quietly ran the compliant
-  // path would make one of the tests above pass for the wrong reason.
-  const r = await runCli(t, ["--scenario", "no-such-thing"], "mock-agent.mjs");
+  // path would make one of the tests above pass for the wrong reason. Names
+  // inherited from Object.prototype are also unknown: a plain-object map with
+  // `in` used to treat `constructor` and `toString` as real fixtures.
+  for (const name of [
+    "no-such-thing",
+    "constructor",
+    "toString",
+    "__proto__",
+  ]) {
+    const r = await runCli(t, ["--scenario", name], "mock-agent.mjs");
 
-  assert.equal(r.code, 2);
-  assert.match(r.stderr, /unknown --scenario "no-such-thing"\. Known: refuse/);
+    assert.equal(r.code, 2, name);
+    assert.match(
+      r.stderr,
+      new RegExp(`unknown --scenario "${name}"\\. Known: refuse`),
+      name,
+    );
+  }
 });
