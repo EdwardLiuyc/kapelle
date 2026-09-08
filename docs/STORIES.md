@@ -1080,7 +1080,7 @@ reported, and rejecting the block over a synonym would throw away a good summary
 `mock-agent.mjs` now sends a compliant block, which is what keeps the happy path exercisable
 offline; M1b-5 still owns the non-compliant fixtures.
 **Review round (#88) moved the cross-check's input twice, both times measured.** The diff was
-read as porcelain *text*, and `git()` trims — so ` M run.ts`, the commonest shape there is,
+read as porcelain *text*, and `git()` trims — so `M run.ts`, the commonest shape there is,
 lost its status column and read as the path `un.ts`, warning `filesNotInDiff` about a file
 the agent had correctly reported. It is now `changedPaths`, over `git status -z`, which
 writes paths verbatim and gives a rename's source its own entry: that deleted the unquoter
