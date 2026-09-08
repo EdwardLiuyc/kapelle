@@ -26,6 +26,7 @@ const SCENARIOS = {
   "absolute-path": "reads /etc/passwd by absolute path",
   "symlink-escape": "reads an in-root symlink that points out of the root",
   "write-no-ask": "calls fs/write_text_file with no permission request first",
+  "always-menu": "offers only allow_always, then writes the same path twice",
   "malformed-json": "puts a non-JSON line on stdout, then carries on",
   oversized: "puts a line past the client's length cap on stdout",
   "unknown-method": "calls a client method that does not exist",
@@ -152,6 +153,37 @@ const ATTACKS = {
         content: "written without asking\n",
       }),
     ),
+
+  "always-menu": async (sid) => {
+    // A menu with no `allow_once` on it. `pickOption` prefers `allow_once` and
+    // reaches `allow_always` only when nothing narrower was offered, so this is
+    // the one shape that can produce an "always" answer the human never chose —
+    // and the client must still spend that approval on a single write.
+    update(sid, {
+      sessionUpdate: "tool_call",
+      toolCallId: "w1",
+      title: "Write notes.md",
+      kind: "edit",
+      rawInput: { path: "notes.md" },
+      status: "pending",
+    });
+    await callClient("session/request_permission", {
+      sessionId: sid,
+      toolCall: { toolCallId: "w1" },
+      options: [
+        { optionId: "always", name: "Always allow", kind: "allow_always" },
+      ],
+    });
+
+    const write = () =>
+      callClient("fs/write_text_file", {
+        sessionId: sid,
+        path: "notes.md",
+        content: "x\n",
+      });
+    outcome(sid, await write());
+    outcome(sid, await write());
+  },
 
   "malformed-json": async (sid) => {
     process.stdout.write("{ this is not json at all\n");

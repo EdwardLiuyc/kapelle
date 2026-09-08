@@ -39,6 +39,8 @@ interface Run {
   text: string;
   stopReason: string | undefined;
   cwd: string;
+  /** `kind:title` for every call the policy was asked to judge, in order. */
+  decisions: string[];
 }
 
 /**
@@ -55,12 +57,20 @@ async function attack(
 ): Promise<Run> {
   const cwd = await tempDir(t);
   const chunks: string[] = [];
+  const decisions: string[] = [];
   const agent = new AcpAgent({
     name: `hostile-${scenario}`,
     command: process.execPath,
     args: [HOSTILE_AGENT, "--scenario", scenario],
     cwd,
-    policy,
+    // Wrapped rather than passed through: "how many times was the policy
+    // asked" is the whole assertion for the reuse cases, and counting the
+    // `_client_permission` events instead would miss a decision the client
+    // took without emitting one.
+    policy: (req) => {
+      decisions.push(`${req.toolCall.kind}:${req.toolCall.title}`);
+      return policy(req);
+    },
     requestTimeoutMs: 10_000,
     onEvent: ({ update }) => {
       if (
@@ -77,7 +87,7 @@ async function attack(
   await agent.start();
   await agent.newSession();
   const res = await agent.prompt("do your worst");
-  return { text: chunks.join(""), stopReason: res.stopReason, cwd };
+  return { text: chunks.join(""), stopReason: res.stopReason, cwd, decisions };
 }
 
 /** True when the file is absent — the shape every "and nothing was written" check wants. */
@@ -138,6 +148,26 @@ test("the same write is allowed when the policy allows it", async (t) => {
   const run = await attack(t, "write-no-ask", ALLOW_ALL);
   assert.match(run.text, /OUTCOME=allowed/);
   assert.equal(await absent(join(run.cwd, "SNEAKY.md")), false);
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("an allow-only menu grants one write, not the whole session", async (t) => {
+  // `pickOption` never picks `allow_always` while an `allow_once` is on offer,
+  // so an "always" answer only ever came from a harness that gave the client no
+  // narrower choice. Keeping it as a standing grant let every later write to
+  // that path skip the policy — the human said yes once, to one write.
+  const run = await attack(t, "always-menu");
+
+  assert.equal(
+    run.decisions.length,
+    2,
+    "the approval is spent on the first write; the second is a new decision",
+  );
+  assert.match(run.decisions[0] ?? "", /^edit:Write notes\.md$/);
+  assert.match(
+    run.decisions[1] ?? "",
+    /^edit:fs\/write_text_file .*notes\.md$/,
+  );
   assert.equal(run.stopReason, "end_turn");
 });
 

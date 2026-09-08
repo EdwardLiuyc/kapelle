@@ -1140,8 +1140,20 @@ the sentence "the policy filters what a harness *asks*" by exactly one case, and
 further: a mutation through the harness's own shell is still outside the policy's reach
 and still inferred afterwards by `policyNeverFired`. The allow-all case is tested too —
 without it, deleting `#guardWrite` and banning every `fs` write outright would pass.
-A write that follows an approved permission for the same path reuses that decision, so a
-well-behaved `ask` session does not prompt twice for one edit.
+**Review round, 2026-09-08.** The first cut consulted the policy on *every*
+`fs/write_text_file`, the follow-up write a well-behaved harness sends after its own
+approved `session/request_permission` included — measured against `mock-agent`, one edit
+became two `ask` prompts and two `_client_permission` events. A write that follows an
+approved permission for the same resolved path now reuses that decision. **The approval
+covers one write and is consumed by it**, and there is deliberately no standing grant even
+for `allow_always`: `pickOption` prefers `allow_once` and reaches `allow_always` only when
+the harness offered nothing narrower, so an "always" entry would be a session-long grant
+for a path the human never chose to grant that way — `hostile-agent`'s `always-menu`
+scenario is that shape, and its test counts two decisions for two writes. A *denial* is the
+one sticky entry, so a harness that writes after being refused is refused again without
+re-asking. Approval for one path never covers another: measured, a harness approved for
+`ALLOWED.md` that then wrote `OTHER.md` was put back through the policy under the real
+target's name.
 **(3) Oversized payload** — there was no cap at all; `MAX_LINE_LENGTH` is 32 MiB, and the
 line is dropped with a stderr notice while the turn carries on. The ceiling is recorded at
 the constant: `readline` has already buffered the line by the time the check runs, so this

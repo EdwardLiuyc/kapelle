@@ -249,7 +249,15 @@ export class AcpAgent {
   // new mutation to judge; a write with no entry is the hostile case and goes
   // through `#guardWrite`. Keyed by the resolved absolute path so a later write
   // to a different file still asks.
-  #writeDecisions = new Map<string, "denied" | "once" | "always">();
+  //
+  // An approval covers **one** write and is consumed by it. There is no
+  // standing grant here even when the harness's menu was `allow_always`:
+  // `pickOption` prefers `allow_once` and reaches `allow_always` only when the
+  // harness offered nothing narrower, so an "always" entry would be a session
+  // -long grant for a path nobody chose to grant that way. A denial is the one
+  // sticky entry, so a harness that writes after being refused is refused
+  // again without re-asking.
+  #writeDecisions = new Map<string, "denied" | "once">();
   #closed = false;
   #promptInFlight = false;
   #stderr: string[] = [];
@@ -836,14 +844,11 @@ export class AcpAgent {
       const rawPath = detail.rawInput?.path;
       // pi-lens-ignore: no-runtime-typeof
       if (typeof rawPath === "string") {
-        const optionKind = options.find((o) => o.optionId === optionId)?.kind;
-        let decision: "denied" | "once" | "always" = "once";
-        if (optionId === null || !allow) {
-          decision = "denied";
-        } else if (optionKind === "allow_always") {
-          decision = "always";
-        }
-        this.#writeDecisions.set(resolve(this.cwd, rawPath), decision);
+        const denied = optionId === null || !allow;
+        this.#writeDecisions.set(
+          resolve(this.cwd, rawPath),
+          denied ? "denied" : "once",
+        );
       }
     }
 
