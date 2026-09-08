@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { test } from "node:test";
 
+import { MOCK_AGENT } from "../../integration/helpers.ts";
 import { AcpAgent } from "../agent.ts";
 
 /**
@@ -95,36 +96,6 @@ const PERMISSION_WITHOUT_ID = [
 
 /** Accepts the pipe, reads stdin, and answers nothing, ever. */
 const HANGS_FOREVER = "process.stdin.resume();";
-
-/**
- * Answers `initialize` immediately, then goes silent on `session/new`.
- *
- * `session/new` is the slowest handshake step M0-1 measured (copilot, 3.0s),
- * so it is the call most likely to hang a task — and without this fixture the
- * allowlist could be narrowed to `["initialize"]` with the suite still green.
- */
-const STALLS_ON_SESSION_NEW = [
-  'let buf = "";',
-  'process.stdin.on("data", (chunk) => {',
-  "  buf += chunk;",
-  "  let nl;",
-  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
-  "    const line = buf.slice(0, nl);",
-  "    buf = buf.slice(nl + 1);",
-  "    if (!line.trim()) continue;",
-  "    const msg = JSON.parse(line);",
-  '    if (msg.method === "initialize")',
-  "      process.stdout.write(",
-  "        JSON.stringify({",
-  '          jsonrpc: "2.0",',
-  "          id: msg.id,",
-  "          result: { protocolVersion: 1 },",
-  '        }) + "\\n",',
-  "      );",
-  "    // session/new is deliberately ignored.",
-  "  }",
-  "});",
-].join("\n");
 
 /**
  * Accepts the pipe, explains itself on stderr, then dies during the handshake.
@@ -408,10 +379,16 @@ test("a harness that never answers initialize fails on the deadline", async (t) 
 });
 
 test("session-management calls are bounded too, not just the handshake", async (t) => {
+  // `session/new` is the slowest handshake step M0-1 measured (copilot, 3.0s),
+  // so it is the call most likely to hang a task — and without this fixture
+  // the allowlist could be narrowed to `["initialize"]` with the suite still
+  // green. The fixture is `mock-agent.mjs`'s, so the same silence is
+  // reachable from the CLI (M1b-5); the budget here is what keeps the test
+  // off the 30s default.
   const agent = new AcpAgent({
     name: "stalls-on-new",
     command: process.execPath,
-    args: ["-e", STALLS_ON_SESSION_NEW],
+    args: [MOCK_AGENT, "--scenario", "silent-session"],
     // Generous enough to cover process spawn and node boot, so only the
     // deliberate stall can trip it.
     requestTimeoutMs: 2_000,
@@ -868,4 +845,25 @@ test("setMode sends the session id and the harness's own mode id", async (t) => 
   await agent.setMode("plan");
   const res = await agent.request<AskResult>("debug/ask", { allowOnly: false });
   assert.deepEqual(res.mode, { sessionId: "s1", modeId: "plan" });
+});
+
+test("every session gets a fresh id, and a forged one is refused", async (t) => {
+  // The mock used to answer `sess_mock_1` to anything, so a client that sent a
+  // stale or invented id would have been answered as if it were valid (M1b-5).
+  // Nothing in the client can send one today — this is the fixture that stays
+  // honest if that ever changes.
+  const agent = new AcpAgent({
+    name: "mock",
+    command: process.execPath,
+    args: [MOCK_AGENT],
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  const first = await agent.newSession();
+  const second = await agent.newSession();
+  assert.notEqual(first, second, "one process, two sessions, two ids");
+
+  agent.sessionId = "sess_never_issued" as typeof second;
+  await assert.rejects(() => agent.prompt("hi"), /unknown session/);
 });

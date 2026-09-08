@@ -526,7 +526,13 @@ test("--quiet reports a task that failed without ever throwing", async (t) => {
   const cwd = await tempDir(t);
   const file = await runFile(
     t,
-    mockRun([{ id: "picky", prompt: "please refuse this" }]),
+    mockRun([
+      {
+        id: "picky",
+        prompt: "hi",
+        cmd: `node ${MOCK_AGENT} --scenario refuse`,
+      },
+    ]),
   );
 
   const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
@@ -540,7 +546,13 @@ test("a refusal is a failed task, and it is not a silent one", async (t) => {
   const cwd = await tempDir(t);
   const file = await runFile(
     t,
-    mockRun([{ id: "picky", prompt: "please refuse this" }]),
+    mockRun([
+      {
+        id: "picky",
+        prompt: "hi",
+        cmd: `node ${MOCK_AGENT} --scenario refuse`,
+      },
+    ]),
   );
 
   const r = await runCli(t, ["--file", file, "--cwd", cwd]);
@@ -575,4 +587,96 @@ test("a preflight refusal is one actionable line, not a stack trace", async (t) 
   // The failure a reader meets is the instruction, not Node's internals.
   assert.doesNotMatch(r.stderr, /\bat .*worktree\.ts/);
   assert.doesNotMatch(r.stderr, /node:internal/);
+});
+
+// --- M1b-5: the non-compliant fixtures -------------------------------------
+
+/** A committed repository with `.agent-team/` ignored — the shape a run needs
+ *  before `openWorktrees` will give each task a checkout of its own. */
+async function gitRepo(t: import("node:test").TestContext) {
+  const cwd = await tempDir(t);
+  await git(cwd, "init", "-b", "main");
+  await git(cwd, "config", "user.email", "test@example.invalid");
+  await git(cwd, "config", "user.name", "Test");
+  await writeFile(join(cwd, ".gitignore"), ".agent-team/\n");
+  await git(cwd, "add", "-A");
+  await git(cwd, "commit", "-m", "first");
+  return cwd;
+}
+
+test("each cross-check fixture trips its own warning, and only its own", async (t) => {
+  // The four kinds in `core/result.ts:35-39`, driven over the real wire rather
+  // than through an injected executor (`core/tests/run.test.ts` owns that
+  // half). Each task gets its own worktree, which is the only condition under
+  // which the tree-shaped checks read anything at all.
+  const cwd = await gitRepo(t);
+  const scenario = (id: string) => ({
+    id,
+    prompt: "hi",
+    cmd: `node ${MOCK_AGENT} --scenario ${id}`,
+  });
+  const file = await runFile(
+    t,
+    mockRun(
+      [
+        scenario("no-result"),
+        scenario("malformed-result"),
+        scenario("claimed-success"),
+        scenario("files-not-in-diff"),
+        scenario("unasked-write"),
+      ],
+      { maxConcurrency: 5 },
+    ),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  // A disagreement is something to read, never a failure: `warned` exits 0.
+  assert.equal(r.code, 0);
+  const card = (id: string) =>
+    r.stdout.split(`▸ ${id} (mock-agent) warned`)[1]?.split("\n▸ ")[0] ?? "";
+  for (const id of [
+    "no-result",
+    "malformed-result",
+    "claimed-success",
+    "files-not-in-diff",
+    "unasked-write",
+  ]) {
+    assert.ok(
+      r.stdout.includes(`▸ ${id} (mock-agent) warned`),
+      `${id} did not finish as warned`,
+    );
+    assert.equal(
+      (card(id).match(/^ {2}! /gm) ?? []).length,
+      1,
+      `${id} warned about more than the one thing it is a fixture for`,
+    );
+  }
+  // A missing block and a malformed one are the same verdict: nothing was
+  // reported, so the summary below the card is ours.
+  assert.match(card("no-result"), /no <task-result> block; the summary/);
+  assert.match(card("malformed-result"), /no <task-result> block; the summary/);
+  assert.match(card("claimed-success"), /working tree is unchanged/);
+  assert.match(card("files-not-in-diff"), /<files> names ghost\.md/);
+  assert.match(card("unasked-write"), /without ever asking permission/);
+});
+
+test("the prompt response's usage is captured, not just usage_update", async (t) => {
+  // M0-5's pin: `usage` on the `session/prompt` reply is the only per-task
+  // token count all three harnesses send, and the mock never sent it.
+  const cwd = await tempDir(t);
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.match(r.stdout, /tokens: 1234 total \(1200 in, 34 out; unknown\)/);
+});
+
+test("an unknown --scenario is a loud exit, not the default fixture", async (t) => {
+  // The fixture selector's own guard: a typo that quietly ran the compliant
+  // path would make one of the tests above pass for the wrong reason.
+  const r = await runCli(t, ["--scenario", "no-such-thing"], "mock-agent.mjs");
+
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /unknown --scenario "no-such-thing"\. Known: refuse/);
 });
