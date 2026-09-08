@@ -7,7 +7,8 @@
  *
  * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
  * (#62 R5), the whole `PromptResponse` (#62 B3), the cancel-intent event
- * (#62 R4), stderr capture on death, `#guardPath` containment, and the
+ * (#62 R4), stderr capture on death, `#guardPath` containment, `#guardWrite`'s
+ * no-ask refusal and its reuse of an approved edit decision, and the
  * toolCall-id lookup's parity with the pre-port client.
  */
 
@@ -363,6 +364,42 @@ test("a symlink that stays inside the root is still followed", async (t) => {
   const read = await probe(agent, "alias.txt");
   assert.equal(read.refused, false);
   assert.equal(read.content, "in-root content");
+});
+
+// --- #guardWrite · mutation without asking -----------------------------------
+
+test("an allowed permission is not re-decided when the same write crosses the wire", async (t) => {
+  // A well-behaved harness announces an edit, asks permission, and only then
+  // performs the write through `fs/write_text_file`. M1b-6 made the file
+  // service consult the policy; that must apply to a write that skipped the
+  // permission request, not turn one approved edit into two decisions (and two
+  // `ask` prompts).
+  const root = await tempDir(t, "acp-write-once-");
+  const decisions: string[] = [];
+  const agent = new AcpAgent({
+    name: "mock-write",
+    command: process.execPath,
+    args: [MOCK_AGENT],
+    cwd: root,
+    requestTimeoutMs: 10_000,
+    policy: ({ toolCall }) => {
+      decisions.push(`${toolCall.kind}:${toolCall.title}`);
+      return true;
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+  await agent.prompt("self test");
+
+  const editDecisions = decisions.filter((d) => d.startsWith("edit:"));
+  assert.equal(
+    editDecisions.length,
+    1,
+    "the follow-up fs write is the same approved edit, not a second decision",
+  );
+  assert.match(editDecisions[0] ?? "", /Write ACP_TEST\.md/);
 });
 
 // --- #62 B1 · per-request timeout --------------------------------------------

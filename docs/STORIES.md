@@ -1140,6 +1140,8 @@ the sentence "the policy filters what a harness *asks*" by exactly one case, and
 further: a mutation through the harness's own shell is still outside the policy's reach
 and still inferred afterwards by `policyNeverFired`. The allow-all case is tested too —
 without it, deleting `#guardWrite` and banning every `fs` write outright would pass.
+A write that follows an approved permission for the same path reuses that decision, so a
+well-behaved `ask` session does not prompt twice for one edit.
 **(3) Oversized payload** — there was no cap at all; `MAX_LINE_LENGTH` is 32 MiB, and the
 line is dropped with a stderr notice while the turn carries on. The ceiling is recorded at
 the constant: `readline` has already buffered the line by the time the check runs, so this

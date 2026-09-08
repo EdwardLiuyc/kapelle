@@ -243,6 +243,13 @@ export class AcpAgent {
   // and the lookup in #requestPermission has to be able to miss in the same
   // way the pre-port code did.
   #toolCalls = new Map<ToolCallId | undefined, RememberedToolCall>();
+  // Direct `fs/write_text_file` paths the client has already been asked about
+  // through `session/request_permission`. A write that follows an approved
+  // permission for the same path is the second half of that one decision, not a
+  // new mutation to judge; a write with no entry is the hostile case and goes
+  // through `#guardWrite`. Keyed by the resolved absolute path so a later write
+  // to a different file still asks.
+  #writeDecisions = new Map<string, "denied" | "once" | "always">();
   #closed = false;
   #promptInFlight = false;
   #stderr: string[] = [];
@@ -729,8 +736,8 @@ export class AcpAgent {
   }
 
   /**
-   * Put a write through the same policy as a tool call the harness asks about
-   * (M1b-6, issue #22).
+   * Put a write with no prior `session/request_permission` decision through the
+   * same policy as a tool call the harness asks about (M1b-6, issue #22).
    *
    * Without this, `safe` refuses the *request* to edit and then performs the
    * edit for any harness that skips the request and calls the file service
@@ -738,6 +745,9 @@ export class AcpAgent {
    * only mutation the client can see on the wire, so it is the only one it can
    * refuse; a harness editing through its own shell stays outside the policy's
    * jurisdiction and is inferred afterwards by `policyNeverFired`.
+   *
+   * A write that follows an approved `session/request_permission` for the same
+   * path is not a new decision and is handled by `#writeDecisions` instead.
    *
    * `kind: "edit"` is the honest label, and it is what makes `safePolicy`
    * refuse: `READ_ONLY_KINDS` does not contain it. `options` is empty because
@@ -774,7 +784,16 @@ export class AcpAgent {
     content,
   }: WriteTextFileParams): Promise<WriteTextFileResponse> {
     const abs = await this.#guardPath(path, { write: true });
-    await this.#guardWrite(abs);
+    const decision = this.#writeDecisions.get(abs);
+    if (decision === undefined) {
+      await this.#guardWrite(abs);
+    } else if (decision === "denied") {
+      throw new Error(`write refused by policy: ${abs}`);
+    } else if (decision === "once") {
+      // One approved write, not a standing grant. Consume it before attempting
+      // the write so a later retry must ask again.
+      this.#writeDecisions.delete(abs);
+    }
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, content, "utf8");
     this.onEvent({
@@ -804,6 +823,29 @@ export class AcpAgent {
       options,
     });
     const optionId = pickOption(options, allow);
+
+    // Remember what this edit decision covers. The follow-up `fs/write_text_file`
+    // that a well-behaved harness sends after an approved permission request is
+    // not a second, unasked mutation: it is the same logical write, so it should
+    // not re-enter the policy. Only paths named in the permission request are
+    // remembered; a direct write to a different path still goes through
+    // `#guardWrite`.
+    if (detail.kind === "edit") {
+      // `rawInput` is arbitrary agent-supplied JSON, so the only safe way to
+      // learn whether it names a file is a runtime check at this decode point.
+      const rawPath = detail.rawInput?.path;
+      // pi-lens-ignore: no-runtime-typeof
+      if (typeof rawPath === "string") {
+        const optionKind = options.find((o) => o.optionId === optionId)?.kind;
+        let decision: "denied" | "once" | "always" = "once";
+        if (optionId === null || !allow) {
+          decision = "denied";
+        } else if (optionKind === "allow_always") {
+          decision = "always";
+        }
+        this.#writeDecisions.set(resolve(this.cwd, rawPath), decision);
+      }
+    }
 
     this.onEvent({
       agent: this.name,
