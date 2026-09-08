@@ -465,12 +465,13 @@ throws without a byte reaching the subprocess, covered by `node:test`.
 test in `protocol/tests/agent.test.ts`: the 30s deadline on the handshake and session-management
 calls but never on `session/prompt`, unbounded stderr attached to a mid-handshake death,
 the in-flight guard, the whole `PromptResponse`, and `_client_cancel_requested`.
-**One `#guardPath` case does not pass, deliberately.** A symlink pointing out of the root is
+**One `#guardPath` case did not pass, deliberately.** A symlink pointing out of the root was
 followed: `path.resolve` is string arithmetic and never touches the filesystem, so
-`link.txt` looks in-root. The test records what the guard does today rather than what it
-should do (`protocol/tests/agent.test.ts:362`), and **M1b-6 owns closing it** — the fix is
-`fs.realpath` before the prefix check. The other four cases — in-root, escaping `../`,
-absolute-outside, and the read/write asymmetry under `allowReadOutsideRoot` — pass.
+`link.txt` looked in-root. The test recorded what the guard did rather than what it
+should do, and M1b-6 closed it on 2026-09-08 — `realpath` on both root and target before
+the prefix check, and the assertion is now `refused`. The other four cases — in-root,
+escaping `../`, absolute-outside, and the read/write asymmetry under
+`allowReadOutsideRoot` — passed all along.
 
 **M1a-4 · `protocol/registry.ts` · M · needs M1a-3, M0-7**
 **Re-sized S → M, 2026-08-23.** The decision was ratified unchanged; the estimate was not.
@@ -1121,6 +1122,35 @@ is one turn only. Folded in as well: M0-5's pin of `usage` on the `session/promp
 Path escape (`../../etc/passwd`, absolute paths, symlink), mutation without asking,
 malformed JSON-RPC, oversized payload, a method we do not implement.
 *Done when* each attempt is refused with a specific error and the run continues.
+**Landed 2026-09-08 (#22).** `hostile-agent.mjs` beside `mock-agent.mjs`, one attack per
+`--scenario` and **no default** — a bare run exits 2, because a hostile agent with no
+attack selected is a worse mock and a typo that ran it would make a containment test pass
+without containing anything. `protocol/tests/hostile.test.ts` drives all seven, and every
+case asserts twice: the refusal, **and** `end_turn`. The second half is the one that gets
+forgotten, and a client that dies on hostile input has not contained it.
+**Two of the five were already refused** and needed only recording — a non-JSON line was
+ignored, and an unimplemented method already answered with a named error rather than a
+crash. **Three were live holes**, and each fix has a test that is red without it.
+**(1) The symlink**, closed as M1a-3 said it would be. **(2) Mutation without asking** —
+`fs/write_text_file` never consulted the policy, so `safe` refused the *request* to edit
+and then performed the edit for any harness that skipped the request and called the file
+service directly. Decided in scoping: `#guardWrite` puts it through the same policy under
+the honest label `kind: "edit"`, which is what makes `safePolicy` refuse it. This widens
+the sentence "the policy filters what a harness *asks*" by exactly one case, and no
+further: a mutation through the harness's own shell is still outside the policy's reach
+and still inferred afterwards by `policyNeverFired`. The allow-all case is tested too —
+without it, deleting `#guardWrite` and banning every `fs` write outright would pass.
+**(3) Oversized payload** — there was no cap at all; `MAX_LINE_LENGTH` is 32 MiB, and the
+line is dropped with a stderr notice while the turn carries on. The ceiling is recorded at
+the constant: `readline` has already buffered the line by the time the check runs, so this
+refuses the payload rather than bounding the memory that held it, and a real bound means a
+manual chunk scanner over stdout. Two things the build settled. The flood the fixture
+sends is a **well-formed** `agent_message_chunk` carrying a marker, not garbage — a
+malformed flood would be dropped by `JSON.parse`'s own `catch` even with no cap, and the
+test could not tell the two apart. And `guardAgent` in `protocol/tests/agent.test.ts` now
+passes an allow-all policy: `AcpAgent`'s default is `DENY_ALL`, so after (2) that suite
+would have gone green for the wrong reason, and keeping the path guard and the policy in
+separate suites is the same separation the architecture note asks for.
 
 **M1b-7 · Per-task stderr capture · XS · needs M1b-3**
 **Gap, narrowed by M1a-3** — stderr was discarded unless `--verbose`. M1a-3 now retains it

@@ -1,8 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve, sep } from "node:path";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
 import type {
@@ -56,6 +56,22 @@ const TIMED_METHODS = new Set([
 // M0-1 measured the slowest handshake step at 3.0s (copilot's session/new),
 // so this is an order of magnitude above the worst observed.
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The longest stdout line this client will parse (M1b-6, issue #22).
+ *
+ * Counted in UTF-16 units rather than bytes — for JSON-RPC's ASCII-heavy
+ * payloads the two are within a rounding error, and `Buffer.byteLength` on
+ * every line of every turn is a cost paid for nothing. 32 MiB is far above any
+ * real payload: the largest thing that legitimately crosses this wire is a
+ * file's contents in an `fs/read_text_file` reply, which the harness asked for.
+ *
+ * ponytail: `readline` has already buffered the whole line by the time we see
+ * it, so this refuses the payload rather than bounding the memory that held
+ * it. A real bound means a manual chunk scanner over stdout in place of
+ * `createInterface`; upgrade to one if this ever fires against a live harness.
+ */
+const MAX_LINE_LENGTH = 32 * 1024 * 1024;
 
 /**
  * The policy a caller who supplied none gets.
@@ -560,6 +576,16 @@ export class AcpAgent {
   }
 
   #onLine(raw: string): void {
+    // Before `trim`, which would copy the whole thing. Unconditional, not
+    // `#log`: a refusal is exactly the event a run must not be silent about,
+    // and a harness that reaches this length is not having a normal turn.
+    if (raw.length > MAX_LINE_LENGTH) {
+      process.stderr.write(
+        `[${this.name}] oversized stdout line dropped: ${raw.length} chars (max ${MAX_LINE_LENGTH})\n`,
+      );
+      return;
+    }
+
     const line = raw.trim();
     if (!line) return;
 
@@ -659,12 +685,28 @@ export class AcpAgent {
 
   // ---------- client-side capabilities ----------
 
-  #guardPath(p: string, { write }: { write: boolean }): string {
+  /**
+   * The absolute path to use, or a throw naming the root it left.
+   *
+   * The prefix check is on **realpaths** (M1b-6, issue #22). `resolve` is
+   * string arithmetic and never touches the filesystem, so before this a
+   * symlink sitting inside the root and pointing outside it read as in-root
+   * and was followed — the hole `protocol/tests/agent.test.ts` recorded as a
+   * documented gap rather than a pass.
+   *
+   * What is returned is still the resolved-but-not-realpathed path, so a write
+   * lands where the harness asked and `_client_wrote_file` reports that name.
+   * Following the link at write time is safe because it is the same link this
+   * check just resolved.
+   */
+  async #guardPath(p: string, { write }: { write: boolean }): Promise<string> {
     const abs = resolve(this.cwd, p);
-    const inRoot = abs === this.cwd || abs.startsWith(this.cwd + sep);
+    const root = await realPathOrNearest(this.cwd);
+    const real = await realPathOrNearest(abs);
+    const inRoot = real === root || real.startsWith(root + sep);
     if (!inRoot && (write || !this.allowReadOutsideRoot)) {
       throw new Error(
-        `path outside workspace root refused: ${abs} (root: ${this.cwd})`,
+        `path outside workspace root refused: ${real} (root: ${root})`,
       );
     }
     return abs;
@@ -675,7 +717,7 @@ export class AcpAgent {
     line,
     limit,
   }: ReadTextFileParams): Promise<ReadTextFileResponse> {
-    const abs = this.#guardPath(path, { write: false });
+    const abs = await this.#guardPath(path, { write: false });
     let content = await readFile(abs, "utf8");
     if (line != null || limit != null) {
       const lines = content.split("\n");
@@ -686,11 +728,53 @@ export class AcpAgent {
     return { content };
   }
 
+  /**
+   * Put a write through the same policy as a tool call the harness asks about
+   * (M1b-6, issue #22).
+   *
+   * Without this, `safe` refuses the *request* to edit and then performs the
+   * edit for any harness that skips the request and calls the file service
+   * directly — which is the whole of "mutation without asking". This is the
+   * only mutation the client can see on the wire, so it is the only one it can
+   * refuse; a harness editing through its own shell stays outside the policy's
+   * jurisdiction and is inferred afterwards by `policyNeverFired`.
+   *
+   * `kind: "edit"` is the honest label, and it is what makes `safePolicy`
+   * refuse: `READ_ONLY_KINDS` does not contain it. `options` is empty because
+   * nothing offered any — this is our own decision point, not a reply to a
+   * `session/request_permission`, so there is no option id to pick.
+   */
+  async #guardWrite(abs: string): Promise<void> {
+    const toolCall: PolicyToolCall = {
+      title: `fs/write_text_file ${abs}`,
+      kind: "edit",
+      rawInput: { path: abs },
+    };
+    const allow = await this.policy({
+      agent: this.name,
+      toolCall,
+      options: [],
+    });
+
+    this.onEvent({
+      agent: this.name,
+      update: {
+        sessionUpdate: "_client_permission",
+        allow,
+        title: toolCall.title,
+        kind: toolCall.kind,
+      },
+    });
+
+    if (!allow) throw new Error(`write refused by policy: ${abs}`);
+  }
+
   async #writeTextFile({
     path,
     content,
   }: WriteTextFileParams): Promise<WriteTextFileResponse> {
-    const abs = this.#guardPath(path, { write: true });
+    const abs = await this.#guardPath(path, { write: true });
+    await this.#guardWrite(abs);
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, content, "utf8");
     this.onEvent({
@@ -769,6 +853,24 @@ export class AcpAgent {
 
   #log(m: string): void {
     if (this.verbose) process.stderr.write(`[${this.name}] ${m}\n`);
+  }
+}
+
+/**
+ * The real path of `p`, following symlinks as far as the filesystem goes.
+ *
+ * `realpath` throws on a path that does not exist, which every write to a new
+ * file is, so the missing tail is resolved against the nearest ancestor that
+ * does exist and re-appended. That is enough for containment: a link can only
+ * be followed where a link actually exists.
+ */
+async function realPathOrNearest(p: string): Promise<string> {
+  try {
+    return await realpath(p);
+  } catch {
+    const parent = dirname(p);
+    if (parent === p) return p;
+    return join(await realPathOrNearest(parent), basename(p));
   }
 }
 

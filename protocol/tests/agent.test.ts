@@ -227,6 +227,11 @@ async function guardAgent(
     cwd: root,
     allowReadOutsideRoot,
     requestTimeoutMs: 5_000,
+    // Allow-all, so this suite tests the path guard alone. Since M1b-6 a write
+    // also passes the policy, and the default is DENY_ALL — without this every
+    // case below would pass for the wrong reason. The policy half has its own
+    // suite in `protocol/tests/hostile.test.ts`.
+    policy: () => true,
   });
   t.after(() => agent.stop());
   await agent.start();
@@ -330,22 +335,34 @@ test("allowReadOutsideRoot lifts reads but never writes", async (t) => {
   assert.match(String(write.message), /path outside workspace root refused/);
 });
 
-test("a symlink out of the root is NOT contained (documented gap)", async (t) => {
+test("a symlink out of the root is refused (closed by M1b-6)", async (t) => {
   const root = await tempDir(t, "acp-guard-");
   const outside = await tempDir(t, "acp-outside-");
   await writeFile(join(outside, "secret.txt"), "outside content", "utf8");
   await symlink(join(outside, "secret.txt"), join(root, "link.txt"));
   const agent = await guardAgent(t, root);
 
-  // `#guardPath` uses path.resolve, which is pure string arithmetic and does
-  // not follow symlinks, so `link.txt` looks in-root and the read succeeds
-  // against a file outside it. This test records what the guard does today
-  // rather than what it ought to do; M1b-6 (`hostile-agent`) lists symlink
-  // escape among the attempts that must be refused with a specific error, and
-  // closing it means resolving with fs.realpath before the prefix check.
+  // Until issue #22 this case read the outside file and the test recorded that
+  // as a documented gap: `path.resolve` is string arithmetic and never touches
+  // the filesystem, so `link.txt` looked in-root. `#guardPath` now compares
+  // realpaths, and the message names the resolved target rather than the link.
   const read = await probe(agent, "link.txt");
-  assert.equal(read.refused, false, "today the symlink is followed");
-  assert.equal(read.content, "outside content");
+  assert.equal(read.refused, true, "the link is resolved before the check");
+  assert.match(String(read.message), /path outside workspace root refused/);
+});
+
+test("a symlink that stays inside the root is still followed", async (t) => {
+  // The other side of the same edit. Realpathing everything would be easy to
+  // over-tighten into refusing ordinary in-root links, which no story asked
+  // for and which would break a workspace that uses one.
+  const root = await tempDir(t, "acp-guard-");
+  await writeFile(join(root, "real.txt"), "in-root content", "utf8");
+  await symlink(join(root, "real.txt"), join(root, "alias.txt"));
+  const agent = await guardAgent(t, root);
+
+  const read = await probe(agent, "alias.txt");
+  assert.equal(read.refused, false);
+  assert.equal(read.content, "in-root content");
 });
 
 // --- #62 B1 · per-request timeout --------------------------------------------
