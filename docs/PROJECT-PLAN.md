@@ -11,15 +11,7 @@ building and in what order. Draft — expect refinement.
 
 ## Context
 
-`agent-team` is today a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `render.mjs`,
-`run.mjs`, `fanout.mjs`). `PROJECT-BRIEF.md` describes a **supervisor**. The gap between
-those two words is this plan.
-
-Concretely: `run.mjs` and `fanout.mjs` each construct an `AcpAgent`, drive one turn, and
-print. There is no task, no run, no result, and no state that outlives the process. Every
-deferred P1 item (monitoring UI, graph topology) and most of the P0 open questions
-(worktree lifecycle, structured results, cost tracking) are blocked on the same missing
-thing: a supervisor core that owns run state.
+This plan was written when `agent-team` was a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `run.mjs`, `fanout.mjs`). M1a/M1b have since ported it to TypeScript and added the supervisor-shaped pieces this plan called for: `run.ts` and `core/run.ts` now execute N independent tasks from a JSON run file, each in its own worktree, returning parsed results and warnings. `PROJECT-BRIEF.md` describes a **supervisor**. The gap that remains is the daemon: worktrees, branches and stderr logs persist on disk, but no process owns a run record or crash recovery across invocations.
 
 Intended outcome: a local daemon that executes a declarative run file — N harnesses in
 isolated git worktrees, in parallel or as a dependency chain — enforcing one permission
@@ -35,11 +27,11 @@ policy across all of them and returning machine-readable results.
 | Process shape | Daemon, with `core/` that has no knowledge of HTTP or of a TTY. |
 | UI | **M4**, after the daemon. Read views plus permission answering. Designed to grow into a run-dispatch front end, so the daemon API must be complete — not observability-only. |
 | Result contract | A `<task-result>` block in the final message. `git status` cross-checks it; disagreement raises a task **warning**, never a failure. MCP `report_result` deferred. |
-| Worktrees | Supervisor owns fully — creates off a base ref, removes on success, **keeps worktree and branch on failure or timeout**, reaps orphans only when the run is terminal and past the retention window. |
+| Worktrees | Supervisor owns fully — creates off a base ref, removes on success, **keeps worktree and branch on failure/timeout when the task left work, and rolls back a failed task that produced nothing**, reaps orphans only when the run is terminal and past the retention window. |
 | Merge-back | Explicit `agent-team merge <runId>`; never automatic. `--squash` (default) lands changes **unstaged**; `--rebase` preserves per-stage commits. Aborts wholesale on overlap. |
 | Liveness | Per-task **stall → warn** (idle, or the same tool repeating) and **TTL → `session/cancel`**. Each disabled by setting `0`. **Measured (M0-4): cancellation works and is fast — every harness ended its turn within 64 ms and stopped emitting, and the session stayed usable, so the TTL rung needs a 2 s grace and no kill. But the stop reason cannot classify the outcome: copilot reports `end_turn` for a turn it cancelled, so the supervisor's own record of *did I cancel* is the authoritative half.** |
 | Crash recovery | Startup sweep plus transactional spawn. A partially-created task leaves nothing behind. |
-| Run definition | A `.ts` module default-exporting the run object; `.json` also accepted; the daemon's POST body is the same shape. One validator behind all three. |
+| Run definition | `.json` file or the daemon's POST body, both converging on one runtime validator. `.ts`/`.mjs` run files are deliberately not supported: importing executes code in-process. |
 | Handoff | Same worktree, sequential. Successor sees predecessor's changes on disk plus its result summary in-prompt. |
 | Mode naming | **`safe` keeps its name (decided 2026-08-23, #62 R1).** After M1a-5's negotiate-then-filter, `safe` is defence in depth with no enforcement guarantee — against opencode the filter never fires, and the one refusal measured arrived as agent prose. Renaming it to `restricted` was considered and rejected in favour of familiarity. The consequence is owned in M1a-5: the containment notice becomes **non-suppressible**, because it is then the only thing carrying the caveat. |
 | Sandboxing | **Deferred, with an event trigger rather than a judgement (decided 2026-08-23, #62 R2): M2's daemon accepting `POST /runs`.** Until dispatch can come from somewhere other than the operator's own terminal, `auto` is a watched human act; after it, `auto` plus an API is remote code execution as a service. M1's worktree isolation, containment label and silent-autonomy warning bound **nothing** about the harness's own shell, and the docs say so. |
@@ -83,21 +75,7 @@ actively bad for a parallel split — the first overlapping file leaves you reas
 half-landed state. Preflighting the whole run and then merging, or refusing, keeps the
 outcome binary.
 
-**Why the run file is code.** Node executes `.ts` directly, so a module costs no parser at
-all, while YAML would cost either a runtime dependency — against the brief's zero-deps
-survival trait — or ~150 lines of subset parser that becomes a permanent bug surface.
-Template literals matter more than they sound: prompts are multi-line prose and they are
-most of what a run file contains. `satisfies Run` gets the file type-checked by
-`tsc --noEmit` before it ever runs. **One rule this makes non-negotiable:** the *CLI*
-imports run files; the *daemon* never imports a path supplied over the API — it accepts
-objects only. Importing is executing, and that boundary is the whole difference between a
-convenience and a remote-code-execution hole.
-**Amended 2026-09-05 (STORIES M1b-1): this whole rationale is retired — run files are JSON
-only, and nothing in the tool imports one.** The rule above is kept by removing the side
-that could break it, not by policing it: `JSON.parse` on both sides, so there is no
-asymmetry left between the CLI and the daemon. Multi-line prompts survive as `\n` in JSON
-strings, and `satisfies Run` while authoring survives in a generator script that emits the
-JSON.
+**Why run files are JSON, not code.** Run files are data, never modules: `.json` files and the daemon's POST body both arrive through `JSON.parse` and converge on the same runtime validator. `.ts`/`.mjs` run files were dropped because `await import()` executes the file in-process, where it can read `AGENT_TEAM_*` and mutate shared policy state before the exported object is ever validated. Multi-line prompts survive as `\n` in JSON strings, and `satisfies Run`-style authoring survives in a generator script that emits JSON.
 
 **Why the diff only warns.** A read-only stage legitimately produces no diff, so the diff
 cannot be the primary contract without breaking the plan and review stages the pipeline is
@@ -381,7 +359,7 @@ driven from a run file, fully verifiable offline.
 - **`core/worktree.ts`** — `git worktree add` off a base ref into
   `.agent-team/wt/<runId>/<taskId>`; preflight (repo detection, dirty-tree refusal, base-ref
   resolution). Retention: remove the worktree on success, **keep worktree and branch on
-  failure or timeout** so partial work stays inspectable; the branch always survives.
+  failure/timeout when the task left work**, and roll back a task that produced nothing.
   **Transactional spawn** — worktree creation, task registration and agent start either all
   succeed or are all rolled back, so a failed spawn never leaves an orphan worktree with no
   run record.
@@ -389,9 +367,9 @@ driven from a run file, fully verifiable offline.
   `<status>`, `<summary>`, `<details>`, and optional `<files>` and `<branch>`. Extraction is
   a regex for the wrapper, then one per field. Strictness: return `null` if the wrapper is
   absent, or if any of status/summary/details is missing or empty after trimming; a missing
-  *optional* field is `undefined`, not a rejection. `TaskResult` merges these agent-reported
-  fields with supervisor-observed ones (`stopReason`, duration, turns, tokens from
-  `usage_update`, permission count, `git status --porcelain`, `policyNeverFired`).
+  *optional* field is `undefined`, not a rejection. `TaskRun` carries the agent-reported fields beside the observed ones the run records
+  (`stopReason`, duration, tokens/usage semantics, `warnings[]`); permission count and the
+  git tree are cross-check inputs, not stored on the result.
   **Cross-check** — compare the block against the diff and record any disagreement in
   `warnings[]`: status `success` with an empty diff; `<files>` naming paths the diff does not
   contain; a non-empty diff with no `<task-result>` at all; plus the existing
@@ -546,7 +524,7 @@ reach the subprocess, which a pure function cannot express.
 ```bash
 npm run check                    # tsc --noEmit
 npm run selftest                 # existing end-to-end, must keep passing
-node run.ts "self test" --cmd "node mock-agent.ts" --mode safe   # write refused
+node run.ts "self test" --cmd "node mock-agent.mjs" --mode safe   # write refused
 node run.ts "escape"    --cmd "node hostile-agent.mjs --scenario path-escape" --mode auto # path guard blocks
 ```
 
@@ -560,9 +538,9 @@ its own worktree, each returning a parsed `TaskResult`; `git worktree list` clea
 afterwards. Then kill the process mid-run and confirm the orphans are reaped at next start.
 A task against `mock-agent`'s stall mode produces a stall warning, then a `session/cancel`
 at TTL, with the branch intact afterwards; repeat mode raises a warning and is *not*
-cancelled. A run file authored as a `.ts` module type-checks under `npm run check` and
-validates to the same object as the equivalent `.json`. A run file that exceeds a harness
-`maxMode` is rejected, naming both values, before any subprocess starts.
+cancelled. A JSON run file validates through `core/runfile.ts`, and the same run as a POST
+body validates to the same object. A run file that exceeds a harness `maxMode` is rejected,
+naming both values, before any subprocess starts.
 `agent-team merge` on a two-task run lands both as unstaged changes; the same merge with a
 conflicting local edit aborts having changed nothing; `--rebase` on a pipeline run preserves
 per-stage commits where `--squash` leaves one combined blob. Kill a task mid-spawn and

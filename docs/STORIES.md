@@ -670,8 +670,9 @@ the live queue; AgentPool's `is_loading` / `finish_load` split
 (`agents/acp_agent/session_state.py:58`, `:91`) is the shape.
 *Done when* every consumer — CLI render, and later persistence and SSE — subscribes, and
 nothing reads agent state directly. This is the invariant that makes M4 purely additive.
-**Landed 2026-09-03 (#14).** Both entry points subscribe and neither reads agent state:
-`run.ts` attaches `render`, `fanout.mjs` attaches its own buffering listener. **Not
+**Landed 2026-09-03 (#14).** At the time both entry points subscribed and neither read agent
+state: `run.ts` attached `render`, and `fanout.mjs` attached its own buffering listener
+(`fanout.mjs` was retired in M1b-8). **Not
 `node:events`** — `EventEmitter.emit` propagates a listener's throw and skips the listeners
 behind it, so one broken renderer would take the run down; a `Set` and a `try` is less code
 than wrapping every handler.
@@ -683,8 +684,9 @@ producer.
 each producer.** M1b-2 landed its two producers without adding a variant, and M1b-3 landed
 `worktree created` the same way, so "each story widens the union" had already stopped being
 true twice. Widening it costs a supervisor/agent discriminated union plus every listener
-that destructures `update` — five sites today (`run.ts:172`, `run.ts:321`, `fanout.mjs:56`,
-`core/run.ts:330`, `core/run.ts:332`) — and buys nothing while no consumer subscribes.
+that destructures `update` — five call sites at the time (two in `run.ts`, one in
+`fanout.mjs`, two in `core/run.ts`; `fanout.mjs` is gone since M1b-8) — and buys nothing
+while no consumer subscribes.
 Landing one of the three would not have stopped that backlog accumulating, only shortened
 it by one. The first real consumer (`core/notify.ts` M1c-4, M2's persisted log, M4's SSE
 stream) pays the cost once for all three. The sixth, the containment warning, deliberately stays on stderr: routing it
@@ -935,8 +937,8 @@ Schema's property names are asserted equal to `RUN_KEYS` and `TASK_KEYS` by a te
 **M1b-3 · `core/worktree.ts` · M · needs M1a-8**
 `git worktree add` off a base ref into `.agent-team/wt/<runId>/<taskId>`. Preflight: repo
 detection, dirty-tree refusal, base-ref resolution. Retention: remove the worktree on
-success, **keep worktree and branch on failure or timeout** so partial work stays
-inspectable; the branch always survives. **Transactional spawn** — worktree creation, task
+success, **keep worktree and branch on failure or timeout when the task left work** so
+partial work stays inspectable; a task that produced nothing is rolled back entirely. **Transactional spawn** — worktree creation, task
 registration and agent start either all succeed or are all rolled back, so a failed spawn
 never leaves an orphan worktree with no run record.
 **Gap** — `.agent-team/` sits **inside the working tree of the repo being worked on**, and
@@ -974,7 +976,7 @@ still orphan one; that is M2-5, which needs a persisted run record nothing write
 covers the whole `TaskStatus` union now**, including `warned` (M1b-4) and `timed_out`
 (M1c-1), which have no producer — the reason M1b-2 gave for shipping the whole severity
 ordering early. `done` and `warned` release, matching the two statuses the CLI exits 0 for
-(`run.ts:405`); everything below keeps its worktree, uncommitted, for reading.
+(the CLI's exit-code rule for run files); everything below keeps its worktree, uncommitted, for reading.
 **Review found three ways retention could act on the wrong thing (#85, all measured
 2026-09-07, each with a test that is red without its fix).** (a) `git status --porcelain`
 fixes the format, not the content: `status.showUntrackedFiles=no` empties it, so a task
@@ -1008,9 +1010,11 @@ Prompt preamble requesting a `<task-result>` block with `<status>`, `<summary>`,
 `<details>`, optional `<files>` and `<branch>`. Extraction is a regex for the wrapper, then
 one per field. Strictness: `null` if the wrapper is absent, or if any of
 status/summary/details is missing or empty after trimming; a missing *optional* field is
-`undefined`, not a rejection. `TaskResult` merges these agent-reported fields with observed
-ones: `stopReason`, duration, turns, tokens, permission count, `git status --porcelain`,
-`policyNeverFired`. Cross-check writes `warnings[]` — status `success` with an empty diff;
+`undefined`, not a rejection. `TaskRun` (the implementation of this story's `TaskResult`)
+carries the agent-reported fields beside the observed ones the run already records:
+`stopReason`, duration, tokens/usage semantics, and `warnings[]`. Permission count and the
+git tree are internal cross-check inputs, not stored on the result. Cross-check writes
+`warnings[]` — status `success` with an empty diff;
 `<files>` naming paths the diff does not contain; a non-empty diff with no block at all;
 plus `policyNeverFired`. `<files>` is our extension to ensemble's schema and exists
 precisely to make this check possible.
@@ -1121,14 +1125,17 @@ is one turn only. Folded in as well: M0-5's pin of `usage` on the `session/promp
 **M1b-6 · `hostile-agent` · S · needs M1a-3**
 Path escape (`../../etc/passwd`, absolute paths, symlink), mutation without asking,
 malformed JSON-RPC, oversized payload, a method we do not implement.
-*Done when* each attempt is refused with a specific error and the run continues.
+*Done when* each hostile attempt is handled — refused with a specific error where the
+client has a request to answer, or safely dropped/ignored for malformed or oversized input —
+and the run continues.
 **Landed 2026-09-08 (#22).** `hostile-agent.mjs` beside `mock-agent.mjs`, one attack per
 `--scenario` and **no default** — a bare run exits 2, because a hostile agent with no
 attack selected is a worse mock and a typo that ran it would make a containment test pass
-without containing anything. `protocol/tests/hostile.test.ts` drives all seven, and every
-case asserts twice: the refusal, **and** `end_turn`. The second half is the one that gets
-forgotten, and a client that dies on hostile input has not contained it.
-**Two of the five were already refused** and needed only recording — a non-JSON line was
+without containing anything. `protocol/tests/hostile.test.ts` drives all eight attack
+scenarios, and every case asserts the attack was handled — refused, allowed, or dropped as
+the scenario expects — **and** that the turn still ends. The second half is the one that
+gets forgotten, and a client that dies on hostile input has not contained it.
+**Two of the five were already handled** and needed only recording — a non-JSON line was
 ignored, and an unimplemented method already answered with a named error rather than a
 crash. **Three were live holes**, and each fix has a test that is red without it.
 **(1) The symlink**, closed as M1a-3 said it would be. **(2) Mutation without asking** —
@@ -1178,7 +1185,7 @@ mirrored under `--verbose`, and under a daemon nobody is watching a terminal.
 *Done when* a harness that fails to start leaves a log containing its real error rather than
 only `Internal error (code -32603)`.
 **Decided 2026-09-07 (issue #23), the two forks the file name left open.**
-**Run files only** — the single-prompt CLI mints no run id and has no task id (`run.ts:129`),
+**Run files only** — the single-prompt CLI mints no run id and has no task id (the single-prompt path in `run.ts`),
 and the operator who typed it is watching the terminal the story says nobody watches.
 **A cwd that cannot carry worktrees still logs** — a non-repository cwd falls back to the
 shared cwd, and that fallback is the CI shape this story exists for, so the log follows it
@@ -1187,12 +1194,21 @@ the repository root `.agent-team/` beside where worktrees would have been.
 `openWorktrees` now returns the `root` it chose, because worktrees are no longer the only
 state under `.agent-team/`: a caller guessing `cwd` would split the directory in two
 whenever `--cwd` names a subdirectory.
+**Landed 2026-09-07 (#23).** `core/run.ts` resolves the log path and `AcpAgent` opens the
+file exclusively (`ax`) so a re-run never mixes two executions in one file. Run-file tasks
+write `.agent-team/runs/<runId>/<taskId>.stderr.log` regardless of `--verbose`/`--quiet`;
+the single-prompt CLI does not. A log directory that cannot be made is a notice, never a
+status change. Spawn failures write the harness's own reason to the file, not only
+`Internal error (code -32603)`.
 
 **M1b-8 · Retire `fanout.mjs` · S · needs M1b-2**
 Its job becomes "a run file with N independent tasks". Port `tasks.json` to the new schema
 as a worked example.
 *Done when* `npm run fanout` is gone from `package.json` and the README shows the run file
 instead.
+**Landed 2026-09-07 (#24).** `fanout.mjs` and the `npm run fanout` script are gone.
+`tasks.json` is now the worked run-file example and README shows `node run.ts --file`
+instead of the retired script.
 
 ---
 

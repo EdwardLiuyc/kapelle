@@ -14,8 +14,8 @@ answer its file-system requests, and decide its permissions. The harness is the
 | Path | What it is |
 | --- | --- |
 | `protocol/` | Everything wire-level: hand-written types for every message we touch (`types.ts`), the client itself (`agent.ts` — JSON-RPC over stdio, handshake, `fs/*`, permissions), and the adapter layer (`registry.ts` — how to launch each harness, and what we measured when we ran it). |
-| `core/` | Client-side logic that never touches the wire: the policy filter (`policy.ts`) and the event bus (`events.ts`). |
-| root scripts | The entry points and terminal glue: `run.ts` (CLI: one prompt, or N tasks from a run file via `--file`), `render.ts` (terminal output for `session/update` events), `mock-agent.mjs` (a fake agent, so you can test with nothing installed). |
+| `core/` | Supervisor-side orchestration and pure logic: policy (`policy.ts`), event bus (`events.ts`), run-file validation (`runfile.ts`), the run engine (`run.ts`), worktrees (`worktree.ts`), and result parsing/cross-check (`result.ts`). `core/` may import `protocol/`, never the reverse. |
+| root scripts | The entry points and terminal glue: `run.ts` (CLI: one prompt, or N tasks from a run file via `--file`), `render.ts` (terminal output for `session/update` events), and the offline fake agents `mock-agent.mjs` (compliant) and `hostile-agent.mjs` (adversarial). |
 | `docs/` | Plans, stories and what was measured about each harness. |
 | `assets/`, config files | Logo, tool configs (`biome.json`, `tsconfig.json`, `knip.jsonc`, `.markdownlint.json`), `package.json`. |
 
