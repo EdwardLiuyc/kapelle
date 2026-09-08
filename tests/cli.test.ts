@@ -18,7 +18,7 @@
 
 import assert from "node:assert/strict";
 import { execFile as execFileCb } from "node:child_process";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -27,7 +27,12 @@ const execFile = promisify(execFileCb);
 const git = async (cwd: string, ...args: string[]) =>
   (await execFile("git", args, { cwd })).stdout.trim();
 
-import { MOCK_AGENT, runCli, tempDir } from "../integration/helpers.ts";
+import {
+  HOSTILE_AGENT,
+  MOCK_AGENT,
+  runCli,
+  tempDir,
+} from "../integration/helpers.ts";
 
 const MOCK = ["--cmd", `node ${MOCK_AGENT}`];
 
@@ -727,4 +732,230 @@ test("an unknown --scenario is a loud exit, not the default fixture", async (t) 
       name,
     );
   }
+});
+
+// --- M1b end-to-end: full CLI flows that span run files, git, and hostile ---
+
+test("a --file run in git leaves task branches and per-task stderr logs", async (t) => {
+  const cwd = await gitRepo(t);
+  const file = await runFile(
+    t,
+    mockRun(
+      [
+        { id: "one", prompt: "one" },
+        { id: "two", prompt: "two" },
+      ],
+      { maxConcurrency: 2 },
+    ),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  assert.equal(r.code, 0, r.stderr);
+
+  const runId = r.stdout.match(/run ([a-z0-9_-]+)/)?.[1];
+  assert.ok(runId, "run id should be printed");
+
+  const wt = await git(cwd, "worktree", "list");
+  assert.doesNotMatch(wt, /\.agent-team\/wt\//, "worktrees should be cleaned");
+
+  const branches = await git(cwd, "branch", "--list", "agent-team/*");
+  assert.match(branches, /agent-team\/.*\/one/);
+  assert.match(branches, /agent-team\/.*\/two/);
+
+  const logs = join(cwd, ".agent-team", "runs", String(runId));
+  assert.equal(await readFile(join(logs, "one.stderr.log"), "utf8"), "");
+  assert.equal(await readFile(join(logs, "two.stderr.log"), "utf8"), "");
+  await assert.rejects(access(join(cwd, "ACP_TEST.md")), /ENOENT/);
+});
+
+test("a failed --file task that changed files keeps its worktree", async (t) => {
+  const cwd = await gitRepo(t);
+  const meta = await tempDir(t);
+  const agent = join(meta, "fail-agent.mjs");
+  await writeFile(
+    agent,
+    `import { writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+const rl = createInterface({ input: process.stdin });
+rl.on("line", async (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: false }, agentInfo: { name: "fail-agent", version: "1" }, authMethods: [] } });
+  if (msg.method === "session/new") return send({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });
+  if (msg.method === "session/prompt") {
+    writeFileSync("partial.txt", "work in progress\\n");
+    send({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "refusal" } });
+  }
+});
+`,
+  );
+  const file = await runFile(
+    t,
+    mockRun([
+      { id: "fail", prompt: "make work then fail", cmd: `node ${agent}` },
+    ]),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  assert.equal(r.code, 1, r.stderr);
+
+  const runId = r.stdout.match(/run ([a-z0-9_-]+)/)?.[1];
+  assert.ok(runId);
+
+  const wt = await git(cwd, "worktree", "list");
+  const retained = wt
+    .split("\n")
+    .find(
+      (line) => line.includes(".agent-team/wt") && line.includes(String(runId)),
+    );
+  assert.ok(retained, wt);
+  const path = retained?.split(/\s+/)[0];
+  assert.ok(path, retained);
+  assert.match(
+    await readFile(join(path, "partial.txt"), "utf8"),
+    /work in progress/,
+  );
+});
+
+test("hostile path escapes are refused and the turn continues via the CLI", async (t) => {
+  const cwd = await tempDir(t);
+  for (const scenario of ["path-escape", "absolute-path", "symlink-escape"]) {
+    const r = await runCli(t, [
+      "do your worst",
+      "--cmd",
+      `node ${HOSTILE_AGENT} --scenario ${scenario}`,
+      "--mode",
+      "auto",
+      "--cwd",
+      cwd,
+    ]);
+
+    assert.equal(r.code, 0, `${scenario}: ${r.stderr}`);
+    assert.match(r.stdout, /OUTCOME=refused/, scenario);
+    assert.match(r.stdout, /end_turn/, scenario);
+  }
+});
+
+test("hostile write-no-ask is refused under safe and allowed under auto", async (t) => {
+  const cwd = await tempDir(t);
+  const args = (mode: string) => [
+    "do your worst",
+    "--cmd",
+    `node ${HOSTILE_AGENT} --scenario write-no-ask`,
+    "--mode",
+    mode,
+    "--cwd",
+    cwd,
+  ];
+
+  const safe = await runCli(t, args("safe"));
+  assert.equal(safe.code, 0, safe.stderr);
+  assert.match(safe.stdout + safe.stderr, /write refused by policy/);
+  await assert.rejects(access(join(cwd, "SNEAKY.md")), /ENOENT/);
+
+  const auto = await runCli(t, args("auto"));
+  assert.equal(auto.code, 0, auto.stderr);
+  assert.equal(
+    await readFile(join(cwd, "SNEAKY.md"), "utf8"),
+    "written without asking\n",
+  );
+});
+
+test("hostile malformed JSON and unknown methods do not kill the turn", async (t) => {
+  const cwd = await tempDir(t);
+  for (const scenario of ["malformed-json", "unknown-method"]) {
+    const r = await runCli(t, [
+      "do your worst",
+      "--cmd",
+      `node ${HOSTILE_AGENT} --scenario ${scenario}`,
+      "--mode",
+      "auto",
+      "--cwd",
+      cwd,
+    ]);
+
+    assert.equal(r.code, 0, `${scenario}: ${r.stderr}`);
+    assert.match(r.stdout, /end_turn/, scenario);
+  }
+});
+
+test("three slow run-file tasks honor maxConcurrency 2", async (t) => {
+  const cwd = await tempDir(t);
+  const meta = await tempDir(t);
+  const agent = join(meta, "slow-agent.mjs");
+  await writeFile(
+    agent,
+    `import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const rl = createInterface({ input: process.stdin });
+rl.on("line", async (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: false }, agentInfo: { name: "slow", version: "1" }, authMethods: [] } });
+  if (msg.method === "session/new") return send({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s" + msg.id } });
+  if (msg.method === "session/prompt") {
+    appendFileSync("activity.log", "start " + Date.now() + "\\n");
+    await sleep(600);
+    appendFileSync("activity.log", "end " + Date.now() + "\\n");
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: msg.params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "<task-result>\\n<status>success</status>\\n<summary>slow done</summary>\\n<details>none</details>\\n</task-result>" } } } });
+    send({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
+  }
+});
+`,
+  );
+  const file = await runFile(
+    t,
+    mockRun(
+      [1, 2, 3].map((n) => ({
+        id: `slow${n}`,
+        prompt: `slow ${n}`,
+        cmd: `node ${agent}`,
+      })),
+      { maxConcurrency: 2 },
+    ),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  assert.equal(r.code, 0, r.stderr);
+
+  const activity = await readFile(join(cwd, "activity.log"), "utf8");
+  const starts = activity.match(/^start/gm) ?? [];
+  assert.equal(starts.length, 3, activity);
+
+  let active = 0;
+  let maxActive = 0;
+  for (const line of activity.trim().split("\n")) {
+    if (line.startsWith("start")) active += 1;
+    if (line.startsWith("end")) active -= 1;
+    if (active > maxActive) maxActive = active;
+  }
+  assert.equal(maxActive, 2, activity);
+});
+
+test("a warned task and a failed task roll up to a failed run", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun([
+      {
+        id: "warned",
+        prompt: "warn",
+        cmd: `node ${MOCK_AGENT} --scenario no-result`,
+      },
+      {
+        id: "failed",
+        prompt: "fail",
+        cmd: `node ${MOCK_AGENT} --scenario refuse`,
+      },
+    ]),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(r.stdout, /▸ warned \(mock-agent\) warned/);
+  assert.match(r.stdout, /▸ failed \(mock-agent\) failed/);
+  assert.match(r.stdout, /\nfailed — 2 tasks, 2 turns,/);
 });
