@@ -1080,7 +1080,7 @@ reported, and rejecting the block over a synonym would throw away a good summary
 `mock-agent.mjs` now sends a compliant block, which is what keeps the happy path exercisable
 offline; M1b-5 still owns the non-compliant fixtures.
 **Review round (#88) moved the cross-check's input twice, both times measured.** The diff was
-read as porcelain *text*, and `git()` trims — so ` M run.ts`, the commonest shape there is,
+read as porcelain *text*, and `git()` trims — so `M run.ts`, the commonest shape there is,
 lost its status column and read as the path `un.ts`, warning `filesNotInDiff` about a file
 the agent had correctly reported. It is now `changedPaths`, over `git status -z`, which
 writes paths verbatim and gives a rename's source its own entry: that deleted the unquoter
@@ -1096,6 +1096,26 @@ Multiple sessions, a permission timeout, a malformed `<task-result>`, a missing 
 answers the re-ask on the second turn, and fixtures tripping each cross-check warning.
 *Done when* every new client path is exercisable with nothing installed — the property that
 keeps this project verifiable offline.
+**Landed 2026-09-08 (#21).** Fixtures are selected by `--scenario <name>` on **argv**, not
+by a keyword in the prompt. The story's own `silent-session` case proves why: it fires during
+the handshake, before any prompt exists, so no keyword could reach it. `refuse` moved to the
+same surface with the rest, so prompt text is load-bearing nowhere now. An unknown name exits
+2 instead of falling back to the compliant path — a typo that quietly ran the happy fixture
+would make a test pass for the wrong reason. Five block-shaped fixtures cover the four
+cross-check kinds **one at a time**, which is the property the suite asserts: each card
+carries exactly one `!` line. That is why `files-not-in-diff` reports `partial` rather than
+`success` — a success claim over an unchanged tree would trip `claimedSuccessNoDiff` too —
+and why `unasked-write` writes through node's own `fs` rather than `fs/write_text_file`,
+since `policyNeverFired` is about the mutation the client never sees.
+Three of the story's five items were substituted in scoping, each recorded on the issue.
+**Multiple sessions** is unreachable — `AcpAgent` holds one `sessionId` and each task gets
+its own subprocess — so the cheap half landed instead: an id minted per `session/new`, and a
+refusal for any id the mock never issued. **The permission timeout** is M2-3's clock, so the
+handshake deadline stands in for it; the mock's silence on `session/new` replaced the inline
+`node -e` script `protocol/tests/agent.test.ts` used to carry, which is a deletion rather
+than a second fixture. **The re-ask** is gone from the client (#62 R5), so the missing block
+is one turn only. Folded in as well: M0-5's pin of `usage` on the `session/prompt`
+**response**, which the mock had never sent.
 
 **M1b-6 · `hostile-agent` · S · needs M1a-3**
 Path escape (`../../etc/passwd`, absolute paths, symlink), mutation without asking,
