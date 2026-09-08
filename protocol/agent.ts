@@ -1,8 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve, sep } from "node:path";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
 import type {
@@ -56,6 +56,22 @@ const TIMED_METHODS = new Set([
 // M0-1 measured the slowest handshake step at 3.0s (copilot's session/new),
 // so this is an order of magnitude above the worst observed.
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The longest stdout line this client will parse (M1b-6, issue #22).
+ *
+ * Counted in UTF-16 units rather than bytes — for JSON-RPC's ASCII-heavy
+ * payloads the two are within a rounding error, and `Buffer.byteLength` on
+ * every line of every turn is a cost paid for nothing. 32 MiB is far above any
+ * real payload: the largest thing that legitimately crosses this wire is a
+ * file's contents in an `fs/read_text_file` reply, which the harness asked for.
+ *
+ * ponytail: `readline` has already buffered the whole line by the time we see
+ * it, so this refuses the payload rather than bounding the memory that held
+ * it. A real bound means a manual chunk scanner over stdout in place of
+ * `createInterface`; upgrade to one if this ever fires against a live harness.
+ */
+const MAX_LINE_LENGTH = 32 * 1024 * 1024;
 
 /**
  * The policy a caller who supplied none gets.
@@ -227,6 +243,21 @@ export class AcpAgent {
   // and the lookup in #requestPermission has to be able to miss in the same
   // way the pre-port code did.
   #toolCalls = new Map<ToolCallId | undefined, RememberedToolCall>();
+  // Direct `fs/write_text_file` paths the client has already been asked about
+  // through `session/request_permission`. A write that follows an approved
+  // permission for the same path is the second half of that one decision, not a
+  // new mutation to judge; a write with no entry is the hostile case and goes
+  // through `#guardWrite`. Keyed by the resolved absolute path so a later write
+  // to a different file still asks.
+  //
+  // An approval covers **one** write and is consumed by it. There is no
+  // standing grant here even when the harness's menu was `allow_always`:
+  // `pickOption` prefers `allow_once` and reaches `allow_always` only when the
+  // harness offered nothing narrower, so an "always" entry would be a session
+  // -long grant for a path nobody chose to grant that way. A denial is the one
+  // sticky entry, so a harness that writes after being refused is refused
+  // again without re-asking.
+  #writeDecisions = new Map<string, "denied" | "once">();
   #closed = false;
   #promptInFlight = false;
   #stderr: string[] = [];
@@ -560,6 +591,16 @@ export class AcpAgent {
   }
 
   #onLine(raw: string): void {
+    // Before `trim`, which would copy the whole thing. Unconditional, not
+    // `#log`: a refusal is exactly the event a run must not be silent about,
+    // and a harness that reaches this length is not having a normal turn.
+    if (raw.length > MAX_LINE_LENGTH) {
+      process.stderr.write(
+        `[${this.name}] oversized stdout line dropped: ${raw.length} chars (max ${MAX_LINE_LENGTH})\n`,
+      );
+      return;
+    }
+
     const line = raw.trim();
     if (!line) return;
 
@@ -659,12 +700,28 @@ export class AcpAgent {
 
   // ---------- client-side capabilities ----------
 
-  #guardPath(p: string, { write }: { write: boolean }): string {
+  /**
+   * The absolute path to use, or a throw naming the root it left.
+   *
+   * The prefix check is on **realpaths** (M1b-6, issue #22). `resolve` is
+   * string arithmetic and never touches the filesystem, so before this a
+   * symlink sitting inside the root and pointing outside it read as in-root
+   * and was followed — the hole `protocol/tests/agent.test.ts` recorded as a
+   * documented gap rather than a pass.
+   *
+   * What is returned is still the resolved-but-not-realpathed path, so a write
+   * lands where the harness asked and `_client_wrote_file` reports that name.
+   * Following the link at write time is safe because it is the same link this
+   * check just resolved.
+   */
+  async #guardPath(p: string, { write }: { write: boolean }): Promise<string> {
     const abs = resolve(this.cwd, p);
-    const inRoot = abs === this.cwd || abs.startsWith(this.cwd + sep);
+    const root = await realPathOrNearest(this.cwd);
+    const real = await realPathOrNearest(abs);
+    const inRoot = real === root || real.startsWith(root + sep);
     if (!inRoot && (write || !this.allowReadOutsideRoot)) {
       throw new Error(
-        `path outside workspace root refused: ${abs} (root: ${this.cwd})`,
+        `path outside workspace root refused: ${real} (root: ${root})`,
       );
     }
     return abs;
@@ -675,7 +732,7 @@ export class AcpAgent {
     line,
     limit,
   }: ReadTextFileParams): Promise<ReadTextFileResponse> {
-    const abs = this.#guardPath(path, { write: false });
+    const abs = await this.#guardPath(path, { write: false });
     let content = await readFile(abs, "utf8");
     if (line != null || limit != null) {
       const lines = content.split("\n");
@@ -686,11 +743,65 @@ export class AcpAgent {
     return { content };
   }
 
+  /**
+   * Put a write with no prior `session/request_permission` decision through the
+   * same policy as a tool call the harness asks about (M1b-6, issue #22).
+   *
+   * Without this, `safe` refuses the *request* to edit and then performs the
+   * edit for any harness that skips the request and calls the file service
+   * directly — which is the whole of "mutation without asking". This is the
+   * only mutation the client can see on the wire, so it is the only one it can
+   * refuse; a harness editing through its own shell stays outside the policy's
+   * jurisdiction and is inferred afterwards by `policyNeverFired`.
+   *
+   * A write that follows an approved `session/request_permission` for the same
+   * path is not a new decision and is handled by `#writeDecisions` instead.
+   *
+   * `kind: "edit"` is the honest label, and it is what makes `safePolicy`
+   * refuse: `READ_ONLY_KINDS` does not contain it. `options` is empty because
+   * nothing offered any — this is our own decision point, not a reply to a
+   * `session/request_permission`, so there is no option id to pick.
+   */
+  async #guardWrite(abs: string): Promise<void> {
+    const toolCall: PolicyToolCall = {
+      title: `fs/write_text_file ${abs}`,
+      kind: "edit",
+      rawInput: { path: abs },
+    };
+    const allow = await this.policy({
+      agent: this.name,
+      toolCall,
+      options: [],
+    });
+
+    this.onEvent({
+      agent: this.name,
+      update: {
+        sessionUpdate: "_client_permission",
+        allow,
+        title: toolCall.title,
+        kind: toolCall.kind,
+      },
+    });
+
+    if (!allow) throw new Error(`write refused by policy: ${abs}`);
+  }
+
   async #writeTextFile({
     path,
     content,
   }: WriteTextFileParams): Promise<WriteTextFileResponse> {
-    const abs = this.#guardPath(path, { write: true });
+    const abs = await this.#guardPath(path, { write: true });
+    const decision = this.#writeDecisions.get(abs);
+    if (decision === undefined) {
+      await this.#guardWrite(abs);
+    } else if (decision === "denied") {
+      throw new Error(`write refused by policy: ${abs}`);
+    } else if (decision === "once") {
+      // One approved write, not a standing grant. Consume it before attempting
+      // the write so a later retry must ask again.
+      this.#writeDecisions.delete(abs);
+    }
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, content, "utf8");
     this.onEvent({
@@ -720,6 +831,26 @@ export class AcpAgent {
       options,
     });
     const optionId = pickOption(options, allow);
+
+    // Remember what this edit decision covers. The follow-up `fs/write_text_file`
+    // that a well-behaved harness sends after an approved permission request is
+    // not a second, unasked mutation: it is the same logical write, so it should
+    // not re-enter the policy. Only paths named in the permission request are
+    // remembered; a direct write to a different path still goes through
+    // `#guardWrite`.
+    if (detail.kind === "edit") {
+      // `rawInput` is arbitrary agent-supplied JSON, so the only safe way to
+      // learn whether it names a file is a runtime check at this decode point.
+      const rawPath = detail.rawInput?.path;
+      // pi-lens-ignore: no-runtime-typeof
+      if (typeof rawPath === "string") {
+        const denied = optionId === null || !allow;
+        this.#writeDecisions.set(
+          resolve(this.cwd, rawPath),
+          denied ? "denied" : "once",
+        );
+      }
+    }
 
     this.onEvent({
       agent: this.name,
@@ -769,6 +900,24 @@ export class AcpAgent {
 
   #log(m: string): void {
     if (this.verbose) process.stderr.write(`[${this.name}] ${m}\n`);
+  }
+}
+
+/**
+ * The real path of `p`, following symlinks as far as the filesystem goes.
+ *
+ * `realpath` throws on a path that does not exist, which every write to a new
+ * file is, so the missing tail is resolved against the nearest ancestor that
+ * does exist and re-appended. That is enough for containment: a link can only
+ * be followed where a link actually exists.
+ */
+async function realPathOrNearest(p: string): Promise<string> {
+  try {
+    return await realpath(p);
+  } catch {
+    const parent = dirname(p);
+    if (parent === p) return p;
+    return join(await realPathOrNearest(parent), basename(p));
   }
 }
 

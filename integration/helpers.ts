@@ -107,6 +107,9 @@ export function runCli(
  */
 export const MOCK_AGENT = join(REPO, "mock-agent.mjs");
 
+/** Its opposite: the harness that attacks the client (M1b-6). Absolute for the same reason. */
+export const HOSTILE_AGENT = join(REPO, "hostile-agent.mjs");
+
 /** The prompt every write test uses. One file, one word, nothing to interpret. */
 export const WRITE_PROMPT =
   "create a file called PROOF.md containing the single word hello";

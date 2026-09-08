@@ -30,5 +30,7 @@
   //
   // mock-agent.mjs is a runnable script (`node mock-agent.mjs`, inside the
   // selftest script's --cmd string), not an imported module, and is dev-only.
-  "entry": ["run.ts!", "mock-agent.mjs"]
+  // hostile-agent.mjs is the same shape: spawned by protocol/tests/hostile.test.ts
+  // as a subprocess, never imported, so nothing reaches it through the graph.
+  "entry": ["run.ts!", "mock-agent.mjs", "hostile-agent.mjs"]
 }

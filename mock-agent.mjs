@@ -241,6 +241,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       toolCallId: "t2",
       title: "Write ACP_TEST.md",
       kind: "edit",
+      rawInput: { path: "ACP_TEST.md" },
       status: "pending",
     });
     const perm = await callClient("session/request_permission", {

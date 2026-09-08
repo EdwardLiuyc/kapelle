@@ -446,7 +446,10 @@ driven from a run file, fully verifiable offline.
   returns), and a **repeat mode** (the same tool title on a loop) — one per watchdog signal.
   Add fixtures that trip each cross-check warning, and a run file that violates a `maxMode`
   ceiling and must be rejected before anything spawns. Add `hostile-agent`: path escape,
-  mutation without asking, protocol violation.
+  mutation without asking, protocol violation. **Landed 2026-09-08 (#22)** as
+  `hostile-agent.mjs` — `.mjs`, not the `.ts` this line first guessed, because it is the
+  sibling of `mock-agent.mjs` and neither is imported by anything typed. One attack per
+  `--scenario`, and no default: a hostile agent with no attack selected is a worse mock.
 
 ---
 
@@ -544,7 +547,7 @@ reach the subprocess, which a pure function cannot express.
 npm run check                    # tsc --noEmit
 npm run selftest                 # existing end-to-end, must keep passing
 node run.ts "self test" --cmd "node mock-agent.ts" --mode safe   # write refused
-node run.ts "escape"    --cmd "node hostile-agent.ts" --mode auto # path guard blocks
+node run.ts "escape"    --cmd "node hostile-agent.mjs --scenario path-escape" --mode auto # path guard blocks
 ```
 
 **M0** — findings note recording, per harness: does it start, does it complete a turn,
