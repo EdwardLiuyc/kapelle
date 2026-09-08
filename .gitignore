@@ -2,5 +2,7 @@ ACP_TEST.md
 node_modules/
 .agent-team/
 
-# Agent worktrees, wherever a harness puts them (.claude/worktrees/ today).
-**/worktrees/*
+# Claude Code checks agent worktrees out inside the repo. Named, not globbed:
+# `**/worktrees/*` would also hide a source directory that happened to be
+# called worktrees, and git hiding real work is how it gets lost.
+.claude/worktrees/
