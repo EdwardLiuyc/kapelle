@@ -44,7 +44,7 @@ policy across all of them and returning machine-readable results.
 | Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. **Required, not optional: M0-1 found this is opencode's default behaviour, not an anomaly.** |
 | Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. **Capability axis measured too, 2026-08-23 — parked.** M0-3's `87cbfe3` advertised `_meta.terminal_output: true`; claude-agent-acp's Bash `tool_call` then carried a `terminal_id` and `{type:"terminal"}` block for a terminal never created, with still no `terminal/*` calls, no command output, and no exit code (`M0-FINDINGS.md`). It is a rendering convention, not visibility — `argvChannel` gains no fourth value, and no follow-up is scheduled. |
 | Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `protocol/agent.ts` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), and the capability flags M0-3 found harnesses gating on (measured for `terminal_output` via `87cbfe3`) all live there. |
-| Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency; zero runtime deps preserved. |
+| Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency. **Zero runtime deps until M1c-7 (2026-09-09), which ratified a presentation-only exception and took `marked`** — see `README.md` for the rule. |
 | Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
 | CLI | **One front end, one core (amended 2026-09-06, M2-9).** `agent-team run <file>` drives in-process; `--detach` hands the same file to the daemon; `agent-team attach <run-id>` streams a detached run. The original "two front ends, `run` and `runs`" is dropped: `runs` leaked the `POST /runs` path into a name people type, read as "many runs" when the difference is *local versus detached*, and a second CLI is a second place to keep the flags, notice rules and SIGINT grace in step. |
 
@@ -60,8 +60,9 @@ booting a server, and the CLI drifts into a second implementation.
 **Why TypeScript doesn't cost a build step any more.** Node 22.18+/24 strips type
 annotations at load and executes `.ts` directly. Checking types still needs the
 `typescript` package — but so does the JSDoc alternative, so the dependency cost is a
-wash. Zero *runtime* dependencies, the property the brief calls a survival trait, is
-preserved either way. The Node 24 `engines` bump is for LTS, not for the language feature.
+wash. Zero *runtime* dependencies, the property the brief calls a survival trait, was
+preserved either way; M1c-7 later spent it once, under a written exception that
+keeps every dependency downstream of the bus. The Node 24 `engines` bump is for LTS, not for the language feature.
 
 **Why an XML tag rather than a fenced JSON block.** Agents that write code emit fenced
 blocks constantly, so "the last fenced JSON block in the final message" is ambiguous

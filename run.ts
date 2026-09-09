@@ -21,7 +21,7 @@ import {
   resolveEnv,
   warningsFor,
 } from "./protocol/registry.ts";
-import { render } from "./render.ts";
+import { flushStream, render } from "./render.ts";
 
 const argv = process.argv.slice(2);
 
@@ -228,8 +228,12 @@ if (runFilePath) {
     // here — there is no worktree and no task record to hang a warning on.
     // The whole PromptResponse is returned (#62 B3); M1 renders only stopReason.
     const { stopReason } = await agent.prompt(withResultPreamble(promptText));
+    // The end of a turn flushes the block `render` still has open (M1c-7):
+    // this line prints past the renderer, so nothing else would close it.
+    flushStream();
     if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
   } catch (err) {
+    flushStream();
     console.error(`\nerror: ${messageOf(err)}`);
     process.exitCode = 1;
   } finally {

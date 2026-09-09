@@ -22,5 +22,8 @@
     "@types/node": "^24.13.3",
     "knip": "^6.34.0",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "marked": "18.0.12"
   }
 }

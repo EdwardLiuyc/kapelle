@@ -337,6 +337,23 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       status: "failed",
     });
 
+    // Markdown, split mid-line across chunks the way a real harness streams it
+    // (M1c-7). `mock-agent.mjs` being too tidy is what hid this bug through
+    // M1a, so the message carries the three constructs the story names: a GFM
+    // table, a nested list, and a fence with a blank line inside it — the last
+    // being the one a naive blank-line rule splits in two.
+    for (const chunk of [
+      "\n## What I did\n\n| step | result |\n| --- | --- |\n| read",
+      " | ok |\n| write | see above |\n\n- checked the file\n  - it par",
+      "sed\n  - it was **not** empty\n- reported back\n\n```js\nconst x = 1;\n",
+      "\nconst y = 2;\n```\n",
+    ]) {
+      update(sid, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: chunk },
+      });
+    }
+
     // The result block M1b-4's preamble asks for, as a compliant harness
     // sends it: last in the final message, and `<files>` only when the write
     // actually happened — a block that claimed ACP_TEST.md under `safe` would
