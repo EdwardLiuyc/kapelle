@@ -690,6 +690,11 @@ async function runOne(
         err instanceof Error ? err.message : String(err)
       }`,
     );
+    // We cannot prove the advertised branch now carries the task's work (a
+    // release failure can happen before the commit lands). Drop the metadata
+    // so merge refuses instead of silently landing an empty branch.
+    settled.branch = undefined;
+    settled.baseSha = undefined;
   }
   return settled;
 }
