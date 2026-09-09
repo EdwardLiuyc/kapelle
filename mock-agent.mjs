@@ -26,6 +26,8 @@ const SCENARIOS = {
   "claimed-success": "claims success and changes nothing",
   "files-not-in-diff": "lists a file it never wrote",
   "unasked-write": "writes a file itself, without asking permission",
+  stall: "writes one file, then emits nothing and never returns",
+  repeat: "the same tool title on a loop, then ends the turn itself",
 };
 
 const at = process.argv.indexOf("--scenario");
@@ -39,6 +41,15 @@ if (scenario !== null && !Object.hasOwn(SCENARIOS, scenario)) {
     ).join(", ")}`,
   );
   process.exit(2);
+}
+
+// M1c-2's stall fixture writes before the protocol starts. A task that changed
+// nothing is untouched, and `release` rolls its branch back
+// (`core/worktree.ts:382`); writing at startup means the work is already on disk
+// if the TTL fires during spawn/handshake/startup, before the prompt would
+// otherwise arrive.
+if (scenario === "stall") {
+  writeFileSync("stalled.txt", "written just before going quiet\n");
 }
 
 const result = (status, summary, details, files) =>
@@ -87,6 +98,22 @@ const USAGE = {
   totalTokens: 1234,
   cachedReadTokens: 0,
 };
+
+/** M1c-2's repeat fixture. Twelve calls 150 ms apart hold the turn open for
+ *  ~1.8 s, which is past one sweep: `sweepIntervalMs` never ticks faster than
+ *  once a second (`core/watchdog.ts`), so a tighter loop would finish before
+ *  the watchdog ever looked at it. */
+const REPEATS = 12;
+const REPEAT_TITLE = "Search for the same thing again";
+const REPEAT_GAP_MS = 150;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** The prompt `stall` never answered, kept so `session/cancel` can end it.
+ *  M0-4 measured every real harness ending its turn within 64 ms of a cancel,
+ *  so answering is the realistic half; a harness that ignores the cancel is
+ *  already covered by `tests/cli.test.ts`'s inline stubborn agent. */
+let stalledPromptId = null;
 
 let nextId = 1000;
 let sessionCount = 0;
@@ -147,6 +174,14 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     reply(msg.id, { sessionId: sid });
   }
 
+  if (msg.method === "session/cancel") {
+    if (stalledPromptId !== null) {
+      reply(stalledPromptId, { stopReason: "cancelled", usage: USAGE });
+      stalledPromptId = null;
+    }
+    return;
+  }
+
   if (msg.method === "session/prompt") {
     const sid = msg.params.sessionId;
 
@@ -163,6 +198,44 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // exceptions goes silent on every one of them.
     if (scenario === "refuse") {
       reply(msg.id, { stopReason: "refusal", usage: USAGE });
+      return;
+    }
+
+    // M1c-2's stall fixture never answers this prompt. The file was already
+    // written at startup, so a TTL that fires before the prompt arrives still
+    // leaves the branch/worktree intact to inspect.
+    if (scenario === "stall") {
+      stalledPromptId = msg.id;
+      return;
+    }
+
+    // The busy loop idle time structurally cannot see: one title, over and
+    // over, then a normal end of turn — repeat warns and must not cancel.
+    if (scenario === "repeat") {
+      for (let i = 0; i < REPEATS; i++) {
+        update(sid, {
+          sessionUpdate: "tool_call",
+          toolCallId: `loop${i}`,
+          title: REPEAT_TITLE,
+          kind: "search",
+          status: "pending",
+        });
+        await sleep(REPEAT_GAP_MS);
+      }
+      update(sid, {
+        sessionUpdate: "agent_message_chunk",
+        // `partial`, and nothing written: a `success` claim on an unchanged
+        // tree would trip `claimedSuccessNoDiff` and warn for the wrong reason.
+        content: {
+          type: "text",
+          text: result(
+            "partial",
+            "Ran the same search over and over.",
+            `Repeated "${REPEAT_TITLE}" ${REPEATS} times, then gave up.`,
+          ),
+        },
+      });
+      reply(msg.id, { stopReason: "end_turn", usage: USAGE });
       return;
     }
 
