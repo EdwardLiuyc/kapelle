@@ -30,6 +30,7 @@ import {
 } from "../protocol/registry.ts";
 import { assertTaskId } from "./ids.ts";
 import { type HarnessLayer, resolvePolicy } from "./policy.ts";
+import { WATCHDOG_DEFAULTS, type WatchdogLimits } from "./watchdog.ts";
 
 /** Suggested by the ratified decision (`docs/STORIES.md`, M1b-1 Gap 2). M2-7
  *  config overrides it; nothing here reads config, which does not exist yet. */
@@ -39,7 +40,7 @@ const DEFAULT_MAX_CONCURRENCY = 4;
  *  filled in by the time anyone sees this. `cmd` and `worktree` are optional
  *  because *absent* is a meaning of its own — no custom command, and "branch
  *  off the current commit". */
-export interface Task {
+export interface Task extends WatchdogLimits {
   id: string;
   prompt: string;
   agent: string;
@@ -74,11 +75,19 @@ export interface RunInput {
   allowReadOutsideRoot?: boolean;
   cmd?: string;
   worktree?: string;
+  stallIdleMs?: number;
+  stallRepeatCount?: number;
+  ttlMs?: number;
 }
 
 /** Exported for the run-file JSON Schema's drift test (M1b-2, #18): the
  *  schema is an authoring aid an editor reads, never a second validator, so
  *  its property list is asserted equal to these Sets rather than trusted. */
+/** The three watchdog knobs (M1c-1, #25). Listed once: they are accepted at
+ *  both levels, exactly like `mode` and `agent`, and a list per level is a
+ *  second place for one of them to be forgotten. */
+const WATCHDOG_KEYS = ["stallIdleMs", "stallRepeatCount", "ttlMs"] as const;
+
 export const RUN_KEYS = new Set([
   "tasks",
   "maxConcurrency",
@@ -88,6 +97,7 @@ export const RUN_KEYS = new Set([
   "allowReadOutsideRoot",
   "cmd",
   "worktree",
+  ...WATCHDOG_KEYS,
 ]);
 
 /** `needs` is listed so a dependency gets the M3 message rather than the
@@ -102,6 +112,7 @@ export const TASK_KEYS = new Set([
   "worktree",
   "note",
   "needs",
+  ...WATCHDOG_KEYS,
 ]);
 
 /**
@@ -145,6 +156,11 @@ export function validateRun(
       `run file: worktree inheritance lands in M3 — "worktree" is a base ref ` +
         `to branch from, not a task to inherit a checkout from.`,
     );
+  }
+  // Same reason the mode default is checked here: a task override must not be
+  // able to hide an invalid run-level value.
+  for (const key of WATCHDOG_KEYS) {
+    void optionalCount(run[key], "run file", key);
   }
   void optionalString(run.cmd, "run file", "cmd");
   const runAgent = optionalString(run.agent, "run file", "agent");
@@ -270,7 +286,14 @@ function validateTask(
     }),
   );
 
-  const task: Task = { id, prompt, agent, mode, allowReadOutsideRoot };
+  const task: Task = {
+    id,
+    prompt,
+    agent,
+    mode,
+    allowReadOutsideRoot,
+    ...watchdogLimits(t, run, where),
+  };
   if (cmd !== undefined) task.cmd = cmd;
   if (worktree !== undefined) task.worktree = worktree;
   const note = optionalString(t.note, where, "note");
@@ -342,6 +365,40 @@ function optionalBool(
     throw new Error(`${where}: "${key}" must be true or false.`);
   }
   return value;
+}
+
+/** `0` is meaningful — it is how a signal is switched off — so the floor is
+ *  zero, not one. Milliseconds and a count share one rule because they share
+ *  one shape: a whole number that cannot be negative. */
+function optionalCount(
+  value: unknown,
+  where: string,
+  key: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new Error(
+      `${where}: "${key}" must be a whole number 0 or greater; ` +
+        `got ${JSON.stringify(value)}.`,
+    );
+  }
+  return value as number;
+}
+
+/** Task value, else run value, else the default — the `t.x ?? run.x` shape the
+ *  other five run-level defaults already use. */
+function watchdogLimits(
+  t: Record<string, unknown>,
+  run: Record<string, unknown>,
+  where: string,
+): WatchdogLimits {
+  const pick = (key: (typeof WATCHDOG_KEYS)[number]) =>
+    optionalCount(t[key] ?? run[key], where, key) ?? WATCHDOG_DEFAULTS[key];
+  return {
+    stallIdleMs: pick("stallIdleMs"),
+    stallRepeatCount: pick("stallRepeatCount"),
+    ttlMs: pick("ttlMs"),
+  };
 }
 
 function rethrowWith<T>(where: string, f: () => T): T {

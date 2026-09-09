@@ -48,6 +48,7 @@ import {
   withResultPreamble,
 } from "./result.ts";
 import type { Run, Task } from "./runfile.ts";
+import { createWatchdog, sweepIntervalMs, type Watchdog } from "./watchdog.ts";
 import {
   changedPaths,
   openWorktrees,
@@ -359,6 +360,34 @@ export async function runRun(
 
   const results = new Array<TaskRun>(run.tasks.length);
   const queue = run.tasks.map((task, index) => ({ task, index }));
+
+  // One sweep for the whole run, each task judged by its own limits (M1c-1).
+  // The controls map is how the sweep reaches a single task: `signal` here is
+  // run-wide, so aborting it to cut one stalled task would cancel the others.
+  const controls = new Map<string, TaskControl>();
+  const watchdog = createWatchdog({
+    onWarn: (taskId, kind, text) => {
+      // On the bus, not through `onNotice`: M1c-4's notifier and M4's toast
+      // subscribe to this same event, and unlike the containment line a stall
+      // warning is ordinary run output that `--quiet` may drop.
+      options.bus.emit({
+        agent: taskId,
+        update: { sessionUpdate: "_client_stall_warning", kind, text },
+      });
+    },
+    onTimeout: (taskId) => {
+      const control = controls.get(taskId);
+      if (!control) return;
+      // The flag before the cancel: `statusFor` reads our own record, and a
+      // task that settled between the two would otherwise read `cancelled`.
+      control.fired = true;
+      control.cancel();
+    },
+  });
+  const sweep = setInterval(() => watchdog.sweep(), sweepIntervalMs(run.tasks));
+  // `unref`: the sweep watches a run that is already keeping the loop alive.
+  // It must never be the reason a finished process lingers.
+  sweep.unref();
   let turns = 0;
   const onTurn = () => {
     turns += 1;
@@ -396,12 +425,18 @@ export async function runRun(
         worktrees,
         logs ? join(logDir, `${task.id}.stderr.log`) : undefined,
         onceNotices,
+        watchdog,
+        controls,
       );
     }
   };
 
   const width = Math.min(run.maxConcurrency, run.tasks.length);
-  await Promise.all(Array.from({ length: width }, worker));
+  try {
+    await Promise.all(Array.from({ length: width }, worker));
+  } finally {
+    clearInterval(sweep);
+  }
 
   return {
     status: runStatus(results.map((r) => r.status)),
@@ -409,6 +444,14 @@ export async function runRun(
     turns,
     tasks: results,
   };
+}
+
+/** How the run-wide sweep reaches one task. `fired` is the supervisor's own
+ *  record that the TTL cut this task off — never `stopReason`, which M0-4
+ *  measured copilot lying about. */
+interface TaskControl {
+  cancel: () => void;
+  fired: boolean;
 }
 
 async function runOne(
@@ -420,8 +463,22 @@ async function runOne(
   worktrees: Worktrees | null,
   stderrLog: string | undefined,
   onceNotices: Set<string>,
+  watchdog: Watchdog,
+  controls: Map<string, TaskControl>,
 ): Promise<TaskRun> {
   const started = Date.now();
+
+  // This task's own abort, chained to the run's. The executor sees only this
+  // one, so a TTL cuts one task where ^C still cuts them all.
+  const control = new AbortController();
+  const onRunAbort = () => control.abort();
+  signal.addEventListener("abort", onRunAbort);
+  if (signal.aborted) control.abort();
+  const self: TaskControl = { cancel: () => control.abort(), fired: false };
+  controls.set(task.id, self);
+
+  // `Task` carries the three limits structurally, so there is nothing to map.
+  const watch = watchdog.watch(task.id, task);
 
   // One label-and-filter route for both task notices and run-level notices,
   // so the CLI's `--quiet` rules cannot fork by accident.
@@ -438,6 +495,7 @@ async function runOne(
   // removeListener, so a per-task listener on the shared bus would pile up.
   const bus = createEventBus();
   bus.addListener(options.bus.emit);
+  bus.addListener(watch.note);
   let transcript = "";
   bus.addListener(({ update }) => {
     if (update.sessionUpdate === "agent_message_chunk") {
@@ -462,7 +520,7 @@ async function runOne(
     const outcome = await exec(task, {
       cwd,
       bus,
-      signal,
+      signal: control.signal,
       verbose: options.verbose ?? false,
       stderrLog,
       isolated: worktrees !== null,
@@ -478,7 +536,7 @@ async function runOne(
     const status = statusFor({
       stopReason: outcome.stopReason,
       cancelRequested,
-      watchdogFired: false,
+      watchdogFired: self.fired,
     });
     const warnings = outcome.warnings ?? [];
     const result: TaskRun = {
@@ -530,11 +588,21 @@ async function runOne(
       agent: task.agent,
       cwd,
       transcript,
-      status: statusFor({ cancelRequested, watchdogFired: false, threw: true }),
+      status: statusFor({
+        cancelRequested,
+        watchdogFired: self.fired,
+        threw: true,
+      }),
       durationMs: Date.now() - started,
       error: err instanceof Error ? err.message : String(err),
     };
   }
+
+  signal.removeEventListener("abort", onRunAbort);
+  controls.delete(task.id);
+  // Before the worktree work below, which is slow enough for a tight
+  // `stallIdleMs` to warn about a task that has already finished.
+  watch.close();
 
   // Teardown never changes the verdict. A worktree that cannot be committed or
   // removed is a mess to report, not a reason to relabel a task that finished:

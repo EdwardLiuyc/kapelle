@@ -40,6 +40,9 @@ test("fills the defaults and returns the resolved shape", () => {
     agent: "demo",
     mode: "ask",
     allowReadOutsideRoot: false,
+    stallIdleMs: 300_000,
+    stallRepeatCount: 8,
+    ttlMs: 3_600_000,
   };
   const expected: Run = { maxConcurrency: 4, tasks: [resolved] };
   assert.deepEqual(run(minimal), expected);
@@ -270,5 +273,72 @@ test("the run-file schema lists exactly the keys the validator knows", async () 
   assert.deepEqual(
     Object.keys(schema.$defs.task.properties).sort(),
     [...TASK_KEYS].sort(),
+  );
+});
+
+// --- watchdog limits (M1c-1, #25) ------------------------------------------
+
+test("watchdog limits default when nobody sets them", () => {
+  const [task] = run(minimal).tasks;
+  assert.equal(task?.stallIdleMs, 300_000);
+  assert.equal(task?.stallRepeatCount, 8);
+  assert.equal(task?.ttlMs, 3_600_000);
+});
+
+test("a run-level watchdog limit reaches every task", () => {
+  const resolved = run({
+    agent: "demo",
+    ttlMs: 60_000,
+    tasks: [lint, { id: "docs", prompt: "write docs" }],
+  });
+  assert.deepEqual(
+    resolved.tasks.map((t) => t.ttlMs),
+    [60_000, 60_000],
+  );
+});
+
+test("a task's watchdog limit wins over the run's", () => {
+  const resolved = run({
+    agent: "demo",
+    stallIdleMs: 10_000,
+    tasks: [lint, { id: "slow", prompt: "think", stallIdleMs: 900_000 }],
+  });
+  assert.deepEqual(
+    resolved.tasks.map((t) => t.stallIdleMs),
+    [10_000, 900_000],
+  );
+});
+
+test("0 is a legal watchdog limit — it is how a signal is disabled", () => {
+  const [task] = run({
+    agent: "demo",
+    tasks: [{ ...lint, stallIdleMs: 0, stallRepeatCount: 0, ttlMs: 0 }],
+  }).tasks;
+  assert.equal(task?.stallIdleMs, 0);
+  assert.equal(task?.stallRepeatCount, 0);
+  assert.equal(task?.ttlMs, 0);
+});
+
+test("a negative or fractional watchdog limit is rejected, naming the key", () => {
+  throwsWith(
+    { agent: "demo", tasks: [{ ...lint, ttlMs: -1 }] },
+    /"ttlMs" must be a whole number 0 or greater/,
+  );
+  throwsWith(
+    { agent: "demo", tasks: [{ ...lint, stallIdleMs: 1.5 }] },
+    /"stallIdleMs" must be a whole number 0 or greater/,
+  );
+  throwsWith(
+    { agent: "demo", tasks: [{ ...lint, stallRepeatCount: "8" }] },
+    /"stallRepeatCount" must be a whole number 0 or greater/,
+  );
+});
+
+test("a bad run-level watchdog limit is rejected even when no task uses it", () => {
+  // Same rule the mode default follows: a task override must not be able to
+  // hide an invalid run-level value.
+  throwsWith(
+    { agent: "demo", ttlMs: -5, tasks: [{ ...lint, ttlMs: 1_000 }] },
+    /run file: "ttlMs" must be a whole number 0 or greater/,
   );
 });
