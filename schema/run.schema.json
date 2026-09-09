@@ -38,6 +38,24 @@
     "worktree": {
       "type": "string",
       "description": "A base ref to branch from. Never a path, and never another task's name: worktree inheritance lands in M3."
+    },
+    "stallIdleMs": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 300000,
+      "description": "Warn when a task sends nothing for this many ms. The task keeps running. 0 disables."
+    },
+    "stallRepeatCount": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 8,
+      "description": "Warn when the same tool title fires this many times in a row — the busy loop idle time cannot see. The task keeps running. 0 disables."
+    },
+    "ttlMs": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 3600000,
+      "description": "Wall time for one task. On expiry the client sends session/cancel, marks the task timed_out and keeps its branch. 0 disables."
     }
   },
   "$defs": {
@@ -66,6 +84,24 @@
           "maxItems": 0,
           "items": { "type": "string" },
           "description": "Task dependencies land in M3. M1 rejects a non-empty needs rather than running the tasks in parallel and returning a plausible wrong answer."
+        },
+        "stallIdleMs": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 300000,
+          "description": "Warn when a task sends nothing for this many ms. The task keeps running. 0 disables."
+        },
+        "stallRepeatCount": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 8,
+          "description": "Warn when the same tool title fires this many times in a row — the busy loop idle time cannot see. The task keeps running. 0 disables."
+        },
+        "ttlMs": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 3600000,
+          "description": "Wall time for one task. On expiry the client sends session/cancel, marks the task timed_out and keeps its branch. 0 disables."
         }
       }
     }

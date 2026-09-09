@@ -31,6 +31,7 @@ import {
   HOSTILE_AGENT,
   MOCK_AGENT,
   runCli,
+  spawnCli,
   tempDir,
 } from "../integration/helpers.ts";
 
@@ -933,6 +934,49 @@ rl.on("line", async (line) => {
     if (active > maxActive) maxActive = active;
   }
   assert.equal(maxActive, 2, activity);
+});
+
+test("a TTL force-kills a harness that ignores session/cancel", async (t) => {
+  const cwd = await tempDir(t);
+  const meta = await tempDir(t);
+  const agent = join(meta, "stubborn-agent.mjs");
+  await writeFile(
+    agent,
+    `import { createInterface } from "node:readline";
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+const rl = createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") return send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: false }, agentInfo: { name: "stubborn", version: "1" }, authMethods: [] } });
+  if (msg.method === "session/new") return send({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });
+  if (msg.method === "session/prompt") return; // never answers and ignores session/cancel
+});
+`,
+  );
+  const file = await runFile(
+    t,
+    mockRun([{ id: "stubborn", prompt: "never ends", cmd: `node ${agent}` }], {
+      stallIdleMs: 0,
+      stallRepeatCount: 0,
+      ttlMs: 50,
+    }),
+  );
+
+  const { child, done } = spawnCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await Promise.race([
+    done,
+    new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error("TTL force-kill did not fire; run hung"));
+      }, 10_000);
+      child.once("close", () => clearTimeout(timer));
+    }),
+  ]);
+
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(r.stdout, /▸ stubborn \(stubborn-agent\) timed_out/);
 });
 
 test("a warned task and a failed task roll up to a failed run", async (t) => {

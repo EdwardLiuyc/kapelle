@@ -326,6 +326,16 @@ async function runFromFile(path: string): Promise<number> {
   const asker = canAsk ? makeAskPolicy() : undefined;
 
   const bus = createEventBus();
+  // Not filtered by `--quiet`, and not folded into the end-of-run task card:
+  // a stall warning is only useful while the task is still stalled, and an
+  // hour-late line saying "it went quiet" is not the same information.
+  // M1c-4 adds the bell and the desktop notification to this same event.
+  bus.addListener(({ agent: taskId, update }) => {
+    if (update.sessionUpdate === "_client_stall_warning") {
+      console.error(`! [${taskId}] ${update.text}`);
+    }
+  });
+
   // Result warnings are data on the bus, not a CLI-only field. Under `--quiet`
   // there is no task card to print them from, so this subscriber is the route
   // that keeps the disagreement visible; it is deliberately separate from the

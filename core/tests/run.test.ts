@@ -511,3 +511,108 @@ test("the summary is the block's own words, or ours and flagged as ours", async 
   assert.equal(ours?.summary, "I did some work.");
   assert.equal(ours?.summarySynthesised, true);
 });
+
+// --- the watchdog (M1c-1, #25) ---------------------------------------------
+
+/** One stalling task and one quick sibling, both with tiny limits. The sweep
+ *  floor is 1 s (`core/watchdog.ts`), so this test really does wait — which is
+ *  why there is one of it rather than one per assertion. */
+function stallRun(): Run {
+  return validateRun({
+    maxConcurrency: 2,
+    cmd: "node mock-agent.mjs",
+    stallIdleMs: 10,
+    stallRepeatCount: 0,
+    ttlMs: 10,
+    tasks: [
+      { id: "stall", prompt: "hang" },
+      { id: "quick", prompt: "hello", stallIdleMs: 0, ttlMs: 0 },
+    ],
+  });
+}
+
+test("the TTL cancels the stalled task alone and marks it timed_out", {
+  // Without a watchdog this test hangs rather than fails; the bound turns the
+  // missing feature into a red test instead of a stuck suite.
+  timeout: 15_000,
+}, async () => {
+  const exec: TaskExecutor = async (task, ctx) => {
+    ctx.onTurn();
+    if (task.id !== "stall") return { stopReason: "end_turn" };
+    // Never ends by itself. Only the watchdog's cancel gets it out of here,
+    // which is the whole point: the run-wide signal was never aborted.
+    await new Promise<void>((resolve) => {
+      ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    return {};
+  };
+
+  const bus = createEventBus();
+  const stalls: string[] = [];
+  bus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "_client_stall_warning") {
+      stalls.push(`${agent}:${update.kind}`);
+    }
+  });
+
+  const report = await runRun(stallRun(), { cwd: "/tmp/nowhere", bus }, exec);
+
+  const byId = Object.fromEntries(report.tasks.map((t) => [t.id, t.status]));
+  assert.equal(byId.stall, "timed_out");
+  assert.equal(byId.quick, "done", "a sibling must not be cancelled with it");
+  assert.equal(report.status, "timed_out");
+  assert.deepEqual(stalls, ["stall:idle"], "the idle warning reached the bus");
+});
+
+test("a task with every limit at 0 is never touched by the watchdog", async () => {
+  const run = validateRun({
+    cmd: "node mock-agent.mjs",
+    stallIdleMs: 0,
+    stallRepeatCount: 0,
+    ttlMs: 0,
+    tasks: [{ id: "t0", prompt: "hello" }],
+  });
+  const exec: TaskExecutor = async (_task, ctx) => {
+    ctx.onTurn();
+    // Longer than the 1 s sweep floor, so a watchdog that ignored `0` would
+    // have cancelled this before it returned.
+    await new Promise((r) => setTimeout(r, 1_200));
+    return { stopReason: "end_turn" };
+  };
+
+  const report = await runRun(run, options(), exec);
+  assert.equal(report.status, "done");
+});
+
+test("an operator cancel outranks a TTL that fires in the same window", async () => {
+  // `statusFor` puts `watchdogFired` above `cancelRequested`, so without the
+  // guard in `onTimeout` a task the operator had already ^C'd would be
+  // relabelled `timed_out` by the next sweep — blaming the harness for a stop
+  // the operator asked for.
+  const canceller = new AbortController();
+  const run = validateRun({
+    cmd: "node mock-agent.mjs",
+    stallIdleMs: 0,
+    stallRepeatCount: 0,
+    ttlMs: 10,
+    tasks: [{ id: "t0", prompt: "hello" }],
+  });
+
+  const exec: TaskExecutor = async (_task, ctx) => {
+    ctx.onTurn();
+    canceller.abort();
+    // Outlives the 1 s sweep floor, so the TTL really is checked while the
+    // run signal is already aborted. Deliberately not waiting on
+    // `ctx.signal`: a task that exits the instant it is cancelled never
+    // reaches the sweep, and would pass this test either way.
+    await new Promise((r) => setTimeout(r, 1_400));
+    return {};
+  };
+
+  const report = await runRun(
+    run,
+    { cwd: "/tmp/nowhere", bus: createEventBus(), signal: canceller.signal },
+    exec,
+  );
+  assert.equal(report.tasks[0]?.status, "cancelled");
+});

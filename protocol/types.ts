@@ -421,13 +421,23 @@ export interface ClientResultWarningEvent extends Meta {
   text: string;
 }
 
+/** A watchdog stall signal for one task (M1c-1, issue #25). Advisory: the task
+ *  is still running when this is emitted. The TTL rung sends a real
+ *  `session/cancel` instead and shows up as `_client_cancel_requested`. */
+export interface ClientStallWarningEvent extends Meta {
+  sessionUpdate: "_client_stall_warning";
+  kind: "idle" | "repeat";
+  text: string;
+}
+
 /** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
   | ClientPermissionEvent
   | ClientWroteFileEvent
   | ClientCancelRequestedEvent
-  | ClientResultWarningEvent;
+  | ClientResultWarningEvent
+  | ClientStallWarningEvent;
 
 /** The `session/update` notification as it arrives. */
 export interface SessionNotification extends Meta {
@@ -707,7 +717,8 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_permission"
         | "_client_wrote_file"
         | "_client_cancel_requested"
-        | "_client_result_warning" = u.sessionUpdate;
+        | "_client_result_warning"
+        | "_client_stall_warning" = u.sessionUpdate;
       void fallthrough;
       return false;
     }
