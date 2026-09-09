@@ -29,7 +29,15 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
-          persist-credentials: false
+          # `persist-credentials: false` is the safer default and was set here
+          # deliberately, but claude-code-action cannot live with it: on an
+          # `issue_comment` event checkout lands on the default branch, and the
+          # action then runs `git fetch origin --depth=<n> <pr-branch>` of its
+          # own to reach the PR under review. With no token left in
+          # `.git/config` that fetch has no login and the job dies on
+          # "could not read Username for 'https://github.com'".
+          # Measured 2026-09-10, run 34417415736.
+          persist-credentials: true
 
       - name: Run Claude Code
         id: claude
