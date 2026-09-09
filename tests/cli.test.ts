@@ -81,6 +81,17 @@ test("merge without a run id is a usage error, not a prompt", async (t) => {
   assert.match(r.stderr, /merge needs one run id/);
 });
 
+test("merge is recognized when --cwd precedes the subcommand", async (t) => {
+  const cwd = await tempDir(t);
+  const r = await runCli(t, ["--cwd", cwd, "merge", ...MOCK, "--mode", "auto"]);
+
+  // It must dispatch to merge and fail on the missing run id, not launch the
+  // single-agent prompt path with "merge" as prose.
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /merge needs one run id/);
+  assert.deepEqual(await readdir(cwd), []);
+});
+
 test("--rebase is refused as M3-4 territory", async (t) => {
   const r = await runCli(t, ["merge", "20260909-120000-abcd", "--rebase"]);
 

@@ -127,7 +127,9 @@ function orExit<T>(f: () => T): T {
 // It would also beat the SIGINT handler's own 130 whenever a cancelled run
 // settles inside the two-second grace. The single-agent path below is an
 // `else` for the same reason — there is nothing left to skip past.
-if (argv[0] === "merge") {
+// `positional[0]`, not `argv[0]`: options such as `--cwd` can precede the
+// subcommand, and `flag()`/`has()` deliberately parse flags from anywhere.
+if (positional[0] === "merge") {
   process.exitCode = await runMergeCommand().catch((err) => {
     console.error(`error: ${messageOf(err)}`);
     return 1;
