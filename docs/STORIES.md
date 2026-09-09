@@ -1251,6 +1251,11 @@ Stall: accepts the prompt, emits nothing, never returns. Repeat: the same tool t
 loop. One per watchdog signal.
 *Done when* stall produces a warning then a cancel at TTL with the branch intact, and repeat
 produces a warning and is **not** cancelled.
+**Amended 2026-09-09 (#26).** Stall writes one file *before* it goes quiet. A task that
+changed nothing is untouched, and `release` deletes the branch of an untouched task that did
+not finish (`core/worktree.ts:382`) — so "with the branch intact" had nothing left to check.
+Stall also *answers* `session/cancel` (M0-4's measured 64 ms); the harness that ignores a
+cancel is already covered by the inline stubborn agent in `tests/cli.test.ts`.
 
 **M1c-3 · `core/merge.ts` — preflight and `--squash` · M · needs M1b-3**
 `agent-team merge <runId>`, never automatic. A run produces branches; landing them is a

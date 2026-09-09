@@ -1028,3 +1028,75 @@ test("a warned task and a failed task roll up to a failed run", async (t) => {
   assert.match(r.stdout, /▸ failed \(mock-agent\) failed/);
   assert.match(r.stdout, /\nfailed — 2 tasks, 2 turns,/);
 });
+
+// --- the watchdog's two signals, end to end (M1c-2, #26) ---------------------
+//
+// `core/tests/watchdog.test.ts` owns the arithmetic; these two drive the whole
+// path — mock fixture, sweep, bus, printed line, task status, branch — which is
+// the only place the rungs are visible as behaviour rather than as a number.
+//
+// Both are seconds-scale on purpose: `sweepIntervalMs` never ticks faster than
+// once a second, so limits below that do not make the test quicker.
+
+test("a stalled task warns, times out at the TTL, and keeps its branch", async (t) => {
+  const cwd = await gitRepo(t);
+  const file = await runFile(
+    t,
+    mockRun(
+      [
+        {
+          id: "stall",
+          prompt: "go quiet",
+          cmd: `node ${MOCK_AGENT} --scenario stall`,
+        },
+      ],
+      // The idle rung warns at the first sweep (1 s), the TTL cuts at the
+      // second. Repeat is off: this fixture emits no tool calls at all.
+      { stallIdleMs: 200, stallRepeatCount: 0, ttlMs: 1500 },
+    ),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.equal(r.code, 1, r.stdout);
+  assert.match(r.stderr, /! \[stall\] no activity for \d+s — still running/);
+  assert.match(r.stdout, /▸ stall \(mock-agent\) timed_out/);
+
+  // The point of the fixture writing before it went quiet: a timed-out task
+  // keeps its work for reading, so both the branch and the checkout survive.
+  const branches = await git(cwd, "branch", "--list", "agent-team/*");
+  assert.match(branches, /agent-team\/.*\/stall/);
+  const wt = await git(cwd, "worktree", "list");
+  assert.match(wt, /\.agent-team\/wt\//);
+});
+
+test("a repeated tool title warns, and the task is never cancelled", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(
+    t,
+    mockRun(
+      [
+        {
+          id: "loop",
+          prompt: "loop",
+          cmd: `node ${MOCK_AGENT} --scenario repeat`,
+        },
+      ],
+      // `stallIdleMs` is set for the sweep, not to fire: the interval is a
+      // quarter of the finest time limit, so this is what buys a 1 s tick
+      // inside a ~1.8 s turn. The fixture emits every 150 ms, so 4 s of idle
+      // never accumulates.
+      { stallIdleMs: 4_000, stallRepeatCount: 5, ttlMs: 0 },
+    ),
+  );
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(
+    r.stderr,
+    /! \[loop\] \d+× "Search for the same thing again" in a row/,
+  );
+  assert.match(r.stdout, /▸ loop \(mock-agent\) done/);
+  assert.doesNotMatch(r.stdout, /timed_out|cancelled/);
+});
