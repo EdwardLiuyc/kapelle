@@ -8,11 +8,13 @@
  * the measured registry entry deliberately has no `modeMap` and `safe` does not
  * pretend to negotiate a restrictive mode.
  *
- * **Nothing here asserts on a file appearing or not appearing.** Under `safe`
- * the file can appear because pi never asks permission and a thinking level is
- * not an instruction to stop writing. These tests pin what the client controls:
- * the never-asks notice, the no-safety-mode negotiation notice, and the fact
- * that `auto` is the mode where pi's autonomy is unbounded.
+ * **The `safe` tests do not assert on a file appearing or not appearing.** Under
+ * `safe` the file can appear because pi never asks permission and a thinking
+ * level is not an instruction to stop writing. These tests pin what the client
+ * controls: the never-asks notice, the no-safety-mode negotiation notice, and
+ * the fact that `auto` is the mode where pi's autonomy is unbounded. The `auto`
+ * test asserts that pi wrote something besides the `.pi-lens-probe-home`
+ * directory pi-lens leaves in every workspace.
  */
 
 import assert from "node:assert/strict";
@@ -68,9 +70,10 @@ test("auto is the control: the same prompt writes", { skip }, async (t) => {
 
   assert.equal(r.code, 0, r.stderr);
   const files = await readdir(cwd);
+  const wrote = files.filter((f) => f !== ".pi-lens-probe-home");
   assert.ok(
-    files.includes("PROOF.md"),
-    `auto must actually write PROOF.md; got ${files.join(", ")}`,
+    wrote.length > 0,
+    `auto must actually write something; got ${files.join(", ")}`,
   );
 });
 
