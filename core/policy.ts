@@ -168,7 +168,9 @@ export function policyFor(mode: ClientMode): Policy {
  * is the only half of `safe` that reaches a harness which never asks us
  * anything. Mode ids come from the registry's `measured.modeMap` — they are a
  * claim about one build, so a harness with no `measured` half has no ids and
- * negotiation is skipped rather than guessed at.
+ * negotiation is skipped rather than guessed at. A measured harness can also
+ * omit `modeMap` when its ACP modes are not safety/behaviour modes (pi-acp's
+ * are thinking-effort levels); that is the same skip, not a guess.
  *
  * Deliberately not done for `ask` and `auto`. The map has ids for them, but
  * sending `auto`'s would put claude into `bypassPermissions` — an escalation
@@ -188,7 +190,7 @@ export async function negotiateSafeMode(
   // The spec says modeId must be one of `availableModes`, but opencode
   // advertises no modes and honours set_mode anyway (§M0-1), so the registry's
   // measured ids are the source here, not the handshake.
-  const modeId = entry.measured?.modeMap.safe;
+  const modeId = entry.measured?.modeMap?.safe;
   if (!modeId) {
     return `${agent.name}: no measured mode ids, so safe mode was not negotiated — it filters only what this harness asks.`;
   }

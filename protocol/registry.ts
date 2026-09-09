@@ -7,11 +7,11 @@
  * **The entry is split in two, and the split is load-bearing.** `launch` is a
  * recipe we choose: it is true until the harness changes its CLI. `measured`
  * is a lab report: every field is a claim about one *build*, and M0-7 watched
- * three of them change in three days (`docs/M0-FINDINGS.md`). Three entries
- * (`omp`, `pi`, `gemini`) have a real recipe and no lab report — they were
- * never installed here — so `measured` is optional, and its absence is the
- * only marker of an unverified harness (#62 B5, one mechanism, no second flag
- * to drift out of sync). Every consumer must handle it missing; `warningsFor`
+ * three of them change in three days (`docs/M0-FINDINGS.md`). Two entries
+ * (`omp`, `gemini`) have a real recipe and no lab report — they were never
+ * installed here — so `measured` is optional, and its absence is the only
+ * marker of an unverified harness (#62 B5, one mechanism, no second flag to
+ * drift out of sync). Every consumer must handle it missing; `warningsFor`
  * is where that conservative reading lives.
  */
 
@@ -48,8 +48,11 @@ interface MeasuredLabels {
   argvChannel: "terminal" | "notification" | "permission" | "none";
   /** False means the policy has no jurisdiction at all — not reduced reach. */
   asksPermission: boolean;
-  /** Harness-side mode ids, per client mode. Vocabularies do not align. */
-  modeMap: Record<ClientMode, string>;
+  /** Harness-side mode ids, per client mode. Vocabularies do not align.
+   *  Optional because a measured harness may expose no safety/behaviour modes:
+   *  pi-acp's ACP modes are thinking-effort levels, so mapping them to
+   *  `safe`/`ask`/`auto` would claim a mode that does not restrict anything. */
+  modeMap?: Record<ClientMode, string>;
   /** Whether `usage_update.used` counts this turn or the whole session. */
   usage: "per-turn" | "cumulative" | "absent";
   /** Vendor `_meta` flags the harness gates real behaviour on. */
@@ -125,6 +128,24 @@ export const AGENTS: Record<string, AgentEntry> = {
     launch: { command: "pi-acp", args: [] },
     defaultMode: "ask",
     maxMode: "auto",
+    measured: {
+      shell: "internal",
+      // Shell command text arrives in the `tool_call` title, and command
+      // output/exit arrive in `tool_call_update._meta`. It also emits a
+      // `{type:"terminal"}` content block and `_meta.terminal_info` for a
+      // terminal it never asks the client to create.
+      argvChannel: "notification",
+      // Zero `session/request_permission` requests in any mode; under `safe` it
+      // wrote the file anyway, so the policy has no jurisdiction.
+      asksPermission: false,
+      // No modeMap: pi-acp exposes ACP session modes as thinking-effort levels
+      // (`off`…`xhigh`), not as plan/build/bypass style safety modes. Sending
+      // `session/set_mode` under `safe` would only change thinking effort and
+      // would not make `safe` any more binding.
+      usage: "absent",
+      // pi-acp 0.0.33 was measured against pi v0.85.1 on this machine.
+      measuredOn: { version: "0.0.33", date: "2026-09-09" },
+    },
   },
 
   // Claude Code has no native ACP mode. The official adapter wraps the Claude

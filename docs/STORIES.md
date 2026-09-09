@@ -535,6 +535,11 @@ containment labels are guesses, and dropping the entries would discard the first
 the second. `run` prints one line — "no measured labels for this harness" — when the
 selected entry has no `measuredOn`, and the `unknown` → `internal`/`none` rule below keeps
 the claim conservative.
+**Amended 2026-09-09: `pi` now has a measured half** (pi-acp 0.0.33 / pi v0.85.1). The
+B5 mechanism is unchanged — `omp` and `gemini` still stay unverified by absence — but pi's
+measurement added a new shape: a measured entry can omit `modeMap` when the harness's ACP
+modes are not safety/behaviour modes (pi exposes thinking-effort levels). `modeMap` is now
+optional in `MeasuredLabels`; `safe` skips negotiation when it is absent.
 **Also carries the `usage` field decided in M1a-3 (#62 B3)**: `"per-turn" | "cumulative" |
 "absent"`, measured — copilot is cumulative, opencode and claude-agent-acp are per-turn.
 *Done when* `unknown` behaves as `internal` for warning purposes, so a harness M0-1 could

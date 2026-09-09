@@ -34,7 +34,12 @@ export function needs(bin: string): false | string {
 /** A throwaway workspace the harness may write into. Removed with the test. */
 export async function tempDir(t: TestContext): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "acp-it-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  // Retry the recursive removal: harness extensions can still be writing into
+  // the workspace for a moment after the CLI subprocess exits (pi-lens writes
+  // `.pi-lens-probe-home/`), and a one-shot `rm` can fail on ENOTEMPTY.
+  t.after(() =>
+    rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+  );
   return dir;
 }
 

@@ -65,8 +65,10 @@ M1a-4's call, not this note's.
 | `env.unset` | — | `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_ENTRYPOINT` | — |
 | `loadSession` | true, plus `resume` and `fork` | true, plus `resume`, `fork`, `delete` | true — but `close`/`list` only, **neither `resume` nor `fork`** |
 
-`omp`, `pi` and `gemini` are uninstalled here: **`unknown` by absence, not by test.**
-`unknown` should read as `internal` / `none` for warning purposes.
+At the time of the M0 runs below, `omp`, `pi` and `gemini` were uninstalled here:
+**`unknown` by absence, not by test.** pi was measured later (2026-09-09, below);
+`omp` and `gemini` remain unverified by absence. `unknown` should read as
+`internal` / `none` for warning purposes.
 
 ### Containment vocabulary
 
@@ -1004,18 +1006,50 @@ named rather than papered over:
 
 ---
 
+## pi-acp measured 2026-09-09
+
+pi was installed after the M0 rows above were taken, so it is not a fourth column in the
+M0 tables. This section is the measurement that fills its registry entry — pi-acp 0.0.33
+spawning pi v0.85.1, one machine, throwaway workspaces, wire-tap captures.
+
+| field | pi-acp 0.0.33 / pi v0.85.1 |
+| --- | --- |
+| `shell` | `internal` — pi reads/writes/executes locally; no `terminal/*` or `fs/*` delegation |
+| `argvChannel` | `notification` — shell commands arrive as the `tool_call` title; read calls arrive as `rawInput.path` |
+| `asksPermission` | **false** — zero `session/request_permission` requests; it wrote a file under `safe` |
+| `modeMap` | **absent** — ACP `modes` are thinking-effort levels (`off`…`xhigh`), not safety/behaviour modes |
+| `usage` | `absent` — no `usage_update` and no `usage` on the `session/prompt` response in the turns measured |
+| `measuredOn` | `{ version: "0.0.33", date: "2026-09-09" }` |
+
+Other wire notes that matter for downstream consumers:
+
+- `session/new` returns `modes.currentModeId: "medium"` and `configOptions` for `model` and
+  `thought_level`. `session/set_mode` accepts the six thinking ids and rejects a bogus id
+  with `-32602`, confirming the ids in `modes` are the only ids.
+- Shell `tool_call`s carry `content: [{ type: "terminal", terminalId }]` and
+  `_meta.terminal_info`, even though the client never advertises `terminal/*`. Output and
+  exit status arrive on `tool_call_update` as `_meta.terminal_output` and
+  `_meta.terminal_exit`.
+- Because the only ACP modes are thinking levels, mapping `safe`/`ask`/`auto` to one of
+  them would claim a safety mode that does not exist. The registry entry therefore omits
+  `modeMap`; `safe` prints the no-safety-mode notice and the never-asks notice rather than
+  pretending a thinking level bounds the agent.
+
+---
+
 ## What this note does not cover
 
 M0's questions are answered; these are the edges, collected so that no downstream story
 mistakes silence for a negative result.
 
-- **`omp`, `pi` and `gemini` were never run** — uninstalled on this machine. Every table
-  here has three columns because three harnesses exist to test, not because the registry
-  has three entries. `unknown` is the honest label, and it should read as
-  `internal` / `none` for warning purposes.
-- **Only copilot's column was re-verified.** opencode is still 1.18.18 and
-  claude-agent-acp still 0.49.0, the versions their rows were measured on, so those columns
-  are already single-build. They will decay the same way the moment either updates.
+- **`omp` and `gemini` were never run** — uninstalled on this machine. The M0 tables have
+  three columns because three harnesses existed to test at the time, not because the registry
+  has three entries; pi is measured separately above. `unknown` is the honest label, and it
+  should read as `internal` / `none` for warning purposes.
+- **Only copilot's M0 column was re-verified in-place; pi is not an M0 row but was
+  measured later** (above). opencode is still 1.18.18 and claude-agent-acp still 0.49.0 in
+  the M0 rows, the versions those rows were measured on. They will decay the same way the
+  moment either updates.
 - **Nothing was driven near a real limit**, nothing was compacted automatically, and no
   harness was cancelled mid-*edit* — the three named gaps under §M0-5 and §M0-4 coverage.
 - **`safe` was measured, `auto` was not bounded.** §M0-3's verdicts are all under
