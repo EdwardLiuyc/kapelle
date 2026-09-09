@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
+import { mergeRun } from "./core/merge.ts";
 import {
   makeAskPolicy,
   negotiateSafeMode,
@@ -74,6 +75,7 @@ acp-mvp — a minimal Agent Client Protocol client
 
   node run.ts "<prompt>" [options]
   node run.ts --file <run.json> [--cwd dir] [--verbose] [--quiet]
+  node run.ts merge <runId> [--squash] [--cwd dir]
 
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: opencode)
@@ -94,6 +96,7 @@ Examples:
   node run.ts "add a health endpoint" --cwd ../my-app --mode ask
   node run.ts "what does src/index.ts do" --mode safe
   node run.ts --file tasks.run.json
+  node run.ts merge 20260909-101500-abc1
 `);
   process.exit(promptText || runFilePath ? 0 : 1);
 }
@@ -124,7 +127,14 @@ function orExit<T>(f: () => T): T {
 // It would also beat the SIGINT handler's own 130 whenever a cancelled run
 // settles inside the two-second grace. The single-agent path below is an
 // `else` for the same reason — there is nothing left to skip past.
-if (runFilePath) {
+// `positional[0]`, not `argv[0]`: options such as `--cwd` can precede the
+// subcommand, and `flag()`/`has()` deliberately parse flags from anywhere.
+if (positional[0] === "merge") {
+  process.exitCode = await runMergeCommand().catch((err) => {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  });
+} else if (runFilePath) {
   process.exitCode = await runFromFile(runFilePath);
 } else {
   const spec = orExit(() =>
@@ -446,6 +456,32 @@ async function runFromFile(path: string): Promise<number> {
   // `warned` is a run that finished with something worth reading, not a
   // failure. Every rung below it means at least one task did not complete.
   return report.status === "done" || report.status === "warned" ? 0 : 1;
+}
+
+/**
+ * The `merge` half: `node run.ts merge <runId> [--squash] [--cwd dir]`.
+ *
+ * M1c-3 ships `--squash` only; `--rebase` is M3-4 and is refused here rather
+ * than silently ignored. The `agent-team` bin and the file rename are M1c-5.
+ */
+async function runMergeCommand(): Promise<number> {
+  if (has("rebase")) {
+    console.error("--rebase lands in M3-4; M1c-3 ships --squash only.");
+    return 1;
+  }
+
+  const ids = positional.slice(1);
+  if (ids.length !== 1) {
+    console.error(
+      "merge needs one run id: node run.ts merge <runId> [--squash]",
+    );
+    return 1;
+  }
+
+  const runId = ids[0] as string;
+  await mergeRun(runId, flag("cwd", process.cwd()));
+  console.log(`merged ${runId} as unstaged changes`);
+  return 0;
 }
 
 /**

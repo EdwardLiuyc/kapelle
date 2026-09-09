@@ -45,6 +45,17 @@ export function newRunId(now: Date = new Date()): string {
 }
 
 /** Returns the id unchanged, or throws naming both the id and the rule. */
+export function assertRunId(id: string): string {
+  if (!RUN_ID_PATTERN.test(id)) {
+    throw new Error(
+      `invalid run id ${JSON.stringify(id)}: must match ${RUN_ID_PATTERN.source} ` +
+        `(YYYYMMDD-HHMMSS-<4 char base36>)`,
+    );
+  }
+  return id;
+}
+
+/** Returns the id unchanged, or throws naming both the id and the rule. */
 export function assertTaskId(id: string): string {
   if (!TASK_ID_PATTERN.test(id)) {
     throw new Error(
@@ -59,11 +70,6 @@ export function assertTaskId(id: string): string {
 /** The branch a task's work lands on. Validates **both** halves, so no caller
  *  can build a ref that `git check-ref-format` would reject. */
 export function branchName(runId: string, taskId: string): string {
-  if (!RUN_ID_PATTERN.test(runId)) {
-    throw new Error(
-      `invalid run id ${JSON.stringify(runId)}: must match ${RUN_ID_PATTERN.source} ` +
-        `(YYYYMMDD-HHMMSS-<4 char base36>)`,
-    );
-  }
+  assertRunId(runId);
   return `agent-team/${runId}/${assertTaskId(taskId)}`;
 }

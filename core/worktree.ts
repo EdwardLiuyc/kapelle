@@ -169,6 +169,9 @@ export interface Worktrees {
    *  Returns a warning to print when it kept a checkout it meant to remove,
    *  and `null` when retention went as planned. */
   release(taskId: string, status: TaskStatus): Promise<string | null>;
+  /** The branch and base SHA for an acquired task, or undefined when the task
+   *  never acquired a worktree. Used to write the run record merge reads. */
+  info(taskId: string): { branch: string; baseSha: string } | undefined;
 }
 
 export interface WorktreeSetup {
@@ -332,6 +335,10 @@ export async function openWorktrees(
           );
         }
         return inside;
+      },
+
+      info(taskId) {
+        return held.get(taskId);
       },
 
       async release(taskId, status) {
