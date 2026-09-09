@@ -43,6 +43,15 @@ if (scenario !== null && !Object.hasOwn(SCENARIOS, scenario)) {
   process.exit(2);
 }
 
+// M1c-2's stall fixture writes before the protocol starts. A task that changed
+// nothing is untouched, and `release` rolls its branch back
+// (`core/worktree.ts:382`); writing at startup means the work is already on disk
+// if the TTL fires during spawn/handshake/startup, before the prompt would
+// otherwise arrive.
+if (scenario === "stall") {
+  writeFileSync("stalled.txt", "written just before going quiet\n");
+}
+
 const result = (status, summary, details, files) =>
   `<task-result>\n<status>${status}</status>\n<summary>${summary}</summary>\n` +
   `<details>${details}</details>\n${files ? `<files>${files}</files>\n` : ""}` +
@@ -192,12 +201,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       return;
     }
 
-    // The two watchdog fixtures (M1c-2, #26). `stall` writes **before** going
-    // quiet on purpose: a task that changed nothing is untouched, and
-    // `release` rolls its branch back (`core/worktree.ts:382`), so "a cancel
-    // at TTL with the branch intact" would have no branch left to check.
+    // M1c-2's stall fixture never answers this prompt. The file was already
+    // written at startup, so a TTL that fires before the prompt arrives still
+    // leaves the branch/worktree intact to inspect.
     if (scenario === "stall") {
-      writeFileSync("stalled.txt", "written just before going quiet\n");
       stalledPromptId = msg.id;
       return;
     }
