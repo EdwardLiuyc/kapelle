@@ -14,7 +14,7 @@
  * measured emits one, so `mock-agent.mjs` is the only thing that drives it.)
  */
 
-import { blockEnd, toAnsi } from "./core/markdown.ts";
+import { blockEnd, displayWidth, toAnsi } from "./core/markdown.ts";
 import type { AgentEventEnvelope } from "./protocol/agent.ts";
 import type { ContentBlock } from "./protocol/types.ts";
 
@@ -75,7 +75,7 @@ function drawnRows(): number {
   const columns = process.stdout.columns || 80;
   let rows = 0;
   for (const l of drawn.split("\n")) {
-    rows += Math.max(1, Math.ceil([...l].length / columns));
+    rows += Math.max(1, Math.ceil(displayWidth(l) / columns));
   }
   return rows;
 }
@@ -100,6 +100,7 @@ function paint(block: string) {
 
   // Up to the first row drawn, then clear to the end of the screen.
   process.stdout.write(rows > 1 ? `\r\x1b[${rows - 1}A\x1b[J` : "\r\x1b[J");
+  atCol0 = true;
   // `toAnsi` drops the blank line that closed the block; put it back, so the
   // gap between two paragraphs survives the repaint.
   const gap = /\n[ \t]*\n$/.test(block) ? "\n" : "";
@@ -171,18 +172,20 @@ export function render({ agent, update }: AgentEventEnvelope): void {
       // printed once per run of thinking, not once per chunk.
       const text = textOf(update.content);
       if (!text) break;
-      let out = text;
+      let said = text;
       if (stream !== "thought") {
         endStream();
         // Built from `agent` rather than `tag`: nesting dim inside dim ends the
         // run at the inner reset, and the words after it lose the dimming.
-        process.stdout.write(dim(`[${agent}] thinking: `));
+        emit(dim(`[${agent}] thinking: `));
         // The prefix already supplies the space, and a chunk that opens a run
         // often starts mid-sentence with one.
-        out = text.trimStart();
+        said = text.trimStart();
         stream = "thought";
       }
-      process.stdout.write(dim(out));
+      // Through `emit`, so `atCol0` stays true of the cursor even though a
+      // thought is never buffered or repainted.
+      emit(dim(said));
       break;
     }
 

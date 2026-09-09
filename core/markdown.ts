@@ -328,15 +328,37 @@ const split = (s: string): string[] => (s === "" ? [] : s.split("\n"));
 // biome-ignore lint/suspicious/noControlCharactersInRegex: measuring text, not escapes.
 const SGR = /\x1b\[[0-9;]*m/g;
 
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 /**
- * Display columns, counted in code points with the colour removed. A wide CJK
- * glyph counts as one where it occupies two — pi buys `get-east-asian-width`
- * to fix that, and it is a second dependency for a mis-aligned table border.
- * ponytail: naive width; add the package if CJK tables become common.
+ * Coarse East Asian Wide / Fullwidth ranges, plus the emoji planes.
+ * ponytail: a range list, not the Unicode table — pi buys
+ * `get-east-asian-width` for the exact answer. Widen it if a script shows up
+ * that these ranges miss.
  */
-function visibleWidth(s: string): number {
-  return [...s.replace(SGR, "")].length;
+const WIDE =
+  /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]|[\u{1F300}-\u{1FAFF}]|[\u{20000}-\u{3FFFD}]/u;
+
+/**
+ * Display columns, with the colour removed.
+ *
+ * **Counted in graphemes, not code points, and that is the load-bearing part**
+ * — `render.ts` measures the rows it drew with this before erasing them, so an
+ * over-count moves the cursor up past its own output and erases whatever was
+ * above it, the agent's thinking included. A family emoji is five code points
+ * and one grapheme; `Intl.Segmenter` is in the standard library and gets that
+ * right where `[...s].length` does not. Wide glyphs count two, so a CJK line is
+ * not under-counted either, which would leave the raw text behind on screen.
+ */
+export function displayWidth(s: string): number {
+  let width = 0;
+  for (const { segment } of GRAPHEMES.segment(s.replace(SGR, ""))) {
+    width += WIDE.test(segment) ? 2 : 1;
+  }
+  return width;
 }
+
+const visibleWidth = displayWidth;
 
 function clip(s: string, w: number): string {
   const shown = visibleWidth(s);

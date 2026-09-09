@@ -104,7 +104,10 @@ test("a line event closes an open stream instead of landing on it", () => {
  * as the test runner set it (a pipe), which is the path this story must not
  * change; this one claims a terminal so the repaint runs.
  */
-function drawOnTty(updates: SessionUpdate[]): string {
+function drawOnTty(
+  updates: SessionUpdate[],
+  size: { columns?: number; rows?: number } = {},
+): string {
   const stdout = process.stdout;
   const was = {
     isTTY: stdout.isTTY,
@@ -113,8 +116,8 @@ function drawOnTty(updates: SessionUpdate[]): string {
     noColor: process.env.NO_COLOR,
   };
   stdout.isTTY = true;
-  stdout.columns = 80;
-  stdout.rows = 24;
+  stdout.columns = size.columns ?? 80;
+  stdout.rows = size.rows ?? 24;
   process.env.NO_COLOR = undefined as unknown as string;
   delete process.env.NO_COLOR;
   try {
@@ -188,4 +191,20 @@ test("a block taller than the screen is left raw rather than mis-erased", () => 
 
   assert.equal(out, tall, "drawn once, raw, and never taken back");
   assert.equal(ERASE.test(out), false);
+});
+
+test("the erase is measured in columns, not code points", () => {
+  // Five code points, one grapheme, two columns. Counting code points made a
+  // 6-column line look like 15 and moved the cursor a row too far up — over
+  // the agent's thinking, which is never buffered and cannot be redrawn.
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+  // Two chunks, so the raw text is on screen before the block closes — that
+  // is the only moment there is anything to measure.
+  const out = drawOnTty([says(family.repeat(3)), says("\n\n")], {
+    columns: 10,
+  });
+
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+  const movedUp = /\x1b\[\d+A/;
+  assert.equal(movedUp.test(out), false, "one row drawn, none to move up");
 });

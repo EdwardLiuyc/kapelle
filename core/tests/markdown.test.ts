@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { marked } from "marked";
-import { blockEnd, toAnsi } from "../markdown.ts";
+import { blockEnd, displayWidth, toAnsi } from "../markdown.ts";
 
 /** Colour is not the subject of any assertion here. */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping SGR codes.
@@ -99,4 +99,22 @@ test("a renderer failure costs the screen, not the run", () => {
   } finally {
     marked.lexer = real;
   }
+});
+
+test("displayWidth counts terminal columns, not code points", () => {
+  // The erase in `render.ts` is measured with this, so an over-count moves the
+  // cursor up past its own output and eats the lines above it.
+  assert.equal(displayWidth("abc"), 3);
+  assert.equal(
+    displayWidth("\u001b[1mabc\u001b[22m"),
+    3,
+    "colour is not width",
+  );
+  assert.equal(
+    displayWidth("\u{1F468}\u200D\u{1F469}\u200D\u{1F467}"),
+    2,
+    "one grapheme, two columns, five code points",
+  );
+  assert.equal(displayWidth("\u4E2D\u6587"), 4, "CJK is double width");
+  assert.equal(displayWidth("e\u0301"), 1, "a combining accent adds no column");
 });
