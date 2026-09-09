@@ -388,6 +388,18 @@ export type StopReason =
 // Not protocol traffic; emitted by this client onto its own event stream.
 // ---------------------------------------------------------------------------
 
+/** A permission decision is about to be taken (M1c-4, issue #28). Emitted
+ *  before the policy is consulted, so it fires in every mode — under `safe`
+ *  and `auto` the decision returns immediately and nobody is waiting. Only
+ *  `ask` blocks on a human, which is why `core/notify.ts` alerts on this
+ *  event only when the resolved mode is `ask`. M4-3 answers from the browser
+ *  off this same event. */
+export interface ClientPermissionPendingEvent extends Meta {
+  sessionUpdate: "_client_permission_pending";
+  title: string;
+  kind: ToolKind;
+}
+
 export interface ClientPermissionEvent extends Meta {
   sessionUpdate: "_client_permission";
   allow: boolean;
@@ -433,6 +445,7 @@ export interface ClientStallWarningEvent extends Meta {
 /** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
+  | ClientPermissionPendingEvent
   | ClientPermissionEvent
   | ClientWroteFileEvent
   | ClientCancelRequestedEvent
@@ -714,6 +727,7 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
       // Only the `_client_` events may fall through; a new SessionUpdate
       // variant makes this assignment a type error.
       const fallthrough:
+        | "_client_permission_pending"
         | "_client_permission"
         | "_client_wrote_file"
         | "_client_cancel_requested"

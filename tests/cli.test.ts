@@ -1059,7 +1059,14 @@ test("a stalled task warns, times out at the TTL, and keeps its branch", async (
   const r = await runCli(t, ["--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 1, r.stdout);
-  assert.match(r.stderr, /! \[stall\] no activity for \d+s — still running/);
+  // The bell in front is M1c-4: the same line, once, with the attention
+  // signal attached — and `once` is what a second subscriber would break.
+  assert.match(r.stderr, /\x07! \[stall\] no activity for \d+s — still running/);
+  assert.equal(
+    r.stderr.match(/no activity for/g)?.length,
+    1,
+    "one owner of the stall line, not two",
+  );
   assert.match(r.stdout, /▸ stall \(mock-agent\) timed_out/);
 
   // The point of the fixture writing before it went quiet: a timed-out task

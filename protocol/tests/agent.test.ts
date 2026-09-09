@@ -882,6 +882,34 @@ test("a denial with no reject option answers cancelled, not a guessed allow", as
   );
 });
 
+test("the pending event is emitted before the policy is consulted", async (t) => {
+  // M1c-4, issue #28. The whole point of a separate event is the *moment*: a
+  // record written after the decision cannot ring a bell for the human the
+  // decision is waiting on. So the policy itself is the observer — whatever it
+  // can already see is what left the client before it blocked.
+  const seen: CapturedEvent[] = [];
+  let seenWhenAsked: string[] = [];
+  const agent = await permissionAgent(
+    t,
+    () => {
+      seenWhenAsked = seen.map((e) => e.update.sessionUpdate);
+      return true;
+    },
+    (e) => seen.push(e),
+  );
+
+  await agent.request<AskResult>("debug/ask", { allowOnly: false });
+
+  assert.deepEqual(
+    seenWhenAsked,
+    ["_client_permission_pending"],
+    "the pending event, and only it, is out before the decision is taken",
+  );
+  const pending = seen[0]?.update as { title?: string; kind?: string };
+  assert.equal(pending.kind, "edit", "it carries the kind a filter needs");
+  assert.ok(pending.title, "and the title a human needs to answer");
+});
+
 test("a matching reject option is preferred over cancelling", async (t) => {
   const agent = await permissionAgent(t, () => false);
   const res = await agent.request<AskResult>("debug/ask", { allowOnly: false });

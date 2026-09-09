@@ -228,5 +228,12 @@ export function render({ agent, update }: AgentEventEnvelope): void {
     case "_client_wrote_file":
       line(`${tag} ${green("wrote")} ${update.path}`);
       break;
+
+    // `_client_permission_pending` is deliberately not drawn (M1c-4). Under
+    // `ask` the prompt itself is already on screen and `core/notify.ts` writes
+    // the alert line; under `safe`/`auto` the decision is instant and the
+    // `_client_permission` arm above says what it was. Drawing it here would
+    // print two lines per decision, one of them announcing a wait that never
+    // happened.
   }
 }
