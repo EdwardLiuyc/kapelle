@@ -91,13 +91,13 @@
           "default": 300000,
           "description": "Warn when a task sends nothing for this many ms. The task keeps running. 0 disables."
         },
-            "stallRepeatCount": {
+        "stallRepeatCount": {
           "type": "integer",
           "minimum": 0,
           "default": 8,
           "description": "Warn when the same tool title fires this many times in a row — the busy loop idle time cannot see. The task keeps running. 0 disables."
         },
-            "ttlMs": {
+        "ttlMs": {
           "type": "integer",
           "minimum": 0,
           "default": 3600000,

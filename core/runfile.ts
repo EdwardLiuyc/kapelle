@@ -64,8 +64,8 @@ export interface Run {
  *  above cannot be forgotten here. */
 export type TaskInput = Partial<Task> & { id: string; prompt: string };
 
-/** What a person writes, at the top of the file. The five run-level defaults
- *  are copied into any task that omits them; a task value always wins. */
+/** What a person writes, at the top of the file. The run-level defaults are
+ *  copied into any task that omits them; a task value always wins. */
 export interface RunInput {
   tasks: TaskInput[];
   maxConcurrency?: number;
@@ -80,14 +80,14 @@ export interface RunInput {
   ttlMs?: number;
 }
 
-/** Exported for the run-file JSON Schema's drift test (M1b-2, #18): the
- *  schema is an authoring aid an editor reads, never a second validator, so
- *  its property list is asserted equal to these Sets rather than trusted. */
 /** The three watchdog knobs (M1c-1, #25). Listed once: they are accepted at
  *  both levels, exactly like `mode` and `agent`, and a list per level is a
  *  second place for one of them to be forgotten. */
 const WATCHDOG_KEYS = ["stallIdleMs", "stallRepeatCount", "ttlMs"] as const;
 
+/** Exported for the run-file JSON Schema's drift test (M1b-2, #18): the
+ *  schema is an authoring aid an editor reads, never a second validator, so
+ *  its property list is asserted equal to these Sets rather than trusted. */
 export const RUN_KEYS = new Set([
   "tasks",
   "maxConcurrency",
@@ -386,7 +386,7 @@ function optionalCount(
 }
 
 /** Task value, else run value, else the default — the `t.x ?? run.x` shape the
- *  other five run-level defaults already use. */
+ *  run-level defaults already use. */
 function watchdogLimits(
   t: Record<string, unknown>,
   run: Record<string, unknown>,

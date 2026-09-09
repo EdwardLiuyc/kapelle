@@ -583,3 +583,36 @@ test("a task with every limit at 0 is never touched by the watchdog", async () =
   const report = await runRun(run, options(), exec);
   assert.equal(report.status, "done");
 });
+
+test("an operator cancel outranks a TTL that fires in the same window", async () => {
+  // `statusFor` puts `watchdogFired` above `cancelRequested`, so without the
+  // guard in `onTimeout` a task the operator had already ^C'd would be
+  // relabelled `timed_out` by the next sweep — blaming the harness for a stop
+  // the operator asked for.
+  const canceller = new AbortController();
+  const run = validateRun({
+    cmd: "node mock-agent.mjs",
+    stallIdleMs: 0,
+    stallRepeatCount: 0,
+    ttlMs: 10,
+    tasks: [{ id: "t0", prompt: "hello" }],
+  });
+
+  const exec: TaskExecutor = async (_task, ctx) => {
+    ctx.onTurn();
+    canceller.abort();
+    // Outlives the 1 s sweep floor, so the TTL really is checked while the
+    // run signal is already aborted. Deliberately not waiting on
+    // `ctx.signal`: a task that exits the instant it is cancelled never
+    // reaches the sweep, and would pass this test either way.
+    await new Promise((r) => setTimeout(r, 1_400));
+    return {};
+  };
+
+  const report = await runRun(
+    run,
+    { cwd: "/tmp/nowhere", bus: createEventBus(), signal: canceller.signal },
+    exec,
+  );
+  assert.equal(report.tasks[0]?.status, "cancelled");
+});
