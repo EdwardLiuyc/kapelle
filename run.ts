@@ -337,6 +337,13 @@ async function runFromFile(path: string): Promise<number> {
   // Built only when it will be used, and closed however the run ends: an open
   // readline holds stdin and the process never exits.
   const asker = canAsk ? makeAskPolicy() : undefined;
+  // With `canAsk` true, exactly one task remains in `ask` mode (the others were
+  // re-resolved as `safe` above). Restrict pending-permission alerts to that
+  // task so a concurrent `safe`/`auto` task does not ring for a decision that
+  // never waits on a human. Stall warnings are still global.
+  const askTaskId = canAsk
+    ? tasks.find((task) => task.mode === "ask")?.id
+    : undefined;
 
   const bus = createEventBus();
   // Not filtered by `--quiet`, and not folded into the end-of-run task card:
@@ -347,8 +354,14 @@ async function runFromFile(path: string): Promise<number> {
   //
   // `asks` is the asker, not a mode: tasks carry their own modes, and the one
   // thing that decides whether a human can be blocked is whether `canAsk`
-  // left an asker standing.
-  bus.addListener(makeNotifier({ asks: canAsk }));
+  // left an asker standing. When it did, `askIds` keeps the bell on that one
+  // task rather than on every permission decision in a mixed-mode run.
+  bus.addListener(
+    makeNotifier({
+      asks: canAsk,
+      askIds: askTaskId ? new Set([askTaskId]) : undefined,
+    }),
+  );
 
   // Result warnings are data on the bus, not a CLI-only field. Under `--quiet`
   // there is no task card to print them from, so this subscriber is the route

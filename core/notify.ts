@@ -65,6 +65,11 @@ export interface NotifyOptions {
    *  whether one asker survived `canAsk` (`run.ts`). `safe` and `auto` answer
    *  the same request with nobody reading it, so alerting would be noise. */
   asks: boolean;
+  /** When provided, pending-permission alerts are restricted to these
+   *  agent/task ids. The `--file` path has one asker when `asks` is true, so
+   *  a mixed-mode run needs this to avoid ringing for `safe`/`auto` tasks
+   *  whose decisions never wait on a human. Stall warnings are never filtered. */
+  askIds?: ReadonlySet<string>;
   /** Seams for the test, real behaviour by default. */
   write?: (line: string) => void;
   notify?: (title: string, body: string) => void;
@@ -79,12 +84,14 @@ export interface NotifyOptions {
  */
 export function makeNotifier({
   asks,
+  askIds,
   write = (line) => process.stderr.write(line),
   notify = desktop,
 }: NotifyOptions): (event: AgentEventEnvelope) => void {
   return ({ agent, update }) => {
     if (update.sessionUpdate === "_client_permission_pending") {
       if (!asks) return;
+      if (askIds && !askIds.has(agent)) return;
       const text = `permission needed: [${update.kind}] ${update.title}`;
       write(`${BELL}! [${agent}] ${text}\n`);
       notify(`agent-team: ${agent}`, text);

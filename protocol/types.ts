@@ -392,7 +392,7 @@ export type StopReason =
  *  before the policy is consulted, so it fires in every mode — under `safe`
  *  and `auto` the decision returns immediately and nobody is waiting. Only
  *  `ask` blocks on a human, which is why `core/notify.ts` alerts on this
- *  event only when the resolved mode is `ask`. M4-3 answers from the browser
+ *  event only when it is armed for an asker. M4-3 answers from the browser
  *  off this same event. */
 export interface ClientPermissionPendingEvent extends Meta {
   sessionUpdate: "_client_permission_pending";

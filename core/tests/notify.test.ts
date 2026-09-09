@@ -15,11 +15,12 @@ import { makeNotifier, type NotifyOptions } from "../notify.ts";
 const BELL = "\x07";
 
 /** A notifier plus the two logs it wrote to. */
-function harness(asks: boolean) {
+function harness(asks: boolean, askIds?: ReadonlySet<string>) {
   const lines: string[] = [];
   const desktop: Array<[string, string]> = [];
   const opts: NotifyOptions = {
     asks,
+    askIds,
     write: (line) => lines.push(line),
     notify: (title, body) => desktop.push([title, body]),
   };
@@ -62,6 +63,28 @@ test("a pending permission is silent when nobody will be asked", () => {
   h.notify(pending);
   assert.deepEqual(h.lines, []);
   assert.deepEqual(h.desktop, []);
+});
+
+test("a pending permission from a non-ask task is silent in a mixed run file", () => {
+  // `--file` with one asker and another `safe`/`auto` task still emits the
+  // pending event from both, but only the asker's decision can wait on a
+  // human. `askIds` keeps the bell on that task rather than on every task.
+  const h = harness(true, new Set(["asker"]));
+  h.notify({ agent: "asker", update: pending.update });
+  h.notify({ agent: "auto", update: pending.update });
+  assert.deepEqual(h.lines, [
+    `${BELL}! [asker] permission needed: [edit] write src/app.ts\n`,
+  ]);
+  assert.deepEqual(h.desktop, [
+    ["agent-team: asker", "permission needed: [edit] write src/app.ts"],
+  ]);
+});
+
+test("stall warnings from non-ask tasks are not filtered by askIds", () => {
+  const h = harness(true, new Set(["asker"]));
+  h.notify({ agent: "auto", update: stall.update });
+  assert.deepEqual(h.lines, [`${BELL}! [auto] no events for 120s\n`]);
+  assert.deepEqual(h.desktop, [["agent-team: auto", "no events for 120s"]]);
 });
 
 test("a stall warning rings whether or not anyone is asking", () => {

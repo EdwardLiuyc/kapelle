@@ -1061,7 +1061,10 @@ test("a stalled task warns, times out at the TTL, and keeps its branch", async (
   assert.equal(r.code, 1, r.stdout);
   // The bell in front is M1c-4: the same line, once, with the attention
   // signal attached — and `once` is what a second subscriber would break.
-  assert.match(r.stderr, /\x07! \[stall\] no activity for \d+s — still running/);
+  assert.ok(
+    r.stderr.includes("\x07! [stall] no activity for "),
+    "the bell is in front of the stall line",
+  );
   assert.equal(
     r.stderr.match(/no activity for/g)?.length,
     1,

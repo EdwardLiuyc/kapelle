@@ -1297,9 +1297,11 @@ decision is waiting on. So this story added `_client_permission_pending`, emitte
 a bus event independent of the terminal, and M4-3's browser answering needs the same one.
 **It therefore fires in every mode**, since `AcpAgent` holds a `Policy` and not a
 `ClientMode` — pushing the mode into the protocol layer to filter there is the wrong
-direction. The consumer filters instead, and on the `--file` path the honest condition is
-`canAsk` (did one asker survive?) rather than any single task's mode, which is why
-`makeNotifier` takes `asks: boolean` and not a mode.
+direction. The consumer filters instead: on the single-agent path `asks` is whether the
+resolved mode is `ask`; on the `--file` path it is `canAsk` (did one asker survive?)
+plus `askIds` naming that one surviving asker, so a `safe`/`auto` task in the same run
+does not ring for a decision that never waits on a human. `makeNotifier` still takes
+`asks: boolean` and not a mode.
 **This story did not pay M1a-6's deferred union widening** (task started, worktree created,
 task finished). It consumes none of the three; M2's persisted log is their real first
 consumer, and widening a union for a consumer that does not read it is the cost M1a-6's own
