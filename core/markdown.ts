@@ -352,17 +352,40 @@ const WIDE =
  */
 export function displayWidth(s: string): number {
   let width = 0;
-  for (const { segment } of GRAPHEMES.segment(s.replace(SGR, ""))) {
-    width += WIDE.test(segment) ? 2 : 1;
-  }
+  for (const [, cells] of cells_(s)) width += cells;
   return width;
+}
+
+/** Each grapheme of `s`, colour removed, with the columns it occupies. */
+function* cells_(s: string): Generator<[string, number]> {
+  for (const { segment } of GRAPHEMES.segment(s.replace(SGR, ""))) {
+    yield [segment, WIDE.test(segment) ? 2 : 1];
+  }
 }
 
 const visibleWidth = displayWidth;
 
+/**
+ * `s` in exactly `w` columns: padded if it is short, truncated with an
+ * ellipsis if it is long.
+ *
+ * **Truncation counts columns and stops on grapheme boundaries** (#94 review).
+ * Slicing code points overflowed the cell for anything but ASCII — eight CJK
+ * characters are eight code points and sixteen columns, so a row came out
+ * eight columns wider than its own border — and could cut a ZWJ emoji
+ * sequence in half. A wide glyph that will not fit in the last free column is
+ * dropped rather than half-drawn, so the padding below can be > 0.
+ */
 function clip(s: string, w: number): string {
   const shown = visibleWidth(s);
   if (shown <= w) return s + " ".repeat(w - shown);
-  const plain = [...s.replace(SGR, "")];
-  return `${plain.slice(0, Math.max(0, w - 1)).join("")}…`;
+
+  let kept = "";
+  let used = 0;
+  for (const [segment, cells] of cells_(s)) {
+    if (used + cells > w - 1) break;
+    kept += segment;
+    used += cells;
+  }
+  return `${kept}…${" ".repeat(w - used - 1)}`;
 }

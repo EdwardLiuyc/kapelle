@@ -118,3 +118,38 @@ test("displayWidth counts terminal columns, not code points", () => {
   assert.equal(displayWidth("\u4E2D\u6587"), 4, "CJK is double width");
   assert.equal(displayWidth("e\u0301"), 1, "a combining accent adds no column");
 });
+
+test("a truncated wide-glyph cell still fits its column", () => {
+  // #94 review: `clip` sliced code points. Eight CJK characters are eight code
+  // points and sixteen columns, so the row came out eight columns wider than
+  // its own border, and a ZWJ emoji sequence could be cut in half.
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+  for (const cell of [
+    "\u4E2D\u6587".repeat(10),
+    family.repeat(8),
+    "ascii".repeat(9),
+  ]) {
+    const md = `| name | note |\n| --- | --- |\n| ${cell} | ok |\n`;
+    const rows = plain(toAnsi(md, { width: 20 }))
+      .split("\n")
+      .filter(Boolean);
+    const widths = new Set(rows.map(displayWidth));
+    assert.equal(
+      widths.size,
+      1,
+      `every row must be one width, got ${[...widths].join(",")} for ${JSON.stringify(cell.slice(0, 12))}`,
+    );
+  }
+});
+
+test("a truncated cell never splits a grapheme cluster", () => {
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+  const md = `| name |\n| --- |\n| ${family.repeat(6)} |\n`;
+  const out = plain(toAnsi(md, { width: 12 }));
+  assert.equal(
+    out.includes("\u200D\u2026"),
+    false,
+    "no ellipsis after a joiner",
+  );
+  assert.match(out, /\u2026/, "it did truncate");
+});
