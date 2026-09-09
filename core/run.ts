@@ -26,6 +26,7 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AcpAgent, type Policy } from "../protocol/agent.ts";
 import {
@@ -170,6 +171,10 @@ export interface TaskRun {
   id: string;
   agent: string;
   cwd: string;
+  /** The task branch and its base SHA when the task acquired a worktree.
+   *  Used to write the run record M1c-3's merge reads. */
+  branch?: string;
+  baseSha?: string;
   status: TaskStatus;
   stopReason?: StopReason;
   usage?: Usage;
@@ -441,6 +446,22 @@ export async function runRun(
     clearInterval(sweep);
   }
 
+  // The record is what M1c-3's merge reads. A non-git fallback has no branches
+  // to merge, so writing one is skipped there; a filesystem that refuses the
+  // write is a notice, because the run itself has already happened.
+  if (logs && worktrees) {
+    try {
+      await writeRunRecord({ runId, root, logDir, tasks: results });
+    } catch (err) {
+      options.onNotice?.(
+        "run",
+        `cannot write run record: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   return {
     status: runStatus(results.map((r) => r.status)),
     durationMs: Date.now() - started,
@@ -455,6 +476,36 @@ export async function runRun(
 interface TaskControl {
   cancel: () => void;
   fired: boolean;
+}
+
+interface RunRecordInput {
+  runId: string;
+  root: string;
+  logDir: string;
+  tasks: TaskRun[];
+}
+
+async function writeRunRecord(input: RunRecordInput): Promise<void> {
+  const record = {
+    runId: input.runId,
+    root: input.root,
+    tasks: input.tasks.map((task) => {
+      const entry: {
+        id: string;
+        status: TaskStatus;
+        branch?: string;
+        baseSha?: string;
+      } = { id: task.id, status: task.status };
+      if (task.branch !== undefined) entry.branch = task.branch;
+      if (task.baseSha !== undefined) entry.baseSha = task.baseSha;
+      return entry;
+    }),
+  };
+  await writeFile(
+    join(input.logDir, "run.json"),
+    `${JSON.stringify(record, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 async function runOne(
@@ -517,9 +568,13 @@ async function runOne(
   // failure and nobody else's, and it has to read as `failed` rather than
   // taking the whole run down from the pool loop.
   let cwd = options.cwd;
+  let branchMeta: { branch: string; baseSha: string } | undefined;
   let settled: TaskRun;
   try {
-    if (worktrees) cwd = await worktrees.acquire(task.id, task.worktree);
+    if (worktrees) {
+      cwd = await worktrees.acquire(task.id, task.worktree);
+      branchMeta = worktrees.info(task.id);
+    }
     const outcome = await exec(task, {
       cwd,
       bus,
@@ -601,6 +656,11 @@ async function runOne(
     };
   }
 
+  if (branchMeta) {
+    settled.branch = branchMeta.branch;
+    settled.baseSha = branchMeta.baseSha;
+  }
+
   signal.removeEventListener("abort", onRunAbort);
   controls.delete(task.id);
   // Before the worktree work below, which is slow enough for a tight
@@ -616,7 +676,14 @@ async function runOne(
     // harness left on another branch — is a thing to tell the operator about,
     // and the work is still on disk either way.
     const kept = await worktrees?.release(task.id, settled.status);
-    if (kept) onNotice(kept);
+    if (kept) {
+      onNotice(kept);
+      // The checkout was kept because it was not on the advertised branch, so
+      // that branch does not carry this task's work. Drop it from the record
+      // rather than letting merge silently land nothing.
+      settled.branch = undefined;
+      settled.baseSha = undefined;
+    }
   } catch (err) {
     onNotice(
       `worktree cleanup failed, so it is still on disk: ${

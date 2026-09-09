@@ -392,15 +392,13 @@ driven from a run file, fully verifiable offline.
   ACP gives us no way to nudge a turn in flight, so detection reports rather than corrects;
   and a token-based signal was considered and dropped, because `usage_update` reports context
   occupancy in units that are not comparable between vendors.
-- **`core/merge.ts`** — `agent-team merge <runId> [--squash|--rebase]`. Preflight refuses if
-  the working tree has modifications to any file a task branch touches, and refuses if two
-  task branches in the run touch the same file. All-or-nothing: preflight completely, then
-  merge, so a run never half-lands. The two modes share that preflight and differ in what
-  lands. `--squash` (default) leaves the combined changes **unstaged**, nothing committed —
-  right for a parallel split, where the branches are independent. `--rebase` lands the task
-  commits on the current branch with their stage boundaries and messages intact — right for
-  a pipeline, where one inherited worktree carries several stages' commits on a single
-  branch and flattening them discards which stage did what.
+- **`core/merge.ts`** — `agent-team merge <runId> --squash`, reading the run record at
+  `.agent-team/runs/<runId>/run.json`. Preflight refuses if any task is not `done`/`warned`,
+  if the working tree has modifications to any file a task branch touches, or if two task
+  branches in the run touch the same file. All-or-nothing: preflight completely, then
+  merge, so a run never half-lands. `--squash` (default) leaves the combined changes
+  **unstaged**, nothing committed — right for a parallel split, where the branches are
+  independent. `--rebase` moves to M3-4.
 - **`core/notify.ts`** — attention signal for the two events a human needs while looking
   elsewhere: permission pending, and stall warning. Terminal bell plus a distinct stderr
   line; optionally shell out to `notify-send`/`osascript` when present, best-effort, never a
@@ -543,9 +541,8 @@ cancelled. A JSON run file validates through `core/runfile.ts`, and the same run
 body validates to the same object. A run file that exceeds a harness `maxMode` is rejected,
 naming both values, before any subprocess starts.
 `agent-team merge` on a two-task run lands both as unstaged changes; the same merge with a
-conflicting local edit aborts having changed nothing; `--rebase` on a pipeline run preserves
-per-stage commits where `--squash` leaves one combined blob. Kill a task mid-spawn and
-confirm no orphan worktree survives.
+conflicting local edit aborts having changed nothing; a run with an unfinished task is
+refused. Kill a task mid-spawn and confirm no orphan worktree survives.
 
 **M2** — start the daemon, `POST /runs` in `ask` mode with **no client attached**, confirm
 the mutation is denied at timeout and the run completes rather than hanging. Attach
