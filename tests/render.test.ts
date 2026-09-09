@@ -98,3 +98,113 @@ test("a line event closes an open stream instead of landing on it", () => {
 
   assert.equal(out, "mid-sentence\n[h] → Read [read]\n");
 });
+
+/**
+ * The markdown repaint — M1c-7. `draw` above leaves `process.stdout.isTTY`
+ * as the test runner set it (a pipe), which is the path this story must not
+ * change; this one claims a terminal so the repaint runs.
+ */
+function drawOnTty(
+  updates: SessionUpdate[],
+  size: { columns?: number; rows?: number } = {},
+): string {
+  const stdout = process.stdout;
+  const was = {
+    isTTY: stdout.isTTY,
+    columns: stdout.columns,
+    rows: stdout.rows,
+    noColor: process.env.NO_COLOR,
+  };
+  stdout.isTTY = true;
+  stdout.columns = size.columns ?? 80;
+  stdout.rows = size.rows ?? 24;
+  process.env.NO_COLOR = undefined as unknown as string;
+  delete process.env.NO_COLOR;
+  try {
+    return draw(updates);
+  } finally {
+    stdout.isTTY = was.isTTY;
+    stdout.columns = was.columns;
+    stdout.rows = was.rows;
+    if (was.noColor !== undefined) process.env.NO_COLOR = was.noColor;
+  }
+}
+
+/** What survives on screen: everything after the last erase. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: splitting on the erase.
+const tail = (out: string) => out.split(/\x1b\[J/).pop() ?? out;
+
+/** What the erase looks like on the wire, so a test can spot one. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+const ERASE = /\x1b\[(?:\d+A)?\x1b\[J|\r\x1b\[J/;
+
+test("piped output stays the plain markdown source, with no repaint escapes", () => {
+  const out = draw([says("## Header\n"), says("\n| a |\n| - |\n\n")]);
+
+  assert.equal(out, "## Header\n\n| a |\n| - |\n\n");
+  assert.equal(ERASE.test(out), false, "nothing to erase when nobody can see");
+});
+
+test("a closed block is erased and redrawn formatted", () => {
+  const out = drawOnTty([says("## Head"), says("er\n"), says("\nrest")]);
+
+  // The raw text is drawn first, exactly as before, then taken back.
+  assert.match(out, /^## Header\n/);
+  assert.match(out, ERASE);
+  assert.match(out, /Header\n\nrest$/, "the rendered heading replaces it");
+  assert.equal(out.includes("## Header\n\nrest"), false, "the `##` is gone");
+});
+
+test("a fenced block containing a blank line survives as one block", () => {
+  const out = drawOnTty([
+    says("```js\nconst x = 1;\n"),
+    says("\nconst y = 2;\n```\n\n"),
+  ]);
+
+  assert.match(out, / {2}const x = 1;\n\n {2}const y = 2;\n/);
+  // The raw draw legitimately carries the fence; what matters is what stands
+  // after the last erase.
+  assert.equal(
+    tail(out).includes("```"),
+    false,
+    "the fence markers are not left on screen",
+  );
+});
+
+test("a tool call flushes the open block instead of landing inside it", () => {
+  const out = drawOnTty([
+    says("Reading the **file**"),
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "t2",
+      title: "Read",
+      kind: "read",
+    },
+  ]);
+
+  assert.match(out, /Reading the file\n\[h\] → Read \[read\]\n$/);
+});
+
+test("a block taller than the screen is left raw rather than mis-erased", () => {
+  const tall = `${Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n")}\n\n`;
+  const out = drawOnTty([says(tall.slice(0, -1)), says("\n")]);
+
+  assert.equal(out, tall, "drawn once, raw, and never taken back");
+  assert.equal(ERASE.test(out), false);
+});
+
+test("the erase is measured in columns, not code points", () => {
+  // Five code points, one grapheme, two columns. Counting code points made a
+  // 6-column line look like 15 and moved the cursor a row too far up — over
+  // the agent's thinking, which is never buffered and cannot be redrawn.
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+  // Two chunks, so the raw text is on screen before the block closes — that
+  // is the only moment there is anything to measure.
+  const out = drawOnTty([says(family.repeat(3)), says("\n\n")], {
+    columns: 10,
+  });
+
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+  const movedUp = /\x1b\[\d+A/;
+  assert.equal(movedUp.test(out), false, "one row drawn, none to move up");
+});

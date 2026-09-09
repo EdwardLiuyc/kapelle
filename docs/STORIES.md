@@ -1342,6 +1342,28 @@ which is what the shared-renderer requirement below needs; and its `heal` option
 exactly our input — *"fixes incomplete markdown from streaming LLM output"*. Priced risk:
 `0.0.x`, six months old. The fallback path is what makes that affordable, since its worst
 outcome is the screen we have today.
+**Decided at pickup, 2026-09-09 (issue #78).** The dependency exception is **ratified** as
+proposed — "zero runtime dependencies" was a recorded status, not a rule — and `README.md`,
+`CLAUDE.md`, `PROJECT-PLAN.md:47` and M4-1 above now say so. **`md4x` is dropped on
+measurement**: 0.0.29, its latest release, renders `- one\n  - alpha` as `* one  * alpha`,
+gluing the child onto the parent line, numbers a nested ordered list `1,2,3` straight through
+the nesting, and joins table cells with tabs — it fails this story's own nested-list
+criterion. Its Node entry also `require`s a prebuilt `.node` binary, so a native crash aborts
+the process and the try/catch fallback cannot catch it, failing "worst failure is cosmetic"
+as well. **`marked` 18.0.12 is taken alone** — MIT, zero own dependencies, 44 KB ESM, ships
+its own types — with the ANSI paint written here, rather than `marked-terminal`, which pins
+`marked` below 16 and pulls 40 packages. `earendil-works/pi` (MIT) was read as prior art and
+makes the same choice: its whole TUI package declares `marked` 18.0.11 and
+`get-east-asian-width`, and walks the tokens itself. Two shapes are taken from its
+`packages/tui/src/components/markdown.ts` — a list drawn as a marker prefix plus a
+continuation pad of equal width (:756), and a table that prints its own source rather than a
+broken box when the terminal is too narrow (:842). Its streaming model does **not** transfer:
+it re-parses the whole message per chunk and lets a full-screen layout engine repaint, where
+this client writes into scrollback and can only erase the rows it drew. Its 1337-line
+`utils.ts` (grapheme segmentation, emoji width, ANSI-aware wrapping) is declined, so nothing
+in `core/markdown.ts` wraps text — the terminal does — and `width` reaches the table renderer
+alone.
+
 **One renderer for every surface.** `core/markdown.ts` is the only file that knows a markdown
 library exists: `toAnsi(md, {width})` now, `toHtml(md)` when M4 wants it. `render.ts` calls
 the first, M4-1's `dashboard-js-render` the second. M1a-6's rule is what forces this shape —
@@ -1591,14 +1613,15 @@ String-templated HTML/CSS/JS out of the daemon. No framework, no build step, no 
 dependency — the same constraint the rest of the project holds. Split across
 `dashboard-html`, `-js-core`, `-js-events`, `-js-render`; that split is what keeps a
 zero-build dashboard readable past a few hundred lines.
-**Amended by M1c-7 (2026-09-04): the "no runtime dependency" clause is under revision.**
-M1c-7 renders agent text as Markdown and takes the project's first runtime dependency to do
-it, and `-js-render` is the second consumer of the same `core/markdown.ts` — the parser is
-shared across surfaces, only the paint is per surface. Whichever way M1c-7 decides, this
-sentence must be revised rather than quietly broken: either it gains the same
-presentation-layer exception M1c-7 proposes, or the browser half is vendored as one
-self-contained file and the clause stands as written. Do not start M4-1 against the
-unamended text.
+**Amended by M1c-7, settled 2026-09-09.** The clause now reads: no framework, no build
+step, and **no runtime dependency outside presentation** — the exception M1c-7 ratified,
+which allows a dependency downstream of the bus whose worst failure is cosmetic. `-js-render`
+is the second consumer of `core/markdown.ts`: the parser is shared across surfaces, only the
+paint is per surface. Nothing is vendored, and **the browser stays dependency-free** — the
+daemon renders HTML server-side with `marked.parse` and templates it in, which is what
+"string-templated HTML out of the daemon" already meant. One thing M4-1 inherits: `marked`
+does **not** sanitise, so agent text rendered into a page is an XSS hole until M4-1 escapes
+it. `toHtml` is deliberately absent from `core/markdown.ts` until this story adds it.
 
 **M4-2 · Read views · L · needs M4-1, M2-2**
 Run list; per-run task cards with status, elapsed, token count and a stall indicator; the

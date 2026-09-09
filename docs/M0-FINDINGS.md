@@ -169,8 +169,65 @@ ran" question (M0-5).
 
 Handled variants seen: `agent_message_chunk` (all three), `tool_call` / `tool_call_update`
 (all three), `usage_update` (all three), `agent_thought_chunk` (**opencode only** — 15× in
-one turn; the other two never emit it). `plan` was not emitted by any harness on these
+one turn; the other two did not emit it). `plan` was not emitted by any harness on these
 prompts, so its rendering path is still unexercised outside `mock-agent.mjs`.
+
+#### Re-measured 2026-09-09 (M1c-7 pickup), one turn each
+
+The 2026-08-20 rows above are a survey of six turns, not a law about the protocol, so they
+were re-run on today's builds with a prompt that **explicitly asks for step-by-step
+reasoning** — the case most likely to produce a thought chunk.
+
+| | opencode 1.18.30 | claude-agent-acp 0.49.0 | copilot |
+| --- | --- | --- | --- |
+| `agent_message_chunk` | 42× | 8× | 7× |
+| `agent_thought_chunk` | **13×** | **none** | **none** |
+| `messageId` on chunks | **on all 55** | **on all 8** | **never** |
+| other variants | `available_commands_update`, `usage_update` | same | plus `config_option_update`, `session_info_update` |
+
+**`agent_thought_chunk` stays opencode-only**, now on a prompt that begged for it. Read it as
+a property of the *adapter's default settings* rather than of the harness: claude-agent-acp
+streams thinking only when extended thinking is switched on, and nothing here switches it on.
+A harness that starts emitting it needs no client change — `render.ts` has had the branch
+since M1a-7.
+
+**`messageId` is populated by two of three** — the M1c-7 measurement, which no M0 finding
+covered. It is not needed: block detection uses blank lines, and copilot omits it entirely,
+so a `messageId`-keyed design would have had no fallback on one third of the fleet. Recorded
+because it is the natural second key if blank-line detection ever proves wrong.
+
+**`session_info_update` is new** — copilot sends one per session and M0-1 did not see it.
+Unhandled, like its two siblings, and dropped in silence by design.
+
+#### claude-agent-acp 0.75.1, re-measured 2026-09-09
+
+The adapter jumped 0.49.0 → 0.75.1 (26 releases). `npm run test:harness` for claude passes
+all three tests, and a `--mode auto` probe running one `echo` re-verified the rest:
+
+- **`shell: internal`** holds — it ran the command itself, called no `terminal/*` and no `fs/*`.
+- **`argvChannel: notification`** holds, with the same lateness: `tool_call` carries
+  `rawInput: {}` and `title: "Terminal"`, and the command text (`{"command":"echo …"}`)
+  arrives on the first `tool_call_update`. Anything judging a command must still read the
+  merged view.
+- **`asksPermission: true`** holds — under `safe` the refusal fires on `switch_mode`, exactly
+  as measured 2026-09-04.
+- **`modeMap`**: `safe: "plan"` negotiates, `auto: "bypassPermissions"` is accepted by
+  `session/set_mode`. `ask: "default"` is still unverified and still unread — only
+  `modeMap.safe` has a consumer (`core/policy.ts:191`).
+- **Not re-verified, and the new date does not cover them:** `usage`, because separating
+  per-turn from cumulative needs two turns in one session and `prompt()` throws on the second
+  (#62 R5); and `meta`, which describes behaviour gated on advertising `terminal_output`,
+  which this client does not advertise.
+
+Three things that are new on the wire since M0, none of which the client reads yet:
+
+- `usage_update` can carry **`cost`** — `{"amount":0.1323235,"currency":"USD"}` on the last
+  update of the turn. The first vendor-neutral money figure any harness has given us.
+- `size` **changed mid-turn**, 200000 for every update and then 1000000 on the last one. M0-5
+  already refuses to build a rung on that denominator; this is a second reason.
+- The `_meta["_claude/rateLimit"]` object has grown `unifiedWindows` (`five_hour` and
+  `seven_day`, each with `utilization` and `resetsAt`), plus `overageStatus` and
+  `overageDisabledReason`. Still the fleet's only exhaustion signal.
 
 ### Methods reaching the `#handleRequest` default
 

@@ -154,7 +154,16 @@ export const AGENTS: Record<string, AgentEntry> = {
       // and a `{type:"terminal"}` content block — for a terminal never
       // created, with no command output and no exit code (§M0-3).
       meta: { terminal_output: true },
-      measuredOn: { version: "0.49.0", date: "2026-08-22" },
+      // Re-measured on 0.75.1, 2026-09-09. `shell`, `argvChannel`,
+      // `asksPermission`, `modeMap.safe` and `modeMap.auto` were all
+      // re-verified against the real adapter — argv still arrives empty on the
+      // `tool_call` and complete on the update, and `set_mode` still accepts
+      // both ids. **Two fields are carried forward, not re-verified**, and the
+      // date does not cover them: `usage`, because telling per-turn from
+      // cumulative needs two turns in one session and `prompt()` throws on the
+      // second (#62 R5); and `meta`, because it describes what claude does when
+      // we advertise `terminal_output`, which this client does not.
+      measuredOn: { version: "0.75.1", date: "2026-09-09" },
     },
   },
 

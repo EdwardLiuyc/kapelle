@@ -3,7 +3,14 @@
 <!-- markdownlint-disable MD033 -- HTML is required for the fixed-width right-aligned logo; markdown has no image sizing -->
 <img src="assets/icon.svg" alt="agent-team" width="88" align="right">
 
-A minimal Agent Client Protocol client. Zero runtime dependencies, Node 24+.
+A minimal Agent Client Protocol client. One runtime dependency, Node 24+.
+
+That dependency is `marked`, and the rule it arrived under (ratified 2026-09-09,
+M1c-7) is narrow: a runtime dependency is acceptable only **downstream of the bus,
+in presentation**, where its worst failure is cosmetic — it can change no permission
+decision, path guard, policy, mode negotiation, or anything that reaches a
+subprocess. It is pinned exactly, and `core/markdown.ts` falls back to the raw text
+if it throws, so a bad release costs the screen and never the run.
 
 You are the **client**: you spawn the harness as a subprocess, own the workspace,
 answer its file-system requests, and decide its permissions. The harness is the

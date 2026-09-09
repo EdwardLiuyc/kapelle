@@ -5,8 +5,10 @@
  * is M0-2's regression insurance: older adapters refused to start a nested
  * session when they saw the markers a parent Claude Code session leaves behind,
  * and the registry scrubs `CLAUDECODE`, `CLAUDE_CODE_SSE_PORT` and
- * `CLAUDE_CODE_ENTRYPOINT` for that reason. 0.49.0 no longer refuses, so the
- * scrub is insurance — and insurance nobody exercises is not insurance.
+ * `CLAUDE_CODE_ENTRYPOINT` for that reason. **Re-checked on 0.75.1,
+ * 2026-09-09** (#80): with all three markers set and the scrub bypassed, the
+ * adapter still starts and completes a turn, so the scrub stays insurance
+ * rather than a fix — and insurance nobody exercises is not insurance.
  *
  * **`safe` against claude is an interlock, not a sandbox.** Measured
  * 2026-09-04, three runs of three: claude usually obeys the negotiated plan
@@ -26,9 +28,9 @@ test("claude-agent-acp spawns and completes a handshake", {
   skip,
 }, async (t) => {
   // This does **not** prove the env scrub: the scrub is deterministic and is
-  // covered by `resolveEnv`'s unit tests in `protocol/registry.test.ts`. This
-  // integration test only proves the real adapter starts and completes a
-  // handshake from the environment this suite runs in.
+  // covered by `resolveEnv`'s unit tests in `protocol/tests/registry.test.ts`.
+  // This integration test only proves the real adapter starts and completes
+  // a handshake from the environment this suite runs in.
   const cwd = await tempDir(t);
   const r = await runCli(t, [
     "say hi and stop",
