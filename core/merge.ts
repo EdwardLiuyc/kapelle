@@ -178,8 +178,12 @@ async function readRunRecord(runId: string, cwd: string): Promise<RunRecord> {
       `run record ${path} is for ${recordedRunId}, not ${runId}.`,
     );
   }
-  if (typeof object.root !== "string" || object.root === "") {
-    throw new Error(`run record ${path}: "root" must be a non-empty string.`);
+  const recordedRoot = requiredString(object.root, "root");
+  if (recordedRoot !== root) {
+    throw new Error(
+      `run record ${path} was created in ${recordedRoot}, not ${root}. ` +
+        `Refusing to merge a copied or misplaced record.`,
+    );
   }
   if (!Array.isArray(object.tasks) || object.tasks.length === 0) {
     throw new Error(`run record ${path}: "tasks" must be a non-empty array.`);

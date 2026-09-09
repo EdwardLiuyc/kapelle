@@ -333,6 +333,24 @@ test("rollback removes a stale SQUASH_MSG", async (t) => {
   assert.match(status, /^A {2}unrelated\.txt$/m);
 });
 
+test("a run record copied from another repo is refused", async (t) => {
+  const root = await repo(t);
+  await runRun(
+    runOf(["a"]),
+    { cwd: root, runId: RUN_ID, bus: createEventBus() },
+    perTaskWriter,
+  );
+
+  const recordPath = join(root, ".agent-team", "runs", RUN_ID, "run.json");
+  const record = JSON.parse(await readFile(recordPath, "utf8")) as {
+    root: string;
+  };
+  record.root = "/somewhere/else";
+  await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+
+  await assert.rejects(mergeRun(RUN_ID, root), /created in/);
+});
+
 test("a missing run record is a clear error", async (t) => {
   const root = await repo(t);
   await assert.rejects(mergeRun(RUN_ID, root), /no run record/);
