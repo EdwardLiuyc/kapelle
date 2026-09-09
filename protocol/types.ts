@@ -389,11 +389,13 @@ export type StopReason =
 // ---------------------------------------------------------------------------
 
 /** A permission decision is about to be taken (M1c-4, issue #28). Emitted
- *  before the policy is consulted, so it fires in every mode — under `safe`
- *  and `auto` the decision returns immediately and nobody is waiting. Only
- *  `ask` blocks on a human, which is why `core/notify.ts` alerts on this
- *  event only when it is armed for an asker. M4-3 answers from the browser
- *  off this same event. */
+ *  before the policy is consulted, so it fires in **every** mode and for
+ *  **every** kind — `AcpAgent` cannot know which decisions will block. Under
+ *  `safe` and `auto` none of them do, and even under `ask` a `READ_ONLY_KINDS`
+ *  call is auto-approved without a prompt. So the event means "a decision is
+ *  pending", not "a human is waiting": `core/notify.ts` narrows it to the
+ *  second before it rings. M4-3 answers from the browser off this same event
+ *  and will want the wider meaning. */
 export interface ClientPermissionPendingEvent extends Meta {
   sessionUpdate: "_client_permission_pending";
   title: string;

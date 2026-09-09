@@ -1302,6 +1302,14 @@ resolved mode is `ask`; on the `--file` path it is `canAsk` (did one asker survi
 plus `askIds` naming that one surviving asker, so a `safe`/`auto` task in the same run
 does not ring for a decision that never waits on a human. `makeNotifier` still takes
 `asks: boolean` and not a mode.
+**A second filter, found in review: `kind`.** The event means *a decision is pending*, not
+*a human is waiting* — `makeAskPolicy` auto-approves `READ_ONLY_KINDS` without touching
+readline, so a `read` or `search` under `ask` rang a bell nobody was needed for. The
+notifier imports the set from `core/policy.ts` rather than restating it, so what `ask`
+auto-approves and what the bell skips cannot drift apart. The review's own justification
+overstated the volume — it cited M0-4's 443 events, which are opencode's, and opencode has
+`asksPermission: false` and sends no permission requests at all — but the finding stands on
+its own terms for claude and copilot, which do ask.
 **This story did not pay M1a-6's deferred union widening** (task started, worktree created,
 task finished). It consumes none of the three; M2's persisted log is their real first
 consumer, and widening a union for a consumer that does not read it is the cost M1a-6's own

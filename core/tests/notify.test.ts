@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { makeNotifier, type NotifyOptions } from "../notify.ts";
+import { READ_ONLY_KINDS } from "../policy.ts";
 
 const BELL = "\x07";
 
@@ -63,6 +64,43 @@ test("a pending permission is silent when nobody will be asked", () => {
   h.notify(pending);
   assert.deepEqual(h.lines, []);
   assert.deepEqual(h.desktop, []);
+});
+
+test("a read-only pending permission is silent — nobody is ever prompted for it", () => {
+  // `makeAskPolicy` returns on `READ_ONLY_KINDS` without reaching readline, so
+  // the pending event for one is over before anybody could look up. Ringing
+  // there is what trains a user to ignore the bell.
+  for (const kind of [...READ_ONLY_KINDS]) {
+    const h = harness(true);
+    h.notify({
+      agent: "solo",
+      update: {
+        sessionUpdate: "_client_permission_pending",
+        title: `a ${kind} tool call`,
+        kind,
+      },
+    });
+    assert.deepEqual(h.lines, [], `${kind} must not ring`);
+    assert.deepEqual(h.desktop, [], `${kind} must not pop up`);
+  }
+});
+
+test("a mutation pending permission still rings — the filter is by kind, not off", () => {
+  // The guard above must not swallow the case the story exists for. `edit` is
+  // the kind `#guardWrite` always emits, so this covers the direct-write path
+  // as well as a harness that asks first.
+  for (const kind of ["edit", "delete", "execute", "move", "other"] as const) {
+    const h = harness(true);
+    h.notify({
+      agent: "solo",
+      update: {
+        sessionUpdate: "_client_permission_pending",
+        title: `a ${kind} tool call`,
+        kind,
+      },
+    });
+    assert.equal(h.lines.length, 1, `${kind} must ring`);
+  }
 });
 
 test("a pending permission from a non-ask task is silent in a mixed run file", () => {

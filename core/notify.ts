@@ -5,6 +5,10 @@
  * prompt is waiting for an answer, and the watchdog thinks a task has gone
  * quiet. Everything else can wait for the task card.
  *
+ * "Waiting for an answer" is narrower than "a decision is pending", which is
+ * why this file filters on `kind` as well as on who is asking — see the
+ * pending branch below.
+ *
  * **The bus event exists independently of this file.** `core/run.ts` emits
  * `_client_stall_warning` and `protocol/agent.ts` emits
  * `_client_permission_pending` whether or not anything subscribes; M4-4's
@@ -27,6 +31,7 @@
 import { spawn } from "node:child_process";
 
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
+import { READ_ONLY_KINDS } from "./policy.ts";
 
 /** ASCII BEL. The terminal's own attention signal; no escape sequence, no
  *  colour, nothing `NO_COLOR` or a pipe has an opinion about. */
@@ -92,6 +97,14 @@ export function makeNotifier({
     if (update.sessionUpdate === "_client_permission_pending") {
       if (!asks) return;
       if (askIds && !askIds.has(agent)) return;
+      // The event is emitted before *every* policy await, because
+      // `protocol/agent.ts` cannot know which ones will block. `makeAskPolicy`
+      // returns on `READ_ONLY_KINDS` without touching readline, so those
+      // decisions are over in microseconds with nobody waiting on them — a
+      // bell there is a bell for nothing, and the fastest way to teach someone
+      // to ignore the alert. The same constant both sides, so a change to what
+      // `ask` auto-approves cannot leave the two out of step.
+      if (READ_ONLY_KINDS.has(update.kind)) return;
       const text = `permission needed: [${update.kind}] ${update.title}`;
       write(`${BELL}! [${agent}] ${text}\n`);
       notify(`agent-team: ${agent}`, text);
