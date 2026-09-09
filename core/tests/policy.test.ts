@@ -222,6 +222,28 @@ test("an unmeasured harness is skipped, loudly, and the run continues", async ()
   assert.deepEqual(calls, [], "nothing is guessed at");
 });
 
+test("a measured harness with no modeMap is skipped too", async () => {
+  const { agent, calls } = stubAgent(async () => ({}));
+  const noSafetyModes = {
+    launch: { command: "pi-acp" },
+    measured: {
+      shell: "internal",
+      argvChannel: "notification",
+      asksPermission: false,
+      usage: "absent",
+      measuredOn: { version: "0.0.33", date: "2026-09-09" },
+    },
+  } as AgentEntry;
+
+  const warning = await negotiateSafeMode(agent, noSafetyModes, "safe");
+  assert.match(String(warning), /not negotiated/);
+  assert.deepEqual(
+    calls,
+    [],
+    "a thinking-effort mode must not be sent as if it were a safety mode",
+  );
+});
+
 test("a failed set_mode warns rather than killing the run", async () => {
   const { agent } = stubAgent(async () => {
     throw new Error("-32602 invalid modeId");
