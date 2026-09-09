@@ -75,3 +75,6 @@ follow it.
 - **[`address-comment`](.agent/skills/address-comment/SKILL.md)** — run when asked to
   address, handle, triage or answer review comments on a pull request. Ends with CI read
   and a reply on every thread, including the rejected ones.
+- **[`merge-close`](.agent/skills/merge-close/SKILL.md)** — run when asked to merge-close
+  a pull request after verifying all acceptance criteria are met. Merges, cleans up the
+  branch, and checks whether a linked issue auto-closed without closing it manually.
