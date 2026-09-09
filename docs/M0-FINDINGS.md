@@ -199,6 +199,36 @@ because it is the natural second key if blank-line detection ever proves wrong.
 **`session_info_update` is new** — copilot sends one per session and M0-1 did not see it.
 Unhandled, like its two siblings, and dropped in silence by design.
 
+#### claude-agent-acp 0.75.1, re-measured 2026-09-09
+
+The adapter jumped 0.49.0 → 0.75.1 (26 releases). `npm run test:harness` for claude passes
+all three tests, and a `--mode auto` probe running one `echo` re-verified the rest:
+
+- **`shell: internal`** holds — it ran the command itself, called no `terminal/*` and no `fs/*`.
+- **`argvChannel: notification`** holds, with the same lateness: `tool_call` carries
+  `rawInput: {}` and `title: "Terminal"`, and the command text (`{"command":"echo …"}`)
+  arrives on the first `tool_call_update`. Anything judging a command must still read the
+  merged view.
+- **`asksPermission: true`** holds — under `safe` the refusal fires on `switch_mode`, exactly
+  as measured 2026-09-04.
+- **`modeMap`**: `safe: "plan"` negotiates, `auto: "bypassPermissions"` is accepted by
+  `session/set_mode`. `ask: "default"` is still unverified and still unread — only
+  `modeMap.safe` has a consumer (`core/policy.ts:191`).
+- **Not re-verified, and the new date does not cover them:** `usage`, because separating
+  per-turn from cumulative needs two turns in one session and `prompt()` throws on the second
+  (#62 R5); and `meta`, which describes behaviour gated on advertising `terminal_output`,
+  which this client does not advertise.
+
+Three things that are new on the wire since M0, none of which the client reads yet:
+
+- `usage_update` can carry **`cost`** — `{"amount":0.1323235,"currency":"USD"}` on the last
+  update of the turn. The first vendor-neutral money figure any harness has given us.
+- `size` **changed mid-turn**, 200000 for every update and then 1000000 on the last one. M0-5
+  already refuses to build a rung on that denominator; this is a second reason.
+- The `_meta["_claude/rateLimit"]` object has grown `unifiedWindows` (`five_hour` and
+  `seven_day`, each with `utilization` and `resetsAt`), plus `overageStatus` and
+  `overageDisabledReason`. Still the fleet's only exhaustion signal.
+
 ### Methods reaching the `#handleRequest` default
 
 **None.** Across six surveyed turns, no harness sent a method outside the three we
