@@ -72,11 +72,11 @@ const runFilePath = flag("file");
 
 if ((!promptText && !runFilePath) || has("help")) {
   console.log(`
-acp-mvp — a minimal Agent Client Protocol client
+kapelle — a minimal Agent Client Protocol client
 
-  node run.ts "<prompt>" [options]
-  node run.ts --file <run.json> [--cwd dir] [--verbose] [--quiet]
-  node run.ts merge <runId> [--squash] [--cwd dir]
+  kapelle "<prompt>" [options]
+  kapelle --file <run.json> [--cwd dir] [--verbose] [--quiet]
+  kapelle merge <runId> [--squash] [--cwd dir]
 
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: opencode)
@@ -93,11 +93,11 @@ Options:
   --quiet          suppress normal output; safety notices still print
 
 Examples:
-  node run.ts "list the top-level files and summarise this repo"
-  node run.ts "add a health endpoint" --cwd ../my-app --mode ask
-  node run.ts "what does src/index.ts do" --mode safe
-  node run.ts --file tasks.run.json
-  node run.ts merge 20260909-101500-abc1
+  kapelle "list the top-level files and summarise this repo"
+  kapelle "add a health endpoint" --cwd ../my-app --mode ask
+  kapelle "what does src/index.ts do" --mode safe
+  kapelle --file tasks.run.json
+  kapelle merge 20260909-101500-abc1
 `);
   process.exit(promptText || runFilePath ? 0 : 1);
 }
@@ -142,7 +142,7 @@ if (positional[0] === "merge") {
     resolveAgent(flag("agent", "opencode"), flag("cmd")),
   );
 
-  // `task > run > harness > default`: run.ts is one task, so `--mode` is the run
+  // `task > run > harness > default`: cli.ts is one task, so `--mode` is the run
   // layer and the registry entry is the harness layer. An unknown mode, or one
   // above the entry's ceiling, is a validation error here rather than a silent
   // downgrade. There is no `--allow-read-outside-root` flag: the task layer that
@@ -281,7 +281,7 @@ async function runFromFile(path: string): Promise<number> {
   }
 
   // A positional prompt is the same conflict, and the most dangerous shape of
-  // it: `run.ts --file tasks.json "and also do X"` reads like it queued the
+  // it: `cli.ts --file tasks.json "and also do X"` reads like it queued the
   // extra work. Silently dropping it would be the one failure mode the three
   // flags above are rejected to avoid.
   if (promptText) {
@@ -476,7 +476,7 @@ async function runFromFile(path: string): Promise<number> {
 }
 
 /**
- * The `merge` half: `node run.ts merge <runId> [--squash] [--cwd dir]`.
+ * The `merge` half: `kapelle merge <runId> [--squash] [--cwd dir]`.
  *
  * M1c-3 ships `--squash` only; `--rebase` is M3-4 and is refused here rather
  * than silently ignored. The `agent-team` bin and the file rename are M1c-5.
@@ -489,9 +489,7 @@ async function runMergeCommand(): Promise<number> {
 
   const ids = positional.slice(1);
   if (ids.length !== 1) {
-    console.error(
-      "merge needs one run id: node run.ts merge <runId> [--squash]",
-    );
+    console.error("merge needs one run id: kapelle merge <runId> [--squash]");
     return 1;
   }
 

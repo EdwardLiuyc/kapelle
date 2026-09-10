@@ -67,7 +67,7 @@ function desktop(title: string, body: string): void {
 export interface NotifyOptions {
   /** Is a human actually going to be asked? A boolean and not a `ClientMode`
    *  because the `--file` path has no single mode: there, the condition is
-   *  whether one asker survived `canAsk` (`run.ts`). `safe` and `auto` answer
+   *  whether one asker survived `canAsk` (`cli.ts`). `safe` and `auto` answer
    *  the same request with nobody reading it, so alerting would be noise. */
   asks: boolean;
   /** When provided, pending-permission alerts are restricted to these
@@ -83,7 +83,7 @@ export interface NotifyOptions {
 /**
  * The bus listener. Subscribe it with `bus.addListener(makeNotifier(…))`.
  *
- * Owns *both* halves of the stall line, not just the bell: `run.ts` used to
+ * Owns *both* halves of the stall line, not just the bell: `cli.ts` used to
  * print that line from a subscriber of its own, and two subscribers writing
  * about one event is how a run ends up saying it twice.
  */

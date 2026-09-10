@@ -50,14 +50,14 @@ export interface CliResult {
 }
 
 /**
- * Run `run.ts` as a real subprocess and collect everything it printed.
+ * Run `cli.ts` as a real subprocess and collect everything it printed.
  *
  * No TTY is attached, so `--mode ask` resolves to `safe` here exactly as it
  * does in CI or a pipe. The kill in `t.after` matters: when the test runner's
  * timeout fires it does not reap our children, and a stranded harness holds a
  * session open.
  */
-export function spawnCli(t: TestContext, args: string[], script = "run.ts") {
+export function spawnCli(t: TestContext, args: string[], script = "cli.ts") {
   const child = spawn(process.execPath, [script, ...args], { cwd: REPO });
   t.after(() => void child.kill("SIGKILL"));
 

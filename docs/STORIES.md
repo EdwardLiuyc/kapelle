@@ -761,7 +761,7 @@ fixture had room, and M1b-5 rewrites this file anyway. The `--emit` proposal is 
 closed as answered, not deferred.
 
 **M1a-8 · `core/ids.ts` · XS · needs M1a-1**
-**Gap** — `agent-team merge <runId>` operates on branches, retention promises "the branch
+**Gap** — `kapelle merge <runId>` operates on branches, retention promises "the branch
 always survives", and worktrees live at `.agent-team/wt/<runId>/<taskId>` — yet the plan
 gives no format for `runId`, no charset constraint for `taskId`, and **no branch naming
 convention at all**, so merge has no defined way to find the branches belonging to a run.
@@ -1266,7 +1266,7 @@ Stall also *answers* `session/cancel` (M0-4's measured 64 ms); the harness that 
 cancel is already covered by the inline stubborn agent in `tests/cli.test.ts`.
 
 **M1c-3 · `core/merge.ts` — preflight and `--squash` · M · needs M1b-3**
-`agent-team merge <runId>`, never automatic. A run produces branches; landing them is a
+`kapelle merge <runId>`, never automatic. A run produces branches; landing them is a
 distinct act with its own failure mode. Preflight refuses if the working tree has
 modifications to any file a task branch touches, and refuses if two task branches in the run
 touch the same file. All-or-nothing: preflight completely, then merge, so a run never
@@ -1320,12 +1320,28 @@ run does not say it twice; and the desktop half is spawned unguarded, because a 
 check buys nothing a failing spawn does not already give.
 
 **M1c-5 · Package identity · XS**
-**Gap** — the plan invokes `agent-team merge`, but `package.json` is `private`, named
+**Gap** — the plan invokes `kapelle merge`, but `package.json` is `private`, named
 `acp-mvp`, and has no `bin`; and no document states which platforms are supported, while
 M1c-4 shells to `notify-send`/`osascript` and `git worktree`, paths and `sep` all behave
-differently on Windows. **Decision: rename to `agent-team`, drop `private`, add the `bin`
-entry, and declare macOS and Linux supported with Windows explicitly unsupported** — rather
-than discovering it.
+differently on Windows. **Decision: rename, add the `bin` entry, and declare macOS and Linux
+supported with Windows explicitly unsupported** — rather than discovering it.
+**Amended 2026-09-10 at pickup — the planned name was taken, and `private` stays.** npm
+`agent-team@0.2.0` is live, unrelated, describes itself as *"Multi-agent CLI orchestrator via
+ACP protocol"*, and declares `bin: {"agent-team": …}`, so the collision is on the package name
+**and** on the command a user types. **Decision: the package and the command are `kapelle`** —
+the ensemble a *Kapellmeister* directs, the players rather than the conductor. **`private:
+true` is kept**: it blocks `npm publish` alone, never `bin` and never `npm link`, so it costs
+nothing while nothing here is ready to publish, and the day it is, the name is a two-line
+edit. The rename **stops at the command**: `.agent-team/`, the `agent-team/<runId>/<taskId>`
+branch prefix and `AGENT_TEAM_*` keep their names, because they label the project on disk and
+moving them orphans the run state of every existing checkout for no visible gain. The `bin`
+wraps **today's argv** and adds no `run` subcommand — `cli.ts` already dispatches `merge`, so
+`kapelle merge <runId>` works on day one, while `kapelle run <file>`, `attach` and `--detach`
+stay M2-9's surface. `"os": ["darwin", "linux"]` is the whole of the Windows block: measured
+2026-09-10 on Node 24.20.0, npm enforces it on the **root** package, so `npm install` there
+fails `EBADPLATFORM` and installs nothing; `npm install --force` and running `node cli.ts` on
+a populated checkout still bypass it, and both were left open rather than paying for a
+`win32` guard no report has asked for. WSL is Linux.
 **Added 2026-09-06 — this story also renames the front-end file, and is the only cheap
 moment to do it.** `run.ts` (the CLI) and `core/run.ts` (the engine) share a name and differ
 only by a directory. M1b-2 made that collision live rather than theoretical: `run.ts
@@ -1334,13 +1350,16 @@ only by a directory. M1b-2 made that collision live rather than theoretical: `ru
 and not the other, for two reasons. `core/run.ts` is named as a deliverable in M1b-2 and in
 `PROJECT-PLAN.md`'s architecture, so renaming it edits many documents to fix one file; and
 `run.ts` is the one whose name stops being user-facing **here** — after the `bin` lands,
-people type `agent-team run`, never a filename, so this story is the last moment the rename
+people type `kapelle run`, never a filename, so this story is the last moment the rename
 is nearly free. It touches `package.json`, the README, `tests/cli.test.ts`,
 `integration/helpers.ts`, `CLAUDE.md` and the `note` field of every file in
 `assets/example/`; all mechanical, all covered by the suite except the last, which no test
 reads. That last one is listed because it is the one that would rot quietly: the examples
 must stay copy-pasteable, so their notes name the command that works **today**, and this is
 the story that makes `node run.ts` stop being that command.
+Also amended at pickup: the rename list gains `docs/PROJECT-PLAN.md` and this
+file, which between them type `agent-team run`/`merge`/`attach` in fourteen
+places, and the usage banner in `cli.ts`, which still announced `acp-mvp`.
 `fanout.mjs` needs no decision — M1b-8 deletes it.
 Coordinate with the M2-9 amendment, which drops `runs.ts` entirely, so the end state is two
 files with two jobs and two names: `cli.ts` for everything a person types, `core/run.ts` for
@@ -1564,15 +1583,15 @@ things are wrong with that, and none of them is the daemon.
    grace in step.** That is the argument M1b-2 already used to put `--file` on `run.ts`
    rather than in a new file, and M1b-8 uses to retire `fanout.mjs`. It does not stop being
    true one milestone later. The CLI is already subcommand-shaped: M1c-3 adds
-   `agent-team merge`, and M1c-5 adds the `bin` that makes subcommands the surface people
+   `kapelle merge`, and M1c-5 adds the `bin` that makes subcommands the surface people
    type.
 
 **Decision: one command, and a flag for the difference.**
 
 ```text
-agent-team run tasks.json             # in-process; dies with the terminal
-agent-team run tasks.json --detach    # hands it to the daemon, returns the run id
-agent-team attach <run-id>            # stream a detached run, replay included
+kapelle run tasks.json             # in-process; dies with the terminal
+kapelle run tasks.json --detach    # hands it to the daemon, returns the run id
+kapelle attach <run-id>            # stream a detached run, replay included
 ```
 
 `attach` is its own verb rather than a flag on `run`, because reattaching starts no work —
@@ -1580,8 +1599,8 @@ it is a different job with a different argument, and M2-2's replay-from-cursor i
 of it. What is dropped is the *file and the name*, not the code: submitting over HTTP,
 streaming SSE and answering permissions interactively are all still this story's
 deliverable, reached through `--detach` and `attach` instead of a second binary.
-*Done when* `agent-team run <file> --detach` returns a run id while the run continues
-without the launching terminal, and `agent-team attach <run-id>` on a later terminal receives
+*Done when* `kapelle run <file> --detach` returns a run id while the run continues
+without the launching terminal, and `kapelle attach <run-id>` on a later terminal receives
 the history and then the live tail.
 
 ---

@@ -1,7 +1,7 @@
-# agent-team
+# kapelle
 
 <!-- markdownlint-disable MD033 -- HTML is required for the fixed-width right-aligned logo; markdown has no image sizing -->
-<img src="assets/icon.svg" alt="agent-team" width="88" align="right">
+<img src="assets/icon.svg" alt="kapelle" width="88" align="right">
 
 A minimal Agent Client Protocol client. One runtime dependency, Node 24+.
 
@@ -16,13 +16,49 @@ You are the **client**: you spawn the harness as a subprocess, own the workspace
 answer its file-system requests, and decide its permissions. The harness is the
 **agent**. Adding a second harness is an entry in `protocol/registry.ts`, not an integration.
 
+## The name
+
+A *Kapelle* is the ensemble a *Kapellmeister* directs — the players, not the
+conductor. That is the right way round here: this client directs, and the
+harnesses do the playing. It is also simply free, where `agent-team` is not —
+an unrelated npm package of the same name and the same stated purpose already
+claims that command.
+
+The repository, the `.agent-team/` state directory and the
+`agent-team/<runId>/<taskId>` branch prefix keep their old names. They label the
+project on disk, not the command you type, and moving them would orphan the run
+state of every existing checkout.
+
+## Install
+
+```bash
+npm install
+npm link       # puts `kapelle` on your PATH; `npm unlink -g kapelle` undoes it
+kapelle --help
+```
+
+If `npm link` fails with `EACCES` on `/usr/lib/node_modules`, npm's global prefix is
+root-owned. Point it somewhere you own rather than reaching for `sudo`:
+
+```bash
+npm config set prefix ~/.local        # then add ~/.local/bin to PATH
+```
+
+**macOS and Linux only.** Windows is not supported: `core/notify.ts` shells to
+`notify-send`/`osascript`, and `git worktree` paths and separators differ there.
+`package.json` declares `"os": ["darwin", "linux"]`, so `npm install` on Windows
+stops with `EBADPLATFORM` rather than failing later in a stranger place. WSL
+counts as Linux and works.
+
+Without `npm link`, every `kapelle` below reads `node cli.ts` from the repo root.
+
 ## Layout
 
 | Path | What it is |
 | --- | --- |
 | `protocol/` | Everything wire-level: hand-written types for every message we touch (`types.ts`), the client itself (`agent.ts` — JSON-RPC over stdio, handshake, `fs/*`, permissions), and the adapter layer (`registry.ts` — how to launch each harness, and what we measured when we ran it). |
 | `core/` | Supervisor-side orchestration and pure logic: policy (`policy.ts`), event bus (`events.ts`), run-file validation (`runfile.ts`), the run engine (`run.ts`), worktrees (`worktree.ts`), merge (`merge.ts`), and result parsing/cross-check (`result.ts`). `core/` may import `protocol/`, never the reverse. |
-| root scripts | The entry points and terminal glue: `run.ts` (CLI: one prompt, N tasks from a run file via `--file`, or `merge <runId>`), `render.ts` (terminal output for `session/update` events), and the offline fake agents `mock-agent.mjs` (compliant) and `hostile-agent.mjs` (adversarial). |
+| root scripts | The entry points and terminal glue: `cli.ts` (the CLI, and the `kapelle` `bin`: one prompt, N tasks from a run file via `--file`, or `merge <runId>`), `render.ts` (terminal output for `session/update` events), and the offline fake agents `mock-agent.mjs` (compliant) and `hostile-agent.mjs` (adversarial). |
 | `docs/` | Plans, stories and what was measured about each harness. |
 | `assets/`, config files | Logo, tool configs (`biome.json`, `tsconfig.json`, `knip.jsonc`, `.markdownlint.json`), `package.json`. |
 
@@ -30,12 +66,12 @@ Test suites (`*.test.ts`) live in a `tests/` folder beside their sources — `co
 
 ## Run files
 
-`run.ts --file` runs N independent tasks, each with its own agent and mode.
+`kapelle --file` runs N independent tasks, each with its own agent and mode.
 In a git repository, each task gets its own worktree; outside one, tasks share
 the cwd and a notice says so. `tasks.json` is the worked example:
 
 ```bash
-node run.ts --file tasks.json
+kapelle --file tasks.json
 ```
 
 ```json

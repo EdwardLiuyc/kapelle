@@ -135,7 +135,7 @@ test("a stall warning rings whether or not anyone is asking", () => {
 });
 
 test("the stall line is written once, not once per half", () => {
-  // `run.ts` used to print this line from a subscriber of its own. The
+  // `cli.ts` used to print this line from a subscriber of its own. The
   // notifier owns it now; two owners is how a run says it twice.
   const h = harness(true);
   h.notify(stall);

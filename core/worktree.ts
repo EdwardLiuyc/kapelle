@@ -44,7 +44,7 @@ export const STATE_DIR = ".agent-team";
 /**
  * Which statuses give the worktree back.
  *
- * `done` and `warned` are the two the CLI exits 0 for (`run.ts:405`), and
+ * `done` and `warned` are the two the CLI exits 0 for (`cli.ts:475`), and
  * teardown agrees with that rather than with a narrower reading of success.
  * Everything below them keeps its worktree so partial work stays inspectable.
  *

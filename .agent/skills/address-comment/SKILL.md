@@ -17,7 +17,7 @@ follow it. Concretely:
 | --- | --- |
 | any agent with a prompt | paste this file, then: `Run this procedure for PR #<N> in <repo>.` |
 | an agent working in this repo | `AGENTS.md` points here; ask for `"address-comment #<N>"` |
-| this repo's ACP client | `node run.ts "$(cat .agent/skills/address-comment/SKILL.md; printf '\n\nRun this for PR #<N>.')" --agent opencode --mode ask` |
+| this repo's ACP client | `node cli.ts "$(cat .agent/skills/address-comment/SKILL.md; printf '\n\nRun this for PR #<N>.')" --agent opencode --mode ask` |
 
 Arguments the procedure understands, however they arrive: the **PR number** (required
 unless the current branch has exactly one open PR), `--repo owner/name` (defaults to the
@@ -140,7 +140,7 @@ Not a file, not a PR comment. One table for the developer standing there:
 
 ```text
 comment              verdict                     lands in
-run.ts:120           valid                       <sha>
+cli.ts:120           valid                       <sha>
 core/run.ts:320      valid finding, wrong fix    <sha> (doc corrected, not the code)
 core/run.ts:408      valid                       <sha>
 tests/cli.test.ts:44  rejected — <one line why>   —
