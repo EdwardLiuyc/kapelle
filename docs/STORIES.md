@@ -1334,7 +1334,7 @@ true` is kept**: it blocks `npm publish` alone, never `bin` and never `npm link`
 nothing while nothing here is ready to publish, and the day it is, the name is a two-line
 edit. **The name reaches the disk as well as the command**, each with exactly one
 definition: `STATE_DIR` (`core/worktree.ts:42`) is `.kapelle`, `BRANCH_PREFIX`
-(`core/ids.ts:74`, extracted from an inline literal so the two cannot drift) is `kapelle`,
+(`core/ids.ts:73`, extracted from an inline literal so the two cannot drift) is `kapelle`,
 `SECRET_PREFIX` (`protocol/registry.ts:96`) is `KAPELLE_`, and the per-task commit subject
 is `kapelle: <taskId> (<runId>)`, which has to match the branch it lands on. The one
 identifier that does not follow is the schema `$id`: it is the repository's URL, so it

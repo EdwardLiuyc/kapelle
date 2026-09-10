@@ -11,7 +11,7 @@ building and in what order. Draft — expect refinement.
 
 ## Context
 
-This plan was written when `kapelle` was a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `run.mjs`, `fanout.mjs`). M1a/M1b have since ported it to TypeScript and added the supervisor-shaped pieces this plan called for: `cli.ts` and `core/run.ts` now execute N independent tasks from a JSON run file, each in its own worktree, returning parsed results and warnings. `PROJECT-BRIEF.md` describes a **supervisor**. The gap that remains is the daemon: worktrees, branches and stderr logs persist on disk, but no process owns a run record or crash recovery across invocations.
+This plan was written when the project was a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `run.mjs`, `fanout.mjs`). M1a/M1b have since ported it to TypeScript and added the supervisor-shaped pieces this plan called for: `cli.ts` and `core/run.ts` now execute N independent tasks from a JSON run file, each in its own worktree, returning parsed results and warnings. `PROJECT-BRIEF.md` describes a **supervisor**. The gap that remains is the daemon: worktrees, branches and stderr logs persist on disk, but no process owns a run record or crash recovery across invocations.
 
 Intended outcome: a local daemon that executes a declarative run file — N harnesses in
 isolated git worktrees, in parallel or as a dependency chain — enforcing one permission
