@@ -34,7 +34,7 @@ const SCENARIOS = {
 
 const at = process.argv.indexOf("--scenario");
 const scenario = at === -1 ? null : process.argv[at + 1];
-if (scenario === null || !(scenario in SCENARIOS)) {
+if (scenario === null || !Object.hasOwn(SCENARIOS, scenario)) {
   // No default path, unlike `mock-agent`: a hostile agent with no attack
   // selected is just a worse mock, and a typo that ran it would make a
   // containment test pass without containing anything.

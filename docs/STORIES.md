@@ -1489,6 +1489,26 @@ the process mid-run, restart, confirm orphans are reaped. A `.json` run file and
 as a POST body validate to the same object (amended 2026-09-05, M1b-1: run files are JSON
 only). A run file exceeding a harness `maxMode` is rejected, naming both values, before any
 subprocess starts.
+**Amended 2026-09-10 (#30): the orphan-reap clause is dropped, and the story grew an M1
+stage retrospective.** Nothing reaps today and nothing was meant to — the sweep is M2-5,
+which needs a persisted run record; this story records the surviving state instead.
+Measured 2026-09-10 on the fixture that stalls: `kill -9` mid-run leaves the checkout at
+`.kapelle/wt/<runId>/<taskId>` **and** its branch, a second run adds a second one beside it
+rather than clearing the first, and the harness subprocess itself dies with the parent — so
+what survives a crash is on disk, never in the process table. The retrospective is the
+second half and is the reason the story is no longer S.
+**DONE 2026-09-10 (#30).** Three tasks, three harnesses, one run: opencode 1.18.30 27.3 s,
+claude-agent-acp 0.75.1 7.7 s, copilot 1.0.83 8.2 s, each `done` with a parsed
+`<task-result>`, `git worktree list` back to one entry, three `kapelle/<runId>/<taskId>`
+branches and three `.kapelle/runs/<runId>/<taskId>.stderr.log` files left behind, and
+`kapelle merge <runId>` through the linked `bin` landing all three as unstaged additions.
+The version-drift warning fired for opencode and copilot and stayed silent for claude,
+which is the one build whose `measuredOn` still matches. The ceiling rejection was observed
+end-to-end by lowering opencode's `maxMode` to `safe` behind a PATH shim that records an
+exec: the run printed `task "a": mode "auto" exceeds the ceiling for "opencode": maxMode is
+"safe".` and the shim was never touched. Every shipped entry is `maxMode: "auto"`
+(`protocol/registry.ts:103`), so the committed cover for it stays the injected-entry test
+at `core/tests/runfile.test.ts:127`.
 
 ---
 

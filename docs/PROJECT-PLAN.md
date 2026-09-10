@@ -11,7 +11,7 @@ building and in what order. Draft — expect refinement.
 
 ## Context
 
-This plan was written when the project was a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `run.mjs`, `fanout.mjs`). M1a/M1b have since ported it to TypeScript and added the supervisor-shaped pieces this plan called for: `cli.ts` and `core/run.ts` now execute N independent tasks from a JSON run file, each in its own worktree, returning parsed results and warnings. `PROJECT-BRIEF.md` describes a **supervisor**. The gap that remains is the daemon: worktrees, branches and stderr logs persist on disk, but no process owns a run record or crash recovery across invocations.
+This plan was written when the project was a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `run.mjs`, `fanout.mjs`). M1a, M1b and M1c have since ported it to TypeScript and added the supervisor-shaped pieces this plan called for: `cli.ts` and `core/run.ts` now execute N independent tasks from a JSON run file, each in its own worktree, returning parsed results and warnings. `PROJECT-BRIEF.md` describes a **supervisor**. The gap that remains is the daemon: worktrees, branches and stderr logs persist on disk, but no process owns a run record or crash recovery across invocations.
 
 Intended outcome: a local daemon that executes a declarative run file — N harnesses in
 isolated git worktrees, in parallel or as a dependency chain — enforcing one permission
@@ -44,8 +44,8 @@ policy across all of them and returning machine-readable results.
 | Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. **Required, not optional: M0-1 found this is opencode's default behaviour, not an anomaly.** |
 | Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. **Capability axis measured too, 2026-08-23 — parked.** M0-3's `87cbfe3` advertised `_meta.terminal_output: true`; claude-agent-acp's Bash `tool_call` then carried a `terminal_id` and `{type:"terminal"}` block for a terminal never created, with still no `terminal/*` calls, no command output, and no exit code (`M0-FINDINGS.md`). It is a rendering convention, not visibility — `argvChannel` gains no fourth value, and no follow-up is scheduled. |
 | Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `protocol/agent.ts` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), and the capability flags M0-3 found harnesses gating on (measured for `terminal_output` via `87cbfe3`) all live there. |
-| Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency. **Zero runtime deps until M1c-7 (2026-09-09), which ratified a presentation-only exception and took `marked`** — see `README.md` for the rule. |
-| Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
+| Language | TypeScript on Node 24, run directly via type stripping — **no build step**. Four devDependencies — `typescript`, `@types/node`, `biome`, `knip` (amended 2026-08-31, M1a-1; the story's original *"only devDependency"* is history). **Zero runtime deps until M1c-7 (2026-09-09), which ratified a presentation-only exception and took `marked`** — see `README.md` for the rule. |
+| Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, with **pi-acp a measured fourth since 2026-09-09 (#99)**, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
 | CLI | **One front end, one core (amended 2026-09-06, M2-9).** `kapelle run <file>` drives in-process; `--detach` hands the same file to the daemon; `kapelle attach <run-id>` streams a detached run. The original "two front ends, `run` and `runs`" is dropped: `runs` leaked the `POST /runs` path into a name people type, read as "many runs" when the difference is *local versus detached*, and a second CLI is a second place to keep the flags, notice rules and SIGINT grace in step. |
 
 ### Notes on some of these
@@ -496,7 +496,7 @@ driven from a run file, fully verifiable offline.
 The first thing here that is not a CLI. Design reference: `opencode-ensemble`'s dashboard.
 
 - **Serving** — string-templated HTML/CSS/JS out of the daemon. No framework, no build
-  step, no runtime dependency; the same constraint the rest of the project holds. Split
+  step, and no runtime dependency outside presentation — the exception M1c-7 ratified (2026-09-09, #78) — the same constraint the rest of the project holds. Split
   across four modules (`dashboard-html`, `-js-core`, `-js-events`, `-js-render`) — that
   split is what keeps a zero-build dashboard readable past a few hundred lines.
 - **Read views** — run list; per-run task cards with status, elapsed, token count and a
@@ -534,7 +534,10 @@ fields mean, and how does it respond to `session/cancel` mid-turn.
 
 **M1** — a run file with three independent tasks against three real harnesses, each in
 its own worktree, each returning a parsed `TaskResult`; `git worktree list` clean
-afterwards. Then kill the process mid-run and confirm the orphans are reaped at next start.
+afterwards. **Amended 2026-09-10 (M1c-6, #30): the reap is not M1's.** `kill -9` mid-run
+leaves the worktree and the branch behind and a restart does not clear them (observed
+2026-09-10); the sweep that would is M2-5, which needs a persisted run record nothing
+writes yet. M1 records the surviving state instead of reaping it.
 A task against `mock-agent`'s stall mode produces a stall warning, then a `session/cancel`
 at TTL, with the branch intact afterwards; repeat mode raises a warning and is *not*
 cancelled. A JSON run file validates through `core/runfile.ts`, and the same run as a POST
@@ -542,7 +545,8 @@ body validates to the same object. A run file that exceeds a harness `maxMode` i
 naming both values, before any subprocess starts.
 `kapelle merge` on a two-task run lands both as unstaged changes; the same merge with a
 conflicting local edit aborts having changed nothing; a run with an unfinished task is
-refused. Kill a task mid-spawn and confirm no orphan worktree survives.
+refused. Kill a task mid-spawn and confirm no orphan worktree survives *with no run
+record* — a worktree whose run record exists is kept on purpose, and reaping it is M2-5.
 
 **M2** — start the daemon, `POST /runs` in `ask` mode with **no client attached**, confirm
 the mutation is denied at timeout and the run completes rather than hanging. Attach
@@ -613,8 +617,8 @@ notify-on-attention-needed event; and the four-file split for a zero-build dashb
 **Not taken, deliberately:**
 
 - **SQLite for state.** Ensemble needs it for concurrent plugin writers. Our daemon is
-  single-process and single-writer; JSON per run stays, and zero runtime dependencies
-  with it.
+  single-process and single-writer; JSON per run stays, and the runtime-dependency rule
+  of the day with it (presentation-only since M1c-7).
 - **Peer messaging** (`team_message` / `team_broadcast`). `PROJECT-BRIEF.md` names A2A
   messaging as a non-goal. Ensemble's coordination model *is* inter-agent chat; ours is
   DAG plus handoff.
