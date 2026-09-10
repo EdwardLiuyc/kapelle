@@ -7,7 +7,7 @@
  * that lies, escapes and floods, so the refusals can be tested with nothing
  * installed:
  *
- *   node run.ts "escape" --cmd "node hostile-agent.mjs --scenario path-escape" --mode auto
+ *   node cli.ts "escape" --cmd "node hostile-agent.mjs --scenario path-escape" --mode auto
  *
  * `--mode auto` in that line is deliberate. The path guard is unconditional
  * and does not consult the policy, so `auto` is the mode that proves the guard

@@ -15,7 +15,7 @@
  * **Supervisor variants widen as their producers land.** The story lists six
  * (task started, worktree created, permission pending, stall warning, task
  * finished, containment warning). Most have no producer in the tree yet; the
- * containment warning stays on stderr at `run.ts` — moving it onto the bus
+ * containment warning stays on stderr at `cli.ts` — moving it onto the bus
  * would route it through a sink `--quiet` switches off, and #13 says that
  * line is never silenced. M1b-4 is the first producer on this side of the
  * client: `core/run.ts` emits `_client_result_warning` for cross-check

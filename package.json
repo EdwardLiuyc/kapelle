@@ -1,17 +1,24 @@
 {
-  "name": "acp-mvp",
+  "name": "kapelle",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "A minimal Agent Client Protocol client — supervise coding agents from Node",
+  "bin": {
+    "kapelle": "./cli.ts"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "start": "node run.ts",
+    "start": "node cli.ts",
     "fmt": "biome check --write .",
     "fmt:check": "biome check .",
-    "selftest": "node run.ts \"self test\" --cmd \"node mock-agent.mjs\" --mode auto",
+    "selftest": "node cli.ts \"self test\" --cmd \"node mock-agent.mjs\" --mode auto",
     "check": "if find . -path ./node_modules -prune -o \\( -name '*.ts' -o -name '*.mts' -o -name '*.cts' \\) -print | grep -q .; then tsc --noEmit; else echo 'check: no TypeScript files yet; tsc skipped'; fi",
     "knip": "knip --no-config-hints && knip --production --include files --no-config-hints",
     "test": "node --test --test-timeout=30000",

@@ -402,7 +402,7 @@ test("a task's events reach the run's bus, tagged with the task id", async () =>
 });
 
 test("askPolicy reaches the asking task and nothing else", async () => {
-  // `run.ts` decides *whether* one prompt can serve this run; the pool only
+  // `cli.ts` decides *whether* one prompt can serve this run; the pool only
   // has to hand it to the task that asks. A policy leaking onto an `auto` or
   // `safe` task would silently change what that task may do.
   const askPolicy = async () => true;

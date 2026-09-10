@@ -11,7 +11,7 @@ building and in what order. Draft — expect refinement.
 
 ## Context
 
-This plan was written when `agent-team` was a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `run.mjs`, `fanout.mjs`). M1a/M1b have since ported it to TypeScript and added the supervisor-shaped pieces this plan called for: `run.ts` and `core/run.ts` now execute N independent tasks from a JSON run file, each in its own worktree, returning parsed results and warnings. `PROJECT-BRIEF.md` describes a **supervisor**. The gap that remains is the daemon: worktrees, branches and stderr logs persist on disk, but no process owns a run record or crash recovery across invocations.
+This plan was written when `agent-team` was a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `run.mjs`, `fanout.mjs`). M1a/M1b have since ported it to TypeScript and added the supervisor-shaped pieces this plan called for: `cli.ts` and `core/run.ts` now execute N independent tasks from a JSON run file, each in its own worktree, returning parsed results and warnings. `PROJECT-BRIEF.md` describes a **supervisor**. The gap that remains is the daemon: worktrees, branches and stderr logs persist on disk, but no process owns a run record or crash recovery across invocations.
 
 Intended outcome: a local daemon that executes a declarative run file — N harnesses in
 isolated git worktrees, in parallel or as a dependency chain — enforcing one permission
@@ -28,7 +28,7 @@ policy across all of them and returning machine-readable results.
 | UI | **M4**, after the daemon. Read views plus permission answering. Designed to grow into a run-dispatch front end, so the daemon API must be complete — not observability-only. |
 | Result contract | A `<task-result>` block in the final message. `git status` cross-checks it; disagreement raises a task **warning**, never a failure. MCP `report_result` deferred. |
 | Worktrees | Supervisor owns fully — creates off a base ref, removes on success, **keeps worktree and branch on failure/timeout when the task left work, and rolls back a failed task that produced nothing**, reaps orphans only when the run is terminal and past the retention window. |
-| Merge-back | Explicit `agent-team merge <runId>`; never automatic. `--squash` (default) lands changes **unstaged**; `--rebase` preserves per-stage commits. Aborts wholesale on overlap. |
+| Merge-back | Explicit `kapelle merge <runId>`; never automatic. `--squash` (default) lands changes **unstaged**; `--rebase` preserves per-stage commits. Aborts wholesale on overlap. |
 | Liveness | Per-task **stall → warn** (idle, or the same tool repeating) and **TTL → `session/cancel`**. Each disabled by setting `0`. **Measured (M0-4): cancellation works and is fast — every harness ended its turn within 64 ms and stopped emitting, and the session stayed usable, so the TTL rung needs a 2 s grace and no kill. But the stop reason cannot classify the outcome: copilot reports `end_turn` for a turn it cancelled, so the supervisor's own record of *did I cancel* is the authoritative half.** |
 | Crash recovery | Startup sweep plus transactional spawn. A partially-created task leaves nothing behind. |
 | Run definition | `.json` file or the daemon's POST body, both converging on one runtime validator. `.ts`/`.mjs` run files are deliberately not supported: importing executes code in-process. |
@@ -46,7 +46,7 @@ policy across all of them and returning machine-readable results.
 | Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `protocol/agent.ts` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), and the capability flags M0-3 found harnesses gating on (measured for `terminal_output` via `87cbfe3`) all live there. |
 | Language | TypeScript on Node 24, run directly via type stripping — **no build step**. `typescript` as the only devDependency. **Zero runtime deps until M1c-7 (2026-09-09), which ratified a presentation-only exception and took `marked`** — see `README.md` for the rule. |
 | Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
-| CLI | **One front end, one core (amended 2026-09-06, M2-9).** `agent-team run <file>` drives in-process; `--detach` hands the same file to the daemon; `agent-team attach <run-id>` streams a detached run. The original "two front ends, `run` and `runs`" is dropped: `runs` leaked the `POST /runs` path into a name people type, read as "many runs" when the difference is *local versus detached*, and a second CLI is a second place to keep the flags, notice rules and SIGINT grace in step. |
+| CLI | **One front end, one core (amended 2026-09-06, M2-9).** `kapelle run <file>` drives in-process; `--detach` hands the same file to the daemon; `kapelle attach <run-id>` streams a detached run. The original "two front ends, `run` and `runs`" is dropped: `runs` leaked the `POST /runs` path into a name people type, read as "many runs" when the difference is *local versus detached*, and a second CLI is a second place to keep the flags, notice rules and SIGINT grace in step. |
 
 ### Notes on some of these
 
@@ -87,10 +87,10 @@ human judge.
 ## Target architecture
 
 ```text
-front ends    cli.ts  agent-team run <file>            direct, in-process, TTY ask
-                      agent-team run <file> --detach   submits to the daemon
-                      agent-team attach <run-id>       streams SSE, answers permissions
-                      agent-team merge ...
+front ends    cli.ts  kapelle run <file>            direct, in-process, TTY ask
+                      kapelle run <file> --detach   submits to the daemon
+                      kapelle attach <run-id>       streams SSE, answers permissions
+                      kapelle merge ...
               dashboard (M4 — read views + permission answering; a third subscriber)
                    │
 daemon.ts     POST /runs · GET /runs/:id · GET /runs/:id/events (SSE+replay)
@@ -117,7 +117,7 @@ protocol/     agent.ts (JSON-RPC/stdio, fs/* + #guardPath, permission)
 ### Run flow
 
 ```text
-run.ts ──▶ import, validate ──▶ Run created, tasks in DAG order
+cli.ts ──▶ import, validate ──▶ Run created, tasks in DAG order
            (mode precedence + harness ceiling resolved here)
               ┌───────────────┼───────────────┐
               ▼               ▼               ▼
@@ -154,10 +154,10 @@ run.ts ──▶ import, validate ──▶ Run created, tasks in DAG order
                         kept on failure/timeout; branches always left
 
       ──— later, operator-initiated, outside the run —──
-      agent-team merge <runId> ──▶ preflight all branches
-                                   ──▶ --squash: combined, unstaged (default)
-                                   ──▶ --rebase: stage commits preserved
-                                   ──▶ or refuse, having changed nothing
+      kapelle merge <runId> ──▶ preflight all branches
+                                ──▶ --squash: combined, unstaged (default)
+                                ──▶ --rebase: stage commits preserved
+                                ──▶ or refuse, having changed nothing
 ```
 
 ### Three architecture invariants this shape exists to protect
@@ -392,7 +392,7 @@ driven from a run file, fully verifiable offline.
   ACP gives us no way to nudge a turn in flight, so detection reports rather than corrects;
   and a token-based signal was considered and dropped, because `usage_update` reports context
   occupancy in units that are not comparable between vendors.
-- **`core/merge.ts`** — `agent-team merge <runId> --squash`, reading the run record at
+- **`core/merge.ts`** — `kapelle merge <runId> --squash`, reading the run record at
   `.agent-team/runs/<runId>/run.json`. Preflight refuses if any task is not `done`/`warned`,
   if the working tree has modifications to any file a task branch touches, or if two task
   branches in the run touch the same file. All-or-nothing: preflight completely, then
@@ -414,10 +414,13 @@ driven from a run file, fully verifiable offline.
   Validation is also where the mode precedence chain and the harness ceiling are resolved, so
   a bad run file fails before any subprocess starts. DAG *execution* is M3; M1 runs the
   independent-tasks case only.
-- **CLIs** — `run.ts` keeps driving in-process (fast, TTY `ask` works, no daemon needed),
+- **CLIs** — `cli.ts` keeps driving in-process (fast, TTY `ask` works, no daemon needed),
   plus the new `merge` subcommand. Retire `fanout.mjs`: its job becomes "a run file with N
-  independent tasks." The file is renamed `cli.ts` at M1c-5, alongside the `bin` that makes
-  `agent-team run` — not a filename — the thing people type.
+  independent tasks." The file was renamed `cli.ts` at M1c-5, alongside the `bin` that makes
+  `kapelle` — not a filename — the thing people type. `agent-team` was the planned
+  name and is taken on npm by an unrelated package of the same purpose; the package,
+  the command and this document now read `kapelle`, while `.agent-team/` and the
+  `agent-team/<runId>/<taskId>` branch prefix keep theirs.
 - **Testing** — extend `mock-agent` with multiple sessions, a permission timeout, a
   malformed `<task-result>`, a **stall mode** (accepts the prompt, emits nothing, never
   returns), and a **repeat mode** (the same tool title on a loop) — one per watchdog signal.
@@ -467,7 +470,7 @@ driven from a run file, fully verifiable offline.
 - **Browser-compatible auth** — `EventSource` cannot set custom headers. The token must be
   acceptable as a query parameter on the SSE endpoint, or exchangeable for a cookie by a
   login POST. Decided here so M4 is not blocked; the localhost-only bind is unchanged.
-- `agent-team run <file> --detach` and `agent-team attach <run-id>` — submit a run file, stream
+- `kapelle run <file> --detach` and `kapelle attach <run-id>` — submit a run file, stream
   SSE, answer permissions interactively, print results. **Amended 2026-09-06 (M2-9): no
   `runs.ts`.** Same deliverable, reached through a flag and a second verb on the one CLI
   rather than a second binary whose name differed by one letter.
@@ -523,8 +526,8 @@ reach the subprocess, which a pure function cannot express.
 ```bash
 npm run check                    # tsc --noEmit
 npm run selftest                 # existing end-to-end, must keep passing
-node run.ts "self test" --cmd "node mock-agent.mjs" --mode safe   # write refused
-node run.ts "escape"    --cmd "node hostile-agent.mjs --scenario path-escape" --mode auto # path guard blocks
+node cli.ts "self test" --cmd "node mock-agent.mjs" --mode safe   # write refused
+node cli.ts "escape"    --cmd "node hostile-agent.mjs --scenario path-escape" --mode auto # path guard blocks
 ```
 
 **M0** — findings note recording, per harness: does it start, does it complete a turn,
@@ -540,7 +543,7 @@ at TTL, with the branch intact afterwards; repeat mode raises a warning and is *
 cancelled. A JSON run file validates through `core/runfile.ts`, and the same run as a POST
 body validates to the same object. A run file that exceeds a harness `maxMode` is rejected,
 naming both values, before any subprocess starts.
-`agent-team merge` on a two-task run lands both as unstaged changes; the same merge with a
+`kapelle merge` on a two-task run lands both as unstaged changes; the same merge with a
 conflicting local edit aborts having changed nothing; a run with an unfinished task is
 refused. Kill a task mid-spawn and confirm no orphan worktree survives.
 

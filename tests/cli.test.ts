@@ -1,5 +1,5 @@
 /**
- * The CLI surface — `run.ts`, one prompt or a run file — driven as a real
+ * The CLI surface — `cli.ts`, one prompt or a run file — driven as a real
  * subprocess.
  *
  * **None of this needs a harness**, so unlike `integration/`, it runs in CI on
@@ -69,6 +69,8 @@ test("no prompt is a usage error; --help is not", async (t) => {
   const bare = await runCli(t, []);
   assert.equal(bare.code, 1);
   assert.match(bare.stdout, /minimal Agent Client Protocol client/);
+  assert.match(bare.stdout, /kapelle/);
+  assert.doesNotMatch(bare.stdout, /acp-mvp/);
 
   const help = await runCli(t, ["hi", "--help"]);
   assert.equal(help.code, 0);
@@ -188,9 +190,9 @@ test("ask without a TTY re-resolves as safe, and says so", async (t) => {
   );
 });
 
-// --- run files: `run.ts --file` (M1b-2, #18) ---------------------------------
+// --- run files: `cli.ts --file` (M1b-2, #18) ---------------------------------
 
-/** A run file, written where `run.ts` can read it. */
+/** A run file, written where `cli.ts` can read it. */
 async function runFile(
   t: import("node:test").TestContext,
   run: Record<string, unknown>,

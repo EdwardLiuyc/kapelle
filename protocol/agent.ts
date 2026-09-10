@@ -388,8 +388,8 @@ export class AcpAgent {
         terminal: false,
       },
       clientInfo: {
-        name: "acp-mvp",
-        title: "ACP MVP client",
+        name: "kapelle",
+        title: "Kapelle",
         version: "0.1.0",
       },
     });

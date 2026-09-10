@@ -53,7 +53,7 @@ test("a pending permission rings and names the tool call when asking", () => {
     `${BELL}! [t1] permission needed: [edit] write src/app.ts\n`,
   ]);
   assert.deepEqual(h.desktop, [
-    ["agent-team: t1", "permission needed: [edit] write src/app.ts"],
+    ["kapelle: t1", "permission needed: [edit] write src/app.ts"],
   ]);
 });
 
@@ -114,7 +114,7 @@ test("a pending permission from a non-ask task is silent in a mixed run file", (
     `${BELL}! [asker] permission needed: [edit] write src/app.ts\n`,
   ]);
   assert.deepEqual(h.desktop, [
-    ["agent-team: asker", "permission needed: [edit] write src/app.ts"],
+    ["kapelle: asker", "permission needed: [edit] write src/app.ts"],
   ]);
 });
 
@@ -122,7 +122,7 @@ test("stall warnings from non-ask tasks are not filtered by askIds", () => {
   const h = harness(true, new Set(["asker"]));
   h.notify({ agent: "auto", update: stall.update });
   assert.deepEqual(h.lines, [`${BELL}! [auto] no events for 120s\n`]);
-  assert.deepEqual(h.desktop, [["agent-team: auto", "no events for 120s"]]);
+  assert.deepEqual(h.desktop, [["kapelle: auto", "no events for 120s"]]);
 });
 
 test("a stall warning rings whether or not anyone is asking", () => {
@@ -130,12 +130,12 @@ test("a stall warning rings whether or not anyone is asking", () => {
     const h = harness(asks);
     h.notify(stall);
     assert.deepEqual(h.lines, [`${BELL}! [t1] no events for 120s\n`]);
-    assert.deepEqual(h.desktop, [["agent-team: t1", "no events for 120s"]]);
+    assert.deepEqual(h.desktop, [["kapelle: t1", "no events for 120s"]]);
   }
 });
 
 test("the stall line is written once, not once per half", () => {
-  // `run.ts` used to print this line from a subscriber of its own. The
+  // `cli.ts` used to print this line from a subscriber of its own. The
   // notifier owns it now; two owners is how a run says it twice.
   const h = harness(true);
   h.notify(stall);

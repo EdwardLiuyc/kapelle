@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/EdwardLiuyc/agent-team/schema/run.schema.json",
-  "title": "agent-team run file",
+  "title": "kapelle run file",
   "description": "An authoring aid, not a validator. core/runfile.ts's validateRun is the only check that runs: a schema cannot fill defaults, reach the agent registry for the maxMode ceiling, spot a duplicate task id, or say \"task dependencies land in M3\". One test asserts these property names equal RUN_KEYS and TASK_KEYS, so this file cannot drift away from the validator unnoticed.",
   "type": "object",
   "required": ["tasks"],

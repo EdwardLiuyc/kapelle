@@ -9,7 +9,7 @@
   // one of them as dead code.
   //
   // core/ids.ts and core/runfile.ts were ignored here while they were typed
-  // ahead of their consumers. M1b-2 landed: run.ts --file reaches core/run.ts,
+  // ahead of their consumers. M1b-2 landed: cli.ts --file reaches core/run.ts,
   // which imports runfile.ts, which imports ids.ts, so the --production pass
   // now finds both from a real entry. Both entries dropped, as M1b-1 said to.
   //
@@ -25,12 +25,12 @@
   // reachable file — protocol/agent.ts, protocol/registry.ts, render.ts — as unused.
   //
   // knip emits "Remove redundant entry pattern" for the `!` entry, since
-  // package.json's `start` script already makes `run.ts` a dev entry.
+  // package.json's `start` script already makes `cli.ts` a dev entry.
   // Declined for the same reason: dropping it re-breaks --production.
   //
   // mock-agent.mjs is a runnable script (`node mock-agent.mjs`, inside the
   // selftest script's --cmd string), not an imported module, and is dev-only.
   // hostile-agent.mjs is the same shape: spawned by protocol/tests/hostile.test.ts
   // as a subprocess, never imported, so nothing reaches it through the graph.
-  "entry": ["run.ts!", "mock-agent.mjs", "hostile-agent.mjs"]
+  "entry": ["cli.ts!", "mock-agent.mjs", "hostile-agent.mjs"]
 }

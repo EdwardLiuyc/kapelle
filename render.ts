@@ -46,7 +46,7 @@ let stream: "none" | "message" | "thought" = "none";
  * **This is a single-writer renderer and must stay one.** The erase moves the
  * cursor up over the rows it drew, which is only correct while one thing owns
  * the cursor — hence module-level state, one variable per process rather than
- * one per agent. `run.ts:174` subscribes this on the single-agent path only;
+ * one per agent. `cli.ts:185` subscribes this on the single-agent path only;
  * the `--file` path prints milestones and buffers prose instead. Making the
  * state per-agent looks like the fix for that and is not: it stops the output
  * corrupting and leaves it unreadable.
@@ -126,7 +126,7 @@ function endStream() {
   atCol0 = true;
 }
 
-/** Flush the open block at the end of a turn. `run.ts` prints past `render`. */
+/** Flush the open block at the end of a turn. `cli.ts` prints past `render`. */
 export function flushStream(): void {
   endStream();
 }
