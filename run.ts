@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
 import { mergeRun } from "./core/merge.ts";
+import { makeNotifier } from "./core/notify.ts";
 import {
   makeAskPolicy,
   negotiateSafeMode,
@@ -182,6 +183,8 @@ if (positional[0] === "merge") {
   // M1a-6: every consumer subscribes; nothing reads agent state directly.
   const bus = createEventBus();
   if (!quiet) bus.addListener(render);
+  // Never behind `--quiet`: an unanswered prompt stalls the run outright.
+  bus.addListener(makeNotifier({ asks: resolved.mode === "ask" }));
 
   const agent = new AcpAgent({
     name: spec.name,
@@ -334,17 +337,31 @@ async function runFromFile(path: string): Promise<number> {
   // Built only when it will be used, and closed however the run ends: an open
   // readline holds stdin and the process never exits.
   const asker = canAsk ? makeAskPolicy() : undefined;
+  // With `canAsk` true, exactly one task remains in `ask` mode (the others were
+  // re-resolved as `safe` above). Restrict pending-permission alerts to that
+  // task so a concurrent `safe`/`auto` task does not ring for a decision that
+  // never waits on a human. Stall warnings are still global.
+  const askTaskId = canAsk
+    ? tasks.find((task) => task.mode === "ask")?.id
+    : undefined;
 
   const bus = createEventBus();
   // Not filtered by `--quiet`, and not folded into the end-of-run task card:
   // a stall warning is only useful while the task is still stalled, and an
-  // hour-late line saying "it went quiet" is not the same information.
-  // M1c-4 adds the bell and the desktop notification to this same event.
-  bus.addListener(({ agent: taskId, update }) => {
-    if (update.sessionUpdate === "_client_stall_warning") {
-      console.error(`! [${taskId}] ${update.text}`);
-    }
-  });
+  // hour-late line saying "it went quiet" is not the same information. The
+  // notifier owns that line since M1c-4 — it prints the same text with a bell
+  // in front, and a second subscriber here would print it twice.
+  //
+  // `asks` is the asker, not a mode: tasks carry their own modes, and the one
+  // thing that decides whether a human can be blocked is whether `canAsk`
+  // left an asker standing. When it did, `askIds` keeps the bell on that one
+  // task rather than on every permission decision in a mixed-mode run.
+  bus.addListener(
+    makeNotifier({
+      asks: canAsk,
+      askIds: askTaskId ? new Set([askTaskId]) : undefined,
+    }),
+  );
 
   // Result warnings are data on the bus, not a CLI-only field. Under `--quiet`
   // there is no task card to print them from, so this subscriber is the route

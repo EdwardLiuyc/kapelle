@@ -744,6 +744,30 @@ export class AcpAgent {
   }
 
   /**
+   * Announce that a decision is about to be taken (M1c-4, issue #28).
+   *
+   * Before the await, never after: `_client_permission` records what was
+   * decided, and by then any human who was going to be blocked has already
+   * been blocked. The attention signal has to leave the process while the
+   * prompt is still on screen.
+   *
+   * This fires in every mode. `AcpAgent` does not know the resolved mode —
+   * it holds a `Policy`, not a `ClientMode` — and teaching it one to filter
+   * here would put a run-layer concept in the protocol layer. The consumer
+   * filters instead: `core/notify.ts` is only armed for `ask`.
+   */
+  #emitPending(toolCall: PolicyToolCall): void {
+    this.onEvent({
+      agent: this.name,
+      update: {
+        sessionUpdate: "_client_permission_pending",
+        title: toolCall.title,
+        kind: toolCall.kind,
+      },
+    });
+  }
+
+  /**
    * Put a write with no prior `session/request_permission` decision through the
    * same policy as a tool call the harness asks about (M1b-6, issue #22).
    *
@@ -768,6 +792,7 @@ export class AcpAgent {
       kind: "edit",
       rawInput: { path: abs },
     };
+    this.#emitPending(toolCall);
     const allow = await this.policy({
       agent: this.name,
       toolCall,
@@ -825,6 +850,7 @@ export class AcpAgent {
       rawInput: toolCall?.rawInput ?? known.rawInput,
     };
 
+    this.#emitPending(detail);
     const allow = await this.policy({
       agent: this.name,
       toolCall: detail,

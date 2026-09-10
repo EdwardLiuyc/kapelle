@@ -1288,6 +1288,36 @@ pending, and stall warning. Terminal bell plus a distinct stderr line; optionall
 `notify-send`/`osascript` when present, best-effort, never a dependency.
 *Done when* the bus event exists independently of the terminal output — M4-4's toast
 subscribes to the same one.
+**Landed 2026-09-10 (#28).** Half the story was already on the bus: `_client_stall_warning`
+(M1c-1). The other half was missing and not obviously so — `_client_permission` is emitted
+*after* the decision, and a record of what was decided cannot ring a bell for the human the
+decision is waiting on. So this story added `_client_permission_pending`, emitted in
+`protocol/agent.ts` immediately before **both** policy awaits (`#requestPermission` and
+`#guardWrite`), rather than hanging a callback off `makeAskPolicy`: the *Done when* asks for
+a bus event independent of the terminal, and M4-3's browser answering needs the same one.
+**It therefore fires in every mode**, since `AcpAgent` holds a `Policy` and not a
+`ClientMode` — pushing the mode into the protocol layer to filter there is the wrong
+direction. The consumer filters instead: on the single-agent path `asks` is whether the
+resolved mode is `ask`; on the `--file` path it is `canAsk` (did one asker survive?)
+plus `askIds` naming that one surviving asker, so a `safe`/`auto` task in the same run
+does not ring for a decision that never waits on a human. `makeNotifier` still takes
+`asks: boolean` and not a mode.
+**A second filter, found in review: `kind`.** The event means *a decision is pending*, not
+*a human is waiting* — `makeAskPolicy` auto-approves `READ_ONLY_KINDS` without touching
+readline, so a `read` or `search` under `ask` rang a bell nobody was needed for. The
+notifier imports the set from `core/policy.ts` rather than restating it, so what `ask`
+auto-approves and what the bell skips cannot drift apart. The review's own justification
+overstated the volume — it cited M0-4's 443 events, which are opencode's, and opencode has
+`asksPermission: false` and sends no permission requests at all — but the finding stands on
+its own terms for claude and copilot, which do ask.
+**This story did not pay M1a-6's deferred union widening** (task started, worktree created,
+task finished). It consumes none of the three; M2's persisted log is their real first
+consumer, and widening a union for a consumer that does not read it is the cost M1a-6's own
+2026-09-06 amendment exists to defer.
+Two smaller decisions, neither a fork: the bell survives `--quiet` — same reasoning as #13's
+containment line, and the notifier took over the stall line `run.ts` used to print so the
+run does not say it twice; and the desktop half is spawned unguarded, because a presence
+check buys nothing a failing spawn does not already give.
 
 **M1c-5 · Package identity · XS**
 **Gap** — the plan invokes `agent-team merge`, but `package.json` is `private`, named

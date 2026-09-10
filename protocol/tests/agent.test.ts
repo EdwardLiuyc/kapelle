@@ -402,6 +402,40 @@ test("an allowed permission is not re-decided when the same write crosses the wi
   assert.match(editDecisions[0] ?? "", /Write ACP_TEST\.md/);
 });
 
+test("a guardWrite emits the pending event before its policy is consulted", async (t) => {
+  // M1c-4, issue #28. `#requestPermission` is already covered above; this
+  // closes the other policy-await path, where a harness writes through
+  // `fs/write_text_file` without asking first.
+  const root = await tempDir(t, "acp-guard-pending-");
+  const seen: CapturedEvent[] = [];
+  let seenWhenAsked: string[] = [];
+  const agent = new AcpAgent({
+    name: "fs-probe",
+    command: process.execPath,
+    args: ["-e", FS_PROBE],
+    cwd: root,
+    requestTimeoutMs: 5_000,
+    onEvent: (e) => seen.push(e),
+    policy: () => {
+      seenWhenAsked = seen.map((e) => e.update.sessionUpdate);
+      return true;
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  const result = await probe(agent, "new.txt", true);
+  assert.equal(result.refused, false);
+  assert.deepEqual(
+    seenWhenAsked,
+    ["_client_permission_pending"],
+    "the pending event, and only it, is out before a direct write is decided",
+  );
+  const pending = seen[0]?.update as { title?: string; kind?: string };
+  assert.equal(pending.kind, "edit", "it carries the kind a filter needs");
+  assert.ok(pending.title, "and the title a human needs to answer");
+});
+
 // --- #62 B1 · per-request timeout --------------------------------------------
 
 test("the default deadline is the story's 30s", () => {
@@ -880,6 +914,34 @@ test("a denial with no reject option answers cancelled, not a guessed allow", as
     undefined,
     "and records that no option carried it",
   );
+});
+
+test("the pending event is emitted before the policy is consulted", async (t) => {
+  // M1c-4, issue #28. The whole point of a separate event is the *moment*: a
+  // record written after the decision cannot ring a bell for the human the
+  // decision is waiting on. So the policy itself is the observer — whatever it
+  // can already see is what left the client before it blocked.
+  const seen: CapturedEvent[] = [];
+  let seenWhenAsked: string[] = [];
+  const agent = await permissionAgent(
+    t,
+    () => {
+      seenWhenAsked = seen.map((e) => e.update.sessionUpdate);
+      return true;
+    },
+    (e) => seen.push(e),
+  );
+
+  await agent.request<AskResult>("debug/ask", { allowOnly: false });
+
+  assert.deepEqual(
+    seenWhenAsked,
+    ["_client_permission_pending"],
+    "the pending event, and only it, is out before the decision is taken",
+  );
+  const pending = seen[0]?.update as { title?: string; kind?: string };
+  assert.equal(pending.kind, "edit", "it carries the kind a filter needs");
+  assert.ok(pending.title, "and the title a human needs to answer");
 });
 
 test("a matching reject option is preferred over cancelling", async (t) => {

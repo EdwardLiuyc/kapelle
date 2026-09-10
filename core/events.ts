@@ -19,7 +19,14 @@
  * would route it through a sink `--quiet` switches off, and #13 says that
  * line is never silenced. M1b-4 is the first producer on this side of the
  * client: `core/run.ts` emits `_client_result_warning` for cross-check
- * disagreements. Each story widens the union when it lands its producer.
+ * disagreements, and M1c-1 added `_client_stall_warning`.
+ *
+ * **M1c-4 was the first story with a real subscriber and it still did not
+ * widen the union** — `core/notify.ts` consumes the two `_client_` events
+ * above and none of the three supervisor variants, so paying for them here
+ * would have bought a listener nobody has. M2's persisted log is the consumer
+ * that actually reads all three; per the 2026-09-06 amendment it widens once,
+ * for all of them.
  *
  * Not `node:events`: `EventEmitter.emit` propagates a listener's throw and
  * skips the listeners behind it, so a broken renderer would take the run down
