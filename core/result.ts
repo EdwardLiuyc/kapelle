@@ -196,9 +196,9 @@ export function crossCheck(input: CrossCheckInput): ResultWarning[] {
     // The other direction, and the one `RESULT_PREAMBLE` already asks for:
     // "one repo-relative path per line, only if you changed files". Measured
     // 2026-09-10 (M1c-6, #30) — pi-acp drops its own telemetry
-    // (`.pi-lens-probe-home/`, nine files) into whatever workspace root it is
+    // (`.pi-lens-probe-home/`, eight files) into whatever workspace root it is
     // handed, claimed `NOTE-pi.md` alone, and the run said `done` with nothing
-    // to read. `release` commits the whole tree, so those nine reached a
+    // to read. `release` commits the whole tree, so those eight reached a
     // branch and then a merge on the strength of a list that did not mention
     // them.
     //
@@ -210,9 +210,10 @@ export function crossCheck(input: CrossCheckInput): ResultWarning[] {
     // purpose; `policyNeverFired` is the check that speaks for a tree nobody
     // described.
     const claimed = new Set(result.files ?? []);
-    const unclaimed = claimed.size
-      ? (changed ?? []).filter((f) => !claimed.has(f))
-      : [];
+    const unclaimed =
+      changed !== undefined && claimed.size
+        ? changed.filter((f) => !claimed.has(f))
+        : [];
     if (unclaimed.length) {
       out.push({
         kind: "filesUnclaimed",

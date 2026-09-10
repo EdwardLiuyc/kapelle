@@ -1517,7 +1517,7 @@ copilot 1.0.83 8.2 s, pi-acp 11.7 s, each `done` with a parsed `<task-result>`,
 `.kapelle/runs/<runId>/<taskId>.stderr.log` files beside a `run.json`, and
 `kapelle merge <runId>` through the linked `bin` landing all four as unstaged additions.
 **The fourth harness is what found the gap below.** pi-acp writes its own telemetry —
-`.pi-lens-probe-home/`, nine files — into the workspace root it is given. The client
+`.pi-lens-probe-home/`, eight files — into the workspace root it is given. The client
 committed them with the task's real output, merged them into the developer's tree, and said
 `done` with no warning: pi's `<files>` named `NOTE-pi.md` alone, and `crossCheck`
 (`core/result.ts`) only walks *claimed → diff* (`filesNotInDiff`). The reverse — a diff
