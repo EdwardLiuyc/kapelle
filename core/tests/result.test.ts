@@ -65,11 +65,11 @@ test("absent optional fields are undefined, not a rejection", () => {
 test("<files> splits on newlines and commas, and <branch> survives", () => {
   const r = extractResult(
     block(
-      `${FULL}<files>\ncore/run.ts\nrun.ts, README.md\n</files><branch>agent-team/r1/t1</branch>`,
+      `${FULL}<files>\ncore/run.ts\nrun.ts, README.md\n</files><branch>kapelle/r1/t1</branch>`,
     ),
   );
   assert.deepEqual(r?.files, ["core/run.ts", "run.ts", "README.md"]);
-  assert.equal(r?.branch, "agent-team/r1/t1");
+  assert.equal(r?.branch, "kapelle/r1/t1");
 });
 
 // A comma only separates when whitespace follows it: agents write

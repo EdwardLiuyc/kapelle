@@ -3,8 +3,8 @@
  *
  * Three strings the rest of the system agrees on: `runId` names a run,
  * `taskId` names a task inside it, and the branch that carries a task's work
- * is built from both. `.agent-team/wt/<runId>/<taskId>` is a filesystem path
- * and `agent-team/<runId>/<taskId>` is a git ref, so these ids have to be
+ * is built from both. `.kapelle/wt/<runId>/<taskId>` is a filesystem path
+ * and `kapelle/<runId>/<taskId>` is a git ref, so these ids have to be
  * legal in both places before anything is created.
  *
  * **Validation never sanitises** (`docs/STORIES.md:708`). The id in the run
@@ -67,9 +67,14 @@ export function assertTaskId(id: string): string {
   return id;
 }
 
+/** The namespace every task branch hangs under. One definition, matching
+ *  `STATE_DIR` in `core/worktree.ts`: both name the tool on the user's disk,
+ *  and a run whose directory and branches disagree reads as two tools. */
+const BRANCH_PREFIX = "kapelle";
+
 /** The branch a task's work lands on. Validates **both** halves, so no caller
  *  can build a ref that `git check-ref-format` would reject. */
 export function branchName(runId: string, taskId: string): string {
   assertRunId(runId);
-  return `agent-team/${runId}/${assertTaskId(taskId)}`;
+  return `${BRANCH_PREFIX}/${runId}/${assertTaskId(taskId)}`;
 }

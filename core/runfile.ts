@@ -5,7 +5,7 @@
  * **data**, never a module. `.ts`/`.mjs` run files were dropped on 2026-09-05
  * (`docs/STORIES.md`, M1b-1 amendment): `await import()` executes the file
  * inside this process, where it reaches `READ_ONLY_KINDS` and the
- * `AGENT_TEAM_*` secret, and the loop it bought is available from a generator
+ * `KAPELLE_*` secret, and the loop it bought is available from a generator
  * script that emits JSON. So both entry paths — a `.json` file the CLI reads,
  * a POST body the daemon receives — arrive here as a plain object, and
  * nothing in this module imports anything at runtime.

@@ -102,12 +102,12 @@ test("resolveEnv returns the base by identity when there is nothing to do", () =
   assert.equal(resolveEnv(undefined, base), base);
 });
 
-test("resolveEnv strips AGENT_TEAM_* even when the entry declares no env", () => {
-  const base = { PATH: "/usr/bin", AGENT_TEAM_TOKEN: "secret" };
+test("resolveEnv strips KAPELLE_* even when the entry declares no env", () => {
+  const base = { PATH: "/usr/bin", KAPELLE_TOKEN: "secret" };
   const env = resolveEnv(undefined, base);
-  assert.equal(env.AGENT_TEAM_TOKEN, undefined);
+  assert.equal(env.KAPELLE_TOKEN, undefined);
   assert.equal(env.PATH, "/usr/bin");
-  assert.equal(base.AGENT_TEAM_TOKEN, "secret", "the base must not be mutated");
+  assert.equal(base.KAPELLE_TOKEN, "secret", "the base must not be mutated");
 });
 
 test("resolveEnv still applies an entry's own unset and set", () => {

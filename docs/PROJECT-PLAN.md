@@ -11,7 +11,7 @@ building and in what order. Draft — expect refinement.
 
 ## Context
 
-This plan was written when `agent-team` was a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `run.mjs`, `fanout.mjs`). M1a/M1b have since ported it to TypeScript and added the supervisor-shaped pieces this plan called for: `cli.ts` and `core/run.ts` now execute N independent tasks from a JSON run file, each in its own worktree, returning parsed results and warnings. `PROJECT-BRIEF.md` describes a **supervisor**. The gap that remains is the daemon: worktrees, branches and stderr logs persist on disk, but no process owns a run record or crash recovery across invocations.
+This plan was written when `kapelle` was a ~1,750-line ACP **client** (`protocol/agent.ts`, `protocol/registry.ts`, `run.mjs`, `fanout.mjs`). M1a/M1b have since ported it to TypeScript and added the supervisor-shaped pieces this plan called for: `cli.ts` and `core/run.ts` now execute N independent tasks from a JSON run file, each in its own worktree, returning parsed results and warnings. `PROJECT-BRIEF.md` describes a **supervisor**. The gap that remains is the daemon: worktrees, branches and stderr logs persist on disk, but no process owns a run record or crash recovery across invocations.
 
 Intended outcome: a local daemon that executes a declarative run file — N harnesses in
 isolated git worktrees, in parallel or as a dependency chain — enforcing one permission
@@ -76,7 +76,7 @@ actively bad for a parallel split — the first overlapping file leaves you reas
 half-landed state. Preflighting the whole run and then merging, or refusing, keeps the
 outcome binary.
 
-**Why run files are JSON, not code.** Run files are data, never modules: `.json` files and the daemon's POST body both arrive through `JSON.parse` and converge on the same runtime validator. `.ts`/`.mjs` run files were dropped because `await import()` executes the file in-process, where it can read `AGENT_TEAM_*` and mutate shared policy state before the exported object is ever validated. Multi-line prompts survive as `\n` in JSON strings, and `satisfies Run`-style authoring survives in a generator script that emits JSON.
+**Why run files are JSON, not code.** Run files are data, never modules: `.json` files and the daemon's POST body both arrive through `JSON.parse` and converge on the same runtime validator. `.ts`/`.mjs` run files were dropped because `await import()` executes the file in-process, where it can read `KAPELLE_*` and mutate shared policy state before the exported object is ever validated. Multi-line prompts survive as `\n` in JSON strings, and `satisfies Run`-style authoring survives in a generator script that emits JSON.
 
 **Why the diff only warns.** A read-only stage legitimately produces no diff, so the diff
 cannot be the primary contract without breaking the plan and review stages the pipeline is
@@ -358,7 +358,7 @@ driven from a run file, fully verifiable offline.
   worktree created, permission pending, stall warning, task finished). Keep the `_client_`
   prefix convention for client-originated events (`render.mjs`).
 - **`core/worktree.ts`** — `git worktree add` off a base ref into
-  `.agent-team/wt/<runId>/<taskId>`; preflight (repo detection, dirty-tree refusal, base-ref
+  `.kapelle/wt/<runId>/<taskId>`; preflight (repo detection, dirty-tree refusal, base-ref
   resolution). Retention: remove the worktree on success, **keep worktree and branch on
   failure/timeout when the task left work**, and roll back a task that produced nothing.
   **Transactional spawn** — worktree creation, task registration and agent start either all
@@ -393,7 +393,7 @@ driven from a run file, fully verifiable offline.
   and a token-based signal was considered and dropped, because `usage_update` reports context
   occupancy in units that are not comparable between vendors.
 - **`core/merge.ts`** — `kapelle merge <runId> --squash`, reading the run record at
-  `.agent-team/runs/<runId>/run.json`. Preflight refuses if any task is not `done`/`warned`,
+  `.kapelle/runs/<runId>/run.json`. Preflight refuses if any task is not `done`/`warned`,
   if the working tree has modifications to any file a task branch touches, or if two task
   branches in the run touch the same file. All-or-nothing: preflight completely, then
   merge, so a run never half-lands. `--squash` (default) leaves the combined changes
@@ -408,7 +408,7 @@ driven from a run file, fully verifiable offline.
   `worktree`). **Amended 2026-09-05 (STORIES M1b-1): run files are JSON only** — the
   `.ts`/`.mjs` loader described here is dropped, because `await import()` executes the file
   inside the supervisor process, where it reaches the shared policy state and the
-  `AGENT_TEAM_*` secret. `.json` files are `JSON.parse`. Both remaining
+  `KAPELLE_*` secret. `.json` files are `JSON.parse`. Both remaining
   entry paths — JSON file, POST body — converge on the one validator, because
   `satisfies Run` erases at runtime and therefore checks nothing that arrives over the wire.
   Validation is also where the mode precedence chain and the harness ceiling are resolved, so
@@ -417,10 +417,7 @@ driven from a run file, fully verifiable offline.
 - **CLIs** — `cli.ts` keeps driving in-process (fast, TTY `ask` works, no daemon needed),
   plus the new `merge` subcommand. Retire `fanout.mjs`: its job becomes "a run file with N
   independent tasks." The file was renamed `cli.ts` at M1c-5, alongside the `bin` that makes
-  `kapelle` — not a filename — the thing people type. `agent-team` was the planned
-  name and is taken on npm by an unrelated package of the same purpose; the package,
-  the command and this document now read `kapelle`, while `.agent-team/` and the
-  `agent-team/<runId>/<taskId>` branch prefix keep theirs.
+  `kapelle` — not a filename — the thing people type.
 - **Testing** — extend `mock-agent` with multiple sessions, a permission timeout, a
   malformed `<task-result>`, a **stall mode** (accepts the prompt, emits nothing, never
   returns), and a **repeat mode** (the same tool title on a loop) — one per watchdog signal.
@@ -449,7 +446,7 @@ driven from a run file, fully verifiable offline.
   On boot: mark tasks left in `running` as `errored`, kill or reap any registered child PIDs
   that survived, reconcile `git worktree list` against persisted run records, and reap only
   those worktrees whose run is terminal *and* past the retention window (default 7 days).
-- **Persistence** — JSON per run under `.agent-team/runs/<id>/`, written on state
+- **Persistence** — JSON per run under `.kapelle/runs/<id>/`, written on state
   transitions. For completed-run history, not live recovery.
   **The stated reason was wrong and M0-1 corrected it:** "ACP has no resume" is true of
   the base protocol but false of every harness we target. All three advertise
@@ -460,7 +457,7 @@ driven from a run file, fully verifiable offline.
   alongside the run record here (cheap, and useless if skipped), and gate any
   `session/load` call on the capability, since the registry still contains harnesses that
   lack it.
-- **Config** — `.agent-team/config.json` with `AGENT_TEAM_*` env override, layered
+- **Config** — `.kapelle/config.json` with `KAPELLE_*` env override, layered
   env > project. Exists because the new knobs (watchdog thresholds, TTL, retention window,
   port, permission timeout) need a home other than the run file.
 - **Auth** — localhost-only bind plus a shared-secret token file. Not optional: anything
