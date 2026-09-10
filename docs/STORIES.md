@@ -1025,9 +1025,10 @@ plus `policyNeverFired`.
 **Amended 2026-09-10 (M1c-6, #30): a fifth, `filesUnclaimed` — the diff holding a path
 `<files>` never names.** The list above walks one way only, which the preamble does not:
 it already asks for *"one repo-relative path per line, only if you changed files"*, so the
-rule was written and never verified. pi-acp exposed it by dropping its own telemetry
-(`.pi-lens-probe-home/`, eight files) into the workspace root, claiming `NOTE-pi.md`
-alone, and finishing `done` with nothing to read; `release` then committed all nine to the
+rule was written and never verified. A pi task exposed it. The `pi-lens` extension that pi
+loads from `~/.pi/agent/settings.json` (4.1.5, `dist/index.js:2465`) wrote its telemetry
+(`.pi-lens-probe-home/`, eight files) into the workspace root; the task claimed `NOTE-pi.md`
+alone and finished `done` with nothing to read; `release` then committed all nine to the
 task branch. It fires **only where `<files>` is present and non-empty** — omitting the
 optional field is what an agent that forgot looks like, and warning on its absence would
 fire on every task that never used it and double up with `policyNeverFired`, which is the
@@ -1516,8 +1517,11 @@ copilot 1.0.83 8.2 s, pi-acp 11.7 s, each `done` with a parsed `<task-result>`,
 `git worktree list` back to one entry, four `kapelle/<runId>/<taskId>` branches and four
 `.kapelle/runs/<runId>/<taskId>.stderr.log` files beside a `run.json`, and
 `kapelle merge <runId>` through the linked `bin` landing all four as unstaged additions.
-**The fourth harness is what found the gap below.** pi-acp writes its own telemetry —
-`.pi-lens-probe-home/`, eight files — into the workspace root it is given. The client
+**The fourth harness is what found the gap below.** pi loads the `pi-lens` extension from
+`~/.pi/agent/settings.json` on this machine, and pi-lens 4.1.5 writes its telemetry —
+`.pi-lens-probe-home/`, eight files — into the workspace root it is given
+(`dist/index.js:2465`). That is this machine's pi setup, not pi-acp: a pi without the
+extension would not show it, and any extension that logs to its cwd would. The client
 committed them with the task's real output, merged them into the developer's tree, and said
 `done` with no warning: pi's `<files>` named `NOTE-pi.md` alone, and `crossCheck`
 (`core/result.ts`) only walks *claimed → diff* (`filesNotInDiff`). The reverse — a diff
