@@ -532,7 +532,8 @@ does it emit unhandled update variants, does it ever call `terminal/create`, doe
 commands through `terminal/*` or internally, does it emit `usage_update` and what do the
 fields mean, and how does it respond to `session/cancel` mid-turn.
 
-**M1** — a run file with three independent tasks against three real harnesses, each in
+**M1** — a run file with one independent task per measured harness — **four since #99 added
+pi-acp**, where this line was written when three existed — each in
 its own worktree, each returning a parsed `TaskResult`; `git worktree list` clean
 afterwards. **Amended 2026-09-10 (M1c-6, #30): the reap is not M1's.** `kill -9` mid-run
 leaves the worktree and the branch behind and a restart does not clear them (observed

@@ -1499,11 +1499,21 @@ rather than clearing the first, and in this fixture the harness exits when its s
 with the parent, so the state observed surviving a crash is on disk. A real harness that
 outlives the supervisor stays M2-4's registry to track and M2-5's sweep to reap. The
 retrospective is the second half and is the reason the story is no longer S.
-**DONE 2026-09-10 (#30).** Three tasks, three harnesses, one run: opencode 1.18.30 27.3 s,
-claude-agent-acp 0.75.1 7.7 s, copilot 1.0.83 8.2 s, each `done` with a parsed
-`<task-result>`, `git worktree list` back to one entry, three `kapelle/<runId>/<taskId>`
-branches and three `.kapelle/runs/<runId>/<taskId>.stderr.log` files left behind, and
-`kapelle merge <runId>` through the linked `bin` landing all three as unstaged additions.
+**DONE 2026-09-10 (#30). Four harnesses, not the three the story asked for** — pi-acp has
+been a measured fourth since #99, and "three" here dates the story rather than bounding it.
+One run, `maxConcurrency: 4`: opencode 1.18.30 9.1 s, claude-agent-acp 0.75.1 8.4 s,
+copilot 1.0.83 8.2 s, pi-acp 11.7 s, each `done` with a parsed `<task-result>`,
+`git worktree list` back to one entry, four `kapelle/<runId>/<taskId>` branches and four
+`.kapelle/runs/<runId>/<taskId>.stderr.log` files beside a `run.json`, and
+`kapelle merge <runId>` through the linked `bin` landing all four as unstaged additions.
+**The fourth harness is what found the gap below.** pi-acp writes its own telemetry —
+`.pi-lens-probe-home/`, nine files — into the workspace root it is given. The client
+committed them with the task's real output, merged them into the developer's tree, and said
+`done` with no warning: pi's `<files>` named `NOTE-pi.md` alone, and `crossCheck`
+(`core/result.ts`) only walks *claimed → diff* (`filesNotInDiff`). The reverse — a diff
+holding paths the result never claimed — has no check, and M1b-4 above enumerates four
+warnings without ever ruling it out. A three-harness run cannot see this: the other three
+touch only what they were asked to.
 The version-drift warning fired for opencode and copilot and stayed silent for claude,
 which is the one build whose `measuredOn` still matches. The ceiling rejection was observed
 end-to-end by lowering opencode's `maxMode` to `safe` behind a PATH shim that records an
