@@ -99,6 +99,33 @@ const PERMISSION_WITHOUT_ID = [
 const HANGS_FOREVER = "process.stdin.resume();";
 
 /**
+ * Records the `initialize` params, answers the handshake, and returns the
+ * recorded params on request. Exists so the package identity on the wire is
+ * pinned without reaching into `AcpAgent`'s private outbound queue.
+ */
+const INITIALIZE_PROBE = [
+  'let buf = "";',
+  "let initParams = null;",
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize") {',
+  "      initParams = msg.params;",
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    } else if (msg.method === "debug/init_client_info") {',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: initParams ?? {} });',
+  "    }",
+  "  }",
+  "});",
+].join("\n");
+
+/**
  * Accepts the pipe, explains itself on stderr, then dies during the handshake.
  *
  * The shape is copied from the real measurement in issue #11: node's
@@ -441,6 +468,25 @@ test("a guardWrite emits the pending event before its policy is consulted", asyn
 test("the default deadline is the story's 30s", () => {
   const agent = new AcpAgent({ command: "true" });
   assert.equal(agent.requestTimeoutMs, 30_000);
+});
+
+test("initialize carries the kapelle clientInfo, not the old package name", async (t) => {
+  const agent = new AcpAgent({
+    name: "init-info",
+    command: process.execPath,
+    args: ["-e", INITIALIZE_PROBE],
+    requestTimeoutMs: 5_000,
+    policy: () => true,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  const info = await agent.request<{
+    clientInfo?: { name?: string; title?: string };
+  }>("debug/init_client_info");
+
+  assert.equal(info.clientInfo?.name, "kapelle");
+  assert.equal(info.clientInfo?.title, "Kapelle");
 });
 
 test("a harness that never answers initialize fails on the deadline", async (t) => {

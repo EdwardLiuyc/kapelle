@@ -27,7 +27,7 @@
 const TASK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 /** The shape `newRunId` mints. `branchName` checks against it because merge
- *  takes a run id from the command line — `agent-team merge <runId>` — so a
+ *  takes a run id from the command line — `kapelle merge <runId>` — so a
  *  run id is user input, not only something we minted. */
 const RUN_ID_PATTERN = /^\d{8}-\d{6}-[0-9a-z]{4}$/;
 

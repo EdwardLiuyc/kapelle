@@ -1,7 +1,7 @@
 /**
  * Merge — story M1c-3, issue #27.
  *
- * `agent-team merge <runId> --squash` lands a run's task branches as combined,
+ * `kapelle merge <runId> --squash` lands a run's task branches as combined,
  * unstaged working-tree changes without creating a commit. It is never
  * automatic: the branches are the run's output, and landing them is a separate
  * operator act.

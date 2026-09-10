@@ -288,7 +288,7 @@ export interface RunOptions {
   /** The run's working directory. Each task's worktree hangs off it. */
   cwd: string;
   /** Names the run's worktrees and branches. Minted here when absent, but a
-   *  caller that has to print the id — `run.ts` does — mints it itself: a run
+   *  caller that has to print the id — `cli.ts` does — mints it itself: a run
    *  file may never supply one, or a re-run would rebuild branch names that
    *  already exist (`core/runfile.ts:53`). */
   runId?: string;
@@ -301,7 +301,7 @@ export interface RunOptions {
    *
    * **One prompt cannot serve two askers**, so the caller supplies this only
    * when it has checked that at most one task in the run asks *and* that a TTY
-   * exists — `run.ts` does both, and re-resolves the rest as `safe`. Absent,
+   * exists — `cli.ts` does both, and re-resolves the rest as `safe`. Absent,
    * an `ask` task falls back to `policyFor("ask")`. M2-3 replaces this with a
    * pending-decision queue over the API, which is what makes `ask` work for N
    * tasks at once.

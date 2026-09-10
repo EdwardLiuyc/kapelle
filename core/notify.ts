@@ -107,13 +107,13 @@ export function makeNotifier({
       if (READ_ONLY_KINDS.has(update.kind)) return;
       const text = `permission needed: [${update.kind}] ${update.title}`;
       write(`${BELL}! [${agent}] ${text}\n`);
-      notify(`agent-team: ${agent}`, text);
+      notify(`kapelle: ${agent}`, text);
       return;
     }
 
     if (update.sessionUpdate === "_client_stall_warning") {
       write(`${BELL}! [${agent}] ${update.text}\n`);
-      notify(`agent-team: ${agent}`, update.text);
+      notify(`kapelle: ${agent}`, update.text);
     }
   };
 }

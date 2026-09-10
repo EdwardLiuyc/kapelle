@@ -69,6 +69,8 @@ test("no prompt is a usage error; --help is not", async (t) => {
   const bare = await runCli(t, []);
   assert.equal(bare.code, 1);
   assert.match(bare.stdout, /minimal Agent Client Protocol client/);
+  assert.match(bare.stdout, /kapelle/);
+  assert.doesNotMatch(bare.stdout, /acp-mvp/);
 
   const help = await runCli(t, ["hi", "--help"]);
   assert.equal(help.code, 0);

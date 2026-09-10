@@ -408,7 +408,7 @@ async function runFromFile(path: string): Promise<number> {
         cwd: flag("cwd", process.cwd()),
         // Minted here rather than left to `runRun`'s default because it is
         // printed: it names every branch the run leaves behind, and
-        // `agent-team merge <runId>` is how they are found again.
+        // `kapelle merge <runId>` is how they are found again.
         runId,
         bus,
         signal: canceller.signal,
@@ -479,7 +479,7 @@ async function runFromFile(path: string): Promise<number> {
  * The `merge` half: `kapelle merge <runId> [--squash] [--cwd dir]`.
  *
  * M1c-3 ships `--squash` only; `--rebase` is M3-4 and is refused here rather
- * than silently ignored. The `agent-team` bin and the file rename are M1c-5.
+ * than silently ignored. The `kapelle` bin and the file rename are M1c-5.
  */
 async function runMergeCommand(): Promise<number> {
   if (has("rebase")) {
