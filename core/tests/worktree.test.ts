@@ -35,7 +35,7 @@ async function tempDir(t: TestContext): Promise<string> {
   return dir;
 }
 
-/** A repository with one commit and `.agent-team/` already ignored — the
+/** A repository with one commit and `.kapelle/` already ignored — the
  *  shape the preflight demands, so a test that wants a refusal undoes one
  *  part of it rather than building the broken repo from scratch. */
 async function repo(t: TestContext): Promise<string> {
@@ -43,14 +43,14 @@ async function repo(t: TestContext): Promise<string> {
   await git(dir, "init", "-b", "main");
   await git(dir, "config", "user.email", "test@example.invalid");
   await git(dir, "config", "user.name", "Test");
-  await writeFile(join(dir, ".gitignore"), ".agent-team/\n");
+  await writeFile(join(dir, ".gitignore"), ".kapelle/\n");
   await writeFile(join(dir, "README.md"), "first\n");
   await git(dir, "add", "-A");
   await git(dir, "commit", "-m", "first");
   return dir;
 }
 
-const branchOf = (taskId: string) => `agent-team/${RUN_ID}/${taskId}`;
+const branchOf = (taskId: string) => `kapelle/${RUN_ID}/${taskId}`;
 
 async function hasBranch(root: string, taskId: string): Promise<boolean> {
   try {
@@ -88,7 +88,7 @@ test("a cwd that is not a repository falls back with a notice", async (t) => {
 test("a repository with no commits falls back with a notice", async (t) => {
   const dir = await tempDir(t);
   await git(dir, "init", "-b", "main");
-  await writeFile(join(dir, ".gitignore"), ".agent-team/\n");
+  await writeFile(join(dir, ".gitignore"), ".kapelle/\n");
 
   const { worktrees, notice } = await openWorktrees(dir, RUN_ID);
 
@@ -96,9 +96,9 @@ test("a repository with no commits falls back with a notice", async (t) => {
   assert.match(String(notice), /no commits yet/);
 });
 
-test("a repository with no commits still refuses an unignored .agent-team", async (t) => {
+test("a repository with no commits still refuses an unignored .kapelle", async (t) => {
   // The unborn-HEAD fallback is not a pass around the ignore preflight:
-  // `core/run.ts` writes `.agent-team/runs/` even when worktrees cannot
+  // `core/run.ts` writes `.kapelle/runs/` even when worktrees cannot
   // exist, so a fresh `git init` with no .gitignore must refuse before the
   // run can create state that would be committed by accident.
   const dir = await tempDir(t);
@@ -110,26 +110,26 @@ test("a repository with no commits still refuses an unignored .agent-team", asyn
   });
 });
 
-test("an unignored .agent-team/ refuses, and the message is the fix", async (t) => {
+test("an unignored .kapelle/ refuses, and the message is the fix", async (t) => {
   const root = await repo(t);
   await writeFile(join(root, ".gitignore"), "node_modules/\n");
   await git(root, "commit", "-am", "drop the ignore");
 
   await assert.rejects(openWorktrees(root, RUN_ID), (err: Error) => {
     assert.match(err.message, /not ignored by git/);
-    assert.match(err.message, /add `\.agent-team\/` to \.gitignore/i);
+    assert.match(err.message, /add `\.kapelle\/` to \.gitignore/i);
     return true;
   });
 });
 
-test("a tracked .agent-team/ refuses as tracked, not as unignored", async (t) => {
+test("a tracked .kapelle/ refuses as tracked, not as unignored", async (t) => {
   const root = await repo(t);
   // Ignored *and* committed: `check-ignore` still matches the pattern, so
   // only the tracked check can tell this apart from the case above — and it
   // is the case where following the other message would fix nothing.
-  await run("mkdir", ["-p", join(root, ".agent-team")]);
-  await writeFile(join(root, ".agent-team", "old.json"), "{}\n");
-  await git(root, "add", "-f", ".agent-team");
+  await run("mkdir", ["-p", join(root, ".kapelle")]);
+  await writeFile(join(root, ".kapelle", "old.json"), "{}\n");
+  await git(root, "add", "-f", ".kapelle");
   await git(root, "commit", "-m", "oops");
 
   await assert.rejects(openWorktrees(root, RUN_ID), (err: Error) => {
@@ -154,8 +154,8 @@ test("supervisor state never trips the dirty-tree refusal", async (t) => {
   const root = await repo(t);
   // The second run onward starts here: the first run's worktrees, logs and
   // records are all sitting in the tree the preflight is about to check.
-  await run("mkdir", ["-p", join(root, ".agent-team", "runs")]);
-  await writeFile(join(root, ".agent-team", "runs", "old.log"), "noise\n");
+  await run("mkdir", ["-p", join(root, ".kapelle", "runs")]);
+  await writeFile(join(root, ".kapelle", "runs", "old.log"), "noise\n");
 
   const { worktrees, notice } = await openWorktrees(root, RUN_ID);
   assert.ok(worktrees);
@@ -172,7 +172,7 @@ test("acquire checks out the branch at the base ref's commit", async (t) => {
 
   const path = await worktrees.acquire("plan");
 
-  assert.equal(path, join(root, ".agent-team", "wt", RUN_ID, "plan"));
+  assert.equal(path, join(root, ".kapelle", "wt", RUN_ID, "plan"));
   assert.equal(await git(path, "rev-parse", "HEAD"), head);
   assert.equal(
     await git(path, "rev-parse", "--abbrev-ref", "HEAD"),
@@ -307,8 +307,8 @@ test("ignored files in the worktree do not block removal", async (t) => {
   // `git worktree remove` refuses while untracked or ignored files sit there,
   // and a task that ran an install leaves exactly that behind.
   const path = await worktrees.acquire("build");
-  await run("mkdir", ["-p", join(path, ".agent-team")]);
-  await writeFile(join(path, ".agent-team", "state.json"), "{}\n");
+  await run("mkdir", ["-p", join(path, ".kapelle")]);
+  await writeFile(join(path, ".kapelle", "state.json"), "{}\n");
   await writeFile(join(path, "src.txt"), "work\n");
   await worktrees.release("build", "done");
 
@@ -351,10 +351,7 @@ test("a run gives each task its own worktree and cleans up after", async (t) => 
 
   assert.equal(report.status, "done");
   assert.notEqual(seen.get("plan"), seen.get("impl"));
-  assert.equal(
-    seen.get("plan"),
-    join(root, ".agent-team", "wt", RUN_ID, "plan"),
-  );
+  assert.equal(seen.get("plan"), join(root, ".kapelle", "wt", RUN_ID, "plan"));
   // `git worktree list` back to just the main worktree is the story's own
   // *done when*, and it is one line rather than two `existsSync` calls.
   assert.equal((await git(root, "worktree", "list")).split("\n").length, 1);
@@ -410,10 +407,7 @@ test("a failed task keeps its worktree for reading", async (t) => {
   );
 
   assert.equal(report.status, "failed");
-  assert.equal(
-    existsSync(join(root, ".agent-team", "wt", RUN_ID, "plan")),
-    true,
-  );
+  assert.equal(existsSync(join(root, ".kapelle", "wt", RUN_ID, "plan")), true);
 });
 
 test("a task that throws before writing leaves no worktree and no branch through the pool", async (t) => {
@@ -431,10 +425,7 @@ test("a task that throws before writing leaves no worktree and no branch through
   );
 
   assert.equal(report.status, "failed");
-  assert.equal(
-    existsSync(join(root, ".agent-team", "wt", RUN_ID, "plan")),
-    false,
-  );
+  assert.equal(existsSync(join(root, ".kapelle", "wt", RUN_ID, "plan")), false);
   assert.equal(await hasBranch(root, "plan"), false);
 });
 
@@ -548,7 +539,7 @@ test("a subdirectory cwd stays the workspace root inside the worktree", async (t
 
   assert.equal(
     path,
-    join(root, ".agent-team", "wt", RUN_ID, "plan", "packages", "app"),
+    join(root, ".kapelle", "wt", RUN_ID, "plan", "packages", "app"),
   );
   assert.equal(existsSync(join(path, "a.txt")), true);
   assert.equal(existsSync(join(path, "outside.txt")), false);
@@ -593,7 +584,7 @@ test("a symlinked --cwd cannot walk a task out of its own checkout", async (t) =
   const plan = await worktrees.acquire("plan");
 
   assert.notEqual(impl, plan);
-  const wt = join(root, ".agent-team", "wt", RUN_ID);
+  const wt = join(root, ".kapelle", "wt", RUN_ID);
   assert.equal(plan, join(wt, "plan", "packages", "app"));
   assert.equal(impl, join(wt, "impl", "packages", "app"));
   // The subtree the operator asked for, and nothing above it.
@@ -626,7 +617,7 @@ test("changedPaths reports what git changed, verbatim", async (t) => {
   await writeFile(join(dir, 'q"uote.ts'), "r\n");
   await writeFile(join(dir, "un tracked.ts"), "n\n");
   await git(dir, "mv", "old.ts", "new.ts");
-  await writeFile(join(dir, ".agent-team", "state"), "s\n").catch(() => {});
+  await writeFile(join(dir, ".kapelle", "state"), "s\n").catch(() => {});
 
   const paths = await changedPaths(dir);
   for (const path of [
@@ -640,7 +631,7 @@ test("changedPaths reports what git changed, verbatim", async (t) => {
     assert.ok(paths.includes(path), `${path} missing from ${paths.join(", ")}`);
   }
   // Ignored state is invisible, which is what keeps it out of the cross-check.
-  assert.ok(!paths.some((p) => p.startsWith(".agent-team")));
+  assert.ok(!paths.some((p) => p.startsWith(".kapelle")));
 });
 
 test("changedPaths is empty on a clean tree", async (t) => {

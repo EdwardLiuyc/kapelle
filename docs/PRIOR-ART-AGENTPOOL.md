@@ -456,7 +456,7 @@ forwards the request to the outer client via `acp_permission_callback`
 answers for a harness two processes away.
 
 For us that is a serious alternative to building the M4 dashboard: implementing the agent
-side would hand agent-team an existing, maintained UI with permission answering, which is
+side would hand kapelle an existing, maintained UI with permission answering, which is
 precisely the M4 scope. It is not free — the agent side is a second protocol surface, and
 run/worktree/merge concepts have no place in an editor's session model. Worth comparing
 honestly at M4 rather than doing both.

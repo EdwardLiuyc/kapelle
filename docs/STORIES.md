@@ -55,7 +55,7 @@ touches any of these ten.
 | **M1a-8** (ids and branch names) | ratified **with amendment** — the charset produced illegal git refs |
 | **M1b-1** (`needs` rejected at M1) | ratified |
 | **M1b-2** (`stopReason` mapping, `skipped`, roll-up ordering) | ratified **with amendment** — two statuses were unplaced in the ordering |
-| **M1b-3** (`.agent-team/` git-ignore) | ratified **with amendment** — the preflight dirtied the tree it checks |
+| **M1b-3** (`.kapelle/` git-ignore) | ratified **with amendment** — the preflight dirtied the tree it checks |
 | **M1b-4** (missing result block) | **decided** — the retro was right that only extraction had been settled, not disposition |
 | **M1c-3** (`--rebase` deferral) | ratified |
 
@@ -486,7 +486,7 @@ Today's `AGENTS` map plus `defaultMode`, `maxMode` and the containment label
 `env -u CLAUDECODE` baked into a registry entry that has nowhere to put it. This sharpens
 under the daemon: M2-8 introduces a shared secret, and a daemon holding that token in its
 environment would hand it to every harness it spawns. **Decided 2026-08-23 (ratified, #62 B1): add `env?: { unset?: string[]; set?: Record<string,string> }` to registry entries**; M2-8 also
-strips `AGENT_TEAM_*` unconditionally.
+strips `KAPELLE_*` unconditionally.
 **Revised by M0-1** — the labels are measured, and one field turns out to be too few. All
 three targets are `shell: "internal"`, but they differ on something `shell` cannot express:
 whether the harness asks permission at all. opencode never does. **Add a second field,
@@ -559,7 +559,7 @@ branches kept only their probes) and `docs/M0-FINDINGS.md` records the handshake
 `agentInfo`. So the literal comes from the version rows in that note, and the check compares
 against `agentInfo.version` when the harness sends one and stays silent when it does not —
 warning only, never failing a run, as B2 decided.
-**M2-8's `AGENT_TEAM_*` strip collides with M0-2's identity return**, and secrecy wins:
+**M2-8's `KAPELLE_*` strip collides with M0-2's identity return**, and secrecy wins:
 `resolveEnv` returns `base` by identity only when the entry declares no `env` **and** no such
 variable is set. Both properties are asserted in `protocol/tests/registry.test.ts`.
 `terminal-auth` was deliberately **not** recorded. It is not one flag but two directions —
@@ -762,14 +762,14 @@ closed as answered, not deferred.
 
 **M1a-8 · `core/ids.ts` · XS · needs M1a-1**
 **Gap** — `kapelle merge <runId>` operates on branches, retention promises "the branch
-always survives", and worktrees live at `.agent-team/wt/<runId>/<taskId>` — yet the plan
+always survives", and worktrees live at `.kapelle/wt/<runId>/<taskId>` — yet the plan
 gives no format for `runId`, no charset constraint for `taskId`, and **no branch naming
 convention at all**, so merge has no defined way to find the branches belonging to a run.
 Three things depend on it: filesystem path safety, git ref legality, and branch discovery.
 **Decided 2026-08-23 (ratified with amendment, #62 B1):** `runId` =
 `YYYYMMDD-HHMMSS-<4 char base36>` (sorts chronologically, readable in a path, collision-safe
 within a second); `taskId` validator-enforced **`^[a-z0-9][a-z0-9_-]{0,63}$`**; branch =
-`agent-team/<runId>/<taskId>`. Merge discovers branches by reading the run's own persisted
+`kapelle/<runId>/<taskId>`. Merge discovers branches by reading the run's own persisted
 record, **never** by reconstructing names.
 **Amendment — `.` removed from the task-id charset.** The original `[a-z0-9._-]` admitted
 ids that are illegal as git refs, which the *done when* below explicitly requires to survive
@@ -813,7 +813,7 @@ tasks spawns twelve harnesses, twelve model subscriptions and twelve worktrees a
 **Amendment 2026-09-05 — run files are JSON only; the `.ts`/`.mjs` loader is dropped.**
 Of the three entry paths, only the module form executes code: `await import()` runs every
 line of the file before the validator ever sees the object it exports. Measured here against
-this repo's own modules — an imported run file read `AGENT_TEAM_*` out of `process.env` and
+this repo's own modules — an imported run file read `KAPELLE_*` out of `process.env` and
 added `edit` to the shared `READ_ONLY_KINDS` Set (`core/policy.ts:41`), after which
 `safePolicy` approved edits for every task in the run, while the object it exported still
 validated cleanly. A `cmd` subprocess can do neither: `resolveEnv` strips the secret
@@ -940,28 +940,28 @@ run file with `maxConcurrency: 2` never has three live subprocesses, and the run
 Schema's property names are asserted equal to `RUN_KEYS` and `TASK_KEYS` by a test.
 
 **M1b-3 · `core/worktree.ts` · M · needs M1a-8**
-`git worktree add` off a base ref into `.agent-team/wt/<runId>/<taskId>`. Preflight: repo
+`git worktree add` off a base ref into `.kapelle/wt/<runId>/<taskId>`. Preflight: repo
 detection, dirty-tree refusal, base-ref resolution. Retention: remove the worktree on
 success, **keep worktree and branch on failure or timeout when the task left work** so
 partial work stays inspectable; a task that produced nothing is rolled back entirely. **Transactional spawn** — worktree creation, task
 registration and agent start either all succeed or are all rolled back, so a failed spawn
 never leaves an orphan worktree with no run record.
-**Gap** — `.agent-team/` sits **inside the working tree of the repo being worked on**, and
+**Gap** — `.kapelle/` sits **inside the working tree of the repo being worked on**, and
 the plan never reconciles that with its own rules. Three consequences: the dirty-tree
 refusal above will refuse on the supervisor's own state directory from the second run
 onward; M1b-4's `git status --porcelain` cross-check will attribute supervisor files to the
 agent; and a worktree nested inside the parent tree is inside the parent's `#guardPath`
 root when a task runs from the repo root. **Decided 2026-08-23 (ratified with amendment, #62 B1): a preflight step that requires
-`.agent-team/` to be git-ignored** — **refusing to start with an instruction if it is
+`.kapelle/` to be git-ignored** — **refusing to start with an instruction if it is
 neither ignored nor tracked**, refusing to start if the path is *tracked* — plus explicit
 exclusion from the diff cross-check (M1b-4). Keeping state in-repo is right, discoverable
 and per-project; it just has to be invisible to git.
-**Amendment — the preflight cannot append it.** As written it appended `.agent-team/` to
+**Amendment — the preflight cannot append it.** As written it appended `.kapelle/` to
 `.gitignore` when absent, which dirties the working tree the same preflight refuses to start
 on: the first run in a fresh repo would either refuse after having modified the user's file,
 or need an exception carved for its own edit. It is also a write to someone's repository
 that nobody asked for, on a tool whose entire posture is that it does not touch things
-without permission. So it **refuses with the fix in the message** — *"add `.agent-team/` to
+without permission. So it **refuses with the fix in the message** — *"add `.kapelle/` to
 .gitignore and re-run"* — a one-time cost per repository, paid deliberately.
 *Done when* a run leaves `git worktree list` clean after success and populated after
 failure, and killing a task mid-spawn leaves no orphan worktree without a run record.
@@ -1007,7 +1007,7 @@ ignore refusals told the operator to do something the next preflight rejects: ed
 success" and "the branch always survives" only hold together if something commits first:
 otherwise `git worktree remove` refuses on the dirty tree or discards the work, and M1c-3
 would merge a branch sitting at its own base ref. `release` now commits onto
-`agent-team/<runId>/<taskId>` before removing, and `--force`s the removal because ignored
+`kapelle/<runId>/<taskId>` before removing, and `--force`s the removal because ignored
 files a task installed would otherwise block it.
 
 **M1b-4 · `core/result.ts` · M · needs M1b-2**
@@ -1028,7 +1028,7 @@ found opencode produces a non-empty diff with zero permission requests *by defau
 exact signature this warning exists to catch — so on opencode it fires on
 every mutating task. Two consequences: the warning text must not read as an anomaly report,
 and it should be paired with M1a-4's `asksPermission: false` so a run says "this harness
-never asks" once, rather than crying wolf per task. Excludes `.agent-team/` from the diff (M1b-3).
+never asks" once, rather than crying wolf per task. Excludes `.kapelle/` from the diff (M1b-3).
 **Warnings publish on the bus and never fail the task** — a read-only stage legitimately
 produces no diff, and making disagreement fatal would turn every harness quirk into a hard
 stop and break the review stages the pipeline is built on.
@@ -1185,7 +1185,7 @@ in memory and attaches it to the rejection when a harness **dies**
 **dies during the handshake**. What remains for this story is the **durable**
 record: a harness that dies leaves nothing on disk, a *live* harness's stderr is still only
 mirrored under `--verbose`, and under a daemon nobody is watching a terminal.
-**Decision: capture to `.agent-team/runs/<id>/<taskId>.stderr.log` unconditionally**;
+**Decision: capture to `.kapelle/runs/<id>/<taskId>.stderr.log` unconditionally**;
 `--verbose` continues to mirror it to the terminal.
 *Done when* a harness that fails to start leaves a log containing its real error rather than
 only `Internal error (code -32603)`.
@@ -1195,13 +1195,13 @@ and the operator who typed it is watching the terminal the story says nobody wat
 **A cwd that cannot carry worktrees still logs** — a non-repository cwd falls back to the
 shared cwd, and that fallback is the CI shape this story exists for, so the log follows it
 there. A repository with no commits falls back to the shared cwd too, but its log goes to
-the repository root `.agent-team/` beside where worktrees would have been.
+the repository root `.kapelle/` beside where worktrees would have been.
 `openWorktrees` now returns the `root` it chose, because worktrees are no longer the only
-state under `.agent-team/`: a caller guessing `cwd` would split the directory in two
+state under `.kapelle/`: a caller guessing `cwd` would split the directory in two
 whenever `--cwd` names a subdirectory.
 **Landed 2026-09-07 (#23).** `core/run.ts` resolves the log path and `AcpAgent` opens the
 file exclusively (`ax`) so a re-run never mixes two executions in one file. Run-file tasks
-write `.agent-team/runs/<runId>/<taskId>.stderr.log` regardless of `--verbose`/`--quiet`;
+write `.kapelle/runs/<runId>/<taskId>.stderr.log` regardless of `--verbose`/`--quiet`;
 the single-prompt CLI does not. A log directory that cannot be made is a notice, never a
 status change. Spawn failures write the harness's own reason to the file, not only
 `Internal error (code -32603)`.
@@ -1332,9 +1332,13 @@ ACP protocol"*, and declares `bin: {"agent-team": …}`, so the collision is on 
 the ensemble a *Kapellmeister* directs, the players rather than the conductor. **`private:
 true` is kept**: it blocks `npm publish` alone, never `bin` and never `npm link`, so it costs
 nothing while nothing here is ready to publish, and the day it is, the name is a two-line
-edit. The rename **stops at the command**: `.agent-team/`, the `agent-team/<runId>/<taskId>`
-branch prefix and `AGENT_TEAM_*` keep their names, because they label the project on disk and
-moving them orphans the run state of every existing checkout for no visible gain. The `bin`
+edit. **The name reaches the disk as well as the command**, each with exactly one
+definition: `STATE_DIR` (`core/worktree.ts:42`) is `.kapelle`, `BRANCH_PREFIX`
+(`core/ids.ts:73`, extracted from an inline literal so the two cannot drift) is `kapelle`,
+`SECRET_PREFIX` (`protocol/registry.ts:96`) is `KAPELLE_`, and the per-task commit subject
+is `kapelle: <taskId> (<runId>)`, which has to match the branch it lands on. The one
+identifier that does not follow is the schema `$id`: it is the repository's URL, so it
+tracks the repository name rather than the tool's. The `bin`
 wraps **today's argv** and adds no `run` subcommand — `cli.ts` already dispatches `merge`, so
 `kapelle merge <runId>` works on day one, while `kapelle run <file>`, `attach` and `--detach`
 stay M2-9's surface. `"os": ["darwin", "linux"]` is the whole of the Windows block: measured
@@ -1357,9 +1361,8 @@ is nearly free. It touches `package.json`, the README, `tests/cli.test.ts`,
 reads. That last one is listed because it is the one that would rot quietly: the examples
 must stay copy-pasteable, so their notes name the command that works **today**, and this is
 the story that makes `node run.ts` stop being that command.
-Also amended at pickup: the rename list gains `docs/PROJECT-PLAN.md` and this
-file, which between them type `agent-team run`/`merge`/`attach` in fourteen
-places, and the usage banner in `cli.ts`, which still announced `acp-mvp`.
+Also amended at pickup: the rename list gains `docs/PROJECT-PLAN.md`, this file
+and the usage banner in `cli.ts`.
 `fanout.mjs` needs no decision — M1b-8 deletes it.
 Coordinate with the M2-9 amendment, which drops `runs.ts` entirely, so the end state is two
 files with two jobs and two names: `cli.ts` for everything a person types, `core/run.ts` for
@@ -1506,7 +1509,7 @@ history.
 persistence bullet describes "JSON per run, written on state transitions", which is a
 different thing. No cursor semantics, no bound, and no statement of what happens to
 per-token `agent_message_chunk` events, of which a single task produces thousands.
-**Decision:** append-only `.agent-team/runs/<id>/events.jsonl`; monotonic per-run `seq` as
+**Decision:** append-only `.kapelle/runs/<id>/events.jsonl`; monotonic per-run `seq` as
 the cursor; `Last-Event-ID` honoured; in-memory ring (last ~1000) for hot replay and the
 file for cold; **message chunks coalesced into the log per message rather than logged per
 token** — live subscribers get the stream, the log gets the message, otherwise the log is
@@ -1538,7 +1541,7 @@ is terminal **and** past the retention window (default 7 days).
 retention, and leaves no harness subprocess alive.
 
 **M2-6 · Persistence · S · needs M2-1**
-JSON per run under `.agent-team/runs/<id>/`, written on state transitions. For completed-run
+JSON per run under `.kapelle/runs/<id>/`, written on state transitions. For completed-run
 history, not live recovery.
 **Revised by M0-1 — the stated reason was wrong.** "ACP has no resume" holds for the base
 protocol but not for any harness we target: all three advertise
@@ -1550,7 +1553,7 @@ migration. Actual reattachment stays out of scope and stays capability-gated. Si
 ensemble needs for concurrent plugin writers — and zero runtime dependencies stays with it.
 
 **M2-7 · Config · S · needs M2-1**
-`.agent-team/config.json`, `AGENT_TEAM_*` env override, layered env > project. Home for the
+`.kapelle/config.json`, `KAPELLE_*` env override, layered env > project. Home for the
 knobs that do not belong in a run file: watchdog thresholds, TTL, retention window, port,
 permission timeout, `maxConcurrency` default.
 **Gap** — the plan introduces the file but says nothing about validating it. A
@@ -1563,7 +1566,7 @@ Localhost-only bind plus a shared-secret token file. Not optional: anything that
 *every* write endpoint is an execution surface, not just `POST /runs`. `EventSource` cannot
 set custom headers, so the token must also be acceptable as a query parameter on the SSE
 endpoint or exchangeable for a cookie by a login POST — decided here so M4 is not blocked;
-the localhost-only bind is unchanged. Strips `AGENT_TEAM_*` from child environments before
+the localhost-only bind is unchanged. Strips `KAPELLE_*` from child environments before
 spawn (M1a-4).
 
 **M2-9 · `--detach` and `attach` · M · needs M2-2, M2-3**

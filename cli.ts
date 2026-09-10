@@ -429,7 +429,7 @@ async function runFromFile(path: string): Promise<number> {
       },
     );
   } catch (err) {
-    // The preflight's refusals land here — an unignored `.agent-team/`, a
+    // The preflight's refusals land here — an unignored `.kapelle/`, a
     // dirty tree — and each one is an instruction to the operator, not a
     // fault. A stack trace would bury the one line that says what to do.
     console.error(`error: ${messageOf(err)}`);

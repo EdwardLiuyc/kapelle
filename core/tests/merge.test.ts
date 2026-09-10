@@ -35,7 +35,7 @@ async function repo(t: TestContext): Promise<string> {
   await git(dir, "init", "-b", "main");
   await git(dir, "config", "user.email", "test@example.invalid");
   await git(dir, "config", "user.name", "Test");
-  await writeFile(join(dir, ".gitignore"), ".agent-team/\n");
+  await writeFile(join(dir, ".gitignore"), ".kapelle/\n");
   await writeFile(join(dir, "README.md"), "first\n");
   await git(dir, "add", "-A");
   await git(dir, "commit", "-m", "first");
@@ -69,7 +69,7 @@ test("a two-task run writes run.json, then merge lands both changes unstaged", a
   );
   assert.equal(report.status, "done");
 
-  const record = join(root, ".agent-team", "runs", RUN_ID, "run.json");
+  const record = join(root, ".kapelle", "runs", RUN_ID, "run.json");
   assert.equal(existsSync(record), true);
   const parsed = JSON.parse(await readFile(record, "utf8")) as {
     tasks: { id: string; branch: string; baseSha: string }[];
@@ -141,10 +141,7 @@ test("a task left on another branch is not silently mergeable", async (t) => {
   assert.equal(report.status, "done");
 
   const record = JSON.parse(
-    await readFile(
-      join(root, ".agent-team", "runs", RUN_ID, "run.json"),
-      "utf8",
-    ),
+    await readFile(join(root, ".kapelle", "runs", RUN_ID, "run.json"), "utf8"),
   ) as { tasks: { branch?: string }[] };
   assert.equal(record.tasks[0]?.branch, undefined);
 
@@ -341,7 +338,7 @@ test("a run record copied from another repo is refused", async (t) => {
     perTaskWriter,
   );
 
-  const recordPath = join(root, ".agent-team", "runs", RUN_ID, "run.json");
+  const recordPath = join(root, ".kapelle", "runs", RUN_ID, "run.json");
   const record = JSON.parse(await readFile(recordPath, "utf8")) as {
     root: string;
   };

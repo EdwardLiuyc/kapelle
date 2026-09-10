@@ -330,13 +330,9 @@ test("one asking task with no TTY runs as safe, and says so", async (t) => {
   const r = await runCli(t, ["--file", file, "--cwd", cwd]);
 
   assert.match(r.stderr, /\[one\] not a TTY — ask runs as safe/);
-  // `.agent-team/` is our own state, not the task's work: M1b-7's stderr log
+  // `.kapelle/` is our own state, not the task's work: M1b-7's stderr log
   // is written for every task of a run, refused write or not.
-  assert.deepEqual(
-    await readdir(cwd),
-    [".agent-team"],
-    "safe refused the write",
-  );
+  assert.deepEqual(await readdir(cwd), [".kapelle"], "safe refused the write");
 });
 
 test("two asking tasks are refused a prompt they would have to share", async (t) => {
@@ -357,7 +353,7 @@ test("two asking tasks are refused a prompt they would have to share", async (t)
   // The count is the point: one readline cannot attribute an answer between
   // two askers, so the limit is on askers, not on tasks.
   assert.match(r.stderr, /2 tasks ask, and one prompt cannot serve two/);
-  assert.deepEqual(await readdir(cwd), [".agent-team"], "both ran as safe");
+  assert.deepEqual(await readdir(cwd), [".kapelle"], "both ran as safe");
 });
 
 test("--file --quiet drops the advisory line, exactly as one prompt does", async (t) => {
@@ -444,8 +440,8 @@ test("a harness that dies leaves its own error in a per-task log", async (t) => 
 
   // Printed as `run <id>` on stdout, which `--quiet` silences — so the id is
   // read off the directory, which is also how an operator finds it.
-  const [runId] = await readdir(join(cwd, ".agent-team", "runs"));
-  const logs = join(cwd, ".agent-team", "runs", String(runId));
+  const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
+  const logs = join(cwd, ".kapelle", "runs", String(runId));
 
   assert.match(
     await readFile(join(logs, "doomed.stderr.log"), "utf8"),
@@ -472,10 +468,10 @@ test("a spawn failure is written to the per-task log, not just printed", async (
   const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
 
   assert.equal(r.code, 1);
-  const [runId] = await readdir(join(cwd, ".agent-team", "runs"));
+  const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
   assert.match(
     await readFile(
-      join(cwd, ".agent-team", "runs", String(runId), "ghost.stderr.log"),
+      join(cwd, ".kapelle", "runs", String(runId), "ghost.stderr.log"),
       "utf8",
     ),
     /failed to spawn "definitely-not-a-real-binary"/,
@@ -505,13 +501,13 @@ test("a missing --cwd is not created by the stderr log directory", async (t) => 
 
 test("--cwd in a subdirectory logs at the repository root", async (t) => {
   // Worktrees run each task at the same subdirectory inside its checkout,
-  // but `.agent-team/` is repository-level state. The log has to follow the
+  // but `.kapelle/` is repository-level state. The log has to follow the
   // root `openWorktrees` chose, not the subdirectory the task actually ran in.
   const root = await tempDir(t);
   await git(root, "init", "-b", "main");
   await git(root, "config", "user.email", "test@example.invalid");
   await git(root, "config", "user.name", "Test");
-  await writeFile(join(root, ".gitignore"), ".agent-team/\n");
+  await writeFile(join(root, ".gitignore"), ".kapelle/\n");
   await mkdir(join(root, "sub"));
   await writeFile(join(root, "sub", "keep.txt"), "x\n");
   await git(root, "add", "-A");
@@ -527,10 +523,10 @@ test("--cwd in a subdirectory logs at the repository root", async (t) => {
   ]);
 
   assert.equal(r.code, 0);
-  const [runId] = await readdir(join(root, ".agent-team", "runs"));
+  const [runId] = await readdir(join(root, ".kapelle", "runs"));
   assert.equal(
     await readFile(
-      join(root, ".agent-team", "runs", String(runId), "one.stderr.log"),
+      join(root, ".kapelle", "runs", String(runId), "one.stderr.log"),
       "utf8",
     ),
     "",
@@ -608,7 +604,7 @@ test("a preflight refusal is one actionable line, not a stack trace", async (t) 
   await writeFile(join(cwd, "README.md"), "first\n");
   await git("add", "-A");
   await git("commit", "-m", "first");
-  // `.agent-team/` is neither ignored nor tracked — the refusal a first run in
+  // `.kapelle/` is neither ignored nor tracked — the refusal a first run in
   // a fresh repository meets.
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 
@@ -624,14 +620,14 @@ test("a preflight refusal is one actionable line, not a stack trace", async (t) 
 
 // --- M1b-5: the non-compliant fixtures -------------------------------------
 
-/** A committed repository with `.agent-team/` ignored — the shape a run needs
+/** A committed repository with `.kapelle/` ignored — the shape a run needs
  *  before `openWorktrees` will give each task a checkout of its own. */
 async function gitRepo(t: import("node:test").TestContext) {
   const cwd = await tempDir(t);
   await git(cwd, "init", "-b", "main");
   await git(cwd, "config", "user.email", "test@example.invalid");
   await git(cwd, "config", "user.name", "Test");
-  await writeFile(join(cwd, ".gitignore"), ".agent-team/\n");
+  await writeFile(join(cwd, ".gitignore"), ".kapelle/\n");
   await git(cwd, "add", "-A");
   await git(cwd, "commit", "-m", "first");
   return cwd;
@@ -784,13 +780,13 @@ test("a --file run in git leaves task branches and per-task stderr logs", async 
   assert.ok(runId, "run id should be printed");
 
   const wt = await git(cwd, "worktree", "list");
-  assert.doesNotMatch(wt, /\.agent-team\/wt\//, "worktrees should be cleaned");
+  assert.doesNotMatch(wt, /\.kapelle\/wt\//, "worktrees should be cleaned");
 
-  const branches = await git(cwd, "branch", "--list", "agent-team/*");
-  assert.match(branches, /agent-team\/.*\/one/);
-  assert.match(branches, /agent-team\/.*\/two/);
+  const branches = await git(cwd, "branch", "--list", "kapelle/*");
+  assert.match(branches, /kapelle\/.*\/one/);
+  assert.match(branches, /kapelle\/.*\/two/);
 
-  const logs = join(cwd, ".agent-team", "runs", String(runId));
+  const logs = join(cwd, ".kapelle", "runs", String(runId));
   assert.equal(await readFile(join(logs, "one.stderr.log"), "utf8"), "");
   assert.equal(await readFile(join(logs, "two.stderr.log"), "utf8"), "");
   await assert.rejects(access(join(cwd, "ACP_TEST.md")), /ENOENT/);
@@ -835,7 +831,7 @@ rl.on("line", async (line) => {
   const retained = wt
     .split("\n")
     .find(
-      (line) => line.includes(".agent-team/wt") && line.includes(String(runId)),
+      (line) => line.includes(".kapelle/wt") && line.includes(String(runId)),
     );
   assert.ok(retained, wt);
   const path = retained?.split(/\s+/)[0];
@@ -1076,10 +1072,10 @@ test("a stalled task warns, times out at the TTL, and keeps its branch", async (
 
   // The point of the fixture writing before it went quiet: a timed-out task
   // keeps its work for reading, so both the branch and the checkout survive.
-  const branches = await git(cwd, "branch", "--list", "agent-team/*");
-  assert.match(branches, /agent-team\/.*\/stall/);
+  const branches = await git(cwd, "branch", "--list", "kapelle/*");
+  assert.match(branches, /kapelle\/.*\/stall/);
   const wt = await git(cwd, "worktree", "list");
-  assert.match(wt, /\.agent-team\/wt\//);
+  assert.match(wt, /\.kapelle\/wt\//);
 });
 
 test("a repeated tool title warns, and the task is never cancelled", async (t) => {

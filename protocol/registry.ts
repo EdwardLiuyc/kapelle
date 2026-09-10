@@ -93,7 +93,7 @@ const CLAUDE_PARENT_ENV: EnvSpec = {
  * — entry or `--cmd`, env spec or none (M2-8). A daemon holding the shared
  * secret would otherwise hand it to every subprocess it spawns.
  */
-const SECRET_PREFIX = "AGENT_TEAM_";
+const SECRET_PREFIX = "KAPELLE_";
 
 export const AGENTS: Record<string, AgentEntry> = {
   // Native ACP support: `opencode acp` starts it as an ACP subprocess.
@@ -264,7 +264,7 @@ export function resolveAgent(id: string, customCmd?: string): ResolvedAgent {
  *
  * Returns `base` **by identity** when there is nothing to do, so harnesses
  * without env quirks keep sharing `process.env` rather than each getting a
- * copy. The `AGENT_TEAM_*` strip is the one thing that can force a copy even
+ * copy. The `KAPELLE_*` strip is the one thing that can force a copy even
  * for an entry that declares no `env` — the two decisions collide only when
  * such a variable is actually set, and secrecy wins that collision.
  */

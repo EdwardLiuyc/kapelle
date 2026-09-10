@@ -145,7 +145,7 @@ export interface CrossCheckInput {
    *  or no worktree isolating it from its siblings (#88). Undefined is
    *  *unknown*, never *empty*: every check below that compares against the
    *  working tree skips itself rather than guessing. Ignored paths are already
-   *  out, which is what keeps `.agent-team/` from reading as agent work
+   *  out, which is what keeps `.kapelle/` from reading as agent work
    *  (M1b-3). */
   changed?: readonly string[];
   /** `_client_permission` events seen for this task. */

@@ -20,14 +20,11 @@ answer its file-system requests, and decide its permissions. The harness is the
 
 A *Kapelle* is the ensemble a *Kapellmeister* directs — the players, not the
 conductor. That is the right way round here: this client directs, and the
-harnesses do the playing. It is also simply free, where `agent-team` is not —
-an unrelated npm package of the same name and the same stated purpose already
-claims that command.
+harnesses do the playing.
 
-The repository, the `.agent-team/` state directory and the
-`agent-team/<runId>/<taskId>` branch prefix keep their old names. They label the
-project on disk, not the command you type, and moving them would orphan the run
-state of every existing checkout.
+The name is one word everywhere you meet it: the command you type, the
+`.kapelle/` state directory in your repository, and the
+`kapelle/<runId>/<taskId>` branches a run leaves behind.
 
 ## Install
 

@@ -1,13 +1,13 @@
 /**
  * Worktrees — story M1b-3, issue #19.
  *
- * One `git worktree` per task, at `.agent-team/wt/<runId>/<taskId>`, branched
- * off a base ref as `agent-team/<runId>/<taskId>` (`core/ids.ts`). This is the
+ * One `git worktree` per task, at `.kapelle/wt/<runId>/<taskId>`, branched
+ * off a base ref as `kapelle/<runId>/<taskId>` (`core/ids.ts`). This is the
  * seam `core/run.ts`'s `taskCwd` held open: before this file, every task in a
  * run shared one working directory and only non-colliding work was safe.
  *
  * **The state directory has to be invisible to git** (`docs/STORIES.md:932`).
- * `.agent-team/` sits inside the working tree of the repo being worked on, so
+ * `.kapelle/` sits inside the working tree of the repo being worked on, so
  * an unignored one would make the dirty-tree refusal below refuse on our own
  * files from the second run onward, and would put supervisor state into
  * M1b-4's diff cross-check. The preflight therefore **refuses with the fix in
@@ -39,7 +39,7 @@ const run = promisify(execFile);
 
 /** Where supervisor state lives, relative to the repo root. Exported for
  *  M1b-7's stderr logs, which live beside the worktrees (`core/run.ts`). */
-export const STATE_DIR = ".agent-team";
+export const STATE_DIR = ".kapelle";
 
 /**
  * Which statuses give the worktree back.
@@ -67,7 +67,7 @@ const RELEASES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
  * as untouched — the checkout is removed with the work in it (measured
  * 2026-09-07, #85). `--untracked-files=all` cannot be weakened by anyone's
  * config, which is the only property a safety check may rely on. Ignored files
- * stay out, so `.agent-team/` is still invisible here.
+ * stay out, so `.kapelle/` is still invisible here.
  *
  * The text is for **people** — a refusal message names what is dirty. Anything
  * that needs the paths themselves calls `changedPaths` below, because `git()`
@@ -93,7 +93,7 @@ function workingTreeStatus(cwd: string): Promise<string> {
  * follows must be consumed either way — reading one column would leave it to
  * be re-read as a status line and mangled.
  *
- * Ignored paths stay out, exactly as above, so `.agent-team/` never reads as
+ * Ignored paths stay out, exactly as above, so `.kapelle/` never reads as
  * agent work and no exclusion list is needed here.
  */
 export async function changedPaths(cwd: string): Promise<string[]> {
@@ -178,7 +178,7 @@ export interface WorktreeSetup {
   /** `null` when the cwd cannot carry worktrees; `notice` says why. */
   worktrees: Worktrees | null;
   notice?: string;
-  /** Where `.agent-team/` lives for this run — the repository root whenever
+  /** Where `.kapelle/` lives for this run — the repository root whenever
    *  git reports one (including the no-commit fallback), or the requested
    *  cwd itself when there is no repository at all. Returned because
    *  worktrees are not the only supervisor state kept there: M1b-7's stderr
@@ -191,7 +191,7 @@ export interface WorktreeSetup {
  * Preflight, then a handle for the run.
  *
  * Returns a fallback with a notice when the cwd cannot carry worktrees.
- * **Throws** when it can but must not: `.agent-team/` tracked or unignored, or
+ * **Throws** when it can but must not: `.kapelle/` tracked or unignored, or
  * a dirty working tree. The difference is deliberate — the first is a place
  * that never promised isolation, the second is a repository we would damage.
  */
@@ -212,9 +212,9 @@ export async function openWorktrees(
 
   // Tracked is checked before ignored because it is the worse diagnosis and
   // `check-ignore` never reports a tracked path: without this, a committed
-  // `.agent-team/` would be reported as merely missing from `.gitignore`, and
+  // `.kapelle/` would be reported as merely missing from `.gitignore`, and
   // following that advice would leave it tracked *and* ignored. This runs
-  // before the unborn-HEAD fallback too: `core/run.ts` writes `.agent-team/`
+  // before the unborn-HEAD fallback too: `core/run.ts` writes `.kapelle/`
   // even when worktrees cannot exist, so an unignored one has to refuse here
   // rather than let the log directory create the state the preflight exists
   // to prevent.
@@ -252,7 +252,7 @@ export async function openWorktrees(
     };
   }
 
-  // `.agent-team/` is ignored by the check above, so it can never be the
+  // `.kapelle/` is ignored by the check above, so it can never be the
   // reason this fires — the criterion that the supervisor's own state does not
   // trip its own refusal is met by ordering, not by a second exclusion list.
   const dirty = await workingTreeStatus(root);
@@ -399,7 +399,7 @@ export async function openWorktrees(
             "commit",
             "--no-verify",
             "-m",
-            `agent-team: ${taskId} (${runId})`,
+            `kapelle: ${taskId} (${runId})`,
           ]);
         }
         await removeWorktree(root, task.path);
