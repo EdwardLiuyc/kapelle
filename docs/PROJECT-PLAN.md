@@ -372,7 +372,8 @@ driven from a run file, fully verifiable offline.
   (`stopReason`, duration, tokens/usage semantics, `warnings[]`); permission count and the
   git tree are cross-check inputs, not stored on the result.
   **Cross-check** — compare the block against the diff and record any disagreement in
-  `warnings[]`: status `success` with an empty diff; `<files>` naming paths the diff does not
+  `warnings[]` (five since M1c-6): status `success` with an empty diff; a changed path
+  `<files>` never names; `<files>` naming paths the diff does not
   contain; a non-empty diff with no `<task-result>` at all; plus the existing
   `policyNeverFired`. `<files>` is our extension to ensemble's schema and exists precisely to
   make this check possible. Warnings publish on the bus and never fail the task.

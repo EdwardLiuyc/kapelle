@@ -634,7 +634,7 @@ async function gitRepo(t: import("node:test").TestContext) {
 }
 
 test("each cross-check fixture trips its own warning, and only its own", async (t) => {
-  // The four kinds in `core/result.ts:35-39`, driven over the real wire rather
+  // The five kinds in `core/result.ts`, driven over the real wire rather
   // than through an injected executor (`core/tests/run.test.ts` owns that
   // half). Each task gets its own worktree, which is the only condition under
   // which the tree-shaped checks read anything at all.
@@ -652,9 +652,10 @@ test("each cross-check fixture trips its own warning, and only its own", async (
         scenario("malformed-result"),
         scenario("claimed-success"),
         scenario("files-not-in-diff"),
+        scenario("files-unclaimed"),
         scenario("unasked-write"),
       ],
-      { maxConcurrency: 5 },
+      { maxConcurrency: 6 },
     ),
   );
 
@@ -669,6 +670,7 @@ test("each cross-check fixture trips its own warning, and only its own", async (
     "malformed-result",
     "claimed-success",
     "files-not-in-diff",
+    "files-unclaimed",
     "unasked-write",
   ]) {
     assert.ok(
@@ -687,6 +689,7 @@ test("each cross-check fixture trips its own warning, and only its own", async (
   assert.match(card("malformed-result"), /no <task-result> block; the summary/);
   assert.match(card("claimed-success"), /working tree is unchanged/);
   assert.match(card("files-not-in-diff"), /<files> names ghost\.md/);
+  assert.match(card("files-unclaimed"), /also shows unclaimed\.txt/);
   assert.match(card("unasked-write"), /without ever asking permission/);
 });
 

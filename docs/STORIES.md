@@ -1021,7 +1021,17 @@ carries the agent-reported fields beside the observed ones the run already recor
 git tree are internal cross-check inputs, not stored on the result. Cross-check writes
 `warnings[]` — status `success` with an empty diff;
 `<files>` naming paths the diff does not contain; a non-empty diff with no block at all;
-plus `policyNeverFired`. `<files>` is our extension to ensemble's schema and exists
+plus `policyNeverFired`.
+**Amended 2026-09-10 (M1c-6, #30): a fifth, `filesUnclaimed` — the diff holding a path
+`<files>` never names.** The list above walks one way only, which the preamble does not:
+it already asks for *"one repo-relative path per line, only if you changed files"*, so the
+rule was written and never verified. pi-acp exposed it by dropping its own telemetry
+(`.pi-lens-probe-home/`, eight files) into the workspace root, claiming `NOTE-pi.md`
+alone, and finishing `done` with nothing to read; `release` then committed all nine to the
+task branch. It fires **only where `<files>` is present and non-empty** — omitting the
+optional field is what an agent that forgot looks like, and warning on its absence would
+fire on every task that never used it and double up with `policyNeverFired`, which is the
+check that already speaks for a tree nobody described. `<files>` is our extension to ensemble's schema and exists
 precisely to make this check possible.
 **Revised by M0-1: `policyNeverFired` is now a required check, not a nicety.** The survey
 found opencode produces a non-empty diff with zero permission requests *by default* — the

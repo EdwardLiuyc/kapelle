@@ -431,6 +431,7 @@ export interface ClientResultWarningEvent extends Meta {
     | "noResultBlock"
     | "claimedSuccessNoDiff"
     | "filesNotInDiff"
+    | "filesUnclaimed"
     | "policyNeverFired";
   text: string;
 }

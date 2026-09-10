@@ -26,6 +26,7 @@ const SCENARIOS = {
   "claimed-success": "claims success and changes nothing",
   "files-not-in-diff": "lists a file it never wrote",
   "unasked-write": "writes a file itself, without asking permission",
+  "files-unclaimed": "asks, writes two files, then lists only one of them",
   stall: "writes one file, then emits nothing and never returns",
   repeat: "the same tool title on a loop, then ends the turn itself",
 };
@@ -87,6 +88,17 @@ const FINAL_MESSAGE = {
     "success",
     "Wrote a file.",
     "Wrote it directly, never through the client.",
+  ),
+  // The mirror of `files-not-in-diff`: there the list names a file the tree
+  // lacks, here the tree holds a file the list never names. `claimed.txt` is
+  // in the diff, so `filesNotInDiff` stays quiet, and the fixture asks
+  // permission first so `policyNeverFired` does too -- one warning, like every
+  // sibling above.
+  "files-unclaimed": result(
+    "success",
+    "Wrote the file.",
+    "Wrote one file and mentioned it.",
+    "claimed.txt",
   ),
 };
 
@@ -246,6 +258,31 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         // about a harness that mutates the workspace with its own tools, which
         // is what the client cannot see and can only infer afterwards.
         writeFileSync("sneaky.txt", "written behind the client's back\n");
+      }
+      if (scenario === "files-unclaimed") {
+        // Ask first. The permission itself is not what is under test -- it is
+        // what keeps `permissionCount` above zero, so this stays a one-warning
+        // fixture instead of tripping `policyNeverFired` as well.
+        update(sid, {
+          sessionUpdate: "tool_call",
+          toolCallId: "t1",
+          title: "Write claimed.txt",
+          kind: "edit",
+          rawInput: { path: "claimed.txt" },
+          status: "pending",
+        });
+        await callClient("session/request_permission", {
+          sessionId: sid,
+          toolCall: { toolCallId: "t1" },
+          options: [
+            { optionId: "yes", name: "Allow once", kind: "allow_once" },
+            { optionId: "no", name: "Reject", kind: "reject_once" },
+          ],
+        });
+        // Both written with its own tools, so the client sees neither: the
+        // list below is the only account it gets, and it is short by one.
+        writeFileSync("claimed.txt", "the file the agent mentions\n");
+        writeFileSync("unclaimed.txt", "the file the agent does not\n");
       }
       update(sid, {
         sessionUpdate: "agent_message_chunk",
