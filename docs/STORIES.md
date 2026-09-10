@@ -977,7 +977,7 @@ in-memory.** A task whose worktree is untouched at release — no diff, HEAD sti
 sha — has its checkout removed either way; the branch is removed only for a non-releasing
 status, the shape a failed spawn takes today, while a `done`/`warned` task with an empty
 diff leaves its branch at the base ref without an empty commit. A `kill -9` mid-spawn can
-still orphan one; that is M2-5, which needs a persisted run record nothing writes yet. **(3) Teardown
+still orphan one; that is M2-5, which needs a record written on state transitions (M2-6) — the `run.json` M1c-3's merge reads is written only after the run ends. **(3) Teardown
 covers the whole `TaskStatus` union now**, including `warned` (M1b-4) and `timed_out`
 (M1c-1), which have no producer — the reason M1b-2 gave for shipping the whole severity
 ordering early. `done` and `warned` release, matching the two statuses the CLI exits 0 for
@@ -1482,7 +1482,7 @@ detection as a truth table, a pure function separate from the drawing, per M1a-1
 *Note* `mock-agent.mjs` needs a message carrying a table, a nested list and a fence with a
 blank line inside it — coordinate with M1b-5, which rewrites that file.
 
-**M1c-6 · M1 acceptance · S · needs all M1c**
+**M1c-6 · M1 acceptance · M · needs all M1c**
 A run file with three independent tasks against three real harnesses, each in its own
 worktree, each returning a parsed `TaskResult`; `git worktree list` clean afterwards. Kill
 the process mid-run, restart, confirm orphans are reaped. A `.json` run file and the same run
@@ -1491,12 +1491,14 @@ only). A run file exceeding a harness `maxMode` is rejected, naming both values,
 subprocess starts.
 **Amended 2026-09-10 (#30): the orphan-reap clause is dropped, and the story grew an M1
 stage retrospective.** Nothing reaps today and nothing was meant to — the sweep is M2-5,
-which needs a persisted run record; this story records the surviving state instead.
+which needs a record written on state transitions (M2-6); this story documents the surviving
+state instead.
 Measured 2026-09-10 on the fixture that stalls: `kill -9` mid-run leaves the checkout at
 `.kapelle/wt/<runId>/<taskId>` **and** its branch, a second run adds a second one beside it
-rather than clearing the first, and the harness subprocess itself dies with the parent — so
-what survives a crash is on disk, never in the process table. The retrospective is the
-second half and is the reason the story is no longer S.
+rather than clearing the first, and in this fixture the harness exits when its stdin closes
+with the parent, so the state observed surviving a crash is on disk. A real harness that
+outlives the supervisor stays M2-4's registry to track and M2-5's sweep to reap. The
+retrospective is the second half and is the reason the story is no longer S.
 **DONE 2026-09-10 (#30).** Three tasks, three harnesses, one run: opencode 1.18.30 27.3 s,
 claude-agent-acp 0.75.1 7.7 s, copilot 1.0.83 8.2 s, each `done` with a parsed
 `<task-result>`, `git worktree list` back to one entry, three `kapelle/<runId>/<taskId>`

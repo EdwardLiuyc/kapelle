@@ -92,11 +92,11 @@ Present each one as:
 **How long the list should be.** This is about the number of *decisions*, not the number of
 options inside one. There is no hard limit on the number. Some have none — say "no open decisions"
 rather than inventing one to look thorough. Some have more, usually zero to four per issue.
-If you reach five, stop and report that instead: that many live forks means the issue was 
+If you reach five, stop and report that instead: that many live forks means the issue was
 never scoped, which is a bigger finding than any single one of them.
 
 There could be some decisions that are trivial or obvious, and those do not need to be listed.
-Just mention them briefly after the main list of open decisions, without going into the full 
+Just mention them briefly after the main list of open decisions, without going into the full
 decision-making process.
 
 **When to ask.** Before posting the comment, so the answers land in it as settled decisions

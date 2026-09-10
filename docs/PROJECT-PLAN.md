@@ -536,8 +536,10 @@ fields mean, and how does it respond to `session/cancel` mid-turn.
 its own worktree, each returning a parsed `TaskResult`; `git worktree list` clean
 afterwards. **Amended 2026-09-10 (M1c-6, #30): the reap is not M1's.** `kill -9` mid-run
 leaves the worktree and the branch behind and a restart does not clear them (observed
-2026-09-10); the sweep that would is M2-5, which needs a persisted run record nothing
-writes yet. M1 records the surviving state instead of reaping it.
+2026-09-10); the sweep that would is M2-5, which needs a record written on state
+transitions (M2-6). The `run.json` M1c-3's merge reads is written once, after every task
+finishes (`core/run.ts:454`), so a crash mid-run leaves none. M1 leaves the surviving state
+in place; the M1c-6 story documents what survives instead of reaping it.
 A task against `mock-agent`'s stall mode produces a stall warning, then a `session/cancel`
 at TTL, with the branch intact afterwards; repeat mode raises a warning and is *not*
 cancelled. A JSON run file validates through `core/runfile.ts`, and the same run as a POST
