@@ -292,6 +292,11 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
 
   // It is one of ours, so the state-dir refusal now applies — the same 409
   // `POST /repos` would have given, before the body is validated.
+  // ponytail: the state-dir check runs three times per run — here, in the
+  // `openWorktrees` below, and again inside `runRun` (about ten git spawns,
+  // measured on #107). Deleting this call would let a bad body's 400 answer
+  // before an unsafe `.kapelle/`'s 409. Hand the handler's `openWorktrees`
+  // result to `runRun` if request latency ever matters.
   await rootOf(cwd);
 
   let run: Run;
