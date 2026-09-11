@@ -13,11 +13,12 @@
  * goes red on a model update and teaches everyone to ignore the suite.
  */
 
-import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFile, spawn, spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
+import { promisify } from "node:util";
 
 const REPO = join(import.meta.dirname, "..");
 
@@ -41,6 +42,20 @@ export async function tempDir(t: TestContext): Promise<string> {
     rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
   );
   return dir;
+}
+
+/** A committed repository with `.kapelle/` ignored — the shape a run needs
+ *  before `openWorktrees` will give each task a checkout of its own. */
+export async function gitRepo(t: TestContext): Promise<string> {
+  const cwd = await tempDir(t);
+  const git = (...args: string[]) => promisify(execFile)("git", args, { cwd });
+  await git("init", "-b", "main");
+  await git("config", "user.email", "test@example.invalid");
+  await git("config", "user.name", "Test");
+  await writeFile(join(cwd, ".gitignore"), ".kapelle/\n");
+  await git("add", "-A");
+  await git("commit", "-m", "first");
+  return cwd;
 }
 
 export interface CliResult {

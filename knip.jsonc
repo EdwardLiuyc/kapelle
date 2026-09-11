@@ -32,5 +32,8 @@
   // selftest script's --cmd string), not an imported module, and is dev-only.
   // hostile-agent.mjs is the same shape: spawned by protocol/tests/hostile.test.ts
   // as a subprocess, never imported, so nothing reaches it through the graph.
-  "entry": ["cli.ts!", "mock-agent.mjs", "hostile-agent.mjs"]
+  //
+  // daemon.ts (M2-1) is the second production root: `node daemon.ts` runs it,
+  // and nothing imports it — tests/daemon.test.ts spawns it as a subprocess.
+  "entry": ["cli.ts!", "daemon.ts!", "mock-agent.mjs", "hostile-agent.mjs"]
 }

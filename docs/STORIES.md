@@ -362,7 +362,7 @@ M1a-5 starts: (1) one small untyped surface (`session/set_mode`) argues for
 hand-extension; three or more (elicitation, `terminal/*`, v2) for SDK-types-only or
 codegen; (2) wholesale adoption costs the zero-runtime-dependency trait (zod peer dep);
 (3) adopting the official types surrenders the `assertNever` pattern. Re-checkpoint at
-M2-1 (event log) if M1a-5 hand-extends.
+M2-2 (event log) if M1a-5 hand-extends.
 **Landed 2026-08-31 (#10).** The union is hand-written, `_meta` sits on the base of the
 message types in both directions, and `assertNever` makes an unhandled variant a `tsc`
 error. `locations[]` is typed on `tool_call` and `tool_call_update`
@@ -372,7 +372,8 @@ whether `render` shows it never ran, and the type costs nothing while it waits.
 `session/set_mode` was the only surface M1 needed outside this file, which is criterion (1)
 as written — one small addition, not three. It is typed at `protocol/types.ts:582`, the SDK
 was not adopted, the zero-runtime-dependency trait is intact, and `assertNever` still works.
-Per the rule above, this hand-extension re-opens the checkpoint at **M2-1**.
+Per the rule above, this hand-extension re-opens the checkpoint at **M2-2**, the event log
+(written as M2-1 before the stories were renumbered; corrected at M2-1's pickup, #31).
 
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
@@ -1547,6 +1548,20 @@ at `core/tests/runfile.test.ts:127`.
 `core/` split guards against orchestration logic living in HTTP handlers: if `POST /runs` is
 where worktree creation and stage sequencing happen, the scheduler becomes untestable
 without booting a server and the CLI drifts into a second implementation.
+**Amended at pickup 2026-09-11 (#31).** The *done when* above checks nothing — `core/`
+already ran headless — so the issue's criteria replace it: `node:http` stays out of `core/`
+and `protocol/`, and `daemon.ts` calls no `resolvePolicy`, `AcpAgent` or `acquire`. Four
+decisions. **M2-8's token ships here**: every account on the machine reaches `127.0.0.1`,
+and a run file is a command line. **The sandboxing trigger fires with this story, and
+sandboxing stays deferred** (see the backlog). **`ask` is refused with a 400 naming M2-3**:
+with no decider `runRun` gives an `ask` task `safePolicy`, but `negotiateSafeMode` skips a
+task that still says `ask` and `safe`'s `allowReadOutsideRoot` rule never runs, so on a
+harness that never asks there is no containment at all — `cli.ts` re-resolves such a task
+on a terminal someone is watching, and the daemon has nobody. **The worktree preflight
+answers before the 202**, as a 409, so a caller never holds an id for a run that could not
+start; `openWorktrees` is read-only until `acquire`, and `runRun` repeats it. `DELETE` is
+asynchronous — 202 with `cancelRequested`, the verdict on `GET` — because `core/run.ts`
+already stops a harness 2 s after the abort.
 
 **M2-2 · Event log and SSE replay · M · needs M2-1**
 `GET /runs/:id/events`, SSE with replay-from-cursor, so a client attaching late still sees
@@ -1573,6 +1588,9 @@ three. The plan never says what happens when two clients answer the same pending
 a silent overwrite.**
 *Done when* a run submitted in `ask` mode with **no client attached** denies at timeout and
 completes rather than hanging.
+**Amended 2026-09-11 (M2-1, #31):** until this story lands the daemon refuses any task
+resolving to `ask` with a 400 naming M2-3 (`refuseAsk`, `daemon.ts`). Lifting that refusal
+is part of this story.
 
 **M2-4 · Daemon lifecycle · S · needs M2-1**
 Pidfile, single-instance guard, live-child registry, kill-all on shutdown, SIGTERM.
@@ -1614,6 +1632,10 @@ set custom headers, so the token must also be acceptable as a query parameter on
 endpoint or exchangeable for a cookie by a login POST — decided here so M4 is not blocked;
 the localhost-only bind is unchanged. Strips `KAPELLE_*` from child environments before
 spawn (M1a-4).
+**Amended 2026-09-11 (M2-1, #31): the token file moved to M2-1.** `daemon.ts` writes a fresh
+32-byte token to `.kapelle/daemon.token` (`0600`) at each start and refuses any request
+without it. What stays here is the browser half — the query parameter or cookie exchange —
+and the `KAPELLE_*` strip already landed with M1a-4.
 
 **M2-9 · `--detach` and `attach` · M · needs M2-2, M2-3**
 Submit a run file to the daemon, stream SSE, answer permissions interactively, print
@@ -1804,7 +1826,7 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   hazard no line-count bound touches — a progress spinner writing `\r` with no `\n`
   accumulates into a single unbounded line. *Trigger:* a harness measured emitting stderr
   through a normal turn (`opencode --print-logs` already does ~11 MB per agent per 4 h), or
-  a rejection message large enough to be unreadable in the terminal or M2-1's event log.
+  a rejection message large enough to be unreadable in the terminal or M2-2's event log.
   Note M1b-7 keeps the complete record on disk regardless, so this is about what is held in
   memory and pasted into an error, not about losing data.
 
@@ -1823,6 +1845,12 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   neither (`docs/PRIOR-ART-AGENTPOOL.md`); and the platform matrix is real work — `bwrap` is
   Linux-only and macOS's `sandbox-exec` is deprecated — which is a second reason not to
   inline it into a milestone that already needs shrinking.
+  **Trigger fired 2026-09-11 (M2-1, #31) — still deferred.** `POST /runs` ships behind a
+  `0600` token file and a `127.0.0.1` bind, so dispatch still comes only from the local
+  operator (`PROJECT-BRIEF.md`: local-first, single operator), and what reaches the daemon is
+  no wider than what reaches the terminal. *New trigger:* the daemon binding anything other
+  than `127.0.0.1`, or accepting a caller who is not the local operator. The token stops
+  being enough at the same moment, so that day needs TLS as much as it needs a sandbox.
 - **Per-harness price table.** *Trigger:* M0-5 reporting that any harness names the model it
   selected. **Trigger fired 2026-08-22 — all three name it**, in `configOptions` on the
   `session/new` response with the reserved `category: "model"`. Still unscheduled, and M0-5
