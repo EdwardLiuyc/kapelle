@@ -24,7 +24,7 @@ policy across all of them and returning machine-readable results.
 | Area | Decision |
 | --- | --- |
 | Workflows | Parallel split **and** pipeline handoff — not competing variants of the same task. |
-| Process shape | Daemon, with `core/` that has no knowledge of HTTP or of a TTY. |
+| Process shape | Daemon — **one per operator, serving every added repository** (amended 2026-09-11, M2-1) — with `core/` that has no knowledge of HTTP or of a TTY. |
 | UI | **M4**, after the daemon. Read views plus permission answering. Designed to grow into a run-dispatch front end, so the daemon API must be complete — not observability-only. |
 | Result contract | A `<task-result>` block in the final message. `git status` cross-checks it; disagreement raises a task **warning**, never a failure. MCP `report_result` deferred. |
 | Worktrees | Supervisor owns fully — creates off a base ref, removes on success, **keeps worktree and branch on failure/timeout when the task left work, and rolls back a failed task that produced nothing**, reaps orphans only when the run is terminal and past the retention window. |
@@ -93,7 +93,7 @@ front ends    cli.ts  kapelle run <file>            direct, in-process, TTY ask
                       kapelle merge ...
               dashboard (M4 — read views + permission answering; a third subscriber)
                    │
-daemon.ts     POST /runs · GET /runs/:id · GET /runs/:id/events (SSE+replay)
+daemon.ts     POST /repos · POST /runs · GET /runs/:id · GET /runs/:id/events (SSE+replay)
               GET/POST /permissions/:id · pidfile · child registry · persistence
                    │
 core/         run.ts        scheduler.ts     worktree.ts
@@ -434,7 +434,9 @@ driven from a run file, fully verifiable offline.
 ## M2 — Daemon
 
 - `daemon.ts` on `node:http`, no framework. `POST /runs`, `GET /runs`, `GET /runs/:id`,
-  `DELETE /runs/:id` (cancel).
+  `DELETE /runs/:id` (cancel). **One daemon for all repositories (amended 2026-09-11,
+  M2-1):** `POST /repos` adds a repository, `POST /runs` takes `{cwd, run}`, and the token,
+  port and pid live in `$XDG_RUNTIME_DIR/kapelle/daemon.json`.
 - `GET /runs/:id/events` — SSE with replay-from-cursor, so a client attaching late still
   sees history.
 - **Permission-over-API** — pending decision list, `GET /permissions`,

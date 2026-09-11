@@ -1550,18 +1550,24 @@ where worktree creation and stage sequencing happen, the scheduler becomes untes
 without booting a server and the CLI drifts into a second implementation.
 **Amended at pickup 2026-09-11 (#31).** The *done when* above checks nothing — `core/`
 already ran headless — so the issue's criteria replace it: `node:http` stays out of `core/`
-and `protocol/`, and `daemon.ts` calls no `resolvePolicy`, `AcpAgent` or `acquire`. Four
-decisions. **M2-8's token ships here**: every account on the machine reaches `127.0.0.1`,
-and a run file is a command line. **The sandboxing trigger fires with this story, and
+and `protocol/`, and `daemon.ts` calls no `resolvePolicy`, `AcpAgent` or `acquire`.
+**One daemon for all of the operator's repositories.** `POST /repos` adds one, checked once
+by `checkStateDir` (`core/worktree.ts`), so a tracked or unignored `.kapelle/` is a 409;
+`POST /runs {cwd, run}` refuses a folder outside every added repository with a 403. One
+port, one token, one dashboard; run state stays in each repository's `.kapelle/`, and the
+repository list is in memory until M2-6. **M2-8's token ships here**, because every account
+on the machine reaches `127.0.0.1` and a run file is a command line. It lives with the port
+and pid in `$XDG_RUNTIME_DIR/kapelle/daemon.json` — a `0700` directory, a `0600` file,
+outside every repository — and is published only once the port is open. That file is also
+the **single-instance lock**: a second daemon finds a live pid and exits without touching
+it, and a dead pid's file is replaced. **The sandboxing trigger fires with this story, and
 sandboxing stays deferred** (see the backlog). **`ask` is refused with a 400 naming M2-3**:
 with no decider `runRun` gives an `ask` task `safePolicy`, but `negotiateSafeMode` skips a
 task that still says `ask` and `safe`'s `allowReadOutsideRoot` rule never runs, so on a
-harness that never asks there is no containment at all — `cli.ts` re-resolves such a task
-on a terminal someone is watching, and the daemon has nobody. **The worktree preflight
-answers before the 202**, as a 409, so a caller never holds an id for a run that could not
-start; `openWorktrees` is read-only until `acquire`, and `runRun` repeats it. `DELETE` is
-asynchronous — 202 with `cancelRequested`, the verdict on `GET` — because `core/run.ts`
-already stops a harness 2 s after the abort.
+harness that never asks there is no containment at all. **The worktree preflight answers
+before the 202**, as a 409; `openWorktrees` is read-only until `acquire`, and `runRun`
+repeats it. `DELETE` is asynchronous — 202 with `cancelRequested`, the verdict on `GET` —
+because `core/run.ts` already stops a harness 2 s after the abort.
 
 **M2-2 · Event log and SSE replay · M · needs M2-1**
 `GET /runs/:id/events`, SSE with replay-from-cursor, so a client attaching late still sees
@@ -1595,6 +1601,11 @@ is part of this story.
 **M2-4 · Daemon lifecycle · S · needs M2-1**
 Pidfile, single-instance guard, live-child registry, kill-all on shutdown, SIGTERM.
 *Done when* a daemon crash leaves no harness subprocess alive holding write access.
+**Amended 2026-09-11 (M2-1, #31):** the pidfile and single-instance guard landed with M2-1 —
+`$XDG_RUNTIME_DIR/kapelle/daemon.json` holds the pid, a live one refuses a second daemon and
+a dead one is replaced. What stays here: a strict lock for two daemons starting in the same
+instant (marked `ponytail:` in `daemon.ts`), the live-child registry, kill-all, SIGTERM, and
+the `kapelle daemon start` and `kapelle daemon add <path>` verbs.
 
 **M2-5 · Crash-recovery sweep · M · needs M2-4, M1b-3**
 The fuller version of "run `git worktree prune`". On boot: mark tasks left in `running` as
@@ -1603,6 +1614,8 @@ The fuller version of "run `git worktree prune`". On boot: mark tasks left in `r
 is terminal **and** past the retention window (default 7 days).
 *Done when* `kill -9` then restart marks the task errored, reaps no worktree still within
 retention, and leaves no harness subprocess alive.
+**Amended 2026-09-11 (M2-1, #31):** one daemon serves every added repository, so the sweep
+reconciles each of them — which needs the repository list M2-6 persists.
 
 **M2-6 · Persistence · S · needs M2-1**
 JSON per run under `.kapelle/runs/<id>/`, written on state transitions. For completed-run
@@ -1615,6 +1628,9 @@ protocol limit. **Persist the harness `sessionId` on the run record here** — i
 field, and without it the backlog's `session/load` item cannot be picked up later without a
 migration. Actual reattachment stays out of scope and stays capability-gated. Single-process and single-writer, which is why this is JSON and not the SQLite
 ensemble needs for concurrent plugin writers — and zero runtime dependencies stays with it.
+**Amended 2026-09-11 (M2-1, #31):** persist the list of added repositories too. The daemon
+keeps it in memory, so a restart forgets every `POST /repos`. It belongs to the daemon, not to
+a repository, so it lives in a user-level location rather than in any one `.kapelle/`.
 
 **M2-7 · Config · S · needs M2-1**
 `.kapelle/config.json`, `KAPELLE_*` env override, layered env > project. Home for the
@@ -1623,6 +1639,9 @@ permission timeout, `maxConcurrency` default.
 **Gap** — the plan introduces the file but says nothing about validating it. A
 silently-ignored `stallIdleMs` typo is a watchdog that never fires.
 *Done when* unknown keys and type mismatches are rejected loudly at load.
+**Amended 2026-09-11 (M2-1, #31):** one daemon serves every repository, so the daemon-wide
+knobs — port, permission timeout — cannot come from one repository's `.kapelle/config.json`.
+They need a user-level file or `KAPELLE_*`; per-run knobs keep the project layer.
 
 **M2-8 · Auth · S · needs M2-1**
 Localhost-only bind plus a shared-secret token file. Not optional: anything that can
@@ -1632,10 +1651,11 @@ set custom headers, so the token must also be acceptable as a query parameter on
 endpoint or exchangeable for a cookie by a login POST — decided here so M4 is not blocked;
 the localhost-only bind is unchanged. Strips `KAPELLE_*` from child environments before
 spawn (M1a-4).
-**Amended 2026-09-11 (M2-1, #31): the token file moved to M2-1.** `daemon.ts` writes a fresh
-32-byte token to `.kapelle/daemon.token` (`0600`) at each start and refuses any request
-without it. What stays here is the browser half — the query parameter or cookie exchange —
-and the `KAPELLE_*` strip already landed with M1a-4.
+**Amended 2026-09-11 (M2-1, #31): the token moved to M2-1.** `daemon.ts` writes a fresh
+32-byte token to `$XDG_RUNTIME_DIR/kapelle/daemon.json` at each start and refuses any
+request without it. What stays here is the browser half — the query parameter or cookie
+exchange, and a `Host` check against DNS rebinding once a page the daemon serves holds the
+token. The `KAPELLE_*` strip already landed with M1a-4.
 
 **M2-9 · `--detach` and `attach` · M · needs M2-2, M2-3**
 Submit a run file to the daemon, stream SSE, answer permissions interactively, print
@@ -1673,6 +1693,9 @@ deliverable, reached through `--detach` and `attach` instead of a second binary.
 *Done when* `kapelle run <file> --detach` returns a run id while the run continues
 without the launching terminal, and `kapelle attach <run-id>` on a later terminal receives
 the history and then the live tail.
+**Amended 2026-09-11 (M2-1, #31):** `--detach` reads the port and token from
+`$XDG_RUNTIME_DIR/kapelle/daemon.json` and sends `{cwd, run}`, with `cwd` the folder it was
+started in; a repository not yet added answers 403.
 
 ---
 

@@ -14,9 +14,9 @@
  */
 
 import { execFile, spawn, spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
 import { promisify } from "node:util";
 
@@ -45,14 +45,28 @@ export async function tempDir(t: TestContext): Promise<string> {
 }
 
 /** A committed repository with `.kapelle/` ignored — the shape a run needs
- *  before `openWorktrees` will give each task a checkout of its own. */
-export async function gitRepo(t: TestContext): Promise<string> {
+ *  before `openWorktrees` will give each task a checkout of its own.
+ *
+ *  `ignore` replaces the ignore line (the daemon's token-placement test needs
+ *  a root-anchored `/.kapelle/` that a subdirectory token would escape), and
+ *  `files` are committed first so a test can build the monorepo shape. */
+export async function gitRepo(
+  t: TestContext,
+  {
+    ignore = ".kapelle/\n",
+    files = {},
+  }: { ignore?: string; files?: Record<string, string> } = {},
+): Promise<string> {
   const cwd = await tempDir(t);
   const git = (...args: string[]) => promisify(execFile)("git", args, { cwd });
   await git("init", "-b", "main");
   await git("config", "user.email", "test@example.invalid");
   await git("config", "user.name", "Test");
-  await writeFile(join(cwd, ".gitignore"), ".kapelle/\n");
+  await writeFile(join(cwd, ".gitignore"), ignore);
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(cwd, path)), { recursive: true });
+    await writeFile(join(cwd, path), content);
+  }
   await git("add", "-A");
   await git("commit", "-m", "first");
   return cwd;
@@ -72,8 +86,17 @@ export interface CliResult {
  * timeout fires it does not reap our children, and a stranded harness holds a
  * session open.
  */
-export function spawnCli(t: TestContext, args: string[], script = "cli.ts") {
-  const child = spawn(process.execPath, [script, ...args], { cwd: REPO });
+export function spawnCli(
+  t: TestContext,
+  args: string[],
+  script = "cli.ts",
+  /** Merged over this process's environment, never replacing it. */
+  env?: Record<string, string>,
+) {
+  const child = spawn(process.execPath, [script, ...args], {
+    cwd: REPO,
+    env: env ? { ...process.env, ...env } : process.env,
+  });
   t.after(() => void child.kill("SIGKILL"));
 
   let stdout = "";

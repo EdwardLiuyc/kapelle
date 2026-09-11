@@ -4,16 +4,25 @@
  *
  * **None of this needs a harness**, so it runs in CI like `tests/cli.test.ts`:
  * every run points at `mock-agent.mjs`, and every refusal fails before a
- * subprocess starts. The plumbing is the same `spawnCli` the CLI suite uses,
- * given `daemon.ts` as its script.
+ * subprocess starts. Each daemon gets its own `XDG_RUNTIME_DIR`, so no test
+ * ever meets another test's `daemon.json` — or the developer's real one.
  */
 
 import assert from "node:assert/strict";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  realpath,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
+  type CliResult,
   gitRepo,
   MOCK_AGENT,
   spawnCli,
@@ -23,33 +32,53 @@ import {
 interface Daemon {
   url: string;
   token: string;
-  cwd: string;
+  /** What `daemon.json` says, next to what the test actually spawned. */
+  pid: number;
+  childPid: number | undefined;
+  file: string;
 }
 
-/** Boots `daemon.ts` on a free port in `cwd`, and reads back what it wrote. */
-async function boot(t: TestContext, cwd: string): Promise<Daemon> {
-  const d = spawnCli(t, ["--cwd", cwd, "--port", "0"], "daemon.ts");
-  let out = "";
-  d.child.stdout.on("data", (chunk) => {
-    out += chunk;
+/** Spawns `daemon.ts` with `runtime` as its `XDG_RUNTIME_DIR`. */
+function start(t: TestContext, runtime: string) {
+  return spawnCli(t, ["--port", "0"], "daemon.ts", {
+    XDG_RUNTIME_DIR: runtime,
   });
+}
+
+/** Starts a daemon and reads back the record it wrote once listening. */
+async function boot(t: TestContext, runtime?: string): Promise<Daemon> {
+  const dir = runtime ?? (await tempDir(t));
+  const d = start(t, dir);
   // A daemon that dies at startup must fail with its own words, not a timeout.
   const died = d.done.then((r) => {
     throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
   });
-  await Promise.race([d.waitFor("\n"), died]);
+  await Promise.race([d.waitFor("listening on "), died]);
   died.catch(() => {});
-  const url = /listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(out)?.[1];
-  assert.ok(url, `no address in ${JSON.stringify(out)}`);
-  const token = await readFile(join(cwd, ".kapelle", "daemon.token"), "utf8");
-  return { url, token, cwd };
+  const file = join(dir, "kapelle", "daemon.json");
+  const { port, token, pid } = JSON.parse(await readFile(file, "utf8"));
+  return {
+    url: `http://127.0.0.1:${port}`,
+    token,
+    pid,
+    childPid: d.child.pid,
+    file,
+  };
 }
 
-/** A run record, and the `{error}` every refusal sends, typed as the tests
- *  read them: each test asserts only the fields its reply carries. */
+/** The exit of a daemon expected to refuse, or `null` if it kept running. */
+async function exitOf(d: ReturnType<typeof start>): Promise<CliResult | null> {
+  const late = new Promise<null>((ok) => setTimeout(() => ok(null), 5_000));
+  return Promise.race([d.done, late]);
+}
+
+/** A run record, a repo, and the `{error}` every refusal sends, typed as the
+ *  tests read them: each test asserts only the fields its reply carries. */
 interface Reply {
   id: string;
   status: string;
+  cwd: string;
+  root: string;
   error: string;
   cancelRequested?: true;
   report: { tasks: { status: string }[] };
@@ -74,44 +103,17 @@ async function api<T = Reply>(
   return { status: res.status, body: text ? JSON.parse(text) : undefined };
 }
 
-// --- the token (decided at pickup, 2026-09-11) --------------------------------
-
-test("a request without the right token is refused, and starts nothing", async (t) => {
-  const d = await boot(t, await tempDir(t));
-  const run = {
-    mode: "auto",
-    cmd: "node -e 0",
-    tasks: [{ id: "a", prompt: "hi" }],
-  };
-
-  assert.equal((await api(d, "POST", "/runs", run, null)).status, 401);
-  assert.equal(
-    (await api(d, "POST", "/runs", run, "0".repeat(64))).status,
-    401,
-  );
-  assert.equal((await api(d, "GET", "/runs", undefined, "short")).status, 401);
-
-  const listed = await api(d, "GET", "/runs");
-  assert.equal(listed.status, 200);
-  assert.deepEqual(listed.body, []);
-});
-
-test("the token is 32 random bytes in a file only the owner can read", async (t) => {
-  const d = await boot(t, await tempDir(t));
-  const other = await boot(t, await tempDir(t));
-
-  assert.match(d.token, /^[0-9a-f]{64}$/);
-  assert.notEqual(d.token, other.token);
-  const { mode } = await stat(join(d.cwd, ".kapelle", "daemon.token"));
-  assert.equal(mode & 0o777, 0o600);
-});
-
-// --- POST /runs and GET --------------------------------------------------------
-
 const mockRun = (
   tasks: Record<string, unknown>[],
   rest: Record<string, unknown> = {},
 ) => ({ cmd: `node ${MOCK_AGENT}`, mode: "auto", ...rest, tasks });
+
+/** Registers `path` and returns it, so a test reads `cwd = await added(...)`. */
+async function added(d: Daemon, path: string): Promise<string> {
+  const r = await api(d, "POST", "/repos", { path });
+  assert.equal(r.status, 200, r.body.error);
+  return path;
+}
 
 /** Polls `GET /runs/:id` until the run leaves `running`. */
 async function settled(d: Daemon, id: string): Promise<Reply> {
@@ -124,33 +126,161 @@ async function settled(d: Daemon, id: string): Promise<Reply> {
   throw new Error(`run ${id} never settled`);
 }
 
-test("POST /runs accepts a run, lists it, and reports it done", async (t) => {
-  const d = await boot(t, await tempDir(t));
+// --- the token and daemon.json --------------------------------------------------
 
-  const posted = await api(
-    d,
-    "POST",
-    "/runs",
-    mockRun([{ id: "one", prompt: "hi" }]),
+test("a request without the right token is refused, and changes nothing", async (t) => {
+  const d = await boot(t);
+  const cwd = await tempDir(t);
+  const run = { cwd, run: mockRun([{ id: "a", prompt: "hi" }]) };
+
+  assert.equal(
+    (await api(d, "POST", "/repos", { path: cwd }, null)).status,
+    401,
   );
-  assert.equal(posted.status, 202);
-  assert.equal(typeof posted.body.id, "string");
+  assert.equal(
+    (await api(d, "POST", "/runs", run, "0".repeat(64))).status,
+    401,
+  );
+  assert.equal((await api(d, "GET", "/runs", undefined, "short")).status, 401);
 
-  const listed = await api<{ id: string }[]>(d, "GET", "/runs");
+  assert.deepEqual((await api(d, "GET", "/repos")).body, []);
+  assert.deepEqual((await api(d, "GET", "/runs")).body, []);
+});
+
+test("daemon.json holds port, pid and a random token, and only the owner can read it", async (t) => {
+  const d = await boot(t);
+  const other = await boot(t);
+
+  assert.match(d.token, /^[0-9a-f]{64}$/);
+  assert.notEqual(d.token, other.token);
+  assert.equal(d.pid, d.childPid);
+  assert.equal((await stat(d.file)).mode & 0o777, 0o600);
+  assert.equal((await stat(join(d.file, ".."))).mode & 0o777, 0o700);
+});
+
+test("a second daemon refuses to start, and leaves the first one's token alone", async (t) => {
+  const runtime = await tempDir(t);
+  const first = await boot(t, runtime);
+  const before = await readFile(first.file, "utf8");
+
+  const second = await exitOf(start(t, runtime));
+  assert.ok(second, "the second daemon kept running");
+  assert.equal(second.code, 1);
+  assert.match(second.stderr, new RegExp(`already running: pid ${first.pid}`));
+
+  assert.equal(await readFile(first.file, "utf8"), before);
+  assert.equal((await api(first, "GET", "/runs")).status, 200);
+});
+
+test("a daemon.json left by a daemon that died is replaced, not obeyed", async (t) => {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: dead, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  const d = await boot(t, runtime);
+  assert.notEqual(d.token, "stale");
+  assert.equal(d.pid, d.childPid);
+});
+
+test("a runtime directory other users can enter is refused", async (t) => {
+  const runtime = await tempDir(t);
+  const dir = join(runtime, "kapelle");
+  await mkdir(dir);
+  await chmod(dir, 0o755);
+
+  const r = await exitOf(start(t, runtime));
+  assert.ok(r, "the daemon started anyway");
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /0700/);
+  await assert.rejects(readFile(join(dir, "daemon.json")));
+});
+
+// --- repos ----------------------------------------------------------------------
+
+test("POST /repos registers the repository root, once, and GET /repos lists it", async (t) => {
+  const root = await gitRepo(t, { files: { "pkg/file.txt": "x\n" } });
+  const d = await boot(t);
+
+  const sub = await api(d, "POST", "/repos", { path: join(root, "pkg") });
+  assert.equal(sub.status, 200);
+  assert.equal(sub.body.root, await realpath(root));
+  assert.equal((await api(d, "POST", "/repos", { path: root })).status, 200);
+
+  assert.deepEqual((await api(d, "GET", "/repos")).body, [
+    await realpath(root),
+  ]);
+});
+
+test("POST /repos refuses a relative, missing or unignored path, and registers none", async (t) => {
+  const d = await boot(t);
+
+  const relative = await api(d, "POST", "/repos", { path: "src/app" });
+  assert.equal(relative.status, 400);
+  assert.match(relative.body.error, /absolute/);
+
+  const missing = await api(d, "POST", "/repos", {
+    path: join(await tempDir(t), "typo"),
+  });
+  assert.equal(missing.status, 400);
+  assert.match(missing.body.error, /does not exist/);
+
+  const unignored = await api(d, "POST", "/repos", {
+    path: await gitRepo(t, { ignore: "" }),
+  });
+  assert.equal(unignored.status, 409);
+  assert.match(unignored.body.error, /is not ignored by git/);
+
+  assert.deepEqual((await api(d, "GET", "/repos")).body, []);
+});
+
+test("POST /runs in a folder never added is 403, and starts nothing", async (t) => {
+  const d = await boot(t);
+  const r = await api(d, "POST", "/runs", {
+    cwd: await tempDir(t),
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+
+  assert.equal(r.status, 403);
+  assert.match(r.body.error, /POST \/repos/);
+  assert.deepEqual((await api(d, "GET", "/runs")).body, []);
+});
+
+// --- POST /runs and GET ---------------------------------------------------------
+
+test("POST /runs accepts a run, lists it with its folder, and reports it done", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  assert.equal(posted.status, 202);
+
+  const listed = await api<{ id: string; cwd: string }[]>(d, "GET", "/runs");
   assert.deepEqual(
-    listed.body.map((r) => r.id),
-    [posted.body.id],
+    listed.body.map((r) => [r.id, r.cwd]),
+    [[posted.body.id, await realpath(cwd)]],
   );
 
   const run = await settled(d, posted.body.id);
   assert.equal(run.status, "done");
-  assert.equal(run.report.tasks[0].status, "done");
+  assert.equal(run.report.tasks[0]?.status, "done");
 });
 
-test("an invalid run is 400 in validateRun's words, and creates no run", async (t) => {
-  const d = await boot(t, await tempDir(t));
+test("an invalid body is 400 in the validator's words, and creates no run", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
 
-  const empty = await api(d, "POST", "/runs", { tasks: [] });
+  const noRun = await api(d, "POST", "/runs", { cwd });
+  assert.equal(noRun.status, 400);
+
+  const empty = await api(d, "POST", "/runs", { cwd, run: { tasks: [] } });
   assert.equal(empty.status, 400);
   assert.match(empty.body.error, /non-empty "tasks" array/);
 
@@ -165,26 +295,25 @@ test("an invalid run is 400 in validateRun's words, and creates no run", async (
 });
 
 test("a run that would ask is refused naming M2-3, a bare file included", async (t) => {
-  const d = await boot(t, await tempDir(t));
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
 
   // No mode anywhere: every registry entry defaults to `ask`, so this is the
   // run file people actually write, and it must not quietly run as `safe`.
   const bare = await api(d, "POST", "/runs", {
-    cmd: `node ${MOCK_AGENT}`,
-    tasks: [{ id: "one", prompt: "hi" }],
+    cwd,
+    run: { cmd: `node ${MOCK_AGENT}`, tasks: [{ id: "one", prompt: "hi" }] },
   });
   assert.equal(bare.status, 400);
   assert.match(bare.body.error, /M2-3/);
 
-  const mixed = await api(
-    d,
-    "POST",
-    "/runs",
-    mockRun([
+  const mixed = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([
       { id: "calm", prompt: "hi" },
       { id: "curious", prompt: "hi", mode: "ask" },
     ]),
-  );
+  });
   assert.equal(mixed.status, 400);
   assert.match(mixed.body.error, /"curious"/);
 
@@ -192,16 +321,14 @@ test("a run that would ask is refused naming M2-3, a bare file included", async 
 });
 
 test("a dirty tree is 409 in the preflight's words, and creates no run", async (t) => {
-  const cwd = await gitRepo(t);
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
   await writeFile(join(cwd, "wip.txt"), "uncommitted\n");
-  const d = await boot(t, cwd);
 
-  const r = await api(
-    d,
-    "POST",
-    "/runs",
-    mockRun([{ id: "one", prompt: "hi" }]),
-  );
+  const r = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
   assert.equal(r.status, 409);
   assert.match(r.body.error, /uncommitted changes/);
   assert.match(r.body.error, /wip\.txt/);
@@ -209,18 +336,45 @@ test("a dirty tree is 409 in the preflight's words, and creates no run", async (
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
 
-// --- DELETE /runs/:id, and what the record carries ----------------------------
+test("a subdirectory cwd runs inside its registered root, and the daemon writes nothing into the repo", async (t) => {
+  // A root-anchored ignore: an unanchored `.kapelle/` would hide a file the
+  // daemon wrongly left in `pkg/`, and let exactly that bug pass.
+  const root = await gitRepo(t, {
+    ignore: "/.kapelle/\n",
+    files: { "pkg/file.txt": "committed\n" },
+  });
+  const d = await boot(t);
+  const cwd = await added(d, join(root, "pkg"));
+
+  const status = spawnSync(
+    "git",
+    ["status", "--porcelain", "--untracked-files=all", "--ignored"],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(status.stdout, "");
+
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  // A worktree runs the result cross-check, and mock-agent reports
+  // `ACP_TEST.md` from inside `pkg/`, so the run may promote to `warned`.
+  // What this test owns is that nothing the daemon wrote failed it.
+  assert.match((await settled(d, posted.body.id)).status, /^(done|warned)$/);
+});
+
+// --- DELETE /runs/:id, and what the record carries ------------------------------
 
 test("DELETE cancels a live run, and refuses a settled or unknown one", async (t) => {
-  const d = await boot(t, await tempDir(t));
-  const posted = await api(
-    d,
-    "POST",
-    "/runs",
-    mockRun([
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([
       { id: "stuck", prompt: "hi", cmd: `node ${MOCK_AGENT} --scenario stall` },
     ]),
-  );
+  });
   const { id } = posted.body;
 
   // Cancel is cooperative, so the answer is an acknowledgement, not a verdict.
@@ -238,17 +392,15 @@ test("DELETE cancels a live run, and refuses a settled or unknown one", async (t
 test("containment notices reach the run record, where nothing drops them", async (t) => {
   // #13: these lines are never suppressed. A daemon has no terminal, so the
   // record is the only place a caller can still read them.
-  const d = await boot(t, await tempDir(t));
-  const posted = await api(
-    d,
-    "POST",
-    "/runs",
-    mockRun([{ id: "one", prompt: "hi" }], { mode: "safe" }),
-  );
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }], { mode: "safe" }),
+  });
 
   const { notices } = await settled(d, posted.body.id);
-  const find = (re: RegExp) =>
-    notices.find((n: { text: string }) => re.test(n.text));
+  const find = (re: RegExp) => notices.find((n) => re.test(n.text));
   assert.equal(find(/safe mode was not negotiated/)?.taskId, "one");
   assert.equal(find(/is not a git repository/)?.taskId, "run");
 });
