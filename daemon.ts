@@ -9,9 +9,9 @@
  * — to watch every run. Run state still lives in each repository's
  * `.kapelle/`.
  *
- * **Transport over `core/`, and nothing more.** It calls `checkStateDir`,
- * `validateRun`, `openWorktrees` and `runRun`; worktrees, policy and harnesses
- * stay behind them. If orchestration grew here, the scheduler would be
+ * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
+ * `checkStateDir`, `validateRun`, `openWorktrees` and `runRun`; worktrees,
+ * policy and harnesses stay behind them. If orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
  * implementation (`docs/STORIES.md`, M2-1).
  *
@@ -50,7 +50,7 @@ import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
 import { type RunReport, runRun, type TaskStatus } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
-import { checkStateDir, openWorktrees } from "./core/worktree.ts";
+import { checkStateDir, openWorktrees, stateDirRoot } from "./core/worktree.ts";
 import type { Warning } from "./protocol/registry.ts";
 
 // ponytail: a fixed default port; M2-7's config is its home.
@@ -276,7 +276,12 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
 async function postRun(req: IncomingMessage, res: ServerResponse) {
   const body = await readBody(req);
   const cwd = existingDir(body.cwd, "cwd");
-  const root = await rootOf(cwd);
+
+  // Membership answers before the state check: a folder outside every added
+  // repository is a 403 whatever its `.kapelle/` looks like, so the root has
+  // to be resolved unchecked. Otherwise an unadded repo with an unsafe state
+  // dir would answer 409 and the client would be told to fix the wrong thing.
+  const { root } = await stateDirRoot(cwd);
   if (!repos.has(root)) {
     throw refusal(
       403,
@@ -284,6 +289,10 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
         `{"path": ${JSON.stringify(root)}} first.`,
     );
   }
+
+  // It is one of ours, so the state-dir refusal now applies — the same 409
+  // `POST /repos` would have given, before the body is validated.
+  await rootOf(cwd);
 
   let run: Run;
   try {

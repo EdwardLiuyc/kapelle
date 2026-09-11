@@ -149,12 +149,28 @@ async function tryGit(cwd: string, args: string[]): Promise<string | null> {
 }
 
 /**
- * The root every piece of supervisor state hangs off, checked.
+ * The root supervisor state hangs off, resolved but not checked.
  *
  * `git rev-parse --show-toplevel`, or `cwd` itself when it is not a
- * repository (`isRepo: false`, the shared-cwd fallback). **Throws** when
- * `.kapelle/` is tracked or not ignored, because anything written there would
- * show up as the operator's changes — or be committed with them.
+ * repository (`isRepo: false`, the shared-cwd fallback). Never throws: the
+ * tracked/unignored checks live in `checkStateDir`, and the daemon needs this
+ * half on its own so it can answer "is this folder inside an added
+ * repository?" (403) before a state-dir refusal (409) can pre-empt it.
+ */
+export async function stateDirRoot(
+  cwd: string,
+): Promise<{ root: string; isRepo: boolean }> {
+  const root = await tryGit(cwd, ["rev-parse", "--show-toplevel"]);
+  if (root === null) return { root: cwd, isRepo: false };
+  return { root, isRepo: true };
+}
+
+/**
+ * The root every piece of supervisor state hangs off, checked.
+ *
+ * **Throws** when `.kapelle/` is tracked or not ignored, because anything
+ * written there would show up as the operator's changes — or be committed
+ * with them.
  *
  * This is the half of the preflight that is a property of the repository
  * rather than of the moment: `openWorktrees` runs it before every run, and the
@@ -164,8 +180,8 @@ async function tryGit(cwd: string, args: string[]): Promise<string | null> {
 export async function checkStateDir(
   cwd: string,
 ): Promise<{ root: string; isRepo: boolean }> {
-  const root = await tryGit(cwd, ["rev-parse", "--show-toplevel"]);
-  if (root === null) return { root: cwd, isRepo: false };
+  const { root, isRepo } = await stateDirRoot(cwd);
+  if (!isRepo) return { root, isRepo };
 
   // Tracked is checked before ignored because it is the worse diagnosis and
   // `check-ignore` never reports a tracked path: without this, a committed

@@ -250,6 +250,42 @@ test("POST /runs in a folder never added is 403, and starts nothing", async (t) 
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
 
+test("an unadded repo with an unsafe .kapelle/ is still 403, by membership first", async (t) => {
+  // The state-dir refusal is a 409 for repositories we own; for one never
+  // added it must not pre-empt the 403 the story promises.
+  const d = await boot(t);
+  const cwd = await gitRepo(t, { ignore: "" });
+
+  const r = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+
+  assert.equal(r.status, 403);
+  assert.match(r.body.error, /POST \/repos/);
+  assert.deepEqual((await api(d, "GET", "/runs")).body, []);
+});
+
+test("an added repo that becomes unsafe is a 409 before the 202", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  await writeFile(join(cwd, ".gitignore"), "");
+  assert.equal(spawnSync("git", ["add", "-A"], { cwd }).status, 0);
+  assert.equal(
+    spawnSync("git", ["commit", "-m", "drop the ignore"], { cwd }).status,
+    0,
+  );
+
+  const r = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /is not ignored by git/);
+  assert.deepEqual((await api(d, "GET", "/runs")).body, []);
+});
+
 // --- POST /runs and GET ---------------------------------------------------------
 
 test("POST /runs accepts a run, lists it with its folder, and reports it done", async (t) => {
@@ -362,6 +398,16 @@ test("a subdirectory cwd runs inside its registered root, and the daemon writes 
   // `ACP_TEST.md` from inside `pkg/`, so the run may promote to `warned`.
   // What this test owns is that nothing the daemon wrote failed it.
   assert.match((await settled(d, posted.body.id)).status, /^(done|warned)$/);
+
+  // The pre-run status above cannot see what the run wrote. Without
+  // `--ignored`, the daemon's own `.kapelle/` is allowed while an unanchored
+  // `pkg/.kapelle/` would surface — which is the claim in the test name.
+  const after = spawnSync(
+    "git",
+    ["status", "--porcelain", "--untracked-files=all"],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(after.stdout, "");
 });
 
 // --- DELETE /runs/:id, and what the record carries ------------------------------
