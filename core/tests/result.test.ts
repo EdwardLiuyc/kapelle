@@ -22,6 +22,9 @@ import {
 const block = (body: string) =>
   `Did the thing.\n<task-result>${body}</task-result>`;
 const FULL = `<status>success</status><summary>Did it.</summary><details>Edited one file.</details>`;
+/** A block whose `<files>` names exactly these paths. */
+const filesResult = (...files: string[]) =>
+  extractResult(block(`${FULL}<files>${files.join("\n")}</files>`));
 
 test("a complete block extracts every required field", () => {
   const r = extractResult(block(FULL));
@@ -147,24 +150,63 @@ test("success with an empty diff warns", () => {
 // that only changed `core/run.ts.new`. Turning git's output into paths is
 // `changedPaths`' job, and `core/tests/worktree.test.ts` proves that against git.
 test("<files> is matched by exact path, not by substring", () => {
-  const filesResult = (...files: string[]) =>
-    extractResult(block(`${FULL}<files>${files.join("\n")}</files>`));
-
-  assert.deepEqual(
-    kinds({
+  // Asserted on the one kind this test is about. The whole list would also
+  // carry `filesUnclaimed` for `core/run.ts.new`, which is true and is a
+  // different test's subject.
+  assert.ok(
+    !kinds({
       result: filesResult("run.ts"),
       changed: ["run.ts", "core/run.ts.new"],
       permissionCount: 1,
-    }),
-    [],
+    }).includes("filesNotInDiff"),
+    "an exact match in the tree satisfies the claim",
   );
-  assert.deepEqual(
+  assert.ok(
     kinds({
       result: filesResult("run.ts"),
       changed: ["core/run.ts.new"],
       permissionCount: 1,
+    }).includes("filesNotInDiff"),
+    "a near-miss path must not satisfy the claim",
+  );
+});
+
+test("a changed path <files> never names warns, and names only that path", () => {
+  const [w] = crossCheck({
+    result: filesResult("claimed.txt"),
+    changed: ["claimed.txt", "unclaimed.txt"],
+    permissionCount: 1,
+  });
+  assert.equal(w?.kind, "filesUnclaimed");
+  // The whole list, anchored: `claimed.txt` is a substring of `unclaimed.txt`,
+  // so a bare `doesNotMatch` on it can never tell the two apart.
+  assert.match(w?.text ?? "", /also shows unclaimed\.txt, which <files>/);
+});
+
+test("an absent <files> never trips filesUnclaimed, however much changed", () => {
+  // The field is optional, and omitting it is what an agent that forgot looks
+  // like. Firing here would warn on every task that never used it, and would
+  // double up with `policyNeverFired` on the one fixture built for that.
+  assert.deepEqual(
+    kinds({
+      result: extractResult(block(FULL)),
+      changed: ["a.txt", "b.txt"],
+      permissionCount: 1,
     }),
-    ["filesNotInDiff"],
+    [],
+  );
+});
+
+test("an unknown tree cannot contradict a <files> list", () => {
+  // `changed: undefined` is *unknown*, never empty -- outside a repository, and
+  // in the shared-cwd fallback, every tree-shaped check skips itself.
+  assert.deepEqual(
+    kinds({
+      result: filesResult("claimed.txt"),
+      changed: undefined,
+      permissionCount: 1,
+    }),
+    [],
   );
 });
 

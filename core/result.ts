@@ -36,6 +36,7 @@ type ResultWarningKind =
   | "noResultBlock"
   | "claimedSuccessNoDiff"
   | "filesNotInDiff"
+  | "filesUnclaimed"
   | "policyNeverFired";
 
 /** `kind` is what a test asserts on; `text` is what an operator reads. Same
@@ -189,6 +190,35 @@ export function crossCheck(input: CrossCheckInput): ResultWarning[] {
       out.push({
         kind: "filesNotInDiff",
         text: `<files> names ${missing.join(", ")}, which the working tree does not show as changed.`,
+      });
+    }
+
+    // The other direction, and the one `RESULT_PREAMBLE` already asks for:
+    // "one repo-relative path per line, only if you changed files". Measured
+    // 2026-09-10 (M1c-6, #30) — pi loads the `pi-lens` extension from
+    // `~/.pi/agent/settings.json`, which writes telemetry
+    // (`.pi-lens-probe-home/`, eight files) into whatever workspace root it is
+    // handed; the task claimed `NOTE-pi.md` alone, and the run said `done` with nothing
+    // to read. `release` commits the whole tree, so those eight reached a
+    // branch and then a merge on the strength of a list that did not mention
+    // them.
+    //
+    // **Only when `<files>` is present and non-empty.** The field is optional
+    // and omitting it is what a real agent that forgot looks like
+    // (`mock-agent.mjs`'s `unasked-write` is exactly that shape), so firing on
+    // its absence would warn on every task that never used it and drown the
+    // case where a list exists and is short. That absence stays uncovered on
+    // purpose; `policyNeverFired` is the check that speaks for a tree nobody
+    // described.
+    const claimed = new Set(result.files ?? []);
+    const unclaimed =
+      changed !== undefined && claimed.size
+        ? changed.filter((f) => !claimed.has(f))
+        : [];
+    if (unclaimed.length) {
+      out.push({
+        kind: "filesUnclaimed",
+        text: `the working tree also shows ${unclaimed.join(", ")}, which <files> does not name.`,
       });
     }
   }

@@ -634,7 +634,7 @@ async function gitRepo(t: import("node:test").TestContext) {
 }
 
 test("each cross-check fixture trips its own warning, and only its own", async (t) => {
-  // The four kinds in `core/result.ts:35-39`, driven over the real wire rather
+  // The five kinds in `core/result.ts`, driven over the real wire rather
   // than through an injected executor (`core/tests/run.test.ts` owns that
   // half). Each task gets its own worktree, which is the only condition under
   // which the tree-shaped checks read anything at all.
@@ -652,9 +652,10 @@ test("each cross-check fixture trips its own warning, and only its own", async (
         scenario("malformed-result"),
         scenario("claimed-success"),
         scenario("files-not-in-diff"),
+        scenario("files-unclaimed"),
         scenario("unasked-write"),
       ],
-      { maxConcurrency: 5 },
+      { maxConcurrency: 6 },
     ),
   );
 
@@ -669,6 +670,7 @@ test("each cross-check fixture trips its own warning, and only its own", async (
     "malformed-result",
     "claimed-success",
     "files-not-in-diff",
+    "files-unclaimed",
     "unasked-write",
   ]) {
     assert.ok(
@@ -687,6 +689,7 @@ test("each cross-check fixture trips its own warning, and only its own", async (
   assert.match(card("malformed-result"), /no <task-result> block; the summary/);
   assert.match(card("claimed-success"), /working tree is unchanged/);
   assert.match(card("files-not-in-diff"), /<files> names ghost\.md/);
+  assert.match(card("files-unclaimed"), /also shows unclaimed\.txt/);
   assert.match(card("unasked-write"), /without ever asking permission/);
 });
 
@@ -736,25 +739,32 @@ test("the prompt response's usage is captured, not just usage_update", async (t)
   assert.match(r.stdout, /tokens: 1234 total \(1200 in, 34 out; unknown\)/);
 });
 
-test("an unknown --scenario is a loud exit, not the default fixture", async (t) => {
+test("an unknown --scenario is a loud exit in both fixtures", async (t) => {
   // The fixture selector's own guard: a typo that quietly ran the compliant
   // path would make one of the tests above pass for the wrong reason. Names
   // inherited from Object.prototype are also unknown: a plain-object map with
   // `in` used to treat `constructor` and `toString` as real fixtures.
-  for (const name of [
-    "no-such-thing",
-    "constructor",
-    "toString",
-    "__proto__",
-  ]) {
-    const r = await runCli(t, ["--scenario", name], "mock-agent.mjs");
+  //
+  // Both fake agents, not just the mock. #90 fixed this in `mock-agent.mjs`
+  // and the sibling copy in `hostile-agent.mjs` survived it (M1c-6): a
+  // `--scenario constructor` there exited 0 and ran no attack at all, which
+  // is a containment test passing without containing anything.
+  for (const [script, known] of [
+    ["mock-agent.mjs", "refuse"],
+    ["hostile-agent.mjs", "path-escape"],
+  ] as const) {
+    for (const name of [
+      "no-such-thing",
+      "constructor",
+      "toString",
+      "__proto__",
+    ]) {
+      const where = `${script} --scenario ${name}`;
+      const r = await runCli(t, ["--scenario", name], script);
 
-    assert.equal(r.code, 2, name);
-    assert.match(
-      r.stderr,
-      new RegExp(`unknown --scenario "${name}"\\. Known: refuse`),
-      name,
-    );
+      assert.equal(r.code, 2, where);
+      assert.match(r.stderr, new RegExp(`Known: ${known}`), where);
+    }
   }
 });
 

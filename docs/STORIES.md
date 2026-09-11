@@ -977,7 +977,7 @@ in-memory.** A task whose worktree is untouched at release — no diff, HEAD sti
 sha — has its checkout removed either way; the branch is removed only for a non-releasing
 status, the shape a failed spawn takes today, while a `done`/`warned` task with an empty
 diff leaves its branch at the base ref without an empty commit. A `kill -9` mid-spawn can
-still orphan one; that is M2-5, which needs a persisted run record nothing writes yet. **(3) Teardown
+still orphan one; that is M2-5, which needs a record written on state transitions (M2-6) — the `run.json` M1c-3's merge reads is written only after the run ends. **(3) Teardown
 covers the whole `TaskStatus` union now**, including `warned` (M1b-4) and `timed_out`
 (M1c-1), which have no producer — the reason M1b-2 gave for shipping the whole severity
 ordering early. `done` and `warned` release, matching the two statuses the CLI exits 0 for
@@ -1021,7 +1021,18 @@ carries the agent-reported fields beside the observed ones the run already recor
 git tree are internal cross-check inputs, not stored on the result. Cross-check writes
 `warnings[]` — status `success` with an empty diff;
 `<files>` naming paths the diff does not contain; a non-empty diff with no block at all;
-plus `policyNeverFired`. `<files>` is our extension to ensemble's schema and exists
+plus `policyNeverFired`.
+**Amended 2026-09-10 (M1c-6, #30): a fifth, `filesUnclaimed` — the diff holding a path
+`<files>` never names.** The list above walks one way only, which the preamble does not:
+it already asks for *"one repo-relative path per line, only if you changed files"*, so the
+rule was written and never verified. A pi task exposed it. The `pi-lens` extension that pi
+loads from `~/.pi/agent/settings.json` (4.1.5, `dist/index.js:2465`) wrote its telemetry
+(`.pi-lens-probe-home/`, eight files) into the workspace root; the task claimed `NOTE-pi.md`
+alone and finished `done` with nothing to read; `release` then committed all nine to the
+task branch. It fires **only where `<files>` is present and non-empty** — omitting the
+optional field is what an agent that forgot looks like, and warning on its absence would
+fire on every task that never used it and double up with `policyNeverFired`, which is the
+check that already speaks for a tree nobody described. `<files>` is our extension to ensemble's schema and exists
 precisely to make this check possible.
 **Revised by M0-1: `policyNeverFired` is now a required check, not a nicety.** The survey
 found opencode produces a non-empty diff with zero permission requests *by default* — the
@@ -1482,13 +1493,48 @@ detection as a truth table, a pure function separate from the drawing, per M1a-1
 *Note* `mock-agent.mjs` needs a message carrying a table, a nested list and a fence with a
 blank line inside it — coordinate with M1b-5, which rewrites that file.
 
-**M1c-6 · M1 acceptance · S · needs all M1c**
+**M1c-6 · M1 acceptance · M · needs all M1c**
 A run file with three independent tasks against three real harnesses, each in its own
 worktree, each returning a parsed `TaskResult`; `git worktree list` clean afterwards. Kill
 the process mid-run, restart, confirm orphans are reaped. A `.json` run file and the same run
 as a POST body validate to the same object (amended 2026-09-05, M1b-1: run files are JSON
 only). A run file exceeding a harness `maxMode` is rejected, naming both values, before any
 subprocess starts.
+**Amended 2026-09-10 (#30): the orphan-reap clause is dropped, and the story grew an M1
+stage retrospective.** Nothing reaps today and nothing was meant to — the sweep is M2-5,
+which needs a record written on state transitions (M2-6); this story documents the surviving
+state instead.
+Measured 2026-09-10 on the fixture that stalls: `kill -9` mid-run leaves the checkout at
+`.kapelle/wt/<runId>/<taskId>` **and** its branch, a second run adds a second one beside it
+rather than clearing the first, and in this fixture the harness exits when its stdin closes
+with the parent, so the state observed surviving a crash is on disk. A real harness that
+outlives the supervisor stays M2-4's registry to track and M2-5's sweep to reap. The
+retrospective is the second half and is the reason the story is no longer S.
+**DONE 2026-09-10 (#30). Four harnesses, not the three the story asked for** — pi-acp has
+been a measured fourth since #99, and "three" here dates the story rather than bounding it.
+One run, `maxConcurrency: 4`: opencode 1.18.30 9.1 s, claude-agent-acp 0.75.1 8.4 s,
+copilot 1.0.83 8.2 s, pi-acp 11.7 s, each `done` with a parsed `<task-result>`,
+`git worktree list` back to one entry, four `kapelle/<runId>/<taskId>` branches and four
+`.kapelle/runs/<runId>/<taskId>.stderr.log` files beside a `run.json`, and
+`kapelle merge <runId>` through the linked `bin` landing all four as unstaged additions.
+**The fourth harness is what found the gap below.** pi loads the `pi-lens` extension from
+`~/.pi/agent/settings.json` on this machine, and pi-lens 4.1.5 writes its telemetry —
+`.pi-lens-probe-home/`, eight files — into the workspace root it is given
+(`dist/index.js:2465`). That is this machine's pi setup, not pi-acp: a pi without the
+extension would not show it, and any extension that logs to its cwd would. The client
+committed them with the task's real output, merged them into the developer's tree, and said
+`done` with no warning: pi's `<files>` named `NOTE-pi.md` alone, and `crossCheck`
+(`core/result.ts`) only walks *claimed → diff* (`filesNotInDiff`). The reverse — a diff
+holding paths the result never claimed — has no check, and M1b-4 above enumerates four
+warnings without ever ruling it out. A three-harness run cannot see this: the other three
+touch only what they were asked to.
+The version-drift warning fired for opencode and copilot and stayed silent for claude,
+which is the one build whose `measuredOn` still matches. The ceiling rejection was observed
+end-to-end by lowering opencode's `maxMode` to `safe` behind a PATH shim that records an
+exec: the run printed `task "a": mode "auto" exceeds the ceiling for "opencode": maxMode is
+"safe".` and the shim was never touched. Every shipped entry is `maxMode: "auto"`
+(`protocol/registry.ts:103`), so the committed cover for it stays the injected-entry test
+at `core/tests/runfile.test.ts:127`.
 
 ---
 
