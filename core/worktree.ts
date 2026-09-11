@@ -148,6 +148,71 @@ async function tryGit(cwd: string, args: string[]): Promise<string | null> {
   }
 }
 
+/**
+ * The root supervisor state hangs off, resolved but not checked.
+ *
+ * `git rev-parse --show-toplevel`, or `cwd` itself when it is not a
+ * repository (`isRepo: false`, the shared-cwd fallback). Never throws: the
+ * tracked/unignored checks live in `checkStateDir`, and the daemon needs this
+ * half on its own so it can answer "is this folder inside an added
+ * repository?" (403) before a state-dir refusal (409) can pre-empt it.
+ */
+export async function stateDirRoot(
+  cwd: string,
+): Promise<{ root: string; isRepo: boolean }> {
+  const root = await tryGit(cwd, ["rev-parse", "--show-toplevel"]);
+  if (root === null) return { root: cwd, isRepo: false };
+  return { root, isRepo: true };
+}
+
+/**
+ * The root every piece of supervisor state hangs off, checked.
+ *
+ * **Throws** when `.kapelle/` is tracked or not ignored, because anything
+ * written there would show up as the operator's changes — or be committed
+ * with them.
+ *
+ * This is the half of the preflight that is a property of the repository
+ * rather than of the moment: `openWorktrees` runs it before every run, and the
+ * daemon runs it when a repository is added, where a dirty tree is none of its
+ * business yet.
+ */
+export async function checkStateDir(
+  cwd: string,
+): Promise<{ root: string; isRepo: boolean }> {
+  const { root, isRepo } = await stateDirRoot(cwd);
+  if (!isRepo) return { root, isRepo };
+
+  // Tracked is checked before ignored because it is the worse diagnosis and
+  // `check-ignore` never reports a tracked path: without this, a committed
+  // `.kapelle/` would be reported as merely missing from `.gitignore`, and
+  // following that advice would leave it tracked *and* ignored. This runs
+  // before the unborn-HEAD fallback too: `core/run.ts` writes `.kapelle/`
+  // even when worktrees cannot exist, so an unignored one has to refuse here
+  // rather than let the log directory create the state the preflight exists
+  // to prevent.
+  if ((await git(root, ["ls-files", "--", STATE_DIR])) !== "") {
+    throw new Error(
+      `${STATE_DIR}/ is tracked by git. It holds supervisor state — worktrees, ` +
+        `logs, run records — and must not be committed. Run ` +
+        `\`git rm -r --cached ${STATE_DIR}\`, add \`${STATE_DIR}/\` to ` +
+        `.gitignore, ${COMMIT_THEN}`,
+    );
+  }
+
+  if (
+    (await tryGit(root, ["check-ignore", "-q", "--", `${STATE_DIR}/`])) === null
+  ) {
+    throw new Error(
+      `${STATE_DIR}/ is not ignored by git. Worktrees and supervisor state go ` +
+        `there, and an unignored one would show up as your changes. Add ` +
+        `\`${STATE_DIR}/\` to .gitignore, ${COMMIT_THEN}`,
+    );
+  }
+
+  return { root, isRepo: true };
+}
+
 /** One task's checkout, held from `acquire` to `release`. */
 interface Held {
   /** The checkout root — what `git worktree remove` is given. Not what the
@@ -199,42 +264,16 @@ export async function openWorktrees(
   cwd: string,
   runId: string,
 ): Promise<WorktreeSetup> {
-  const root = await tryGit(cwd, ["rev-parse", "--show-toplevel"]);
-  if (root === null) {
+  // The tracked and unignored refusals are in `checkStateDir`, and run first.
+  const { root, isRepo } = await checkStateDir(cwd);
+  if (!isRepo) {
     return {
       worktrees: null,
-      root: cwd,
+      root,
       notice:
         `${cwd} is not a git repository — every task runs in it directly, ` +
         `so tasks that touch the same files will collide.`,
     };
-  }
-
-  // Tracked is checked before ignored because it is the worse diagnosis and
-  // `check-ignore` never reports a tracked path: without this, a committed
-  // `.kapelle/` would be reported as merely missing from `.gitignore`, and
-  // following that advice would leave it tracked *and* ignored. This runs
-  // before the unborn-HEAD fallback too: `core/run.ts` writes `.kapelle/`
-  // even when worktrees cannot exist, so an unignored one has to refuse here
-  // rather than let the log directory create the state the preflight exists
-  // to prevent.
-  if ((await git(root, ["ls-files", "--", STATE_DIR])) !== "") {
-    throw new Error(
-      `${STATE_DIR}/ is tracked by git. It holds supervisor state — worktrees, ` +
-        `logs, run records — and must not be committed. Run ` +
-        `\`git rm -r --cached ${STATE_DIR}\`, add \`${STATE_DIR}/\` to ` +
-        `.gitignore, ${COMMIT_THEN}`,
-    );
-  }
-
-  if (
-    (await tryGit(root, ["check-ignore", "-q", "--", `${STATE_DIR}/`])) === null
-  ) {
-    throw new Error(
-      `${STATE_DIR}/ is not ignored by git. Worktrees and supervisor state go ` +
-        `there, and an unignored one would show up as your changes. Add ` +
-        `\`${STATE_DIR}/\` to .gitignore, ${COMMIT_THEN}`,
-    );
   }
 
   // An unborn HEAD is a repository with nothing to branch from. Same fallback

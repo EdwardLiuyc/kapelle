@@ -12,7 +12,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +21,12 @@ import { promisify } from "node:util";
 import { createEventBus } from "../events.ts";
 import { runRun, type TaskExecutor, type TaskStatus } from "../run.ts";
 import { validateRun } from "../runfile.ts";
-import { changedPaths, openWorktrees, type Worktrees } from "../worktree.ts";
+import {
+  changedPaths,
+  checkStateDir,
+  openWorktrees,
+  type Worktrees,
+} from "../worktree.ts";
 
 const run = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) =>
@@ -120,6 +125,24 @@ test("an unignored .kapelle/ refuses, and the message is the fix", async (t) => 
     assert.match(err.message, /add `\.kapelle\/` to \.gitignore/i);
     return true;
   });
+});
+
+test("checkStateDir refuses an unignored .kapelle/, and does not care about a dirty tree", async (t) => {
+  // The daemon checks a repository once, when it is added, with no run to
+  // branch yet: uncommitted work at that moment is none of its business.
+  const plain = await tempDir(t);
+  assert.deepEqual(await checkStateDir(plain), { root: plain, isRepo: false });
+
+  const root = await repo(t);
+  await writeFile(join(root, "wip.txt"), "uncommitted\n");
+  assert.deepEqual(await checkStateDir(join(root)), {
+    root: realpathSync(root),
+    isRepo: true,
+  });
+
+  await writeFile(join(root, ".gitignore"), "node_modules/\n");
+  await git(root, "commit", "-am", "drop the ignore");
+  await assert.rejects(checkStateDir(root), /not ignored by git/);
 });
 
 test("a tracked .kapelle/ refuses as tracked, not as unignored", async (t) => {

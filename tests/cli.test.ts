@@ -28,6 +28,7 @@ const git = async (cwd: string, ...args: string[]) =>
   (await execFile("git", args, { cwd })).stdout.trim();
 
 import {
+  gitRepo,
   HOSTILE_AGENT,
   MOCK_AGENT,
   runCli,
@@ -619,19 +620,6 @@ test("a preflight refusal is one actionable line, not a stack trace", async (t) 
 });
 
 // --- M1b-5: the non-compliant fixtures -------------------------------------
-
-/** A committed repository with `.kapelle/` ignored — the shape a run needs
- *  before `openWorktrees` will give each task a checkout of its own. */
-async function gitRepo(t: import("node:test").TestContext) {
-  const cwd = await tempDir(t);
-  await git(cwd, "init", "-b", "main");
-  await git(cwd, "config", "user.email", "test@example.invalid");
-  await git(cwd, "config", "user.name", "Test");
-  await writeFile(join(cwd, ".gitignore"), ".kapelle/\n");
-  await git(cwd, "add", "-A");
-  await git(cwd, "commit", "-m", "first");
-  return cwd;
-}
 
 test("each cross-check fixture trips its own warning, and only its own", async (t) => {
   // The five kinds in `core/result.ts`, driven over the real wire rather
