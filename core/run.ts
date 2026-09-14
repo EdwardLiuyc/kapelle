@@ -610,8 +610,12 @@ async function runOne(
           agent: task.id,
           update: {
             sessionUpdate: "_client_worktree_created",
+            // The workspace the task runs in — the checkout root, or the
+            // `--cwd` subdirectory inside it — never `info`'s checkout root.
+            // Listed explicitly so a wider `info` cannot shadow it.
             path: cwd,
-            ...branchMeta,
+            branch: branchMeta.branch,
+            baseSha: branchMeta.baseSha,
           },
         });
       }

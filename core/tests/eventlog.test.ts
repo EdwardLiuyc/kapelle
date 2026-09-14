@@ -33,6 +33,17 @@ const chunk = (text: string, agent = "t0"): AgentEventEnvelope => ({
 
 const tick = () => new Promise((ok) => setImmediate(ok));
 
+/** Waits up to `ms` for `ok`, yielding between checks. Counting event-loop
+ *  turns is not a time bound — an fs write callback can land many turns later
+ *  under load — which made the turn-counted waits flaky. */
+async function waitFor(ok: () => boolean, what: string, ms = 5_000) {
+  for (const end = Date.now() + ms; Date.now() < end; ) {
+    if (ok()) return;
+    await tick();
+  }
+  assert.ok(ok(), `timed out waiting for ${what}`);
+}
+
 /** Everything `follow` sends, in order. */
 function collect(log: EventLog, after: number, signal?: AbortSignal) {
   const seqs: number[] = [];
@@ -98,10 +109,11 @@ test("a reader after the run gets the lines after its cursor, then ends", async 
 });
 
 test("readers attached while writes are in flight see no gap, duplicate or partial line", async (t) => {
-  // The whole point of one source: history and live tail are one loop, so a
-  // reader that starts mid-write and catches up must hand over from the file
-  // to the bell without losing or repeating a line. Lines are large and
-  // multi-byte so reads cross 64 KiB chunks mid-character.
+  // The whole point of one source: every reader sees the same contiguous
+  // stream. These readers attach at the committed tail, so their lines arrive
+  // from the bell while writes are still in flight; lines are large and
+  // multi-byte so the final full-replay reader crosses 64 KiB chunks
+  // mid-character. The disk-to-bell handover is the next test.
   const { log } = await logIn(t);
   const text = "é🙂".repeat(300);
   const TOTAL = 3000;
@@ -111,8 +123,8 @@ test("readers attached while writes are in flight see no gap, duplicate or parti
   for (let i = 1; i <= TOTAL; i++) {
     log.append(chunk(`${i}:${text}`, `t${i % 3}`));
     if (i % 500 === 0) {
-      // Uncommitted writes are pending here, so this reader starts on the
-      // file and must catch up to the bell while appends keep coming.
+      // At the committed tail (`next = committed + 1`), so this reader is
+      // bell-driven while later appends are still uncommitted.
       const after = log.size;
       cursors.push(after);
       readers.push(collect(log, after));
@@ -135,15 +147,92 @@ test("readers attached while writes are in flight see no gap, duplicate or parti
   });
 });
 
+test("a reader behind the tail drains the file, then hands over to the bell", async (t) => {
+  // The keystone of the one-source design, made deterministic: a reader that
+  // starts behind the committed tail reads those lines from the file, then
+  // takes the rest from the writer's notification. The in-flight test above
+  // attaches at the tail, so this crossing is the one it cannot reach.
+  const { log } = await logIn(t);
+  for (const text of ["1", "2", "3"]) log.append(chunk(text));
+  await waitFor(() => log.size >= 3, "the prefix to commit");
+
+  const r = collect(log, 2); // next = 3, so the first line must come from disk
+  await waitFor(() => r.seqs.length >= 1, "the disk prefix");
+  assert.deepEqual(r.seqs, [3], "the committed prefix arrived from the file");
+
+  log.append(chunk("4"));
+  await waitFor(() => r.seqs.length >= 2, "the first live line");
+  log.append(chunk("5"));
+  await log.close();
+  await r.done;
+
+  assert.deepEqual(
+    r.seqs,
+    [3, 4, 5],
+    "no gap and no duplicate at the handover",
+  );
+  r.lines.forEach((line, i) => {
+    assert.equal(JSON.parse(line).update.content.text, String(3 + i));
+  });
+});
+
+test("an abort mid-drain stops the sends, including the rest of the chunk", async (t) => {
+  // All three lines are committed before the reader starts, so they arrive in
+  // one 64 KiB read. The abort lands in the first `send`; the two lines still
+  // buffered in that chunk must not follow it out.
+  const { log } = await logIn(t);
+  for (const text of ["a", "b", "c"]) log.append(chunk(text));
+  await waitFor(() => log.size >= 3, "the lines to commit");
+
+  const stop = new AbortController();
+  const seqs: number[] = [];
+  const done = log.follow(
+    0,
+    (seq) => {
+      seqs.push(seq);
+      stop.abort();
+    },
+    stop.signal,
+  );
+  await log.close();
+  await done;
+  assert.deepEqual(seqs, [1], "nothing is sent after the abort");
+});
+
+test("an abort in the bell stops lines committed in the same batch", async (t) => {
+  // Appends made in one go are flushed as one write, and their callbacks ring
+  // the bell back to back in a single tick — before the reader's own teardown
+  // can remove it. Abort on line 3, and lines 4 and 5 of that batch must stay
+  // behind (measured 2026-09-14: without the check they were sent).
+  const { log } = await logIn(t);
+  log.append(chunk("a"));
+  const stop = new AbortController();
+  const seqs: number[] = [];
+  const done = log.follow(
+    0,
+    (seq) => {
+      seqs.push(seq);
+      if (seq === 3) stop.abort();
+    },
+    stop.signal,
+  );
+  await waitFor(() => seqs.length >= 1, "the first line");
+
+  for (const text of ["b", "c", "d", "e"]) log.append(chunk(text));
+  await done;
+  await log.close();
+  assert.deepEqual(seqs, [1, 2, 3], "nothing is sent after the abort");
+});
+
 test("a caught-up reader gets new lines live, and an abort detaches it", async (t) => {
   const { log } = await logIn(t);
   log.append(chunk("a"));
   const stop = new AbortController();
   const r = collect(log, 0, stop.signal);
 
-  for (let i = 0; i < 20 && r.seqs.length < 1; i++) await tick();
+  await waitFor(() => r.seqs.length >= 1, "the first live line");
   log.append(chunk("b"));
-  for (let i = 0; i < 20 && r.seqs.length < 2; i++) await tick();
+  await waitFor(() => r.seqs.length >= 2, "the second live line");
   assert.deepEqual(r.seqs, [1, 2], "live line arrived before the log closed");
 
   stop.abort();

@@ -456,7 +456,9 @@ export interface ClientTaskStartedEvent extends Meta {
 }
 
 /** The task's own checkout exists. Absent in the shared-cwd fallback, where
- *  no worktree is made. */
+ *  no worktree is made. `path` is the workspace the task ran in — the checkout
+ *  root, or the `--cwd` subdirectory inside it; the same path the task reports
+ *  as its `cwd`. */
 export interface ClientWorktreeCreatedEvent extends Meta {
   sessionUpdate: "_client_worktree_created";
   path: string;

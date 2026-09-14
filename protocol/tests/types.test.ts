@@ -110,6 +110,14 @@ const CLIENT_EVENTS: AgentEvent[] = [
     kind: "filesNotInDiff",
     text: "<files> names ghost.ts, which the working tree does not show as changed.",
   },
+  { sessionUpdate: "_client_task_started", harness: "opencode" },
+  {
+    sessionUpdate: "_client_worktree_created",
+    path: "/wt/run/one/pkg",
+    branch: "kapelle/run/one",
+    baseSha: "0123456789abcdef",
+  },
+  { sessionUpdate: "_client_task_finished", status: "done", durationMs: 1234 },
 ];
 
 // --- the exhaustive switch ---------------------------------------------------

@@ -395,6 +395,10 @@ async function getEvents(
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
   });
+  // Headers go out now, not on the first write: a reconnecting client whose
+  // `Last-Event-ID` is already the tail has no history to replay, and without
+  // this it would sit in "connecting" until the next event.
+  res.flushHeaders();
   try {
     await log.follow(
       after,

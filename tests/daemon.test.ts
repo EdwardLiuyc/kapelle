@@ -19,7 +19,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
@@ -411,6 +411,50 @@ test("a subdirectory cwd runs inside its registered root, and the daemon writes 
   assert.equal(after.stdout, "");
 });
 
+test("a subdirectory run logs the workspace path it actually ran in", async (t) => {
+  // M2-2's `_client_worktree_created.path` is the task's workspace, not the
+  // checkout root: `Worktrees.info` must not leak its `Held.path` into the
+  // event. `--cwd <root>/pkg` is the case where the two differ, and where the
+  // silent spread used to overwrite `path: cwd`.
+  const root = await gitRepo(t, {
+    ignore: "/.kapelle/\n",
+    files: { "pkg/file.txt": "committed\n" },
+  });
+  const d = await boot(t);
+  const cwd = await added(d, join(root, "pkg"));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  const id = posted.body.id as string;
+  assert.match((await settled(d, id)).status, /^(done|warned)$/);
+
+  const events = (
+    await readFile(
+      join(await realpath(root), ".kapelle", "runs", id, "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const created = events.find(
+    (e) => e.update.sessionUpdate === "_client_worktree_created",
+  );
+  assert.ok(created, "the worktree event landed in the log");
+  assert.ok(
+    created.update.path.endsWith(`${sep}one${sep}pkg`),
+    `path is the workspace inside the checkout, got ${created.update.path}`,
+  );
+  assert.ok(
+    created.update.path.includes(`${sep}.kapelle${sep}wt${sep}`),
+    `path is inside the run's worktree, got ${created.update.path}`,
+  );
+  assert.match(created.update.branch, /^kapelle\//);
+  assert.ok(String(created.update.baseSha).length > 0, "baseSha is recorded");
+});
+
 // --- DELETE /runs/:id, and what the record carries ------------------------------
 
 test("DELETE cancels a live run, and refuses a settled or unknown one", async (t) => {
@@ -458,7 +502,11 @@ interface Stream {
   status: number;
   frames: {
     id: number;
-    data: { seq: number; agent: string; update: { sessionUpdate: string } };
+    data: {
+      seq: number;
+      agent: string;
+      update: { sessionUpdate: string; status?: string };
+    };
   }[];
   /** Resolves when the daemon ends the stream. */
   ended: Promise<void>;
@@ -506,8 +554,12 @@ async function stream(
   return out;
 }
 
-async function until(what: string, check: () => boolean): Promise<void> {
-  for (const end = Date.now() + 20_000; Date.now() < end; ) {
+async function until(
+  what: string,
+  check: () => boolean,
+  ms = 20_000,
+): Promise<void> {
+  for (const end = Date.now() + ms; Date.now() < end; ) {
     if (check()) return;
     await new Promise((ok) => setTimeout(ok, 20));
   }
@@ -547,6 +599,42 @@ test("a stream attached mid-run gets the history then the live tail, contiguousl
       has(first, "one", "_client_task_finished") &&
       has(first, "stuck", "_client_task_started"),
   );
+  const finished = first.frames.find(
+    (f) =>
+      f.data.agent === "one" &&
+      f.data.update.sessionUpdate === "_client_task_finished",
+  );
+  assert.ok(finished, "the first task's verdict is logged");
+  assert.ok(
+    finished.data.update.status === "done" ||
+      finished.data.update.status === "warned",
+    `a non-cancelled task finished with ${String(finished.data.update.status)}`,
+  );
+
+  // A reconnect whose cursor is already the tail has no history to write, so
+  // the 200 has to flush on its own. Without `flushHeaders` this fetch would
+  // never resolve until the next event — and `stuck` never sends one.
+  const committed = (
+    await readFile(join(cwd, ".kapelle", "runs", id, "events.jsonl"), "utf8")
+  )
+    .trimEnd()
+    .split("\n").length;
+  const tailStream = stream(d, id, committed);
+  // If the timeout below wins, this still settles later; nothing may reject
+  // unhandled just because the assertion already failed.
+  void tailStream.then((s) => void s.ended.catch(() => {})).catch(() => {});
+  let slow: ReturnType<typeof setTimeout> | undefined;
+  const caught = await Promise.race([
+    tailStream,
+    new Promise<never>((_, fail) => {
+      slow = setTimeout(
+        () => fail(new Error("a caught-up stream never received its headers")),
+        5_000,
+      );
+    }),
+  ]).finally(() => clearTimeout(slow));
+  assert.equal(caught.status, 200, "headers arrive before any event does");
+  assert.deepEqual(caught.frames, [], "no history is replayed past the tail");
 
   const late = await stream(d, id);
   const resumed = await stream(d, id, 2);
@@ -555,7 +643,7 @@ test("a stream attached mid-run gets the history then the live tail, contiguousl
     () => late.frames.length >= first.frames.length,
   );
   assert.equal((await api(d, "DELETE", `/runs/${id}`)).status, 202);
-  await Promise.all([first.ended, late.ended, resumed.ended]);
+  await Promise.all([first.ended, late.ended, resumed.ended, caught.ended]);
 
   const seqs = (s: Stream) => s.frames.map((f) => f.id);
   const n = first.frames.length;
@@ -640,12 +728,33 @@ test("a client that disconnects mid-run leaves no reader holding the log open", 
   };
   await until("the writer to open the log", () => handles() === 1);
 
-  const client = new AbortController();
-  const res = await fetch(`${d.url}/runs/${id}/events`, {
-    headers: { authorization: `Bearer ${d.token}` },
-    signal: client.signal,
-  });
-  assert.equal(res.status, 200);
+  // A reader opens the file only when the daemon already counts a committed
+  // line. The bytes can be visible before the write callback advances
+  // `committed`, so do not gate on the file: a stream that arrives at the tail
+  // stays bell-driven, never opens the file, and `handles() === 2` never
+  // arrives. Retry with fresh streams until one opens the file, cancelling
+  // each abandoned stream so it leaves no reader behind.
+  let client: AbortController | undefined;
+  let res: Awaited<ReturnType<typeof fetch>> | undefined;
+  for (let attempt = 0; attempt < 20 && handles() !== 2; attempt++) {
+    client = new AbortController();
+    res = await fetch(`${d.url}/runs/${id}/events`, {
+      headers: { authorization: `Bearer ${d.token}` },
+      signal: client.signal,
+    });
+    assert.equal(res.status, 200);
+    await until("the reader to open the log", () => handles() === 2, 250).catch(
+      () => {},
+    );
+    if (handles() === 2) break;
+    client.abort();
+    await res.body?.cancel().catch(() => {});
+    await until("the reader to let go", () => handles() === 1, 5_000);
+    client = undefined;
+    res = undefined;
+  }
+  assert.ok(client, "a reader attached");
+  assert.ok(res, "a reader attached and opened the log");
   await until("the reader to open the log", () => handles() === 2);
 
   client.abort();

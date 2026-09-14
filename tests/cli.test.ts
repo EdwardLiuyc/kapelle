@@ -237,6 +237,40 @@ test("--file runs every task and reports each one", async (t) => {
   assert.match(r.stdout, /done — 3 tasks, 3 turns/);
 });
 
+test("--file runs write the same event log the daemon replays", async (t) => {
+  // M2-2 acceptance: `core/run.ts` subscribes the log, so the run-file path
+  // writes one too. The daemon half is covered in tests/daemon.test.ts.
+  const cwd = await tempDir(t);
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  assert.equal(r.code, 0);
+
+  const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
+  const events = (
+    await readFile(
+      join(cwd, ".kapelle", "runs", String(runId), "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+
+  assert.deepEqual(
+    events.map((e) => e.seq),
+    Array.from({ length: events.length }, (_, i) => i + 1),
+  );
+  for (const e of events) {
+    assert.equal(e.agent, "one");
+    assert.equal(typeof e.update.sessionUpdate, "string");
+  }
+  const kinds = events.map((e) => e.update.sessionUpdate);
+  assert.ok(kinds.includes("_client_task_started"), "started is logged");
+  assert.ok(kinds.includes("_client_task_finished"), "finished is logged");
+  assert.ok(kinds.includes("agent_message_chunk"), "prose is logged raw");
+});
+
 test("every run-file task carries its own advisory notice, on stderr", async (t) => {
   // A `--cmd` spec is unmeasured, so the reachable offline notice is the
   // advisory "no measured labels" line. Every task starts its own harness,

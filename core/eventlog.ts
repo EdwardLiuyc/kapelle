@@ -105,7 +105,9 @@ export function createEventLog(
     async follow(after, send, signal) {
       let next = after + 1;
       const bell: Send = (seq, line) => {
-        if (seq !== next) return;
+        // `signal` can abort while the reader is parked; the bell must go
+        // quiet then, not on the microtask that removes it.
+        if (seq !== next || signal?.aborted) return;
         send(seq, line);
         next += 1;
       };
@@ -162,11 +164,14 @@ async function readLines(
       pos,
     );
     if (bytesRead === 0) return;
+    // An abort during the read must not dispatch this chunk: `follow` promises
+    // sends stop when `signal` aborts.
+    if (signal?.aborted) return;
     pos += bytesRead;
     // Split on bytes, not on a decoded string: a chunk boundary can land
     // inside a multi-byte character, never inside a newline.
     let data = Buffer.concat([carry, buf.subarray(0, bytesRead)]);
-    for (let nl = data.indexOf(NEWLINE); nl !== -1; ) {
+    for (let nl = data.indexOf(NEWLINE); nl !== -1 && !signal?.aborted; ) {
       onLine(data.toString("utf8", 0, nl));
       data = data.subarray(nl + 1);
       nl = data.indexOf(NEWLINE);

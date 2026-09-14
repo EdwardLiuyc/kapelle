@@ -377,7 +377,11 @@ export async function openWorktrees(
       },
 
       info(taskId) {
-        return held.get(taskId);
+        // Deliberately the declared shape, never the `Held` record: callers
+        // spread what they get, and `Held.path` is the checkout root — not the
+        // workspace `acquire` returned when `--cwd` named a subdirectory.
+        const task = held.get(taskId);
+        return task && { branch: task.branch, baseSha: task.baseSha };
       },
 
       async release(taskId, status) {
