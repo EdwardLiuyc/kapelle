@@ -10,6 +10,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readdirSync, readlinkSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -449,4 +450,209 @@ test("containment notices reach the run record, where nothing drops them", async
   const find = (re: RegExp) => notices.find((n) => re.test(n.text));
   assert.equal(find(/safe mode was not negotiated/)?.taskId, "one");
   assert.equal(find(/is not a git repository/)?.taskId, "run");
+});
+
+// --- GET /runs/:id/events, M2-2 -------------------------------------------------
+
+interface Stream {
+  status: number;
+  frames: {
+    id: number;
+    data: { seq: number; agent: string; update: { sessionUpdate: string } };
+  }[];
+  /** Resolves when the daemon ends the stream. */
+  ended: Promise<void>;
+}
+
+/** Opens the SSE stream and parses frames as they arrive. */
+async function stream(
+  d: Daemon,
+  id: string,
+  lastEventId?: number | string,
+): Promise<Stream> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${d.token}`,
+  };
+  if (lastEventId !== undefined) headers["last-event-id"] = String(lastEventId);
+  const res = await fetch(`${d.url}/runs/${id}/events`, { headers });
+  const out: Stream = {
+    status: res.status,
+    frames: [],
+    ended: Promise.resolve(),
+  };
+  if (res.status !== 200 || !res.body) {
+    await res.body?.cancel();
+    return out;
+  }
+  assert.equal(res.headers.get("content-type"), "text/event-stream");
+  const body = res.body.pipeThrough(new TextDecoderStream());
+  out.ended = (async () => {
+    let buffer = "";
+    for await (const text of body) {
+      buffer += text;
+      for (
+        let end = buffer.indexOf("\n\n");
+        end !== -1;
+        end = buffer.indexOf("\n\n")
+      ) {
+        const frame = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const id = /^id: (\d+)$/m.exec(frame)?.[1];
+        const data = /^data: (.*)$/m.exec(frame)?.[1];
+        out.frames.push({ id: Number(id), data: JSON.parse(data as string) });
+      }
+    }
+  })();
+  return out;
+}
+
+async function until(what: string, check: () => boolean): Promise<void> {
+  for (const end = Date.now() + 20_000; Date.now() < end; ) {
+    if (check()) return;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+test("a stream attached mid-run gets the history then the live tail, contiguously, as the log file has it", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun(
+      [
+        { id: "one", prompt: "hi" },
+        {
+          id: "stuck",
+          prompt: "hi",
+          cmd: `node ${MOCK_AGENT} --scenario stall`,
+        },
+      ],
+      { maxConcurrency: 1 },
+    ),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  const { id } = posted.body;
+
+  const first = await stream(d, id);
+  assert.equal(first.status, 200);
+  const has = (s: Stream, agent: string, kind: string) =>
+    s.frames.some(
+      (f) => f.data.agent === agent && f.data.update.sessionUpdate === kind,
+    );
+  // Mid-run for certain: `one` is over and `stuck` never answers its prompt.
+  await until(
+    "the second task to start",
+    () =>
+      has(first, "one", "_client_task_finished") &&
+      has(first, "stuck", "_client_task_started"),
+  );
+
+  const late = await stream(d, id);
+  const resumed = await stream(d, id, 2);
+  await until(
+    "the late stream to catch up",
+    () => late.frames.length >= first.frames.length,
+  );
+  assert.equal((await api(d, "DELETE", `/runs/${id}`)).status, 202);
+  await Promise.all([first.ended, late.ended, resumed.ended]);
+
+  const seqs = (s: Stream) => s.frames.map((f) => f.id);
+  const n = first.frames.length;
+  assert.deepEqual(
+    seqs(first),
+    Array.from({ length: n }, (_, i) => i + 1),
+  );
+  assert.deepEqual(late.frames, first.frames);
+  assert.deepEqual(resumed.frames, first.frames.slice(2));
+  assert.ok(
+    has(first, "stuck", "_client_task_finished"),
+    "the tail reached the end",
+  );
+
+  const file = await readFile(
+    join(cwd, ".kapelle", "runs", id, "events.jsonl"),
+    "utf8",
+  );
+  assert.deepEqual(
+    file
+      .trimEnd()
+      .split("\n")
+      .map((l) => JSON.parse(l)),
+    first.frames.map((f) => f.data),
+  );
+});
+
+test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the token is required", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  const { id } = posted.body;
+  await settled(d, id);
+
+  assert.equal((await stream(d, "nope")).status, 404);
+  assert.equal(
+    (await api(d, "GET", `/runs/${id}/events`, undefined, null)).status,
+    401,
+  );
+  for (const bad of ["x", -1, 1.5, 100_000]) {
+    assert.equal(
+      (await stream(d, id, bad)).status,
+      400,
+      `Last-Event-ID ${bad}`,
+    );
+  }
+
+  const done = await stream(d, id);
+  await done.ended;
+  assert.ok(done.frames.length > 0, "a settled run still replays, then ends");
+});
+
+test("a client that disconnects mid-run leaves no reader holding the log open", {
+  skip: process.platform !== "linux" && "reads /proc/<pid>/fd",
+}, async (t) => {
+  // A reader is invisible over HTTP, but a reader that has touched the file
+  // keeps it open until it detaches. With the writer that is two handles; a
+  // reader left attached after its client left would keep the second until
+  // the run ends — and this run never ends on its own.
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([
+      { id: "stuck", prompt: "hi", cmd: `node ${MOCK_AGENT} --scenario stall` },
+    ]),
+  });
+  const { id } = posted.body;
+  const log = join(await realpath(cwd), ".kapelle", "runs", id, "events.jsonl");
+  const handles = () => {
+    const fds = join("/proc", String(d.pid), "fd");
+    return readdirSync(fds).filter((fd) => {
+      try {
+        return readlinkSync(join(fds, fd)) === log;
+      } catch {
+        return false; // closed between the listing and the read
+      }
+    }).length;
+  };
+  await until("the writer to open the log", () => handles() === 1);
+
+  const client = new AbortController();
+  const res = await fetch(`${d.url}/runs/${id}/events`, {
+    headers: { authorization: `Bearer ${d.token}` },
+    signal: client.signal,
+  });
+  assert.equal(res.status, 200);
+  await until("the reader to open the log", () => handles() === 2);
+
+  client.abort();
+  await res.body?.cancel().catch(() => {});
+  await until("the reader to let go", () => handles() === 1);
+  assert.equal((await api(d, "GET", `/runs/${id}`)).body.status, "running");
+
+  await api(d, "DELETE", `/runs/${id}`);
+  await settled(d, id);
 });

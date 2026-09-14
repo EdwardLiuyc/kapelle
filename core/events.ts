@@ -23,10 +23,10 @@
  *
  * **M1c-4 was the first story with a real subscriber and it still did not
  * widen the union** — `core/notify.ts` consumes the two `_client_` events
- * above and none of the three supervisor variants, so paying for them here
- * would have bought a listener nobody has. M2's persisted log is the consumer
- * that actually reads all three; per the 2026-09-06 amendment it widens once,
- * for all of them.
+ * above and none of the three supervisor variants. M2-2's persisted log
+ * (`core/eventlog.ts`) is the consumer that reads all three, and it widened
+ * the union once: `_client_task_started`, `_client_worktree_created` and
+ * `_client_task_finished`.
  *
  * Not `node:events`: `EventEmitter.emit` propagates a listener's throw and
  * skips the listeners behind it, so a broken renderer would take the run down

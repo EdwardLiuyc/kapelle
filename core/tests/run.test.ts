@@ -384,7 +384,9 @@ test("prose is buffered per task, not interleaved", async () => {
 test("a task's events reach the run's bus, tagged with the task id", async () => {
   const bus = createEventBus();
   const seen: string[] = [];
-  bus.addListener(({ agent }) => seen.push(agent));
+  bus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "agent_thought_chunk") seen.push(agent);
+  });
 
   const exec: TaskExecutor = async (task, ctx) => {
     ctx.bus.emit({
@@ -399,6 +401,48 @@ test("a task's events reach the run's bus, tagged with the task id", async () =>
 
   await runRun(runOf(2, 2), { cwd: "/tmp/nowhere", bus }, exec);
   assert.deepEqual(seen.sort(), ["t0", "t1"]);
+});
+
+test("each task is bracketed by started and finished events, a pre-start cancel included", async () => {
+  // M2-2: a replay has no other way to tell where one task's events begin and
+  // how it ended. A task cancelled before it started never starts, but must
+  // still say it finished, or a log reader never learns it existed.
+  const bus = createEventBus();
+  const seen: string[] = [];
+  bus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "_client_task_started") {
+      seen.push(`${agent}:started:${update.harness}`);
+    } else if (update.sessionUpdate === "_client_task_finished") {
+      seen.push(`${agent}:finished:${update.status}`);
+    } else {
+      seen.push(`${agent}:${update.sessionUpdate}`);
+    }
+  });
+
+  const cancel = new AbortController();
+  const exec: TaskExecutor = async (task, ctx) => {
+    ctx.bus.emit({
+      agent: task.id,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "x" },
+      },
+    });
+    cancel.abort();
+    return { stopReason: "end_turn" };
+  };
+
+  await runRun(
+    runOf(2, 1),
+    { cwd: "/tmp/nowhere", bus, signal: cancel.signal },
+    exec,
+  );
+  assert.deepEqual(seen, [
+    `t0:started:${runOf(2, 1).tasks[0]?.agent}`,
+    "t0:agent_thought_chunk",
+    "t0:finished:cancelled",
+    "t1:finished:cancelled",
+  ]);
 });
 
 test("askPolicy reaches the asking task and nothing else", async () => {

@@ -445,6 +445,35 @@ export interface ClientStallWarningEvent extends Meta {
   text: string;
 }
 
+/** A task left the queue and is about to acquire its worktree (M2-2, #32).
+ *  The first of the three supervisor variants M1a-6's 2026-09-06 amendment
+ *  left for the persisted log to widen: a replay has no other way to tell
+ *  where one task's events begin. `harness` is the registry id or `--cmd`
+ *  label — `agent` on the envelope is already the task id. */
+export interface ClientTaskStartedEvent extends Meta {
+  sessionUpdate: "_client_task_started";
+  harness: string;
+}
+
+/** The task's own checkout exists. Absent in the shared-cwd fallback, where
+ *  no worktree is made. */
+export interface ClientWorktreeCreatedEvent extends Meta {
+  sessionUpdate: "_client_worktree_created";
+  path: string;
+  branch: string;
+  baseSha: string;
+}
+
+/** A task's verdict, after its worktree was released. Also sent for a task
+ *  cancelled before it started, which has no `_client_task_started`. `status`
+ *  repeats core's `TaskStatus` because protocol may not depend on core — the
+ *  same rule `ClientResultWarningEvent.kind` follows. */
+export interface ClientTaskFinishedEvent extends Meta {
+  sessionUpdate: "_client_task_finished";
+  status: "done" | "warned" | "cancelled" | "skipped" | "timed_out" | "failed";
+  durationMs: number;
+}
+
 /** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
@@ -453,7 +482,10 @@ export type AgentEvent =
   | ClientWroteFileEvent
   | ClientCancelRequestedEvent
   | ClientResultWarningEvent
-  | ClientStallWarningEvent;
+  | ClientStallWarningEvent
+  | ClientTaskStartedEvent
+  | ClientWorktreeCreatedEvent
+  | ClientTaskFinishedEvent;
 
 /** The `session/update` notification as it arrives. */
 export interface SessionNotification extends Meta {
@@ -735,7 +767,10 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_wrote_file"
         | "_client_cancel_requested"
         | "_client_result_warning"
-        | "_client_stall_warning" = u.sessionUpdate;
+        | "_client_stall_warning"
+        | "_client_task_started"
+        | "_client_worktree_created"
+        | "_client_task_finished" = u.sessionUpdate;
       void fallthrough;
       return false;
     }
