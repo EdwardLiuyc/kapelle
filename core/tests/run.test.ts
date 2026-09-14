@@ -384,7 +384,9 @@ test("prose is buffered per task, not interleaved", async () => {
 test("a task's events reach the run's bus, tagged with the task id", async () => {
   const bus = createEventBus();
   const seen: string[] = [];
-  bus.addListener(({ agent }) => seen.push(agent));
+  bus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "agent_thought_chunk") seen.push(agent);
+  });
 
   const exec: TaskExecutor = async (task, ctx) => {
     ctx.bus.emit({
@@ -399,6 +401,109 @@ test("a task's events reach the run's bus, tagged with the task id", async () =>
 
   await runRun(runOf(2, 2), { cwd: "/tmp/nowhere", bus }, exec);
   assert.deepEqual(seen.sort(), ["t0", "t1"]);
+});
+
+test("each task is bracketed by started and finished events, a pre-start cancel included", async () => {
+  // M2-2: a replay has no other way to tell where one task's events begin and
+  // how it ended. A task cancelled before it started never starts, but must
+  // still say it finished, or a log reader never learns it existed.
+  const bus = createEventBus();
+  const seen: string[] = [];
+  bus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "_client_task_started") {
+      seen.push(`${agent}:started:${update.harness}`);
+    } else if (update.sessionUpdate === "_client_task_finished") {
+      seen.push(`${agent}:finished:${update.status}`);
+    } else {
+      seen.push(`${agent}:${update.sessionUpdate}`);
+    }
+  });
+
+  const cancel = new AbortController();
+  const exec: TaskExecutor = async (task, ctx) => {
+    ctx.bus.emit({
+      agent: task.id,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "x" },
+      },
+    });
+    cancel.abort();
+    return { stopReason: "end_turn" };
+  };
+
+  await runRun(
+    runOf(2, 1),
+    { cwd: "/tmp/nowhere", bus, signal: cancel.signal },
+    exec,
+  );
+  assert.deepEqual(seen, [
+    `t0:started:${runOf(2, 1).tasks[0]?.agent}`,
+    "t0:agent_thought_chunk",
+    "t0:finished:cancelled",
+    "t1:finished:cancelled",
+  ]);
+});
+
+test("a successful task's finished event carries its verdict and duration", async () => {
+  // The bracket test above forces cancellation, so a hardcoded
+  // `status: "cancelled"` or `durationMs: 0` would survive it.
+  const bus = createEventBus();
+  const seen: AgentEventEnvelope[] = [];
+  bus.addListener((event) => seen.push(event));
+
+  const exec: TaskExecutor = async () => {
+    // A measurable delay: `durationMs: 0` is the mutant this test exists to
+    // kill, so the assertion needs a real clock floor to compare against.
+    await new Promise((ok) => setTimeout(ok, 20));
+    return { stopReason: "end_turn" };
+  };
+  await runRun(runOf(1, 1), { cwd: "/tmp/nowhere", bus }, exec);
+
+  const finished = seen.find(
+    (event) => event.update.sessionUpdate === "_client_task_finished",
+  );
+  assert.ok(finished, "the finished event reached the bus");
+  assert.equal(finished.update.sessionUpdate, "_client_task_finished");
+  if (finished.update.sessionUpdate === "_client_task_finished") {
+    assert.equal(finished.update.status, "done");
+    assert.ok(
+      finished.update.durationMs >= 10,
+      `durationMs is the task's own clock, got ${finished.update.durationMs}`,
+    );
+  }
+});
+
+test("started names the registry agent, or the --cmd label", async () => {
+  const named = validateRun({
+    maxConcurrency: 1,
+    tasks: [{ id: "named", prompt: "hello", agent: "opencode" }],
+  });
+  const namedSeen: string[] = [];
+  const namedBus = createEventBus();
+  namedBus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "_client_task_started") {
+      namedSeen.push(`${agent}:${update.harness}`);
+    }
+  });
+  await runRun(named, { cwd: "/tmp/nowhere", bus: namedBus }, async () => ({
+    stopReason: "end_turn",
+  }));
+  assert.deepEqual(namedSeen, ["named:opencode"]);
+
+  const cmdSeen: string[] = [];
+  const cmdBus = createEventBus();
+  cmdBus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "_client_task_started") {
+      cmdSeen.push(`${agent}:${update.harness}`);
+    }
+  });
+  await runRun(runOf(1, 1), { cwd: "/tmp/nowhere", bus: cmdBus }, async () => ({
+    stopReason: "end_turn",
+  }));
+  // A literal, not `runOf(...).tasks[0].agent`: the derived label is what this
+  // pins (resolveAgent("", "node mock-agent.mjs") -> "mock-agent").
+  assert.deepEqual(cmdSeen, ["t0:mock-agent"]);
 });
 
 test("askPolicy reaches the asking task and nothing else", async () => {

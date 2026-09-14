@@ -374,6 +374,12 @@ as written — one small addition, not three. It is typed at `protocol/types.ts:
 was not adopted, the zero-runtime-dependency trait is intact, and `assertNever` still works.
 Per the rule above, this hand-extension re-opens the checkpoint at **M2-2**, the event log
 (written as M2-1 before the stories were renumbered; corrected at M2-1's pickup, #31).
+**Checkpoint closed at M2-2 (2026-09-14, #32): keep the hand-written types.** All three
+criteria say keep: the event log adds no ACP surface (its three new variants are
+`_client_` events), the SDK would add `zod`, and the log needs `assertNever` most. The log
+does not depend on the types either — `protocol/agent.ts` forwards every `session/update`
+as it arrived, unlisted variants included. The next checkpoint is a story that adds three
+or more untyped protocol surfaces.
 
 **M1a-3 · Port `acp.mjs` → `protocol/agent.ts` · M · needs M1a-2**
 Essentially intact. Both invariants preserved verbatim: the `toolCallId → {title, kind,
@@ -705,6 +711,10 @@ bus, when the run bus is the one being added as a listener. `addListener` also m
 file's own `BusListener` type, which `subscribe` did not. Done now because the cost only
 grows: five production call sites today, and M2's persisted log, M4's SSE stream and
 `core/notify.ts` each add one. Mechanical — 14 sites, no behaviour change.
+**Landed 2026-09-14 (M2-2, #32):** the persisted log widened the union with three
+`_client_` variants — task started, worktree created, task finished — emitted by
+`core/run.ts`. They joined the existing `_client_` events in `AgentEvent`, so no listener's
+destructuring changed. Permission pending had already landed with M1c-4.
 
 **M1a-7 · Port `render.mjs` and `run.mjs` · S · needs M1a-6**
 `run.ts` keeps driving in-process, TTY `ask` intact.
@@ -1584,6 +1594,18 @@ token** — live subscribers get the stream, the log gets the message, otherwise
 the story's *size* depends on it.
 *Done when* `curl -N` attached mid-run receives the history and then the live tail,
 contiguously.
+**Amended 2026-09-14 (pickup, #32): the Decision above is replaced.** (1) **The log is
+raw**: every bus event, one line each as `{seq, agent, update}`, with `_meta`; chunks are
+not coalesced, because joined text cannot be split again and a reader can join it. M0-4's
+443 events per opencode turn makes a task tens of kilobytes, so (2) **no compression**;
+M2-5's retention bounds the disk. (3) **The file is the only replay source**: each SSE
+connection tails `events.jsonl` from its own offset, so history and live tail are one loop
+and there is no ring-to-file hand-off. One open write stream; a caught-up reader takes the
+line from the writer's in-process notification instead of the disk; no reader passes the
+committed offset; memory is one byte offset per line. (4) The three supervisor variants
+M1a-6 left for this consumer land here: `_client_task_started`, `_client_worktree_created`,
+`_client_task_finished`. The log is `core/eventlog.ts`, subscribed by `core/run.ts`, so
+`--file` runs write one too.
 
 **M2-3 · Permission over API · M · needs M2-1, M1a-5**
 Pending decision list, `GET /permissions`, `POST /permissions/:id`, configurable timeout
@@ -1616,6 +1638,9 @@ is terminal **and** past the retention window (default 7 days).
 retention, and leaves no harness subprocess alive.
 **Amended 2026-09-11 (M2-1, #31):** one daemon serves every added repository, so the sweep
 reconciles each of them — which needs the repository list M2-6 persists.
+**Amended 2026-09-14 (M2-2, #32):** a task with `_client_task_started` and no
+`_client_task_finished` in `events.jsonl` was cut off, which the sweep can read. The log is
+uncompressed, so retention is its only disk bound; reaping a run removes its log with it.
 
 **M2-6 · Persistence · S · needs M2-1**
 JSON per run under `.kapelle/runs/<id>/`, written on state transitions. For completed-run
@@ -1631,6 +1656,9 @@ ensemble needs for concurrent plugin writers — and zero runtime dependencies s
 **Amended 2026-09-11 (M2-1, #31):** persist the list of added repositories too. The daemon
 keeps it in memory, so a restart forgets every `POST /repos`. It belongs to the daemon, not to
 a repository, so it lives in a user-level location rather than in any one `.kapelle/`.
+**Amended 2026-09-14 (M2-2, #32):** replay after a restart comes from M2-2's file. The
+daemon keeps only a `seq → offset` index per run, so this story rebuilds it by reading
+`events.jsonl` once; no second replay path. The run JSON stays separate from the log.
 
 **M2-7 · Config · S · needs M2-1**
 `.kapelle/config.json`, `KAPELLE_*` env override, layered env > project. Home for the
@@ -1642,6 +1670,7 @@ silently-ignored `stallIdleMs` typo is a watchdog that never fires.
 **Amended 2026-09-11 (M2-1, #31):** one daemon serves every repository, so the daemon-wide
 knobs — port, permission timeout — cannot come from one repository's `.kapelle/config.json`.
 They need a user-level file or `KAPELLE_*`; per-run knobs keep the project layer.
+**Amended 2026-09-14 (M2-2, #32):** no replay buffer size to configure — M2-2 has no ring.
 
 **M2-8 · Auth · S · needs M2-1**
 Localhost-only bind plus a shared-secret token file. Not optional: anything that can
@@ -1696,6 +1725,11 @@ the history and then the live tail.
 **Amended 2026-09-11 (M2-1, #31):** `--detach` reads the port and token from
 `$XDG_RUNTIME_DIR/kapelle/daemon.json` and sends `{cwd, run}`, with `cwd` the folder it was
 started in; a repository not yet added answers 403.
+**Amended 2026-09-14 (M2-2, #32):** the stream is raw — every bus event, text chunks
+included, `id:` its `seq`, `Last-Event-ID` honoured — so `attach` can feed it to
+`render.ts`. `render.ts` owns one stream at a time, so an N-task run needs the `--file`
+path's shape: one task in full, or milestones for all; that choice is this story's. Task
+boundaries arrive as `_client_task_started` / `_client_task_finished`.
 
 ---
 
@@ -1706,6 +1740,9 @@ Topological execution: parallel where no `needs`, sequential where there is. Lif
 rejection. Cycle detection is a validation error.
 *Done when* `node:test` covers toposort, cycles, and the dependent-skipping rule from
 M1b-2's `skipped` decision.
+**Amended 2026-09-14 (M2-2, #32):** a skipped task never starts, so it emits
+`_client_task_finished` with status `skipped`, as a task cancelled before it started already
+does — otherwise the log and SSE viewers never learn it existed.
 
 **M3-2 · Worktree inheritance · M · needs M3-1, M1b-3**
 **Inherit if you are the only successor; fork from the predecessor's branch otherwise** —
@@ -1782,6 +1819,10 @@ it. `toHtml` is deliberately absent from `core/markdown.ts` until this story add
 **M4-2 · Read views · L · needs M4-1, M2-2**
 Run list; per-run task cards with status, elapsed, token count and a stall indicator; the
 DAG rendered from `needs`; a live event timeline; the final `<task-result>` per task.
+**Amended 2026-09-14 (M2-2, #32):** the stream is raw, so the timeline joins
+`agent_message_chunk` pieces for display; task cards can key off `_client_task_started`,
+`_client_worktree_created` and `_client_task_finished`. `EventSource` still needs M2-8's
+query-parameter or cookie token.
 
 **M4-3 · Permission answering · M · needs M4-2, M2-3**
 The one write path, and what makes M4 a control surface rather than a viewer — it is what

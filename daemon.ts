@@ -46,6 +46,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
+import type { EventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
 import { type RunReport, runRun, type TaskStatus } from "./core/run.ts";
@@ -242,6 +243,11 @@ interface RunState {
 const runs = new Map<string, RunState>();
 /** Kept beside the record rather than on it, so a `GET` never serialises one. */
 const cancels = new Map<string, AbortController>();
+/** Settles once `runRun` hands over the log, or with `undefined` when the run
+ *  ended without one — a preflight that threw, or a state dir it could not
+ *  make. A `GET /events` that arrives first waits here rather than 404ing a
+ *  run that exists. */
+const eventLogs = new Map<string, Promise<EventLog | undefined>>();
 
 /**
  * `ask` is refused until M2-3 (decided 2026-09-11, #31).
@@ -322,11 +328,19 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
   const canceller = new AbortController();
   runs.set(id, state);
   cancels.set(id, canceller);
+  let settleLog: (log?: EventLog) => void = () => {};
+  eventLogs.set(
+    id,
+    new Promise((ok) => {
+      settleLog = ok;
+    }),
+  );
   runRun(run, {
     cwd,
     runId: id,
     bus: createEventBus(),
     signal: canceller.signal,
+    onEventLog: settleLog,
     onNotice: (taskId, text, kind) => {
       state.notices.push(kind ? { taskId, text, kind } : { taskId, text });
     },
@@ -341,8 +355,63 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
         state.error = messageOf(err);
       },
     )
-    .finally(() => cancels.delete(id));
+    .finally(() => {
+      cancels.delete(id);
+      settleLog(undefined);
+    });
   send(res, 202, { id });
+}
+
+/**
+ * `GET /runs/:id/events` — every event of the run, then the live tail, as SSE
+ * (M2-2, #32). Each event's `id:` is its `seq`, so a reconnecting client's
+ * `Last-Event-ID` resumes at the next one. The stream ends when the run does.
+ */
+async function getEvents(
+  id: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  // Before any await: a client that leaves while the log is still pending
+  // must not leave a reader behind for the rest of the run.
+  const gone = new AbortController();
+  res.on("close", () => gone.abort());
+
+  const pending = eventLogs.get(id);
+  if (!pending) throw refusal(404, `no run ${id}`);
+  const log = await pending;
+  if (!log) throw refusal(404, `run ${id} has no event log`);
+
+  const header = req.headers["last-event-id"];
+  const after = header === undefined ? 0 : Number(header);
+  if (!Number.isInteger(after) || after < 0 || after > log.size) {
+    throw refusal(
+      400,
+      `Last-Event-ID must be a whole number from 0 to ${log.size}; got ${header}`,
+    );
+  }
+
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+  });
+  // Headers go out now, not on the first write: a reconnecting client whose
+  // `Last-Event-ID` is already the tail has no history to replay, and without
+  // this it would sit in "connecting" until the next event.
+  res.flushHeaders();
+  try {
+    await log.follow(
+      after,
+      (seq, line) => res.write(`id: ${seq}\ndata: ${line}\n\n`),
+      gone.signal,
+    );
+  } catch {
+    // Headers are sent, so no error body can follow. A cut stream is what
+    // tells an SSE client to reconnect with its `Last-Event-ID`.
+    res.destroy();
+    return;
+  }
+  res.end();
 }
 
 async function route(req: IncomingMessage, res: ServerResponse) {
@@ -352,6 +421,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   }
   const { pathname } = new URL(req.url ?? "/", "http://daemon");
   const one = /^\/runs\/([^/]+)$/.exec(pathname);
+  const events = /^\/runs\/([^/]+)\/events$/.exec(pathname);
 
   if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
@@ -365,6 +435,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       200,
       [...runs.values()].map(({ id, cwd, status }) => ({ id, cwd, status })),
     );
+  } else if (req.method === "GET" && events) {
+    await getEvents(events[1] as string, req, res);
   } else if (req.method === "GET" && one) {
     const state = runs.get(one[1] as string);
     if (state) send(res, 200, state);

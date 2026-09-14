@@ -37,6 +37,7 @@ import {
   warningsFor,
 } from "../protocol/registry.ts";
 import type { StopReason, Usage } from "../protocol/types.ts";
+import { createEventLog, type EventLog } from "./eventlog.ts";
 import { createEventBus, type EventBus } from "./events.ts";
 import { newRunId } from "./ids.ts";
 import { negotiateSafeMode, policyFor } from "./policy.ts";
@@ -309,6 +310,10 @@ export interface RunOptions {
   askPolicy?: Policy;
   /** Notices a run must print even under `--quiet` (#13). */
   onNotice?: (taskId: string, text: string, kind?: Warning["kind"]) => void;
+  /** Handed the run's event log once it exists, before any task starts —
+   *  `daemon.ts` serves `GET /runs/:id/events` from it (M2-2). Never called
+   *  when the log directory could not be made. */
+  onEventLog?: (log: EventLog) => void;
 }
 
 /**
@@ -361,6 +366,16 @@ export async function runRun(
         err instanceof Error ? err.message : String(err)
       }`,
     );
+  }
+
+  // Subscribed before any task can emit, so `seq` 1 is the run's first event.
+  let eventLog: EventLog | undefined;
+  if (logs) {
+    eventLog = createEventLog(join(logDir, "events.jsonl"), (err) =>
+      options.onNotice?.("run", `cannot write event log: ${err.message}`),
+    );
+    options.bus.addListener(eventLog.append);
+    options.onEventLog?.(eventLog);
   }
 
   const results = new Array<TaskRun>(run.tasks.length);
@@ -421,6 +436,16 @@ export async function runRun(
           durationMs: 0,
           transcript: "",
         };
+        // No `_client_task_started` came first: a replay still needs to learn
+        // the task existed and how it ended.
+        options.bus.emit({
+          agent: task.id,
+          update: {
+            sessionUpdate: "_client_task_finished",
+            status: "cancelled",
+            durationMs: 0,
+          },
+        });
         continue;
       }
 
@@ -444,6 +469,8 @@ export async function runRun(
     await Promise.all(Array.from({ length: width }, worker));
   } finally {
     clearInterval(sweep);
+    // Every task has emitted its last event by now, so readers can end.
+    await eventLog?.close();
   }
 
   // The record is what M1c-3's merge reads. A non-git fallback has no branches
@@ -521,6 +548,10 @@ async function runOne(
   controls: Map<string, TaskControl>,
 ): Promise<TaskRun> {
   const started = Date.now();
+  options.bus.emit({
+    agent: task.id,
+    update: { sessionUpdate: "_client_task_started", harness: task.agent },
+  });
 
   // This task's own abort, chained to the run's. The executor sees only this
   // one, so a TTL cuts one task where ^C still cuts them all.
@@ -574,6 +605,20 @@ async function runOne(
     if (worktrees) {
       cwd = await worktrees.acquire(task.id, task.worktree);
       branchMeta = worktrees.info(task.id);
+      if (branchMeta) {
+        options.bus.emit({
+          agent: task.id,
+          update: {
+            sessionUpdate: "_client_worktree_created",
+            // The workspace the task runs in — the checkout root, or the
+            // `--cwd` subdirectory inside it — never `info`'s checkout root.
+            // Listed explicitly so a wider `info` cannot shadow it.
+            path: cwd,
+            branch: branchMeta.branch,
+            baseSha: branchMeta.baseSha,
+          },
+        });
+      }
     }
     const outcome = await exec(task, {
       cwd,
@@ -696,6 +741,16 @@ async function runOne(
     settled.branch = undefined;
     settled.baseSha = undefined;
   }
+  // After teardown, which never changes the verdict but can take long enough
+  // that a reader would otherwise see the next task start first.
+  options.bus.emit({
+    agent: task.id,
+    update: {
+      sessionUpdate: "_client_task_finished",
+      status: settled.status,
+      durationMs: settled.durationMs,
+    },
+  });
   return settled;
 }
 
