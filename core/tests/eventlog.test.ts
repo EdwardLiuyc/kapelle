@@ -273,3 +273,93 @@ test("a log that cannot be written reports once, keeps the run going, and ends r
   assert.deepEqual(r.seqs, []);
   assert.equal(log.size, 0);
 });
+
+test("size counts committed lines, not appended ones", async (t) => {
+  // daemon.ts bounds Last-Event-ID by log.size, so a size that counted
+  // `appended` would let a client resume past lines that are not replayable
+  // yet and skip them silently.
+  const { log } = await logIn(t);
+  log.append(chunk("a"));
+  log.append(chunk("b"));
+  assert.equal(log.size, 0, "no write callback has run yet");
+  await waitFor(() => log.size >= 2, "both lines to commit");
+  assert.equal(log.size, 2);
+});
+
+test("close is idempotent, and an append after close changes nothing", async (t) => {
+  const { log, path } = await logIn(t);
+  log.append(chunk("a"));
+  log.append(chunk("b"));
+  await log.close();
+  await log.close(); // no throw, no second flush
+  log.append(chunk("c"));
+
+  assert.equal(log.size, 2);
+  const texts = (await readFile(path, "utf8"))
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line).update.content.text);
+  assert.deepEqual(texts, ["a", "b"]);
+});
+
+test("a reader joining while close flushes still sees every line once", async (t) => {
+  // `close()` sets `accepting` false before `out.end()`, so a reader that
+  // arrives during the flush cannot rely on the `while (next <= committed)`
+  // loop alone: the flush's write callbacks are what ring it.
+  const { log } = await logIn(t);
+  const TOTAL = 20;
+  for (let i = 1; i <= TOTAL; i++) log.append(chunk(String(i)));
+
+  const closing = log.close();
+  const r = collect(log, 0);
+  await closing;
+  await r.done;
+  assert.deepEqual(r.seqs, range(1, TOTAL));
+});
+
+test("a non-zero cursor resumes on the byte offset after multi-byte lines", async (t) => {
+  // `starts` is byte offsets; a character-count regression would start the
+  // disk read inside a previous line and duplicate or corrupt seq 2.
+  const { log } = await logIn(t);
+  const texts = ["é🙂 first", "é🙂 second", "é🙂 third"];
+  for (const text of texts) log.append(chunk(text));
+  await waitFor(() => log.size >= 3, "the multi-byte lines to commit");
+
+  const r = collect(log, 1);
+  await log.close();
+  await r.done;
+  assert.deepEqual(r.seqs, [2, 3]);
+  assert.deepEqual(
+    r.lines.map((line) => JSON.parse(line).update.content.text),
+    texts.slice(1),
+  );
+});
+
+test("a line larger than one 64 KiB chunk survives a mid-read commit", async (t) => {
+  // Line 1 is short and line 2 is huge, so line 1 is dispatched while line 2
+  // is still being read from disk. The third line appended from inside line
+  // 1's `send` therefore commits while the reader is behind: `next` is 2, the
+  // bell must ignore seq 3, and the disk must hand it over exactly once later.
+  const { log } = await logIn(t);
+  const big = "é🙂".repeat(200_000); // ~1.2 MB, several 64 KiB reads
+  log.append(chunk("first"));
+  log.append(chunk(big));
+  await waitFor(() => log.size >= 2, "the two-line prefix to commit");
+
+  const seqs: number[] = [];
+  const lines: string[] = [];
+  const done = log.follow(0, (seq, line) => {
+    seqs.push(seq);
+    lines.push(line);
+    if (seq === 1) log.append(chunk("after"));
+  });
+  await waitFor(() => seqs.length >= 3, "the appended line");
+  await log.close();
+  await done;
+
+  assert.deepEqual(seqs, [1, 2, 3]);
+  assert.deepEqual(
+    lines.map((line) => JSON.parse(line).update.content.text),
+    ["first", big, "after"],
+  );
+});

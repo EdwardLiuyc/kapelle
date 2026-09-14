@@ -451,8 +451,28 @@ test("a subdirectory run logs the workspace path it actually ran in", async (t) 
     created.update.path.includes(`${sep}.kapelle${sep}wt${sep}`),
     `path is inside the run's worktree, got ${created.update.path}`,
   );
-  assert.match(created.update.branch, /^kapelle\//);
-  assert.ok(String(created.update.baseSha).length > 0, "baseSha is recorded");
+  assert.equal(
+    created.update.branch,
+    `kapelle/${id}/one`,
+    "the branch names the run and the task",
+  );
+  const head = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).stdout.trim();
+  assert.equal(created.update.baseSha, head, "the base sha is the clone point");
+  const kinds = events.map((e) => e.update.sessionUpdate);
+  const started = kinds.indexOf("_client_task_started");
+  const worktree = kinds.indexOf("_client_worktree_created");
+  const finished = kinds.indexOf("_client_task_finished");
+  assert.ok(
+    started !== -1 &&
+      worktree !== -1 &&
+      finished !== -1 &&
+      started < worktree &&
+      worktree < finished,
+    `task boundaries are ordered started < worktree < finished: ${kinds.join(", ")}`,
+  );
 });
 
 // --- DELETE /runs/:id, and what the record carries ------------------------------
@@ -613,13 +633,11 @@ test("a stream attached mid-run gets the history then the live tail, contiguousl
 
   // A reconnect whose cursor is already the tail has no history to write, so
   // the 200 has to flush on its own. Without `flushHeaders` this fetch would
-  // never resolve until the next event — and `stuck` never sends one.
-  const committed = (
-    await readFile(join(cwd, ".kapelle", "runs", id, "events.jsonl"), "utf8")
-  )
-    .trimEnd()
-    .split("\n").length;
-  const tailStream = stream(d, id, committed);
+  // never resolve until the next event — and `stuck` never sends one. The
+  // cursor is the last seq the first stream received, never the log file's
+  // line count: bytes can be on disk before the write callback advances
+  // `committed`, and a cursor past `log.size` is a 400.
+  const tailStream = stream(d, id, first.frames.at(-1)?.id ?? 0);
   // If the timeout below wins, this still settles later; nothing may reject
   // unhandled just because the assertion already failed.
   void tailStream.then((s) => void s.ended.catch(() => {})).catch(() => {});
@@ -681,10 +699,18 @@ test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the tok
   const { id } = posted.body;
   await settled(d, id);
 
-  assert.equal((await stream(d, "nope")).status, 404);
+  const nope = await api<{ error: string }>(d, "GET", "/runs/nope/events");
+  assert.equal(nope.status, 404);
+  assert.match(nope.body.error, /no run nope/, "the 404 names the run");
   assert.equal(
     (await api(d, "GET", `/runs/${id}/events`, undefined, null)).status,
     401,
+  );
+  assert.equal(
+    (await api(d, "GET", `/runs/${id}/events`, undefined, "0".repeat(64)))
+      .status,
+    401,
+    "a wrong token is 401 on the events route too",
   );
   for (const bad of ["x", -1, 1.5, 100_000]) {
     assert.equal(
@@ -697,6 +723,14 @@ test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the tok
   const done = await stream(d, id);
   await done.ended;
   assert.ok(done.frames.length > 0, "a settled run still replays, then ends");
+
+  const fromZero = await stream(d, id, 0);
+  await fromZero.ended;
+  assert.deepEqual(
+    fromZero.frames,
+    done.frames,
+    "Last-Event-ID: 0 is the full replay",
+  );
 });
 
 test("a client that disconnects mid-run leaves no reader holding the log open", {

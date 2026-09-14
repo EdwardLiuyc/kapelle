@@ -445,6 +445,67 @@ test("each task is bracketed by started and finished events, a pre-start cancel 
   ]);
 });
 
+test("a successful task's finished event carries its verdict and duration", async () => {
+  // The bracket test above forces cancellation, so a hardcoded
+  // `status: "cancelled"` or `durationMs: 0` would survive it.
+  const bus = createEventBus();
+  const seen: AgentEventEnvelope[] = [];
+  bus.addListener((event) => seen.push(event));
+
+  const exec: TaskExecutor = async () => {
+    // A measurable delay: `durationMs: 0` is the mutant this test exists to
+    // kill, so the assertion needs a real clock floor to compare against.
+    await new Promise((ok) => setTimeout(ok, 20));
+    return { stopReason: "end_turn" };
+  };
+  await runRun(runOf(1, 1), { cwd: "/tmp/nowhere", bus }, exec);
+
+  const finished = seen.find(
+    (event) => event.update.sessionUpdate === "_client_task_finished",
+  );
+  assert.ok(finished, "the finished event reached the bus");
+  assert.equal(finished.update.sessionUpdate, "_client_task_finished");
+  if (finished.update.sessionUpdate === "_client_task_finished") {
+    assert.equal(finished.update.status, "done");
+    assert.ok(
+      finished.update.durationMs >= 10,
+      `durationMs is the task's own clock, got ${finished.update.durationMs}`,
+    );
+  }
+});
+
+test("started names the registry agent, or the --cmd label", async () => {
+  const named = validateRun({
+    maxConcurrency: 1,
+    tasks: [{ id: "named", prompt: "hello", agent: "opencode" }],
+  });
+  const namedSeen: string[] = [];
+  const namedBus = createEventBus();
+  namedBus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "_client_task_started") {
+      namedSeen.push(`${agent}:${update.harness}`);
+    }
+  });
+  await runRun(named, { cwd: "/tmp/nowhere", bus: namedBus }, async () => ({
+    stopReason: "end_turn",
+  }));
+  assert.deepEqual(namedSeen, ["named:opencode"]);
+
+  const cmdSeen: string[] = [];
+  const cmdBus = createEventBus();
+  cmdBus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "_client_task_started") {
+      cmdSeen.push(`${agent}:${update.harness}`);
+    }
+  });
+  await runRun(runOf(1, 1), { cwd: "/tmp/nowhere", bus: cmdBus }, async () => ({
+    stopReason: "end_turn",
+  }));
+  // A literal, not `runOf(...).tasks[0].agent`: the derived label is what this
+  // pins (resolveAgent("", "node mock-agent.mjs") -> "mock-agent").
+  assert.deepEqual(cmdSeen, ["t0:mock-agent"]);
+});
+
 test("askPolicy reaches the asking task and nothing else", async () => {
   // `cli.ts` decides *whether* one prompt can serve this run; the pool only
   // has to hand it to the task that asks. A policy leaking onto an `auto` or

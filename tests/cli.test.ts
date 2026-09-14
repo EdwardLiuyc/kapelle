@@ -1034,6 +1034,20 @@ rl.on("line", (line) => {
   assert.match(r.stdout, /▸ stubborn \(stubborn-agent\) timed_out/);
 });
 
+/** The sole run's persisted events, for tests that assert what the log kept. */
+async function soleEventLog(cwd: string) {
+  const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
+  return (
+    await readFile(
+      join(cwd, ".kapelle", "runs", String(runId), "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 test("a warned task and a failed task roll up to a failed run", async (t) => {
   const cwd = await tempDir(t);
   const file = await runFile(
@@ -1057,6 +1071,15 @@ test("a warned task and a failed task roll up to a failed run", async (t) => {
   assert.match(r.stdout, /▸ warned \(mock-agent\) warned/);
   assert.match(r.stdout, /▸ failed \(mock-agent\) failed/);
   assert.match(r.stdout, /\nfailed — 2 tasks, 2 turns,/);
+
+  const finished = (await soleEventLog(cwd)).filter(
+    (e) => e.update.sessionUpdate === "_client_task_finished",
+  );
+  assert.deepEqual(
+    finished.map((e) => `${e.agent}:${e.update.status}`).sort(),
+    ["failed:failed", "warned:warned"],
+    "the log keeps each task's real verdict",
+  );
 });
 
 // --- the watchdog's two signals, end to end (M1c-2, #26) ---------------------
@@ -1108,6 +1131,12 @@ test("a stalled task warns, times out at the TTL, and keeps its branch", async (
   assert.match(branches, /kapelle\/.*\/stall/);
   const wt = await git(cwd, "worktree", "list");
   assert.match(wt, /\.kapelle\/wt\//);
+
+  const timedOut = (await soleEventLog(cwd)).find(
+    (e) =>
+      e.agent === "stall" && e.update.sessionUpdate === "_client_task_finished",
+  );
+  assert.equal(timedOut?.update.status, "timed_out");
 });
 
 test("a repeated tool title warns, and the task is never cancelled", async (t) => {
