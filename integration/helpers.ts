@@ -20,6 +20,9 @@ import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
 import { promisify } from "node:util";
 
+import { AcpAgent } from "../protocol/agent.ts";
+import { resolveAgent, resolveEnv } from "../protocol/registry.ts";
+
 const REPO = join(import.meta.dirname, "..");
 
 /**
@@ -159,3 +162,57 @@ export const HOSTILE_AGENT = join(REPO, "hostile-agent.mjs");
 /** The prompt every write test uses. One file, one word, nothing to interpret. */
 export const WRITE_PROMPT =
   "create a file called PROOF.md containing the single word hello";
+
+/** What `twoTurns` saw. Every field is ours to observe, none is the model's prose. */
+export interface TwoTurns {
+  first: string;
+  second: string;
+  sessionBefore: string;
+  sessionAfter: string | null;
+  spawns: number;
+}
+
+/**
+ * Two prompts on one session, the second sent only after the first ended.
+ *
+ * The one integration helper that drives `AcpAgent` rather than `cli.ts`: the
+ * CLI sends one prompt per session, so no argv reaches a second turn. #62 R5
+ * refuses a prompt *during* a live turn; this is the other case, measured on
+ * all four harnesses on 2026-09-15 (`docs/M0-FINDINGS.md` §Multi-turn). The
+ * prompts carry a codeword so a human reading a failure can see whether context
+ * held, but the caller asserts only stop reasons, the session id and the spawn
+ * count. `policy: () => false` because nothing here needs a tool.
+ */
+export async function twoTurns(t: TestContext, id: string): Promise<TwoTurns> {
+  const spec = resolveAgent(id);
+  const cwd = await tempDir(t);
+  let spawns = 0;
+  const agent = new AcpAgent({
+    name: id,
+    command: spec.launch.command,
+    args: spec.launch.args,
+    env: resolveEnv(spec.launch.env),
+    cwd,
+    policy: () => false,
+    onEvent: (e) => {
+      if (e.update.sessionUpdate === "_client_harness_spawned") spawns++;
+    },
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  const sessionBefore = await agent.newSession();
+  const first = await agent.prompt(
+    "Remember this codeword: ZEBRA-4417. Do not use any tools. Reply with only the word OK.",
+  );
+  const second = await agent.prompt(
+    "What codeword did I give you in my previous message? Do not use any tools. Reply with only the codeword.",
+  );
+  return {
+    first: first.stopReason,
+    second: second.stopReason,
+    sessionBefore,
+    sessionAfter: agent.sessionId,
+    spawns,
+  };
+}

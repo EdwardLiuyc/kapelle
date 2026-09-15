@@ -209,7 +209,7 @@ export interface RunReport {
   status: TaskStatus;
   durationMs: number;
   /** One prompt per session per task (M0-4: never a nudge, and `prompt()`
-   *  throws on a second call), so this counts the tasks that got far enough
+   *  throws during a live turn), so this counts the tasks that got far enough
    *  to send one. It stops being trivially `tasks.length` the moment a spawn
    *  fails or the operator cancels the queue. */
   turns: number;

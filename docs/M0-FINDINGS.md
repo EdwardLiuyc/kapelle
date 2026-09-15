@@ -661,6 +661,9 @@ may `stop()` immediately after the response without racing a trailing notificati
   *someone interrupted me*, depending on harness. The status must be derived from the
   triple (`stopReason`, did **we** send a cancel, did the watchdog fire) — the supervisor's
   own record of intent is the authoritative half. The table stands; its input does not.
+- **Scope note, 2026-09-15:** Question 2 sent the second prompt *during* a live turn. A
+  prompt sent after `end_turn` is a different case and completed on all four harnesses —
+  see §Multi-turn below.
 - **One prompt per session per task, and never a "nudge".** Given #4555, a supervisor that
   sends a second prompt — even to a session it believes idle — can silently destroy work
   and get `end_turn` for it. This is a second, empirical argument for M1c-1's deliberate
@@ -1072,6 +1075,44 @@ measurement, and why `AcpAgent.stop()` keeps a SIGKILL behind the grace.
 **Consequences.** `stop()` closes stdin first and signals only a harness still alive after
 the grace; a daemon crash delivers the same end of file through the kernel; the daemon
 records live harness pids in `children.json` for M2-5, for the build that stops honouring it.
+
+---
+
+## Multi-turn · a second prompt after `end_turn` — measured 2026-09-15
+
+**Question.** M0-4 Question 2 sent a second prompt while the first turn was still running.
+Does a second prompt sent *after* the first turn ended complete on the same session, with
+the first turn's context kept?
+
+**Method.** One `AcpAgent`, one `session/new`, `policy: () => false`. Turn 1: *"Remember
+this codeword: ZEBRA-4417. Do not use any tools. Reply with only the word OK."* Turn 2,
+sent only once turn 1 had answered: *"What codeword did I give you in my previous message?
+… Reply with only the codeword."* Two runs per harness by script, then one more through
+`npm run test:harness` (`twoTurns` in `integration/helpers.ts`).
+
+| | opencode 1.18.30 | claude-agent-acp 0.75.1 | copilot 1.0.83 | pi-acp 0.0.33 / pi v0.85.1 |
+| --- | --- | --- | --- | --- |
+| turn 1 / turn 2 `stopReason` | `end_turn` / `end_turn` | `end_turn` / `end_turn` | `end_turn` / `end_turn` | `end_turn` / `end_turn` |
+| same `sessionId` | yes | yes | yes | yes |
+| harness spawns | 1 | 1 | 1 | 1 |
+| turn 2 answered the codeword | 2 of 2 | 2 of 2 | 2 of 2 | 2 of 2 |
+| both turns, wall clock | 9.1 s, 14.6 s | 5.2 s, 4.6 s | 5.5 s, 4.5 s | 6.1 s, 5.7 s |
+
+**Answer: yes, on all four.** The in-flight guard (#62 R5) already allows it, so no client
+change was needed. The session keeps its context between turns until the client ends it:
+`core/run.ts` awaits `agent.stop()` after the turn, which closes the harness's stdin (§M2-4).
+No harness closes a session by itself after `end_turn`, and the client never sends
+`session/close`.
+
+**What this does not change.** A prompt *during* a live turn still kills that turn (M0-4
+Question 2). Copilot's [#4555](https://github.com/github/copilot-cli/issues/4555) still aborts
+background work on any prompt; this probe started no background work, so it did not reach
+that path. pi prefixes its first message with a startup banner (version, skills, extensions),
+and a pi extension adds an `[anchored-tools]` line to the second — noise a chat surface would
+show, from this machine's pi configuration rather than from the protocol.
+
+**Offline counterpart.** `mock-agent.mjs --scenario remember` answers each turn with the
+previous turn's prompt, and `protocol/tests/agent.test.ts` pins the client half in CI.
 
 ---
 

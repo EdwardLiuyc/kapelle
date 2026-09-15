@@ -29,6 +29,7 @@ const SCENARIOS = {
   "files-unclaimed": "asks, writes two files, then lists only one of them",
   stall: "writes one file, then emits nothing and never returns",
   repeat: "the same tool title on a loop, then ends the turn itself",
+  remember: "answers each turn with the previous turn's prompt, per session",
 };
 
 const at = process.argv.indexOf("--scenario");
@@ -132,6 +133,9 @@ let sessionCount = 0;
 const pending = new Map();
 /** Every id we minted. A prompt for any other id is a client bug. */
 const sessions = new Set();
+/** The `remember` fixture's memory: session id → the last prompt it saw. Held
+ *  by the session, not the process, so a fresh session remembers nothing. */
+const lastPrompt = new Map();
 
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
@@ -210,6 +214,21 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // exceptions goes silent on every one of them.
     if (scenario === "refuse") {
       reply(msg.id, { stopReason: "refusal", usage: USAGE });
+      return;
+    }
+
+    // A second turn on one session, after the first ended. The answer carries
+    // the previous turn's prompt, so a test can tell a session that kept its
+    // context from a client that silently opened a new one.
+    if (scenario === "remember") {
+      const text = msg.params.prompt?.[0]?.text ?? "";
+      const previous = lastPrompt.get(sid) ?? "(none)";
+      lastPrompt.set(sid, text);
+      update(sid, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: `previous: ${previous}` },
+      });
+      reply(msg.id, { stopReason: "end_turn", usage: USAGE });
       return;
     }
 

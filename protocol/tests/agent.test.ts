@@ -398,6 +398,50 @@ test("a symlink that stays inside the root is still followed", async (t) => {
   assert.equal(read.content, "in-root content");
 });
 
+// --- a second turn after end_turn (spike) -----------------------------------
+
+test("a second prompt after end_turn runs on the same live session", async (t) => {
+  // #62 R5 guards a prompt *during* a live turn. M0-4 Question 3 measured a
+  // follow-up prompt completing on all three harnesses once the first turn
+  // had ended. This pins the client half: after `end_turn` the guard is clear,
+  // the session id is unchanged, no second harness is spawned, and the session
+  // still holds the first turn's context.
+  const root = await tempDir(t, "acp-two-turns-");
+  const seen: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "mock-remember",
+    command: process.execPath,
+    args: [MOCK_AGENT, "--scenario", "remember"],
+    cwd: root,
+    requestTimeoutMs: 10_000,
+    onEvent: (e) => seen.push(e),
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  const sid = await agent.newSession();
+
+  const first = await agent.prompt("alpha");
+  assert.equal(first.stopReason, "end_turn");
+
+  const second = await agent.prompt("beta");
+  assert.equal(second.stopReason, "end_turn");
+  assert.equal(agent.sessionId, sid, "no new session was opened");
+
+  const text = seen
+    .map(
+      (e) => e.update as { sessionUpdate: string; content?: { text?: string } },
+    )
+    .filter((u) => u.sessionUpdate === "agent_message_chunk")
+    .map((u) => u.content?.text);
+  assert.deepEqual(text, ["previous: (none)", "previous: alpha"]);
+
+  const spawned = seen.filter(
+    (e) => e.update.sessionUpdate === "_client_harness_spawned",
+  );
+  assert.equal(spawned.length, 1, "one harness served both turns");
+});
+
 // --- #guardWrite · mutation without asking -----------------------------------
 
 test("an allowed permission is not re-decided when the same write crosses the wire", async (t) => {
