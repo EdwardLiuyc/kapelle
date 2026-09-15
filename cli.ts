@@ -79,7 +79,8 @@ kapelle — a minimal Agent Client Protocol client
   kapelle "<prompt>" [options]
   kapelle --file <run.json> [--cwd dir] [--verbose] [--quiet]
   kapelle merge <runId> [--squash] [--cwd dir]
-  kapelle daemon start [--port n]    runs in this terminal until ^C or SIGTERM
+  kapelle daemon start [--port n] [--permission-timeout s]
+                                     runs in this terminal until ^C or SIGTERM
   kapelle daemon add <path>          adds a repository to the running daemon
 
 Options:

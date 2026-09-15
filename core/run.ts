@@ -300,12 +300,11 @@ export interface RunOptions {
   /**
    * An interactive decider for `ask` tasks.
    *
-   * **One prompt cannot serve two askers**, so the caller supplies this only
-   * when it has checked that at most one task in the run asks *and* that a TTY
-   * exists — `cli.ts` does both, and re-resolves the rest as `safe`. Absent,
-   * an `ask` task falls back to `policyFor("ask")`. M2-3 replaces this with a
-   * pending-decision queue over the API, which is what makes `ask` work for N
-   * tasks at once.
+   * **One prompt cannot serve two askers**, so `cli.ts` supplies its terminal
+   * decider only when at most one task in the run asks *and* a TTY exists, and
+   * re-resolves the rest as `safe`. `daemon.ts` supplies M2-3's pending-decision
+   * queue (`core/permissions.ts`), which serves N askers at once. Absent, an
+   * `ask` task falls back to `policyFor("ask")`.
    */
   askPolicy?: Policy;
   /** Notices a run must print even under `--quiet` (#13). */

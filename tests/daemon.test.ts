@@ -43,16 +43,20 @@ interface Daemon {
 }
 
 /** Spawns `daemon.ts` with `runtime` as its `XDG_RUNTIME_DIR`. */
-function start(t: TestContext, runtime: string) {
-  return spawnCli(t, ["--port", "0"], "daemon.ts", {
+function start(t: TestContext, runtime: string, args: string[] = []) {
+  return spawnCli(t, ["--port", "0", ...args], "daemon.ts", {
     XDG_RUNTIME_DIR: runtime,
   });
 }
 
 /** Starts a daemon and reads back the record it wrote once listening. */
-async function boot(t: TestContext, runtime?: string): Promise<Daemon> {
+async function boot(
+  t: TestContext,
+  runtime?: string,
+  args: string[] = [],
+): Promise<Daemon> {
   const dir = runtime ?? (await tempDir(t));
-  const d = start(t, dir);
+  const d = start(t, dir, args);
   // A daemon that dies at startup must fail with its own words, not a timeout.
   const died = d.done.then((r) => {
     throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
@@ -550,32 +554,6 @@ test("an invalid body is 400 in the validator's words, and creates no run", asyn
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
 
-test("a run that would ask is refused naming M2-3, a bare file included", async (t) => {
-  const d = await boot(t);
-  const cwd = await added(d, await tempDir(t));
-
-  // No mode anywhere: every registry entry defaults to `ask`, so this is the
-  // run file people actually write, and it must not quietly run as `safe`.
-  const bare = await api(d, "POST", "/runs", {
-    cwd,
-    run: { cmd: `node ${MOCK_AGENT}`, tasks: [{ id: "one", prompt: "hi" }] },
-  });
-  assert.equal(bare.status, 400);
-  assert.match(bare.body.error, /M2-3/);
-
-  const mixed = await api(d, "POST", "/runs", {
-    cwd,
-    run: mockRun([
-      { id: "calm", prompt: "hi" },
-      { id: "curious", prompt: "hi", mode: "ask" },
-    ]),
-  });
-  assert.equal(mixed.status, 400);
-  assert.match(mixed.body.error, /"curious"/);
-
-  assert.deepEqual((await api(d, "GET", "/runs")).body, []);
-});
-
 test("a dirty tree is 409 in the preflight's words, and creates no run", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
@@ -1017,4 +995,116 @@ test("a client that disconnects mid-run leaves no reader holding the log open", 
 
   await api(d, "DELETE", `/runs/${id}`);
   await settled(d, id);
+});
+
+// --- permissions over the API, M2-3 ---------------------------------------------
+
+interface Pending {
+  id: string;
+  runId: string;
+  taskId: string;
+  kind: string;
+  title: string;
+}
+
+/** A run file naming no mode: every registry entry defaults to `ask`, so this
+ *  is the file people actually write. */
+const askRun = (cwd: string) => ({
+  cwd,
+  run: { cmd: `node ${MOCK_AGENT}`, tasks: [{ id: "one", prompt: "hi" }] },
+});
+
+/** Polls `GET /permissions` until one decision is pending, and returns it. */
+async function pendingOne(d: Daemon): Promise<Pending> {
+  for (const end = Date.now() + 20_000; Date.now() < end; ) {
+    const r = await api<Pending[]>(d, "GET", "/permissions");
+    assert.equal(r.status, 200);
+    const [found] = r.body;
+    if (found) return found;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  throw new Error("no permission ever became pending");
+}
+
+test("an ask run with no client attached is denied at the timeout, and completes", async (t) => {
+  const d = await boot(t, undefined, ["--permission-timeout", "0.5"]);
+  const cwd = await added(d, await tempDir(t));
+
+  const posted = await api(d, "POST", "/runs", askRun(cwd));
+  assert.equal(posted.status, 202, posted.body.error);
+  const run = await settled(d, posted.body.id);
+  assert.equal(run.status, "done");
+
+  const s = await stream(d, posted.body.id);
+  await s.ended;
+  const decisions = s.frames
+    .map((f) => f.data.update as { sessionUpdate: string; allow?: boolean })
+    .filter((u) => u.sessionUpdate === "_client_permission");
+  // The mock asks twice — the edit, then a delete with an allow-only menu.
+  assert.deepEqual(
+    decisions.map((u) => u.allow),
+    [false, false],
+  );
+  await assert.rejects(stat(join(cwd, "ACP_TEST.md")));
+  assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
+});
+
+test("an answer lets the write happen; a second answer is 409, an unknown id 404, a bad body 400", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", askRun(cwd));
+  assert.equal(posted.status, 202, posted.body.error);
+
+  const pending = await pendingOne(d);
+  assert.equal(pending.runId, posted.body.id);
+  assert.equal(pending.taskId, "one");
+  assert.equal(pending.kind, "edit");
+
+  const path = `/permissions/${pending.id}`;
+  assert.equal((await api(d, "POST", path, { allow: "yes" })).status, 400);
+  assert.equal((await api(d, "POST", path, { allow: true })).status, 200);
+  assert.equal((await api(d, "POST", path, { allow: false })).status, 409);
+  assert.equal(
+    (await api(d, "POST", "/permissions/nope", { allow: true })).status,
+    404,
+  );
+
+  // The mock's second request, the allow-only delete; the queue is not
+  // answered by the first decision's id.
+  const next = await pendingOne(d);
+  assert.notEqual(next.id, pending.id);
+  assert.equal(next.kind, "delete");
+  assert.equal(
+    (await api(d, "POST", `/permissions/${next.id}`, { allow: false })).status,
+    200,
+  );
+
+  assert.equal((await settled(d, posted.body.id)).status, "done");
+  await stat(join(cwd, "ACP_TEST.md"));
+});
+
+test("cancelling a run denies its pending decision at once, not at the timeout", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", askRun(cwd));
+  const pending = await pendingOne(d);
+
+  assert.equal((await api(d, "DELETE", `/runs/${posted.body.id}`)).status, 202);
+  // The default timeout is 120 s; `settled` gives up after 20.
+  assert.equal((await settled(d, posted.body.id)).status, "cancelled");
+  assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
+  assert.equal(
+    (await api(d, "POST", `/permissions/${pending.id}`, { allow: true }))
+      .status,
+    409,
+  );
+});
+
+test("a --permission-timeout that is not above 0 refuses to start", async (t) => {
+  const r = await exitOf(
+    start(t, await tempDir(t), ["--permission-timeout", "0"]),
+  );
+  assert.ok(r, "the daemon started anyway");
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /--permission-timeout/);
 });

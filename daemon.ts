@@ -10,7 +10,8 @@
  * `.kapelle/`.
  *
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
- * `checkStateDir`, `validateRun`, `openWorktrees` and `runRun`; worktrees,
+ * `checkStateDir`, `validateRun`, `openWorktrees`, `runRun` and the permission
+ * queue; worktrees,
  * policy and harnesses stay behind them. If orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
  * implementation (`docs/STORIES.md`, M2-1).
@@ -49,6 +50,7 @@ import { parseArgs } from "node:util";
 import type { EventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
+import { createPermissionQueue } from "./core/permissions.ts";
 import { type RunReport, runRun, type TaskStatus } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import { runtimeDir } from "./core/runtime.ts";
@@ -71,15 +73,32 @@ function orExit<T>(f: () => T): T {
   }
 }
 
-const port = orExit(() => {
-  const { values } = parseArgs({ options: { port: { type: "string" } } });
+// ponytail: a daemon-wide flag; M2-7's user-level config is its home too.
+const DEFAULT_PERMISSION_TIMEOUT_S = 120;
+
+const { port, permissionTimeoutMs } = orExit(() => {
+  const { values } = parseArgs({
+    options: {
+      port: { type: "string" },
+      "permission-timeout": { type: "string" },
+    },
+  });
   const n = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(n) || n < 0 || n > 65535) {
     throw new Error(
       `--port must be a whole number 0-65535; got ${values.port}`,
     );
   }
-  return n;
+  const raw = values["permission-timeout"];
+  const seconds =
+    raw === undefined ? DEFAULT_PERMISSION_TIMEOUT_S : Number(raw);
+  // No `0` meaning "wait forever": an unanswered decision must end (M2-3).
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(
+      `--permission-timeout must be a number of seconds above 0; got ${raw}`,
+    );
+  }
+  return { port: n, permissionTimeoutMs: seconds * 1000 };
 });
 
 /** Is `pid` a live process? `EPERM` means it is, and is someone else's. */
@@ -305,25 +324,11 @@ function recordChildren(): void {
 }
 
 /**
- * `ask` is refused until M2-3 (decided 2026-09-11, #31).
- *
- * With no decider, `runRun` gives an `ask` task `safePolicy` — but the task
- * still says `ask`, so `negotiateSafeMode` skips it and `safe`'s forcing of
- * `allowReadOutsideRoot` never ran. On a harness that never asks, that is no
- * containment at all. `cli.ts` re-resolves such a task as `safe` and says so
- * on the terminal; the daemon has nobody watching, so it refuses instead of
- * running a mode the file did not name.
+ * Every `ask` decision the daemon is waiting on, across all runs (M2-3, #33).
+ * An unanswered one is denied after `--permission-timeout`, so an `ask` run
+ * with nobody attached completes instead of hanging.
  */
-function refuseAsk(run: Run): void {
-  const asker = run.tasks.find((task) => task.mode === "ask");
-  if (asker) {
-    throw new Error(
-      `task "${asker.id}": mode "ask" needs someone to answer permission ` +
-        `prompts, and the daemon cannot ask until M2-3. Set "mode" to ` +
-        `"safe" or "auto" — every agent defaults to "ask" when none is named.`,
-    );
-  }
-}
+const permissions = createPermissionQueue(permissionTimeoutMs);
 
 async function postRepo(req: IncomingMessage, res: ServerResponse) {
   const body = await readBody(req);
@@ -363,7 +368,6 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
   let run: Run;
   try {
     run = validateRun(body.run);
-    refuseAsk(run);
   } catch (err) {
     throw refusal(400, messageOf(err));
   }
@@ -409,6 +413,7 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     bus,
     signal: canceller.signal,
     onEventLog: settleLog,
+    askPolicy: permissions.policyFor(id, bus, canceller.signal),
     onNotice: (taskId, text, kind) => {
       state.notices.push(kind ? { taskId, text, kind } : { taskId, text });
     },
@@ -424,6 +429,9 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
       },
     )
     .finally(() => {
+      // A task the watchdog cut can leave a decision behind; the run is over,
+      // so deny it now rather than list it until the timer.
+      canceller.abort();
       cancels.delete(id);
       inFlight.delete(done);
       settleLog(undefined);
@@ -484,6 +492,26 @@ async function getEvents(
   res.end();
 }
 
+/** `POST /permissions/:id {"allow": boolean}` — the first answer wins. */
+async function postPermission(
+  id: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const { allow } = await readBody(req);
+  if (typeof allow !== "boolean") {
+    throw refusal(400, `"allow" must be true or false; got ${allow}`);
+  }
+  const result = permissions.answer(id, allow);
+  if (result === "unknown") throw refusal(404, `no permission ${id}`);
+  // A defined error, not an overwrite: someone else's answer, the timeout or
+  // a cancel already decided it, and the harness has been told.
+  if (result === "settled") {
+    throw refusal(409, `permission ${id} was already decided`);
+  }
+  send(res, 200, { id, allow });
+}
+
 async function route(req: IncomingMessage, res: ServerResponse) {
   if (!authorised(req)) {
     send(res, 401, { error: "missing or wrong token" });
@@ -492,6 +520,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const { pathname } = new URL(req.url ?? "/", "http://daemon");
   const one = /^\/runs\/([^/]+)$/.exec(pathname);
   const events = /^\/runs\/([^/]+)\/events$/.exec(pathname);
+  const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
 
   if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
@@ -511,6 +540,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const state = runs.get(one[1] as string);
     if (state) send(res, 200, state);
     else send(res, 404, { error: `no run ${one[1]}` });
+  } else if (req.method === "GET" && pathname === "/permissions") {
+    send(res, 200, permissions.list());
+  } else if (req.method === "POST" && decision) {
+    await postPermission(decision[1] as string, req, res);
   } else if (req.method === "DELETE" && one) {
     // Asynchronous on purpose: cancel is cooperative, so the answer is an
     // acknowledgement and `GET` reports the verdict. `core/run.ts` stops a
