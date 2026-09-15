@@ -306,16 +306,6 @@ function recordChildren(): void {
   }
 }
 
-/**
- * `ask` is refused until M2-3 (decided 2026-09-11, #31).
- *
- * With no decider, `runRun` gives an `ask` task `safePolicy` — but the task
- * still says `ask`, so `negotiateSafeMode` skips it and `safe`'s forcing of
- * `allowReadOutsideRoot` never ran. On a harness that never asks, that is no
- * containment at all. `cli.ts` re-resolves such a task as `safe` and says so
- * on the terminal; the daemon has nobody watching, so it refuses instead of
- * running a mode the file did not name.
- */
 /** Mirrors a bus's harness pids into `children.json`, labelled with `id`. */
 function trackChildren(bus: ReturnType<typeof createEventBus>, id: string) {
   bus.addListener(({ agent, update }) => {
@@ -329,6 +319,16 @@ function trackChildren(bus: ReturnType<typeof createEventBus>, id: string) {
   });
 }
 
+/**
+ * `ask` is refused until M2-3 (decided 2026-09-11, #31).
+ *
+ * With no decider, `runRun` gives an `ask` task `safePolicy` — but the task
+ * still says `ask`, so `negotiateSafeMode` skips it and `safe`'s forcing of
+ * `allowReadOutsideRoot` never ran. On a harness that never asks, that is no
+ * containment at all. `cli.ts` re-resolves such a task as `safe` and says so
+ * on the terminal; the daemon has nobody watching, so it refuses instead of
+ * running a mode the file did not name.
+ */
 function refuseAsk(run: Run): void {
   const asker = run.tasks.find((task) => task.mode === "ask");
   if (asker) {

@@ -1206,6 +1206,7 @@ test("chat.ts talks to a room end to end: messages in, answers out, /dismiss sto
 });
 
 test("chat.ts reaches the daemon over HTTP only: its one repo import is core/runtime.ts", async () => {
+  // Packages (pi-tui) are allowed; only a relative import reaches this repo.
   const source = await readFile(
     join(import.meta.dirname, "..", "chat.ts"),
     "utf8",
@@ -1213,7 +1214,7 @@ test("chat.ts reaches the daemon over HTTP only: its one repo import is core/run
   const imports = [...source.matchAll(/^import[^;]*?from "([^"]+)";/gms)].map(
     (m) => m[1],
   );
-  const local = imports.filter((spec) => !spec?.startsWith("node:"));
+  const local = imports.filter((spec) => spec?.startsWith("."));
   assert.deepEqual(local, ["./core/runtime.ts"]);
 });
 
@@ -1259,16 +1260,15 @@ const noPty =
     ? "needs util-linux script(1) for a pseudo-terminal"
     : false;
 
-test("chat.ts on a real terminal shows what the operator types", {
+test("chat.ts on a real terminal is the full-screen chat, and leaves the conversation in scrollback", {
   skip: noPty,
 }, async (t) => {
-  // Terminal mode switches the terminal's own echo off, so readline has to
-  // draw typed keys itself; without an `output` stream it drew none, and the
-  // operator typed blind. Pipes never showed it: only a TTY reaches that path.
+  // Pipes never reach this path: only a TTY gets the pi-tui screen. A pty
+  // made by `script` from a pipe has no size, so the command sets one.
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
-  const cmd = `node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`;
+  const cmd = `stty cols 100 rows 30; node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`;
   const child = spawn("script", ["-qfec", cmd, "/dev/null"], {
     cwd: join(import.meta.dirname, ".."),
     env: { ...process.env, XDG_RUNTIME_DIR: runtime },
@@ -1294,24 +1294,32 @@ test("chat.ts on a real terminal shows what the operator types", {
   child.stdout.setEncoding("utf8").on("data", (c: string) => {
     out += c;
   });
-  const exited = new Promise((ok) => child.on("close", ok));
+  const exited = new Promise<number | null>((ok) =>
+    child.on("close", (code) => ok(code)),
+  );
 
-  // The prompt, not the banner: keys sent before readline takes the terminal
-  // would be echoed by the terminal itself and prove nothing.
-  await seen("> ");
+  // The status line, not the banner: keys sent before the screen takes the
+  // terminal would be echoed by the terminal itself and prove nothing.
+  await seen("enter to send");
   child.stdin.write("alpha\r");
   await seen("previous: (none)");
   child.stdin.write("/dismiss\r");
   await seen("the room was dismissed");
-  await exited;
+  assert.equal(await exited, 0, out);
 
-  // Readline redraws with cursor codes between the prompt and the text.
+  // What stays on the normal screen once the alternate one is left.
+  // CSI, OSC and APC sequences; pi-tui writes all three.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
-  const screen = out.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
-  assert.match(screen, /> alpha/, "the typed line is on screen");
-  assert.doesNotMatch(
-    screen,
-    /you: alpha/,
-    "and it is not printed a second time",
+  const escapes =
+    /\x1b(\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(\x07|\x1b\\)|_[^\x1b]*\x1b\\)/g;
+  const text = out
+    .slice(out.lastIndexOf("\x1b[?1049l"))
+    .replace(escapes, "")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+$/gm, "");
+  assert.match(
+    text,
+    /you\n\s*alpha\n[\s\S]*mock-agent\n\s*previous: \(none\)\n[\s\S]*the room was dismissed/,
+    "the typed message, the answer, then the exit line",
   );
 });

@@ -10,12 +10,32 @@
  * One room is one harness kept alive between messages, until `/dismiss`.
  * Leaving (`/leave`, end of input, ^C) keeps the room, and `attach` replays
  * its whole conversation from the room's event log.
+ *
+ * **Two screens over one stream.** On a TTY the room is a full-screen
+ * `pi-tui` app: a scrolling transcript with each answer rendered as markdown
+ * while it streams, and an editor below it. Piped, it is plain lines, which
+ * is what a script or a test reads.
  */
 
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
+
+import {
+  type Component,
+  Container,
+  Editor,
+  Key,
+  Markdown,
+  type MarkdownTheme,
+  matchesKey,
+  ProcessTerminal,
+  ScrollView,
+  Text,
+  TuiAltScreen,
+  VStack,
+} from "@earendil-works/pi-tui";
 
 import { runtimeDir } from "./core/runtime.ts";
 
@@ -126,8 +146,8 @@ async function follow(
   }
 }
 
-/** Prints a room's events as a conversation. */
-function makePrinter(tty: boolean) {
+/** Prints a room's events as a conversation, for a piped stdin. */
+function makePrinter() {
   let atLineStart = true;
   let speaking = false;
   const write = (s: string) => {
@@ -140,17 +160,11 @@ function makePrinter(tty: boolean) {
     write(`${s}\n`);
   };
   return {
-    /** Messages this terminal sent and already shows as typed input. */
-    pendingEcho: 0,
     show(event: LogEvent) {
       const u = event.update;
       switch (u.sessionUpdate) {
         case "_client_user_message":
           speaking = false;
-          if (tty && this.pendingEcho > 0) {
-            this.pendingEcho -= 1;
-            return;
-          }
           line(`you: ${u.text}`);
           return;
         case "agent_message_chunk":
@@ -181,14 +195,189 @@ function makePrinter(tty: boolean) {
   };
 }
 
+const sgr = (open: number, close: number) => (s: string) =>
+  `\x1b[${open}m${s}\x1b[${close}m`;
+const bold = sgr(1, 22);
+const dim = sgr(2, 22);
+const italic = sgr(3, 23);
+const underline = sgr(4, 24);
+const cyan = sgr(36, 39);
+const green = sgr(32, 39);
+const yellow = sgr(33, 39);
+
+const MARKDOWN_THEME: MarkdownTheme = {
+  heading: (s) => bold(cyan(s)),
+  link: (s) => underline(cyan(s)),
+  linkUrl: dim,
+  code: yellow,
+  codeBlock: (s) => s,
+  codeBlockBorder: dim,
+  quote: italic,
+  quoteBorder: dim,
+  hr: dim,
+  listBullet: cyan,
+  bold,
+  italic,
+  strikethrough: sgr(9, 29),
+  underline,
+};
+
+const EDITOR_THEME = {
+  borderColor: dim,
+  selectList: {
+    selectedPrefix: cyan,
+    selectedText: bold,
+    description: dim,
+    scrollInfo: dim,
+    noMatch: dim,
+  },
+};
+
+/**
+ * The full-screen chat for one room. Resolves with the exit code.
+ *
+ * Busy is read from the stream, not from this terminal's own requests: a
+ * `_client_user_message` starts a turn and `_client_turn_ended` ends it. So a
+ * replayed history, or a message another client sent, leaves the editor in
+ * the right state with no bookkeeping of which turn is ours.
+ */
+function chatTui(d: Daemon, room: RoomView): Promise<number> {
+  const tui = new TuiAltScreen(new ProcessTerminal());
+  const transcript = new Container();
+  const status = new Text("", 1, 0);
+  const editor = new Editor(tui, EDITOR_THEME, { paddingX: 1 });
+  tui.setLayoutRoot(
+    new VStack([
+      {
+        component: new ScrollView(transcript, { follow: "end", primary: true }),
+        basis: "auto",
+        grow: 1,
+        shrink: 1,
+        minSize: 1,
+      },
+      { component: status, basis: "auto", shrink: 0 },
+      { component: editor, basis: "auto", shrink: 1, minSize: 1 },
+    ]),
+  );
+  tui.setFocus(editor);
+
+  const add = (c: Component) => {
+    transcript.addChild(c);
+    tui.requestRender();
+  };
+  const note = (s: string) => add(new Text(dim(s), 1, 0));
+  const setBusy = (busy: boolean) => {
+    editor.disableSubmit = busy;
+    status.setText(
+      dim(
+        busy
+          ? `${room.harness} is answering…`
+          : "enter to send · /leave keeps the room · /dismiss stops it",
+      ),
+    );
+    tui.requestRender();
+  };
+
+  note(`room ${room.id} · ${room.harness} · ${room.workspace}`);
+  for (const { text } of room.notices) add(new Text(yellow(`! ${text}`), 1, 0));
+  setBusy(room.status === "busy");
+
+  // The answer being streamed: chunks are joined and the whole text re-set,
+  // because markdown only parses correctly as a whole.
+  // ponytail: re-parses the whole answer per frame (~5 ms at 53k chars,
+  // measured); split finished blocks into their own components if it lags.
+  let answer: { md: Markdown; text: string } | undefined;
+  const show = ({ agent, update: u }: LogEvent) => {
+    switch (u.sessionUpdate) {
+      case "_client_user_message":
+        answer = undefined;
+        add(new Text(`\n${bold(cyan("you"))}\n${u.text}`, 1, 0));
+        setBusy(true);
+        return;
+      case "agent_message_chunk":
+        if (u.content?.type !== "text") return;
+        if (!answer) {
+          add(new Text(`\n${bold(green(agent))}`, 1, 0));
+          answer = { md: new Markdown("", 1, 0, MARKDOWN_THEME), text: "" };
+          add(answer.md);
+        }
+        answer.text += u.content.text ?? "";
+        answer.md.setText(answer.text);
+        tui.requestRender();
+        return;
+      case "tool_call":
+        answer = undefined;
+        note(`  · ${u.title}`);
+        return;
+      case "_client_turn_ended":
+        answer = undefined;
+        if (u.error)
+          add(new Text(yellow(`! the turn failed: ${u.error}`), 1, 0));
+        else if (u.stopReason !== "end_turn") {
+          add(new Text(yellow(`! the turn ended: ${u.stopReason}`), 1, 0));
+        }
+        setBusy(false);
+        return;
+      case "_client_harness_exited":
+        add(new Text(yellow("! the harness exited"), 1, 0));
+        return;
+    }
+  };
+
+  return new Promise((finish) => {
+    const stop = new AbortController();
+    let done = false;
+    // `tui.stop()` leaves the alternate screen and prints the whole transcript
+    // to the normal one, so the conversation stays in scrollback on exit.
+    const end = (code: number, last: string) => {
+      if (done) return;
+      done = true;
+      stop.abort();
+      tui.stop();
+      console.log(last);
+      finish(code);
+    };
+    const left = `left room ${room.id}; rejoin with: node chat.ts attach ${room.id}`;
+
+    tui.addInputListener((data) => {
+      if (!matchesKey(data, Key.ctrl("c"))) return undefined;
+      end(0, left);
+      return { consume: true };
+    });
+
+    editor.onSubmit = async (text) => {
+      if (!text) return;
+      if (text === "/leave") return end(0, left);
+      if (text === "/dismiss") {
+        status.setText(dim("dismissing: stopping the harness…"));
+        tui.requestRender();
+        const r = await api<RoomView>(d, "DELETE", `/rooms/${room.id}`);
+        // A 200 ends the stream, and that ends the chat below.
+        if (r.status !== 200) end(1, `! ${r.body.error}`);
+        return;
+      }
+      editor.addToHistory(text);
+      const r = await api(d, "POST", `/rooms/${room.id}/messages`, { text });
+      if (r.status !== 202) add(new Text(yellow(`! ${r.body.error}`), 1, 0));
+    };
+
+    tui.start();
+    follow(d, room.id, show, stop.signal).then(
+      () => end(0, "the room was dismissed"),
+      (err) => end(1, `! ${(err as Error).message}`),
+    );
+  });
+}
+
 /** The chat loop for one room. Resolves with the exit code. */
 async function chat(d: Daemon, room: RoomView): Promise<number> {
+  if (process.stdin.isTTY && process.stdout.isTTY) return chatTui(d, room);
+
   console.log(`room ${room.id} · ${room.harness} · ${room.workspace}`);
   for (const { text } of room.notices) console.log(`! ${text}`);
   console.log("type a message; /leave to exit, /dismiss to stop the room");
 
-  const tty = Boolean(process.stdin.isTTY);
-  const printer = makePrinter(tty);
+  const printer = makePrinter();
 
   // The highest `_client_turn_ended` seen, and the one turn being waited on.
   let lastTurnEnd = 0;
@@ -217,15 +406,7 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
     },
   );
 
-  // `output` is not optional on a TTY: terminal mode switches the terminal's
-  // own echo off and draws typed keys and the prompt itself, to `output`.
-  // Without it nothing typed was visible at all.
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: tty,
-  });
-  rl.setPrompt("> ");
+  const rl = createInterface({ input: process.stdin, terminal: false });
   const lines: string[] = [];
   let inputDone = false;
   let wake = () => {};
@@ -249,7 +430,6 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
 
   let code = 0;
   for (;;) {
-    if (tty) rl.prompt();
     const next = await Promise.race([nextLine(), ended]);
     if (next === "ended") {
       console.log("the room was dismissed");
@@ -271,9 +451,6 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
       break;
     }
 
-    // Counted before the request: the message can reach the log, and this
-    // stream, before the response does.
-    printer.pendingEcho += Number(tty);
     const r = await api<{ seq: number }>(
       d,
       "POST",
@@ -281,7 +458,6 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
       { text },
     );
     if (r.status !== 202) {
-      printer.pendingEcho -= Number(tty);
       console.error(`! ${r.body.error}`);
       continue;
     }
