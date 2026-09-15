@@ -1628,6 +1628,13 @@ Pidfile, single-instance guard, live-child registry, kill-all on shutdown, SIGTE
 a dead one is replaced. What stays here: a strict lock for two daemons starting in the same
 instant (marked `ponytail:` in `daemon.ts`), the live-child registry, kill-all, SIGTERM, and
 the `kapelle daemon start` and `kapelle daemon add <path>` verbs.
+**Amended at pickup 2026-09-15 (#34): stdin first, no process group.** Measured on all four
+harnesses (`docs/M0-FINDINGS.md` §M2-4): each runs its shell commands in a session of its
+own, so a group kill never reaches them, and SIGTERM or SIGKILL left opencode's (and under
+SIGKILL copilot's) running command alive. Closing stdin left nothing on all four, which is
+also what a crash delivers. `AcpAgent.stop()` therefore closes stdin, waits, and SIGKILLs
+only a survivor; `kapelle daemon start` runs in the foreground; live pids go to
+`children.json` beside `daemon.json` for M2-5.
 
 **M2-5 · Crash-recovery sweep · M · needs M2-4, M1b-3**
 The fuller version of "run `git worktree prune`". On boot: mark tasks left in `running` as

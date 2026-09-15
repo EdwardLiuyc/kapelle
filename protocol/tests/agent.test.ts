@@ -32,6 +32,11 @@ type CapturedEvent = {
   update: { sessionUpdate: string; sessionId?: string };
 };
 
+/** Every event except the harness's own spawn and exit (M2-4), which bracket
+ *  every run and are covered by their own test. */
+const turnEvents = (events: CapturedEvent[]) =>
+  events.filter((e) => !e.update.sessionUpdate.startsWith("_client_harness_"));
+
 /** What the policy is handed, structurally. Same reasoning as above. */
 type CapturedToolCall = { title: string; kind: string };
 
@@ -444,7 +449,7 @@ test("a guardWrite emits the pending event before its policy is consulted", asyn
     requestTimeoutMs: 5_000,
     onEvent: (e) => seen.push(e),
     policy: () => {
-      seenWhenAsked = seen.map((e) => e.update.sessionUpdate);
+      seenWhenAsked = turnEvents(seen).map((e) => e.update.sessionUpdate);
       return true;
     },
   });
@@ -458,9 +463,99 @@ test("a guardWrite emits the pending event before its policy is consulted", asyn
     ["_client_permission_pending"],
     "the pending event, and only it, is out before a direct write is decided",
   );
-  const pending = seen[0]?.update as { title?: string; kind?: string };
+  const pending = turnEvents(seen)[0]?.update as {
+    title?: string;
+    kind?: string;
+  };
   assert.equal(pending.kind, "edit", "it carries the kind a filter needs");
   assert.ok(pending.title, "and the title a human needs to answer");
+});
+
+// --- M2-4 · stop() closes stdin first ------------------------------------------
+
+/**
+ * Starts `sleep 300` in a session of its own, the way every measured harness
+ * runs a shell command, and writes its pid to `argv[1]`. On end of file it
+ * kills that command and exits; on SIGTERM it dies with the command still
+ * running — opencode's measured shape (2026-09-15).
+ */
+const REAPS_ON_EOF = [
+  'const { spawn } = require("node:child_process");',
+  'const { writeFileSync } = require("node:fs");',
+  'const child = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });',
+  "writeFileSync(process.argv[1], String(child.pid));",
+  "process.stdin.resume();",
+  'process.stdin.on("end", () => {',
+  '  process.kill(child.pid, "SIGKILL");',
+  "  process.exit(0);",
+  "});",
+].join("\n");
+
+/** Resolves true once `pid` is gone, false if it is still alive after 5s. */
+async function gone(pid: number): Promise<boolean> {
+  for (const until = Date.now() + 5_000; Date.now() < until; ) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  return false;
+}
+
+test("stop() closes stdin before any signal, so the harness reaps its own shell command", async (t) => {
+  const dir = await tempDir(t, "acp-stop-");
+  const pidFile = join(dir, "child.pid");
+  const events: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "reaps",
+    command: process.execPath,
+    args: ["-e", REAPS_ON_EOF, pidFile],
+    onEvent: (e) => events.push(e),
+  });
+  // Never answers `initialize`: the rejection on close is expected.
+  const started = agent.start().catch(() => {});
+
+  let child = 0;
+  for (const until = Date.now() + 5_000; !child && Date.now() < until; ) {
+    child = Number(await readFile(pidFile, "utf8").catch(() => 0));
+    if (!child) await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.ok(child, "the fake harness started its command");
+  t.after(() => {
+    try {
+      process.kill(child, "SIGKILL");
+    } catch {}
+  });
+
+  agent.stop();
+  await started;
+
+  // A signal first kills the harness before it reads end of file, and the
+  // command it started in its own session outlives it.
+  assert.equal(await gone(child), true, "the harness's command is gone");
+  assert.deepEqual(
+    events.map((e) => e.update.sessionUpdate),
+    ["_client_harness_spawned", "_client_harness_exited"],
+  );
+});
+
+test("a harness that ignores end of file is killed after the grace", async (t) => {
+  const agent = new AcpAgent({
+    name: "deaf",
+    command: process.execPath,
+    args: ["-e", "process.stdin.resume(); setInterval(() => {}, 1000);"],
+    stopGraceMs: 200,
+  });
+  t.after(() => agent.stop());
+  const started = agent.start().catch((err: Error) => err.message);
+
+  agent.stop();
+  const at = Date.now();
+  // `null`: ended by a signal, not an exit of its own.
+  assert.match(String(await started), /exited with code null/);
+  assert.ok(Date.now() - at >= 150, "it waited for the grace first");
 });
 
 // --- #62 B1 · per-request timeout --------------------------------------------
@@ -764,7 +859,7 @@ test("cancel() before a session exists sends nothing and emits nothing", async (
   await agent.start();
   agent.cancel(); // no session yet
 
-  assert.equal(events.length, 0, "no event without a session");
+  assert.equal(turnEvents(events).length, 0, "no event without a session");
   const seen = await agent.request<{ count: number }>("debug/cancel_count");
   assert.equal(seen.count, 0, "no session/cancel on the wire either");
 });
@@ -821,7 +916,7 @@ test("cancel() after the harness has died records nothing", async (t) => {
   // Nothing was sent, so an authoritative cancel record here would be the
   // false entry M1b-2 keys on.
   assert.equal(
-    events.length,
+    turnEvents(events).length,
     0,
     "no cancel-intent event for a cancel that reached nothing",
   );
@@ -972,7 +1067,7 @@ test("the pending event is emitted before the policy is consulted", async (t) =>
   const agent = await permissionAgent(
     t,
     () => {
-      seenWhenAsked = seen.map((e) => e.update.sessionUpdate);
+      seenWhenAsked = turnEvents(seen).map((e) => e.update.sessionUpdate);
       return true;
     },
     (e) => seen.push(e),
@@ -985,7 +1080,10 @@ test("the pending event is emitted before the policy is consulted", async (t) =>
     ["_client_permission_pending"],
     "the pending event, and only it, is out before the decision is taken",
   );
-  const pending = seen[0]?.update as { title?: string; kind?: string };
+  const pending = turnEvents(seen)[0]?.update as {
+    title?: string;
+    kind?: string;
+  };
   assert.equal(pending.kind, "edit", "it carries the kind a filter needs");
   assert.ok(pending.title, "and the title a human needs to answer");
 });

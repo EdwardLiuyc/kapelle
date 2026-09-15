@@ -37,6 +37,8 @@ interface Daemon {
   pid: number;
   childPid: number | undefined;
   file: string;
+  /** The daemon's exit, for the tests that stop it. */
+  done: Promise<CliResult>;
 }
 
 /** Spawns `daemon.ts` with `runtime` as its `XDG_RUNTIME_DIR`. */
@@ -64,6 +66,7 @@ async function boot(t: TestContext, runtime?: string): Promise<Daemon> {
     pid,
     childPid: d.child.pid,
     file,
+    done: d.done,
   };
 }
 
@@ -199,6 +202,134 @@ test("a runtime directory other users can enter is refused", async (t) => {
   assert.equal(r.code, 1);
   assert.match(r.stderr, /0700/);
   await assert.rejects(readFile(join(dir, "daemon.json")));
+});
+
+// --- lifecycle (M2-4) --------------------------------------------------------------
+
+/** True once `pid` is gone, false if it is still alive after 10s. */
+async function gone(pid: number): Promise<boolean> {
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  return false;
+}
+
+/** Starts a run whose harness never ends its turn, and returns the pid the
+ *  daemon recorded for it in `children.json`. */
+async function stalledHarness(t: TestContext, d: Daemon): Promise<number> {
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([
+      { id: "stuck", prompt: "hi", cmd: `node ${MOCK_AGENT} --scenario stall` },
+    ]),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  const children = join(d.file, "..", "children.json");
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    const record = await readFile(children, "utf8").catch(() => null);
+    if (record) {
+      const [child] = JSON.parse(record).children;
+      assert.equal(child.runId, posted.body.id);
+      assert.equal(child.taskId, "stuck");
+      t.after(() => {
+        try {
+          process.kill(child.pid, "SIGKILL");
+        } catch {}
+      });
+      return child.pid;
+    }
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  throw new Error("children.json never named the harness");
+}
+
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  test(`${signal} cancels every run, stops its harness, removes daemon.json and exits 0`, async (t) => {
+    const d = await boot(t);
+    const harness = await stalledHarness(t, d);
+
+    process.kill(d.pid, signal);
+    const exit = await d.done;
+    assert.equal(exit.code, 0, exit.stderr);
+    assert.equal(await gone(harness), true, "the harness outlived the daemon");
+    await assert.rejects(readFile(d.file), "daemon.json is removed");
+    await assert.rejects(
+      readFile(join(d.file, "..", "children.json")),
+      "children.json is removed once no harness is live",
+    );
+  });
+}
+
+test("kill -9 of the daemon mid-turn leaves no harness alive, and the pid on record", async (t) => {
+  const d = await boot(t);
+  const harness = await stalledHarness(t, d);
+
+  process.kill(d.pid, "SIGKILL");
+  await d.done;
+  // Nothing in the daemon ran: the harness saw its stdin close and exited.
+  assert.equal(await gone(harness), true, "the harness outlived the daemon");
+  const record = await readFile(join(d.file, "..", "children.json"), "utf8");
+  assert.equal(JSON.parse(record).children[0].pid, harness);
+});
+
+test("daemons started together on a stale daemon.json: exactly one listens", async (t) => {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: dead, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  const daemons = Array.from({ length: 6 }, () => start(t, runtime));
+  const outcomes = await Promise.all(
+    daemons.map((d) =>
+      Promise.race([
+        d.waitFor("listening on ").then(() => "listening"),
+        d.done.then((r) => `exited ${r.code}`),
+      ]),
+    ),
+  );
+  assert.equal(
+    outcomes.filter((o) => o === "listening").length,
+    1,
+    outcomes.join(", "),
+  );
+  assert.deepEqual(
+    outcomes.filter((o) => o !== "listening"),
+    Array(5).fill("exited 1"),
+  );
+});
+
+test("kapelle daemon start listens, and kapelle daemon add registers a repository", async (t) => {
+  const runtime = await tempDir(t);
+  const env = { XDG_RUNTIME_DIR: runtime };
+  const repo = await tempDir(t);
+
+  const none = await spawnCli(t, ["daemon", "add", repo], "cli.ts", env).done;
+  assert.equal(none.code, 1);
+  assert.match(none.stderr, /no daemon is listening/);
+
+  const daemon = spawnCli(t, ["daemon", "start", "--port", "0"], "cli.ts", env);
+  await daemon.waitFor("listening on ");
+
+  const add = await spawnCli(t, ["daemon", "add", repo], "cli.ts", env).done;
+  assert.equal(add.code, 0, add.stderr);
+  assert.equal(add.stdout.trim(), `added ${await realpath(repo)}`);
+
+  const file = join(runtime, "kapelle", "daemon.json");
+  const { port, token, pid } = JSON.parse(await readFile(file, "utf8"));
+  const d = { url: `http://127.0.0.1:${port}`, token, pid } as Daemon;
+  assert.deepEqual((await api<string[]>(d, "GET", "/repos")).body, [
+    await realpath(repo),
+  ]);
 });
 
 // --- repos ----------------------------------------------------------------------

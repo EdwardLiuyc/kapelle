@@ -476,6 +476,20 @@ export interface ClientTaskFinishedEvent extends Meta {
   durationMs: number;
 }
 
+/** A harness subprocess started, and the pid it runs as (M2-4). The daemon
+ *  keeps the live ones in a file, so a harness that outlives a crash can be
+ *  found by M2-5's sweep. */
+export interface ClientHarnessSpawnedEvent extends Meta {
+  sessionUpdate: "_client_harness_spawned";
+  pid: number;
+}
+
+/** That harness subprocess is gone: it exited or was killed (M2-4). */
+export interface ClientHarnessExitedEvent extends Meta {
+  sessionUpdate: "_client_harness_exited";
+  pid: number;
+}
+
 /** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
@@ -487,7 +501,9 @@ export type AgentEvent =
   | ClientStallWarningEvent
   | ClientTaskStartedEvent
   | ClientWorktreeCreatedEvent
-  | ClientTaskFinishedEvent;
+  | ClientTaskFinishedEvent
+  | ClientHarnessSpawnedEvent
+  | ClientHarnessExitedEvent;
 
 /** The `session/update` notification as it arrives. */
 export interface SessionNotification extends Meta {
@@ -772,7 +788,9 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_stall_warning"
         | "_client_task_started"
         | "_client_worktree_created"
-        | "_client_task_finished" = u.sessionUpdate;
+        | "_client_task_finished"
+        | "_client_harness_spawned"
+        | "_client_harness_exited" = u.sessionUpdate;
       void fallthrough;
       return false;
     }

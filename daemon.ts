@@ -28,13 +28,15 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   closeSync,
   ftruncateSync,
-  lstatSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import {
@@ -43,7 +45,6 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
 import type { EventLog } from "./core/eventlog.ts";
@@ -51,6 +52,7 @@ import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
 import { type RunReport, runRun, type TaskStatus } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
+import { runtimeDir } from "./core/runtime.ts";
 import { checkStateDir, openWorktrees, stateDirRoot } from "./core/worktree.ts";
 import type { Warning } from "./protocol/registry.ts";
 
@@ -81,31 +83,6 @@ const port = orExit(() => {
   return n;
 });
 
-/**
- * `$XDG_RUNTIME_DIR/kapelle`, or a per-user directory under the system temp
- * dir where that is unset (macOS). Either way it must be ours and closed to
- * everyone else: in a shared `/tmp`, another account could create the
- * directory first, and whoever owns it can read or replace the token.
- */
-function runtimeDir(): string {
-  const { uid } = userInfo();
-  const base = process.env.XDG_RUNTIME_DIR;
-  const dir = base ? join(base, "kapelle") : join(tmpdir(), `kapelle-${uid}`);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  // `lstat`, so a symlink planted where the directory should be is refused
-  // rather than followed.
-  const st = lstatSync(dir);
-  const mode = st.mode & 0o777;
-  if (!st.isDirectory() || st.uid !== uid || (mode & 0o077) !== 0) {
-    throw new Error(
-      `${dir} must be a directory owned by you with mode 0700; it is owned ` +
-        `by uid ${st.uid} with mode ${mode.toString(8)}. Fix or remove it, ` +
-        `then start the daemon again.`,
-    );
-  }
-  return dir;
-}
-
 /** Is `pid` a live process? `EPERM` means it is, and is someone else's. */
 function alive(pid: number): boolean {
   try {
@@ -116,10 +93,26 @@ function alive(pid: number): boolean {
   }
 }
 
-/** Opens `file` exclusively and writes this pid into it straight away. */
+/**
+ * Creates `file` holding this pid, or throws `EEXIST`.
+ *
+ * Written to a private name first and then linked in, because `link` never
+ * replaces and the file it publishes already has the pid in it. An exclusive
+ * `open` published an empty file for an instant, and a second daemon reading
+ * it then took it for stale.
+ */
 function create(file: string): number {
-  const fd = openSync(file, "wx", 0o600);
-  writeSync(fd, JSON.stringify({ pid: process.pid }));
+  const tmp = `${file}.${process.pid}`;
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeSync(fd, JSON.stringify({ pid: process.pid }));
+    linkSync(tmp, file);
+  } catch (err) {
+    closeSync(fd);
+    throw err;
+  } finally {
+    rmSync(tmp, { force: true });
+  }
   return fd;
 }
 
@@ -137,25 +130,42 @@ function claim(file: string): number {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
   }
-  let holder: { pid?: unknown; port?: unknown } = {};
+  // Replacing a stale file is check-then-act, so two daemons starting in the
+  // same instant could both see it stale and both replace it. `mkdir` is
+  // atomic, so exactly one gets past here; the other refuses rather than
+  // waits, because the winner's pid is about to be live (M2-4).
+  const lock = `${file}.lock`;
   try {
-    holder = JSON.parse(readFileSync(file, "utf8"));
-  } catch {
-    // Unreadable: nothing live is vouching for it, so it counts as stale.
-  }
-  if (typeof holder.pid === "number" && alive(holder.pid)) {
+    mkdirSync(lock);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
     throw new Error(
-      `a daemon is already running: pid ${holder.pid}, port ${holder.port} ` +
-        `(${file}).`,
+      `another daemon is starting (${lock} exists). If none is, remove ` +
+        `that directory and start again.`,
     );
   }
-  // ponytail: two daemons starting in the same instant can both reach this
-  // line; M2-4's lifecycle work owns a strict lock.
-  rmSync(file, { force: true });
-  return create(file);
+  try {
+    let holder: { pid?: unknown; port?: unknown } = {};
+    try {
+      holder = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      // Unreadable: nothing live is vouching for it, so it counts as stale.
+    }
+    if (typeof holder.pid === "number" && alive(holder.pid)) {
+      throw new Error(
+        `a daemon is already running: pid ${holder.pid}, port ${holder.port} ` +
+          `(${file}).`,
+      );
+    }
+    rmSync(file, { force: true });
+    return create(file);
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
 }
 
-const file = orExit(() => join(runtimeDir(), "daemon.json"));
+const dir = orExit(runtimeDir);
+const file = join(dir, "daemon.json");
 const fd = orExit(() => claim(file));
 
 const token = randomBytes(32).toString("hex");
@@ -241,6 +251,8 @@ interface RunState {
 }
 
 const runs = new Map<string, RunState>();
+/** Every run still in flight, so a shutdown can wait for them to settle. */
+const inFlight = new Set<Promise<void>>();
 /** Kept beside the record rather than on it, so a `GET` never serialises one. */
 const cancels = new Map<string, AbortController>();
 /** Settles once `runRun` hands over the log, or with `undefined` when the run
@@ -248,6 +260,43 @@ const cancels = new Map<string, AbortController>();
  *  make. A `GET /events` that arrives first waits here rather than 404ing a
  *  run that exists. */
 const eventLogs = new Map<string, Promise<EventLog | undefined>>();
+
+/**
+ * Every live harness, by pid (M2-4, #34), mirrored to `children.json` beside
+ * `daemon.json` for M2-5's sweep to read after a crash.
+ *
+ * A crash is covered without it: every measured harness exits when its stdin
+ * closes, and the kernel closes that pipe when the daemon dies. The file is
+ * the record for a harness build that does not. Removed once nothing is live,
+ * so a file that is there after a daemon died names only what was running.
+ */
+const children = new Map<
+  number,
+  { pid: number; runId: string; taskId: string }
+>();
+const childrenFile = join(dir, "children.json");
+
+// ponytail: a pid alone can be reused by an unrelated process before M2-5
+// reads it; record a start time when the sweep needs to tell them apart.
+function recordChildren(): void {
+  try {
+    if (children.size === 0) {
+      rmSync(childrenFile, { force: true });
+      return;
+    }
+    const tmp = `${childrenFile}.tmp`;
+    writeFileSync(
+      tmp,
+      JSON.stringify({ pid: process.pid, children: [...children.values()] }),
+      { mode: 0o600 },
+    );
+    renameSync(tmp, childrenFile);
+  } catch (err) {
+    console.error(
+      `cannot record harness pids in ${childrenFile}: ${messageOf(err)}`,
+    );
+  }
+}
 
 /**
  * `ask` is refused until M2-3 (decided 2026-09-11, #31).
@@ -324,7 +373,20 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     throw refusal(409, messageOf(err));
   }
 
+  // After the last await, so no run can start once a shutdown has begun.
+  if (stopping) throw refusal(503, "the daemon is shutting down");
+
   const state: RunState = { id, cwd, status: "running", notices: [] };
+  const bus = createEventBus();
+  bus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "_client_harness_spawned") {
+      children.set(update.pid, { pid: update.pid, runId: id, taskId: agent });
+      recordChildren();
+    } else if (update.sessionUpdate === "_client_harness_exited") {
+      children.delete(update.pid);
+      recordChildren();
+    }
+  });
   const canceller = new AbortController();
   runs.set(id, state);
   cancels.set(id, canceller);
@@ -335,10 +397,10 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
       settleLog = ok;
     }),
   );
-  runRun(run, {
+  const done = runRun(run, {
     cwd,
     runId: id,
-    bus: createEventBus(),
+    bus,
     signal: canceller.signal,
     onEventLog: settleLog,
     onNotice: (taskId, text, kind) => {
@@ -357,8 +419,10 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     )
     .finally(() => {
       cancels.delete(id);
+      inFlight.delete(done);
       settleLog(undefined);
     });
+  inFlight.add(done);
   send(res, 202, { id });
 }
 
@@ -469,6 +533,31 @@ const server = createServer((req, res) => {
     });
   });
 });
+
+let stopping = false;
+
+/**
+ * SIGTERM or SIGINT: cancel every run, wait for each to settle, then remove
+ * `daemon.json` and exit 0 (M2-4, #34).
+ *
+ * No kill loop of its own. A cancelled task stops its harness through
+ * `core/run.ts` (2 s after the abort), and `AcpAgent.stop()` closes stdin
+ * before it ever signals — the only stop that also ends the shell commands a
+ * harness started. Waiting on the runs is what waits on their harnesses, and
+ * it is also what lets each worktree be released.
+ */
+async function shutdown(signal: string): Promise<void> {
+  if (stopping) return;
+  stopping = true;
+  console.log(`${signal}: cancelling ${inFlight.size} run(s), then exiting`);
+  server.close();
+  for (const canceller of cancels.values()) canceller.abort();
+  await Promise.all(inFlight);
+  rmSync(file, { force: true });
+  process.exit(0);
+}
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
 
 server.on("error", (err) => {
   rmSync(file, { force: true });

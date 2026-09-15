@@ -57,6 +57,10 @@ const TIMED_METHODS = new Set([
 // so this is an order of magnitude above the worst observed.
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
+// M2-4 measured every harness exiting within 1 s of stdin closing, mid shell
+// command included (`docs/M0-FINDINGS.md` §M2-4), so this is a safety net.
+const DEFAULT_STOP_GRACE_MS = 5_000;
+
 /**
  * The longest stdout line this client will parse (M1b-6, issue #22).
  *
@@ -135,6 +139,8 @@ export interface AcpAgentOptions {
   /** Deadline for handshake and session-management calls. Never applied to
    * `session/prompt`. Defaults to 30s. */
   requestTimeoutMs?: number;
+  /** How long `stop()` waits after closing stdin before SIGKILL. Defaults to 5s. */
+  stopGraceMs?: number;
 }
 
 // --- internal wire shapes ----------------------------------------------------
@@ -230,6 +236,7 @@ export class AcpAgent {
   verbose: boolean;
   stderrLog: string | null;
   requestTimeoutMs: number;
+  stopGraceMs: number;
   sessionId: SessionId | null;
   agentInfo: Implementation | null;
   agentCapabilities: AgentCapabilities | null;
@@ -262,6 +269,9 @@ export class AcpAgent {
   #promptInFlight = false;
   #stderr: string[] = [];
   #stderrFile: WriteStream | null = null;
+  #killTimer: NodeJS.Timeout | null = null;
+  /** Settles when the subprocess has closed; `stop()` hands it out. */
+  #exited: Promise<void> = Promise.resolve();
 
   constructor({
     name,
@@ -275,6 +285,7 @@ export class AcpAgent {
     verbose = false,
     stderrLog,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    stopGraceMs = DEFAULT_STOP_GRACE_MS,
   }: AcpAgentOptions) {
     this.name = name ?? command;
     this.command = command;
@@ -287,6 +298,7 @@ export class AcpAgent {
     this.verbose = verbose;
     this.stderrLog = stderrLog ?? null;
     this.requestTimeoutMs = requestTimeoutMs;
+    this.stopGraceMs = stopGraceMs;
     this.sessionId = null;
     this.agentInfo = null;
     this.agentCapabilities = null;
@@ -303,6 +315,7 @@ export class AcpAgent {
       stdio: "pipe",
     });
     this.#proc = proc;
+    this.#exited = new Promise((ok) => proc.once("close", () => ok()));
 
     proc.on("error", (err: Error) => {
       // M1b-7: the rejection message is enough while a terminal is watching,
@@ -332,8 +345,25 @@ export class AcpAgent {
       }
     });
 
+    // M2-4: a pid the daemon can record, so a harness that outlives a crash
+    // can be found again (M2-5). `undefined` means the spawn failed.
+    const { pid } = proc;
+    if (pid !== undefined) {
+      this.onEvent({
+        agent: this.name,
+        update: { sessionUpdate: "_client_harness_spawned", pid },
+      });
+    }
+
     proc.on("close", (code: number | null) => {
       this.#closed = true;
+      if (this.#killTimer) clearTimeout(this.#killTimer);
+      if (pid !== undefined) {
+        this.onEvent({
+          agent: this.name,
+          update: { sessionUpdate: "_client_harness_exited", pid },
+        });
+      }
       this.#stderrFile?.end();
       this.#stderrFile = null;
       this.#failAll(new Error(this.#exitMessage(code)));
@@ -515,11 +545,31 @@ export class AcpAgent {
     });
   }
 
-  stop(): void {
-    if (this.#proc && !this.#closed) {
-      this.#proc.stdin.end();
-      this.#proc.kill();
+  /**
+   * Closes stdin, and SIGKILLs the harness only if it is still alive after
+   * `stopGraceMs` (M2-4, #34).
+   *
+   * **Stdin first, never a signal first.** Every harness runs its shell
+   * commands in a session of their own, so no kill from here reaches them;
+   * only the harness's own shutdown does, and end of file is what starts it.
+   * Measured 2026-09-15: SIGTERM left opencode's running command alive, and
+   * SIGKILL left opencode's and copilot's; closing stdin left none on all four.
+   * It is a convention, not an ACP guarantee, hence the SIGKILL behind it.
+   * The same end of file is what a daemon crash delivers.
+   *
+   * Resolves once the subprocess is gone, so a caller that awaits it knows
+   * the harness is not still writing to the workspace.
+   */
+  stop(): Promise<void> {
+    const proc = this.#proc;
+    if (proc && !this.#closed && !this.#killTimer) {
+      proc.stdin.end();
+      this.#killTimer = setTimeout(
+        () => proc.kill("SIGKILL"),
+        this.stopGraceMs,
+      );
     }
+    return this.#exited;
   }
 
   // ---------- JSON-RPC plumbing ----------

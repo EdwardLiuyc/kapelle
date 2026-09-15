@@ -120,6 +120,9 @@ export function spawnCli(
         () => reject(new Error(`never saw ${JSON.stringify(text)}`)),
         60_000,
       );
+      // A child that exits instead of printing must not hold the test file
+      // open for the rest of the minute.
+      bail.unref();
       const check = () => {
         if (!stdout.includes(text)) return;
         clearTimeout(bail);

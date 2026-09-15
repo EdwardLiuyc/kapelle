@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
 import { mergeRun } from "./core/merge.ts";
@@ -14,6 +15,7 @@ import {
 import { withResultPreamble } from "./core/result.ts";
 import { runRun, type TaskRun } from "./core/run.ts";
 import { type Task, validateRun } from "./core/runfile.ts";
+import { runtimeDir } from "./core/runtime.ts";
 import { AcpAgent } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
 import {
@@ -77,6 +79,8 @@ kapelle — a minimal Agent Client Protocol client
   kapelle "<prompt>" [options]
   kapelle --file <run.json> [--cwd dir] [--verbose] [--quiet]
   kapelle merge <runId> [--squash] [--cwd dir]
+  kapelle daemon start [--port n]    runs in this terminal until ^C or SIGTERM
+  kapelle daemon add <path>          adds a repository to the running daemon
 
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: opencode)
@@ -130,7 +134,19 @@ function orExit<T>(f: () => T): T {
 // `else` for the same reason — there is nothing left to skip past.
 // `positional[0]`, not `argv[0]`: options such as `--cwd` can precede the
 // subcommand, and `flag()`/`has()` deliberately parse flags from anywhere.
-if (positional[0] === "merge") {
+if (positional[0] === "daemon" && positional[1] === "start") {
+  // `daemon.ts` parses its own flags from `process.argv`, so the two words
+  // that chose it are taken out and the rest is handed over as typed.
+  const rest = [...argv];
+  for (const word of ["daemon", "start"]) rest.splice(rest.indexOf(word), 1);
+  process.argv.splice(2, Infinity, ...rest);
+  await import("./daemon.ts");
+} else if (positional[0] === "daemon") {
+  process.exitCode = await runDaemonCommand().catch((err) => {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  });
+} else if (positional[0] === "merge") {
   process.exitCode = await runMergeCommand().catch((err) => {
     console.error(`error: ${messageOf(err)}`);
     return 1;
@@ -201,9 +217,10 @@ if (positional[0] === "merge") {
   process.on("SIGINT", () => {
     console.error("\n^C cancelling turn…");
     agent.cancel();
+    // Exit once the harness is gone, not before: it ends its own shell
+    // commands only after it has read end of file (M2-4).
     setTimeout(() => {
-      agent.stop();
-      process.exit(130);
+      void agent.stop().finally(() => process.exit(130));
     }, 2000);
   });
 
@@ -251,7 +268,7 @@ if (positional[0] === "merge") {
     process.exitCode = 1;
   } finally {
     closeAsk();
-    agent.stop();
+    await agent.stop();
   }
 }
 
@@ -531,4 +548,41 @@ function printTask(task: TaskRun): void {
   for (const w of task.warnings ?? []) console.log(`  ! ${w.text}`);
   const prose = task.transcript.trim();
   if (prose) console.log(prose);
+}
+
+/**
+ * `kapelle daemon add <path>`: `POST /repos` to the daemon named in
+ * `daemon.json`, with the token from the same file (M2-4, #34).
+ */
+async function runDaemonCommand(): Promise<number> {
+  const [, verb, ...rest] = positional;
+  if (verb !== "add" || rest.length !== 1) {
+    console.error(
+      "usage: kapelle daemon start [--port n] | kapelle daemon add <path>",
+    );
+    return 1;
+  }
+  const file = join(runtimeDir(), "daemon.json");
+  const { port, token } = JSON.parse(
+    await readFile(file, "utf8").catch(() => "{}"),
+  );
+  if (!port || !token) {
+    console.error(
+      `no daemon is listening (${file} is missing or not ready). ` +
+        "Start one with: kapelle daemon start",
+    );
+    return 1;
+  }
+  const res = await fetch(`http://127.0.0.1:${port}/repos`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ path: resolve(rest[0] as string) }),
+  });
+  const body = (await res.json()) as { root?: string; error?: string };
+  if (!res.ok) {
+    console.error(`error: ${body.error}`);
+    return 1;
+  }
+  console.log(`added ${body.root}`);
+  return 0;
 }

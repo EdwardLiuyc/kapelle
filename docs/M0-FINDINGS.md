@@ -1037,6 +1037,44 @@ Other wire notes that matter for downstream consumers:
 
 ---
 
+## M2-4 · How a harness stops — measured 2026-09-15 (#34)
+
+**Question.** When the client goes away, or stops a harness, does the harness exit, and
+does the shell command it was running go with it?
+
+**Method.** A stand-in parent spawned each harness over stdio, answered the handshake,
+allowed every permission, and prompted `Run exactly this shell command and wait for it:
+sleep 300`. Once a `tool_call` had arrived and `sleep 300` showed in `ps`, the parent
+stopped the harness one of four ways, then polled `ps` for the harness and for `sleep`.
+Versions: opencode 1.18.30, claude-agent-acp 0.75.1, copilot 1.0.83, pi-acp 0.0.33.
+
+| stop | opencode | claude-agent-acp | copilot | pi-acp |
+| --- | --- | --- | --- | --- |
+| idle after `session/new`, parent `kill -9` | exits < 1 s | exits < 1 s | exits < 1 s | exits < 1 s |
+| mid `sleep`, parent `kill -9` (stdin end of file only) | clean | clean, inner `claude` process gone ≤ 3 s | clean | clean |
+| mid `sleep`, stdin closed and SIGTERM at once (the old `stop()`) | **`sleep` survives** | clean | clean | clean |
+| mid `sleep`, SIGTERM | **`sleep` survives** | clean | clean | clean |
+| mid `sleep`, SIGKILL | **`sleep` survives** | clean | **`sleep` survives** | clean |
+
+*Clean* means the harness and `sleep` were both gone at the first poll after one second.
+
+**Every harness runs its shell command in a session of its own** (`ps` showed `sleep`'s
+pgid and sid equal to its own pid, never the harness's). So no kill the client sends — to
+the harness pid or to its process group — reaches that command. Only the harness's own
+shutdown does, and end of file on stdin is what starts it on all four.
+
+**End of file is a convention, not a guarantee.** ACP's transports page shows "close
+stdin, terminate subprocess" in a diagram and places no requirement on the agent. MCP's
+lifecycle spec writes the same order down for its clients — close input, wait, SIGTERM,
+SIGKILL — but it too requires nothing of the server. That is why this is a per-build
+measurement, and why `AcpAgent.stop()` keeps a SIGKILL behind the grace.
+
+**Consequences.** `stop()` closes stdin first and signals only a harness still alive after
+the grace; a daemon crash delivers the same end of file through the kernel; the daemon
+records live harness pids in `children.json` for M2-5, for the build that stops honouring it.
+
+---
+
 ## What this note does not cover
 
 M0's questions are answered; these are the edges, collected so that no downstream story
