@@ -491,6 +491,21 @@ const REAPS_ON_EOF = [
   "});",
 ].join("\n");
 
+/**
+ * Ignores end of file and leaks a grandchild that inherits stdout/stderr —
+ * the shape whose pipes stay open after SIGKILL, so Node's `close` event
+ * would never arrive and `stop()` would hang (M2-4, #34). Writes the
+ * grandchild's pid to `argv[1]`.
+ */
+const LEAKS_A_PIPE_HOLDER = [
+  'const { spawn } = require("node:child_process");',
+  'const { writeFileSync } = require("node:fs");',
+  'const child = spawn("sleep", ["300"], { stdio: ["ignore", "inherit", "inherit"] });',
+  "writeFileSync(process.argv[1], String(child.pid));",
+  "process.stdin.resume();",
+  "setInterval(() => {}, 1000);",
+].join("\n");
+
 /** Resolves true once `pid` is gone, false if it is still alive after 5s. */
 async function gone(pid: number): Promise<boolean> {
   for (const until = Date.now() + 5_000; Date.now() < until; ) {
@@ -561,11 +576,51 @@ test("a harness that ignores end of file is killed after the grace", async (t) =
   assert.ok(Date.now() - at >= 150, "it waited for the grace first");
 });
 
+test("stop() settles once the harness is killed, though a leaked grandchild holds its pipes", async (t) => {
+  const dir = await tempDir(t, "acp-leak-");
+  const pidFile = join(dir, "grandchild.pid");
+  const agent = new AcpAgent({
+    name: "leaks",
+    command: process.execPath,
+    args: ["-e", LEAKS_A_PIPE_HOLDER, pidFile],
+    stopGraceMs: 200,
+  });
+  t.after(() => agent.stop());
+  const started = agent.start().catch(() => {});
+
+  let grandchild = 0;
+  for (const until = Date.now() + 5_000; !grandchild && Date.now() < until; ) {
+    grandchild = Number(await readFile(pidFile, "utf8").catch(() => 0));
+    if (!grandchild) await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.ok(grandchild, "the fake harness leaked its command");
+  t.after(() => {
+    try {
+      process.kill(grandchild, "SIGKILL");
+    } catch {
+      // Already gone: nothing left to kill.
+    }
+  });
+
+  const at = Date.now();
+  await agent.stop();
+  assert.ok(
+    Date.now() - at < 3_000,
+    "stop() resolved though the grandchild holds the pipes",
+  );
+  await started;
+});
+
 // --- #62 B1 · per-request timeout --------------------------------------------
 
 test("the default deadline is the story's 30s", () => {
   const agent = new AcpAgent({ command: "true" });
   assert.equal(agent.requestTimeoutMs, 30_000);
+});
+
+test("the default stop grace is the measured 5s safety net", () => {
+  const agent = new AcpAgent({ command: "true" });
+  assert.equal(agent.stopGraceMs, 5_000);
 });
 
 test("initialize carries the kapelle clientInfo, not the old package name", async (t) => {

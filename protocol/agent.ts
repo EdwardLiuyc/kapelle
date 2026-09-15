@@ -61,6 +61,11 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 // command included (`docs/M0-FINDINGS.md` §M2-4), so this is a safety net.
 const DEFAULT_STOP_GRACE_MS = 5_000;
 
+// How long a harness's stdio has to drain after the process exits before we
+// close our ends ourselves. `close` waits on those streams, and a grandchild
+// that inherited them can hold them open forever (M2-4, #34).
+const STDIO_DRAIN_MS = 250;
+
 /**
  * The longest stdout line this client will parse (M1b-6, issue #22).
  *
@@ -270,6 +275,8 @@ export class AcpAgent {
   #stderr: string[] = [];
   #stderrFile: WriteStream | null = null;
   #killTimer: NodeJS.Timeout | null = null;
+  /** Closes our stdio ends once the process is gone but a pipe-holder lives. */
+  #drainTimer: NodeJS.Timeout | null = null;
   /** Settles when the subprocess has closed; `stop()` hands it out. */
   #exited: Promise<void> = Promise.resolve();
 
@@ -358,6 +365,7 @@ export class AcpAgent {
     proc.on("close", (code: number | null) => {
       this.#closed = true;
       if (this.#killTimer) clearTimeout(this.#killTimer);
+      if (this.#drainTimer) clearTimeout(this.#drainTimer);
       if (pid !== undefined) {
         this.onEvent({
           agent: this.name,
@@ -367,6 +375,19 @@ export class AcpAgent {
       this.#stderrFile?.end();
       this.#stderrFile = null;
       this.#failAll(new Error(this.#exitMessage(code)));
+    });
+
+    // `close` waits for the child's stdio streams, not just its exit, and a
+    // harness that leaked a grandchild holding them open never produces one.
+    // Once the process is gone, drain what it left, then close our ends so
+    // `close` — and every cleanup that rides on it — still arrives: a stopped
+    // harness must never leave `stop()` pending (M2-4, #34).
+    proc.on("exit", () => {
+      this.#drainTimer = setTimeout(() => {
+        proc.stdin.destroy();
+        proc.stdout.destroy();
+        proc.stderr.destroy();
+      }, STDIO_DRAIN_MS);
     });
 
     createInterface({ input: proc.stdout }).on("line", (line: string) => {
@@ -558,7 +579,9 @@ export class AcpAgent {
    * The same end of file is what a daemon crash delivers.
    *
    * Resolves once the subprocess is gone, so a caller that awaits it knows
-   * the harness is not still writing to the workspace.
+   * the harness is not still writing to the workspace. Its stdio is given
+   * `STDIO_DRAIN_MS` to drain after exit; a leaked grandchild holding the
+   * pipes only delays this by that much, so it can never hang a stop.
    */
   stop(): Promise<void> {
     const proc = this.#proc;

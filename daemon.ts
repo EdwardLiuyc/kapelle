@@ -27,7 +27,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   closeSync,
-  ftruncateSync,
   linkSync,
   mkdirSync,
   openSync,
@@ -147,7 +146,12 @@ function claim(file: string): number {
   try {
     let holder: { pid?: unknown; port?: unknown } = {};
     try {
-      holder = JSON.parse(readFileSync(file, "utf8"));
+      const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+      // A non-object (`null`, `[]`, `42`) names no pid either; it counts as
+      // stale exactly like an unreadable file, and must not throw here.
+      if (typeof parsed === "object" && parsed !== null) {
+        holder = parsed as { pid?: unknown; port?: unknown };
+      }
     } catch {
       // Unreadable: nothing live is vouching for it, so it counts as stale.
     }
@@ -571,8 +575,16 @@ server.on("error", (err) => {
 // a token for a daemon that is not listening.
 server.listen(port, "127.0.0.1", () => {
   const { port: bound } = server.address() as AddressInfo;
-  ftruncateSync(fd, 0);
-  writeSync(fd, JSON.stringify({ pid: process.pid, port: bound, token }), 0);
+  // Published atomically: `rename` never exposes a half-written record, and
+  // the claim file it replaces already names this live pid, so a second
+  // starter reads a live pid at either end of the swap. Truncating this file
+  // in place left it empty for an instant — the state `claim` treats as stale
+  // — and let a second daemon take over a running one (M2-4, #34).
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ pid: process.pid, port: bound, token }), {
+    mode: 0o600,
+  });
+  renameSync(tmp, file);
   closeSync(fd);
   console.log(`listening on http://127.0.0.1:${bound} (token in ${file})`);
 });

@@ -135,10 +135,14 @@ function orExit<T>(f: () => T): T {
 // `positional[0]`, not `argv[0]`: options such as `--cwd` can precede the
 // subcommand, and `flag()`/`has()` deliberately parse flags from anywhere.
 if (positional[0] === "daemon" && positional[1] === "start") {
-  // `daemon.ts` parses its own flags from `process.argv`, so the two words
-  // that chose it are taken out and the rest is handed over as typed.
+  // `daemon.ts` parses its own flags from `process.argv`, so the words that
+  // chose it — and the global presentation flags it does not define — are
+  // taken out, and the rest is handed over as typed so `--port n` reaches it.
   const rest = [...argv];
-  for (const word of ["daemon", "start"]) rest.splice(rest.indexOf(word), 1);
+  for (const word of ["daemon", "start", "--quiet", "--verbose"]) {
+    const i = rest.indexOf(word);
+    if (i !== -1) rest.splice(i, 1);
+  }
   process.argv.splice(2, Infinity, ...rest);
   await import("./daemon.ts");
 } else if (positional[0] === "daemon") {
@@ -563,14 +567,24 @@ async function runDaemonCommand(): Promise<number> {
     return 1;
   }
   const file = join(runtimeDir(), "daemon.json");
-  let holder: { port?: number; token?: string } = {};
+  let holder: { port?: unknown; token?: unknown } = {};
   try {
-    holder = JSON.parse(await readFile(file, "utf8"));
+    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
+    // A non-object (`null`, `[]`, `42`) is as unready as a missing file: it
+    // must fall through to the message below, not throw on destructuring.
+    if (typeof parsed === "object" && parsed !== null) {
+      holder = parsed as { port?: unknown; token?: unknown };
+    }
   } catch {
     // Missing or malformed: treated as "no daemon is listening" below.
   }
   const { port, token } = holder;
-  if (!port || !token) {
+  if (
+    typeof port !== "number" ||
+    !port ||
+    typeof token !== "string" ||
+    !token
+  ) {
     console.error(
       `no daemon is listening (${file} is missing or not ready). ` +
         "Start one with: kapelle daemon start",
