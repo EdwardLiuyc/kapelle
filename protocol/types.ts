@@ -490,6 +490,23 @@ export interface ClientHarnessExitedEvent extends Meta {
   pid: number;
 }
 
+/** A message the operator sent into a chat room (`core/room.ts`). On the log
+ *  so a client that attaches later replays both sides of the conversation,
+ *  not only the harness's answers. */
+export interface ClientUserMessageEvent extends Meta {
+  sessionUpdate: "_client_user_message";
+  text: string;
+}
+
+/** A chat room's turn is over, and the room takes the next message.
+ *  `stopReason` is the harness's own word; `error` is set instead when the
+ *  prompt threw, which is what a harness that died mid-turn looks like. */
+export interface ClientTurnEndedEvent extends Meta {
+  sessionUpdate: "_client_turn_ended";
+  stopReason?: string;
+  error?: string;
+}
+
 /** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
@@ -503,7 +520,9 @@ export type AgentEvent =
   | ClientWorktreeCreatedEvent
   | ClientTaskFinishedEvent
   | ClientHarnessSpawnedEvent
-  | ClientHarnessExitedEvent;
+  | ClientHarnessExitedEvent
+  | ClientUserMessageEvent
+  | ClientTurnEndedEvent;
 
 /** The `session/update` notification as it arrives. */
 export interface SessionNotification extends Meta {
@@ -790,7 +809,9 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_worktree_created"
         | "_client_task_finished"
         | "_client_harness_spawned"
-        | "_client_harness_exited" = u.sessionUpdate;
+        | "_client_harness_exited"
+        | "_client_user_message"
+        | "_client_turn_ended" = u.sessionUpdate;
       void fallthrough;
       return false;
     }
