@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import { readdir } from "node:fs/promises";
 import test from "node:test";
-import { needs, runCli, tempDir, WRITE_PROMPT } from "./helpers.ts";
+import { needs, runCli, tempDir, twoTurns, WRITE_PROMPT } from "./helpers.ts";
 
 const skip = needs("copilot");
 
@@ -93,4 +93,14 @@ test("the containment notice names the shell", { skip }, async (t) => {
   ]);
 
   assert.match(r.stderr, /runs its own commands \(shell: internal\)/);
+});
+
+test("a second prompt after end_turn runs on the same session", {
+  skip,
+}, async (t) => {
+  const r = await twoTurns(t, "copilot");
+  assert.equal(r.first, "end_turn");
+  assert.equal(r.second, "end_turn", "the follow-up turn completed");
+  assert.equal(r.sessionAfter, r.sessionBefore, "no new session was opened");
+  assert.equal(r.spawns, 1, "one harness served both turns");
 });

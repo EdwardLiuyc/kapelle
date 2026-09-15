@@ -7,10 +7,11 @@
  * we *observed*.
  *
  * **There is no re-ask.** The original story sent one bounded follow-up when
- * the block was missing; `docs/STORIES.md:1046` strikes it and
- * `protocol/agent.ts:446` makes it unreachable — `prompt()` throws on a second
- * call, because copilot's prompt handler aborts the session unconditionally
- * and opencode reads a second prompt as an injection attempt (M0-4). So the
+ * the block was missing; `docs/STORIES.md:1084` strikes it and
+ * `protocol/agent.ts` refuses a prompt during a live turn. A re-ask after the
+ * turn ends would reach the harness, but copilot's prompt handler aborts
+ * background work unconditionally (github/copilot-cli#4555), and a concurrent
+ * prompt reads as an injection attempt on opencode (M0-4). So the
  * preamble lands on the first shot or not at all, and a miss is a warning plus
  * a synthesised summary — never a failure. Compliance with a prompt is not
  * enforceable, and failing on it would make a non-compliant harness unusable

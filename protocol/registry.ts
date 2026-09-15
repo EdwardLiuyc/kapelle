@@ -181,9 +181,11 @@ export const AGENTS: Record<string, AgentEntry> = {
       // `tool_call` and complete on the update, and `set_mode` still accepts
       // both ids. **Two fields are carried forward, not re-verified**, and the
       // date does not cover them: `usage`, because telling per-turn from
-      // cumulative needs two turns in one session and `prompt()` throws on the
-      // second (#62 R5); and `meta`, because it describes what claude does when
-      // we advertise `terminal_output`, which this client does not.
+      // cumulative needs two turns in one session, and no probe had run at this
+      // date — the second turn is reachable now (`docs/M0-FINDINGS.md`
+      // §Multi-turn, 2026-09-15), but `usage` is still carried forward, not
+      // measured; and `meta`, because it describes what claude does when we
+      // advertise `terminal_output`, which this client does not.
       measuredOn: { version: "0.75.1", date: "2026-09-09" },
     },
   },
