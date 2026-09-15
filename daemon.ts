@@ -403,6 +403,14 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     } else if (update.sessionUpdate === "_client_harness_exited") {
       children.delete(update.pid);
       recordChildren();
+    } else if (update.sessionUpdate === "_client_task_finished") {
+      // A task the watchdog's TTL cut leaves decisions nobody can act on: its
+      // harness is gone and the run-wide signal has not fired, because the
+      // siblings are still running. The task's own end is the sturdy hook —
+      // a cancelled harness asks again on its way out (measured against
+      // `mock-agent.mjs`: a second request arrives after `session/cancel`),
+      // so denying at the cancel would leave that one listed until the timeout.
+      permissions.denyTask(id, agent);
     }
   });
   const canceller = new AbortController();

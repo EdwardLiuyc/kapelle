@@ -773,11 +773,12 @@ async function stream(
 
 async function until(
   what: string,
-  check: () => boolean,
+  /** Awaited, so a check that has to ask the daemon is written inline. */
+  check: () => boolean | Promise<boolean>,
   ms = 20_000,
 ): Promise<void> {
   for (const end = Date.now() + ms; Date.now() < end; ) {
-    if (check()) return;
+    if (await check()) return;
     await new Promise((ok) => setTimeout(ok, 20));
   }
   throw new Error(`timed out waiting for ${what}`);
@@ -1153,4 +1154,49 @@ test("a --permission-timeout above Node's timer ceiling refuses to start", async
   // The last whole second below Node's 2^31-1 ms ceiling still boots.
   const d = await boot(t, undefined, ["--permission-timeout", "2147483"]);
   assert.ok(d.token);
+});
+
+test("a task the watchdog cuts drops its pending decision at once, while its siblings run", async (t) => {
+  // The run-wide signal never fires here: the TTL cuts one task, the other
+  // keeps the run alive. Without the per-task deny the entry would sit in
+  // `GET /permissions` for the whole 120 s timeout.
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: {
+      cmd: `node ${MOCK_AGENT}`,
+      maxConcurrency: 2,
+      tasks: [
+        { id: "asker", prompt: "hi", ttlMs: 2_000 },
+        {
+          id: "busy",
+          prompt: "hi",
+          mode: "auto",
+          cmd: `node ${MOCK_AGENT} --scenario stall`,
+        },
+      ],
+    },
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+
+  const pending = await pendingOne(d);
+  assert.equal(pending.taskId, "asker");
+  await until("the cut task's decision to be denied", async () => {
+    const r = await api<Pending[]>(d, "GET", "/permissions");
+    return r.body.length === 0;
+  });
+  // Still running: this was the task's own TTL, not the run's cancel.
+  assert.equal(
+    (await api(d, "GET", `/runs/${posted.body.id}`)).body.status,
+    "running",
+  );
+  assert.equal(
+    (await api(d, "POST", `/permissions/${pending.id}`, { allow: true }))
+      .status,
+    409,
+  );
+
+  await api(d, "DELETE", `/runs/${posted.body.id}`);
+  await settled(d, posted.body.id);
 });

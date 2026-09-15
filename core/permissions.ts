@@ -9,6 +9,11 @@
  * once, and every later answer — a second client, or one that lost to the
  * timer or a cancel — is told `settled` rather than overwriting anything.
  *
+ * A cancel denies what it reaches: the run's signal covers the whole run, and
+ * `denyTask` covers one task the watchdog's TTL cut while its siblings run —
+ * `daemon.ts` calls it when that task ends, because the per-task abort lives
+ * inside `core/run.ts` and never leaves it.
+ *
  * The queue hands `runRun` a plain `Policy` through `RunOptions.askPolicy`,
  * so neither the pool nor `protocol/` knows it exists. It knows no HTTP
  * either; `daemon.ts` maps its three answers to status codes.
@@ -87,6 +92,15 @@ export function createPermissionQueue(timeoutMs: number) {
           });
         });
       };
+    },
+
+    /** Deny everything one task left open, once that task has ended. */
+    denyTask(runId: string, taskId: string): void {
+      for (const { decision, settle } of [...pending.values()]) {
+        if (decision.runId === runId && decision.taskId === taskId) {
+          settle(false);
+        }
+      }
     },
 
     list(): PendingDecision[] {
