@@ -240,7 +240,9 @@ async function stalledHarness(t: TestContext, d: Daemon): Promise<number> {
       t.after(() => {
         try {
           process.kill(child.pid, "SIGKILL");
-        } catch {}
+        } catch {
+          // Already gone: nothing left to kill.
+        }
       });
       return child.pid;
     }

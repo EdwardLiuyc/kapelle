@@ -563,9 +563,13 @@ async function runDaemonCommand(): Promise<number> {
     return 1;
   }
   const file = join(runtimeDir(), "daemon.json");
-  const { port, token } = JSON.parse(
-    await readFile(file, "utf8").catch(() => "{}"),
-  );
+  let holder: { port?: number; token?: string } = {};
+  try {
+    holder = JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    // Missing or malformed: treated as "no daemon is listening" below.
+  }
+  const { port, token } = holder;
   if (!port || !token) {
     console.error(
       `no daemon is listening (${file} is missing or not ready). ` +

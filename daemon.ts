@@ -285,6 +285,8 @@ function recordChildren(): void {
       return;
     }
     const tmp = `${childrenFile}.tmp`;
+    // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
+    // pi-lens-ignore: no-raw-json-store-write
     writeFileSync(
       tmp,
       JSON.stringify({ pid: process.pid, children: [...children.values()] }),

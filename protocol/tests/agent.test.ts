@@ -514,6 +514,7 @@ test("stop() closes stdin before any signal, so the harness reaps its own shell 
     args: ["-e", REAPS_ON_EOF, pidFile],
     onEvent: (e) => events.push(e),
   });
+  t.after(() => agent.stop());
   // Never answers `initialize`: the rejection on close is expected.
   const started = agent.start().catch(() => {});
 
@@ -526,7 +527,9 @@ test("stop() closes stdin before any signal, so the harness reaps its own shell 
   t.after(() => {
     try {
       process.kill(child, "SIGKILL");
-    } catch {}
+    } catch {
+      // Already gone: nothing left to kill.
+    }
   });
 
   agent.stop();

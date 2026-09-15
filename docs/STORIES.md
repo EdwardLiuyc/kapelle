@@ -1626,8 +1626,9 @@ Pidfile, single-instance guard, live-child registry, kill-all on shutdown, SIGTE
 **Amended 2026-09-11 (M2-1, #31):** the pidfile and single-instance guard landed with M2-1 —
 `$XDG_RUNTIME_DIR/kapelle/daemon.json` holds the pid, a live one refuses a second daemon and
 a dead one is replaced. What stays here: a strict lock for two daemons starting in the same
-instant (marked `ponytail:` in `daemon.ts`), the live-child registry, kill-all, SIGTERM, and
-the `kapelle daemon start` and `kapelle daemon add <path>` verbs.
+instant (it was marked `ponytail:` in `daemon.ts`; this story replaced it), the live-child
+registry, kill-all, SIGTERM, and the `kapelle daemon start` and `kapelle daemon add <path>`
+verbs.
 **Amended at pickup 2026-09-15 (#34): stdin first, no process group.** Measured on all four
 harnesses (`docs/M0-FINDINGS.md` §M2-4): each runs its shell commands in a session of its
 own, so a group kill never reaches them, and SIGTERM or SIGKILL left opencode's (and under
