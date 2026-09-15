@@ -13,7 +13,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
-import { assertTaskId, branchName, newRunId } from "../ids.ts";
+import {
+  assertRunId,
+  assertTaskId,
+  branchName,
+  newRoomId,
+  newRunId,
+} from "../ids.ts";
 
 test("newRunId is YYYYMMDD-HHMMSS-<4 char base36>, in UTC", () => {
   const id = newRunId(new Date("2026-09-03T12:34:56.789Z"));
@@ -63,7 +69,21 @@ test("illegal task ids throw rather than being sanitised", () => {
 
 test("branchName validates both halves it is given", () => {
   assert.throws(() => branchName(newRunId(), "build.lock"), /invalid task id/);
-  assert.throws(() => branchName("not-a-run-id", "plan"), /invalid run id/);
+  assert.throws(
+    () => branchName("not-a-run-id", "plan"),
+    /invalid run or room id/,
+  );
+});
+
+test("a room id is its own namespace: branchName takes it, assertRunId does not", () => {
+  const roomId = newRoomId();
+  assert.match(roomId, /^room-\d{8}-\d{6}-[0-9a-z]{4}$/);
+  // The branch a participant's work lands on. `core/worktree.ts` serves runs
+  // and rooms alike, so `branchName` has to take both.
+  assert.equal(branchName(roomId, "room"), `kapelle/${roomId}/room`);
+  // But nothing that takes a run id from the command line may accept one —
+  // `kapelle merge <runId>` must not reach into a room's branches (S9).
+  assert.throws(() => assertRunId(roomId), /invalid run id/);
 });
 
 test("minted branch names round-trip through git check-ref-format", () => {

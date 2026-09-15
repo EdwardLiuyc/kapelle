@@ -20,6 +20,10 @@
   // opt-in test suite, so they are ignored rather than misdeclared as
   // production roots. `npm run check` still type-checks them.
   "ignore": ["protocol/types.ts", "integration/**"],
+  // script(1) is util-linux's, spawned by tests/daemon.test.ts to give `attach`
+  // (M2-9) and chat.ts a real pseudo-terminal. A system binary, not an npm one,
+  // so nothing lists it.
+  "ignoreBinaries": ["script"],
   // Entry points. The `!` suffix marks a *production* entry: without it, knip's
   // --production mode (which pi-lens runs) has no roots at all and reports every
   // reachable file — protocol/agent.ts, protocol/registry.ts, render.ts — as unused.
@@ -35,8 +39,13 @@
   //
   // daemon.ts (M2-1) is the second production root: `node daemon.ts` runs it,
   // and nothing imports it — tests/daemon.test.ts spawns it as a subprocess.
-  // `script` is util-linux's, spawned by tests/daemon.test.ts to give `attach`
-  // a real TTY (M2-9); it is a system tool, not a package to list.
-  "ignoreBinaries": ["script"],
-  "entry": ["cli.ts!", "daemon.ts!", "mock-agent.mjs", "hostile-agent.mjs"]
+  // chat.ts (chat MVP) is the third, for the same reason: `node chat.ts`, spawned
+  // by tests/daemon.test.ts, imported by nothing.
+  "entry": [
+    "cli.ts!",
+    "daemon.ts!",
+    "chat.ts!",
+    "mock-agent.mjs",
+    "hostile-agent.mjs"
+  ]
 }

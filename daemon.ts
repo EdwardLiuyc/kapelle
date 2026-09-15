@@ -11,7 +11,8 @@
  *
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
  * `stateDirFor`, `validateRun`, `sweepBoot`, `runRun`,
- * `processIdentity` and the permission queue; worktrees, policy and harnesses
+ * `processIdentity` and the permission queue, and for chat rooms
+ * `roomHarness` and `openRoom`; worktrees, policy and harnesses
  * stay behind them. If orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
  * implementation (`docs/STORIES.md`, M2-1).
@@ -63,8 +64,9 @@ import {
 } from "./core/config.ts";
 import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
-import { newRunId } from "./core/ids.ts";
+import { newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
+import { openRoom, type Room, roomHarness } from "./core/room.ts";
 import { type RunReport, runRun, type TaskStatus } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import {
@@ -74,7 +76,7 @@ import {
   writeRepos,
 } from "./core/runtime.ts";
 import { processIdentity, sweepBoot } from "./core/sweep.ts";
-import { stateDirRoot } from "./core/worktree.ts";
+import { openWorktrees, stateDirRoot } from "./core/worktree.ts";
 import { AGENTS, type Warning } from "./protocol/registry.ts";
 
 // M2-7: the user-level config is read once here, after the startup helpers
@@ -548,8 +550,12 @@ function restoredLog(id: string): Promise<EventLog | undefined> | undefined {
  */
 interface Child {
   pid: number;
-  runId: string;
-  taskId: string;
+  /** Which kind of owner spawned it: a run's task, or a room's participant.
+   *  S14 renamed the two id fields so one file serves both; the sweep reads a
+   *  legacy `{pid, runId, taskId}` entry as a run. */
+  kind: "run" | "room";
+  ownerId: string;
+  unitId: string;
   /** `ps`'s start time, filled in once it answers; see the spawn listener. */
   startedAt?: string;
 }
@@ -588,6 +594,45 @@ function recordChildren(): void {
  */
 const permissions = createPermissionQueue(permissionTimeoutMs);
 
+/**
+ * Mirrors a bus's harness pids into `children.json` for the next boot's sweep
+ * (M2-4, #34). One listener for both owners: `kind` tells a run from a room,
+ * `ownerId` is the run or room id and `unitId` the task or participant (S14).
+ */
+function trackChildren(
+  bus: ReturnType<typeof createEventBus>,
+  kind: Child["kind"],
+  ownerId: string,
+) {
+  bus.addListener(({ agent, update }) => {
+    if (update.sessionUpdate === "_client_harness_spawned") {
+      // The start time is the sweep's proof that a surviving pid is still
+      // this harness and not a recycled pid (M2-5). `undefined` when `ps`
+      // cannot answer before the harness exits: the sweep then leaves the pid
+      // alone rather than signal a stranger.
+      const entry: Child = { pid: update.pid, kind, ownerId, unitId: agent };
+      children.set(update.pid, entry);
+      recordChildren();
+      // Filled in after the fact, never inline: `processIdentity` shells out
+      // to `ps`, and doing that synchronously here would stall every other
+      // run's SSE writes and permission answers on each harness spawn. The
+      // entry is filled in after the fact, so a crash inside that window is
+      // the known no-identity outcome: the next boot cannot safely signal the
+      // pid and can only name it in a notice, leaving it alive. Conservative,
+      // not a free window; `_client_harness_exited` still drops the entry
+      // when the harness exits normally.
+      void processIdentity(update.pid).then((startedAt) => {
+        if (startedAt === null || children.get(update.pid) !== entry) return;
+        entry.startedAt = startedAt;
+        recordChildren();
+      });
+    } else if (update.sessionUpdate === "_client_harness_exited") {
+      children.delete(update.pid);
+      recordChildren();
+    }
+  });
+}
+
 async function postRepo(req: IncomingMessage, res: ServerResponse) {
   const body = await readBody(req);
   // Since #129 a repository cannot be in a state that refuses a run, so this
@@ -611,10 +656,13 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
   send(res, 200, { root });
 }
 
-async function postRun(req: IncomingMessage, res: ServerResponse) {
-  const body = await readBody(req);
-  const cwd = existingDir(body.cwd, "cwd");
-
+/**
+ * The repository root `cwd` belongs to, or a 403 for a folder outside every
+ * added one. `stateDirRoot` never throws, so an unadded folder is told to add
+ * itself rather than to fix something else. Shared by `POST /runs` and
+ * `POST /rooms`, which refuse in the same order.
+ */
+async function refuseUnadded(cwd: string): Promise<string> {
   const { root } = await stateDirRoot(cwd);
   if (!repos.has(root)) {
     throw refusal(
@@ -623,6 +671,13 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
         `{"path": ${JSON.stringify(root)}} first.`,
     );
   }
+  return root;
+}
+
+async function postRun(req: IncomingMessage, res: ServerResponse) {
+  const body = await readBody(req);
+  const cwd = existingDir(body.cwd, "cwd");
+  const root = await refuseUnadded(cwd);
 
   let run: Run;
   try {
@@ -644,32 +699,9 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
 
   const state: RunState = { id, cwd, status: "running", notices: [] };
   const bus = createEventBus();
+  trackChildren(bus, "run", id);
   bus.addListener(({ agent, update }) => {
-    if (update.sessionUpdate === "_client_harness_spawned") {
-      // The start time is the sweep's proof that a surviving pid is still
-      // this harness and not a recycled pid (M2-5). `undefined` when `ps`
-      // cannot answer before the harness exits: the sweep then leaves the pid
-      // alone rather than signal a stranger.
-      const entry: Child = { pid: update.pid, runId: id, taskId: agent };
-      children.set(update.pid, entry);
-      recordChildren();
-      // Filled in after the fact, never inline: `processIdentity` shells out
-      // to `ps`, and doing that synchronously here would stall every other
-      // run's SSE writes and permission answers on each harness spawn. The
-      // entry is filled in after the fact, so a crash inside that window is
-      // the known no-identity outcome: the next boot cannot safely signal the
-      // pid and can only name it in a notice, leaving it alive. Conservative,
-      // not a free window; `_client_harness_exited` still drops the entry
-      // when the harness exits normally.
-      void processIdentity(update.pid).then((startedAt) => {
-        if (startedAt === null || children.get(update.pid) !== entry) return;
-        entry.startedAt = startedAt;
-        recordChildren();
-      });
-    } else if (update.sessionUpdate === "_client_harness_exited") {
-      children.delete(update.pid);
-      recordChildren();
-    } else if (update.sessionUpdate === "_client_task_finished") {
+    if (update.sessionUpdate === "_client_task_finished") {
       // A task the watchdog's TTL cut leaves decisions nobody can act on: its
       // harness is gone and the run-wide signal has not fired, because the
       // siblings are still running. The task's own end is the sturdy hook —
@@ -744,7 +776,17 @@ async function getEvents(
   if (!pending) throw refusal(404, `no run ${id}`);
   const log = await pending;
   if (!log) throw refusal(404, `run ${id} has no event log`);
+  await streamLog(log, req, res, gone.signal);
+}
 
+/** SSE over one event log: replay after `Last-Event-ID`, then the live tail,
+ *  ending when the log closes. Shared by runs and rooms. */
+async function streamLog(
+  log: EventLog,
+  req: IncomingMessage,
+  res: ServerResponse,
+  signal: AbortSignal,
+) {
   const header = req.headers["last-event-id"];
   const after = header === undefined ? 0 : Number(header);
   if (!Number.isInteger(after) || after < 0 || after > log.size) {
@@ -766,7 +808,7 @@ async function getEvents(
     await log.follow(
       after,
       (seq, line) => res.write(`id: ${seq}\ndata: ${line}\n\n`),
-      gone.signal,
+      signal,
     );
   } catch {
     // Headers are sent, so no error body can follow. A cut stream is what
@@ -775,6 +817,115 @@ async function getEvents(
     return;
   }
   res.end();
+}
+
+/** One chat room as the API reports it. In memory only, like a run. */
+interface RoomState {
+  id: string;
+  cwd: string;
+  harness: string;
+  workspace: string;
+  notices: { text: string; kind?: Warning["kind"] }[];
+}
+
+const rooms = new Map<string, { room: Room; state: RoomState }>();
+
+const roomView = ({ room, state }: { room: Room; state: RoomState }) => ({
+  ...state,
+  status: room.status(),
+});
+
+/**
+ * `POST /rooms {cwd, agent | cmd}` — a chat room: one harness, kept alive
+ * until `DELETE` (chat MVP). The refusals keep `POST /runs`'s order — not
+ * added (403), then a bad harness (400) — and the answer waits for the
+ * harness's session, so a harness that cannot start is this request's error,
+ * not a room that is silently dead.
+ * Always `auto`: the MVP has no one to answer a permission prompt.
+ */
+async function postRoom(req: IncomingMessage, res: ServerResponse) {
+  const body = await readBody(req);
+  const cwd = existingDir(body.cwd, "cwd");
+  await refuseUnadded(cwd);
+
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  let spec: ReturnType<typeof roomHarness>;
+  try {
+    spec = roomHarness(str(body.agent), str(body.cmd));
+  } catch (err) {
+    throw refusal(400, messageOf(err));
+  }
+
+  const id = newRoomId();
+  // No 409 wrapper (#129): since the state directory moved out of the
+  // repository, `openWorktrees` throws for nothing a repository can be in.
+  const setup = await openWorktrees(cwd, id);
+  if (stopping) throw refusal(503, "the daemon is shutting down");
+
+  const notices: RoomState["notices"] = [];
+  const bus = createEventBus();
+  trackChildren(bus, "room", id);
+  const room = await openRoom({
+    roomId: id,
+    cwd,
+    spec,
+    setup,
+    bus,
+    onNotice: (text, kind) => notices.push(kind ? { text, kind } : { text }),
+  });
+  // A shutdown that began while the harness was starting has already closed
+  // every room it knew of; this one must not outlive the daemon.
+  if (stopping) {
+    await room.close();
+    throw refusal(503, "the daemon is shutting down");
+  }
+  const entry = {
+    room,
+    state: {
+      id,
+      cwd,
+      harness: room.harness,
+      workspace: room.workspace,
+      notices,
+    },
+  };
+  rooms.set(id, entry);
+  send(res, 201, roomView(entry));
+}
+
+/**
+ * `POST /rooms/:id/messages {text}` — one turn. 202 once the message is on
+ * the room's log; the answer arrives on `GET /rooms/:id/events`. `seq` is the
+ * log's size before the message, so a client waits for the first
+ * `_client_turn_ended` after it rather than one it is still replaying.
+ */
+/**
+ * `POST /rooms/:id/messages {text}` — one turn. 202 once the message is on
+ * the room's log; the answer arrives on `GET /rooms/:id/events`. `seq` is the
+ * log's size before the message, so a client waits for the first
+ * `_client_turn_ended` after it rather than one it is still replaying.
+ */
+async function postMessage(
+  id: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const entry = rooms.get(id);
+  if (!entry) throw refusal(404, `no room ${id}`);
+  const { text } = await readBody(req);
+  if (typeof text !== "string" || !text.trim()) {
+    throw refusal(400, '"text" must be a non-empty string');
+  }
+  const seq = entry.room.eventLog?.size ?? 0;
+  let turn: Promise<void>;
+  try {
+    turn = entry.room.send(text);
+  } catch (err) {
+    throw refusal(409, messageOf(err));
+  }
+  // Settles with the turn; a failed turn is already on the log as an event.
+  turn.catch(() => {});
+  send(res, 202, { seq });
 }
 
 /** `POST /permissions/:id {"allow": boolean}` — the first answer wins. */
@@ -813,6 +964,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const one = /^\/runs\/([^/]+)$/.exec(pathname);
   const events = /^\/runs\/([^/]+)\/events$/.exec(pathname);
   const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
+  const room = /^\/rooms\/([^/]+)$/.exec(pathname);
+  const roomSub = /^\/rooms\/([^/]+)\/(events|messages)$/.exec(pathname);
 
   if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
@@ -831,6 +984,36 @@ async function route(req: IncomingMessage, res: ServerResponse) {
         tasks: (tasks ?? []).map(({ id, status }) => ({ id, status })),
       })),
     );
+  } else if (req.method === "POST" && pathname === "/rooms") {
+    await postRoom(req, res);
+  } else if (req.method === "GET" && pathname === "/rooms") {
+    send(res, 200, [...rooms.values()].map(roomView));
+  } else if (req.method === "GET" && room) {
+    const entry = rooms.get(room[1] as string);
+    if (entry) send(res, 200, roomView(entry));
+    else send(res, 404, { error: `no room ${room[1]}` });
+  } else if (req.method === "POST" && roomSub?.[2] === "messages") {
+    await postMessage(roomSub[1] as string, req, res);
+  } else if (req.method === "GET" && roomSub?.[2] === "events") {
+    const entry = rooms.get(roomSub[1] as string);
+    if (!entry) throw refusal(404, `no room ${roomSub[1]}`);
+    const log = entry.room.eventLog;
+    if (!log) throw refusal(404, `room ${roomSub[1]} has no event log`);
+    const gone = new AbortController();
+    res.on("close", () => gone.abort());
+    await streamLog(log, req, res, gone.signal);
+  } else if (req.method === "DELETE" && room) {
+    // Synchronous, unlike a run's cancel: dismissing waits for the harness to
+    // exit and the worktree to be committed, which `stop()` bounds at 5 s.
+    const entry = rooms.get(room[1] as string);
+    if (!entry) {
+      send(res, 404, { error: `no room ${room[1]}` });
+    } else if (entry.room.status() === "closed") {
+      send(res, 409, { error: `room ${room[1]} is already dismissed` });
+    } else {
+      await entry.room.close();
+      send(res, 200, roomView(entry));
+    }
   } else if (req.method === "GET" && events) {
     await getEvents(events[1] as string, req, res);
   } else if (req.method === "GET" && one) {
@@ -888,7 +1071,10 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`${signal}: cancelling ${inFlight.size} run(s), then exiting`);
   server.close();
   for (const canceller of cancels.values()) canceller.abort();
-  await Promise.all(inFlight);
+  await Promise.all([
+    ...inFlight,
+    ...[...rooms.values()].map(({ room }) => room.close()),
+  ]);
   rmSync(file, { force: true });
   process.exit(0);
 }
