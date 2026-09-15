@@ -402,6 +402,17 @@ export interface ClientPermissionPendingEvent extends Meta {
   kind: ToolKind;
 }
 
+/** An `ask` decision is waiting for an API client (M2-3, #33). `id` is what
+ *  `POST /permissions/:id` answers, so a client following the event stream
+ *  can answer without polling `GET /permissions`. Emitted by the daemon's
+ *  queue only; a terminal `ask` has no id to give. */
+export interface ClientPermissionQueuedEvent extends Meta {
+  sessionUpdate: "_client_permission_queued";
+  id: string;
+  title: string;
+  kind: ToolKind;
+}
+
 export interface ClientPermissionEvent extends Meta {
   sessionUpdate: "_client_permission";
   allow: boolean;
@@ -494,6 +505,7 @@ export interface ClientHarnessExitedEvent extends Meta {
 export type AgentEvent =
   | SessionUpdate
   | ClientPermissionPendingEvent
+  | ClientPermissionQueuedEvent
   | ClientPermissionEvent
   | ClientWroteFileEvent
   | ClientCancelRequestedEvent
@@ -781,6 +793,7 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
       // variant makes this assignment a type error.
       const fallthrough:
         | "_client_permission_pending"
+        | "_client_permission_queued"
         | "_client_permission"
         | "_client_wrote_file"
         | "_client_cancel_requested"

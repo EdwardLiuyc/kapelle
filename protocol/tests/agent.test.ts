@@ -885,10 +885,17 @@ test("a fresh log holds the harness's stderr, with no flag asked for", async (t)
 
   await assert.rejects(agent.start());
 
-  assert.match(
-    await readFile(log, "utf8"),
-    /Cannot find module '\/nonexistent\/preload\.js'/,
-  );
+  // Polled, not read once: `start()` rejects when the harness dies, and the
+  // last stderr lines are still travelling up the pipe and through the log's
+  // write stream. A single read was green locally and flaked on CI (#112).
+  const wanted = /Cannot find module '\/nonexistent\/preload\.js'/;
+  let text = "";
+  for (const end = Date.now() + 5_000; Date.now() < end; ) {
+    text = await readFile(log, "utf8");
+    if (wanted.test(text)) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.match(text, wanted);
 });
 
 test("a silent harness produces no stderr section at all", async (t) => {

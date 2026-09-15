@@ -932,8 +932,8 @@ A notice on stderr says which case fired.
 
 It is a downgrade often but not always, because every registry entry is `defaultMode: "ask"`
 (`protocol/registry.ts`): a run file naming no mode has every task inherit one, and a
-two-task file of that shape runs as `safe`. **M2-3 is what lifts the limit to N askers** —
-its pending-decision list replaces the single readline with a queue, and its recorded
+two-task file of that shape runs as `safe`. **M2-3's queue serves N askers in the daemon
+only; M2-9's `attach` lifts the CLI's limit** (amended 2026-09-16, #33) — its recorded
 decision (first writer wins; a second answer to a settled decision is a defined error) is
 the same collision seen from the API side. `core/run.ts` takes the decider as
 `RunOptions.askPolicy` and never builds one, so M2-3 supplies a different decider rather
@@ -1627,6 +1627,13 @@ completes rather than hanging.
 **Amended 2026-09-11 (M2-1, #31):** until this story lands the daemon refuses any task
 resolving to `ask` with a 400 naming M2-3 (`refuseAsk`, `daemon.ts`). Lifting that refusal
 is part of this story.
+**Amended at pickup 2026-09-16 (#33): daemon only.** The CLI keeps its one-asker rule; M2-9's
+`attach` is the next place a person answers, so it lifts that. The queue is
+`core/permissions.ts`, handed to `runRun` as `RunOptions.askPolicy`. The answer is
+`{"allow": boolean}`, not an option id, so `pickOption` stays the only place that picks. The
+timeout is daemon-wide (M2-7's amendment): `--permission-timeout`, default 120 s. The queue
+emits `_client_permission_queued` with the id, so M2-9 can answer from the stream. A second
+answer is 409; cancelling a run denies what it has open.
 
 **M2-4 · Daemon lifecycle · S · needs M2-1**
 Pidfile, single-instance guard, live-child registry, kill-all on shutdown, SIGTERM.
