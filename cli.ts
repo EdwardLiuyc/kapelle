@@ -335,7 +335,8 @@ async function runFromFile(path: string): Promise<number> {
   //
   // It is a downgrade often, not always, because every registry entry is
   // `defaultMode: "ask"`: a bare run file names no mode and every task inherits
-  // one. M2-3's pending-decision queue is what lifts the limit to N askers.
+  // one. M2-3's queue serves N askers in the daemon only; M2-9's `attach` is
+  // what lifts the CLI's limit.
   const askers = validated.tasks.filter((t) => t.mode === "ask");
   const canAsk = askers.length === 1 && Boolean(process.stdin.isTTY);
   if (askers.length > 1) {

@@ -92,13 +92,21 @@ const { port, permissionTimeoutMs } = orExit(() => {
   const raw = values["permission-timeout"];
   const seconds =
     raw === undefined ? DEFAULT_PERMISSION_TIMEOUT_S : Number(raw);
+  const permissionTimeoutMs = seconds * 1000;
   // No `0` meaning "wait forever": an unanswered decision must end (M2-3).
-  if (!Number.isFinite(seconds) || seconds <= 0) {
+  // Node clamps a timer above 2^31-1 ms to 1 ms, so the ceiling is a refusal,
+  // not a silent cap that would deny every decision at once.
+  if (
+    !Number.isFinite(seconds) ||
+    seconds <= 0 ||
+    permissionTimeoutMs > 2147483647
+  ) {
     throw new Error(
-      `--permission-timeout must be a number of seconds above 0; got ${raw}`,
+      `--permission-timeout must be a number of seconds above 0 and at most ` +
+        `2147483 (Node's 32-bit timer ceiling); got ${raw}`,
     );
   }
-  return { port: n, permissionTimeoutMs: seconds * 1000 };
+  return { port: n, permissionTimeoutMs };
 });
 
 /** Is `pid` a live process? `EPERM` means it is, and is someone else's. */

@@ -1027,23 +1027,56 @@ async function pendingOne(d: Daemon): Promise<Pending> {
 }
 
 test("an ask run with no client attached is denied at the timeout, and completes", async (t) => {
-  const d = await boot(t, undefined, ["--permission-timeout", "0.5"]);
+  const d = await boot(t, undefined, ["--permission-timeout", "2"]);
   const cwd = await added(d, await tempDir(t));
 
   const posted = await api(d, "POST", "/runs", askRun(cwd));
   assert.equal(posted.status, 202, posted.body.error);
+  // Capture the first decision while it is still pending: with the 2 s timeout
+  // it is still listed, and a late answer after the run must read as settled.
+  const pending = await pendingOne(d);
+  assert.equal(pending.runId, posted.body.id);
+  assert.equal(pending.kind, "edit");
+
   const run = await settled(d, posted.body.id);
   assert.equal(run.status, "done");
 
-  const s = await stream(d, posted.body.id);
-  await s.ended;
-  const decisions = s.frames
-    .map((f) => f.data.update as { sessionUpdate: string; allow?: boolean })
+  // The criterion names the file, not the stream: read events.jsonl directly.
+  const events = (
+    await readFile(
+      join(
+        await realpath(cwd),
+        ".kapelle",
+        "runs",
+        posted.body.id,
+        "events.jsonl",
+      ),
+      "utf8",
+    )
+  )
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  // Only the queue emits `_client_permission_queued`, so this cannot pass on
+  // the `safePolicy` fallback an unwired `askPolicy` would leave behind.
+  assert.ok(
+    events.some((e) => e.update.sessionUpdate === "_client_permission_queued"),
+    "the queue announced the pending decision on the run bus",
+  );
+  const decisions = events
+    .map((e) => e.update as { sessionUpdate: string; allow?: boolean })
     .filter((u) => u.sessionUpdate === "_client_permission");
   // The mock asks twice — the edit, then a delete with an allow-only menu.
   assert.deepEqual(
     decisions.map((u) => u.allow),
     [false, false],
+  );
+
+  // A timed-out decision is settled, not unknown: a late allow is 409.
+  assert.equal(
+    (await api(d, "POST", `/permissions/${pending.id}`, { allow: true }))
+      .status,
+    409,
   );
   await assert.rejects(stat(join(cwd, "ACP_TEST.md")));
   assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
@@ -1107,4 +1140,17 @@ test("a --permission-timeout that is not above 0 refuses to start", async (t) =>
   assert.ok(r, "the daemon started anyway");
   assert.equal(r.code, 1);
   assert.match(r.stderr, /--permission-timeout/);
+});
+
+test("a --permission-timeout above Node's timer ceiling refuses to start", async (t) => {
+  const over = await exitOf(
+    start(t, await tempDir(t), ["--permission-timeout", "2147484"]),
+  );
+  assert.ok(over, "the daemon started anyway");
+  assert.equal(over.code, 1);
+  assert.match(over.stderr, /--permission-timeout/);
+
+  // The last whole second below Node's 2^31-1 ms ceiling still boots.
+  const d = await boot(t, undefined, ["--permission-timeout", "2147483"]);
+  assert.ok(d.token);
 });
