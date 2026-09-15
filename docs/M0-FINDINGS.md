@@ -217,9 +217,10 @@ all three tests, and a `--mode auto` probe running one `echo` re-verified the re
   `session/set_mode`. `ask: "default"` is still unverified and still unread — only
   `modeMap.safe` has a consumer (`core/policy.ts:191`).
 - **Not re-verified, and the new date does not cover them:** `usage`, because separating
-  per-turn from cumulative needs two turns in one session and `prompt()` throws on the second
-  (#62 R5); and `meta`, which describes behaviour gated on advertising `terminal_output`,
-  which this client does not advertise.
+  per-turn from cumulative needs two turns in one session, and no probe had run at this date;
+  §Multi-turn below (2026-09-15) makes the second turn reachable but leaves `usage` carried
+  forward, not measured. And `meta`, which describes behaviour gated on advertising
+  `terminal_output`, which this client does not advertise.
 
 Three things that are new on the wire since M0, none of which the client reads yet:
 
@@ -1087,8 +1088,11 @@ the first turn's context kept?
 **Method.** One `AcpAgent`, one `session/new`, `policy: () => false`. Turn 1: *"Remember
 this codeword: ZEBRA-4417. Do not use any tools. Reply with only the word OK."* Turn 2,
 sent only once turn 1 had answered: *"What codeword did I give you in my previous message?
-… Reply with only the codeword."* Two runs per harness by script, then one more through
-`npm run test:harness` (`twoTurns` in `integration/helpers.ts`).
+… Reply with only the codeword."* Two runs per harness by script; the recall and wall-clock
+rows below come from those runs. One more run per harness goes through `npm run test:harness`
+(`twoTurns` in `integration/helpers.ts`), which asserts only what the client controls — the
+stop reasons, the session id and the spawn count — and never the agent's prose, so recall on
+a real harness is observed here but not asserted by the suite.
 
 | | opencode 1.18.30 | claude-agent-acp 0.75.1 | copilot 1.0.83 | pi-acp 0.0.33 / pi v0.85.1 |
 | --- | --- | --- | --- | --- |

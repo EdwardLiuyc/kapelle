@@ -9,7 +9,7 @@
  * calls back into the client's fs/read_text_file, and asks permission for a
  * write — enough to prove every path in the client works.
  *
- * `--scenario <name>` selects a non-compliant fixture instead (M1b-5). Argv,
+ * `--scenario <name>` selects a named fixture instead (M1b-5). Argv,
  * never a keyword in the prompt: `silent-session` fires during the handshake,
  * before any prompt exists, so no keyword could reach it. With no flag the
  * compliant default path runs, so `npm run selftest` is unchanged.

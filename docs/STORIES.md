@@ -1089,11 +1089,13 @@ handler calls `session.abort()` unconditionally as its first action
 ([github/copilot-cli#4555](https://github.com/github/copilot-cli/issues/4555)), tearing down
 background work **even when no turn is in flight**, and on opencode a second prompt lands in
 the previous turn's context where the model reads it as a suspected prompt injection. The
-retry would silently destroy the very work whose result it was trying to recover. #62's R5
-makes this structural rather than advisory — `prompt()` throws on a second call during
-a live turn (M1a-3) — so this story could not have implemented the retry even if it wanted to. The
-conflict predates today: it was written into M1b-4 before M0-4 measured the behaviour, and
-survived because nothing forced the two to be read together.
+retry would silently destroy the very work whose result it was trying to recover. The
+structural half is narrower than this story assumed: #62's R5 refuses a prompt only during
+a live turn (M1a-3), and a re-ask sent after `end_turn` would reach the harness
+(`docs/M0-FINDINGS.md` §Multi-turn, 2026-09-15). The retry stays struck as policy, not as
+an impossibility: copilot's handler aborts background work on any prompt (#4555), so the
+client must not send one. The conflict predates today: it was written into M1b-4 before
+M0-4 measured the behaviour, and survived because nothing forced the two to be read together.
 *Done when* `node:test` covers the strictness matrix field by field, and a fixture exists
 per warning class.
 **Landed 2026-09-07 (#20).** `core/result.ts` — preamble, extractor, cross-check, all pure —

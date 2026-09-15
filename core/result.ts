@@ -7,7 +7,7 @@
  * we *observed*.
  *
  * **There is no re-ask.** The original story sent one bounded follow-up when
- * the block was missing; `docs/STORIES.md:1046` strikes it and
+ * the block was missing; `docs/STORIES.md:1084` strikes it and
  * `protocol/agent.ts` refuses a prompt during a live turn. A re-ask after the
  * turn ends would reach the harness, but copilot's prompt handler aborts
  * background work unconditionally (github/copilot-cli#4555), and a concurrent
