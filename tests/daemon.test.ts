@@ -16,6 +16,7 @@ import {
   mkdir,
   readFile,
   realpath,
+  rm,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -37,6 +38,8 @@ interface Daemon {
   pid: number;
   childPid: number | undefined;
   file: string;
+  /** The daemon's exit, for the tests that stop it. */
+  done: Promise<CliResult>;
 }
 
 /** Spawns `daemon.ts` with `runtime` as its `XDG_RUNTIME_DIR`. */
@@ -64,6 +67,7 @@ async function boot(t: TestContext, runtime?: string): Promise<Daemon> {
     pid,
     childPid: d.child.pid,
     file,
+    done: d.done,
   };
 }
 
@@ -199,6 +203,221 @@ test("a runtime directory other users can enter is refused", async (t) => {
   assert.equal(r.code, 1);
   assert.match(r.stderr, /0700/);
   await assert.rejects(readFile(join(dir, "daemon.json")));
+});
+
+for (const stale of ["null", "[]", "42"]) {
+  test(`a daemon.json holding ${stale} is replaced, like any dead daemon's`, async (t) => {
+    const runtime = await tempDir(t);
+    const dir = join(runtime, "kapelle");
+    await mkdir(dir, { mode: 0o700 });
+    await writeFile(join(dir, "daemon.json"), stale, { mode: 0o600 });
+
+    const d = await boot(t, runtime);
+    assert.equal(typeof d.pid, "number");
+    process.kill(d.pid, "SIGTERM");
+    assert.equal((await d.done).code, 0);
+  });
+}
+
+// --- lifecycle (M2-4) --------------------------------------------------------------
+
+/** True once `pid` is gone, false if it is still alive after 10s. */
+async function gone(pid: number): Promise<boolean> {
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  return false;
+}
+
+/** Starts a run whose harness never ends its turn, and returns the pid the
+ *  daemon recorded for it in `children.json`. */
+async function stalledHarness(t: TestContext, d: Daemon): Promise<number> {
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([
+      { id: "stuck", prompt: "hi", cmd: `node ${MOCK_AGENT} --scenario stall` },
+    ]),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  const children = join(d.file, "..", "children.json");
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    const record = await readFile(children, "utf8").catch(() => null);
+    if (record) {
+      const [child] = JSON.parse(record).children;
+      // Registered before the assertions: a failing assertion must not skip
+      // the reap and leave the harness behind.
+      t.after(() => {
+        try {
+          process.kill(child.pid, "SIGKILL");
+        } catch {
+          // Already gone: nothing left to kill.
+        }
+      });
+      assert.equal(child.runId, posted.body.id);
+      assert.equal(child.taskId, "stuck");
+      return child.pid;
+    }
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  throw new Error("children.json never named the harness");
+}
+
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  test(`${signal} cancels every run, stops its harness, removes daemon.json and exits 0`, async (t) => {
+    const d = await boot(t);
+    const harness = await stalledHarness(t, d);
+
+    process.kill(d.pid, signal);
+    const exit = await d.done;
+    assert.equal(exit.code, 0, exit.stderr);
+    assert.equal(await gone(harness), true, "the harness outlived the daemon");
+    await assert.rejects(readFile(d.file), "daemon.json is removed");
+    await assert.rejects(
+      readFile(join(d.file, "..", "children.json")),
+      "children.json is removed once no harness is live",
+    );
+  });
+}
+
+test("kill -9 of the daemon mid-turn leaves no harness alive, and the pid on record", async (t) => {
+  const d = await boot(t);
+  const harness = await stalledHarness(t, d);
+
+  process.kill(d.pid, "SIGKILL");
+  await d.done;
+  // Nothing in the daemon ran: the harness saw its stdin close and exited.
+  assert.equal(await gone(harness), true, "the harness outlived the daemon");
+  const record = await readFile(join(d.file, "..", "children.json"), "utf8");
+  assert.equal(JSON.parse(record).children[0].pid, harness);
+});
+
+test("daemons started together on a stale daemon.json: exactly one listens", async (t) => {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: dead, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  const daemons = Array.from({ length: 6 }, () => start(t, runtime));
+  const outcomes = await Promise.all(
+    daemons.map((d) =>
+      Promise.race([
+        d.waitFor("listening on ").then(() => "listening"),
+        d.done.then((r) => `exited ${r.code}`),
+      ]),
+    ),
+  );
+  assert.equal(
+    outcomes.filter((o) => o === "listening").length,
+    1,
+    outcomes.join(", "),
+  );
+  assert.deepEqual(
+    outcomes.filter((o) => o !== "listening"),
+    Array(5).fill("exited 1"),
+  );
+});
+
+test("the strict lock refuses a start while held, and is gone once a start succeeds", async (t) => {
+  const runtime = await tempDir(t);
+  const dir = join(runtime, "kapelle");
+  await mkdir(dir, { mode: 0o700 });
+  // A stale daemon.json makes a newcomer take the lock path at all; the held
+  // lock is another starter mid-replace, so this one must refuse rather than
+  // wait (M2-4).
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  await writeFile(
+    join(dir, "daemon.json"),
+    JSON.stringify({ pid: dead, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+  const lock = join(dir, "daemon.json.lock");
+  await mkdir(lock);
+
+  const refused = await exitOf(start(t, runtime));
+  assert.ok(refused, "a held lock refuses, it does not listen");
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /another daemon is starting/);
+  await stat(lock); // the loser does not remove a lock it did not take
+  await rm(lock, { recursive: true, force: true });
+  // A start that takes the lock releases it again, so the next one works.
+  const first = await boot(t, runtime);
+  await assert.rejects(stat(lock), "the winner removed its own lock");
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const second = await boot(t, runtime);
+  assert.equal(typeof second.pid, "number");
+  process.kill(second.pid, "SIGTERM");
+  assert.equal((await second.done).code, 0);
+});
+
+test("kapelle daemon start listens, and kapelle daemon add registers a repository", async (t) => {
+  const runtime = await tempDir(t);
+  const env = { XDG_RUNTIME_DIR: runtime };
+  const repo = await tempDir(t);
+
+  const none = await spawnCli(t, ["daemon", "add", repo], "cli.ts", env).done;
+  assert.equal(none.code, 1);
+  assert.match(none.stderr, /no daemon is listening/);
+
+  const daemon = spawnCli(t, ["daemon", "start", "--port", "0"], "cli.ts", env);
+  const died = daemon.done.then((r) => {
+    throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
+  });
+  await Promise.race([daemon.waitFor("listening on "), died]);
+  died.catch(() => {});
+
+  const add = await spawnCli(t, ["daemon", "add", repo], "cli.ts", env).done;
+  assert.equal(add.code, 0, add.stderr);
+  assert.equal(add.stdout.trim(), `added ${await realpath(repo)}`);
+
+  const file = join(runtime, "kapelle", "daemon.json");
+  const { port, token, pid } = JSON.parse(await readFile(file, "utf8"));
+  const d = { url: `http://127.0.0.1:${port}`, token, pid } as Daemon;
+  assert.deepEqual((await api<string[]>(d, "GET", "/repos")).body, [
+    await realpath(repo),
+  ]);
+});
+
+test("kapelle --quiet daemon start starts the daemon, global flags included", async (t) => {
+  const runtime = await tempDir(t);
+  const daemon = spawnCli(
+    t,
+    ["--quiet", "daemon", "start", "--port", "0"],
+    "cli.ts",
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  const died = daemon.done.then((r) => {
+    throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
+  });
+  await Promise.race([daemon.waitFor("listening on "), died]);
+  died.catch(() => {});
+
+  const file = join(runtime, "kapelle", "daemon.json");
+  assert.equal(typeof JSON.parse(await readFile(file, "utf8")).pid, "number");
+});
+
+test("kapelle daemon add treats a non-object daemon.json as no daemon", async (t) => {
+  const runtime = await tempDir(t);
+  const dir = join(runtime, "kapelle");
+  await mkdir(dir, { mode: 0o700 });
+  await writeFile(join(dir, "daemon.json"), "null", { mode: 0o600 });
+
+  const r = await spawnCli(t, ["daemon", "add", "/tmp"], "cli.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  }).done;
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /no daemon is listening/);
 });
 
 // --- repos ----------------------------------------------------------------------

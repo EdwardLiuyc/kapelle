@@ -809,7 +809,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
   const onAbort = () => {
     agent.cancel();
     if (cancelGrace) return;
-    cancelGrace = setTimeout(() => agent.stop(), CANCEL_GRACE_MS);
+    cancelGrace = setTimeout(() => void agent.stop(), CANCEL_GRACE_MS);
     // `unref`: the grace timer is a safety net. If the run has already settled
     // it must not keep the process alive on its own.
     cancelGrace.unref();
@@ -891,7 +891,9 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
   } finally {
     if (cancelGrace) clearTimeout(cancelGrace);
     ctx.signal.removeEventListener("abort", onAbort);
-    agent.stop();
+    // Awaited (M2-4): a task is not over while its harness can still write,
+    // and a daemon shutting down waits on the run to wait on the harness.
+    await agent.stop();
   }
 }
 
