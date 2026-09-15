@@ -1636,6 +1636,10 @@ SIGKILL copilot's) running command alive. Closing stdin left nothing on all four
 also what a crash delivers. `AcpAgent.stop()` therefore closes stdin, waits, and SIGKILLs
 only a survivor; `kapelle daemon start` runs in the foreground; live pids go to
 `children.json` beside `daemon.json` for M2-5.
+**A task now ends only once its harness has exited** (decided 2026-09-15, PR #109 review):
+`runTask` awaits `stop()`, so the worktree is committed only after nothing can still write to
+it. The cost is on purpose: `durationMs` includes the shutdown and the pool slot stays busy
+for it — under 1 s measured, up to `stopGraceMs` + 250 ms for a harness that ignores end of file.
 
 **M2-5 · Crash-recovery sweep · M · needs M2-4, M1b-3**
 The fuller version of "run `git worktree prune`". On boot: mark tasks left in `running` as
