@@ -6,13 +6,14 @@
  * every run points at `mock-agent.mjs`, and every refusal fails before a
  * subprocess starts. Each daemon gets its own `XDG_RUNTIME_DIR` **and
  * `XDG_STATE_HOME`**, so no test ever meets another test's `daemon.json` or
- * `repos.json` — or the developer's real ones. The two point at one temp dir
- * here; only the daemon cares that they are different places in real life.
+ * `repos.json` — or the developer's real ones. Most tests point both at one
+ * temp dir; the restart and fallback tests keep them apart, the way a reboot
+ * does in real life.
  */
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readlinkSync } from "node:fs";
+import { existsSync, readdirSync, readlinkSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -22,6 +23,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { userInfo } from "node:os";
 import { join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
 
@@ -29,6 +31,7 @@ import {
   type CliResult,
   gitRepo,
   MOCK_AGENT,
+  REPO,
   spawnCli,
   tempDir,
 } from "../integration/helpers.ts";
@@ -44,15 +47,26 @@ interface Daemon {
   done: Promise<CliResult>;
 }
 
-/** Spawns `daemon.ts` with `runtime` as its runtime *and* state directory. */
-function start(t: TestContext, runtime: string, args: string[] = []) {
-  return spawnCli(t, ["--port", "0", ...args], "daemon.ts", dirs(runtime));
+/** Spawns `daemon.ts` with `runtime` as its runtime directory and `state` as
+ *  its state directory (defaulting to `runtime`). `extraEnv` merges last, so a
+ *  test can point `HOME`/`XDG_STATE_HOME` wherever it needs. */
+function start(
+  t: TestContext,
+  runtime: string,
+  args: string[] = [],
+  state: string = runtime,
+  extraEnv: Record<string, string> = {},
+) {
+  return spawnCli(t, ["--port", "0", ...args], "daemon.ts", {
+    ...dirs(runtime, state),
+    ...extraEnv,
+  });
 }
 
 /** The two user-level directories a daemon must not share with anyone. */
-const dirs = (runtime: string) => ({
+const dirs = (runtime: string, state: string = runtime) => ({
   XDG_RUNTIME_DIR: runtime,
-  XDG_STATE_HOME: runtime,
+  XDG_STATE_HOME: state,
 });
 
 /** Starts a daemon and reads back the record it wrote once listening. */
@@ -60,9 +74,11 @@ async function boot(
   t: TestContext,
   runtime?: string,
   args: string[] = [],
+  state?: string,
+  env: Record<string, string> = {},
 ): Promise<Daemon> {
   const dir = runtime ?? (await tempDir(t));
-  const d = start(t, dir, args);
+  const d = start(t, dir, args, state ?? dir, env);
   // A daemon that dies at startup must fail with its own words, not a timeout.
   const died = d.done.then((r) => {
     throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
@@ -1238,7 +1254,10 @@ test("a task the watchdog cuts drops its pending decision at once, while its sib
 
 test("a restarted daemon keeps its repositories and serves the runs from before", async (t) => {
   const runtime = await tempDir(t);
-  const first = await boot(t, runtime);
+  // State outlives the runtime dir (a reboot), so keep them distinct: the
+  // list must land in the state dir, not beside `daemon.json`.
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
   const root = await realpath(await added(first, await gitRepo(t)));
   const posted = await api(first, "POST", "/runs", {
     cwd: root,
@@ -1253,13 +1272,18 @@ test("a restarted daemon keeps its repositories and serves the runs from before"
 
   // Same user-level directories, a new process: everything below comes off
   // the disk, since this daemon ran none of it.
-  const second = await boot(t, runtime);
+  const second = await boot(t, runtime, [], state);
   assert.deepEqual((await api<string[]>(second, "GET", "/repos")).body, [root]);
   // Owner-only, same as daemon.json: the list names every repository the
   // daemon will run in.
   assert.equal(
-    (await stat(join(runtime, "kapelle", "repos.json"))).mode & 0o777,
+    (await stat(join(state, "kapelle", "repos.json"))).mode & 0o777,
     0o600,
+  );
+  assert.equal(
+    existsSync(join(runtime, "kapelle", "repos.json")),
+    false,
+    "the list must not sit in the runtime dir",
   );
   assert.deepEqual((await api<Reply[]>(second, "GET", "/runs")).body, [
     { id, cwd: root, status: "done" },
@@ -1272,8 +1296,11 @@ test("a restarted daemon keeps its repositories and serves the runs from before"
     [["a", "done"]],
   );
   // The field M2-6 exists to carry: one session id, so `session/load` can be
-  // picked up later without a migration.
-  assert.match(String(one.body.tasks?.[0]?.sessionId), /\S/);
+  // picked up later without a migration. `String(undefined)` is `"undefined"`,
+  // which matches a non-empty regex — assert the type, not its printout.
+  const restoredSession = one.body.tasks?.[0]?.sessionId;
+  assert.equal(typeof restoredSession, "string");
+  assert.equal(restoredSession, "sess_mock_1");
 
   // And the log replays, although nothing is writing it: `createEventLog`
   // opens `flags: "w"`, so this has to come from the read-only open.
@@ -1323,20 +1350,90 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     join(runs, "foreign", "run.json"),
     JSON.stringify({ runId: "not-this-one", status: "done", tasks: [] }),
   );
+  // A record still saying `running` is a crash #35's sweep owns: deliberately
+  // not restored, and silent because it is the expected post-crash state.
+  await mkdir(join(runs, "live"));
+  await writeFile(
+    join(runs, "live", "run.json"),
+    JSON.stringify({ runId: "live", status: "running", tasks: [] }),
+  );
+  // A run directory with no record at all, and a record with no status: both
+  // are skipped with a notice.
+  await mkdir(join(runs, "no-record"));
+  await mkdir(join(runs, "no-status"));
+  await writeFile(
+    join(runs, "no-status", "run.json"),
+    JSON.stringify({ runId: "no-status", tasks: [] }),
+  );
 
   const second = await boot(t, runtime);
   const list = await api<Reply[]>(second, "GET", "/runs");
   assert.equal(list.status, 200);
   assert.deepEqual(list.body, []);
+  // Terminal runs only: the `running` record is not served, not even by id.
+  assert.equal((await api(second, "GET", "/runs/live")).status, 404);
 
   process.kill(second.pid, "SIGTERM");
   const out = await second.done;
   assert.equal(out.code, 0);
   assert.match(out.stderr, /skipping .*truncated.*run\.json/);
   assert.match(out.stderr, /skipping .*foreign.*run\.json/);
+  assert.match(out.stderr, /skipping .*no-record.*run\.json/);
+  assert.match(out.stderr, /skipping .*no-status.*run\.json/);
+  assert.equal(
+    out.stderr.includes(join(runs, "live")),
+    false,
+    "a `running` record is skipped silently, not noticed",
+  );
   assert.equal(
     out.stderr.includes(`skipping runs under ${quiet}`),
     false,
     "a repository that never ran has no records to skip",
   );
+});
+
+test("a relative XDG_RUNTIME_DIR falls back to the temp dir, never the cwd", async (t) => {
+  const tmp = await tempDir(t);
+  const state = await tempDir(t);
+  // `TMPDIR` so the fallback lands here and not in the developer's real
+  // per-user directory, where it would meet their running daemon's lock.
+  // A relative value used to be taken at face value, which put the **token**
+  // under the daemon's cwd — this repository, for `kapelle daemon start`,
+  // where `.gitignore` covers `.kapelle/` and not a stray `rel/`.
+  const d = start(t, "rel/rt", [], state, { TMPDIR: tmp });
+  const died = d.done.then((r) => {
+    throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
+  });
+  await Promise.race([d.waitFor("listening on "), died]);
+  died.catch(() => {});
+
+  const fallback = join(tmp, `kapelle-${userInfo().uid}`, "daemon.json");
+  assert.equal((await stat(fallback)).mode & 0o777, 0o600);
+  assert.equal(
+    existsSync(join(REPO, "rel")),
+    false,
+    "a relative runtime dir must not be taken at face value",
+  );
+});
+
+test("an empty XDG_STATE_HOME falls back to ~/.local/state", async (t) => {
+  const runtime = await tempDir(t);
+  const home = await tempDir(t);
+  // `XDG_STATE_HOME=""` is unset per the XDG spec. A nullish check would
+  // instead resolve to a relative `./kapelle` beside the daemon's cwd.
+  const d = await boot(t, runtime, [], runtime, {
+    XDG_STATE_HOME: "",
+    HOME: home,
+  });
+  const root = await realpath(await added(d, await gitRepo(t)));
+  assert.deepEqual((await api<string[]>(d, "GET", "/repos")).body, [root]);
+
+  const fallback = join(home, ".local", "state", "kapelle", "repos.json");
+  assert.equal(
+    (await stat(fallback)).mode & 0o777,
+    0o600,
+    "the repo list should land under $HOME/.local/state",
+  );
+  process.kill(d.pid, "SIGTERM");
+  assert.equal((await d.done).code, 0);
 });

@@ -9,7 +9,7 @@
  */
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { gitRepo, tempDir } from "../../integration/helpers.ts";
@@ -798,6 +798,54 @@ test("the record carries the session id the executor reported", async (t) => {
   assert.equal(
     (await recordIn(root, RECORD_RUN)).tasks[0].sessionId,
     "sess-42",
+  );
+});
+
+/** Answers the handshake, then dies on the prompt: a session existed and the
+ *  task did not return from it. */
+const DIE_ON_PROMPT_HARNESS = `
+import { createInterface } from "node:readline";
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  if (!line.trim()) return;
+  const m = JSON.parse(line);
+  if (m.method === "initialize")
+    return send({ jsonrpc: "2.0", id: m.id, result: {
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: false },
+      agentInfo: { name: "die-on-prompt", version: "1" },
+      authMethods: [],
+    } });
+  if (m.method === "session/new")
+    return send({ jsonrpc: "2.0", id: m.id, result: { sessionId: "sess_die_1" } });
+  if (m.method === "session/prompt") process.exit(7);
+});
+`;
+
+test("the record keeps the session id when the harness dies mid-prompt", async (t) => {
+  const root = await gitRepo(t);
+  const harness = join(await tempDir(t), "die-on-prompt.mjs");
+  await writeFile(harness, DIE_ON_PROMPT_HARNESS);
+
+  // No injected executor: the real `runTask` spawns this fake harness, which
+  // answers `session/new` and then exits on the prompt. The session existed,
+  // so the record must carry its id even though the task settles failed
+  // (M2-6, #36). Against the pre-fix source this fails with `undefined`.
+  const run = validateRun({
+    cmd: `node ${harness}`,
+    tasks: [{ id: "dies", prompt: "x" }],
+  });
+  const report = await runRun(run, {
+    cwd: root,
+    runId: RECORD_RUN,
+    bus: createEventBus(),
+  });
+
+  assert.equal(report.tasks[0]?.status, "failed");
+  assert.equal(report.tasks[0]?.sessionId, "sess_die_1");
+  assert.equal(
+    (await recordIn(root, RECORD_RUN)).tasks[0].sessionId,
+    "sess_die_1",
   );
 });
 

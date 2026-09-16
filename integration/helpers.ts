@@ -23,7 +23,8 @@ import { promisify } from "node:util";
 import { AcpAgent } from "../protocol/agent.ts";
 import { resolveAgent, resolveEnv } from "../protocol/registry.ts";
 
-const REPO = join(import.meta.dirname, "..");
+/** The repository root, and the cwd of every subprocess spawned here. */
+export const REPO = join(import.meta.dirname, "..");
 
 /**
  * Reason to skip, or `false` to run. Sync because `test(name, { skip })` is

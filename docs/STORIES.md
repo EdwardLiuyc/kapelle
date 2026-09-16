@@ -1671,10 +1671,11 @@ reconciles each of them — which needs the repository list M2-6 persists.
 `_client_task_finished` in `events.jsonl` was cut off, which the sweep can read. The log is
 uncompressed, so retention is its only disk bound; reaping a run removes its log with it.
 **Amended 2026-09-16 (M2-6, #36):** the two inputs now exist — `repos.json` names every
-repository to sweep, and each `run.json` names its tasks with `startedAt`/`endedAt` for the
-retention window. **The record left saying `running` is this story's subject**: M2-6's boot
-scan deliberately restores terminal runs only, so a crashed one is invisible to the API
-until the sweep marks it, rather than being listed as live with nothing running it.
+repository to sweep, and each `run.json` carries run-level `startedAt`/`endedAt` (with the
+task statuses) for the retention window. **The record left saying `running` is this story's
+subject**: M2-6's boot scan deliberately restores terminal runs only, so a crashed one is
+invisible to the API until the sweep marks it, rather than being listed as live with
+nothing running it.
 
 **M2-6 · Persistence · S · needs M2-1**
 JSON per run under `.kapelle/runs/<id>/`, written on state transitions. For completed-run
@@ -1712,7 +1713,8 @@ The record itself is now written at every task transition — `queued`, `running
 verdict — atomically (temp file plus `rename`), and for **every** run with a log directory,
 including the shared-cwd fallback that has no branches: `core/merge.ts` already refuses a
 task with no branch by name, which beats "no run record. Run it first."
-`sessionId` rides the task entry, set on the path that reached `session/prompt`.
+`sessionId` rides the task entry, set once `session/new` answers — the success
+path, a cancel before the prompt, and a throw out of the harness.
 
 **M2-7 · Config · S · needs M2-1**
 `.kapelle/config.json`, `KAPELLE_*` env override, layered env > project. Home for the

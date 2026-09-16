@@ -21,18 +21,26 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 /**
  * `$XDG_RUNTIME_DIR/kapelle`, or a per-user directory under the system temp
  * dir where that is unset (macOS). Either way it must be ours and closed to
  * everyone else: in a shared `/tmp`, another account could create the
  * directory first, and whoever owns it can read or replace the token.
+ *
+ * Unset means **empty or relative**, the same rule `stateDir` follows. A
+ * relative value would put the token under whatever directory the daemon
+ * started in — a repository, for `kapelle daemon start`, where `.gitignore`
+ * covers `.kapelle/` and not this.
  */
 export function runtimeDir(): string {
   const { uid } = userInfo();
   const base = process.env.XDG_RUNTIME_DIR;
-  const dir = base ? join(base, "kapelle") : join(tmpdir(), `kapelle-${uid}`);
+  const dir =
+    base && isAbsolute(base)
+      ? join(base, "kapelle")
+      : join(tmpdir(), `kapelle-${uid}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return ours(dir);
 }
@@ -73,7 +81,15 @@ function ours(dir: string): string {
  * a list worth no less care than the token beside it.
  */
 function stateDir(): string {
-  const base = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+  // XDG says an empty or relative value means unset, and `runtimeDir` already
+  // treats an empty base the same way. A `""` base here would otherwise
+  // resolve to the relative `./kapelle`, putting the list in whatever
+  // directory the daemon happened to start in.
+  const configured = process.env.XDG_STATE_HOME;
+  const base =
+    configured && isAbsolute(configured)
+      ? configured
+      : join(homedir(), ".local", "state");
   const dir = join(base, "kapelle");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return ours(dir);

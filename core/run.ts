@@ -180,11 +180,10 @@ export interface TaskRun {
    *  record, so the backlog's `session/load` item can be picked up without a
    *  migration; reattachment itself stays out of scope and capability-gated.
    *
-   *  ponytail: set on the success path only — `runTask` builds its
-   *  `TaskOutcome` once the executor returns, so a task whose harness threw
-   *  at any point, mid-prompt included, loses it, and its session is the
-   *  least resumable one there is. Thread it through the throw if that
-   *  changes. */
+   *  Set once `session/new` has answered, on every settle path from there:
+   *  the success return, a cancel before the prompt, and a throw out of the
+   *  harness. A task killed before it settles is still the `running` record
+   *  from task start — that window is #35's sweep, which owns crashed runs. */
   sessionId?: string;
   status: TaskStatus;
   stopReason?: StopReason;
@@ -785,6 +784,13 @@ async function runOne(
     settled = result;
   } catch (err) {
     record();
+    // `runTask` carries a session id out on its thrown error (M2-6, #36): the
+    // turn ended badly, but the session it ran in did exist. A task that never
+    // reached `session/new` has none, and neither has a non-object throw.
+    const sessionId =
+      err !== null && typeof err === "object"
+        ? (err as { sessionId?: unknown }).sessionId
+        : undefined;
     settled = {
       id: task.id,
       agent: task.agent,
@@ -798,6 +804,7 @@ async function runOne(
       durationMs: Date.now() - started,
       error: err instanceof Error ? err.message : String(err),
     };
+    if (typeof sessionId === "string") settled.sessionId = sessionId;
   }
 
   if (branchMeta) {
@@ -923,6 +930,9 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
   // ended a turn, and `statusFor` reads the abort as `cancelled`.
   const cancelled = () => ctx.signal.aborted;
 
+  // Set once `session/new` answers, so a throw or a late cancel can still hand
+  // the id to the record (M2-6, #36). Nothing reads it before that point.
+  let sessionId: string | undefined;
   try {
     if (cancelled()) return {};
     const init = await agent.start();
@@ -950,7 +960,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     }
 
     if (cancelled()) return {};
-    const sessionId = await agent.newSession();
+    sessionId = await agent.newSession();
     // No kind: the not-negotiated line is not a `warningsFor` warning and is
     // never suppressible (#13), so it takes the unconditional route.
     const notNegotiated = await negotiateSafeMode(agent, spec, task.mode);
@@ -958,7 +968,8 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
 
     // Count at the prompt boundary, not at spawn: a task that fails to start
     // sends no prompt, and a task cancelled before this line sends none either.
-    if (cancelled()) return {};
+    // The session exists by now, so the record keeps its id even here.
+    if (cancelled()) return { sessionId };
     ctx.onTurn();
     // The preamble rides the one prompt this task gets. There is no second
     // one to ask again with (M0-4, `protocol/agent.ts:446`), which is exactly
@@ -987,6 +998,14 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     });
     if (warnings.length) outcome.warnings = warnings;
     return outcome;
+  } catch (err) {
+    // The turn ended badly, but the session it ran in did exist. A narrow
+    // property on the thrown error is the one channel to `runOne`'s record
+    // (M2-6, #36); nothing else sets or reads it.
+    if (sessionId !== undefined && err !== null && typeof err === "object") {
+      (err as { sessionId?: string }).sessionId ??= sessionId;
+    }
+    throw err;
   } finally {
     if (cancelGrace) clearTimeout(cancelGrace);
     ctx.signal.removeEventListener("abort", onAbort);
