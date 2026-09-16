@@ -180,9 +180,11 @@ export interface TaskRun {
    *  record, so the backlog's `session/load` item can be picked up without a
    *  migration; reattachment itself stays out of scope and capability-gated.
    *
-   *  ponytail: set on the path that reached `session/prompt` only. A task
-   *  whose harness threw before that loses it, and its session is the least
-   *  resumable one there is. Thread it through the throw if that changes. */
+   *  ponytail: set on the success path only — `runTask` builds its
+   *  `TaskOutcome` once the executor returns, so a task whose harness threw
+   *  at any point, mid-prompt included, loses it, and its session is the
+   *  least resumable one there is. Thread it through the throw if that
+   *  changes. */
   sessionId?: string;
   status: TaskStatus;
   stopReason?: StopReason;
@@ -607,6 +609,11 @@ function recordTask(task: TaskRun): RecordTask {
  * `children.json`: this is now written while the run is live, so a crash
  * between two writes must leave the previous record whole rather than half a
  * one for `core/merge.ts` and M2-5 to parse.
+ *
+ * Asserted by inspection, not by a test: a reader racing the write sees the
+ * old record or the new one whichever way this is written, so a test of it
+ * would pass on a plain `writeFile` too. The consequence that *is* tested is
+ * the other side — `daemon.ts` skips a truncated record with a notice.
  */
 async function writeRunRecord(input: RunRecordInput): Promise<void> {
   const record = {

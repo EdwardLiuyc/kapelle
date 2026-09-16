@@ -324,10 +324,11 @@ const restoredLogs = new Map<string, string>();
  *
  * Run state lives in each repository's `.kapelle/runs/<id>/`, so the scan
  * follows the repository list rather than a second index. Anything unreadable
- * is skipped in silence: a run whose record is missing, truncated by a crash
- * or not ours is exactly what M2-5's sweep exists to reconcile, and a daemon
- * that refused to boot over one could not be reached by the request that
- * fixes it.
+ * is skipped with a notice naming the path and the reason: a run whose
+ * record is missing, truncated by a crash or not ours is exactly what M2-5's
+ * sweep exists to reconcile, and a daemon that refused to boot over one
+ * could not be reached by the request that fixes it. A repository whose
+ * runs directory does not exist yet gets no notice — nothing was skipped.
  *
  * **Only terminal runs.** A record still saying `running` belongs to a
  * process that is gone; calling it live here would list a run nothing is
@@ -340,20 +341,38 @@ function restoreRuns(): void {
     let ids: string[];
     try {
       ids = readdirSync(dir);
-    } catch {
+    } catch (err) {
+      // ENOENT is a runs directory that is simply not there (the repository
+      // never ran, or the directory was removed): no records exist to skip,
+      // so it stays quiet. Anything else (permission, not-a-directory) is a
+      // real skip and gets the notice.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error(`skipping runs under ${dir}: ${messageOf(err)}`);
+      }
       continue;
     }
     for (const id of ids) {
       const logDir = join(dir, id);
+      const recordPath = join(logDir, "run.json");
       let record: Record<string, unknown>;
       try {
-        record = JSON.parse(readFileSync(join(logDir, "run.json"), "utf8"));
-      } catch {
+        record = JSON.parse(readFileSync(recordPath, "utf8"));
+      } catch (err) {
+        console.error(`skipping ${recordPath}: ${messageOf(err)}`);
         continue;
       }
-      if (record?.runId !== id) continue;
+      if (record?.runId !== id) {
+        console.error(`skipping ${recordPath}: runId is not ${id}`);
+        continue;
+      }
       const status = record.status;
-      if (typeof status !== "string" || status === "running") continue;
+      if (typeof status !== "string") {
+        console.error(`skipping ${recordPath}: no status in the record`);
+        continue;
+      }
+      // Expected after a crash, so no notice: the process that left a record
+      // still saying `running` is gone, and marking it is #35's job.
+      if (status === "running") continue;
       const state: RunState = {
         id,
         cwd: typeof record.cwd === "string" ? record.cwd : root,
@@ -437,10 +456,11 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
   // Checked once here, so a repository whose `.kapelle/` would be committed
   // never gets as far as a run.
   const root = await rootOf(existingDir(body.path, "path"));
+  // Persisted before the 200 and before the in-memory add: a caller told its
+  // repository was added must not find it gone after a restart, and a failed
+  // write must not leave memory ahead of disk.
+  writeRepos([...new Set(repos).add(root)]);
   repos.add(root);
-  // Persisted before the 200: a caller told its repository was added must not
-  // find it gone after a restart.
-  writeRepos([...repos]);
   send(res, 200, { root });
 }
 

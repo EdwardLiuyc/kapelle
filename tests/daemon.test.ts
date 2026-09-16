@@ -1233,6 +1233,12 @@ test("a restarted daemon keeps its repositories and serves the runs from before"
   // the disk, since this daemon ran none of it.
   const second = await boot(t, runtime);
   assert.deepEqual((await api<string[]>(second, "GET", "/repos")).body, [root]);
+  // Owner-only, same as daemon.json: the list names every repository the
+  // daemon will run in.
+  assert.equal(
+    (await stat(join(runtime, "kapelle", "repos.json"))).mode & 0o777,
+    0o600,
+  );
   assert.deepEqual((await api<Reply[]>(second, "GET", "/runs")).body, [
     { id, cwd: root, status: "done" },
   ]);
@@ -1261,5 +1267,54 @@ test("a restarted daemon keeps its repositories and serves the runs from before"
   assert.deepEqual(
     replay.frames.map((f) => f.id),
     replay.frames.map((_, i) => i + 1),
+  );
+
+  // A cursor into the restored log resumes after it, and one past the end
+  // gets the same 400 a live log gives.
+  const resumed = await stream(second, id, 1);
+  assert.equal(resumed.status, 200);
+  await resumed.ended;
+  assert.deepEqual(
+    resumed.frames.map((f) => f.id),
+    replay.frames.map((f) => f.id).filter((n) => n > 1),
+  );
+  const pastEnd = await stream(second, id, replay.frames.length + 1);
+  assert.equal(pastEnd.status, 400);
+});
+
+test("a boot skips a record it cannot trust with a notice, and answers anyway", async (t) => {
+  const runtime = await tempDir(t);
+  const first = await boot(t, runtime);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  // A second repository that never runs: no `.kapelle/runs/` is ever made
+  // for it, which must boot quietly — nothing was skipped.
+  const quiet = await realpath(await added(first, await gitRepo(t)));
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  // One record truncated mid-write, one written by something else.
+  const runs = join(root, ".kapelle", "runs");
+  await mkdir(join(runs, "truncated"), { recursive: true });
+  await writeFile(join(runs, "truncated", "run.json"), '{"runId": "trun');
+  await mkdir(join(runs, "foreign"));
+  await writeFile(
+    join(runs, "foreign", "run.json"),
+    JSON.stringify({ runId: "not-this-one", status: "done", tasks: [] }),
+  );
+
+  const second = await boot(t, runtime);
+  const list = await api<Reply[]>(second, "GET", "/runs");
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.body, []);
+
+  process.kill(second.pid, "SIGTERM");
+  const out = await second.done;
+  assert.equal(out.code, 0);
+  assert.match(out.stderr, /skipping .*truncated.*run\.json/);
+  assert.match(out.stderr, /skipping .*foreign.*run\.json/);
+  assert.equal(
+    out.stderr.includes(`skipping runs under ${quiet}`),
+    false,
+    "a repository that never ran has no records to skip",
   );
 });
