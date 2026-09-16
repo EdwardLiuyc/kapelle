@@ -1676,6 +1676,21 @@ task statuses) for the retention window. **The record left saying `running` is t
 subject**: M2-6's boot scan deliberately restores terminal runs only, so a crashed one is
 invisible to the API until the sweep marks it, rather than being listed as live with
 nothing running it.
+**Amended at pickup 2026-09-16 (#35).** Five decisions, in `core/sweep.ts`. (1) **`errored`
+reads `failed`** — `TaskStatus` (`core/run.ts:72`) has no such rung; a task caught
+`running` becomes `failed`, tasks still `queued` stay `queued`, and the record is rewritten
+with `endedAt` = recovery time, which is what makes M2-6's boot scan restore it. (2)
+**Retention is 30 days**, `DEFAULT_RETENTION_MS` in `core/sweep.ts` (the plan's 7 was
+raised by the developer at implementation time); the constant stays until M2-7 carries the
+knob. Reaping takes the whole footprint — worktree, branches, and the run directory
+including `events.jsonl` and the stderr logs — and runs worktree-first: a checkout that
+cannot be removed keeps its record for the next sweep. (3) **A worktree with no readable
+record** loses a clean checkout but keeps its branch; a dirty one is kept and named in a
+boot notice, and an unreadable record counts as absent. (4) **Surviving pids are
+identity-checked**: `children.json` carries the `ps` start time recorded at spawn, and only
+a still-matching pid is signalled (SIGTERM, then SIGKILL). (5) **Boot-only, in `core/`**,
+awaited after the instance claim and before `restoreRuns`/`listen`; a per-repository
+failure is a notice, never a refused boot.
 
 **M2-6 · Persistence · S · needs M2-1**
 JSON per run under `.kapelle/runs/<id>/`, written on state transitions. For completed-run

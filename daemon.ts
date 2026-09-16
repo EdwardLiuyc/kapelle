@@ -10,9 +10,9 @@
  * `.kapelle/`.
  *
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
- * `checkStateDir`, `validateRun`, `openWorktrees`, `runRun` and the permission
- * queue; worktrees,
- * policy and harnesses stay behind them. If orchestration grew here, the scheduler would be
+ * `checkStateDir`, `validateRun`, `openWorktrees`, `sweepBoot`, `runRun` and
+ * the permission queue; worktrees, policy and harnesses stay behind them. If
+ * orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
  * implementation (`docs/STORIES.md`, M2-1).
  *
@@ -55,6 +55,7 @@ import { createPermissionQueue } from "./core/permissions.ts";
 import { type RunReport, runRun, type TaskStatus } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import { readRepos, runtimeDir, writeRepos } from "./core/runtime.ts";
+import { processIdentity, sweepBoot } from "./core/sweep.ts";
 import {
   checkStateDir,
   openWorktrees,
@@ -337,8 +338,9 @@ const restoredLogs = new Map<string, string>();
  *
  * **Only terminal runs.** A record still saying `running` belongs to a
  * process that is gone; calling it live here would list a run nothing is
- * running and hand `DELETE` a canceller that does not exist. Marking those
- * `errored` is #35's job, and this story gives it the record to do it with.
+ * running and hand `DELETE` a canceller that does not exist. The M2-5 sweep
+ * ran just before this scan and rewrote those to `failed`; the guard below is
+ * for a record the sweep could not write.
  */
 function restoreRuns(): void {
   for (const root of repos) {
@@ -375,8 +377,8 @@ function restoreRuns(): void {
         console.error(`skipping ${recordPath}: no status in the record`);
         continue;
       }
-      // Expected after a crash, so no notice: the process that left a record
-      // still saying `running` is gone, and marking it is #35's job.
+      // The sweep rewrote these to `failed` before this scan, so one left
+      // here is a record it could not write; expected after a crash, silent.
       if (status === "running") continue;
       const state: RunState = {
         id,
@@ -395,6 +397,16 @@ function restoreRuns(): void {
     }
   }
 }
+
+// M2-5 (#35): reconcile the previous daemon's debris before anything is
+// restored or served. This rewrites a record left `running` to `failed` with
+// a fresh `endedAt`, so the scan below sees it as terminal; worktrees and runs
+// inside the retention window are left alone.
+await sweepBoot({
+  repos: addedRepos,
+  childrenFile: join(dir, "children.json"),
+  onNotice: (text) => console.error(text),
+});
 
 // At import, before the port opens: a request must never meet a half-restored
 // list. ponytail: synchronous and O(runs ever kept) — one `readdir` plus one
@@ -426,12 +438,12 @@ function restoredLog(id: string): Promise<EventLog | undefined> | undefined {
  */
 const children = new Map<
   number,
-  { pid: number; runId: string; taskId: string }
+  { pid: number; runId: string; taskId: string; startedAt?: string }
 >();
 const childrenFile = join(dir, "children.json");
 
-// ponytail: a pid alone can be reused by an unrelated process before M2-5
-// reads it; record a start time when the sweep needs to tell them apart.
+// Each entry carries the process's start time (M2-5): the sweep signals a pid
+// only when `ps` still reports the same start, so a reused pid is left alone.
 function recordChildren(): void {
   try {
     if (children.size === 0) {
@@ -527,7 +539,16 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
   const bus = createEventBus();
   bus.addListener(({ agent, update }) => {
     if (update.sessionUpdate === "_client_harness_spawned") {
-      children.set(update.pid, { pid: update.pid, runId: id, taskId: agent });
+      // The start time is the sweep's proof that a surviving pid is still
+      // this harness and not a recycled pid (M2-5). `undefined` when `ps`
+      // cannot answer before the harness exits: the sweep then leaves the pid
+      // alone rather than signal a stranger.
+      children.set(update.pid, {
+        pid: update.pid,
+        runId: id,
+        taskId: agent,
+        startedAt: processIdentity(update.pid) ?? undefined,
+      });
       recordChildren();
     } else if (update.sessionUpdate === "_client_harness_exited") {
       children.delete(update.pid);

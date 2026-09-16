@@ -446,7 +446,7 @@ driven from a run file, fully verifiable offline.
   shutdown, SIGTERM handling. A daemon crash must not leak harness subprocesses holding
   write access.
 - **Crash-recovery sweep at startup** — the fuller version of "run `git worktree prune`".
-  On boot: mark tasks left in `running` as `errored`, kill or reap any registered child PIDs
+  On boot: mark tasks left in `running` as `failed`, kill or reap any registered child PIDs
   that survived, reconcile `git worktree list` against persisted run records, and reap only
   those worktrees whose run is terminal *and* past the retention window (default 7 days).
 - **Persistence** — JSON per run under `.kapelle/runs/<id>/`, written on state
@@ -557,7 +557,7 @@ record* — a worktree whose run record exists is kept on purpose, and reaping i
 **M2** — start the daemon, `POST /runs` in `ask` mode with **no client attached**, confirm
 the mutation is denied at timeout and the run completes rather than hanging. Attach
 `curl -N` to the SSE endpoint mid-run and confirm replay-from-cursor delivers the history.
-`kill -9` the daemon, restart, and confirm the sweep marks the task errored, reaps no
+`kill -9` the daemon, restart, and confirm the sweep marks the task failed, reaps no
 worktree still within retention, and leaves no harness subprocess alive.
 
 **M3** — a three-stage pipeline (opencode plans `safe` → claude-agent-acp implements

@@ -1350,8 +1350,8 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     join(runs, "foreign", "run.json"),
     JSON.stringify({ runId: "not-this-one", status: "done", tasks: [] }),
   );
-  // A record still saying `running` is a crash #35's sweep owns: deliberately
-  // not restored, and silent because it is the expected post-crash state.
+  // A record still saying `running` is a crash: M2-5's sweep rewrites it to
+  // `failed` before this daemon restores, so it is served, not skipped.
   await mkdir(join(runs, "live"));
   await writeFile(
     join(runs, "live", "run.json"),
@@ -1369,9 +1369,12 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   const second = await boot(t, runtime);
   const list = await api<Reply[]>(second, "GET", "/runs");
   assert.equal(list.status, 200);
-  assert.deepEqual(list.body, []);
-  // Terminal runs only: the `running` record is not served, not even by id.
-  assert.equal((await api(second, "GET", "/runs/live")).status, 404);
+  // `live` was left `running` and the sweep rewrote it terminal: the one run
+  // served is the crashed one, and it reads `failed`.
+  assert.deepEqual(list.body, [{ id: "live", cwd: root, status: "failed" }]);
+  const live = await api(second, "GET", "/runs/live");
+  assert.equal(live.status, 200);
+  assert.equal(live.body.status, "failed");
 
   process.kill(second.pid, "SIGTERM");
   const out = await second.done;
@@ -1383,13 +1386,74 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   assert.equal(
     out.stderr.includes(join(runs, "live")),
     false,
-    "a `running` record is skipped silently, not noticed",
+    "rewriting a crashed record is silent, not a notice",
   );
   assert.equal(
     out.stderr.includes(`skipping runs under ${quiet}`),
     false,
     "a repository that never ran has no records to skip",
   );
+});
+
+test("kill -9 then restart marks the run failed and keeps its worktree", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  const posted = await api(first, "POST", "/runs", {
+    cwd: root,
+    run: mockRun([
+      { id: "stuck", prompt: "hi", cmd: `node ${MOCK_AGENT} --scenario stall` },
+    ]),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  const { id } = posted.body;
+
+  // The harness is live once children.json names it, so the kill lands mid-turn.
+  const childrenFile = join(runtime, "kapelle", "children.json");
+  let harness = 0;
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    const record = await readFile(childrenFile, "utf8").catch(() => null);
+    if (record) {
+      harness = JSON.parse(record).children[0].pid;
+      break;
+    }
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.ok(harness > 0, "children.json never named the harness");
+  t.after(() => {
+    try {
+      process.kill(harness, "SIGKILL");
+    } catch {
+      // Already gone: nothing left to kill.
+    }
+  });
+
+  const worktree = join(root, ".kapelle", "wt", id, "stuck");
+  assert.equal(existsSync(worktree), true, "the run should own a worktree");
+
+  process.kill(first.pid, "SIGKILL");
+  await first.done;
+
+  // Same runtime and state, a new process: everything below is the sweep's.
+  const second = await boot(t, runtime, [], state);
+  const restored = await api(second, "GET", `/runs/${id}`);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.status, "failed");
+  assert.deepEqual(
+    restored.body.tasks?.map((task) => [task.id, task.status]),
+    [["stuck", "failed"]],
+  );
+  const record = JSON.parse(
+    await readFile(join(root, ".kapelle", "runs", id, "run.json"), "utf8"),
+  );
+  assert.equal(typeof record.endedAt, "string");
+  assert.equal(existsSync(worktree), true, "a worktree inside retention stays");
+  assert.equal(await gone(harness), true, "the harness outlived the restart");
+  assert.equal(existsSync(childrenFile), false);
+
+  process.kill(second.pid, "SIGTERM");
+  assert.equal((await second.done).code, 0);
 });
 
 test("a relative XDG_RUNTIME_DIR falls back to the temp dir, never the cwd", async (t) => {
