@@ -146,6 +146,67 @@ export function createEventLog(
   };
 }
 
+/**
+ * A finished run's log, read back from disk (M2-6, #36).
+ *
+ * The same `EventLog` a live run hands out, so `daemon.ts` serves
+ * `GET /runs/:id/events` for a run from before a restart through the one code
+ * path. Read-only on purpose: `createEventLog` opens with `flags: "w"`, which
+ * would truncate the very file this replays.
+ *
+ * The one scan at open is what M2-6's amendment calls rebuilding the index —
+ * line offsets and the line count, never the events. A trailing partial line,
+ * which is what a `kill -9` mid-write leaves, is dropped by `readLines`: the
+ * same "committed, not appended" rule the writer follows.
+ */
+export async function openEventLog(path: string): Promise<EventLog> {
+  const starts: number[] = [];
+  let bytes = 0;
+  const index = await open(path, "r");
+  try {
+    await readLines(index, 0, (await index.stat()).size, undefined, (line) => {
+      starts.push(bytes);
+      bytes += Buffer.byteLength(line) + 1;
+    });
+  } finally {
+    await index.close();
+  }
+
+  return {
+    // Nothing writes to a run that is over. Present because the interface is
+    // shared with the live log, never called.
+    append() {},
+
+    async follow(after, send, signal) {
+      if (after >= starts.length || signal?.aborted) return;
+      const file = await open(path, "r");
+      try {
+        let next = after + 1;
+        await readLines(
+          file,
+          starts[after] as number,
+          bytes,
+          signal,
+          (line) => {
+            send(next, line);
+            next += 1;
+          },
+        );
+      } finally {
+        await file.close();
+      }
+      // No park at the end: the run is over, so the reader is caught up for
+      // good and the stream ends.
+    },
+
+    get size() {
+      return starts.length;
+    },
+
+    async close() {},
+  };
+}
+
 /** Sends each whole line in `[from, to)`; `to` always sits on a line end. */
 async function readLines(
   file: FileHandle,

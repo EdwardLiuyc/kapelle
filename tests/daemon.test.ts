@@ -4,8 +4,10 @@
  *
  * **None of this needs a harness**, so it runs in CI like `tests/cli.test.ts`:
  * every run points at `mock-agent.mjs`, and every refusal fails before a
- * subprocess starts. Each daemon gets its own `XDG_RUNTIME_DIR`, so no test
- * ever meets another test's `daemon.json` — or the developer's real one.
+ * subprocess starts. Each daemon gets its own `XDG_RUNTIME_DIR` **and
+ * `XDG_STATE_HOME`**, so no test ever meets another test's `daemon.json` or
+ * `repos.json` — or the developer's real ones. The two point at one temp dir
+ * here; only the daemon cares that they are different places in real life.
  */
 
 import assert from "node:assert/strict";
@@ -42,12 +44,16 @@ interface Daemon {
   done: Promise<CliResult>;
 }
 
-/** Spawns `daemon.ts` with `runtime` as its `XDG_RUNTIME_DIR`. */
+/** Spawns `daemon.ts` with `runtime` as its runtime *and* state directory. */
 function start(t: TestContext, runtime: string, args: string[] = []) {
-  return spawnCli(t, ["--port", "0", ...args], "daemon.ts", {
-    XDG_RUNTIME_DIR: runtime,
-  });
+  return spawnCli(t, ["--port", "0", ...args], "daemon.ts", dirs(runtime));
 }
+
+/** The two user-level directories a daemon must not share with anyone. */
+const dirs = (runtime: string) => ({
+  XDG_RUNTIME_DIR: runtime,
+  XDG_STATE_HOME: runtime,
+});
 
 /** Starts a daemon and reads back the record it wrote once listening. */
 async function boot(
@@ -91,6 +97,8 @@ interface Reply {
   error: string;
   cancelRequested?: true;
   report: { tasks: { status: string }[] };
+  /** A run restored from disk carries its record's tasks, not a report. */
+  tasks?: { id: string; status: string; sessionId?: string }[];
   notices: { taskId: string; text: string }[];
 }
 
@@ -367,7 +375,7 @@ test("the strict lock refuses a start while held, and is gone once a start succe
 
 test("kapelle daemon start listens, and kapelle daemon add registers a repository", async (t) => {
   const runtime = await tempDir(t);
-  const env = { XDG_RUNTIME_DIR: runtime };
+  const env = dirs(runtime);
   const repo = await tempDir(t);
 
   const none = await spawnCli(t, ["daemon", "add", repo], "cli.ts", env).done;
@@ -399,7 +407,7 @@ test("kapelle --quiet daemon start starts the daemon, global flags included", as
     t,
     ["--quiet", "daemon", "start", "--port", "0"],
     "cli.ts",
-    { XDG_RUNTIME_DIR: runtime },
+    dirs(runtime),
   );
   const died = daemon.done.then((r) => {
     throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
@@ -417,9 +425,12 @@ test("kapelle daemon add treats a non-object daemon.json as no daemon", async (t
   await mkdir(dir, { mode: 0o700 });
   await writeFile(join(dir, "daemon.json"), "null", { mode: 0o600 });
 
-  const r = await spawnCli(t, ["daemon", "add", "/tmp"], "cli.ts", {
-    XDG_RUNTIME_DIR: runtime,
-  }).done;
+  const r = await spawnCli(
+    t,
+    ["daemon", "add", "/tmp"],
+    "cli.ts",
+    dirs(runtime),
+  ).done;
   assert.equal(r.code, 1);
   assert.match(r.stderr, /no daemon is listening/);
 });
@@ -1199,4 +1210,56 @@ test("a task the watchdog cuts drops its pending decision at once, while its sib
 
   await api(d, "DELETE", `/runs/${posted.body.id}`);
   await settled(d, posted.body.id);
+});
+
+// --- across a restart (M2-6, #36) -------------------------------------------
+
+test("a restarted daemon keeps its repositories and serves the runs from before", async (t) => {
+  const runtime = await tempDir(t);
+  const first = await boot(t, runtime);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  const posted = await api(first, "POST", "/runs", {
+    cwd: root,
+    run: mockRun([{ id: "a", prompt: "hi" }]),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  const { id } = posted.body;
+  assert.equal((await settled(first, id)).status, "done");
+
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  // Same user-level directories, a new process: everything below comes off
+  // the disk, since this daemon ran none of it.
+  const second = await boot(t, runtime);
+  assert.deepEqual((await api<string[]>(second, "GET", "/repos")).body, [root]);
+  assert.deepEqual((await api<Reply[]>(second, "GET", "/runs")).body, [
+    { id, cwd: root, status: "done" },
+  ]);
+
+  const one = await api(second, "GET", `/runs/${id}`);
+  assert.equal(one.status, 200);
+  assert.deepEqual(
+    one.body.tasks?.map((task) => [task.id, task.status]),
+    [["a", "done"]],
+  );
+  // The field M2-6 exists to carry: one session id, so `session/load` can be
+  // picked up later without a migration.
+  assert.match(String(one.body.tasks?.[0]?.sessionId), /\S/);
+
+  // And the log replays, although nothing is writing it: `createEventLog`
+  // opens `flags: "w"`, so this has to come from the read-only open.
+  const replay = await stream(second, id);
+  assert.equal(replay.status, 200);
+  await replay.ended;
+  assert.ok(
+    replay.frames.some(
+      (f) => f.data.update.sessionUpdate === "_client_task_finished",
+    ),
+    "the restored stream should carry the task's end",
+  );
+  assert.deepEqual(
+    replay.frames.map((f) => f.id),
+    replay.frames.map((_, i) => i + 1),
+  );
 });

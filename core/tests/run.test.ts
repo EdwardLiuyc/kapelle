@@ -9,7 +9,10 @@
  */
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
+import { gitRepo, tempDir } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { AGENTS, resolveAgent, warningsFor } from "../../protocol/registry.ts";
 import type {
@@ -720,4 +723,96 @@ test("an operator cancel outranks a TTL that fires in the same window", async ()
     exec,
   );
   assert.equal(report.tasks[0]?.status, "cancelled");
+});
+
+// --- the run record (M2-6, #36) ---------------------------------------------
+
+/** What `.kapelle/runs/<id>/run.json` says right now. */
+async function recordIn(root: string, runId: string) {
+  const path = join(root, ".kapelle", "runs", runId, "run.json");
+  return JSON.parse(await readFile(path, "utf8"));
+}
+
+const RECORD_RUN = "20260916-120000-abcd";
+
+test("the record names a running task and a queued one, before the run ends", async (t) => {
+  const root = await gitRepo(t);
+  // One at a time, so the second task is still queued while the first runs.
+  const run = validateRun({
+    maxConcurrency: 1,
+    tasks: [
+      { id: "a", prompt: "x", agent: "opencode" },
+      { id: "b", prompt: "x", agent: "opencode" },
+    ],
+  });
+
+  let midRun:
+    | { status: string; tasks: { id: string; status: string }[] }
+    | undefined;
+  const exec: TaskExecutor = async (task) => {
+    if (task.id === "a") midRun = await recordIn(root, RECORD_RUN);
+    return { stopReason: "end_turn" };
+  };
+  const report = await runRun(
+    run,
+    { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+    exec,
+  );
+
+  // The whole point: a `kill -9` here leaves this on disk for M2-5 to read.
+  // Before M2-6 the file did not exist until the run was over.
+  assert.ok(midRun, "no record on disk while the first task was running");
+  assert.equal(midRun.status, "running");
+  assert.deepEqual(
+    midRun.tasks.map((task) => [task.id, task.status]),
+    [
+      ["a", "running"],
+      ["b", "queued"],
+    ],
+  );
+
+  const ended = await recordIn(root, RECORD_RUN);
+  assert.equal(ended.status, report.status);
+  assert.equal(typeof ended.startedAt, "string");
+  assert.equal(typeof ended.endedAt, "string");
+  assert.equal(ended.cwd, root);
+  assert.deepEqual(
+    ended.tasks.map((task: { status: string }) => task.status),
+    ["done", "done"],
+  );
+});
+
+test("the record carries the session id the executor reported", async (t) => {
+  const root = await gitRepo(t);
+  const exec: TaskExecutor = async () => ({
+    stopReason: "end_turn",
+    sessionId: "sess-42",
+  });
+  await runRun(
+    runOf(1, 1),
+    { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+    exec,
+  );
+
+  // One field, so the backlog's `session/load` needs no migration (#36).
+  assert.equal(
+    (await recordIn(root, RECORD_RUN)).tasks[0].sessionId,
+    "sess-42",
+  );
+});
+
+test("a run with no worktrees still writes a record", async (t) => {
+  // Not a repository, so `openWorktrees` falls back to the shared cwd. The
+  // record used to be skipped here, and `kapelle merge` answered "no run
+  // record" where it can now name the task that has no branch.
+  const root = await tempDir(t);
+  const report = await runRun(
+    runOf(1, 1),
+    { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+    async () => ({ stopReason: "end_turn" }),
+  );
+
+  const record = await recordIn(root, RECORD_RUN);
+  assert.equal(record.status, report.status);
+  assert.deepEqual(record.tasks, [{ id: "t0", status: "done" }]);
 });

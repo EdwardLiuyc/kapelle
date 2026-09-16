@@ -1,5 +1,11 @@
 /**
- * The daemon's runtime directory — `daemon.json` and `children.json` live here.
+ * The daemon's user-level files.
+ *
+ * Two directories, because they answer to different lifetimes. The **runtime**
+ * directory holds what is only true while a daemon is up — `daemon.json` and
+ * `children.json` — and is wiped at logout. The **state** directory holds what
+ * must outlive that: `repos.json`, the list of repositories added with
+ * `POST /repos` (M2-6, #36).
  *
  * Its own file because two entry points need the one definition: `daemon.ts`
  * writes the token there and `cli.ts`'s `kapelle daemon add` reads it back
@@ -7,8 +13,14 @@
  * daemon.
  */
 
-import { lstatSync, mkdirSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import {
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -34,4 +46,55 @@ export function runtimeDir(): string {
     );
   }
   return dir;
+}
+
+/**
+ * `$XDG_STATE_HOME/kapelle`, or `~/.local/state/kapelle` where that is unset.
+ *
+ * **Not `runtimeDir()`** (decided 2026-09-16, #36). On Linux that resolves to
+ * `/run/user/<uid>`, a tmpfs cleared at logout, so a repository list kept
+ * there would survive a daemon restart and not a reboot — and a list that is
+ * sometimes there is worse than one that never was.
+ */
+function stateDir(): string {
+  const base = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+  const dir = join(base, "kapelle");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+/** Where the repository list lives. */
+function reposFile(): string {
+  return join(stateDir(), "repos.json");
+}
+
+/**
+ * Every repository added to the daemon (M2-6, #36).
+ *
+ * A missing, unreadable or malformed file reads as an empty list rather than
+ * throwing: that is the state before the first `POST /repos`, and a daemon
+ * that refuses to boot over it would be unreachable by the very request that
+ * fixes it. Entries are re-checked on use, so a repository that has since
+ * moved is refused then, not here.
+ */
+export function readRepos(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(reposFile(), "utf8"));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is string => typeof entry === "string");
+  } catch {
+    return [];
+  }
+}
+
+/** Replace the list, atomically — a half-written one reads as empty. */
+export function writeRepos(repos: readonly string[]): void {
+  const path = reposFile();
+  const tmp = `${path}.tmp`;
+  // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
+  // pi-lens-ignore: no-raw-json-store-write
+  writeFileSync(tmp, `${JSON.stringify([...repos], null, 2)}\n`, {
+    mode: 0o600,
+  });
+  renameSync(tmp, path);
 }
