@@ -34,8 +34,19 @@ export function runtimeDir(): string {
   const base = process.env.XDG_RUNTIME_DIR;
   const dir = base ? join(base, "kapelle") : join(tmpdir(), `kapelle-${uid}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  // `lstat`, so a symlink planted where the directory should be is refused
-  // rather than followed.
+  return ours(dir);
+}
+
+/**
+ * `dir`, once it is ours and closed to everyone else.
+ *
+ * `lstat`, so a symlink planted where the directory should be is refused
+ * rather than followed. Both directories take it: one holds the token, the
+ * other holds the list of repositories the daemon will run harnesses in, and
+ * neither is something to inherit from whoever got there first.
+ */
+function ours(dir: string): string {
+  const { uid } = userInfo();
   const st = lstatSync(dir);
   const mode = st.mode & 0o777;
   if (!st.isDirectory() || st.uid !== uid || (mode & 0o077) !== 0) {
@@ -55,12 +66,17 @@ export function runtimeDir(): string {
  * `/run/user/<uid>`, a tmpfs cleared at logout, so a repository list kept
  * there would survive a daemon restart and not a reboot — and a list that is
  * sometimes there is worse than one that never was.
+ *
+ * Guarded exactly as `runtimeDir` is. The default sits under `$HOME` and is
+ * not the shared place `tmpdir()` is, but `XDG_STATE_HOME` can name anywhere,
+ * and this file decides which folders the daemon will start harnesses in —
+ * a list worth no less care than the token beside it.
  */
 function stateDir(): string {
   const base = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
   const dir = join(base, "kapelle");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
+  return ours(dir);
 }
 
 /** Where the repository list lives. */
@@ -78,8 +94,13 @@ function reposFile(): string {
  * moved is refused then, not here.
  */
 export function readRepos(): string[] {
+  // Outside the `try`, so the directory guard is never swallowed: a state
+  // directory somebody else owns is a refusal to start, the same answer the
+  // runtime directory gives, and not an empty list that looks like a fresh
+  // install.
+  const path = reposFile();
   try {
-    const parsed: unknown = JSON.parse(readFileSync(reposFile(), "utf8"));
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((entry): entry is string => typeof entry === "string");
   } catch {

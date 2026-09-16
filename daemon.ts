@@ -203,6 +203,11 @@ function claim(file: string): number {
 
 const dir = orExit(runtimeDir);
 const file = join(dir, "daemon.json");
+// Read before the claim, and through `orExit` like every other startup
+// refusal: a state directory somebody else owns stops the daemon with one
+// line rather than a stack, and stops it before `daemon.json` exists, so a
+// start that refused leaves nothing behind for the next one to clear.
+const addedRepos = orExit(readRepos);
 const fd = orExit(() => claim(file));
 
 const token = randomBytes(32).toString("hex");
@@ -270,7 +275,7 @@ async function rootOf(dir: string): Promise<string> {
 /** Every repository root added, restored from `repos.json` (M2-6, #36).
  *  Not re-checked here: a repository that has moved or whose `.kapelle/` has
  *  since been committed is refused by `POST /runs`, which checks on use. */
-const repos = new Set<string>(readRepos());
+const repos = new Set<string>(addedRepos);
 
 /** One run as the API reports it. Live runs are built here; finished ones
  *  are read back from their `run.json` at boot (M2-6, #36). */
@@ -391,6 +396,11 @@ function restoreRuns(): void {
   }
 }
 
+// At import, before the port opens: a request must never meet a half-restored
+// list. ponytail: synchronous and O(runs ever kept) — one `readdir` plus one
+// small `readFile` per run, on the boot path only. Move it behind `listen` (or
+// read the newest N) if a repository with thousands of kept runs makes the
+// daemon slow to answer.
 restoreRuns();
 
 /** The log of a run that ended before this daemon started, opened on first
@@ -458,8 +468,10 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
   const root = await rootOf(existingDir(body.path, "path"));
   // Persisted before the 200 and before the in-memory add: a caller told its
   // repository was added must not find it gone after a restart, and a failed
-  // write must not leave memory ahead of disk.
-  writeRepos([...new Set(repos).add(root)]);
+  // write must not leave memory ahead of disk. Hence the copy — it is what
+  // lets the write happen first, and it dedups a repository added twice.
+  const next = new Set(repos).add(root);
+  writeRepos([...next]);
   repos.add(root);
   send(res, 200, { root });
 }

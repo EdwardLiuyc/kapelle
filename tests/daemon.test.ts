@@ -217,6 +217,28 @@ test("a runtime directory other users can enter is refused", async (t) => {
   await assert.rejects(readFile(join(dir, "daemon.json")));
 });
 
+test("a state directory other users can enter is refused", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const dir = join(state, "kapelle");
+  await mkdir(dir);
+  await chmod(dir, 0o755);
+
+  // Two separate directories on purpose: the runtime one is fine, so the
+  // refusal below is the state directory's own guard and not `runtimeDir`'s.
+  // `repos.json` names the folders the daemon will start harnesses in.
+  const r = await exitOf(
+    spawnCli(t, ["--port", "0"], "daemon.ts", {
+      XDG_RUNTIME_DIR: runtime,
+      XDG_STATE_HOME: state,
+    }),
+  );
+  assert.ok(r, "the daemon started anyway");
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /0700/);
+  await assert.rejects(readFile(join(runtime, "kapelle", "daemon.json")));
+});
+
 for (const stale of ["null", "[]", "42"]) {
   test(`a daemon.json holding ${stale} is replaced, like any dead daemon's`, async (t) => {
     const runtime = await tempDir(t);
