@@ -26,7 +26,7 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AcpAgent, type Policy } from "../protocol/agent.ts";
 import {
@@ -176,6 +176,15 @@ export interface TaskRun {
    *  Used to write the run record M1c-3's merge reads. */
   branch?: string;
   baseSha?: string;
+  /** The harness session this task ran in (M2-6, #36). One field on the run
+   *  record, so the backlog's `session/load` item can be picked up without a
+   *  migration; reattachment itself stays out of scope and capability-gated.
+   *
+   *  Set once `session/new` has answered, on every settle path from there:
+   *  the success return, a cancel before the prompt, and a throw out of the
+   *  harness. A task killed before it settles is still the `running` record
+   *  from task start — that window is #35's sweep, which owns crashed runs. */
+  sessionId?: string;
   status: TaskStatus;
   stopReason?: StopReason;
   usage?: Usage;
@@ -263,6 +272,8 @@ interface TaskContext {
 
 interface TaskOutcome {
   stopReason?: StopReason;
+  /** The harness's own session id, for the run record (M2-6). */
+  sessionId?: string;
   usage?: Usage;
   usageSemantics?: UsageSemantics;
   /** M1b-4, and produced by the *executor* rather than by `runOne`: only
@@ -377,6 +388,58 @@ export async function runRun(
     options.onEventLog?.(eventLog);
   }
 
+  // The record is written on every task transition, not once at the end
+  // (M2-6, #36). A daemon that dies mid-run used to leave nothing at all —
+  // the file landed after `Promise.all` — so the sweep that reconciles a
+  // crash (M2-5) had no record to reconcile, and a restart could not tell a
+  // task that was running from one that never left the queue.
+  //
+  // Written for any run with a log directory, including the shared-cwd
+  // fallback that has no branches: `core/merge.ts` already refuses a task
+  // with no branch by name, which is a better answer than "no run record".
+  const entries = new Map<string, RecordTask>();
+  let recordFailed = false;
+  let writing: Promise<void> = Promise.resolve();
+  const persist = (
+    status: TaskStatus | "running",
+    endedAt?: string,
+  ): Promise<void> => {
+    if (!logs) return writing;
+    // Chained, never concurrent: two workers renaming one temp file at the
+    // same instant is the one way an atomic write stops being atomic.
+    writing = writing
+      .then(() =>
+        writeRunRecord({
+          runId,
+          root,
+          cwd: options.cwd,
+          status,
+          startedAt: new Date(started).toISOString(),
+          ...(endedAt ? { endedAt } : {}),
+          logDir,
+          tasks: run.tasks.map(
+            (t) => entries.get(t.id) ?? { id: t.id, status: "queued" },
+          ),
+        }),
+      )
+      .catch((err) => {
+        // Once per run: a filesystem that refuses this write refuses every
+        // later one too, and the run itself is still happening.
+        if (recordFailed) return;
+        recordFailed = true;
+        options.onNotice?.(
+          "run",
+          `cannot write run record: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+    return writing;
+  };
+  // Before any task starts, so a run that dies during its first spawn still
+  // has a record naming every task it was going to run.
+  await persist("running");
+
   const results = new Array<TaskRun>(run.tasks.length);
   const queue = run.tasks.map((task, index) => ({ task, index }));
 
@@ -445,8 +508,15 @@ export async function runRun(
             durationMs: 0,
           },
         });
+        entries.set(task.id, recordTask(results[index] as TaskRun));
+        await persist("running");
         continue;
       }
+
+      entries.set(task.id, { id: task.id, status: "running" });
+      // Awaited, so the record is on disk before the harness is spawned: a
+      // `kill -9` during the spawn is exactly the case the sweep reads it for.
+      await persist("running");
 
       results[index] = await runOne(
         task,
@@ -460,6 +530,8 @@ export async function runRun(
         watchdog,
         controls,
       );
+      entries.set(task.id, recordTask(results[index] as TaskRun));
+      await persist("running");
     }
   };
 
@@ -472,24 +544,13 @@ export async function runRun(
     await eventLog?.close();
   }
 
-  // The record is what M1c-3's merge reads. A non-git fallback has no branches
-  // to merge, so writing one is skipped there; a filesystem that refuses the
-  // write is a notice, because the run itself has already happened.
-  if (logs && worktrees) {
-    try {
-      await writeRunRecord({ runId, root, logDir, tasks: results });
-    } catch (err) {
-      options.onNotice?.(
-        "run",
-        `cannot write run record: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-  }
+  // The last write is the terminal one: it is what M1c-3's merge reads, and
+  // what tells a restart that this run is over rather than abandoned.
+  const status = runStatus(results.map((r) => r.status));
+  await persist(status, new Date().toISOString());
 
   return {
-    status: runStatus(results.map((r) => r.status)),
+    status,
     durationMs: Date.now() - started,
     turns,
     tasks: results,
@@ -504,34 +565,71 @@ interface TaskControl {
   fired: boolean;
 }
 
+/**
+ * One task as the run record carries it (M2-6, #36).
+ *
+ * `status` widens `TaskStatus` with the two states a task can be *caught* in
+ * by a crash. Neither is a verdict, which is why neither is a `TaskStatus`:
+ * nothing in this module can settle on them, and `core/merge.ts` refuses both
+ * as unfinished along with every other non-`done`/`warned` value.
+ */
+interface RecordTask {
+  id: string;
+  status: TaskStatus | "queued" | "running";
+  branch?: string;
+  baseSha?: string;
+  sessionId?: string;
+}
+
 interface RunRecordInput {
   runId: string;
   root: string;
+  cwd: string;
+  status: TaskStatus | "running";
+  startedAt: string;
+  endedAt?: string;
   logDir: string;
-  tasks: TaskRun[];
+  tasks: RecordTask[];
 }
 
+/** A finished task, as the record carries it. */
+function recordTask(task: TaskRun): RecordTask {
+  const entry: RecordTask = { id: task.id, status: task.status };
+  if (task.branch !== undefined) entry.branch = task.branch;
+  if (task.baseSha !== undefined) entry.baseSha = task.baseSha;
+  if (task.sessionId !== undefined) entry.sessionId = task.sessionId;
+  return entry;
+}
+
+/**
+ * Write the record, atomically.
+ *
+ * Temp file plus `rename`, the shape `daemon.ts` already uses for
+ * `children.json`: this is now written while the run is live, so a crash
+ * between two writes must leave the previous record whole rather than half a
+ * one for `core/merge.ts` and M2-5 to parse.
+ *
+ * Asserted by inspection, not by a test: a reader racing the write sees the
+ * old record or the new one whichever way this is written, so a test of it
+ * would pass on a plain `writeFile` too. The consequence that *is* tested is
+ * the other side — `daemon.ts` skips a truncated record with a notice.
+ */
 async function writeRunRecord(input: RunRecordInput): Promise<void> {
   const record = {
     runId: input.runId,
     root: input.root,
-    tasks: input.tasks.map((task) => {
-      const entry: {
-        id: string;
-        status: TaskStatus;
-        branch?: string;
-        baseSha?: string;
-      } = { id: task.id, status: task.status };
-      if (task.branch !== undefined) entry.branch = task.branch;
-      if (task.baseSha !== undefined) entry.baseSha = task.baseSha;
-      return entry;
-    }),
+    cwd: input.cwd,
+    status: input.status,
+    startedAt: input.startedAt,
+    ...(input.endedAt ? { endedAt: input.endedAt } : {}),
+    tasks: input.tasks,
   };
-  await writeFile(
-    join(input.logDir, "run.json"),
-    `${JSON.stringify(record, null, 2)}\n`,
-    "utf8",
-  );
+  const path = join(input.logDir, "run.json");
+  const tmp = `${path}.tmp`;
+  // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
+  // pi-lens-ignore: no-raw-json-store-write
+  await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await rename(tmp, path);
 }
 
 async function runOne(
@@ -654,6 +752,7 @@ async function runOne(
     };
     if (outcome.stopReason !== undefined)
       result.stopReason = outcome.stopReason;
+    if (outcome.sessionId !== undefined) result.sessionId = outcome.sessionId;
     if (outcome.usage !== undefined) {
       result.usage = outcome.usage;
       result.usageSemantics = outcome.usageSemantics;
@@ -685,6 +784,13 @@ async function runOne(
     settled = result;
   } catch (err) {
     record();
+    // `runTask` carries a session id out on its thrown error (M2-6, #36): the
+    // turn ended badly, but the session it ran in did exist. A task that never
+    // reached `session/new` has none, and neither has a non-object throw.
+    const sessionId =
+      err !== null && typeof err === "object"
+        ? (err as { sessionId?: unknown }).sessionId
+        : undefined;
     settled = {
       id: task.id,
       agent: task.agent,
@@ -698,6 +804,7 @@ async function runOne(
       durationMs: Date.now() - started,
       error: err instanceof Error ? err.message : String(err),
     };
+    if (typeof sessionId === "string") settled.sessionId = sessionId;
   }
 
   if (branchMeta) {
@@ -823,6 +930,9 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
   // ended a turn, and `statusFor` reads the abort as `cancelled`.
   const cancelled = () => ctx.signal.aborted;
 
+  // Set once `session/new` answers, so a throw or a late cancel can still hand
+  // the id to the record (M2-6, #36). Nothing reads it before that point.
+  let sessionId: string | undefined;
   try {
     if (cancelled()) return {};
     const init = await agent.start();
@@ -850,7 +960,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     }
 
     if (cancelled()) return {};
-    await agent.newSession();
+    sessionId = await agent.newSession();
     // No kind: the not-negotiated line is not a `warningsFor` warning and is
     // never suppressible (#13), so it takes the unconditional route.
     const notNegotiated = await negotiateSafeMode(agent, spec, task.mode);
@@ -858,7 +968,8 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
 
     // Count at the prompt boundary, not at spawn: a task that fails to start
     // sends no prompt, and a task cancelled before this line sends none either.
-    if (cancelled()) return {};
+    // The session exists by now, so the record keeps its id even here.
+    if (cancelled()) return { sessionId };
     ctx.onTurn();
     // The preamble rides the one prompt this task gets. There is no second
     // one to ask again with (M0-4, `protocol/agent.ts:446`), which is exactly
@@ -868,7 +979,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     );
 
     const result = extractResult(prose);
-    const outcome: TaskOutcome = { stopReason };
+    const outcome: TaskOutcome = { stopReason, sessionId };
     if (usage !== undefined) {
       outcome.usage = usage;
       outcome.usageSemantics = usageSemanticsFor(spec);
@@ -887,6 +998,14 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     });
     if (warnings.length) outcome.warnings = warnings;
     return outcome;
+  } catch (err) {
+    // The turn ended badly, but the session it ran in did exist. A narrow
+    // property on the thrown error is the one channel to `runOne`'s record
+    // (M2-6, #36); nothing else sets or reads it.
+    if (sessionId !== undefined && err !== null && typeof err === "object") {
+      (err as { sessionId?: string }).sessionId ??= sessionId;
+    }
+    throw err;
   } finally {
     if (cancelGrace) clearTimeout(cancelGrace);
     ctx.signal.removeEventListener("abort", onAbort);

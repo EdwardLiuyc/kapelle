@@ -9,7 +9,10 @@
  */
 
 import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
+import { gitRepo, tempDir } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { AGENTS, resolveAgent, warningsFor } from "../../protocol/registry.ts";
 import type {
@@ -720,4 +723,144 @@ test("an operator cancel outranks a TTL that fires in the same window", async ()
     exec,
   );
   assert.equal(report.tasks[0]?.status, "cancelled");
+});
+
+// --- the run record (M2-6, #36) ---------------------------------------------
+
+/** What `.kapelle/runs/<id>/run.json` says right now. */
+async function recordIn(root: string, runId: string) {
+  const path = join(root, ".kapelle", "runs", runId, "run.json");
+  return JSON.parse(await readFile(path, "utf8"));
+}
+
+const RECORD_RUN = "20260916-120000-abcd";
+
+test("the record names a running task and a queued one, before the run ends", async (t) => {
+  const root = await gitRepo(t);
+  // One at a time, so the second task is still queued while the first runs.
+  const run = validateRun({
+    maxConcurrency: 1,
+    tasks: [
+      { id: "a", prompt: "x", agent: "opencode" },
+      { id: "b", prompt: "x", agent: "opencode" },
+    ],
+  });
+
+  let midRun:
+    | { status: string; tasks: { id: string; status: string }[] }
+    | undefined;
+  const exec: TaskExecutor = async (task) => {
+    if (task.id === "a") midRun = await recordIn(root, RECORD_RUN);
+    return { stopReason: "end_turn" };
+  };
+  const report = await runRun(
+    run,
+    { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+    exec,
+  );
+
+  // The whole point: a `kill -9` here leaves this on disk for M2-5 to read.
+  // Before M2-6 the file did not exist until the run was over.
+  assert.ok(midRun, "no record on disk while the first task was running");
+  assert.equal(midRun.status, "running");
+  assert.deepEqual(
+    midRun.tasks.map((task) => [task.id, task.status]),
+    [
+      ["a", "running"],
+      ["b", "queued"],
+    ],
+  );
+
+  const ended = await recordIn(root, RECORD_RUN);
+  assert.equal(ended.status, report.status);
+  assert.equal(typeof ended.startedAt, "string");
+  assert.equal(typeof ended.endedAt, "string");
+  assert.equal(ended.cwd, root);
+  assert.deepEqual(
+    ended.tasks.map((task: { status: string }) => task.status),
+    ["done", "done"],
+  );
+});
+
+test("the record carries the session id the executor reported", async (t) => {
+  const root = await gitRepo(t);
+  const exec: TaskExecutor = async () => ({
+    stopReason: "end_turn",
+    sessionId: "sess-42",
+  });
+  await runRun(
+    runOf(1, 1),
+    { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+    exec,
+  );
+
+  // One field, so the backlog's `session/load` needs no migration (#36).
+  assert.equal(
+    (await recordIn(root, RECORD_RUN)).tasks[0].sessionId,
+    "sess-42",
+  );
+});
+
+/** Answers the handshake, then dies on the prompt: a session existed and the
+ *  task did not return from it. */
+const DIE_ON_PROMPT_HARNESS = `
+import { createInterface } from "node:readline";
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  if (!line.trim()) return;
+  const m = JSON.parse(line);
+  if (m.method === "initialize")
+    return send({ jsonrpc: "2.0", id: m.id, result: {
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: false },
+      agentInfo: { name: "die-on-prompt", version: "1" },
+      authMethods: [],
+    } });
+  if (m.method === "session/new")
+    return send({ jsonrpc: "2.0", id: m.id, result: { sessionId: "sess_die_1" } });
+  if (m.method === "session/prompt") process.exit(7);
+});
+`;
+
+test("the record keeps the session id when the harness dies mid-prompt", async (t) => {
+  const root = await gitRepo(t);
+  const harness = join(await tempDir(t), "die-on-prompt.mjs");
+  await writeFile(harness, DIE_ON_PROMPT_HARNESS);
+
+  // No injected executor: the real `runTask` spawns this fake harness, which
+  // answers `session/new` and then exits on the prompt. The session existed,
+  // so the record must carry its id even though the task settles failed
+  // (M2-6, #36). Against the pre-fix source this fails with `undefined`.
+  const run = validateRun({
+    cmd: `node ${harness}`,
+    tasks: [{ id: "dies", prompt: "x" }],
+  });
+  const report = await runRun(run, {
+    cwd: root,
+    runId: RECORD_RUN,
+    bus: createEventBus(),
+  });
+
+  assert.equal(report.tasks[0]?.status, "failed");
+  assert.equal(report.tasks[0]?.sessionId, "sess_die_1");
+  assert.equal(
+    (await recordIn(root, RECORD_RUN)).tasks[0].sessionId,
+    "sess_die_1",
+  );
+});
+
+test("a run with no worktrees still writes a record", async (t) => {
+  // Not a repository, so `openWorktrees` falls back to the shared cwd. The
+  // record used to be skipped here, and `kapelle merge` answered "no run
+  // record" where it can now name the task that has no branch.
+  const root = await tempDir(t);
+  const report = await runRun(
+    runOf(1, 1),
+    { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+    async () => ({ stopReason: "end_turn" }),
+  );
+
+  const record = await recordIn(root, RECORD_RUN);
+  assert.equal(record.status, report.status);
+  assert.deepEqual(record.tasks, [{ id: "t0", status: "done" }]);
 });

@@ -994,7 +994,9 @@ in-memory.** A task whose worktree is untouched at release — no diff, HEAD sti
 sha — has its checkout removed either way; the branch is removed only for a non-releasing
 status, the shape a failed spawn takes today, while a `done`/`warned` task with an empty
 diff leaves its branch at the base ref without an empty commit. A `kill -9` mid-spawn can
-still orphan one; that is M2-5, which needs a record written on state transitions (M2-6) — the `run.json` M1c-3's merge reads is written only after the run ends. **(3) Teardown
+still orphan one; that is M2-5. The record it reconciles against is written on every task
+transition as of M2-6 (#36); before that, `run.json` landed only after the run ended, so a
+`kill -9` left nothing to reconcile. **(3) Teardown
 covers the whole `TaskStatus` union now**, including `warned` (M1b-4) and `timed_out`
 (M1c-1), which have no producer — the reason M1b-2 gave for shipping the whole severity
 ordering early. `done` and `warned` release, matching the two statuses the CLI exits 0 for
@@ -1668,6 +1670,12 @@ reconciles each of them — which needs the repository list M2-6 persists.
 **Amended 2026-09-14 (M2-2, #32):** a task with `_client_task_started` and no
 `_client_task_finished` in `events.jsonl` was cut off, which the sweep can read. The log is
 uncompressed, so retention is its only disk bound; reaping a run removes its log with it.
+**Amended 2026-09-16 (M2-6, #36):** the two inputs now exist — `repos.json` names every
+repository to sweep, and each `run.json` carries run-level `startedAt`/`endedAt` (with the
+task statuses) for the retention window. **The record left saying `running` is this story's
+subject**: M2-6's boot scan deliberately restores terminal runs only, so a crashed one is
+invisible to the API until the sweep marks it, rather than being listed as live with
+nothing running it.
 
 **M2-6 · Persistence · S · needs M2-1**
 JSON per run under `.kapelle/runs/<id>/`, written on state transitions. For completed-run
@@ -1686,6 +1694,27 @@ a repository, so it lives in a user-level location rather than in any one `.kape
 **Amended 2026-09-14 (M2-2, #32):** replay after a restart comes from M2-2's file. The
 daemon keeps only a `seq → offset` index per run, so this story rebuilds it by reading
 `events.jsonl` once; no second replay path. The run JSON stays separate from the log.
+**Amended at pickup 2026-09-16 (#36).** Two decisions and one correction.
+**(1) The repository list lives in a state directory, not the runtime one** —
+`$XDG_STATE_HOME/kapelle/repos.json`, or `~/.local/state/kapelle` where that is unset.
+`runtimeDir()` resolves to `/run/user/<uid>` on Linux, a tmpfs cleared at logout, so a list
+kept beside `daemon.json` would survive a daemon restart and not a reboot; a list that is
+sometimes there is worse than one that never was.
+**(2) The daemon reads records back on boot**, so `GET /runs`, `GET /runs/:id` and
+`GET /runs/:id/events` all answer for runs from before the restart — M2-2's amendment
+already promised the SSE half, and M2-9's `kapelle attach <run-id>` needs the lookup. The
+scan follows the repository list rather than a second index, and M2-5 reuses it. **Terminal
+runs only**, per that story's amendment above.
+**(3) "Rebuild the index by reading `events.jsonl` once" understated the change.** The
+`seq → offset` index is `starts[]` inside a log `createEventLog` opens with `flags: "w"`,
+which truncates. Replay needs a **read-only** open, `openEventLog` (`core/eventlog.ts`), and
+it drops a trailing partial line the way the writer's "committed, not appended" rule does.
+The record itself is now written at every task transition — `queued`, `running`, then the
+verdict — atomically (temp file plus `rename`), and for **every** run with a log directory,
+including the shared-cwd fallback that has no branches: `core/merge.ts` already refuses a
+task with no branch by name, which beats "no run record. Run it first."
+`sessionId` rides the task entry, set once `session/new` answers — the success
+path, a cancel before the prompt, and a throw out of the harness.
 
 **M2-7 · Config · S · needs M2-1**
 `.kapelle/config.json`, `KAPELLE_*` env override, layered env > project. Home for the

@@ -5,12 +5,12 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
-import { createEventLog, type EventLog } from "../eventlog.ts";
+import { createEventLog, type EventLog, openEventLog } from "../eventlog.ts";
 
 async function logIn(t: TestContext): Promise<{ log: EventLog; path: string }> {
   const dir = await mkdtemp(join(tmpdir(), "kapelle-eventlog-"));
@@ -362,4 +362,45 @@ test("a line larger than one 64 KiB chunk survives a mid-read commit", async (t)
     lines.map((line) => JSON.parse(line).update.content.text),
     ["first", big, "after"],
   );
+});
+
+// --- replay after a restart (M2-6, #36) -------------------------------------
+
+test("a log on disk replays without a writer, and the file survives it", async (t) => {
+  const { log, path } = await logIn(t);
+  log.append(chunk("first"));
+  log.append(chunk("second"));
+  log.append(chunk("third"));
+  await log.close();
+  const onDisk = await readFile(path, "utf8");
+
+  const replay = await openEventLog(path);
+  assert.equal(replay.size, 3);
+  const { seqs, lines, done } = collect(replay, 1);
+  // No park at the end: a finished run's reader is caught up for good, so
+  // this resolves on its own rather than waiting for a close that never comes.
+  await done;
+  assert.deepEqual(seqs, [2, 3]);
+  assert.deepEqual(
+    lines.map((line) => JSON.parse(line).update.content.text),
+    ["second", "third"],
+  );
+
+  // The whole point of the read-only open: `createEventLog` uses `flags: "w"`,
+  // which would have emptied the file this just replayed.
+  assert.equal(await readFile(path, "utf8"), onDisk);
+});
+
+test("a half-written last line is not replayed, the way it was never committed", async (t) => {
+  const { log, path } = await logIn(t);
+  log.append(chunk("whole"));
+  await log.close();
+  // What a `kill -9` mid-write leaves behind.
+  await writeFile(path, `${await readFile(path, "utf8")}{"seq":2,"agen`);
+
+  const replay = await openEventLog(path);
+  assert.equal(replay.size, 1);
+  const { seqs, done } = collect(replay, 0);
+  await done;
+  assert.deepEqual(seqs, [1]);
 });

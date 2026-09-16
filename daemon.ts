@@ -31,6 +31,7 @@ import {
   linkSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -47,14 +48,19 @@ import {
 import type { AddressInfo } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
-import type { EventLog } from "./core/eventlog.ts";
+import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
 import { type RunReport, runRun, type TaskStatus } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
-import { runtimeDir } from "./core/runtime.ts";
-import { checkStateDir, openWorktrees, stateDirRoot } from "./core/worktree.ts";
+import { readRepos, runtimeDir, writeRepos } from "./core/runtime.ts";
+import {
+  checkStateDir,
+  openWorktrees,
+  STATE_DIR,
+  stateDirRoot,
+} from "./core/worktree.ts";
 import type { Warning } from "./protocol/registry.ts";
 
 // ponytail: a fixed default port; M2-7's config is its home.
@@ -197,6 +203,11 @@ function claim(file: string): number {
 
 const dir = orExit(runtimeDir);
 const file = join(dir, "daemon.json");
+// Read before the claim, and through `orExit` like every other startup
+// refusal: a state directory somebody else owns stops the daemon with one
+// line rather than a stack, and stops it before `daemon.json` exists, so a
+// start that refused leaves nothing behind for the next one to clear.
+const addedRepos = orExit(readRepos);
 const fd = orExit(() => claim(file));
 
 const token = randomBytes(32).toString("hex");
@@ -261,10 +272,13 @@ async function rootOf(dir: string): Promise<string> {
   }
 }
 
-/** Every repository root added. In memory until M2-6 persists it. */
-const repos = new Set<string>();
+/** Every repository root added, restored from `repos.json` (M2-6, #36).
+ *  Not re-checked here: a repository that has moved or whose `.kapelle/` has
+ *  since been committed is refused by `POST /runs`, which checks on use. */
+const repos = new Set<string>(addedRepos);
 
-/** One run as the API reports it. In memory only: M2-6 persists it. */
+/** One run as the API reports it. Live runs are built here; finished ones
+ *  are read back from their `run.json` at boot (M2-6, #36). */
 interface RunState {
   id: string;
   /** The folder the run was started in: a repository root or a folder in one. */
@@ -279,6 +293,20 @@ interface RunState {
   /** Every notice, containment lines included. #13 says those are never
    *  suppressed, and with no terminal this record is where they survive. */
   notices: { taskId: string; text: string; kind?: Warning["kind"] }[];
+  /** A run read back from disk after a restart, and the tasks its record
+   *  names. `report` belongs to the run that happened in *this* process, so a
+   *  restored run has the record's task list instead of a synthesised one. */
+  restored?: true;
+  tasks?: RecordTask[];
+}
+
+/** A task as `run.json` carries it — `core/run.ts` writes this shape. */
+interface RecordTask {
+  id: string;
+  status: string;
+  branch?: string;
+  baseSha?: string;
+  sessionId?: string;
 }
 
 const runs = new Map<string, RunState>();
@@ -291,6 +319,101 @@ const cancels = new Map<string, AbortController>();
  *  make. A `GET /events` that arrives first waits here rather than 404ing a
  *  run that exists. */
 const eventLogs = new Map<string, Promise<EventLog | undefined>>();
+/** `events.jsonl` on disk, by run id, for runs restored at boot. Held as a
+ *  path rather than an open log: opening one scans the whole file, and most
+ *  restored runs are never asked for. */
+const restoredLogs = new Map<string, string>();
+
+/**
+ * Read every added repository's finished runs back into memory (M2-6, #36).
+ *
+ * Run state lives in each repository's `.kapelle/runs/<id>/`, so the scan
+ * follows the repository list rather than a second index. Anything unreadable
+ * is skipped with a notice naming the path and the reason: a run whose
+ * record is missing, truncated by a crash or not ours is exactly what M2-5's
+ * sweep exists to reconcile, and a daemon that refused to boot over one
+ * could not be reached by the request that fixes it. A repository whose
+ * runs directory does not exist yet gets no notice — nothing was skipped.
+ *
+ * **Only terminal runs.** A record still saying `running` belongs to a
+ * process that is gone; calling it live here would list a run nothing is
+ * running and hand `DELETE` a canceller that does not exist. Marking those
+ * `errored` is #35's job, and this story gives it the record to do it with.
+ */
+function restoreRuns(): void {
+  for (const root of repos) {
+    const dir = join(root, STATE_DIR, "runs");
+    let ids: string[];
+    try {
+      ids = readdirSync(dir);
+    } catch (err) {
+      // ENOENT is a runs directory that is simply not there (the repository
+      // never ran, or the directory was removed): no records exist to skip,
+      // so it stays quiet. Anything else (permission, not-a-directory) is a
+      // real skip and gets the notice.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error(`skipping runs under ${dir}: ${messageOf(err)}`);
+      }
+      continue;
+    }
+    for (const id of ids) {
+      const logDir = join(dir, id);
+      const recordPath = join(logDir, "run.json");
+      let record: Record<string, unknown>;
+      try {
+        record = JSON.parse(readFileSync(recordPath, "utf8"));
+      } catch (err) {
+        console.error(`skipping ${recordPath}: ${messageOf(err)}`);
+        continue;
+      }
+      if (record?.runId !== id) {
+        console.error(`skipping ${recordPath}: runId is not ${id}`);
+        continue;
+      }
+      const status = record.status;
+      if (typeof status !== "string") {
+        console.error(`skipping ${recordPath}: no status in the record`);
+        continue;
+      }
+      // Expected after a crash, so no notice: the process that left a record
+      // still saying `running` is gone, and marking it is #35's job.
+      if (status === "running") continue;
+      const state: RunState = {
+        id,
+        cwd: typeof record.cwd === "string" ? record.cwd : root,
+        // The record is one we wrote, so its status is a `TaskStatus`. A
+        // hand-edited one reaches the API unaltered rather than failing a boot.
+        status: status as TaskStatus,
+        notices: [],
+        restored: true,
+      };
+      if (Array.isArray(record.tasks)) {
+        state.tasks = record.tasks as RecordTask[];
+      }
+      runs.set(id, state);
+      restoredLogs.set(id, join(logDir, "events.jsonl"));
+    }
+  }
+}
+
+// At import, before the port opens: a request must never meet a half-restored
+// list. ponytail: synchronous and O(runs ever kept) — one `readdir` plus one
+// small `readFile` per run, on the boot path only. Move it behind `listen` (or
+// read the newest N) if a repository with thousands of kept runs makes the
+// daemon slow to answer.
+restoreRuns();
+
+/** The log of a run that ended before this daemon started, opened on first
+ *  ask and cached with the live ones. */
+function restoredLog(id: string): Promise<EventLog | undefined> | undefined {
+  const path = restoredLogs.get(id);
+  if (path === undefined) return undefined;
+  // A log that cannot be opened — never written, or removed since — settles
+  // as `undefined`, which `getEvents` already answers as a 404.
+  const opened = openEventLog(path).catch(() => undefined);
+  eventLogs.set(id, opened);
+  return opened;
+}
 
 /**
  * Every live harness, by pid (M2-4, #34), mirrored to `children.json` beside
@@ -343,6 +466,12 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
   // Checked once here, so a repository whose `.kapelle/` would be committed
   // never gets as far as a run.
   const root = await rootOf(existingDir(body.path, "path"));
+  // Persisted before the 200 and before the in-memory add: a caller told its
+  // repository was added must not find it gone after a restart, and a failed
+  // write must not leave memory ahead of disk. Hence the copy — it is what
+  // lets the write happen first, and it dedups a repository added twice.
+  const next = new Set(repos).add(root);
+  writeRepos([...next]);
   repos.add(root);
   send(res, 200, { root });
 }
@@ -471,7 +600,7 @@ async function getEvents(
   const gone = new AbortController();
   res.on("close", () => gone.abort());
 
-  const pending = eventLogs.get(id);
+  const pending = eventLogs.get(id) ?? restoredLog(id);
   if (!pending) throw refusal(404, `no run ${id}`);
   const log = await pending;
   if (!log) throw refusal(404, `run ${id} has no event log`);

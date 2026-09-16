@@ -352,3 +352,25 @@ test("a missing run record is a clear error", async (t) => {
   const root = await repo(t);
   await assert.rejects(mergeRun(RUN_ID, root), /no run record/);
 });
+
+test("merge refuses a run that is still going, naming the task (M2-6)", async (t) => {
+  const root = await repo(t);
+  let refusal: string | undefined;
+  await runRun(
+    runOf(["a"]),
+    { cwd: root, runId: RUN_ID, bus: createEventBus() },
+    async (_task, ctx) => {
+      // Mid-task, so the record on disk says `running`. Before M2-6 no record
+      // existed until the run was over, and merge said "Run it first" — which
+      // reads as "you never ran it", not "it is running now".
+      refusal = await mergeRun(RUN_ID, root).then(
+        () => undefined,
+        (err: Error) => err.message,
+      );
+      await writeFile(join(ctx.cwd, "a.txt"), "work\n");
+      return { stopReason: "end_turn" };
+    },
+  );
+
+  assert.match(String(refusal), /unfinished task: a \(running\)/);
+});
