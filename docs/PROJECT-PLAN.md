@@ -27,7 +27,7 @@ policy across all of them and returning machine-readable results.
 | Process shape | Daemon — **one per operator, serving every added repository** (amended 2026-09-11, M2-1) — with `core/` that has no knowledge of HTTP or of a TTY. |
 | UI | **M4**, after the daemon. Read views plus permission answering. Designed to grow into a run-dispatch front end, so the daemon API must be complete — not observability-only. |
 | Result contract | A `<task-result>` block in the final message. `git status` cross-checks it; disagreement raises a task **warning**, never a failure. MCP `report_result` deferred. |
-| Worktrees | Supervisor owns fully — creates off a base ref, removes on success, **keeps worktree and branch on failure/timeout when the task left work, and rolls back a failed task that produced nothing**, reaps orphans only when the run is terminal and past the retention window. |
+| Worktrees | Supervisor owns fully — creates off a base ref, removes on success, **keeps worktree and branch on failure/timeout when the task left work, and rolls back a failed task that produced nothing**. A run-owned worktree is reaped only when its run is terminal and past the retention window. A worktree with no readable record is reconciled at boot: clean and still on a branch loses its checkout but keeps the branch; dirty or detached HEAD is kept. |
 | Merge-back | Explicit `kapelle merge <runId>`; never automatic. `--squash` (default) lands changes **unstaged**; `--rebase` preserves per-stage commits. Aborts wholesale on overlap. |
 | Liveness | Per-task **stall → warn** (idle, or the same tool repeating) and **TTL → `session/cancel`**. Each disabled by setting `0`. **Measured (M0-4): cancellation works and is fast — every harness ended its turn within 64 ms and stopped emitting, and the session stayed usable, so the TTL rung needs a 2 s grace and no kill. But the stop reason cannot classify the outcome: copilot reports `end_turn` for a turn it cancelled, so the supervisor's own record of *did I cancel* is the authoritative half.** |
 | Crash recovery | Startup sweep plus transactional spawn. A partially-created task leaves nothing behind. |
@@ -446,9 +446,9 @@ driven from a run file, fully verifiable offline.
   shutdown, SIGTERM handling. A daemon crash must not leak harness subprocesses holding
   write access.
 - **Crash-recovery sweep at startup** — the fuller version of "run `git worktree prune`".
-  On boot: mark tasks left in `running` as `errored`, kill or reap any registered child PIDs
+  On boot: mark tasks left in `running` as `failed`, kill or reap any registered child PIDs
   that survived, reconcile `git worktree list` against persisted run records, and reap only
-  those worktrees whose run is terminal *and* past the retention window (default 7 days).
+  those worktrees whose run is terminal *and* past the retention window (default 30 days).
 - **Persistence** — JSON per run under `.kapelle/runs/<id>/`, written on state
   transitions. For completed-run history, not live recovery.
   **The stated reason was wrong and M0-1 corrected it:** "ACP has no resume" is true of
@@ -557,7 +557,7 @@ record* — a worktree whose run record exists is kept on purpose, and reaping i
 **M2** — start the daemon, `POST /runs` in `ask` mode with **no client attached**, confirm
 the mutation is denied at timeout and the run completes rather than hanging. Attach
 `curl -N` to the SSE endpoint mid-run and confirm replay-from-cursor delivers the history.
-`kill -9` the daemon, restart, and confirm the sweep marks the task errored, reaps no
+`kill -9` the daemon, restart, and confirm the sweep marks the task failed, reaps no
 worktree still within retention, and leaves no harness subprocess alive.
 
 **M3** — a three-stage pipeline (opencode plans `safe` → claude-agent-acp implements

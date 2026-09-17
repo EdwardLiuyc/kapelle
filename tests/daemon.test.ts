@@ -26,7 +26,8 @@ import {
 import { userInfo } from "node:os";
 import { join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
-
+import { processIdentity } from "../core/sweep.ts";
+import { openWorktrees } from "../core/worktree.ts";
 import {
   type CliResult,
   gitRepo,
@@ -159,6 +160,44 @@ async function settled(d: Daemon, id: string): Promise<Reply> {
   throw new Error(`run ${id} never settled`);
 }
 
+/** Does the repository have this exact local branch? */
+function hasBranch(root: string, branch: string): boolean {
+  return (
+    spawnSync("git", ["rev-parse", "--verify", `refs/heads/${branch}`], {
+      cwd: root,
+    }).status === 0
+  );
+}
+
+/** A finished run written straight to disk with a real checkout and branch:
+ *  the shape M2-5's boot sweep reaps, without going through `POST /runs`. */
+async function directFinishedRun(
+  root: string,
+  id: string,
+  endedAt: string,
+): Promise<{ dir: string; worktree: string; branch: string }> {
+  const { worktrees } = await openWorktrees(root, id);
+  assert.ok(worktrees, "the fixture repository should carry worktrees");
+  const worktree = await worktrees.acquire("a");
+  const branch = `kapelle/${id}/a`;
+  const dir = join(root, ".kapelle", "runs", id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, "run.json"),
+    JSON.stringify({
+      runId: id,
+      root,
+      cwd: root,
+      status: "failed",
+      startedAt: endedAt,
+      endedAt,
+      tasks: [{ id: "a", status: "failed", branch }],
+    }),
+  );
+  await writeFile(join(dir, "events.jsonl"), "{}\n");
+  return { dir, worktree, branch };
+}
+
 // --- the token and daemon.json --------------------------------------------------
 
 test("a request without the right token is refused, and changes nothing", async (t) => {
@@ -270,6 +309,16 @@ for (const stale of ["null", "[]", "42"]) {
 }
 
 // --- lifecycle (M2-4) --------------------------------------------------------------
+
+/** Is `pid` a live process right now? */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** True once `pid` is gone, false if it is still alive after 10s. */
 async function gone(pid: number): Promise<boolean> {
@@ -1350,8 +1399,8 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     join(runs, "foreign", "run.json"),
     JSON.stringify({ runId: "not-this-one", status: "done", tasks: [] }),
   );
-  // A record still saying `running` is a crash #35's sweep owns: deliberately
-  // not restored, and silent because it is the expected post-crash state.
+  // A record still saying `running` is a crash: M2-5's sweep rewrites it to
+  // `failed` before this daemon restores, so it is served, not skipped.
   await mkdir(join(runs, "live"));
   await writeFile(
     join(runs, "live", "run.json"),
@@ -1369,9 +1418,12 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   const second = await boot(t, runtime);
   const list = await api<Reply[]>(second, "GET", "/runs");
   assert.equal(list.status, 200);
-  assert.deepEqual(list.body, []);
-  // Terminal runs only: the `running` record is not served, not even by id.
-  assert.equal((await api(second, "GET", "/runs/live")).status, 404);
+  // `live` was left `running` and the sweep rewrote it terminal: the one run
+  // served is the crashed one, and it reads `failed`.
+  assert.deepEqual(list.body, [{ id: "live", cwd: root, status: "failed" }]);
+  const live = await api(second, "GET", "/runs/live");
+  assert.equal(live.status, 200);
+  assert.equal(live.body.status, "failed");
 
   process.kill(second.pid, "SIGTERM");
   const out = await second.done;
@@ -1383,13 +1435,260 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   assert.equal(
     out.stderr.includes(join(runs, "live")),
     false,
-    "a `running` record is skipped silently, not noticed",
+    "rewriting a crashed record is silent, not a notice",
   );
   assert.equal(
     out.stderr.includes(`skipping runs under ${quiet}`),
     false,
     "a repository that never ran has no records to skip",
   );
+});
+
+test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keeps its worktree", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  const posted = await api(first, "POST", "/runs", {
+    cwd: root,
+    run: mockRun(
+      [
+        {
+          id: "stuck",
+          prompt: "hi",
+          cmd: `node ${MOCK_AGENT} --scenario stall`,
+        },
+        { id: "waiting", prompt: "hi" },
+      ],
+      { maxConcurrency: 1 },
+    ),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  const { id } = posted.body;
+
+  // The harness is live once children.json names it with its recorded start
+  // time, and the first task's record already reads `running`, so the kill
+  // lands mid-turn with `waiting` still queued behind it.
+  const childrenFile = join(runtime, "kapelle", "children.json");
+  const recordPath = join(root, ".kapelle", "runs", id, "run.json");
+  let harness = 0;
+  let recordedStartedAt = "";
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    const children = await readFile(childrenFile, "utf8").catch(() => null);
+    const record = await readFile(recordPath, "utf8").catch(() => null);
+    if (children && record) {
+      const [child] = JSON.parse(children).children;
+      const tasks = JSON.parse(record).tasks;
+      if (
+        child?.taskId === "stuck" &&
+        typeof child.startedAt === "string" &&
+        tasks?.[0]?.status === "running"
+      ) {
+        harness = child.pid;
+        recordedStartedAt = child.startedAt;
+        break;
+      }
+    }
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.ok(
+    harness > 0,
+    "children.json never named the harness with its identity",
+  );
+  t.after(() => {
+    try {
+      process.kill(harness, "SIGKILL");
+    } catch {
+      // Already gone: nothing left to kill.
+    }
+  });
+  // Pins the daemon-side identity write: the kill test would still pass if
+  // `daemon.ts` never recorded `startedAt`, since the harness dies on EOF.
+  assert.equal(await processIdentity(harness), recordedStartedAt);
+
+  const worktree = join(root, ".kapelle", "wt", id, "stuck");
+  assert.equal(existsSync(worktree), true, "the run should own a worktree");
+
+  process.kill(first.pid, "SIGKILL");
+  await first.done;
+
+  // Same runtime and state, a new process: everything below is the sweep's.
+  const second = await boot(t, runtime, [], state);
+  const restored = await api(second, "GET", `/runs/${id}`);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.status, "failed");
+  assert.deepEqual(
+    restored.body.tasks?.map((task) => [task.id, task.status]),
+    [
+      ["stuck", "failed"],
+      ["waiting", "queued"],
+    ],
+  );
+  const record = JSON.parse(
+    await readFile(join(root, ".kapelle", "runs", id, "run.json"), "utf8"),
+  );
+  assert.equal(typeof record.endedAt, "string");
+  assert.equal(existsSync(worktree), true, "a worktree inside retention stays");
+  assert.equal(await gone(harness), true, "the harness outlived the restart");
+  assert.equal(existsSync(childrenFile), false);
+
+  process.kill(second.pid, "SIGTERM");
+  assert.equal((await second.done).code, 0);
+});
+
+test("kill -9 with a harness that ignores stdin and SIGTERM: the next boot kills it", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  const posted = await api(first, "POST", "/runs", {
+    cwd: root,
+    run: mockRun([
+      {
+        id: "stuck",
+        prompt: "hi",
+        cmd: `node ${MOCK_AGENT} --scenario stubborn`,
+      },
+    ]),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  const { id } = posted.body;
+
+  const childrenFile = join(runtime, "kapelle", "children.json");
+  let harness = 0;
+  t.after(() => {
+    if (harness <= 0) return;
+    try {
+      process.kill(harness, "SIGKILL");
+    } catch {
+      // Already gone: nothing left to kill.
+    }
+  });
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    const record = await readFile(childrenFile, "utf8").catch(() => null);
+    if (record) {
+      const [child] = JSON.parse(record).children;
+      if (child?.taskId === "stuck" && typeof child.startedAt === "string") {
+        harness = child.pid;
+        break;
+      }
+    }
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.ok(harness > 0, "children.json never named the stubborn harness");
+  assert.equal(alive(harness), true, "the harness should be alive");
+
+  process.kill(first.pid, "SIGKILL");
+  await first.done;
+  // SIGKILL closes the daemon's end of the harness pipes. `stubborn` has a
+  // live timer, so EOF alone must not end it.
+  await new Promise((ok) => setTimeout(ok, 300));
+  const harnessStderr = async (): Promise<string> =>
+    (await readFile(
+      join(root, ".kapelle", "runs", id, "stuck.stderr.log"),
+      "utf8",
+    ).catch(() => "")) || "(no stderr)";
+  assert.equal(
+    alive(harness),
+    true,
+    `stdin EOF alone must not end it; harness stderr: ${await harnessStderr()}`,
+  );
+
+  const second = await boot(t, runtime, [], state);
+  assert.equal(
+    await gone(harness),
+    true,
+    `the next boot must kill it; harness stderr: ${await harnessStderr()}`,
+  );
+  assert.equal(existsSync(childrenFile), false);
+  const restored = await api(second, "GET", `/runs/${id}`);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.status, "failed");
+
+  process.kill(second.pid, "SIGTERM");
+  const out = await second.done;
+  assert.equal(out.code, 0);
+  assert.match(out.stderr, new RegExp(`killed harness pid ${harness}`));
+});
+
+test("a boot reaps expired runs in every added repository and serves the in-window one", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const rootA = await realpath(await added(first, await gitRepo(t)));
+  const rootB = await realpath(await added(first, await gitRepo(t)));
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const OLD = "20260801-000000-olda";
+  const OLD2 = "20260801-000001-oldb";
+  const RECENT = "20260915-000000-recn";
+  const since = Date.now();
+  const expired = new Date(since - 40 * 24 * 60 * 60 * 1000).toISOString();
+  const inWindow = new Date(since - 60_000).toISOString();
+  const old = await directFinishedRun(rootA, OLD, expired);
+  const recent = await directFinishedRun(rootA, RECENT, inWindow);
+  const old2 = await directFinishedRun(rootB, OLD2, expired);
+
+  const second = await boot(t, runtime, [], state);
+
+  assert.equal(existsSync(old.worktree), false);
+  assert.equal(existsSync(old.dir), false);
+  assert.equal(hasBranch(rootA, old.branch), false);
+  assert.equal(existsSync(old2.worktree), false);
+  assert.equal(existsSync(old2.dir), false);
+  assert.equal(hasBranch(rootB, old2.branch), false);
+  assert.equal(existsSync(recent.worktree), true);
+  assert.equal(existsSync(recent.dir), true);
+  assert.equal(hasBranch(rootA, recent.branch), true);
+
+  const list = await api<Reply[]>(second, "GET", "/runs");
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.body.map((run) => run.id).sort(), [RECENT]);
+  assert.equal((await api(second, "GET", `/runs/${OLD}`)).status, 404);
+  const served = await api(second, "GET", `/runs/${RECENT}`);
+  assert.equal(served.status, 200);
+  assert.equal(served.body.status, "failed");
+
+  process.kill(second.pid, "SIGTERM");
+  const out = await second.done;
+  assert.equal(out.code, 0);
+  assert.ok(out.stderr.includes(`reaped run ${OLD}`));
+  assert.ok(out.stderr.includes(`reaped run ${OLD2}`));
+  assert.equal(out.stderr.includes(`reaped run ${RECENT}`), false);
+});
+
+test("boot reconciles record-less worktrees: clean removed, dirty kept and noticed", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const CLEAN = "20260915-000000-clna";
+  const DIRTY = "20260915-000001-drtb";
+  const { worktrees: cleanWt } = await openWorktrees(root, CLEAN);
+  assert.ok(cleanWt, "the fixture repository should carry worktrees");
+  const cleanPath = await cleanWt.acquire("a");
+  const { worktrees: dirtyWt } = await openWorktrees(root, DIRTY);
+  assert.ok(dirtyWt, "the fixture repository should carry worktrees");
+  const dirtyPath = await dirtyWt.acquire("a");
+  await writeFile(join(dirtyPath, "partial.txt"), "work\n");
+
+  const second = await boot(t, runtime, [], state);
+
+  assert.equal(existsSync(cleanPath), false, "the clean orphan is removed");
+  assert.equal(hasBranch(root, `kapelle/${CLEAN}/a`), true);
+  assert.equal(existsSync(dirtyPath), true, "the dirty orphan is kept");
+  assert.equal(existsSync(join(dirtyPath, "partial.txt")), true);
+  assert.deepEqual((await api(second, "GET", "/runs")).body, []);
+
+  process.kill(second.pid, "SIGTERM");
+  const out = await second.done;
+  assert.equal(out.code, 0);
+  assert.match(out.stderr, /removed orphan worktree/);
+  assert.match(out.stderr, /uncommitted changes/);
 });
 
 test("a relative XDG_RUNTIME_DIR falls back to the temp dir, never the cwd", async (t) => {

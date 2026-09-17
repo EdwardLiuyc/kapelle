@@ -1676,6 +1676,46 @@ task statuses) for the retention window. **The record left saying `running` is t
 subject**: M2-6's boot scan deliberately restores terminal runs only, so a crashed one is
 invisible to the API until the sweep marks it, rather than being listed as live with
 nothing running it.
+**Amended at pickup 2026-09-16 (#35).** Five decisions, in `core/sweep.ts`. (1) **`errored`
+reads `failed`** — `TaskStatus` (`core/run.ts:72`) has no such rung; a task caught
+`running` becomes `failed`, tasks still `queued` stay `queued`, and the record is rewritten
+with `endedAt` = recovery time, which is what makes M2-6's boot scan restore it. (2)
+**Retention is 30 days**, `DEFAULT_RETENTION_MS` in `core/sweep.ts` (the plan's 7 was
+raised by the developer at implementation time); the constant stays until M2-7 carries the
+knob. Reaping takes the whole footprint — worktree, branches, and the run directory
+including `events.jsonl` and the stderr logs — and runs worktree-first: a checkout that
+cannot be removed keeps its record for the next sweep. (3) **A worktree with no readable
+record** loses a clean checkout but keeps its branch; a dirty one is kept and named in a
+boot notice, and an unreadable record counts as absent. (4) **Surviving pids are
+identity-checked**: `children.json` carries the `ps` start time recorded at spawn, and only
+a still-matching pid is signalled (SIGTERM, then SIGKILL). (5) **Boot-only, in `core/`**,
+awaited after the instance claim and before `restoreRuns`/`listen`; a per-repository
+failure is a notice, never a refused boot.
+
+**Amended by review 2026-09-17 (#35).** Six of the sweep's answers were wrong on the edge
+that produced the debris in the first place. (1) **An orphan on a detached HEAD is kept**,
+clean tree or not: `release` refuses the same shape for the same measured reason (#85), and
+`kill -9` is exactly when an agent is most likely to have been interrupted after a
+`git checkout <sha>`, where removing the checkout takes the reflog and the commits with it.
+So decision (3) above now reads: clean **and still on a branch** loses the checkout, and
+dirty **or detached** is kept and named. (2) **A pid that cannot be identified is named in
+a notice** before `children.json` is deleted — it is still not signalled, because killing
+blind is the worse failure, but the file was the last record of it and the skip was silent.
+(3) **`processIdentity` is asynchronous**: `daemon.ts` records it from the
+`_client_harness_spawned` listener, and a synchronous `ps` there blocked the event loop —
+every run's SSE writes and permission answers — on each harness spawn; the field is filled
+in once `ps` answers, since only the next boot reads it. (4) **The record temp file carries
+the writer's pid** in both `core/sweep.ts` and `core/run.ts`: a `cli.ts --file` run in an
+added repository writes the same `run.json`, and one shared `run.json.tmp` is how two
+processes tear an atomic write. (5) **`git worktree list` failing is not an empty list** —
+it now returns `null` and the repository's reap and orphan passes are skipped until the
+next boot, rather than deleting checkouts behind git's back. (6) **Retention falls back to
+`startedAt`** when a terminal record has no readable `endedAt`, which was otherwise
+immortal — never past the window, and never an orphan either. Plus two smaller ones:
+`markCrashed` isolates a failed record write, so one unwritable `run.json` no longer takes
+its whole repository's sweep down on this and every later boot, and `daemon.ts` installs a
+claim-file handler for the span of the sweep, which runs before the real signal handlers
+exist. Retention is **30 days** in `docs/PROJECT-PLAN.md` too, which still said 7.
 
 **M2-6 · Persistence · S · needs M2-1**
 JSON per run under `.kapelle/runs/<id>/`, written on state transitions. For completed-run

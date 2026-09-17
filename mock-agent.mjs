@@ -28,6 +28,8 @@ const SCENARIOS = {
   "unasked-write": "writes a file itself, without asking permission",
   "files-unclaimed": "asks, writes two files, then lists only one of them",
   stall: "writes one file, then emits nothing and never returns",
+  stubborn:
+    "like stall, but ignores SIGTERM and stays alive after its stdin closes",
   repeat: "the same tool title on a loop, then ends the turn itself",
   remember: "answers each turn with the previous turn's prompt, per session",
 };
@@ -50,8 +52,24 @@ if (scenario !== null && !Object.hasOwn(SCENARIOS, scenario)) {
 // (`core/worktree.ts:382`); writing at startup means the work is already on disk
 // if the TTL fires during spawn/handshake/startup, before the prompt would
 // otherwise arrive.
-if (scenario === "stall") {
+if (scenario === "stall" || scenario === "stubborn") {
   writeFileSync("stalled.txt", "written just before going quiet\n");
+}
+
+// M2-5's crash-recovery test: a harness the daemon's graceful stop cannot end.
+// `stall` leaves the event loop with nothing to do once the client closes its
+// stdin; this fixture must not, and it must shrug off the sweep's SIGTERM so
+// the escalation to SIGKILL is what actually kills it.
+if (scenario === "stubborn") {
+  // A surviving harness can meet three things a dying supervisor leaves: the
+  // signals its shutdown path would send, a stdout/stderr reader that is gone,
+  // and nothing else. Ignore the first two so only SIGKILL can end it.
+  for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) {
+    process.on(signal, () => {});
+  }
+  process.stdout.on("error", () => {});
+  process.stderr.on("error", () => {});
+  setInterval(() => {}, 1 << 30);
 }
 
 const result = (status, summary, details, files) =>
@@ -235,7 +253,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // M1c-2's stall fixture never answers this prompt. The file was already
     // written at startup, so a TTL that fires before the prompt arrives still
     // leaves the branch/worktree intact to inspect.
-    if (scenario === "stall") {
+    if (scenario === "stall" || scenario === "stubborn") {
       stalledPromptId = msg.id;
       return;
     }
