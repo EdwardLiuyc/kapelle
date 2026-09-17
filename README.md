@@ -56,7 +56,7 @@ Without `npm link`, every `kapelle` below reads `node cli.ts` from the repo root
 | `protocol/` | Everything wire-level: hand-written types for every message we touch (`types.ts`), the client itself (`agent.ts` — JSON-RPC over stdio, handshake, `fs/*`, permissions), and the adapter layer (`registry.ts` — how to launch each harness, and what we measured when we ran it). |
 | `core/` | Supervisor-side orchestration and pure logic: policy (`policy.ts`), event bus (`events.ts`), run-file validation (`runfile.ts`), the run engine (`run.ts`), worktrees (`worktree.ts`), merge (`merge.ts`), result parsing/cross-check (`result.ts`), the stall detector (`watchdog.ts`), the attention signal (`notify.ts`), run and task ids (`ids.ts`), and the one file that knows a markdown library exists (`markdown.ts`). `core/` may import `protocol/`, never the reverse. |
 | root scripts | The entry points and terminal glue: `cli.ts` (the CLI, and the `kapelle` `bin`: one prompt, N tasks from a run file via `--file`, or `merge <runId>`), `daemon.ts` (one HTTP daemon for all your repositories, on `127.0.0.1`: add a repository with `POST /repos`, then `POST`/`GET`/`DELETE /runs` plus `GET /permissions` and `POST /permissions/:id` for pending `ask` decisions, behind the bearer token in `$XDG_RUNTIME_DIR/kapelle/daemon.json`; the repository list survives a restart in `$XDG_STATE_HOME/kapelle/repos.json`), `render.ts` (terminal output for `session/update` events), and the offline fake agents `mock-agent.mjs` (compliant) and `hostile-agent.mjs` (adversarial). |
-| `docs/` | Plans, stories and what was measured about each harness. |
+| `docs/` | Plans, stories and what was measured about each harness; `CONFIG.md` is the knobs reference. |
 | `assets/`, config files | Logo, tool configs (`biome.json`, `tsconfig.json`, `knip.jsonc`, `.markdownlint.json`), `package.json`. |
 
 Test suites (`*.test.ts`) live in a `tests/` folder beside their sources — `core/tests/`, `protocol/tests/`, and `tests/` at the root; `npm run test` runs them all.
@@ -91,5 +91,18 @@ kapelle --file tasks.json
 
 Task ids are validated and never sanitised: they name the git branches a run
 leaves behind. See `schema/run.schema.json` for every field.
+
+## Configuration
+
+Two optional JSON files plus `KAPELLE_*` environment overrides set the knobs
+that do not belong in a run file. The user-level
+`$XDG_CONFIG_HOME/kapelle/config.json` (`~/.config/kapelle/config.json` by
+default) holds the daemon-wide `port` and `permissionTimeoutMs`; a repository's
+`.kapelle/config.json` holds the per-run watchdog thresholds, TTL,
+`maxConcurrency` default and retention window. Unknown keys and wrong types are
+refused by file and key; unknown `KAPELLE_*` names warn and are ignored.
+
+Every knob, its range, its precedence and every failure mode:
+[`docs/CONFIG.md`](docs/CONFIG.md).
 
 ## 1. Verify the client works (no harness needed)

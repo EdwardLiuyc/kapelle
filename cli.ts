@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { resolveRunDefaults, warnUnknownConfigEnv } from "./core/config.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
 import { mergeRun } from "./core/merge.ts";
@@ -16,6 +17,7 @@ import { withResultPreamble } from "./core/result.ts";
 import { runRun, type TaskRun } from "./core/run.ts";
 import { type Task, validateRun } from "./core/runfile.ts";
 import { runtimeDir } from "./core/runtime.ts";
+import { stateDirRoot } from "./core/worktree.ts";
 import { AcpAgent } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
 import {
@@ -322,7 +324,17 @@ async function runFromFile(path: string): Promise<number> {
     return 1;
   }
 
-  const validated = orExit(() => validateRun(parsed));
+  // M2-7: the project config of the folder the run starts in supplies the
+  // defaults the run file omits; `orExit` refuses a bad config by file:key.
+  const cwd = flag("cwd", process.cwd());
+  // Advisory, so `--quiet` drops it (#13): only the containment notice and the
+  // not-negotiated line survive. It fires for every legitimate `KAPELLE_*`
+  // secret too, so a quiet run would carry it on every invocation.
+  if (!quiet) warnUnknownConfigEnv();
+  const { root } = await stateDirRoot(cwd);
+  const defaults = orExit(() => resolveRunDefaults(root));
+
+  const validated = orExit(() => validateRun(parsed, AGENTS, defaults));
 
   // **One asker can still be answered; two cannot.** `makeAskPolicy` owns a
   // single readline over one stdin, so two tasks prompting at once would
@@ -428,7 +440,7 @@ async function runFromFile(path: string): Promise<number> {
     report = await runRun(
       { ...validated, tasks },
       {
-        cwd: flag("cwd", process.cwd()),
+        cwd,
         // Minted here rather than left to `runRun`'s default because it is
         // printed: it names every branch the run leaves behind, and
         // `kapelle merge <runId>` is how they are found again.

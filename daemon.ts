@@ -48,6 +48,13 @@ import {
 import type { AddressInfo } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
+import {
+  readEnvConfig,
+  readProjectConfig,
+  readUserConfig,
+  resolveRunDefaults,
+  warnUnknownConfigEnv,
+} from "./core/config.ts";
 import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
@@ -62,9 +69,14 @@ import {
   STATE_DIR,
   stateDirRoot,
 } from "./core/worktree.ts";
-import type { Warning } from "./protocol/registry.ts";
+import { AGENTS, type Warning } from "./protocol/registry.ts";
 
-// ponytail: a fixed default port; M2-7's config is its home.
+// M2-7: the user-level config is read once here, after the startup helpers
+// below and before the port is claimed. `KAPELLE_*` is also read here for the
+// daemon-wide knobs, then re-read for every run-default resolution and per
+// repository by the boot sweep. Unknown `KAPELLE_*` names warn and are
+// ignored (they may be secrets); a known name with a bad value refuses the
+// start like any flag.
 const DEFAULT_PORT = 4719;
 
 const messageOf = (err: unknown) =>
@@ -80,7 +92,10 @@ function orExit<T>(f: () => T): T {
   }
 }
 
-// ponytail: a daemon-wide flag; M2-7's user-level config is its home too.
+const userConfig = orExit(() => readUserConfig());
+warnUnknownConfigEnv();
+const configEnv = orExit(() => readEnvConfig());
+
 const DEFAULT_PERMISSION_TIMEOUT_S = 120;
 
 const { port, permissionTimeoutMs } = orExit(() => {
@@ -90,15 +105,27 @@ const { port, permissionTimeoutMs } = orExit(() => {
       "permission-timeout": { type: "string" },
     },
   });
-  const n = values.port === undefined ? DEFAULT_PORT : Number(values.port);
+  const rawPort = values.port;
+  const n =
+    rawPort === undefined
+      ? (configEnv.port ?? userConfig.port ?? DEFAULT_PORT)
+      : Number(rawPort);
   if (!Number.isInteger(n) || n < 0 || n > 65535) {
-    throw new Error(
-      `--port must be a whole number 0-65535; got ${values.port}`,
-    );
+    throw new Error(`--port must be a whole number 0-65535; got ${rawPort}`);
   }
   const raw = values["permission-timeout"];
-  const seconds =
-    raw === undefined ? DEFAULT_PERMISSION_TIMEOUT_S : Number(raw);
+  // The config values were validated where they were read (M2-7); the flag
+  // is the one string path left.
+  if (raw === undefined) {
+    return {
+      port: n,
+      permissionTimeoutMs:
+        configEnv.permissionTimeoutMs ??
+        userConfig.permissionTimeoutMs ??
+        DEFAULT_PERMISSION_TIMEOUT_S * 1000,
+    };
+  }
+  const seconds = Number(raw);
   const permissionTimeoutMs = seconds * 1000;
   // No `0` meaning "wait forever": an unanswered decision must end (M2-3).
   // Node clamps a timer above 2^31-1 ms to 1 ms, so the ceiling is a refusal,
@@ -499,6 +526,13 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
   // Checked once here, so a repository whose `.kapelle/` would be committed
   // never gets as far as a run.
   const root = await rootOf(existingDir(body.path, "path"));
+  // M2-7: a config that does not load is refused at add time, naming the file
+  // and key, rather than at the repository's first run.
+  try {
+    readProjectConfig(root);
+  } catch (err) {
+    throw refusal(400, messageOf(err));
+  }
   // Persisted before the 200 and before the in-memory add: a caller told its
   // repository was added must not find it gone after a restart, and a failed
   // write must not leave memory ahead of disk. Hence the copy — it is what
@@ -537,7 +571,9 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
 
   let run: Run;
   try {
-    run = validateRun(body.run);
+    // M2-7: project config and `KAPELLE_*` supply the run-file defaults; a
+    // bad value is the same 400 as a bad run file.
+    run = validateRun(body.run, AGENTS, resolveRunDefaults(root));
   } catch (err) {
     throw refusal(400, messageOf(err));
   }

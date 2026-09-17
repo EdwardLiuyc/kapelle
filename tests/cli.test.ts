@@ -315,13 +315,14 @@ test("prose is buffered per task, never braided together", async (t) => {
 
 test("a run file's own agent and mode cannot be overridden from argv", async (t) => {
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+  const cwd = await tempDir(t);
 
   for (const flag of [
     ["--mode", "safe"],
     ["--agent", "opencode"],
     ["--cmd", "true"],
   ]) {
-    const r = await runCli(t, ["--file", file, ...flag]);
+    const r = await runCli(t, ["--file", file, "--cwd", cwd, ...flag]);
     assert.equal(r.code, 1, flag[0]);
     assert.match(r.stderr, new RegExp(`${flag[0]} does not apply with --file`));
   }
@@ -334,16 +335,34 @@ test("a bad run file is the validator's sentence, not a stack", async (t) => {
     t,
     mockRun([{ id: "one", prompt: "hi", needs: ["two"] }]),
   );
+  const cwd = await tempDir(t);
 
-  const r = await runCli(t, ["--file", file]);
+  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /task dependencies land in M3/);
   assert.doesNotMatch(r.stderr, /Node\.js v\d/);
 });
 
+test("a bad project config refuses a run-file run, naming the key", async (t) => {
+  const root = await gitRepo(t);
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(root, ".kapelle", "config.json"),
+    JSON.stringify({ stallIdle: 1 }),
+  );
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const r = await runCli(t, ["--file", file, "--cwd", root]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /unknown key "stallIdle"/);
+  assert.doesNotMatch(r.stderr, /Node\.js v\d/);
+});
+
 test("a missing run file is a clean exit, not a stack", async (t) => {
-  const r = await runCli(t, ["--file", "/nope/none.run.json"]);
+  const cwd = await tempDir(t);
+  const r = await runCli(t, ["--file", "/nope/none.run.json", "--cwd", cwd]);
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /cannot read run file/);
@@ -423,8 +442,9 @@ test("a prompt alongside --file is refused, not silently dropped", async (t) => 
   // The dangerous shape of the same conflict `--agent`/`--cmd`/`--mode` are
   // rejected for: this one reads as if the extra work was queued.
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+  const cwd = await tempDir(t);
 
-  const r = await runCli(t, ["--file", file, "and also do this"]);
+  const r = await runCli(t, ["--file", file, "--cwd", cwd, "and also do this"]);
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /a prompt does not apply with --file/);

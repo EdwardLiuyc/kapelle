@@ -39,6 +39,7 @@ import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { rename, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
+import { resolveRetentionMs } from "./config.ts";
 import { branchName } from "./ids.ts";
 import { changedPaths, STATE_DIR } from "./worktree.ts";
 
@@ -48,9 +49,10 @@ const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
 /**
- * How long a terminal run's state is kept (decided at pickup 2026-09-16,
- * raised to 30 days by the developer the same day). A constant until M2-7
- * gives the daemon-wide knobs a config file; this is the value it will load.
+ * The retention window when neither `KAPELLE_RETENTION_MS` nor the
+ * repository's `.kapelle/config.json` names one (decided at pickup
+ * 2026-09-16, raised to 30 days by the developer the same day; the knob
+ * lands with M2-7).
  */
 export const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -59,6 +61,7 @@ export interface SweepOptions {
   repos: readonly string[];
   /** The previous daemon's `children.json`; nothing is read outside it. */
   childrenFile: string;
+  /** Overrides the per-repo `KAPELLE_*`/config value; the tests use it. */
   retentionMs?: number;
   /** Injectable clock, so the retention boundary is a test and not a wait. */
   now?: number;
@@ -621,7 +624,7 @@ export async function sweepBoot(options: SweepOptions): Promise<void> {
   const {
     repos,
     childrenFile,
-    retentionMs = DEFAULT_RETENTION_MS,
+    retentionMs: overrideRetentionMs,
     now = Date.now(),
     onNotice = (text: string) => console.error(text),
   } = options;
@@ -637,6 +640,11 @@ export async function sweepBoot(options: SweepOptions): Promise<void> {
   }
   for (const root of repos) {
     try {
+      // M2-7: per repository. An explicit option (tests) wins, then
+      // `KAPELLE_RETENTION_MS`, then that repo's `.kapelle/config.json`,
+      // then the built-in — and a bad config skips only this repo.
+      const retentionMs =
+        overrideRetentionMs ?? resolveRetentionMs(root) ?? DEFAULT_RETENTION_MS;
       await sweepRepo(root, retentionMs, now, onNotice);
     } catch (err) {
       onNotice(`cannot sweep ${root}: ${messageOf(err)}`);

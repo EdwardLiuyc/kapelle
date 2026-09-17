@@ -460,9 +460,12 @@ driven from a run file, fully verifiable offline.
   alongside the run record here (cheap, and useless if skipped), and gate any
   `session/load` call on the capability, since the registry still contains harnesses that
   lack it.
-- **Config** — `.kapelle/config.json` with `KAPELLE_*` env override, layered
-  env > project. Exists because the new knobs (watchdog thresholds, TTL, retention window,
-  port, permission timeout) need a home other than the run file.
+- **Config** — two layers plus `KAPELLE_*` above both (M2-7; the split amended
+  2026-09-11 by M2-1). A repository's `.kapelle/config.json` holds the per-run knobs
+  (watchdog thresholds, TTL, `maxConcurrency`, retention window); the user-level
+  `$XDG_CONFIG_HOME/kapelle/config.json` holds the daemon-wide port and permission
+  timeout, which cannot come from one repository. Both files refuse unknown keys and
+  wrong types by file and key.
 - **Auth** — localhost-only bind plus a shared-secret token file. Not optional: anything
   that can `POST /runs` with `mode: auto` executes commands as the user, and once the
   dashboard can dispatch runs *every* write endpoint is an execution surface, not just

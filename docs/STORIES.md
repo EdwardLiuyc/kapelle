@@ -1767,6 +1767,17 @@ silently-ignored `stallIdleMs` typo is a watchdog that never fires.
 knobs — port, permission timeout — cannot come from one repository's `.kapelle/config.json`.
 They need a user-level file or `KAPELLE_*`; per-run knobs keep the project layer.
 **Amended 2026-09-14 (M2-2, #32):** no replay buffer size to configure — M2-2 has no ring.
+**Amended at pickup 2026-09-17 (#37).** Three decisions. (1) **Unknown `KAPELLE_*` env
+names warn and are ignored**, not refused: the prefix is also `SECRET_PREFIX`
+(`protocol/registry.ts:96`), stripped from every harness, so an unknown name may be a
+secret rather than a typo; a known name with a bad value still refuses the load. (2)
+**Precedence is run file > env > project config > built-in**; for the daemon-wide knobs a
+CLI flag sits above env, which sits above the user-level file. (3) **Retention is per
+repository** in `.kapelle/config.json` (env above it), read by each repository's sweep
+pass, rather than one daemon-wide number. Both files are strict — an unknown key or a
+wrong type is refused naming file and key — and a bad project config refuses that
+repository's run and skips its sweep, never the daemon's boot. Implemented in
+`core/config.ts`.
 
 **M2-8 · Auth · S · needs M2-1**
 Localhost-only bind plus a shared-secret token file. Not optional: anything that can
