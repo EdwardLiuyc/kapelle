@@ -1797,16 +1797,34 @@ token moves to **M4-1**, and the cookie/`POST /login` half of the either-or is d
 outright — when M4-1 builds it, it is `?token=` on the SSE route. A browser is the only
 client that needs it: nothing serves `text/html` yet, and a **TUI is not the same case** —
 it runs as the operator, reads `daemon.json` the way `kapelle daemon add` does
-(`cli.ts:595-610`), and streams SSE with `fetch`, which can set headers. That is M2-9's
+(`cli.ts:583-613`), and streams SSE with `fetch`, which can set headers. That is M2-9's
 `attach`, not auth work. The `Host` check stays here because it guards the daemon now
 rather than only once a page holds the token: `LOOPBACK_HOST` (`daemon.ts:266`) admits
-`127.0.0.1`, `localhost` and `[::1]`, with or without a port, and anything else is `403`
-before the token is read. The **port is deliberately not matched**: rebinding needs an
-attacker-chosen DNS name to gain same-origin access. Direct cross-origin requests to a
-loopback URL still arrive with a loopback `Host`, but without the bearer token they are
-refused; matching the port would add no protection against those. With
-`requireHostHeader: false`, a request with **no** `Host` reaches the same guard and gets
-`403`, independent of Node's defaults (asserted in `tests/daemon.test.ts`).
+`127.0.0.1`, `localhost`, `localhost.` and `[::1]`, with or without a port and in **any
+case** — a hostname is case-insensitive (RFC 9110 §4.2.3) and `curl`, Python, Go and Java
+all copy the caller's spelling into `Host`, so a case-sensitive match refuses a local
+client with a security-shaped error. The regex takes `/i` and **not** `/u`, which would
+fold `localhoſt` into a match. Anything else is `403` before the token is read. The
+**port is deliberately not matched**: rebinding needs an attacker-chosen DNS name to gain
+same-origin access. Direct cross-origin requests to a loopback URL still arrive with a
+loopback `Host`, but without the bearer token they are refused; matching the port would
+add no protection against those.
+
+**The guard reads `authorityOf`, not `req.headers.host`,** because an HTTP/1.1 message
+carries the authority in two places and the header is not always the one that counts.
+An **absolute-form** target (`GET http://evil.example/repos`) is authoritative and `Host`
+is ignored (RFC 9112 §3.2.2) — reading the header there added a repository through a
+forged target, and refused a loopback target that carried a forged header. **Two `Host`
+lines** are malformed (RFC 9110 §7.2) and Node keeps only the first, so a loopback line in
+front of a forged one passed; `rawHeaders` is where both survive, and more than one is a
+refusal. Neither shape is reachable from a browser — a page can emit neither — so this is
+the allowlist being closed rather than a live rebinding path.
+
+A request with **no** `Host` at all is refused by the same guard: on HTTP/1.1 because
+`requireHostHeader: false` hands it here instead of letting Node answer `400`, and on
+HTTP/1.0 — where that option has no say — because there is then no authority to match.
+Master served the HTTP/1.0 shape; one rule ("a loopback authority, or `403`") is worth
+more than the `nc` health probe it costs. All of it is asserted in `tests/daemon.test.ts`.
 
 **M2-9 · `--detach` and `attach` · M · needs M2-2, M2-3**
 Submit a run file to the daemon, stream SSE, answer permissions interactively, print

@@ -231,7 +231,7 @@ test("a request without the right token is refused, and changes nothing", async 
 function rawGet(
   d: Daemon,
   host: string | null,
-  { auth = true, path = "/runs" } = {},
+  { auth = true, path = "/runs", second = "" } = {},
 ): Promise<{ status: number; body: string }> {
   const { port } = new URL(d.url);
   return new Promise((ok, fail) => {
@@ -254,6 +254,8 @@ function rawGet(
         res.on("end", () => ok({ status: res.statusCode ?? 0, body: text }));
       },
     );
+    // Node's options reject an array Host; setHeader is how two lines go out.
+    if (second) req.setHeader("host", [host ?? "", second]);
     req.on("error", fail);
     req.end();
   });
@@ -274,16 +276,41 @@ test("a Host outside loopback is refused, token or no token", async (t) => {
     403,
   );
 
-  // Host-less HTTP/1.1 requests reach the same guard, not Node's default 400.
+  // A Host-less request reaches the same guard, not Node's default 400 — on
+  // HTTP/1.0 too, where `requireHostHeader` has no say at all.
   assert.equal((await rawGet(d, null)).status, 403);
 
-  // The names a local client actually sends still pass.
   const { port } = new URL(d.url);
+
+  // Two Host lines: Node reports only the first, so a loopback line in front
+  // of a forged one would pass a guard that read `req.headers.host`.
+  assert.equal(
+    (await rawGet(d, "127.0.0.1", { second: "evil.example" })).status,
+    403,
+  );
+
+  // An absolute-form target carries the authority that wins over Host, both
+  // ways round: the forged one refused, the loopback one served.
+  assert.equal(
+    (await rawGet(d, `localhost:${port}`, { path: "http://evil.example/runs" }))
+      .status,
+    403,
+  );
+  assert.equal(
+    (await rawGet(d, "evil.example", { path: `http://127.0.0.1:${port}/runs` }))
+      .status,
+    200,
+  );
+
+  // The names a local client actually sends still pass. `[::1]` is forged by
+  // rawGet over an IPv4 socket: the daemon binds 127.0.0.1 only.
   for (const host of [
     `127.0.0.1:${port}`,
     "127.0.0.1",
     `localhost:${port}`,
     "localhost",
+    `LOCALHOST:${port}`,
+    `localhost.:${port}`,
     `[::1]:${port}`,
     "[::1]",
   ]) {
