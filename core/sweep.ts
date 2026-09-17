@@ -70,9 +70,9 @@ export interface SweepOptions {
  * (the process is gone, or `ps` is not answering).
  *
  * `ps` rather than `/proc`: one implementation for both supported platforms,
- * and equality is all the sweep needs. The two reads happen on the same
- * machine with the same locale, so a locale-formatted date compares equal to
- * itself and a recycled pid does not.
+ * and equality is all the sweep needs. Both reads are normalized to `C`/UTC,
+ * so a locale- or timezone-formatted start time compares equal across daemon
+ * processes and a recycled pid does not.
  *
  * **Asynchronous because of its other caller.** `daemon.ts` records the
  * identity from the `_client_harness_spawned` listener, and a synchronous
@@ -83,6 +83,7 @@ export async function processIdentity(pid: number): Promise<string | null> {
   try {
     const { stdout } = await run("ps", ["-p", String(pid), "-o", "lstart="], {
       timeout: 2_000,
+      env: { ...process.env, LC_ALL: "C", LANG: "C", TZ: "UTC" },
     });
     const identity = stdout.trim();
     return identity === "" ? null : identity;
@@ -458,17 +459,17 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return stdout;
 }
 
-/** Every run record under one repository, `null` where unreadable. */
-function readRecords(pass: RepoPass): Map<string, RunRecord | null> {
+/** Every run record under one repository, or `null` when the directory cannot be read. */
+function readRecords(pass: RepoPass): Map<string, RunRecord | null> | null {
   const { runsDir, onNotice } = pass;
   const records = new Map<string, RunRecord | null>();
   let ids: string[] = [];
   try {
     ids = readdirSync(runsDir);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      onNotice(`skipping runs under ${runsDir}: ${messageOf(err)}`);
-    }
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return records;
+    onNotice(`skipping runs under ${runsDir}: ${messageOf(err)}`);
+    return null;
   }
   for (const id of ids) {
     records.set(id, readRecord(join(runsDir, id, "run.json"), id));
@@ -566,6 +567,10 @@ async function sweepRepo(
     onNotice,
   };
   const records = readRecords(pass);
+  if (records === null) {
+    onNotice(`skipping reap and orphan cleanup in ${root} until the next boot`);
+    return;
+  }
   await markCrashed(records, pass);
 
   const managed = existsSync(join(root, STATE_DIR, "wt"))

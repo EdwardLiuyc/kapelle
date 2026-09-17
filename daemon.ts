@@ -10,9 +10,9 @@
  * `.kapelle/`.
  *
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
- * `checkStateDir`, `validateRun`, `openWorktrees`, `sweepBoot`, `runRun` and
- * the permission queue; worktrees, policy and harnesses stay behind them. If
- * orchestration grew here, the scheduler would be
+ * `checkStateDir`, `validateRun`, `openWorktrees`, `sweepBoot`, `runRun`,
+ * `processIdentity` and the permission queue; worktrees, policy and harnesses
+ * stay behind them. If orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
  * implementation (`docs/STORIES.md`, M2-1).
  *
@@ -570,10 +570,11 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
       // Filled in after the fact, never inline: `processIdentity` shells out
       // to `ps`, and doing that synchronously here would stall every other
       // run's SSE writes and permission answers on each harness spawn. The
-      // value is only read by the *next* boot, so the short window where the
-      // file names a pid with no identity costs nothing — and if the harness
-      // exits inside it, `_client_harness_exited` has already dropped the
-      // entry, which is what the identity check below compares.
+      // entry is filled in after the fact, so a crash inside that window is
+      // the known no-identity outcome: the next boot cannot safely signal the
+      // pid and can only name it in a notice, leaving it alive. Conservative,
+      // not a free window; `_client_harness_exited` still drops the entry
+      // when the harness exits normally.
       void processIdentity(update.pid).then((startedAt) => {
         if (startedAt === null || children.get(update.pid) !== entry) return;
         entry.startedAt = startedAt;
