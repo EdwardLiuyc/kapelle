@@ -150,7 +150,7 @@ async function sweepChildren(
   for (const raw of entries) {
     if (!isObject(raw)) continue;
     const pid = raw.pid;
-    if (!isNumber(pid) || !Number.isInteger(pid)) continue;
+    if (!isNumber(pid) || !Number.isInteger(pid) || pid <= 0) continue;
     const where = `run ${raw.runId}, task ${raw.taskId}`;
     // Without the recorded identity this cannot prove the pid is the harness,
     // and a recycled pid would make the signal land on a stranger — so an

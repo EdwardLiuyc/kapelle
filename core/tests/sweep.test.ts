@@ -176,6 +176,79 @@ test("a crashed record is rewritten: running tasks failed, queued left", async (
   );
 });
 
+test("a running record with missing or malformed tasks still becomes failed", async (t) => {
+  const root = await gitRepo(t);
+  const startedAt = "2026-09-01T00:00:00.000Z";
+  const dirs = {
+    "no-tasks": await writeRun(
+      root,
+      { runId: "no-tasks", root, cwd: root, status: "running", startedAt },
+      "no-tasks",
+    ),
+    "bad-array": await writeRun(
+      root,
+      {
+        runId: "bad-array",
+        root,
+        cwd: root,
+        status: "running",
+        startedAt,
+        tasks: "nope",
+      },
+      "bad-array",
+    ),
+    mixed: await writeRun(
+      root,
+      {
+        runId: "mixed",
+        root,
+        cwd: root,
+        status: "running",
+        startedAt,
+        tasks: [
+          null,
+          42,
+          {
+            id: "a",
+            status: "running",
+            branch: "kapelle/mixed/a",
+            sessionId: "s",
+          },
+          "x",
+          { id: "b", status: "done" },
+        ],
+      },
+      "mixed",
+    ),
+  };
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  for (const [id, dir] of Object.entries(dirs)) {
+    const record = JSON.parse(await readFile(join(dir, "run.json"), "utf8"));
+    assert.equal(record.status, "failed", id);
+    assert.equal(record.endedAt, new Date(NOW).toISOString(), id);
+    assert.equal(record.root, root, id);
+    assert.equal(record.cwd, root, id);
+    assert.equal(record.startedAt, startedAt, id);
+  }
+  const noTasks = JSON.parse(
+    await readFile(join(dirs["no-tasks"], "run.json"), "utf8"),
+  );
+  assert.deepEqual(noTasks.tasks, []);
+  const badArray = JSON.parse(
+    await readFile(join(dirs["bad-array"], "run.json"), "utf8"),
+  );
+  assert.deepEqual(badArray.tasks, []);
+  const mixed = JSON.parse(
+    await readFile(join(dirs.mixed, "run.json"), "utf8"),
+  );
+  assert.deepEqual(mixed.tasks, [
+    { id: "a", status: "failed", branch: "kapelle/mixed/a", sessionId: "s" },
+    { id: "b", status: "done" },
+  ]);
+});
+
 // --- retention ---------------------------------------------------------------
 
 test("a terminal run past retention is reaped whole", async (t) => {
@@ -301,6 +374,157 @@ test("a terminal record that cannot be dated is kept, not reaped", async (t) => 
   assert.ok(notices.some((notice) => notice.includes("cannot be dated")));
 });
 
+test("a past-retention run loses every worktree it owns", async (t) => {
+  const root = await gitRepo(t);
+  const a = await addWorktree(root, "a");
+  const b = await addWorktree(root, "b");
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    startedAt: "2026-08-01T00:00:00.000Z",
+    endedAt: "2026-08-01T00:10:00.000Z",
+    tasks: [
+      { id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` },
+      { id: "b", status: "failed", branch: `kapelle/${RUN_ID}/b` },
+    ],
+  });
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal(existsSync(a), false, "the first checkout should be gone");
+  assert.equal(existsSync(b), false, "the second checkout should be gone");
+  assert.equal(existsSync(dir), false);
+  assert.equal(await hasBranch(root, `kapelle/${RUN_ID}/a`), false);
+  assert.equal(await hasBranch(root, `kapelle/${RUN_ID}/b`), false);
+  assert.ok(notices.some((notice) => notice.includes(`reaped run ${RUN_ID}`)));
+});
+
+test("a branch held in another worktree is kept, and its expired run still clears", async (t) => {
+  const root = await gitRepo(t);
+  const path = await addWorktree(root, "a");
+  const branch = `kapelle/${RUN_ID}/a`;
+  // Detach the run's own checkout so the branch can move to the repository
+  // root, where `git branch -D` must refuse to delete a checked-out branch.
+  await git(path, "checkout", "--detach");
+  await git(root, "checkout", branch);
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    startedAt: "2026-08-01T00:00:00.000Z",
+    endedAt: "2026-08-01T00:10:00.000Z",
+    tasks: [{ id: "a", status: "failed", branch }],
+  });
+
+  let notices: string[] = [];
+  try {
+    notices = await sweep(root, join(await tempDir(t), "children.json"));
+  } finally {
+    // Back to the base branch so the temp directory can remove the root.
+    await git(root, "checkout", "-");
+  }
+
+  assert.ok(
+    notices.some((notice) => notice.includes(`cannot delete branch ${branch}`)),
+  );
+  assert.equal(existsSync(path), false);
+  assert.equal(existsSync(dir), false);
+  assert.equal(await hasBranch(root, branch), true);
+});
+
+test("endedAt decides the window when it disagrees with startedAt", async (t) => {
+  const root = await gitRepo(t);
+  const keptPath = await addWorktree(root, "a", RUN_ID);
+  const reapedPath = await addWorktree(root, "a", ORPHAN_ID);
+  const keptDir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    // Old `startedAt`, recent `endedAt`: `endedAt` alone keeps this one.
+    startedAt: "2026-07-01T00:00:00.000Z",
+    endedAt: "2026-09-10T00:00:00.000Z",
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+  const reapedDir = await writeRun(
+    root,
+    {
+      runId: ORPHAN_ID,
+      root,
+      cwd: root,
+      status: "failed",
+      // Recent `startedAt`, old `endedAt`: `endedAt` alone reaps this one.
+      startedAt: "2026-09-10T00:00:00.000Z",
+      endedAt: "2026-07-01T00:00:00.000Z",
+      tasks: [{ id: "a", status: "failed", branch: `kapelle/${ORPHAN_ID}/a` }],
+    },
+    ORPHAN_ID,
+  );
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal(existsSync(keptPath), true);
+  assert.equal(existsSync(keptDir), true);
+  assert.equal(await hasBranch(root, `kapelle/${RUN_ID}/a`), true);
+  assert.equal(existsSync(reapedPath), false);
+  assert.equal(existsSync(reapedDir), false);
+  assert.equal(await hasBranch(root, `kapelle/${ORPHAN_ID}/a`), false);
+});
+
+test("retentionMs overrides the default window", async (t) => {
+  const root = await gitRepo(t);
+  const path = await addWorktree(root, "a");
+  const endedAt = new Date(NOW - 2 * 60 * 60 * 1000).toISOString();
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    startedAt: endedAt,
+    endedAt,
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+
+  await sweepBoot({
+    repos: [root],
+    childrenFile: join(await tempDir(t), "children.json"),
+    now: NOW,
+    retentionMs: 60 * 60 * 1000,
+    onNotice: () => {},
+  });
+
+  assert.equal(existsSync(path), false);
+  assert.equal(existsSync(dir), false);
+  assert.equal(await hasBranch(root, `kapelle/${RUN_ID}/a`), false);
+});
+
+test("a second sweep with the same clock says nothing and changes nothing", async (t) => {
+  const root = await gitRepo(t);
+  const path = await addWorktree(root, "a");
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "running",
+    startedAt: "2026-09-01T00:00:00.000Z",
+    tasks: [{ id: "a", status: "running" }],
+  });
+  const childrenFile = join(await tempDir(t), "children.json");
+
+  await sweep(root, childrenFile);
+  const after = await readFile(join(dir, "run.json"), "utf8");
+  const second = await sweep(root, childrenFile);
+
+  assert.equal(await readFile(join(dir, "run.json"), "utf8"), after);
+  assert.equal((await readRun(dir)).status, "failed");
+  assert.equal(existsSync(path), true);
+  assert.equal(existsSync(childrenFile), false);
+  assert.deepEqual(second, []);
+});
+
 // --- orphans: no readable record --------------------------------------------
 
 test("a clean orphan loses its checkout but keeps its branch", async (t) => {
@@ -363,6 +587,53 @@ test("an unreadable runs directory skips reap and orphan cleanup", async (t) => 
     notices.some((notice) =>
       notice.includes("skipping reap and orphan cleanup"),
     ),
+  );
+  assert.equal(
+    notices.some((notice) => notice.includes("removed orphan worktree")),
+    false,
+  );
+});
+
+test("an unreadable runs directory skips an expired reap too", async (t) => {
+  const root = await gitRepo(t);
+  const path = await addWorktree(root, "a");
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    // Past retention: without the unreadable-directory skip, this record
+    // would be reaped, so the skip is not vacuous.
+    startedAt: "2026-07-01T00:00:00.000Z",
+    endedAt: "2026-07-01T00:10:00.000Z",
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+  const recordPath = join(dir, "run.json");
+  const before = await readFile(recordPath, "utf8");
+  const runsDir = join(root, ".kapelle", "runs");
+  await chmod(runsDir, 0o000);
+  let notices: string[] = [];
+  try {
+    notices = await sweep(root, join(await tempDir(t), "children.json"));
+  } finally {
+    await chmod(runsDir, 0o700);
+  }
+
+  assert.equal(existsSync(path), true, "the worktree is kept");
+  assert.equal(
+    await hasBranch(root, `kapelle/${RUN_ID}/a`),
+    true,
+    "the branch is kept",
+  );
+  assert.equal(await readFile(recordPath, "utf8"), before, "record unchanged");
+  assert.ok(
+    notices.some((notice) =>
+      notice.includes("skipping reap and orphan cleanup"),
+    ),
+  );
+  assert.equal(
+    notices.some((notice) => notice.includes(`reaped run ${RUN_ID}`)),
+    false,
   );
   assert.equal(
     notices.some((notice) => notice.includes("removed orphan worktree")),
@@ -544,6 +815,54 @@ test("malformed children entries cannot throw and are removed", async (t) => {
   assert.equal(existsSync(childrenFile), false);
 });
 
+test("a dead pid with a recorded identity is ignored silently", async (t) => {
+  const child = sleeper(t);
+  const pid = child.pid as number;
+  const startedAt = await waitForIdentity(pid);
+  const exited = new Promise<void>((ok) => child.once("exit", () => ok()));
+  child.kill("SIGKILL");
+  await exited;
+  const childrenFile = join(await tempDir(t), "children.json");
+  await writeFile(
+    childrenFile,
+    JSON.stringify({
+      pid: process.pid,
+      children: [{ pid, runId: RUN_ID, taskId: "a", startedAt }],
+    }),
+  );
+
+  const notices = await sweep([], childrenFile);
+
+  assert.deepEqual(notices, []);
+  assert.equal(existsSync(childrenFile), false);
+});
+
+test("non-positive and non-integer pids are ignored", async (t) => {
+  const childrenFile = join(await tempDir(t), "children.json");
+  await writeFile(
+    childrenFile,
+    JSON.stringify({
+      children: [
+        { pid: 0, runId: RUN_ID, taskId: "a" },
+        {
+          pid: -1,
+          runId: RUN_ID,
+          taskId: "b",
+          startedAt: "2026-09-01T00:00:00.000Z",
+        },
+        { pid: 1.5, runId: RUN_ID, taskId: "c" },
+      ],
+    }),
+  );
+
+  const notices = await sweep([], childrenFile);
+
+  for (const notice of notices) {
+    assert.equal(/alive|no start time|killed/.test(notice), false, notice);
+  }
+  assert.equal(existsSync(childrenFile), false);
+});
+
 // --- git refusing to answer --------------------------------------------------
 
 test("worktrees that cannot be listed stop the reap, not just the list", async (t) => {
@@ -697,4 +1016,91 @@ test("only repositories in the list are swept", async (t) => {
   assert.equal(existsSync(leftPath), true);
   assert.equal(existsSync(leftDir), true);
   assert.equal(await hasBranch(left, `kapelle/${RUN_ID}/a`), true);
+});
+
+test("one sweep reconciles every repository in the list", async (t) => {
+  const first = await gitRepo(t);
+  const second = await gitRepo(t);
+  const firstPath = await addWorktree(first, "a", RUN_ID);
+  const secondPath = await addWorktree(second, "a", ORPHAN_ID);
+  const firstDir = await writeRun(first, {
+    runId: RUN_ID,
+    root: first,
+    cwd: first,
+    status: "failed",
+    startedAt: "2026-08-01T00:00:00.000Z",
+    endedAt: "2026-08-01T00:10:00.000Z",
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+  const secondDir = await writeRun(
+    second,
+    {
+      runId: ORPHAN_ID,
+      root: second,
+      cwd: second,
+      status: "failed",
+      startedAt: "2026-08-01T00:00:00.000Z",
+      endedAt: "2026-08-01T00:10:00.000Z",
+      tasks: [{ id: "a", status: "failed", branch: `kapelle/${ORPHAN_ID}/a` }],
+    },
+    ORPHAN_ID,
+  );
+
+  const notices = await sweep(
+    [first, second],
+    join(await tempDir(t), "children.json"),
+  );
+
+  assert.equal(existsSync(firstPath), false);
+  assert.equal(existsSync(secondPath), false);
+  assert.equal(existsSync(firstDir), false);
+  assert.equal(existsSync(secondDir), false);
+  assert.equal(await hasBranch(first, `kapelle/${RUN_ID}/a`), false);
+  assert.equal(await hasBranch(second, `kapelle/${ORPHAN_ID}/a`), false);
+  assert.ok(notices.includes(`reaped run ${RUN_ID}`));
+  assert.ok(notices.includes(`reaped run ${ORPHAN_ID}`));
+});
+
+test("a broken repository does not stop a later repository's sweep", async (t) => {
+  // Not a repository at all: `git worktree prune` fails here, so the record
+  // cannot be reaped, but the loop must still reach the second root.
+  const bad = await tempDir(t);
+  await mkdir(join(bad, ".kapelle", "wt", RUN_ID, "a"), {
+    recursive: true,
+  });
+  const badDir = await writeRun(bad, {
+    runId: RUN_ID,
+    root: bad,
+    cwd: bad,
+    status: "failed",
+    startedAt: "2026-08-01T00:00:00.000Z",
+    endedAt: "2026-08-01T00:10:00.000Z",
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+  const good = await gitRepo(t);
+  const goodPath = await addWorktree(good, "a");
+  const goodDir = await writeRun(good, {
+    runId: RUN_ID,
+    root: good,
+    cwd: good,
+    status: "failed",
+    startedAt: "2026-08-01T00:00:00.000Z",
+    endedAt: "2026-08-01T00:10:00.000Z",
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+
+  const notices = await sweep(
+    [bad, good],
+    join(await tempDir(t), "children.json"),
+  );
+
+  assert.equal(existsSync(join(badDir, "run.json")), true);
+  assert.ok(
+    notices.some((notice) => notice.includes("cannot reconcile worktrees")),
+  );
+  assert.ok(notices.some((notice) => notice.includes("skipping reap")));
+  assert.equal(existsSync(goodPath), false);
+  assert.equal(existsSync(goodDir), false);
+  assert.equal(await hasBranch(good, `kapelle/${RUN_ID}/a`), false);
+  assert.ok(notices.some((notice) => notice.includes(`reaped run ${RUN_ID}`)));
 });
