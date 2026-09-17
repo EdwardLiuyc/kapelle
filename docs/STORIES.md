@@ -1792,6 +1792,21 @@ spawn (M1a-4).
 request without it. What stays here is the browser half — the query parameter or cookie
 exchange, and a `Host` check against DNS rebinding once a page the daemon serves holds the
 token. The `KAPELLE_*` strip already landed with M1a-4.
+**Amended at pickup 2026-09-17 (#38): this story is the `Host` check alone.** The browser
+token moves to **M4-1**, and the cookie/`POST /login` half of the either-or is dropped
+outright — when M4-1 builds it, it is `?token=` on the SSE route. A browser is the only
+client that needs it: nothing serves `text/html` yet, and a **TUI is not the same case** —
+it runs as the operator, reads `daemon.json` the way `kapelle daemon add` does
+(`cli.ts:595-610`), and streams SSE with `fetch`, which can set headers. That is M2-9's
+`attach`, not auth work. The `Host` check stays here because it guards the daemon now
+rather than only once a page holds the token: `LOOPBACK_HOST` (`daemon.ts:266`) admits
+`127.0.0.1`, `localhost` and `[::1]`, with or without a port, and anything else is `403`
+before the token is read. The **port is deliberately not matched**: rebinding needs an
+attacker-chosen DNS name to gain same-origin access. Direct cross-origin requests to a
+loopback URL still arrive with a loopback `Host`, but without the bearer token they are
+refused; matching the port would add no protection against those. With
+`requireHostHeader: false`, a request with **no** `Host` reaches the same guard and gets
+`403`, independent of Node's defaults (asserted in `tests/daemon.test.ts`).
 
 **M2-9 · `--detach` and `attach` · M · needs M2-2, M2-3**
 Submit a run file to the daemon, stream SSE, answer permissions interactively, print
@@ -1909,6 +1924,10 @@ stage A's summary and stage C flags anything B got wrong.
 The first thing here that is not a CLI. Design reference: `opencode-ensemble`'s dashboard.
 
 **M4-1 · Serving · M · needs M2-8**
+**Inherited from M2-8 at its pickup, 2026-09-17 (#38):** the browser token. `EventSource`
+cannot set headers, so `GET /runs/:id/events` must also accept `?token=<token>`; the
+daemon bakes the token into the page it serves, and the cookie exchange is not an option
+any more. The `Host` check it pairs with already landed with #38.
 String-templated HTML/CSS/JS out of the daemon. No framework, no build step, no runtime
 dependency — the same constraint the rest of the project holds. Split across
 `dashboard-html`, `-js-core`, `-js-events`, `-js-render`; that split is what keeps a

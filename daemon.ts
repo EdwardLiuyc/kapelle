@@ -23,6 +23,11 @@
  * never sees it, in a `0700` directory only the operator can enter, and wiped
  * at logout. It stops being enough the moment the daemon binds anywhere else,
  * which is also the trigger that re-opens sandboxing.
+ *
+ * **A `Host` outside loopback is refused before the token is read** (M2-8,
+ * #38), which closes DNS rebinding — an attacker page gaining same-origin
+ * access to this loopback daemon. The browser half, `?token=` on the SSE
+ * endpoint, is deferred to M4-1, where a served page first needs it.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -243,6 +248,22 @@ const token = randomBytes(32).toString("hex");
 // both sides gives that without a length check that answers early.
 const digest = (s: string) => createHash("sha256").update(s).digest();
 const expected = digest(token);
+
+/**
+ * The names this daemon answers to — story M2-8, issue #38.
+ *
+ * DNS rebinding is the attack the token alone does not stop: a page on
+ * `evil.example` re-resolves its own name to `127.0.0.1`, and the browser then
+ * talks to this daemon while treating the reply as same-origin. The `Host`
+ * line is the one field that attack cannot forge — it still says
+ * `evil.example`, because that is the name the browser was told to fetch.
+ *
+ * The port is deliberately not matched: rebinding needs an attacker-chosen
+ * DNS name to gain same-origin access. Direct cross-origin requests to a
+ * loopback URL still arrive with a loopback Host, but without the bearer token
+ * they are refused. Matching the port would add no protection against those.
+ */
+const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 
 function authorised(req: IncomingMessage): boolean {
   const header = req.headers.authorization ?? "";
@@ -745,6 +766,12 @@ async function postPermission(
 }
 
 async function route(req: IncomingMessage, res: ServerResponse) {
+  // Before the token and every route: both a forged and a missing Host are
+  // refused here. requireHostHeader: false lets this guard handle either.
+  if (!LOOPBACK_HOST.test(req.headers.host ?? "")) {
+    send(res, 403, { error: "host not allowed" });
+    return;
+  }
   if (!authorised(req)) {
     send(res, 401, { error: "missing or wrong token" });
     return;
@@ -797,7 +824,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   }
 }
 
-const server = createServer((req, res) => {
+const server = createServer({ requireHostHeader: false }, (req, res) => {
   route(req, res).catch((err) => {
     send(res, (err as { status?: number }).status ?? 500, {
       error: messageOf(err),

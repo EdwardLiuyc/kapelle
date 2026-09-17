@@ -23,6 +23,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { request } from "node:http";
 import { userInfo } from "node:os";
 import { join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -220,6 +221,74 @@ test("a request without the right token is refused, and changes nothing", async 
 
   assert.deepEqual((await api(d, "GET", "/repos")).body, []);
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
+});
+
+/**
+ * A raw request with a `Host` of our choosing. `fetch` cannot send one — the
+ * spec makes `Host` a forbidden header name — and a browser cannot either,
+ * which is the whole reason the check works.
+ */
+function rawGet(
+  d: Daemon,
+  host: string | null,
+  { auth = true, path = "/runs" } = {},
+): Promise<{ status: number; body: string }> {
+  const { port } = new URL(d.url);
+  return new Promise((ok, fail) => {
+    const req = request(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        setHost: false,
+        headers: {
+          ...(auth ? { authorization: `Bearer ${d.token}` } : {}),
+          ...(host === null ? {} : { host }),
+        },
+      },
+      (res) => {
+        let text = "";
+        res.on("data", (c) => {
+          text += c;
+        });
+        res.on("end", () => ok({ status: res.statusCode ?? 0, body: text }));
+      },
+    );
+    req.on("error", fail);
+    req.end();
+  });
+}
+
+test("a Host outside loopback is refused, token or no token", async (t) => {
+  const d = await boot(t);
+
+  // The rebinding shape: a real token would not help, and this one is real.
+  const forged = await rawGet(d, "evil.example");
+  assert.equal(forged.status, 403);
+  assert.match(forged.body, /host not allowed/);
+
+  // Host refusal precedes authentication, which would otherwise answer 401.
+  assert.equal((await rawGet(d, "evil.example", { auth: false })).status, 403);
+  assert.equal(
+    (await rawGet(d, "evil.example", { path: "/runs/some-id/events" })).status,
+    403,
+  );
+
+  // Host-less HTTP/1.1 requests reach the same guard, not Node's default 400.
+  assert.equal((await rawGet(d, null)).status, 403);
+
+  // The names a local client actually sends still pass.
+  const { port } = new URL(d.url);
+  for (const host of [
+    `127.0.0.1:${port}`,
+    "127.0.0.1",
+    `localhost:${port}`,
+    "localhost",
+    `[::1]:${port}`,
+    "[::1]",
+  ]) {
+    assert.equal((await rawGet(d, host)).status, 200, host);
+  }
 });
 
 test("daemon.json holds port, pid and a random token, and only the owner can read it", async (t) => {
