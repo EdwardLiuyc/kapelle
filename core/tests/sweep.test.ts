@@ -793,6 +793,27 @@ test("a pid recorded without an identity is left alone, but named", async (t) =>
   );
 });
 
+test("a malformed run or task id is labelled unknown, not stringified", async (t) => {
+  const child = sleeper(t);
+  const childrenFile = join(await tempDir(t), "children.json");
+  await writeFile(
+    childrenFile,
+    JSON.stringify({
+      pid: process.pid,
+      children: [{ pid: child.pid, runId: { nested: true }, taskId: 42 }],
+    }),
+  );
+
+  const notices = await sweep([], childrenFile);
+
+  assert.ok(
+    notices.some((notice) =>
+      notice.includes(`harness pid ${child.pid} (run unknown, task unknown)`),
+    ),
+    "a malformed id must not stringify into the notice",
+  );
+});
+
 test("malformed children.json cannot throw and is removed", async (t) => {
   const childrenFile = join(await tempDir(t), "children.json");
   await writeFile(childrenFile, "not json");

@@ -102,6 +102,9 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/** What the sweep managed to do to a harness whose identity it verified. */
+type StopOutcome = "gone" | "killed" | "survived";
+
 /**
  * SIGTERM, half a second, then SIGKILL.
  *
@@ -112,22 +115,31 @@ function isAlive(pid: number): boolean {
  * no pipe to a process it did not spawn, so signals are all it has. The grace
  * is short for the same reason: SIGTERM is the signal measured not to be
  * enough, so waiting the harness's own 5 s on it would only delay the boot.
+ *
+ * Returns what actually happened instead of assuming the signal worked:
+ * `gone` when the pid exited before it could be signalled, `killed` once it
+ * is gone or a fatal signal was delivered, `survived` when it could not be
+ * signalled at all.
  */
-async function terminate(pid: number): Promise<void> {
+async function terminate(pid: number): Promise<StopOutcome> {
+  if (!isAlive(pid)) return "gone";
   try {
     process.kill(pid, "SIGTERM");
   } catch {
-    return;
+    return isAlive(pid) ? "survived" : "gone";
   }
   for (let i = 0; i < 20 && isAlive(pid); i++) {
     await new Promise((ok) => setTimeout(ok, 25));
   }
-  if (!isAlive(pid)) return;
+  if (!isAlive(pid)) return "killed";
   try {
     process.kill(pid, "SIGKILL");
   } catch {
-    // Raced with its own exit.
+    return isAlive(pid) ? "survived" : "killed";
   }
+  // The kernel took a fatal signal; a zombie it leaves is its parent's to
+  // reap, not a harness still running.
+  return "killed";
 }
 
 /** Step 1: the harnesses the previous daemon could not stop. */
@@ -151,7 +163,9 @@ async function sweepChildren(
     if (!isObject(raw)) continue;
     const pid = raw.pid;
     if (!isNumber(pid) || !Number.isInteger(pid) || pid <= 0) continue;
-    const where = `run ${raw.runId}, task ${raw.taskId}`;
+    const where =
+      `run ${isString(raw.runId) ? raw.runId : "unknown"}, ` +
+      `task ${isString(raw.taskId) ? raw.taskId : "unknown"}`;
     // Without the recorded identity this cannot prove the pid is the harness,
     // and a recycled pid would make the signal land on a stranger — so an
     // unverifiable pid is left alive, which is the safer of two bad answers.
@@ -177,11 +191,16 @@ async function sweepChildren(
       }
       continue;
     }
-    await terminate(pid);
-    onNotice(
-      `killed harness pid ${pid} (run ${raw.runId}, task ` +
-        `${raw.taskId}) left by a previous daemon`,
-    );
+    const stopped = await terminate(pid);
+    if (stopped === "killed") {
+      onNotice(
+        `killed harness pid ${pid} (${where}) left by a previous daemon`,
+      );
+    } else if (stopped === "survived") {
+      onNotice(
+        `harness pid ${pid} (${where}) could not be stopped; stop it by hand`,
+      );
+    }
   }
   rmSync(childrenFile, { force: true });
 }
