@@ -9,7 +9,11 @@ Three sources set the knobs that do not belong in a run file (M2-7, #37):
   repository's file.
 - **Project level** — `<repo>/.kapelle/config.json`. Holds the run defaults:
   `stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency` and
-  `retentionMs`.
+  `retentionMs`. **This file is not shared.** `.kapelle/` has to stay
+  git-ignored — `checkStateDir` refuses a run in a repository that tracks it —
+  so the file cannot be committed, and it reaches nobody else who clones the
+  repository. Each person writes their own copy, or the run file carries the
+  values instead.
 - **Environment** — `KAPELLE_*`. Overrides both files; for the run knobs an
   explicit run-file value still wins.
 
@@ -27,8 +31,8 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | Config | Read by | Not read by |
 | --- | --- | --- |
 | User file | `kapelle daemon start` only | in-process CLI, merge, sweep |
-| Project file | `POST /repos`, `POST /runs` (each request), `kapelle run --file`, `sweepBoot` per repository | plain `kapelle "prompt"`, `merge` |
-| `KAPELLE_*` env | daemon start, every run-default resolution, `kapelle run --file` | plain prompt, merge |
+| Project file | `POST /repos`, `POST /runs` (each request), `kapelle --file`, `sweepBoot` per repository | plain `kapelle "prompt"`, `merge` |
+| `KAPELLE_*` env | daemon start, every run-default resolution, `kapelle --file` | plain prompt, merge |
 
 ## User file — `$XDG_CONFIG_HOME/kapelle/config.json`
 
@@ -49,13 +53,14 @@ refuses the daemon start (one line, exit 1), before the instance claim.
 | ❌ | timeout bad | `0`, `-5`, `"soon"`, `2147483648` | `must be a number of milliseconds above 0 and at most 2147483647` |
 | ❌ | invalid JSON | `{port: 1}` | `<path> is not valid JSON: …` |
 | ❌ | not an object | `[]`, `null`, `42`, `"x"` | `<path> must be a JSON object.` |
-| ❌ | unreadable / a directory | `chmod 000` | `cannot read <path>: …` |
+| ❌ | unreadable | `chmod 000` | `cannot read <path>: …` |
+| ❌ | a directory, a symlink, someone else's, or group/other-writable | `chmod 666` | `<path> must be a plain file owned by you and not writable by anyone else.` |
 | ⚠ | — | — | files never warn; strict refusal is the only failure mode |
 
 ## Project file — `<repo>/.kapelle/config.json`
 
 Per-run defaults plus retention. A bad file surfaces per read site:
-`POST /repos` → 400; `POST /runs` → 400; `kapelle run --file` → exit 1; the
+`POST /repos` → 400; `POST /runs` → 400; `kapelle --file` → exit 1; the
 boot sweep → `cannot sweep <root>: …` notice and only that repository is
 skipped. The daemon keeps booting and serving the rest.
 
@@ -79,13 +84,13 @@ skipped. The daemon keeps booting and serving the rest.
 
 Known names are validated and override both files; unknown names are the only
 warning path. An offending known value blocks the daemon start and a
-`kapelle run --file` the same way a file error does.
+`kapelle --file` the same way a file error does.
 
 | Path | Case | Example | Result |
 | --- | --- | --- | --- |
 | ✅ | known + valid | `KAPELLE_TTL_MS=60000` | beats project config, loses to run file |
 | ✅ | unset | — | no opinion |
-| ⚠ | unknown name | `KAPELLE_FOO=1`, `KAPELLE_TOKEN=…` | warns once: `! unknown KAPELLE_* env ignored as config: KAPELLE_FOO. Known: KAPELLE_PORT, …`; ignored; still stripped from harness env by `resolveEnv` |
+| ⚠ | unknown name | `KAPELLE_FOO=1`, `KAPELLE_TOKEN=…` | warns once: `! unknown KAPELLE_* env ignored as config: KAPELLE_FOO. Known: KAPELLE_PORT, …`; ignored; still stripped from harness env by `resolveEnv`. Advisory, so `--quiet` drops it |
 | ❌ | known but empty | `KAPELLE_TTL_MS=` | `KAPELLE_TTL_MS is set but empty.` |
 | ❌ | known non-numeric | `KAPELLE_TTL_MS=soon` | `KAPELLE_TTL_MS must be a number; got "soon".` |
 | ❌ | known wrong range | `KAPELLE_MAX_CONCURRENCY=0` | `… must be a whole number 1 or greater; got 0.` |

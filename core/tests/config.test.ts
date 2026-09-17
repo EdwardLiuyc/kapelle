@@ -6,7 +6,14 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -143,13 +150,42 @@ test("structural failures are refused by path in both readers", async (t) => {
 
   await rm(projectPath);
   await mkdir(projectPath);
-  assert.throws(() => readProjectConfig(root), /cannot read/);
+  assert.throws(() => readProjectConfig(root), /must be a plain file/);
 
   const xdg = await tempDir(t);
   await writeUser(xdg, []);
   assert.throws(
     () => readUserConfig({ XDG_CONFIG_HOME: xdg }),
     /must be a JSON object/,
+  );
+});
+
+test("a config file anyone else can write, or a symlink, is refused", async (t) => {
+  // This file picks the daemon's port and how long an unanswered permission
+  // waits before it is denied, so it is guarded like the token beside it.
+  const xdg = await tempDir(t);
+  await writeUser(xdg, { port: 5000 });
+  const path = join(xdg, "kapelle", "config.json");
+
+  await chmod(path, 0o666);
+  assert.throws(
+    () => readUserConfig({ XDG_CONFIG_HOME: xdg }),
+    /must be a plain file/,
+  );
+
+  await chmod(path, 0o600);
+  assert.deepEqual(readUserConfig({ XDG_CONFIG_HOME: xdg }), { port: 5000 });
+
+  // lstat, not stat: a symlink planted where the config belongs is refused
+  // rather than followed, even when its target is a file we would accept.
+  const elsewhere = await tempDir(t);
+  const real = join(elsewhere, "planted.json");
+  await writeFile(real, JSON.stringify({ port: 9999 }));
+  await rm(path);
+  await symlink(real, path);
+  assert.throws(
+    () => readUserConfig({ XDG_CONFIG_HOME: xdg }),
+    /must be a plain file/,
   );
 });
 

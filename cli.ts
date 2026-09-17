@@ -327,7 +327,10 @@ async function runFromFile(path: string): Promise<number> {
   // M2-7: the project config of the folder the run starts in supplies the
   // defaults the run file omits; `orExit` refuses a bad config by file:key.
   const cwd = flag("cwd", process.cwd());
-  warnUnknownConfigEnv();
+  // Advisory, so `--quiet` drops it (#13): only the containment notice and the
+  // not-negotiated line survive. It fires for every legitimate `KAPELLE_*`
+  // secret too, so a quiet run would carry it on every invocation.
+  if (!quiet) warnUnknownConfigEnv();
   const { root } = await stateDirRoot(cwd);
   const defaults = orExit(() => resolveRunDefaults(root));
 

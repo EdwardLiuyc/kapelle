@@ -23,8 +23,8 @@
  * is still a refusal.
  */
 
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { lstatSync, readFileSync } from "node:fs";
+import { homedir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { SECRET_PREFIX } from "../protocol/registry.ts";
 import type { RunDefaults } from "./runfile.ts";
@@ -143,6 +143,13 @@ function checkKnob(key: keyof ConfigValues, value: unknown, where: string) {
  * Parse one config file, refusing unknown keys and keys that belong to the
  * other layer. Missing reads as `{}` — a config file is an override, and the
  * built-in defaults are what an absent one means.
+ *
+ * The file is guarded the way `core/runtime.ts` guards the token directory,
+ * and for the same reason: this one picks the daemon's port and how long an
+ * unanswered permission waits before it is denied. `lstat`, so a symlink
+ * planted where the config should be is refused rather than followed, and the
+ * check is on the **file** rather than its directory — `~/.config` is
+ * commonly 0755, and refusing that would be a guard nobody could satisfy.
  */
 function readConfigFile(
   path: string,
@@ -151,9 +158,18 @@ function readConfigFile(
 ): Record<string, unknown> {
   let text: string;
   try {
+    const st = lstatSync(path);
+    const mode = st.mode & 0o777;
+    if (!st.isFile() || st.uid !== userInfo().uid || (mode & 0o022) !== 0) {
+      throw new Error(
+        `${path} must be a plain file owned by you and not writable by ` +
+          `anyone else. Fix or remove it, then try again.`,
+      );
+    }
     text = readFileSync(path, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    if (err instanceof Error && err.message.startsWith(path)) throw err;
     throw new Error(`cannot read ${path}: ${messageOf(err)}`);
   }
 
@@ -281,13 +297,16 @@ export function resolveRunDefaults(
 ): RunDefaults {
   const project = readProjectConfig(root);
   const fromEnv = readEnvConfig(env);
-  const pick = (key: keyof RunDefaults) => fromEnv[key] ?? project[key];
-  return {
-    stallIdleMs: pick("stallIdleMs"),
-    stallRepeatCount: pick("stallRepeatCount"),
-    ttlMs: pick("ttlMs"),
-    maxConcurrency: pick("maxConcurrency"),
-  };
+  // Built from `RUN_DEFAULT_KEYS`, never a hand-written literal. Every field
+  // is optional, so a fifth knob added to the interface and the key list would
+  // still type-check against a literal that never returned it — the silent
+  // ignore this module exists to prevent, one layer up.
+  const defaults: RunDefaults = {};
+  for (const key of RUN_DEFAULT_KEYS) {
+    const value = fromEnv[key] ?? project[key];
+    if (value !== undefined) defaults[key] = value;
+  }
+  return defaults;
 }
 
 /**
