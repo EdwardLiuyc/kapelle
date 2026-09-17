@@ -61,7 +61,14 @@ if (scenario === "stall" || scenario === "stubborn") {
 // stdin; this fixture must not, and it must shrug off the sweep's SIGTERM so
 // the escalation to SIGKILL is what actually kills it.
 if (scenario === "stubborn") {
-  process.on("SIGTERM", () => {});
+  // A surviving harness can meet three things a dying supervisor leaves: the
+  // signals its shutdown path would send, a stdout/stderr reader that is gone,
+  // and nothing else. Ignore the first two so only SIGKILL can end it.
+  for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) {
+    process.on(signal, () => {});
+  }
+  process.stdout.on("error", () => {});
+  process.stderr.on("error", () => {});
   setInterval(() => {}, 1 << 30);
 }
 

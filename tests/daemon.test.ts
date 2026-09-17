@@ -1583,10 +1583,23 @@ test("kill -9 with a harness that ignores stdin and SIGTERM: the next boot kills
   // SIGKILL closes the daemon's end of the harness pipes. `stubborn` has a
   // live timer, so EOF alone must not end it.
   await new Promise((ok) => setTimeout(ok, 300));
-  assert.equal(alive(harness), true, "stdin EOF alone must not end it");
+  const harnessStderr = async (): Promise<string> =>
+    (await readFile(
+      join(root, ".kapelle", "runs", id, "stuck.stderr.log"),
+      "utf8",
+    ).catch(() => "")) || "(no stderr)";
+  assert.equal(
+    alive(harness),
+    true,
+    `stdin EOF alone must not end it; harness stderr: ${await harnessStderr()}`,
+  );
 
   const second = await boot(t, runtime, [], state);
-  assert.equal(await gone(harness), true, "the next boot must kill it");
+  assert.equal(
+    await gone(harness),
+    true,
+    `the next boot must kill it; harness stderr: ${await harnessStderr()}`,
+  );
   assert.equal(existsSync(childrenFile), false);
   const restored = await api(second, "GET", `/runs/${id}`);
   assert.equal(restored.status, 200);
