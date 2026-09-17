@@ -130,6 +130,29 @@ test("an unknown project key is refused naming file and key", async (t) => {
   );
 });
 
+test("structural failures are refused by path in both readers", async (t) => {
+  const root = await tempDir(t);
+  const projectPath = join(root, ".kapelle", "config.json");
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+
+  await writeFile(projectPath, "{not json");
+  assert.throws(() => readProjectConfig(root), /is not valid JSON/);
+
+  await writeFile(projectPath, "null");
+  assert.throws(() => readProjectConfig(root), /must be a JSON object/);
+
+  await rm(projectPath);
+  await mkdir(projectPath);
+  assert.throws(() => readProjectConfig(root), /cannot read/);
+
+  const xdg = await tempDir(t);
+  await writeUser(xdg, []);
+  assert.throws(
+    () => readUserConfig({ XDG_CONFIG_HOME: xdg }),
+    /must be a JSON object/,
+  );
+});
+
 test("env config parses known names and refuses bad values", () => {
   assert.deepEqual(
     readEnvConfig({ KAPELLE_TTL_MS: "5", KAPELLE_MAX_CONCURRENCY: "3" }),
@@ -197,6 +220,23 @@ test("run file > env > project config > built-in", async (t) => {
   assert.equal(floor.maxConcurrency, 4);
 });
 
+test("stall knobs flow from project and env into the resolved task", async (t) => {
+  const root = await tempDir(t);
+  await writeProject(root, { stallIdleMs: 111, stallRepeatCount: 2 });
+
+  const fromProject = validateRun(minimal, {}, resolveRunDefaults(root, {}));
+  assert.equal(fromProject.tasks[0].stallIdleMs, 111);
+  assert.equal(fromProject.tasks[0].stallRepeatCount, 2);
+
+  const env = {
+    KAPELLE_STALL_IDLE_MS: "222",
+    KAPELLE_STALL_REPEAT_COUNT: "3",
+  };
+  const fromEnv = validateRun(minimal, {}, resolveRunDefaults(root, env));
+  assert.equal(fromEnv.tasks[0].stallIdleMs, 222);
+  assert.equal(fromEnv.tasks[0].stallRepeatCount, 3);
+});
+
 test("retention resolves per repository, env above it", async (t) => {
   const one = await tempDir(t);
   const two = await tempDir(t);
@@ -210,6 +250,18 @@ test("retention resolves per repository, env above it", async (t) => {
   assert.equal(resolveRetentionMs(one, { KAPELLE_RETENTION_MS: "500" }), 500);
   // The env is process-wide, so it beats each repo's own value.
   assert.equal(resolveRetentionMs(two, { KAPELLE_RETENTION_MS: "500" }), 500);
+});
+
+test("retention env override still validates the repository's file", async (t) => {
+  const root = await tempDir(t);
+  await writeProject(root, { stallIdle: 1 });
+  assert.throws(
+    () => resolveRetentionMs(root, { KAPELLE_RETENTION_MS: "1000" }),
+    (err: unknown) =>
+      err instanceof Error &&
+      err.message.includes(join(root, ".kapelle", "config.json")) &&
+      err.message.includes('unknown key "stallIdle"'),
+  );
 });
 
 test("a bad project config skips that repo's sweep with a notice", async (t) => {

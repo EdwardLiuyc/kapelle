@@ -71,10 +71,12 @@ import {
 } from "./core/worktree.ts";
 import { AGENTS, type Warning } from "./protocol/registry.ts";
 
-// M2-7: user-level config and `KAPELLE_*` env are read once, after the
-// startup helpers below and before the port is claimed. Unknown `KAPELLE_*`
-// names warn and are ignored (they may be secrets); a known name with a bad
-// value refuses the start like any flag.
+// M2-7: the user-level config is read once here, after the startup helpers
+// below and before the port is claimed. `KAPELLE_*` is also read here for the
+// daemon-wide knobs, then re-read for every run-default resolution and per
+// repository by the boot sweep. Unknown `KAPELLE_*` names warn and are
+// ignored (they may be secrets); a known name with a bad value refuses the
+// start like any flag.
 const DEFAULT_PORT = 4719;
 
 const messageOf = (err: unknown) =>

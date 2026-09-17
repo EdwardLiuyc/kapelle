@@ -83,6 +83,20 @@ export interface CliResult {
 }
 
 /**
+ * The child environment, with the ambient config namespace removed. M2-7's
+ * config reads `KAPELLE_*` from the process, so an exported knob would change
+ * what these tests measure; a caller that means to set one passes it in
+ * `env`, which still wins.
+ */
+function childEnv(env?: Record<string, string>): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = { ...process.env };
+  for (const name of Object.keys(base)) {
+    if (name.startsWith("KAPELLE_")) delete base[name];
+  }
+  return env ? { ...base, ...env } : base;
+}
+
+/**
  * Run `cli.ts` as a real subprocess and collect everything it printed.
  *
  * No TTY is attached, so `--mode ask` resolves to `safe` here exactly as it
@@ -99,7 +113,7 @@ export function spawnCli(
 ) {
   const child = spawn(process.execPath, [script, ...args], {
     cwd: REPO,
-    env: env ? { ...process.env, ...env } : process.env,
+    env: childEnv(env),
   });
   t.after(() => void child.kill("SIGKILL"));
 

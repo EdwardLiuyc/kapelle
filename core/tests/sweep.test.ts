@@ -11,7 +11,7 @@ import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type TestContext, test } from "node:test";
+import { afterEach, beforeEach, type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import { gitRepo, tempDir } from "../../integration/helpers.ts";
 import { DEFAULT_RETENTION_MS, processIdentity, sweepBoot } from "../sweep.ts";
@@ -25,6 +25,31 @@ const RUN_ID = "20260906-120000-abcd";
 /** A second run id, for a worktree that must survive the first run's pass. */
 const ORPHAN_ID = "20260906-120001-efgh";
 const NOW = Date.parse("2026-09-17T00:00:00.000Z");
+
+/**
+ * The sweep reads `KAPELLE_*` from the process, so an ambient knob would move
+ * every window in this file. Clear them around each test; a test that wants
+ * the env sets it explicitly, and nothing here meets the developer's shell.
+ */
+let savedConfigEnv: Record<string, string> = {};
+
+beforeEach(() => {
+  savedConfigEnv = {};
+  for (const name of Object.keys(process.env)) {
+    if (!name.startsWith("KAPELLE_")) continue;
+    savedConfigEnv[name] = process.env[name] ?? "";
+    delete process.env[name];
+  }
+});
+
+afterEach(() => {
+  for (const name of Object.keys(process.env)) {
+    if (name.startsWith("KAPELLE_")) delete process.env[name];
+  }
+  for (const [name, value] of Object.entries(savedConfigEnv)) {
+    process.env[name] = value;
+  }
+});
 
 async function sweep(
   roots: string | string[],
@@ -536,6 +561,56 @@ test("retention is per repository, read from each repo's config", async (t) => {
   assert.equal(existsSync(longWorktree), true, notices.join("\n"));
   assert.equal(existsSync(longDir), true);
   assert.equal(await hasBranch(long, `kapelle/${RUN_ID}/a`), true);
+});
+
+test("a bad repo's config is skipped while the env window reaps another repo", async (t) => {
+  const bad = await gitRepo(t);
+  const good = await gitRepo(t);
+  const oldEndedAt = new Date(NOW - 2 * 60 * 60 * 1000).toISOString();
+  const recentEndedAt = new Date(NOW - 30 * 60 * 1000).toISOString();
+  const record = (root: string, id: string, endedAt: string) => ({
+    runId: id,
+    root,
+    cwd: root,
+    status: "failed",
+    startedAt: endedAt,
+    endedAt,
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${id}/a` }],
+  });
+
+  const oldWorktree = await addWorktree(good, "a", RUN_ID);
+  const oldDir = await writeRun(good, record(good, RUN_ID, oldEndedAt), RUN_ID);
+  const recentWorktree = await addWorktree(good, "a", ORPHAN_ID);
+  const recentDir = await writeRun(
+    good,
+    record(good, ORPHAN_ID, recentEndedAt),
+    ORPHAN_ID,
+  );
+  await mkdir(join(bad, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(bad, ".kapelle", "config.json"),
+    JSON.stringify({ stallIdle: 1 }),
+  );
+
+  // The env must win for `good`, but it must not hide `bad`'s broken file:
+  // the sweep skips that repo instead of reaping it under the env window.
+  process.env.KAPELLE_RETENTION_MS = String(60 * 60 * 1000);
+  const notices = await sweep(
+    [bad, good],
+    join(await tempDir(t), "children.json"),
+  );
+
+  assert.ok(
+    notices.some((text) => text.includes(bad) && text.includes('"stallIdle"')),
+    notices.join("\n"),
+  );
+  assert.equal(existsSync(oldWorktree), false, notices.join("\n"));
+  assert.equal(existsSync(oldDir), false);
+  assert.equal(await hasBranch(good, `kapelle/${RUN_ID}/a`), false);
+  // In-window for the same env: the good repo's recent run is kept.
+  assert.equal(existsSync(recentWorktree), true, notices.join("\n"));
+  assert.equal(existsSync(recentDir), true);
+  assert.equal(await hasBranch(good, `kapelle/${ORPHAN_ID}/a`), true);
 });
 
 test("a second sweep with the same clock says nothing and changes nothing", async (t) => {

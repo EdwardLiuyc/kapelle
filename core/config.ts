@@ -44,7 +44,8 @@ interface ConfigValues {
   retentionMs?: number;
 }
 
-/** The run defaults, and only these, are valid in a repository's file. */
+/** The per-run defaults. `retentionMs` is the other repository-level knob;
+ *  `PROJECT_KEYS` adds it just below. */
 const RUN_DEFAULT_KEYS = [
   "stallIdleMs",
   "stallRepeatCount",
@@ -250,9 +251,10 @@ function unknownConfigEnvNames(env: NodeJS.ProcessEnv): string[] {
 }
 
 /**
- * Warn about unknown `KAPELLE_*` names, once per process, and leave them
- * alone. They are not refused: the prefix is also where secrets live, and a
- * daemon must not fail to start over one.
+ * Warn about unknown `KAPELLE_*` names and leave them alone. Callers invoke
+ * this once per process; there is no internal once-guard. They are not
+ * refused: the prefix is also where secrets live, and a daemon must not fail
+ * to start over one.
  */
 export function warnUnknownConfigEnv(
   env: NodeJS.ProcessEnv = process.env,
@@ -297,5 +299,9 @@ export function resolveRetentionMs(
   root: string,
   env: NodeJS.ProcessEnv = process.env,
 ): number | undefined {
-  return readEnvConfig(env).retentionMs ?? readProjectConfig(root).retentionMs;
+  // The project file is read unconditionally: `??` on the env value would
+  // short-circuit it, and then a bad repository file would not skip that
+  // repository's sweep (issue #37 AC4) just because the env named a window.
+  const project = readProjectConfig(root);
+  return readEnvConfig(env).retentionMs ?? project.retentionMs;
 }

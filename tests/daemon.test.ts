@@ -64,10 +64,13 @@ function start(
   });
 }
 
-/** The two user-level directories a daemon must not share with anyone. */
+/** The user-level directories a daemon must not share with anyone. */
 const dirs = (runtime: string, state: string = runtime) => ({
   XDG_RUNTIME_DIR: runtime,
   XDG_STATE_HOME: state,
+  // M2-7's user config reads `$XDG_CONFIG_HOME/kapelle/config.json`; a path
+  // under this test's own state dir keeps a developer's real file out.
+  XDG_CONFIG_HOME: join(state, "config-home"),
 });
 
 /** Starts a daemon and reads back the record it wrote once listening. */
@@ -283,10 +286,7 @@ test("a state directory other users can enter is refused", async (t) => {
   // refusal below is the state directory's own guard and not `runtimeDir`'s.
   // `repos.json` names the folders the daemon will start harnesses in.
   const r = await exitOf(
-    spawnCli(t, ["--port", "0"], "daemon.ts", {
-      XDG_RUNTIME_DIR: runtime,
-      XDG_STATE_HOME: state,
-    }),
+    spawnCli(t, ["--port", "0"], "daemon.ts", dirs(runtime, state)),
   );
   assert.ok(r, "the daemon started anyway");
   assert.equal(r.code, 1);
@@ -1181,6 +1181,38 @@ test("an ask run with no client attached is denied at the timeout, and completes
   assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
 });
 
+/** Boots with `env`, starts an ask run with no client, and returns it settled. */
+async function unanswered(t: TestContext, env: Record<string, string>) {
+  const d = await boot(t, await tempDir(t), [], undefined, env);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", askRun(cwd));
+  assert.equal(posted.status, 202, posted.body.error);
+  await pendingOne(d);
+  return { cwd, run: await settled(d, posted.body.id) };
+}
+
+test("a user-config permission timeout settles an unanswered decision", async (t) => {
+  const config = await tempDir(t);
+  await mkdir(join(config, "kapelle"), { recursive: true });
+  await writeFile(
+    join(config, "kapelle", "config.json"),
+    JSON.stringify({ permissionTimeoutMs: 1500 }),
+  );
+
+  // The default is 120 s; settling inside the 20 s poll can only mean the
+  // user file's 1.5 s window was applied.
+  const { cwd, run } = await unanswered(t, { XDG_CONFIG_HOME: config });
+  assert.equal(run.status, "done");
+  await assert.rejects(stat(join(cwd, "ACP_TEST.md")));
+});
+
+test("KAPELLE_PERMISSION_TIMEOUT_MS settles an unanswered decision", async (t) => {
+  const { run } = await unanswered(t, {
+    KAPELLE_PERMISSION_TIMEOUT_MS: "1500",
+  });
+  assert.equal(run.status, "done");
+});
+
 test("an answer lets the write happen; a second answer is 409, an unknown id 404, a bad body 400", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await tempDir(t));
@@ -1755,6 +1787,9 @@ test("a user-level config supplies the port when no flag does", async (t) => {
     await readFile(join(runtime, "kapelle", "daemon.json"), "utf8"),
   );
   assert.ok(port > 0, "port 0 from the config should have bound an ephemeral");
+  // daemon.ts's DEFAULT_PORT is 4719; a different port proves the file, not
+  // the built-in default, supplied the value.
+  assert.notEqual(port, 4719, "the config's port 0 must beat the 4719 default");
   d.child.kill("SIGTERM");
   assert.equal((await d.done).code, 0);
 });
@@ -1779,6 +1814,45 @@ test("a --port flag still wins over the user config", async (t) => {
     await readFile(join(runtime, "kapelle", "daemon.json"), "utf8"),
   );
   assert.notEqual(port, 1);
+  d.child.kill("SIGTERM");
+  assert.equal((await d.done).code, 0);
+});
+
+test("KAPELLE_PORT wins over the user config", async (t) => {
+  const runtime = await tempDir(t);
+  const config = await tempDir(t);
+  await mkdir(join(config, "kapelle"), { recursive: true });
+  // Port 1 fails for a non-root process; `not 1` also catches a root process
+  // actually binding the user file's value instead of the env's ephemeral 0.
+  await writeFile(
+    join(config, "kapelle", "config.json"),
+    JSON.stringify({ port: 1 }),
+  );
+  const d = spawnCli(t, [], "daemon.ts", {
+    ...dirs(runtime),
+    XDG_CONFIG_HOME: config,
+    KAPELLE_PORT: "0",
+  });
+  await d.waitFor("listening on ");
+  const { port } = JSON.parse(
+    await readFile(join(runtime, "kapelle", "daemon.json"), "utf8"),
+  );
+  assert.notEqual(port, 1, "the env's port 0 must beat the user file's 1");
+  d.child.kill("SIGTERM");
+  assert.equal((await d.done).code, 0);
+});
+
+test("a --port flag wins over KAPELLE_PORT", async (t) => {
+  const runtime = await tempDir(t);
+  const d = spawnCli(t, ["--port", "0"], "daemon.ts", {
+    ...dirs(runtime),
+    KAPELLE_PORT: "1",
+  });
+  await d.waitFor("listening on ");
+  const { port } = JSON.parse(
+    await readFile(join(runtime, "kapelle", "daemon.json"), "utf8"),
+  );
+  assert.notEqual(port, 1, "the flag's port 0 must beat the env's 1");
   d.child.kill("SIGTERM");
   assert.equal((await d.done).code, 0);
 });

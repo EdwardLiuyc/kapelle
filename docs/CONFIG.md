@@ -116,7 +116,9 @@ Notes:
 
 - `--permission-timeout` is seconds; the env and file forms are milliseconds.
 - Project config is re-read on every request/run (edit without a restart);
-  user config and `KAPELLE_*` are read once at daemon start.
+  the user config is read once at daemon start. `KAPELLE_*` is read at daemon
+  start for the daemon-wide knobs, then re-read for every run-default
+  resolution and per repository by the boot sweep.
 - `0` is a meaningful watchdog value (signal disabled) and a meaningful
   `retentionMs` (reap every terminal run on the next sweep); `port: 0` means
   an OS-chosen port.
