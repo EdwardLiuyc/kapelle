@@ -93,7 +93,7 @@ const CLAUDE_PARENT_ENV: EnvSpec = {
  * — entry or `--cmd`, env spec or none (M2-8). A daemon holding the shared
  * secret would otherwise hand it to every subprocess it spawns.
  */
-const SECRET_PREFIX = "KAPELLE_";
+export const SECRET_PREFIX = "KAPELLE_";
 
 export const AGENTS: Record<string, AgentEntry> = {
   // Native ACP support: `opencode acp` starts it as an ACP subprocess.

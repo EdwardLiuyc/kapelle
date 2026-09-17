@@ -342,6 +342,22 @@ test("a bad run file is the validator's sentence, not a stack", async (t) => {
   assert.doesNotMatch(r.stderr, /Node\.js v\d/);
 });
 
+test("a bad project config refuses a run-file run, naming the key", async (t) => {
+  const root = await gitRepo(t);
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(root, ".kapelle", "config.json"),
+    JSON.stringify({ stallIdle: 1 }),
+  );
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const r = await runCli(t, ["--file", file, "--cwd", root]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /unknown key "stallIdle"/);
+  assert.doesNotMatch(r.stderr, /Node\.js v\d/);
+});
+
 test("a missing run file is a clean exit, not a stack", async (t) => {
   const r = await runCli(t, ["--file", "/nope/none.run.json"]);
 

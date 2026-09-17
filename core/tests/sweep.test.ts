@@ -501,6 +501,43 @@ test("retentionMs overrides the default window", async (t) => {
   assert.equal(await hasBranch(root, `kapelle/${RUN_ID}/a`), false);
 });
 
+test("retention is per repository, read from each repo's config", async (t) => {
+  const short = await gitRepo(t);
+  const long = await gitRepo(t);
+  const endedAt = new Date(NOW - 2 * 60 * 60 * 1000).toISOString();
+  const record = (root: string) => ({
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    startedAt: endedAt,
+    endedAt,
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+
+  const shortWorktree = await addWorktree(short, "a");
+  const longWorktree = await addWorktree(long, "a");
+  const shortDir = await writeRun(short, record(short));
+  const longDir = await writeRun(long, record(long));
+  await writeFile(
+    join(short, ".kapelle", "config.json"),
+    JSON.stringify({ retentionMs: 60 * 60 * 1000 }),
+  );
+
+  const notices = await sweep(
+    [short, long],
+    join(await tempDir(t), "children.json"),
+  );
+
+  assert.equal(existsSync(shortWorktree), false);
+  assert.equal(existsSync(shortDir), false);
+  assert.equal(await hasBranch(short, `kapelle/${RUN_ID}/a`), false);
+  // The repository with no config keeps the built-in 30 days.
+  assert.equal(existsSync(longWorktree), true, notices.join("\n"));
+  assert.equal(existsSync(longDir), true);
+  assert.equal(await hasBranch(long, `kapelle/${RUN_ID}/a`), true);
+});
+
 test("a second sweep with the same clock says nothing and changes nothing", async (t) => {
   const root = await gitRepo(t);
   const path = await addWorktree(root, "a");

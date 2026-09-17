@@ -33,8 +33,18 @@ import { type HarnessLayer, resolvePolicy } from "./policy.ts";
 import { WATCHDOG_DEFAULTS, type WatchdogLimits } from "./watchdog.ts";
 
 /** Suggested by the ratified decision (`docs/STORIES.md`, M1b-1 Gap 2). M2-7
- *  config overrides it; nothing here reads config, which does not exist yet. */
+ *  config overrides it: `core/config.ts` resolves `KAPELLE_*` and the project
+ *  file into `RunDefaults`, and nothing in this module reads either. */
 const DEFAULT_MAX_CONCURRENCY = 4;
+
+/** The config layer below the run file (M2-7): a task value or a run-level
+ *  value wins over it, and the built-in defaults floor it. */
+export interface RunDefaults {
+  stallIdleMs?: number;
+  stallRepeatCount?: number;
+  ttlMs?: number;
+  maxConcurrency?: number;
+}
 
 /** One task, resolved. No optional defaults: if a field has a default, it is
  *  filled in by the time anyone sees this. `cmd` and `worktree` are optional
@@ -124,6 +134,7 @@ export const TASK_KEYS = new Set([
 export function validateRun(
   input: unknown,
   agents: Record<string, AgentEntry> = AGENTS,
+  defaults: RunDefaults = {},
 ): Run {
   const run = asObject(input, "run file");
   rejectUnknownKeys(run, RUN_KEYS, "run file");
@@ -132,11 +143,12 @@ export function validateRun(
     throw new Error('run file needs a non-empty "tasks" array.');
   }
 
-  const maxConcurrency = run.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY;
+  const maxConcurrency =
+    run.maxConcurrency ?? defaults.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY;
   if (!Number.isInteger(maxConcurrency) || (maxConcurrency as number) < 1) {
     throw new Error(
       `run file: "maxConcurrency" must be a whole number 1 or greater; ` +
-        `got ${JSON.stringify(run.maxConcurrency)}.`,
+        `got ${JSON.stringify(run.maxConcurrency ?? defaults.maxConcurrency)}.`,
     );
   }
 
@@ -170,7 +182,7 @@ export function validateRun(
 
   const seen = new Set<string>();
   const tasks = run.tasks.map((raw, i) =>
-    validateTask(raw, i, run, agents, seen),
+    validateTask(raw, i, run, agents, seen, defaults),
   );
 
   const note = optionalString(run.note, "run file", "note");
@@ -185,6 +197,7 @@ function validateTask(
   run: Record<string, unknown>,
   agents: Record<string, AgentEntry>,
   seen: Set<string>,
+  defaults: RunDefaults,
 ): Task {
   const t = asObject(raw, `tasks[${index}]`);
   rejectUnknownKeys(t, TASK_KEYS, `tasks[${index}]`);
@@ -292,7 +305,7 @@ function validateTask(
     agent,
     mode,
     allowReadOutsideRoot,
-    ...watchdogLimits(t, run, where),
+    ...watchdogLimits(t, run, where, defaults),
   };
   if (cmd !== undefined) task.cmd = cmd;
   if (worktree !== undefined) task.worktree = worktree;
@@ -385,15 +398,18 @@ function optionalCount(
   return value as number;
 }
 
-/** Task value, else run value, else the default — the `t.x ?? run.x` shape the
- *  run-level defaults already use. */
+/** Task value, else run value, else the config default, else the built-in —
+ *  the `t.x ?? run.x` shape the run-level defaults already use. */
 function watchdogLimits(
   t: Record<string, unknown>,
   run: Record<string, unknown>,
   where: string,
+  defaults: RunDefaults,
 ): WatchdogLimits {
   const pick = (key: (typeof WATCHDOG_KEYS)[number]) =>
-    optionalCount(t[key] ?? run[key], where, key) ?? WATCHDOG_DEFAULTS[key];
+    optionalCount(t[key] ?? run[key], where, key) ??
+    defaults[key] ??
+    WATCHDOG_DEFAULTS[key];
   return {
     stallIdleMs: pick("stallIdleMs"),
     stallRepeatCount: pick("stallRepeatCount"),
