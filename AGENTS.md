@@ -70,6 +70,11 @@ Reusable procedures live in `.agent/skills/<name>/SKILL.md` as plain Markdown, a
 only a shell and the CLIs they name. There is no registry and no plugin: read the file and
 follow it.
 
+Harnesses that need discovery metadata get a per-harness shim that carries the frontmatter
+and points back here: `.pi/skills/` (pi, invoked as `/skill:<name>`) and `.claude/skills/`
+(Claude Code, invoked as `/<name>`). Keep procedure edits in `.agent/skills/`; the shims
+carry discovery metadata only.
+
 - **[`pickup-issue`](.agent/skills/pickup-issue/SKILL.md)** — run when asked to pick up,
   start, scope or break down a GitHub issue, before writing any code.
 - **[`address-comment`](.agent/skills/address-comment/SKILL.md)** — run when asked to
