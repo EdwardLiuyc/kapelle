@@ -20,8 +20,9 @@
  *    run that is terminal **and** past the retention window loses its
  *    worktree, its branches and its run directory (log included, M2-2's only
  *    disk bound); a run inside the window keeps all of it. A worktree with no
- *    readable record is an orphan: a clean one loses its checkout but keeps
- *    its branch, and a dirty one is kept and named.
+ *    readable record is an orphan: a clean one still on a branch loses its
+ *    checkout but keeps that branch, and one that is dirty or on a detached
+ *    HEAD — where the work is on no ref to keep — is kept and named.
  *
  * **Whole-run reaping is ordered worktree-first.** If a checkout cannot be
  * removed, the record is kept too and the run is retried on the next boot —
@@ -33,7 +34,7 @@
  * `restoreRuns` follows.
  */
 
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { rename, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
@@ -72,15 +73,18 @@ export interface SweepOptions {
  * and equality is all the sweep needs. The two reads happen on the same
  * machine with the same locale, so a locale-formatted date compares equal to
  * itself and a recycled pid does not.
+ *
+ * **Asynchronous because of its other caller.** `daemon.ts` records the
+ * identity from the `_client_harness_spawned` listener, and a synchronous
+ * fork+exec there blocks the event loop for every other run — SSE writes and
+ * permission answers included — on the spawn of each task's harness.
  */
-export function processIdentity(pid: number): string | null {
+export async function processIdentity(pid: number): Promise<string | null> {
   try {
-    const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
-      encoding: "utf8",
+    const { stdout } = await run("ps", ["-p", String(pid), "-o", "lstart="], {
       timeout: 2_000,
-      stdio: ["ignore", "pipe", "ignore"],
     });
-    const identity = out.trim();
+    const identity = stdout.trim();
     return identity === "" ? null : identity;
   } catch {
     return null;
@@ -97,7 +101,17 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** SIGTERM, a moment, then SIGKILL — the order `AcpAgent.stop()` uses. */
+/**
+ * SIGTERM, half a second, then SIGKILL.
+ *
+ * **Not `AcpAgent.stop()`'s order**, which closes stdin first and only SIGKILLs
+ * a harness still alive after 5 s, and never sends SIGTERM at all. Closing
+ * stdin is the stop that works — §M2-4 measured SIGTERM leaving opencode's
+ * shell command alive where end of file left nothing — but the sweep inherits
+ * no pipe to a process it did not spawn, so signals are all it has. The grace
+ * is short for the same reason: SIGTERM is the signal measured not to be
+ * enough, so waiting the harness's own 5 s on it would only delay the boot.
+ */
 async function terminate(pid: number): Promise<void> {
   try {
     process.kill(pid, "SIGTERM");
@@ -136,11 +150,32 @@ async function sweepChildren(
     if (!isObject(raw)) continue;
     const pid = raw.pid;
     if (!isNumber(pid) || !Number.isInteger(pid)) continue;
+    const where = `run ${raw.runId}, task ${raw.taskId}`;
     // Without the recorded identity this cannot prove the pid is the harness,
-    // and a recycled pid would make the signal land on a stranger.
+    // and a recycled pid would make the signal land on a stranger — so an
+    // unverifiable pid is left alive, which is the safer of two bad answers.
+    // **Never silently**: `children.json` is deleted a few lines down, so this
+    // notice is the last trace of a harness someone may have to stop by hand.
     const startedAt = raw.startedAt;
-    if (!isString(startedAt)) continue;
-    if (processIdentity(pid) !== startedAt) continue;
+    if (!isString(startedAt)) {
+      if (isAlive(pid)) {
+        onNotice(
+          `harness pid ${pid} (${where}) is alive but was recorded with no ` +
+            `start time, so it cannot be told apart from a reused pid; left ` +
+            `alone — stop it by hand if it is still running`,
+        );
+      }
+      continue;
+    }
+    if ((await processIdentity(pid)) !== startedAt) {
+      if (isAlive(pid)) {
+        onNotice(
+          `pid ${pid} (${where}) is alive but no longer the recorded ` +
+            `harness; left alone`,
+        );
+      }
+      continue;
+    }
     await terminate(pid);
     onNotice(
       `killed harness pid ${pid} (run ${raw.runId}, task ` +
@@ -189,20 +224,43 @@ function readRecord(path: string, id: string): RunRecord | null {
   }
 }
 
-/** The record's `endedAt` as a time, or `null` when it is absent or invalid. */
-function endedAtOf(record: RunRecord): number | null {
-  const value = record.endedAt;
-  if (!isString(value)) return null;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
+/**
+ * When a record's retention window starts: its `endedAt`, falling back to its
+ * `startedAt`.
+ *
+ * The fallback is what keeps a record mortal. A terminal record with no
+ * readable `endedAt` — written before M2-6 added the field, or hand-edited
+ * since — is otherwise never past the window *and* never an orphan either,
+ * because its worktree does have a record; it would keep its checkout, its
+ * branches and its `events.jsonl` forever, and retention is M2-2's only disk
+ * bound. `null` only when neither stamp parses, which is a record the sweep
+ * cannot date at all and reports rather than reaps.
+ */
+function terminalSince(record: RunRecord): number | null {
+  for (const value of [record.endedAt, record.startedAt]) {
+    if (!isString(value)) continue;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 /**
  * Rewrite with temp file plus `rename`, the shape `core/run.ts` uses: a reader
  * racing the sweep sees the old record or the new one, never half of either.
+ *
+ * The temp name carries this process's pid because the sweep is **not** the
+ * only writer of `run.json`: a `node cli.ts --file` run in an added repository
+ * writes the same file on every task transition, and a shared `run.json.tmp`
+ * is exactly how two processes turn one atomic write into a torn one.
+ *
+ * ponytail: the pid suffix keeps the write atomic, not the decision. A CLI run
+ * that is genuinely live still reads as `running` to a daemon booting beside
+ * it and is marked `failed` under it. Closing that needs the writer's pid in
+ * the record itself, which is M2-7's shape, not this pass's.
  */
 async function writeRecord(path: string, record: RunRecord): Promise<void> {
-  const tmp = `${path}.tmp`;
+  const tmp = `${path}.${process.pid}.tmp`;
   // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
   // pi-lens-ignore: no-raw-json-store-write
   await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
@@ -224,8 +282,19 @@ interface RepoPass {
   onNotice: (text: string) => void;
 }
 
-/** Worktrees under `<root>/.kapelle/wt`, after pruning vanished checkouts. */
-async function managedWorktrees(pass: RepoPass): Promise<ManagedWorktree[]> {
+/**
+ * Worktrees under `<root>/.kapelle/wt`, after pruning vanished checkouts.
+ *
+ * `null` — not `[]` — when git could not answer, because the two mean opposite
+ * things to every caller below. An empty list says "this run owns no
+ * checkouts", which sends `reapRun` straight to `rmSync` and `branch -D`,
+ * removing checkouts behind git's back and leaving stale `.git/worktrees`
+ * admin entries; and it makes every real checkout look like an orphan. A
+ * repository whose worktrees cannot be listed is left for the next boot.
+ */
+async function managedWorktrees(
+  pass: RepoPass,
+): Promise<ManagedWorktree[] | null> {
   const { root, onNotice } = pass;
   try {
     // An admin entry whose working tree is gone is what plain `git worktree
@@ -247,7 +316,7 @@ async function managedWorktrees(pass: RepoPass): Promise<ManagedWorktree[]> {
     return managed;
   } catch (err) {
     onNotice(`cannot reconcile worktrees in ${root}: ${messageOf(err)}`);
-    return [];
+    return null;
   }
 }
 
@@ -268,13 +337,38 @@ async function reconcileOrphan(path: string, pass: RepoPass): Promise<void> {
     onNotice(`leaving orphan worktree ${path}: it has uncommitted changes`);
     return;
   }
+  // **A clean checkout is not the same as an empty one, and "the branch is
+  // kept" only holds while HEAD is still on a branch.** `release`
+  // (`core/worktree.ts`) refuses the same way and for the same measured reason
+  // (#85): an agent that ran `git checkout <sha>` and committed left that work
+  // on no ref at all, and removing the checkout takes its reflog with it, so
+  // the commits become unreachable. Orphans are precisely the `kill -9` case,
+  // which is when an agent is most likely to have been interrupted mid-move.
+  const on = await tryGit(path, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (on === null) {
+    onNotice(
+      `leaving orphan worktree ${path}: it is on a detached HEAD, so any ` +
+        `commit there is on no branch and removing it would lose the work`,
+    );
+    return;
+  }
   try {
     await git(root, ["worktree", "remove", "--force", path]);
   } catch (err) {
     onNotice(`cannot remove orphan worktree ${path}: ${messageOf(err)}`);
     return;
   }
-  onNotice(`removed orphan worktree ${path}; its branch is kept`);
+  onNotice(`removed orphan worktree ${path}; its branch ${on} is kept`);
+}
+
+/** `git`, but a failure is an answer (`null`) rather than a throw. */
+async function tryGit(cwd: string, args: string[]): Promise<string | null> {
+  try {
+    const out = await git(cwd, args);
+    return out.trim();
+  } catch {
+    return null;
+  }
 }
 
 /** Does the repository have this exact local branch? */
@@ -391,7 +485,7 @@ async function markCrashed(
   records: Map<string, RunRecord | null>,
   pass: RepoPass,
 ): Promise<void> {
-  const { runsDir, now } = pass;
+  const { runsDir, now, onNotice } = pass;
   for (const [id, record] of records) {
     if (record?.status !== "running") continue;
     const rewritten: RunRecord = {
@@ -402,8 +496,19 @@ async function markCrashed(
         task.status === "running" ? { ...task, status: "failed" } : task,
       ),
     };
-    await writeRecord(join(runsDir, id, "run.json"), rewritten);
-    records.set(id, rewritten);
+    // Isolated per record: one unwritable `run.json` — a full disk, a
+    // read-only mount, the wrong owner — must not take this repository's
+    // worktree reconciliation, reaping and orphan cleanup down with it, which
+    // is what an escape to `sweepBoot`'s catch would do on this and every
+    // later boot. The old record stays `running` and is retried next time.
+    try {
+      await writeRecord(join(runsDir, id, "run.json"), rewritten);
+      records.set(id, rewritten);
+    } catch (err) {
+      onNotice(
+        `cannot mark run ${id} in ${pass.root} as failed: ${messageOf(err)}`,
+      );
+    }
   }
 }
 
@@ -415,9 +520,34 @@ async function reapExpired(
 ): Promise<void> {
   for (const [id, record] of records) {
     if (!record) continue;
-    const endedAt = endedAtOf(record);
-    if (endedAt === null || pass.now - endedAt <= pass.retentionMs) continue;
-    await reapRun(id, record, managed, pass);
+    // Only terminal runs are reapable. A `running` record can still be here:
+    // `markCrashed` above isolates a write that failed, and a live
+    // `cli.ts --file` run in an added repository writes the same status. Its
+    // worktree is the one thing this pass exists to keep, and `startedAt` is
+    // no licence to remove it — the story reaps terminal runs only.
+    if (record.status === "running") {
+      pass.onNotice(
+        `keeping run ${id} in ${pass.root}: it still reads running, so it ` +
+          `is not terminal and retention does not apply`,
+      );
+      continue;
+    }
+    const since = terminalSince(record);
+    if (since === null) {
+      pass.onNotice(
+        `keeping run ${id} in ${pass.root}: its record carries no readable ` +
+          `startedAt or endedAt, so it cannot be dated against retention`,
+      );
+      continue;
+    }
+    if (pass.now - since <= pass.retentionMs) continue;
+    try {
+      await reapRun(id, record, managed, pass);
+    } catch (err) {
+      // Isolated like `markCrashed`: a directory that cannot be removed must
+      // not take the repository's later records and orphan pass down with it.
+      pass.onNotice(`cannot reap run ${id} in ${pass.root}: ${messageOf(err)}`);
+    }
   }
 }
 
@@ -441,6 +571,12 @@ async function sweepRepo(
   const managed = existsSync(join(root, STATE_DIR, "wt"))
     ? await managedWorktrees(pass)
     : [];
+  // Records were still worth marking — that needs no git — but nothing below
+  // is safe without the list: see `managedWorktrees` on why `null` is not `[]`.
+  if (managed === null) {
+    onNotice(`skipping reap and orphan cleanup in ${root} until the next boot`);
+    return;
+  }
 
   await reapExpired(records, managed, pass);
 
@@ -466,7 +602,15 @@ export async function sweepBoot(options: SweepOptions): Promise<void> {
     onNotice = (text: string) => console.error(text),
   } = options;
 
-  await sweepChildren(childrenFile, onNotice);
+  // Caught like a repository: `sweepChildren` removes files and signals
+  // processes, and the file header's promise is that nothing here throws — an
+  // unhandled rejection out of the boot path would exit past `daemon.ts`'s
+  // `orExit` and leave the claim file behind.
+  try {
+    await sweepChildren(childrenFile, onNotice);
+  } catch (err) {
+    onNotice(`cannot sweep ${childrenFile}: ${messageOf(err)}`);
+  }
   for (const root of repos) {
     try {
       await sweepRepo(root, retentionMs, now, onNotice);

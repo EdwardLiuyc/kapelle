@@ -402,11 +402,27 @@ function restoreRuns(): void {
 // restored or served. This rewrites a record left `running` to `failed` with
 // a fresh `endedAt`, so the scan below sees it as terminal; worktrees and runs
 // inside the retention window are left alone.
+// The real handlers are installed further down, once `server` and the run
+// registry exist. Until then a ^C through a slow sweep — git across several
+// repositories, half a second per surviving pid — would take the default kill
+// and leave the claim file that `claim()` has already written, the one state
+// M2-4 works to avoid. These two do that much and no more: there is no run to
+// cancel yet.
+const bailOut = () => {
+  rmSync(file, { force: true });
+  process.exit(0);
+};
+process.once("SIGTERM", bailOut);
+process.once("SIGINT", bailOut);
+
 await sweepBoot({
   repos: addedRepos,
   childrenFile: join(dir, "children.json"),
   onNotice: (text) => console.error(text),
 });
+
+process.off("SIGTERM", bailOut);
+process.off("SIGINT", bailOut);
 
 // At import, before the port opens: a request must never meet a half-restored
 // list. ponytail: synchronous and O(runs ever kept) — one `readdir` plus one
@@ -436,10 +452,15 @@ function restoredLog(id: string): Promise<EventLog | undefined> | undefined {
  * the record for a harness build that does not. Removed once nothing is live,
  * so a file that is there after a daemon died names only what was running.
  */
-const children = new Map<
-  number,
-  { pid: number; runId: string; taskId: string; startedAt?: string }
->();
+interface Child {
+  pid: number;
+  runId: string;
+  taskId: string;
+  /** `ps`'s start time, filled in once it answers; see the spawn listener. */
+  startedAt?: string;
+}
+
+const children = new Map<number, Child>();
 const childrenFile = join(dir, "children.json");
 
 // Each entry carries the process's start time (M2-5): the sweep signals a pid
@@ -543,13 +564,21 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
       // this harness and not a recycled pid (M2-5). `undefined` when `ps`
       // cannot answer before the harness exits: the sweep then leaves the pid
       // alone rather than signal a stranger.
-      children.set(update.pid, {
-        pid: update.pid,
-        runId: id,
-        taskId: agent,
-        startedAt: processIdentity(update.pid) ?? undefined,
-      });
+      const entry: Child = { pid: update.pid, runId: id, taskId: agent };
+      children.set(update.pid, entry);
       recordChildren();
+      // Filled in after the fact, never inline: `processIdentity` shells out
+      // to `ps`, and doing that synchronously here would stall every other
+      // run's SSE writes and permission answers on each harness spawn. The
+      // value is only read by the *next* boot, so the short window where the
+      // file names a pid with no identity costs nothing — and if the harness
+      // exits inside it, `_client_harness_exited` has already dropped the
+      // entry, which is what the identity check below compares.
+      void processIdentity(update.pid).then((startedAt) => {
+        if (startedAt === null || children.get(update.pid) !== entry) return;
+        entry.startedAt = startedAt;
+        recordChildren();
+      });
     } else if (update.sessionUpdate === "_client_harness_exited") {
       children.delete(update.pid);
       recordChildren();

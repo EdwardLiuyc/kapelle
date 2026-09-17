@@ -625,7 +625,10 @@ async function writeRunRecord(input: RunRecordInput): Promise<void> {
     tasks: input.tasks,
   };
   const path = join(input.logDir, "run.json");
-  const tmp = `${path}.tmp`;
+  // Suffixed with the pid: `core/sweep.ts` rewrites this same file on a daemon
+  // boot, so a fixed `run.json.tmp` would let two processes write one temp
+  // path and rename halves of each other's record into place.
+  const tmp = `${path}.${process.pid}.tmp`;
   // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
   // pi-lens-ignore: no-raw-json-store-write
   await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");

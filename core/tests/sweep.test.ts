@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
@@ -22,6 +22,8 @@ const git = async (cwd: string, ...args: string[]) =>
   (await run("git", args, { cwd })).stdout.trim();
 
 const RUN_ID = "20260906-120000-abcd";
+/** A second run id, for a worktree that must survive the first run's pass. */
+const ORPHAN_ID = "20260906-120001-efgh";
 const NOW = Date.parse("2026-09-17T00:00:00.000Z");
 
 async function sweep(
@@ -98,7 +100,7 @@ async function gone(pid: number): Promise<boolean> {
 
 async function waitForIdentity(pid: number): Promise<string> {
   for (const until = Date.now() + 5_000; Date.now() < until; ) {
-    const identity = processIdentity(pid);
+    const identity = await processIdentity(pid);
     if (identity) return identity;
     await new Promise((ok) => setTimeout(ok, 25));
   }
@@ -226,6 +228,28 @@ test("the boundary holds: kept at 30 days, reaped just past it", async (t) => {
   assert.equal(await hasBranch(root, `kapelle/${RUN_ID}/a`), false);
 });
 
+test("a terminal record with no endedAt is dated by its startedAt", async (t) => {
+  const root = await gitRepo(t);
+  const path = await addWorktree(root, "a");
+  // The record a run written before M2-6 leaves, or a hand-edited one. Without
+  // a fallback stamp it is never past the window and never an orphan either,
+  // so its checkout, branches and event log would be kept for good.
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    startedAt: "2026-08-01T00:00:00.000Z",
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal(existsSync(path), false);
+  assert.equal(existsSync(dir), false);
+  assert.equal(await hasBranch(root, `kapelle/${RUN_ID}/a`), false);
+});
+
 // --- orphans: no readable record --------------------------------------------
 
 test("a clean orphan loses its checkout but keeps its branch", async (t) => {
@@ -252,6 +276,31 @@ test("an unreadable record counts as absent", async (t) => {
 
   assert.equal(existsSync(path), false);
   assert.equal(existsSync(join(dir, "run.json")), true, "the record stays");
+});
+
+test("an orphan on a detached HEAD is kept, however clean it looks", async (t) => {
+  const root = await gitRepo(t);
+  const path = await addWorktree(root, "a");
+  // What `kill -9` can interrupt: the agent moved off the task branch and
+  // committed, so the work is on no ref and the clean tree below is a lie.
+  await git(path, "checkout", "--detach");
+  await writeFile(join(path, "work.txt"), "kept\n");
+  await git(path, "add", "-A");
+  await git(
+    path,
+    "-c",
+    "user.email=t@e",
+    "-c",
+    "user.name=t",
+    "commit",
+    "-m",
+    "w",
+  );
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal(existsSync(path), true, "the checkout carries the only copy");
+  assert.ok(notices.some((notice) => notice.includes("detached HEAD")));
 });
 
 test("a dirty orphan is kept and noticed", async (t) => {
@@ -317,6 +366,122 @@ test("a pid that no longer matches its identity is not signalled", async (t) => 
     false,
   );
   assert.equal(existsSync(childrenFile), false);
+});
+
+test("a pid recorded without an identity is left alone, but named", async (t) => {
+  const child = sleeper(t);
+  const childrenFile = join(await tempDir(t), "children.json");
+  // What `daemon.ts` writes when `ps` could not answer at spawn: `startedAt`
+  // is absent, so nothing here can tell this pid from a reused one.
+  await writeFile(
+    childrenFile,
+    JSON.stringify({
+      pid: process.pid,
+      children: [{ pid: child.pid, runId: RUN_ID, taskId: "a" }],
+    }),
+  );
+
+  const notices = await sweep([], childrenFile);
+
+  assert.equal(isAlive(child.pid as number), true);
+  assert.ok(
+    notices.some(
+      (notice) =>
+        notice.includes(`${child.pid}`) && notice.includes("no start time"),
+    ),
+    "the file is deleted next, so the notice is the last trace of this pid",
+  );
+});
+
+// --- git refusing to answer --------------------------------------------------
+
+test("worktrees that cannot be listed stop the reap, not just the list", async (t) => {
+  // A root that is not a repository at all: `git worktree prune` fails there,
+  // which stands in for any git that will not answer.
+  const root = await tempDir(t);
+  await mkdir(join(root, ".kapelle", "wt", RUN_ID, "a"), { recursive: true });
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    startedAt: "2026-08-01T00:00:00.000Z",
+    endedAt: "2026-08-01T00:10:00.000Z",
+    tasks: [{ id: "a", status: "failed", branch: `kapelle/${RUN_ID}/a` }],
+  });
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal(
+    existsSync(dir),
+    true,
+    "an unanswered list is not an empty one: reaping here would delete " +
+      "checkouts behind git's back",
+  );
+  assert.ok(notices.some((n) => n.includes("cannot reconcile worktrees")));
+  assert.ok(notices.some((n) => n.includes("skipping reap")));
+});
+
+test("one unwritable record does not stop the rest of the repository", async (t) => {
+  const root = await gitRepo(t);
+  const kept = await addWorktree(root, "a", RUN_ID);
+  const orphan = await addWorktree(root, "a", ORPHAN_ID);
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "running",
+    // Old enough that the `startedAt` fallback would reap this run if a
+    // non-terminal record were reapable at all.
+    startedAt: "2026-07-01T00:00:00.000Z",
+    tasks: [{ id: "a", status: "running" }],
+  });
+  // Readable, not writable: `markCrashed` cannot land its temp file here.
+  await chmod(dir, 0o500);
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  // Restored here rather than in an `after` hook: the temp directory's own
+  // cleanup is registered first and so runs first, and it cannot unlink a
+  // record out of a directory it may not write.
+  await chmod(dir, 0o700);
+
+  assert.equal((await readRun(dir)).status, "running", "retried next boot");
+  assert.ok(notices.some((notice) => notice.includes("cannot mark run")));
+  assert.ok(
+    notices.some((notice) => notice.includes("still reads running")),
+    "retention must not date a run that is not terminal",
+  );
+  assert.equal(
+    existsSync(kept),
+    true,
+    "a running record's worktree is not reapable",
+  );
+  assert.equal(existsSync(orphan), false, "the orphan pass still ran");
+});
+
+test("a reap that cannot finish does not stop the rest of the repository", async (t) => {
+  const root = await gitRepo(t);
+  const orphan = await addWorktree(root, "a", ORPHAN_ID);
+  const dir = await writeRun(root, {
+    runId: RUN_ID,
+    root,
+    cwd: root,
+    status: "failed",
+    startedAt: "2026-08-01T00:00:00.000Z",
+    endedAt: "2026-08-01T00:10:00.000Z",
+    tasks: [{ id: "a", status: "failed" }],
+  });
+  // Past retention, and its run directory cannot be removed: `rmSync` throws
+  // after the worktree pass, the shape the per-record catch exists for.
+  await chmod(dir, 0o500);
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  await chmod(dir, 0o700);
+
+  assert.ok(notices.some((notice) => notice.includes("cannot reap run")));
+  assert.equal(existsSync(orphan), false, "later cleanup still ran");
 });
 
 // --- the repository list is the boundary ------------------------------------

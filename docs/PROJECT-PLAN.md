@@ -448,7 +448,7 @@ driven from a run file, fully verifiable offline.
 - **Crash-recovery sweep at startup** — the fuller version of "run `git worktree prune`".
   On boot: mark tasks left in `running` as `failed`, kill or reap any registered child PIDs
   that survived, reconcile `git worktree list` against persisted run records, and reap only
-  those worktrees whose run is terminal *and* past the retention window (default 7 days).
+  those worktrees whose run is terminal *and* past the retention window (default 30 days).
 - **Persistence** — JSON per run under `.kapelle/runs/<id>/`, written on state
   transitions. For completed-run history, not live recovery.
   **The stated reason was wrong and M0-1 corrected it:** "ACP has no resume" is true of
