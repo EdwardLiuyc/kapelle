@@ -981,6 +981,13 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
       withResultPreamble(task.prompt),
     );
 
+    // The tree read below must happen after the harness is gone (#110):
+    // `release()` commits after this function returns, and a write that lands
+    // during shutdown would otherwise be committed but never cross-checked.
+    // `stop()` is idempotent, so the `finally` below still covers every path
+    // that throws before this line.
+    await agent.stop();
+
     const result = extractResult(prose);
     const outcome: TaskOutcome = { stopReason, sessionId };
     if (usage !== undefined) {

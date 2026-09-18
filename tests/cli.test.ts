@@ -695,9 +695,10 @@ test("each cross-check fixture trips its own warning, and only its own", async (
         scenario("claimed-success"),
         scenario("files-not-in-diff"),
         scenario("files-unclaimed"),
+        scenario("eof-write"),
         scenario("unasked-write"),
       ],
-      { maxConcurrency: 6 },
+      { maxConcurrency: 7 },
     ),
   );
 
@@ -713,6 +714,7 @@ test("each cross-check fixture trips its own warning, and only its own", async (
     "claimed-success",
     "files-not-in-diff",
     "files-unclaimed",
+    "eof-write",
     "unasked-write",
   ]) {
     assert.ok(
@@ -732,6 +734,9 @@ test("each cross-check fixture trips its own warning, and only its own", async (
   assert.match(card("claimed-success"), /working tree is unchanged/);
   assert.match(card("files-not-in-diff"), /<files> names ghost\.md/);
   assert.match(card("files-unclaimed"), /also shows unclaimed\.txt/);
+  // #110: the tree read follows the harness exit, so a write made on end of
+  // file is reported like any other unclaimed path.
+  assert.match(card("eof-write"), /also shows late\.txt/);
   assert.match(card("unasked-write"), /without ever asking permission/);
 });
 

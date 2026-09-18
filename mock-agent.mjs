@@ -27,6 +27,7 @@ const SCENARIOS = {
   "files-not-in-diff": "lists a file it never wrote",
   "unasked-write": "writes a file itself, without asking permission",
   "files-unclaimed": "asks, writes two files, then lists only one of them",
+  "eof-write": "writes a file when stdin ends, after the turn has ended",
   stall: "writes one file, then emits nothing and never returns",
   stubborn:
     "like stall, but ignores SIGTERM and stays alive after its stdin closes",
@@ -54,6 +55,14 @@ if (scenario !== null && !Object.hasOwn(SCENARIOS, scenario)) {
 // otherwise arrive.
 if (scenario === "stall" || scenario === "stubborn") {
   writeFileSync("stalled.txt", "written just before going quiet\n");
+}
+
+// #110's fixture writes only when the client closes stdin, which `stop()` does
+// after the turn: a tree read taken before the stop misses it.
+if (scenario === "eof-write") {
+  process.stdin.on("end", () => {
+    writeFileSync("late.txt", "written after the turn ended\n");
+  });
 }
 
 // M2-5's crash-recovery test: a harness the daemon's graceful stop cannot end.
@@ -117,6 +126,14 @@ const FINAL_MESSAGE = {
     "success",
     "Wrote the file.",
     "Wrote one file and mentioned it.",
+    "claimed.txt",
+  ),
+  // #110: the same one-warning shape, but the second file is written by the
+  // end-of-file handler above, so only a tree read after `stop()` can see it.
+  "eof-write": result(
+    "success",
+    "Wrote the file.",
+    "Wrote one file during the turn.",
     "claimed.txt",
   ),
 };
@@ -296,7 +313,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         // is what the client cannot see and can only infer afterwards.
         writeFileSync("sneaky.txt", "written behind the client's back\n");
       }
-      if (scenario === "files-unclaimed") {
+      if (scenario === "files-unclaimed" || scenario === "eof-write") {
         // Ask first. The permission itself is not what is under test -- it is
         // what keeps `permissionCount` above zero, so this stays a one-warning
         // fixture instead of tripping `policyNeverFired` as well.
@@ -316,10 +333,13 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
             { optionId: "no", name: "Reject", kind: "reject_once" },
           ],
         });
-        // Both written with its own tools, so the client sees neither: the
-        // list below is the only account it gets, and it is short by one.
+        // Written with its own tools, so the client sees neither: the list
+        // below is the only account it gets. `files-unclaimed` writes both
+        // files here; `eof-write`'s second lands on end of file instead.
         writeFileSync("claimed.txt", "the file the agent mentions\n");
-        writeFileSync("unclaimed.txt", "the file the agent does not\n");
+        if (scenario === "files-unclaimed") {
+          writeFileSync("unclaimed.txt", "the file the agent does not\n");
+        }
       }
       update(sid, {
         sessionUpdate: "agent_message_chunk",
