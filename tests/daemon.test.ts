@@ -1619,7 +1619,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     JSON.stringify({
       runId: "corrupt-tasks",
       status: "done",
-      tasks: [null],
+      tasks: [null, { foo: "bar" }, { id: "ok", status: "done" }],
     }),
   );
   // A run directory with no record at all, and a record with no status: both
@@ -1641,7 +1641,12 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   assert.deepEqual(
     [...list.body].sort((a, b) => a.id.localeCompare(b.id)),
     [
-      { id: "corrupt-tasks", cwd: root, status: "done", tasks: [] },
+      {
+        id: "corrupt-tasks",
+        cwd: root,
+        status: "done",
+        tasks: [{ id: "ok", status: "done" }],
+      },
       { id: "live", cwd: root, status: "failed", tasks: [] },
     ],
   );

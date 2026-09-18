@@ -466,11 +466,12 @@ function restoreRuns(): void {
       if (Array.isArray(record.tasks)) {
         // Trusted for its runId and status, but a hand-edited `tasks` can
         // still hold junk, and the route destructures every element: one
-        // `[null]` would 500 the whole list. Keep the run, drop the element
-        // (M2-6: a boot answers anyway).
+        // `[null]` would 500 the whole list, and `{foo: "bar"}` would print
+        // as `undefined undefined` in `kapelle ps`. Keep the run, drop any
+        // element without a string id and status (M2-6: a boot answers anyway).
         state.tasks = record.tasks.filter(
           (t): t is RecordTask =>
-            typeof t === "object" && t !== null && !Array.isArray(t),
+            typeof t?.id === "string" && typeof t?.status === "string",
         );
       }
       runs.set(id, state);
