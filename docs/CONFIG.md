@@ -31,8 +31,8 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | Config | Read by | Not read by |
 | --- | --- | --- |
 | User file | `kapelle daemon start` only | in-process CLI, merge, sweep |
-| Project file | `POST /repos`, `POST /runs` (each request), `kapelle --file`, `sweepBoot` per repository | plain `kapelle "prompt"`, `merge` |
-| `KAPELLE_*` env | daemon start, every run-default resolution, `kapelle --file` | plain prompt, merge |
+| Project file | `POST /repos`, `POST /runs` (each request), `kapelle run --file`, `sweepBoot` per repository | plain `kapelle "prompt"`, `merge` |
+| `KAPELLE_*` env | daemon start, every run-default resolution, `kapelle run --file` | plain prompt, merge |
 
 ## User file — `$XDG_CONFIG_HOME/kapelle/config.json`
 
@@ -60,7 +60,7 @@ refuses the daemon start (one line, exit 1), before the instance claim.
 ## Project file — `<repo>/.kapelle/config.json`
 
 Per-run defaults plus retention. A bad file surfaces per read site:
-`POST /repos` → 400; `POST /runs` → 400; `kapelle --file` → exit 1; the
+`POST /repos` → 400; `POST /runs` → 400; `kapelle run --file` → exit 1; the
 boot sweep → `cannot sweep <root>: …` notice and only that repository is
 skipped. The daemon keeps booting and serving the rest.
 
@@ -84,7 +84,7 @@ skipped. The daemon keeps booting and serving the rest.
 
 Known names are validated and override both files; unknown names are the only
 warning path. An offending known value blocks the daemon start and a
-`kapelle --file` the same way a file error does.
+`kapelle run --file` the same way a file error does.
 
 | Path | Case | Example | Result |
 | --- | --- | --- | --- |

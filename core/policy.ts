@@ -71,6 +71,11 @@ async function autoPolicy(): Promise<boolean> {
 /** Read-only auto-approved; mutations prompt on the terminal. */
 export function makeAskPolicy(): { close: () => void; policy: Policy } {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // On a TTY readline reads ^C as a key, not a signal, and with no listener it
+  // closes itself: the open question never answers and the process's own
+  // SIGINT handler never runs, so a ^C at the prompt hung the run. Re-raising
+  // it as a real signal hands it to whichever handler the caller installed.
+  rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"));
   const ask = (q: string) => new Promise<string>((res) => rl.question(q, res));
   return {
     close: () => rl.close(),

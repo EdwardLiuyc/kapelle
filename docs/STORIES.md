@@ -1870,6 +1870,29 @@ included, `id:` its `seq`, `Last-Event-ID` honoured — so `attach` can feed it 
 `render.ts`. `render.ts` owns one stream at a time, so an N-task run needs the `--file`
 path's shape: one task in full, or milestones for all; that choice is this story's. Task
 boundaries arrive as `_client_task_started` / `_client_task_finished`.
+**Amended at pickup 2026-09-18 (#39).** (1) **The run file is a verb's flag:** `kapelle run
+--file <f> [--detach]`, and the bare `kapelle --file` is refused with a line naming the new
+spelling, so every job is a verb like `merge`, `daemon` and `attach`. An unquoted prompt
+starting with `run` now meets the verb. (2) **The in-process path keeps its one-asker rule**;
+its notice names `--detach` plus `attach`. (3) **`attach` offers both shapes**: milestones for
+all tasks by default, and `--task <id>` for that one task in full through `render.ts`, with
+only its asks — the filter is client-side, since every event already names its task. Each
+task card is built from the stream, because a run restored after a restart has no `report`. It asks one `_client_permission_queued` at a time, on a TTY only, and only while
+`GET /permissions` still lists it; ^C leaves the run running. Found on the way: readline
+swallowed ^C at a y/N prompt on a TTY and hung every `ask` path, so `makeAskPolicy`
+re-raises it as a real SIGINT.
+
+**M2-10 · List detached runs and their tasks · S · needs M2-9**
+Added 2026-09-18 at M2-9's pickup (#39). A person who detached runs has no command that says
+what is still going. `GET /runs` answers `{id, cwd, status}` only, and a live run's state in
+`daemon.ts` carries no task list: the per-task state is in each repository's
+`.kapelle/runs/<runId>/run.json`, written at every transition (M2-6). Add a verb — `kapelle
+ps` is the working name — that lists runs and each task's id and status, reading
+`daemon.json` through `daemonApi()` as `attach` does.
+**Gap** — the daemon must report a live run's tasks: keep them in memory from the
+`_client_task_*` events, or read the record back on `GET`. Decide at pickup.
+*Done when* the verb lists every running run with each task's id and status, and a finished
+run shows its verdict.
 
 ---
 

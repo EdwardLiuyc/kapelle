@@ -228,7 +228,7 @@ test("--file runs every task and reports each one", async (t) => {
     ),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 0);
   for (const id of ["one", "two", "three"]) {
@@ -243,7 +243,7 @@ test("--file runs write the same event log the daemon replays", async (t) => {
   const cwd = await tempDir(t);
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
   assert.equal(r.code, 0);
 
   const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
@@ -284,7 +284,7 @@ test("every run-file task carries its own advisory notice, on stderr", async (t)
     ]),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.equal(
     (r.stderr.match(/no measured labels for this harness/g) ?? []).length,
@@ -303,7 +303,7 @@ test("prose is buffered per task, never braided together", async (t) => {
     ]),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   // Each task's block is contiguous: its whole transcript sits between its
   // own header and the next one. Interleaving would split it.
@@ -322,7 +322,7 @@ test("a run file's own agent and mode cannot be overridden from argv", async (t)
     ["--agent", "opencode"],
     ["--cmd", "true"],
   ]) {
-    const r = await runCli(t, ["--file", file, "--cwd", cwd, ...flag]);
+    const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, ...flag]);
     assert.equal(r.code, 1, flag[0]);
     assert.match(r.stderr, new RegExp(`${flag[0]} does not apply with --file`));
   }
@@ -337,7 +337,7 @@ test("a bad run file is the validator's sentence, not a stack", async (t) => {
   );
   const cwd = await tempDir(t);
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /task dependencies land in M3/);
@@ -353,7 +353,7 @@ test("a bad project config refuses a run-file run, naming the key", async (t) =>
   );
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 
-  const r = await runCli(t, ["--file", file, "--cwd", root]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", root]);
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /unknown key "stallIdle"/);
@@ -362,7 +362,13 @@ test("a bad project config refuses a run-file run, naming the key", async (t) =>
 
 test("a missing run file is a clean exit, not a stack", async (t) => {
   const cwd = await tempDir(t);
-  const r = await runCli(t, ["--file", "/nope/none.run.json", "--cwd", cwd]);
+  const r = await runCli(t, [
+    "run",
+    "--file",
+    "/nope/none.run.json",
+    "--cwd",
+    cwd,
+  ]);
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /cannot read run file/);
@@ -381,7 +387,7 @@ test("one asking task with no TTY runs as safe, and says so", async (t) => {
     }),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.match(r.stderr, /\[one\] not a TTY — ask runs as safe/);
   // `.kapelle/` is our own state, not the task's work: M1b-7's stderr log
@@ -402,7 +408,7 @@ test("two asking tasks are refused a prompt they would have to share", async (t)
     ),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   // The count is the point: one readline cannot attribute an answer between
   // two askers, so the limit is on askers, not on tasks.
@@ -421,10 +427,10 @@ test("--file --quiet drops the advisory line, exactly as one prompt does", async
   const cwd = await tempDir(t);
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 
-  const loud = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const loud = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
   assert.match(loud.stderr, /no measured labels for this harness/);
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
   assert.equal(r.stdout, "");
   assert.doesNotMatch(
     r.stderr,
@@ -444,7 +450,14 @@ test("a prompt alongside --file is refused, not silently dropped", async (t) => 
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
   const cwd = await tempDir(t);
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd, "and also do this"]);
+  const r = await runCli(t, [
+    "run",
+    "--file",
+    file,
+    "--cwd",
+    cwd,
+    "and also do this",
+  ]);
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /a prompt does not apply with --file/);
@@ -461,7 +474,7 @@ test("a task whose harness cannot start fails alone, and fails the run", async (
     ],
   });
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 1, "one failed task fails the run");
   assert.match(r.stdout, /▸ good \(mock-agent\) done/);
@@ -491,7 +504,7 @@ test("a harness that dies leaves its own error in a per-task log", async (t) => 
     ],
   });
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
 
   // Printed as `run <id>` on stdout, which `--quiet` silences — so the id is
   // read off the directory, which is also how an operator finds it.
@@ -520,7 +533,7 @@ test("a spawn failure is written to the per-task log, not just printed", async (
     tasks: [{ id: "ghost", prompt: "hi", cmd: "definitely-not-a-real-binary" }],
   });
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
 
   assert.equal(r.code, 1);
   const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
@@ -541,7 +554,14 @@ test("a missing --cwd is not created by the stderr log directory", async (t) => 
   const missing = join(cwd, "typo");
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 
-  const r = await runCli(t, ["--file", file, "--cwd", missing, "--quiet"]);
+  const r = await runCli(t, [
+    "run",
+    "--file",
+    file,
+    "--cwd",
+    missing,
+    "--quiet",
+  ]);
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /failed to spawn/);
@@ -570,6 +590,7 @@ test("--cwd in a subdirectory logs at the repository root", async (t) => {
 
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
   const r = await runCli(t, [
+    "run",
     "--file",
     file,
     "--cwd",
@@ -595,7 +616,7 @@ test("--quiet still reports a task failure, on stderr", async (t) => {
     tasks: [{ id: "doomed", prompt: "hi", cmd: "node --badflag" }],
   });
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
 
   assert.equal(r.code, 1);
   assert.equal(r.stdout, "");
@@ -619,7 +640,7 @@ test("--quiet reports a task that failed without ever throwing", async (t) => {
     ]),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd, "--quiet"]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
 
   assert.equal(r.code, 1);
   assert.equal(r.stdout, "");
@@ -639,7 +660,7 @@ test("a refusal is a failed task, and it is not a silent one", async (t) => {
     ]),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 1);
   assert.match(r.stdout, /▸ picky \(mock-agent\) failed/);
@@ -663,7 +684,7 @@ test("a preflight refusal is one actionable line, not a stack trace", async (t) 
   // a fresh repository meets.
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /is not ignored by git/);
@@ -701,7 +722,7 @@ test("each cross-check fixture trips its own warning, and only its own", async (
     ),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   // A disagreement is something to read, never a failure: `warned` exits 0.
   assert.equal(r.code, 0);
@@ -756,7 +777,13 @@ test("unasked-write trips only policyNeverFired from a repository subdirectory",
       },
     ]),
   );
-  const r = await runCli(t, ["--file", file, "--cwd", join(root, "sub")]);
+  const r = await runCli(t, [
+    "run",
+    "--file",
+    file,
+    "--cwd",
+    join(root, "sub"),
+  ]);
 
   assert.equal(r.code, 0);
   assert.match(r.stdout, /▸ unasked-write \(mock-agent\) warned/);
@@ -776,7 +803,7 @@ test("the prompt response's usage is captured, not just usage_update", async (t)
   const cwd = await tempDir(t);
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.match(r.stdout, /tokens: 1234 total \(1200 in, 34 out; unknown\)/);
 });
@@ -825,7 +852,7 @@ test("a --file run in git leaves task branches and per-task stderr logs", async 
     ),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
   assert.equal(r.code, 0, r.stderr);
 
   const runId = r.stdout.match(/run ([a-z0-9_-]+)/)?.[1];
@@ -873,7 +900,7 @@ rl.on("line", async (line) => {
     ]),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
   assert.equal(r.code, 1, r.stderr);
 
   const runId = r.stdout.match(/run ([a-z0-9_-]+)/)?.[1];
@@ -994,7 +1021,7 @@ rl.on("line", async (line) => {
     ),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
   assert.equal(r.code, 0, r.stderr);
 
   const activity = await readFile(join(cwd, "activity.log"), "utf8");
@@ -1038,7 +1065,7 @@ rl.on("line", (line) => {
     }),
   );
 
-  const { child, done } = spawnCli(t, ["--file", file, "--cwd", cwd]);
+  const { child, done } = spawnCli(t, ["run", "--file", file, "--cwd", cwd]);
   const r = await Promise.race([
     done,
     new Promise<never>((_, reject) => {
@@ -1086,7 +1113,7 @@ test("a warned task and a failed task roll up to a failed run", async (t) => {
     ]),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
   assert.equal(r.code, 1, r.stderr);
   assert.match(r.stdout, /▸ warned \(mock-agent\) warned/);
   assert.match(r.stdout, /▸ failed \(mock-agent\) failed/);
@@ -1129,7 +1156,7 @@ test("a stalled task warns, times out at the TTL, and keeps its branch", async (
     ),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 1, r.stdout);
   // The bell in front is M1c-4: the same line, once, with the attention
@@ -1179,7 +1206,7 @@ test("a repeated tool title warns, and the task is never cancelled", async (t) =
     ),
   );
 
-  const r = await runCli(t, ["--file", file, "--cwd", cwd]);
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 0, r.stderr);
   assert.match(

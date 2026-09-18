@@ -55,7 +55,7 @@ Without `npm link`, every `kapelle` below reads `node cli.ts` from the repo root
 | --- | --- |
 | `protocol/` | Everything wire-level: hand-written types for every message we touch (`types.ts`), the client itself (`agent.ts` — JSON-RPC over stdio, handshake, `fs/*`, permissions), and the adapter layer (`registry.ts` — how to launch each harness, and what we measured when we ran it). |
 | `core/` | Supervisor-side orchestration and pure logic: policy (`policy.ts`), event bus (`events.ts`), run-file validation (`runfile.ts`), the run engine (`run.ts`), worktrees (`worktree.ts`), merge (`merge.ts`), result parsing/cross-check (`result.ts`), the stall detector (`watchdog.ts`), the attention signal (`notify.ts`), run and task ids (`ids.ts`), and the one file that knows a markdown library exists (`markdown.ts`). `core/` may import `protocol/`, never the reverse. |
-| root scripts | The entry points and terminal glue: `cli.ts` (the CLI, and the `kapelle` `bin`: one prompt, N tasks from a run file via `--file`, or `merge <runId>`), `daemon.ts` (one HTTP daemon for all your repositories, on `127.0.0.1`: add a repository with `POST /repos`, then `POST`/`GET`/`DELETE /runs` plus `GET /permissions` and `POST /permissions/:id` for pending `ask` decisions, behind the bearer token in `$XDG_RUNTIME_DIR/kapelle/daemon.json`; the repository list survives a restart in `$XDG_STATE_HOME/kapelle/repos.json`), `render.ts` (terminal output for `session/update` events), and the offline fake agents `mock-agent.mjs` (compliant) and `hostile-agent.mjs` (adversarial). |
+| root scripts | The entry points and terminal glue: `cli.ts` (the CLI, and the `kapelle` `bin`: one prompt, N tasks from a run file via `run --file`, the same run handed to the daemon with `--detach` and followed with `attach <runId>`, or `merge <runId>`), `daemon.ts` (one HTTP daemon for all your repositories, on `127.0.0.1`: add a repository with `POST /repos`, then `POST`/`GET`/`DELETE /runs` plus `GET /permissions` and `POST /permissions/:id` for pending `ask` decisions, behind the bearer token in `$XDG_RUNTIME_DIR/kapelle/daemon.json`; the repository list survives a restart in `$XDG_STATE_HOME/kapelle/repos.json`), `render.ts` (terminal output for `session/update` events), and the offline fake agents `mock-agent.mjs` (compliant) and `hostile-agent.mjs` (adversarial). |
 | `docs/` | Plans, stories and what was measured about each harness; `CONFIG.md` is the knobs reference. |
 | `assets/`, config files | Logo, tool configs (`biome.json`, `tsconfig.json`, `knip.jsonc`, `.markdownlint.json`), `package.json`. |
 
@@ -63,13 +63,18 @@ Test suites (`*.test.ts`) live in a `tests/` folder beside their sources — `co
 
 ## Run files
 
-`kapelle --file` runs N independent tasks, each with its own agent and mode.
+`kapelle run --file` runs N independent tasks, each with its own agent and mode.
 In a git repository, each task gets its own worktree; outside one, tasks share
 the cwd and a notice says so. `tasks.json` is the worked example:
 
 ```bash
-kapelle --file tasks.json
+kapelle run --file tasks.json
 ```
+
+With a daemon running (`kapelle daemon start`, then `kapelle daemon add .`),
+`kapelle run --file tasks.json --detach` hands the run over and prints its id;
+`kapelle attach <runId>` shows it from any terminal and asks its `ask` prompts;
+add `--task <taskId>` to watch one task in full.
 
 ```json
 {
