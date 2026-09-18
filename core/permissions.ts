@@ -43,8 +43,9 @@ export function createPermissionQueue(timeoutMs: number) {
     { decision: PendingDecision; settle: (allow: boolean) => void }
   >();
   // ponytail: every settled id is kept for the daemon's lifetime, so a late
-  // answer reads 409 rather than 404; a few dozen bytes each. Drop them with
-  // their run once M2-6 gives runs a lifetime.
+  // answer reads 409 rather than 404; a few dozen bytes each. `daemon.ts`
+  // never drops a run from memory either, so both live equally long. Drop
+  // them with their run once the daemon evicts runs.
   const settled = new Set<string>();
 
   return {

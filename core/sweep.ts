@@ -52,7 +52,7 @@ const messageOf = (err: unknown) =>
  * The retention window when neither `KAPELLE_RETENTION_MS` nor the
  * repository's `.kapelle/config.json` names one (decided at pickup
  * 2026-09-16, raised to 30 days by the developer the same day; the knob
- * lands with M2-7).
+ * landed with M2-7).
  */
 export const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -281,7 +281,8 @@ function terminalSince(record: RunRecord): number | null {
  * ponytail: the pid suffix keeps the write atomic, not the decision. A CLI run
  * that is genuinely live still reads as `running` to a daemon booting beside
  * it and is marked `failed` under it. Closing that needs the writer's pid in
- * the record itself, which is M2-7's shape, not this pass's.
+ * the record itself; M2-7 landed as config and did not add one, so this
+ * stays open until a record carries its writer.
  */
 async function writeRecord(path: string, record: RunRecord): Promise<void> {
   const tmp = `${path}.${process.pid}.tmp`;

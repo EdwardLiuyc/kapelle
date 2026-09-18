@@ -1893,6 +1893,13 @@ ps` is the working name — that lists runs and each task's id and status, readi
 `_client_task_*` events, or read the record back on `GET`. Decide at pickup.
 *Done when* the verb lists every running run with each task's id and status, and a finished
 run shows its verdict.
+**Amended at pickup 2026-09-18 (#121): the gap is closed with a callback.** `core/run.ts`
+hands `daemon.ts` the same task list it writes to `run.json`, through `RunOptions.onTasks`,
+at every transition, and the first time before its first `await`, so a live run is never
+listed without tasks. `GET /runs` carries `tasks: [{id, status}]` on each entry, so
+`kapelle ps` makes one request. Rejected: reading `run.json` on each `GET` (a file read per
+request), and rebuilding the list from `_client_task_*` events (a second copy of the status
+rules, and no event exists for `queued`).
 
 ---
 
