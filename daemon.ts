@@ -23,6 +23,11 @@
  * never sees it, in a `0700` directory only the operator can enter, and wiped
  * at logout. It stops being enough the moment the daemon binds anywhere else,
  * which is also the trigger that re-opens sandboxing.
+ *
+ * **A `Host` outside loopback is refused before the token is read** (M2-8,
+ * #38), which closes DNS rebinding — an attacker page gaining same-origin
+ * access to this loopback daemon. The browser half, `?token=` on the SSE
+ * endpoint, is deferred to M4-1, where a served page first needs it.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -243,6 +248,48 @@ const token = randomBytes(32).toString("hex");
 // both sides gives that without a length check that answers early.
 const digest = (s: string) => createHash("sha256").update(s).digest();
 const expected = digest(token);
+
+/**
+ * The names this daemon answers to — story M2-8, issue #38.
+ *
+ * DNS rebinding is the attack the token alone does not stop: a page on
+ * `evil.example` re-resolves its own name to `127.0.0.1`, and the browser then
+ * talks to this daemon while treating the reply as same-origin. The `Host`
+ * line is the one field that attack cannot forge — it still says
+ * `evil.example`, because that is the name the browser was told to fetch.
+ *
+ * The port is deliberately not matched: rebinding needs an attacker-chosen
+ * DNS name to gain same-origin access. Direct cross-origin requests to a
+ * loopback URL still arrive with a loopback Host, but without the bearer token
+ * they are refused. Matching the port would add no protection against those.
+ */
+const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost\.?|\[::1\])(:\d+)?$/i;
+
+/**
+ * The authority this request is addressed to, or `null` when there is no one
+ * answer. Two fields can carry it, and the guard has to read the right one.
+ *
+ * RFC 9112 §3.2.2: with an absolute-form target (`GET http://host/path`) the
+ * target's authority wins and `Host` is ignored. RFC 9110 §7.2: more than one
+ * `Host` line is malformed — Node keeps the first for `req.headers.host`, so a
+ * loopback line followed by a forged one would otherwise pass. `rawHeaders` is
+ * where both survive. The match itself is case-insensitive and admits the
+ * root-anchored `localhost.`, because a hostname is both (RFC 9110 §4.2.3) and
+ * a rebinding page can put neither spelling on the wire; `/i` without `/u`, or
+ * `localhoſt` would fold into a match.
+ */
+function authorityOf(req: IncomingMessage): string | null {
+  const hosts = req.rawHeaders.filter(
+    (h, i) => i % 2 === 0 && h.toLowerCase() === "host",
+  );
+  if (hosts.length > 1) return null;
+  try {
+    // Throws for an origin-form target, which is every ordinary request.
+    return new URL(req.url ?? "/").host;
+  } catch {
+    return req.headers.host ?? "";
+  }
+}
 
 function authorised(req: IncomingMessage): boolean {
   const header = req.headers.authorization ?? "";
@@ -745,6 +792,13 @@ async function postPermission(
 }
 
 async function route(req: IncomingMessage, res: ServerResponse) {
+  // Before the token and every route: a forged, duplicated or missing Host is
+  // refused here. requireHostHeader: false lets this guard handle the last.
+  const authority = authorityOf(req);
+  if (authority === null || !LOOPBACK_HOST.test(authority)) {
+    send(res, 403, { error: "host not allowed" });
+    return;
+  }
   if (!authorised(req)) {
     send(res, 401, { error: "missing or wrong token" });
     return;
@@ -797,7 +851,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   }
 }
 
-const server = createServer((req, res) => {
+const server = createServer({ requireHostHeader: false }, (req, res) => {
   route(req, res).catch((err) => {
     send(res, (err as { status?: number }).status ?? 500, {
       error: messageOf(err),
