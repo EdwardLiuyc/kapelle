@@ -891,6 +891,71 @@ test("DELETE cancels a live run, and refuses a settled or unknown one", async (t
   assert.equal((await api(d, "GET", "/runs/nope")).status, 404);
 });
 
+test("GET /runs and kapelle ps list a live run's tasks, then its verdict", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun(
+      [
+        {
+          id: "stuck",
+          prompt: "hi",
+          cmd: `node ${MOCK_AGENT} --scenario stall`,
+        },
+        { id: "waiting", prompt: "hi" },
+      ],
+      { maxConcurrency: 1 },
+    ),
+  });
+  assert.equal(posted.status, 202, posted.body.error);
+  const { id } = posted.body;
+  type Listed = { id: string; status: string; tasks: Reply["tasks"] }[];
+  const tasksOf = async () =>
+    (await api<Listed>(d, "GET", "/runs")).body.find((r) => r.id === id)?.tasks;
+
+  // `runRun` hands over the queued list before the 202 is sent, so the first
+  // listing already names both tasks. The ordering itself is pinned in
+  // core/tests/run.test.ts; over HTTP the first persist usually wins anyway.
+  assert.deepEqual(
+    (await tasksOf())?.map((task) => task.id),
+    ["stuck", "waiting"],
+  );
+
+  // Live: one task running, the other still queued behind it.
+  const live = [
+    { id: "stuck", status: "running" },
+    { id: "waiting", status: "queued" },
+  ];
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    if (JSON.stringify(await tasksOf()) === JSON.stringify(live)) break;
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.deepEqual(await tasksOf(), live);
+
+  const env = { XDG_RUNTIME_DIR: join(d.file, "..", "..") };
+  const ps = await spawnCli(t, ["ps"], "cli.ts", env).done;
+  assert.equal(ps.code, 0, ps.stderr);
+  assert.match(ps.stdout, new RegExp(`^${id}  running  `, "m"));
+  assert.match(ps.stdout, /^ {2}stuck {2}running$/m);
+  assert.match(ps.stdout, /^ {2}waiting {2}queued$/m);
+
+  // Finished: the run's status is its verdict, and every task has one.
+  await api(d, "DELETE", `/runs/${id}`);
+  assert.equal((await settled(d, id)).status, "cancelled");
+  const after = await spawnCli(t, ["ps"], "cli.ts", env).done;
+  assert.equal(after.code, 0, after.stderr);
+  assert.match(after.stdout, new RegExp(`^${id}  cancelled  `, "m"));
+  assert.match(after.stdout, /^ {2}stuck {2}cancelled$/m);
+  assert.match(after.stdout, /^ {2}waiting {2}cancelled$/m);
+});
+
+test("kapelle ps with no daemon exits 1 and says so", async (t) => {
+  const r = await spawnCli(t, ["ps"], "cli.ts", dirs(await tempDir(t))).done;
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /no daemon is listening/);
+});
+
 test("containment notices reach the run record, where nothing drops them", async (t) => {
   // #13: these lines are never suppressed. A daemon has no terminal, so the
   // record is the only place a caller can still read them.
@@ -1474,7 +1539,7 @@ test("a restarted daemon keeps its repositories and serves the runs from before"
     "the list must not sit in the runtime dir",
   );
   assert.deepEqual((await api<Reply[]>(second, "GET", "/runs")).body, [
-    { id, cwd: root, status: "done" },
+    { id, cwd: root, status: "done", tasks: [{ id: "a", status: "done" }] },
   ]);
 
   const one = await api(second, "GET", `/runs/${id}`);
@@ -1545,6 +1610,18 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     join(runs, "live", "run.json"),
     JSON.stringify({ runId: "live", status: "running", tasks: [] }),
   );
+  // A trusted record whose `tasks` array holds junk: the run is served with
+  // the bad element dropped, because the route destructures every element and
+  // one `[null]` would otherwise 500 the whole list.
+  await mkdir(join(runs, "corrupt-tasks"));
+  await writeFile(
+    join(runs, "corrupt-tasks", "run.json"),
+    JSON.stringify({
+      runId: "corrupt-tasks",
+      status: "done",
+      tasks: [null, { foo: "bar" }, { id: "ok", status: "done" }],
+    }),
+  );
   // A run directory with no record at all, and a record with no status: both
   // are skipped with a notice.
   await mkdir(join(runs, "no-record"));
@@ -1557,9 +1634,22 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   const second = await boot(t, runtime);
   const list = await api<Reply[]>(second, "GET", "/runs");
   assert.equal(list.status, 200);
-  // `live` was left `running` and the sweep rewrote it terminal: the one run
-  // served is the crashed one, and it reads `failed`.
-  assert.deepEqual(list.body, [{ id: "live", cwd: root, status: "failed" }]);
+  // `live` was left `running` and the sweep rewrote it terminal: it reads
+  // `failed`. `corrupt-tasks` is trusted for its runId/status, so it is
+  // served too, with the junk element dropped. Sorted: restore order is
+  // readdir order, which is not part of the contract.
+  assert.deepEqual(
+    [...list.body].sort((a, b) => a.id.localeCompare(b.id)),
+    [
+      {
+        id: "corrupt-tasks",
+        cwd: root,
+        status: "done",
+        tasks: [{ id: "ok", status: "done" }],
+      },
+      { id: "live", cwd: root, status: "failed", tasks: [] },
+    ],
+  );
   const live = await api(second, "GET", "/runs/live");
   assert.equal(live.status, 200);
   assert.equal(live.body.status, "failed");

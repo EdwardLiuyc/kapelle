@@ -161,6 +161,28 @@ test("a six-task run with maxConcurrency 2 never has three live at once", async 
   assert.equal(report.status, "done");
 });
 
+test("onTasks hears every task as queued before runRun first awaits", async () => {
+  const heard: { id: string; status: string }[][] = [];
+  const started = runRun(
+    runOf(2, 1),
+    { ...options(), onTasks: (tasks) => heard.push(tasks) },
+    async () => ({ stopReason: "end_turn" }),
+  );
+  // Nothing awaited yet: `daemon.ts` sends its 202 at this point, so a list
+  // that arrived only after the preflight would leave a live run task-less.
+  assert.deepEqual(heard, [
+    [
+      { id: "t0", status: "queued" },
+      { id: "t1", status: "queued" },
+    ],
+  ]);
+  await started;
+  assert.deepEqual(
+    heard.at(-1)?.map((t) => t.status),
+    ["done", "done"],
+  );
+});
+
 test("the pool never opens more workers than there are tasks", async () => {
   let peak = 0;
   let live = 0;

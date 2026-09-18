@@ -324,6 +324,10 @@ export interface RunOptions {
    *  `daemon.ts` serves `GET /runs/:id/events` from it (M2-2). Never called
    *  when the log directory could not be made. */
   onEventLog?: (log: EventLog) => void;
+  /** Handed the task list at every transition, the list `run.json` carries —
+   *  `daemon.ts` lists a live run's tasks from it (M2-10). Called whether or
+   *  not the record could be written. */
+  onTasks?: (tasks: RecordTask[]) => void;
 }
 
 /**
@@ -341,6 +345,18 @@ export async function runRun(
   const started = Date.now();
   const signal = options.signal ?? new AbortController().signal;
   const runId = options.runId ?? newRunId();
+
+  // Every task's state, for the record and for `onTasks`. A task absent from
+  // `entries` has not left the queue.
+  const entries = new Map<string, RecordTask>();
+  const snapshot = () =>
+    run.tasks.map(
+      (t): RecordTask => entries.get(t.id) ?? { id: t.id, status: "queued" },
+    );
+  // Before the first await, so a caller that has just started the run can
+  // list its tasks at once — `daemon.ts` answers its 202 right after this
+  // call returns, and the first `persist` is a preflight away (M2-10).
+  options.onTasks?.(snapshot());
 
   // Preflight once for the run, not once per task: every refusal it raises is
   // a property of the repository, so N tasks would raise the same one N times
@@ -397,13 +413,14 @@ export async function runRun(
   // Written for any run with a log directory, including the shared-cwd
   // fallback that has no branches: `core/merge.ts` already refuses a task
   // with no branch by name, which is a better answer than "no run record".
-  const entries = new Map<string, RecordTask>();
   let recordFailed = false;
   let writing: Promise<void> = Promise.resolve();
   const persist = (
     status: TaskStatus | "running",
     endedAt?: string,
   ): Promise<void> => {
+    const tasks = snapshot();
+    options.onTasks?.(tasks);
     if (!logs) return writing;
     // Chained, never concurrent: two workers renaming one temp file at the
     // same instant is the one way an atomic write stops being atomic.
@@ -417,9 +434,7 @@ export async function runRun(
           startedAt: new Date(started).toISOString(),
           ...(endedAt ? { endedAt } : {}),
           logDir,
-          tasks: run.tasks.map(
-            (t) => entries.get(t.id) ?? { id: t.id, status: "queued" },
-          ),
+          tasks,
         }),
       )
       .catch((err) => {

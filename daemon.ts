@@ -464,7 +464,15 @@ function restoreRuns(): void {
         restored: true,
       };
       if (Array.isArray(record.tasks)) {
-        state.tasks = record.tasks as RecordTask[];
+        // Trusted for its runId and status, but a hand-edited `tasks` can
+        // still hold junk, and the route destructures every element: one
+        // `[null]` would 500 the whole list, and `{foo: "bar"}` would print
+        // as `undefined undefined` in `kapelle ps`. Keep the run, drop any
+        // element without a string id and status (M2-6: a boot answers anyway).
+        state.tasks = record.tasks.filter(
+          (t): t is RecordTask =>
+            typeof t?.id === "string" && typeof t?.status === "string",
+        );
       }
       runs.set(id, state);
       restoredLogs.set(id, join(logDir, "events.jsonl"));
@@ -693,6 +701,9 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     signal: canceller.signal,
     onEventLog: settleLog,
     askPolicy: permissions.policyFor(id, bus, canceller.signal),
+    onTasks: (tasks) => {
+      state.tasks = tasks;
+    },
     onNotice: (taskId, text, kind) => {
       state.notices.push(kind ? { taskId, text, kind } : { taskId, text });
     },
@@ -818,7 +829,12 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     send(
       res,
       200,
-      [...runs.values()].map(({ id, cwd, status }) => ({ id, cwd, status })),
+      [...runs.values()].map(({ id, cwd, status, tasks }) => ({
+        id,
+        cwd,
+        status,
+        tasks: (tasks ?? []).map(({ id, status }) => ({ id, status })),
+      })),
     );
   } else if (req.method === "GET" && events) {
     await getEvents(events[1] as string, req, res);
