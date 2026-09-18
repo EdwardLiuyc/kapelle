@@ -940,6 +940,10 @@ async function attachRun(): Promise<number> {
     return 1;
   } finally {
     flushStream();
+    // `answering` is not drained. The stream ends only once every task has
+    // settled, so any question still on screen was already decided by the
+    // timeout or a cancel; closing leaves its promise unresolved, and nothing
+    // awaits it. A POST still in flight keeps the loop alive on its own.
     asker?.close();
   }
   const state = await refreshState();
