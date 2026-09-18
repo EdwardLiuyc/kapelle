@@ -756,7 +756,7 @@ test("each cross-check fixture trips its own warning, and only its own", async (
       [
         scenario("no-result"),
         scenario("malformed-result"),
-        scenario("claimed-success"),
+        scenario("read-only"),
         scenario("files-not-in-diff"),
         scenario("files-unclaimed"),
         scenario("eof-write"),
@@ -775,7 +775,6 @@ test("each cross-check fixture trips its own warning, and only its own", async (
   for (const id of [
     "no-result",
     "malformed-result",
-    "claimed-success",
     "files-not-in-diff",
     "files-unclaimed",
     "eof-write",
@@ -795,7 +794,11 @@ test("each cross-check fixture trips its own warning, and only its own", async (
   // reported, so the summary below the card is ours.
   assert.match(card("no-result"), /no <task-result> block; the summary/);
   assert.match(card("malformed-result"), /no <task-result> block; the summary/);
-  assert.match(card("claimed-success"), /working tree is unchanged/);
+  // Success, no <files>, no change: the claim and the tree agree (#119).
+  assert.ok(
+    r.stdout.includes("▸ read-only (mock-agent) done"),
+    "a read-only success was not done",
+  );
   assert.match(card("files-not-in-diff"), /<files> names ghost\.md/);
   assert.match(card("files-unclaimed"), /also shows unclaimed\.txt/);
   // #110: the tree read follows the harness exit, so a write made on end of

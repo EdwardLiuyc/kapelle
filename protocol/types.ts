@@ -440,7 +440,6 @@ export interface ClientResultWarningEvent extends Meta {
   sessionUpdate: "_client_result_warning";
   kind:
     | "noResultBlock"
-    | "claimedSuccessNoDiff"
     | "filesNotInDiff"
     | "filesUnclaimed"
     | "policyNeverFired";

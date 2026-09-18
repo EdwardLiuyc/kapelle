@@ -1053,6 +1053,14 @@ optional field is what an agent that forgot looks like, and warning on its absen
 fire on every task that never used it and double up with `policyNeverFired`, which is the
 check that already speaks for a tree nobody described. `<files>` is our extension to ensemble's schema and exists
 precisely to make this check possible.
+**Amended 2026-09-18 (M2 retro, #119): `claimedSuccessNoDiff` is removed.** It fired on
+status `success` plus an unchanged tree and never read `<files>`, so it warned on every
+read-only task that worked — the claim ("no files") and the tree ("no change") agreed.
+Measured on a real daemon run (opencode 1.18.30): a one-sentence summary task finished
+`warned`. It broke this amendment's own rule that an absent `<files>` must not warn, and a
+`<files>` that names paths is already covered by `filesNotInDiff`. What it alone caught — a
+task meant to change something that changed nothing, listed nothing and said `success` — is
+visible without it as a branch with no commit. Four checks remain.
 **Revised by M0-1: `policyNeverFired` is now a required check, not a nicety.** The survey
 found opencode produces a non-empty diff with zero permission requests *by default* — the
 exact signature this warning exists to catch — so on opencode it fires on
