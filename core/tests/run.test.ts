@@ -576,7 +576,7 @@ test("a warning promotes a done task, and the run, to warned", async () => {
     if (task.id !== "t1") return { stopReason: "end_turn" };
     return {
       stopReason: "end_turn",
-      warnings: [{ kind: "claimedSuccessNoDiff", text: "said success" }],
+      warnings: [{ kind: "filesNotInDiff", text: "named ghost.md" }],
     };
   };
 
@@ -586,7 +586,7 @@ test("a warning promotes a done task, and the run, to warned", async () => {
   assert.equal(warned?.status, "warned");
   assert.deepEqual(
     warned?.warnings?.map((w) => w.kind),
-    ["claimedSuccessNoDiff"],
+    ["filesNotInDiff"],
   );
   assert.equal(report.tasks.filter((t) => t.status === "done").length, 2);
   assert.equal(report.status, "warned");
@@ -598,7 +598,7 @@ test("a warning promotes a done task, and the run, to warned", async () => {
   );
   assert.deepEqual(
     warnings.map((e) => [e.agent, e.update.kind, e.update.text]),
-    [["t1", "claimedSuccessNoDiff", "said success"]],
+    [["t1", "filesNotInDiff", "named ghost.md"]],
   );
 });
 

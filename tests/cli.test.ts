@@ -740,10 +740,12 @@ test("a preflight refusal is one actionable line, not a stack trace", async (t) 
 // --- M1b-5: the non-compliant fixtures -------------------------------------
 
 test("each cross-check fixture trips its own warning, and only its own", async (t) => {
-  // The five kinds in `core/result.ts`, driven over the real wire rather
+  // The four kinds in `core/result.ts`, driven over the real wire rather
   // than through an injected executor (`core/tests/run.test.ts` owns that
   // half). Each task gets its own worktree, which is the only condition under
-  // which the tree-shaped checks read anything at all.
+  // which the tree-shaped checks read anything at all. `read-only` is mixed
+  // in as the no-warning control; the loop below asserts exactly one `!` line
+  // for each of the other six fixtures.
   const cwd = await gitRepo(t);
   const scenario = (id: string) => ({
     id,
@@ -756,7 +758,7 @@ test("each cross-check fixture trips its own warning, and only its own", async (
       [
         scenario("no-result"),
         scenario("malformed-result"),
-        scenario("claimed-success"),
+        scenario("read-only"),
         scenario("files-not-in-diff"),
         scenario("files-unclaimed"),
         scenario("eof-write"),
@@ -775,7 +777,6 @@ test("each cross-check fixture trips its own warning, and only its own", async (
   for (const id of [
     "no-result",
     "malformed-result",
-    "claimed-success",
     "files-not-in-diff",
     "files-unclaimed",
     "eof-write",
@@ -795,7 +796,11 @@ test("each cross-check fixture trips its own warning, and only its own", async (
   // reported, so the summary below the card is ours.
   assert.match(card("no-result"), /no <task-result> block; the summary/);
   assert.match(card("malformed-result"), /no <task-result> block; the summary/);
-  assert.match(card("claimed-success"), /working tree is unchanged/);
+  // Success, no <files>, no change: the claim and the tree agree (#119).
+  assert.ok(
+    r.stdout.includes("▸ read-only (mock-agent) done"),
+    "a read-only success was not done",
+  );
   assert.match(card("files-not-in-diff"), /<files> names ghost\.md/);
   assert.match(card("files-unclaimed"), /also shows unclaimed\.txt/);
   // #110: the tree read follows the harness exit, so a write made on end of

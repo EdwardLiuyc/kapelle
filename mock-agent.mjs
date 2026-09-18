@@ -23,7 +23,7 @@ const SCENARIOS = {
   "silent-session": "never answers session/new",
   "no-result": "prose with no <task-result> block at all",
   "malformed-result": "a block whose <summary> is empty",
-  "claimed-success": "claims success and changes nothing",
+  "read-only": "reports success, lists no files and changes nothing",
   "files-not-in-diff": "lists a file it never wrote",
   "unasked-write": "writes a file itself, without asking permission",
   "files-unclaimed": "asks, writes two files, then lists only one of them",
@@ -97,11 +97,9 @@ const result = (status, summary, details, files) =>
 const FINAL_MESSAGE = {
   "no-result": "I read the file and fixed it. That is all I have to say.",
   "malformed-result": `Done.\n${result("success", "", "Nothing was changed.")}`,
-  "claimed-success": result("success", "Fixed the bug.", "Edited one file."),
-  // `partial`, so the lie about `<files>` is the only thing under test: a
-  // `success` claim with an unchanged tree would trip a second warning too.
+  "read-only": result("success", "Read the file.", "Changed nothing."),
   "files-not-in-diff": result(
-    "partial",
+    "success",
     "Fixed most of the bug.",
     "Edited one file.",
     "ghost.md",
@@ -290,8 +288,6 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       }
       update(sid, {
         sessionUpdate: "agent_message_chunk",
-        // `partial`, and nothing written: a `success` claim on an unchanged
-        // tree would trip `claimedSuccessNoDiff` and warn for the wrong reason.
         content: {
           type: "text",
           text: result(

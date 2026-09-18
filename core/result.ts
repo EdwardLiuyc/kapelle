@@ -20,8 +20,9 @@
 
 /** The extracted block. `status` is the agent's own word, not our vocabulary:
  *  a harness that writes "ok" instead of "success" has still reported, and
- *  rejecting the block would throw away a good summary over a synonym. Only
- *  the cross-check reads it, and only to recognise a success claim.
+ *  rejecting the block would throw away a good summary over a synonym. No
+ *  check branches on it since #119 dropped `claimedSuccessNoDiff`; it rides
+ *  the result for whoever reads it.
  *
  *  `RESULT_PREAMBLE` below *asks* for a closed list even so — see the
  *  asymmetry it documents, which is deliberate rather than a contradiction. */
@@ -35,7 +36,6 @@ export interface AgentResult {
 
 type ResultWarningKind =
   | "noResultBlock"
-  | "claimedSuccessNoDiff"
   | "filesNotInDiff"
   | "filesUnclaimed"
   | "policyNeverFired";
@@ -63,9 +63,9 @@ export interface ResultWarning {
  * **Asked strictly, accepted liberally, on purpose** (#88). This text names a
  * closed vocabulary — `success | partial | failed` — while `AgentResult.status`
  * accepts whatever arrives. Both halves earn their side: a model given a free
- * choice writes "ok", "complete" or "done-ish", and `crossCheck` recognises a
- * success claim by the word, so asking loosely would quietly cost us
- * `claimedSuccessNoDiff` on every harness that picked a synonym. Enforcing the
+ * choice writes "ok", "complete" or "done-ish", and every reader of the
+ * status — a person, or a later stage's prompt — is then left to guess what
+ * the synonym meant. Enforcing the
  * list on the way back in would cost more — a block rejected over one word
  * loses its summary and its `<files>` too, and compliance with a prompt is not
  * enforceable anyway (see the no-re-ask note at the top). So the ask is strict
@@ -177,12 +177,6 @@ export function crossCheck(input: CrossCheckInput): ResultWarning[] {
           `agent's prose, not reported by it.`,
     });
   } else {
-    if (result.status.toLowerCase() === "success" && changed?.length === 0) {
-      out.push({
-        kind: "claimedSuccessNoDiff",
-        text: `reported success, but the working tree is unchanged.`,
-      });
-    }
     // Exact paths, never a substring search of the status text: a listed
     // `run.ts` would otherwise match `core/run.ts.new`.
     const seen = new Set(changed ?? []);

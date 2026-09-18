@@ -135,14 +135,16 @@ test("no block at all warns, and says so differently when the tree changed", () 
   assert.match(w?.text ?? "", /working tree changed/);
 });
 
-test("success with an empty diff warns", () => {
+// A read-only task: it claims no files and changes none, so what it said and
+// what the tree shows agree. #119's real run was warned for exactly this.
+test("success with an empty diff and no <files> does not warn", () => {
   assert.deepEqual(
     kinds({
       result: extractResult(block(FULL)),
       changed: [],
       permissionCount: 1,
     }),
-    ["claimedSuccessNoDiff"],
+    [],
   );
 });
 
