@@ -375,6 +375,31 @@ test("a missing run file is a clean exit, not a stack", async (t) => {
   assert.doesNotMatch(r.stderr, /Node\.js v\d/);
 });
 
+test("run --detach against a stale daemon record is one line, not a stack", async (t) => {
+  // A daemon killed with kill -9 leaves daemon.json behind naming a dead
+  // port. `attach` and `merge` already caught that fetch; `--detach` used to
+  // print the raw TypeError.
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: 999999, port: 1, token: "x" }),
+  );
+  const file = await runFile(t, mockRun([{ id: "a", prompt: "hi" }]));
+
+  const r = await spawnCli(
+    t,
+    ["run", "--file", file, "--detach", "--cwd", runtime],
+    "cli.ts",
+    { XDG_RUNTIME_DIR: runtime },
+  ).done;
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /^error: /m);
+  assert.doesNotMatch(r.stderr, /TypeError|triggerUncaughtException/);
+});
+
 test("one asking task with no TTY runs as safe, and says so", async (t) => {
   // A test runner has no TTY, which is also every CI and piped invocation.
   // The interactive half — one asker *with* a TTY keeps `ask` — cannot be
@@ -411,8 +436,10 @@ test("two asking tasks are refused a prompt they would have to share", async (t)
   const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   // The count is the point: one readline cannot attribute an answer between
-  // two askers, so the limit is on askers, not on tasks.
+  // two askers, so the limit is on askers, not on tasks. The notice must also
+  // name the way past the limit (M2-9 amendment): --detach plus attach.
   assert.match(r.stderr, /2 tasks ask, and one prompt cannot serve two/);
+  assert.match(r.stderr, /use --detach and answer them with kapelle attach/);
   assert.deepEqual(await readdir(cwd), [".kapelle"], "both ran as safe");
 });
 
@@ -462,6 +489,22 @@ test("a prompt alongside --file is refused, not silently dropped", async (t) => 
   assert.equal(r.code, 1);
   assert.match(r.stderr, /a prompt does not apply with --file/);
   assert.match(r.stderr, /and also do this/);
+
+  // `--detach` is a boolean flag, so the same prompt must stay positional.
+  // It used to be swallowed as if it were `--detach`'s value, and the run
+  // was submitted with the prompt silently dropped.
+  const detach = await runCli(t, [
+    "run",
+    "--file",
+    file,
+    "--cwd",
+    cwd,
+    "--detach",
+    "and also do this",
+  ]);
+  assert.equal(detach.code, 1);
+  assert.match(detach.stderr, /a prompt does not apply with --file/);
+  assert.match(detach.stderr, /and also do this/);
 });
 
 test("a task whose harness cannot start fails alone, and fails the run", async (t) => {

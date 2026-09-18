@@ -87,8 +87,8 @@ human judge.
 ## Target architecture
 
 ```text
-front ends    cli.ts  kapelle run <file>            direct, in-process, TTY ask
-                      kapelle run <file> --detach   submits to the daemon
+front ends    cli.ts  kapelle run --file <file>      direct, in-process, TTY ask
+                      kapelle run --file <file> --detach   submits to the daemon
                       kapelle attach <run-id>       streams SSE, answers permissions
                       kapelle merge ...
               dashboard (M4 — read views + permission answering; a third subscriber)

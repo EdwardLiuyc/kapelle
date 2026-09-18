@@ -63,7 +63,7 @@ with watchdogs, a result contract, an explicit merge, and a terminal renderer.
 
 ```bash
 kapelle "<prompt>" [--agent <id>|--cmd "<cmd>"|--cwd <dir>|--mode <mode>|--verbose|--quiet]
-kapelle --file tasks.json [--cwd <dir>|--verbose|--quiet]
+kapelle run --file tasks.json [--cwd <dir>|--verbose|--quiet]
 kapelle merge <runId> [--squash] [--cwd <dir>]
 ```
 
@@ -80,7 +80,7 @@ branches.
 
 ```mermaid
 flowchart TD
-    A["kapelle --file run.json"] --> B["openWorktrees(cwd, runId)"]
+    A["kapelle run --file run.json"] --> B["openWorktrees(cwd, runId)"]
     B --> C{"git repo with commits?"}
     C -- "no" --> D["shared cwd fallback + notice<br/>no branches, nothing to merge"]
     C -- "yes" --> E{".kapelle/ tracked by git?"}

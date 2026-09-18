@@ -1275,6 +1275,17 @@ test("an ask run with no client attached is denied at the timeout, and completes
   );
   await assert.rejects(stat(join(cwd, "ACP_TEST.md")));
   assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
+
+  // M2-9: a replay carries every decision the run ever queued, and this run
+  // settled both at the timeout. `attach` must not re-ask them: without the
+  // `GET /permissions` guard this prints the wait line for both, and on a TTY
+  // it would sit at a prompt for a decision the daemon settled long ago.
+  const attached = await spawnCli(t, ["attach", posted.body.id], "cli.ts", {
+    XDG_RUNTIME_DIR: join(d.file, "..", ".."),
+  }).done;
+  assert.equal(attached.code, 0, attached.stderr);
+  assert.match(attached.stdout, /▸ one \(mock-agent\) done/);
+  assert.doesNotMatch(attached.stderr, /waiting on/);
 });
 
 /** Boots with `env`, starts an ask run with no client, and returns it settled. */
@@ -1659,6 +1670,26 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   assert.equal(existsSync(worktree), true, "a worktree inside retention stays");
   assert.equal(await gone(harness), true, "the harness outlived the restart");
   assert.equal(existsSync(childrenFile), false);
+
+  // M2-9: the partial log carries no `_client_task_finished`, so `attach`
+  // must reconcile with the record `restoreRuns` built. The regression: it
+  // printed only `stuck` and said `done — 1 task`, exit 0, for a failed run.
+  const attachEnv = dirs(runtime, state);
+  const attached = await spawnCli(t, ["attach", id], "cli.ts", attachEnv).done;
+  assert.equal(attached.code, 1, attached.stderr);
+  assert.match(attached.stdout, /stuck \([^)]*\) failed/);
+  assert.match(attached.stdout, /waiting \([^)]*\) queued/);
+  assert.doesNotMatch(attached.stdout, /\bdone\b/);
+  assert.match(attached.stdout, /failed — 2 tasks/);
+
+  const oneTask = await spawnCli(
+    t,
+    ["attach", id, "--task", "waiting"],
+    "cli.ts",
+    attachEnv,
+  ).done;
+  assert.equal(oneTask.code, 1, oneTask.stderr);
+  assert.match(oneTask.stdout, /waiting \([^)]*\) queued/);
 
   process.kill(second.pid, "SIGTERM");
   assert.equal((await second.done).code, 0);
@@ -2159,6 +2190,9 @@ test("attach --task draws that one task in full, and refuses a task the run lack
   assert.match(r.stdout, /\[b\].*Read package\.json/);
   assert.match(r.stdout, /Reading package\.json via the client/);
   assert.doesNotMatch(r.stdout, /\[a\]|▸ a /);
+  // Notices are filtered the same way: a's advisory line must not survive
+  // into b's view (M2-9 amendment, "with only its asks").
+  assert.doesNotMatch(r.stderr, /\[a\]/);
   assert.match(r.stdout, /▸ b \(mock-agent\) done/);
   assert.match(r.stdout, /done — 1 task/);
   // The prose is drawn once, live, not again on the card.
@@ -2167,8 +2201,146 @@ test("attach --task draws that one task in full, and refuses a task the run lack
   const none = await spawnCli(t, ["attach", id, "--task", "zz"], "cli.ts", env)
     .done;
   assert.equal(none.code, 1);
-  // The run-level notice still prints first: it concerns every task.
-  assert.match(none.stderr, new RegExp(`error: run ${id} has no task zz\n$`));
+  // The run-level notice still prints first: it concerns every task, and the
+  // other task's notices are filtered out with its events.
+  assert.match(none.stderr, /not a git repository/);
+  assert.ok(
+    none.stderr.trimEnd().endsWith(`error: run ${id} has no task zz`),
+    none.stderr,
+  );
+});
+
+test("attach asks one permission at a time when two tasks wait", {
+  skip: noScript,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const id = await detach(t, env, cwd, {
+    cmd: `node ${MOCK_AGENT}`,
+    maxConcurrency: 2,
+    tasks: [
+      { id: "one", prompt: "hi" },
+      { id: "two", prompt: "hi" },
+    ],
+  });
+
+  const child = spawn(
+    "script",
+    ["-qfec", `${process.execPath} cli.ts attach ${id}`, "/dev/null"],
+    { cwd: REPO, env: { ...process.env, ...env } },
+  );
+  t.after(() => void child.kill("SIGKILL"));
+  let out = "";
+  let answered = 0;
+  const asked = () => out.split("allow? [y/N]").length - 1;
+  child.stdout.setEncoding("utf8").on("data", (text: string) => {
+    out += text;
+  });
+
+  // Both tasks reach their first ask, so the daemon holds two decisions while
+  // the client has printed one question: the `answering` chain holds the rest.
+  for (const until = Date.now() + 10_000; asked() < 1; ) {
+    if (Date.now() > until) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.ok(asked() >= 1, out);
+  for (const until = Date.now() + 10_000; ; ) {
+    if ((await api<Pending[]>(d, "GET", "/permissions")).body.length >= 2) {
+      break;
+    }
+    if (Date.now() > until) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.ok(
+    (await api<Pending[]>(d, "GET", "/permissions")).body.length >= 2,
+    "both tasks should have a pending decision",
+  );
+  await new Promise((ok) => setTimeout(ok, 300));
+  assert.equal(asked(), 1, out);
+
+  // Answer the rest as they appear; the mock's delete offers no reject, so
+  // the topic named in the latest prompt is the decision to make.
+  const answerShown = () => {
+    while (answered < asked()) {
+      const prompt = out.slice(out.lastIndexOf("wants to run"));
+      child.stdin.write(prompt.includes("[delete]") ? "n\n" : "y\n");
+      answered++;
+    }
+  };
+  const closed = new Promise<number | null>((ok) => child.on("close", ok));
+  for (const until = Date.now() + 15_000; ; ) {
+    answerShown();
+    if (child.exitCode !== null || Date.now() > until) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  answerShown();
+  assert.equal(
+    await Promise.race([
+      closed,
+      new Promise<string>((ok) => setTimeout(() => ok("hung"), 15_000).unref()),
+    ]),
+    0,
+    out,
+  );
+  assert.equal(asked(), 4, out);
+  assert.match(out, /▸ one \(mock-agent\) done/);
+  assert.match(out, /▸ two \(mock-agent\) done/);
+  assert.match(out, /done — 2 tasks/);
+});
+
+test("attach --task asks only that task, never its sibling", {
+  skip: noScript,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  // The sibling's unanswered asks deny at the timeout, so the run ends;
+  // the selected task's asks are answered at once.
+  const d = await boot(t, runtime, ["--permission-timeout", "2"]);
+  const cwd = await added(d, await gitRepo(t));
+  const id = await detach(t, env, cwd, {
+    cmd: `node ${MOCK_AGENT}`,
+    maxConcurrency: 2,
+    tasks: [
+      { id: "one", prompt: "hi" },
+      { id: "two", prompt: "hi" },
+    ],
+  });
+
+  const child = spawn(
+    "script",
+    [
+      "-qfec",
+      `${process.execPath} cli.ts attach ${id} --task one`,
+      "/dev/null",
+    ],
+    { cwd: REPO, env: { ...process.env, ...env } },
+  );
+  t.after(() => void child.kill("SIGKILL"));
+  let out = "";
+  let answered = 0;
+  const asked = () => out.split("allow? [y/N]").length - 1;
+  child.stdout.setEncoding("utf8").on("data", (text: string) => {
+    out += text;
+    while (answered < asked()) {
+      const prompt = out.slice(out.lastIndexOf("wants to run"));
+      child.stdin.write(prompt.includes("[delete]") ? "n\n" : "y\n");
+      answered++;
+    }
+  });
+
+  const code = await Promise.race([
+    new Promise<number | null>((ok) => child.on("close", ok)),
+    new Promise<string>((ok) => setTimeout(() => ok("hung"), 20_000).unref()),
+  ]);
+  assert.equal(code, 0, out);
+  // One's two asks only: `two` was filtered out entirely, asks included.
+  assert.equal(asked(), 2, out);
+  assert.match(out, /one wants to run \[edit\]/);
+  assert.doesNotMatch(out, /two wants to run/);
+  assert.match(out, /▸ one \(mock-agent\) done/);
+  assert.match(out, /done — 1 task/);
 });
 
 test("attach without a TTY names the pending ask, and ^C leaves the run running", async (t) => {

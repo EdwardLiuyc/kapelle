@@ -67,10 +67,36 @@ const has = (name: string) => argv.includes(`--${name}`);
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
+/**
+ * Flags that take no value. The token after one stays positional, not its
+ * value: `kapelle run --file f --detach "and also do X"` must still see the
+ * prompt and refuse it, rather than dropping it because `--detach` looked
+ * like the value-taking half of a pair.
+ */
+const BOOLEAN_FLAGS = new Set([
+  "--verbose",
+  "--quiet",
+  "--detach",
+  "--help",
+  "--rebase",
+  "--squash",
+]);
+
+/** The statuses `core/run.ts` settles on. A restored record may carry one it
+ *  does not (`queued`), and `attach` counts that as failed, never success. */
+const TASK_STATUSES = new Set<string>([
+  "done",
+  "warned",
+  "cancelled",
+  "skipped",
+  "timed_out",
+  "failed",
+]);
+
 const positional = argv.filter((a, i) => {
   if (a.startsWith("--")) return false;
   const prev = argv[i - 1];
-  return !(prev?.startsWith("--") && !["--verbose", "--quiet"].includes(prev));
+  return !(prev?.startsWith("--") && !BOOLEAN_FLAGS.has(prev));
 });
 
 const promptText = positional.join(" ").trim();
@@ -174,10 +200,13 @@ if (positional[0] === "daemon" && positional[1] === "start") {
   if (!runFilePath) {
     console.error("run needs a run file: kapelle run --file <run.json>");
     process.exitCode = 1;
+  } else if (has("detach")) {
+    process.exitCode = await detachRun(runFilePath).catch((err) => {
+      console.error(`error: ${messageOf(err)}`);
+      return 1;
+    });
   } else {
-    process.exitCode = await (has("detach")
-      ? detachRun(runFilePath)
-      : runFromFile(runFilePath));
+    process.exitCode = await runFromFile(runFilePath);
   }
 } else if (positional[0] === "attach") {
   process.exitCode = await attachRun().catch((err) => {
@@ -593,8 +622,34 @@ function plural(n: number, word: string): string {
 /** What a task card needs: a `TaskRun`, or what `attach` rebuilds of one. */
 type Card = Pick<TaskRun, "id" | "agent" | "durationMs" | "transcript"> &
   Partial<Pick<TaskRun, "error" | "usage" | "usageSemantics" | "warnings">> & {
-    status: TaskStatus | "running";
+    /** A `TaskStatus`, `running` until the stream settles it, or a restored
+     *  record's own word (`queued`), printed as written. */
+    status: string;
   };
+
+/**
+ * A task as `GET /runs/:id` reports it: a live run's `report.tasks` entry (a
+ * `TaskRun`, with its error and usage) or a restored record's `tasks` entry,
+ * which carries fewer fields. A restored record's status is a plain string —
+ * it may say `queued` for a task the crash left unstarted, which is not a
+ * `TaskStatus` and must still keep the verdict away from `done`.
+ */
+type RecordedTask = Omit<Partial<TaskRun>, "status"> & {
+  id: string;
+  status: string;
+};
+
+/**
+ * `GET /runs/:id` as `attach` reads it. `report` belongs to a run this daemon
+ * process ran; a run restored after a restart carries `tasks` from its record
+ * instead (daemon.ts, M2-6).
+ */
+interface AttachState {
+  error?: string;
+  report?: { tasks?: RecordedTask[] };
+  tasks?: RecordedTask[];
+  notices?: { taskId: string; text: string; kind?: Warning["kind"] }[];
+}
 
 function printTask(task: Card): void {
   const secs = (task.durationMs / 1000).toFixed(1);
@@ -713,7 +768,14 @@ async function* sseEvents(
     let end = buffered.indexOf("\n\n");
     while (end !== -1) {
       for (const line of buffered.slice(0, end).split("\n")) {
-        if (line.startsWith("data: ")) yield JSON.parse(line.slice(6));
+        if (!line.startsWith("data: ")) continue;
+        try {
+          yield JSON.parse(line.slice(6));
+        } catch {
+          // The caller reports a cut stream the same way; a corrupt frame is
+          // no different from one the daemon never finished writing.
+          throw new Error("malformed event from the daemon stream");
+        }
       }
       buffered = buffered.slice(end + 2);
       end = buffered.indexOf("\n\n");
@@ -755,14 +817,16 @@ async function attachRun(): Promise<number> {
   const path = `/runs/${encodeURIComponent(id)}`;
 
   // Notices live on the run record, not the stream: the containment lines
-  // (#13) print whatever `--quiet` says, and the advisory ones do not.
+  // (#13) print whatever `--quiet` says, and the advisory ones do not. The
+  // same record is the authority `attach` reconciles its verdict against once
+  // the stream ends — a run restored after a crash has no `report`, and a
+  // stream cut mid-run has no `_client_task_finished` for what it missed.
   let printed = 0;
-  const printNotices = async () => {
+  const refreshState = async (): Promise<AttachState> => {
     const res = await api(path);
     if (!res.ok) throw new Error(await refusalOf(res));
-    const { notices } = (await res.json()) as {
-      notices: { taskId: string; text: string; kind?: Warning["kind"] }[];
-    };
+    const state = (await res.json()) as AttachState;
+    const notices = state.notices ?? [];
     for (const { taskId, text, kind } of notices.slice(printed)) {
       if (!shown(taskId)) continue;
       if (kind && printableWarnings([{ kind, text }], quiet).length === 0) {
@@ -771,11 +835,17 @@ async function attachRun(): Promise<number> {
       console.error(`! [${taskId}] ${text}`);
     }
     printed = notices.length;
+    return state;
   };
-  await printNotices();
+  const initial = await refreshState();
 
   const res = await api(`${path}/events`);
-  if (!res.ok || !res.body) throw new Error(await refusalOf(res));
+  if (!res.ok || !res.body) {
+    // A `runRun` throw before it opens a log (the only real setter of
+    // `state.error`) leaves the record as the one place its reason survives.
+    console.error(`error: ${initial.error ?? (await refusalOf(res))}`);
+    return 1;
+  }
   if (!quiet) console.log(`attached to ${id}`);
 
   process.on("SIGINT", () => process.exit(130));
@@ -784,9 +854,8 @@ async function attachRun(): Promise<number> {
   const answer = (agent: string, decision: ClientPermissionQueuedEvent) => {
     answering = answering
       .then(async () => {
-        const open = (await (await api("/permissions")).json()) as {
-          id: string;
-        }[];
+        const openRes = await api("/permissions");
+        const open = (await openRes.json()) as { id: string }[];
         if (!open.some((p) => p.id === decision.id)) return;
         if (!asker) {
           console.error(
@@ -861,6 +930,9 @@ async function attachRun(): Promise<number> {
           c.status = update.status;
           c.durationMs = update.durationMs;
           break;
+        default:
+          // Other session updates do not shape a task card.
+          break;
       }
     }
   } catch (err) {
@@ -870,16 +942,39 @@ async function attachRun(): Promise<number> {
     flushStream();
     asker?.close();
   }
-  await printNotices();
+  const state = await refreshState();
+
+  // The stream is not the whole story. A run killed mid-turn and restored has
+  // no `_client_task_finished` for the task it cut, and nothing at all for one
+  // still queued; and no stream carries error text or usage. The record has
+  // them — `report.tasks` for a run this daemon ran, `tasks` for one restored
+  // after a restart (daemon.ts, M2-6) — so it fills what the stream left open.
+  // `state.status` is never read: it can still say `running` for a beat after
+  // the stream ends, and the tasks already decide the run (`runStatus`).
+  for (const r of state.report?.tasks ?? state.tasks ?? []) {
+    if (only && r.id !== only) continue;
+    const c = card(r.id);
+    if (c.status === "running") c.status = r.status;
+    if (c.agent === "?" && r.agent) c.agent = r.agent;
+    c.durationMs ||= r.durationMs ?? 0;
+    c.error ??= r.error;
+    c.usage ??= r.usage;
+    c.usageSemantics ??= r.usageSemantics;
+    if (!c.warnings?.length) c.warnings = r.warnings;
+  }
+  if (state.error) console.error(`error: ${state.error}`);
   if (only && !cards.has(only)) {
     console.error(`error: run ${id} has no task ${only}`);
     return 1;
   }
 
+  // Anything that is not a verdict — a card still `running`, a record's
+  // `queued` — counts as failed: an unfinished task is never a success.
   const statuses: TaskStatus[] = [];
   for (const c of cards.values()) {
-    if (c.status === "running") continue;
-    statuses.push(c.status);
+    statuses.push(
+      TASK_STATUSES.has(c.status) ? (c.status as TaskStatus) : "failed",
+    );
     if (quiet) {
       if (c.status !== "done" && c.status !== "warned") {
         console.error(`error: [${c.id}] ${c.status}`);
@@ -888,7 +983,8 @@ async function attachRun(): Promise<number> {
       printTask(only ? { ...c, transcript: "" } : c);
     }
   }
-  const status = runStatus(statuses);
+  // A throw out of `runRun` fails the run whatever its tasks said.
+  const status = state.error ? "failed" : runStatus(statuses);
   if (!quiet) console.log(`\n${status} — ${plural(statuses.length, "task")}`);
   return status === "done" || status === "warned" ? 0 : 1;
 }
