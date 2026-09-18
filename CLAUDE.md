@@ -23,6 +23,7 @@ node cli.ts "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<
 node cli.ts run --file <run.json>   # N tasks from a run file (tasks.json is the worked example)
 node cli.ts run --file <run.json> --detach   # hand it to the running daemon; prints the run id
 node cli.ts attach <runId> [--task <id>]   # history then live tail of a detached run; answers its ask prompts on a TTY; --task draws one task in full
+node cli.ts ps                     # every run the daemon knows (GET /runs), and each task's id and status under it (M2-10)
 node daemon.ts [--port n] [--permission-timeout s]   # one HTTP daemon for all repos (M2-1); port, pid and token in $XDG_RUNTIME_DIR/kapelle/daemon.json, the repo list in $XDG_STATE_HOME/kapelle/repos.json (M2-6)
 node cli.ts daemon start [--port n] [--permission-timeout s]   # the same daemon, in the foreground; ^C or SIGTERM cancels runs and exits (M2-4)
 node cli.ts daemon add <path>         # POST /repos to the running daemon, token read from daemon.json

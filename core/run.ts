@@ -324,6 +324,10 @@ export interface RunOptions {
    *  `daemon.ts` serves `GET /runs/:id/events` from it (M2-2). Never called
    *  when the log directory could not be made. */
   onEventLog?: (log: EventLog) => void;
+  /** Handed the task list at every transition, the list `run.json` carries —
+   *  `daemon.ts` lists a live run's tasks from it (M2-10). Called whether or
+   *  not the record could be written. */
+  onTasks?: (tasks: RecordTask[]) => void;
 }
 
 /**
@@ -404,6 +408,10 @@ export async function runRun(
     status: TaskStatus | "running",
     endedAt?: string,
   ): Promise<void> => {
+    const tasks = run.tasks.map(
+      (t): RecordTask => entries.get(t.id) ?? { id: t.id, status: "queued" },
+    );
+    options.onTasks?.(tasks);
     if (!logs) return writing;
     // Chained, never concurrent: two workers renaming one temp file at the
     // same instant is the one way an atomic write stops being atomic.
@@ -417,9 +425,7 @@ export async function runRun(
           startedAt: new Date(started).toISOString(),
           ...(endedAt ? { endedAt } : {}),
           logDir,
-          tasks: run.tasks.map(
-            (t) => entries.get(t.id) ?? { id: t.id, status: "queued" },
-          ),
+          tasks,
         }),
       )
       .catch((err) => {

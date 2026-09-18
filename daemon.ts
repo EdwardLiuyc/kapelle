@@ -693,6 +693,9 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     signal: canceller.signal,
     onEventLog: settleLog,
     askPolicy: permissions.policyFor(id, bus, canceller.signal),
+    onTasks: (tasks) => {
+      state.tasks = tasks;
+    },
     onNotice: (taskId, text, kind) => {
       state.notices.push(kind ? { taskId, text, kind } : { taskId, text });
     },
@@ -818,7 +821,12 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     send(
       res,
       200,
-      [...runs.values()].map(({ id, cwd, status }) => ({ id, cwd, status })),
+      [...runs.values()].map(({ id, cwd, status, tasks }) => ({
+        id,
+        cwd,
+        status,
+        tasks: (tasks ?? []).map(({ id, status }) => ({ id, status })),
+      })),
     );
   } else if (req.method === "GET" && events) {
     await getEvents(events[1] as string, req, res);

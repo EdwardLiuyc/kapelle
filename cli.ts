@@ -208,6 +208,11 @@ if (positional[0] === "daemon" && positional[1] === "start") {
   } else {
     process.exitCode = await runFromFile(runFilePath);
   }
+} else if (positional[0] === "ps") {
+  process.exitCode = await listRuns().catch((err) => {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  });
 } else if (positional[0] === "attach") {
   process.exitCode = await attachRun().catch((err) => {
     console.error(`error: ${messageOf(err)}`);
@@ -750,6 +755,31 @@ async function detachRun(path: string): Promise<number> {
         `  tasks: ${tasks.map((task) => task.id).join(", ")}\n` +
         `  one task in full: kapelle attach ${id} --task <taskId>`,
     );
+  }
+  return 0;
+}
+
+/**
+ * `kapelle ps`: every run the daemon knows, and each task's id and status
+ * under it (M2-10, #121). A finished run's status is its verdict.
+ */
+async function listRuns(): Promise<number> {
+  const api = await daemonApi();
+  if (!api) return 1;
+  const res = await api("/runs");
+  if (!res.ok) {
+    console.error(`error: ${await refusalOf(res)}`);
+    return 1;
+  }
+  const runs = (await res.json()) as {
+    id: string;
+    cwd: string;
+    status: string;
+    tasks: { id: string; status: string }[];
+  }[];
+  for (const run of runs) {
+    console.log(`${run.id}  ${run.status}  ${run.cwd}`);
+    for (const task of run.tasks) console.log(`  ${task.id}  ${task.status}`);
   }
   return 0;
 }
