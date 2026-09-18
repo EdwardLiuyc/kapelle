@@ -46,7 +46,7 @@ policy across all of them and returning machine-readable results.
 | Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `protocol/agent.ts` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), and the capability flags M0-3 found harnesses gating on (measured for `terminal_output` via `87cbfe3`) all live there. |
 | Language | TypeScript on Node 24, run directly via type stripping — **no build step**. Four devDependencies — `typescript`, `@types/node`, `biome`, `knip` (amended 2026-08-31, M1a-1; the story's original *"only devDependency"* is history). **Zero runtime deps until M1c-7 (2026-09-09), which ratified a presentation-only exception and took `marked`** — see `README.md` for the rule. |
 | Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, with **pi-acp a measured fourth since 2026-09-09 (#99)**, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
-| CLI | **One front end, one core (amended 2026-09-06, M2-9).** `kapelle run <file>` drives in-process; `--detach` hands the same file to the daemon; `kapelle attach <run-id>` streams a detached run. The original "two front ends, `run` and `runs`" is dropped: `runs` leaked the `POST /runs` path into a name people type, read as "many runs" when the difference is *local versus detached*, and a second CLI is a second place to keep the flags, notice rules and SIGINT grace in step. |
+| CLI | **One front end, one core (amended 2026-09-06, M2-9).** `kapelle run --file <file>` drives in-process (the bare `kapelle --file` is gone, amended 2026-09-18, #39); `--detach` hands the same file to the daemon; `kapelle attach <run-id>` streams a detached run. The original "two front ends, `run` and `runs`" is dropped: `runs` leaked the `POST /runs` path into a name people type, read as "many runs" when the difference is *local versus detached*, and a second CLI is a second place to keep the flags, notice rules and SIGINT grace in step. |
 
 ### Notes on some of these
 
@@ -87,8 +87,8 @@ human judge.
 ## Target architecture
 
 ```text
-front ends    cli.ts  kapelle run <file>            direct, in-process, TTY ask
-                      kapelle run <file> --detach   submits to the daemon
+front ends    cli.ts  kapelle run --file <file>      direct, in-process, TTY ask
+                      kapelle run --file <file> --detach   submits to the daemon
                       kapelle attach <run-id>       streams SSE, answers permissions
                       kapelle merge ...
               dashboard (M4 — read views + permission answering; a third subscriber)
@@ -473,7 +473,7 @@ driven from a run file, fully verifiable offline.
 - **Browser-compatible auth** — `EventSource` cannot set custom headers. The token must be
   acceptable as a query parameter on the SSE endpoint, or exchangeable for a cookie by a
   login POST. Decided here so M4 is not blocked; the localhost-only bind is unchanged.
-- `kapelle run <file> --detach` and `kapelle attach <run-id>` — submit a run file, stream
+- `kapelle run --file <file> --detach` and `kapelle attach <run-id>` — submit a run file, stream
   SSE, answer permissions interactively, print results. **Amended 2026-09-06 (M2-9): no
   `runs.ts`.** Same deliverable, reached through a flag and a second verb on the one CLI
   rather than a second binary whose name differed by one letter.

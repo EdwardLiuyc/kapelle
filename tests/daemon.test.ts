@@ -12,7 +12,7 @@
  */
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readlinkSync } from "node:fs";
 import {
   chmod,
@@ -1275,6 +1275,17 @@ test("an ask run with no client attached is denied at the timeout, and completes
   );
   await assert.rejects(stat(join(cwd, "ACP_TEST.md")));
   assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
+
+  // M2-9: a replay carries every decision the run ever queued, and this run
+  // settled both at the timeout. `attach` must not re-ask them: without the
+  // `GET /permissions` guard this prints the wait line for both, and on a TTY
+  // it would sit at a prompt for a decision the daemon settled long ago.
+  const attached = await spawnCli(t, ["attach", posted.body.id], "cli.ts", {
+    XDG_RUNTIME_DIR: join(d.file, "..", ".."),
+  }).done;
+  assert.equal(attached.code, 0, attached.stderr);
+  assert.match(attached.stdout, /▸ one \(mock-agent\) done/);
+  assert.doesNotMatch(attached.stderr, /waiting on/);
 });
 
 /** Boots with `env`, starts an ask run with no client, and returns it settled. */
@@ -1660,6 +1671,26 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   assert.equal(await gone(harness), true, "the harness outlived the restart");
   assert.equal(existsSync(childrenFile), false);
 
+  // M2-9: the partial log carries no `_client_task_finished`, so `attach`
+  // must reconcile with the record `restoreRuns` built. The regression: it
+  // printed only `stuck` and said `done — 1 task`, exit 0, for a failed run.
+  const attachEnv = dirs(runtime, state);
+  const attached = await spawnCli(t, ["attach", id], "cli.ts", attachEnv).done;
+  assert.equal(attached.code, 1, attached.stderr);
+  assert.match(attached.stdout, /stuck \([^)]*\) failed/);
+  assert.match(attached.stdout, /waiting \([^)]*\) queued/);
+  assert.doesNotMatch(attached.stdout, /\bdone\b/);
+  assert.match(attached.stdout, /failed — 2 tasks/);
+
+  const oneTask = await spawnCli(
+    t,
+    ["attach", id, "--task", "waiting"],
+    "cli.ts",
+    attachEnv,
+  ).done;
+  assert.equal(oneTask.code, 1, oneTask.stderr);
+  assert.match(oneTask.stdout, /waiting \([^)]*\) queued/);
+
   process.kill(second.pid, "SIGTERM");
   assert.equal((await second.done).code, 0);
 });
@@ -2029,4 +2060,412 @@ test("a project config is re-read per run, and its error is the run's 400", asyn
   });
   assert.equal(refused.status, 400);
   assert.match(refused.body.error, /"ttlMs" must be a whole number/);
+});
+
+// --- kapelle run --detach and kapelle attach, M2-9 ------------------------------
+
+/** `kapelle run --file <run> --detach` against `d`; returns the id it printed. */
+async function detach(
+  t: TestContext,
+  env: Record<string, string>,
+  cwd: string,
+  run: unknown,
+): Promise<string> {
+  const file = join(await tempDir(t), "run.json");
+  await writeFile(file, JSON.stringify(run));
+  const r = await spawnCli(
+    t,
+    ["run", "--file", file, "--detach", "--cwd", cwd],
+    "cli.ts",
+    env,
+  ).done;
+  assert.equal(r.code, 0, r.stderr);
+  const id = r.stdout.trim();
+  assert.match(id, /^\S+$/, "stdout carries the run id and nothing else");
+  assert.match(r.stderr, new RegExp(`kapelle attach ${id}\n`));
+  // Every task id it can be attached to, and how.
+  const ids = (run as { tasks: { id: string }[] }).tasks.map((task) => task.id);
+  assert.match(r.stderr, new RegExp(`tasks: ${ids.join(", ")}\n`));
+  assert.match(r.stderr, new RegExp(`kapelle attach ${id} --task <taskId>`));
+  return id;
+}
+
+// `script` from util-linux gives `attach` a real TTY; BSD's takes other flags.
+const noScript = spawnSync("script", ["--version"])
+  .stdout?.toString()
+  .includes("util-linux")
+  ? false
+  : "needs util-linux script for a TTY";
+
+test("run --detach returns the id; attach on a TTY answers both asks and exits with the run", {
+  skip: noScript,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await tempDir(t));
+  const id = await detach(t, env, cwd, askRun(cwd).run);
+
+  // The run goes on without the terminal that started it.
+  assert.equal((await pendingOne(d)).runId, id);
+
+  const child = spawn(
+    "script",
+    ["-qfec", `${process.execPath} cli.ts attach ${id}`, "/dev/null"],
+    { cwd: REPO, env: { ...process.env, ...env } },
+  );
+  t.after(() => void child.kill("SIGKILL"));
+  let out = "";
+  const done = new Promise<number | null>((ok) => child.on("close", ok));
+  // The mock asks twice: the edit (allowed here), then an allow-only delete.
+  const answers = ["y\n", "n\n"];
+  child.stdout.setEncoding("utf8").on("data", (text: string) => {
+    out += text;
+    const asked = out.split("allow? [y/N]").length - 1;
+    while (answers.length > 2 - asked) child.stdin.write(answers.shift());
+  });
+
+  assert.equal(await done, 0, out);
+  assert.match(out, /attached to /);
+  assert.match(out, /wants to run \[edit\]/);
+  assert.match(out, /▸ one \(mock-agent\) done/);
+  assert.match(out, /done — 1 task/);
+  await stat(join(cwd, "ACP_TEST.md"));
+  assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
+});
+
+test("attach replays a finished run, and refuses an unknown id or a missing daemon", async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+
+  const none = await spawnCli(t, ["attach", "x"], "cli.ts", env).done;
+  assert.equal(none.code, 1);
+  assert.match(none.stderr, /no daemon is listening/);
+
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await tempDir(t));
+  const id = await detach(
+    t,
+    env,
+    cwd,
+    mockRun([
+      { id: "a", prompt: "hi" },
+      { id: "b", prompt: "hi" },
+    ]),
+  );
+  await settled(d, id);
+
+  const r = await spawnCli(t, ["attach", id], "cli.ts", env).done;
+  assert.equal(r.code, 0, r.stderr);
+  // Both cards and the verdict, built from the stream alone.
+  assert.match(r.stdout, /▸ a \(mock-agent\) done/);
+  assert.match(r.stdout, /▸ b \(mock-agent\) done/);
+  assert.match(r.stdout, /done — 2 tasks/);
+
+  const unknown = await spawnCli(t, ["attach", "nope"], "cli.ts", env).done;
+  assert.equal(unknown.code, 1);
+  assert.equal(unknown.stderr.trim(), "error: no run nope");
+});
+
+test("attach --task draws that one task in full, and refuses a task the run lacks", async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await tempDir(t));
+  const id = await detach(
+    t,
+    env,
+    cwd,
+    mockRun([
+      { id: "a", prompt: "hi" },
+      { id: "b", prompt: "hi" },
+    ]),
+  );
+  await settled(d, id);
+
+  const r = await spawnCli(t, ["attach", id, "--task", "b"], "cli.ts", env)
+    .done;
+  assert.equal(r.code, 0, r.stderr);
+  // Drawn by `render.ts`, tagged by task: b's tool calls and prose, none of a's.
+  assert.match(r.stdout, /\[b\].*Read package\.json/);
+  assert.match(r.stdout, /Reading package\.json via the client/);
+  assert.doesNotMatch(r.stdout, /\[a\]|▸ a /);
+  // Notices are filtered the same way: a's advisory line must not survive
+  // into b's view (M2-9 amendment, "with only its asks").
+  assert.doesNotMatch(r.stderr, /\[a\]/);
+  assert.match(r.stdout, /▸ b \(mock-agent\) done/);
+  assert.match(r.stdout, /done — 1 task/);
+  // The prose is drawn once, live, not again on the card.
+  assert.equal(r.stdout.split("Reading package.json via").length - 1, 1);
+
+  const none = await spawnCli(t, ["attach", id, "--task", "zz"], "cli.ts", env)
+    .done;
+  assert.equal(none.code, 1);
+  // The run-level notice still prints first: it concerns every task, and the
+  // other task's notices are filtered out with its events.
+  assert.match(none.stderr, /not a git repository/);
+  assert.ok(
+    none.stderr.trimEnd().endsWith(`error: run ${id} has no task zz`),
+    none.stderr,
+  );
+});
+
+test("attach asks one permission at a time when two tasks wait", {
+  skip: noScript,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const id = await detach(t, env, cwd, {
+    cmd: `node ${MOCK_AGENT}`,
+    maxConcurrency: 2,
+    tasks: [
+      { id: "one", prompt: "hi" },
+      { id: "two", prompt: "hi" },
+    ],
+  });
+
+  const child = spawn(
+    "script",
+    ["-qfec", `${process.execPath} cli.ts attach ${id}`, "/dev/null"],
+    { cwd: REPO, env: { ...process.env, ...env } },
+  );
+  t.after(() => void child.kill("SIGKILL"));
+  let out = "";
+  let answered = 0;
+  const asked = () => out.split("allow? [y/N]").length - 1;
+  child.stdout.setEncoding("utf8").on("data", (text: string) => {
+    out += text;
+  });
+
+  // Both tasks reach their first ask, so the daemon holds two decisions while
+  // the client has printed one question: the `answering` chain holds the rest.
+  for (const until = Date.now() + 10_000; asked() < 1; ) {
+    if (Date.now() > until) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.ok(asked() >= 1, out);
+  for (const until = Date.now() + 10_000; ; ) {
+    if ((await api<Pending[]>(d, "GET", "/permissions")).body.length >= 2) {
+      break;
+    }
+    if (Date.now() > until) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.ok(
+    (await api<Pending[]>(d, "GET", "/permissions")).body.length >= 2,
+    "both tasks should have a pending decision",
+  );
+  await new Promise((ok) => setTimeout(ok, 300));
+  assert.equal(asked(), 1, out);
+
+  // Answer the rest as they appear; the mock's delete offers no reject, so
+  // the topic named in the latest prompt is the decision to make.
+  const answerShown = () => {
+    while (answered < asked()) {
+      const prompt = out.slice(out.lastIndexOf("wants to run"));
+      child.stdin.write(prompt.includes("[delete]") ? "n\n" : "y\n");
+      answered++;
+    }
+  };
+  const closed = new Promise<number | null>((ok) => child.on("close", ok));
+  for (const until = Date.now() + 15_000; ; ) {
+    answerShown();
+    if (child.exitCode !== null || Date.now() > until) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  answerShown();
+  assert.equal(
+    await Promise.race([
+      closed,
+      new Promise<string>((ok) => setTimeout(() => ok("hung"), 15_000).unref()),
+    ]),
+    0,
+    out,
+  );
+  assert.equal(asked(), 4, out);
+  assert.match(out, /▸ one \(mock-agent\) done/);
+  assert.match(out, /▸ two \(mock-agent\) done/);
+  assert.match(out, /done — 2 tasks/);
+});
+
+test("attach --task asks only that task, never its sibling", {
+  skip: noScript,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  // The sibling's unanswered asks deny at the timeout, so the run ends;
+  // the selected task's asks are answered at once.
+  const d = await boot(t, runtime, ["--permission-timeout", "2"]);
+  const cwd = await added(d, await gitRepo(t));
+  const id = await detach(t, env, cwd, {
+    cmd: `node ${MOCK_AGENT}`,
+    maxConcurrency: 2,
+    tasks: [
+      { id: "one", prompt: "hi" },
+      { id: "two", prompt: "hi" },
+    ],
+  });
+
+  const child = spawn(
+    "script",
+    [
+      "-qfec",
+      `${process.execPath} cli.ts attach ${id} --task one`,
+      "/dev/null",
+    ],
+    { cwd: REPO, env: { ...process.env, ...env } },
+  );
+  t.after(() => void child.kill("SIGKILL"));
+  let out = "";
+  let answered = 0;
+  const asked = () => out.split("allow? [y/N]").length - 1;
+  child.stdout.setEncoding("utf8").on("data", (text: string) => {
+    out += text;
+    while (answered < asked()) {
+      const prompt = out.slice(out.lastIndexOf("wants to run"));
+      child.stdin.write(prompt.includes("[delete]") ? "n\n" : "y\n");
+      answered++;
+    }
+  });
+
+  const code = await Promise.race([
+    new Promise<number | null>((ok) => child.on("close", ok)),
+    new Promise<string>((ok) => setTimeout(() => ok("hung"), 20_000).unref()),
+  ]);
+  assert.equal(code, 0, out);
+  // One's two asks only: `two` was filtered out entirely, asks included.
+  assert.equal(asked(), 2, out);
+  assert.match(out, /one wants to run \[edit\]/);
+  assert.doesNotMatch(out, /two wants to run/);
+  assert.match(out, /▸ one \(mock-agent\) done/);
+  assert.match(out, /done — 1 task/);
+});
+
+test("attach without a TTY names the pending ask, and ^C leaves the run running", async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await tempDir(t));
+  const id = await detach(t, env, cwd, askRun(cwd).run);
+  await pendingOne(d);
+
+  const a = spawnCli(t, ["attach", id], "cli.ts", env);
+  // The wait line is on stderr, which `waitFor` does not watch.
+  const waiting = new Promise<void>((ok) => {
+    let err = "";
+    a.child.stderr.on("data", (text: string) => {
+      err += text;
+      if (err.includes("waiting on [edit]")) ok();
+    });
+  });
+  await Promise.race([
+    waiting,
+    a.done.then((r) => {
+      throw new Error(`attach exited ${r.code}: ${r.stderr}`);
+    }),
+  ]);
+  a.child.kill("SIGINT");
+  assert.equal((await a.done).code, 130);
+  assert.equal((await api(d, "GET", `/runs/${id}`)).body.status, "running");
+});
+
+test("run --detach in a folder never added is the daemon's 403, and kapelle --file is refused", async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  await boot(t, runtime);
+  const file = join(await tempDir(t), "run.json");
+  await writeFile(file, JSON.stringify(mockRun([{ id: "a", prompt: "hi" }])));
+
+  const r = await spawnCli(
+    t,
+    ["run", "--file", file, "--detach", "--cwd", await tempDir(t)],
+    "cli.ts",
+    env,
+  ).done;
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^error: .* has not been added to the daemon/);
+  assert.equal(r.stdout, "");
+
+  const bare = await spawnCli(t, ["--file", file], "cli.ts", env).done;
+  assert.equal(bare.code, 1);
+  assert.match(bare.stderr, /kapelle run --file <run.json>/);
+
+  const noFile = await spawnCli(t, ["run"], "cli.ts", env).done;
+  assert.equal(noFile.code, 1);
+  assert.match(noFile.stderr, /run needs a run file/);
+});
+
+test("^C at attach's y/N prompt exits 130 and leaves the run running", {
+  skip: noScript,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await tempDir(t));
+  const id = await detach(t, env, cwd, askRun(cwd).run);
+
+  // `script -e` returns the child's exit status, so 130 is attach's own.
+  const child = spawn(
+    "script",
+    ["-qfec", `${process.execPath} cli.ts attach ${id}`, "/dev/null"],
+    { cwd: REPO, env: { ...process.env, ...env } },
+  );
+  t.after(() => void child.kill("SIGKILL"));
+  let out = "";
+  let sent = false;
+  child.stdout.setEncoding("utf8").on("data", (text: string) => {
+    out += text;
+    if (!sent && out.includes("allow? [y/N]")) {
+      sent = true;
+      child.stdin.write("\x03");
+    }
+  });
+  const code = await Promise.race([
+    new Promise<number | null>((ok) => child.on("close", ok)),
+    new Promise<string>((ok) => setTimeout(() => ok("hung"), 10_000)),
+  ]);
+  assert.equal(code, 130, out);
+  assert.equal((await api(d, "GET", `/runs/${id}`)).body.status, "running");
+});
+
+test("an answer typed after the timeout decided is the daemon's 409, printed, and attach carries on", {
+  skip: noScript,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+  const d = await boot(t, runtime, ["--permission-timeout", "3"]);
+  const cwd = await added(d, await tempDir(t));
+  const id = await detach(t, env, cwd, askRun(cwd).run);
+
+  const child = spawn(
+    "script",
+    ["-qfec", `${process.execPath} cli.ts attach ${id}`, "/dev/null"],
+    { cwd: REPO, env: { ...process.env, ...env } },
+  );
+  t.after(() => void child.kill("SIGKILL"));
+  let out = "";
+  let asked = 0;
+  child.stdout.setEncoding("utf8").on("data", (text: string) => {
+    out += text;
+    const now = out.split("allow? [y/N]").length - 1;
+    // The edit is answered 4 s after it is asked: past its 3 s timeout, and
+    // inside the delete's, which is queued only once the edit is denied. So
+    // the run is still live when the late answer lands, and the delete is
+    // answered at once.
+    for (; asked < now; asked++) {
+      const late = asked === 0;
+      setTimeout(
+        () => child.stdin.write(late ? "y\n" : "n\n"),
+        late ? 4000 : 0,
+      );
+    }
+  });
+
+  assert.equal(await new Promise((ok) => child.on("close", ok)), 0, out);
+  assert.match(out, /error: permission \S+ was already decided/);
+  assert.match(out, /done — 1 task/);
+  // The timeout's deny stands: the late "y" wrote nothing.
+  await assert.rejects(stat(join(cwd, "ACP_TEST.md")));
 });

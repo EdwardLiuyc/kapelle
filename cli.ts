@@ -14,19 +14,26 @@ import {
   resolvePolicy,
 } from "./core/policy.ts";
 import { withResultPreamble } from "./core/result.ts";
-import { runRun, type TaskRun } from "./core/run.ts";
+import {
+  runRun,
+  runStatus,
+  type TaskRun,
+  type TaskStatus,
+} from "./core/run.ts";
 import { type Task, validateRun } from "./core/runfile.ts";
 import { runtimeDir } from "./core/runtime.ts";
 import { stateDirRoot } from "./core/worktree.ts";
-import { AcpAgent } from "./protocol/agent.ts";
+import { AcpAgent, type AgentEventEnvelope } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
 import {
   AGENTS,
   printableWarnings,
   resolveAgent,
   resolveEnv,
+  type Warning,
   warningsFor,
 } from "./protocol/registry.ts";
+import type { ClientPermissionQueuedEvent } from "./protocol/types.ts";
 import { flushStream, render } from "./render.ts";
 
 const argv = process.argv.slice(2);
@@ -60,18 +67,44 @@ const has = (name: string) => argv.includes(`--${name}`);
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
+/**
+ * Flags that take no value. The token after one stays positional, not its
+ * value: `kapelle run --file f --detach "and also do X"` must still see the
+ * prompt and refuse it, rather than dropping it because `--detach` looked
+ * like the value-taking half of a pair.
+ */
+const BOOLEAN_FLAGS = new Set([
+  "--verbose",
+  "--quiet",
+  "--detach",
+  "--help",
+  "--rebase",
+  "--squash",
+]);
+
+/** The statuses `core/run.ts` settles on. A restored record may carry one it
+ *  does not (`queued`), and `attach` counts that as failed, never success. */
+const TASK_STATUSES = new Set<string>([
+  "done",
+  "warned",
+  "cancelled",
+  "skipped",
+  "timed_out",
+  "failed",
+]);
+
 const positional = argv.filter((a, i) => {
   if (a.startsWith("--")) return false;
   const prev = argv[i - 1];
-  return !(prev?.startsWith("--") && !["--verbose", "--quiet"].includes(prev));
+  return !(prev?.startsWith("--") && !BOOLEAN_FLAGS.has(prev));
 });
 
 const promptText = positional.join(" ").trim();
 
-// `--file` is the other half of this CLI: one prompt, or N of them from a run
-// file (M1b-2, #18). One entry point rather than two, because a second CLI
+// `run --file` is the other half of this CLI: one prompt, or N of them from a
+// run file (M1b-2, #18). One entry point rather than two, because a second CLI
 // would only be a second place to keep the notice rules, the SIGINT grace and
-// the arg parsing in step.
+// the arg parsing in step. A verb since M2-9 (#39), like `merge` and `attach`.
 const runFilePath = flag("file");
 
 if ((!promptText && !runFilePath) || has("help")) {
@@ -79,7 +112,11 @@ if ((!promptText && !runFilePath) || has("help")) {
 kapelle — a minimal Agent Client Protocol client
 
   kapelle "<prompt>" [options]
-  kapelle --file <run.json> [--cwd dir] [--verbose] [--quiet]
+  kapelle run --file <run.json> [--cwd dir] [--verbose] [--quiet]
+  kapelle run --file <run.json> --detach   hands the run to the daemon
+  kapelle attach <runId> [--task <taskId>]
+                                     streams a detached run, answers its asks;
+                                     --task draws that one task in full
   kapelle merge <runId> [--squash] [--cwd dir]
   kapelle daemon start [--port n] [--permission-timeout s]
                                      runs in this terminal until ^C or SIGTERM
@@ -103,7 +140,8 @@ Examples:
   kapelle "list the top-level files and summarise this repo"
   kapelle "add a health endpoint" --cwd ../my-app --mode ask
   kapelle "what does src/index.ts do" --mode safe
-  kapelle --file tasks.run.json
+  kapelle run --file tasks.run.json
+  kapelle run --file tasks.run.json --detach
   kapelle merge 20260909-101500-abc1
 `);
   process.exit(promptText || runFilePath ? 0 : 1);
@@ -158,8 +196,30 @@ if (positional[0] === "daemon" && positional[1] === "start") {
     console.error(`error: ${messageOf(err)}`);
     return 1;
   });
+} else if (positional[0] === "run") {
+  if (!runFilePath) {
+    console.error("run needs a run file: kapelle run --file <run.json>");
+    process.exitCode = 1;
+  } else if (has("detach")) {
+    process.exitCode = await detachRun(runFilePath).catch((err) => {
+      console.error(`error: ${messageOf(err)}`);
+      return 1;
+    });
+  } else {
+    process.exitCode = await runFromFile(runFilePath);
+  }
+} else if (positional[0] === "attach") {
+  process.exitCode = await attachRun().catch((err) => {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  });
 } else if (runFilePath) {
-  process.exitCode = await runFromFile(runFilePath);
+  // Removed rather than kept as an alias (decided 2026-09-18, #39): one
+  // spelling per job, and every other job is already a verb.
+  console.error(
+    "--file is a flag of the run verb now: kapelle run --file <run.json>",
+  );
+  process.exitCode = 1;
 } else {
   const spec = orExit(() =>
     resolveAgent(flag("agent", "opencode"), flag("cmd")),
@@ -290,39 +350,8 @@ if (positional[0] === "daemon" && positional[1] === "start") {
  * the same as no summary. Only milestones — a tool call — go out live.
  */
 async function runFromFile(path: string): Promise<number> {
-  // The file carries agent, cmd and mode per task, and `resolvePolicy` has
-  // already settled them against each harness's ceiling. A CLI flag would be
-  // a second, unresolved answer to a question the file already answered —
-  // refused rather than silently losing to the file or silently beating it.
-  for (const conflicting of ["agent", "cmd", "mode"]) {
-    if (has(conflicting)) {
-      console.error(
-        `--${conflicting} does not apply with --file: a run file sets ` +
-          `"${conflicting}" per task. Edit the file instead.`,
-      );
-      return 1;
-    }
-  }
-
-  // A positional prompt is the same conflict, and the most dangerous shape of
-  // it: `cli.ts --file tasks.json "and also do X"` reads like it queued the
-  // extra work. Silently dropping it would be the one failure mode the three
-  // flags above are rejected to avoid.
-  if (promptText) {
-    console.error(
-      `a prompt does not apply with --file: a run file carries one prompt ` +
-        `per task. Got ${JSON.stringify(promptText)}.`,
-    );
-    return 1;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(path, "utf8"));
-  } catch (err) {
-    console.error(`cannot read run file ${path}: ${messageOf(err)}`);
-    return 1;
-  }
+  const parsed = await loadRunFile(path);
+  if (parsed === undefined) return 1;
 
   // M2-7: the project config of the folder the run starts in supplies the
   // defaults the run file omits; `orExit` refuses a bad config by file:key.
@@ -347,14 +376,16 @@ async function runFromFile(path: string): Promise<number> {
   //
   // It is a downgrade often, not always, because every registry entry is
   // `defaultMode: "ask"`: a bare run file names no mode and every task inherits
-  // one. M2-3's queue serves N askers in the daemon only; M2-9's `attach` is
-  // what lifts the CLI's limit.
+  // one. M2-3's queue serves N askers in the daemon only, and `attach` answers
+  // them one at a time (M2-9): that pair is the way past this limit, and the
+  // in-process path keeps it (decided 2026-09-18, #39).
   const askers = validated.tasks.filter((t) => t.mode === "ask");
   const canAsk = askers.length === 1 && Boolean(process.stdin.isTTY);
   if (askers.length > 1) {
     console.error(
       `! ${askers.length} tasks ask, and one prompt cannot serve two — ` +
-        `running them as safe. Set a mode per task, or wait for the daemon.`,
+        `running them as safe. Set a mode per task, or use --detach and ` +
+        "answer them with kapelle attach.",
     );
   }
 
@@ -511,6 +542,47 @@ async function runFromFile(path: string): Promise<number> {
 }
 
 /**
+ * Read and parse a run file for either half of `run`, refusing what the file
+ * already answers. `undefined` means the reason is printed and the caller
+ * exits 1.
+ */
+async function loadRunFile(path: string): Promise<unknown> {
+  // The file carries agent, cmd and mode per task, and `resolvePolicy` has
+  // already settled them against each harness's ceiling. A CLI flag would be
+  // a second, unresolved answer to a question the file already answered —
+  // refused rather than silently losing to the file or silently beating it.
+  for (const conflicting of ["agent", "cmd", "mode"]) {
+    if (has(conflicting)) {
+      console.error(
+        `--${conflicting} does not apply with --file: a run file sets ` +
+          `"${conflicting}" per task. Edit the file instead.`,
+      );
+      return undefined;
+    }
+  }
+
+  // A positional prompt is the same conflict, and the most dangerous shape of
+  // it: `kapelle run --file tasks.json "and also do X"` reads like it queued
+  // the extra work. Silently dropping it would be the one failure mode the
+  // three flags above are rejected to avoid.
+  const extra = positional.slice(1).join(" ").trim();
+  if (extra) {
+    console.error(
+      `a prompt does not apply with --file: a run file carries one prompt ` +
+        `per task. Got ${JSON.stringify(extra)}.`,
+    );
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch (err) {
+    console.error(`cannot read run file ${path}: ${messageOf(err)}`);
+    return undefined;
+  }
+}
+
+/**
  * The `merge` half: `kapelle merge <runId> [--squash] [--cwd dir]`.
  *
  * M1c-3 ships `--squash` only; `--rebase` is M3-4 and is refused here rather
@@ -547,7 +619,39 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-function printTask(task: TaskRun): void {
+/** What a task card needs: a `TaskRun`, or what `attach` rebuilds of one. */
+type Card = Pick<TaskRun, "id" | "agent" | "durationMs" | "transcript"> &
+  Partial<Pick<TaskRun, "error" | "usage" | "usageSemantics" | "warnings">> & {
+    /** A `TaskStatus`, `running` until the stream settles it, or a restored
+     *  record's own word (`queued`), printed as written. */
+    status: string;
+  };
+
+/**
+ * A task as `GET /runs/:id` reports it: a live run's `report.tasks` entry (a
+ * `TaskRun`, with its error and usage) or a restored record's `tasks` entry,
+ * which carries fewer fields. A restored record's status is a plain string —
+ * it may say `queued` for a task the crash left unstarted, which is not a
+ * `TaskStatus` and must still keep the verdict away from `done`.
+ */
+type RecordedTask = Omit<Partial<TaskRun>, "status"> & {
+  id: string;
+  status: string;
+};
+
+/**
+ * `GET /runs/:id` as `attach` reads it. `report` belongs to a run this daemon
+ * process ran; a run restored after a restart carries `tasks` from its record
+ * instead (daemon.ts, M2-6).
+ */
+interface AttachState {
+  error?: string;
+  report?: { tasks?: RecordedTask[] };
+  tasks?: RecordedTask[];
+  notices?: { taskId: string; text: string; kind?: Warning["kind"] }[];
+}
+
+function printTask(task: Card): void {
   const secs = (task.durationMs / 1000).toFixed(1);
   console.log(`\n▸ ${task.id} (${task.agent}) ${task.status} in ${secs}s`);
   if (task.error) console.log(`  error: ${task.error}`);
@@ -568,18 +672,15 @@ function printTask(task: TaskRun): void {
   if (prose) console.log(prose);
 }
 
+/** A request to the running daemon, with its token already on it. */
+type DaemonApi = (path: string, init?: RequestInit) => Promise<Response>;
+
 /**
- * `kapelle daemon add <path>`: `POST /repos` to the daemon named in
- * `daemon.json`, with the token from the same file (M2-4, #34).
+ * The daemon named in `daemon.json`, or `undefined` with the reason printed.
+ * Every verb that talks to the daemon reads it here, so none of them can
+ * disagree about what "no daemon is listening" means.
  */
-async function runDaemonCommand(): Promise<number> {
-  const [, verb, ...rest] = positional;
-  if (verb !== "add" || rest.length !== 1) {
-    console.error(
-      "usage: kapelle daemon start [--port n] | kapelle daemon add <path>",
-    );
-    return 1;
-  }
+async function daemonApi(): Promise<DaemonApi | undefined> {
   const file = join(runtimeDir(), "daemon.json");
   let holder: { port?: unknown; token?: unknown } = {};
   try {
@@ -603,11 +704,311 @@ async function runDaemonCommand(): Promise<number> {
       `no daemon is listening (${file} is missing or not ready). ` +
         "Start one with: kapelle daemon start",
     );
+    return undefined;
+  }
+  return (path, init) =>
+    fetch(`http://127.0.0.1:${port}${path}`, {
+      ...init,
+      headers: { authorization: `Bearer ${token}` },
+    });
+}
+
+/** The daemon's `{error}` line for a refused request. */
+async function refusalOf(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => ({}))) as { error?: string };
+  return body.error ?? `HTTP ${res.status}`;
+}
+
+/**
+ * `kapelle run --file <f> --detach`: `POST /runs` and print the id (M2-9, #39).
+ *
+ * The daemon validates the file against its own registry and config, so the
+ * file goes over as parsed and every refusal comes back as the daemon's line.
+ * The id is the only thing on stdout, so `id=$(kapelle run … --detach)` works.
+ */
+async function detachRun(path: string): Promise<number> {
+  const run = await loadRunFile(path);
+  if (run === undefined) return 1;
+  const api = await daemonApi();
+  if (!api) return 1;
+  const res = await api("/runs", {
+    method: "POST",
+    body: JSON.stringify({ cwd: resolve(flag("cwd", process.cwd())), run }),
+  });
+  if (!res.ok) {
+    console.error(`error: ${await refusalOf(res)}`);
     return 1;
   }
-  const res = await fetch(`http://127.0.0.1:${port}/repos`, {
+  const { id } = (await res.json()) as { id: string };
+  console.log(id);
+  if (!quiet) {
+    // The ids come from the file as sent: the 202 says the daemon's
+    // `validateRun` accepted it, so `tasks` is an array of objects with ids.
+    const { tasks } = run as { tasks: { id: string }[] };
+    console.error(
+      `detached — follow it with: kapelle attach ${id}\n` +
+        `  tasks: ${tasks.map((task) => task.id).join(", ")}\n` +
+        `  one task in full: kapelle attach ${id} --task <taskId>`,
+    );
+  }
+  return 0;
+}
+
+/**
+ * The events of an SSE response, as `core/eventlog.ts` wrote them. A stream
+ * cut before the daemon ended it throws, which is what tells `attach` the
+ * daemon went away rather than the run finishing.
+ */
+async function* sseEvents(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<AgentEventEnvelope> {
+  let buffered = "";
+  for await (const text of body.pipeThrough(new TextDecoderStream())) {
+    buffered += text;
+    let end = buffered.indexOf("\n\n");
+    while (end !== -1) {
+      for (const line of buffered.slice(0, end).split("\n")) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          yield JSON.parse(line.slice(6));
+        } catch {
+          // The caller reports a cut stream the same way; a corrupt frame is
+          // no different from one the daemon never finished writing.
+          throw new Error("malformed event from the daemon stream");
+        }
+      }
+      buffered = buffered.slice(end + 2);
+      end = buffered.indexOf("\n\n");
+    }
+  }
+}
+
+/**
+ * `kapelle attach <runId>`: a detached run's history, then its live tail
+ * (M2-9, #39). It shows what `run --file` shows — milestones live, a card per
+ * task at the end — and builds every card from the stream, because a run read
+ * back after a daemon restart has no `report` to build one from.
+ *
+ * Each `_client_permission_queued` is asked on the TTY, one at a time, and
+ * only while `GET /permissions` still lists it: a replay carries every
+ * decision the run ever queued, and most were settled long ago. ^C leaves the
+ * run running; cancelling it is `DELETE /runs/:id`, which has no verb yet.
+ *
+ * `--task <id>` is the other shape the M2-2 amendment offered: that one task
+ * in full through `render.ts`, as a single prompt draws it, and only its asks.
+ * The filter is ours, not the daemon's — every event already names its task —
+ * so a replay still downloads the other tasks' events and drops them.
+ */
+async function attachRun(): Promise<number> {
+  const [, id, ...extra] = positional;
+  if (!id || extra.length) {
+    console.error(
+      "attach needs one run id: kapelle attach <runId> [--task <taskId>]",
+    );
+    return 1;
+  }
+  const only = flag("task");
+  // `run` is the run's own notices (a missing repository, say): they concern
+  // every task, so a one-task view keeps them.
+  const shown = (taskId: string) =>
+    !only || taskId === only || taskId === "run";
+  const api = await daemonApi();
+  if (!api) return 1;
+  const path = `/runs/${encodeURIComponent(id)}`;
+
+  // Notices live on the run record, not the stream: the containment lines
+  // (#13) print whatever `--quiet` says, and the advisory ones do not. The
+  // same record is the authority `attach` reconciles its verdict against once
+  // the stream ends — a run restored after a crash has no `report`, and a
+  // stream cut mid-run has no `_client_task_finished` for what it missed.
+  let printed = 0;
+  const refreshState = async (): Promise<AttachState> => {
+    const res = await api(path);
+    if (!res.ok) throw new Error(await refusalOf(res));
+    const state = (await res.json()) as AttachState;
+    const notices = state.notices ?? [];
+    for (const { taskId, text, kind } of notices.slice(printed)) {
+      if (!shown(taskId)) continue;
+      if (kind && printableWarnings([{ kind, text }], quiet).length === 0) {
+        continue;
+      }
+      console.error(`! [${taskId}] ${text}`);
+    }
+    printed = notices.length;
+    return state;
+  };
+  const initial = await refreshState();
+
+  const res = await api(`${path}/events`);
+  if (!res.ok || !res.body) {
+    // A `runRun` throw before it opens a log (the only real setter of
+    // `state.error`) leaves the record as the one place its reason survives.
+    console.error(`error: ${initial.error ?? (await refusalOf(res))}`);
+    return 1;
+  }
+  if (!quiet) console.log(`attached to ${id}`);
+
+  process.on("SIGINT", () => process.exit(130));
+  const asker = process.stdin.isTTY ? makeAskPolicy() : undefined;
+  let answering = Promise.resolve();
+  const answer = (agent: string, decision: ClientPermissionQueuedEvent) => {
+    answering = answering
+      .then(async () => {
+        const openRes = await api("/permissions");
+        const open = (await openRes.json()) as { id: string }[];
+        if (!open.some((p) => p.id === decision.id)) return;
+        if (!asker) {
+          console.error(
+            `! [${agent}] waiting on [${decision.kind}] ${decision.title} — ` +
+              "attach from a terminal to answer, or it is denied at the timeout",
+          );
+          return;
+        }
+        // Close the block `render` has open, or the question lands inside it.
+        if (only) flushStream();
+        const allow = await asker.policy({
+          agent,
+          toolCall: { kind: decision.kind, title: decision.title },
+          options: [],
+        });
+        const posted = await api(`/permissions/${decision.id}`, {
+          method: "POST",
+          body: JSON.stringify({ allow }),
+        });
+        if (!posted.ok) console.error(`error: ${await refusalOf(posted)}`);
+      })
+      .catch((err) => console.error(`error: ${messageOf(err)}`));
+  };
+
+  const cards = new Map<string, Card>();
+  const card = (taskId: string): Card => {
+    let c = cards.get(taskId);
+    if (!c) {
+      c = {
+        id: taskId,
+        agent: "?",
+        status: "running",
+        durationMs: 0,
+        transcript: "",
+        warnings: [],
+      };
+      cards.set(taskId, c);
+    }
+    return c;
+  };
+
+  try {
+    for await (const event of sseEvents(res.body)) {
+      const { agent, update } = event;
+      if (only && agent !== only) continue;
+      const c = card(agent);
+      // One task owns the cursor, so it can be drawn in full; the milestone
+      // line below would repeat the tool call `render` has just drawn.
+      if (only && !quiet) render(event);
+      switch (update.sessionUpdate) {
+        case "_client_task_started":
+          c.agent = update.harness;
+          break;
+        case "agent_message_chunk":
+          if (update.content?.type === "text")
+            c.transcript += update.content.text;
+          break;
+        case "tool_call":
+          if (!quiet && !only) console.log(`[${agent}] → ${update.title}`);
+          break;
+        case "_client_stall_warning":
+          console.error(`! [${agent}] ${update.text}`);
+          break;
+        case "_client_result_warning":
+          c.warnings?.push({ kind: update.kind, text: update.text });
+          if (quiet) console.error(`! [${agent}] ${update.text}`);
+          break;
+        case "_client_permission_queued":
+          answer(agent, update);
+          break;
+        case "_client_task_finished":
+          c.status = update.status;
+          c.durationMs = update.durationMs;
+          break;
+        default:
+          // Other session updates do not shape a task card.
+          break;
+      }
+    }
+  } catch (err) {
+    console.error(`error: lost the daemon mid-run: ${messageOf(err)}`);
+    return 1;
+  } finally {
+    flushStream();
+    // `answering` is not drained. The stream ends only once every task has
+    // settled, so any question still on screen was already decided by the
+    // timeout or a cancel; closing leaves its promise unresolved, and nothing
+    // awaits it. A POST still in flight keeps the loop alive on its own.
+    asker?.close();
+  }
+  const state = await refreshState();
+
+  // The stream is not the whole story. A run killed mid-turn and restored has
+  // no `_client_task_finished` for the task it cut, and nothing at all for one
+  // still queued; and no stream carries error text or usage. The record has
+  // them — `report.tasks` for a run this daemon ran, `tasks` for one restored
+  // after a restart (daemon.ts, M2-6) — so it fills what the stream left open.
+  // `state.status` is never read: it can still say `running` for a beat after
+  // the stream ends, and the tasks already decide the run (`runStatus`).
+  for (const r of state.report?.tasks ?? state.tasks ?? []) {
+    if (only && r.id !== only) continue;
+    const c = card(r.id);
+    if (c.status === "running") c.status = r.status;
+    if (c.agent === "?" && r.agent) c.agent = r.agent;
+    c.durationMs ||= r.durationMs ?? 0;
+    c.error ??= r.error;
+    c.usage ??= r.usage;
+    c.usageSemantics ??= r.usageSemantics;
+    if (!c.warnings?.length) c.warnings = r.warnings;
+  }
+  if (state.error) console.error(`error: ${state.error}`);
+  if (only && !cards.has(only)) {
+    console.error(`error: run ${id} has no task ${only}`);
+    return 1;
+  }
+
+  // Anything that is not a verdict — a card still `running`, a record's
+  // `queued` — counts as failed: an unfinished task is never a success.
+  const statuses: TaskStatus[] = [];
+  for (const c of cards.values()) {
+    statuses.push(
+      TASK_STATUSES.has(c.status) ? (c.status as TaskStatus) : "failed",
+    );
+    if (quiet) {
+      if (c.status !== "done" && c.status !== "warned") {
+        console.error(`error: [${c.id}] ${c.status}`);
+      }
+    } else {
+      printTask(only ? { ...c, transcript: "" } : c);
+    }
+  }
+  // A throw out of `runRun` fails the run whatever its tasks said.
+  const status = state.error ? "failed" : runStatus(statuses);
+  if (!quiet) console.log(`\n${status} — ${plural(statuses.length, "task")}`);
+  return status === "done" || status === "warned" ? 0 : 1;
+}
+
+/**
+ * `kapelle daemon add <path>`: `POST /repos` to the daemon named in
+ * `daemon.json`, with the token from the same file (M2-4, #34).
+ */
+async function runDaemonCommand(): Promise<number> {
+  const [, verb, ...rest] = positional;
+  if (verb !== "add" || rest.length !== 1) {
+    console.error(
+      "usage: kapelle daemon start [--port n] | kapelle daemon add <path>",
+    );
+    return 1;
+  }
+  const api = await daemonApi();
+  if (!api) return 1;
+  const res = await api("/repos", {
     method: "POST",
-    headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ path: resolve(rest[0] as string) }),
   });
   const body = (await res.json()) as { root?: string; error?: string };

@@ -1,5 +1,5 @@
 {
-  "note": "Smallest run file. Needs nothing installed. Run it from the repo root and pass no --cwd: the harness is spawned in the workspace root, so a relative \"node mock-agent.mjs\" resolves only when that root is this repo. node cli.ts --file assets/example/single_mock.json",
+  "note": "Smallest run file. Needs nothing installed. Run it from the repo root and pass no --cwd: the harness is spawned in the workspace root, so a relative \"node mock-agent.mjs\" resolves only when that root is this repo. node cli.ts run --file assets/example/single_mock.json",
   "cmd": "node mock-agent.mjs",
   "mode": "ask",
   "tasks": [

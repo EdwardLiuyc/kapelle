@@ -35,5 +35,8 @@
   //
   // daemon.ts (M2-1) is the second production root: `node daemon.ts` runs it,
   // and nothing imports it — tests/daemon.test.ts spawns it as a subprocess.
+  // `script` is util-linux's, spawned by tests/daemon.test.ts to give `attach`
+  // a real TTY (M2-9); it is a system tool, not a package to list.
+  "ignoreBinaries": ["script"],
   "entry": ["cli.ts!", "daemon.ts!", "mock-agent.mjs", "hostile-agent.mjs"]
 }

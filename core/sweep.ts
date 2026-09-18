@@ -273,9 +273,10 @@ function terminalSince(record: RunRecord): number | null {
  * racing the sweep sees the old record or the new one, never half of either.
  *
  * The temp name carries this process's pid because the sweep is **not** the
- * only writer of `run.json`: a `node cli.ts --file` run in an added repository
- * writes the same file on every task transition, and a shared `run.json.tmp`
- * is exactly how two processes turn one atomic write into a torn one.
+ * only writer of `run.json`: a `node cli.ts run --file` run in an added
+ * repository writes the same file on every task transition, and a shared
+ * `run.json.tmp` is exactly how two processes turn one atomic write into a
+ * torn one.
  *
  * ponytail: the pid suffix keeps the write atomic, not the decision. A CLI run
  * that is genuinely live still reads as `running` to a daemon booting beside
@@ -545,9 +546,9 @@ async function reapExpired(
     if (!record) continue;
     // Only terminal runs are reapable. A `running` record can still be here:
     // `markCrashed` above isolates a write that failed, and a live
-    // `cli.ts --file` run in an added repository writes the same status. Its
-    // worktree is the one thing this pass exists to keep, and `startedAt` is
-    // no licence to remove it — the story reaps terminal runs only.
+    // `cli.ts run --file` run in an added repository writes the same status.
+    // Its worktree is the one thing this pass exists to keep, and `startedAt`
+    // is no licence to remove it — the story reaps terminal runs only.
     if (record.status === "running") {
       pass.onNotice(
         `keeping run ${id} in ${pass.root}: it still reads running, so it ` +
