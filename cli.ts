@@ -117,6 +117,8 @@ kapelle — a minimal Agent Client Protocol client
   kapelle attach <runId> [--task <taskId>]
                                      streams a detached run, answers its asks;
                                      --task draws that one task in full
+  kapelle ps                         every run the daemon knows, and each
+                                     task's id and status under it
   kapelle merge <runId> [--squash] [--cwd dir]
   kapelle daemon start [--port n] [--permission-timeout s]
                                      runs in this terminal until ^C or SIGTERM
@@ -775,11 +777,13 @@ async function listRuns(): Promise<number> {
     id: string;
     cwd: string;
     status: string;
-    tasks: { id: string; status: string }[];
+    tasks?: { id: string; status: string }[];
   }[];
   for (const run of runs) {
     console.log(`${run.id}  ${run.status}  ${run.cwd}`);
-    for (const task of run.tasks) console.log(`  ${task.id}  ${task.status}`);
+    for (const task of run.tasks ?? []) {
+      console.log(`  ${task.id}  ${task.status}`);
+    }
   }
   return 0;
 }

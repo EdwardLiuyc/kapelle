@@ -914,6 +914,14 @@ test("GET /runs and kapelle ps list a live run's tasks, then its verdict", async
   const tasksOf = async () =>
     (await api<Listed>(d, "GET", "/runs")).body.find((r) => r.id === id)?.tasks;
 
+  // `runRun` hands over the queued list before the 202 is sent, so the first
+  // listing already names both tasks. The ordering itself is pinned in
+  // core/tests/run.test.ts; over HTTP the first persist usually wins anyway.
+  assert.deepEqual(
+    (await tasksOf())?.map((task) => task.id),
+    ["stuck", "waiting"],
+  );
+
   // Live: one task running, the other still queued behind it.
   const live = [
     { id: "stuck", status: "running" },
@@ -1602,6 +1610,18 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     join(runs, "live", "run.json"),
     JSON.stringify({ runId: "live", status: "running", tasks: [] }),
   );
+  // A trusted record whose `tasks` array holds junk: the run is served with
+  // the bad element dropped, because the route destructures every element and
+  // one `[null]` would otherwise 500 the whole list.
+  await mkdir(join(runs, "corrupt-tasks"));
+  await writeFile(
+    join(runs, "corrupt-tasks", "run.json"),
+    JSON.stringify({
+      runId: "corrupt-tasks",
+      status: "done",
+      tasks: [null],
+    }),
+  );
   // A run directory with no record at all, and a record with no status: both
   // are skipped with a notice.
   await mkdir(join(runs, "no-record"));
@@ -1614,11 +1634,17 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   const second = await boot(t, runtime);
   const list = await api<Reply[]>(second, "GET", "/runs");
   assert.equal(list.status, 200);
-  // `live` was left `running` and the sweep rewrote it terminal: the one run
-  // served is the crashed one, and it reads `failed`.
-  assert.deepEqual(list.body, [
-    { id: "live", cwd: root, status: "failed", tasks: [] },
-  ]);
+  // `live` was left `running` and the sweep rewrote it terminal: it reads
+  // `failed`. `corrupt-tasks` is trusted for its runId/status, so it is
+  // served too, with the junk element dropped. Sorted: restore order is
+  // readdir order, which is not part of the contract.
+  assert.deepEqual(
+    [...list.body].sort((a, b) => a.id.localeCompare(b.id)),
+    [
+      { id: "corrupt-tasks", cwd: root, status: "done", tasks: [] },
+      { id: "live", cwd: root, status: "failed", tasks: [] },
+    ],
+  );
   const live = await api(second, "GET", "/runs/live");
   assert.equal(live.status, 200);
   assert.equal(live.body.status, "failed");

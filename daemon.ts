@@ -464,7 +464,14 @@ function restoreRuns(): void {
         restored: true,
       };
       if (Array.isArray(record.tasks)) {
-        state.tasks = record.tasks as RecordTask[];
+        // Trusted for its runId and status, but a hand-edited `tasks` can
+        // still hold junk, and the route destructures every element: one
+        // `[null]` would 500 the whole list. Keep the run, drop the element
+        // (M2-6: a boot answers anyway).
+        state.tasks = record.tasks.filter(
+          (t): t is RecordTask =>
+            typeof t === "object" && t !== null && !Array.isArray(t),
+        );
       }
       runs.set(id, state);
       restoredLogs.set(id, join(logDir, "events.jsonl"));
