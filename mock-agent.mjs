@@ -99,7 +99,7 @@ const FINAL_MESSAGE = {
   "malformed-result": `Done.\n${result("success", "", "Nothing was changed.")}`,
   "read-only": result("success", "Read the file.", "Changed nothing."),
   "files-not-in-diff": result(
-    "partial",
+    "success",
     "Fixed most of the bug.",
     "Edited one file.",
     "ghost.md",

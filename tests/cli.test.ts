@@ -740,10 +740,12 @@ test("a preflight refusal is one actionable line, not a stack trace", async (t) 
 // --- M1b-5: the non-compliant fixtures -------------------------------------
 
 test("each cross-check fixture trips its own warning, and only its own", async (t) => {
-  // The five kinds in `core/result.ts`, driven over the real wire rather
+  // The four kinds in `core/result.ts`, driven over the real wire rather
   // than through an injected executor (`core/tests/run.test.ts` owns that
   // half). Each task gets its own worktree, which is the only condition under
-  // which the tree-shaped checks read anything at all.
+  // which the tree-shaped checks read anything at all. `read-only` is mixed
+  // in as the no-warning control; the loop below asserts exactly one `!` line
+  // for each of the other six fixtures.
   const cwd = await gitRepo(t);
   const scenario = (id: string) => ({
     id,

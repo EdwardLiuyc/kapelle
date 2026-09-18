@@ -1060,7 +1060,9 @@ Measured on a real daemon run (opencode 1.18.30): a one-sentence summary task fi
 `warned`. It broke this amendment's own rule that an absent `<files>` must not warn, and a
 `<files>` that names paths is already covered by `filesNotInDiff`. What it alone caught — a
 task meant to change something that changed nothing, listed nothing and said `success` — is
-visible without it as a branch with no commit. Four checks remain.
+no longer detected by the cross-check. Its branch is left at its base ref with no commit, so
+there is no commit that could pass for the work, but the report does not surface that and a
+person must inspect git to see it. Four checks remain.
 **Revised by M0-1: `policyNeverFired` is now a required check, not a nicety.** The survey
 found opencode produces a non-empty diff with zero permission requests *by default* — the
 exact signature this warning exists to catch — so on opencode it fires on
@@ -1153,8 +1155,9 @@ same surface with the rest, so prompt text is load-bearing nowhere now. An unkno
 2 instead of falling back to the compliant path — a typo that quietly ran the happy fixture
 would make a test pass for the wrong reason. Five block-shaped fixtures cover the four
 cross-check kinds **one at a time**, which is the property the suite asserts: each card
-carries exactly one `!` line. That is why `files-not-in-diff` reports `partial` rather than
-`success` — a success claim over an unchanged tree would trip `claimedSuccessNoDiff` too —
+carries exactly one `!` line. That is why `files-not-in-diff` reported `partial` rather than
+`success` at landing — a success claim over an unchanged tree would have tripped
+`claimedSuccessNoDiff` too —
 and why `unasked-write` writes through node's own `fs` rather than `fs/write_text_file`,
 since `policyNeverFired` is about the mutation the client never sees.
 Three of the story's five items were substituted in scoping, each recorded on the issue.
@@ -1166,6 +1169,11 @@ handshake deadline stands in for it; the mock's silence on `session/new` replace
 than a second fixture. **The re-ask** is gone from the client (#62 R5), so the missing block
 is one turn only. Folded in as well: M0-5's pin of `usage` on the `session/prompt`
 **response**, which the mock had never sent.
+**Amended 2026-09-18 (#126): the `claimedSuccessNoDiff` check those `partial` choices
+dodged is removed** (M1b-4's #119 amendment above). `files-not-in-diff` now reports
+`success` and still trips only `filesNotInDiff`. The renamed `read-only` fixture is the
+no-warning control, so those five block-shaped fixtures cover three warning kinds one at a
+time plus that control, not the four kinds named at landing.
 
 **M1b-6 · `hostile-agent` · S · needs M1a-3**
 Path escape (`../../etc/passwd`, absolute paths, symlink), mutation without asking,
