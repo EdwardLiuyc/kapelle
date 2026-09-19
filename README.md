@@ -74,7 +74,8 @@ kapelle run --file tasks.json
 With a daemon running (`kapelle daemon start`, then `kapelle daemon add .`),
 `kapelle run --file tasks.json --detach` hands the run over and prints its id;
 `kapelle attach <runId>` shows it from any terminal and asks its `ask` prompts;
-add `--task <taskId>` to watch one task in full.
+add `--task <taskId>` to watch one task in full. `kapelle ps` lists every run the
+daemon knows, with each task's status.
 
 ```json
 {

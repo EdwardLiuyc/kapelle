@@ -469,14 +469,20 @@ driven from a run file, fully verifiable offline.
 - **Auth** — localhost-only bind plus a shared-secret token file. Not optional: anything
   that can `POST /runs` with `mode: auto` executes commands as the user, and once the
   dashboard can dispatch runs *every* write endpoint is an execution surface, not just
-  `POST /runs`.
+  `POST /runs`. **Amended 2026-09-11 (M2-1) and 2026-09-17 (M2-8):** the token landed with
+  M2-1, and M2-8 became a `Host` check that refuses any authority outside loopback with a
+  `403` before the token is read, which closes DNS rebinding.
 - **Browser-compatible auth** — `EventSource` cannot set custom headers. The token must be
   acceptable as a query parameter on the SSE endpoint, or exchangeable for a cookie by a
   login POST. Decided here so M4 is not blocked; the localhost-only bind is unchanged.
+  **Amended 2026-09-17 (M2-8, #38): moved to M4-1.** No page is served until then. The
+  cookie and login-POST option is dropped; M4-1 builds `?token=` on the SSE route.
 - `kapelle run --file <file> --detach` and `kapelle attach <run-id>` — submit a run file, stream
   SSE, answer permissions interactively, print results. **Amended 2026-09-06 (M2-9): no
   `runs.ts`.** Same deliverable, reached through a flag and a second verb on the one CLI
   rather than a second binary whose name differed by one letter.
+- `kapelle ps` — every run the daemon knows, and each task's id and status under it.
+  **Added 2026-09-18 (M2-10, #121).**
 
 ---
 

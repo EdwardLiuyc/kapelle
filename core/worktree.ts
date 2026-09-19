@@ -24,8 +24,9 @@
  * **The spawn transaction is in-memory only** (decided 2026-09-06, #19). A
  * task that produced nothing has its worktree *and* its branch removed, so a
  * harness that fails to start leaves neither behind. A supervisor killed with
- * `kill -9` mid-spawn can still orphan one; that is M2-5's crash-recovery
- * sweep, which needs the persisted run record M2-6 has not written yet.
+ * `kill -9` mid-spawn can still orphan one; `core/sweep.ts` reconciles orphans
+ * at the next daemon boot, for the repositories the daemon knows
+ * (`repos.json`).
  */
 
 import { execFile } from "node:child_process";
