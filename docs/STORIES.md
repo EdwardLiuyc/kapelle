@@ -1410,6 +1410,8 @@ containment line, and the notifier took over the stall line `run.ts` used to pri
 run does not say it twice; and the desktop half is spawned unguarded, because a presence
 check buys nothing a failing spawn does not already give.
 
+**Amended (room model):** the second consumer of `_client_permission_pending` is the TUI overlay (M4-3), not a browser; the event and the notifier are unchanged.
+
 **M1c-5 · Package identity · XS**
 **Gap** — the plan invokes `kapelle merge`, but `package.json` is `private`, named
 `acp-mvp`, and has no `bin`; and no document states which platforms are supported, while
@@ -1573,6 +1575,8 @@ detection as a truth table, a pure function separate from the drawing, per M1a-1
 *Note* `mock-agent.mjs` needs a message carrying a table, a nested list and a fence with a
 blank line inside it — coordinate with M1b-5, which rewrites that file.
 
+**Amended (room model):** the second consumer of `core/markdown.ts` is the TUI (`client/` plus pi-tui's `Markdown`), not `dashboard-js-render`; `toHtml` returns only if a browser client does.
+
 **M1c-6 · M1 acceptance · M · needs all M1c**
 A run file with three independent tasks against three real harnesses, each in its own
 worktree, each returning a parsed `TaskResult`; `git worktree list` clean afterwards. Kill
@@ -1648,6 +1652,8 @@ before the 202**, as a 409; `openWorktrees` is read-only until `acquire`, and `r
 repeats it. `DELETE` is asynchronous — 202 with `cancelRequested`, the verdict on `GET` —
 because `core/run.ts` already stops a harness 2 s after the abort.
 
+**Amended (room model):** the daemon also serves `/rooms` (M6); the one-dashboard line now means one client surface, the TUI. Rooms are another execution surface behind the same loopback + token and the same sandboxing trigger.
+
 **M2-2 · Event log and SSE replay · M · needs M2-1**
 `GET /runs/:id/events`, SSE with replay-from-cursor, so a client attaching late still sees
 history.
@@ -1676,6 +1682,8 @@ M1a-6 left for this consumer land here: `_client_task_started`, `_client_worktre
 `_client_task_finished`. The log is `core/eventlog.ts`, subscribed by `core/run.ts`, so
 `--file` runs write one too.
 
+**Amended (room model):** room logs are `{seq, roomId, participantId, update}` (S10) and add `_client_user_message` / `_client_turn_ended`; the run log shape is unchanged.
+
 **M2-3 · Permission over API · M · needs M2-1, M1a-5**
 Pending decision list, `GET /permissions`, `POST /permissions/:id`, configurable timeout
 (default ~120s) → **deny**, so an unattended run never wedges.
@@ -1695,6 +1703,8 @@ is part of this story.
 timeout is daemon-wide (M2-7's amendment): `--permission-timeout`, default 120 s. The queue
 emits `_client_permission_queued` with the id, so M2-9 can answer from the stream. A second
 answer is 409; cancelling a run denies what it has open.
+
+**Amended (room model):** `PendingDecision` gains `roomId`, `participantId` and `turn` (S12); rooms reuse the same queue, first-writer-wins and timeout deny.
 
 **M2-4 · Daemon lifecycle · S · needs M2-1**
 Pidfile, single-instance guard, live-child registry, kill-all on shutdown, SIGTERM.
@@ -1716,6 +1726,8 @@ only a survivor; `kapelle daemon start` runs in the foreground; live pids go to
 `runTask` awaits `stop()`, so the worktree is committed only after nothing can still write to
 it. The cost is on purpose: `durationMs` includes the shutdown and the pool slot stays busy
 for it — under 1 s measured, up to `stopGraceMs` + 250 ms for a harness that ignores end of file.
+
+**Amended (room model):** `children.json` entries gain `kind`, `ownerId` and `unitId` (S14); the sweep reads the legacy `{runId, taskId}` shape as a run, and room harnesses register the same way.
 
 **M2-5 · Crash-recovery sweep · M · needs M2-4, M1b-3**
 The fuller version of "run `git worktree prune`". On boot: mark tasks left in `running` as
@@ -1776,6 +1788,8 @@ its whole repository's sweep down on this and every later boot, and `daemon.ts` 
 claim-file handler for the span of the sweep, which runs before the real signal handlers
 exist. Retention is **30 days** in `docs/PROJECT-PLAN.md` too, which still said 7.
 
+**Amended (room model):** the sweep also reconciles room participants' harnesses and room worktrees from the same registry.
+
 **M2-6 · Persistence · S · needs M2-1**
 JSON per run under `.kapelle/runs/<id>/`, written on state transitions. For completed-run
 history, not live recovery.
@@ -1815,6 +1829,8 @@ task with no branch by name, which beats "no run record. Run it first."
 `sessionId` rides the task entry, set once `session/new` answers — the success
 path, a cancel before the prompt, and a throw out of the harness.
 
+**Amended (room model):** rooms persist under `stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and the room event log; restore is read-only and per-participant resume is capability-gated (S3, S4).
+
 **M2-7 · Config · S · needs M2-1**
 `.kapelle/config.json`, `KAPELLE_*` env override, layered env > project. Home for the
 knobs that do not belong in a run file: watchdog thresholds, TTL, retention window, port,
@@ -1837,6 +1853,8 @@ pass, rather than one daemon-wide number. Both files are strict — an unknown k
 wrong type is refused naming file and key — and a bad project config refuses that
 repository's run and skips its sweep, never the daemon's boot. Implemented in
 `core/config.ts`.
+
+**Amended (room model):** room knobs live here too: per-participant queue bound, room retention, idle eviction (off in v1).
 
 **M2-8 · Auth · S · needs M2-1**
 Localhost-only bind plus a shared-secret token file. Not optional: anything that can
@@ -1884,6 +1902,8 @@ A request with **no** `Host` at all is refused by the same guard: on HTTP/1.1 be
 HTTP/1.0 — where that option has no say — because there is then no authority to match.
 Master served the HTTP/1.0 shape; one rule ("a loopback authority, or `403`") is worth
 more than the `nc` health probe it costs. All of it is asserted in `tests/daemon.test.ts`.
+
+**Amended (room model):** the browser half is retired (A3); `?token=` and the cookie exchange return only with a browser client. The Host check and the bearer token stay.
 
 **M2-9 · `--detach` and `attach` · M · needs M2-2, M2-3**
 Submit a run file to the daemon, stream SSE, answer permissions interactively, print
@@ -1941,6 +1961,8 @@ task card is built from the stream, because a run restored after a restart has n
 swallowed ^C at a y/N prompt on a TTY and hung every `ask` path, so `makeAskPolicy`
 re-raises it as a real SIGINT.
 
+**Amended (room model):** `attach` is later refactored onto the shared `client/` module (M5-10); the room SSE shape is `{seq, roomId, participantId, update}`.
+
 **M2-10 · List detached runs and their tasks · S · needs M2-9**
 Added 2026-09-18 at M2-9's pickup (#39). A person who detached runs has no command that says
 what is still going. `GET /runs` answers `{id, cwd, status}` only, and a live run's state in
@@ -1963,6 +1985,9 @@ rules, and no event exists for `queued`).
 ---
 
 ## M3 — Pipeline, DAG, terminals
+
+**Runs only.** The dependency graph, worktree inheritance and handoff below are
+run-file semantics. Rooms have no graph and no scheduler (M6); they never reuse these stories.
 
 **M3-1 · `core/scheduler.ts` · M · needs M1b-2**
 Topological execution: parallel where no `needs`, sequential where there is. Lifts M1b-1's
@@ -2026,69 +2051,216 @@ stage A's summary and stage C flags anything B got wrong.
 
 ---
 
-## M4 — Dashboard
+## M4 — TUI
 
-The first thing here that is not a CLI. Design reference: `opencode-ensemble`'s dashboard.
+The first thing here that is not a CLI. `spike/chat-tui` proves the screen; these stories
+move it onto the shared `client/` module and add the roster, permissions and the
+multi-room surface. The browser dashboard stories are retired (A3, A7); `chat.ts` and
+pi-tui are the direction.
 
-**M4-1 · Serving · M · needs M2-8**
-**Inherited from M2-8 at its pickup, 2026-09-17 (#38):** the browser token. `EventSource`
-cannot set headers, so `GET /runs/:id/events` must also accept `?token=<token>`; the
-daemon bakes the token into the page it serves, and the cookie exchange is not an option
-any more. The `Host` check it pairs with already landed with #38.
-String-templated HTML/CSS/JS out of the daemon. No framework, no build step, no runtime
-dependency — the same constraint the rest of the project holds. Split across
-`dashboard-html`, `-js-core`, `-js-events`, `-js-render`; that split is what keeps a
-zero-build dashboard readable past a few hundred lines.
-**Amended by M1c-7, settled 2026-09-09.** The clause now reads: no framework, no build
-step, and **no runtime dependency outside presentation** — the exception M1c-7 ratified,
-which allows a dependency downstream of the bus whose worst failure is cosmetic. `-js-render`
-is the second consumer of `core/markdown.ts`: the parser is shared across surfaces, only the
-paint is per surface. Nothing is vendored, and **the browser stays dependency-free** — the
-daemon renders HTML server-side with `marked.parse` and templates it in, which is what
-"string-templated HTML out of the daemon" already meant. One thing M4-1 inherits: `marked`
-does **not** sanitise, so agent text rendered into a page is an XSS hole until M4-1 escapes
-it. `toHtml` is deliberately absent from `core/markdown.ts` until this story adds it.
+**M4-1 · pi-tui screen as the first shared-client consumer · M · needs M6-1, M5-10**
+The spike screen becomes a consumer of `client/`: its `Daemon`, `api`, `follow`,
+`RoomView` and `LogEvent` move into the module, and `chat.ts` keeps only the screen and
+the commands. Ratify `@earendil-works/pi-tui` 0.85.1 under M1c-7's rule (presentation
+only, worst failure cosmetic, pinned exactly), dedupe the nested `marked` 18.0.5 with an
+override to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
+loaded, try/catch-guarded, Shift+Enter only on Apple Terminal, never on Linux.
+*Done when* `chat.ts` imports `client/` and pi-tui and nothing else from the repository,
+the import-boundary test says so, and the TTY test still leaves the transcript in
+scrollback.
+Decisions: S7, S8, S9, M6. (S8 settled as (a).)
 
-**M4-2 · Read views · L · needs M4-1, M2-2**
-Run list; per-run task cards with status, elapsed, token count and a stall indicator; the
-DAG rendered from `needs`; a live event timeline; the final `<task-result>` per task.
-**Amended 2026-09-14 (M2-2, #32):** the stream is raw, so the timeline joins
-`agent_message_chunk` pieces for display; task cards can key off `_client_task_started`,
-`_client_worktree_created` and `_client_task_finished`. `EventSource` still needs M2-8's
-query-parameter or cookie token.
+**M4-2 · Room and roster sidebar, switching, unread badges · M · needs M4-1, M6-3**
+A room list from `GET /rooms`, a rooms → participants tree, switching between rooms and
+participants without losing their streams, and unread/attention badges derived from
+events (`_client_turn_ended`, permission queued, stall warning). This is the
+"multiple chat rooms" requirement, one level richer because a room has a roster.
+Decisions: R8, R19, S11. (S11 settled as (a) plus the additive `_client_room_closed`.)
 
-**M4-3 · Permission answering · M · needs M4-2, M2-3**
-The one write path, and what makes M4 a control surface rather than a viewer — it is what
-makes `ask` mode usable unattended.
-*Done when* answering from the browser lets the run proceed and a CLI observer on the same
-run sees the same decision.
+**M4-3 · Answer per-participant permissions from the TUI · M · needs M4-2, M5-4, M6-5**
+With a person at the keyboard, a participant can run `ask`: a queued permission names the
+room, the participant and the turn, opens an overlay, the answer posts by id, and every
+other observer sees the same decision through the answered event.
+*Done when* answering in the TUI lets the turn proceed and a CLI observer on the same room
+sees the same decision.
+Decisions: R12, S2, S12, D1–D8. (S2 settled: per participant at add, default `auto`.)
 
-**M4-4 · Toasts · S · needs M4-2**
-Subscribes to the same bus events `core/notify.ts` uses (M1c-4).
+**M4-4 · Notifications and transcript polish · S · needs M4-2**
+Terminal bell and desktop notification for a participant waiting on a permission or
+stalled, transcript search, and the block-splitting optimisation for the `Markdown`
+component if the measured re-parse cost grows past the spike's ~5 ms at 53k chars.
+Decisions: R19, F9.
+
+---
+
+## M5 — Client contract (proposed)
+
+The contract work that makes `attach`, the TUI and a future bridge speak one documented
+API. Decisions live in `docs/CONTRACT-PLAN.md` (A, B, C, D, E, F, G, H, I, J, K, M);
+this section is the work breakdown once they are settled. Every story below is
+**Proposed**.
+
+**M5-1 · Contract artifact and version handshake · M · needs M2-10**
+`docs/CLIENT-API.md`, `client/contract.ts`, a `GET /version` and a capability list; the
+compatibility policy written down.
+*Done when* a reader who has never opened `daemon.ts` can implement a client from the
+document, and a contract test asserts the version/capability response.
+Decisions: A1–A7, B1–B10.
+
+**M5-2 · Curated run DTOs · M · needs M5-1**
+`RunDto` and `TaskDto`, one shape for live and restored runs, mapped at the daemon edge.
+*Done when* a test asserts a live run and a boot-restored run produce the same DTO shape.
+Decisions: C1–C12.
+
+**M5-3 · Error envelopes, body limits, request validation · S · needs M5-1**
+Stable `{error:{code,message}}`, a body-size cap with 413, optional 415, a read timeout.
+Decisions: C7, C8, J1–J5.
+
+**M5-4 · Permission resolution and settled decisions · M · needs M2-3, M5-1**
+An answered event with the queued id, outcome and reason (`client`, `timeout`, `cancel`,
+`task_end`, `run_end`), every settle path covered, settled decisions queryable.
+*Done when* two clients on one room or run attribute a decision to the same id and reason.
+Decisions: D1–D8.
+
+**M5-5 · Run terminal event and event timestamps · S · needs M5-1**
+`_client_run_finished` before the log closes, plus `at` timestamps on events.
+Decisions: E1–E6, C5, C6.
+
+**M5-6 · SSE liveness, reconnect and backpressure · M · needs M5-1**
+Heartbeat, `retry:`, a reconnect consumer with `Last-Event-ID`, and a `follow` seam that
+pauses on a full socket; a slow-client policy.
+Decisions: F1–F9.
+
+**M5-7 · Idempotent dispatch · S · needs M5-1, M2-6**
+`Idempotency-Key` on `POST /runs`; a replay and a conflict response.
+Decisions: G1–G6.
+
+**M5-8 · Task-level cancel · S · needs M2-3, M2-9**
+`DELETE /runs/:id/tasks/:taskId`; status vocabulary, worktree outcome, permission deny.
+Decisions: H1–H7.
+
+**M5-9 · Run filtering and repository removal · S · needs M5-2**
+`DELETE /repos`, `GET /runs` filters, ordering and cursor pagination.
+Decisions: I1–I5.
+
+**M5-10 · Shared client module and reducer · M · needs M5-2, M5-4, M5-5**
+`client/` owns the DTOs, HTTP client, SSE parser and a pure reducer; `attach` and
+`chat.ts` are refactored onto it.
+*Done when* `attach` contains no protocol parsing of its own and the reducer is tested
+from recorded streams for live, restored, cancelled and replay cases.
+Decisions: B6, B7, F3, K6. (B6 settled as (a).)
+
+**M5-11 · Conformance suite and v1 freeze · M · needs M5-1..M5-6**
+Contract tests that treat the daemon as an external process: mock client, golden DTO
+fixtures, replay, permission race, idempotency; CI with no credentials.
+Decisions: B8, M1–M6.
+
+---
+
+## M6 — Rooms (proposed)
+
+A room is a long-lived container of independent agents on one repository: empty, or with a
+starter agent acting as the orchestrator. Each named agent has its own harness, mode,
+settings and long-lived multi-turn session; there is no dependency graph and no scheduler
+(R24–R30 retired). Decisions R1–R36 and S1–S14 live in `docs/CONTRACT-PLAN.md`. Every
+story below is **Proposed**; the spike (`chat-mvp`, `spike/chat-tui`) is reference only
+until M6-10.
+
+**M6-1 · Design the participant runtime and room container · S · needs R7, R9, R13, R17, R32–R36**
+The spike is reference, not a base (S1). Produce the amended design: the participant
+runtime wrapped in the room container (roster, empty/starter, settings, streams,
+persistence, queue, base choice, title). No code lands; the R/S decisions are recorded and
+the API shapes sketched for the rest.
+*Done when* every R decision that shapes an API has an answer and M6-2..M6-10 can be
+picked up without re-opening the model.
+Decisions: R1–R23, R31–R36, S1, S10, S12, S13.
+
+**M6-2 · Room container: roster, empty/starter, DTOs · M · needs M6-1, M5-1, M5-10**
+The room record (repo, roster, title, created/updated); `POST /rooms` accepts an empty
+room or a starter participant and answers 201 once the session exists (S13); `RoomDto`
+and `ParticipantDto` in `client/contract.ts`; `newRoomId()` in `core/ids.ts`
+(`room-YYYYMMDD-HHMMSS-xxxx`), `assertRoomId`, `roomBranchName`, opaque participant ids.
+No dependency field and no scheduler.
+*Done when* empty and starter rooms round-trip through `GET /rooms/:id`, ids are tested,
+and the DTOs are covered by contract tests.
+Decisions: R1, R3, R9, R17, R21, R22, R33, R36, S4, S13. (R22 settled: a new `roomId`.)
+
+**M6-3 · Participant lifecycle: add/remove/list, settings, names · M · needs M6-2**
+`POST /rooms/:id/agents` with `{name, agent or cmd, mode, settings}`; list, get, remove.
+Names unique and validated; harness fixed at add; mode mutable and default `auto`;
+removal cancels the session and applies the worktree policy. Settings reuse run-file
+`Task` fields plus a purpose/instructions field.
+Decisions: R4, R9, R10, R12, R15, R18, R33. (R33 settled as (a).)
+
+**M6-4 · Routing, room timeline, participant streams and cancel-turn · M · needs M6-3**
+A message names its target participant, orchestrator by default (R7a). One room log and
+one sequence; every line `{seq, roomId, participantId, update}` (S10); a thread is a
+client-side filter (R8c over R13a). Nested participant event route for the filtered view.
+A busy participant queues FIFO (R32a); cancel-current-turn keeps the session (S5a);
+cross-agent context is human-composed in v1 (R34a), `contextFrom` next (R34b).
+*Done when* one participant's thread and the room timeline replay from one log, and a
+second message to a busy participant is queued and answered in order.
+Decisions: R6, R7, R8, R13, R32, R34, S5, S10, S11.
+
+**M6-5 · Per-participant modes and permissions · M · needs M6-4, M5-4**
+Per-participant mode at add, default `auto`; `ask`/`safe` selectable (S2). The permission
+queue gains `roomId`, `participantId`, `turn` (S12); first-writer-wins and timeout deny;
+the answered event from M5-4. `auto` still warns about silent autonomy.
+Decisions: R12, S2, S12.
+
+**M6-6 · Per-participant worktrees, base choice, merge · M · needs M6-2**
+Each participant owns one worktree and branch, `kapelle/<roomId>/<participantId>`, forked
+from the chosen base, room base by default (R35c); nothing is inherited and no checkout is
+shared (R24–R30 retired). Parallel turns are safe; a global cap stays config. `kapelle`
+gains a room merge entry (R31, open: `kapelle room merge` recommended) that merges in
+creation order and aborts atomically on conflict.
+*Done when* two participants work in parallel without touching each other's files and the
+room's branches can be merged or refused with a named reason.
+Decisions: R6, R14, R31, R35.
+
+**M6-7 · Persistence, restart and per-participant resume · M · needs M6-2, M2-6**
+`stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and the event
+log; restore read-only; resume per participant is capability-gated on `session/load`
+(S3b now, S3c later). Retention and idle eviction use owner config.
+Decisions: R17, S3, S4.
+
+**M6-8 · Orchestrator and delegation · M · needs M6-4 · deferred by R2**
+R2 is decided for v1: the orchestrator is a normal participant and the default recipient,
+with no delegation powers. Kept for the later coordinator choice (R34c); the charter's
+agent-to-agent non-goal still applies.
+Decisions: R2, R23, R34.
+
+**M6-9 · Room CLI and bridge readiness · S · needs M6-5, M4-2**
+Keep `chat.ts` standalone and add `kapelle chat` that runs it (S7a); document the bridge
+pattern in `CLIENT-API.md` — a local process subscribes to a room or participant stream
+and answers permissions; no chat SDK enters the daemon.
+Decisions: S7, K5, R19.
+
+**M6-10 · Port the spike runtime onto master · M · needs M6-1, M5-1, M5-10**
+Only after M6-1 settles the model: rebase the spike deliberately (S1a) and keep only what
+the design keeps, reconciled with M2-3..M2-10. The branches are a sketch to re-derive,
+not a patch to apply; their routes, ids and `children.json` change with R22/S14.
+*Done when* the participant runtime runs on master behind the designed API, the spike's
+useful tests are ported, and the branches can be deleted without losing behaviour.
+Decisions: S1, S9, S13, S14.
 
 ---
 
 ## Critical path
 
 ```text
-M0-1 ─┬─ M0-3 ─┬─ M0-7 ─ M1a-4 ┐
-      ├─ M0-4 ─┤                      │
-      └─ M0-5 ─┘                      │
-                                  │
-  M1a-1 ─ M1a-2 ─ M1a-3 ─┬─ M1a-5 ┴─ M1b-1 ─ M1b-2 ─ M1b-4 ─┐
-                         └─ M1a-6 ─ M1a-7      M1b-3 ─┬──────┤
-                                                      │      │
-                                      M1c-1 ─ M1c-3 ──┴─ M1c-6
-                                                           │
-                               M2-1 ─┬─ M2-2 ─┬─ M2-9 ─────┤
-                                     ├─ M2-3 ─┘            │
-                                     └─ M2-4 ─ M2-5        │
-                                                           │
-                               M3-1 ─ M3-2 ─┬─ M3-3 ───────┤
-                                            └─ M3-4        │
-                               M3-5 (conditional on M0-3) ─┘
-                                                           │
-                               M4-1 ─ M4-2 ─ M4-3 ─────────┘
+M0 ─ M1a ─ M1b ─ M1c ─ M2
+  ├─ M3  (pipeline, DAG, worktrees; runs only)
+  ├─ M5  (client contract)
+  │    M5-1 ─ M5-2 ─ M5-10 ─ M4-1 ─ M4-2 ─ M4-3 ─ M4-4
+  │             └─ M5-3..M5-9, M5-11
+  └─ M6  (rooms)
+       M6-1 ─ M6-2 ─ M6-3 ─ M6-4 ─┬─ M6-5 ─ M6-9
+                                  ├─ M6-6
+                                  ├─ M6-7
+                                  └─ M6-8 (deferred by R2)
+
+M6-10 ports the spike after M6-1 and M5-10; M5-11 freezes the v1 contract.
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
@@ -2148,6 +2320,7 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   no wider than what reaches the terminal. *New trigger:* the daemon binding anything other
   than `127.0.0.1`, or accepting a caller who is not the local operator. The token stops
   being enough at the same moment, so that day needs TLS as much as it needs a sandbox.
+  Rooms add a surface: each participant runs a harness and the default room mode is `auto`, so the same trigger — a bind beyond `127.0.0.1`, or a caller who is not the operator — applies to the room API.
 - **Per-harness price table.** *Trigger:* M0-5 reporting that any harness names the model it
   selected. **Trigger fired 2026-08-22 — all three name it**, in `configOptions` on the
   `session/new` response with the reserved `category: "model"`. Still unscheduled, and M0-5
@@ -2168,6 +2341,7 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   scheduled, but it is now a known-available feature rather than a hypothetical, it must
   stay behind a per-harness capability check, and it depends on M2-6 persisting the harness
   `sessionId`.
+  Rooms and participants are the second consumer: per-participant resume after a daemon restart (M6-7) uses the same capability-gated call.
 - **`#send` write backpressure.** `#send` ignores the return value of `write()`
   (`protocol/agent.ts`). *Trigger:* fan-out moving large file contents. The one item here that is
   genuinely "fix it when it bites" — Node buffers, so it degrades to memory growth rather
