@@ -1,6 +1,8 @@
 ACP_TEST.md
 node_modules/
 .pi-lens-probe-home/
+docs/contract/
+docs/room-model/
 
 # Claude Code checks agent worktrees out inside the repo. Named, not globbed:
 # `**/worktrees/*` would also hide a source directory that happened to be

@@ -2058,7 +2058,7 @@ move it onto the shared `client/` module and add the roster, permissions and the
 multi-room surface. The browser dashboard stories are retired (A3, A7); `chat.ts` and
 pi-tui are the direction.
 
-**M4-1 · pi-tui screen as the first shared-client consumer · M · needs M6-1, M5-10**
+**M4-1 · pi-tui screen as the first shared-client consumer · M · needs M6-0, M5-10**
 The spike screen becomes a consumer of `client/`: its `Daemon`, `api`, `follow`,
 `RoomView` and `LogEvent` move into the module, and `chat.ts` keeps only the screen and
 the commands. Ratify `@earendil-works/pi-tui` 0.85.1 under M1c-7's rule (presentation
@@ -2074,8 +2074,10 @@ Decisions: S7, S8, S9, M6. (S8 settled as (a).)
 A room list from `GET /rooms`, a rooms → participants tree, switching between rooms and
 participants without losing their streams, and unread/attention badges derived from
 events (`_client_turn_ended`, permission queued, stall warning). This is the
-"multiple chat rooms" requirement, one level richer because a room has a roster.
-Decisions: R8, R19, S11. (S11 settled as (a) plus the additive `_client_room_closed`.)
+"multiple chat rooms" requirement, one level richer because a room has a roster. The stall
+warning the badge reads is the one R38 creates: a participant's watchdog warns, never
+cancels.
+Decisions: R8, R19, S11, R38. (S11 settled as (a) plus the additive `_client_room_closed`.)
 
 **M4-3 · Answer per-participant permissions from the TUI · M · needs M4-2, M5-4, M6-5**
 With a person at the keyboard, a participant can run `ask`: a queued permission names the
@@ -2088,8 +2090,10 @@ Decisions: R12, S2, S12, D1–D8. (S2 settled: per participant at add, default `
 **M4-4 · Notifications and transcript polish · S · needs M4-2**
 Terminal bell and desktop notification for a participant waiting on a permission or
 stalled, transcript search, and the block-splitting optimisation for the `Markdown`
-component if the measured re-parse cost grows past the spike's ~5 ms at 53k chars.
-Decisions: R19, F9.
+component if the measured re-parse cost grows past the spike's ~5 ms at 53k chars. The
+stall half needs R38; without it no room emits `_client_stall_warning` and there is
+nothing to ring for.
+Decisions: R19, F9, R38.
 
 ---
 
@@ -2162,18 +2166,40 @@ Decisions: B8, M1–M6.
 A room is a long-lived container of independent agents on one repository: empty, or with a
 starter agent acting as the orchestrator. Each named agent has its own harness, mode,
 settings and long-lived multi-turn session; there is no dependency graph and no scheduler
-(R24–R30 retired). Decisions R1–R36 and S1–S14 live in `docs/CONTRACT-PLAN.md`. Every
-story below is **Proposed**; the spike (`chat-mvp`, `spike/chat-tui`) is reference only
-until M6-10.
+(R24–R30 retired). Decisions R1–R42 and S1–S14 live in `docs/CONTRACT-PLAN.md`. Every
+story below is **Proposed**. **Amended 2026-09-20 (plan review):** the spike port moves
+from last to **first, as M6-0** — it needs nothing, and it is the only story that gets
+more expensive the longer it waits. R37–R42 close six decisions the stories below were
+reading without an answer.
 
-**M6-1 · Design the participant runtime and room container · S · needs R7, R9, R13, R17, R32–R36**
-The spike is reference, not a base (S1). Produce the amended design: the participant
-runtime wrapped in the room container (roster, empty/starter, settings, streams,
-persistence, queue, base choice, title). No code lands; the R/S decisions are recorded and
-the API shapes sketched for the rest.
-*Done when* every R decision that shapes an API has an answer and M6-2..M6-10 can be
+**M6-0 · Land the spike on master · M · needs nothing**
+Rebase `chat-mvp` and `spike/chat-tui` onto current master (S1a) and reconcile with what
+landed since: the M2-3 permission queue, the M2-5 sweep, M2-6 persistence, M2-7 config,
+the M2-8 Host guard, M2-9 `attach`, M2-10 `ps`. Two corrections the spike predates: room
+state moves out of `.kapelle/rooms/` to `stateDirFor(root)` (#129), and `children.json`
+takes S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
+**No new features** — one participant per room, `auto` only, no roster and no permission
+answering — and `kapelle chat` ships marked **experimental**, so the room API is not a
+promise until M5-1 documents it. R37 applies from here. The spike's `close()` releases as
+`done`, which commits the work and removes the checkout; both must stop. `release` already
+behaves as R37 wants under a non-releasing status, but every such label (`failed`,
+`cancelled`, `timed_out`) misdescribes a room that simply closed — so this story picks
+either a participant status `release` accepts, or a `release` that takes the decision
+instead of a `TaskStatus`, in the smallest change that leaves runs untouched. Add R40's `ponytail:` comment where the
+room runtime spawns a harness.
+*Done when* the spike's seven `tests/daemon.test.ts` cases pass on master, `npm run check`
+and `npm run fmt:check` are clean, room state is under `stateDirFor(root)`, and
+`kapelle chat` drives a room end to end against `mock-agent.mjs`.
+Decisions: S1, S9, S13, S14, R37, R40.
+
+**M6-1 · Design the room container · S · needs M6-0**
+With the runtime on master, design what the spike does not have: the roster, the
+empty/starter choice, per-participant settings, streams, persistence, queue, base choice
+and title. No code lands; the R/S decisions are recorded and the API shapes sketched for
+the rest.
+*Done when* every R decision that shapes an API has an answer and M6-2..M6-9 can be
 picked up without re-opening the model.
-Decisions: R1–R23, R31–R36, S1, S10, S12, S13.
+Decisions: R1–R23, R31–R42, S10, S12, S13.
 
 **M6-2 · Room container: roster, empty/starter, DTOs · M · needs M6-1, M5-1, M5-10**
 The room record (repo, roster, title, created/updated); `POST /rooms` accepts an empty
@@ -2186,7 +2212,9 @@ and the DTOs are covered by contract tests.
 Decisions: R1, R3, R9, R17, R21, R22, R33, R36, S4, S13. (R22 settled: a new `roomId`.)
 
 **M6-3 · Participant lifecycle: add/remove/list, settings, names · M · needs M6-2**
-`POST /rooms/:id/agents` with `{name, agent or cmd, mode, settings}`; list, get, remove.
+`POST /rooms/:id/agents` with `{name, agent or cmd, mode, settings}`; list, get, remove,
+and rename — R10 grants it, so the story carries it: the display name is mutable, the
+opaque id and the branch name are not.
 Names unique and validated; harness fixed at add; mode mutable and default `auto`;
 removal cancels the session and applies the worktree policy. Settings reuse run-file
 `Task` fields plus a purpose/instructions field.
@@ -2196,11 +2224,14 @@ Decisions: R4, R9, R10, R12, R15, R18, R33. (R33 settled as (a).)
 A message names its target participant, orchestrator by default (R7a). One room log and
 one sequence; every line `{seq, roomId, participantId, update}` (S10); a thread is a
 client-side filter (R8c over R13a). Nested participant event route for the filtered view.
-A busy participant queues FIFO (R32a); cancel-current-turn keeps the session (S5a);
-cross-agent context is human-composed in v1 (R34a), `contextFrom` next (R34b).
-*Done when* one participant's thread and the room timeline replay from one log, and a
-second message to a busy participant is queued and answered in order.
-Decisions: R6, R7, R8, R13, R32, R34, S5, S10, S11.
+A busy participant queues FIFO (R32a), bound 16 and `429` when full, in memory and lost at
+restart (R41); cancel-current-turn keeps the session (S5a); cross-agent context is
+human-composed in v1 (R34a), `contextFrom` next (R34b). A room turn carries no result
+contract (R39) and a watchdog that only warns (R38).
+*Done when* one participant's thread and the room timeline replay from one log, a second
+message to a busy participant is queued and answered in order, and the seventeenth is
+refused with `429`.
+Decisions: R6, R7, R8, R13, R32, R34, R38, R39, R41, S5, S10, S11.
 
 **M6-5 · Per-participant modes and permissions · M · needs M6-4, M5-4**
 Per-participant mode at add, default `auto`; `ask`/`safe` selectable (S2). The permission
@@ -2208,21 +2239,39 @@ queue gains `roomId`, `participantId`, `turn` (S12); first-writer-wins and timeo
 the answered event from M5-4. `auto` still warns about silent autonomy.
 Decisions: R12, S2, S12.
 
-**M6-6 · Per-participant worktrees, base choice, merge · M · needs M6-2**
+**M6-6 · Per-participant worktrees, chained base, and the merge rework · L · needs M6-2**
 Each participant owns one worktree and branch, `kapelle/<roomId>/<participantId>`, forked
 from the chosen base, room base by default (R35c); nothing is inherited and no checkout is
-shared (R24–R30 retired). Parallel turns are safe; a global cap stays config. `kapelle`
-gains a room merge entry (R31, open: `kapelle room merge` recommended) that merges in
-creation order and aborts atomically on conflict.
-*Done when* two participants work in parallel without touching each other's files and the
-room's branches can be merged or refused with a named reason.
-Decisions: R6, R14, R31, R35.
+shared (R24–R30 retired). Parallel turns are safe; nothing caps the live harness count in
+v1 (R40). Under R37 the participant commits its own branch, so the supervisor adds no
+commits of its own. **Sized `L` because R35(c) forces a merge rework** (decided
+2026-09-20): `core/merge.ts` assumes one base per run — it measures each branch's diff from
+that branch's own `baseSha` (`core/merge.ts:83`), refuses when two branches touch one file
+(`:86`), then squashes every branch at once (`:126`) — so two participants on different
+bases can pass the overlap check while the squash replays the parent's work. The
+`done`/`warned` gate (`:65`) also names a task status a participant never reaches (R37).
+Deliverables: a preflight correct for per-participant bases; a test proving the
+multi-branch squash is right when one branch's history contains another's; `kapelle room
+merge` (R31b as the surface, R31c as the v1 subset), merging in creation order and
+aborting atomically; and the participant states a room merge accepts.
+*Done when* two participants work in parallel without touching each other's files, a
+chained-base pair merges without replaying the parent's commits, and a real conflict is
+refused by name with nothing half-landed.
+*Risk* — the only new, untested git logic in the room model. Fallback: R35(a) for v1,
+chained bases with R35(d).
+Decisions: R6, R14, R31, R35, R37.
 
 **M6-7 · Persistence, restart and per-participant resume · M · needs M6-2, M2-6**
 `stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and the event
 log; restore read-only; resume per participant is capability-gated on `session/load`
-(S3b now, S3c later). Retention and idle eviction use owner config.
-Decisions: R17, S3, S4.
+(S3b now, S3c later). Retention and idle eviction use owner config. **R42 says the
+consequence out loud:** a restored room is read-only. Every participant reads `exited`,
+its history replays and its branch and checkout survive, but it cannot be messaged or
+revived until S3(c) lands. The DTO carries that distinction rather than leaving a client
+to infer it.
+*Done when* a restart lists the room with every participant, its history replays, each
+participant reads `exited`, and a message to one is refused with a reason naming S3(c).
+Decisions: R17, S3, S4, R42.
 
 **M6-8 · Orchestrator and delegation · M · needs M6-4 · deferred by R2**
 R2 is decided for v1: the orchestrator is a normal participant and the default recipient,
@@ -2236,14 +2285,6 @@ pattern in `CLIENT-API.md` — a local process subscribes to a room or participa
 and answers permissions; no chat SDK enters the daemon.
 Decisions: S7, K5, R19.
 
-**M6-10 · Port the spike runtime onto master · M · needs M6-1, M5-1, M5-10**
-Only after M6-1 settles the model: rebase the spike deliberately (S1a) and keep only what
-the design keeps, reconciled with M2-3..M2-10. The branches are a sketch to re-derive,
-not a patch to apply; their routes, ids and `children.json` change with R22/S14.
-*Done when* the participant runtime runs on master behind the designed API, the spike's
-useful tests are ported, and the branches can be deleted without losing behaviour.
-Decisions: S1, S9, S13, S14.
-
 ---
 
 ## Critical path
@@ -2251,16 +2292,19 @@ Decisions: S1, S9, S13, S14.
 ```text
 M0 ─ M1a ─ M1b ─ M1c ─ M2
   ├─ M3  (pipeline, DAG, worktrees; runs only)
+  ├─ M6-0 (port the spike; needs nothing, goes first)
   ├─ M5  (client contract)
   │    M5-1 ─ M5-2 ─ M5-10 ─ M4-1 ─ M4-2 ─ M4-3 ─ M4-4
   │             └─ M5-3..M5-9, M5-11
   └─ M6  (rooms)
        M6-1 ─ M6-2 ─ M6-3 ─ M6-4 ─┬─ M6-5 ─ M6-9
-                                  ├─ M6-6
+                                  ├─ M6-6 (L)
                                   ├─ M6-7
                                   └─ M6-8 (deferred by R2)
 
-M6-10 ports the spike after M6-1 and M5-10; M5-11 freezes the v1 contract.
+M6-0 comes before M5 and M6-1: it is a rebase of proven code, it needs nothing, and it is
+the only story that gets more expensive by waiting. M4-1 needs M6-0 and M5-10. M5-11
+freezes the v1 contract.
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
@@ -2285,6 +2329,17 @@ capacity is one large story lighter.
 
 Each carries its trigger, so none of these is waiting to become a blocker by accident:
 
+- **Global live-harness cap (R40).** Added 2026-09-20 with the room model. Rooms make the
+  live subprocess count `runs + Σ(busy participants)` across every room, and the default
+  participant mode is `auto`, so nothing asks a human before a turn starts. `maxConcurrency`
+  bounds **one run**; nothing bounds the daemon. v1 caps nothing on purpose — a cap is a
+  knob, a default and a refusal path, and no room has yet had more than one participant.
+  The shape when it is wanted: one daemon-wide key beside `port` in the user config,
+  counted across runs and rooms, and a `429` when a message would exceed it — not a second
+  queue on top of R41's per-participant FIFO, because "queued behind another room" has no
+  honest place to be drawn in the TUI. *Trigger:* the first room with more than a handful
+  of participants, or the first machine driven into swap or a failed harness spawn for want
+  of resources.
 - **Bound the retained stderr to a head/tail window.** M1a-3 retains every stderr line for
   the life of the agent and attaches all of it to a death rejection. The 2026-08-31
   measurement says that costs nothing today — zero bytes per turn on all three harnesses in
