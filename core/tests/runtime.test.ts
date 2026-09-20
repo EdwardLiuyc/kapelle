@@ -15,7 +15,13 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
@@ -76,5 +82,68 @@ test("a repository that no longer exists still resolves — sweep reports on it"
     const gone = join(realpathSync(tmpdir()), "kapelle-deleted-repo");
     assert.equal(stateDirFor(gone), stateDirFor(gone));
     assert.equal(basename(stateDirFor(gone)).split("-")[0], "kapelle");
+  });
+});
+
+/**
+ * A symlinked `XDG_STATE_HOME` base must resolve to the same directory as its
+ * realpath, canonically spelled — otherwise `git worktree list --porcelain`
+ * (which reports symlink-resolved paths) and `stateDirFor`'s own `<wt>` root
+ * disagree, and `core/sweep.ts`'s `managedWorktrees()` treats every managed
+ * checkout as unrelated (`relative()` returns `..`). This reproduces the
+ * macOS shape without depending on `tmpdir()` being a symlink itself.
+ */
+test("stateDirFor is canonical even when XDG_STATE_HOME is a symlink", () => {
+  // The link lives in its own mkdtemp, so a killed run can never leave a
+  // stale path that makes `symlinkSync` throw EEXIST.
+  const holder = mkdtempSync(join(realpathSync(tmpdir()), "kapelle-links-"));
+  const real = join(holder, "real");
+  const link = join(holder, "link");
+  mkdirSync(real, { recursive: true, mode: 0o700 });
+  symlinkSync(real, link);
+  const before = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = link;
+  let repo: string | undefined;
+  try {
+    repo = realpathSync(mkdtempSync(join(tmpdir(), "linked-repo-")));
+    const dir = stateDirFor(repo);
+    assert.equal(
+      dirname(dirname(dir)),
+      join(real, "kapelle"),
+      "the state dir must sit under the symlink's realpath, not its own spelling",
+    );
+    assert.ok(
+      !dir.startsWith(link),
+      "the returned path should not use the unresolved symlink spelling",
+    );
+  } finally {
+    if (before === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = before;
+    if (repo !== undefined) rmSync(repo, { recursive: true, force: true });
+    rmSync(holder, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A `resolve(root)` keying (rather than `realpathSync(root)`) would give a
+ * symlinked repository path and its realpath two different state dirs —
+ * splitting one repository's worktrees across two folders.
+ */
+test("a symlinked repository path resolves to the same state dir as its realpath", () => {
+  withStateHome(() => {
+    // Its own mkdtemp, like the test above: a pid-named link in the shared
+    // temp dir throws EEXIST once a killed run leaves one behind and the pid
+    // comes round again — and `symlinkSync` sits before the `try`, so that
+    // throw would leak the directory too.
+    const holder = mkdtempSync(join(realpathSync(tmpdir()), "kapelle-links-"));
+    try {
+      const real = join(holder, "repo");
+      const link = join(holder, "link");
+      mkdirSync(real, { recursive: true });
+      symlinkSync(real, link);
+      assert.equal(stateDirFor(link), stateDirFor(realpathSync(link)));
+    } finally {
+      rmSync(holder, { recursive: true, force: true });
+    }
   });
 });

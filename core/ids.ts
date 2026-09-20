@@ -3,9 +3,9 @@
  *
  * Three strings the rest of the system agrees on: `runId` names a run,
  * `taskId` names a task inside it, and the branch that carries a task's work
- * is built from both. `.kapelle/wt/<runId>/<taskId>` is a filesystem path
- * and `kapelle/<runId>/<taskId>` is a git ref, so these ids have to be
- * legal in both places before anything is created.
+ * is built from both. `<stateDirFor(root)>/wt/<runId>/<taskId>` is a
+ * filesystem path and `kapelle/<runId>/<taskId>` is a git ref, so these ids
+ * have to be legal in both places before anything is created.
  *
  * **Validation never sanitises** (`docs/STORIES.md:708`). The id in the run
  * file is the id in the path and in the ref; rewriting a bad id here would

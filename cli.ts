@@ -502,9 +502,9 @@ async function runFromFile(path: string): Promise<number> {
       },
     );
   } catch (err) {
-    // The preflight's refusals land here — an unignored `.kapelle/`, a
-    // dirty tree — and each one is an instruction to the operator, not a
-    // fault. A stack trace would bury the one line that says what to do.
+    // `runRun`'s own refusals — the state directory's ownership guard — and
+    // anything unexpected land here, one actionable line each. A stack trace
+    // would bury the line that says what to do.
     console.error(`error: ${messageOf(err)}`);
     return 1;
   } finally {

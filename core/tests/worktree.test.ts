@@ -121,7 +121,7 @@ test("a repository that never heard of .kapelle runs, and is left clean (#129)",
   assert.equal(await git(root, "status", "--porcelain", "-uall"), "");
   assert.equal(existsSync(join(root, ".kapelle")), false);
   assert.ok(
-    !stateRoot.startsWith(realpathSync(root) + "/"),
+    !stateRoot.startsWith(`${realpathSync(root)}/`),
     `${stateRoot} should not be inside ${root}`,
   );
 });

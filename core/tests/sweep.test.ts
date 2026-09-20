@@ -8,8 +8,9 @@
 
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, type TestContext, test } from "node:test";
 import { promisify } from "node:util";
@@ -662,6 +663,37 @@ test("a clean orphan loses its checkout but keeps its branch", async (t) => {
   );
 });
 
+test("a clean orphan is reconciled even when XDG_STATE_HOME is a symlink", async (t) => {
+  // `git worktree list --porcelain` reports symlink-resolved paths. If
+  // `stateDirFor` kept the symlink's own spelling, `managedWorktrees()`'s
+  // `relative(wtRoot, path)` would read every managed checkout as `..` and
+  // skip it — the shape this reproduces without depending on the platform's
+  // own tmpdir being a symlink (macOS: `/var` -> `/private/var`).
+  const holder = mkdtempSync(join(realpathSync(tmpdir()), "kapelle-links-"));
+  t.after(() => rm(holder, { recursive: true, force: true }));
+  const real = join(holder, "real");
+  const link = join(holder, "link");
+  await mkdir(real, { recursive: true, mode: 0o700 });
+  symlinkSync(real, link);
+  const before = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = link;
+  t.after(() => {
+    if (before === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = before;
+  });
+
+  const root = await gitRepo(t);
+  const path = await addWorktree(root, "a");
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal(existsSync(path), false);
+  assert.equal(await hasBranch(root, `kapelle/${RUN_ID}/a`), true);
+  assert.ok(
+    notices.some((notice) => notice.includes("removed orphan worktree")),
+  );
+});
+
 test("an unreadable record counts as absent", async (t) => {
   const root = await gitRepo(t);
   const path = await addWorktree(root, "a");
@@ -1262,7 +1294,12 @@ async function stranded(t: TestContext): Promise<{
   root: string;
   workspace: string;
 }> {
-  const root = await gitRepo(t);
+  // Canonicalized: `repos.json` entries are realpaths (`daemon.ts` realpaths
+  // at `POST /repos`), and `stateDirFor` keys on `realpathSync(root)`. Passing
+  // `gitRepo`'s unresolved spelling would disagree with that key whenever the
+  // tmpdir chain contains a symlink (macOS: `tmpdir()` is `/var`, realpath is
+  // `/private/var`), and `sweepStranded` would find nothing to strand.
+  const root = realpathSync(await gitRepo(t));
   const { worktrees } = await openWorktrees(root, RUN_ID);
   assert.ok(worktrees);
   await worktrees.acquire("a");

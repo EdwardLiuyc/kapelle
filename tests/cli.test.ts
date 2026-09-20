@@ -18,7 +18,14 @@
 
 import assert from "node:assert/strict";
 import { execFile as execFileCb } from "node:child_process";
-import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -131,6 +138,33 @@ test("an unverified harness warns, and --quiet drops that line", async (t) => {
     quiet.stderr,
     "",
     "unverified is advisory, so --quiet may drop it",
+  );
+});
+
+test("a dirty tree runs, and --quiet drops the uncommitted advisory (#129)", async (t) => {
+  // The dirty-tree notice is advisory (issue #129 AC: "--quiet drops it"),
+  // and no test pinned that end-to-end: mutating `cli.ts` to always print
+  // any "uncommitted" notice would keep every other test in this file green.
+  const cwd = await gitRepo(t);
+  await writeFile(join(cwd, "wip.txt"), "uncommitted\n");
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+
+  const loud = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
+  assert.match(loud.stderr, /1 uncommitted file in .* will not reach any task/);
+  // The line names the root `git rev-parse --show-toplevel` resolved, not the
+  // spelling `--cwd` was given, so the fixture path has to be realpath'd
+  // before it can match (macOS: `/var` -> `/private/var`).
+  const resolved = await realpath(cwd);
+  assert.match(
+    loud.stderr,
+    new RegExp(resolved.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+  );
+
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
+  assert.doesNotMatch(
+    r.stderr,
+    /uncommitted/,
+    "the dirty-tree notice is advisory, so --quiet drops it",
   );
 });
 

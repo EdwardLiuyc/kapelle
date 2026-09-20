@@ -319,7 +319,7 @@ interface RepoPass {
 }
 
 /**
- * Worktrees under `<root>/.kapelle/wt`, after pruning vanished checkouts.
+ * Worktrees under `<stateDirFor(root)>/wt`, after pruning vanished checkouts.
  *
  * `null` — not `[]` — when git could not answer, because the two mean opposite
  * things to every caller below. An empty list says "this run owns no
@@ -629,11 +629,6 @@ async function sweepRepo(
 }
 
 /**
- * Reconcile every added repository, then the previous daemon's children.
- * Called between the instance claim and `restoreRuns`, so no request ever
- * meets half-swept state.
- */
-/**
  * A workspace whose repository is no longer at the path that keys it (#129).
  *
  * State is keyed on the repository's path (`stateDirFor`), which is the
@@ -672,6 +667,11 @@ async function sweepStranded(
   );
 }
 
+/**
+ * Reconcile every added repository, then the previous daemon's children.
+ * Called between the instance claim and `restoreRuns`, so no request ever
+ * meets half-swept state.
+ */
 export async function sweepBoot(options: SweepOptions): Promise<void> {
   const {
     repos,

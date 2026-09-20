@@ -33,8 +33,8 @@ import { basename, isAbsolute, join, resolve } from "node:path";
  *
  * Unset means **empty or relative**, the same rule `stateDir` follows. A
  * relative value would put the token under whatever directory the daemon
- * started in — a repository, for `kapelle daemon start`, where `.gitignore`
- * covers `.kapelle/` and not this.
+ * started in — a repository, for `kapelle daemon start`, where a checkout
+ * could commit it.
  */
 export function runtimeDir(): string {
   const { uid } = userInfo();
@@ -94,7 +94,14 @@ function stateDir(): string {
       : join(homedir(), ".local", "state");
   const dir = join(base, "kapelle");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return ours(dir);
+  // Canonicalize `base`, not `dir`: `dir` is the thing `ours` is about to
+  // guard, and following symlinks before that guard runs would let a symlink
+  // planted at `<base>/kapelle` point the guard at a directory it did not
+  // check. `git worktree list --porcelain` reports symlink-resolved paths
+  // (macOS: `tmpdir()` is `/var`, realpath is `/private/var`), so a spelling
+  // that disagreed with that would make every managed checkout look unrelated
+  // to `core/sweep.ts`'s `managedWorktrees()` and go unreconciled.
+  return ours(join(realpathSync(base), "kapelle"));
 }
 
 /** Where the repository list lives. */
@@ -129,6 +136,11 @@ function reposFile(): string {
  * over debris. `realpath` first so a symlinked `--cwd` and the real path agree
  * — `git rev-parse --show-toplevel` already resolves, and subtracting one from
  * the other is what #85 measured going wrong elsewhere.
+ *
+ * Does throw, though, through `stateDir()`: that call creates the state
+ * directory and guards it with `ours` (yours, `0700`), so a state directory
+ * owned by someone else or with a looser mode is a refusal here, not a
+ * silent pass-through.
  */
 export function stateDirFor(root: string): string {
   let real: string;
@@ -149,6 +161,10 @@ export function stateDirFor(root: string): string {
  * that refuses to boot over it would be unreachable by the very request that
  * fixes it. Entries are re-checked on use, so a repository that has since
  * moved is refused then, not here.
+ *
+ * Entries are canonical realpaths — `daemon.ts` realpaths at `POST /repos`,
+ * matching what `stateDirFor` keys on — because a path that is gone cannot be
+ * re-resolved to check it against anything else.
  */
 export function readRepos(): string[] {
   // Outside the `try`, so the directory guard is never swallowed: a state

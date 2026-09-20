@@ -6,8 +6,8 @@
  * #31). A repository is added once (`POST /repos`), and a run names the folder
  * it runs in (`POST /runs {cwd, run}`); a folder outside every added
  * repository is refused. One port, one token, and one place — M4's dashboard
- * — to watch every run. Run state still lives in each repository's
- * `.kapelle/`.
+ * — to watch every run. Run state lives in each repository's own workspace
+ * under `stateDirFor(root)`, outside the repository.
  *
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
  * `stateDirFor`, `validateRun`, `sweepBoot`, `runRun`,
@@ -340,8 +340,8 @@ function existingDir(value: unknown, field: string): string {
 }
 
 /** Every repository root added, restored from `repos.json` (M2-6, #36).
- *  Not re-checked here: a repository that has moved or whose `.kapelle/` has
- *  since been committed is refused by `POST /runs`, which checks on use. */
+ *  Not re-checked here: a repository that has since moved is refused by
+ *  `POST /runs`, which checks membership on use. */
 const repos = new Set<string>(addedRepos);
 
 /** One run as the API reports it. Live runs are built here; finished ones
@@ -394,8 +394,8 @@ const restoredLogs = new Map<string, string>();
 /**
  * Read every added repository's finished runs back into memory (M2-6, #36).
  *
- * Run state lives in each repository's `.kapelle/runs/<id>/`, so the scan
- * follows the repository list rather than a second index. Anything unreadable
+ * Run state lives in each repository's own workspace under `stateDirFor(root)`,
+ * so the scan follows the repository list rather than a second index. Anything unreadable
  * is skipped with a notice naming the path and the reason: a run whose
  * record is missing, truncated by a crash or not ours is exactly what M2-5's
  * sweep exists to reconcile, and a daemon that refused to boot over one

@@ -369,8 +369,8 @@ export async function runRun(
 
   // Beside the worktrees, in the same per-repository state directory, and
   // made once for the run (M1b-7). Since #129 that is outside the repository:
-  // a run leaves the working tree exactly as it found it. A directory we
-  // cannot create is a notice and nothing more: the
+  // a run leaves the working tree exactly as it found it. A log directory we
+  // cannot create or write to below is a notice and nothing more: the
   // run still has a terminal and a rejection message, and losing the durable
   // copy is not a reason to refuse to work.
   const logDir = join(stateDirFor(root), "runs", runId);

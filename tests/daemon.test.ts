@@ -659,11 +659,57 @@ test("POST /repos refuses a relative or missing path, and registers none", async
   assert.deepEqual((await api(d, "GET", "/repos")).body, []);
 });
 
+// #129: `.kapelle/` used to have to be gitignored, on pain of a 409. It no
+// longer holds any state the daemon writes, so both an untracked and a
+// tracked `.kapelle/` are accepted.
+test("POST /repos accepts a repository whose .kapelle/ is untracked", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  // A file inside, so git can actually see the directory: an empty one is
+  // invisible and would make this test's name a proxy.
+  await writeFile(join(root, ".kapelle", "notes.txt"), "untracked\n");
+
+  const res = await api(d, "POST", "/repos", { path: root });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual((await api(d, "GET", "/repos")).body, [
+    await realpath(root),
+  ]);
+});
+
+test("POST /repos accepts a repository with a tracked .kapelle/config.json", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t, { files: { ".kapelle/config.json": "{}\n" } });
+
+  const res = await api(d, "POST", "/repos", { path: root });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual((await api(d, "GET", "/repos")).body, [
+    await realpath(root),
+  ]);
+});
+
 test("POST /runs in a folder never added is 403, and starts nothing", async (t) => {
   const d = await boot(t);
   const r = await api(d, "POST", "/runs", {
     cwd: await tempDir(t),
     run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+
+  assert.equal(r.status, 403);
+  assert.match(r.body.error, /POST \/repos/);
+  assert.deepEqual((await api(d, "GET", "/runs")).body, []);
+});
+
+// Membership before validation: a never-added folder must not leak whether
+// its run body would have passed the validator (#129 scoping — "both
+// handlers' remaining refusal order is asserted").
+test("POST /runs checks membership before the run body: 403, not 400", async (t) => {
+  const d = await boot(t);
+  const r = await api(d, "POST", "/runs", {
+    cwd: await tempDir(t),
+    run: { tasks: [] },
   });
 
   assert.equal(r.status, 403);
@@ -1553,8 +1599,8 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   const runtime = await tempDir(t);
   const first = await boot(t, runtime);
   const root = await realpath(await added(first, await gitRepo(t)));
-  // A second repository that never runs: no `.kapelle/runs/` is ever made
-  // for it, which must boot quietly — nothing was skipped.
+  // A second repository that never runs: no run directory is ever made
+  // under its workspace, which must boot quietly — nothing was skipped.
   const quiet = await realpath(await added(first, await gitRepo(t)));
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
@@ -1912,7 +1958,7 @@ test("a relative XDG_RUNTIME_DIR falls back to the temp dir, never the cwd", asy
   // per-user directory, where it would meet their running daemon's lock.
   // A relative value used to be taken at face value, which put the **token**
   // under the daemon's cwd — this repository, for `kapelle daemon start`,
-  // where `.gitignore` covers `.kapelle/` and not a stray `rel/`.
+  // where a checkout could commit a stray `rel/`.
   const d = start(t, "rel/rt", [], state, { TMPDIR: tmp });
   const died = d.done.then((r) => {
     throw new Error(`daemon exited ${r.code}: ${r.stderr}`);

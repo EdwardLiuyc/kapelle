@@ -2,8 +2,8 @@
  * The event log — story M2-2, issue #32.
  *
  * One bus listener per run, appending every event to
- * `.kapelle/runs/<runId>/events.jsonl` as `{seq, agent, update}`, one line
- * each. Decided at pickup (2026-09-14):
+ * `<stateDirFor(root)>/runs/<runId>/events.jsonl` as `{seq, agent, update}`,
+ * one line each. Decided at pickup (2026-09-14):
  *
  * **Raw, never coalesced.** Every `agent_message_chunk` is its own line, with
  * its `_meta`. Joined text cannot be split again; a reader who wants messages

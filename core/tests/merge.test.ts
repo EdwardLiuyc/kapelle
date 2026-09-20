@@ -39,7 +39,6 @@ async function repo(t: TestContext): Promise<string> {
   await git(dir, "init", "-b", "main");
   await git(dir, "config", "user.email", "test@example.invalid");
   await git(dir, "config", "user.name", "Test");
-  await writeFile(join(dir, ".gitignore"), ".kapelle/\n");
   await writeFile(join(dir, "README.md"), "first\n");
   await git(dir, "add", "-A");
   await git(dir, "commit", "-m", "first");
@@ -95,6 +94,34 @@ test("a two-task run writes run.json, then merge lands both changes unstaged", a
   // The merge must not have staged anything: added files are untracked (`??`),
   // not staged (`A `), and there is no new commit.
   assert.doesNotMatch(status, /^A /m);
+});
+
+test("an unrelated dirty path is ignored — mergeRun succeeds and leaves it untouched", async (t) => {
+  const root = await repo(t);
+  const report = await runRun(
+    runOf(["a"]),
+    { cwd: root, runId: RUN_ID, bus: createEventBus() },
+    writer("a.txt"),
+  );
+  assert.equal(report.status, "done");
+
+  // b.txt is dirty in the main tree but no task branch touches it.
+  await writeFile(join(root, "b.txt"), "unrelated dirty\n");
+
+  await mergeRun(RUN_ID, root);
+
+  assert.equal(await readFile(join(root, "a.txt"), "utf8"), "work\n");
+  assert.equal(
+    await readFile(join(root, "b.txt"), "utf8"),
+    "unrelated dirty\n",
+  );
+  const status = await git(
+    root,
+    "status",
+    "--porcelain",
+    "--untracked-files=all",
+  );
+  assert.match(status, /\?\? b\.txt/);
 });
 
 test("a conflicting local edit aborts before changing anything", async (t) => {

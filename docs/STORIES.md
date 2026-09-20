@@ -1281,7 +1281,7 @@ shared cwd, and that fallback is the CI shape this story exists for, so the log 
 there. A repository with no commits falls back to the shared cwd too, but its log goes to
 the repository's own workspace under `stateDirFor(root)`, beside where worktrees would have been (`.kapelle/` until #129).
 `openWorktrees` now returns the `root` it chose, because worktrees are no longer the only
-state under `.kapelle/`: a caller guessing `cwd` would split the directory in two
+state under `stateDirFor(root)`: a caller guessing `cwd` would split the directory in two
 whenever `--cwd` names a subdirectory.
 **Landed 2026-09-07 (#23).** `core/run.ts` resolves the log path and `AcpAgent` opens the
 file exclusively (`ax`) so a re-run never mixes two executions in one file. Run-file tasks
@@ -1626,8 +1626,8 @@ and `protocol/`, and `daemon.ts` calls no `resolvePolicy`, `AcpAgent` or `acquir
 **One daemon for all of the operator's repositories.** `POST /repos` adds one, checked once
 by `stateDirRoot` (`core/worktree.ts`); the tracked/unignored 409 is gone with #129;
 `POST /runs {cwd, run}` refuses a folder outside every added repository with a 403. One
-port, one token, one dashboard; run state stays in each repository's `.kapelle/`, and the
-repository list is in memory until M2-6. **M2-8's token ships here**, because every account
+port, one token, one dashboard; run state lives in each repository's own workspace under
+`stateDirFor(root)`, and the repository list is in memory until M2-6. **M2-8's token ships here**, because every account
 on the machine reaches `127.0.0.1` and a run file is a command line. It lives with the port
 and pid in `$XDG_RUNTIME_DIR/kapelle/daemon.json` — a `0700` directory, a `0600` file,
 outside every repository — and is published only once the port is open. That file is also
