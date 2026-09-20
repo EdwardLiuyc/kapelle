@@ -50,13 +50,9 @@ import {
   withResultPreamble,
 } from "./result.ts";
 import type { Run, Task } from "./runfile.ts";
+import { stateDirFor } from "./runtime.ts";
 import { createWatchdog, sweepIntervalMs, type Watchdog } from "./watchdog.ts";
-import {
-  changedPaths,
-  openWorktrees,
-  STATE_DIR,
-  type Worktrees,
-} from "./worktree.ts";
+import { changedPaths, openWorktrees, type Worktrees } from "./worktree.ts";
 
 /**
  * Every terminal state a task can reach.
@@ -361,14 +357,23 @@ export async function runRun(
   // Preflight once for the run, not once per task: every refusal it raises is
   // a property of the repository, so N tasks would raise the same one N times
   // — and the first worktree would already exist by then.
-  const { worktrees, notice, root } = await openWorktrees(options.cwd, runId);
-  if (notice) options.onNotice?.("run", notice);
+  const { worktrees, notice, advisory, root } = await openWorktrees(
+    options.cwd,
+    runId,
+  );
+  // Two kinds, one route. The fallback notice says isolation is absent, which
+  // #13 makes unsuppressible; the dirty-tree line (#129) is a courtesy the
+  // operator can silence.
+  if (notice) options.onNotice?.("run", notice, "containment");
+  if (advisory) options.onNotice?.("run", advisory, "advisory");
 
-  // Beside the worktrees, under the same root, and made once for the run
-  // (M1b-7). A directory we cannot create is a notice and nothing more: the
+  // Beside the worktrees, in the same per-repository state directory, and
+  // made once for the run (M1b-7). Since #129 that is outside the repository:
+  // a run leaves the working tree exactly as it found it. A log directory we
+  // cannot create or write to below is a notice and nothing more: the
   // run still has a terminal and a rejection message, and losing the durable
   // copy is not a reason to refuse to work.
-  const logDir = join(root, STATE_DIR, "runs", runId);
+  const logDir = join(stateDirFor(root), "runs", runId);
   let logs = true;
   try {
     // A missing root is the non-repo fallback for a typo'd `--cwd`. The

@@ -12,7 +12,11 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { gitRepo, tempDir } from "../../integration/helpers.ts";
+import {
+  gitRepo,
+  isolateStateHome,
+  tempDir,
+} from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { AGENTS, resolveAgent, warningsFor } from "../../protocol/registry.ts";
 import type {
@@ -30,6 +34,9 @@ import {
   usageSemanticsFor,
 } from "../run.ts";
 import { type Run, validateRun } from "../runfile.ts";
+import { stateDirFor } from "../runtime.ts";
+
+isolateStateHome();
 
 // --- the stop-reason table ---------------------------------------------------
 
@@ -749,9 +756,9 @@ test("an operator cancel outranks a TTL that fires in the same window", async ()
 
 // --- the run record (M2-6, #36) ---------------------------------------------
 
-/** What `.kapelle/runs/<id>/run.json` says right now. */
+/** What the run record says right now — outside the repository since #129. */
 async function recordIn(root: string, runId: string) {
-  const path = join(root, ".kapelle", "runs", runId, "run.json");
+  const path = join(stateDirFor(root), "runs", runId, "run.json");
   return JSON.parse(await readFile(path, "utf8"));
 }
 

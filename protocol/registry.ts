@@ -287,13 +287,19 @@ export function resolveEnv(
  *
  * `containment` is never suppressible (#13, `docs/STORIES.md` M1a-7): #62 R1
  * kept the name `safe` and paid for it by making that line the only carrier of
- * the caveat that `safe` is defence in depth, not a sandbox. `unverified` and
- * `version` are advisory and may be quieted. Callers filter on this field;
- * without it the printing side sees three indistinguishable strings and can
+ * the caveat that `safe` is defence in depth, not a sandbox. `unverified`,
+ * `version` and `advisory` may be quieted. Callers filter on this field;
+ * without it the printing side sees four indistinguishable strings and can
  * only choose all or none.
+ *
+ * `advisory` is the general case the other two are instances of, added for
+ * #129's dirty-tree line. It says nothing about the harness — it is the run
+ * telling the operator something they would otherwise be surprised by later.
+ * A notice with **no** kind still always prints; the kind is how a caller
+ * opts *into* being quietable.
  */
 export interface Warning {
-  kind: "containment" | "unverified" | "version";
+  kind: "containment" | "unverified" | "version" | "advisory";
   text: string;
   /** Set only when the same line belongs once per run, not once per task.
    *  The caller supplies the deduplication; the registry only names what is

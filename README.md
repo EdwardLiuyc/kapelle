@@ -23,8 +23,22 @@ conductor. That is the right way round here: this client directs, and the
 harnesses do the playing.
 
 The name is one word everywhere you meet it: the command you type, the
-`.kapelle/` state directory in your repository, and the
-`kapelle/<runId>/<taskId>` branches a run leaves behind.
+`kapelle/<runId>/<taskId>` branches a run leaves behind, and the
+`~/.local/state/kapelle/` directory those runs keep their worktrees and
+records in.
+
+Run `kapelle workspace` inside a repository to print where its worktrees and
+records live. If you rename or move the repository, `kapelle workspace move
+<old-path> <new-path>` carries them across and repairs the checkouts — one
+command, because a plain `mv` would leave git calling every checkout
+`prunable`.
+
+**A run asks nothing of your repository.** No `.gitignore` line, and no clean
+working tree: each task gets a `git worktree` of its own, outside your
+repository, branched off `HEAD`. Keep working in your checkout while the
+agents work in theirs. The one thing a run says about uncommitted changes is
+one line telling you they will not reach any task — `merge` is where a real
+conflict is caught, per file.
 
 ## Install
 
@@ -104,7 +118,8 @@ Two optional JSON files plus `KAPELLE_*` environment overrides set the knobs
 that do not belong in a run file. The user-level
 `$XDG_CONFIG_HOME/kapelle/config.json` (`~/.config/kapelle/config.json` by
 default) holds the daemon-wide `port` and `permissionTimeoutMs`; a repository's
-`.kapelle/config.json` holds the per-run watchdog thresholds, TTL,
+`.kapelle/config.json` — the only file kapelle reads from inside your
+repository, and one you write yourself — holds the per-run watchdog thresholds, TTL,
 `maxConcurrency` default and retention window. Unknown keys and wrong types are
 refused by file and key; unknown `KAPELLE_*` names warn and are ignored.
 

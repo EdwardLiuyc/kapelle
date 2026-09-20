@@ -55,7 +55,7 @@ touches any of these ten.
 | **M1a-8** (ids and branch names) | ratified **with amendment** — the charset produced illegal git refs |
 | **M1b-1** (`needs` rejected at M1) | ratified |
 | **M1b-2** (`stopReason` mapping, `skipped`, roll-up ordering) | ratified **with amendment** — two statuses were unplaced in the ordering |
-| **M1b-3** (`.kapelle/` git-ignore) | ratified **with amendment** — the preflight dirtied the tree it checks |
+| **M1b-3** (`.kapelle/` git-ignore) | ratified **with amendment**, then **reversed 2026-09-20 (#129)** — state moved out of the repository |
 | **M1b-4** (missing result block) | **decided** — the retro was right that only extraction had been settled, not disposition |
 | **M1c-3** (`--rebase` deferral) | ratified |
 
@@ -980,6 +980,49 @@ or need an exception carved for its own edit. It is also a write to someone's re
 that nobody asked for, on a tool whose entire posture is that it does not touch things
 without permission. So it **refuses with the fix in the message** — *"add `.kapelle/` to
 .gitignore and re-run"* — a one-time cost per repository, paid deliberately.
+
+**Amendment 2026-09-20 (#129) — reversed. The state moves out of the repository, and
+the dirty-tree refusal becomes a notice.** The decision above was ratified on the reading
+that in-repo state is "right, discoverable and per-project", and the toll — one
+`.gitignore` edit and a commit — was thought one-time and small. Using it said otherwise.
+The `.gitignore` edit is paid per repository, by a tool whose whole posture is that it asks
+nothing; and the dirty-tree refusal turned out to be the worse half, because a supervisor
+whose purpose is to run agents while the operator works cannot also demand the operator's
+tree be clean. It forced a stash-or-temp-commit decision, every run, on changes no task
+would ever touch.
+
+Neither refusal was load-bearing. `git worktree add` succeeds against a dirty main tree,
+and a worktree is a separate checkout the operator's edits never reach; and M1c-3's merge
+already refuses **per file** — only where a dirty path overlaps a path a task branch
+touched — which is the one moment a dirty tree can cost work. The blunt refusal at run
+start was a second, coarser copy of a check that already existed in the right place.
+
+So: worktrees, run records, event logs and stderr logs move to
+`$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/` (`stateDirFor`, `core/runtime.ts`); both
+ignore refusals and `checkStateDir` are deleted, with the two daemon 409s they raised; and
+the dirty tree becomes one advisory line naming the count and the base commit, which
+`--quiet` drops and which fires only on the worktree path, since the shared-cwd fallback
+runs tasks *in* the dirty tree. **`<repo>/.kapelle/config.json` stays**, and may now be
+committed: it is a per-project setting a team may want to share, and the only file the tool
+reads from inside a repository.
+
+The third consequence in the Gap above — a worktree nested inside the parent's
+`#guardPath` root — **closes** rather than moving, since checkouts are no longer inside the
+repository at all.
+
+**The key is the repository's path**, which is the one cost this takes on: rename or move a
+repository and its workspace is stranded. A marker file in `.git/` would survive the move
+and was judged more machinery than the problem is worth (decided 2026-09-20, #129). The
+boot sweep therefore **reports and keeps** a workspace whose repository is gone, and deletes
+it only when an operator on a TTY answers yes — a path that is gone reads identically for a
+rename, a move and a delete, and those want opposite answers. The notice names an exact
+command for each ending, and the repair is a verb — `kapelle workspace move <old> <new>` —
+rather than a printed `mv`: measured 2026-09-20, git keeps the old absolute path on both
+sides of a worktree link, so `mv` alone leaves every checkout `prunable` and the next
+`git worktree prune` deletes the work it has just moved. `moveWorkspace` does the
+`git worktree repair` in the same call, so the two halves cannot be separated. The bare
+`kapelle workspace` prints where a repository's state lives, which stopped being answerable
+by looking once it left the repository.
 *Done when* a run leaves `git worktree list` clean after success and populated after
 failure, and killing a task mid-spawn leaves no orphan worktree without a run record.
 **Landed 2026-09-06 (#19).** `core/worktree.ts`, driven by `core/run.ts`'s pool: one
@@ -1243,9 +1286,9 @@ and the operator who typed it is watching the terminal the story says nobody wat
 **A cwd that cannot carry worktrees still logs** — a non-repository cwd falls back to the
 shared cwd, and that fallback is the CI shape this story exists for, so the log follows it
 there. A repository with no commits falls back to the shared cwd too, but its log goes to
-the repository root `.kapelle/` beside where worktrees would have been.
+the repository's own workspace under `stateDirFor(root)`, beside where worktrees would have been (`.kapelle/` until #129).
 `openWorktrees` now returns the `root` it chose, because worktrees are no longer the only
-state under `.kapelle/`: a caller guessing `cwd` would split the directory in two
+state under `stateDirFor(root)`: a caller guessing `cwd` would split the directory in two
 whenever `--cwd` names a subdirectory.
 **Landed 2026-09-07 (#23).** `core/run.ts` resolves the log path and `AcpAgent` opens the
 file exclusively (`ax`) so a re-run never mixes two executions in one file. Run-file tasks
@@ -1588,10 +1631,10 @@ without booting a server and the CLI drifts into a second implementation.
 already ran headless — so the issue's criteria replace it: `node:http` stays out of `core/`
 and `protocol/`, and `daemon.ts` calls no `resolvePolicy`, `AcpAgent` or `acquire`.
 **One daemon for all of the operator's repositories.** `POST /repos` adds one, checked once
-by `checkStateDir` (`core/worktree.ts`), so a tracked or unignored `.kapelle/` is a 409;
+by `stateDirRoot` (`core/worktree.ts`); the tracked/unignored 409 is gone with #129;
 `POST /runs {cwd, run}` refuses a folder outside every added repository with a 403. One
-port, one token, one dashboard; run state stays in each repository's `.kapelle/`, and the
-repository list is in memory until M2-6. **M2-8's token ships here**, because every account
+port, one token, one dashboard; run state lives in each repository's own workspace under
+`stateDirFor(root)`, and the repository list is in memory until M2-6. **M2-8's token ships here**, because every account
 on the machine reaches `127.0.0.1` and a run file is a command line. It lives with the port
 and pid in `$XDG_RUNTIME_DIR/kapelle/daemon.json` — a `0700` directory, a `0600` file,
 outside every repository — and is published only once the port is open. That file is also

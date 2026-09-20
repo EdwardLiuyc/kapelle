@@ -27,6 +27,7 @@ import { request } from "node:http";
 import { userInfo } from "node:os";
 import { join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
+import { stateDirFor } from "../core/runtime.ts";
 import { processIdentity } from "../core/sweep.ts";
 import { openWorktrees } from "../core/worktree.ts";
 import {
@@ -65,14 +66,22 @@ function start(
   });
 }
 
-/** The user-level directories a daemon must not share with anyone. */
-const dirs = (runtime: string, state: string = runtime) => ({
-  XDG_RUNTIME_DIR: runtime,
-  XDG_STATE_HOME: state,
-  // M2-7's user config reads `$XDG_CONFIG_HOME/kapelle/config.json`; a path
-  // under this test's own state dir keeps a developer's real file out.
-  XDG_CONFIG_HOME: join(state, "config-home"),
-});
+/** The user-level directories a daemon must not share with anyone.
+ *
+ *  It also points **this process** at the same state home, because since #129
+ *  a run's worktrees and records live there: a fixture built here with
+ *  `openWorktrees` or read back with `stateDirFor` has to agree with the
+ *  daemon that owns them. */
+const dirs = (runtime: string, state: string = runtime) => {
+  process.env.XDG_STATE_HOME = state;
+  return {
+    XDG_RUNTIME_DIR: runtime,
+    XDG_STATE_HOME: state,
+    // M2-7's user config reads `$XDG_CONFIG_HOME/kapelle/config.json`; a path
+    // under this test's own state dir keeps a developer's real file out.
+    XDG_CONFIG_HOME: join(state, "config-home"),
+  };
+};
 
 /** Starts a daemon and reads back the record it wrote once listening. */
 async function boot(
@@ -184,7 +193,7 @@ async function directFinishedRun(
   assert.ok(worktrees, "the fixture repository should carry worktrees");
   const worktree = await worktrees.acquire("a");
   const branch = `kapelle/${id}/a`;
-  const dir = join(root, ".kapelle", "runs", id);
+  const dir = join(stateDirFor(root), "runs", id);
   await mkdir(dir, { recursive: true });
   await writeFile(
     join(dir, "run.json"),
@@ -634,7 +643,7 @@ test("POST /repos registers the repository root, once, and GET /repos lists it",
   ]);
 });
 
-test("POST /repos refuses a relative, missing or unignored path, and registers none", async (t) => {
+test("POST /repos refuses a relative or missing path, and registers none", async (t) => {
   const d = await boot(t);
 
   const relative = await api(d, "POST", "/repos", { path: "src/app" });
@@ -647,13 +656,38 @@ test("POST /repos refuses a relative, missing or unignored path, and registers n
   assert.equal(missing.status, 400);
   assert.match(missing.body.error, /does not exist/);
 
-  const unignored = await api(d, "POST", "/repos", {
-    path: await gitRepo(t, { ignore: "" }),
-  });
-  assert.equal(unignored.status, 409);
-  assert.match(unignored.body.error, /is not ignored by git/);
-
   assert.deepEqual((await api(d, "GET", "/repos")).body, []);
+});
+
+// #129: `.kapelle/` used to have to be gitignored, on pain of a 409. It no
+// longer holds any state the daemon writes, so both an untracked and a
+// tracked `.kapelle/` are accepted.
+test("POST /repos accepts a repository whose .kapelle/ is untracked", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  // A file inside, so git can actually see the directory: an empty one is
+  // invisible and would make this test's name a proxy.
+  await writeFile(join(root, ".kapelle", "notes.txt"), "untracked\n");
+
+  const res = await api(d, "POST", "/repos", { path: root });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual((await api(d, "GET", "/repos")).body, [
+    await realpath(root),
+  ]);
+});
+
+test("POST /repos accepts a repository with a tracked .kapelle/config.json", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t, { files: { ".kapelle/config.json": "{}\n" } });
+
+  const res = await api(d, "POST", "/repos", { path: root });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual((await api(d, "GET", "/repos")).body, [
+    await realpath(root),
+  ]);
 });
 
 test("POST /runs in a folder never added is 403, and starts nothing", async (t) => {
@@ -668,39 +702,18 @@ test("POST /runs in a folder never added is 403, and starts nothing", async (t) 
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
 
-test("an unadded repo with an unsafe .kapelle/ is still 403, by membership first", async (t) => {
-  // The state-dir refusal is a 409 for repositories we own; for one never
-  // added it must not pre-empt the 403 the story promises.
+// Membership before validation: a never-added folder must not leak whether
+// its run body would have passed the validator (#129 scoping — "both
+// handlers' remaining refusal order is asserted").
+test("POST /runs checks membership before the run body: 403, not 400", async (t) => {
   const d = await boot(t);
-  const cwd = await gitRepo(t, { ignore: "" });
-
   const r = await api(d, "POST", "/runs", {
-    cwd,
-    run: mockRun([{ id: "one", prompt: "hi" }]),
+    cwd: await tempDir(t),
+    run: { tasks: [] },
   });
 
   assert.equal(r.status, 403);
   assert.match(r.body.error, /POST \/repos/);
-  assert.deepEqual((await api(d, "GET", "/runs")).body, []);
-});
-
-test("an added repo that becomes unsafe is a 409 before the 202", async (t) => {
-  const d = await boot(t);
-  const cwd = await added(d, await gitRepo(t));
-  await writeFile(join(cwd, ".gitignore"), "");
-  assert.equal(spawnSync("git", ["add", "-A"], { cwd }).status, 0);
-  assert.equal(
-    spawnSync("git", ["commit", "-m", "drop the ignore"], { cwd }).status,
-    0,
-  );
-
-  const r = await api(d, "POST", "/runs", {
-    cwd,
-    run: mockRun([{ id: "one", prompt: "hi" }]),
-  });
-
-  assert.equal(r.status, 409);
-  assert.match(r.body.error, /is not ignored by git/);
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
 
@@ -748,27 +761,36 @@ test("an invalid body is 400 in the validator's words, and creates no run", asyn
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
 
-test("a dirty tree is 409 in the preflight's words, and creates no run", async (t) => {
+test("a dirty tree runs, and says so on the record (#129)", async (t) => {
+  // It used to be a 409. The operator working alongside their own agents is
+  // the normal case, and the daemon has no terminal to print a notice on, so
+  // the advisory goes on the run record instead.
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
   await writeFile(join(cwd, "wip.txt"), "uncommitted\n");
 
-  const r = await api(d, "POST", "/runs", {
+  const posted = await api(d, "POST", "/runs", {
     cwd,
     run: mockRun([{ id: "one", prompt: "hi" }]),
   });
-  assert.equal(r.status, 409);
-  assert.match(r.body.error, /uncommitted changes/);
-  assert.match(r.body.error, /wip\.txt/);
 
-  assert.deepEqual((await api(d, "GET", "/runs")).body, []);
+  assert.equal(posted.status, 202, posted.body.error);
+  const done = await settled(d, posted.body.id);
+  assert.match(done.status, /^(done|warned)$/);
+  assert.ok(
+    (done.notices as { text: string }[]).some((n) =>
+      /1 uncommitted file .* will not reach any task/.test(n.text),
+    ),
+    `no dirty-tree advisory in ${JSON.stringify(done.notices)}`,
+  );
+  // And the operator's own work is still there, untouched.
+  assert.equal(await readFile(join(cwd, "wip.txt"), "utf8"), "uncommitted\n");
 });
 
 test("a subdirectory cwd runs inside its registered root, and the daemon writes nothing into the repo", async (t) => {
-  // A root-anchored ignore: an unanchored `.kapelle/` would hide a file the
-  // daemon wrongly left in `pkg/`, and let exactly that bug pass.
+  // No ignore rule at all, so a file the daemon wrongly left in `pkg/` has
+  // nowhere to hide (#129).
   const root = await gitRepo(t, {
-    ignore: "/.kapelle/\n",
     files: { "pkg/file.txt": "committed\n" },
   });
   const d = await boot(t);
@@ -791,9 +813,8 @@ test("a subdirectory cwd runs inside its registered root, and the daemon writes 
   // What this test owns is that nothing the daemon wrote failed it.
   assert.match((await settled(d, posted.body.id)).status, /^(done|warned)$/);
 
-  // The pre-run status above cannot see what the run wrote. Without
-  // `--ignored`, the daemon's own `.kapelle/` is allowed while an unanchored
-  // `pkg/.kapelle/` would surface — which is the claim in the test name.
+  // The pre-run status above cannot see what the run wrote. Since #129 the
+  // daemon writes nothing here at all, so a clean status is the whole claim.
   const after = spawnSync(
     "git",
     ["status", "--porcelain", "--untracked-files=all"],
@@ -808,7 +829,6 @@ test("a subdirectory run logs the workspace path it actually ran in", async (t) 
   // event. `--cwd <root>/pkg` is the case where the two differ, and where the
   // silent spread used to overwrite `path: cwd`.
   const root = await gitRepo(t, {
-    ignore: "/.kapelle/\n",
     files: { "pkg/file.txt": "committed\n" },
   });
   const d = await boot(t);
@@ -822,10 +842,7 @@ test("a subdirectory run logs the workspace path it actually ran in", async (t) 
   assert.match((await settled(d, id)).status, /^(done|warned)$/);
 
   const events = (
-    await readFile(
-      join(await realpath(root), ".kapelle", "runs", id, "events.jsonl"),
-      "utf8",
-    )
+    await readFile(join(stateDirFor(root), "runs", id, "events.jsonl"), "utf8")
   )
     .trimEnd()
     .split("\n")
@@ -839,7 +856,7 @@ test("a subdirectory run logs the workspace path it actually ran in", async (t) 
     `path is the workspace inside the checkout, got ${created.update.path}`,
   );
   assert.ok(
-    created.update.path.includes(`${sep}.kapelle${sep}wt${sep}`),
+    created.update.path.includes(`${sep}wt${sep}`),
     `path is inside the run's worktree, got ${created.update.path}`,
   );
   assert.equal(
@@ -1134,7 +1151,7 @@ test("a stream attached mid-run gets the history then the live tail, contiguousl
   );
 
   const file = await readFile(
-    join(cwd, ".kapelle", "runs", id, "events.jsonl"),
+    join(stateDirFor(cwd), "runs", id, "events.jsonl"),
     "utf8",
   );
   assert.deepEqual(
@@ -1206,7 +1223,7 @@ test("a client that disconnects mid-run leaves no reader holding the log open", 
     ]),
   });
   const { id } = posted.body;
-  const log = join(await realpath(cwd), ".kapelle", "runs", id, "events.jsonl");
+  const log = join(stateDirFor(cwd), "runs", id, "events.jsonl");
   const handles = () => {
     const fds = join("/proc", String(d.pid), "fd");
     return readdirSync(fds).filter((fd) => {
@@ -1304,13 +1321,7 @@ test("an ask run with no client attached is denied at the timeout, and completes
   // The criterion names the file, not the stream: read events.jsonl directly.
   const events = (
     await readFile(
-      join(
-        await realpath(cwd),
-        ".kapelle",
-        "runs",
-        posted.body.id,
-        "events.jsonl",
-      ),
+      join(stateDirFor(cwd), "runs", posted.body.id, "events.jsonl"),
       "utf8",
     )
   )
@@ -1588,14 +1599,14 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   const runtime = await tempDir(t);
   const first = await boot(t, runtime);
   const root = await realpath(await added(first, await gitRepo(t)));
-  // A second repository that never runs: no `.kapelle/runs/` is ever made
-  // for it, which must boot quietly — nothing was skipped.
+  // A second repository that never runs: no run directory is ever made
+  // under its workspace, which must boot quietly — nothing was skipped.
   const quiet = await realpath(await added(first, await gitRepo(t)));
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
 
   // One record truncated mid-write, one written by something else.
-  const runs = join(root, ".kapelle", "runs");
+  const runs = join(stateDirFor(root), "runs");
   await mkdir(join(runs, "truncated"), { recursive: true });
   await writeFile(join(runs, "truncated", "run.json"), '{"runId": "trun');
   await mkdir(join(runs, "foreign"));
@@ -1699,7 +1710,7 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   // time, and the first task's record already reads `running`, so the kill
   // lands mid-turn with `waiting` still queued behind it.
   const childrenFile = join(runtime, "kapelle", "children.json");
-  const recordPath = join(root, ".kapelle", "runs", id, "run.json");
+  const recordPath = join(stateDirFor(root), "runs", id, "run.json");
   let harness = 0;
   let recordedStartedAt = "";
   for (const until = Date.now() + 10_000; Date.now() < until; ) {
@@ -1735,7 +1746,7 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   // `daemon.ts` never recorded `startedAt`, since the harness dies on EOF.
   assert.equal(await processIdentity(harness), recordedStartedAt);
 
-  const worktree = join(root, ".kapelle", "wt", id, "stuck");
+  const worktree = join(stateDirFor(root), "wt", id, "stuck");
   assert.equal(existsSync(worktree), true, "the run should own a worktree");
 
   process.kill(first.pid, "SIGKILL");
@@ -1754,7 +1765,7 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
     ],
   );
   const record = JSON.parse(
-    await readFile(join(root, ".kapelle", "runs", id, "run.json"), "utf8"),
+    await readFile(join(stateDirFor(root), "runs", id, "run.json"), "utf8"),
   );
   assert.equal(typeof record.endedAt, "string");
   assert.equal(existsSync(worktree), true, "a worktree inside retention stays");
@@ -1834,7 +1845,7 @@ test("kill -9 with a harness that ignores stdin and SIGTERM: the next boot kills
   await new Promise((ok) => setTimeout(ok, 300));
   const harnessStderr = async (): Promise<string> =>
     (await readFile(
-      join(root, ".kapelle", "runs", id, "stuck.stderr.log"),
+      join(stateDirFor(root), "runs", id, "stuck.stderr.log"),
       "utf8",
     ).catch(() => "")) || "(no stderr)";
   assert.equal(
@@ -1947,7 +1958,7 @@ test("a relative XDG_RUNTIME_DIR falls back to the temp dir, never the cwd", asy
   // per-user directory, where it would meet their running daemon's lock.
   // A relative value used to be taken at face value, which put the **token**
   // under the daemon's cwd — this repository, for `kapelle daemon start`,
-  // where `.gitignore` covers `.kapelle/` and not a stray `rel/`.
+  // where a checkout could commit a stray `rel/`.
   const d = start(t, "rel/rt", [], state, { TMPDIR: tmp });
   const died = d.done.then((r) => {
     throw new Error(`daemon exited ${r.code}: ${r.stderr}`);

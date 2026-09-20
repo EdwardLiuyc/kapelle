@@ -13,17 +13,19 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
+import { isolateStateHome } from "../../integration/helpers.ts";
 import { createEventBus } from "../events.ts";
 import { runRun, type TaskExecutor, type TaskStatus } from "../run.ts";
 import { validateRun } from "../runfile.ts";
+import { stateDirFor } from "../runtime.ts";
 import {
   changedPaths,
-  checkStateDir,
+  moveWorkspace,
   openWorktrees,
   type Worktrees,
 } from "../worktree.ts";
@@ -34,21 +36,22 @@ const git = async (cwd: string, ...args: string[]) =>
 
 const RUN_ID = "20260906-120000-abcd";
 
+isolateStateHome();
+
 async function tempDir(t: TestContext): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "wt-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
 
-/** A repository with one commit and `.kapelle/` already ignored — the
- *  shape the preflight demands, so a test that wants a refusal undoes one
- *  part of it rather than building the broken repo from scratch. */
+/** A repository with one commit and **no `.gitignore` at all** — since #129
+ *  that is the shape a run must accept, so it is the shape every test here
+ *  starts from. */
 async function repo(t: TestContext): Promise<string> {
   const dir = await tempDir(t);
   await git(dir, "init", "-b", "main");
   await git(dir, "config", "user.email", "test@example.invalid");
   await git(dir, "config", "user.name", "Test");
-  await writeFile(join(dir, ".gitignore"), ".kapelle/\n");
   await writeFile(join(dir, "README.md"), "first\n");
   await git(dir, "add", "-A");
   await git(dir, "commit", "-m", "first");
@@ -56,6 +59,11 @@ async function repo(t: TestContext): Promise<string> {
 }
 
 const branchOf = (taskId: string) => `kapelle/${RUN_ID}/${taskId}`;
+
+/** Where a task's checkout lands since #129 — outside the repository, under
+ *  the state directory `isolateStateHome` has pointed somewhere throwaway. */
+const wtOf = (root: string, ...rest: string[]) =>
+  join(stateDirFor(root), "wt", RUN_ID, ...rest);
 
 async function hasBranch(root: string, taskId: string): Promise<boolean> {
   try {
@@ -93,7 +101,6 @@ test("a cwd that is not a repository falls back with a notice", async (t) => {
 test("a repository with no commits falls back with a notice", async (t) => {
   const dir = await tempDir(t);
   await git(dir, "init", "-b", "main");
-  await writeFile(join(dir, ".gitignore"), ".kapelle/\n");
 
   const { worktrees, notice } = await openWorktrees(dir, RUN_ID);
 
@@ -101,88 +108,73 @@ test("a repository with no commits falls back with a notice", async (t) => {
   assert.match(String(notice), /no commits yet/);
 });
 
-test("a repository with no commits still refuses an unignored .kapelle", async (t) => {
-  // The unborn-HEAD fallback is not a pass around the ignore preflight:
-  // `core/run.ts` writes `.kapelle/runs/` even when worktrees cannot
-  // exist, so a fresh `git init` with no .gitignore must refuse before the
-  // run can create state that would be committed by accident.
-  const dir = await tempDir(t);
-  await git(dir, "init", "-b", "main");
-
-  await assert.rejects(openWorktrees(dir, RUN_ID), (err: Error) => {
-    assert.match(err.message, /not ignored by git/);
-    return true;
-  });
-});
-
-test("an unignored .kapelle/ refuses, and the message is the fix", async (t) => {
+test("a repository that never heard of .kapelle runs, and is left clean (#129)", async (t) => {
+  // The whole of the toll #129 removes. `repo()` writes no `.gitignore` at
+  // all, which before this issue was two refusals and a commit before the
+  // first run could start.
   const root = await repo(t);
-  await writeFile(join(root, ".gitignore"), "node_modules/\n");
-  await git(root, "commit", "-am", "drop the ignore");
 
-  await assert.rejects(openWorktrees(root, RUN_ID), (err: Error) => {
-    assert.match(err.message, /not ignored by git/);
-    assert.match(err.message, /add `\.kapelle\/` to \.gitignore/i);
-    return true;
-  });
-});
-
-test("checkStateDir refuses an unignored .kapelle/, and does not care about a dirty tree", async (t) => {
-  // The daemon checks a repository once, when it is added, with no run to
-  // branch yet: uncommitted work at that moment is none of its business.
-  const plain = await tempDir(t);
-  assert.deepEqual(await checkStateDir(plain), { root: plain, isRepo: false });
-
-  const root = await repo(t);
-  await writeFile(join(root, "wip.txt"), "uncommitted\n");
-  assert.deepEqual(await checkStateDir(join(root)), {
-    root: realpathSync(root),
-    isRepo: true,
-  });
-
-  await writeFile(join(root, ".gitignore"), "node_modules/\n");
-  await git(root, "commit", "-am", "drop the ignore");
-  await assert.rejects(checkStateDir(root), /not ignored by git/);
-});
-
-test("a tracked .kapelle/ refuses as tracked, not as unignored", async (t) => {
-  const root = await repo(t);
-  // Ignored *and* committed: `check-ignore` still matches the pattern, so
-  // only the tracked check can tell this apart from the case above — and it
-  // is the case where following the other message would fix nothing.
-  await run("mkdir", ["-p", join(root, ".kapelle")]);
-  await writeFile(join(root, ".kapelle", "old.json"), "{}\n");
-  await git(root, "add", "-f", ".kapelle");
-  await git(root, "commit", "-m", "oops");
-
-  await assert.rejects(openWorktrees(root, RUN_ID), (err: Error) => {
-    assert.match(err.message, /is tracked by git/);
-    assert.match(err.message, /git rm -r --cached/);
-    return true;
-  });
-});
-
-test("a dirty working tree refuses and names what is dirty", async (t) => {
-  const root = await repo(t);
-  await writeFile(join(root, "README.md"), "edited\n");
-
-  await assert.rejects(openWorktrees(root, RUN_ID), (err: Error) => {
-    assert.match(err.message, /uncommitted changes/);
-    assert.match(err.message, /README\.md/);
-    return true;
-  });
-});
-
-test("supervisor state never trips the dirty-tree refusal", async (t) => {
-  const root = await repo(t);
-  // The second run onward starts here: the first run's worktrees, logs and
-  // records are all sitting in the tree the preflight is about to check.
-  await run("mkdir", ["-p", join(root, ".kapelle", "runs")]);
-  await writeFile(join(root, ".kapelle", "runs", "old.log"), "noise\n");
-
-  const { worktrees, notice } = await openWorktrees(root, RUN_ID);
+  const {
+    worktrees,
+    notice,
+    root: stateRoot,
+  } = await openWorktrees(root, RUN_ID);
   assert.ok(worktrees);
   assert.equal(notice, undefined);
+  await workThenRelease(worktrees, "a", "done");
+
+  assert.equal(await git(root, "status", "--porcelain", "-uall"), "");
+  assert.equal(existsSync(join(root, ".kapelle")), false);
+  assert.ok(
+    !stateRoot.startsWith(`${realpathSync(root)}/`),
+    `${stateRoot} should not be inside ${root}`,
+  );
+});
+
+test("a tracked .kapelle/ is fine — config.json is meant to be committed (#129)", async (t) => {
+  const root = await repo(t);
+  await run("mkdir", ["-p", join(root, ".kapelle")]);
+  await writeFile(join(root, ".kapelle", "config.json"), '{"ttlMs":1000}\n');
+  await git(root, "add", "-A");
+  await git(root, "commit", "-m", "project config");
+
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+});
+
+test("a dirty working tree is an advisory notice, not a refusal (#129)", async (t) => {
+  const root = await repo(t);
+  await writeFile(join(root, "README.md"), "edited\n");
+  await writeFile(join(root, "untracked.txt"), "new\n");
+  const head = await git(root, "rev-parse", "--short", "HEAD");
+
+  const { worktrees, advisory } = await openWorktrees(root, RUN_ID);
+
+  assert.ok(worktrees, "a dirty tree no longer refuses the run");
+  // The count and the base, not the file list: the operator working alongside
+  // a run has a long list and does not need it read back.
+  assert.match(String(advisory), /2 uncommitted/);
+  assert.match(String(advisory), new RegExp(head));
+  assert.match(String(advisory), /will not reach any task/);
+});
+
+test("a clean working tree gets no advisory", async (t) => {
+  const { advisory } = await openWorktrees(await repo(t), RUN_ID);
+  assert.equal(advisory, undefined);
+});
+
+test("the shared-cwd fallback gets no dirty advisory (#129)", async (t) => {
+  // There the tasks run *in* the dirty tree, so "will not reach any task"
+  // would be false — the one place the notice must not fire.
+  const dir = await tempDir(t);
+  await git(dir, "init", "-b", "main");
+  await writeFile(join(dir, "wip.txt"), "uncommitted\n");
+
+  const { worktrees, notice, advisory } = await openWorktrees(dir, RUN_ID);
+
+  assert.equal(worktrees, null);
+  assert.match(String(notice), /no commits yet/);
+  assert.equal(advisory, undefined);
 });
 
 // --- acquire -----------------------------------------------------------------
@@ -195,7 +187,7 @@ test("acquire checks out the branch at the base ref's commit", async (t) => {
 
   const path = await worktrees.acquire("plan");
 
-  assert.equal(path, join(root, ".kapelle", "wt", RUN_ID, "plan"));
+  assert.equal(path, wtOf(root, "plan"));
   assert.equal(await git(path, "rev-parse", "HEAD"), head);
   assert.equal(
     await git(path, "rev-parse", "--abbrev-ref", "HEAD"),
@@ -330,8 +322,9 @@ test("ignored files in the worktree do not block removal", async (t) => {
   // `git worktree remove` refuses while untracked or ignored files sit there,
   // and a task that ran an install leaves exactly that behind.
   const path = await worktrees.acquire("build");
-  await run("mkdir", ["-p", join(path, ".kapelle")]);
-  await writeFile(join(path, ".kapelle", "state.json"), "{}\n");
+  await run("mkdir", ["-p", join(path, "node_modules")]);
+  await writeFile(join(path, "node_modules", "state.json"), "{}\n");
+  await writeFile(join(path, ".gitignore"), "node_modules/\n");
   await writeFile(join(path, "src.txt"), "work\n");
   await worktrees.release("build", "done");
 
@@ -374,7 +367,7 @@ test("a run gives each task its own worktree and cleans up after", async (t) => 
 
   assert.equal(report.status, "done");
   assert.notEqual(seen.get("plan"), seen.get("impl"));
-  assert.equal(seen.get("plan"), join(root, ".kapelle", "wt", RUN_ID, "plan"));
+  assert.equal(seen.get("plan"), wtOf(root, "plan"));
   // `git worktree list` back to just the main worktree is the story's own
   // *done when*, and it is one line rather than two `existsSync` calls.
   assert.equal((await git(root, "worktree", "list")).split("\n").length, 1);
@@ -430,7 +423,7 @@ test("a failed task keeps its worktree for reading", async (t) => {
   );
 
   assert.equal(report.status, "failed");
-  assert.equal(existsSync(join(root, ".kapelle", "wt", RUN_ID, "plan")), true);
+  assert.equal(existsSync(wtOf(root, "plan")), true);
 });
 
 test("a task that throws before writing leaves no worktree and no branch through the pool", async (t) => {
@@ -448,7 +441,7 @@ test("a task that throws before writing leaves no worktree and no branch through
   );
 
   assert.equal(report.status, "failed");
-  assert.equal(existsSync(join(root, ".kapelle", "wt", RUN_ID, "plan")), false);
+  assert.equal(existsSync(wtOf(root, "plan")), false);
   assert.equal(await hasBranch(root, "plan"), false);
 });
 
@@ -479,30 +472,16 @@ test("untracked output survives status.showUntrackedFiles=no", async (t) => {
   assert.match(listed, /RESULT\.md/);
 });
 
-test("the dirty-tree refusal survives status.showUntrackedFiles=no", async (t) => {
+test("the dirty-tree advisory survives status.showUntrackedFiles=no", async (t) => {
+  // #85's property outlives the refusal it was found in: `--porcelain` alone
+  // does not override the setting, so a count taken without
+  // `--untracked-files=all` would read a tree of new files as clean.
   const root = await repo(t);
   await git(root, "config", "status.showUntrackedFiles", "no");
   await writeFile(join(root, "stray.txt"), "uncommitted\n");
 
-  await assert.rejects(openWorktrees(root, RUN_ID), (err: Error) => {
-    assert.match(err.message, /uncommitted changes/);
-    assert.match(err.message, /stray\.txt/);
-    return true;
-  });
-});
-
-test("both ignore refusals tell the operator to commit the change", async (t) => {
-  // Following "add it to .gitignore and re-run" literally left the tree dirty,
-  // so the very next preflight refused — a fix whose own result is rejected.
-  const root = await repo(t);
-  await writeFile(join(root, ".gitignore"), "node_modules/\n");
-  await git(root, "commit", "-am", "drop the ignore");
-
-  await assert.rejects(openWorktrees(root, RUN_ID), (err: Error) => {
-    assert.match(err.message, /commit that change, and re-run/);
-    assert.match(err.message, /\.git\/info\/exclude/);
-    return true;
-  });
+  const { advisory } = await openWorktrees(root, RUN_ID);
+  assert.match(String(advisory), /1 uncommitted file /);
 });
 
 test("a checkout left on another branch is kept, with a warning", async (t) => {
@@ -560,10 +539,7 @@ test("a subdirectory cwd stays the workspace root inside the worktree", async (t
   // so the requested subtree would silently become the repo.
   const path = await worktrees.acquire("plan");
 
-  assert.equal(
-    path,
-    join(root, ".kapelle", "wt", RUN_ID, "plan", "packages", "app"),
-  );
+  assert.equal(path, wtOf(root, "plan", "packages", "app"));
   assert.equal(existsSync(join(path, "a.txt")), true);
   assert.equal(existsSync(join(path, "outside.txt")), false);
 });
@@ -607,7 +583,7 @@ test("a symlinked --cwd cannot walk a task out of its own checkout", async (t) =
   const plan = await worktrees.acquire("plan");
 
   assert.notEqual(impl, plan);
-  const wt = join(root, ".kapelle", "wt", RUN_ID);
+  const wt = wtOf(root);
   assert.equal(plan, join(wt, "plan", "packages", "app"));
   assert.equal(impl, join(wt, "impl", "packages", "app"));
   // The subtree the operator asked for, and nothing above it.
@@ -625,6 +601,7 @@ test("a symlinked --cwd cannot walk a task out of its own checkout", async (t) =
 // thing left to prove is that this reading agrees with git.
 test("changedPaths reports what git changed, verbatim", async (t) => {
   const dir = await repo(t);
+  await writeFile(join(dir, ".gitignore"), "ignored/\n");
   await writeFile(join(dir, "run.ts"), "one\n");
   await writeFile(join(dir, "café.ts"), "u\n");
   await writeFile(join(dir, 'q"uote.ts'), "q\n");
@@ -640,7 +617,8 @@ test("changedPaths reports what git changed, verbatim", async (t) => {
   await writeFile(join(dir, 'q"uote.ts'), "r\n");
   await writeFile(join(dir, "un tracked.ts"), "n\n");
   await git(dir, "mv", "old.ts", "new.ts");
-  await writeFile(join(dir, ".kapelle", "state"), "s\n").catch(() => {});
+  await run("mkdir", ["-p", join(dir, "ignored")]);
+  await writeFile(join(dir, "ignored", "state"), "s\n");
 
   const paths = await changedPaths(dir);
   for (const path of [
@@ -653,10 +631,114 @@ test("changedPaths reports what git changed, verbatim", async (t) => {
   ]) {
     assert.ok(paths.includes(path), `${path} missing from ${paths.join(", ")}`);
   }
-  // Ignored state is invisible, which is what keeps it out of the cross-check.
-  assert.ok(!paths.some((p) => p.startsWith(".kapelle")));
+  // Whatever the operator ignores stays invisible, which is what keeps build
+  // output out of the cross-check.
+  assert.ok(!paths.some((p) => p.startsWith("ignored/")));
 });
 
 test("changedPaths is empty on a clean tree", async (t) => {
   assert.deepEqual(await changedPaths(await repo(t)), []);
+});
+
+// --- moveWorkspace (#129) ----------------------------------------------------
+
+// Renaming a repository strands its workspace, because `stateDirFor` keys on
+// the path. `mv` alone does not repair it: measured 2026-09-20, git keeps the
+// old absolute path on both sides of the link and reports the moved checkout
+// as `prunable` — so a later `git worktree prune` would delete the work. The
+// two halves must therefore be one command nobody can half-run.
+
+test("moveWorkspace carries the workspace to the renamed repository", async (t) => {
+  const from = await repo(t);
+  const { worktrees } = await openWorktrees(from, RUN_ID);
+  assert.ok(worktrees);
+  const before = await worktrees.acquire("a");
+  await writeFile(join(before, "made.txt"), "work\n");
+  const oldWorkspace = stateDirFor(from);
+
+  const to = join(await tempDir(t), "renamed");
+  await run("mv", [from, to]);
+
+  const workspace = await moveWorkspace(from, to);
+
+  assert.equal(workspace, stateDirFor(to));
+  assert.equal(existsSync(oldWorkspace), false, "the old workspace is gone");
+  assert.equal(
+    await readFile(join(workspace, "wt", RUN_ID, "a", "made.txt"), "utf8"),
+    "work\n",
+    "the task's work came with it",
+  );
+});
+
+test("moveWorkspace repairs the worktree links, so nothing is prunable", async (t) => {
+  // The half that `mv` cannot do. Without `git worktree repair` the checkout
+  // is listed at its old path and marked `prunable`, which is the shape that
+  // loses work.
+  const from = await repo(t);
+  const { worktrees } = await openWorktrees(from, RUN_ID);
+  assert.ok(worktrees);
+  await workThenRelease(worktrees, "a", "failed");
+
+  const to = join(await tempDir(t), "renamed");
+  await run("mv", [from, to]);
+  const workspace = await moveWorkspace(from, to);
+
+  const listed = await git(to, "worktree", "list");
+  assert.doesNotMatch(listed, /prunable/, listed);
+  assert.ok(
+    listed.includes(join(workspace, "wt", RUN_ID, "a")),
+    `the checkout is listed at its new path, got:\n${listed}`,
+  );
+  // And it is a working checkout, not just a listed one.
+  assert.equal(
+    await git(
+      join(workspace, "wt", RUN_ID, "a"),
+      "rev-parse",
+      "--abbrev-ref",
+      "HEAD",
+    ),
+    branchOf("a"),
+  );
+});
+
+test("moveWorkspace refuses a destination that is not a repository", async (t) => {
+  const from = await repo(t);
+  const setup = await openWorktrees(from, RUN_ID);
+  assert.ok(setup.worktrees);
+  await setup.worktrees.acquire("a");
+  const to = await tempDir(t);
+
+  await assert.rejects(moveWorkspace(from, to), (err: Error) => {
+    assert.match(err.message, new RegExp(to));
+    assert.match(err.message, /not a git repository/);
+    return true;
+  });
+});
+
+test("moveWorkspace refuses when the source has no workspace", async (t) => {
+  // Nothing to move is an error the operator should see, not a silent no-op:
+  // they ran this because a notice named a workspace.
+  const from = join(await tempDir(t), "never-ran");
+  const to = await repo(t);
+
+  await assert.rejects(moveWorkspace(from, to), /no kapelle workspace/);
+});
+
+test("moveWorkspace refuses rather than overwrite an existing workspace", async (t) => {
+  // Both must have *acquired*: `openWorktrees` creates no directory, so a
+  // repository that only preflighted has no workspace to collide with.
+  const from = await repo(t);
+  const a = await openWorktrees(from, RUN_ID);
+  assert.ok(a.worktrees);
+  await a.worktrees.acquire("a");
+  const to = await repo(t);
+  const b = await openWorktrees(to, RUN_ID);
+  assert.ok(b.worktrees);
+  await b.worktrees.acquire("a");
+
+  await assert.rejects(moveWorkspace(from, to), (err: Error) => {
+    assert.match(err.message, new RegExp(stateDirFor(to)));
+    assert.match(err.message, /already has/);
+    return true;
+  });
 });

@@ -1,19 +1,28 @@
 /**
  * Worktrees — story M1b-3, issue #19.
  *
- * One `git worktree` per task, at `.kapelle/wt/<runId>/<taskId>`, branched
- * off a base ref as `kapelle/<runId>/<taskId>` (`core/ids.ts`). This is the
- * seam `core/run.ts`'s `taskCwd` held open: before this file, every task in a
- * run shared one working directory and only non-colliding work was safe.
+ * One `git worktree` per task, at `stateDirFor(root)/wt/<runId>/<taskId>`,
+ * branched off a base ref as `kapelle/<runId>/<taskId>` (`core/ids.ts`). This
+ * is the seam `core/run.ts`'s `taskCwd` held open: before this file, every
+ * task in a run shared one working directory and only non-colliding work was
+ * safe.
  *
- * **The state directory has to be invisible to git** (`docs/STORIES.md:932`).
- * `.kapelle/` sits inside the working tree of the repo being worked on, so
- * an unignored one would make the dirty-tree refusal below refuse on our own
- * files from the second run onward, and would put supervisor state into
- * M1b-4's diff cross-check. The preflight therefore **refuses with the fix in
- * the message** rather than appending the line itself: appending dirties the
- * very tree it is about to check, and is a write to someone's repository that
- * nobody asked for (`docs/STORIES.md:942`).
+ * **A run asks nothing of the operator's repository** (decided 2026-09-20,
+ * #129). Worktrees and records used to sit at `<repo>/.kapelle/`, inside the
+ * working tree of the repo being worked on, which cost three things: a
+ * `.gitignore` edit and two refusals before the first run, a dirty-tree
+ * refusal that forbade the operator from working alongside their own agents,
+ * and a checkout nested inside the parent's `#guardPath` root. Moving the
+ * state under `core/runtime.ts`'s state directory deletes all three. It
+ * reverses M1b-3's own ratified decision (#62 B1, "keeping state in-repo is
+ * right, discoverable and per-project") on a year of using it: discoverable
+ * was true, and it was not worth the toll.
+ *
+ * `git` itself never minded — `worktree add` succeeds against a dirty main
+ * tree, and a worktree is a separate checkout the operator's edits never
+ * reach. What is left of the dirty check is one advisory line, because
+ * `core/merge.ts:92` already refuses **per file** at the one moment a dirty
+ * tree can cost work.
  *
  * **A cwd that cannot carry worktrees falls back rather than refusing**
  * (decided 2026-09-06, #19). Not a repo, or a repo with no commit to branch
@@ -30,16 +39,24 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { branchName } from "./ids.ts";
 import type { TaskStatus } from "./run.ts";
+import { stateDirFor } from "./runtime.ts";
 
 const run = promisify(execFile);
 
-/** Where supervisor state lives, relative to the repo root. Exported for
- *  M1b-7's stderr logs, which live beside the worktrees (`core/run.ts`). */
+/**
+ * The one thing still kept **inside** the repository: `<repo>/.kapelle/`, which
+ * since #129 holds `config.json` and nothing else (`core/config.ts:87`).
+ *
+ * It stays because it is a per-project setting a team may want committed, and
+ * a file the operator writes on purpose — it is never auto-created, so it
+ * needs no `.gitignore` line and trips no preflight. Everything a run
+ * generates lives at `stateDirFor(root)` instead.
+ */
 export const STATE_DIR = ".kapelle";
 
 /**
@@ -61,24 +78,6 @@ const RELEASES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
 ]);
 
 /**
- * The working-tree state, and **never** a bare `status --porcelain`.
- *
- * `--porcelain` fixes the *format*, not the *content*: `status.showUntrackedFiles=no`
- * still empties the list, and a task whose whole output is new files then reads
- * as untouched — the checkout is removed with the work in it (measured
- * 2026-09-07, #85). `--untracked-files=all` cannot be weakened by anyone's
- * config, which is the only property a safety check may rely on. Ignored files
- * stay out, so `.kapelle/` is still invisible here.
- *
- * The text is for **people** — a refusal message names what is dirty. Anything
- * that needs the paths themselves calls `changedPaths` below, because `git()`
- * trims, and trimming eats the leading status-column space of the first entry.
- */
-function workingTreeStatus(cwd: string): Promise<string> {
-  return git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
-}
-
-/**
  * The paths the working tree shows as changed — M1b-4's cross-check input.
  *
  * `-z` rather than the text above, because the text is *lossy for machines*.
@@ -94,8 +93,11 @@ function workingTreeStatus(cwd: string): Promise<string> {
  * follows must be consumed either way — reading one column would leave it to
  * be re-read as a status line and mangled.
  *
- * Ignored paths stay out, exactly as above, so `.kapelle/` never reads as
- * agent work and no exclusion list is needed here.
+ * `--untracked-files=all` rather than a bare `--porcelain`, which
+ * `status.showUntrackedFiles=no` silently empties: a task whose whole output
+ * was new files then read as untouched, and its checkout was removed with the
+ * work in it (measured 2026-09-07, #85). Ignored paths stay out, so nothing
+ * the operator's own `.gitignore` covers reads as agent work.
  */
 export async function changedPaths(cwd: string): Promise<string[]> {
   const { stdout } = await run(
@@ -119,28 +121,13 @@ export async function changedPaths(cwd: string): Promise<string[]> {
   return paths;
 }
 
-/**
- * The tail both ignore refusals share, and the reason it is not just "re-run".
- *
- * Editing `.gitignore` is itself an uncommitted change, so the advice as first
- * written led straight into the dirty-tree refusal below — a fix whose own
- * result the next preflight rejects (#85). Committing settles it. The
- * `.git/info/exclude` alternative is offered because it is the one that leaves
- * no change to commit at all, which is what someone with a deliberately dirty
- * tree actually needs.
- */
-const COMMIT_THEN =
-  `commit that change, and re-run. To leave the working tree untouched ` +
-  `instead, put the same line in .git/info/exclude, which is local to your ` +
-  `clone and needs no commit.`;
-
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await run("git", args, { cwd });
   return stdout.trim();
 }
 
-/** `git` for the questions whose answer is the exit code — `check-ignore`,
- *  `rev-parse --verify` — where a non-zero exit is information, not a fault. */
+/** `git` for the questions whose answer is the exit code — `rev-parse
+ *  --verify`, `--show-toplevel` — where a non-zero exit is information. */
 async function tryGit(cwd: string, args: string[]): Promise<string | null> {
   try {
     return await git(cwd, args);
@@ -153,64 +140,16 @@ async function tryGit(cwd: string, args: string[]): Promise<string | null> {
  * The root supervisor state hangs off, resolved but not checked.
  *
  * `git rev-parse --show-toplevel`, or `cwd` itself when it is not a
- * repository (`isRepo: false`, the shared-cwd fallback). Never throws: the
- * tracked/unignored checks live in `checkStateDir`, and the daemon needs this
- * half on its own so it can answer "is this folder inside an added
- * repository?" (403) before a state-dir refusal (409) can pre-empt it.
+ * repository (`isRepo: false`, the shared-cwd fallback). **Never throws** —
+ * since #129 there is nothing about a repository that can refuse a run, so
+ * this is the whole of the root preflight. `daemon.ts` needs it to answer "is
+ * this folder inside an added repository?" (403) without a second git call.
  */
 export async function stateDirRoot(
   cwd: string,
 ): Promise<{ root: string; isRepo: boolean }> {
   const root = await tryGit(cwd, ["rev-parse", "--show-toplevel"]);
   if (root === null) return { root: cwd, isRepo: false };
-  return { root, isRepo: true };
-}
-
-/**
- * The root every piece of supervisor state hangs off, checked.
- *
- * **Throws** when `.kapelle/` is tracked or not ignored, because anything
- * written there would show up as the operator's changes — or be committed
- * with them.
- *
- * This is the half of the preflight that is a property of the repository
- * rather than of the moment: `openWorktrees` runs it before every run, and the
- * daemon runs it when a repository is added, where a dirty tree is none of its
- * business yet.
- */
-export async function checkStateDir(
-  cwd: string,
-): Promise<{ root: string; isRepo: boolean }> {
-  const { root, isRepo } = await stateDirRoot(cwd);
-  if (!isRepo) return { root, isRepo };
-
-  // Tracked is checked before ignored because it is the worse diagnosis and
-  // `check-ignore` never reports a tracked path: without this, a committed
-  // `.kapelle/` would be reported as merely missing from `.gitignore`, and
-  // following that advice would leave it tracked *and* ignored. This runs
-  // before the unborn-HEAD fallback too: `core/run.ts` writes `.kapelle/`
-  // even when worktrees cannot exist, so an unignored one has to refuse here
-  // rather than let the log directory create the state the preflight exists
-  // to prevent.
-  if ((await git(root, ["ls-files", "--", STATE_DIR])) !== "") {
-    throw new Error(
-      `${STATE_DIR}/ is tracked by git. It holds supervisor state — worktrees, ` +
-        `logs, run records — and must not be committed. Run ` +
-        `\`git rm -r --cached ${STATE_DIR}\`, add \`${STATE_DIR}/\` to ` +
-        `.gitignore, ${COMMIT_THEN}`,
-    );
-  }
-
-  if (
-    (await tryGit(root, ["check-ignore", "-q", "--", `${STATE_DIR}/`])) === null
-  ) {
-    throw new Error(
-      `${STATE_DIR}/ is not ignored by git. Worktrees and supervisor state go ` +
-        `there, and an unignored one would show up as your changes. Add ` +
-        `\`${STATE_DIR}/\` to .gitignore, ${COMMIT_THEN}`,
-    );
-  }
-
   return { root, isRepo: true };
 }
 
@@ -243,30 +182,39 @@ export interface Worktrees {
 export interface WorktreeSetup {
   /** `null` when the cwd cannot carry worktrees; `notice` says why. */
   worktrees: Worktrees | null;
+  /** Containment-shaped, so `--quiet` never drops it (#13): it says isolation
+   *  is absent. */
   notice?: string;
-  /** Where `.kapelle/` lives for this run — the repository root whenever
-   *  git reports one (including the no-commit fallback), or the requested
-   *  cwd itself when there is no repository at all. Returned because
-   *  worktrees are not the only supervisor state kept there: M1b-7's stderr
-   *  logs go beside them, and a caller that guessed `cwd` would split the
-   *  directory in two whenever `--cwd` named a subdirectory. */
+  /** Advisory, and `--quiet` drops it (#129): the operator's uncommitted work
+   *  will not reach any task. Set only on the worktree path — in the
+   *  shared-cwd fallback the tasks run *in* the dirty tree, so it would be a
+   *  lie there. */
+  advisory?: string;
+  /** Which repository this run's supervisor state hangs off — the repository
+   *  root whenever git reports one (including the no-commit fallback), or the
+   *  requested cwd itself when there is no repository at all. The state
+   *  itself lives at `stateDirFor(root)`, outside the repository since #129;
+   *  this is the key, not the location. Returned because worktrees are not
+   *  the only state kept there — M1b-7's stderr logs go beside them — and a
+   *  caller that guessed `cwd` would split the directory in two whenever
+   *  `--cwd` named a subdirectory. */
   root: string;
 }
 
 /**
  * Preflight, then a handle for the run.
  *
- * Returns a fallback with a notice when the cwd cannot carry worktrees.
- * **Throws** when it can but must not: `.kapelle/` tracked or unignored, or
- * a dirty working tree. The difference is deliberate — the first is a place
- * that never promised isolation, the second is a repository we would damage.
+ * Returns a fallback with a notice when the cwd cannot carry worktrees. Since
+ * #129 it **throws for nothing a repository can be in**: state no longer
+ * lands in the working tree, so there is nothing to ignore, and a dirty tree
+ * is a notice rather than a refusal. `core/merge.ts` still refuses a dirty
+ * path a task branch touched, which is the one moment dirtiness costs work.
  */
 export async function openWorktrees(
   cwd: string,
   runId: string,
 ): Promise<WorktreeSetup> {
-  // The tracked and unignored refusals are in `checkStateDir`, and run first.
-  const { root, isRepo } = await checkStateDir(cwd);
+  const { root, isRepo } = await stateDirRoot(cwd);
   if (!isRepo) {
     return {
       worktrees: null,
@@ -279,9 +227,7 @@ export async function openWorktrees(
 
   // An unborn HEAD is a repository with nothing to branch from. Same fallback
   // as no repository at all: `git worktree add` would fail per task, and one
-  // notice up front beats N identical spawn failures. The ignore/tracked
-  // refusals above still run first for the reason given there — the log
-  // directory is created no matter which fallback this ends in.
+  // notice up front beats N identical spawn failures.
   if ((await tryGit(root, ["rev-parse", "--verify", "HEAD"])) === null) {
     return {
       worktrees: null,
@@ -292,17 +238,22 @@ export async function openWorktrees(
     };
   }
 
-  // `.kapelle/` is ignored by the check above, so it can never be the
-  // reason this fires — the criterion that the supervisor's own state does not
-  // trip its own refusal is met by ordering, not by a second exclusion list.
-  const dirty = await workingTreeStatus(root);
-  if (dirty !== "") {
-    throw new Error(
-      `the working tree at ${root} has uncommitted changes, and a run branches ` +
-        `off a commit — the changes below would not reach any task. Commit or ` +
-        `stash them and re-run.\n${dirty}`,
-    );
-  }
+  // A notice, never a refusal (#129). A supervisor whose whole point is to
+  // work while the operator works cannot demand a clean tree first: that
+  // forces a stash-or-temp-commit decision on changes the run never touches.
+  // What is left is the surprise — a run branches off a commit — and one line
+  // closes that. The count and the base, not the list: someone working
+  // alongside a run has a long list and does not need it read back.
+  //
+  // `core/merge.ts:92` keeps the refusal that matters, per file, at the one
+  // moment a dirty tree can actually cost work.
+  const dirty = (await changedPaths(root)).length;
+  const advisory =
+    dirty === 0
+      ? undefined
+      : `${dirty} uncommitted ${dirty === 1 ? "file" : "files"} in ${root} ` +
+        `will not reach any task — tasks branch from HEAD ` +
+        `(${await git(root, ["rev-parse", "--short", "HEAD"])}).`;
 
   // Where `cwd` sits inside the repository, so each task's checkout can be
   // entered at the same place. Empty for a run started at the repo root, which
@@ -321,6 +272,7 @@ export async function openWorktrees(
 
   return {
     root,
+    advisory,
     worktrees: {
       async acquire(taskId, baseRef = "HEAD") {
         const branch = branchName(runId, taskId);
@@ -339,7 +291,7 @@ export async function openWorktrees(
           );
         }
 
-        const path = join(root, STATE_DIR, "wt", runId, taskId);
+        const path = join(stateDirFor(root), "wt", runId, taskId);
         await git(root, ["worktree", "add", "-b", branch, path, baseSha]);
         held.set(taskId, { path, branch, baseSha });
 
@@ -414,7 +366,7 @@ export async function openWorktrees(
           );
         }
 
-        const dirty = (await workingTreeStatus(task.path)) !== "";
+        const dirty = (await changedPaths(task.path)).length > 0;
         const head = await git(task.path, ["rev-parse", "HEAD"]);
         const untouched = !dirty && head === task.baseSha;
 
@@ -459,4 +411,76 @@ export async function openWorktrees(
  *  definition what the repository was told not to keep. */
 function removeWorktree(root: string, path: string): Promise<string> {
   return git(root, ["worktree", "remove", "--force", path]);
+}
+
+/**
+ * Carry a repository's workspace to where the repository now is (#129).
+ *
+ * `stateDirFor` keys on the path, so renaming or moving a repository strands
+ * its workspace — with, very possibly, the only copy of a failed task's work
+ * in it. This is the repair `core/sweep.ts`'s stranded notice names.
+ *
+ * **One command, because the two halves must not be separable.** `mv` alone
+ * is not the fix: measured 2026-09-20, git keeps the old absolute path on
+ * both sides of a worktree link, so after the move `git worktree list`
+ * reports the checkout at its old path and marks it `prunable` — and the next
+ * `git worktree prune` deletes the work. `git worktree repair` rewrites both
+ * sides. An operator who ran the `mv` from a printed recipe and not the
+ * repair would be left in exactly the shape that loses the work they moved,
+ * which is why no recipe is printed.
+ *
+ * Refuses rather than guesses: a destination that is not a repository, a
+ * source with no workspace, and a destination that already has one. The last
+ * matters most — merging two workspaces would put two repositories' run
+ * records in one directory, and `mv` onto an existing directory nests rather
+ * than replaces.
+ *
+ * Returns the new workspace path.
+ */
+export async function moveWorkspace(
+  fromRepo: string,
+  toRepo: string,
+): Promise<string> {
+  const { root: to, isRepo } = await stateDirRoot(toRepo);
+  if (!isRepo) {
+    throw new Error(
+      `${toRepo} is not a git repository, so it has no workspace to move to.`,
+    );
+  }
+
+  const from = stateDirFor(fromRepo);
+  if (!existsSync(from)) {
+    throw new Error(`${fromRepo} has no kapelle workspace at ${from}.`);
+  }
+
+  const target = stateDirFor(to);
+  if (target === from) return from;
+  if (existsSync(target)) {
+    throw new Error(
+      `${to} already has a workspace at ${target}. Moving ${from} onto it ` +
+        `would put two repositories' worktrees and run records in one ` +
+        `directory. Move or remove one of them first.`,
+    );
+  }
+
+  await run("mv", [from, target]);
+
+  // Every checkout at once: `repair` takes the *new* paths and fixes the link
+  // from both ends. A path that is no longer a checkout is reported and
+  // skipped by git itself, so a workspace holding debris still repairs the
+  // rest — which is the case this exists for.
+  const checkouts: string[] = [];
+  const wt = join(target, "wt");
+  if (existsSync(wt)) {
+    for (const runId of readdirSync(wt)) {
+      for (const taskId of readdirSync(join(wt, runId))) {
+        checkouts.push(join(wt, runId, taskId));
+      }
+    }
+  }
+  if (checkouts.length > 0) {
+    await git(to, ["worktree", "repair", ...checkouts]);
+  }
+
+  return target;
 }

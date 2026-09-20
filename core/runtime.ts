@@ -13,15 +13,17 @@
  * daemon.
  */
 
+import { createHash } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 
 /**
  * `$XDG_RUNTIME_DIR/kapelle`, or a per-user directory under the system temp
@@ -31,8 +33,8 @@ import { isAbsolute, join } from "node:path";
  *
  * Unset means **empty or relative**, the same rule `stateDir` follows. A
  * relative value would put the token under whatever directory the daemon
- * started in — a repository, for `kapelle daemon start`, where `.gitignore`
- * covers `.kapelle/` and not this.
+ * started in — a repository, for `kapelle daemon start`, where a checkout
+ * could commit it.
  */
 export function runtimeDir(): string {
   const { uid } = userInfo();
@@ -92,12 +94,73 @@ function stateDir(): string {
       : join(homedir(), ".local", "state");
   const dir = join(base, "kapelle");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return ours(dir);
+  // Canonicalize `base`, not `dir`: `dir` is the thing `ours` is about to
+  // guard, and following symlinks before that guard runs would let a symlink
+  // planted at `<base>/kapelle` point the guard at a directory it did not
+  // check. `git worktree list --porcelain` reports symlink-resolved paths
+  // (macOS: `tmpdir()` is `/var`, realpath is `/private/var`), so a spelling
+  // that disagreed with that would make every managed checkout look unrelated
+  // to `core/sweep.ts`'s `managedWorktrees()` and go unreconciled.
+  return ours(join(realpathSync(base), "kapelle"));
 }
 
 /** Where the repository list lives. */
 function reposFile(): string {
   return join(stateDir(), "repos.json");
+}
+
+/**
+ * Where one repository's supervisor state lives (issue #129).
+ *
+ * `<stateDir()>/repos/<name>-<hash>` — worktrees, run records, event logs and
+ * stderr logs. It used to be `<repo>/.kapelle/`, which cost every repository a
+ * `.gitignore` edit and two refusals before its first run
+ * (`core/worktree.ts`), for state that belongs to this machine and to no
+ * repository. Only `<repo>/.kapelle/config.json` stays behind, and that one is
+ * a file the operator writes on purpose and may commit.
+ *
+ * **Both halves of the name earn their place.** The basename is for the
+ * operator, who reads a failed task's checkout by eye; the digest is because
+ * `~/src/api` and `~/work/api` are both `api`, and one folder for both would
+ * put one repository's worktrees into the other's sweep.
+ *
+ * **Eight hex characters, not the whole digest**, because the operator reads
+ * this folder name and a 64-character tail would bury the part that is for
+ * them. It is a 32-bit space: one operator with a thousand repositories has
+ * about a 1-in-10,000 chance of a collision, and the cost of one is confusion
+ * rather than loss — two repositories would share a `runs/` and a `wt/`, but
+ * `managedWorktrees` reads `git worktree list` **per repository**, so neither
+ * one's sweep can ever see the other's checkouts. Widen it if a shared cache
+ * of repositories ever hangs off this function; a person's laptop does not
+ * need it.
+ *
+ * **Keyed on the path, so a moved or renamed repository strands its
+ * workspace** (decided 2026-09-20, #129). A marker file inside `.git/` would
+ * survive the move, and was judged more machinery than the problem is worth.
+ * `core/sweep.ts` reports a stranded workspace instead of guessing, because a
+ * path that is gone reads the same whether the operator renamed the
+ * repository or deleted it, and those want opposite answers.
+ *
+ * Never throws for a path that does not exist, for that same reason: the sweep
+ * asks about repositories that are gone, and a throw there would refuse a boot
+ * over debris. `realpath` first so a symlinked `--cwd` and the real path agree
+ * — `git rev-parse --show-toplevel` already resolves, and subtracting one from
+ * the other is what #85 measured going wrong elsewhere.
+ *
+ * Does throw, though, through `stateDir()`: that call creates the state
+ * directory and guards it with `ours` (yours, `0700`), so a state directory
+ * owned by someone else or with a looser mode is a refusal here, not a
+ * silent pass-through.
+ */
+export function stateDirFor(root: string): string {
+  let real: string;
+  try {
+    real = realpathSync(root);
+  } catch {
+    real = resolve(root);
+  }
+  const hash = createHash("sha256").update(real).digest("hex").slice(0, 8);
+  return join(stateDir(), "repos", `${basename(real)}-${hash}`);
 }
 
 /**
@@ -108,6 +171,10 @@ function reposFile(): string {
  * that refuses to boot over it would be unreachable by the very request that
  * fixes it. Entries are re-checked on use, so a repository that has since
  * moved is refused then, not here.
+ *
+ * Entries are canonical realpaths — `daemon.ts` realpaths at `POST /repos`,
+ * matching what `stateDirFor` keys on — because a path that is gone cannot be
+ * re-resolved to check it against anything else.
  */
 export function readRepos(): string[] {
   // Outside the `try`, so the directory guard is never swallowed: a state

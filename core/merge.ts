@@ -21,7 +21,8 @@ import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { assertRunId } from "./ids.ts";
-import { changedPaths, STATE_DIR } from "./worktree.ts";
+import { stateDirFor } from "./runtime.ts";
+import { changedPaths } from "./worktree.ts";
 
 const run = promisify(execFile);
 
@@ -156,7 +157,7 @@ async function readRunRecord(runId: string, cwd: string): Promise<RunRecord> {
     throw new Error(`${cwd} is not a git repository.`);
   }
 
-  const path = join(root, STATE_DIR, "runs", runId, "run.json");
+  const path = join(stateDirFor(root), "runs", runId, "run.json");
   let text: string;
   try {
     text = await readFile(path, "utf8");
