@@ -659,11 +659,15 @@ async function sweepStranded(
     return;
   }
 
+  // Both endings get an exact command. The move is one verb rather than a
+  // printed `mv`, because `mv` alone leaves every checkout `prunable` and the
+  // next `git worktree prune` deletes the work it just moved (measured
+  // 2026-09-20; `moveWorkspace` in `core/worktree.ts` does the repair).
   onNotice(
     `${where}. It holds that repository's worktrees and run records, and ` +
-      `nothing will delete it. If you deleted the repository, remove it too: ` +
-      `rm -rf ${workspace}. If you moved or renamed it, the new path gets a ` +
-      `workspace of its own — copy anything you still need out of this one.`,
+      `nothing will delete it. If you moved or renamed the repository: ` +
+      `kapelle workspace move ${root} <new-path>. If you deleted it: ` +
+      `rm -rf ${workspace}.`,
   );
 }
 

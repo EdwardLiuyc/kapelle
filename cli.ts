@@ -21,8 +21,8 @@ import {
   type TaskStatus,
 } from "./core/run.ts";
 import { type Task, validateRun } from "./core/runfile.ts";
-import { runtimeDir } from "./core/runtime.ts";
-import { stateDirRoot } from "./core/worktree.ts";
+import { runtimeDir, stateDirFor } from "./core/runtime.ts";
+import { moveWorkspace, stateDirRoot } from "./core/worktree.ts";
 import { AcpAgent, type AgentEventEnvelope } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
 import {
@@ -190,6 +190,11 @@ if (positional[0] === "daemon" && positional[1] === "start") {
   await import("./daemon.ts");
 } else if (positional[0] === "daemon") {
   process.exitCode = await runDaemonCommand().catch((err) => {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  });
+} else if (positional[0] === "workspace") {
+  process.exitCode = await runWorkspaceCommand().catch((err) => {
     console.error(`error: ${messageOf(err)}`);
     return 1;
   });
@@ -595,6 +600,42 @@ async function loadRunFile(path: string): Promise<unknown> {
  * M1c-3 ships `--squash` only; `--rebase` is M3-4 and is refused here rather
  * than silently ignored. The `kapelle` bin and the file rename are M1c-5.
  */
+/**
+ * `kapelle workspace [--cwd <dir>]` and `kapelle workspace move <from> <to>`.
+ *
+ * Since #129 a run's worktrees and records live outside the repository, so
+ * "where is my stuff" stopped being answerable by looking — the bare form is
+ * that answer. `move` is the repair `core/sweep.ts`'s stranded notice names:
+ * one command, because `mv` without `git worktree repair` leaves every
+ * checkout `prunable` and the next prune deletes the work
+ * (`core/worktree.ts`, `moveWorkspace`).
+ */
+async function runWorkspaceCommand(): Promise<number> {
+  if (positional[1] !== "move") {
+    if (positional.length > 1) {
+      console.error(
+        `unknown workspace command "${positional[1]}": ` +
+          `kapelle workspace [--cwd <dir>] | kapelle workspace move <from> <to>`,
+      );
+      return 1;
+    }
+    const { root } = await stateDirRoot(flag("cwd", process.cwd()));
+    console.log(stateDirFor(root));
+    return 0;
+  }
+
+  const [from, to] = positional.slice(2);
+  if (!from || !to) {
+    console.error(
+      "workspace move needs two paths: kapelle workspace move <old-repo> <new-repo>",
+    );
+    return 1;
+  }
+
+  console.log(await moveWorkspace(from, to));
+  return 0;
+}
+
 async function runMergeCommand(): Promise<number> {
   if (has("rebase")) {
     console.error("--rebase lands in M3-4; M1c-3 ships --squash only.");

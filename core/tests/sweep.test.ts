@@ -1322,19 +1322,18 @@ test("a repository that is gone strands its workspace, and nothing is deleted", 
   assert.match(stranded1, new RegExp(root));
 });
 
-test("the stranded notice covers both endings, and promises no deletion", async (t) => {
-  // The operator has to be able to act without reading the source. The
-  // deletion case gets an exact command; the rename case deliberately gets
-  // none, because the new workspace's name is a digest of the new path and
-  // nothing here can compute it — a fabricated `mv` would be worse than the
-  // sentence that tells the truth.
+test("the stranded notice names an exact command for each ending", async (t) => {
+  // The operator has to be able to act without reading the source: one
+  // command to re-point a renamed repository, one to drop a deleted one.
+  // The move is `kapelle workspace move`, never a printed `mv` — `mv` alone
+  // leaves every checkout `prunable` and the next prune deletes the work.
   const { root, workspace } = await stranded(t);
 
   const notices = await sweep(root, join(await tempDir(t), "children.json"));
   const text = notices.find((n) => n.includes(workspace)) ?? "";
 
+  assert.match(text, new RegExp(`kapelle workspace move ${root} <new-path>`));
   assert.match(text, new RegExp(`rm -rf ${workspace}`));
-  assert.match(text, /moved or renamed/);
   assert.match(text, /nothing will delete it/);
 });
 

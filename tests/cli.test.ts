@@ -18,6 +18,7 @@
 
 import assert from "node:assert/strict";
 import { execFile as execFileCb } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   access,
   mkdir,
@@ -1290,4 +1291,59 @@ test("a repeated tool title warns, and the task is never cancelled", async (t) =
   );
   assert.match(r.stdout, /▸ loop \(mock-agent\) done/);
   assert.doesNotMatch(r.stdout, /timed_out|cancelled/);
+});
+
+// --- kapelle workspace (#129) ------------------------------------------------
+
+test("workspace prints where a repository's state lives", async (t) => {
+  // State left the repository, so "where is my stuff" became a question the
+  // operator cannot answer by looking. This is the answer, and the thing the
+  // stranded notice's repair command is built from.
+  const cwd = await gitRepo(t);
+
+  const r = await runCli(t, ["workspace", "--cwd", cwd]);
+
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout.trim(), stateDirFor(cwd));
+});
+
+test("workspace move carries a renamed repository's state, repaired", async (t) => {
+  // The whole point: `mv` alone leaves every checkout `prunable`, and the
+  // next `git worktree prune` deletes the work. One verb cannot be half-run.
+  const from = await gitRepo(t);
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
+  assert.equal(
+    (await runCli(t, ["run", "--file", file, "--cwd", from, "--quiet"])).code,
+    0,
+  );
+  const to = join(await tempDir(t), "renamed");
+  await execFile("mv", [from, to]);
+
+  const r = await runCli(t, ["workspace", "move", from, to]);
+
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout.trim(), stateDirFor(to));
+  assert.equal(existsSync(stateDirFor(from)), false);
+  assert.doesNotMatch(await git(to, "worktree", "list"), /prunable/);
+});
+
+test("workspace move needs both paths, and says which is missing", async (t) => {
+  const r = await runCli(t, ["workspace", "move", await gitRepo(t)]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /workspace move needs two paths/);
+  assert.doesNotMatch(r.stderr, /node:internal/);
+});
+
+test("workspace move reports a refusal as one line, not a stack", async (t) => {
+  const r = await runCli(t, [
+    "workspace",
+    "move",
+    await gitRepo(t),
+    await tempDir(t),
+  ]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /not a git repository/);
+  assert.doesNotMatch(r.stderr, /\bat .*worktree\.ts/);
 });

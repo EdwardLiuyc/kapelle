@@ -39,7 +39,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { branchName } from "./ids.ts";
@@ -411,4 +411,76 @@ export async function openWorktrees(
  *  definition what the repository was told not to keep. */
 function removeWorktree(root: string, path: string): Promise<string> {
   return git(root, ["worktree", "remove", "--force", path]);
+}
+
+/**
+ * Carry a repository's workspace to where the repository now is (#129).
+ *
+ * `stateDirFor` keys on the path, so renaming or moving a repository strands
+ * its workspace — with, very possibly, the only copy of a failed task's work
+ * in it. This is the repair `core/sweep.ts`'s stranded notice names.
+ *
+ * **One command, because the two halves must not be separable.** `mv` alone
+ * is not the fix: measured 2026-09-20, git keeps the old absolute path on
+ * both sides of a worktree link, so after the move `git worktree list`
+ * reports the checkout at its old path and marks it `prunable` — and the next
+ * `git worktree prune` deletes the work. `git worktree repair` rewrites both
+ * sides. An operator who ran the `mv` from a printed recipe and not the
+ * repair would be left in exactly the shape that loses the work they moved,
+ * which is why no recipe is printed.
+ *
+ * Refuses rather than guesses: a destination that is not a repository, a
+ * source with no workspace, and a destination that already has one. The last
+ * matters most — merging two workspaces would put two repositories' run
+ * records in one directory, and `mv` onto an existing directory nests rather
+ * than replaces.
+ *
+ * Returns the new workspace path.
+ */
+export async function moveWorkspace(
+  fromRepo: string,
+  toRepo: string,
+): Promise<string> {
+  const { root: to, isRepo } = await stateDirRoot(toRepo);
+  if (!isRepo) {
+    throw new Error(
+      `${toRepo} is not a git repository, so it has no workspace to move to.`,
+    );
+  }
+
+  const from = stateDirFor(fromRepo);
+  if (!existsSync(from)) {
+    throw new Error(`${fromRepo} has no kapelle workspace at ${from}.`);
+  }
+
+  const target = stateDirFor(to);
+  if (target === from) return from;
+  if (existsSync(target)) {
+    throw new Error(
+      `${to} already has a workspace at ${target}. Moving ${from} onto it ` +
+        `would put two repositories' worktrees and run records in one ` +
+        `directory. Move or remove one of them first.`,
+    );
+  }
+
+  await run("mv", [from, target]);
+
+  // Every checkout at once: `repair` takes the *new* paths and fixes the link
+  // from both ends. A path that is no longer a checkout is reported and
+  // skipped by git itself, so a workspace holding debris still repairs the
+  // rest — which is the case this exists for.
+  const checkouts: string[] = [];
+  const wt = join(target, "wt");
+  if (existsSync(wt)) {
+    for (const runId of readdirSync(wt)) {
+      for (const taskId of readdirSync(join(wt, runId))) {
+        checkouts.push(join(wt, runId, taskId));
+      }
+    }
+  }
+  if (checkouts.length > 0) {
+    await git(to, ["worktree", "repair", ...checkouts]);
+  }
+
+  return target;
 }

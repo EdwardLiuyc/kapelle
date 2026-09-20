@@ -1015,7 +1015,14 @@ repository and its workspace is stranded. A marker file in `.git/` would survive
 and was judged more machinery than the problem is worth (decided 2026-09-20, #129). The
 boot sweep therefore **reports and keeps** a workspace whose repository is gone, and deletes
 it only when an operator on a TTY answers yes — a path that is gone reads identically for a
-rename, a move and a delete, and those want opposite answers.
+rename, a move and a delete, and those want opposite answers. The notice names an exact
+command for each ending, and the repair is a verb — `kapelle workspace move <old> <new>` —
+rather than a printed `mv`: measured 2026-09-20, git keeps the old absolute path on both
+sides of a worktree link, so `mv` alone leaves every checkout `prunable` and the next
+`git worktree prune` deletes the work it has just moved. `moveWorkspace` does the
+`git worktree repair` in the same call, so the two halves cannot be separated. The bare
+`kapelle workspace` prints where a repository's state lives, which stopped being answerable
+by looking once it left the repository.
 *Done when* a run leaves `git worktree list` clean after success and populated after
 failure, and killing a task mid-spawn leaves no orphan worktree without a run record.
 **Landed 2026-09-06 (#19).** `core/worktree.ts`, driven by `core/run.ts`'s pool: one

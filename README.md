@@ -27,6 +27,12 @@ The name is one word everywhere you meet it: the command you type, the
 `~/.local/state/kapelle/` directory those runs keep their worktrees and
 records in.
 
+Run `kapelle workspace` inside a repository to print where its worktrees and
+records live. If you rename or move the repository, `kapelle workspace move
+<old-path> <new-path>` carries them across and repairs the checkouts — one
+command, because a plain `mv` would leave git calling every checkout
+`prunable`.
+
 **A run asks nothing of your repository.** No `.gitignore` line, and no clean
 working tree: each task gets a `git worktree` of its own, outside your
 repository, branched off `HEAD`. Keep working in your checkout while the

@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -23,7 +23,12 @@ import { createEventBus } from "../events.ts";
 import { runRun, type TaskExecutor, type TaskStatus } from "../run.ts";
 import { validateRun } from "../runfile.ts";
 import { stateDirFor } from "../runtime.ts";
-import { changedPaths, openWorktrees, type Worktrees } from "../worktree.ts";
+import {
+  changedPaths,
+  moveWorkspace,
+  openWorktrees,
+  type Worktrees,
+} from "../worktree.ts";
 
 const run = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) =>
@@ -633,4 +638,107 @@ test("changedPaths reports what git changed, verbatim", async (t) => {
 
 test("changedPaths is empty on a clean tree", async (t) => {
   assert.deepEqual(await changedPaths(await repo(t)), []);
+});
+
+// --- moveWorkspace (#129) ----------------------------------------------------
+
+// Renaming a repository strands its workspace, because `stateDirFor` keys on
+// the path. `mv` alone does not repair it: measured 2026-09-20, git keeps the
+// old absolute path on both sides of the link and reports the moved checkout
+// as `prunable` — so a later `git worktree prune` would delete the work. The
+// two halves must therefore be one command nobody can half-run.
+
+test("moveWorkspace carries the workspace to the renamed repository", async (t) => {
+  const from = await repo(t);
+  const { worktrees } = await openWorktrees(from, RUN_ID);
+  assert.ok(worktrees);
+  const before = await worktrees.acquire("a");
+  await writeFile(join(before, "made.txt"), "work\n");
+  const oldWorkspace = stateDirFor(from);
+
+  const to = join(await tempDir(t), "renamed");
+  await run("mv", [from, to]);
+
+  const workspace = await moveWorkspace(from, to);
+
+  assert.equal(workspace, stateDirFor(to));
+  assert.equal(existsSync(oldWorkspace), false, "the old workspace is gone");
+  assert.equal(
+    await readFile(join(workspace, "wt", RUN_ID, "a", "made.txt"), "utf8"),
+    "work\n",
+    "the task's work came with it",
+  );
+});
+
+test("moveWorkspace repairs the worktree links, so nothing is prunable", async (t) => {
+  // The half that `mv` cannot do. Without `git worktree repair` the checkout
+  // is listed at its old path and marked `prunable`, which is the shape that
+  // loses work.
+  const from = await repo(t);
+  const { worktrees } = await openWorktrees(from, RUN_ID);
+  assert.ok(worktrees);
+  await workThenRelease(worktrees, "a", "failed");
+
+  const to = join(await tempDir(t), "renamed");
+  await run("mv", [from, to]);
+  const workspace = await moveWorkspace(from, to);
+
+  const listed = await git(to, "worktree", "list");
+  assert.doesNotMatch(listed, /prunable/, listed);
+  assert.ok(
+    listed.includes(join(workspace, "wt", RUN_ID, "a")),
+    `the checkout is listed at its new path, got:\n${listed}`,
+  );
+  // And it is a working checkout, not just a listed one.
+  assert.equal(
+    await git(
+      join(workspace, "wt", RUN_ID, "a"),
+      "rev-parse",
+      "--abbrev-ref",
+      "HEAD",
+    ),
+    branchOf("a"),
+  );
+});
+
+test("moveWorkspace refuses a destination that is not a repository", async (t) => {
+  const from = await repo(t);
+  const setup = await openWorktrees(from, RUN_ID);
+  assert.ok(setup.worktrees);
+  await setup.worktrees.acquire("a");
+  const to = await tempDir(t);
+
+  await assert.rejects(moveWorkspace(from, to), (err: Error) => {
+    assert.match(err.message, new RegExp(to));
+    assert.match(err.message, /not a git repository/);
+    return true;
+  });
+});
+
+test("moveWorkspace refuses when the source has no workspace", async (t) => {
+  // Nothing to move is an error the operator should see, not a silent no-op:
+  // they ran this because a notice named a workspace.
+  const from = join(await tempDir(t), "never-ran");
+  const to = await repo(t);
+
+  await assert.rejects(moveWorkspace(from, to), /no kapelle workspace/);
+});
+
+test("moveWorkspace refuses rather than overwrite an existing workspace", async (t) => {
+  // Both must have *acquired*: `openWorktrees` creates no directory, so a
+  // repository that only preflighted has no workspace to collide with.
+  const from = await repo(t);
+  const a = await openWorktrees(from, RUN_ID);
+  assert.ok(a.worktrees);
+  await a.worktrees.acquire("a");
+  const to = await repo(t);
+  const b = await openWorktrees(to, RUN_ID);
+  assert.ok(b.worktrees);
+  await b.worktrees.acquire("a");
+
+  await assert.rejects(moveWorkspace(from, to), (err: Error) => {
+    assert.match(err.message, new RegExp(stateDirFor(to)));
+    assert.match(err.message, /already has/);
+    return true;
+  });
 });
