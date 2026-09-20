@@ -394,9 +394,10 @@ const restoredLogs = new Map<string, string>();
 /**
  * Read every added repository's finished runs back into memory (M2-6, #36).
  *
- * Run state lives in each repository's own workspace under `stateDirFor(root)`,
- * so the scan follows the repository list rather than a second index. Anything unreadable
- * is skipped with a notice naming the path and the reason: a run whose
+ * Run state lives in each repository's own workspace under
+ * `stateDirFor(root)`, so the scan follows the repository list rather than a
+ * second index. Anything unreadable is skipped with a notice naming the path
+ * and the reason: a run whose
  * record is missing, truncated by a crash or not ours is exactly what M2-5's
  * sweep exists to reconcile, and a daemon that refused to boot over one
  * could not be reached by the request that fixes it. A repository whose

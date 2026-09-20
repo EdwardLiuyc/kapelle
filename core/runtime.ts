@@ -124,6 +124,16 @@ function reposFile(): string {
  * `~/src/api` and `~/work/api` are both `api`, and one folder for both would
  * put one repository's worktrees into the other's sweep.
  *
+ * **Eight hex characters, not the whole digest**, because the operator reads
+ * this folder name and a 64-character tail would bury the part that is for
+ * them. It is a 32-bit space: one operator with a thousand repositories has
+ * about a 1-in-10,000 chance of a collision, and the cost of one is confusion
+ * rather than loss — two repositories would share a `runs/` and a `wt/`, but
+ * `managedWorktrees` reads `git worktree list` **per repository**, so neither
+ * one's sweep can ever see the other's checkouts. Widen it if a shared cache
+ * of repositories ever hangs off this function; a person's laptop does not
+ * need it.
+ *
  * **Keyed on the path, so a moved or renamed repository strands its
  * workspace** (decided 2026-09-20, #129). A marker file inside `.git/` would
  * survive the move, and was judged more machinery than the problem is worth.
