@@ -9,13 +9,20 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, type TestContext, test } from "node:test";
 import { promisify } from "node:util";
-import { gitRepo, tempDir } from "../../integration/helpers.ts";
+import {
+  gitRepo,
+  isolateStateHome,
+  tempDir,
+} from "../../integration/helpers.ts";
+import { stateDirFor } from "../runtime.ts";
 import { DEFAULT_RETENTION_MS, processIdentity, sweepBoot } from "../sweep.ts";
 import { openWorktrees } from "../worktree.ts";
+
+isolateStateHome();
 
 const run = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) =>
@@ -71,7 +78,7 @@ async function writeRun(
   record: Record<string, unknown>,
   id = RUN_ID,
 ): Promise<string> {
-  const dir = join(root, ".kapelle", "runs", id);
+  const dir = join(stateDirFor(root), "runs", id);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "run.json"), JSON.stringify(record, null, 2));
   return dir;
@@ -86,7 +93,7 @@ interface WrittenRecord {
 const readRun = async (dir: string): Promise<WrittenRecord> =>
   JSON.parse(await readFile(join(dir, "run.json"), "utf8")) as WrittenRecord;
 
-/** A checkout under `.kapelle/wt/<runId>/<taskId>`, the shape a run leaves. */
+/** A checkout under `<stateDirFor(root)>/wt/<runId>/<taskId>`, the shape a run leaves. */
 async function addWorktree(
   root: string,
   taskId: string,
@@ -544,6 +551,9 @@ test("retention is per repository, read from each repo's config", async (t) => {
   const longWorktree = await addWorktree(long, "a");
   const shortDir = await writeRun(short, record(short));
   const longDir = await writeRun(long, record(long));
+  // `.kapelle/` is no longer created by the run itself (#129) — the project
+  // config is a file the operator writes, so the test writes it too.
+  await mkdir(join(short, ".kapelle"), { recursive: true });
   await writeFile(
     join(short, ".kapelle", "config.json"),
     JSON.stringify({ retentionMs: 60 * 60 * 1000 }),
@@ -655,7 +665,7 @@ test("a clean orphan loses its checkout but keeps its branch", async (t) => {
 test("an unreadable record counts as absent", async (t) => {
   const root = await gitRepo(t);
   const path = await addWorktree(root, "a");
-  const dir = join(root, ".kapelle", "runs", RUN_ID);
+  const dir = join(stateDirFor(root), "runs", RUN_ID);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "run.json"), '{"runId": "');
 
@@ -679,7 +689,7 @@ test("an unreadable runs directory skips reap and orphan cleanup", async (t) => 
   });
   const recordPath = join(dir, "run.json");
   const before = await readFile(recordPath, "utf8");
-  const runsDir = join(root, ".kapelle", "runs");
+  const runsDir = join(stateDirFor(root), "runs");
   await chmod(runsDir, 0o000);
   let notices: string[] = [];
   try {
@@ -722,7 +732,7 @@ test("an unreadable runs directory skips an expired reap too", async (t) => {
   });
   const recordPath = join(dir, "run.json");
   const before = await readFile(recordPath, "utf8");
-  const runsDir = join(root, ".kapelle", "runs");
+  const runsDir = join(stateDirFor(root), "runs");
   await chmod(runsDir, 0o000);
   let notices: string[] = [];
   try {
@@ -1002,7 +1012,7 @@ test("worktrees that cannot be listed stop the reap, not just the list", async (
   // A root that is not a repository at all: `git worktree prune` fails there,
   // which stands in for any git that will not answer.
   const root = await tempDir(t);
-  await mkdir(join(root, ".kapelle", "wt", RUN_ID, "a"), { recursive: true });
+  await mkdir(join(stateDirFor(root), "wt", RUN_ID, "a"), { recursive: true });
   const dir = await writeRun(root, {
     runId: RUN_ID,
     root,
@@ -1198,7 +1208,7 @@ test("a broken repository does not stop a later repository's sweep", async (t) =
   // Not a repository at all: `git worktree prune` fails here, so the record
   // cannot be reaped, but the loop must still reach the second root.
   const bad = await tempDir(t);
-  await mkdir(join(bad, ".kapelle", "wt", RUN_ID, "a"), {
+  await mkdir(join(stateDirFor(bad), "wt", RUN_ID, "a"), {
     recursive: true,
   });
   const badDir = await writeRun(bad, {
@@ -1236,4 +1246,120 @@ test("a broken repository does not stop a later repository's sweep", async (t) =
   assert.equal(existsSync(goodDir), false);
   assert.equal(await hasBranch(good, `kapelle/${RUN_ID}/a`), false);
   assert.ok(notices.some((notice) => notice.includes(`reaped run ${RUN_ID}`)));
+});
+
+// --- stranded workspaces (#129) ----------------------------------------------
+
+// Since #129 a run's state lives at `stateDirFor(root)`, keyed on the
+// repository's path. Move or rename the repository and that key changes, so
+// the old workspace is stranded — with, very possibly, the only copy of a
+// failed task's work in it. The sweep may not guess: a path that is gone reads
+// exactly the same whether the operator renamed the repository or deleted it,
+// and those want opposite answers.
+
+/** A repository, a workspace full of state, and then the repository gone. */
+async function stranded(t: TestContext): Promise<{
+  root: string;
+  workspace: string;
+}> {
+  const root = await gitRepo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+  await worktrees.acquire("a");
+  const workspace = stateDirFor(root);
+  await rm(root, { recursive: true, force: true });
+  return { root, workspace };
+}
+
+test("a repository that is gone strands its workspace, and nothing is deleted", async (t) => {
+  const { root, workspace } = await stranded(t);
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.ok(existsSync(workspace), "the workspace survived the sweep");
+  const stranded1 = notices.find((n) => n.includes(workspace));
+  assert.ok(
+    stranded1,
+    `no notice named ${workspace} in ${notices.join(" | ")}`,
+  );
+  assert.match(stranded1, new RegExp(root));
+});
+
+test("the stranded notice covers both endings, and promises no deletion", async (t) => {
+  // The operator has to be able to act without reading the source. The
+  // deletion case gets an exact command; the rename case deliberately gets
+  // none, because the new workspace's name is a digest of the new path and
+  // nothing here can compute it — a fabricated `mv` would be worse than the
+  // sentence that tells the truth.
+  const { root, workspace } = await stranded(t);
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+  const text = notices.find((n) => n.includes(workspace)) ?? "";
+
+  assert.match(text, new RegExp(`rm -rf ${workspace}`));
+  assert.match(text, /moved or renamed/);
+  assert.match(text, /nothing will delete it/);
+});
+
+test("an asker that says yes removes the stranded workspace", async (t) => {
+  const { root, workspace } = await stranded(t);
+  const asked: string[] = [];
+
+  await sweepBoot({
+    repos: [root],
+    childrenFile: join(await tempDir(t), "children.json"),
+    now: NOW,
+    onNotice: () => {},
+    ask: async (question) => {
+      asked.push(question);
+      return true;
+    },
+  });
+
+  assert.equal(asked.length, 1, `asked ${asked.length} times`);
+  assert.match(String(asked[0]), new RegExp(workspace));
+  assert.equal(existsSync(workspace), false, "yes means remove it");
+});
+
+test("an asker that says no keeps the stranded workspace", async (t) => {
+  const { root, workspace } = await stranded(t);
+
+  await sweepBoot({
+    repos: [root],
+    childrenFile: join(await tempDir(t), "children.json"),
+    now: NOW,
+    onNotice: () => {},
+    ask: async () => false,
+  });
+
+  assert.ok(existsSync(workspace), "no means keep it");
+});
+
+test("a repository that is still there is never asked about", async (t) => {
+  const root = await gitRepo(t);
+  const asked: string[] = [];
+
+  await sweepBoot({
+    repos: [root],
+    childrenFile: join(await tempDir(t), "children.json"),
+    now: NOW,
+    onNotice: () => {},
+    ask: async (q) => {
+      asked.push(q);
+      return true;
+    },
+  });
+
+  assert.deepEqual(asked, []);
+});
+
+test("a repository gone with no workspace to strand says nothing", async (t) => {
+  // Removing a repository that never ran leaves nothing behind, so there is
+  // nothing to report and nothing to ask.
+  const root = await gitRepo(t);
+  await rm(root, { recursive: true, force: true });
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.deepEqual(notices, []);
 });

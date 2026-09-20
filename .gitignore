@@ -1,6 +1,5 @@
 ACP_TEST.md
 node_modules/
-.kapelle/
 .pi-lens-probe-home/
 
 # Claude Code checks agent worktrees out inside the repo. Named, not globbed:

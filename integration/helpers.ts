@@ -14,10 +14,11 @@
  */
 
 import { execFile, spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { TestContext } from "node:test";
+import { afterEach, beforeEach, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import { AcpAgent } from "../protocol/agent.ts";
@@ -48,16 +49,15 @@ export async function tempDir(t: TestContext): Promise<string> {
   return dir;
 }
 
-/** A committed repository with `.kapelle/` ignored — the shape a run needs
- *  before `openWorktrees` will give each task a checkout of its own.
+/** A committed repository with **no `.gitignore`** — since #129 that is the
+ *  shape a run must accept, so it is the shape the suites start from.
  *
- *  `ignore` replaces the ignore line (the daemon's token-placement test needs
- *  a root-anchored `/.kapelle/` that a subdirectory token would escape), and
- *  `files` are committed first so a test can build the monorepo shape. */
+ *  `ignore` writes one anyway, for a test that needs an ignore rule of its
+ *  own; `files` are committed first so a test can build the monorepo shape. */
 export async function gitRepo(
   t: TestContext,
   {
-    ignore = ".kapelle/\n",
+    ignore = "",
     files = {},
   }: { ignore?: string; files?: Record<string, string> } = {},
 ): Promise<string> {
@@ -66,7 +66,10 @@ export async function gitRepo(
   await git("init", "-b", "main");
   await git("config", "user.email", "test@example.invalid");
   await git("config", "user.name", "Test");
-  await writeFile(join(cwd, ".gitignore"), ignore);
+  if (ignore !== "") await writeFile(join(cwd, ".gitignore"), ignore);
+  // Something has to be committed: a run branches off a commit, and since
+  // #129 the default repository has no `.gitignore` to be that something.
+  await writeFile(join(cwd, "README.md"), "first\n");
   for (const [path, content] of Object.entries(files)) {
     await mkdir(dirname(join(cwd, path)), { recursive: true });
     await writeFile(join(cwd, path), content);
@@ -83,6 +86,51 @@ export interface CliResult {
 }
 
 /**
+ * One throwaway `XDG_STATE_HOME` for every subprocess this file spawns.
+ *
+ * Since #129 a run's worktrees and records live under the state directory
+ * rather than in the repository, so without this every CI run and every
+ * developer's `npm test` would deposit branches and checkouts in their real
+ * `~/.local/state/kapelle`. Forced rather than defaulted — inheriting the
+ * developer's own is exactly the accident worth closing — and `env` still
+ * wins, which is how `tests/daemon.test.ts` gives each daemon its own.
+ */
+const SPAWNED_STATE_HOME = mkdtempSync(
+  join(tmpdir(), "kapelle-spawned-state-"),
+);
+process.on("exit", () =>
+  rmSync(SPAWNED_STATE_HOME, { recursive: true, force: true }),
+);
+// The **test** process points at the same one, so a suite that spawns the CLI
+// can call `stateDirFor` and get the directory its child actually wrote to.
+// `isolateStateHome` overrides it per test for the in-process suites, which
+// spawn nothing.
+process.env.XDG_STATE_HOME = SPAWNED_STATE_HOME;
+
+/**
+ * Give every test in the calling file its own `XDG_STATE_HOME`.
+ *
+ * For the **in-process** suites — `core/tests/worktree.test.ts` and friends
+ * call `stateDirFor` directly, so `process.env` is what they read. Call it
+ * once at module top level. Safe as a module-level pair because `node --test`
+ * runs the tests in one file serially.
+ */
+export function isolateStateHome(): void {
+  let home: string;
+  let before: string | undefined;
+  beforeEach(() => {
+    before = process.env.XDG_STATE_HOME;
+    home = mkdtempSync(join(tmpdir(), "kapelle-state-"));
+    process.env.XDG_STATE_HOME = home;
+  });
+  afterEach(() => {
+    if (before === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = before;
+    rmSync(home, { recursive: true, force: true });
+  });
+}
+
+/**
  * The child environment, with the ambient config namespace removed. M2-7's
  * config reads `KAPELLE_*` from the process, so an exported knob would change
  * what these tests measure; a caller that means to set one passes it in
@@ -93,6 +141,7 @@ function childEnv(env?: Record<string, string>): NodeJS.ProcessEnv {
   for (const name of Object.keys(base)) {
     if (name.startsWith("KAPELLE_")) delete base[name];
   }
+  base.XDG_STATE_HOME = SPAWNED_STATE_HOME;
   return env ? { ...base, ...env } : base;
 }
 

@@ -9,11 +9,12 @@ Three sources set the knobs that do not belong in a run file (M2-7, #37):
   repository's file.
 - **Project level** — `<repo>/.kapelle/config.json`. Holds the run defaults:
   `stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency` and
-  `retentionMs`. **This file is not shared.** `.kapelle/` has to stay
-  git-ignored — `checkStateDir` refuses a run in a repository that tracks it —
-  so the file cannot be committed, and it reaches nobody else who clones the
-  repository. Each person writes their own copy, or the run file carries the
-  values instead.
+  `retentionMs`. **Commit it if you want to** (#129). It used to be
+  uncommittable, because `.kapelle/` also held worktrees and run records and
+  `checkStateDir` refused a repository that tracked it; that state now lives
+  in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`, so this file is the only
+  thing kapelle reads from inside your repository, and it is one you write on
+  purpose. Nothing creates it for you, and no preflight looks at it.
 - **Environment** — `KAPELLE_*`. Overrides both files; for the run knobs an
   explicit run-file value still wins.
 

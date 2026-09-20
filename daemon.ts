@@ -10,7 +10,7 @@
  * `.kapelle/`.
  *
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
- * `checkStateDir`, `validateRun`, `openWorktrees`, `sweepBoot`, `runRun`,
+ * `stateDirFor`, `validateRun`, `sweepBoot`, `runRun`,
  * `processIdentity` and the permission queue; worktrees, policy and harnesses
  * stay behind them. If orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
@@ -52,6 +52,7 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { isAbsolute, join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import {
   readEnvConfig,
@@ -66,14 +67,14 @@ import { newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
 import { type RunReport, runRun, type TaskStatus } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
-import { readRepos, runtimeDir, writeRepos } from "./core/runtime.ts";
-import { processIdentity, sweepBoot } from "./core/sweep.ts";
 import {
-  checkStateDir,
-  openWorktrees,
-  STATE_DIR,
-  stateDirRoot,
-} from "./core/worktree.ts";
+  readRepos,
+  runtimeDir,
+  stateDirFor,
+  writeRepos,
+} from "./core/runtime.ts";
+import { processIdentity, sweepBoot } from "./core/sweep.ts";
+import { stateDirRoot } from "./core/worktree.ts";
 import { AGENTS, type Warning } from "./protocol/registry.ts";
 
 // M2-7: the user-level config is read once here, after the startup helpers
@@ -338,15 +339,6 @@ function existingDir(value: unknown, field: string): string {
   return realpathSync(value);
 }
 
-/** The repository root of `dir`, or a 409 when its `.kapelle/` is unsafe. */
-async function rootOf(dir: string): Promise<string> {
-  try {
-    return (await checkStateDir(dir)).root;
-  } catch (err) {
-    throw refusal(409, messageOf(err));
-  }
-}
-
 /** Every repository root added, restored from `repos.json` (M2-6, #36).
  *  Not re-checked here: a repository that has moved or whose `.kapelle/` has
  *  since been committed is refused by `POST /runs`, which checks on use. */
@@ -418,7 +410,7 @@ const restoredLogs = new Map<string, string>();
  */
 function restoreRuns(): void {
   for (const root of repos) {
-    const dir = join(root, STATE_DIR, "runs");
+    const dir = join(stateDirFor(root), "runs");
     let ids: string[];
     try {
       ids = readdirSync(dir);
@@ -497,10 +489,29 @@ const bailOut = () => {
 process.once("SIGTERM", bailOut);
 process.once("SIGINT", bailOut);
 
+/**
+ * The boot sweep's one question, on a TTY (#129).
+ *
+ * Its own readline, opened and closed per question, because this runs once
+ * before `listen` and nothing else on this process owns stdin yet —
+ * `core/policy.ts`'s asker is for a live run and holds its interface open.
+ */
+function askBoot(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return rl
+    .question(`${question} [y/N] `)
+    .then((answer) => /^y(es)?$/i.test(answer.trim()))
+    .finally(() => rl.close());
+}
+
 await sweepBoot({
   repos: addedRepos,
   childrenFile: join(dir, "children.json"),
   onNotice: (text) => console.error(text),
+  // Only on a TTY — `kapelle daemon start` has one, a background daemon does
+  // not, and a question nobody can answer would hang the boot. Without it
+  // `sweepStranded` reports and keeps, which is the safe half (#129).
+  ask: process.stdin.isTTY ? askBoot : undefined,
 });
 
 process.off("SIGTERM", bailOut);
@@ -578,9 +589,10 @@ const permissions = createPermissionQueue(permissionTimeoutMs);
 
 async function postRepo(req: IncomingMessage, res: ServerResponse) {
   const body = await readBody(req);
-  // Checked once here, so a repository whose `.kapelle/` would be committed
-  // never gets as far as a run.
-  const root = await rootOf(existingDir(body.path, "path"));
+  // Since #129 a repository cannot be in a state that refuses a run, so this
+  // only resolves the root. The 409 that used to live here — a tracked or
+  // unignored `.kapelle/` — is gone with the state that caused it.
+  const { root } = await stateDirRoot(existingDir(body.path, "path"));
   // M2-7: a config that does not load is refused at add time, naming the file
   // and key, rather than at the repository's first run.
   try {
@@ -602,10 +614,6 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
   const body = await readBody(req);
   const cwd = existingDir(body.cwd, "cwd");
 
-  // Membership answers before the state check: a folder outside every added
-  // repository is a 403 whatever its `.kapelle/` looks like, so the root has
-  // to be resolved unchecked. Otherwise an unadded repo with an unsafe state
-  // dir would answer 409 and the client would be told to fix the wrong thing.
   const { root } = await stateDirRoot(cwd);
   if (!repos.has(root)) {
     throw refusal(
@@ -614,15 +622,6 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
         `{"path": ${JSON.stringify(root)}} first.`,
     );
   }
-
-  // It is one of ours, so the state-dir refusal now applies — the same 409
-  // `POST /repos` would have given, before the body is validated.
-  // ponytail: the state-dir check runs three times per run — here, in the
-  // `openWorktrees` below, and again inside `runRun` (about ten git spawns,
-  // measured on #107). Deleting this call would let a bad body's 400 answer
-  // before an unsafe `.kapelle/`'s 409. Hand the handler's `openWorktrees`
-  // result to `runRun` if request latency ever matters.
-  await rootOf(cwd);
 
   let run: Run;
   try {
@@ -633,16 +632,11 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     throw refusal(400, messageOf(err));
   }
 
-  // The preflight answers before the 202, so a caller is never handed an id
-  // for a run that could not start. It is read-only until `acquire`, and
-  // `runRun` repeats it; a tree that turns dirty in between still refuses
-  // there, as a `failed` run.
+  // No preflight before the 202 any more (#129). It existed to answer the two
+  // 409s — an unsafe `.kapelle/`, a dirty tree — that this daemon no longer
+  // has, and it cost about ten git spawns per run to repeat what `runRun`
+  // does anyway (measured on #107).
   const id = newRunId();
-  try {
-    await openWorktrees(cwd, id);
-  } catch (err) {
-    throw refusal(409, messageOf(err));
-  }
 
   // After the last await, so no run can start once a shutdown has begun.
   if (stopping) throw refusal(503, "the daemon is shutting down");

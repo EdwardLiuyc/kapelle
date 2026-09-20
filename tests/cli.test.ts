@@ -27,6 +27,7 @@ const execFile = promisify(execFileCb);
 const git = async (cwd: string, ...args: string[]) =>
   (await execFile("git", args, { cwd })).stdout.trim();
 
+import { stateDirFor } from "../core/runtime.ts";
 import {
   gitRepo,
   HOSTILE_AGENT,
@@ -246,10 +247,10 @@ test("--file runs write the same event log the daemon replays", async (t) => {
   const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
   assert.equal(r.code, 0);
 
-  const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
+  const [runId] = await readdir(join(stateDirFor(cwd), "runs"));
   const events = (
     await readFile(
-      join(cwd, ".kapelle", "runs", String(runId), "events.jsonl"),
+      join(stateDirFor(cwd), "runs", String(runId), "events.jsonl"),
       "utf8",
     )
   )
@@ -415,9 +416,9 @@ test("one asking task with no TTY runs as safe, and says so", async (t) => {
   const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.match(r.stderr, /\[one\] not a TTY — ask runs as safe/);
-  // `.kapelle/` is our own state, not the task's work: M1b-7's stderr log
+  // Nothing at all: since #129 even our own state — M1b-7's stderr log
   // is written for every task of a run, refused write or not.
-  assert.deepEqual(await readdir(cwd), [".kapelle"], "safe refused the write");
+  assert.deepEqual(await readdir(cwd), [], "safe refused the write");
 });
 
 test("two asking tasks are refused a prompt they would have to share", async (t) => {
@@ -440,7 +441,7 @@ test("two asking tasks are refused a prompt they would have to share", async (t)
   // name the way past the limit (M2-9 amendment): --detach plus attach.
   assert.match(r.stderr, /2 tasks ask, and one prompt cannot serve two/);
   assert.match(r.stderr, /use --detach and answer them with kapelle attach/);
-  assert.deepEqual(await readdir(cwd), [".kapelle"], "both ran as safe");
+  assert.deepEqual(await readdir(cwd), [], "both ran as safe");
 });
 
 test("--file --quiet drops the advisory line, exactly as one prompt does", async (t) => {
@@ -551,8 +552,8 @@ test("a harness that dies leaves its own error in a per-task log", async (t) => 
 
   // Printed as `run <id>` on stdout, which `--quiet` silences — so the id is
   // read off the directory, which is also how an operator finds it.
-  const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
-  const logs = join(cwd, ".kapelle", "runs", String(runId));
+  const [runId] = await readdir(join(stateDirFor(cwd), "runs"));
+  const logs = join(stateDirFor(cwd), "runs", String(runId));
 
   assert.match(
     await readFile(join(logs, "doomed.stderr.log"), "utf8"),
@@ -579,10 +580,10 @@ test("a spawn failure is written to the per-task log, not just printed", async (
   const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
 
   assert.equal(r.code, 1);
-  const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
+  const [runId] = await readdir(join(stateDirFor(cwd), "runs"));
   assert.match(
     await readFile(
-      join(cwd, ".kapelle", "runs", String(runId), "ghost.stderr.log"),
+      join(stateDirFor(cwd), "runs", String(runId), "ghost.stderr.log"),
       "utf8",
     ),
     /failed to spawn "definitely-not-a-real-binary"/,
@@ -619,13 +620,12 @@ test("a missing --cwd is not created by the stderr log directory", async (t) => 
 
 test("--cwd in a subdirectory logs at the repository root", async (t) => {
   // Worktrees run each task at the same subdirectory inside its checkout,
-  // but `.kapelle/` is repository-level state. The log has to follow the
-  // root `openWorktrees` chose, not the subdirectory the task actually ran in.
+  // but the log is repository-level state. It has to follow the root
+  // `openWorktrees` chose, not the subdirectory the task actually ran in.
   const root = await tempDir(t);
   await git(root, "init", "-b", "main");
   await git(root, "config", "user.email", "test@example.invalid");
   await git(root, "config", "user.name", "Test");
-  await writeFile(join(root, ".gitignore"), ".kapelle/\n");
   await mkdir(join(root, "sub"));
   await writeFile(join(root, "sub", "keep.txt"), "x\n");
   await git(root, "add", "-A");
@@ -642,10 +642,10 @@ test("--cwd in a subdirectory logs at the repository root", async (t) => {
   ]);
 
   assert.equal(r.code, 0);
-  const [runId] = await readdir(join(root, ".kapelle", "runs"));
+  const [runId] = await readdir(join(stateDirFor(root), "runs"));
   assert.equal(
     await readFile(
-      join(root, ".kapelle", "runs", String(runId), "one.stderr.log"),
+      join(stateDirFor(root), "runs", String(runId), "one.stderr.log"),
       "utf8",
     ),
     "",
@@ -711,30 +711,20 @@ test("a refusal is a failed task, and it is not a silent one", async (t) => {
   assert.match(r.stdout, /failed — 1 task, 1 turn,/);
 });
 
-test("a preflight refusal is one actionable line, not a stack trace", async (t) => {
-  // The `catch` in `runFromFile` exists for exactly this, and nothing drove it
-  // through the CLI: `core/tests/worktree.test.ts` only proves `openWorktrees`
-  // rejects, which says nothing about how the process reports it (#85).
-  const cwd = await tempDir(t);
-  const git = (...args: string[]) => execFile("git", args, { cwd });
-  await git("init", "-b", "main");
-  await git("config", "user.email", "test@example.invalid");
-  await git("config", "user.name", "Test");
-  await writeFile(join(cwd, "README.md"), "first\n");
-  await git("add", "-A");
-  await git("commit", "-m", "first");
-  // `.kapelle/` is neither ignored nor tracked — the refusal a first run in
-  // a fresh repository meets.
+test("a first run in a fresh repository needs no .gitignore (#129)", async (t) => {
+  // This used to be the preflight refusal: `.kapelle/` neither ignored nor
+  // tracked was two error lines and a commit before anything ran. Nothing is
+  // written into the repository any more, so there is nothing to ignore.
+  const cwd = await gitRepo(t);
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 
   const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
-  assert.equal(r.code, 1);
-  assert.match(r.stderr, /is not ignored by git/);
-  assert.match(r.stderr, /commit that change, and re-run/);
-  // The failure a reader meets is the instruction, not Node's internals.
-  assert.doesNotMatch(r.stderr, /\bat .*worktree\.ts/);
-  assert.doesNotMatch(r.stderr, /node:internal/);
+  assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /gitignore/);
+  // The repository is exactly as it was found: one committed file, no state.
+  assert.deepEqual(await readdir(cwd), [".git", "README.md"]);
+  assert.equal(await git(cwd, "status", "--porcelain", "-uall"), "");
 });
 
 // --- M1b-5: the non-compliant fixtures -------------------------------------
@@ -912,13 +902,13 @@ test("a --file run in git leaves task branches and per-task stderr logs", async 
   assert.ok(runId, "run id should be printed");
 
   const wt = await git(cwd, "worktree", "list");
-  assert.doesNotMatch(wt, /\.kapelle\/wt\//, "worktrees should be cleaned");
+  assert.doesNotMatch(wt, /\/wt\//, "worktrees should be cleaned");
 
   const branches = await git(cwd, "branch", "--list", "kapelle/*");
   assert.match(branches, /kapelle\/.*\/one/);
   assert.match(branches, /kapelle\/.*\/two/);
 
-  const logs = join(cwd, ".kapelle", "runs", String(runId));
+  const logs = join(stateDirFor(cwd), "runs", String(runId));
   assert.equal(await readFile(join(logs, "one.stderr.log"), "utf8"), "");
   assert.equal(await readFile(join(logs, "two.stderr.log"), "utf8"), "");
   await assert.rejects(access(join(cwd, "ACP_TEST.md")), /ENOENT/);
@@ -962,9 +952,7 @@ rl.on("line", async (line) => {
   const wt = await git(cwd, "worktree", "list");
   const retained = wt
     .split("\n")
-    .find(
-      (line) => line.includes(".kapelle/wt") && line.includes(String(runId)),
-    );
+    .find((line) => line.includes("/wt/") && line.includes(String(runId)));
   assert.ok(retained, wt);
   const path = retained?.split(/\s+/)[0];
   assert.ok(path, retained);
@@ -1136,10 +1124,10 @@ rl.on("line", (line) => {
 
 /** The sole run's persisted events, for tests that assert what the log kept. */
 async function soleEventLog(cwd: string) {
-  const [runId] = await readdir(join(cwd, ".kapelle", "runs"));
+  const [runId] = await readdir(join(stateDirFor(cwd), "runs"));
   return (
     await readFile(
-      join(cwd, ".kapelle", "runs", String(runId), "events.jsonl"),
+      join(stateDirFor(cwd), "runs", String(runId), "events.jsonl"),
       "utf8",
     )
   )
@@ -1230,7 +1218,7 @@ test("a stalled task warns, times out at the TTL, and keeps its branch", async (
   const branches = await git(cwd, "branch", "--list", "kapelle/*");
   assert.match(branches, /kapelle\/.*\/stall/);
   const wt = await git(cwd, "worktree", "list");
-  assert.match(wt, /\.kapelle\/wt\//);
+  assert.match(wt, /\/wt\//);
 
   const timedOut = (await soleEventLog(cwd)).find(
     (e) =>

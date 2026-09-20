@@ -13,15 +13,17 @@
  * daemon.
  */
 
+import { createHash } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 
 /**
  * `$XDG_RUNTIME_DIR/kapelle`, or a per-user directory under the system temp
@@ -98,6 +100,45 @@ function stateDir(): string {
 /** Where the repository list lives. */
 function reposFile(): string {
   return join(stateDir(), "repos.json");
+}
+
+/**
+ * Where one repository's supervisor state lives (issue #129).
+ *
+ * `<stateDir()>/repos/<name>-<hash>` — worktrees, run records, event logs and
+ * stderr logs. It used to be `<repo>/.kapelle/`, which cost every repository a
+ * `.gitignore` edit and two refusals before its first run
+ * (`core/worktree.ts`), for state that belongs to this machine and to no
+ * repository. Only `<repo>/.kapelle/config.json` stays behind, and that one is
+ * a file the operator writes on purpose and may commit.
+ *
+ * **Both halves of the name earn their place.** The basename is for the
+ * operator, who reads a failed task's checkout by eye; the digest is because
+ * `~/src/api` and `~/work/api` are both `api`, and one folder for both would
+ * put one repository's worktrees into the other's sweep.
+ *
+ * **Keyed on the path, so a moved or renamed repository strands its
+ * workspace** (decided 2026-09-20, #129). A marker file inside `.git/` would
+ * survive the move, and was judged more machinery than the problem is worth.
+ * `core/sweep.ts` reports a stranded workspace instead of guessing, because a
+ * path that is gone reads the same whether the operator renamed the
+ * repository or deleted it, and those want opposite answers.
+ *
+ * Never throws for a path that does not exist, for that same reason: the sweep
+ * asks about repositories that are gone, and a throw there would refuse a boot
+ * over debris. `realpath` first so a symlinked `--cwd` and the real path agree
+ * — `git rev-parse --show-toplevel` already resolves, and subtracting one from
+ * the other is what #85 measured going wrong elsewhere.
+ */
+export function stateDirFor(root: string): string {
+  let real: string;
+  try {
+    real = realpathSync(root);
+  } catch {
+    real = resolve(root);
+  }
+  const hash = createHash("sha256").update(real).digest("hex").slice(0, 8);
+  return join(stateDir(), "repos", `${basename(real)}-${hash}`);
 }
 
 /**

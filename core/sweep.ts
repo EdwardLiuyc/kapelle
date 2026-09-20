@@ -41,7 +41,8 @@ import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { resolveRetentionMs } from "./config.ts";
 import { branchName } from "./ids.ts";
-import { changedPaths, STATE_DIR } from "./worktree.ts";
+import { stateDirFor } from "./runtime.ts";
+import { changedPaths } from "./worktree.ts";
 
 const run = promisify(execFile);
 
@@ -66,6 +67,16 @@ export interface SweepOptions {
   /** Injectable clock, so the retention boundary is a test and not a wait. */
   now?: number;
   onNotice?: (text: string) => void;
+  /**
+   * Asks the operator a yes/no question, when there is one to ask (#129).
+   *
+   * Only `sweepStranded` uses it, and only `daemon.ts` supplies it — and only
+   * on a TTY, which `kapelle daemon start` has and a background daemon does
+   * not. Absent, every stranded workspace is reported and kept: this is the
+   * one place the sweep would delete a checkout it cannot prove is debris,
+   * and it does not guess.
+   */
+  ask?: (question: string) => Promise<boolean>;
 }
 
 /**
@@ -326,7 +337,7 @@ async function managedWorktrees(
     // prune` exists for; clearing it first keeps the list below honest.
     await git(root, ["worktree", "prune"]);
     const out = await git(root, ["worktree", "list", "--porcelain"]);
-    const wtRoot = join(root, STATE_DIR, "wt");
+    const wtRoot = join(stateDirFor(root), "wt");
     const managed: ManagedWorktree[] = [];
     for (const line of out.split("\n")) {
       if (!line.startsWith("worktree ")) continue;
@@ -470,7 +481,7 @@ async function reapRun(
     }
   }
   // The checkouts are gone; the run's own husk of a directory may not be.
-  rmSync(join(root, STATE_DIR, "wt", id), { recursive: true, force: true });
+  rmSync(join(stateDirFor(root), "wt", id), { recursive: true, force: true });
 
   await dropBranches(root, id, record, onNotice);
 
@@ -585,7 +596,7 @@ async function sweepRepo(
 ): Promise<void> {
   const pass: RepoPass = {
     root,
-    runsDir: join(root, STATE_DIR, "runs"),
+    runsDir: join(stateDirFor(root), "runs"),
     retentionMs,
     now,
     onNotice,
@@ -597,7 +608,7 @@ async function sweepRepo(
   }
   await markCrashed(records, pass);
 
-  const managed = existsSync(join(root, STATE_DIR, "wt"))
+  const managed = existsSync(join(stateDirFor(root), "wt"))
     ? await managedWorktrees(pass)
     : [];
   // Records were still worth marking — that needs no git — but nothing below
@@ -622,6 +633,45 @@ async function sweepRepo(
  * Called between the instance claim and `restoreRuns`, so no request ever
  * meets half-swept state.
  */
+/**
+ * A workspace whose repository is no longer at the path that keys it (#129).
+ *
+ * State is keyed on the repository's path (`stateDirFor`), which is the
+ * decision that makes this case exist: a rename changes the key, and the old
+ * workspace — possibly holding the only copy of a failed task's work — is
+ * orphaned. A path that is gone reads identically for a rename, a move and a
+ * delete, and those want opposite answers, so this **never deletes on its own
+ * judgement**. With an asker it asks; without one it reports and keeps.
+ */
+async function sweepStranded(
+  root: string,
+  onNotice: (text: string) => void,
+  ask?: (question: string) => Promise<boolean>,
+): Promise<void> {
+  const workspace = stateDirFor(root);
+  // A repository that never ran leaves nothing behind, so there is nothing to
+  // report and nobody to interrupt.
+  if (!existsSync(workspace)) return;
+
+  const where = `${root} is gone, but its kapelle workspace is still at ${workspace}`;
+  if (ask && (await ask(`${where}. Remove it?`))) {
+    try {
+      rmSync(workspace, { recursive: true, force: true });
+      onNotice(`removed the stranded workspace ${workspace}`);
+    } catch (err) {
+      onNotice(`cannot remove ${workspace}: ${messageOf(err)}`);
+    }
+    return;
+  }
+
+  onNotice(
+    `${where}. It holds that repository's worktrees and run records, and ` +
+      `nothing will delete it. If you deleted the repository, remove it too: ` +
+      `rm -rf ${workspace}. If you moved or renamed it, the new path gets a ` +
+      `workspace of its own — copy anything you still need out of this one.`,
+  );
+}
+
 export async function sweepBoot(options: SweepOptions): Promise<void> {
   const {
     repos,
@@ -642,6 +692,13 @@ export async function sweepBoot(options: SweepOptions): Promise<void> {
   }
   for (const root of repos) {
     try {
+      // The repository itself is gone — moved, renamed, or deleted. Its
+      // workspace is not, and the three cases are indistinguishable from
+      // here, so nothing is reaped without an answer (#129).
+      if (!existsSync(root)) {
+        await sweepStranded(root, onNotice, options.ask);
+        continue;
+      }
       // M2-7: per repository. An explicit option (tests) wins, then
       // `KAPELLE_RETENTION_MS`, then that repo's `.kapelle/config.json`,
       // then the built-in — and a bad config skips only this repo.

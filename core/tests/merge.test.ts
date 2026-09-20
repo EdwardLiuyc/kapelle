@@ -13,10 +13,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
+import { isolateStateHome } from "../../integration/helpers.ts";
 import { createEventBus } from "../events.ts";
 import { mergeRun } from "../merge.ts";
 import { runRun, type TaskExecutor } from "../run.ts";
 import { validateRun } from "../runfile.ts";
+import { stateDirFor } from "../runtime.ts";
+
+isolateStateHome();
 
 const run = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) =>
@@ -69,7 +73,7 @@ test("a two-task run writes run.json, then merge lands both changes unstaged", a
   );
   assert.equal(report.status, "done");
 
-  const record = join(root, ".kapelle", "runs", RUN_ID, "run.json");
+  const record = join(stateDirFor(root), "runs", RUN_ID, "run.json");
   assert.equal(existsSync(record), true);
   const parsed = JSON.parse(await readFile(record, "utf8")) as {
     tasks: { id: string; branch: string; baseSha: string }[];
@@ -141,7 +145,7 @@ test("a task left on another branch is not silently mergeable", async (t) => {
   assert.equal(report.status, "done");
 
   const record = JSON.parse(
-    await readFile(join(root, ".kapelle", "runs", RUN_ID, "run.json"), "utf8"),
+    await readFile(join(stateDirFor(root), "runs", RUN_ID, "run.json"), "utf8"),
   ) as { tasks: { branch?: string }[] };
   assert.equal(record.tasks[0]?.branch, undefined);
 
@@ -338,7 +342,7 @@ test("a run record copied from another repo is refused", async (t) => {
     perTaskWriter,
   );
 
-  const recordPath = join(root, ".kapelle", "runs", RUN_ID, "run.json");
+  const recordPath = join(stateDirFor(root), "runs", RUN_ID, "run.json");
   const record = JSON.parse(await readFile(recordPath, "utf8")) as {
     root: string;
   };
