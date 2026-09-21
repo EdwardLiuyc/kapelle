@@ -134,7 +134,8 @@ not a browser dashboard.
   runtime is a session manager with per-participant turn queues (R32).
 - **The spike lands before it rots.** Decided 2026-09-20: every story put in front of the
   port makes the rebase larger, and the branches are already 13 commits behind. M6-0
-  rebases deliberately (S1 = a) and ships behind `kapelle chat`, marked experimental. The
+  rebases deliberately (S1 = a) and ships behind `chat.ts`, marked experimental; the
+  `kapelle chat` verb is M6-9's (S7a). The
   room *model* is still designed afterwards by M6-1; only the proven single-participant
   runtime (P1–P9) moves early.
 
@@ -160,7 +161,7 @@ Needs are hard ordering only.
 | M5-9 | S | M5-2 | Run filtering and repository removal |
 | M5-10 | M | M5-2, M5-4, M5-5 | Shared client module and reducer; `attach` refactored onto it |
 | M5-11 | M | M5-1..M5-6 | Conformance suite and v1 freeze |
-| M6-0 | M | — | Land the spike on master: rebase, reconcile with M2-3..M2-10, `kapelle chat` experimental |
+| M6-0 | M | — | Land the spike on master: rebase, reconcile with M2-3..M2-10, `chat.ts` experimental |
 | M6-1 | S | M6-0 | Design the room container on the landed runtime (no code) |
 | M4-1 | M | M6-0, M5-10 | pi-tui screen as the first shared-client consumer |
 | M4-2 | M | M4-1, M6-3 | Room/roster sidebar, switching, unread badges |
