@@ -112,6 +112,51 @@ gh issue view <N> --json state,closed,url
 - If it is not closed, report that it is still open. **Do not close it manually unless the
   developer explicitly says so.**
 
+### 7. Unblock what the closed issue was blocking
+
+Only when step 6 found the issue **closed**. If it is still open, skip this step and say so.
+
+- Ask GitHub what that issue blocks, then ask each dependent whether any blocker is still
+  open:
+
+```bash
+gh api repos/<owner>/<repo>/issues/<N>/dependencies/blocks -q '.[].number'
+# for each dependent D:
+gh api repos/<owner>/<repo>/issues/<D>/dependencies/blocked_by \
+  -q '[.[] | select(.state == "open") | .number] | join(", ")'
+```
+
+- An empty answer means D has no open blocker left. Those are the candidates. A dependent
+  with blockers left stays where it is — name it and the blockers in the report.
+
+- **Check project authority before touching the board.** This needs the `project` scope,
+  which `repo` does not grant:
+
+```bash
+gh project list --owner <owner>
+```
+
+  If that prints `missing required scopes [read:project]`, stop this step. Report the
+  candidates and tell the developer to run `gh auth refresh -s project`, then re-run the
+  step. Do not fail the merge over it — the merge is already done and correct.
+
+- Move each candidate from **Backlog** to **Ready**, and only from Backlog:
+
+```bash
+gh project item-list <projectNumber> --owner <owner> --limit 300 --format json
+gh project field-list <projectNumber> --owner <owner> --format json
+gh project item-edit --id <itemId> --project-id <projectId> \
+  --field-id <statusFieldId> --single-select-option-id <readyOptionId>
+```
+
+  In this repo the board is project **3**, `Agent Team`, owner `EdwardLiuyc`, and its
+  Status options are `Backlog`, `Ready`, `In progress`, `In review`, `Done`.
+
+- Report each move as `#D -> Ready`, and each skip with its reason.
+
+Under `--dry-run`, print the moves instead of making them.
+
+
 ## Rules
 
 - Stop at the first unmet condition. Merge only when all ACs are met, the branch is synced,
@@ -123,3 +168,7 @@ gh issue view <N> --json state,closed,url
 - Keep the summary comment short.
 - If a linked issue is not auto-closed, report it and leave it open until the developer says
   otherwise.
+- Only `Backlog` moves to `Ready`. Never touch an item already `In progress`, `In review`
+  or `Done`, and never add an issue to the board that is not on it — report it instead.
+- An issue with an open blocker never moves, however ready it looks.
+- A missing `project` scope stops step 7 only. The merge stands.

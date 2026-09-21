@@ -1,6 +1,6 @@
 ---
 name: merge-close
-description: "Merge a pull request after verifying all acceptance criteria are met: find the PR for the current branch, confirm an AC list exists, confirm the branch is synced to remote, verify every AC is met, post a short all-ACs-met comment, merge and delete the branch, and check whether a linked issue auto-closed. Trigger: /skill:merge-close <pr-number>, or any request to 'merge close', 'check ACs and merge', or 'complete the PR'."
+description: "Merge a pull request after verifying all acceptance criteria are met: find the PR for the current branch, confirm an AC list exists, confirm the branch is synced to remote, verify every AC is met, post a short all-ACs-met comment, merge and delete the branch, check whether a linked issue auto-closed, and move newly unblocked issues to Ready on the project board. Trigger: /skill:merge-close <pr-number>, or any request to 'merge close', 'check ACs and merge', or 'complete the PR'."
 ---
 
 # merge-close

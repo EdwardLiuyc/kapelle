@@ -82,4 +82,5 @@ carry discovery metadata only.
   and a reply on every thread, including the rejected ones.
 - **[`merge-close`](.agent/skills/merge-close/SKILL.md)** — run when asked to merge-close
   a pull request after verifying all acceptance criteria are met. Merges, cleans up the
-  branch, and checks whether a linked issue auto-closed without closing it manually.
+  branch, checks whether a linked issue auto-closed without closing it manually, and
+  moves whatever that issue was blocking to `Ready` once it has no open blocker left.
