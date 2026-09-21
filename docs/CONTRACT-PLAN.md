@@ -442,19 +442,28 @@ starter orchestrator, per-participant settings and long-lived sessions.
 
 ### M6-0 · Land the spike on master · M · needs nothing
 
-**Decided 2026-09-20.** The port moves from last to first. The spike branches are already
+**Decided 2026-09-20. Landed 2026-09-21 (#144).** The port moves from last to first. The spike branches are already
 13 commits behind master, every story placed in front of the rebase makes it larger, and
-nothing else in M4/M5/M6 gets cheaper by waiting. Rebase `chat-mvp` and `spike/chat-tui`
-onto current master (S1 = a) and reconcile with what landed since: the M2-3 permission
+nothing else in M4/M5/M6 gets cheaper by waiting. Rebase `chat-mvp` onto current master (S1 = a)
+and reconcile with what landed since: the M2-3 permission
 queue, the M2-5 sweep, M2-6 persistence, M2-7 config, the M2-8 Host guard, M2-9 `attach`
 and M2-10 `ps`. Two things the spike predates must be corrected in the rebase: room state
 moves out of `.kapelle/rooms/` to `stateDirFor(root)` (#129), and `children.json` gains
 S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
 
+**Only `chat-mvp` lands (decided 2026-09-21, #144).** `spike/chat-tui` is rebased and
+left unlanded: M4-1 is the story that ratifies `@earendil-works/pi-tui` 0.85.1 under
+M1c-7's rule and dedupes its nested `marked`, and it needs M5-10 first. Landing the
+screen here would ratify a second runtime dependency ahead of the story that vets it, so
+`package.json` keeps `marked` as its only one. The rebase of the TUI commit waits until
+M6-0 is on master, so it is done once rather than twice.
+
 **No new features.** One participant per room, `auto` only, no roster, no per-participant
-modes, no permission answering. `kapelle chat` ships marked **experimental**, so the room
-API is not a promise until M5-1 documents it. The room *model* is designed afterwards by
-M6-1, and M6-2..M6-9 build it; this story only stops the proven runtime from rotting.
+modes, no permission answering. `chat.ts` ships marked **experimental** in its header and
+its usage line, so the room API is not a promise until M5-1 documents it. The `kapelle
+chat` verb itself stays with **M6-9** (S7a), which owns it; M6-0 keeps `node chat.ts`.
+The room *model* is designed afterwards by M6-1, and M6-2..M6-9 build it; this story only
+stops the proven runtime from rotting.
 
 R37 applies from this story on: the supervisor never commits a participant's branch.
 The spike's `close()` releases the worktree as `done`, which commits the work and removes
@@ -462,12 +471,24 @@ the checkout. The rebase must stop doing both. `core/worktree.ts` `release` alre
 behaviour R37 wants under a **non-releasing** status — the checkout is kept uncommitted,
 and a participant that committed its own work is not `untouched`, so its branch survives —
 but every existing non-releasing label (`failed`, `cancelled`, `timed_out`) is a lie about
-a room that simply closed. This story picks that apart: either a participant status that
-`release` accepts, or a `release` that takes the decision rather than a `TaskStatus`.
-Decide it here, in the smallest change that keeps runs untouched.
+a room that simply closed. **Settled 2026-09-21 (#144): `release` takes the decision.** Its second parameter is a
+`ReleaseAction` — `"commit" | "keep"` — and `RELEASES` moves to `core/run.ts` beside
+`TaskStatus`, converting at its one call site; a room always passes `"keep"`. The
+alternative, a seventh `TaskStatus`, was rejected: `BY_SEVERITY`, `statusFor`, `runStatus`
+and the `run.json` record would each have to answer for a value no task can reach, and
+`core/worktree.ts` would keep importing a run word it has no use for. It now imports none.
 
 Add the `ponytail:` comment R40 asks for at the point the room runtime spawns a harness:
 nothing bounds the live count across runs and rooms in v1.
+
+**S9 lands here, not in M6-2 (decided 2026-09-21, #144).** A chat with one agent is a room
+of two — the operator and the agent — so rooms are the general case and a room id should
+never have been a run id. `core/ids.ts` gains `newRoomId()` (`room-YYYYMMDD-HHMMSS-xxxx`)
+and a private `assertOwnerId` that takes a run id **or** a room id, which is what
+`branchName` validates with, since `core/worktree.ts` serves both. `assertRunId` still
+rejects a room id, so `kapelle merge <runId>` cannot reach into a room's branches.
+`assertRoomId` and `roomBranchName` are **not** added: nothing imports them, and
+`npm run knip` fails on an unused export. M6-2 adds them when it has a caller.
 
 *Done when* the spike's seven `tests/daemon.test.ts` cases pass on master, `npm run check`
 and `npm run fmt:check` are clean, room state is under `stateDirFor(root)`, and
@@ -482,6 +503,15 @@ roster, the empty/starter orchestrator choice, per-participant settings, streams
 persistence. No code lands from this story; it ends with the R/S decisions recorded and
 the API shapes sketched for M6-2 onward.
 
+**R42 is re-opened here (raised 2026-09-21, #144).** The owner's stated requirement is
+the opposite of what R42(b) records: agents idle in a room with uncommitted work, the
+machine reboots, and the operator expects to keep talking to them afterwards. Today a
+daemon shutdown calls the same `close()` as a dismiss, so a restart is a **stop**, not a
+pause. R42(b) then makes the restored room read-only. Nothing blocks the other answer —
+all measured harnesses advertise `loadSession: true` (`docs/STORIES.md:1798`), so S3(c) is
+unscheduled rather than impossible. M6-1 decides whether shutdown and close stay the same
+verb, and R37's `keep` is what makes either answer possible: the checkout is still there.
+
 *Done when* every R decision that shapes an API has an answer, and M6-2..M6-9 can be
 picked up without re-opening the model.
 
@@ -492,9 +522,10 @@ Decisions: **R1–R23, R31–R42, S10, S12, S13**.
 Define the room record: repo, roster, created/updated, title; `POST /rooms` accepts an
 empty room or a starter participant (the orchestrator) and answers `201` once the session
 exists (S13); `RoomDto` and `ParticipantDto` land in `client/contract.ts`; the
-persistence layout is decided (R17). Mint `newRoomId()` in `core/ids.ts`
-(`room-YYYYMMDD-HHMMSS-xxxx`), add `assertRoomId` and `roomBranchName`, and mint opaque,
-ref-safe participant ids; the run-id functions stay untouched (R22). There is no
+persistence layout is decided (R17). `newRoomId()` already landed in M6-0 (#144), so
+what is left here is `assertRoomId` and `roomBranchName` — both only once something
+imports them — and opaque, ref-safe participant ids; the run-id functions stay untouched
+(R22). There is no
 dependency field and no scheduler: the roster is a list of independent agents (R24–R30
 retired). For v1 the room carries a title only (R36a); a room-level topic injected at add
 is a follow-up (R36b).
@@ -814,18 +845,18 @@ no dependency relation between agents (R24–R30 retired).
 | R34 | Cross-agent context | (a) human-composed only; the client includes another agent's text in its message (b) `POST messages {contextFrom}` injects those participants' last turn or result (c) supervisor-mediated delegation, charter-gated | **Decided (interview):** (a) for v1; (b) as the next addition; (c) stays deferred with M6-8 |
 | R35 | Workspace base and rebase | (a) fork from the room base at add (b) fork at first turn (c) choose a base ref at add, including another participant's branch (d) allow a later re-base | **Decided (interview):** (c) with the room base as the default; (d) later |
 | R36 | Room topic/context | (a) a title only (b) a room-level topic or instructions injected into every participant at add (c) none | **Decided (interview):** (a) now: a title only; (b) as a follow-up addition |
-| R37 | Commit cadence for a participant | (a) the supervisor commits at every turn end (b) the supervisor commits at room close (c) the participant commits its own branch itself | **Decided 2026-09-20:** (c). It is the participant's own branch, so a lazy agent harms nobody else, and the supervisor stays out of the commit business entirely. There is **no auto-commit at close**: uncommitted work is left in the checkout, which is kept. `core/worktree.ts` `release` therefore is never called with `done` for a participant — M6-0 names the non-committing path it uses instead. A participant that never commits has nothing for R31 to merge, which is visible and is its own fault |
+| R37 | Commit cadence for a participant | (a) the supervisor commits at every turn end (b) the supervisor commits at room close (c) the participant commits its own branch itself | **Decided 2026-09-20:** (c). It is the participant's own branch, so a lazy agent harms nobody else, and the supervisor stays out of the commit business entirely. There is **no auto-commit at close**: uncommitted work is left in the checkout, which is kept. `core/worktree.ts` `release` therefore is never called with `done` for a participant — **M6-0 settled the non-committing path (2026-09-21, #144): `release` takes a `ReleaseAction` (`"commit" | "keep"`), `RELEASES` moved to `core/run.ts`, and a room always passes `"keep"`.** A participant that never commits has nothing for R31 to merge, which is visible and is its own fault |
 | R38 | Participant watchdog | (a) none, as the spike (b) idle and repeat **warn only**, no TTL (c) the full run watchdog including `ttlMs` | **Decided 2026-09-20:** (b). A silent agent must stay visible, so `_client_stall_warning` is emitted and M4-2's badge and M4-4's bell have an event to read. `ttlMs` takes no part: a chat turn must not be killed by a clock, and there is no deliverable a timeout would protect |
 | R39 | Result contract in a room | (a) rooms use the run contract (b) rooms use none of it | **Decided 2026-09-20:** (b), restating `core/room.ts`'s own scope note so it is not re-opened. No `RESULT_PREAMBLE` on a room prompt, no `extractResult`, no `crossCheck`, no `_client_result_warning`. A room turn is conversation, not a deliverable |
 | R40 | Global live-harness cap | (a) a daemon-wide cap, refuse at the limit (b) a daemon-wide cap, queue at the limit (c) none in v1 | **Decided 2026-09-20:** (c). `runs + Σ(busy participants)` across every room is unbounded, with the default mode `auto`. Recorded as a backlog item with a trigger in `STORIES.md` and as a `ponytail:` comment where the room runtime spawns a harness (M6-0), not built. This is the one accepted risk in the room model that is about resources rather than correctness |
 | R41 | Turn-queue bound and overflow | (a) bound 16, refuse with `429` (b) unbounded | **Decided 2026-09-20:** (a). Sixteen messages queued to one agent already means the human should stop typing. The queue is in memory and is **lost at a daemon restart** (R42), which the API documents rather than hides |
-| R42 | What a restart leaves | (a) re-spawn a participant with a fresh session, context lost (b) nothing until S3(c) | **Decided 2026-09-20:** (b). A restored room is read-only: every participant reads `exited`, its history replays and its branch and checkout survive, but it cannot be messaged or revived until S3(c) lands `session/load`. M6-7 says this in its *Done when* rather than implying the roster is usable |
+| R42 | What a restart leaves | (a) re-spawn a participant with a fresh session, context lost (b) nothing until S3(c) | **Decided 2026-09-20:** (b). A restored room is read-only: every participant reads `exited`, its history replays and its branch and checkout survive, but it cannot be messaged or revived until S3(c) lands `session/load`. M6-7 says this in its *Done when* rather than implying the roster is usable. **Re-opened 2026-09-21 (#144):** the owner wants a reboot to be resumable — idle agents with uncommitted work, restart, keep talking. That makes a daemon shutdown a pause, not the `close()` it calls today. M6-1 decides; `loadSession: true` on every measured harness means S3(c) is unscheduled, not blocked |
 
 ### Spike integration and API decisions — revised
 
 | ID | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| S1 | How to land the spike | (a) rebase both commits onto master, resolve toward current M2 (b) cherry-pick the runtime files, rewrite the daemon integration (c) merge master into the branch, then land | **Decided (interview):** (a). **Amended 2026-09-20:** the port is **M6-0 and comes first**, not last. The branches are 13 commits behind and every story placed in front of the rebase makes it larger; nothing about the rebase gets cheaper by waiting for the room model, because the single-participant runtime it carries is already settled (P1–P9). It ships behind `kapelle chat`, marked experimental, with no new features |
+| S1 | How to land the spike | (a) rebase both commits onto master, resolve toward current M2 (b) cherry-pick the runtime files, rewrite the daemon integration (c) merge master into the branch, then land | **Decided (interview):** (a). **Amended 2026-09-20:** the port is **M6-0 and comes first**, not last. The branches are 13 commits behind and every story placed in front of the rebase makes it larger; nothing about the rebase gets cheaper by waiting for the room model, because the single-participant runtime it carries is already settled (P1–P9). It ships behind `chat.ts`, marked experimental, with no new features. **Landed 2026-09-21 (#144):** only the `chat-mvp` commit; `spike/chat-tui` is rebased and left for M4-1, which ratifies pi-tui |
 | S2 | Participant mode default | (a) keep `auto` for v1 (b) mode at add, default `ask` for a TUI (c) per-message override | **Decided (interview):** mode per participant at add, default `auto`; `ask`/`safe` selectable |
 | S3 | Restart and resume | (a) ephemeral rooms, history replay only (b) persist metadata, restore read-only (c) restore + per-participant `session/load` | **Decided (interview):** (b) now; (c) later |
 | S4 | Room and participant records | (a) events are the only record (b) `room.json` + participant records, turns derived from events (c) a file per turn | **Decided (interview):** (b) |
@@ -833,12 +864,12 @@ no dependency relation between agents (R24–R30 retired).
 | S6 | Room close response | (a) synchronous 200 once every participant has stopped and its checkout is released per R37 (b) 202 like a run cancel (c) 204 | **Decided (interview), corrected 2026-09-21:** (a). The option's old wording said "commits/releases, as the spike", which R37 forbids: nothing is committed, the checkout is kept. **The bound needs participants stopped in parallel**, not one after another: `stop()` waits up to `stopGraceMs` (5 s) for a harness that ignores end of file, so a serial close of N participants bounds at 5N seconds — half a minute of a hanging request on a room of six. Parallel makes the documented bound `stopGraceMs` + overhead, a number that can actually be written down |
 | S7 | Command surface | (a) `chat.ts` standalone, add `kapelle chat` that runs it (b) move verbs into `cli.ts` (c) retire `chat.ts` | **Decided (interview):** (a) |
 | S8 | Shared client and chat | (a) `client/` owns DTOs, HTTP, SSE, reducer; `chat.ts` imports `client/` only (b) chat keeps its own client (c) put the client under `protocol/` | **Decided (interview):** (a); the import-boundary test allows `client/` and pi-tui, forbids `core/`, `protocol/` and `daemon.ts` |
-| S9 | Room and participant ids | (a) reuse `newRunId()` for rooms, opaque ids for participants (b) a distinct room prefix (c) uuid for both | **Decided (interview):** (b): a new `newRoomId()`, never the run id; participant ids opaque |
+| S9 | Room and participant ids | (a) reuse `newRunId()` for rooms, opaque ids for participants (b) a distinct room prefix (c) uuid for both | **Decided (interview):** (b): a new `newRoomId()`, never the run id; participant ids opaque. **Built in M6-0, not M6-2 (2026-09-21, #144):** `newRoomId()` plus a private `assertOwnerId` that `branchName` validates with; `assertRunId` still rejects a room id |
 | S10 | Event identity | (a) `agent` is the participant name, room from the URL (b) add `roomId` + `participantId` to every room event (c) `agent` is the room id | **Decided (interview):** (b). Room log/SSE line: `{seq, roomId, participantId, update}`; run lines stay `{seq, agent, update}` with `agent` as the task id |
 | S11 | Stream end on room close | (a) close closes the log and the stream ends, as the spike (b) final event then end (c) reopen read-only | **Decided (interview):** (a) now: close ends the log and every stream, and a client reconciles with `GET /rooms/:id` (closed vs 404). Additive follow-up: `_client_room_closed {reason}` with `dismissed`, `deleted` or `shutdown`, emitted before the log closes, when a second observer must distinguish a deliberate close from a cut |
 | S12 | Permission scoping | (a) extend `PendingDecision` with `roomId` + `participantId` + `turn` (b) a separate room queue (c) keep rooms `auto` only | **Decided (interview):** (a): `PendingDecision` gains `roomId`, `participantId` and `turn` alongside `runId`/`taskId`; same queue, same first-writer-wins |
 | S13 | Creation status | room `201 {room}`; participant add `201 {participant}`; both wait for the session | **Decided (interview):** yes; a harness that cannot start is a request error, not a dead participant |
-| S14 | `children.json` | (a) reuse `{pid, runId, taskId}` with the room id in `runId` and the participant in `taskId` (b) rename to `ownerId` (c) a separate file | **Decided (interview):** (b): entries become `{pid, kind, ownerId, unitId, startedAt?}` with `kind` as `run` or `room`; the sweep reads legacy `{pid, runId, taskId}` as a run |
+| S14 | `children.json` | (a) reuse `{pid, runId, taskId}` with the room id in `runId` and the participant in `taskId` (b) rename to `ownerId` (c) a separate file | **Decided (interview):** (b): entries become `{pid, kind, ownerId, unitId, startedAt?}` with `kind` as `run` or `room`; the sweep reads legacy `{pid, runId, taskId}` as a run. **Built in M6-0 (2026-09-21, #144)**, with one `trackChildren` listener for both owners |
 
 ### Testing and release
 
@@ -888,8 +919,9 @@ no dependency relation between agents (R24–R30 retired).
 - **The spike is stale, and that is why it goes first.** It predates M2-3 and M2-8 in
   particular, so its daemon patch must be re-derived, not applied. Budget the rebase as
   real work (S1) — and do it as **M6-0**, before M5 and the room container, because the
-  cost grows with every story placed in front of it. This risk is discharged the day M6-0
-  lands; until then it is the largest one on this list.
+  cost grows with every story placed in front of it. **Discharged 2026-09-21 (#144):**
+  the daemon patch was re-derived against M2-3, M2-6, M2-7, M2-8 and #129, and the suite
+  is green. What remains stale is `spike/chat-tui`, one commit, waiting for M4-1.
 - **The room model is a container of independent agents, not a task DAG.** The roster
   work starts from the retired R24–R30 decisions; the open decisions that shape it are
   R32–R36 (busy queue, availability, cross-agent context, workspace base, room topic).
