@@ -2109,6 +2109,9 @@ this section is the work breakdown once they are settled. Every story below is
 **M5-1 · Contract artifact and version handshake · M · needs M2-10**
 `docs/CLIENT-API.md`, `client/contract.ts`, a `GET /version` and a capability list; the
 compatibility policy written down.
+**Added 2026-09-21 (#145):** it also folds in M6-1's room vocabulary and record sketch
+(`docs/CONTRACT-PLAN.md`) and marks that section superseded — the sketch is planning,
+`CLIENT-API.md` is the promise, and two documents cannot both be normative.
 *Done when* a reader who has never opened `daemon.ts` can implement a client from the
 document, and a contract test asserts the version/capability response.
 Decisions: A1–A7, B1–B10.
@@ -2209,12 +2212,19 @@ With the runtime on master, design what the spike does not have: the roster, the
 empty/starter choice, per-participant settings, streams, persistence, queue, base choice
 and title. No code lands; the R/S decisions are recorded and the API shapes sketched for
 the rest.
-**R42 is re-opened here (#144, 2026-09-21):** the owner wants a machine reboot to be
-resumable — idle agents with uncommitted work, restart the daemon, keep talking to them.
-Today shutdown calls the same `close()` as a dismiss, so a restart is a stop, and R42(b)
-then makes the restored room read-only. `loadSession: true` on every measured harness
-means S3(c) is unscheduled, not blocked. R37's `keep` leaves the checkout in place either
-way, so this decision costs nothing to defer to M6-1 and everything to get wrong later.
+**R42 answered 2026-09-21 (#145): (c) — a shutdown is a pause, not a close.** The owner
+wants a reboot to be resumable, and it now is: shutdown stops each harness and leaves the
+room `paused`, with roster, branch, checkout and history intact; a participant revives on
+its next message. `session/load` where the harness advertises it, otherwise a fresh session
+with the loss reported as `resumed: "fresh"`. **Half A** — revive with a fresh session — is
+M6-7 and needs no probe; **Half B** — `session/load` — stays deferred with S3(c). R37's
+`keep` is what made either answer possible: the checkout never left.
+
+**One word per idea, decided with it.** `dismiss` is a person ending a room
+(`POST /rooms/:id/dismiss`); `delete` throws it away (`DELETE /rooms/:id`, R18's own
+meaning, which the MVP had borrowed); `pause` is the machine stopping; `resume` brings a
+room back. The status set is `idle`/`busy`/`exited`/`paused`/`dismissed` — `closed` is
+renamed. M6-2 does the rename while `chat.ts` is still the only client and experimental.
 *Done when* every R decision that shapes an API has an answer and M6-2..M6-9 can be
 picked up without re-opening the model.
 Decisions: R1–R23, R31–R42, S10, S12, S13.
@@ -2225,8 +2235,19 @@ room or a starter participant and answers 201 once the session exists (S13); `Ro
 and `ParticipantDto` in `client/contract.ts`; `assertRoomId` and `roomBranchName` once
 something imports them (`newRoomId()` landed in M6-0, #144), opaque participant ids.
 No dependency field and no scheduler.
-*Done when* empty and starter rooms round-trip through `GET /rooms/:id`, ids are tested,
-and the DTOs are covered by contract tests.
+**Added 2026-09-21 (#145):** `GET /rooms` carries the roster inline and summarised,
+`participants: [{id, name, status}]` — the shape `GET /runs` already gives its tasks
+(`daemon.ts:987`) — so M4-2's sidebar costs one call, not one per room; the full
+`ParticipantDto` is on `GET /rooms/:id`. The participant record carries the harness
+`sessionId` from this first version (the M2-6 precedent at `:1797`), even though nothing
+loads it until M6-7. **And the rename lands here**, while `chat.ts` is the only client and
+marked experimental: status `closed` becomes `dismissed`, `Room.close()` becomes
+`dismiss()`, its inner closure — confusingly named `shutdown` today, one import from
+`daemon.ts`'s process `shutdown` — becomes `teardown()`, and dismiss moves to
+`POST /rooms/:id/dismiss` so `DELETE /rooms/:id` can mean what R18 says it means.
+*Done when* empty and starter rooms round-trip through `GET /rooms/:id`, the list carries
+each roster inline, ids are tested, no file says `closed` of a dismissed room, and the
+DTOs are covered by contract tests.
 Decisions: R1, R3, R9, R17, R21, R22, R33, R36, S4, S13. (R22 settled: a new `roomId`.)
 
 **M6-3 · Participant lifecycle: add/remove/list, settings, names · M · needs M6-2**
@@ -2282,14 +2303,18 @@ Decisions: R6, R14, R31, R35, R37.
 
 **M6-7 · Persistence, restart and per-participant resume · M · needs M6-2, M2-6**
 `stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and the event
-log; restore read-only; resume per participant is capability-gated on `session/load`
-(S3b now, S3c later). Retention and idle eviction use owner config. **R42 says the
-consequence out loud:** a restored room is read-only. Every participant reads `exited`,
-its history replays and its branch and checkout survive, but it cannot be messaged or
-revived until S3(c) lands. The DTO carries that distinction rather than leaving a client
-to infer it.
-*Done when* a restart lists the room with every participant, its history replays, each
-participant reads `exited`, and a message to one is refused with a reason naming S3(c).
+log; retention and idle eviction use owner config. **Rewritten 2026-09-21 (#145) by
+R42(c):** a shutdown is a pause, so this story splits the two verbs — shutdown persists the
+room and stops each harness, and no longer calls the dismiss path. A restart restores the
+roster with every participant `paused`, and a participant revives on its next message:
+respawn the harness in its existing worktree, `session/load` where the harness advertises
+it, otherwise a fresh session with `resumed: "fresh"` on the DTO. That is **Half A**, and it
+needs no new protocol method and no probe. **Half B** — `session/load` itself — stays
+deferred with S3(c) and is gated on a measurement nobody has taken (see the backlog).
+`exited` revives through the same path, so a crashed room is recoverable too (R33).
+*Done when* a restart lists the room with every participant `paused`, its history replays,
+a message to one revives it and is answered, the DTO says `loaded` or `fresh`, and a
+dismissed room is not revived by the same path.
 Decisions: R17, S3, S4, R42.
 
 **M6-8 · Orchestrator and delegation · M · needs M6-4 · deferred by R2**
@@ -2417,6 +2442,13 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   stay behind a per-harness capability check, and it depends on M2-6 persisting the harness
   `sessionId`.
   Rooms and participants are the second consumer: per-participant resume after a daemon restart (M6-7) uses the same capability-gated call.
+  **Two gaps recorded 2026-09-21 (#145), both to close before Half B is scheduled.** Every
+  `loadSession: true` we hold is a **handshake advertisement** (`docs/M0-FINDINGS.md:136`);
+  §Multi-turn measured two turns in *one* process, and nobody has loaded a session into a
+  **new** harness process — which is what a reboot needs. And pi-acp's measurement table
+  (`docs/M0-FINDINGS.md:1019`) has no `loadSession` row at all, so "every measured harness
+  advertises it" is true of three of the four. One probe answers both. M6-7's Half A does
+  not wait on it.
 - **`#send` write backpressure.** `#send` ignores the return value of `write()`
   (`protocol/agent.ts`). *Trigger:* fan-out moving large file contents. The one item here that is
   genuinely "fix it when it bites" — Node buffers, so it degrades to memory growth rather
