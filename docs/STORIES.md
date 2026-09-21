@@ -1829,7 +1829,7 @@ task with no branch by name, which beats "no run record. Run it first."
 `sessionId` rides the task entry, set once `session/new` answers — the success
 path, a cancel before the prompt, and a throw out of the harness.
 
-**Amended (room model):** rooms persist under `stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and the room event log; restore is read-only and per-participant resume is capability-gated (S3, S4).
+**Amended (room model):** rooms persist under `stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and the room event log; restore is no longer read-only — a restored room comes back `paused` and a participant revives on its next message with a fresh session (S3(b), R42) — and the participant record carries `sessionId` (S4). `session/load` reattachment (S3(c), Half B) stays capability-gated and deferred.
 
 **M2-7 · Config · S · needs M2-1**
 `.kapelle/config.json`, `KAPELLE_*` env override, layered env > project. Home for the
@@ -2239,12 +2239,18 @@ No dependency field and no scheduler.
 `participants: [{id, name, status}]` — the shape `GET /runs` already gives its tasks
 (`daemon.ts:987`) — so M4-2's sidebar costs one call, not one per room; the full
 `ParticipantDto` is on `GET /rooms/:id`. The participant record carries the harness
-`sessionId` from this first version (the M2-6 precedent at `:1797`), even though nothing
-loads it until M6-7. **And the rename lands here**, while `chat.ts` is the only client and
+`sessionId` from this first version (the M2-6 precedent at `:1800`), even though nothing
+loads it until Half B (`session/load`) lands. **And the rename lands here**, while `chat.ts` is the only client and
 marked experimental: status `closed` becomes `dismissed`, `Room.close()` becomes
 `dismiss()`, its inner closure — confusingly named `shutdown` today, one import from
 `daemon.ts`'s process `shutdown` — becomes `teardown()`, and dismiss moves to
-`POST /rooms/:id/dismiss` so `DELETE /rooms/:id` can mean what R18 says it means.
+`POST /rooms/:id/dismiss` so `DELETE /rooms/:id` can mean what R18 says it means. The
+rename also splits today's single `RoomStatus` (`core/room.ts:43`: `idle`/`busy`/`exited`/
+`closed`) into a room status — `active`/`paused`/`dismissed`, what `GET /rooms` and
+`GET /rooms/:id` publish — and a participant status — `idle`/`busy`/`exited`/`paused`/
+`dismissed`, the sketch's record. A mechanical `closed`→`dismissed` rename alone would
+publish participant-shaped values as the room status, which `daemon.ts`'s `roomView` reads
+from `room.status()` today.
 *Done when* empty and starter rooms round-trip through `GET /rooms/:id`, the list carries
 each roster inline, ids are tested, no file says `closed` of a dismissed room, and the
 DTOs are covered by contract tests.
@@ -2307,13 +2313,14 @@ log; retention and idle eviction use owner config. **Rewritten 2026-09-21 (#145)
 R42(c):** a shutdown is a pause, so this story splits the two verbs — shutdown persists the
 room and stops each harness, and no longer calls the dismiss path. A restart restores the
 roster with every participant `paused`, and a participant revives on its next message:
-respawn the harness in its existing worktree, `session/load` where the harness advertises
-it, otherwise a fresh session with `resumed: "fresh"` on the DTO. That is **Half A**, and it
-needs no new protocol method and no probe. **Half B** — `session/load` itself — stays
-deferred with S3(c) and is gated on a measurement nobody has taken (see the backlog).
-`exited` revives through the same path, so a crashed room is recoverable too (R33).
+respawn the harness in its existing worktree with a fresh session and `resumed: "fresh"` on
+the DTO. That is **Half A**, and it needs no new protocol method and no probe. **Half B** —
+`session/load` itself — stays deferred with S3(c) and is gated on a measurement nobody has
+taken (see the backlog); when it lands, a harness that advertises `loadSession: true`
+reattaches with `resumed: "loaded"` instead. `exited` revives through the same fresh-session
+path, so a crashed room is recoverable too (R33).
 *Done when* a restart lists the room with every participant `paused`, its history replays,
-a message to one revives it and is answered, the DTO says `loaded` or `fresh`, and a
+a message to one revives it and is answered, the DTO reports `resumed: "fresh"`, and a
 dismissed room is not revived by the same path.
 Decisions: R17, S3, S4, R42.
 
@@ -2441,7 +2448,9 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   scheduled, but it is now a known-available feature rather than a hypothetical, it must
   stay behind a per-harness capability check, and it depends on M2-6 persisting the harness
   `sessionId`.
-  Rooms and participants are the second consumer: per-participant resume after a daemon restart (M6-7) uses the same capability-gated call.
+  Rooms and participants are the second consumer: M6-7's Half A revives a participant after
+  a daemon restart with a fresh session, not this call; Half B uses the capability-gated
+  call when it lands.
   **Two gaps recorded 2026-09-21 (#145), both to close before Half B is scheduled.** Every
   `loadSession: true` we hold is a **handshake advertisement** (`docs/M0-FINDINGS.md:136`);
   §Multi-turn measured two turns in *one* process, and nobody has loaded a session into a

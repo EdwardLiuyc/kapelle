@@ -624,9 +624,10 @@ on the same session with the first turn's context kept, on all four harnesses
   parallel turns are safe. **The participant commits its own branch; the supervisor never
   commits.** A participant may fork from another participant's branch, which is what forces
   the merge rework: `core/merge.ts` assumes one base per run.
-- **Persistence and restart** — `stateDirFor(root)/rooms/<roomId>/`. A restored room is
-  **read-only**: every participant comes back `exited` with its history and its branch
-  intact, and cannot be revived until `session/load` resume lands.
+- **Persistence and restart** — `stateDirFor(root)/rooms/<roomId>/`. A restored room comes
+  back `paused`: every participant `paused`, harness stopped, history and branch intact. A
+  participant revives on its next message with a fresh session (Half A); `session/load`
+  (Half B) stays deferred and capability-gated.
 - **Room CLI and bridges** — `kapelle chat` runs the same HTTP-only binary; a bridge is a
   local process that subscribes to a stream and answers permissions. **No chat SDK enters
   the daemon.**
@@ -707,8 +708,9 @@ holding its own multi-turn session. Message one and confirm the other two are un
 message a busy one and confirm the second message is queued and answered in order.
 Answer an `ask` participant's permission from the TUI and confirm a CLI observer on the
 same room sees the same decision. Cancel one turn and confirm that participant's session
-survives. Restart the daemon and confirm the room comes back read-only, with every
-participant `exited`, its history replayable and its branch intact. Merge the room's
+survives. Restart the daemon and confirm the room comes back `paused`, with every
+participant `paused`, its history replayable and its branch intact, and that messaging one
+revives it and is answered. Merge the room's
 branches and confirm a real conflict is refused by name with nothing half-landed.
 
 ---
