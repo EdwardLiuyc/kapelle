@@ -25,7 +25,9 @@ policy across all of them and returning machine-readable results.
 | --- | --- |
 | Workflows | Parallel split **and** pipeline handoff — not competing variants of the same task. |
 | Process shape | Daemon — **one per operator, serving every added repository** (amended 2026-09-11, M2-1) — with `core/` that has no knowledge of HTTP or of a TTY. |
-| UI | **M4**, after the daemon. Read views plus permission answering. Designed to grow into a run-dispatch front end, so the daemon API must be complete — not observability-only. |
+| UI | **M4**, after the daemon: a local TUI (`chat.ts` + pi-tui), not a browser. Read views plus permission answering for runs and rooms. Designed to grow into a run-dispatch front end, so the daemon API must be complete — not observability-only. |
+| Client contract | **M5 — that it exists is settled; its shape is not.** One documented API every front end shares, so `attach`, the TUI and a later bridge stop each inventing DTOs, and M2's HTTP surface is its subject. **Open, so no file name here is a promise:** the artifact and the module's location (B1, B6 in `docs/CONTRACT-PLAN.md`). Settled either way is the direction: whatever the module is called, the daemon and the front ends import it and `core/` never does. |
+| Rooms | **M6.** A long-lived container of *independent* agents on one repository — a roster, not a graph. Each agent has its own harness, mode, settings, worktree and multi-turn session. **No dependency relation, no scheduler, no result contract, no turn TTL**; the human sequences work by choosing who to message. Separate from runs: a room never replaces `POST /runs`, and a run never becomes a room. |
 | Result contract | A `<task-result>` block in the final message. `git status` cross-checks it; disagreement raises a task **warning**, never a failure. MCP `report_result` deferred. |
 | Worktrees | Supervisor owns fully — creates off a base ref, removes on success, **keeps worktree and branch on failure/timeout when the task left work, and rolls back a failed task that produced nothing**. A run-owned worktree is reaped only when its run is terminal and past the retention window. A worktree with no readable record is reconciled at boot: clean and still on a branch loses its checkout but keeps the branch; dirty or detached HEAD is kept. |
 | Merge-back | Explicit `kapelle merge <runId>`; never automatic. `--squash` (default) lands changes **unstaged**; `--rebase` preserves per-stage commits. Aborts wholesale on overlap. |
@@ -91,10 +93,15 @@ front ends    cli.ts  kapelle run --file <file>      direct, in-process, TTY ask
                       kapelle run --file <file> --detach   submits to the daemon
                       kapelle attach <run-id>       streams SSE, answers permissions
                       kapelle merge ...
-              dashboard (M4 — read views + permission answering; a third subscriber)
+              TUI (M4 — read views + permission answering; a third subscriber)
+              chat.ts  kapelle chat                  rooms, HTTP only
+                   │
+(client/?)    DTOs, HTTP client, SSE parser, pure reducer   (M5 — name open: B6)
+              — an edge module: front ends and daemon.ts import it, core/ never does —
                    │
 daemon.ts     POST /repos · POST /runs · GET /runs/:id · GET /runs/:id/events (SSE+replay)
               GET/POST /permissions/:id · pidfile · child registry · persistence
+              POST /rooms · /rooms/:id/agents · /messages · /events   (M6)
                    │
 core/         run.ts        scheduler.ts     worktree.ts
               Run/Task/     DAG: parallel    git worktree add/prune,
@@ -106,7 +113,9 @@ core/         run.ts        scheduler.ts     worktree.ts
               idle/repeat   squash | rebase  bell + bus event on
               → warn        or refuse        permission / stall
               TTL → cancel
-                   │  one AcpAgent per task
+              room.ts (M6)  a roster of independent participants — no graph,
+                            no scheduler, one turn at a time per participant
+                   │  one AcpAgent per task, and one per live participant
 protocol/     agent.ts (JSON-RPC/stdio, fs/* + #guardPath, permission)
               types.ts (session/update discriminated union) · registry.ts
                    │
@@ -162,11 +171,11 @@ cli.ts ──▶ import, validate ──▶ Run created, tasks in DAG order
 
 ### Three architecture invariants this shape exists to protect
 
-1. **One core, three consumers.** Daemon, CLI and dashboard are transport. `mock-agent`
+1. **One core, three consumers.** Daemon, CLI and the TUI are transport. `mock-agent`
    drives the core with no transport at all — that is what keeps everything verifiable
    offline.
 2. **The event bus is the single source of truth.** Nothing reads agent state directly.
-   The M4 dashboard becomes purely additive — a third subscriber.
+   The M4 TUI becomes purely additive — a third subscriber.
 3. **Two independent safety layers stay separate.** `#guardPath` is unconditional and
    covers every `fs/*` call; policy is about intent and varies per task. The daemon adds
    a third concern: the API is itself an execution surface. **M0-1 qualifies the first
@@ -320,7 +329,7 @@ driven from a run file, fully verifiable offline.
   default is `"ask"`), then the `maxMode` ceiling applies — and exceeding it is a **validation error
   naming both values**, never a silent downgrade. Starting a task in `safe` or `ask` against
   a `shell: "internal"` harness emits a one-line containment warning as a bus event, so the
-  CLI and the M4 dashboard both surface it.
+  CLI and the M4 TUI both surface it.
   **M0-1 fills in the labels, and shows one field is not enough.** All three targets are
   `shell: "internal"`, but they differ on something the label does not capture: whether the
   harness asks permission at all. opencode never does — so it needs a second field, e.g.
@@ -403,7 +412,7 @@ driven from a run file, fully verifiable offline.
 - **`core/notify.ts`** — attention signal for the two events a human needs while looking
   elsewhere: permission pending, and stall warning. Terminal bell plus a distinct stderr
   line; optionally shell out to `notify-send`/`osascript` when present, best-effort, never a
-  dependency. The bus event is the real product — M4's toast subscribes to the same one.
+  dependency. The bus event is the real product — the M4 notification subscribes to the same one.
 - **`core/runfile.ts`** — exports the `Run` / `Task` types *and* a runtime validator. Schema
   is run-level defaults plus `tasks[]` (`id`, `agent`, `prompt`, `mode`, `needs[]`,
   `worktree`). **Amended 2026-09-05 (STORIES M1b-1): run files are JSON only** — the
@@ -468,15 +477,13 @@ driven from a run file, fully verifiable offline.
   wrong types by file and key.
 - **Auth** — localhost-only bind plus a shared-secret token file. Not optional: anything
   that can `POST /runs` with `mode: auto` executes commands as the user, and once the
-  dashboard can dispatch runs *every* write endpoint is an execution surface, not just
+  TUI can dispatch runs *every* write endpoint is an execution surface, not just
   `POST /runs`. **Amended 2026-09-11 (M2-1) and 2026-09-17 (M2-8):** the token landed with
   M2-1, and M2-8 became a `Host` check that refuses any authority outside loopback with a
   `403` before the token is read, which closes DNS rebinding.
-- **Browser-compatible auth** — `EventSource` cannot set custom headers. The token must be
-  acceptable as a query parameter on the SSE endpoint, or exchangeable for a cookie by a
-  login POST. Decided here so M4 is not blocked; the localhost-only bind is unchanged.
-  **Amended 2026-09-17 (M2-8, #38): moved to M4-1.** No page is served until then. The
-  cookie and login-POST option is dropped; M4-1 builds `?token=` on the SSE route.
+- **Browser-compatible auth — retired (2026-09-20, room model).** The TUI sets headers, so
+  `?token=` and the cookie exchange are not needed. They return only if a browser client does. The
+  Host check and the bearer token stay; the localhost-only bind is unchanged.
 - `kapelle run --file <file> --detach` and `kapelle attach <run-id>` — submit a run file, stream
   SSE, answer permissions interactively, print results. **Amended 2026-09-06 (M2-9): no
   `runs.ts`.** Same deliverable, reached through a flag and a second verb on the one CLI
@@ -487,6 +494,9 @@ driven from a run file, fully verifiable offline.
 ---
 
 ## M3 — Pipeline, DAG, terminals
+
+**Runs only.** The scheduler, inheritance and handoff below are run-file semantics;
+rooms have no graph and no scheduler (M6, `docs/CONTRACT-PLAN.md`).
 
 - **`core/scheduler.ts`** — topological execution: parallel where no `needs`, sequential
   where there is.
@@ -503,23 +513,131 @@ driven from a run file, fully verifiable offline.
 
 ---
 
-## M4 — Dashboard
+## M4 — TUI
 
-The first thing here that is not a CLI. Design reference: `opencode-ensemble`'s dashboard.
+The first thing here that is not a CLI, and not a browser. `spike/chat-tui` proves the
+screen (`TuiAltScreen`, a `ScrollView` transcript, an `Editor`, and a `Markdown`
+component re-set as chunks arrive); M4 turns it into the first client of the shared
+`client/` module and adds the room/roster surface. The browser dashboard and its
+`?token=` auth are retired (A3, A7). `core/markdown.ts` is still shared by every surface;
+the paint now lives in the TUI.
 
-- **Serving** — string-templated HTML/CSS/JS out of the daemon. No framework, no build
-  step, and no runtime dependency outside presentation — the exception M1c-7 ratified (2026-09-09, #78) — the same constraint the rest of the project holds. Split
-  across four modules (`dashboard-html`, `-js-core`, `-js-events`, `-js-render`) — that
-  split is what keeps a zero-build dashboard readable past a few hundred lines.
-- **Read views** — run list; per-run task cards with status, elapsed, token count and a
-  stall indicator; the DAG rendered from `needs`; a live event timeline; the final
-  `<task-result>` per task.
-- **One write path** — answer pending permission prompts. This is what makes `ask` mode
-  usable unattended, and it is why M4 is a control surface rather than a viewer.
-- **Toasts** — subscribe to the same bus events `core/notify.ts` uses.
-- **Deferred to M5+** — composing and dispatching runs from the browser. Named here because
+- **M4-1 — the pi-tui screen** as the first `client/` consumer. `@earendil-works/pi-tui`
+  0.85.1 is ratified under M1c-7's presentation rule, the nested `marked` 18.0.5 is
+  deduped with an override to 18.0.12, and the optional `darwin-modifiers.node` helper is
+  recorded (lazily loaded, try/catch-guarded, Shift+Enter on Apple Terminal only).
+- **M4-2 — room and roster sidebar**: rooms → participants, switching between rooms and
+  participants, unread and attention badges.
+- **M4-3 — permission answering**: the per-participant `ask` overlay, answered by id;
+  a CLI observer on the same room sees the same decision. This is the write path that
+  makes `ask` usable unattended.
+- **M4-4 — notifications and polish**: bell and desktop attention for a waiting
+  participant, transcript search, and the block-splitting optimisation if the markdown
+  re-parse cost grows.
+- **Deferred to M5+** — composing and dispatching runs from the TUI. Named here because
   it is the stated trajectory and it is why M2's API has to be complete rather than
   observability-only. Not built at M4.
+
+**M4 is numbered before M5 and M6 and built after both.** M4-1 needs the spike on master
+(M6-0) and the shared client module (M5-10); the numbering is historical, from when M4 was
+the browser dashboard.
+
+---
+
+## M5 — Client contract
+
+The gap M2 left. Today the contract is the sum of `daemon.ts`, the M2 story amendments,
+and whatever `cli.ts` happens to call, so a client author cannot tell which of those facts
+are promises. M5 writes it down and gives every client one implementation to share.
+Decisions live in `docs/CONTRACT-PLAN.md`.
+
+The target: a client — the TUI first, a chat bridge later, `attach` today — can be written
+from `docs/CLIENT-API.md` alone. It discovers the daemon, checks a version, speaks
+documented shapes, follows a documented stream, and never imports `daemon.ts`, `core/`, or
+an internal `RunState` type to understand what it sees.
+
+- **The artifact** — `docs/CLIENT-API.md` as the normative document, `client/contract.ts`
+  as the shared types, a version handshake and a capability list. **`client/` is an edge
+  module**: `daemon.ts` and the front ends may import it, `core/` may not — the same
+  direction rule `core/` → `protocol/` already follows.
+- **Curated DTOs** — `RunDto` and `TaskDto`, one shape for a live run and a restored one,
+  mapped at the daemon edge. `GET /runs/:id` serialises the internal `RunState` today: a
+  live run carries fifteen or more fields per task, a restored one carries five, and
+  `cli.ts` keeps private types to bridge the difference.
+- **Error envelopes and request limits** — a stable `{error:{code,message}}`, a body cap,
+  a content-type check and a read timeout. Every refusal is `{error: string}` today.
+- **Permission resolution** — an answered event carrying the queued id, the outcome and
+  the reason (`client`, `timeout`, `cancel`, `task_end`, `run_end`). Without it a second
+  observer sees a decision it cannot match to the question, and M4-3's acceptance test
+  cannot be written honestly.
+- **A run terminal event, and timestamps** — the only "this run is over" signal today is
+  the stream ending, which a client cannot tell from a cut connection.
+- **SSE liveness** — heartbeat, `retry:`, a reconnecting reference client, and a
+  backpressure seam. `EventLog.follow` ignores `write()` returning false, so a slow client
+  buffers the rest of a run in its socket. **Pausing one reader must never pause the run.**
+- **Idempotent dispatch, task-level cancel, run filtering** — the three write-path gaps a
+  bridge or a reconnecting TUI meets first.
+- **The shared client module** — `client/` owns the DTOs, the HTTP client, the SSE parser
+  and a pure reducer; `attach` is refactored onto it with no visible behaviour change, and
+  `chat.ts` follows at M4-1. Two client implementations exist today and drift without this.
+- **Conformance and the v1 freeze** — contract tests that treat the daemon as an external
+  process and fail when a DTO field is renamed. The freeze note names what may change only
+  additively.
+
+---
+
+## M6 — Rooms
+
+A **room** is a long-lived container of independent agents on one repository. It starts
+empty, or with a starter agent acting as the orchestrator. Each named agent has its own
+harness, its own mode, its own settings and a long-lived multi-turn session. Work is
+conversation: a task emerges in the chat and may take turns of back-and-forth between
+several agents.
+
+**There is no dependency graph and no scheduler.** That is the decision the whole milestone
+rests on. An earlier design gave rooms `needs`, blocked turns and a room scheduler; it is
+retired (R24–R30). The human sequences the work by choosing who to message, and the daemon
+only routes messages and enforces one rule per participant: one turn at a time. M3 is
+therefore irrelevant to rooms — its graph belongs to run files.
+
+The multi-turn session this rests on is measured: a prompt sent after `end_turn` completes
+on the same session with the first turn's context kept, on all four harnesses
+(`docs/M0-FINDINGS.md` §Multi-turn).
+
+- **M6-0 — land the spike first.** `chat-mvp` and `spike/chat-tui` already prove the
+  single-participant runtime and the screen. They are 13 commits behind master, so the
+  rebase is the one piece of work that grows while it waits — it goes before M5 and before
+  the room design, with no new features, behind an experimental `kapelle chat`.
+- **The room container** — the room record, an empty or starter room, `RoomDto` and
+  `ParticipantDto`, and a room id of its own (`newRoomId()`, never a run id).
+- **Participants** — add, remove, list, rename; an opaque id plus a unique display name;
+  the harness fixed at add, the mode mutable.
+- **Routing and the timeline** — a message names its target, the orchestrator by default.
+  One room log and one sequence, every line carrying `roomId` and `participantId`; a
+  per-participant thread is a filter over that log. A busy participant queues FIFO, bounded.
+- **Modes and permissions** — per participant, `ask`/`safe`/`auto`, **default `auto`**
+  because a room is often left unattended and an `ask` default would wedge one. The M2-3
+  queue is reused, gaining `roomId`, `participantId` and `turn`.
+- **Worktrees and merge** — one worktree and branch per participant,
+  `kapelle/<roomId>/<participantId>`. Nothing is inherited and no checkout is shared, so
+  parallel turns are safe. **The participant commits its own branch; the supervisor never
+  commits.** A participant may fork from another participant's branch, which is what forces
+  the merge rework: `core/merge.ts` assumes one base per run.
+- **Persistence and restart** — `stateDirFor(root)/rooms/<roomId>/`. A restored room is
+  **read-only**: every participant comes back `exited` with its history and its branch
+  intact, and cannot be revived until `session/load` resume lands.
+- **Room CLI and bridges** — `kapelle chat` runs the same HTTP-only binary; a bridge is a
+  local process that subscribes to a stream and answers permissions. **No chat SDK enters
+  the daemon.**
+
+**Deliberately not in a room**, so none of these reads as a gap: no dependency graph, no
+scheduler, no `<task-result>` contract and no cross-check (a turn is conversation, not a
+deliverable), no turn TTL (a watchdog that warns and never cancels), and no cap on the
+total live harnesses in v1.
+
+**Rooms are another execution surface behind the same door.** Loopback bind, Host guard
+and bearer token are unchanged, and the sandboxing trigger in `docs/STORIES.md`'s backlog
+covers the room API exactly as it covers `POST /runs`.
 
 ---
 
@@ -573,8 +691,24 @@ worktree still within retention, and leaves no harness subprocess alive.
 `auto` → copilot reviews `safe`) in one inherited worktree, where stage B's prompt
 demonstrably contains stage A's summary and stage C flags anything B got wrong.
 
-**M4** — attach the dashboard to a run in `ask` mode, answer a permission from the browser,
-and confirm the run proceeds and a CLI observer on the same run sees the same decision.
+**M4** — attach the TUI to a run in `ask` mode, answer a permission in the terminal,
+and confirm the run proceeds and a CLI observer on the same run sees the same decision. The room participant flow uses the same screen.
+
+**M5** — write a client from `docs/CLIENT-API.md` alone, with `daemon.ts` never opened, and
+have it pass the conformance suite: a live run and a boot-restored run produce the same DTO
+shape, a stream-only client learns the run's final status without a second request, and
+killing the daemon mid-run then restarting lets the client resume with no gap and no
+duplicates. Rename one DTO field and confirm the suite goes red. CI runs it with no
+credentials.
+
+**M6** — a room with three participants on three harnesses, each in its own worktree, each
+holding its own multi-turn session. Message one and confirm the other two are untouched;
+message a busy one and confirm the second message is queued and answered in order.
+Answer an `ask` participant's permission from the TUI and confirm a CLI observer on the
+same room sees the same decision. Cancel one turn and confirm that participant's session
+survives. Restart the daemon and confirm the room comes back read-only, with every
+participant `exited`, its history replayable and its branch intact. Merge the room's
+branches and confirm a real conflict is refused by name with nothing half-landed.
 
 ---
 
@@ -627,7 +761,7 @@ as orchestrator. None of its code transfers; several of its failure modes do.
 **Taken:** the explicit merge command with overlap-blocking preflight; two-signal stall
 detection; preserving the branch before aborting on timeout; the startup crash-recovery
 sweep and transactional spawn; the `<task-result>` contract and its strictness rule; the
-notify-on-attention-needed event; and the four-file split for a zero-build dashboard.
+notify-on-attention-needed event.
 
 **Not taken, deliberately:**
 
