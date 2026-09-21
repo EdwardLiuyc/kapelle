@@ -120,7 +120,7 @@ Only when step 6 found the issue **closed**. If it is still open, skip this step
   open:
 
 ```bash
-gh api repos/<owner>/<repo>/issues/<N>/dependencies/blocks -q '.[].number'
+gh api repos/<owner>/<repo>/issues/<N>/dependencies/blocking -q '.[].number'
 # for each dependent D:
 gh api repos/<owner>/<repo>/issues/<D>/dependencies/blocked_by \
   -q '[.[] | select(.state == "open") | .number] | join(", ")'
