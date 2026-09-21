@@ -2180,8 +2180,9 @@ landed since: the M2-3 permission queue, the M2-5 sweep, M2-6 persistence, M2-7 
 the M2-8 Host guard, M2-9 `attach`, M2-10 `ps`. Two corrections the spike predates: room
 state moves out of `.kapelle/rooms/` to `stateDirFor(root)` (#129), and `children.json`
 takes S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
-**Only `chat-mvp` lands.** `spike/chat-tui` is rebased and left unlanded, because M4-1
-ratifies `@earendil-works/pi-tui` and dedupes its nested `marked`, and it needs M5-10
+**Only `chat-mvp` lands, and `spike/chat-tui` is left where it is** — not rebased here
+either, because M4-1 rebases it anyway and doing it twice buys nothing. M4-1 is where
+`@earendil-works/pi-tui` is ratified and its nested `marked` deduped, and it needs M5-10
 first; `package.json` keeps `marked` as its only runtime dependency.
 **No new features** — one participant per room, `auto` only, no roster and no permission
 answering — and `chat.ts` ships marked **experimental**, so the room API is not a

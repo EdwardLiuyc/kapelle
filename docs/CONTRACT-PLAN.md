@@ -451,12 +451,12 @@ and M2-10 `ps`. Two things the spike predates must be corrected in the rebase: r
 moves out of `.kapelle/rooms/` to `stateDirFor(root)` (#129), and `children.json` gains
 S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
 
-**Only `chat-mvp` lands (decided 2026-09-21, #144).** `spike/chat-tui` is rebased and
-left unlanded: M4-1 is the story that ratifies `@earendil-works/pi-tui` 0.85.1 under
-M1c-7's rule and dedupes its nested `marked`, and it needs M5-10 first. Landing the
-screen here would ratify a second runtime dependency ahead of the story that vets it, so
-`package.json` keeps `marked` as its only one. The rebase of the TUI commit waits until
-M6-0 is on master, so it is done once rather than twice.
+**Only `chat-mvp` lands (decided 2026-09-21, #144).** `spike/chat-tui` is left alone —
+not landed and not rebased: M4-1 is the story that ratifies `@earendil-works/pi-tui`
+0.85.1 under M1c-7's rule and dedupes its nested `marked`, and it needs M5-10 first.
+Landing the screen here would ratify a second runtime dependency ahead of the story that
+vets it, so `package.json` keeps `marked` as its only one. Rebasing it here as well would
+be the same work done twice, since its base moves again when M6-0 reaches master.
 
 **No new features.** One participant per room, `auto` only, no roster, no per-participant
 modes, no permission answering. `chat.ts` ships marked **experimental** in its header and
@@ -856,7 +856,7 @@ no dependency relation between agents (R24–R30 retired).
 
 | ID | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| S1 | How to land the spike | (a) rebase both commits onto master, resolve toward current M2 (b) cherry-pick the runtime files, rewrite the daemon integration (c) merge master into the branch, then land | **Decided (interview):** (a). **Amended 2026-09-20:** the port is **M6-0 and comes first**, not last. The branches are 13 commits behind and every story placed in front of the rebase makes it larger; nothing about the rebase gets cheaper by waiting for the room model, because the single-participant runtime it carries is already settled (P1–P9). It ships behind `chat.ts`, marked experimental, with no new features. **Landed 2026-09-21 (#144):** only the `chat-mvp` commit; `spike/chat-tui` is rebased and left for M4-1, which ratifies pi-tui |
+| S1 | How to land the spike | (a) rebase both commits onto master, resolve toward current M2 (b) cherry-pick the runtime files, rewrite the daemon integration (c) merge master into the branch, then land | **Decided (interview):** (a). **Amended 2026-09-20:** the port is **M6-0 and comes first**, not last. The branches are 13 commits behind and every story placed in front of the rebase makes it larger; nothing about the rebase gets cheaper by waiting for the room model, because the single-participant runtime it carries is already settled (P1–P9). It ships behind `chat.ts`, marked experimental, with no new features. **Landed 2026-09-21 (#144):** only the `chat-mvp` commit. `spike/chat-tui` is left unrebased for M4-1, which ratifies pi-tui and rebases it as its first step — rebasing it here too would be the same work done twice |
 | S2 | Participant mode default | (a) keep `auto` for v1 (b) mode at add, default `ask` for a TUI (c) per-message override | **Decided (interview):** mode per participant at add, default `auto`; `ask`/`safe` selectable |
 | S3 | Restart and resume | (a) ephemeral rooms, history replay only (b) persist metadata, restore read-only (c) restore + per-participant `session/load` | **Decided (interview):** (b) now; (c) later |
 | S4 | Room and participant records | (a) events are the only record (b) `room.json` + participant records, turns derived from events (c) a file per turn | **Decided (interview):** (b) |
