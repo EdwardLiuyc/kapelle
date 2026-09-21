@@ -514,9 +514,10 @@ machine reboots, and the operator expects to keep talking to them afterwards. To
 daemon shutdown calls the same `close()` as a dismiss, so a restart is a **stop**, not a
 pause. R42(b) then makes the restored room read-only. Nothing blocks the other answer —
 three of the four measured harnesses advertise `loadSession: true`
-(`docs/M0-FINDINGS.md:136`; pi-acp's `loadSession` was not measured — see the backlog note in
-`docs/STORIES.md`), so S3(c) is unscheduled rather than impossible. M6-1 decides whether shutdown and close stay the same
-verb, and R37's `keep` is what makes either answer possible: the checkout is still there.
+(`docs/M0-FINDINGS.md:136`; pi-acp's `loadSession` was not measured — see the backlog note
+in `docs/STORIES.md`), so S3(c) is unscheduled rather than impossible. M6-1 decides whether
+shutdown and close stay the same verb, and R37's `keep` is what makes either answer
+possible: the checkout is still there.
 
 **Answered 2026-09-21 (#145).** R42 is decided as (c): a shutdown is a pause. With it came
 four consequences, each recorded on its own row rather than in prose — R9 (roster inline,
@@ -850,7 +851,7 @@ no dependency relation between agents (R24–R30 retired).
 | R15 | Participant settings | reuse the run-file `Task` fields; add a purpose/instructions field for "different tasks"; `prompt`/`needs` are not settings | **Decided (interview):** yes, plus a purpose/instructions field; `prompt`/`needs` are not settings. The purpose is prompt material, never a task status (R33) |
 | R16 | Room versus run | (a) separate; `POST /runs` unchanged (b) a room can dispatch a run from its roster (c) a run becomes a room | **Decided (interview):** (a) now; (b) deferred |
 | R17 | Persistence | room.json + participant records + event log(s); restore read-only; resume per participant, capability-gated | **Decided (interview):** `stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and event log(s); restore read-only; resume per participant, capability-gated. **Amended 2026-09-21 (#145):** restore is **not** read-only any more (R42), and the participant record carries the harness `sessionId` from its first version — the M2-6 precedent (`docs/STORIES.md:1800`): one field now, or a migration once resume lands |
-| R18 | Room lifecycle | close/archive/delete with N participants; retention; idle eviction | **Decided (interview), corrected 2026-09-21:** dismiss stops every participant and keeps its branch, its checkout and the room's history. **The supervisor commits nothing at dismiss (R37)** — the earlier "commits/releases" wording predates R37 and contradicted it. DELETE removes from the active list; retention reaps dismissed rooms; idle eviction configurable and off in v1; archive read-only deferred. **Amended 2026-09-21 (#145) — one word per idea, in code, URL and docs.** `dismiss`: a person ends the room; it stops, and its branch, checkout and history are kept (`POST /rooms/:id/dismiss`). `delete`: it is thrown away (`DELETE /rooms/:id`, the meaning this row already gave it). `pause`: the machine stopped (R42). `resume`: it comes back. A dismissed room is read, replayed, **merged** (R31) and finally deleted or reaped — merging is why the state earns its place, since the participant commits its own branch (R37) and landing it happens after the talking is over. Dismiss is final; pause is the reversible one |
+| R18 | Room lifecycle | close/archive/delete with N participants; retention; idle eviction | **Decided (interview), corrected 2026-09-21:** dismiss stops every participant and keeps its branch, its checkout and the room's history. **The supervisor commits nothing at dismiss (R37)** — the earlier "commits/releases" wording predates R37 and contradicted it. DELETE removes from the active list; retention reaps dismissed rooms; idle eviction configurable and off in v1; archive read-only deferred. **Amended 2026-09-21 (#145) — one word per idea, in code, URL and docs.** `dismiss`: a person ends the room; it stops, and its branch, checkout and history are kept (`POST /rooms/:id/dismiss`). `delete`: it is thrown away (`DELETE /rooms/:id`, the meaning this row already gave it). `pause`: the machine stopped (R42). `resume`: it comes back. A dismissed room is read, replayed, **merged** (R31) and finally deleted or reaped — merging is why the state earns its place, since the participant commits its own branch (R37) and landing it happens after the talking is over. Dismiss is final; pause is the reversible one. **Decided 2026-09-21 (#157 review):** DELETE removes a room's worktrees, branches, record and log at once, and answers `409` naming the files while any checkout has uncommitted changes — the house rule, since `release` (#85) and the sweep (`core/sweep.ts:388`) both keep a dirty checkout rather than lose it. A paused room can be dismissed or deleted without being revived first |
 | R19 | TUI shape | sidebar rooms → participants; active participant thread + room timeline; badges per participant; the permission overlay names the participant | **Decided (interview):** yes, as described |
 | R20 | Cost | per-participant usage labelled by harness; no cross-harness totals | **Decided (interview):** yes |
 | R21 | Starter/orchestrator creation | `POST /rooms {cwd, orchestrator?: {agent or cmd, name?, mode?}}`; empty body allowed; 201 | **Decided (interview):** yes; default orchestrator mode `auto` (R12); 201 |
@@ -868,7 +869,7 @@ no dependency relation between agents (R24–R30 retired).
 | R39 | Result contract in a room | (a) rooms use the run contract (b) rooms use none of it | **Decided 2026-09-20:** (b), restating `core/room.ts`'s own scope note so it is not re-opened. No `RESULT_PREAMBLE` on a room prompt, no `extractResult`, no `crossCheck`, no `_client_result_warning`. A room turn is conversation, not a deliverable |
 | R40 | Global live-harness cap | (a) a daemon-wide cap, refuse at the limit (b) a daemon-wide cap, queue at the limit (c) none in v1 | **Decided 2026-09-20:** (c). `runs + Σ(busy participants)` across every room is unbounded, with the default mode `auto`. Recorded as a backlog item with a trigger in `STORIES.md` and as a `ponytail:` comment where the room runtime spawns a harness (M6-0), not built. This is the one accepted risk in the room model that is about resources rather than correctness |
 | R41 | Turn-queue bound and overflow | (a) bound 16, refuse with `429` (b) unbounded | **Decided 2026-09-20:** (a). Sixteen messages queued to one agent already means the human should stop typing. The queue is in memory and is **lost at a daemon restart** (R42), which the API documents rather than hides |
-| R42 | What a restart leaves | (a) re-spawn a participant with a fresh session, context lost (b) nothing until S3(c) (c) a shutdown is a pause, not a close | **Decided 2026-09-20:** (b). A restored room is read-only: every participant reads `exited`, its history replays and its branch and checkout survive, but it cannot be messaged or revived until S3(c) lands `session/load`. M6-7 says this in its *Done when* rather than implying the roster is usable. **Re-opened 2026-09-21 (#144):** the owner wants a reboot to be resumable — idle agents with uncommitted work, restart, keep talking. That makes a daemon shutdown a pause, not the `close()` it calls today. **Decided 2026-09-21 (#145): (c), a new option — a shutdown is a pause, not a close.** `dismiss` stays the person's verb; a daemon shutdown stops each harness and leaves the room `paused`, with roster, branch, checkout and history intact. A participant revives on its next message: `session/load` where the harness advertises it, otherwise a **fresh session with the loss reported** in the DTO (`resumed: "loaded" \| "fresh"`). That subsumes (a) without its silent amnesia, and keeps S3(c) an upgrade that changes a label rather than the API. The work splits: **Half A**, revive with a fresh session, is M6-7 and needs no probe; **Half B**, `session/load`, stays deferred with S3(c) |
+| R42 | What a restart leaves | (a) re-spawn a participant with a fresh session, context lost (b) nothing until S3(c) (c) a shutdown is a pause, not a close | **Decided 2026-09-21 (#145): (c), a new option — a shutdown is a pause, not a close.** `dismiss` stays the person's verb; a daemon shutdown stops each harness and leaves the room `paused`, with roster, branch, checkout and history intact. A participant revives on its next message: `session/load` where the harness advertises it, otherwise a **fresh session with the loss reported** in the DTO (`resumed: "loaded" \| "fresh"`). That subsumes (a) without its silent amnesia, and keeps S3(c) an upgrade that changes a label rather than the API. The work splits: **Half A**, revive with a fresh session, is M6-7 and needs no probe; **Half B**, `session/load`, stays deferred with S3(c). *History:* **Decided 2026-09-20:** (b). A restored room is read-only: every participant reads `exited`, its history replays and its branch and checkout survive, but it cannot be messaged or revived until S3(c) lands `session/load`. M6-7 says this in its *Done when* rather than implying the roster is usable. **Re-opened 2026-09-21 (#144):** the owner wants a reboot to be resumable — idle agents with uncommitted work, restart, keep talking. That makes a daemon shutdown a pause, not the `close()` it calls today. |
 
 ### Spike integration and API decisions — revised
 
@@ -879,7 +880,7 @@ no dependency relation between agents (R24–R30 retired).
 | S3 | Restart and resume | (a) ephemeral rooms, history replay only (b) persist metadata, restore read-only (c) restore + per-participant `session/load` | **Decided (interview):** (b) now; (c) later. **Amended 2026-09-21 (#145):** (b) keeps its place and changes its meaning — it read *restore read-only*, and now reads **restore and revive with a fresh session** (R42). (c) is still `session/load` and still later, now also gated on a measurement nobody has taken: every `loadSession: true` we hold is a handshake claim (`docs/M0-FINDINGS.md:136`), never a session loaded into a **new** harness process |
 | S4 | Room and participant records | (a) events are the only record (b) `room.json` + participant records, turns derived from events (c) a file per turn | **Decided (interview):** (b). **Amended 2026-09-21 (#145):** the participant record carries the harness `sessionId` from its first version (R17) |
 | S5 | Cancel one turn | (a) `POST /rooms/:id/agents/:agentId/turns/current/cancel` (b) `DELETE .../messages/current` (c) keep room dismiss only | **Decided (interview):** (a) |
-| S6 | Room dismiss response | (a) synchronous 200 once every participant has stopped and its checkout is released per R37 (b) 202 like a run cancel (c) 204 | **Decided (interview), corrected 2026-09-21:** (a). The option's old wording said "commits/releases, as the spike", which R37 forbids: nothing is committed, the checkout is kept. **The bound needs participants stopped in parallel**, not one after another: `stop()` waits up to `stopGraceMs` (5 s) for a harness that ignores end of file, so a serial dismiss of N participants bounds at 5N seconds — half a minute of a hanging request on a room of six. Parallel makes the documented bound `stopGraceMs` + overhead, a number that can actually be written down. **Renamed 2026-09-21 (#145):** this is the **dismiss** response — `POST /rooms/:id/dismiss` — and the same parallel bound covers `pause`, which runs the same `teardown()` (R18) |
+| S6 | Room dismiss response | (a) synchronous 200 once every participant has stopped and its checkout is released per R37 (b) 202 like a run cancel (c) 204 | **Decided (interview), corrected 2026-09-21:** (a). The option's old wording said "commits/releases, as the spike", which R37 forbids: nothing is committed, the checkout is kept. **The bound needs participants stopped in parallel**, not one after another: `stop()` waits up to `stopGraceMs` (5 s) for a harness that ignores end of file, so a serial dismiss of N participants bounds at 5N seconds — half a minute of a hanging request on a room of six. Parallel makes the documented bound `stopGraceMs` + overhead, a number that can actually be written down. **Renamed 2026-09-21 (#145):** this is the **dismiss** response — `POST /rooms/:id/dismiss` — and the same parallel bound covers `pause`, which stops harnesses the same way but never releases a worktree (the sketch's naming trap) |
 | S7 | Command surface | (a) `chat.ts` standalone, add `kapelle chat` that runs it (b) move verbs into `cli.ts` (c) retire `chat.ts` | **Decided (interview):** (a) |
 | S8 | Shared client and chat | (a) `client/` owns DTOs, HTTP, SSE, reducer; `chat.ts` imports `client/` only (b) chat keeps its own client (c) put the client under `protocol/` | **Decided (interview):** (a); the import-boundary test allows `client/` and pi-tui, forbids `core/`, `protocol/` and `daemon.ts` |
 | S9 | Room and participant ids | (a) reuse `newRunId()` for rooms, opaque ids for participants (b) a distinct room prefix (c) uuid for both | **Decided (interview):** (b): a new `newRoomId()`, never the run id; participant ids opaque. **Built in M6-0, not M6-2 (2026-09-21, #144):** `newRoomId()` plus a private `assertOwnerId` that `branchName` validates with; `assertRunId` still rejects a room id |
@@ -898,9 +899,13 @@ actually be drawn as a record — if they could not, M6-2 would find out the exp
 | Verb | Trigger | Room after | Harness | Work on disk |
 | --- | --- | --- | --- | --- |
 | dismiss | a person | `dismissed`, final | stopped | branch + checkout kept |
-| delete | a person | gone | stopped | per retention |
+| delete | a person | gone | stopped | removed; refused with `409` while any checkout has uncommitted work |
 | pause | the machine (SIGTERM, reboot) | `paused` | stopped | branch + checkout kept |
 | resume | the next message to a paused or exited participant | `active` | respawned in its own worktree | untouched |
+
+A paused room can be dismissed or deleted as it is; neither verb respawns a harness first.
+A room whose every participant is `exited` still reads `active`, because each one revives by
+the resume path (R33).
 
 ```text
 room.json         id, cwd, title, base, createdAt, updatedAt, status
@@ -922,14 +927,24 @@ participant that kept its memory from one that did not.
 **Naming trap for M6-7.** `core/room.ts` already has an inner closure named `shutdown`
 that means *dismiss*, returned as `close()`, while `shutdown` in `daemon.ts` means the
 process dying. Same word, opposite meanings, one import apart. M6-2 renames: `close()`
-becomes `dismiss()`, the shared body becomes `teardown()` — cancel the live turn, stop the
-harness, release the worktree with `"keep"`, close the log — and M6-7 adds `pause()` and
-`resume()` on top of it. Dismiss leaves the log closed for good, while pause must leave the
-history replayable and the log appendable after a restart — so M6-7 also owns an append-mode
-writable reopen. `core/eventlog.ts` opens a new log with `flags: "w"` (truncate), its
-`openEventLog` is read-only on purpose, and that reader's `append()` is a no-op today. The reopen must also carry `seq` on from
-the log's existing line count: `createEventLog` counts from 0 (`core/eventlog.ts:65`), so a
-plain append-mode open would write a second `seq 1` and break `Last-Event-ID` resume.
+becomes `dismiss()`, and the part both verbs share becomes `teardown()` — cancel the live
+turn, stop the harness, close the log. M6-7 adds `pause()` and `resume()`, and pause differs
+from dismiss in three places:
+
+- **Only dismiss releases the worktree.** `release(id, "keep")` is not inert: on an
+  untouched checkout it removes the checkout and runs `git branch -D`
+  (`core/worktree.ts:372-376`). An idle participant that has written nothing is the likeliest
+  state at a reboot, and exactly the case R42 was re-opened for, so pause never calls
+  `release`. The harness is stopped, and nothing else holds the checkout.
+- **Resume reattaches the worktree; it does not acquire one.** `acquire` always runs
+  `git worktree add -b` (`core/worktree.ts:289`), which fails when the branch or the path
+  already exists. M6-7 owns a reattach path that refills `held` from the persisted `branch`,
+  `worktree` and `baseSha` — fields the record above already carries.
+- **Resume reopens the log for appending.** `core/eventlog.ts` opens a new log with
+  `flags: "w"`, which truncates (`:62`); `openEventLog` is read-only on purpose, and that
+  reader's `append()` is a no-op (`:178`). The writable reopen must also carry `seq` on from
+  the log's existing line count: `createEventLog` counts from 0 (`:65`), so a plain
+  append-mode open would write a second `seq 1` and break `Last-Event-ID` resume.
 
 ### Testing and release
 

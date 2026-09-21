@@ -2244,7 +2244,9 @@ loads it until Half B (`session/load`) lands. **And the rename lands here**, whi
 marked experimental: status `closed` becomes `dismissed`, `Room.close()` becomes
 `dismiss()`, its inner closure — confusingly named `shutdown` today, one import from
 `daemon.ts`'s process `shutdown` — becomes `teardown()`, and dismiss moves to
-`POST /rooms/:id/dismiss` so `DELETE /rooms/:id` can mean what R18 says it means. The
+`POST /rooms/:id/dismiss` so `DELETE /rooms/:id` can mean what R18 says it means: remove
+the room's worktrees, branches, record and log at once, refused with `409` naming the files
+while any checkout has uncommitted work. The
 rename also splits today's single `RoomStatus` (`core/room.ts:43`: `idle`/`busy`/`exited`/
 `closed`) into a room status — `active`/`paused`/`dismissed`, what `GET /rooms` and
 `GET /rooms/:id` publish — and a participant status — `idle`/`busy`/`exited`/`paused`/
@@ -2318,7 +2320,9 @@ the DTO. That is **Half A**, and it needs no new protocol method and no probe. *
 `session/load` itself — stays deferred with S3(c) and is gated on a measurement nobody has
 taken (see the backlog); when it lands, a harness that advertises `loadSession: true`
 reattaches with `resumed: "loaded"` instead. `exited` revives through the same fresh-session
-path, so a crashed room is recoverable too (R33).
+path, so a crashed room is recoverable too (R33). Pause never releases the worktree,
+resume reattaches it rather than creating one, and the log is reopened for appending with
+`seq` carried on — the sketch in `docs/CONTRACT-PLAN.md` names the code each one replaces.
 *Done when* a restart lists the room with every participant `paused`, its history replays,
 a message to one revives it and is answered, the DTO reports `resumed: "fresh"`, and a
 dismissed room is not revived by the same path.
