@@ -899,12 +899,6 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
  * log's size before the message, so a client waits for the first
  * `_client_turn_ended` after it rather than one it is still replaying.
  */
-/**
- * `POST /rooms/:id/messages {text}` — one turn. 202 once the message is on
- * the room's log; the answer arrives on `GET /rooms/:id/events`. `seq` is the
- * log's size before the message, so a client waits for the first
- * `_client_turn_ended` after it rather than one it is still replaying.
- */
 async function postMessage(
   id: string,
   req: IncomingMessage,
@@ -948,6 +942,10 @@ async function postPermission(
   send(res, 200, { id, allow });
 }
 
+/** A parse base for `req.url`, which is a path, not a URL. Never fetched;
+ *  named as a constant so it is not mistaken for a configurable endpoint. */
+const REQUEST_URL_BASE = "http://daemon";
+
 async function route(req: IncomingMessage, res: ServerResponse) {
   // Before the token and every route: a forged, duplicated or missing Host is
   // refused here. requireHostHeader: false lets this guard handle the last.
@@ -960,7 +958,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     send(res, 401, { error: "missing or wrong token" });
     return;
   }
-  const { pathname } = new URL(req.url ?? "/", "http://daemon");
+  const { pathname } = new URL(req.url ?? "/", REQUEST_URL_BASE);
   const one = /^\/runs\/([^/]+)$/.exec(pathname);
   const events = /^\/runs\/([^/]+)\/events$/.exec(pathname);
   const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
@@ -1004,7 +1002,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     await streamLog(log, req, res, gone.signal);
   } else if (req.method === "DELETE" && room) {
     // Synchronous, unlike a run's cancel: dismissing waits for the harness to
-    // exit and the worktree to be committed, which `stop()` bounds at 5 s.
+    // stop and the checkout to be released — kept, never committed (R37) —
+    // which `stop()` bounds at 5 s.
     const entry = rooms.get(room[1] as string);
     if (!entry) {
       send(res, 404, { error: `no room ${room[1]}` });
@@ -1097,6 +1096,8 @@ server.listen(port, "127.0.0.1", () => {
   // in place left it empty for an instant — the state `claim` treats as stale
   // — and let a second daemon take over a running one (M2-4, #34).
   const tmp = `${file}.tmp`;
+  // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
+  // pi-lens-ignore: no-raw-json-store-write
   writeFileSync(tmp, JSON.stringify({ pid: process.pid, port: bound, token }), {
     mode: 0o600,
   });

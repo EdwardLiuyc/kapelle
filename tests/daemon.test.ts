@@ -2584,6 +2584,7 @@ interface RoomReply {
   workspace: string;
   error: string;
   seq: number;
+  notices: { text: string }[];
 }
 
 /** Polls `GET /rooms/:id` until the room is no longer `busy`. */
@@ -2718,6 +2719,69 @@ test("dismissing a room commits nothing and leaves the checkout (R37)", async (t
     base,
     "the room's branch is still at the base commit",
   );
+});
+
+test("a release that fails is reported and the room still closes, not a 500 (R37)", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: REMEMBER,
+  });
+  assert.equal(open.status, 201, open.body.error);
+  const { id, workspace } = open.body;
+
+  // A locked worktree makes `git worktree remove --force` fail — the sweep
+  // suite relies on the same trick — so `release` throws on this untouched
+  // checkout. The room still has to close, the failure has to be visible, and
+  // the daemon must not be left unable to shut down.
+  assert.equal(
+    spawnSync("git", ["worktree", "lock", workspace], { cwd: root }).status,
+    0,
+  );
+  t.after(() => {
+    spawnSync("git", ["worktree", "unlock", workspace], { cwd: root });
+  });
+
+  const gone = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
+  assert.equal(gone.status, 200, gone.body.error);
+  assert.equal(gone.body.status, "closed");
+  assert.ok(
+    gone.body.notices.some((n) =>
+      /could not release the room's checkout/.test(n.text),
+    ),
+    `release failure not reported: ${JSON.stringify(gone.body.notices)}`,
+  );
+
+  // A rejected close used to escape `shutdown()`'s `Promise.all`, leaving
+  // `daemon.json` behind and skipping `process.exit(0)`.
+  process.kill(d.pid, "SIGTERM");
+  const r = await d.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(existsSync(d.file), false, "daemon.json is removed on shutdown");
+});
+
+test("chat.ts reports a daemon that went away instead of a dismissal, and exits non-zero", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await c.waitFor("type a message");
+
+  // A daemon that goes away ends the SSE stream, the same wire shape a
+  // dismissal has. The client must reconcile with `GET /rooms/:id` instead of
+  // reporting a dismissal that never happened.
+  process.kill(d.pid, "SIGKILL");
+  const r = await c.done;
+
+  assert.notEqual(r.code, 0, r.stdout);
+  assert.doesNotMatch(r.stdout, /the room was dismissed/);
+  assert.match(r.stderr, /lost the daemon|lost the room stream/);
 });
 
 test("a message while the harness is still answering is refused, and dismiss ends that turn", async (t) => {

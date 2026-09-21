@@ -61,7 +61,10 @@ export interface Room {
    */
   send(text: string): Promise<void>;
   /** Cancels a live turn, stops the harness, releases the room's worktree
-   *  **without committing** (R37) and closes the log. Safe to call twice. */
+   *  **without committing** (R37) and closes the log. Safe to call twice. A
+   *  release that fails is reported through `onNotice` and the checkout is
+   *  left where it is; `close()` still resolves, because a room that reads
+   *  `closed` can never be retried. */
   close(): Promise<void>;
 }
 
@@ -169,15 +172,31 @@ export async function openRoom({
   // worktree is removed and its branch rolled back either way.
   const shutdown = () => {
     closing ??= (async () => {
-      // The harness answers a cancel within 64 ms on every measured build
-      // (§M0-4), and `stop()` closes stdin after it, which ends the turn for
-      // one that ignores the cancel.
-      if (turn) agent.cancel();
-      await agent.stop();
-      await turn;
-      const kept = await worktrees?.release(ROOM_TASK, "keep");
-      if (kept) onNotice(kept);
-      await eventLog?.close();
+      try {
+        // The harness answers a cancel within 64 ms on every measured build
+        // (§M0-4), and `stop()` closes stdin after it, which ends the turn
+        // for one that ignores the cancel.
+        if (turn) agent.cancel();
+        await agent.stop();
+        await turn;
+        // A release that throws — a locked worktree, a missing git — must
+        // not strand the room: the log still closes below, `close()` still
+        // resolves, and the checkout is left in place rather than committed
+        // or deleted. The caller is told, because a room that reads `closed`
+        // can never be retried.
+        try {
+          const kept = await worktrees?.release(ROOM_TASK, "keep");
+          if (kept) onNotice(kept);
+        } catch (err) {
+          onNotice(
+            `could not release the room's checkout: ` +
+              `${err instanceof Error ? err.message : String(err)}; ` +
+              "it is left in place",
+          );
+        }
+      } finally {
+        await eventLog?.close();
+      }
     })();
     return closing;
   };
@@ -202,8 +221,11 @@ export async function openRoom({
     harness: spec.name,
     workspace,
     eventLog,
-    status: () =>
-      closing ? "closed" : exited ? "exited" : turn ? "busy" : "idle",
+    status: () => {
+      if (closing) return "closed";
+      if (exited) return "exited";
+      return turn ? "busy" : "idle";
+    },
     send(text) {
       if (closing) throw new Error("the room is closed");
       if (exited) throw new Error("the room's harness has exited");

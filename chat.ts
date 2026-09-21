@@ -97,7 +97,15 @@ async function api<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
-  return { status: res.status, body: text ? JSON.parse(text) : {} };
+  if (!text) return { status: res.status, body: {} as T & { error?: string } };
+  try {
+    return {
+      status: res.status,
+      body: JSON.parse(text) as T & { error?: string },
+    };
+  } catch {
+    throw new Error(`HTTP ${res.status}: response was not JSON`);
+  }
 }
 
 /**
@@ -126,7 +134,12 @@ async function follow(
       const block = buf.slice(0, end);
       buf = buf.slice(end + 2);
       for (const line of block.split("\n")) {
-        if (line.startsWith("data: ")) onEvent(JSON.parse(line.slice(6)));
+        if (!line.startsWith("data: ")) continue;
+        try {
+          onEvent(JSON.parse(line.slice(6)));
+        } catch {
+          throw new Error("malformed SSE frame from the daemon");
+        }
       }
     }
   }
@@ -182,6 +195,10 @@ function makePrinter(tty: boolean) {
         case "_client_harness_exited":
           line("! the harness exited");
           return;
+        default:
+          // An update this client does not render is dropped: the room emits
+          // more kinds than chat.ts draws, and a new one must not crash a chat.
+          break;
       }
     },
   };
@@ -253,12 +270,31 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
     return lines.shift() ?? null;
   };
 
+  /** The stream ended without our `DELETE`: ask the daemon what happened.
+   *  `closed` is someone else's dismissal; anything else means the daemon or
+   *  its stream is gone and the room's fate is unknown. */
+  const reconcile = async (): Promise<number> => {
+    try {
+      const r = await api<RoomView>(d, "GET", `/rooms/${room.id}`);
+      if (r.status === 200 && r.body.status === "closed") {
+        console.log("the room was dismissed");
+        return 0;
+      }
+      console.error(
+        `! lost the room stream (HTTP ${r.status}); the room may still be alive`,
+      );
+    } catch (err) {
+      console.error(`! lost the daemon: ${(err as Error).message}`);
+    }
+    return 1;
+  };
+
   let code = 0;
   for (;;) {
     if (tty) rl.prompt();
     const next = await Promise.race([nextLine(), ended]);
     if (next === "ended") {
-      console.log("the room was dismissed");
+      code = await reconcile();
       break;
     }
     if (next === null || next.trim() === "/leave") break;
