@@ -276,13 +276,27 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
   const reconcile = async (): Promise<number> => {
     try {
       const r = await api<RoomView>(d, "GET", `/rooms/${room.id}`);
-      if (r.status === 200 && r.body.status === "closed") {
-        console.log("the room was dismissed");
-        return 0;
+      if (r.status === 200) {
+        if (r.body.status === "closed") {
+          console.log("the room was dismissed");
+          return 0;
+        }
+        // The stream died, the room did not. Name the state the daemon
+        // reports rather than the status of the GET that reported it, and
+        // say how to get back in.
+        console.error(
+          `! lost the room stream; the room is still ${r.body.status} — ` +
+            `rejoin with: chat.ts attach ${room.id}`,
+        );
+      } else if (r.status === 404) {
+        console.error(
+          `! the daemon no longer knows room ${room.id}; it may have restarted`,
+        );
+      } else {
+        console.error(
+          `! lost the room stream (HTTP ${r.status}); the room may still be alive`,
+        );
       }
-      console.error(
-        `! lost the room stream (HTTP ${r.status}); the room may still be alive`,
-      );
     } catch (err) {
       console.error(`! lost the daemon: ${(err as Error).message}`);
     }

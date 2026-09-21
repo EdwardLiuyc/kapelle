@@ -2721,6 +2721,41 @@ test("dismissing a room commits nothing and leaves the checkout (R37)", async (t
   );
 });
 
+test("two dismissals racing both wait for the one teardown, and both get 200", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: REMEMBER,
+  });
+  assert.equal(open.status, 201, open.body.error);
+  const { id } = open.body;
+
+  // S6(a): a dismissal answers only once the harness has stopped and the
+  // checkout is released. `status()` reads `closed` the instant a close
+  // begins, so keying the 409 on it told the second caller the room was
+  // already dismissed while the harness was still alive.
+  const [first, second] = await Promise.all([
+    api<RoomReply>(d, "DELETE", `/rooms/${id}`),
+    api<RoomReply>(d, "DELETE", `/rooms/${id}`),
+  ]);
+  assert.equal(first.status, 200, first.body.error);
+  assert.equal(second.status, 200, second.body.error);
+
+  // Both waited for the same teardown, so the harness is gone by now.
+  const events = await roomEvents(d, id);
+  assert.equal(
+    events.filter((e) => e.update.sessionUpdate === "_client_harness_exited")
+      .length,
+    1,
+    "one harness, stopped once",
+  );
+
+  // A dismissal that arrives after the close has settled is still a 409.
+  assert.equal((await api<RoomReply>(d, "DELETE", `/rooms/${id}`)).status, 409);
+});
+
 test("a release that fails is reported and the room still closes, not a 500 (R37)", async (t) => {
   const d = await boot(t);
   const root = await gitRepo(t);

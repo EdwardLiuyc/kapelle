@@ -828,7 +828,12 @@ interface RoomState {
   notices: { text: string; kind?: Warning["kind"] }[];
 }
 
-const rooms = new Map<string, { room: Room; state: RoomState }>();
+const rooms = new Map<
+  string,
+  /** `dismissed` is set only once a `DELETE` has *finished* tearing the room
+   *  down, so it tells a settled close from one still in flight. */
+  { room: Room; state: RoomState; dismissed?: boolean }
+>();
 
 const roomView = ({ room, state }: { room: Room; state: RoomState }) => ({
   ...state,
@@ -1007,10 +1012,19 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const entry = rooms.get(room[1] as string);
     if (!entry) {
       send(res, 404, { error: `no room ${room[1]}` });
-    } else if (entry.room.status() === "closed") {
+    } else if (entry.dismissed) {
       send(res, 409, { error: `room ${room[1]} is already dismissed` });
     } else {
+      // **Not `status() === "closed"`**, which reads `closed` the instant a
+      // close begins: a second DELETE arriving mid-teardown would then be told
+      // the room was already dismissed while its harness was still alive and
+      // its checkout unreleased, which is exactly what S6(a) promises does not
+      // happen. `close()` hands every caller the same promise, so two racing
+      // dismissals both wait for the one teardown and both get their 200.
+      // `dismissed` is set after the await, so only a request that arrives
+      // once the close has settled is refused.
       await entry.room.close();
+      entry.dismissed = true;
       send(res, 200, roomView(entry));
     }
   } else if (req.method === "GET" && events) {
