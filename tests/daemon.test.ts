@@ -463,8 +463,10 @@ async function stalledHarness(t: TestContext, d: Daemon): Promise<number> {
           // Already gone: nothing left to kill.
         }
       });
-      assert.equal(child.runId, posted.body.id);
-      assert.equal(child.taskId, "stuck");
+      // S14's shape: one file for runs and rooms, told apart by `kind`.
+      assert.equal(child.kind, "run");
+      assert.equal(child.ownerId, posted.body.id);
+      assert.equal(child.unitId, "stuck");
       return child.pid;
     }
     await new Promise((ok) => setTimeout(ok, 50));
@@ -1720,7 +1722,7 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
       const [child] = JSON.parse(children).children;
       const tasks = JSON.parse(record).tasks;
       if (
-        child?.taskId === "stuck" &&
+        child?.unitId === "stuck" &&
         typeof child.startedAt === "string" &&
         tasks?.[0]?.status === "running"
       ) {
@@ -1828,7 +1830,7 @@ test("kill -9 with a harness that ignores stdin and SIGTERM: the next boot kills
     const record = await readFile(childrenFile, "utf8").catch(() => null);
     if (record) {
       const [child] = JSON.parse(record).children;
-      if (child?.taskId === "stuck" && typeof child.startedAt === "string") {
+      if (child?.unitId === "stuck" && typeof child.startedAt === "string") {
         harness = child.pid;
         break;
       }
@@ -2569,4 +2571,446 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
   assert.match(out, /done — 1 task/);
   // The timeout's deny stands: the late "y" wrote nothing.
   await assert.rejects(stat(join(cwd, "ACP_TEST.md")));
+});
+
+// --- chat rooms (chat MVP) ------------------------------------------------------
+
+const REMEMBER = `node ${MOCK_AGENT} --scenario remember`;
+
+interface RoomReply {
+  id: string;
+  status: string;
+  harness: string;
+  workspace: string;
+  error: string;
+  seq: number;
+  notices: { text: string }[];
+}
+
+/** Polls `GET /rooms/:id` until the room is no longer `busy`. */
+async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
+  for (const until = Date.now() + 20_000; Date.now() < until; ) {
+    const r = await api<RoomReply>(d, "GET", `/rooms/${id}`);
+    assert.equal(r.status, 200);
+    if (r.body.status !== "busy") return r.body;
+    await new Promise((ok) => setTimeout(ok, 25));
+  }
+  throw new Error(`room ${id} never went idle`);
+}
+
+/** Every event of a room, read from its SSE stream. Only call once the room
+ *  is dismissed: the stream ends only when its log closes. */
+async function roomEvents(
+  d: Daemon,
+  id: string,
+): Promise<{ agent: string; update: Record<string, unknown> }[]> {
+  const res = await fetch(`${d.url}/rooms/${id}/events`, {
+    headers: { authorization: `Bearer ${d.token}` },
+  });
+  assert.equal(res.status, 200);
+  return (await res.text())
+    .split("\n")
+    .filter((l) => l.startsWith("data: "))
+    .map((l) => JSON.parse(l.slice(6)));
+}
+
+test("a room keeps one harness and its context across messages, until it is dismissed", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: REMEMBER,
+  });
+  assert.equal(open.status, 201, open.body.error);
+  assert.equal(open.body.status, "idle");
+  const { id } = open.body;
+  // Its own checkout, named by the room id (S9), in the repository's
+  // workspace under `stateDirFor(root)` rather than inside the repository
+  // itself (#129).
+  assert.match(
+    open.body.workspace,
+    /\/wt\/room-\d{8}-\d{6}-[0-9a-z]{4}\/room$/,
+    "the room has its own checkout",
+  );
+  assert.ok(
+    !open.body.workspace.startsWith(cwd),
+    `the checkout is outside the repository, got ${open.body.workspace}`,
+  );
+
+  for (const text of ["alpha", "beta"]) {
+    const r = await api<RoomReply>(d, "POST", `/rooms/${id}/messages`, {
+      text,
+    });
+    assert.equal(r.status, 202, r.body.error);
+    await roomIdle(d, id);
+  }
+
+  const gone = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
+  assert.equal(gone.status, 200, gone.body.error);
+  assert.equal(gone.body.status, "closed");
+
+  const events = await roomEvents(d, id);
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  assert.deepEqual(
+    of("_client_user_message").map((e) => e.update.text),
+    ["alpha", "beta"],
+  );
+  assert.deepEqual(
+    of("agent_message_chunk").map(
+      (e) => (e.update.content as { text: string }).text,
+    ),
+    ["previous: (none)", "previous: alpha"],
+    "the second turn saw the first: one session, context kept",
+  );
+  assert.deepEqual(
+    of("_client_turn_ended").map((e) => e.update.stopReason),
+    ["end_turn", "end_turn"],
+  );
+  assert.equal(
+    of("_client_harness_spawned").length,
+    1,
+    "one harness for both turns",
+  );
+  assert.equal(of("_client_harness_exited").length, 1, "dismiss stopped it");
+
+  const late = await api<RoomReply>(d, "POST", `/rooms/${id}/messages`, {
+    text: "gamma",
+  });
+  assert.equal(late.status, 409);
+  assert.equal((await api<RoomReply>(d, "DELETE", `/rooms/${id}`)).status, 409);
+});
+
+test("dismissing a room commits nothing and leaves the checkout (R37)", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: REMEMBER,
+  });
+  assert.equal(open.status, 201, open.body.error);
+  const { id, workspace } = open.body;
+  const base = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).stdout.trim();
+
+  // Stand in for a participant that worked and did not commit. R37 says the
+  // supervisor never commits for it — not at close, not ever.
+  await writeFile(join(workspace, "draft.txt"), "half a thought\n");
+
+  assert.equal((await api(d, "DELETE", `/rooms/${id}`)).status, 200);
+
+  // The checkout is still there, with the work still uncommitted in it, and
+  // the branch has not moved. The spike released as `done`, which committed
+  // `draft.txt` under our name and deleted the directory it was in.
+  assert.ok(
+    existsSync(join(workspace, "draft.txt")),
+    "the work is still there",
+  );
+  assert.equal(
+    spawnSync("git", ["rev-parse", `refs/heads/kapelle/${id}/room`], {
+      cwd: root,
+      encoding: "utf8",
+    }).stdout.trim(),
+    base,
+    "the room's branch is still at the base commit",
+  );
+});
+
+test("two dismissals racing both wait for the one teardown, and both get 200", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: REMEMBER,
+  });
+  assert.equal(open.status, 201, open.body.error);
+  const { id } = open.body;
+
+  // S6(a): a dismissal answers only once the harness has stopped and the
+  // checkout is released. `status()` reads `closed` the instant a close
+  // begins, so keying the 409 on it told the second caller the room was
+  // already dismissed while the harness was still alive.
+  const [first, second] = await Promise.all([
+    api<RoomReply>(d, "DELETE", `/rooms/${id}`),
+    api<RoomReply>(d, "DELETE", `/rooms/${id}`),
+  ]);
+  assert.equal(first.status, 200, first.body.error);
+  assert.equal(second.status, 200, second.body.error);
+
+  // Both waited for the same teardown, so the harness is gone by now.
+  const events = await roomEvents(d, id);
+  assert.equal(
+    events.filter((e) => e.update.sessionUpdate === "_client_harness_exited")
+      .length,
+    1,
+    "one harness, stopped once",
+  );
+
+  // A dismissal that arrives after the close has settled is still a 409.
+  assert.equal((await api<RoomReply>(d, "DELETE", `/rooms/${id}`)).status, 409);
+});
+
+test("a release that fails is reported and the room still closes, not a 500 (R37)", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: REMEMBER,
+  });
+  assert.equal(open.status, 201, open.body.error);
+  const { id, workspace } = open.body;
+
+  // A locked worktree makes `git worktree remove --force` fail — the sweep
+  // suite relies on the same trick — so `release` throws on this untouched
+  // checkout. The room still has to close, the failure has to be visible, and
+  // the daemon must not be left unable to shut down.
+  assert.equal(
+    spawnSync("git", ["worktree", "lock", workspace], { cwd: root }).status,
+    0,
+  );
+  t.after(() => {
+    spawnSync("git", ["worktree", "unlock", workspace], { cwd: root });
+  });
+
+  const gone = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
+  assert.equal(gone.status, 200, gone.body.error);
+  assert.equal(gone.body.status, "closed");
+  assert.ok(
+    gone.body.notices.some((n) =>
+      /could not release the room's checkout/.test(n.text),
+    ),
+    `release failure not reported: ${JSON.stringify(gone.body.notices)}`,
+  );
+
+  // A rejected close used to escape `shutdown()`'s `Promise.all`, leaving
+  // `daemon.json` behind and skipping `process.exit(0)`.
+  process.kill(d.pid, "SIGTERM");
+  const r = await d.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(existsSync(d.file), false, "daemon.json is removed on shutdown");
+});
+
+test("chat.ts reports a daemon that went away instead of a dismissal, and exits non-zero", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await c.waitFor("type a message");
+
+  // A daemon that goes away ends the SSE stream, the same wire shape a
+  // dismissal has. The client must reconcile with `GET /rooms/:id` instead of
+  // reporting a dismissal that never happened.
+  process.kill(d.pid, "SIGKILL");
+  const r = await c.done;
+
+  assert.notEqual(r.code, 0, r.stdout);
+  assert.doesNotMatch(r.stdout, /the room was dismissed/);
+  assert.match(r.stderr, /lost the daemon|lost the room stream/);
+});
+
+test("a message while the harness is still answering is refused, and dismiss ends that turn", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: `node ${MOCK_AGENT} --scenario stall`,
+  });
+  assert.equal(open.status, 201, open.body.error);
+  const { id } = open.body;
+
+  assert.equal(
+    (await api(d, "POST", `/rooms/${id}/messages`, { text: "one" })).status,
+    202,
+  );
+  const busy = await api<RoomReply>(d, "POST", `/rooms/${id}/messages`, {
+    text: "two",
+  });
+  assert.equal(busy.status, 409);
+  assert.match(busy.body.error, /still answering/);
+
+  assert.equal((await api(d, "DELETE", `/rooms/${id}`)).status, 200);
+  const ended = (await roomEvents(d, id)).filter(
+    (e) => e.update.sessionUpdate === "_client_turn_ended",
+  );
+  assert.equal(ended.length, 1, "the live turn ended on dismiss");
+});
+
+test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a bad message", async (t) => {
+  const d = await boot(t);
+  const repo = await gitRepo(t);
+
+  const unadded = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd: repo,
+    cmd: REMEMBER,
+  });
+  assert.equal(unadded.status, 403);
+
+  const cwd = await added(d, repo);
+  const none = await api<RoomReply>(d, "POST", "/rooms", { cwd });
+  assert.equal(none.status, 400);
+  assert.match(none.body.error, /"agent" or "cmd"/);
+  const unknown = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agent: "nope",
+  });
+  assert.equal(unknown.status, 400);
+  assert.match(unknown.body.error, /unknown agent "nope"/);
+
+  assert.equal(
+    (await api(d, "POST", "/rooms/missing/messages", { text: "x" })).status,
+    404,
+  );
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: REMEMBER,
+  });
+  const empty = await api(d, "POST", `/rooms/${open.body.id}/messages`, {
+    text: " ",
+  });
+  assert.equal(empty.status, 400);
+  await api(d, "DELETE", `/rooms/${open.body.id}`);
+});
+
+test("chat.ts talks to a room end to end: messages in, answers out, /dismiss stops it", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("alpha\nbeta\n/dismiss\n");
+  const r = await c.done;
+
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /you: alpha\nmock-agent: previous: \(none\)\n/);
+  assert.match(r.stdout, /you: beta\nmock-agent: previous: alpha\n/);
+  assert.match(r.stdout, /the room was dismissed/);
+  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  assert.deepEqual(
+    rooms.body.map((room) => room.status),
+    ["closed"],
+  );
+});
+
+test("chat.ts reaches the daemon over HTTP only: its one repo import is core/runtime.ts", async () => {
+  const source = await readFile(
+    join(import.meta.dirname, "..", "chat.ts"),
+    "utf8",
+  );
+  const imports = [...source.matchAll(/^import[^;]*?from "([^"]+)";/gms)].map(
+    (m) => m[1],
+  );
+  const local = imports.filter((spec) => !spec?.startsWith("node:"));
+  assert.deepEqual(local, ["./core/runtime.ts"]);
+});
+
+test("chat.ts /leave keeps the room alive, and attach replays the conversation before the next turn", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const env = { XDG_RUNTIME_DIR: runtime };
+
+  const first = spawnCli(
+    t,
+    ["new", "--cmd", REMEMBER, "--cwd", cwd],
+    "chat.ts",
+    env,
+  );
+  first.child.stdin.end("alpha\n/leave\n");
+  assert.equal((await first.done).code, 0);
+
+  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  assert.deepEqual(
+    rooms.body.map((room) => room.status),
+    ["idle"],
+    "leaving kept it",
+  );
+  const id = rooms.body[0]?.id as string;
+
+  const again = spawnCli(t, ["attach", id], "chat.ts", env);
+  again.child.stdin.end("beta\n/dismiss\n");
+  const r = await again.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(
+    r.stdout,
+    /you: alpha\nmock-agent: previous: \(none\)\n[\s\S]*you: beta\nmock-agent: previous: alpha\n/,
+    "history first, then the new turn — on the same harness",
+  );
+});
+
+/** `script` from util-linux gives a child a real pseudo-terminal. Its flags
+ *  differ on macOS, so the TTY test is Linux-only; it skips elsewhere. */
+const noPty =
+  process.platform !== "linux" ||
+  spawnSync("script", ["--version"]).status !== 0
+    ? "needs util-linux script(1) for a pseudo-terminal"
+    : false;
+
+test("chat.ts on a real terminal shows what the operator types", {
+  skip: noPty,
+}, async (t) => {
+  // Terminal mode switches the terminal's own echo off, so readline has to
+  // draw typed keys itself; without an `output` stream it drew none, and the
+  // operator typed blind. Pipes never showed it: only a TTY reaches that path.
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const cmd = `node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`;
+  const child = spawn("script", ["-qfec", cmd, "/dev/null"], {
+    cwd: join(import.meta.dirname, ".."),
+    env: { ...process.env, XDG_RUNTIME_DIR: runtime },
+  });
+  t.after(() => void child.kill("SIGKILL"));
+
+  let out = "";
+  const seen = (text: string) =>
+    new Promise<void>((ok, fail) => {
+      const bail = setTimeout(
+        () => fail(new Error(`never saw ${text}: ${out}`)),
+        20_000,
+      );
+      const check = () => {
+        if (!out.includes(text)) return;
+        clearTimeout(bail);
+        child.stdout.off("data", check);
+        ok();
+      };
+      child.stdout.on("data", check);
+      check();
+    });
+  child.stdout.setEncoding("utf8").on("data", (c: string) => {
+    out += c;
+  });
+  const exited = new Promise((ok) => child.on("close", ok));
+
+  // The prompt, not the banner: keys sent before readline takes the terminal
+  // would be echoed by the terminal itself and prove nothing.
+  await seen("> ");
+  child.stdin.write("alpha\r");
+  await seen("previous: (none)");
+  child.stdin.write("/dismiss\r");
+  await seen("the room was dismissed");
+  await exited;
+
+  // Readline redraws with cursor codes between the prompt and the text.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
+  const screen = out.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+  assert.match(screen, /> alpha/, "the typed line is on screen");
+  assert.doesNotMatch(
+    screen,
+    /you: alpha/,
+    "and it is not printed a second time",
+  );
 });

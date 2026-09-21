@@ -2059,7 +2059,9 @@ multi-room surface. The browser dashboard stories are retired (A3, A7); `chat.ts
 pi-tui are the direction.
 
 **M4-1 · pi-tui screen as the first shared-client consumer · M · needs M6-0, M5-10**
-The spike screen becomes a consumer of `client/`: its `Daemon`, `api`, `follow`,
+`spike/chat-tui` is still one unlanded commit — M6-0 deliberately left it there (#144), so
+this story rebases it onto master as its first step. The spike screen becomes a consumer
+of `client/`: its `Daemon`, `api`, `follow`,
 `RoomView` and `LogEvent` move into the module, and `chat.ts` keeps only the screen and
 the commands. Ratify `@earendil-works/pi-tui` 0.85.1 under M1c-7's rule (presentation
 only, worst failure cosmetic, pinned exactly), dedupe the nested `marked` 18.0.5 with an
@@ -2172,24 +2174,34 @@ from last to **first, as M6-0** — it needs nothing, and it is the only story t
 more expensive the longer it waits. R37–R42 close six decisions the stories below were
 reading without an answer.
 
-**M6-0 · Land the spike on master · M · needs nothing**
-Rebase `chat-mvp` and `spike/chat-tui` onto current master (S1a) and reconcile with what
+**M6-0 · Land the spike on master · M · needs nothing · landed 2026-09-21 (#144)**
+Rebase `chat-mvp` onto current master (S1a) and reconcile with what
 landed since: the M2-3 permission queue, the M2-5 sweep, M2-6 persistence, M2-7 config,
 the M2-8 Host guard, M2-9 `attach`, M2-10 `ps`. Two corrections the spike predates: room
 state moves out of `.kapelle/rooms/` to `stateDirFor(root)` (#129), and `children.json`
 takes S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
+**Only `chat-mvp` lands, and `spike/chat-tui` is left where it is** — not rebased here
+either, because M4-1 rebases it anyway and doing it twice buys nothing. M4-1 is where
+`@earendil-works/pi-tui` is ratified and its nested `marked` deduped, and it needs M5-10
+first; `package.json` keeps `marked` as its only runtime dependency.
 **No new features** — one participant per room, `auto` only, no roster and no permission
-answering — and `kapelle chat` ships marked **experimental**, so the room API is not a
-promise until M5-1 documents it. R37 applies from here. The spike's `close()` releases as
+answering — and `chat.ts` ships marked **experimental**, so the room API is not a
+promise until M5-1 documents it. The `kapelle chat` verb stays with M6-9 (S7a). R37
+applies from here. The spike's `close()` releases as
 `done`, which commits the work and removes the checkout; both must stop. `release` already
 behaves as R37 wants under a non-releasing status, but every such label (`failed`,
-`cancelled`, `timed_out`) misdescribes a room that simply closed — so this story picks
-either a participant status `release` accepts, or a `release` that takes the decision
-instead of a `TaskStatus`, in the smallest change that leaves runs untouched. Add R40's `ponytail:` comment where the
-room runtime spawns a harness.
+`cancelled`, `timed_out`) misdescribes a room that simply closed. **Settled: `release`
+takes a `ReleaseAction` (`"commit" | "keep"`)**, `RELEASES` moves to `core/run.ts` beside
+`TaskStatus` and converts at its one call site, and a room always passes `"keep"` — so
+`core/worktree.ts` imports no run word at all. Add R40's `ponytail:` comment where the
+room runtime spawns a harness. **S9 lands here too:** `newRoomId()`
+(`room-YYYYMMDD-HHMMSS-xxxx`) plus a private `assertOwnerId` that `branchName` validates
+with, since `core/worktree.ts` serves runs and rooms alike; `assertRunId` still rejects a
+room id. `assertRoomId` and `roomBranchName` wait for a caller — `npm run knip` fails on
+an unused export.
 *Done when* the spike's seven `tests/daemon.test.ts` cases pass on master, `npm run check`
 and `npm run fmt:check` are clean, room state is under `stateDirFor(root)`, and
-`kapelle chat` drives a room end to end against `mock-agent.mjs`.
+`node chat.ts` drives a room end to end against `mock-agent.mjs`.
 Decisions: S1, S9, S13, S14, R37, R40.
 
 **M6-1 · Design the room container · S · needs M6-0**
@@ -2197,6 +2209,12 @@ With the runtime on master, design what the spike does not have: the roster, the
 empty/starter choice, per-participant settings, streams, persistence, queue, base choice
 and title. No code lands; the R/S decisions are recorded and the API shapes sketched for
 the rest.
+**R42 is re-opened here (#144, 2026-09-21):** the owner wants a machine reboot to be
+resumable — idle agents with uncommitted work, restart the daemon, keep talking to them.
+Today shutdown calls the same `close()` as a dismiss, so a restart is a stop, and R42(b)
+then makes the restored room read-only. `loadSession: true` on every measured harness
+means S3(c) is unscheduled, not blocked. R37's `keep` leaves the checkout in place either
+way, so this decision costs nothing to defer to M6-1 and everything to get wrong later.
 *Done when* every R decision that shapes an API has an answer and M6-2..M6-9 can be
 picked up without re-opening the model.
 Decisions: R1–R23, R31–R42, S10, S12, S13.
@@ -2204,8 +2222,8 @@ Decisions: R1–R23, R31–R42, S10, S12, S13.
 **M6-2 · Room container: roster, empty/starter, DTOs · M · needs M6-1, M5-1, M5-10**
 The room record (repo, roster, title, created/updated); `POST /rooms` accepts an empty
 room or a starter participant and answers 201 once the session exists (S13); `RoomDto`
-and `ParticipantDto` in `client/contract.ts`; `newRoomId()` in `core/ids.ts`
-(`room-YYYYMMDD-HHMMSS-xxxx`), `assertRoomId`, `roomBranchName`, opaque participant ids.
+and `ParticipantDto` in `client/contract.ts`; `assertRoomId` and `roomBranchName` once
+something imports them (`newRoomId()` landed in M6-0, #144), opaque participant ids.
 No dependency field and no scheduler.
 *Done when* empty and starter rooms round-trip through `GET /rooms/:id`, ids are tested,
 and the DTOs are covered by contract tests.
@@ -2330,7 +2348,8 @@ capacity is one large story lighter.
 
 Each carries its trigger, so none of these is waiting to become a blocker by accident:
 
-- **Global live-harness cap (R40).** Added 2026-09-20 with the room model. Rooms make the
+- **Global live-harness cap (R40).** Added 2026-09-20 with the room model; the
+  `ponytail:` anchor is the file header of `core/room.ts` since M6-0 (#144). Rooms make the
   live subprocess count `runs + Σ(busy participants)` across every room, and the default
   participant mode is `auto`, so nothing asks a human before a turn starts. `maxConcurrency`
   bounds **one run**; nothing bounds the daemon. v1 caps nothing on purpose — a cap is a

@@ -82,6 +82,22 @@ export type TaskStatus =
  * and left a half-written file on disk, so it ranks just below outright
  * failure (`docs/STORIES.md`, M1b-2 Gap 2 amendment).
  */
+/**
+ * Which statuses hand the worktree back as a commit (R37, moved here from
+ * `core/worktree.ts`).
+ *
+ * `done` and `warned` are the two the CLI exits 0 for (`cli.ts:475`), and
+ * teardown agrees with that rather than with a narrower reading of success.
+ * Everything below them keeps its worktree so partial work stays inspectable.
+ * It lives beside `TaskStatus` because it is a claim about task vocabulary;
+ * `release` itself now takes a plain `ReleaseAction`, so a room — which has
+ * no verdict — never has to borrow one of these words.
+ */
+export const RELEASES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  "done",
+  "warned",
+]);
+
 const BY_SEVERITY: readonly TaskStatus[] = [
   "done",
   "warned",
@@ -849,7 +865,10 @@ async function runOne(
     // A warning, not a throw: retention that declined to act — a checkout the
     // harness left on another branch — is a thing to tell the operator about,
     // and the work is still on disk either way.
-    const kept = await worktrees?.release(task.id, settled.status);
+    const kept = await worktrees?.release(
+      task.id,
+      RELEASES.has(settled.status) ? "commit" : "keep",
+    );
     if (kept) {
       onNotice(kept);
       // The checkout was kept because it was not on the advertised branch, so

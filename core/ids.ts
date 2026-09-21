@@ -44,6 +44,29 @@ export function newRunId(now: Date = new Date()): string {
   return `${date}-${time}-${suffix}`;
 }
 
+/** A room id is a run id behind a `room-` prefix (S9): same stamp, same sort
+ *  order, but never mistakable for a run on disk, in a branch name or in
+ *  `children.json`. `assertRunId` rejects one, which is what stops
+ *  `kapelle merge <id>` reaching into a room's branches. */
+const ROOM_ID_PATTERN = /^room-\d{8}-\d{6}-[0-9a-z]{4}$/;
+
+export function newRoomId(now: Date = new Date()): string {
+  return `room-${newRunId(now)}`;
+}
+
+/**
+ * A run id **or** a room id — the two things that own a branch namespace and
+ * a worktree directory. `core/worktree.ts` serves both, so it validates here
+ * rather than against either vocabulary alone.
+ */
+function assertOwnerId(id: string): string {
+  if (RUN_ID_PATTERN.test(id) || ROOM_ID_PATTERN.test(id)) return id;
+  throw new Error(
+    `invalid run or room id ${JSON.stringify(id)}: must match ` +
+      `${RUN_ID_PATTERN.source} or ${ROOM_ID_PATTERN.source}`,
+  );
+}
+
 /** Returns the id unchanged, or throws naming both the id and the rule. */
 export function assertRunId(id: string): string {
   if (!RUN_ID_PATTERN.test(id)) {
@@ -72,9 +95,10 @@ export function assertTaskId(id: string): string {
  *  and a run whose directory and branches disagree reads as two tools. */
 const BRANCH_PREFIX = "kapelle";
 
-/** The branch a task's work lands on. Validates **both** halves, so no caller
- *  can build a ref that `git check-ref-format` would reject. */
-export function branchName(runId: string, taskId: string): string {
-  assertRunId(runId);
-  return `${BRANCH_PREFIX}/${runId}/${assertTaskId(taskId)}`;
+/** The branch a task's or a participant's work lands on. Validates **both**
+ *  halves, so no caller can build a ref that `git check-ref-format` would
+ *  reject. */
+export function branchName(ownerId: string, taskId: string): string {
+  assertOwnerId(ownerId);
+  return `${BRANCH_PREFIX}/${ownerId}/${assertTaskId(taskId)}`;
 }

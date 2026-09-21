@@ -20,7 +20,12 @@ import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import { isolateStateHome } from "../../integration/helpers.ts";
 import { createEventBus } from "../events.ts";
-import { runRun, type TaskExecutor, type TaskStatus } from "../run.ts";
+import {
+  RELEASES,
+  runRun,
+  type TaskExecutor,
+  type TaskStatus,
+} from "../run.ts";
 import { validateRun } from "../runfile.ts";
 import { stateDirFor } from "../runtime.ts";
 import {
@@ -84,7 +89,7 @@ async function workThenRelease(
 ): Promise<string> {
   const path = await worktrees.acquire(taskId);
   await writeFile(join(path, "made.txt"), "work\n");
-  await worktrees.release(taskId, status);
+  await worktrees.release(taskId, RELEASES.has(status) ? "commit" : "keep");
   return path;
 }
 
@@ -286,7 +291,7 @@ test("a task that changed nothing rolls back worktree and branch", async (t) => 
 
   // The spawn-failure shape: the worktree exists, the harness never wrote.
   const path = await worktrees.acquire("plan");
-  await worktrees.release("plan", "failed");
+  await worktrees.release("plan", "keep");
 
   assert.equal(existsSync(path), false);
   assert.equal(await hasBranch(root, "plan"), false);
@@ -305,7 +310,7 @@ for (const status of ["done", "warned"] as const) {
     // the branch always survives for a released task; only the rollback of a
     // non-releasing status deletes one.
     const path = await worktrees.acquire(status);
-    await worktrees.release(status, status);
+    await worktrees.release(status, "commit");
 
     assert.equal(existsSync(path), false);
     assert.equal(await hasBranch(root, status), true);
@@ -326,7 +331,7 @@ test("ignored files in the worktree do not block removal", async (t) => {
   await writeFile(join(path, "node_modules", "state.json"), "{}\n");
   await writeFile(join(path, ".gitignore"), "node_modules/\n");
   await writeFile(join(path, "src.txt"), "work\n");
-  await worktrees.release("build", "done");
+  await worktrees.release("build", "commit");
 
   assert.equal(existsSync(path), false);
   const listed = await git(
@@ -459,7 +464,7 @@ test("untracked output survives status.showUntrackedFiles=no", async (t) => {
 
   const path = await worktrees.acquire("plan");
   await writeFile(join(path, "RESULT.md"), "the whole output of the task\n");
-  assert.equal(await worktrees.release("plan", "done"), null);
+  assert.equal(await worktrees.release("plan", "commit"), null);
 
   assert.equal(existsSync(path), false);
   const listed = await git(
@@ -495,7 +500,7 @@ test("a checkout left on another branch is kept, with a warning", async (t) => {
   await git(path, "checkout", "-q", "-b", "the-agents-own-branch");
   await writeFile(join(path, "RESULT.md"), "the work\n");
 
-  const warning = await worktrees.release("plan", "done");
+  const warning = await worktrees.release("plan", "commit");
 
   assert.match(String(warning), /the-agents-own-branch/);
   assert.match(String(warning), /Nothing was committed or removed/);
@@ -516,7 +521,7 @@ test("a detached HEAD is kept too, and says so", async (t) => {
   await git(path, "checkout", "-q", "--detach");
   await writeFile(join(path, "RESULT.md"), "the work\n");
 
-  const warning = await worktrees.release("plan", "done");
+  const warning = await worktrees.release("plan", "commit");
 
   assert.match(String(warning), /detached HEAD/);
   assert.equal(existsSync(path), true);

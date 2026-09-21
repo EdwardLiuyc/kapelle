@@ -607,7 +607,8 @@ on the same session with the first turn's context kept, on all four harnesses
 - **M6-0 — land the spike first.** `chat-mvp` and `spike/chat-tui` already prove the
   single-participant runtime and the screen. They are 13 commits behind master, so the
   rebase is the one piece of work that grows while it waits — it goes before M5 and before
-  the room design, with no new features, behind an experimental `kapelle chat`.
+  the room design, with no new features, behind an experimental `chat.ts` — the
+  `kapelle chat` verb that runs it comes later, with M6-9.
 - **The room container** — the room record, an empty or starter room, `RoomDto` and
   `ParticipantDto`, and a room id of its own (`newRoomId()`, never a run id).
 - **Participants** — add, remove, list, rename; an opaque id plus a unique display name;

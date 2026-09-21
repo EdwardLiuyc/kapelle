@@ -43,7 +43,6 @@ import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { branchName } from "./ids.ts";
-import type { TaskStatus } from "./run.ts";
 import { stateDirFor } from "./runtime.ts";
 
 const run = promisify(execFile);
@@ -60,22 +59,17 @@ const run = promisify(execFile);
 export const STATE_DIR = ".kapelle";
 
 /**
- * Which statuses give the worktree back.
+ * What `release` should do with a checkout: turn it into a commit on the task
+ * branch and remove it, or leave it where it is.
  *
- * `done` and `warned` are the two the CLI exits 0 for (`cli.ts:475`), and
- * teardown agrees with that rather than with a narrower reading of success.
- * Everything below them keeps its worktree so partial work stays inspectable.
- *
- * `warned` (M1b-4) and `timed_out` (M1c-1) have no producer in the tree yet.
- * They are handled here, not later, for the reason M1b-2 gave for shipping the
- * whole severity ordering ahead of its producers: the union is already the
- * contract, and a rung added afterwards rewrites this table and its test
- * rather than extending them.
+ * **The caller decides, because only the caller has a verdict.** A run maps
+ * its `TaskStatus` through `RELEASES` (`core/run.ts`); a room has no verdict
+ * at all and always keeps, because the supervisor never commits a
+ * participant's branch (R37). Passing a status here would force a room to
+ * borrow a task word — `done` commits work nobody approved, and `failed`
+ * libels a room that simply closed.
  */
-const RELEASES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
-  "done",
-  "warned",
-]);
+type ReleaseAction = "commit" | "keep";
 
 /**
  * The paths the working tree shows as changed — M1b-4's cross-check input.
@@ -173,7 +167,7 @@ export interface Worktrees {
    *  that produced nothing at all. Safe to call for a task never acquired.
    *  Returns a warning to print when it kept a checkout it meant to remove,
    *  and `null` when retention went as planned. */
-  release(taskId: string, status: TaskStatus): Promise<string | null>;
+  release(taskId: string, action: ReleaseAction): Promise<string | null>;
   /** The branch and base SHA for an acquired task, or undefined when the task
    *  never acquired a worktree. Used to write the run record merge reads. */
   info(taskId: string): { branch: string; baseSha: string } | undefined;
@@ -337,7 +331,7 @@ export async function openWorktrees(
         return task && { branch: task.branch, baseSha: task.baseSha };
       },
 
-      async release(taskId, status) {
+      async release(taskId, action) {
         const task = held.get(taskId);
         if (!task) return null;
         held.delete(taskId);
@@ -371,19 +365,19 @@ export async function openWorktrees(
         const untouched = !dirty && head === task.baseSha;
 
         // Nothing was produced, so there is nothing to inspect. The branch
-        // decision still keys on status: a done/warned task with an empty
+        // decision still keys on the action: a committing task with an empty
         // diff leaves its branch at the base ref (#19), while a task that
         // failed before it wrote anything is the rollback half of the
         // transactional spawn — no worktree and no branch.
         if (untouched) {
           await removeWorktree(root, task.path);
-          if (!RELEASES.has(status)) {
+          if (action === "keep") {
             await git(root, ["branch", "-D", task.branch]);
           }
           return null;
         }
 
-        if (!RELEASES.has(status)) return null;
+        if (action === "keep") return null;
 
         // The commit is what makes "remove the worktree, keep the branch"
         // coherent: without it, removal either refuses on the dirty tree or
