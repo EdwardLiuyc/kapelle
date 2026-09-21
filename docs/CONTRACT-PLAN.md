@@ -183,11 +183,11 @@ shipped. They start on the same day.
 ```text
 M5-1 ─┬─ M5-2 ─┬─ M5-10 ─┬─ M4-1 ─ M4-2 ─┬─ M4-3
       │        └─ M5-9   │               └─ M4-4
+      ├─ M5-3            │
       ├─ M5-4 ───────────┤
       ├─ M5-5 ───────────┘
-      ├─ M5-3 ─┬─ M5-11
-      ├─ M5-6 ─┤
-      └─ M5-7 ─┘
+      ├─ M5-6
+      └─ M5-7
 
 M6-0 ─ M6-1 ─ M6-2 ─ M6-3 ─ M6-4 ─┬─ M6-5 ─ M6-9
                                   ├─ M6-6 (L)
@@ -198,8 +198,10 @@ M6-0 ─ M6-1 ─ M6-2 ─ M6-3 ─ M6-4 ─┬─ M6-5 ─ M6-9
 The edges that cross between the two roots, drawn as text because drawing them as lines
 makes the graph unreadable: **M6-2** also needs M5-1 and M5-10; **M4-1** also needs M6-0;
 **M4-2** also needs M6-3; **M6-5** also needs M5-4; **M4-3** also needs M5-4 and M6-5;
-**M6-9** also needs M4-2. **M5-8** stands alone — M2-3 and M2-9 are its only needs and both
-shipped, so it is ready now and blocks nothing.
+**M6-9** also needs M4-2. **M5-11** needs all six of M5-1..M5-6, which is six lines into one node, so it is named
+here too. **M5-7 is not one of them** — M5-11 adds an idempotency test *if* M5-7 has
+landed, which is a condition, not a dependency. **M5-8** stands alone: M2-3 and M2-9 are
+its only needs and both shipped, so it is ready now and blocks nothing.
 
 M6-0 goes first within its own root: it is a rebase, it needs nothing, and it is the only
 story that gets cheaper by being done sooner. M6-1 then designs the room container on a

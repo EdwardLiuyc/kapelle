@@ -1,6 +1,12 @@
 ACP_TEST.md
 node_modules/
 .pi-lens-probe-home/
+
+# Rendered diagrams for the contract and room-model interviews: HTML, JSON and
+# PNG generated from the plan prose, ~70 files. The source of truth is
+# `docs/CONTRACT-PLAN.md`; these are output, regenerated on demand, and nothing
+# committed points at them — which is why the two lines below match no tracked
+# path. Named, not globbed, for the same reason as the worktrees rule.
 docs/contract/
 docs/room-model/
 
