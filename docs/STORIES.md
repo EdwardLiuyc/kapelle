@@ -2252,8 +2252,9 @@ bases can pass the overlap check while the squash replays the parent's work. The
 `done`/`warned` gate (`:65`) also names a task status a participant never reaches (R37).
 Deliverables: a preflight correct for per-participant bases; a test proving the
 multi-branch squash is right when one branch's history contains another's; `kapelle room
-merge` (R31b as the surface, R31c as the v1 subset), merging in creation order and
-aborting atomically; and the participant states a room merge accepts.
+merge <roomId>` as the surface (R31b), scoped in v1 to one participant at a time
+(`--participant`) with whole-room merge as the additive follow-up, merging in creation
+order and aborting atomically; and the participant states a room merge accepts.
 *Done when* two participants work in parallel without touching each other's files, a
 chained-base pair merges without replaying the parent's commits, and a real conflict is
 refused by name with nothing half-landed.

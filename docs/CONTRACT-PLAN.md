@@ -177,22 +177,34 @@ Needs are hard ordering only.
 
 Proposed critical path:
 
+**Two roots, and no edge between them.** M6-0 needs nothing; M5-1 needs only M2-10, which
+shipped. They start on the same day.
+
 ```text
-M6-0 (port) ─┬─ M5-1 ─ M5-2 ─ M5-10 ─┬─ M4-1 ─ M4-2 ─┬─ M4-3 ─ M6-9
-             │        │              │              └─ M4-4
-             │        ├─ M5-3 ─ M5-4 ─ M5-6 ──┘
-             │        ├─ M5-5 ─────────────────┘
-             │        └─ M5-7 ─ M5-8 ─ M5-9 ─ M5-11
-             └─ M6-1 (design) ─ M6-2 ─ M6-3 ─ M6-4 ─┬─ M6-5 ─────────┘
-                                                    ├─ M6-6 (L)
-                                                    ├─ M6-7
-                                                    └─ M6-8 (deferred by R2)
+M5-1 ─┬─ M5-2 ─┬─ M5-10 ─┬─ M4-1 ─ M4-2 ─┬─ M4-3
+      │        └─ M5-9   │               └─ M4-4
+      ├─ M5-4 ───────────┤
+      ├─ M5-5 ───────────┘
+      ├─ M5-3 ─┬─ M5-11
+      ├─ M5-6 ─┤
+      └─ M5-7 ─┘
+
+M6-0 ─ M6-1 ─ M6-2 ─ M6-3 ─ M6-4 ─┬─ M6-5 ─ M6-9
+                                  ├─ M6-6 (L)
+                                  ├─ M6-7
+                                  └─ M6-8 (deferred by R2)
 ```
 
-M6-0 comes first: it is a rebase, it needs nothing, and it is the only story that gets
-cheaper by being done sooner. M6-1 then designs the room container on a runtime that
-runs. M5-10 absorbs `chat.ts`'s private client, so M4-1 is a refactor onto one module.
-M6-2..M6-8 parallel the contract work once M6-1 and M5-1/M5-10 exist.
+The edges that cross between the two roots, drawn as text because drawing them as lines
+makes the graph unreadable: **M6-2** also needs M5-1 and M5-10; **M4-1** also needs M6-0;
+**M4-2** also needs M6-3; **M6-5** also needs M5-4; **M4-3** also needs M5-4 and M6-5;
+**M6-9** also needs M4-2. **M5-8** stands alone — M2-3 and M2-9 are its only needs and both
+shipped, so it is ready now and blocks nothing.
+
+M6-0 goes first within its own root: it is a rebase, it needs nothing, and it is the only
+story that gets cheaper by being done sooner. M6-1 then designs the room container on a
+runtime that runs. M5-10 absorbs `chat.ts`'s private client, so M4-1 is a refactor onto one
+module. **M6-2 is the gate** — three feeds meet there, and everything below it queues.
 
 ## M5 stories
 
@@ -787,14 +799,14 @@ no dependency relation between agents (R24–R30 retired).
 | R15 | Participant settings | reuse the run-file `Task` fields; add a purpose/instructions field for "different tasks"; `prompt`/`needs` are not settings | **Decided (interview):** yes, plus a purpose/instructions field; `prompt`/`needs` are not settings. The purpose is prompt material, never a task status (R33) |
 | R16 | Room versus run | (a) separate; `POST /runs` unchanged (b) a room can dispatch a run from its roster (c) a run becomes a room | **Decided (interview):** (a) now; (b) deferred |
 | R17 | Persistence | room.json + participant records + event log(s); restore read-only; resume per participant, capability-gated | **Decided (interview):** `stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and event log(s); restore read-only; resume per participant, capability-gated |
-| R18 | Room lifecycle | close/archive/delete with N participants; retention; idle eviction | **Decided (interview):** close stops every participant, commits/releases and keeps branches + history; DELETE removes from the active list; retention reaps closed rooms; idle eviction configurable and off in v1; archive read-only deferred |
+| R18 | Room lifecycle | close/archive/delete with N participants; retention; idle eviction | **Decided (interview), corrected 2026-09-21:** close stops every participant and keeps its branch, its checkout and the room's history. **The supervisor commits nothing at close (R37)** — the earlier "commits/releases" wording predates R37 and contradicted it. DELETE removes from the active list; retention reaps closed rooms; idle eviction configurable and off in v1; archive read-only deferred |
 | R19 | TUI shape | sidebar rooms → participants; active participant thread + room timeline; badges per participant; the permission overlay names the participant | **Decided (interview):** yes, as described |
 | R20 | Cost | per-participant usage labelled by harness; no cross-harness totals | **Decided (interview):** yes |
 | R21 | Starter/orchestrator creation | `POST /rooms {cwd, orchestrator?: {agent or cmd, name?, mode?}}`; empty body allowed; 201 | **Decided (interview):** yes; default orchestrator mode `auto` (R12); 201 |
 | R22 | Naming and ids | room id `newRunId()`; participant opaque id + validated unique name; branch names if R5 forks | **Decided (interview):** a distinct `newRoomId()` — do not reuse the run id; participant ids opaque and ref-safe |
 | R23 | Orchestrator instructions | if R2 = coordinator, inject roster, status and the daemon-mediated delegation protocol; if R2 = normal, nothing | defer with R2 |
 | R24–R30 | dependency model (retired) | R24 needs, R25 inherit, R26 blocked turns, R27 scheduler, R28 predecessor-done, R29 multi-parent base, R30 reactivation | **Retired (interview):** a room is a group of independent long-lived agents, not a task DAG. Tasks are conversational and may span turns; work is sequenced by the human routing messages, not by dependencies. No `needs`, no handoff, no blocked turn, no scheduler, no completion gate. |
-| R31 | Room merge entry point | (a) `kapelle merge <roomId>` detects the `room-` prefix and merges participant branches (b) a separate `kapelle room merge <roomId>` (c) merge stays per-participant, no room-level entry (d) integrate-then-land | **Decided 2026-09-20:** (b) as the surface, (c) as the v1 subset, (d) internally. No dependency order exists, so order is creation order and conflicts abort atomically. Answered inside M6-6, because chained bases (R35c) force that story to rework the preflight anyway, and the `done`/`warned` gate at `core/merge.ts:65` has to be replaced with participant states either way (R37) |
+| R31 | Room merge entry point | (a) `kapelle merge <roomId>` detects the `room-` prefix and merges participant branches (b) a separate `kapelle room merge <roomId>` (c) merge stays per-participant, no room-level entry (d) integrate-then-land | **Decided 2026-09-20, wording corrected 2026-09-21:** the surface is (b), `kapelle room merge <roomId>`. The v1 **scope** is one participant at a time (`--participant`), with whole-room merge as the additive follow-up; the earlier note read "(c) as the v1 subset", which cannot be right — (c) says there is no room-level entry at all, and (b) adds one. (d) integrate-then-land is the internal shape when whole-room lands. No dependency order exists, so order is creation order and conflicts abort atomically. Answered inside M6-6, because chained bases (R35c) force that story to rework the preflight anyway, and the `done`/`warned` gate at `core/merge.ts:65` has to be replaced with participant states either way (R37) |
 | R32 | Per-participant turn queue | (a) FIFO queue, bounded, while the agent answers (b) refuse 409 while busy (c) interrupt/replace the live turn (d) latest-only queue | **Decided (interview):** (a) bounded FIFO; replacement goes through the explicit cancel endpoint (S5) |
 | R33 | Participant availability | (a) always available until removed or the room closes; no terminal state (b) an explicit pause/offline state (c) a display-only goal/done flag | **Decided (interview):** (a): runtime state (`idle`/`busy`/`exited`/`closed`) is the only participant state. (c) is retired: it reintroduces a task status the room model removed, and `idle` already answers "can I send now?". (b) pause stays a deferred additive feature if idle harnesses become a resource problem. |
 | R34 | Cross-agent context | (a) human-composed only; the client includes another agent's text in its message (b) `POST messages {contextFrom}` injects those participants' last turn or result (c) supervisor-mediated delegation, charter-gated | **Decided (interview):** (a) for v1; (b) as the next addition; (c) stays deferred with M6-8 |
@@ -816,7 +828,7 @@ no dependency relation between agents (R24–R30 retired).
 | S3 | Restart and resume | (a) ephemeral rooms, history replay only (b) persist metadata, restore read-only (c) restore + per-participant `session/load` | **Decided (interview):** (b) now; (c) later |
 | S4 | Room and participant records | (a) events are the only record (b) `room.json` + participant records, turns derived from events (c) a file per turn | **Decided (interview):** (b) |
 | S5 | Cancel one turn | (a) `POST /rooms/:id/agents/:agentId/turns/current/cancel` (b) `DELETE .../messages/current` (c) keep room dismiss only | **Decided (interview):** (a) |
-| S6 | Room close response | (a) synchronous 200 after every participant commits/releases, as the spike (b) 202 like a run cancel (c) 204 | **Decided (interview):** (a) with a documented bound |
+| S6 | Room close response | (a) synchronous 200 once every participant has stopped and its checkout is released per R37 (b) 202 like a run cancel (c) 204 | **Decided (interview), corrected 2026-09-21:** (a). The option's old wording said "commits/releases, as the spike", which R37 forbids: nothing is committed, the checkout is kept. **The bound needs participants stopped in parallel**, not one after another: `stop()` waits up to `stopGraceMs` (5 s) for a harness that ignores end of file, so a serial close of N participants bounds at 5N seconds — half a minute of a hanging request on a room of six. Parallel makes the documented bound `stopGraceMs` + overhead, a number that can actually be written down |
 | S7 | Command surface | (a) `chat.ts` standalone, add `kapelle chat` that runs it (b) move verbs into `cli.ts` (c) retire `chat.ts` | **Decided (interview):** (a) |
 | S8 | Shared client and chat | (a) `client/` owns DTOs, HTTP, SSE, reducer; `chat.ts` imports `client/` only (b) chat keeps its own client (c) put the client under `protocol/` | **Decided (interview):** (a); the import-boundary test allows `client/` and pi-tui, forbids `core/`, `protocol/` and `daemon.ts` |
 | S9 | Room and participant ids | (a) reuse `newRunId()` for rooms, opaque ids for participants (b) a distinct room prefix (c) uuid for both | **Decided (interview):** (b): a new `newRoomId()`, never the run id; participant ids opaque |

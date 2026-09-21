@@ -26,7 +26,7 @@ policy across all of them and returning machine-readable results.
 | Workflows | Parallel split **and** pipeline handoff — not competing variants of the same task. |
 | Process shape | Daemon — **one per operator, serving every added repository** (amended 2026-09-11, M2-1) — with `core/` that has no knowledge of HTTP or of a TTY. |
 | UI | **M4**, after the daemon: a local TUI (`chat.ts` + pi-tui), not a browser. Read views plus permission answering for runs and rooms. Designed to grow into a run-dispatch front end, so the daemon API must be complete — not observability-only. |
-| Client contract | **M5.** `docs/CLIENT-API.md` plus `client/contract.ts` — one documented API every front end shares, so `attach`, the TUI and a later bridge stop each inventing DTOs. `client/` is an edge module: the daemon and the front ends import it, `core/` never does. |
+| Client contract | **M5 — that it exists is settled; its shape is not.** One documented API every front end shares, so `attach`, the TUI and a later bridge stop each inventing DTOs, and M2's HTTP surface is its subject. **Open, so no file name here is a promise:** the artifact and the module's location (B1, B6 in `docs/CONTRACT-PLAN.md`). Settled either way is the direction: whatever the module is called, the daemon and the front ends import it and `core/` never does. |
 | Rooms | **M6.** A long-lived container of *independent* agents on one repository — a roster, not a graph. Each agent has its own harness, mode, settings, worktree and multi-turn session. **No dependency relation, no scheduler, no result contract, no turn TTL**; the human sequences work by choosing who to message. Separate from runs: a room never replaces `POST /runs`, and a run never becomes a room. |
 | Result contract | A `<task-result>` block in the final message. `git status` cross-checks it; disagreement raises a task **warning**, never a failure. MCP `report_result` deferred. |
 | Worktrees | Supervisor owns fully — creates off a base ref, removes on success, **keeps worktree and branch on failure/timeout when the task left work, and rolls back a failed task that produced nothing**. A run-owned worktree is reaped only when its run is terminal and past the retention window. A worktree with no readable record is reconciled at boot: clean and still on a branch loses its checkout but keeps the branch; dirty or detached HEAD is kept. |
@@ -96,7 +96,7 @@ front ends    cli.ts  kapelle run --file <file>      direct, in-process, TTY ask
               TUI (M4 — read views + permission answering; a third subscriber)
               chat.ts  kapelle chat                  rooms, HTTP only
                    │
-client/       contract.ts   DTOs, HTTP client, SSE parser, pure reducer   (M5)
+(client/?)    DTOs, HTTP client, SSE parser, pure reducer   (M5 — name open: B6)
               — an edge module: front ends and daemon.ts import it, core/ never does —
                    │
 daemon.ts     POST /repos · POST /runs · GET /runs/:id · GET /runs/:id/events (SSE+replay)
