@@ -4,9 +4,10 @@
 register behind them.** The room model is the no-dependency roster, R24–R30 retired.
 **Amended 2026-09-20 (plan review):** the spike lands first as **M6-0** rather than last
 (A2 restated), and R31 plus R37–R42 close the room decisions the stories were reading
-without an answer. Still open here: the contract tables A, B, C, D, E, F, G, H, I, J, K
-and M. The purpose remains to name every decision a story depends on before the work
-starts.
+without an answer. **Amended 2026-09-22 (M5-1, #133):** tables A and B are decided, and
+`docs/CLIENT-API.md` is now the client-facing promise. Still open here: the contract
+tables C, D, E, F, G, H, I, J, K and M. The purpose remains to name every decision a
+story depends on before the work starts.
 
 Relationship to the other docs: `PROJECT-BRIEF.md` is the charter (why and what is in
 scope), `PROJECT-PLAN.md` is the milestone narrative, `STORIES.md` is the work
@@ -693,28 +694,28 @@ story, and the story moves into `STORIES.md`.
 
 | ID | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| A1 | Milestone shape | (a) M5 contract + M6 rooms (b) all as M2-11+ (c) one milestone | (a) |
+| A1 | Milestone shape | (a) M5 contract + M6 rooms (b) all as M2-11+ (c) one milestone | **Decided 2026-09-22 (#133):** (a) |
 | A2 | Ordering vs M3 and M4 | (a) M6-1 design first, then M5, port last (b) contract first, rebase spike later (c) M3 first (d) **port first (M6-0)**, then M5 and M6-1 in parallel | **Decided 2026-09-20:** (d). Rooms stay independent of M3 for v1. The rebase is the one item that gets more expensive the longer it waits, and it needs nothing |
 | A3 | Browser dashboard | retired — TUI is `chat.ts` + pi-tui (`spike/chat-tui`) | **Settled by spike** |
-| A4 | Freeze `POST /runs` before M3? | (a) freeze now, M3 additive (b) let M3 change it, freeze after | (a) |
-| A5 | When does v1 stop changing? | (a) at M5-11 (b) after first external client ships (c) never | (a) |
-| A6 | Story placement | (a) `STORIES.md` now as Proposed (b) keep this draft until interview closes | (b) |
+| A4 | Freeze `POST /runs` before M3? | (a) freeze now, M3 additive (b) let M3 change it, freeze after | **Decided 2026-09-22 (#133):** (a). `POST /runs` is *stable* in `docs/CLIENT-API.md` |
+| A5 | When does v1 stop changing? | (a) at M5-11 (b) after first external client ships (c) never | **Decided 2026-09-22 (#133):** (a). "v1" is the client contract, not the package version |
+| A6 | Story placement | (a) `STORIES.md` now as Proposed (b) keep this draft until interview closes | **Decided 2026-09-22 (#133):** stale — the stories moved into `STORIES.md` (M4/M5/M6 sections) before this was answered |
 | A7 | TUI ownership and numbering | M4 becomes the TUI; `chat.ts` is the binary | **Settled by spike** |
 
 ### Contract artifact and versioning
 
 | ID | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| B1 | Source of truth | (a) `CLIENT-API.md` + `client/contract.ts` (b) OpenAPI/JSON Schema generated (c) types only | (a) |
-| B2 | Version scheme | (a) integer `apiVersion: 1` (b) semver (c) capability-only (d) date | (a) |
-| B3 | Version surface | (a) `GET /version` (b) `GET /` (c) response header (d) a + c | (a) |
-| B4 | Capability list | endpoint names, feature flags, or both; exact names to fix here | feature flags, additive |
-| B5 | Mismatch behaviour | (a) refuse with 426 (b) warn and continue (c) best effort | (b) for 1.x, refuse only major |
-| B6 | Shared module location | (a) `client/contract.ts` (b) `protocol/contract.ts` (c) `api/` | (a) |
-| B7 | Machine-readable schema | (a) TS types + contract tests (b) hand-written JSON Schema (c) OpenAPI | (a), revisit at freeze |
-| B8 | Conformance suite home | (a) `tests/contract/` (b) `integration/` (c) per-module tests only | (a) |
-| B9 | `daemon.json` carries version? | (a) no, discovery only (b) yes, both | (a) |
-| B10 | Doc style | (a) normative MUST/SHOULD (b) plain language with a stability table | (b) plus a stability table |
+| B1 | Source of truth | (a) `CLIENT-API.md` + `client/contract.ts` (b) OpenAPI/JSON Schema generated (c) types only | **Decided 2026-09-22 (#133):** (a) |
+| B2 | Version scheme | (a) integer `apiVersion: 1` (b) semver (c) capability-only (d) date | **Decided 2026-09-22 (#133):** **amended to `major.minor`**, sent as `{"apiVersion": {"major": 1, "minor": 0}}` — two integers, so no client splits a string. `major` for a break, `minor` for an addition |
+| B3 | Version surface | (a) `GET /version` (b) `GET /` (c) response header (d) a + c | **Decided 2026-09-22 (#133):** (a) |
+| B4 | Capability list | endpoint names, feature flags, or both; exact names to fix here | **Decided 2026-09-22 (#133):** feature flags, additive, never removed within a major: `repos`, `runs`, `events`, `permissions`, `rooms` |
+| B5 | Mismatch behaviour | (a) refuse with 426 (b) warn and continue (c) best effort | **Decided 2026-09-22 (#133):** a client refuses a different `major` and warns on a different `minor`. Written in the doc; no client enforces it until M5-10 |
+| B6 | Shared module location | (a) `client/contract.ts` (b) `protocol/contract.ts` (c) `api/` | **Decided 2026-09-22 (#133):** (a), `client/` for now |
+| B7 | Machine-readable schema | (a) TS types + contract tests (b) hand-written JSON Schema (c) OpenAPI | **Decided 2026-09-22 (#133):** (a). A JSON Schema can be added later for a client in another language; the daemon declares its runs and rooms with the types and checks the other replies with `satisfies` |
+| B8 | Conformance suite home | (a) `tests/contract/` (b) `integration/` (c) per-module tests only | **Decided 2026-09-22 (#133):** (a) |
+| B9 | `daemon.json` carries version? | (a) no, discovery only (b) yes, both | **Decided 2026-09-22 (#133):** (a) |
+| B10 | Doc style | (a) normative MUST/SHOULD (b) plain language with a stability table | **Decided 2026-09-22 (#133):** (b) plus a stability table |
 
 ### DTOs and payload shapes
 
@@ -891,6 +892,10 @@ no dependency relation between agents (R24–R30 retired).
 | S14 | `children.json` | (a) reuse `{pid, runId, taskId}` with the room id in `runId` and the participant in `taskId` (b) rename to `ownerId` (c) a separate file | **Decided (interview):** (b): entries become `{pid, kind, ownerId, unitId, startedAt?}` with `kind` as `run` or `room`; the sweep reads legacy `{pid, runId, taskId}` as a run. **Built in M6-0 (2026-09-21, #144)**, with one `trackChildren` listener for both owners |
 
 ### Room vocabulary and record sketch (M6-1, 2026-09-21, #145)
+
+**Superseded 2026-09-22 (M5-1, #133):** the table and the record now live in
+`docs/CLIENT-API.md` §Rooms, which is the promise. This section stays as the history of
+how they were checked, and the implementation notes for M6-2 and M6-7 below still apply.
 
 Deliberately short. The routes are not restated here: R9(a) fixes them as nested, and the
 M6-2..M6-5 story bodies name them. What follows is the **check** that the decided rows can

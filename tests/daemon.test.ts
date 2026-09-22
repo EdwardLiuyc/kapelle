@@ -1635,7 +1635,12 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     JSON.stringify({
       runId: "corrupt-tasks",
       status: "done",
-      tasks: [null, { foo: "bar" }, { id: "ok", status: "done" }],
+      tasks: [
+        null,
+        { foo: "bar" },
+        // A key the contract does not name must not reach the wire (#160).
+        { id: "ok", status: "done", note: "hand-edited" },
+      ],
     }),
   );
   // A run directory with no record at all, and a record with no status: both
@@ -1669,6 +1674,8 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   const live = await api(second, "GET", "/runs/live");
   assert.equal(live.status, 200);
   assert.equal(live.body.status, "failed");
+  const corrupt = await api(second, "GET", "/runs/corrupt-tasks");
+  assert.deepEqual(corrupt.body.tasks, [{ id: "ok", status: "done" }]);
 
   process.kill(second.pid, "SIGTERM");
   const out = await second.done;

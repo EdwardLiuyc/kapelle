@@ -28,7 +28,7 @@
  * **A `Host` outside loopback is refused before the token is read** (M2-8,
  * #38), which closes DNS rebinding — an attacker page gaining same-origin
  * access to this loopback daemon. The browser half, `?token=` on the SSE
- * endpoint, is deferred to M4-1, where a served page first needs it.
+ * endpoint, is retired with the browser dashboard (A3): no story serves a page.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -56,6 +56,22 @@ import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import {
+  API_VERSION,
+  CAPABILITIES,
+  type ErrorReply,
+  type MessageAccepted,
+  type PendingDecision,
+  type PermissionAnswered,
+  type RepoAdded,
+  type RepoRoots,
+  type RoomView,
+  type RunAccepted,
+  type RunDetail,
+  type RunListEntry,
+  type TaskEntry,
+  type VersionReply,
+} from "./client/contract.ts";
+import {
   readEnvConfig,
   readProjectConfig,
   readUserConfig,
@@ -67,7 +83,7 @@ import { createEventBus } from "./core/events.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
 import { openRoom, type Room, roomHarness } from "./core/room.ts";
-import { type RunReport, runRun, type TaskStatus } from "./core/run.ts";
+import { runRun, type TaskStatus } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import {
   readRepos,
@@ -77,7 +93,7 @@ import {
 } from "./core/runtime.ts";
 import { processIdentity, sweepBoot } from "./core/sweep.ts";
 import { openWorktrees, stateDirRoot } from "./core/worktree.ts";
-import { AGENTS, type Warning } from "./protocol/registry.ts";
+import { AGENTS } from "./protocol/registry.ts";
 
 // M2-7: the user-level config is read once here, after the startup helpers
 // below and before the port is claimed. `KAPELLE_*` is also read here for the
@@ -346,39 +362,26 @@ function existingDir(value: unknown, field: string): string {
  *  `POST /runs`, which checks membership on use. */
 const repos = new Set<string>(addedRepos);
 
-/** One run as the API reports it. Live runs are built here; finished ones
- *  are read back from their `run.json` at boot (M2-6, #36). */
-interface RunState {
-  id: string;
-  /** The folder the run was started in: a repository root or a folder in one. */
-  cwd: string;
-  status: "running" | TaskStatus;
-  report?: RunReport;
-  /** Set when `runRun` itself threw, which means no task record exists. */
-  error?: string;
-  /** Our own record that a cancel was asked for, the way `core/run.ts`
-   *  keeps one: the status stays `running` until the run settles. */
-  cancelRequested?: true;
-  /** Every notice, containment lines included. #13 says those are never
-   *  suppressed, and with no terminal this record is where they survive. */
-  notices: { taskId: string; text: string; kind?: Warning["kind"] }[];
-  /** A run read back from disk after a restart, and the tasks its record
-   *  names. `report` belongs to the run that happened in *this* process, so a
-   *  restored run has the record's task list instead of a synthesised one. */
-  restored?: true;
-  tasks?: RecordTask[];
-}
+/** Every run, as the API reports it: `RunDetail` from the contract is the
+ *  declared type, so a field added here without the contract is a compile
+ *  error where it is set, not an undocumented field on the wire. Live runs are
+ *  built here; finished ones are read back from their `run.json` at boot
+ *  (M2-6, #36). Notices keep every line, containment included: #13 says those
+ *  are never suppressed, and with no terminal this record is where they
+ *  survive. */
+const runs = new Map<string, RunDetail>();
 
-/** A task as `run.json` carries it — `core/run.ts` writes this shape. */
-interface RecordTask {
-  id: string;
-  status: string;
-  branch?: string;
-  baseSha?: string;
-  sessionId?: string;
-}
-
-const runs = new Map<string, RunState>();
+/** A task as the contract lists it, and nothing else. Both sources are wider
+ *  than `TaskEntry` can see — `core/run.ts`'s record type, and a `run.json`
+ *  anyone can edit — so the fields are copied, never passed through: a key
+ *  added to either stays off the wire until the contract names it. */
+const taskEntry = ({
+  id,
+  status,
+  branch,
+  baseSha,
+  sessionId,
+}: TaskEntry): TaskEntry => ({ id, status, branch, baseSha, sessionId });
 /** Every run still in flight, so a shutdown can wait for them to settle. */
 const inFlight = new Set<Promise<void>>();
 /** Kept beside the record rather than on it, so a `GET` never serialises one. */
@@ -449,7 +452,7 @@ function restoreRuns(): void {
       // The sweep rewrote these to `failed` before this scan, so one left
       // here is a record it could not write; expected after a crash, silent.
       if (status === "running") continue;
-      const state: RunState = {
+      const state: RunDetail = {
         id,
         cwd: typeof record.cwd === "string" ? record.cwd : root,
         // The record is one we wrote, so its status is a `TaskStatus`. A
@@ -464,10 +467,12 @@ function restoreRuns(): void {
         // `[null]` would 500 the whole list, and `{foo: "bar"}` would print
         // as `undefined undefined` in `kapelle ps`. Keep the run, drop any
         // element without a string id and status (M2-6: a boot answers anyway).
-        state.tasks = record.tasks.filter(
-          (t): t is RecordTask =>
-            typeof t?.id === "string" && typeof t?.status === "string",
-        );
+        state.tasks = record.tasks
+          .filter(
+            (t): t is TaskEntry =>
+              typeof t?.id === "string" && typeof t?.status === "string",
+          )
+          .map(taskEntry);
       }
       runs.set(id, state);
       restoredLogs.set(id, join(logDir, "events.jsonl"));
@@ -653,7 +658,7 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
   const next = new Set(repos).add(root);
   writeRepos([...next]);
   repos.add(root);
-  send(res, 200, { root });
+  send(res, 200, { root } satisfies RepoAdded);
 }
 
 /**
@@ -697,7 +702,7 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
   // After the last await, so no run can start once a shutdown has begun.
   if (stopping) throw refusal(503, "the daemon is shutting down");
 
-  const state: RunState = { id, cwd, status: "running", notices: [] };
+  const state: RunDetail = { id, cwd, status: "running", notices: [] };
   const bus = createEventBus();
   trackChildren(bus, "run", id);
   bus.addListener(({ agent, update }) => {
@@ -729,7 +734,7 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     onEventLog: settleLog,
     askPolicy: permissions.policyFor(id, bus, canceller.signal),
     onTasks: (tasks) => {
-      state.tasks = tasks;
+      state.tasks = tasks.map(taskEntry);
     },
     onNotice: (taskId, text, kind) => {
       state.notices.push(kind ? { taskId, text, kind } : { taskId, text });
@@ -754,7 +759,7 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
       settleLog(undefined);
     });
   inFlight.add(done);
-  send(res, 202, { id });
+  send(res, 202, { id } satisfies RunAccepted);
 }
 
 /**
@@ -819,14 +824,9 @@ async function streamLog(
   res.end();
 }
 
-/** One chat room as the API reports it. In memory only, like a run. */
-interface RoomState {
-  id: string;
-  cwd: string;
-  harness: string;
-  workspace: string;
-  notices: { text: string; kind?: Warning["kind"] }[];
-}
+/** One chat room as the API reports it, less the live `status`. In memory
+ *  only, like a run. */
+type RoomState = Omit<RoomView, "status">;
 
 const rooms = new Map<
   string,
@@ -835,7 +835,13 @@ const rooms = new Map<
   { room: Room; state: RoomState; dismissed?: boolean }
 >();
 
-const roomView = ({ room, state }: { room: Room; state: RoomState }) => ({
+const roomView = ({
+  room,
+  state,
+}: {
+  room: Room;
+  state: RoomState;
+}): RoomView => ({
   ...state,
   status: room.status(),
 });
@@ -884,18 +890,16 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
     await room.close();
     throw refusal(503, "the daemon is shutting down");
   }
-  const entry = {
-    room,
-    state: {
-      id,
-      cwd,
-      harness: room.harness,
-      workspace: room.workspace,
-      notices,
-    },
+  const state: RoomState = {
+    id,
+    cwd,
+    harness: room.harness,
+    workspace: room.workspace,
+    notices,
   };
+  const entry = { room, state };
   rooms.set(id, entry);
-  send(res, 201, roomView(entry));
+  send(res, 201, roomView(entry) satisfies RoomView);
 }
 
 /**
@@ -924,7 +928,7 @@ async function postMessage(
   }
   // Settles with the turn; a failed turn is already on the log as an event.
   turn.catch(() => {});
-  send(res, 202, { seq });
+  send(res, 202, { seq } satisfies MessageAccepted);
 }
 
 /** `POST /permissions/:id {"allow": boolean}` — the first answer wins. */
@@ -944,7 +948,7 @@ async function postPermission(
   if (result === "settled") {
     throw refusal(409, `permission ${id} was already decided`);
   }
-  send(res, 200, { id, allow });
+  send(res, 200, { id, allow } satisfies PermissionAnswered);
 }
 
 /** A parse base for `req.url`, which is a path, not a URL. Never fetched;
@@ -956,11 +960,11 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   // refused here. requireHostHeader: false lets this guard handle the last.
   const authority = authorityOf(req);
   if (authority === null || !LOOPBACK_HOST.test(authority)) {
-    send(res, 403, { error: "host not allowed" });
+    send(res, 403, { error: "host not allowed" } satisfies ErrorReply);
     return;
   }
   if (!authorised(req)) {
-    send(res, 401, { error: "missing or wrong token" });
+    send(res, 401, { error: "missing or wrong token" } satisfies ErrorReply);
     return;
   }
   const { pathname } = new URL(req.url ?? "/", REQUEST_URL_BASE);
@@ -970,10 +974,15 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const room = /^\/rooms\/([^/]+)$/.exec(pathname);
   const roomSub = /^\/rooms\/([^/]+)\/(events|messages)$/.exec(pathname);
 
-  if (req.method === "POST" && pathname === "/repos") {
+  if (req.method === "GET" && pathname === "/version") {
+    send(res, 200, {
+      apiVersion: API_VERSION,
+      capabilities: [...CAPABILITIES],
+    } satisfies VersionReply);
+  } else if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
   } else if (req.method === "GET" && pathname === "/repos") {
-    send(res, 200, [...repos]);
+    send(res, 200, [...repos] satisfies RepoRoots);
   } else if (req.method === "POST" && pathname === "/runs") {
     await postRun(req, res);
   } else if (req.method === "GET" && pathname === "/runs") {
@@ -985,16 +994,16 @@ async function route(req: IncomingMessage, res: ServerResponse) {
         cwd,
         status,
         tasks: (tasks ?? []).map(({ id, status }) => ({ id, status })),
-      })),
+      })) satisfies RunListEntry[],
     );
   } else if (req.method === "POST" && pathname === "/rooms") {
     await postRoom(req, res);
   } else if (req.method === "GET" && pathname === "/rooms") {
-    send(res, 200, [...rooms.values()].map(roomView));
+    send(res, 200, [...rooms.values()].map(roomView) satisfies RoomView[]);
   } else if (req.method === "GET" && room) {
     const entry = rooms.get(room[1] as string);
-    if (entry) send(res, 200, roomView(entry));
-    else send(res, 404, { error: `no room ${room[1]}` });
+    if (entry) send(res, 200, roomView(entry) satisfies RoomView);
+    else send(res, 404, { error: `no room ${room[1]}` } satisfies ErrorReply);
   } else if (req.method === "POST" && roomSub?.[2] === "messages") {
     await postMessage(roomSub[1] as string, req, res);
   } else if (req.method === "GET" && roomSub?.[2] === "events") {
@@ -1011,9 +1020,11 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     // which `stop()` bounds at 5 s.
     const entry = rooms.get(room[1] as string);
     if (!entry) {
-      send(res, 404, { error: `no room ${room[1]}` });
+      send(res, 404, { error: `no room ${room[1]}` } satisfies ErrorReply);
     } else if (entry.dismissed) {
-      send(res, 409, { error: `room ${room[1]} is already dismissed` });
+      send(res, 409, {
+        error: `room ${room[1]} is already dismissed`,
+      } satisfies ErrorReply);
     } else {
       // **Not `status() === "closed"`**, which reads `closed` the instant a
       // close begins: a second DELETE arriving mid-teardown would then be told
@@ -1025,16 +1036,16 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       // once the close has settled is refused.
       await entry.room.close();
       entry.dismissed = true;
-      send(res, 200, roomView(entry));
+      send(res, 200, roomView(entry) satisfies RoomView);
     }
   } else if (req.method === "GET" && events) {
     await getEvents(events[1] as string, req, res);
   } else if (req.method === "GET" && one) {
     const state = runs.get(one[1] as string);
     if (state) send(res, 200, state);
-    else send(res, 404, { error: `no run ${one[1]}` });
+    else send(res, 404, { error: `no run ${one[1]}` } satisfies ErrorReply);
   } else if (req.method === "GET" && pathname === "/permissions") {
-    send(res, 200, permissions.list());
+    send(res, 200, permissions.list() satisfies PendingDecision[]);
   } else if (req.method === "POST" && decision) {
     await postPermission(decision[1] as string, req, res);
   } else if (req.method === "DELETE" && one) {
@@ -1045,16 +1056,20 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const state = runs.get(id);
     const canceller = cancels.get(id);
     if (!state) {
-      send(res, 404, { error: `no run ${id}` });
+      send(res, 404, { error: `no run ${id}` } satisfies ErrorReply);
     } else if (!canceller) {
-      send(res, 409, { error: `run ${id} already ended: ${state.status}` });
+      send(res, 409, {
+        error: `run ${id} already ended: ${state.status}`,
+      } satisfies ErrorReply);
     } else {
       canceller.abort();
       state.cancelRequested = true;
       send(res, 202, state);
     }
   } else {
-    send(res, 404, { error: `no route for ${req.method} ${pathname}` });
+    send(res, 404, {
+      error: `no route for ${req.method} ${pathname}`,
+    } satisfies ErrorReply);
   }
 }
 
@@ -1062,7 +1077,7 @@ const server = createServer({ requireHostHeader: false }, (req, res) => {
   route(req, res).catch((err) => {
     send(res, (err as { status?: number }).status ?? 500, {
       error: messageOf(err),
-    });
+    } satisfies ErrorReply);
   });
 });
 
