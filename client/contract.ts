@@ -1,0 +1,198 @@
+/**
+ * The client contract, as types — story M5-1, issue #133.
+ *
+ * `docs/CLIENT-API.md` is the promise; this file is the same shapes for a
+ * TypeScript client. A client imports this file and `protocol/types.ts` (the
+ * ACP events that ride inside the stream), and nothing else from this
+ * repository — never `daemon.ts`, never `core/`.
+ *
+ * `daemon.ts` checks every reply it sends against these types with
+ * `satisfies`, so a shape that drifts fails `npm run check` rather than a
+ * client. Which of them are stable and which will change is the stability
+ * table in the doc, not this file.
+ *
+ * Types only, plus two constants (decided 2026-09-22, B7): a JSON Schema can
+ * be added for a client in another language once one exists.
+ */
+
+import type { AgentEvent, ToolKind } from "../protocol/types.ts";
+
+/**
+ * The contract version (B2, amended 2026-09-22). `major` goes up for a change
+ * that breaks a client; `minor` goes up when something is added. A client
+ * refuses a daemon with a different `major` and warns on a different `minor`
+ * (B5).
+ */
+export const API_VERSION = { major: 1, minor: 0 } as const;
+
+/**
+ * What this daemon can do (B4). Names are only ever added, never removed or
+ * renamed, so a client checks for the one it needs.
+ */
+export const CAPABILITIES = [
+  "repos",
+  "runs",
+  "events",
+  "permissions",
+  "rooms",
+] as const;
+
+/** `GET /version`. `capabilities` is `string[]`, not the list above: a
+ *  newer daemon sends names this file does not know yet. */
+export interface VersionReply {
+  apiVersion: { major: number; minor: number };
+  capabilities: string[];
+}
+
+/** Every refusal, on every route. */
+export interface ErrorReply {
+  error: string;
+}
+
+/** `POST /repos` answers the repository root the path belongs to. */
+export interface RepoAdded {
+  root: string;
+}
+
+/** A finished task's verdict, mildest first. A run's status is the worst of
+ *  its tasks. @public */
+export type TaskStatus =
+  | "done"
+  | "warned"
+  | "cancelled"
+  | "skipped"
+  | "timed_out"
+  | "failed";
+
+/** @public */
+export type RunStatus = "running" | TaskStatus;
+
+/** `POST /runs` answers only the new run's id. */
+export interface RunAccepted {
+  id: string;
+}
+
+/** One task as a run lists it. `status` is a `TaskStatus`, or `queued` or
+ *  `running` while the run is live. Typed as `string` because a run read back
+ *  from disk passes its record's word through unchecked: a client shows a
+ *  word it does not know rather than failing on it. @public */
+export interface TaskEntry {
+  id: string;
+  status: string;
+  branch?: string;
+  baseSha?: string;
+  sessionId?: string;
+}
+
+/** One entry of `GET /runs`. */
+export interface RunListEntry {
+  id: string;
+  cwd: string;
+  status: RunStatus;
+  tasks: { id: string; status: string }[];
+}
+
+/** A line a run or a room kept for the operator. @public */
+export interface Notice {
+  text: string;
+  kind?: "containment" | "unverified" | "version" | "advisory";
+}
+
+/** One finished task in a live run's `report`. Provisional: M5-2 replaces
+ *  it with a curated shape. @public */
+export interface TaskReport {
+  id: string;
+  agent: string;
+  cwd: string;
+  branch?: string;
+  baseSha?: string;
+  sessionId?: string;
+  status: TaskStatus;
+  stopReason?: string;
+  usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  usageSemantics?: "per-turn" | "cumulative" | "unknown";
+  durationMs: number;
+  transcript: string;
+  error?: string;
+  result?: {
+    status: string;
+    summary: string;
+    details: string;
+    files?: string[];
+    branch?: string;
+  };
+  warnings?: { kind: string; text: string }[];
+  summary?: string;
+  summarySynthesised?: true;
+}
+
+/**
+ * `GET /runs/:id`, and the `202` of `DELETE /runs/:id`. Provisional: a live
+ * run and a run restored after a restart do not carry the same fields yet
+ * (M5-2).
+ */
+export interface RunDetail {
+  id: string;
+  cwd: string;
+  status: RunStatus;
+  /** A live run, once it has finished. */
+  report?: {
+    status: TaskStatus;
+    durationMs: number;
+    turns: number;
+    tasks: TaskReport[];
+  };
+  /** The run itself failed to start, so no task record exists. */
+  error?: string;
+  cancelRequested?: true;
+  notices: (Notice & { taskId: string })[];
+  /** Read back from disk after a daemon restart. */
+  restored?: true;
+  tasks?: TaskEntry[];
+}
+
+/** One entry of `GET /permissions`. */
+export interface PendingDecision {
+  id: string;
+  runId: string;
+  taskId: string;
+  kind: ToolKind;
+  title: string;
+}
+
+/** `POST /permissions/:id` answers what was decided. */
+export interface PermissionAnswered {
+  id: string;
+  allow: boolean;
+}
+
+/** A room, from `POST /rooms`, `GET /rooms`, `GET /rooms/:id` and
+ *  `DELETE /rooms/:id`. Experimental until M6-2. */
+export interface RoomView {
+  id: string;
+  cwd: string;
+  harness: string;
+  workspace: string;
+  notices: Notice[];
+  status: "idle" | "busy" | "exited" | "closed";
+}
+
+/** `POST /rooms/:id/messages`: the log's size before the message. The turn
+ *  is over at the first `_client_turn_ended` with a `seq` above this one. */
+export interface MessageAccepted {
+  seq: number;
+}
+
+/**
+ * The JSON in one SSE `data:` line. `agent` is the task id for a run, and the
+ * harness name for a room. `update` is the raw ACP `session/update` value or
+ * one of this client's `_client_*` events.
+ *
+ * @public — read by clients, never built by the daemon, which writes the
+ * line as text.
+ */
+export interface EventLine {
+  seq: number;
+  agent: string;
+  update: AgentEvent;
+}

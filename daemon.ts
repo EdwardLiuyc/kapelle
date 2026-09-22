@@ -56,6 +56,20 @@ import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import {
+  API_VERSION,
+  CAPABILITIES,
+  type ErrorReply,
+  type MessageAccepted,
+  type PendingDecision,
+  type PermissionAnswered,
+  type RepoAdded,
+  type RoomView,
+  type RunAccepted,
+  type RunDetail,
+  type RunListEntry,
+  type VersionReply,
+} from "./client/contract.ts";
+import {
   readEnvConfig,
   readProjectConfig,
   readUserConfig,
@@ -653,7 +667,7 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
   const next = new Set(repos).add(root);
   writeRepos([...next]);
   repos.add(root);
-  send(res, 200, { root });
+  send(res, 200, { root } satisfies RepoAdded);
 }
 
 /**
@@ -754,7 +768,7 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
       settleLog(undefined);
     });
   inFlight.add(done);
-  send(res, 202, { id });
+  send(res, 202, { id } satisfies RunAccepted);
 }
 
 /**
@@ -835,7 +849,13 @@ const rooms = new Map<
   { room: Room; state: RoomState; dismissed?: boolean }
 >();
 
-const roomView = ({ room, state }: { room: Room; state: RoomState }) => ({
+const roomView = ({
+  room,
+  state,
+}: {
+  room: Room;
+  state: RoomState;
+}): RoomView => ({
   ...state,
   status: room.status(),
 });
@@ -924,7 +944,7 @@ async function postMessage(
   }
   // Settles with the turn; a failed turn is already on the log as an event.
   turn.catch(() => {});
-  send(res, 202, { seq });
+  send(res, 202, { seq } satisfies MessageAccepted);
 }
 
 /** `POST /permissions/:id {"allow": boolean}` — the first answer wins. */
@@ -944,7 +964,7 @@ async function postPermission(
   if (result === "settled") {
     throw refusal(409, `permission ${id} was already decided`);
   }
-  send(res, 200, { id, allow });
+  send(res, 200, { id, allow } satisfies PermissionAnswered);
 }
 
 /** A parse base for `req.url`, which is a path, not a URL. Never fetched;
@@ -956,7 +976,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   // refused here. requireHostHeader: false lets this guard handle the last.
   const authority = authorityOf(req);
   if (authority === null || !LOOPBACK_HOST.test(authority)) {
-    send(res, 403, { error: "host not allowed" });
+    send(res, 403, { error: "host not allowed" } satisfies ErrorReply);
     return;
   }
   if (!authorised(req)) {
@@ -970,7 +990,12 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const room = /^\/rooms\/([^/]+)$/.exec(pathname);
   const roomSub = /^\/rooms\/([^/]+)\/(events|messages)$/.exec(pathname);
 
-  if (req.method === "POST" && pathname === "/repos") {
+  if (req.method === "GET" && pathname === "/version") {
+    send(res, 200, {
+      apiVersion: API_VERSION,
+      capabilities: [...CAPABILITIES],
+    } satisfies VersionReply);
+  } else if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
   } else if (req.method === "GET" && pathname === "/repos") {
     send(res, 200, [...repos]);
@@ -985,7 +1010,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
         cwd,
         status,
         tasks: (tasks ?? []).map(({ id, status }) => ({ id, status })),
-      })),
+      })) satisfies RunListEntry[],
     );
   } else if (req.method === "POST" && pathname === "/rooms") {
     await postRoom(req, res);
@@ -1031,10 +1056,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     await getEvents(events[1] as string, req, res);
   } else if (req.method === "GET" && one) {
     const state = runs.get(one[1] as string);
-    if (state) send(res, 200, state);
+    if (state) send(res, 200, state satisfies RunDetail);
     else send(res, 404, { error: `no run ${one[1]}` });
   } else if (req.method === "GET" && pathname === "/permissions") {
-    send(res, 200, permissions.list());
+    send(res, 200, permissions.list() satisfies PendingDecision[]);
   } else if (req.method === "POST" && decision) {
     await postPermission(decision[1] as string, req, res);
   } else if (req.method === "DELETE" && one) {
@@ -1051,7 +1076,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     } else {
       canceller.abort();
       state.cancelRequested = true;
-      send(res, 202, state);
+      send(res, 202, state satisfies RunDetail);
     }
   } else {
     send(res, 404, { error: `no route for ${req.method} ${pathname}` });
