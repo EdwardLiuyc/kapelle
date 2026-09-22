@@ -60,15 +60,17 @@ import {
   CAPABILITIES,
   type ErrorReply,
   type MessageAccepted,
+  type Notice,
   type PendingDecision,
   type PermissionAnswered,
   type RepoAdded,
   type RepoRoots,
   type RoomView,
   type RunAccepted,
-  type RunDetail,
+  type RunDto,
   type RunListEntry,
-  type TaskEntry,
+  type RunStatus,
+  type TaskDto,
   type VersionReply,
 } from "./client/contract.ts";
 import {
@@ -83,7 +85,7 @@ import { createEventBus } from "./core/events.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
 import { openRoom, type Room, roomHarness } from "./core/room.ts";
-import { runRun, type TaskStatus } from "./core/run.ts";
+import { type RunReport, runRun, type TaskRun } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import {
   readRepos,
@@ -362,26 +364,96 @@ function existingDir(value: unknown, field: string): string {
  *  `POST /runs`, which checks membership on use. */
 const repos = new Set<string>(addedRepos);
 
-/** Every run, as the API reports it: `RunDetail` from the contract is the
- *  declared type, so a field added here without the contract is a compile
- *  error where it is set, not an undocumented field on the wire. Live runs are
- *  built here; finished ones are read back from their `run.json` at boot
- *  (M2-6, #36). Notices keep every line, containment included: #13 says those
- *  are never suppressed, and with no terminal this record is where they
- *  survive. */
-const runs = new Map<string, RunDetail>();
+/** One task as `run.json` may carry it (M2-6, M5-2). `id` and `status` are
+ *  trusted by the guard in `restoreRuns`; every other field is copied only
+ *  when present and only when the contract names it, because a `run.json`
+ *  anyone can edit must not put an unknown key on the wire. */
+type RecordedTask = { id: string; status: string } & Partial<TaskDto>;
 
-/** A task as the contract lists it, and nothing else. Both sources are wider
- *  than `TaskEntry` can see — `core/run.ts`'s record type, and a `run.json`
- *  anyone can edit — so the fields are copied, never passed through: a key
- *  added to either stays off the wire until the contract names it. */
-const taskEntry = ({
-  id,
-  status,
-  branch,
-  baseSha,
-  sessionId,
-}: TaskEntry): TaskEntry => ({ id, status, branch, baseSha, sessionId });
+/** One task, live or restored, as the contract carries it. A field the source
+ *  does not have is left out, never `null` (C2). */
+function toTaskDto(task: TaskRun | RecordedTask): TaskDto {
+  const dto: TaskDto = { id: task.id, status: task.status };
+  if (task.agent !== undefined) dto.agent = task.agent;
+  if (task.durationMs !== undefined) dto.durationMs = task.durationMs;
+  if (task.error !== undefined) dto.error = task.error;
+  if (task.usage !== undefined) dto.usage = task.usage;
+  if (task.usageSemantics !== undefined)
+    dto.usageSemantics = task.usageSemantics;
+  if (task.warnings !== undefined) dto.warnings = task.warnings;
+  if (task.summary !== undefined) dto.summary = task.summary;
+  if (task.summarySynthesised !== undefined) {
+    dto.summarySynthesised = task.summarySynthesised;
+  }
+  if (task.branch !== undefined) dto.branch = task.branch;
+  if (task.baseSha !== undefined) dto.baseSha = task.baseSha;
+  if (task.sessionId !== undefined) dto.sessionId = task.sessionId;
+  return dto;
+}
+
+/** One run as the daemon holds it. The wire reply is `RunDto`, built by
+ *  `toRunDto`: a live run's `report` and the record-level fields stay off the
+ *  wire. Live runs are built here; finished ones are read back from their
+ *  `run.json` at boot (M2-6, #36). Notices keep every line, containment
+ *  included: #13 says those are never suppressed, and with no terminal this
+ *  record is where they survive. */
+interface RunState {
+  id: string;
+  cwd: string;
+  root: string;
+  status: RunStatus;
+  source: "live" | "restored";
+  startedAt?: string;
+  endedAt?: string;
+  /** A live run's final report (`core/run.ts`). Flattened by `toRunDto`. */
+  report?: RunReport;
+  error?: string;
+  cancelRequested?: true;
+  notices: (Notice & { taskId: string })[];
+  /** The record-level list: `queued`/`running` entries while live, the
+   *  restored record after a boot. */
+  tasks: TaskDto[];
+}
+
+/** The wire shape of one run: a live run's `report` flattened onto the same
+ *  fields a restored record carries. A gap is omitted, never `null`. */
+function toRunDto(state: RunState): RunDto {
+  const dto: RunDto = {
+    id: state.id,
+    cwd: state.cwd,
+    root: state.root,
+    status: state.status,
+    source: state.source,
+    notices: state.notices,
+    tasks: state.report ? state.report.tasks.map(toTaskDto) : state.tasks,
+  };
+  if (state.startedAt !== undefined) dto.startedAt = state.startedAt;
+  if (state.endedAt !== undefined) dto.endedAt = state.endedAt;
+  if (state.report) {
+    dto.durationMs = state.report.durationMs;
+    dto.turns = state.report.turns;
+  }
+  if (state.error !== undefined) dto.error = state.error;
+  if (state.cancelRequested) dto.cancelRequested = true;
+  return dto;
+}
+
+/** One `GET /runs` entry: the shared run fields plus id/status per task. */
+function toRunListEntry(state: RunState): RunListEntry {
+  const entry: RunListEntry = {
+    id: state.id,
+    cwd: state.cwd,
+    root: state.root,
+    status: state.status,
+    source: state.source,
+    tasks: state.tasks.map(({ id, status }) => ({ id, status })),
+  };
+  if (state.startedAt !== undefined) entry.startedAt = state.startedAt;
+  if (state.endedAt !== undefined) entry.endedAt = state.endedAt;
+  return entry;
+}
+
+const runs = new Map<string, RunState>();
 /** Every run still in flight, so a shutdown can wait for them to settle. */
 const inFlight = new Set<Promise<void>>();
 /** Kept beside the record rather than on it, so a `GET` never serialises one. */
@@ -452,27 +524,32 @@ function restoreRuns(): void {
       // The sweep rewrote these to `failed` before this scan, so one left
       // here is a record it could not write; expected after a crash, silent.
       if (status === "running") continue;
-      const state: RunDetail = {
+      const state: RunState = {
         id,
         cwd: typeof record.cwd === "string" ? record.cwd : root,
-        // The record is one we wrote, so its status is a `TaskStatus`. A
+        root: typeof record.root === "string" ? record.root : root,
+        // The record is one we wrote, so its status is a `RunStatus`. A
         // hand-edited one reaches the API unaltered rather than failing a boot.
-        status: status as TaskStatus,
+        status: status as RunStatus,
+        source: "restored",
         notices: [],
-        restored: true,
+        tasks: [],
       };
+      if (typeof record.startedAt === "string") {
+        state.startedAt = record.startedAt;
+      }
+      if (typeof record.endedAt === "string") state.endedAt = record.endedAt;
       if (Array.isArray(record.tasks)) {
         // Trusted for its runId and status, but a hand-edited `tasks` can
         // still hold junk, and the route destructures every element: one
         // `[null]` would 500 the whole list, and `{foo: "bar"}` would print
         // as `undefined undefined` in `kapelle ps`. Keep the run, drop any
         // element without a string id and status (M2-6: a boot answers anyway).
-        state.tasks = record.tasks
-          .filter(
-            (t): t is TaskEntry =>
-              typeof t?.id === "string" && typeof t?.status === "string",
-          )
-          .map(taskEntry);
+        state.tasks = record.tasks.flatMap((t) =>
+          typeof t?.id === "string" && typeof t?.status === "string"
+            ? [toTaskDto(t as RecordedTask)]
+            : [],
+        );
       }
       runs.set(id, state);
       restoredLogs.set(id, join(logDir, "events.jsonl"));
@@ -702,7 +779,16 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
   // After the last await, so no run can start once a shutdown has begun.
   if (stopping) throw refusal(503, "the daemon is shutting down");
 
-  const state: RunDetail = { id, cwd, status: "running", notices: [] };
+  const state: RunState = {
+    id,
+    cwd,
+    root,
+    status: "running",
+    source: "live",
+    startedAt: new Date().toISOString(),
+    notices: [],
+    tasks: [],
+  };
   const bus = createEventBus();
   trackChildren(bus, "run", id);
   bus.addListener(({ agent, update }) => {
@@ -734,7 +820,7 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     onEventLog: settleLog,
     askPolicy: permissions.policyFor(id, bus, canceller.signal),
     onTasks: (tasks) => {
-      state.tasks = tasks.map(taskEntry);
+      state.tasks = tasks.map(toTaskDto);
     },
     onNotice: (taskId, text, kind) => {
       state.notices.push(kind ? { taskId, text, kind } : { taskId, text });
@@ -744,10 +830,12 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
       (report) => {
         state.status = report.status;
         state.report = report;
+        state.endedAt = new Date().toISOString();
       },
       (err) => {
         state.status = "failed";
         state.error = messageOf(err);
+        state.endedAt = new Date().toISOString();
       },
     )
     .finally(() => {
@@ -989,12 +1077,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     send(
       res,
       200,
-      [...runs.values()].map(({ id, cwd, status, tasks }) => ({
-        id,
-        cwd,
-        status,
-        tasks: (tasks ?? []).map(({ id, status }) => ({ id, status })),
-      })) satisfies RunListEntry[],
+      [...runs.values()].map(toRunListEntry) satisfies RunListEntry[],
     );
   } else if (req.method === "POST" && pathname === "/rooms") {
     await postRoom(req, res);
@@ -1042,7 +1125,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     await getEvents(events[1] as string, req, res);
   } else if (req.method === "GET" && one) {
     const state = runs.get(one[1] as string);
-    if (state) send(res, 200, state);
+    if (state) send(res, 200, toRunDto(state) satisfies RunDto);
     else send(res, 404, { error: `no run ${one[1]}` } satisfies ErrorReply);
   } else if (req.method === "GET" && pathname === "/permissions") {
     send(res, 200, permissions.list() satisfies PendingDecision[]);
@@ -1064,7 +1147,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     } else {
       canceller.abort();
       state.cancelRequested = true;
-      send(res, 202, state);
+      send(res, 202, toRunDto(state) satisfies RunDto);
     }
   } else {
     send(res, 404, {

@@ -124,11 +124,22 @@ interface Reply {
   status: string;
   cwd: string;
   root: string;
+  source: "live" | "restored";
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  turns?: number;
   error: string;
   cancelRequested?: true;
-  report: { tasks: { status: string }[] };
-  /** A run restored from disk carries its record's tasks, not a report. */
-  tasks?: { id: string; status: string; sessionId?: string }[];
+  /** One shape live and restored: a field the record cannot fill is omitted. */
+  tasks: {
+    id: string;
+    status: string;
+    agent?: string;
+    durationMs?: number;
+    sessionId?: string;
+    warnings?: { kind: string; text: string }[];
+  }[];
   notices: { taskId: string; text: string }[];
 }
 
@@ -739,7 +750,7 @@ test("POST /runs accepts a run, lists it with its folder, and reports it done", 
 
   const run = await settled(d, posted.body.id);
   assert.equal(run.status, "done");
-  assert.equal(run.report.tasks[0]?.status, "done");
+  assert.equal(run.tasks[0]?.status, "done");
 });
 
 test("an invalid body is 400 in the validator's words, and creates no run", async (t) => {
@@ -1554,20 +1565,35 @@ test("a restarted daemon keeps its repositories and serves the runs from before"
     false,
     "the list must not sit in the runtime dir",
   );
-  assert.deepEqual((await api<Reply[]>(second, "GET", "/runs")).body, [
-    { id, cwd: root, status: "done", tasks: [{ id: "a", status: "done" }] },
-  ]);
+  const listed = (await api<Reply[]>(second, "GET", "/runs")).body;
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]?.id, id);
+  assert.equal(listed[0]?.cwd, root);
+  assert.equal(listed[0]?.root, root);
+  assert.equal(listed[0]?.status, "done");
+  assert.equal(listed[0]?.source, "restored");
+  // The record fills these (M5-2); the list keeps its tasks slim.
+  assert.equal(typeof listed[0]?.startedAt, "string");
+  assert.equal(typeof listed[0]?.endedAt, "string");
+  assert.deepEqual(
+    listed[0]?.tasks.map((task) => [task.id, task.status]),
+    [["a", "done"]],
+  );
 
   const one = await api(second, "GET", `/runs/${id}`);
   assert.equal(one.status, 200);
   assert.deepEqual(
-    one.body.tasks?.map((task) => [task.id, task.status]),
+    one.body.tasks.map((task) => [task.id, task.status]),
     [["a", "done"]],
   );
+  // The fields the extended record carries (M5-2, D2): the card's header
+  // and elapsed time survive the restart.
+  assert.equal(typeof one.body.tasks[0]?.agent, "string");
+  assert.equal(typeof one.body.tasks[0]?.durationMs, "number");
   // The field M2-6 exists to carry: one session id, so `session/load` can be
   // picked up later without a migration. `String(undefined)` is `"undefined"`,
   // which matches a non-empty regex — assert the type, not its printout.
-  const restoredSession = one.body.tasks?.[0]?.sessionId;
+  const restoredSession = one.body.tasks[0]?.sessionId;
   assert.equal(typeof restoredSession, "string");
   assert.equal(restoredSession, "sess_mock_1");
 
@@ -1659,18 +1685,22 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   // `failed`. `corrupt-tasks` is trusted for its runId/status, so it is
   // served too, with the junk element dropped. Sorted: restore order is
   // readdir order, which is not part of the contract.
+  const rows = [...list.body].sort((a, b) => a.id.localeCompare(b.id));
   assert.deepEqual(
-    [...list.body].sort((a, b) => a.id.localeCompare(b.id)),
+    rows.map((row) => [row.id, row.cwd, row.root, row.status, row.source]),
     [
-      {
-        id: "corrupt-tasks",
-        cwd: root,
-        status: "done",
-        tasks: [{ id: "ok", status: "done" }],
-      },
-      { id: "live", cwd: root, status: "failed", tasks: [] },
+      ["corrupt-tasks", root, root, "done", "restored"],
+      ["live", root, root, "failed", "restored"],
     ],
   );
+  assert.deepEqual(
+    rows.map((row) => row.tasks),
+    [[{ id: "ok", status: "done" }], []],
+  );
+  // The sweep rewrote `live`, so it carries the `endedAt` it wrote (M2-5);
+  // the hand-made record has neither timestamp, so both are omitted.
+  assert.equal(typeof rows[1]?.endedAt, "string");
+  assert.equal(rows[0]?.startedAt, undefined);
   const live = await api(second, "GET", "/runs/live");
   assert.equal(live.status, 200);
   assert.equal(live.body.status, "failed");
@@ -1770,7 +1800,7 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   assert.equal(restored.status, 200);
   assert.equal(restored.body.status, "failed");
   assert.deepEqual(
-    restored.body.tasks?.map((task) => [task.id, task.status]),
+    restored.body.tasks.map((task) => [task.id, task.status]),
     [
       ["stuck", "failed"],
       ["waiting", "queued"],

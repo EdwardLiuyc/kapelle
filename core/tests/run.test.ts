@@ -809,6 +809,16 @@ test("the record names a running task and a queued one, before the run ends", as
     ended.tasks.map((task: { status: string }) => task.status),
     ["done", "done"],
   );
+  // M5-2, D2: the record carries what a client card needs after a restart.
+  assert.deepEqual(
+    ended.tasks.map((task: { agent?: string }) => task.agent),
+    ["opencode", "opencode"],
+  );
+  assert.ok(
+    ended.tasks.every(
+      (task: { durationMs?: number }) => typeof task.durationMs === "number",
+    ),
+  );
 });
 
 test("the record carries the session id the executor reported", async (t) => {
@@ -891,5 +901,15 @@ test("a run with no worktrees still writes a record", async (t) => {
 
   const record = await recordIn(root, RECORD_RUN);
   assert.equal(record.status, report.status);
-  assert.deepEqual(record.tasks, [{ id: "t0", status: "done" }]);
+  // M5-2, D2: the card fields ride the record too; the stub left no branch or
+  // session, and `warnings` is omitted rather than written empty.
+  assert.deepEqual(
+    record.tasks.map((task: { id: string; status: string; agent?: string }) => [
+      task.id,
+      task.status,
+      task.agent,
+    ]),
+    [["t0", "done", "mock-agent"]],
+  );
+  assert.equal(typeof record.tasks[0].durationMs, "number");
 });
