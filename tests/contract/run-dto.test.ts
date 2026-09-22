@@ -9,58 +9,18 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import test, { type TestContext } from "node:test";
+import test from "node:test";
 import type { RunDto, RunListEntry, TaskDto } from "../../client/contract.ts";
 import { stateDirFor } from "../../core/runtime.ts";
 import {
+  daemonApi as api,
+  bootDaemon as boot,
   gitRepo,
   MOCK_AGENT,
-  spawnCli,
   tempDir,
 } from "../../integration/helpers.ts";
-
-interface Daemon {
-  url: string;
-  token: string;
-  pid: number;
-  done: ReturnType<typeof spawnCli>["done"];
-}
-
-async function boot(
-  t: TestContext,
-  runtime: string,
-  state: string,
-): Promise<Daemon> {
-  const d = spawnCli(t, ["--port", "0"], "daemon.ts", {
-    XDG_RUNTIME_DIR: runtime,
-    XDG_STATE_HOME: state,
-    XDG_CONFIG_HOME: join(state, "config-home"),
-  });
-  await d.waitFor("listening on ");
-  const { port, token, pid } = JSON.parse(
-    await readFile(join(runtime, "kapelle", "daemon.json"), "utf8"),
-  );
-  return { url: `http://127.0.0.1:${port}`, token, pid, done: d.done };
-}
-
-async function api<T>(
-  d: Daemon,
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<{ status: number; body: T }> {
-  const res = await fetch(d.url + path, {
-    method,
-    headers: {
-      authorization: `Bearer ${d.token}`,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  return { status: res.status, body: (await res.json()) as T };
-}
 
 /** Every key `RunDto` declares; a reply may not carry any other. */
 const DTO_RUN_KEYS = new Set([
@@ -114,7 +74,7 @@ test("a live run and its boot-restored reply carry the same DTO shape", async (t
   const state = await tempDir(t);
   const repo = await gitRepo(t);
 
-  const first = await boot(t, runtime, state);
+  const first = await boot(t, runtime, [], state);
   const added = await api<{ root: string }>(first, "POST", "/repos", {
     path: repo,
   });
@@ -147,7 +107,7 @@ test("a live run and its boot-restored reply carry the same DTO shape", async (t
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
 
-  const second = await boot(t, runtime, state);
+  const second = await boot(t, runtime, [], state);
   const restoredRes = await api<RunDto>(second, "GET", `/runs/${id}`);
   assert.equal(restoredRes.status, 200);
   const restored = restoredRes.body;
@@ -225,7 +185,7 @@ test("a record written before M5-2 serves with the new fields omitted", async (t
 
   // One daemon long enough to register the repository; its repos.json is what
   // the second boot reads.
-  const first = await boot(t, runtime, state);
+  const first = await boot(t, runtime, [], state);
   const added = await api<{ root: string }>(first, "POST", "/repos", {
     path: repo,
   });
@@ -235,7 +195,6 @@ test("a record written before M5-2 serves with the new fields omitted", async (t
   assert.equal((await first.done).code, 0);
 
   // The five fields M2-6 wrote, and no `agent`/`durationMs`/`warnings`.
-  process.env.XDG_STATE_HOME = state;
   const dir = join(stateDirFor(root), "runs", "old");
   await mkdir(dir, { recursive: true });
   await writeFile(
@@ -258,7 +217,7 @@ test("a record written before M5-2 serves with the new fields omitted", async (t
     }),
   );
 
-  const second = await boot(t, runtime, state);
+  const second = await boot(t, runtime, [], state);
   const got = await api<RunDto>(second, "GET", "/runs/old");
   assert.equal(got.status, 200);
   assert.equal(got.body.source, "restored");
@@ -282,7 +241,7 @@ test("a hand-edited record cannot put a null or a junk time on the wire", async 
 
   // One daemon long enough to register the repository; its repos.json is what
   // the second boot reads.
-  const first = await boot(t, runtime, state);
+  const first = await boot(t, runtime, [], state);
   const added = await api<{ root: string }>(first, "POST", "/repos", {
     path: repo,
   });
@@ -291,7 +250,6 @@ test("a hand-edited record cannot put a null or a junk time on the wire", async 
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
 
-  process.env.XDG_STATE_HOME = state;
   const dir = join(stateDirFor(root), "runs", "raw");
   await mkdir(dir, { recursive: true });
   // Raw text, not `JSON.stringify`: `1e999` must reach `JSON.parse` as
@@ -304,7 +262,7 @@ test("a hand-edited record cannot put a null or a junk time on the wire", async 
       `"tasks":[{"id":"a","status":"done","durationMs":1e999}]}`,
   );
 
-  const second = await boot(t, runtime, state);
+  const second = await boot(t, runtime, [], state);
   const got = await api<RunDto>(second, "GET", "/runs/raw");
   assert.equal(got.status, 200);
   // C5: a junk timestamp is omitted, a valid one still serves.

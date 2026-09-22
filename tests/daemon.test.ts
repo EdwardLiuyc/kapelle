@@ -31,85 +31,18 @@ import { stateDirFor } from "../core/runtime.ts";
 import { processIdentity } from "../core/sweep.ts";
 import { openWorktrees } from "../core/worktree.ts";
 import {
+  bootDaemon as boot,
   type CliResult,
+  type Daemon,
+  daemonApi,
+  daemonDirs as dirs,
   gitRepo,
   MOCK_AGENT,
   REPO,
   spawnCli,
+  startDaemon as start,
   tempDir,
 } from "../integration/helpers.ts";
-
-interface Daemon {
-  url: string;
-  token: string;
-  /** What `daemon.json` says, next to what the test actually spawned. */
-  pid: number;
-  childPid: number | undefined;
-  file: string;
-  /** The daemon's exit, for the tests that stop it. */
-  done: Promise<CliResult>;
-}
-
-/** Spawns `daemon.ts` with `runtime` as its runtime directory and `state` as
- *  its state directory (defaulting to `runtime`). `extraEnv` merges last, so a
- *  test can point `HOME`/`XDG_STATE_HOME` wherever it needs. */
-function start(
-  t: TestContext,
-  runtime: string,
-  args: string[] = [],
-  state: string = runtime,
-  extraEnv: Record<string, string> = {},
-) {
-  return spawnCli(t, ["--port", "0", ...args], "daemon.ts", {
-    ...dirs(runtime, state),
-    ...extraEnv,
-  });
-}
-
-/** The user-level directories a daemon must not share with anyone.
- *
- *  It also points **this process** at the same state home, because since #129
- *  a run's worktrees and records live there: a fixture built here with
- *  `openWorktrees` or read back with `stateDirFor` has to agree with the
- *  daemon that owns them. */
-const dirs = (runtime: string, state: string = runtime) => {
-  process.env.XDG_STATE_HOME = state;
-  return {
-    XDG_RUNTIME_DIR: runtime,
-    XDG_STATE_HOME: state,
-    // M2-7's user config reads `$XDG_CONFIG_HOME/kapelle/config.json`; a path
-    // under this test's own state dir keeps a developer's real file out.
-    XDG_CONFIG_HOME: join(state, "config-home"),
-  };
-};
-
-/** Starts a daemon and reads back the record it wrote once listening. */
-async function boot(
-  t: TestContext,
-  runtime?: string,
-  args: string[] = [],
-  state?: string,
-  env: Record<string, string> = {},
-): Promise<Daemon> {
-  const dir = runtime ?? (await tempDir(t));
-  const d = start(t, dir, args, state ?? dir, env);
-  // A daemon that dies at startup must fail with its own words, not a timeout.
-  const died = d.done.then((r) => {
-    throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
-  });
-  await Promise.race([d.waitFor("listening on "), died]);
-  died.catch(() => {});
-  const file = join(dir, "kapelle", "daemon.json");
-  const { port, token, pid } = JSON.parse(await readFile(file, "utf8"));
-  return {
-    url: `http://127.0.0.1:${port}`,
-    token,
-    pid,
-    childPid: d.child.pid,
-    file,
-    done: d.done,
-  };
-}
 
 /** The exit of a daemon expected to refuse, or `null` if it kept running. */
 async function exitOf(d: ReturnType<typeof start>): Promise<CliResult | null> {
@@ -143,6 +76,7 @@ interface Reply {
   notices: { taskId: string; text: string }[];
 }
 
+/** The suite's default reply type; `daemonApi` itself is shared. */
 async function api<T = Reply>(
   d: Daemon,
   method: string,
@@ -150,15 +84,7 @@ async function api<T = Reply>(
   body?: unknown,
   token: string | null = d.token,
 ): Promise<{ status: number; body: T }> {
-  const headers: Record<string, string> = {};
-  if (token !== null) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(d.url + path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  return { status: res.status, body: text ? JSON.parse(text) : undefined };
+  return daemonApi<T>(d, method, path, body, token);
 }
 
 const mockRun = (
