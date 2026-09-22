@@ -44,6 +44,9 @@ The contract has a version with two numbers: `major.minor`.
 - `major` goes up when a change can break an existing client.
 - `minor` goes up when something is added. Old clients keep working.
 
+These numbers track the **stable** parts. A **provisional** part changes with its named
+story and without a version step; the stability tables below say which is which.
+
 Ask the daemon for its version with [`GET /version`](#get-version). Then compare it with
 the version your client was written for:
 
@@ -81,7 +84,8 @@ Not every part of this API is final yet. Each part has one of three labels:
 
 - **Stable**: will not break within `major` version 1.
 - **Provisional**: works today, but a named story will change it. The story is in the
-  table. Expect a change, and a `minor` or `major` step with it.
+  table. A provisional part changes with that story and without a version step: the
+  version tracks the Stable rows.
 - **Experimental**: can change at any time, with no version step. Do not build on it.
 
 **Stable.** You can build on these now.
@@ -411,9 +415,13 @@ omitted, never `null`.
 
 Each task has `id` and `status`, and when known `agent`, `durationMs`, `error`,
 `usage`, `usageSemantics`, `warnings` (`{kind, text}` each), `summary`,
-`summarySynthesised`, `branch`, `baseSha` and `sessionId`. `cwd`, `stopReason`,
-`transcript` and the structured `result` are not part of the contract: the event
-stream carries the prose, and a restored run never had them.
+`summarySynthesised`, `branch`, `baseSha` and `sessionId`. `usage` carries the token
+counts and may carry a `_meta` object, passed through unchanged (C11). `cwd`,
+`stopReason`, `transcript` and the structured `result` are not part of the contract:
+the event stream carries the prose, and a restored run never had them.
+
+A live run's `startedAt`/`endedAt` are the daemon's clock; a restored run's are the
+record's own stamps, so the same run can report them a moment apart after a restart.
 
 A notice's `kind` is `containment`, `unverified`, `version` or `advisory`. **Always show
 `containment` notices.** They tell the person how much the harness is contained. The other

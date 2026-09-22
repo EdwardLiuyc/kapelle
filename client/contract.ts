@@ -32,6 +32,11 @@ export type { AgentEvent, ToolKind };
  * that breaks a client; `minor` goes up when something is added. A client
  * refuses a daemon with a different `major` and warns on a different `minor`
  * (B5).
+ *
+ * Only a **stable** part is versioned. A provisional part changes with its
+ * named story and without a version step — that is what the label is for
+ * (M5-2 changed one). Which rows are stable is the table in
+ * `docs/CLIENT-API.md`.
  */
 export const API_VERSION = { major: 1, minor: 0 } as const;
 
