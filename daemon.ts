@@ -370,6 +370,18 @@ const repos = new Set<string>(addedRepos);
  *  are never suppressed, and with no terminal this record is where they
  *  survive. */
 const runs = new Map<string, RunDetail>();
+
+/** A task as the contract lists it, and nothing else. Both sources are wider
+ *  than `TaskEntry` can see — `core/run.ts`'s record type, and a `run.json`
+ *  anyone can edit — so the fields are copied, never passed through: a key
+ *  added to either stays off the wire until the contract names it. */
+const taskEntry = ({
+  id,
+  status,
+  branch,
+  baseSha,
+  sessionId,
+}: TaskEntry): TaskEntry => ({ id, status, branch, baseSha, sessionId });
 /** Every run still in flight, so a shutdown can wait for them to settle. */
 const inFlight = new Set<Promise<void>>();
 /** Kept beside the record rather than on it, so a `GET` never serialises one. */
@@ -455,10 +467,12 @@ function restoreRuns(): void {
         // `[null]` would 500 the whole list, and `{foo: "bar"}` would print
         // as `undefined undefined` in `kapelle ps`. Keep the run, drop any
         // element without a string id and status (M2-6: a boot answers anyway).
-        state.tasks = record.tasks.filter(
-          (t): t is TaskEntry =>
-            typeof t?.id === "string" && typeof t?.status === "string",
-        );
+        state.tasks = record.tasks
+          .filter(
+            (t): t is TaskEntry =>
+              typeof t?.id === "string" && typeof t?.status === "string",
+          )
+          .map(taskEntry);
       }
       runs.set(id, state);
       restoredLogs.set(id, join(logDir, "events.jsonl"));
@@ -720,7 +734,7 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     onEventLog: settleLog,
     askPolicy: permissions.policyFor(id, bus, canceller.signal),
     onTasks: (tasks) => {
-      state.tasks = tasks;
+      state.tasks = tasks.map(taskEntry);
     },
     onNotice: (taskId, text, kind) => {
       state.notices.push(kind ? { taskId, text, kind } : { taskId, text });

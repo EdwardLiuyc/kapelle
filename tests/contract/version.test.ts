@@ -101,7 +101,7 @@ test("GET /version is behind the Host guard", async (t) => {
   assert.equal(typeof forged.body.error, "string");
 });
 
-test("GET is the only method /version answers", async (t) => {
+test("POST /version is a 404 with an {error} body", async (t) => {
   const { url, token } = await boot(t);
   const res = await fetch(url, {
     method: "POST",
