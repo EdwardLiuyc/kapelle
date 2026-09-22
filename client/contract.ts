@@ -2,9 +2,10 @@
  * The client contract, as types — story M5-1, issue #133.
  *
  * `docs/CLIENT-API.md` is the promise; this file is the same shapes for a
- * TypeScript client. A client imports this file and `protocol/types.ts` (the
- * ACP events that ride inside the stream), and nothing else from this
- * repository — never `daemon.ts`, never `core/`.
+ * TypeScript client. A client imports this file and nothing else from this
+ * repository — never `daemon.ts`, never `core/`. The ACP event types that
+ * ride inside the stream are re-exported below, so a client never has to
+ * know `protocol/` exists.
  *
  * `daemon.ts` checks every reply it sends against these types with
  * `satisfies`, so a shape that drifts fails `npm run check` rather than a
@@ -16,6 +17,10 @@
  */
 
 import type { AgentEvent, ToolKind } from "../protocol/types.ts";
+
+/** The event types a stream carries, and the tool kinds a permission names.
+ *  Re-exported, not copied, so there is one definition. @public */
+export type { AgentEvent, ToolKind };
 
 /**
  * The contract version (B2, amended 2026-09-22). `major` goes up for a change

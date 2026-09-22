@@ -84,25 +84,33 @@ Not every part of this API is final yet. Each part has one of three labels:
   table. Expect a change, and a `minor` or `major` step with it.
 - **Experimental**: can change at any time, with no version step. Do not build on it.
 
+**Stable.** You can build on these now.
+
+| Part | Note |
+| --- | --- |
+| Finding the daemon (`daemon.json`) | |
+| Host check and token | |
+| `GET /version` | |
+| `POST /repos`, `GET /repos` | |
+| `POST /runs` request body | |
+| `POST /runs` reply (`{id}`) | |
+| SSE format, `seq`, `Last-Event-ID` | |
+| Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
+| `_client_*` events | Except the room events. See [Events](#events). |
+| `GET /permissions`, `POST /permissions/:id` | |
+
+**Provisional and experimental.** These will change. The last column names the story that
+changes each one.
+
 | Part | Label | Changed by |
 | --- | --- | --- |
-| Finding the daemon (`daemon.json`) | Stable | |
-| Host check and token | Stable | |
-| `GET /version` | Stable | |
-| `POST /repos`, `GET /repos` | Stable | |
-| `POST /runs` request body | Stable | |
-| `POST /runs` reply (`{id}`) | Stable | |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages) |
 | `GET /runs/:id`, `DELETE /runs/:id` replies | Provisional | M5-2 (one shape for live and restored runs) |
 | Error replies (`{error}`) | Provisional | M5-3 (adds an error `code`) |
 | Request limits (body size, content type) | Provisional | M5-3 |
-| SSE format, `seq`, `Last-Event-ID` | Stable | |
 | End of a run's stream | Provisional | M5-5 (adds a "run finished" event) |
 | Event timestamps | Provisional | M5-5 (adds `at`) |
 | Heartbeat and reconnect | Provisional | M5-6 |
-| Event `update` values from the harness (ACP) | Stable as a pass-through | See [Events](#events) |
-| `_client_*` events | Stable, except where marked | See [Events](#events) |
-| `GET /permissions`, `POST /permissions/:id` | Stable | |
 | How a permission ended (reason) | Provisional | M5-4 (adds an "answered" event) |
 | `POST /runs` retry safety | Provisional | M5-7 (adds `Idempotency-Key`) |
 | Cancel one task | Not built | M5-8 |
@@ -113,8 +121,8 @@ Version 1 stops changing at story M5-11. After that, only additions are allowed.
 ### Types for TypeScript clients
 
 `client/contract.ts` has every reply shape in this document as a TypeScript type. It also
-has `API_VERSION` and `CAPABILITIES`. The events inside the stream use the types in
-`protocol/types.ts`. A TypeScript client can import these two files and nothing else.
+has `API_VERSION`, `CAPABILITIES`, and the types of the events inside the stream
+(`AgentEvent`). A TypeScript client imports this one file and nothing else.
 
 A client in another language uses this document. There is no JSON Schema yet.
 
@@ -144,9 +152,10 @@ to find the port and the token.
 **Rules:**
 
 - The file exists only while the port is open. No file means no daemon.
-- If the daemon crashed, the file can stay. The port then refuses your connection. Tell the
-  person to start the daemon again.
-- A new daemon makes a new token. Read the file again after a restart.
+- If the daemon crashed, the file can stay. The port then refuses your connection. Restart
+  the daemon first.
+- A new daemon makes a new token. Read the file again after a restart to retrieve the new
+  token.
 - The file and its folder are private to your user. Keep the token secret. Never write it
   into a log or a URL.
 - The file has no version in it. Ask `GET /version` for that.
