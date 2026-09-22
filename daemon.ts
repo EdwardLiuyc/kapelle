@@ -85,7 +85,7 @@ import { createEventBus } from "./core/events.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
 import { openRoom, type Room, roomHarness } from "./core/room.ts";
-import { type RunReport, runRun, type TaskRun } from "./core/run.ts";
+import { type RunReport, runRun } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import {
   readRepos,
@@ -366,6 +366,44 @@ const repos = new Set<string>(addedRepos);
 
 const USAGE_SEMANTICS = new Set(["per-turn", "cumulative", "unknown"]);
 
+/** A `Usage` from a value of unknown provenance, rebuilt key by key so a
+ *  hand-edited record cannot put a wrong-typed or unknown nested value on the
+ *  wire (C2, C11). `undefined` when the required numbers are not all finite. */
+function usageOf(value: unknown): TaskDto["usage"] | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  if (
+    !Number.isFinite(raw.inputTokens) ||
+    !Number.isFinite(raw.outputTokens) ||
+    !Number.isFinite(raw.totalTokens)
+  ) {
+    return undefined;
+  }
+  const usage: NonNullable<TaskDto["usage"]> = {
+    inputTokens: raw.inputTokens as number,
+    outputTokens: raw.outputTokens as number,
+    totalTokens: raw.totalTokens as number,
+  };
+  for (const key of [
+    "thoughtTokens",
+    "cachedReadTokens",
+    "cachedWriteTokens",
+  ] as const) {
+    const n = raw[key];
+    if (Number.isFinite(n)) usage[key] = n as number;
+  }
+  if (
+    typeof raw._meta === "object" &&
+    raw._meta !== null &&
+    !Array.isArray(raw._meta)
+  ) {
+    usage._meta = raw._meta as Record<string, unknown>;
+  }
+  return usage;
+}
+
 /** One task, live or restored, as the contract carries it (M2-6, M5-2). `id`
  *  and `status` are trusted — for a record, by the guard in `restoreRuns`.
  *  Every other field is copied only when the contract names it and its value
@@ -387,10 +425,11 @@ function toTaskDto(task: { id: string; status: string }): TaskDto {
     const value = t[key];
     if (typeof value === "string") dto[key] = value;
   }
-  if (typeof t.durationMs === "number") dto.durationMs = t.durationMs;
-  if (typeof t.usage === "object" && t.usage && !Array.isArray(t.usage)) {
-    dto.usage = t.usage as TaskDto["usage"];
+  if (typeof t.durationMs === "number" && Number.isFinite(t.durationMs)) {
+    dto.durationMs = t.durationMs;
   }
+  const usage = usageOf(t.usage);
+  if (usage !== undefined) dto.usage = usage;
   if (USAGE_SEMANTICS.has(t.usageSemantics as string)) {
     dto.usageSemantics = t.usageSemantics as TaskDto["usageSemantics"];
   }
@@ -549,10 +588,18 @@ function restoreRuns(): void {
         notices: [],
         tasks: [],
       };
-      if (typeof record.startedAt === "string") {
+      if (
+        typeof record.startedAt === "string" &&
+        Number.isFinite(Date.parse(record.startedAt))
+      ) {
         state.startedAt = record.startedAt;
       }
-      if (typeof record.endedAt === "string") state.endedAt = record.endedAt;
+      if (
+        typeof record.endedAt === "string" &&
+        Number.isFinite(Date.parse(record.endedAt))
+      ) {
+        state.endedAt = record.endedAt;
+      }
       if (Array.isArray(record.tasks)) {
         // Trusted for its runId and status, but a hand-edited `tasks` can
         // still hold junk, and the route destructures every element: one

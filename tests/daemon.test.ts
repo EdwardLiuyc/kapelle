@@ -1666,17 +1666,29 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
         { foo: "bar" },
         // A key the contract does not name must not reach the wire (#160),
         // and nor does a named key with the wrong type: `"warnings": 5`
-        // crashed `attach`'s `printTask` (M5-2).
+        // crashed `attach`'s `printTask`, and a malformed `usage` is rebuilt
+        // from the contract's keys or dropped (M5-2).
         {
           id: "ok",
           status: "done",
           note: "hand-edited",
           agent: 7,
           durationMs: "3",
-          usage: null,
+          usage: {
+            inputTokens: 1,
+            outputTokens: 2,
+            totalTokens: 3,
+            _task: "ok",
+            evil: true,
+          },
           usageSemantics: "sometimes",
           summarySynthesised: "yes",
           warnings: [null, 5, { kind: "k", text: "t", extra: 1 }],
+        },
+        {
+          id: "bad-usage",
+          status: "done",
+          usage: { inputTokens: "many", outputTokens: 2, totalTokens: 3 },
         },
         { id: "bad-warnings", status: "done", warnings: 5 },
       ],
@@ -1711,6 +1723,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     [
       [
         { id: "ok", status: "done" },
+        { id: "bad-usage", status: "done" },
         { id: "bad-warnings", status: "done" },
       ],
       [],
@@ -1725,7 +1738,13 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   assert.equal(live.body.status, "failed");
   const corrupt = await api(second, "GET", "/runs/corrupt-tasks");
   assert.deepEqual(corrupt.body.tasks, [
-    { id: "ok", status: "done", warnings: [{ kind: "k", text: "t" }] },
+    {
+      id: "ok",
+      status: "done",
+      usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+      warnings: [{ kind: "k", text: "t" }],
+    },
+    { id: "bad-usage", status: "done" },
     { id: "bad-warnings", status: "done" },
   ]);
 

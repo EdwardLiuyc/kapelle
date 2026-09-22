@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import type { RunDto, TaskDto } from "../../client/contract.ts";
+import type { RunDto, RunListEntry, TaskDto } from "../../client/contract.ts";
 import { stateDirFor } from "../../core/runtime.ts";
 import {
   gitRepo,
@@ -215,6 +215,10 @@ test("a record written before M5-2 serves with the new fields omitted", async (t
   const runtime = await tempDir(t);
   const state = await tempDir(t);
   const repo = await gitRepo(t);
+  // Relative to now: the boot sweep's 30-day retention (core/sweep.ts) would
+  // otherwise reap a fixed date out from under this test.
+  const endedAt = new Date(Date.now() - 60_000).toISOString();
+  const startedAt = new Date(Date.now() - 120_000).toISOString();
 
   // One daemon long enough to register the repository; its repos.json is what
   // the second boot reads.
@@ -238,8 +242,8 @@ test("a record written before M5-2 serves with the new fields omitted", async (t
       root,
       cwd: root,
       status: "done",
-      startedAt: "2026-09-01T00:00:00.000Z",
-      endedAt: "2026-09-01T00:01:00.000Z",
+      startedAt,
+      endedAt,
       tasks: [
         {
           id: "a",
@@ -255,12 +259,68 @@ test("a record written before M5-2 serves with the new fields omitted", async (t
   const got = await api<RunDto>(second, "GET", "/runs/old");
   assert.equal(got.status, 200);
   assert.equal(got.body.source, "restored");
-  assert.equal(got.body.startedAt, "2026-09-01T00:00:00.000Z");
-  assert.equal(got.body.endedAt, "2026-09-01T00:01:00.000Z");
+  assert.equal(got.body.startedAt, startedAt);
+  assert.equal(got.body.endedAt, endedAt);
   assert.deepEqual(got.body.tasks, [
     { id: "a", status: "done", branch: "kapelle/old/a", sessionId: "sess_old" },
   ]);
   assertNoNull(got.body, "old record");
+
+  process.kill(second.pid, "SIGTERM");
+  assert.equal((await second.done).code, 0);
+});
+
+test("a hand-edited record cannot put a null or a junk time on the wire", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const repo = await gitRepo(t);
+  // Relative to now for the same retention reason as the old-record test.
+  const endedAt = new Date(Date.now() - 60_000).toISOString();
+
+  // One daemon long enough to register the repository; its repos.json is what
+  // the second boot reads.
+  const first = await boot(t, runtime, state);
+  const added = await api<{ root: string }>(first, "POST", "/repos", {
+    path: repo,
+  });
+  assert.equal(added.status, 200);
+  const root = added.body.root;
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  process.env.XDG_STATE_HOME = state;
+  const dir = join(stateDirFor(root), "runs", "raw");
+  await mkdir(dir, { recursive: true });
+  // Raw text, not `JSON.stringify`: `1e999` must reach `JSON.parse` as
+  // `Infinity`, which `JSON.stringify` would already have written as `null`.
+  await writeFile(
+    join(dir, "run.json"),
+    `{"runId":"raw","root":${JSON.stringify(root)},` +
+      `"cwd":${JSON.stringify(root)},"status":"done",` +
+      `"startedAt":"yesterday","endedAt":${JSON.stringify(endedAt)},` +
+      `"tasks":[{"id":"a","status":"done","durationMs":1e999}]}`,
+  );
+
+  const second = await boot(t, runtime, state);
+  const got = await api<RunDto>(second, "GET", "/runs/raw");
+  assert.equal(got.status, 200);
+  // C5: a junk timestamp is omitted, a valid one still serves.
+  assert.equal(got.body.startedAt, undefined);
+  assert.equal(got.body.endedAt, endedAt);
+  // C2: a non-finite `durationMs` is omitted, never serialised as null.
+  const task = got.body.tasks[0];
+  assert.ok(task, "the task is served");
+  assert.equal(task.id, "a");
+  assert.equal("durationMs" in task, false);
+  assert.equal(task.durationMs, undefined);
+  assertNoNull(got.body, "raw record");
+
+  // The list route sanitises the same record.
+  const listed = await api<RunListEntry[]>(second, "GET", "/runs");
+  const row = listed.body.find((entry) => entry.id === "raw");
+  assert.ok(row, "the hand-edited run is listed");
+  assert.equal(row.startedAt, undefined);
+  assert.equal(row.endedAt, endedAt);
 
   process.kill(second.pid, "SIGTERM");
   assert.equal((await second.done).code, 0);
