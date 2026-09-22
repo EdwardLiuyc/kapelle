@@ -379,14 +379,19 @@ const STRING_KEYS = [
   "sessionId",
 ] as const satisfies readonly (keyof TaskDto & keyof TaskRun)[];
 
-/** The non-string fields, pinned the same way. */
+/** The non-string fields, pinned the same way. The `Record`'s key set is
+ *  the complement of `STRING_KEYS` plus `id`/`status`, so a field added to
+ *  `TaskDto` fails `npm run check` until `toTaskDto` handles it. */
 const TYPED_KEYS = {
   durationMs: "durationMs",
   usage: "usage",
   usageSemantics: "usageSemantics",
   warnings: "warnings",
   summarySynthesised: "summarySynthesised",
-} as const satisfies Record<string, keyof TaskDto & keyof TaskRun>;
+} as const satisfies Record<
+  Exclude<keyof TaskDto, (typeof STRING_KEYS)[number] | "id" | "status">,
+  keyof TaskDto & keyof TaskRun
+>;
 
 /** A `Usage` from a value of unknown provenance, rebuilt key by key so a
  *  hand-edited record cannot put a wrong-typed or unknown nested value on the
@@ -413,7 +418,7 @@ function usageOf(value: unknown): TaskDto["usage"] | undefined {
     "thoughtTokens",
     "cachedReadTokens",
     "cachedWriteTokens",
-  ] as const) {
+  ] as const satisfies readonly (keyof NonNullable<TaskDto["usage"]>)[]) {
     const n = raw[key];
     if (Number.isFinite(n)) usage[key] = n as number;
   }

@@ -387,7 +387,8 @@ status:
 | `failed` | It failed. |
 
 **Task status** is one of the words above, or `queued` (not started yet), or `running`.
-Show a word that you do not know as it is. Do not fail on it.
+Show a word that you do not know as it is. Do not fail on it; that goes for the run
+status too, which comes off the same record.
 
 #### `GET /runs/:id`
 

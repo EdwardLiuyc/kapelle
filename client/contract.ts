@@ -122,7 +122,8 @@ export interface RunListEntry {
   id: string;
   cwd: string;
   root: string;
-  status: RunStatus;
+  /** A run status word; see `RunDto.status`. */
+  status: string;
   source: "live" | "restored";
   startedAt?: string;
   endedAt?: string;
@@ -138,7 +139,9 @@ export interface RunDto {
   id: string;
   cwd: string;
   root: string;
-  status: RunStatus;
+  /** A `RunStatus`, or the word a hand-edited record carries: as with a
+   *  task, a client shows a word it does not know rather than failing on it. */
+  status: string;
   source: "live" | "restored";
   /** ISO 8601. On a restored run these come from the record. */
   startedAt?: string;

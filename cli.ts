@@ -1026,8 +1026,9 @@ async function attachRun(): Promise<number> {
   // The stream is not the whole story. A run killed mid-turn and restored has
   // no `_client_task_finished` for the task it cut, and nothing at all for one
   // still queued; and no stream carries error text or usage. The reply has
-  // them — `tasks`, one shape live or restored since M5-2 — so it fills what
-  // the stream left open.
+  // them — `tasks`, one shape live or restored since M5-2 (the `report`
+  // fallback only fits a daemon older than M5-2) — so it fills what the
+  // stream left open.
   // `state.status` is never read: it can still say `running` for a beat after
   // the stream ends, and the tasks already decide the run (`runStatus`).
   for (const r of state.report?.tasks ?? state.tasks ?? []) {
