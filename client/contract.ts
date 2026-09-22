@@ -1,5 +1,5 @@
 /**
- * The client contract, as types — story M5-1, issue #133.
+ * The client contract, as types — stories M5-1 (#133) and M5-2 (#134).
  *
  * `docs/CLIENT-API.md` is the promise; this file is the same reply and
  * stream-event shapes for a TypeScript client. A client imports this file
@@ -32,6 +32,11 @@ export type { AgentEvent, ToolKind };
  * that breaks a client; `minor` goes up when something is added. A client
  * refuses a daemon with a different `major` and warns on a different `minor`
  * (B5).
+ *
+ * Only a **stable** part is versioned. A provisional part changes with its
+ * named story and without a version step — that is what the label is for
+ * (M5-2 changed one). Which rows are stable is the table in
+ * `docs/CLIENT-API.md`.
  */
 export const API_VERSION = { major: 1, minor: 0 } as const;
 
@@ -85,83 +90,76 @@ export interface RunAccepted {
   id: string;
 }
 
-/** One task as a run lists it. `status` is a `TaskStatus`, or `queued` or
- *  `running` while the run is live. Typed as `string` because a run read back
- *  from disk passes its record's word through unchecked: a client shows a
- *  word it does not know rather than failing on it. @public */
-export interface TaskEntry {
+/** One task in a run, live or restored (M5-2). A field a restored record
+ *  cannot fill is omitted, never `null`. `status` is a `TaskStatus`, or
+ *  `queued` or `running` while the run is live; typed as `string` because a
+ *  run read back from disk passes its record's word through unchecked: a
+ *  client shows a word it does not know rather than failing on it. @public */
+export interface TaskDto {
   id: string;
   status: string;
+  /** The harness that ran the task. */
+  agent?: string;
+  /** Wall time the task took. */
+  durationMs?: number;
+  error?: string;
+  usage?: Usage;
+  usageSemantics?: "per-turn" | "cumulative" | "unknown";
+  warnings?: { kind: string; text: string }[];
+  summary?: string;
+  summarySynthesised?: true;
+  /** The task's worktree branch and the SHA it branched from, when it had one. */
   branch?: string;
   baseSha?: string;
+  /** The harness session this task ran in (M2-6); a client can keep it for a
+   *  future `session/load`. */
   sessionId?: string;
 }
 
-/** One entry of `GET /runs`. */
+/** One entry of `GET /runs`. The shared fields are the same vocabulary as
+ *  `RunDto`; filters, order and pages arrive in M5-9. */
 export interface RunListEntry {
   id: string;
   cwd: string;
-  status: RunStatus;
+  root: string;
+  /** A run status word; see `RunDto.status`. */
+  status: string;
+  source: "live" | "restored";
+  startedAt?: string;
+  endedAt?: string;
   tasks: { id: string; status: string }[];
+}
+
+/**
+ * `GET /runs/:id`, and the `202` of `DELETE /runs/:id`. One shape for a live
+ * run and one restored after a restart (M5-2): a field the record cannot
+ * fill is omitted, never `null`, and `source` says where it came from.
+ */
+export interface RunDto {
+  id: string;
+  cwd: string;
+  root: string;
+  /** A `RunStatus`, or the word a hand-edited record carries: as with a
+   *  task, a client shows a word it does not know rather than failing on it. */
+  status: string;
+  source: "live" | "restored";
+  /** ISO 8601. On a restored run these come from the record. */
+  startedAt?: string;
+  endedAt?: string;
+  /** The run's own elapsed time and turn count: live-only, not persisted. */
+  durationMs?: number;
+  turns?: number;
+  /** The run itself failed to start, so no task record exists. */
+  error?: string;
+  cancelRequested?: true;
+  notices: (Notice & { taskId: string })[];
+  tasks: TaskDto[];
 }
 
 /** A line a run or a room kept for the operator. @public */
 export interface Notice {
   text: string;
   kind?: "containment" | "unverified" | "version" | "advisory";
-}
-
-/** One finished task in a live run's `report`. Provisional: M5-2 replaces
- *  it with a curated shape. @public */
-export interface TaskReport {
-  id: string;
-  agent: string;
-  cwd: string;
-  branch?: string;
-  baseSha?: string;
-  sessionId?: string;
-  status: TaskStatus;
-  stopReason?: string;
-  usage?: Usage;
-  usageSemantics?: "per-turn" | "cumulative" | "unknown";
-  durationMs: number;
-  transcript: string;
-  error?: string;
-  result?: {
-    status: string;
-    summary: string;
-    details: string;
-    files?: string[];
-    branch?: string;
-  };
-  warnings?: { kind: string; text: string }[];
-  summary?: string;
-  summarySynthesised?: true;
-}
-
-/**
- * `GET /runs/:id`, and the `202` of `DELETE /runs/:id`. Provisional: a live
- * run and a run restored after a restart do not carry the same fields yet
- * (M5-2).
- */
-export interface RunDetail {
-  id: string;
-  cwd: string;
-  status: RunStatus;
-  /** A live run, once it has finished. */
-  report?: {
-    status: TaskStatus;
-    durationMs: number;
-    turns: number;
-    tasks: TaskReport[];
-  };
-  /** The run itself failed to start, so no task record exists. */
-  error?: string;
-  cancelRequested?: true;
-  notices: (Notice & { taskId: string })[];
-  /** Read back from disk after a daemon restart. */
-  restored?: true;
-  tasks?: TaskEntry[];
 }
 
 /** One entry of `GET /permissions`. */

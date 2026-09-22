@@ -15,7 +15,7 @@
 
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, type TestContext } from "node:test";
@@ -211,6 +211,127 @@ export function runCli(
   script?: string,
 ): Promise<CliResult> {
   return spawnCli(t, args, script).done;
+}
+
+/** A daemon under test: its address, its token, and how to read its exit.
+ *
+ *  Shared by `tests/daemon.test.ts` and `tests/contract/run-dto.test.ts`, so
+ *  neither suite copies the boot/HTTP plumbing (CLAUDE.md: share, don't
+ *  copy). */
+export interface Daemon {
+  url: string;
+  token: string;
+  /** What `daemon.json` says, next to what the test actually spawned. */
+  pid: number;
+  childPid: number | undefined;
+  file: string;
+  /** The daemon's exit, for the tests that stop it. */
+  done: Promise<CliResult>;
+}
+
+/** The user-level directories a daemon must not share with anyone.
+ *
+ *  Despite the `use` prefix it returns the env object; it also points **this
+ *  process** at the same state home, because since #129 a run's worktrees and
+ *  records live there: a fixture built here with `openWorktrees` or read back
+ *  with `stateDirFor` has to agree with the daemon that owns them. */
+export function useDaemonDirs(runtime: string, state: string = runtime) {
+  process.env.XDG_STATE_HOME = state;
+  return {
+    XDG_RUNTIME_DIR: runtime,
+    XDG_STATE_HOME: state,
+    // M2-7's user config reads `$XDG_CONFIG_HOME/kapelle/config.json`; a path
+    // under this test's own state dir keeps a developer's real file out.
+    XDG_CONFIG_HOME: join(state, "config-home"),
+  };
+}
+
+/** Spawns `daemon.ts` with `runtime` as its runtime directory and `state` as
+ *  its state directory (defaulting to `runtime`). `extraEnv` merges last, so a
+ *  test can point `HOME`/`XDG_STATE_HOME` wherever it needs. */
+export function startDaemon(
+  t: TestContext,
+  runtime: string,
+  args: string[] = [],
+  state: string = runtime,
+  extraEnv: Record<string, string> = {},
+) {
+  return spawnCli(t, ["--port", "0", ...args], "daemon.ts", {
+    ...useDaemonDirs(runtime, state),
+    ...extraEnv,
+  });
+}
+
+/** Starts a daemon and reads back the record it wrote once listening. */
+export async function bootDaemon(
+  t: TestContext,
+  runtime?: string,
+  args: string[] = [],
+  state?: string,
+  env: Record<string, string> = {},
+): Promise<Daemon> {
+  const dir = runtime ?? (await tempDir(t));
+  const d = startDaemon(t, dir, args, state ?? dir, env);
+  // A daemon that dies at startup must fail with its own words, not a timeout.
+  const died = d.done.then((r) => {
+    throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
+  });
+  await Promise.race([d.waitFor("listening on "), died]);
+  died.catch(() => {});
+  const file = join(dir, "kapelle", "daemon.json");
+  let record: { port: number; token: string; pid: number };
+  try {
+    record = JSON.parse(await readFile(file, "utf8"));
+  } catch (err) {
+    throw new Error(
+      `cannot read ${file}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const { port, token, pid } = record;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    token,
+    pid,
+    childPid: d.child.pid,
+    file,
+    done: d.done,
+  };
+}
+
+/** One request to a running daemon, with its token already on it. */
+export async function daemonApi<T>(
+  d: Daemon,
+  method: string,
+  path: string,
+  body?: unknown,
+  token: string | null = d.token,
+): Promise<{ status: number; body: T }> {
+  const headers: Record<string, string> = {};
+  if (token !== null) headers.authorization = `Bearer ${token}`;
+  const res = await fetch(d.url + path, {
+    method,
+    headers: {
+      ...headers,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (text === "") {
+    // SAFETY: every route in this suite answers JSON, so an empty body only
+    // reaches this branch if the daemon broke; the old helper returned
+    // `undefined` here and the caller fails on the missing fields anyway.
+    return { status: res.status, body: undefined as unknown as T };
+  }
+  try {
+    return { status: res.status, body: JSON.parse(text) as T };
+  } catch (err) {
+    throw new Error(
+      `${method} ${path} did not answer JSON: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
 }
 
 /**

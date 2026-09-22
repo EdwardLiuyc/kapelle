@@ -31,85 +31,18 @@ import { stateDirFor } from "../core/runtime.ts";
 import { processIdentity } from "../core/sweep.ts";
 import { openWorktrees } from "../core/worktree.ts";
 import {
+  bootDaemon as boot,
   type CliResult,
+  type Daemon,
+  daemonApi,
+  useDaemonDirs as dirs,
   gitRepo,
   MOCK_AGENT,
   REPO,
   spawnCli,
+  startDaemon as start,
   tempDir,
 } from "../integration/helpers.ts";
-
-interface Daemon {
-  url: string;
-  token: string;
-  /** What `daemon.json` says, next to what the test actually spawned. */
-  pid: number;
-  childPid: number | undefined;
-  file: string;
-  /** The daemon's exit, for the tests that stop it. */
-  done: Promise<CliResult>;
-}
-
-/** Spawns `daemon.ts` with `runtime` as its runtime directory and `state` as
- *  its state directory (defaulting to `runtime`). `extraEnv` merges last, so a
- *  test can point `HOME`/`XDG_STATE_HOME` wherever it needs. */
-function start(
-  t: TestContext,
-  runtime: string,
-  args: string[] = [],
-  state: string = runtime,
-  extraEnv: Record<string, string> = {},
-) {
-  return spawnCli(t, ["--port", "0", ...args], "daemon.ts", {
-    ...dirs(runtime, state),
-    ...extraEnv,
-  });
-}
-
-/** The user-level directories a daemon must not share with anyone.
- *
- *  It also points **this process** at the same state home, because since #129
- *  a run's worktrees and records live there: a fixture built here with
- *  `openWorktrees` or read back with `stateDirFor` has to agree with the
- *  daemon that owns them. */
-const dirs = (runtime: string, state: string = runtime) => {
-  process.env.XDG_STATE_HOME = state;
-  return {
-    XDG_RUNTIME_DIR: runtime,
-    XDG_STATE_HOME: state,
-    // M2-7's user config reads `$XDG_CONFIG_HOME/kapelle/config.json`; a path
-    // under this test's own state dir keeps a developer's real file out.
-    XDG_CONFIG_HOME: join(state, "config-home"),
-  };
-};
-
-/** Starts a daemon and reads back the record it wrote once listening. */
-async function boot(
-  t: TestContext,
-  runtime?: string,
-  args: string[] = [],
-  state?: string,
-  env: Record<string, string> = {},
-): Promise<Daemon> {
-  const dir = runtime ?? (await tempDir(t));
-  const d = start(t, dir, args, state ?? dir, env);
-  // A daemon that dies at startup must fail with its own words, not a timeout.
-  const died = d.done.then((r) => {
-    throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
-  });
-  await Promise.race([d.waitFor("listening on "), died]);
-  died.catch(() => {});
-  const file = join(dir, "kapelle", "daemon.json");
-  const { port, token, pid } = JSON.parse(await readFile(file, "utf8"));
-  return {
-    url: `http://127.0.0.1:${port}`,
-    token,
-    pid,
-    childPid: d.child.pid,
-    file,
-    done: d.done,
-  };
-}
 
 /** The exit of a daemon expected to refuse, or `null` if it kept running. */
 async function exitOf(d: ReturnType<typeof start>): Promise<CliResult | null> {
@@ -124,14 +57,26 @@ interface Reply {
   status: string;
   cwd: string;
   root: string;
+  source: "live" | "restored";
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  turns?: number;
   error: string;
   cancelRequested?: true;
-  report: { tasks: { status: string }[] };
-  /** A run restored from disk carries its record's tasks, not a report. */
-  tasks?: { id: string; status: string; sessionId?: string }[];
+  /** One shape live and restored: a field the record cannot fill is omitted. */
+  tasks: {
+    id: string;
+    status: string;
+    agent?: string;
+    durationMs?: number;
+    sessionId?: string;
+    warnings?: { kind: string; text: string }[];
+  }[];
   notices: { taskId: string; text: string }[];
 }
 
+/** The suite's default reply type; `daemonApi` itself is shared. */
 async function api<T = Reply>(
   d: Daemon,
   method: string,
@@ -139,15 +84,7 @@ async function api<T = Reply>(
   body?: unknown,
   token: string | null = d.token,
 ): Promise<{ status: number; body: T }> {
-  const headers: Record<string, string> = {};
-  if (token !== null) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(d.url + path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  return { status: res.status, body: text ? JSON.parse(text) : undefined };
+  return daemonApi<T>(d, method, path, body, token);
 }
 
 const mockRun = (
@@ -739,7 +676,26 @@ test("POST /runs accepts a run, lists it with its folder, and reports it done", 
 
   const run = await settled(d, posted.body.id);
   assert.equal(run.status, "done");
-  assert.equal(run.report.tasks[0]?.status, "done");
+  assert.equal(run.tasks[0]?.status, "done");
+});
+
+test("POST /runs accepts a body with no content-type header", async (t) => {
+  // M5-3 will make the header meaningful; until then the daemon reads the
+  // body anyway. `daemonApi` sends the header, so this raw fetch keeps the
+  // no-header case covered rather than leaving it to accident.
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const res = await fetch(`${d.url}/runs`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${d.token}` },
+    body: JSON.stringify({
+      cwd,
+      run: mockRun([{ id: "one", prompt: "hi" }]),
+    }),
+  });
+  assert.equal(res.status, 202);
+  const accepted = (await res.json()) as { id?: unknown };
+  assert.equal(typeof accepted.id, "string");
 });
 
 test("an invalid body is 400 in the validator's words, and creates no run", async (t) => {
@@ -1554,20 +1510,35 @@ test("a restarted daemon keeps its repositories and serves the runs from before"
     false,
     "the list must not sit in the runtime dir",
   );
-  assert.deepEqual((await api<Reply[]>(second, "GET", "/runs")).body, [
-    { id, cwd: root, status: "done", tasks: [{ id: "a", status: "done" }] },
-  ]);
+  const listed = (await api<Reply[]>(second, "GET", "/runs")).body;
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]?.id, id);
+  assert.equal(listed[0]?.cwd, root);
+  assert.equal(listed[0]?.root, root);
+  assert.equal(listed[0]?.status, "done");
+  assert.equal(listed[0]?.source, "restored");
+  // The record fills these (M5-2); the list keeps its tasks slim.
+  assert.equal(typeof listed[0]?.startedAt, "string");
+  assert.equal(typeof listed[0]?.endedAt, "string");
+  assert.deepEqual(
+    listed[0]?.tasks.map((task) => [task.id, task.status]),
+    [["a", "done"]],
+  );
 
   const one = await api(second, "GET", `/runs/${id}`);
   assert.equal(one.status, 200);
   assert.deepEqual(
-    one.body.tasks?.map((task) => [task.id, task.status]),
+    one.body.tasks.map((task) => [task.id, task.status]),
     [["a", "done"]],
   );
+  // The fields the extended record carries (M5-2, D2): the card's header
+  // and elapsed time survive the restart.
+  assert.equal(typeof one.body.tasks[0]?.agent, "string");
+  assert.equal(typeof one.body.tasks[0]?.durationMs, "number");
   // The field M2-6 exists to carry: one session id, so `session/load` can be
   // picked up later without a migration. `String(undefined)` is `"undefined"`,
   // which matches a non-empty regex — assert the type, not its printout.
-  const restoredSession = one.body.tasks?.[0]?.sessionId;
+  const restoredSession = one.body.tasks[0]?.sessionId;
   assert.equal(typeof restoredSession, "string");
   assert.equal(restoredSession, "sess_mock_1");
 
@@ -1638,8 +1609,35 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
       tasks: [
         null,
         { foo: "bar" },
-        // A key the contract does not name must not reach the wire (#160).
-        { id: "ok", status: "done", note: "hand-edited" },
+        // A key the contract does not name must not reach the wire (#160),
+        // and nor does a named key with the wrong type: `"warnings": 5`
+        // crashed `attach`'s `printTask`, and a malformed `usage` is rebuilt
+        // from the contract's keys or dropped (M5-2).
+        {
+          id: "ok",
+          status: "done",
+          note: "hand-edited",
+          agent: 7,
+          durationMs: "3",
+          usage: {
+            inputTokens: 1,
+            outputTokens: 2,
+            totalTokens: 3,
+            _task: "ok",
+            evil: true,
+          },
+          usageSemantics: "sometimes",
+          summarySynthesised: "yes",
+          warnings: [null, 5, { kind: "k", text: "t", extra: 1 }],
+        },
+        {
+          id: "bad-usage",
+          status: "done",
+          usage: { inputTokens: "many", outputTokens: 2, totalTokens: 3 },
+        },
+        { id: "bad-warnings", status: "done", warnings: 5 },
+        // Every entry is junk: the field stays omitted rather than serving `[]`.
+        { id: "junk-warnings", status: "done", warnings: [null, 5] },
       ],
     }),
   );
@@ -1659,23 +1657,45 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   // `failed`. `corrupt-tasks` is trusted for its runId/status, so it is
   // served too, with the junk element dropped. Sorted: restore order is
   // readdir order, which is not part of the contract.
+  const rows = [...list.body].sort((a, b) => a.id.localeCompare(b.id));
   assert.deepEqual(
-    [...list.body].sort((a, b) => a.id.localeCompare(b.id)),
+    rows.map((row) => [row.id, row.cwd, row.root, row.status, row.source]),
     [
-      {
-        id: "corrupt-tasks",
-        cwd: root,
-        status: "done",
-        tasks: [{ id: "ok", status: "done" }],
-      },
-      { id: "live", cwd: root, status: "failed", tasks: [] },
+      ["corrupt-tasks", root, root, "done", "restored"],
+      ["live", root, root, "failed", "restored"],
     ],
   );
+  assert.deepEqual(
+    rows.map((row) => row.tasks),
+    [
+      [
+        { id: "ok", status: "done" },
+        { id: "bad-usage", status: "done" },
+        { id: "bad-warnings", status: "done" },
+        { id: "junk-warnings", status: "done" },
+      ],
+      [],
+    ],
+  );
+  // The sweep rewrote `live`, so it carries the `endedAt` it wrote (M2-5);
+  // the hand-made record has neither timestamp, so both are omitted.
+  assert.equal(typeof rows[1]?.endedAt, "string");
+  assert.equal(rows[0]?.startedAt, undefined);
   const live = await api(second, "GET", "/runs/live");
   assert.equal(live.status, 200);
   assert.equal(live.body.status, "failed");
   const corrupt = await api(second, "GET", "/runs/corrupt-tasks");
-  assert.deepEqual(corrupt.body.tasks, [{ id: "ok", status: "done" }]);
+  assert.deepEqual(corrupt.body.tasks, [
+    {
+      id: "ok",
+      status: "done",
+      usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+      warnings: [{ kind: "k", text: "t" }],
+    },
+    { id: "bad-usage", status: "done" },
+    { id: "bad-warnings", status: "done" },
+    { id: "junk-warnings", status: "done" },
+  ]);
 
   process.kill(second.pid, "SIGTERM");
   const out = await second.done;
@@ -1770,7 +1790,7 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   assert.equal(restored.status, 200);
   assert.equal(restored.body.status, "failed");
   assert.deepEqual(
-    restored.body.tasks?.map((task) => [task.id, task.status]),
+    restored.body.tasks.map((task) => [task.id, task.status]),
     [
       ["stuck", "failed"],
       ["waiting", "queued"],

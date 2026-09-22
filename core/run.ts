@@ -608,6 +608,10 @@ interface TaskControl {
  * by a crash. Neither is a verdict, which is why neither is a `TaskStatus`:
  * nothing in this module can settle on them, and `core/merge.ts` refuses both
  * as unfinished along with every other non-`done`/`warned` value.
+ *
+ * **M5-2 (#134):** the record also carries what a client card needs after a
+ * restart — `agent`, `durationMs` and `warnings`. `usage`, `error` and the
+ * summaries stay live-only; the DTO omits them rather than inventing values.
  */
 interface RecordTask {
   id: string;
@@ -615,6 +619,9 @@ interface RecordTask {
   branch?: string;
   baseSha?: string;
   sessionId?: string;
+  agent?: string;
+  durationMs?: number;
+  warnings?: ResultWarning[];
 }
 
 interface RunRecordInput {
@@ -630,10 +637,16 @@ interface RunRecordInput {
 
 /** A finished task, as the record carries it. */
 function recordTask(task: TaskRun): RecordTask {
-  const entry: RecordTask = { id: task.id, status: task.status };
+  const entry: RecordTask = {
+    id: task.id,
+    status: task.status,
+    agent: task.agent,
+    durationMs: task.durationMs,
+  };
   if (task.branch !== undefined) entry.branch = task.branch;
   if (task.baseSha !== undefined) entry.baseSha = task.baseSha;
   if (task.sessionId !== undefined) entry.sessionId = task.sessionId;
+  if (task.warnings !== undefined) entry.warnings = task.warnings;
   return entry;
 }
 

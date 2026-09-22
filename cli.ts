@@ -676,10 +676,10 @@ type Card = Pick<TaskRun, "id" | "agent" | "durationMs" | "transcript"> &
   };
 
 /**
- * A task as `GET /runs/:id` reports it: a live run's `report.tasks` entry (a
- * `TaskRun`, with its error and usage) or a restored record's `tasks` entry,
- * which carries fewer fields. A restored record's status is a plain string —
- * it may say `queued` for a task the crash left unstarted, which is not a
+ * A task as `GET /runs/:id` reports it: since M5-2 one shape for a live and a
+ * restored run — `TaskDto` in `client/contract.ts`. This bridge type stays
+ * until M5-10 refactors `attach`; a restored record's status is a plain string
+ * — it may say `queued` for a task the crash left unstarted, which is not a
  * `TaskStatus` and must still keep the verdict away from `done`.
  */
 type RecordedTask = Omit<Partial<TaskRun>, "status"> & {
@@ -688,9 +688,9 @@ type RecordedTask = Omit<Partial<TaskRun>, "status"> & {
 };
 
 /**
- * `GET /runs/:id` as `attach` reads it. `report` belongs to a run this daemon
- * process ran; a run restored after a restart carries `tasks` from its record
- * instead (daemon.ts, M2-6).
+ * `GET /runs/:id` as `attach` reads it. Since M5-2 `tasks` is the one shape
+ * for a live and a restored run; `report` is the pre-M5-2 field, kept until
+ * M5-10 removes the branch (daemon.ts, M2-6).
  */
 interface AttachState {
   error?: string;
@@ -1025,9 +1025,10 @@ async function attachRun(): Promise<number> {
 
   // The stream is not the whole story. A run killed mid-turn and restored has
   // no `_client_task_finished` for the task it cut, and nothing at all for one
-  // still queued; and no stream carries error text or usage. The record has
-  // them — `report.tasks` for a run this daemon ran, `tasks` for one restored
-  // after a restart (daemon.ts, M2-6) — so it fills what the stream left open.
+  // still queued; and no stream carries error text or usage. The reply has
+  // them — `tasks`, one shape live or restored since M5-2 (the `report`
+  // fallback only fits a daemon older than M5-2) — so it fills what the
+  // stream left open.
   // `state.status` is never read: it can still say `running` for a beat after
   // the stream ends, and the tasks already decide the run (`runStatus`).
   for (const r of state.report?.tasks ?? state.tasks ?? []) {

@@ -237,7 +237,7 @@ Decisions: **A1–A7, B1–B10**.
 
 ### M5-2 · Curated run DTOs · M · needs M5-1
 
-`GET /runs/:id` currently serialises the daemon's internal `RunState`. A live run
+Before M5-2, `GET /runs/:id` serialised the daemon's internal run state. A live run
 carries `report.tasks: TaskRun[]` with fifteen or more fields; a restored run carries
 `tasks: RecordTask[]` with five. `cli.ts` defines private `AttachState`, `RecordedTask`
 and `Card` types to bridge the difference, and a second client would copy them.
@@ -253,6 +253,14 @@ the same vocabulary; a mapper at the daemon edge (`toRunDto`), never in `core/`.
 shape, and `attach` no longer needs to branch on `report` versus `tasks`.
 
 Decisions: **C1–C12**.
+
+**Closed for M5-2 (#134), 2026-09-22:** C1–C12 decided as recommended. The DTO is the
+card set (`agent`, `durationMs`, `error`, `usage`, `usageSemantics`, `warnings`,
+`summary`, `summarySynthesised`, `branch`, `baseSha`, `sessionId`); `run.json` carries
+`agent`, `durationMs` and `warnings` (C4), so a boot-restored card keeps its header,
+elapsed time and warnings. The second half of the done-when — `attach` no longer
+branching — is delivered as a capability here; removing the branch itself lands with
+M5-10's refactor.
 
 ### M5-3 · Error envelopes, body limits, request validation · S · needs M5-1
 
@@ -721,18 +729,18 @@ story, and the story moves into `STORIES.md`.
 
 | ID | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| C1 | `GET /runs` fields | id, cwd, root, status, tasks, times, source | add root, startedAt/endedAt, keep tasks |
-| C2 | Missing data on restored runs | (a) omit (b) `null` (c) `source: live/restored` + omit (d) explicit `missing[]` | (c) |
-| C3 | Contract fields per task | status + agent + duration + warnings + summary, or a subset | status, agent, duration, warnings, summary |
-| C4 | Extend `run.json` for restored parity? | (a) yes, agent/duration/warnings (b) keep minimal, mark absent | (a) if cheap, else (c) in C2 |
-| C5 | Run times in DTO | (a) startedAt/endedAt ISO (b) epoch ms (c) omit | (a) |
-| C6 | Event timestamps | (a) add `at` to `events.jsonl` and SSE (b) SSE only (c) omit | (a) |
-| C7 | Error shape | (a) keep `{error: string}` (b) `{error:{code,message}}` (c) full problem detail | (b) |
-| C8 | Unknown request fields | (a) reject strictly (b) ignore (c) per endpoint | (a) for writes |
-| C9 | Pagination | (a) limit/cursor (b) limit/offset (c) none | (a) |
-| C10 | Run order | (a) newest first by startedAt (b) insertion order | (a) |
-| C11 | `_meta` in DTO docs | (a) documented pass-through (b) stripped (c) unspecified | (a) |
-| C12 | Rename `agent` to `taskId` in events | (a) no, document (b) yes, new field both | (a) |
+| C1 | `GET /runs` fields | id, cwd, root, status, tasks, times, source | **Decided 2026-09-22 (#134):** add root, startedAt/endedAt, keep tasks; the list's tasks stay `{id, status}`; run-level `durationMs`/`turns` are live-only |
+| C2 | Missing data on restored runs | (a) omit (b) `null` (c) `source: live/restored` + omit (d) explicit `missing[]` | **Decided 2026-09-22 (#134):** (c) — `source` plus omit, never `null` |
+| C3 | Contract fields per task | status + agent + duration + warnings + summary, or a subset | **Decided 2026-09-22 (#134):** the card set — status, agent, durationMs, error, usage, usageSemantics, warnings, summary, summarySynthesised, branch, baseSha, sessionId; no cwd/stopReason/transcript/result |
+| C4 | Extend `run.json` for restored parity? | (a) yes, agent/duration/warnings (b) keep minimal, mark absent | **Decided 2026-09-22 (#134):** (a) — agent/durationMs/warnings in the record; older records omit them |
+| C5 | Run times in DTO | (a) startedAt/endedAt ISO (b) epoch ms (c) omit | **Decided 2026-09-22 (#134):** (a) |
+| C6 | Event timestamps | (a) add `at` to `events.jsonl` and SSE (b) SSE only (c) omit | **Decided 2026-09-22 (#134):** (a), implemented by #137 (M5-5) |
+| C7 | Error shape | (a) keep `{error: string}` (b) `{error:{code,message}}` (c) full problem detail | **Decided 2026-09-22 (#134):** (b), implemented by #135 (M5-3) |
+| C8 | Unknown request fields | (a) reject strictly (b) ignore (c) per endpoint | **Decided 2026-09-22 (#134):** (a) for writes, implemented by #135 (M5-3) |
+| C9 | Pagination | (a) limit/cursor (b) limit/offset (c) none | **Decided 2026-09-22 (#134):** (a), implemented by M5-9 |
+| C10 | Run order | (a) newest first by startedAt (b) insertion order | **Decided 2026-09-22 (#134):** (a), implemented by M5-9 |
+| C11 | `_meta` in DTO docs | (a) documented pass-through (b) stripped (c) unspecified | **Decided 2026-09-22 (#134):** (a) |
+| C12 | Rename `agent` to `taskId` in events | (a) no, document (b) yes, new field both | **Decided 2026-09-22 (#134):** (a) |
 | C13 | Room DTO | id, cwd, status, roster summary, created/updated, counts | roster summary + status + times |
 | C14 | Participant DTO | id, name, harness, mode, status, workspace, branch, sessionId, last activity | all, sessionId optional |
 

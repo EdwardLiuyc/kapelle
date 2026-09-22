@@ -44,6 +44,9 @@ The contract has a version with two numbers: `major.minor`.
 - `major` goes up when a change can break an existing client.
 - `minor` goes up when something is added. Old clients keep working.
 
+These numbers track the **stable** parts. A **provisional** part changes with its named
+story and without a version step; the stability tables below say which is which.
+
 Ask the daemon for its version with [`GET /version`](#get-version). Then compare it with
 the version your client was written for:
 
@@ -81,7 +84,8 @@ Not every part of this API is final yet. Each part has one of three labels:
 
 - **Stable**: will not break within `major` version 1.
 - **Provisional**: works today, but a named story will change it. The story is in the
-  table. Expect a change, and a `minor` or `major` step with it.
+  table. A provisional part changes with that story and without a version step: the
+  version tracks the Stable rows.
 - **Experimental**: can change at any time, with no version step. Do not build on it.
 
 **Stable.** You can build on these now.
@@ -94,6 +98,7 @@ Not every part of this API is final yet. Each part has one of three labels:
 | `POST /repos`, `GET /repos` | |
 | `POST /runs` request body | |
 | `POST /runs` reply (`{id}`) | |
+| `GET /runs/:id`, `DELETE /runs/:id` replies | One shape for live and restored runs (M5-2). |
 | SSE format, `seq`, `Last-Event-ID` | |
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
 | `_client_*` events | Except the room events. See [Events](#events). |
@@ -104,8 +109,7 @@ changes each one.
 
 | Part | Label | Changed by |
 | --- | --- | --- |
-| `GET /runs` list | Provisional | M5-9 (filters, order, pages) |
-| `GET /runs/:id`, `DELETE /runs/:id` replies | Provisional | M5-2 (one shape for live and restored runs) |
+| `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
 | Error replies (`{error}`) | Provisional | M5-3 (adds an error `code`) |
 | Request limits (body size, content type) | Provisional | M5-3 |
 | End of a run's stream | Provisional | M5-5 (adds a "run finished" event) |
@@ -344,7 +348,10 @@ Provisional: M5-9 adds filters, a fixed order and pages.
   {
     "id": "20260922-101500-a1b2",
     "cwd": "/home/me/src/app",
+    "root": "/home/me/src",
     "status": "running",
+    "source": "live",
+    "startedAt": "2026-09-22T10:15:00.000Z",
     "tasks": [
       { "id": "summarise", "status": "running" },
       { "id": "look-for-bugs", "status": "queued" }
@@ -352,6 +359,20 @@ Provisional: M5-9 adds filters, a fixed order and pages.
   }
 ]
 ```
+
+| Field | When | Meaning |
+| --- | --- | --- |
+| `id` | always | The run id. |
+| `cwd` | always | The folder the run started in. |
+| `root` | always | The added repository the run belongs to. |
+| `status` | always | The run status (see below). |
+| `source` | always | `live` for a run this daemon started, `restored` for one read back from disk. |
+| `startedAt` | usually | ISO 8601, when the run was accepted. |
+| `endedAt` | finished runs | ISO 8601, when the run stopped. |
+| `tasks` | always | `{id, status}` per task. |
+
+A field the daemon does not have is omitted, never `null`; `GET /runs/:id` describes
+the same fields in full.
 
 **Run status** is `running` while the run is live. When the run ends, it is the worst task
 status:
@@ -366,12 +387,14 @@ status:
 | `failed` | It failed. |
 
 **Task status** is one of the words above, or `queued` (not started yet), or `running`.
-Show a word that you do not know as it is. Do not fail on it.
+Show a word that you do not know as it is. Do not fail on it; that goes for the run
+status too, which comes off the same record.
 
 #### `GET /runs/:id`
 
-One run in full. Provisional: today a live run and a restored run give different fields.
-M5-2 makes them the same.
+One run in full. Since M5-2 a live run and a run restored after a restart carry the
+same shape: `source` says which one it is, and a field the record cannot fill is
+omitted, never `null`.
 
 **Reply `200`:**
 
@@ -379,18 +402,27 @@ M5-2 makes them the same.
 | --- | --- | --- |
 | `id` | always | The run id. |
 | `cwd` | always | The folder the run started in. |
+| `root` | always | The added repository the run belongs to. |
 | `status` | always | The run status (see above). |
+| `source` | always | `live` or `restored` (see above). |
+| `startedAt` | usually | ISO 8601, when the run was accepted. |
+| `endedAt` | finished runs | ISO 8601, when the run stopped. |
+| `durationMs` | live run, after it ends | The run's own elapsed time. Absent on a restored run. |
+| `turns` | live run, after it ends | How many tasks got a prompt. Absent on a restored run. |
 | `notices` | always | A list of `{taskId, text, kind?}`. Lines for the person to read. See below. |
-| `tasks` | usually | A list of `{id, status, branch?, baseSha?, sessionId?}`. |
-| `report` | live run, after it ends | `{status, durationMs, turns, tasks}`, with each task in full. |
+| `tasks` | always | One task per entry; `[]` when the record has none. |
 | `error` | run could not start | Why. No task ran. |
 | `cancelRequested` | after a cancel | `true`. The status stays `running` until the run stops. |
-| `restored` | run from before a restart | `true`. It has `tasks`, but no `report`. |
 
-Each task in `report.tasks` has: `id`, `agent`, `cwd`, `status`, `durationMs`,
-`transcript` (the agent's text), and when known `branch`, `baseSha`, `sessionId`,
-`stopReason`, `usage`, `usageSemantics`, `error`, `result`, `warnings`, `summary` and
-`summarySynthesised`. `client/contract.ts` (`TaskReport`) has a type for these fields.
+Each task has `id` and `status`, and when known `agent`, `durationMs`, `error`,
+`usage`, `usageSemantics`, `warnings` (`{kind, text}` each), `summary`,
+`summarySynthesised`, `branch`, `baseSha` and `sessionId`. `usage` carries the token
+counts and may carry a `_meta` object, passed through unchanged (C11). `cwd`,
+`stopReason`, `transcript` and the structured `result` are not part of the contract:
+the event stream carries the prose, and a restored run never had them.
+
+A live run's `startedAt`/`endedAt` are the daemon's clock; a restored run's are the
+record's own stamps, so the same run can report them a moment apart after a restart.
 
 A notice's `kind` is `containment`, `unverified`, `version` or `advisory`. **Always show
 `containment` notices.** They tell the person how much the harness is contained. The other
@@ -443,6 +475,9 @@ data: {"seq":7,"agent":"summarise","update":{"sessionUpdate":"agent_message_chun
 | `seq` | The event's number in this log. The first event is `1`. It goes up by one each time, with no gaps. |
 | `agent` | For a run: the task id. For a room: the harness name. |
 | `update` | The event itself. See [Events](#events). |
+
+An event may carry `_meta`, an object the harness attached to it. It is passed through
+unchanged; a client may ignore it.
 
 ### Resume after a break
 
