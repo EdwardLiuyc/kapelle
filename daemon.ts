@@ -85,7 +85,7 @@ import { createEventBus } from "./core/events.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
 import { openRoom, type Room, roomHarness } from "./core/room.ts";
-import { type RunReport, runRun } from "./core/run.ts";
+import { type RunReport, runRun, type TaskRun } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import {
   readRepos,
@@ -366,9 +366,32 @@ const repos = new Set<string>(addedRepos);
 
 const USAGE_SEMANTICS = new Set(["per-turn", "cumulative", "unknown"]);
 
+/** The string fields `toTaskDto` copies, pinned to both sides of the edge:
+ *  `TaskDto` in `client/contract.ts` and the live `TaskRun` in `core/run.ts`.
+ *  A rename on either side fails `npm run check` instead of silently leaving
+ *  the field off the wire. */
+const STRING_KEYS = [
+  "agent",
+  "error",
+  "summary",
+  "branch",
+  "baseSha",
+  "sessionId",
+] as const satisfies readonly (keyof TaskDto & keyof TaskRun)[];
+
+/** The non-string fields, pinned the same way. */
+const TYPED_KEYS = {
+  durationMs: "durationMs",
+  usage: "usage",
+  usageSemantics: "usageSemantics",
+  warnings: "warnings",
+  summarySynthesised: "summarySynthesised",
+} as const satisfies Record<string, keyof TaskDto & keyof TaskRun>;
+
 /** A `Usage` from a value of unknown provenance, rebuilt key by key so a
  *  hand-edited record cannot put a wrong-typed or unknown nested value on the
- *  wire (C2, C11). `undefined` when the required numbers are not all finite. */
+ *  wire. `_meta` is the one exception: C11 passes it through. `undefined`
+ *  when the required numbers are not all finite. */
 function usageOf(value: unknown): TaskDto["usage"] | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
@@ -404,6 +427,19 @@ function usageOf(value: unknown): TaskDto["usage"] | undefined {
   return usage;
 }
 
+/** The contract's warnings, keeping only `{kind, text}` entries. `undefined`
+ *  when nothing is left, so a junk array is omitted rather than served as
+ *  `[]` — the same rule as every other gap (C2). */
+function warningsOf(value: unknown): TaskDto["warnings"] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const warnings = value.flatMap((w) =>
+    typeof w?.kind === "string" && typeof w?.text === "string"
+      ? [{ kind: w.kind, text: w.text }]
+      : [],
+  );
+  return warnings.length > 0 ? warnings : undefined;
+}
+
 /** One task, live or restored, as the contract carries it (M2-6, M5-2). `id`
  *  and `status` are trusted — for a record, by the guard in `restoreRuns`.
  *  Every other field is copied only when the contract names it and its value
@@ -414,33 +450,26 @@ function usageOf(value: unknown): TaskDto["usage"] | undefined {
 function toTaskDto(task: { id: string; status: string }): TaskDto {
   const t: Record<string, unknown> = { ...task };
   const dto: TaskDto = { id: task.id, status: task.status };
-  for (const key of [
-    "agent",
-    "error",
-    "summary",
-    "branch",
-    "baseSha",
-    "sessionId",
-  ] as const) {
+  for (const key of STRING_KEYS) {
     const value = t[key];
     if (typeof value === "string") dto[key] = value;
   }
-  if (typeof t.durationMs === "number" && Number.isFinite(t.durationMs)) {
-    dto.durationMs = t.durationMs;
+  const durationMs = t[TYPED_KEYS.durationMs];
+  if (typeof durationMs === "number" && Number.isFinite(durationMs)) {
+    dto.durationMs = durationMs;
   }
-  const usage = usageOf(t.usage);
+  const usage = usageOf(t[TYPED_KEYS.usage]);
   if (usage !== undefined) dto.usage = usage;
-  if (USAGE_SEMANTICS.has(t.usageSemantics as string)) {
-    dto.usageSemantics = t.usageSemantics as TaskDto["usageSemantics"];
+  const usageSemantics = t[TYPED_KEYS.usageSemantics];
+  if (
+    typeof usageSemantics === "string" &&
+    USAGE_SEMANTICS.has(usageSemantics)
+  ) {
+    dto.usageSemantics = usageSemantics as TaskDto["usageSemantics"];
   }
-  if (Array.isArray(t.warnings)) {
-    dto.warnings = t.warnings.flatMap((w) =>
-      typeof w?.kind === "string" && typeof w?.text === "string"
-        ? [{ kind: w.kind, text: w.text }]
-        : [],
-    );
-  }
-  if (t.summarySynthesised === true) dto.summarySynthesised = true;
+  const warnings = warningsOf(t[TYPED_KEYS.warnings]);
+  if (warnings !== undefined) dto.warnings = warnings;
+  if (t[TYPED_KEYS.summarySynthesised] === true) dto.summarySynthesised = true;
   return dto;
 }
 

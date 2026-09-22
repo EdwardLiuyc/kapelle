@@ -1691,6 +1691,8 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
           usage: { inputTokens: "many", outputTokens: 2, totalTokens: 3 },
         },
         { id: "bad-warnings", status: "done", warnings: 5 },
+        // Every entry is junk: the field stays omitted rather than serving `[]`.
+        { id: "junk-warnings", status: "done", warnings: [null, 5] },
       ],
     }),
   );
@@ -1725,6 +1727,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
         { id: "ok", status: "done" },
         { id: "bad-usage", status: "done" },
         { id: "bad-warnings", status: "done" },
+        { id: "junk-warnings", status: "done" },
       ],
       [],
     ],
@@ -1746,6 +1749,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     },
     { id: "bad-usage", status: "done" },
     { id: "bad-warnings", status: "done" },
+    { id: "junk-warnings", status: "done" },
   ]);
 
   process.kill(second.pid, "SIGTERM");

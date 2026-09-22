@@ -63,7 +63,7 @@ async function api<T>(
 }
 
 /** Every key `RunDto` declares; a reply may not carry any other. */
-const RUN_KEYS = new Set([
+const DTO_RUN_KEYS = new Set([
   "id",
   "cwd",
   "root",
@@ -80,7 +80,7 @@ const RUN_KEYS = new Set([
 ]);
 
 /** Every key `TaskDto` declares. */
-const TASK_KEYS = new Set([
+const DTO_TASK_KEYS = new Set([
   "id",
   "status",
   "agent",
@@ -159,12 +159,15 @@ test("a live run and its boot-restored reply carry the same DTO shape", async (t
     ["restored", restored],
   ] as const) {
     for (const key of Object.keys(dto)) {
-      assert.ok(RUN_KEYS.has(key), `${label} carries unknown run key ${key}`);
+      assert.ok(
+        DTO_RUN_KEYS.has(key),
+        `${label} carries unknown run key ${key}`,
+      );
     }
     for (const task of dto.tasks) {
       for (const key of Object.keys(task)) {
         assert.ok(
-          TASK_KEYS.has(key),
+          DTO_TASK_KEYS.has(key),
           `${label} task carries unknown key ${key}`,
         );
       }
