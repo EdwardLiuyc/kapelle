@@ -38,14 +38,19 @@ async function tempDir(t: TestContext): Promise<string> {
 
 async function writeUser(xdg: string, config: unknown): Promise<void> {
   await mkdir(join(xdg, "kapelle"), { recursive: true });
-  await writeFile(join(xdg, "kapelle", "config.json"), JSON.stringify(config));
+  await writeFile(join(xdg, "kapelle", "config.json"), JSON.stringify(config), {
+    mode: 0o644,
+  });
 }
 
 async function writeProject(root: string, config: unknown): Promise<void> {
   await mkdir(join(root, ".kapelle"), { recursive: true });
+  // 0o644, not the umask's default: a group-writable config is refused
+  // (core/config.ts), and umask 0002 would make one.
   await writeFile(
     join(root, ".kapelle", "config.json"),
     JSON.stringify(config),
+    { mode: 0o644 },
   );
 }
 
@@ -142,7 +147,7 @@ test("structural failures are refused by path in both readers", async (t) => {
   const projectPath = join(root, ".kapelle", "config.json");
   await mkdir(join(root, ".kapelle"), { recursive: true });
 
-  await writeFile(projectPath, "{not json");
+  await writeFile(projectPath, "{not json", { mode: 0o644 });
   assert.throws(() => readProjectConfig(root), /is not valid JSON/);
 
   await writeFile(projectPath, "null");

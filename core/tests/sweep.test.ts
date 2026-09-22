@@ -555,9 +555,12 @@ test("retention is per repository, read from each repo's config", async (t) => {
   // `.kapelle/` is no longer created by the run itself (#129) — the project
   // config is a file the operator writes, so the test writes it too.
   await mkdir(join(short, ".kapelle"), { recursive: true });
+  // 0o644, not the umask's default: a group-writable config is refused
+  // (core/config.ts), and umask 0002 would make one.
   await writeFile(
     join(short, ".kapelle", "config.json"),
     JSON.stringify({ retentionMs: 60 * 60 * 1000 }),
+    { mode: 0o644 },
   );
 
   const notices = await sweep(
@@ -601,6 +604,7 @@ test("a bad repo's config is skipped while the env window reaps another repo", a
   await writeFile(
     join(bad, ".kapelle", "config.json"),
     JSON.stringify({ stallIdle: 1 }),
+    { mode: 0o644 },
   );
 
   // The env must win for `good`, but it must not hide `bad`'s broken file:
