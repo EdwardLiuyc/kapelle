@@ -231,11 +231,11 @@ export interface Daemon {
 
 /** The user-level directories a daemon must not share with anyone.
  *
- *  It also points **this process** at the same state home, because since #129
- *  a run's worktrees and records live there: a fixture built here with
- *  `openWorktrees` or read back with `stateDirFor` has to agree with the
- *  daemon that owns them. */
-export function daemonDirs(runtime: string, state: string = runtime) {
+ *  Despite the `use` prefix it returns the env object; it also points **this
+ *  process** at the same state home, because since #129 a run's worktrees and
+ *  records live there: a fixture built here with `openWorktrees` or read back
+ *  with `stateDirFor` has to agree with the daemon that owns them. */
+export function useDaemonDirs(runtime: string, state: string = runtime) {
   process.env.XDG_STATE_HOME = state;
   return {
     XDG_RUNTIME_DIR: runtime,
@@ -257,7 +257,7 @@ export function startDaemon(
   extraEnv: Record<string, string> = {},
 ) {
   return spawnCli(t, ["--port", "0", ...args], "daemon.ts", {
-    ...daemonDirs(runtime, state),
+    ...useDaemonDirs(runtime, state),
     ...extraEnv,
   });
 }

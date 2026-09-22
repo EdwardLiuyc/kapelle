@@ -22,39 +22,45 @@ import {
   tempDir,
 } from "../../integration/helpers.ts";
 
-/** Every key `RunDto` declares; a reply may not carry any other. */
-const DTO_RUN_KEYS = new Set([
-  "id",
-  "cwd",
-  "root",
-  "status",
-  "source",
-  "startedAt",
-  "endedAt",
-  "durationMs",
-  "turns",
-  "error",
-  "cancelRequested",
-  "notices",
-  "tasks",
-]);
+/** Every key `RunDto` declares; a reply may not carry any other. The literal
+ *  `satisfies` makes a contract field a compile error here until the set
+ *  grows with it. */
+const DTO_RUN_KEYS = new Set(
+  Object.keys({
+    id: 0,
+    cwd: 0,
+    root: 0,
+    status: 0,
+    source: 0,
+    startedAt: 0,
+    endedAt: 0,
+    durationMs: 0,
+    turns: 0,
+    error: 0,
+    cancelRequested: 0,
+    notices: 0,
+    tasks: 0,
+  } satisfies Record<keyof RunDto, 0>),
+);
 
-/** Every key `TaskDto` declares. */
-const DTO_TASK_KEYS = new Set([
-  "id",
-  "status",
-  "agent",
-  "durationMs",
-  "error",
-  "usage",
-  "usageSemantics",
-  "warnings",
-  "summary",
-  "summarySynthesised",
-  "branch",
-  "baseSha",
-  "sessionId",
-]);
+/** Every key `TaskDto` declares, held to the type the same way. */
+const DTO_TASK_KEYS = new Set(
+  Object.keys({
+    id: 0,
+    status: 0,
+    agent: 0,
+    durationMs: 0,
+    error: 0,
+    usage: 0,
+    usageSemantics: 0,
+    warnings: 0,
+    summary: 0,
+    summarySynthesised: 0,
+    branch: 0,
+    baseSha: 0,
+    sessionId: 0,
+  } satisfies Record<keyof TaskDto, 0>),
+);
 
 function assertNoNull(value: unknown, path = "reply"): void {
   if (value === null) assert.fail(`${path} is null`);

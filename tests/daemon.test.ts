@@ -35,7 +35,7 @@ import {
   type CliResult,
   type Daemon,
   daemonApi,
-  daemonDirs as dirs,
+  useDaemonDirs as dirs,
   gitRepo,
   MOCK_AGENT,
   REPO,
@@ -677,6 +677,25 @@ test("POST /runs accepts a run, lists it with its folder, and reports it done", 
   const run = await settled(d, posted.body.id);
   assert.equal(run.status, "done");
   assert.equal(run.tasks[0]?.status, "done");
+});
+
+test("POST /runs accepts a body with no content-type header", async (t) => {
+  // M5-3 will make the header meaningful; until then the daemon reads the
+  // body anyway. `daemonApi` sends the header, so this raw fetch keeps the
+  // no-header case covered rather than leaving it to accident.
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const res = await fetch(`${d.url}/runs`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${d.token}` },
+    body: JSON.stringify({
+      cwd,
+      run: mockRun([{ id: "one", prompt: "hi" }]),
+    }),
+  });
+  assert.equal(res.status, 202);
+  const accepted = (await res.json()) as { id?: unknown };
+  assert.equal(typeof accepted.id, "string");
 });
 
 test("an invalid body is 400 in the validator's words, and creates no run", async (t) => {
