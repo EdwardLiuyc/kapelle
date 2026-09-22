@@ -1379,9 +1379,12 @@ async function unanswered(t: TestContext, env: Record<string, string>) {
 test("a user-config permission timeout settles an unanswered decision", async (t) => {
   const config = await tempDir(t);
   await mkdir(join(config, "kapelle"), { recursive: true });
+  // 0o644, not the umask's default: a group-writable config is refused
+  // (core/config.ts), and umask 0002 would make one.
   await writeFile(
     join(config, "kapelle", "config.json"),
     JSON.stringify({ permissionTimeoutMs: 1500 }),
+    { mode: 0o644 },
   );
 
   // The default is 120 s; settling inside the 20 s poll can only mean the
@@ -2006,6 +2009,7 @@ test("a user-level config supplies the port when no flag does", async (t) => {
   await writeFile(
     join(config, "kapelle", "config.json"),
     JSON.stringify({ port: 0 }),
+    { mode: 0o644 },
   );
 
   const d = spawnCli(t, [], "daemon.ts", {
@@ -2034,6 +2038,7 @@ test("a --port flag still wins over the user config", async (t) => {
   await writeFile(
     join(config, "kapelle", "config.json"),
     JSON.stringify({ port: 1 }),
+    { mode: 0o644 },
   );
   const d = spawnCli(t, ["--port", "0"], "daemon.ts", {
     ...dirs(runtime),
@@ -2057,6 +2062,7 @@ test("KAPELLE_PORT wins over the user config", async (t) => {
   await writeFile(
     join(config, "kapelle", "config.json"),
     JSON.stringify({ port: 1 }),
+    { mode: 0o644 },
   );
   const d = spawnCli(t, [], "daemon.ts", {
     ...dirs(runtime),
@@ -2094,6 +2100,7 @@ test("a bad user config refuses the start, naming the key", async (t) => {
   await writeFile(
     join(config, "kapelle", "config.json"),
     JSON.stringify({ port: "soon" }),
+    { mode: 0o644 },
   );
   const d = spawnCli(t, [], "daemon.ts", {
     ...dirs(runtime),
@@ -2137,6 +2144,7 @@ test("a bad project config is refused at add, and the daemon keeps serving", asy
   await writeFile(
     join(root, ".kapelle", "config.json"),
     JSON.stringify({ stallIdle: 1 }),
+    { mode: 0o644 },
   );
 
   const refused = await api(d, "POST", "/repos", { path: root });
@@ -2155,6 +2163,7 @@ test("a project config is re-read per run, and its error is the run's 400", asyn
   await writeFile(
     join(root, ".kapelle", "config.json"),
     JSON.stringify({ ttlMs: "soon" }),
+    { mode: 0o644 },
   );
 
   const refused = await api(d, "POST", "/runs", {

@@ -383,9 +383,12 @@ test("a bad run file is the validator's sentence, not a stack", async (t) => {
 test("a bad project config refuses a run-file run, naming the key", async (t) => {
   const root = await gitRepo(t);
   await mkdir(join(root, ".kapelle"), { recursive: true });
+  // 0o644, not the umask's default: a group-writable config is refused
+  // (core/config.ts), and umask 0002 would make one.
   await writeFile(
     join(root, ".kapelle", "config.json"),
     JSON.stringify({ stallIdle: 1 }),
+    { mode: 0o644 },
   );
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 

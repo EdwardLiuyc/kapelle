@@ -72,7 +72,9 @@ export async function gitRepo(
   await writeFile(join(cwd, "README.md"), "first\n");
   for (const [path, content] of Object.entries(files)) {
     await mkdir(dirname(join(cwd, path)), { recursive: true });
-    await writeFile(join(cwd, path), content);
+    // 0o644, so a committed `.kapelle/config.json` is not refused as
+    // group-writable under a umask of 0002 (core/config.ts).
+    await writeFile(join(cwd, path), content, { mode: 0o644 });
   }
   await git("add", "-A");
   await git("commit", "-m", "first");
