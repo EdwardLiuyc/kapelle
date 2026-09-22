@@ -1664,8 +1664,21 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
       tasks: [
         null,
         { foo: "bar" },
-        // A key the contract does not name must not reach the wire (#160).
-        { id: "ok", status: "done", note: "hand-edited" },
+        // A key the contract does not name must not reach the wire (#160),
+        // and nor does a named key with the wrong type: `"warnings": 5`
+        // crashed `attach`'s `printTask` (M5-2).
+        {
+          id: "ok",
+          status: "done",
+          note: "hand-edited",
+          agent: 7,
+          durationMs: "3",
+          usage: null,
+          usageSemantics: "sometimes",
+          summarySynthesised: "yes",
+          warnings: [null, 5, { kind: "k", text: "t", extra: 1 }],
+        },
+        { id: "bad-warnings", status: "done", warnings: 5 },
       ],
     }),
   );
@@ -1695,7 +1708,13 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   );
   assert.deepEqual(
     rows.map((row) => row.tasks),
-    [[{ id: "ok", status: "done" }], []],
+    [
+      [
+        { id: "ok", status: "done" },
+        { id: "bad-warnings", status: "done" },
+      ],
+      [],
+    ],
   );
   // The sweep rewrote `live`, so it carries the `endedAt` it wrote (M2-5);
   // the hand-made record has neither timestamp, so both are omitted.
@@ -1705,7 +1724,10 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   assert.equal(live.status, 200);
   assert.equal(live.body.status, "failed");
   const corrupt = await api(second, "GET", "/runs/corrupt-tasks");
-  assert.deepEqual(corrupt.body.tasks, [{ id: "ok", status: "done" }]);
+  assert.deepEqual(corrupt.body.tasks, [
+    { id: "ok", status: "done", warnings: [{ kind: "k", text: "t" }] },
+    { id: "bad-warnings", status: "done" },
+  ]);
 
   process.kill(second.pid, "SIGTERM");
   const out = await second.done;

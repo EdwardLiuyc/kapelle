@@ -364,30 +364,44 @@ function existingDir(value: unknown, field: string): string {
  *  `POST /runs`, which checks membership on use. */
 const repos = new Set<string>(addedRepos);
 
-/** One task as `run.json` may carry it (M2-6, M5-2). `id` and `status` are
- *  trusted by the guard in `restoreRuns`; every other field is copied only
- *  when present and only when the contract names it, because a `run.json`
- *  anyone can edit must not put an unknown key on the wire. */
-type RecordedTask = { id: string; status: string } & Partial<TaskDto>;
+const USAGE_SEMANTICS = new Set(["per-turn", "cumulative", "unknown"]);
 
-/** One task, live or restored, as the contract carries it. A field the source
- *  does not have is left out, never `null` (C2). */
-function toTaskDto(task: TaskRun | RecordedTask): TaskDto {
+/** One task, live or restored, as the contract carries it (M2-6, M5-2). `id`
+ *  and `status` are trusted — for a record, by the guard in `restoreRuns`.
+ *  Every other field is copied only when the contract names it and its value
+ *  has the contract's type: a `run.json` anyone can edit must not put an
+ *  unknown key, or a known key with a wrong value, on the wire, and
+ *  `"warnings": 5` crashed `attach`'s `printTask`. A field the source does
+ *  not have, or has with the wrong type, is left out, never `null` (C2). */
+function toTaskDto(task: { id: string; status: string }): TaskDto {
+  const t: Record<string, unknown> = { ...task };
   const dto: TaskDto = { id: task.id, status: task.status };
-  if (task.agent !== undefined) dto.agent = task.agent;
-  if (task.durationMs !== undefined) dto.durationMs = task.durationMs;
-  if (task.error !== undefined) dto.error = task.error;
-  if (task.usage !== undefined) dto.usage = task.usage;
-  if (task.usageSemantics !== undefined)
-    dto.usageSemantics = task.usageSemantics;
-  if (task.warnings !== undefined) dto.warnings = task.warnings;
-  if (task.summary !== undefined) dto.summary = task.summary;
-  if (task.summarySynthesised !== undefined) {
-    dto.summarySynthesised = task.summarySynthesised;
+  for (const key of [
+    "agent",
+    "error",
+    "summary",
+    "branch",
+    "baseSha",
+    "sessionId",
+  ] as const) {
+    const value = t[key];
+    if (typeof value === "string") dto[key] = value;
   }
-  if (task.branch !== undefined) dto.branch = task.branch;
-  if (task.baseSha !== undefined) dto.baseSha = task.baseSha;
-  if (task.sessionId !== undefined) dto.sessionId = task.sessionId;
+  if (typeof t.durationMs === "number") dto.durationMs = t.durationMs;
+  if (typeof t.usage === "object" && t.usage && !Array.isArray(t.usage)) {
+    dto.usage = t.usage as TaskDto["usage"];
+  }
+  if (USAGE_SEMANTICS.has(t.usageSemantics as string)) {
+    dto.usageSemantics = t.usageSemantics as TaskDto["usageSemantics"];
+  }
+  if (Array.isArray(t.warnings)) {
+    dto.warnings = t.warnings.flatMap((w) =>
+      typeof w?.kind === "string" && typeof w?.text === "string"
+        ? [{ kind: w.kind, text: w.text }]
+        : [],
+    );
+  }
+  if (t.summarySynthesised === true) dto.summarySynthesised = true;
   return dto;
 }
 
@@ -547,7 +561,7 @@ function restoreRuns(): void {
         // element without a string id and status (M2-6: a boot answers anyway).
         state.tasks = record.tasks.flatMap((t) =>
           typeof t?.id === "string" && typeof t?.status === "string"
-            ? [toTaskDto(t as RecordedTask)]
+            ? [toTaskDto(t)]
             : [],
         );
       }
