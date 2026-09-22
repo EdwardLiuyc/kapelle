@@ -6,8 +6,8 @@ register behind them.** The room model is the no-dependency roster, R24–R30 re
 (A2 restated), and R31 plus R37–R42 close the room decisions the stories were reading
 without an answer. **Amended 2026-09-22 (M5-1, #133):** tables A and B are decided, and
 `docs/CLIENT-API.md` is now the client-facing promise. Still open here: the contract
-tables C, D, E, F, G, H, I, J, K and M. The purpose remains to name every decision a story depends on before the work
-starts.
+tables C, D, E, F, G, H, I, J, K and M. The purpose remains to name every decision a
+story depends on before the work starts.
 
 Relationship to the other docs: `PROJECT-BRIEF.md` is the charter (why and what is in
 scope), `PROJECT-PLAN.md` is the milestone narrative, `STORIES.md` is the work
@@ -712,7 +712,7 @@ story, and the story moves into `STORIES.md`.
 | B4 | Capability list | endpoint names, feature flags, or both; exact names to fix here | **Decided 2026-09-22 (#133):** feature flags, additive, never removed within a major: `repos`, `runs`, `events`, `permissions`, `rooms` |
 | B5 | Mismatch behaviour | (a) refuse with 426 (b) warn and continue (c) best effort | **Decided 2026-09-22 (#133):** a client refuses a different `major` and warns on a different `minor`. Written in the doc; no client enforces it until M5-10 |
 | B6 | Shared module location | (a) `client/contract.ts` (b) `protocol/contract.ts` (c) `api/` | **Decided 2026-09-22 (#133):** (a), `client/` for now |
-| B7 | Machine-readable schema | (a) TS types + contract tests (b) hand-written JSON Schema (c) OpenAPI | **Decided 2026-09-22 (#133):** (a). A JSON Schema can be added later for a client in another language; the daemon checks its replies with `satisfies` against the types |
+| B7 | Machine-readable schema | (a) TS types + contract tests (b) hand-written JSON Schema (c) OpenAPI | **Decided 2026-09-22 (#133):** (a). A JSON Schema can be added later for a client in another language; the daemon declares its runs and rooms with the types and checks the other replies with `satisfies` |
 | B8 | Conformance suite home | (a) `tests/contract/` (b) `integration/` (c) per-module tests only | **Decided 2026-09-22 (#133):** (a) |
 | B9 | `daemon.json` carries version? | (a) no, discovery only (b) yes, both | **Decided 2026-09-22 (#133):** (a) |
 | B10 | Doc style | (a) normative MUST/SHOULD (b) plain language with a stability table | **Decided 2026-09-22 (#133):** (b) plus a stability table |

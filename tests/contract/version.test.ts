@@ -29,18 +29,25 @@ async function boot(t: TestContext) {
 }
 
 /** `fetch` takes the Host from the URL, so a forged Host needs node:http. */
-function versionStatus(port: number, headers: Record<string, string>) {
-  return new Promise<number>((resolve, reject) => {
-    const req = request(
-      { hostname: "127.0.0.1", port, path: "/version", headers },
-      (res) => {
-        res.resume();
-        resolve(res.statusCode ?? 0);
-      },
-    );
-    req.on("error", reject);
-    req.end();
-  });
+function versionReply(port: number, headers: Record<string, string>) {
+  return new Promise<{ status: number; body: { error?: unknown } }>(
+    (resolve, reject) => {
+      const req = request(
+        { hostname: "127.0.0.1", port, path: "/version", headers },
+        (res) => {
+          let text = "";
+          res.on("data", (chunk) => {
+            text += chunk;
+          });
+          res.on("end", () =>
+            resolve({ status: res.statusCode ?? 0, body: JSON.parse(text) }),
+          );
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    },
+  );
 }
 
 test("GET /version answers the contract version and every capability", async (t) => {
@@ -85,11 +92,22 @@ test("GET /version needs the token like every other route", async (t) => {
 
 test("GET /version is behind the Host guard", async (t) => {
   const { port, token } = await boot(t);
-  assert.equal(
-    await versionStatus(port, {
-      Host: "evil.example",
-      authorization: `Bearer ${token}`,
-    }),
-    403,
-  );
+  const forged = await versionReply(port, {
+    Host: "evil.example",
+    authorization: `Bearer ${token}`,
+  });
+  assert.equal(forged.status, 403);
+  // The doc promises `{error}` on every refusal, this one included.
+  assert.equal(typeof forged.body.error, "string");
+});
+
+test("GET is the only method /version answers", async (t) => {
+  const { url, token } = await boot(t);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(res.status, 404);
+  const body = (await res.json()) as { error?: unknown };
+  assert.equal(typeof body.error, "string");
 });

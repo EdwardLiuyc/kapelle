@@ -192,7 +192,8 @@ Authorization: Bearer <token>
 A missing or wrong token gets `401`.
 
 **Bodies.** Send request bodies as a JSON object. Every reply that has a body is JSON,
-except the event stream.
+except the event stream. Today there is no limit on the body size, and the daemon does not
+read the `Content-Type` header. M5-3 adds both.
 
 **Errors.** Every refusal has this body:
 
