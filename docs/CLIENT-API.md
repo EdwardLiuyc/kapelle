@@ -113,8 +113,9 @@ changes each one.
 | Heartbeat and reconnect | Provisional | M5-6 |
 | How a permission ended (reason) | Provisional | M5-4 (adds an "answered" event) |
 | `POST /runs` retry safety | Provisional | M5-7 (adds `Idempotency-Key`) |
-| Cancel one task | Not built | M5-8 |
 | Everything under `/rooms` | Experimental | M6-2 and later |
+
+**Planned, not built yet:** cancel one task (M5-8).
 
 Version 1 stops changing at story M5-11. After that, only additions are allowed.
 
@@ -122,20 +123,26 @@ Version 1 stops changing at story M5-11. After that, only additions are allowed.
 
 `client/contract.ts` has every reply shape in this document as a TypeScript type. It also
 has `API_VERSION`, `CAPABILITIES`, and the types of the events inside the stream
-(`AgentEvent`). A TypeScript client imports this one file and nothing else.
+(`AgentEvent`). A TypeScript client imports this one file for every reply and stream-event
+type; the `run` member of the `POST /runs` request body is the run file described by
+`schema/run.schema.json`.
 
-A client in another language uses this document. There is no JSON Schema yet.
+A client in another language uses this document. There is no JSON Schema for the API
+replies; the run file has its own authoring schema at `schema/run.schema.json`.
 
 ## Find the daemon
 
-The daemon writes a file named `daemon.json` when it is ready. Your client reads this file
-to find the port and the token.
+The daemon publishes a file named `daemon.json` as its lock while it starts, and completes
+it with the port and token once it is ready. Your client reads this file to find the port
+and the token.
 
 **Where it is:**
 
 - `$XDG_RUNTIME_DIR/kapelle/daemon.json`, when `XDG_RUNTIME_DIR` is set to an absolute path.
-- Otherwise `<temp dir>/kapelle-<your uid>/daemon.json`. The temp dir is `$TMPDIR`, or
-  `/tmp` when that is not set. On macOS, this is the usual case.
+  A relative or empty value is treated as unset, like the daemon does.
+- Otherwise `<temp dir>/kapelle-<your uid>/daemon.json`. The temp dir is the operating
+  system's (`os.tmpdir()`: `$TMPDIR`, `$TMP` or `$TEMP`, else `/tmp`). On macOS, this is
+  the usual case.
 
 **What it holds:**
 
@@ -151,7 +158,9 @@ to find the port and the token.
 
 **Rules:**
 
-- The file exists only while the port is open. No file means no daemon.
+- While the daemon starts, the file can exist with only `pid`; `port` and `token` are added
+  once the port is open. Require both before you use the file.
+- Once the port is open, the file exists until the daemon stops. No file means no daemon.
 - If the daemon crashed, the file can stay. The port then refuses your connection. Restart
   the daemon first.
 - A new daemon makes a new token. Read the file again after a restart to retrieve the new
@@ -169,8 +178,10 @@ one of these names, with or without a port:
 - `localhost` (or `localhost.`)
 - `[::1]`
 
-Any other `Host` gets `403`. So do a missing `Host` and two `Host` headers. Normal HTTP
-libraries do the right thing for you.
+Normal HTTP libraries send a path like `GET /runs`. Then any other `Host` gets `403`, and
+so do a missing `Host` and two `Host` headers. Some tools send the full address instead,
+like `GET http://127.0.0.1:4719/runs`. Then the daemon checks that address and ignores
+`Host`.
 
 **Token.** Every request needs this header, on every route:
 
@@ -204,7 +215,7 @@ from the HTTP status code. (M5-3 adds a stable `code` field.)
 | `403` | The `Host` is not allowed, or the folder is not in an added repository. |
 | `404` | No such route, run, room or permission. |
 | `409` | The request is fine, but the thing is not in a state to accept it. |
-| `500` | A bug in the daemon. |
+| `500` | A bug in the daemon, or a room's harness could not start. |
 | `503` | The daemon is shutting down. |
 
 **Checks run in this order:** the `Host`, then the token, then the route.
@@ -378,7 +389,7 @@ M5-2 makes them the same.
 Each task in `report.tasks` has: `id`, `agent`, `cwd`, `status`, `durationMs`,
 `transcript` (the agent's text), and when known `branch`, `baseSha`, `sessionId`,
 `stopReason`, `usage`, `usageSemantics`, `error`, `result`, `warnings`, `summary` and
-`summarySynthesised`. `client/contract.ts` (`TaskReport`) has the exact types.
+`summarySynthesised`. `client/contract.ts` (`TaskReport`) has a type for these fields.
 
 A notice's `kind` is `containment`, `unverified`, `version` or `advisory`. **Always show
 `containment` notices.** They tell the person how much the harness is contained. The other
@@ -447,8 +458,8 @@ The value must be a whole number from 0 to the number of events so far. Any othe
 gets `400`.
 
 A browser `EventSource` sends this header for you when it reconnects. Other clients must
-send it themselves. (A browser also cannot send the token header. That problem is still
-open; see M4-1.)
+send it themselves. (A browser also cannot send the token header; the browser path is
+retired, so this is not on a current story.)
 
 ### End of the stream
 
@@ -496,12 +507,13 @@ Ignore a `sessionUpdate` that you do not know. New ones can appear.
 The daemon adds its own events. Their names all start with `_client_`, so they never clash
 with ACP names.
 
-**Tasks** (runs only):
+**Tasks** (runs; a room also emits `_client_worktree_created`, where `agent` is the
+harness name):
 
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
 | `_client_task_started` | `harness` | The task left the queue. Its events follow. |
-| `_client_worktree_created` | `path`, `branch`, `baseSha` | The task's own checkout exists. Missing when the run shares one folder. |
+| `_client_worktree_created` | `path`, `branch`, `baseSha` | The task's (or room's) own checkout exists. Missing when the run shares one folder. |
 | `_client_task_finished` | `status`, `durationMs` | The task's verdict. A task cancelled before it started has this event but no `_client_task_started`. |
 
 **Permissions:**
@@ -568,7 +580,7 @@ asks a person through the API. Reading, searching, fetching and thinking never a
 
 (Provisional: today no event says *why* a question closed. M5-4 adds that.)
 
-#### `GET /permissions`
+### `GET /permissions`
 
 **Reply `200`:** every open question, from all runs.
 
@@ -587,7 +599,7 @@ asks a person through the API. Reading, searching, fetching and thinking never a
 `kind` is one of `read`, `edit`, `delete`, `move`, `search`, `execute`, `think`, `fetch`,
 `switch_mode`, `other`. Treat `id` as an opaque string.
 
-#### `POST /permissions/:id`
+### `POST /permissions/:id`
 
 **Request:**
 
@@ -614,7 +626,7 @@ A room is one harness with one session that stays alive between messages. The ro
 own git branch and checkout. Today a room always runs in `auto` mode, so it never asks a
 permission.
 
-#### `POST /rooms`
+### `POST /rooms`
 
 **Request:** `cwd` plus either `agent` (a harness name) or `cmd` (a command line).
 
@@ -641,13 +653,14 @@ The reply comes when the harness is ready. This can take some seconds.
 harness died) or `closed`.
 
 **Refusals, in this order:** `400` for a bad `cwd`; `403` when `cwd` is not in an added
-repository; `400` for a bad or missing harness; `503` when the daemon shuts down.
+repository; `400` for a bad or missing harness; `500` when the harness cannot start (for
+example its binary is not installed); `503` when the daemon shuts down.
 
-#### `GET /rooms` and `GET /rooms/:id`
+### `GET /rooms` and `GET /rooms/:id`
 
 **Reply `200`:** a list of rooms, or one room. `404` for an unknown id.
 
-#### `POST /rooms/:id/messages`
+### `POST /rooms/:id/messages`
 
 **Request:** `{ "text": "What does this repo do?" }`
 
@@ -657,11 +670,14 @@ at the first `_client_turn_ended` with a `seq` above 41.
 **Refusals:** `404` for an unknown room. `400` for empty text. `409` while the room is
 busy, or after it exited or closed. Send one message at a time.
 
-#### `GET /rooms/:id/events`
+### `GET /rooms/:id/events`
 
 The room's event stream. Same format as a run's. `agent` is the harness name.
 
-#### `DELETE /rooms/:id`
+**Refusals:** `404` for an unknown room, or one with no event log; `400` for a bad
+`Last-Event-ID`.
+
+### `DELETE /rooms/:id`
 
 Stops the harness and closes the room. The reply waits until that is done. The daemon
 never commits the room's work. Changes that nobody committed stay in the checkout.
@@ -713,10 +729,16 @@ This example uses `curl` and `jq`. Any HTTP library works the same way.
 
 ```bash
 # 1. Find the daemon.
-if [ -n "$XDG_RUNTIME_DIR" ]; then f="$XDG_RUNTIME_DIR/kapelle"
-else f="${TMPDIR:-/tmp}/kapelle-$(id -u)"; fi
-PORT=$(jq -r .port "$f/daemon.json")
-TOKEN=$(jq -r .token "$f/daemon.json")
+case "${XDG_RUNTIME_DIR:-}" in
+/*) f="$XDG_RUNTIME_DIR/kapelle" ;;
+*) f="${TMPDIR:-${TMP:-${TEMP:-/tmp}}}/kapelle-$(id -u)" ;;
+esac
+PORT=$(jq -r '.port // empty' "$f/daemon.json")
+TOKEN=$(jq -r '.token // empty' "$f/daemon.json")
+if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
+  echo "daemon not ready: no port/token in $f/daemon.json" >&2
+  exit 1
+fi
 api() { curl -s -H "Authorization: Bearer $TOKEN" "$@"; }
 BASE="http://127.0.0.1:$PORT"
 

@@ -8,6 +8,7 @@
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { request } from "node:http";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { API_VERSION, CAPABILITIES } from "../../client/contract.ts";
@@ -24,7 +25,22 @@ async function boot(t: TestContext) {
   const { port, token } = JSON.parse(
     await readFile(join(dir, "kapelle", "daemon.json"), "utf8"),
   );
-  return { url: `http://127.0.0.1:${port}/version`, token };
+  return { url: `http://127.0.0.1:${port}/version`, port, token };
+}
+
+/** `fetch` takes the Host from the URL, so a forged Host needs node:http. */
+function versionStatus(port: number, headers: Record<string, string>) {
+  return new Promise<number>((resolve, reject) => {
+    const req = request(
+      { hostname: "127.0.0.1", port, path: "/version", headers },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
 }
 
 test("GET /version answers the contract version and every capability", async (t) => {
@@ -33,6 +49,7 @@ test("GET /version answers the contract version and every capability", async (t)
     headers: { authorization: `Bearer ${token}` },
   });
   assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "application/json");
   assert.deepEqual(await res.json(), {
     apiVersion: { major: 1, minor: 0 },
     capabilities: ["repos", "runs", "events", "permissions", "rooms"],
@@ -46,8 +63,33 @@ test("GET /version answers the contract version and every capability", async (t)
 });
 
 test("GET /version needs the token like every other route", async (t) => {
-  const { url } = await boot(t);
-  const res = await fetch(url);
-  assert.equal(res.status, 401);
-  assert.deepEqual(await res.json(), { error: "missing or wrong token" });
+  const { url, token } = await boot(t);
+  const missing = await fetch(url);
+  assert.equal(missing.status, 401);
+  const missingBody = (await missing.json()) as { error?: unknown };
+  assert.equal(typeof missingBody.error, "string");
+
+  const wrong = await fetch(url, {
+    headers: { authorization: "Bearer not-a-real-token" },
+  });
+  assert.equal(wrong.status, 401);
+  const wrongBody = (await wrong.json()) as { error?: unknown };
+  assert.equal(typeof wrongBody.error, "string");
+
+  // The real token still works, so the refusals above are not a broken route.
+  const good = await fetch(url, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(good.status, 200);
+});
+
+test("GET /version is behind the Host guard", async (t) => {
+  const { port, token } = await boot(t);
+  assert.equal(
+    await versionStatus(port, {
+      Host: "evil.example",
+      authorization: `Bearer ${token}`,
+    }),
+    403,
+  );
 });

@@ -2114,10 +2114,11 @@ compatibility policy written down.
 `CLIENT-API.md` is the promise, and two documents cannot both be normative.
 *Done when* a reader who has never opened `daemon.ts` can implement a client from the
 document, and a contract test asserts the version/capability response.
-Decisions: A1–A7, B1–B10. **Decided 2026-09-22 (#133):** all as recommended in
-`docs/CONTRACT-PLAN.md`, except B2, which is `major.minor` rather than one integer, so B5
-reads "warn on a minor difference, refuse a major one". No client checks the version in
-this story; M5-10 adds that.
+Decisions: A1–A7, B1–B10. **Closed for M5-1 (#133):** all now follow
+`docs/CONTRACT-PLAN.md` — A2 was decided 2026-09-20 and A3/A7 were settled by the
+`spike/chat-tui` spike, the rest on 2026-09-22 — except B2, which is `major.minor`
+rather than one integer, so B5 reads "warn on a minor difference, refuse a major one". No
+client checks the version in this story; M5-10 adds that.
 
 **M5-2 · Curated run DTOs · M · needs M5-1**
 `RunDto` and `TaskDto`, one shape for live and restored runs, mapped at the daemon edge.

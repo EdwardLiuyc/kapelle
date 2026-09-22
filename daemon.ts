@@ -63,6 +63,7 @@ import {
   type PendingDecision,
   type PermissionAnswered,
   type RepoAdded,
+  type RepoRoots,
   type RoomView,
   type RunAccepted,
   type RunDetail,
@@ -915,7 +916,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
     },
   };
   rooms.set(id, entry);
-  send(res, 201, roomView(entry));
+  send(res, 201, roomView(entry) satisfies RoomView);
 }
 
 /**
@@ -980,7 +981,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     return;
   }
   if (!authorised(req)) {
-    send(res, 401, { error: "missing or wrong token" });
+    send(res, 401, { error: "missing or wrong token" } satisfies ErrorReply);
     return;
   }
   const { pathname } = new URL(req.url ?? "/", REQUEST_URL_BASE);
@@ -998,7 +999,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   } else if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
   } else if (req.method === "GET" && pathname === "/repos") {
-    send(res, 200, [...repos]);
+    send(res, 200, [...repos] satisfies RepoRoots);
   } else if (req.method === "POST" && pathname === "/runs") {
     await postRun(req, res);
   } else if (req.method === "GET" && pathname === "/runs") {
@@ -1015,11 +1016,11 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   } else if (req.method === "POST" && pathname === "/rooms") {
     await postRoom(req, res);
   } else if (req.method === "GET" && pathname === "/rooms") {
-    send(res, 200, [...rooms.values()].map(roomView));
+    send(res, 200, [...rooms.values()].map(roomView) satisfies RoomView[]);
   } else if (req.method === "GET" && room) {
     const entry = rooms.get(room[1] as string);
-    if (entry) send(res, 200, roomView(entry));
-    else send(res, 404, { error: `no room ${room[1]}` });
+    if (entry) send(res, 200, roomView(entry) satisfies RoomView);
+    else send(res, 404, { error: `no room ${room[1]}` } satisfies ErrorReply);
   } else if (req.method === "POST" && roomSub?.[2] === "messages") {
     await postMessage(roomSub[1] as string, req, res);
   } else if (req.method === "GET" && roomSub?.[2] === "events") {
@@ -1036,9 +1037,11 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     // which `stop()` bounds at 5 s.
     const entry = rooms.get(room[1] as string);
     if (!entry) {
-      send(res, 404, { error: `no room ${room[1]}` });
+      send(res, 404, { error: `no room ${room[1]}` } satisfies ErrorReply);
     } else if (entry.dismissed) {
-      send(res, 409, { error: `room ${room[1]} is already dismissed` });
+      send(res, 409, {
+        error: `room ${room[1]} is already dismissed`,
+      } satisfies ErrorReply);
     } else {
       // **Not `status() === "closed"`**, which reads `closed` the instant a
       // close begins: a second DELETE arriving mid-teardown would then be told
@@ -1050,14 +1053,14 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       // once the close has settled is refused.
       await entry.room.close();
       entry.dismissed = true;
-      send(res, 200, roomView(entry));
+      send(res, 200, roomView(entry) satisfies RoomView);
     }
   } else if (req.method === "GET" && events) {
     await getEvents(events[1] as string, req, res);
   } else if (req.method === "GET" && one) {
     const state = runs.get(one[1] as string);
     if (state) send(res, 200, state satisfies RunDetail);
-    else send(res, 404, { error: `no run ${one[1]}` });
+    else send(res, 404, { error: `no run ${one[1]}` } satisfies ErrorReply);
   } else if (req.method === "GET" && pathname === "/permissions") {
     send(res, 200, permissions.list() satisfies PendingDecision[]);
   } else if (req.method === "POST" && decision) {
@@ -1070,16 +1073,20 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const state = runs.get(id);
     const canceller = cancels.get(id);
     if (!state) {
-      send(res, 404, { error: `no run ${id}` });
+      send(res, 404, { error: `no run ${id}` } satisfies ErrorReply);
     } else if (!canceller) {
-      send(res, 409, { error: `run ${id} already ended: ${state.status}` });
+      send(res, 409, {
+        error: `run ${id} already ended: ${state.status}`,
+      } satisfies ErrorReply);
     } else {
       canceller.abort();
       state.cancelRequested = true;
       send(res, 202, state satisfies RunDetail);
     }
   } else {
-    send(res, 404, { error: `no route for ${req.method} ${pathname}` });
+    send(res, 404, {
+      error: `no route for ${req.method} ${pathname}`,
+    } satisfies ErrorReply);
   }
 }
 
@@ -1087,7 +1094,7 @@ const server = createServer({ requireHostHeader: false }, (req, res) => {
   route(req, res).catch((err) => {
     send(res, (err as { status?: number }).status ?? 500, {
       error: messageOf(err),
-    });
+    } satisfies ErrorReply);
   });
 });
 

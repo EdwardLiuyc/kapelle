@@ -1,11 +1,12 @@
 /**
  * The client contract, as types — story M5-1, issue #133.
  *
- * `docs/CLIENT-API.md` is the promise; this file is the same shapes for a
- * TypeScript client. A client imports this file and nothing else from this
- * repository — never `daemon.ts`, never `core/`. The ACP event types that
- * ride inside the stream are re-exported below, so a client never has to
- * know `protocol/` exists.
+ * `docs/CLIENT-API.md` is the promise; this file is the same reply and
+ * stream-event shapes for a TypeScript client. A client imports this file
+ * and never `daemon.ts` or `core/`; the `run` member of the `POST /runs`
+ * request body is the run file, described by `schema/run.schema.json`. The
+ * ACP event types that ride inside the stream are re-exported below, so a
+ * client never has to know `protocol/` exists.
  *
  * `daemon.ts` checks every reply it sends against these types with
  * `satisfies`, so a shape that drifts fails `npm run check` rather than a
@@ -16,7 +17,7 @@
  * be added for a client in another language once one exists.
  */
 
-import type { AgentEvent, ToolKind } from "../protocol/types.ts";
+import type { AgentEvent, ToolKind, Usage } from "../protocol/types.ts";
 
 /** The event types a stream carries, and the tool kinds a permission names.
  *  Re-exported, not copied, so there is one definition. @public */
@@ -58,6 +59,9 @@ export interface ErrorReply {
 export interface RepoAdded {
   root: string;
 }
+
+/** `GET /repos` answers every added repository root. */
+export type RepoRoots = string[];
 
 /** A finished task's verdict, mildest first. A run's status is the worst of
  *  its tasks. @public */
@@ -114,7 +118,7 @@ export interface TaskReport {
   sessionId?: string;
   status: TaskStatus;
   stopReason?: string;
-  usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  usage?: Usage;
   usageSemantics?: "per-turn" | "cumulative" | "unknown";
   durationMs: number;
   transcript: string;
