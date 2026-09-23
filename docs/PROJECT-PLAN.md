@@ -527,7 +527,9 @@ the paint now lives in the TUI.
   deduped with an override to 18.0.12, and the optional `darwin-modifiers.node` helper is
   recorded (lazily loaded, try/catch-guarded, Shift+Enter on Apple Terminal only).
 - **M4-2 — room and roster sidebar**: rooms → participants, switching between rooms and
-  participants, unread and attention badges.
+  participants, unread and attention badges. The room opens on the timeline; the composer,
+  not the row cursor, names the target — a leading `@name` resolved client-side, the
+  orchestrator by default (R43).
 - **M4-3 — permission answering**: the per-participant `ask` overlay, answered by id;
   a CLI observer on the same room sees the same decision. This is the write path that
   makes `ask` usable unattended.
@@ -613,9 +615,12 @@ on the same session with the first turn's context kept, on all four harnesses
   `ParticipantDto`, and a room id of its own (`newRoomId()`, never a run id).
 - **Participants** — add, remove, list, rename; an opaque id plus a unique display name;
   the harness fixed at add, the mode mutable.
-- **Routing and the timeline** — a message names its target, the orchestrator by default.
+- **Routing and the timeline** — a message names the target, the orchestrator by default —
+  the one participant whose `role` is `orchestrator` (R44).
   One room log and one sequence, every line carrying `roomId` and `participantId`; a
   per-participant thread is a filter over that log. A busy participant queues FIFO, bounded.
+  In the TUI the timeline is the landing view and a leading `@name` in the composer names
+  the target (R43); the daemon parses no message text.
 - **Modes and permissions** — per participant, `ask`/`safe`/`auto`, **default `auto`**
   because a room is often left unattended and an `ask` default would wedge one. The M2-3
   queue is reused, gaining `roomId`, `participantId` and `turn`.
@@ -719,6 +724,11 @@ branches and confirm a real conflict is refused by name with nothing half-landed
 
 The actionable form of these — with triggers and decisions — is `docs/STORIES.md`'s backlog; this section keeps the narrative of *why* each is still open.
 
+- **Scanning the orchestrator's responses for mentions (experimental agent-to-agent).**
+  Named by R43 as the deferred path, carried by M6-8 and the backlog. It is not v1: it
+  reopens `PROJECT-BRIEF.md`'s non-goal and R2/R34c, and it needs its own decision before
+  code. Recorded here so the v1 boundary — the composer parses `@name`, nothing else does
+  — is not mistaken for an oversight.
 - ~~A per-harness price table converting tokens to estimated spend.~~ **Unblocked and
   reshaped by M0-5.** All three harnesses name the model they selected (`configOptions`,
   `category: "model"`, on the `session/new` response), so the blocker is gone — but the

@@ -252,6 +252,7 @@ request that is not valid HTTP gets `400`.
 | `already_decided` | `409` | The permission was already answered, timed out, or cancelled. | Stop. Your answer was not used. |
 | `room_busy` | `409` | The room still answers the last message. | Wait for `_client_turn_ended`, then send again. |
 | `room_closed` | `409` | The room was dismissed, or its harness exited. | Stop. Open a new room. |
+| `orchestrator_exists` | `409` | Not built yet (M6-3). The room already has an orchestrator. | Change the other participant's role first. |
 | `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
 | `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. | Show the message. |
 | `internal` | `500` | An error the daemon did not expect. For example, a bug, or a git command that failed in a broken repository. | Show the message. Report it if the repository is fine. |
@@ -642,7 +643,7 @@ harness name):
 
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
-| `_client_user_message` | `text` | A message a person sent into the room. |
+| `_client_user_message` | `text` | A message a person sent into the room. M6-4 adds `participantId` to the log line, not to this event. |
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer. The room takes the next message. `error` means the turn failed. |
 
 Ignore a `_client_*` name that you do not know. New ones can appear.
@@ -807,17 +808,61 @@ against real fields. It is not an API yet.
 ```text
 room              id, cwd, title, base, createdAt, updatedAt, status
                   status: active | paused | dismissed
-participant       id, name, harness, mode, purpose, settings,
+participant       id, name, role?, harness, mode, purpose, settings,
                   branch, worktree, baseSha,
                   sessionId, resumed?: "loaded" | "fresh",
                   status: idle | busy | exited | paused | dismissed
 room list         [{id, cwd, title, status, updatedAt,
-                    participants: [{id, name, status}]}]
+                    participants: [{id, name, role?, status}]}]
 room detail       the room fields above, plus every participant in full
 ```
 
 `resumed` is missing until a participant comes back. `loaded` means it kept its memory.
 `fresh` means it started a new session.
+
+`role` is one of `orchestrator`, `developer`, `tester` or `architect`, or missing. It is a
+label. It sends no text to the agent. A client changes `name`, `mode` or `role` with one
+route, `PATCH /rooms/:id/agents/:agentId`. A room has at most one `orchestrator`: adding or
+changing a participant to that role is refused with `409` `orchestrator_exists` while
+another one exists. More roles may come later, so a client shows a role it does not know
+as plain text.
+
+### Addressing (planned)
+
+Every message has exactly one target participant. A client sends to
+`POST /rooms/:id/agents/:agentId/messages`, and a per-participant stream is the room's
+event log filtered by `participantId`. The TUI opens on the room timeline and lets the
+person name the target with a leading `@name`; the client resolves the name to the opaque
+participant id itself (R43). The daemon never parses message text. Every client follows
+the same rules, so the TUI and piped `chat.ts` behave the same:
+
+- The client first removes whitespace at the start of the message. So a leading space
+  is not a way to write a literal `@`, and piped `chat.ts`, which already trims, cannot
+  differ from the TUI.
+- A **mention** is a word at the very start of the message that begins with `@`. The name
+  after `@` ends at whitespace (a space, a tab or a newline) or at one of `,` `:` `;` `.`.
+  `@alice, look`, `@alice: look` and `@alice` then a newline then `look` all send `look`
+  to alice.
+- The name matches a participant name with ASCII case folding, so `@Alice` is `@alice`.
+- **One mention** names the target. An unknown name is a client-side error.
+- **Two or more mentions** at the start are a client-side error, known names or not.
+  Taking the first and ignoring the rest would send `@edward @bab hi` to edward with
+  `@bab` as text, so a typo in the second name would pass unnoticed. Refusing catches it.
+- **No mention** sends the message to the participant whose `role` is `orchestrator`. A
+  room with no orchestrator refuses before the request, and says: start with `@name`, or
+  give a participant the orchestrator role.
+- After the first word that does not begin with `@`, an `@` is plain text. `@alice ask
+  @bob` goes to alice. To start a message with a literal `@`, put it in backticks,
+  like `` `@property` ``, or put a word before it.
+- The client **removes the mention**, its end mark and the whitespace after it,
+  newlines included. The rest is the text it sends, so it is what the agent gets and
+  what `_client_user_message` records. A replaying client draws that text and names the
+  target from the log line's `participantId`, which M6-4 adds to every room log line
+  beside `seq` and `agent`.
+- A mention with nothing after it (`@alice`) is a client-side error **at submit**. The
+  daemon would refuse the empty text with `400` `invalid_request`. While the person
+  types, the composer only shows the resolved target, so a thread that opens with its
+  `@name` pre-filled is not in an error state.
 
 ## A first client, step by step
 
