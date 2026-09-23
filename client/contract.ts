@@ -59,9 +59,38 @@ export interface VersionReply {
   capabilities: string[];
 }
 
-/** Every refusal, on every route. */
+/**
+ * What went wrong, one code per situation a client acts on differently (C7,
+ * M5-3) — not one per status: `room_busy` means send again later, while
+ * `already_decided` and `run_ended` mean stop. Codes are only ever added.
+ */
+export type ErrorCode =
+  | "host_not_allowed"
+  | "unauthorized"
+  | "no_route"
+  | "unsupported_media_type"
+  | "body_too_large"
+  | "invalid_request"
+  | "invalid_run"
+  | "invalid_config"
+  | "repo_not_added"
+  | "run_not_found"
+  | "room_not_found"
+  | "permission_not_found"
+  | "no_event_log"
+  | "run_ended"
+  | "already_decided"
+  | "room_busy"
+  | "room_closed"
+  | "shutting_down"
+  | "room_open_failed"
+  | "internal";
+
+/** Every refusal, on every route. `code` is `string`, not `ErrorCode`: a
+ *  newer daemon sends codes this file does not know yet, and a client falls
+ *  back to the status for those. `message` is for a person, never parsed. */
 export interface ErrorReply {
-  error: string;
+  error: { code: string; message: string };
 }
 
 /** `POST /repos` answers the repository root the path belongs to. */

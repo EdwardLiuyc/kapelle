@@ -103,6 +103,8 @@ Not every part of this API is final yet. Each part has one of three labels:
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
 | `_client_*` events | Except the room events. See [Events](#events). |
 | `GET /permissions`, `POST /permissions/:id` | |
+| Error replies (`{error: {code, message}}`) and the error codes | Codes are only added (M5-3). |
+| Request limits: `Content-Type`, body size, unknown fields, read timeout | M5-3. |
 
 **Provisional and experimental.** These will change. The last column names the story that
 changes each one.
@@ -110,8 +112,6 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| Error replies (`{error}`) | Provisional | M5-3 (adds an error `code`) |
-| Request limits (body size, content type) | Provisional | M5-3 |
 | End of a run's stream | Provisional | M5-5 (adds a "run finished" event) |
 | Event timestamps | Provisional | M5-5 (adds `at`) |
 | Heartbeat and reconnect | Provisional | M5-6 |
@@ -195,18 +195,63 @@ Authorization: Bearer <token>
 
 A missing or wrong token gets `401`.
 
-**Bodies.** Send request bodies as a JSON object. Every reply that has a body is JSON,
-except the event stream. Today there is no limit on the body size, and the daemon does not
-read the `Content-Type` header. M5-3 adds both.
+**Bodies.** Every reply that has a body is JSON, except the event stream. A request body
+must follow these rules:
+
+- Send it with the header `Content-Type: application/json`. A parameter such as
+  `; charset=utf-8` is fine. Any other type, or no header, gets `415`. Note that `fetch`
+  sends `text/plain` for a string body and `curl -d` sends a form type, so set the header
+  yourself.
+- Keep it at 4 MiB (4 194 304 bytes) or less. A larger body gets `413`, and the daemon
+  closes the connection. It never holds more than 4 MiB of a body: when `Content-Length`
+  is too large, it reads none of the body.
+- Make it one JSON object. Send only the fields the route names. An unknown field gets
+  `400`.
+- Send it all within 30 seconds. After that the daemon closes the connection with no
+  reply. This limit covers only the request. A slow reply or a long event stream is never
+  cut.
+
+`GET` and `DELETE` have no body and need no `Content-Type`.
 
 **Errors.** Every refusal has this body:
 
 ```json
-{ "error": "a sentence for a person to read" }
+{ "error": { "code": "run_ended", "message": "run 20260922-101500-a1b2 already ended: done" } }
 ```
 
-Show the sentence to the person. Do not parse it: the words can change. Decide what to do
-from the HTTP status code. (M5-3 adds a stable `code` field.)
+- `code` says what went wrong. It is a fixed word. Use it in your code.
+- `message` is a sentence for a person. Show it. Do not parse it: the words can change.
+
+New codes can be added. A code is never removed or renamed within one `major` version. If
+you get a code that you do not know, decide from the HTTP status code.
+
+Two refusals have no JSON body. A request that runs past the 30-second limit gets its
+connection closed. A request that is not valid HTTP gets `400` from Node, with no body.
+
+**Error codes:**
+
+| Code | Status | What happened | What to do |
+| --- | --- | --- | --- |
+| `host_not_allowed` | `403` | The `Host` is not a loopback name. | Connect to `127.0.0.1`. |
+| `unauthorized` | `401` | Token missing or wrong. | Read `daemon.json` again. The daemon may have restarted. |
+| `no_route` | `404` | No route has this method and path. | Fix the client. |
+| `unsupported_media_type` | `415` | The body is not `application/json`. | Set the header. |
+| `body_too_large` | `413` | The body is larger than 4 MiB. | Send less. |
+| `invalid_request` | `400` | A field is missing, has the wrong type, or is unknown; or the body is not a JSON object; or `Last-Event-ID` is out of range. | Fix the request. |
+| `invalid_run` | `400` | The run file is not valid. | Show the message. It names the field. |
+| `invalid_config` | `400` | The repository's `.kapelle/config.json` is not valid. | The person fixes that file. |
+| `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
+| `run_not_found` | `404` | No run has this id. | |
+| `room_not_found` | `404` | No room has this id. | |
+| `permission_not_found` | `404` | The daemon never gave out this permission id. | |
+| `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read the run with `GET /runs/:id`. |
+| `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
+| `already_decided` | `409` | The permission was already answered, timed out, or cancelled. | Stop. Your answer was not used. |
+| `room_busy` | `409` | The room still answers the last message. | Wait for `_client_turn_ended`, then send again. |
+| `room_closed` | `409` | The room was dismissed, or its harness exited. | Stop. Open a new room. |
+| `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
+| `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. | Show the message. |
+| `internal` | `500` | A bug in the daemon. | Report it. |
 
 **Status codes you will see:**
 
@@ -220,10 +265,13 @@ from the HTTP status code. (M5-3 adds a stable `code` field.)
 | `403` | The `Host` is not allowed, or the folder is not in an added repository. |
 | `404` | No such route, run, room or permission. |
 | `409` | The request is fine, but the thing is not in a state to accept it. |
+| `413` | The body is larger than 4 MiB. |
+| `415` | The body is not sent as `application/json`. |
 | `500` | A bug in the daemon, or a room's harness could not start. |
 | `503` | The daemon is shutting down. |
 
-**Checks run in this order:** the `Host`, then the token, then the route.
+**Checks run in this order:** the `Host`, then the token, then the route, then the body
+(`415`, then `413`, then `400`).
 
 ## Routes
 
@@ -284,8 +332,8 @@ repository. The daemon finds the repository root for you.
 
 `root` is the real path of the repository root. Adding the same repository twice is fine.
 
-**Refusals:** `400` when `path` is not absolute or does not exist, or when the
-repository's `.kapelle/config.json` is not valid.
+**Refusals:** `400` `invalid_request` when `path` is not absolute or does not exist.
+`400` `invalid_config` when the repository's `.kapelle/config.json` is not valid.
 
 #### `GET /repos`
 
@@ -331,10 +379,12 @@ Treat the id as an opaque string. Do not parse it.
 
 **Refusals, in this order:**
 
-1. `400`: `cwd` is not an absolute path, or does not exist.
-2. `403`: `cwd` is not inside an added repository. Add it with `POST /repos` first.
-3. `400`: the run file is not valid. The message names the field.
-4. `503`: the daemon is shutting down.
+1. `400` `invalid_request`: `cwd` is not an absolute path, or does not exist.
+2. `403` `repo_not_added`: `cwd` is not inside an added repository. Add it with
+   `POST /repos` first.
+3. `400` `invalid_config`: the repository's `.kapelle/config.json` is not valid.
+4. `400` `invalid_run`: the run file is not valid. The message names the field.
+5. `503` `shutting_down`: the daemon is shutting down.
 
 #### `GET /runs`
 
@@ -428,7 +478,7 @@ A notice's `kind` is `containment`, `unverified`, `version` or `advisory`. **Alw
 `containment` notices.** They tell the person how much the harness is contained. The other
 kinds are advice.
 
-**Refusals:** `404` for an unknown id.
+**Refusals:** `404` `run_not_found` for an unknown id.
 
 #### `DELETE /runs/:id`
 
@@ -437,14 +487,15 @@ Asks the run to stop. Stopping takes a moment, so the reply comes first.
 **Reply `202`:** the run, as `GET /runs/:id` gives it, with `cancelRequested: true`.
 Poll `GET /runs/:id`, or follow the event stream, to see when it stops.
 
-**Refusals:** `404` for an unknown id. `409` when the run already ended.
+**Refusals:** `404` `run_not_found` for an unknown id. `409` `run_ended` when the run
+already ended.
 
 #### `GET /runs/:id/events`
 
 The run's event stream. See [The event stream](#the-event-stream).
 
-**Refusals:** `404` for an unknown id, or when the run has no event log. `400` for a bad
-`Last-Event-ID`.
+**Refusals:** `404` `run_not_found` for an unknown id, `404` `no_event_log` when the run
+has no event log. `400` `invalid_request` for a bad `Last-Event-ID`.
 
 ## The event stream
 
@@ -649,9 +700,9 @@ asks a person through the API. Reading, searching, fetching and thinking never a
 { "id": "7d4c1e0a-5b2f-4a61-9c3e-2f8b1d6a9e40", "allow": true }
 ```
 
-**Refusals:** `400` when `allow` is not `true` or `false`. `404` for an id the daemon
-never gave out. `409` when the question is already closed (answered, timed out, or
-cancelled).
+**Refusals:** `400` `invalid_request` when `allow` is not `true` or `false`. `404`
+`permission_not_found` for an id the daemon never gave out. `409` `already_decided` when
+the question is already closed (answered, timed out, or cancelled).
 
 ## Rooms
 
@@ -688,13 +739,14 @@ The reply comes when the harness is ready. This can take some seconds.
 `status` is `idle` (waits for a message), `busy` (answers a message), `exited` (the
 harness died) or `closed`.
 
-**Refusals, in this order:** `400` for a bad `cwd`; `403` when `cwd` is not in an added
-repository; `400` for a bad or missing harness; `500` when the harness cannot start (for
-example its binary is not installed); `503` when the daemon shuts down.
+**Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
+`repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
+bad or missing harness; `500` `room_open_failed` when the harness cannot start (for
+example its binary is not installed); `503` `shutting_down` when the daemon shuts down.
 
 ### `GET /rooms` and `GET /rooms/:id`
 
-**Reply `200`:** a list of rooms, or one room. `404` for an unknown id.
+**Reply `200`:** a list of rooms, or one room. `404` `room_not_found` for an unknown id.
 
 ### `POST /rooms/:id/messages`
 
@@ -703,23 +755,24 @@ example its binary is not installed); `503` when the daemon shuts down.
 **Reply `202`:** `{ "seq": 41 }`. The answer arrives on the room's stream. The turn is over
 at the first `_client_turn_ended` with a `seq` above 41.
 
-**Refusals:** `404` for an unknown room. `400` for empty text. `409` while the room is
-busy, or after it exited or closed. Send one message at a time.
+**Refusals:** `404` `room_not_found` for an unknown room. `400` `invalid_request` for
+empty text. `409` `room_busy` while the room answers, and `409` `room_closed` after it
+exited or closed. Send one message at a time.
 
 ### `GET /rooms/:id/events`
 
 The room's event stream. Same format as a run's. `agent` is the harness name.
 
-**Refusals:** `404` for an unknown room, or one with no event log; `400` for a bad
-`Last-Event-ID`.
+**Refusals:** `404` `room_not_found` for an unknown room, `404` `no_event_log` for one
+with no event log; `400` `invalid_request` for a bad `Last-Event-ID`.
 
 ### `DELETE /rooms/:id`
 
 Stops the harness and closes the room. The reply waits until that is done. The daemon
 never commits the room's work. Changes that nobody committed stay in the checkout.
 
-**Reply `200`:** the room, with `status: "closed"`. `404` for an unknown room. `409` when
-the room was already closed.
+**Reply `200`:** the room, with `status: "closed"`. `404` `room_not_found` for an unknown
+room. `409` `room_closed` when the room was already closed.
 
 ### Words for the room lifecycle (planned)
 
@@ -775,7 +828,7 @@ if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
   echo "daemon not ready: no port/token in $f/daemon.json" >&2
   exit 1
 fi
-api() { curl -s -H "Authorization: Bearer $TOKEN" "$@"; }
+api() { curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" "$@"; }
 BASE="http://127.0.0.1:$PORT"
 
 # 2. Check the version. Stop if major is not 1.

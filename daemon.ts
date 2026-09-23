@@ -58,6 +58,7 @@ import { parseArgs } from "node:util";
 import {
   API_VERSION,
   CAPABILITIES,
+  type ErrorCode,
   type ErrorReply,
   type MessageAccepted,
   type Notice,
@@ -323,24 +324,71 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-/** An error that carries its HTTP status. Anything thrown without one is 500. */
-function refusal(status: number, message: string): Error {
-  return Object.assign(new Error(message), { status });
+/** An error that carries its HTTP status and contract code (M5-3). Anything
+ *  thrown without them is a 500 `internal`. */
+function refusal(status: number, code: ErrorCode, message: string): Error {
+  return Object.assign(new Error(message), { status, code });
 }
 
+/** The largest request body read (J1): run files carry prompts. */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+/**
+ * A write's JSON body, refused in order: not JSON by `Content-Type` (415),
+ * too large (413), not a JSON object (400), a field outside `fields` (400,
+ * C8). The size is checked on `Content-Length` before a byte is read, and
+ * counted as it arrives for a body sent without one, so an oversized body is
+ * never held in memory.
+ */
 async function readBody(
   req: IncomingMessage,
+  fields: readonly string[],
 ): Promise<Record<string, unknown>> {
-  let text = "";
-  for await (const chunk of req) text += chunk;
+  const type = req.headers["content-type"] ?? "";
+  if (type.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+    throw refusal(
+      415,
+      "unsupported_media_type",
+      `send the body as Content-Type: application/json; got ${type || "none"}`,
+    );
+  }
+  const tooLarge = () =>
+    refusal(
+      413,
+      "body_too_large",
+      `the body is larger than ${MAX_BODY_BYTES} bytes`,
+    );
+  if (Number(req.headers["content-length"]) > MAX_BODY_BYTES) throw tooLarge();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) throw tooLarge();
+    chunks.push(chunk);
+  }
+  // Joined as bytes, then decoded once: a character split across two chunks
+  // would otherwise decode as two replacement characters.
+  const text = Buffer.concat(chunks).toString("utf8");
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch (err) {
-    throw refusal(400, `body is not JSON: ${messageOf(err)}`);
+    throw refusal(
+      400,
+      "invalid_request",
+      `body is not JSON: ${messageOf(err)}`,
+    );
   }
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    throw refusal(400, "body must be a JSON object");
+    throw refusal(400, "invalid_request", "body must be a JSON object");
+  }
+  const unknown = Object.keys(body).find((key) => !fields.includes(key));
+  if (unknown !== undefined) {
+    throw refusal(
+      400,
+      "invalid_request",
+      `unknown field "${unknown}"; this route takes ${fields.join(", ")}`,
+    );
   }
   return body as Record<string, unknown>;
 }
@@ -350,11 +398,16 @@ function existingDir(value: unknown, field: string): string {
   if (typeof value !== "string" || !isAbsolute(value)) {
     throw refusal(
       400,
+      "invalid_request",
       `"${field}" must be an absolute path; got ${JSON.stringify(value)}`,
     );
   }
   if (!statSync(value, { throwIfNoEntry: false })?.isDirectory()) {
-    throw refusal(400, `"${field}": ${value} does not exist as a folder`);
+    throw refusal(
+      400,
+      "invalid_request",
+      `"${field}": ${value} does not exist as a folder`,
+    );
   }
   return realpathSync(value);
 }
@@ -811,7 +864,7 @@ function trackChildren(
 }
 
 async function postRepo(req: IncomingMessage, res: ServerResponse) {
-  const body = await readBody(req);
+  const body = await readBody(req, ["path"]);
   // Since #129 a repository cannot be in a state that refuses a run, so this
   // only resolves the root. The 409 that used to live here — a tracked or
   // unignored `.kapelle/` — is gone with the state that caused it.
@@ -821,7 +874,7 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
   try {
     readProjectConfig(root);
   } catch (err) {
-    throw refusal(400, messageOf(err));
+    throw refusal(400, "invalid_config", messageOf(err));
   }
   // Persisted before the 200 and before the in-memory add: a caller told its
   // repository was added must not find it gone after a restart, and a failed
@@ -844,6 +897,7 @@ async function refuseUnadded(cwd: string): Promise<string> {
   if (!repos.has(root)) {
     throw refusal(
       403,
+      "repo_not_added",
       `${root} has not been added to the daemon. POST /repos ` +
         `{"path": ${JSON.stringify(root)}} first.`,
     );
@@ -852,17 +906,24 @@ async function refuseUnadded(cwd: string): Promise<string> {
 }
 
 async function postRun(req: IncomingMessage, res: ServerResponse) {
-  const body = await readBody(req);
+  const body = await readBody(req, ["cwd", "run"]);
   const cwd = existingDir(body.cwd, "cwd");
   const root = await refuseUnadded(cwd);
 
+  // M2-7: project config and `KAPELLE_*` supply the run-file defaults. Two
+  // codes for two 400s, because the fix is in a different file: the
+  // repository's config, or the run file the client sent.
+  let defaults: ReturnType<typeof resolveRunDefaults>;
+  try {
+    defaults = resolveRunDefaults(root);
+  } catch (err) {
+    throw refusal(400, "invalid_config", messageOf(err));
+  }
   let run: Run;
   try {
-    // M2-7: project config and `KAPELLE_*` supply the run-file defaults; a
-    // bad value is the same 400 as a bad run file.
-    run = validateRun(body.run, AGENTS, resolveRunDefaults(root));
+    run = validateRun(body.run, AGENTS, defaults);
   } catch (err) {
-    throw refusal(400, messageOf(err));
+    throw refusal(400, "invalid_run", messageOf(err));
   }
 
   // No preflight before the 202 any more (#129). It existed to answer the two
@@ -872,7 +933,9 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
   const id = newRunId();
 
   // After the last await, so no run can start once a shutdown has begun.
-  if (stopping) throw refusal(503, "the daemon is shutting down");
+  if (stopping) {
+    throw refusal(503, "shutting_down", "the daemon is shutting down");
+  }
 
   const state: RunState = {
     id,
@@ -961,9 +1024,11 @@ async function getEvents(
   res.on("close", () => gone.abort());
 
   const pending = eventLogs.get(id) ?? restoredLog(id);
-  if (!pending) throw refusal(404, `no run ${id}`);
+  if (!pending) throw refusal(404, "run_not_found", `no run ${id}`);
   const log = await pending;
-  if (!log) throw refusal(404, `run ${id} has no event log`);
+  if (!log) {
+    throw refusal(404, "no_event_log", `run ${id} has no event log`);
+  }
   await streamLog(log, req, res, gone.signal);
 }
 
@@ -980,6 +1045,7 @@ async function streamLog(
   if (!Number.isInteger(after) || after < 0 || after > log.size) {
     throw refusal(
       400,
+      "invalid_request",
       `Last-Event-ID must be a whole number from 0 to ${log.size}; got ${header}`,
     );
   }
@@ -1038,7 +1104,7 @@ const roomView = ({
  * Always `auto`: the MVP has no one to answer a permission prompt.
  */
 async function postRoom(req: IncomingMessage, res: ServerResponse) {
-  const body = await readBody(req);
+  const body = await readBody(req, ["cwd", "agent", "cmd"]);
   const cwd = existingDir(body.cwd, "cwd");
   await refuseUnadded(cwd);
 
@@ -1047,31 +1113,38 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   try {
     spec = roomHarness(str(body.agent), str(body.cmd));
   } catch (err) {
-    throw refusal(400, messageOf(err));
+    throw refusal(400, "invalid_request", messageOf(err));
   }
 
   const id = newRoomId();
   // No 409 wrapper (#129): since the state directory moved out of the
   // repository, `openWorktrees` throws for nothing a repository can be in.
   const setup = await openWorktrees(cwd, id);
-  if (stopping) throw refusal(503, "the daemon is shutting down");
+  if (stopping) {
+    throw refusal(503, "shutting_down", "the daemon is shutting down");
+  }
 
   const notices: RoomState["notices"] = [];
   const bus = createEventBus();
   trackChildren(bus, "room", id);
-  const room = await openRoom({
-    roomId: id,
-    cwd,
-    spec,
-    setup,
-    bus,
-    onNotice: (text, kind) => notices.push(kind ? { text, kind } : { text }),
-  });
+  let room: Room;
+  try {
+    room = await openRoom({
+      roomId: id,
+      cwd,
+      spec,
+      setup,
+      bus,
+      onNotice: (text, kind) => notices.push(kind ? { text, kind } : { text }),
+    });
+  } catch (err) {
+    throw refusal(500, "room_open_failed", messageOf(err));
+  }
   // A shutdown that began while the harness was starting has already closed
   // every room it knew of; this one must not outlive the daemon.
   if (stopping) {
     await room.close();
-    throw refusal(503, "the daemon is shutting down");
+    throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
   const state: RoomState = {
     id,
@@ -1097,17 +1170,20 @@ async function postMessage(
   res: ServerResponse,
 ) {
   const entry = rooms.get(id);
-  if (!entry) throw refusal(404, `no room ${id}`);
-  const { text } = await readBody(req);
+  if (!entry) throw refusal(404, "room_not_found", `no room ${id}`);
+  const { text } = await readBody(req, ["text"]);
   if (typeof text !== "string" || !text.trim()) {
-    throw refusal(400, '"text" must be a non-empty string');
+    throw refusal(400, "invalid_request", '"text" must be a non-empty string');
   }
   const seq = entry.room.eventLog?.size ?? 0;
   let turn: Promise<void>;
   try {
     turn = entry.room.send(text);
   } catch (err) {
-    throw refusal(409, messageOf(err));
+    // `send` refuses a live turn (`busy`) or a room that is over; the status
+    // is read after the throw, so the code names the refusal that happened.
+    const code = entry.room.status() === "busy" ? "room_busy" : "room_closed";
+    throw refusal(409, code, messageOf(err));
   }
   // Settles with the turn; a failed turn is already on the log as an event.
   turn.catch(() => {});
@@ -1120,16 +1196,26 @@ async function postPermission(
   req: IncomingMessage,
   res: ServerResponse,
 ) {
-  const { allow } = await readBody(req);
+  const { allow } = await readBody(req, ["allow"]);
   if (typeof allow !== "boolean") {
-    throw refusal(400, `"allow" must be true or false; got ${allow}`);
+    throw refusal(
+      400,
+      "invalid_request",
+      `"allow" must be true or false; got ${allow}`,
+    );
   }
   const result = permissions.answer(id, allow);
-  if (result === "unknown") throw refusal(404, `no permission ${id}`);
+  if (result === "unknown") {
+    throw refusal(404, "permission_not_found", `no permission ${id}`);
+  }
   // A defined error, not an overwrite: someone else's answer, the timeout or
   // a cancel already decided it, and the harness has been told.
   if (result === "settled") {
-    throw refusal(409, `permission ${id} was already decided`);
+    throw refusal(
+      409,
+      "already_decided",
+      `permission ${id} was already decided`,
+    );
   }
   send(res, 200, { id, allow } satisfies PermissionAnswered);
 }
@@ -1143,12 +1229,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   // refused here. requireHostHeader: false lets this guard handle the last.
   const authority = authorityOf(req);
   if (authority === null || !LOOPBACK_HOST.test(authority)) {
-    send(res, 403, { error: "host not allowed" } satisfies ErrorReply);
-    return;
+    throw refusal(403, "host_not_allowed", "host not allowed");
   }
   if (!authorised(req)) {
-    send(res, 401, { error: "missing or wrong token" } satisfies ErrorReply);
-    return;
+    throw refusal(401, "unauthorized", "missing or wrong token");
   }
   const { pathname } = new URL(req.url ?? "/", REQUEST_URL_BASE);
   const one = /^\/runs\/([^/]+)$/.exec(pathname);
@@ -1180,15 +1264,17 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     send(res, 200, [...rooms.values()].map(roomView) satisfies RoomView[]);
   } else if (req.method === "GET" && room) {
     const entry = rooms.get(room[1] as string);
-    if (entry) send(res, 200, roomView(entry) satisfies RoomView);
-    else send(res, 404, { error: `no room ${room[1]}` } satisfies ErrorReply);
+    if (!entry) throw refusal(404, "room_not_found", `no room ${room[1]}`);
+    send(res, 200, roomView(entry) satisfies RoomView);
   } else if (req.method === "POST" && roomSub?.[2] === "messages") {
     await postMessage(roomSub[1] as string, req, res);
   } else if (req.method === "GET" && roomSub?.[2] === "events") {
     const entry = rooms.get(roomSub[1] as string);
-    if (!entry) throw refusal(404, `no room ${roomSub[1]}`);
+    if (!entry) throw refusal(404, "room_not_found", `no room ${roomSub[1]}`);
     const log = entry.room.eventLog;
-    if (!log) throw refusal(404, `room ${roomSub[1]} has no event log`);
+    if (!log) {
+      throw refusal(404, "no_event_log", `room ${roomSub[1]} has no event log`);
+    }
     const gone = new AbortController();
     res.on("close", () => gone.abort());
     await streamLog(log, req, res, gone.signal);
@@ -1198,11 +1284,9 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     // which `stop()` bounds at 5 s.
     const entry = rooms.get(room[1] as string);
     if (!entry) {
-      send(res, 404, { error: `no room ${room[1]}` } satisfies ErrorReply);
+      throw refusal(404, "room_not_found", `no room ${room[1]}`);
     } else if (entry.dismissed) {
-      send(res, 409, {
-        error: `room ${room[1]} is already dismissed`,
-      } satisfies ErrorReply);
+      throw refusal(409, "room_closed", `room ${room[1]} is already dismissed`);
     } else {
       // **Not `status() === "closed"`**, which reads `closed` the instant a
       // close begins: a second DELETE arriving mid-teardown would then be told
@@ -1220,8 +1304,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     await getEvents(events[1] as string, req, res);
   } else if (req.method === "GET" && one) {
     const state = runs.get(one[1] as string);
-    if (state) send(res, 200, toRunDto(state) satisfies RunDto);
-    else send(res, 404, { error: `no run ${one[1]}` } satisfies ErrorReply);
+    if (!state) throw refusal(404, "run_not_found", `no run ${one[1]}`);
+    send(res, 200, toRunDto(state) satisfies RunDto);
   } else if (req.method === "GET" && pathname === "/permissions") {
     send(res, 200, permissions.list() satisfies PendingDecision[]);
   } else if (req.method === "POST" && decision) {
@@ -1234,30 +1318,47 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const state = runs.get(id);
     const canceller = cancels.get(id);
     if (!state) {
-      send(res, 404, { error: `no run ${id}` } satisfies ErrorReply);
+      throw refusal(404, "run_not_found", `no run ${id}`);
     } else if (!canceller) {
-      send(res, 409, {
-        error: `run ${id} already ended: ${state.status}`,
-      } satisfies ErrorReply);
+      throw refusal(
+        409,
+        "run_ended",
+        `run ${id} already ended: ${state.status}`,
+      );
     } else {
       canceller.abort();
       state.cancelRequested = true;
       send(res, 202, toRunDto(state) satisfies RunDto);
     }
   } else {
-    send(res, 404, {
-      error: `no route for ${req.method} ${pathname}`,
-    } satisfies ErrorReply);
+    throw refusal(404, "no_route", `no route for ${req.method} ${pathname}`);
   }
 }
 
-const server = createServer({ requireHostHeader: false }, (req, res) => {
-  route(req, res).catch((err) => {
-    send(res, (err as { status?: number }).status ?? 500, {
-      error: messageOf(err),
-    } satisfies ErrorReply);
-  });
-});
+/**
+ * J3: a request not fully received in 30 s has its connection closed. Node's
+ * own timer, so the refusal has no body — the one exception to the envelope,
+ * with Node's reply to malformed HTTP. It covers receiving the request only:
+ * a slow reply and an SSE stream are never cut (measured 2026-09-23). Node
+ * checks every 30 s, so the cut lands between 30 and 60 s.
+ */
+const server = createServer(
+  { requireHostHeader: false, requestTimeout: 30_000 },
+  (req, res) => {
+    route(req, res).catch((err) => {
+      const { status = 500, code = "internal" } = err as {
+        status?: number;
+        code?: ErrorCode;
+      };
+      // A refusal sent before the body was read (a 413, a 415, a 404 on a
+      // write) closes the connection rather than reading the rest.
+      if (!req.complete) res.setHeader("connection", "close");
+      send(res, status, {
+        error: { code, message: messageOf(err) },
+      } satisfies ErrorReply);
+    });
+  },
+);
 
 let stopping = false;
 

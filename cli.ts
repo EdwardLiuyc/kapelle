@@ -757,14 +757,23 @@ async function daemonApi(): Promise<DaemonApi | undefined> {
   return (path, init) =>
     fetch(`http://127.0.0.1:${port}${path}`, {
       ...init,
-      headers: { authorization: `Bearer ${token}` },
+      headers: {
+        authorization: `Bearer ${token}`,
+        // Every body this CLI sends is JSON, and the daemon refuses any other
+        // type with a 415 (M5-3).
+        ...(init?.body === undefined
+          ? {}
+          : { "content-type": "application/json" }),
+      },
     });
 }
 
-/** The daemon's `{error}` line for a refused request. */
+/** The message of the daemon's `{error: {code, message}}` for a refusal. */
 async function refusalOf(res: Response): Promise<string> {
-  const body = (await res.json().catch(() => ({}))) as { error?: string };
-  return body.error ?? `HTTP ${res.status}`;
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: { message?: string };
+  };
+  return body.error?.message ?? `HTTP ${res.status}`;
 }
 
 /**
