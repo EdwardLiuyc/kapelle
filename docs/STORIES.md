@@ -1876,7 +1876,7 @@ client that needs it: nothing serves `text/html` yet, and a **TUI is not the sam
 it runs as the operator, reads `daemon.json` the way `kapelle daemon add` does
 (`cli.ts:583-613`), and streams SSE with `fetch`, which can set headers. That is M2-9's
 `attach`, not auth work. The `Host` check stays here because it guards the daemon now
-rather than only once a page holds the token: `LOOPBACK_HOST` (`daemon.ts:266`) admits
+rather than only once a page holds the token: `LOOPBACK_HOST` (`daemon/http.ts:38`) admits
 `127.0.0.1`, `localhost`, `localhost.` and `[::1]`, with or without a port and in **any
 case** — a hostname is case-insensitive (RFC 9110 §4.2.3) and `curl`, Python, Go and Java
 all copy the caller's spelling into `Host`, so a case-sensitive match refuses a local
@@ -2256,7 +2256,7 @@ something imports them (`newRoomId()` landed in M6-0, #144), opaque participant 
 No dependency field and no scheduler.
 **Added 2026-09-21 (#145):** `GET /rooms` carries the roster inline and summarised,
 `participants: [{id, name, role?, status}]` — the shape `GET /runs` already gives its tasks
-(`daemon.ts:987`) — so M4-2's sidebar costs one call, not one per room; the full
+(`daemon/dto.ts:188`) — so M4-2's sidebar costs one call, not one per room; the full
 `ParticipantDto` is on `GET /rooms/:id`. The participant record carries the harness
 `sessionId` from this first version (the M2-6 precedent at `:1800`), even though nothing
 loads it until Half B (`session/load`) lands.

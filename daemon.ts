@@ -31,7 +31,7 @@
  * endpoint, is retired with the browser dashboard (A3): no story serves a page.
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   closeSync,
   linkSync,
@@ -39,10 +39,8 @@ import {
   openSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -52,16 +50,14 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import {
   API_VERSION,
   CAPABILITIES,
-  type ErrorCode,
   type ErrorReply,
   type MessageAccepted,
-  type Notice,
   type PendingDecision,
   type PermissionAnswered,
   type RepoAdded,
@@ -71,7 +67,6 @@ import {
   type RunDto,
   type RunListEntry,
   type RunStatus,
-  type TaskDto,
   type VersionReply,
 } from "./client/contract.ts";
 import {
@@ -86,7 +81,7 @@ import { createEventBus } from "./core/events.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
 import { openRoom, type Room, roomHarness } from "./core/room.ts";
-import { type RunReport, runRun, type TaskRun } from "./core/run.ts";
+import { runRun } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import {
   readRepos,
@@ -96,6 +91,23 @@ import {
 } from "./core/runtime.ts";
 import { processIdentity, sweepBoot } from "./core/sweep.ts";
 import { openWorktrees, stateDirRoot } from "./core/worktree.ts";
+import {
+  type RunState,
+  toRunDto,
+  toRunListEntry,
+  toTaskDto,
+} from "./daemon/dto.ts";
+import {
+  authorised,
+  digest,
+  existingDir,
+  hostAllowed,
+  messageOf,
+  Refusal,
+  readBody,
+  refusal,
+  send,
+} from "./daemon/http.ts";
 import { AGENTS } from "./protocol/registry.ts";
 
 // M2-7: the user-level config is read once here, after the startup helpers
@@ -105,9 +117,6 @@ import { AGENTS } from "./protocol/registry.ts";
 // ignored (they may be secrets); a known name with a bad value refuses the
 // start like any flag.
 const DEFAULT_PORT = 4719;
-
-const messageOf = (err: unknown) =>
-  err instanceof Error ? err.message : String(err);
 
 /** A startup refusal is one line and exit 1, never a stack trace. */
 function orExit<T>(f: () => T): T {
@@ -266,357 +275,12 @@ const addedRepos = orExit(readRepos);
 const fd = orExit(() => claim(file));
 
 const token = randomBytes(32).toString("hex");
-// Compared as digests: `timingSafeEqual` needs equal lengths, and hashing
-// both sides gives that without a length check that answers early.
-const digest = (s: string) => createHash("sha256").update(s).digest();
 const expected = digest(token);
-
-/**
- * The names this daemon answers to — story M2-8, issue #38.
- *
- * DNS rebinding is the attack the token alone does not stop: a page on
- * `evil.example` re-resolves its own name to `127.0.0.1`, and the browser then
- * talks to this daemon while treating the reply as same-origin. The `Host`
- * line is the one field that attack cannot forge — it still says
- * `evil.example`, because that is the name the browser was told to fetch.
- *
- * The port is deliberately not matched: rebinding needs an attacker-chosen
- * DNS name to gain same-origin access. Direct cross-origin requests to a
- * loopback URL still arrive with a loopback Host, but without the bearer token
- * they are refused. Matching the port would add no protection against those.
- */
-const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost\.?|\[::1\])(:\d+)?$/i;
-
-/**
- * The authority this request is addressed to, or `null` when there is no one
- * answer. Two fields can carry it, and the guard has to read the right one.
- *
- * RFC 9112 §3.2.2: with an absolute-form target (`GET http://host/path`) the
- * target's authority wins and `Host` is ignored. RFC 9110 §7.2: more than one
- * `Host` line is malformed — Node keeps the first for `req.headers.host`, so a
- * loopback line followed by a forged one would otherwise pass. `rawHeaders` is
- * where both survive. The match itself is case-insensitive and admits the
- * root-anchored `localhost.`, because a hostname is both (RFC 9110 §4.2.3) and
- * a rebinding page can put neither spelling on the wire; `/i` without `/u`, or
- * `localhoſt` would fold into a match.
- */
-function authorityOf(req: IncomingMessage): string | null {
-  const hosts = req.rawHeaders.filter(
-    (h, i) => i % 2 === 0 && h.toLowerCase() === "host",
-  );
-  if (hosts.length > 1) return null;
-  try {
-    // Throws for an origin-form target, which is every ordinary request.
-    return new URL(req.url ?? "/").host;
-  } catch {
-    return req.headers.host ?? "";
-  }
-}
-
-function authorised(req: IncomingMessage): boolean {
-  const header = req.headers.authorization ?? "";
-  const given = header.startsWith("Bearer ") ? header.slice(7) : "";
-  return timingSafeEqual(digest(given), expected);
-}
-
-function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
-/** An error that carries its HTTP status and contract code (M5-3). Only a
- *  `Refusal` is trusted by the server's catch; anything else is a 500
- *  `internal`, so a raw Node or `execFile` error cannot leak its own `code`
- *  into the envelope. */
-class Refusal extends Error {
-  status: number;
-  code: ErrorCode;
-
-  constructor(status: number, code: ErrorCode, message: string) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
-
-function refusal(status: number, code: ErrorCode, message: string): Refusal {
-  return new Refusal(status, code, message);
-}
-
-/** The largest request body read (J1): run files carry prompts. */
-const MAX_BODY_BYTES = 4 * 1024 * 1024;
-
-/**
- * A write's JSON body, refused in order: not JSON by `Content-Type` (415),
- * too large (413), not a JSON object (400), a field outside `fields` (400,
- * C8). The size is checked on `Content-Length` before a byte is read, and
- * counted as it arrives for a body sent without one, so an oversized body is
- * never held in memory.
- */
-async function readBody(
-  req: IncomingMessage,
-  fields: readonly string[],
-): Promise<Record<string, unknown>> {
-  const type = req.headers["content-type"] ?? "";
-  if (type.split(";")[0]?.trim().toLowerCase() !== "application/json") {
-    throw refusal(
-      415,
-      "unsupported_media_type",
-      `send the body as Content-Type: application/json; got ${type || "none"}`,
-    );
-  }
-  const tooLarge = () =>
-    refusal(
-      413,
-      "body_too_large",
-      `the body is larger than ${MAX_BODY_BYTES} bytes`,
-    );
-  if (Number(req.headers["content-length"]) > MAX_BODY_BYTES) throw tooLarge();
-  const chunks: Buffer[] = [];
-  let size = 0;
-  // `destroyOnReturn: false`, then `resume()`: leaving the loop early must
-  // not destroy the request, or nothing reads the rest of an oversized upload
-  // and it stalls (measured 2026-09-23: after 8 MiB). Resumed, the rest is
-  // discarded as it arrives, as Node does after a 413 on `Content-Length`.
-  let over = false;
-  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
-    size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) {
-      over = true;
-      break;
-    }
-    chunks.push(chunk as Buffer);
-  }
-  if (over) {
-    req.resume();
-    throw tooLarge();
-  }
-  // Joined as bytes, then decoded once: a character split across two chunks
-  // would otherwise decode as two replacement characters.
-  const text = Buffer.concat(chunks).toString("utf8");
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch (err) {
-    throw refusal(
-      400,
-      "invalid_request",
-      `body is not JSON: ${messageOf(err)}`,
-    );
-  }
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    throw refusal(400, "invalid_request", "body must be a JSON object");
-  }
-  const extra = Object.keys(body).find((key) => !fields.includes(key));
-  if (extra !== undefined) {
-    throw refusal(
-      400,
-      "invalid_request",
-      `unknown field "${extra}"; this route takes ${fields.join(", ")}`,
-    );
-  }
-  return body as Record<string, unknown>;
-}
-
-/** `value` as the real path of a folder that exists, or a 400 naming `field`. */
-function existingDir(value: unknown, field: string): string {
-  if (typeof value !== "string" || !isAbsolute(value)) {
-    throw refusal(
-      400,
-      "invalid_request",
-      `"${field}" must be an absolute path; got ${JSON.stringify(value)}`,
-    );
-  }
-  if (!statSync(value, { throwIfNoEntry: false })?.isDirectory()) {
-    throw refusal(
-      400,
-      "invalid_request",
-      `"${field}": ${value} does not exist as a folder`,
-    );
-  }
-  return realpathSync(value);
-}
 
 /** Every repository root added, restored from `repos.json` (M2-6, #36).
  *  Not re-checked here: a repository that has since moved is refused by
  *  `POST /runs`, which checks membership on use. */
 const repos = new Set<string>(addedRepos);
-
-const USAGE_SEMANTICS = new Set(["per-turn", "cumulative", "unknown"]);
-
-/** The string fields `toTaskDto` copies, pinned to both sides of the edge:
- *  `TaskDto` in `client/contract.ts` and the live `TaskRun` in `core/run.ts`.
- *  A rename on either side fails `npm run check` instead of silently leaving
- *  the field off the wire. */
-const STRING_KEYS = [
-  "agent",
-  "error",
-  "summary",
-  "branch",
-  "baseSha",
-  "sessionId",
-] as const satisfies readonly (keyof TaskDto & keyof TaskRun)[];
-
-/** The non-string fields, pinned the same way. The `Record`'s key set is
- *  the complement of `STRING_KEYS` plus `id`/`status`, so a field added to
- *  `TaskDto` fails `npm run check` until `toTaskDto` handles it. */
-const TYPED_KEYS = {
-  durationMs: "durationMs",
-  usage: "usage",
-  usageSemantics: "usageSemantics",
-  warnings: "warnings",
-  summarySynthesised: "summarySynthesised",
-} as const satisfies Record<
-  Exclude<keyof TaskDto, (typeof STRING_KEYS)[number] | "id" | "status">,
-  keyof TaskDto & keyof TaskRun
->;
-
-/** A `Usage` from a value of unknown provenance, rebuilt key by key so a
- *  hand-edited record cannot put a wrong-typed or unknown nested value on the
- *  wire. `_meta` is the one exception: C11 passes it through. `undefined`
- *  when the required numbers are not all finite. */
-function usageOf(value: unknown): TaskDto["usage"] | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const raw = value as Record<string, unknown>;
-  if (
-    !Number.isFinite(raw.inputTokens) ||
-    !Number.isFinite(raw.outputTokens) ||
-    !Number.isFinite(raw.totalTokens)
-  ) {
-    return undefined;
-  }
-  const usage: NonNullable<TaskDto["usage"]> = {
-    inputTokens: raw.inputTokens as number,
-    outputTokens: raw.outputTokens as number,
-    totalTokens: raw.totalTokens as number,
-  };
-  for (const key of [
-    "thoughtTokens",
-    "cachedReadTokens",
-    "cachedWriteTokens",
-  ] as const satisfies readonly (keyof NonNullable<TaskDto["usage"]>)[]) {
-    const n = raw[key];
-    if (Number.isFinite(n)) usage[key] = n as number;
-  }
-  if (
-    typeof raw._meta === "object" &&
-    raw._meta !== null &&
-    !Array.isArray(raw._meta)
-  ) {
-    usage._meta = raw._meta as Record<string, unknown>;
-  }
-  return usage;
-}
-
-/** The contract's warnings, keeping only `{kind, text}` entries. `undefined`
- *  when nothing is left, so a junk array is omitted rather than served as
- *  `[]` — the same rule as every other gap (C2). */
-function warningsOf(value: unknown): TaskDto["warnings"] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const warnings = value.flatMap((w) =>
-    typeof w?.kind === "string" && typeof w?.text === "string"
-      ? [{ kind: w.kind, text: w.text }]
-      : [],
-  );
-  return warnings.length > 0 ? warnings : undefined;
-}
-
-/** One task, live or restored, as the contract carries it (M2-6, M5-2). `id`
- *  and `status` are trusted — for a record, by the guard in `restoreRuns`.
- *  Every other field is copied only when the contract names it and its value
- *  has the contract's type: a `run.json` anyone can edit must not put an
- *  unknown key, or a known key with a wrong value, on the wire, and
- *  `"warnings": 5` crashed `attach`'s `printTask`. A field the source does
- *  not have, or has with the wrong type, is left out, never `null` (C2). */
-function toTaskDto(task: { id: string; status: string }): TaskDto {
-  const t: Record<string, unknown> = { ...task };
-  const dto: TaskDto = { id: task.id, status: task.status };
-  for (const key of STRING_KEYS) {
-    const value = t[key];
-    if (typeof value === "string") dto[key] = value;
-  }
-  const durationMs = t[TYPED_KEYS.durationMs];
-  if (typeof durationMs === "number" && Number.isFinite(durationMs)) {
-    dto.durationMs = durationMs;
-  }
-  const usage = usageOf(t[TYPED_KEYS.usage]);
-  if (usage !== undefined) dto.usage = usage;
-  const usageSemantics = t[TYPED_KEYS.usageSemantics];
-  if (
-    typeof usageSemantics === "string" &&
-    USAGE_SEMANTICS.has(usageSemantics)
-  ) {
-    dto.usageSemantics = usageSemantics as TaskDto["usageSemantics"];
-  }
-  const warnings = warningsOf(t[TYPED_KEYS.warnings]);
-  if (warnings !== undefined) dto.warnings = warnings;
-  if (t[TYPED_KEYS.summarySynthesised] === true) dto.summarySynthesised = true;
-  return dto;
-}
-
-/** One run as the daemon holds it. The wire reply is `RunDto`, built by
- *  `toRunDto`: a live run's `report` and the record-level fields stay off the
- *  wire. Live runs are built here; finished ones are read back from their
- *  `run.json` at boot (M2-6, #36). Notices keep every line, containment
- *  included: #13 says those are never suppressed, and with no terminal this
- *  record is where they survive. */
-interface RunState {
-  id: string;
-  cwd: string;
-  root: string;
-  status: RunStatus;
-  source: "live" | "restored";
-  startedAt?: string;
-  endedAt?: string;
-  /** A live run's final report (`core/run.ts`). Flattened by `toRunDto`. */
-  report?: RunReport;
-  error?: string;
-  cancelRequested?: true;
-  notices: (Notice & { taskId: string })[];
-  /** The record-level list: `queued`/`running` entries while live, the
-   *  restored record after a boot. */
-  tasks: TaskDto[];
-}
-
-/** The wire shape of one run: a live run's `report` flattened onto the same
- *  fields a restored record carries. A gap is omitted, never `null`. */
-function toRunDto(state: RunState): RunDto {
-  const dto: RunDto = {
-    id: state.id,
-    cwd: state.cwd,
-    root: state.root,
-    status: state.status,
-    source: state.source,
-    notices: state.notices,
-    tasks: state.report ? state.report.tasks.map(toTaskDto) : state.tasks,
-  };
-  if (state.startedAt !== undefined) dto.startedAt = state.startedAt;
-  if (state.endedAt !== undefined) dto.endedAt = state.endedAt;
-  if (state.report) {
-    dto.durationMs = state.report.durationMs;
-    dto.turns = state.report.turns;
-  }
-  if (state.error !== undefined) dto.error = state.error;
-  if (state.cancelRequested) dto.cancelRequested = true;
-  return dto;
-}
-
-/** One `GET /runs` entry: the shared run fields plus id/status per task. */
-function toRunListEntry(state: RunState): RunListEntry {
-  const entry: RunListEntry = {
-    id: state.id,
-    cwd: state.cwd,
-    root: state.root,
-    status: state.status,
-    source: state.source,
-    tasks: state.tasks.map(({ id, status }) => ({ id, status })),
-  };
-  if (state.startedAt !== undefined) entry.startedAt = state.startedAt;
-  if (state.endedAt !== undefined) entry.endedAt = state.endedAt;
-  return entry;
-}
 
 const runs = new Map<string, RunState>();
 /** Every run still in flight, so a shutdown can wait for them to settle. */
@@ -1252,11 +916,10 @@ const REQUEST_URL_BASE = "http://daemon";
 async function route(req: IncomingMessage, res: ServerResponse) {
   // Before the token and every route: a forged, duplicated or missing Host is
   // refused here. requireHostHeader: false lets this guard handle the last.
-  const authority = authorityOf(req);
-  if (authority === null || !LOOPBACK_HOST.test(authority)) {
+  if (!hostAllowed(req)) {
     throw refusal(403, "host_not_allowed", "host not allowed");
   }
-  if (!authorised(req)) {
+  if (!authorised(req, expected)) {
     throw refusal(401, "unauthorized", "missing or wrong token");
   }
   const { pathname } = new URL(req.url ?? "/", REQUEST_URL_BASE);
