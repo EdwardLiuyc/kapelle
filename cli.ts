@@ -1096,11 +1096,11 @@ async function runDaemonCommand(): Promise<number> {
     method: "POST",
     body: JSON.stringify({ path: resolve(rest[0] as string) }),
   });
-  const body = (await res.json()) as { root?: string; error?: string };
   if (!res.ok) {
-    console.error(`error: ${body.error}`);
+    console.error(`error: ${await refusalOf(res)}`);
     return 1;
   }
+  const body = (await res.json()) as { root: string };
   console.log(`added ${body.root}`);
   return 0;
 }

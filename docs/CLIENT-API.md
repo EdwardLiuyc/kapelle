@@ -244,7 +244,7 @@ connection closed. A request that is not valid HTTP gets `400` from Node, with n
 | `run_not_found` | `404` | No run has this id. | |
 | `room_not_found` | `404` | No room has this id. | |
 | `permission_not_found` | `404` | The daemon never gave out this permission id. | |
-| `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read the run with `GET /runs/:id`. |
+| `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
 | `already_decided` | `409` | The permission was already answered, timed out, or cancelled. | Stop. Your answer was not used. |
 | `room_busy` | `409` | The room still answers the last message. | Wait for `_client_turn_ended`, then send again. |
@@ -741,8 +741,9 @@ harness died) or `closed`.
 
 **Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
-bad or missing harness; `500` `room_open_failed` when the harness cannot start (for
-example its binary is not installed); `503` `shutting_down` when the daemon shuts down.
+bad or missing harness; `503` `shutting_down` when the daemon shuts down; `500`
+`room_open_failed` when the harness cannot start (for example its binary is not
+installed).
 
 ### `GET /rooms` and `GET /rooms/:id`
 

@@ -532,6 +532,28 @@ test("kapelle daemon start listens, and kapelle daemon add registers a repositor
   ]);
 });
 
+test("kapelle daemon add prints the daemon's refusal message, not an object", async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+
+  const daemon = spawnCli(t, ["daemon", "start", "--port", "0"], "cli.ts", env);
+  const died = daemon.done.then((r) => {
+    throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
+  });
+  await Promise.race([daemon.waitFor("listening on "), died]);
+  died.catch(() => {});
+
+  // A missing path is refused by the daemon with a `{error:{code,message}}`
+  // envelope; the CLI must print `error.message`, not stringify `error`
+  // (M5-3, #135).
+  const missing = join(await tempDir(t), "typo");
+  const refused = await spawnCli(t, ["daemon", "add", missing], "cli.ts", env)
+    .done;
+  assert.equal(refused.code, 1, refused.stderr);
+  assert.match(refused.stderr, /does not exist/);
+  assert.doesNotMatch(refused.stderr, /\[object Object\]/);
+});
+
 test("kapelle --quiet daemon start starts the daemon, global flags included", async (t) => {
   const runtime = await tempDir(t);
   const daemon = spawnCli(
