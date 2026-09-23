@@ -23,7 +23,8 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
+import type { AddressInfo } from "node:net";
 import { userInfo } from "node:os";
 import { join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -62,7 +63,7 @@ interface Reply {
   endedAt?: string;
   durationMs?: number;
   turns?: number;
-  error: string;
+  error: { code: string; message: string };
   cancelRequested?: true;
   /** One shape live and restored: a field the record cannot fill is omitted. */
   tasks: {
@@ -95,7 +96,7 @@ const mockRun = (
 /** Registers `path` and returns it, so a test reads `cwd = await added(...)`. */
 async function added(d: Daemon, path: string): Promise<string> {
   const r = await api(d, "POST", "/repos", { path });
-  assert.equal(r.status, 200, r.body.error);
+  assert.equal(r.status, 200, r.body.error?.message);
   return path;
 }
 
@@ -385,7 +386,7 @@ async function stalledHarness(t: TestContext, d: Daemon): Promise<number> {
       { id: "stuck", prompt: "hi", cmd: `node ${MOCK_AGENT} --scenario stall` },
     ]),
   });
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   const children = join(d.file, "..", "children.json");
   for (const until = Date.now() + 10_000; Date.now() < until; ) {
     const record = await readFile(children, "utf8").catch(() => null);
@@ -532,6 +533,28 @@ test("kapelle daemon start listens, and kapelle daemon add registers a repositor
   ]);
 });
 
+test("kapelle daemon add prints the daemon's refusal message, not an object", async (t) => {
+  const runtime = await tempDir(t);
+  const env = dirs(runtime);
+
+  const daemon = spawnCli(t, ["daemon", "start", "--port", "0"], "cli.ts", env);
+  const died = daemon.done.then((r) => {
+    throw new Error(`daemon exited ${r.code}: ${r.stderr}`);
+  });
+  await Promise.race([daemon.waitFor("listening on "), died]);
+  died.catch(() => {});
+
+  // A missing path is refused by the daemon with a `{error:{code,message}}`
+  // envelope; the CLI must print `error.message`, not stringify `error`
+  // (M5-3, #135).
+  const missing = join(await tempDir(t), "typo");
+  const refused = await spawnCli(t, ["daemon", "add", missing], "cli.ts", env)
+    .done;
+  assert.equal(refused.code, 1, refused.stderr);
+  assert.match(refused.stderr, /does not exist/);
+  assert.doesNotMatch(refused.stderr, /\[object Object\]/);
+});
+
 test("kapelle --quiet daemon start starts the daemon, global flags included", async (t) => {
   const runtime = await tempDir(t);
   const daemon = spawnCli(
@@ -587,13 +610,13 @@ test("POST /repos refuses a relative or missing path, and registers none", async
 
   const relative = await api(d, "POST", "/repos", { path: "src/app" });
   assert.equal(relative.status, 400);
-  assert.match(relative.body.error, /absolute/);
+  assert.match(relative.body.error.message, /absolute/);
 
   const missing = await api(d, "POST", "/repos", {
     path: join(await tempDir(t), "typo"),
   });
   assert.equal(missing.status, 400);
-  assert.match(missing.body.error, /does not exist/);
+  assert.match(missing.body.error.message, /does not exist/);
 
   assert.deepEqual((await api(d, "GET", "/repos")).body, []);
 });
@@ -637,7 +660,8 @@ test("POST /runs in a folder never added is 403, and starts nothing", async (t) 
   });
 
   assert.equal(r.status, 403);
-  assert.match(r.body.error, /POST \/repos/);
+  assert.equal(r.body.error.code, "repo_not_added");
+  assert.match(r.body.error.message, /POST \/repos/);
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
 
@@ -652,7 +676,7 @@ test("POST /runs checks membership before the run body: 403, not 400", async (t)
   });
 
   assert.equal(r.status, 403);
-  assert.match(r.body.error, /POST \/repos/);
+  assert.match(r.body.error.message, /POST \/repos/);
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
 
@@ -679,25 +703,6 @@ test("POST /runs accepts a run, lists it with its folder, and reports it done", 
   assert.equal(run.tasks[0]?.status, "done");
 });
 
-test("POST /runs accepts a body with no content-type header", async (t) => {
-  // M5-3 will make the header meaningful; until then the daemon reads the
-  // body anyway. `daemonApi` sends the header, so this raw fetch keeps the
-  // no-header case covered rather than leaving it to accident.
-  const d = await boot(t);
-  const cwd = await added(d, await tempDir(t));
-  const res = await fetch(`${d.url}/runs`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${d.token}` },
-    body: JSON.stringify({
-      cwd,
-      run: mockRun([{ id: "one", prompt: "hi" }]),
-    }),
-  });
-  assert.equal(res.status, 202);
-  const accepted = (await res.json()) as { id?: unknown };
-  assert.equal(typeof accepted.id, "string");
-});
-
 test("an invalid body is 400 in the validator's words, and creates no run", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await tempDir(t));
@@ -707,14 +712,19 @@ test("an invalid body is 400 in the validator's words, and creates no run", asyn
 
   const empty = await api(d, "POST", "/runs", { cwd, run: { tasks: [] } });
   assert.equal(empty.status, 400);
-  assert.match(empty.body.error, /non-empty "tasks" array/);
+  assert.equal(empty.body.error.code, "invalid_run");
+  assert.match(empty.body.error.message, /non-empty "tasks" array/);
 
   const garbled = await fetch(`${d.url}/runs`, {
     method: "POST",
-    headers: { authorization: `Bearer ${d.token}` },
+    headers: {
+      authorization: `Bearer ${d.token}`,
+      "content-type": "application/json",
+    },
     body: "{",
   });
   assert.equal(garbled.status, 400);
+  assert.equal(((await garbled.json()) as Reply).error.code, "invalid_request");
 
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
@@ -732,7 +742,7 @@ test("a dirty tree runs, and says so on the record (#129)", async (t) => {
     run: mockRun([{ id: "one", prompt: "hi" }]),
   });
 
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   const done = await settled(d, posted.body.id);
   assert.match(done.status, /^(done|warned)$/);
   assert.ok(
@@ -765,7 +775,7 @@ test("a subdirectory cwd runs inside its registered root, and the daemon writes 
     cwd,
     run: mockRun([{ id: "one", prompt: "hi" }]),
   });
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   // A worktree runs the result cross-check, and mock-agent reports
   // `ACP_TEST.md` from inside `pkg/`, so the run may promote to `warned`.
   // What this test owns is that nothing the daemon wrote failed it.
@@ -795,7 +805,7 @@ test("a subdirectory run logs the workspace path it actually ran in", async (t) 
     cwd,
     run: mockRun([{ id: "one", prompt: "hi" }]),
   });
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   const id = posted.body.id as string;
   assert.match((await settled(d, id)).status, /^(done|warned)$/);
 
@@ -861,8 +871,12 @@ test("DELETE cancels a live run, and refuses a settled or unknown one", async (t
   assert.equal(cancel.body.cancelRequested, true);
 
   assert.equal((await settled(d, id)).status, "cancelled");
-  assert.equal((await api(d, "DELETE", `/runs/${id}`)).status, 409);
-  assert.equal((await api(d, "DELETE", "/runs/nope")).status, 404);
+  const again = await api(d, "DELETE", `/runs/${id}`);
+  assert.equal(again.status, 409);
+  assert.equal(again.body.error.code, "run_ended");
+  const gone = await api(d, "DELETE", "/runs/nope");
+  assert.equal(gone.status, 404);
+  assert.equal(gone.body.error.code, "run_not_found");
   assert.equal((await api(d, "GET", "/runs/nope")).status, 404);
 });
 
@@ -883,7 +897,7 @@ test("GET /runs and kapelle ps list a live run's tasks, then its verdict", async
       { maxConcurrency: 1 },
     ),
   });
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   const { id } = posted.body;
   type Listed = { id: string; status: string; tasks: Reply["tasks"] }[];
   const tasksOf = async () =>
@@ -1035,7 +1049,7 @@ test("a stream attached mid-run gets the history then the live tail, contiguousl
       { maxConcurrency: 1 },
     ),
   });
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   const { id } = posted.body;
 
   const first = await stream(d, id);
@@ -1131,9 +1145,10 @@ test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the tok
   const { id } = posted.body;
   await settled(d, id);
 
-  const nope = await api<{ error: string }>(d, "GET", "/runs/nope/events");
+  const nope = await api(d, "GET", "/runs/nope/events");
   assert.equal(nope.status, 404);
-  assert.match(nope.body.error, /no run nope/, "the 404 names the run");
+  assert.equal(nope.body.error.code, "run_not_found");
+  assert.match(nope.body.error.message, /no run nope/, "the 404 names the run");
   assert.equal(
     (await api(d, "GET", `/runs/${id}/events`, undefined, null)).status,
     401,
@@ -1145,11 +1160,15 @@ test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the tok
     "a wrong token is 401 on the events route too",
   );
   for (const bad of ["x", -1, 1.5, 100_000]) {
-    assert.equal(
-      (await stream(d, id, bad)).status,
-      400,
-      `Last-Event-ID ${bad}`,
-    );
+    const r = await fetch(`${d.url}/runs/${id}/events`, {
+      headers: {
+        authorization: `Bearer ${d.token}`,
+        "last-event-id": String(bad),
+      },
+    });
+    assert.equal(r.status, 400, `Last-Event-ID ${bad}`);
+    const refused = (await r.json()) as Reply;
+    assert.equal(refused.error.code, "invalid_request", `Last-Event-ID ${bad}`);
   }
 
   const done = await stream(d, id);
@@ -1163,6 +1182,53 @@ test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the tok
     done.frames,
     "Last-Event-ID: 0 is the full replay",
   );
+});
+
+test("a restored run whose event log is gone answers no_event_log", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  const posted = await api(first, "POST", "/runs", {
+    cwd: root,
+    run: mockRun([{ id: "a", prompt: "hi" }]),
+  });
+  const { id } = posted.body;
+  await settled(first, id);
+
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  // The record survives the restart, the log does not: the run exists, but
+  // there is nothing to stream and the code must say so rather than 404 the
+  // run itself.
+  await rm(join(stateDirFor(root), "runs", id, "events.jsonl"));
+
+  const second = await boot(t, runtime, [], state);
+  const events = await api(second, "GET", `/runs/${id}/events`);
+  assert.equal(events.status, 404);
+  assert.equal(events.body.error.code, "no_event_log");
+});
+
+test("a non-refusal error is a 500 internal, never a leaked code", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], {
+    cwd: root,
+    encoding: "utf8",
+  }).stdout.trim();
+  await writeFile(join(root, gitDir, "index"), "not an index\n");
+  const cwd = await added(d, root);
+
+  // `openWorktrees` runs `git status`, which now throws an execFile error
+  // whose own numeric `code` must not reach the envelope (M5-3, #135).
+  const r = await api(d, "POST", "/rooms", {
+    cwd,
+    cmd: `node ${MOCK_AGENT}`,
+  });
+  assert.equal(r.status, 500);
+  assert.equal(r.body.error.code, "internal");
+  assert.equal(typeof r.body.error.code, "string");
 });
 
 test("a client that disconnects mid-run leaves no reader holding the log open", {
@@ -1266,7 +1332,7 @@ test("an ask run with no client attached is denied at the timeout, and completes
   const cwd = await added(d, await tempDir(t));
 
   const posted = await api(d, "POST", "/runs", askRun(cwd));
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   // Capture the first decision while it is still pending: with the 2 s timeout
   // it is still listed, and a late answer after the run must read as settled.
   const pending = await pendingOne(d);
@@ -1327,7 +1393,7 @@ async function unanswered(t: TestContext, env: Record<string, string>) {
   const d = await boot(t, await tempDir(t), [], undefined, env);
   const cwd = await added(d, await tempDir(t));
   const posted = await api(d, "POST", "/runs", askRun(cwd));
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   await pendingOne(d);
   return { cwd, run: await settled(d, posted.body.id) };
 }
@@ -1361,7 +1427,7 @@ test("an answer lets the write happen; a second answer is 409, an unknown id 404
   const d = await boot(t);
   const cwd = await added(d, await tempDir(t));
   const posted = await api(d, "POST", "/runs", askRun(cwd));
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
 
   const pending = await pendingOne(d);
   assert.equal(pending.runId, posted.body.id);
@@ -1371,11 +1437,12 @@ test("an answer lets the write happen; a second answer is 409, an unknown id 404
   const path = `/permissions/${pending.id}`;
   assert.equal((await api(d, "POST", path, { allow: "yes" })).status, 400);
   assert.equal((await api(d, "POST", path, { allow: true })).status, 200);
-  assert.equal((await api(d, "POST", path, { allow: false })).status, 409);
-  assert.equal(
-    (await api(d, "POST", "/permissions/nope", { allow: true })).status,
-    404,
-  );
+  const second = await api(d, "POST", path, { allow: false });
+  assert.equal(second.status, 409);
+  assert.equal(second.body.error.code, "already_decided");
+  const unknown = await api(d, "POST", "/permissions/nope", { allow: true });
+  assert.equal(unknown.status, 404);
+  assert.equal(unknown.body.error.code, "permission_not_found");
 
   // The mock's second request, the allow-only delete; the queue is not
   // answered by the first decision's id.
@@ -1452,7 +1519,7 @@ test("a task the watchdog cuts drops its pending decision at once, while its sib
       ],
     },
   });
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
 
   const pending = await pendingOne(d);
   assert.equal(pending.taskId, "asker");
@@ -1488,7 +1555,7 @@ test("a restarted daemon keeps its repositories and serves the runs from before"
     cwd: root,
     run: mockRun([{ id: "a", prompt: "hi" }]),
   });
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   const { id } = posted.body;
   assert.equal((await settled(first, id)).status, "done");
 
@@ -1735,7 +1802,7 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
       { maxConcurrency: 1 },
     ),
   });
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   const { id } = posted.body;
 
   // The harness is live once children.json names it with its recorded start
@@ -1843,7 +1910,7 @@ test("kill -9 with a harness that ignores stdin and SIGTERM: the next boot kills
       },
     ]),
   });
-  assert.equal(posted.status, 202, posted.body.error);
+  assert.equal(posted.status, 202, posted.body.error?.message);
   const { id } = posted.body;
 
   const childrenFile = join(runtime, "kapelle", "children.json");
@@ -2176,7 +2243,8 @@ test("a bad project config is refused at add, and the daemon keeps serving", asy
 
   const refused = await api(d, "POST", "/repos", { path: root });
   assert.equal(refused.status, 400);
-  assert.match(refused.body.error, /unknown key "stallIdle"/);
+  assert.equal(refused.body.error.code, "invalid_config");
+  assert.match(refused.body.error.message, /unknown key "stallIdle"/);
 
   const list = await api<unknown[]>(d, "GET", "/repos");
   assert.equal(list.status, 200);
@@ -2198,7 +2266,9 @@ test("a project config is re-read per run, and its error is the run's 400", asyn
     run: mockRun([{ id: "one", prompt: "hi" }]),
   });
   assert.equal(refused.status, 400);
-  assert.match(refused.body.error, /"ttlMs" must be a whole number/);
+  // The config's code, not the run file's: the fix is in the repository.
+  assert.equal(refused.body.error.code, "invalid_config");
+  assert.match(refused.body.error.message, /"ttlMs" must be a whole number/);
 });
 
 // --- kapelle run --detach and kapelle attach, M2-9 ------------------------------
@@ -2618,7 +2688,7 @@ interface RoomReply {
   status: string;
   harness: string;
   workspace: string;
-  error: string;
+  error: { code: string; message: string };
   seq: number;
   notices: { text: string }[];
 }
@@ -2658,7 +2728,7 @@ test("a room keeps one harness and its context across messages, until it is dism
     cwd,
     cmd: REMEMBER,
   });
-  assert.equal(open.status, 201, open.body.error);
+  assert.equal(open.status, 201, open.body.error?.message);
   assert.equal(open.body.status, "idle");
   const { id } = open.body;
   // Its own checkout, named by the room id (S9), in the repository's
@@ -2678,12 +2748,12 @@ test("a room keeps one harness and its context across messages, until it is dism
     const r = await api<RoomReply>(d, "POST", `/rooms/${id}/messages`, {
       text,
     });
-    assert.equal(r.status, 202, r.body.error);
+    assert.equal(r.status, 202, r.body.error?.message);
     await roomIdle(d, id);
   }
 
   const gone = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
-  assert.equal(gone.status, 200, gone.body.error);
+  assert.equal(gone.status, 200, gone.body.error?.message);
   assert.equal(gone.body.status, "closed");
 
   const events = await roomEvents(d, id);
@@ -2715,7 +2785,10 @@ test("a room keeps one harness and its context across messages, until it is dism
     text: "gamma",
   });
   assert.equal(late.status, 409);
-  assert.equal((await api<RoomReply>(d, "DELETE", `/rooms/${id}`)).status, 409);
+  assert.equal(late.body.error.code, "room_closed");
+  const again = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
+  assert.equal(again.status, 409);
+  assert.equal(again.body.error.code, "room_closed");
 });
 
 test("dismissing a room commits nothing and leaves the checkout (R37)", async (t) => {
@@ -2727,7 +2800,7 @@ test("dismissing a room commits nothing and leaves the checkout (R37)", async (t
     cwd,
     cmd: REMEMBER,
   });
-  assert.equal(open.status, 201, open.body.error);
+  assert.equal(open.status, 201, open.body.error?.message);
   const { id, workspace } = open.body;
   const base = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
@@ -2765,7 +2838,7 @@ test("two dismissals racing both wait for the one teardown, and both get 200", a
     cwd,
     cmd: REMEMBER,
   });
-  assert.equal(open.status, 201, open.body.error);
+  assert.equal(open.status, 201, open.body.error?.message);
   const { id } = open.body;
 
   // S6(a): a dismissal answers only once the harness has stopped and the
@@ -2776,8 +2849,8 @@ test("two dismissals racing both wait for the one teardown, and both get 200", a
     api<RoomReply>(d, "DELETE", `/rooms/${id}`),
     api<RoomReply>(d, "DELETE", `/rooms/${id}`),
   ]);
-  assert.equal(first.status, 200, first.body.error);
-  assert.equal(second.status, 200, second.body.error);
+  assert.equal(first.status, 200, first.body.error?.message);
+  assert.equal(second.status, 200, second.body.error?.message);
 
   // Both waited for the same teardown, so the harness is gone by now.
   const events = await roomEvents(d, id);
@@ -2801,7 +2874,7 @@ test("a release that fails is reported and the room still closes, not a 500 (R37
     cwd,
     cmd: REMEMBER,
   });
-  assert.equal(open.status, 201, open.body.error);
+  assert.equal(open.status, 201, open.body.error?.message);
   const { id, workspace } = open.body;
 
   // A locked worktree makes `git worktree remove --force` fail — the sweep
@@ -2817,7 +2890,7 @@ test("a release that fails is reported and the room still closes, not a 500 (R37
   });
 
   const gone = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
-  assert.equal(gone.status, 200, gone.body.error);
+  assert.equal(gone.status, 200, gone.body.error?.message);
   assert.equal(gone.body.status, "closed");
   assert.ok(
     gone.body.notices.some((n) =>
@@ -2855,6 +2928,55 @@ test("chat.ts reports a daemon that went away instead of a dismissal, and exits 
   assert.match(r.stderr, /lost the daemon|lost the room stream/);
 });
 
+test("chat.ts new prints the daemon's refusal message, not an object", async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  const unadded = await tempDir(t);
+
+  // The daemon refuses an unadded cwd with `{error:{code,message}}`; the chat
+  // front end must show `error.message`, not stringify the object (M5-3,
+  // #135).
+  const refused = await spawnCli(
+    t,
+    ["new", "--cmd", REMEMBER, "--cwd", unadded],
+    "chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+  ).done;
+  assert.equal(refused.code, 1, refused.stderr);
+  assert.match(refused.stderr, /has not been added to the daemon/);
+  assert.doesNotMatch(refused.stderr, /\[object Object\]/);
+});
+
+test("chat.ts names the status for a refusal with no JSON envelope", async (t) => {
+  // Node's own 408 has an empty body, and a body of `null` is JSON with no
+  // `error`: both used to print "error: undefined" or "not JSON".
+  for (const body of ["", "null"]) {
+    const fake = createServer((_req, res) => {
+      res.writeHead(408, { "content-type": "application/json" });
+      res.end(body);
+    });
+    await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+    t.after(() => fake.close());
+    const runtime = await tempDir(t);
+    await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+    const { port } = fake.address() as AddressInfo;
+    await writeFile(
+      join(runtime, "kapelle", "daemon.json"),
+      JSON.stringify({ pid: process.pid, port, token: "t" }),
+      { mode: 0o600 },
+    );
+    const r = await spawnCli(t, ["attach", "room-x"], "chat.ts", {
+      XDG_RUNTIME_DIR: runtime,
+    }).done;
+    assert.equal(r.code, 1, r.stderr);
+    assert.equal(
+      r.stderr.trim(),
+      "error: HTTP 408",
+      `body ${JSON.stringify(body)}`,
+    );
+  }
+});
+
 test("a message while the harness is still answering is refused, and dismiss ends that turn", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
@@ -2862,7 +2984,7 @@ test("a message while the harness is still answering is refused, and dismiss end
     cwd,
     cmd: `node ${MOCK_AGENT} --scenario stall`,
   });
-  assert.equal(open.status, 201, open.body.error);
+  assert.equal(open.status, 201, open.body.error?.message);
   const { id } = open.body;
 
   assert.equal(
@@ -2873,7 +2995,8 @@ test("a message while the harness is still answering is refused, and dismiss end
     text: "two",
   });
   assert.equal(busy.status, 409);
-  assert.match(busy.body.error, /still answering/);
+  assert.equal(busy.body.error.code, "room_busy");
+  assert.match(busy.body.error.message, /still answering/);
 
   assert.equal((await api(d, "DELETE", `/rooms/${id}`)).status, 200);
   const ended = (await roomEvents(d, id)).filter(
@@ -2891,22 +3014,24 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
     cmd: REMEMBER,
   });
   assert.equal(unadded.status, 403);
+  assert.equal(unadded.body.error.code, "repo_not_added");
 
   const cwd = await added(d, repo);
   const none = await api<RoomReply>(d, "POST", "/rooms", { cwd });
   assert.equal(none.status, 400);
-  assert.match(none.body.error, /"agent" or "cmd"/);
+  assert.match(none.body.error.message, /"agent" or "cmd"/);
   const unknown = await api<RoomReply>(d, "POST", "/rooms", {
     cwd,
     agent: "nope",
   });
   assert.equal(unknown.status, 400);
-  assert.match(unknown.body.error, /unknown agent "nope"/);
+  assert.match(unknown.body.error.message, /unknown agent "nope"/);
 
-  assert.equal(
-    (await api(d, "POST", "/rooms/missing/messages", { text: "x" })).status,
-    404,
-  );
+  const missing = await api(d, "POST", "/rooms/missing/messages", {
+    text: "x",
+  });
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.error.code, "room_not_found");
   const open = await api<RoomReply>(d, "POST", "/rooms", {
     cwd,
     cmd: REMEMBER,
@@ -2916,6 +3041,34 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
   });
   assert.equal(empty.status, 400);
   await api(d, "DELETE", `/rooms/${open.body.id}`);
+});
+
+test("every room route answers room_not_found for an unknown id", async (t) => {
+  const d = await boot(t);
+  const routes: [string, string, unknown][] = [
+    ["GET", "/rooms/nope", undefined],
+    ["DELETE", "/rooms/nope", undefined],
+    ["POST", "/rooms/nope/messages", { text: "hi" }],
+    ["GET", "/rooms/nope/events", undefined],
+  ];
+  for (const [method, path, body] of routes) {
+    const r = await api(d, method, path, body);
+    assert.equal(r.status, 404, `${method} ${path}`);
+    assert.equal(r.body.error.code, "room_not_found", `${method} ${path}`);
+  }
+});
+
+test("a room whose harness cannot start is a 500 room_open_failed", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  // The harness binary is absent, so `openRoom` fails after the checkout is
+  // ready; that failure has its own code, not `internal` (M5-3, #135).
+  const r = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: "definitely-not-a-command",
+  });
+  assert.equal(r.status, 500);
+  assert.equal(r.body.error.code, "room_open_failed");
 });
 
 test("chat.ts talks to a room end to end: messages in, answers out, /dismiss stops it", async (t) => {

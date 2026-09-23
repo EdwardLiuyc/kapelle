@@ -51,6 +51,13 @@ interface RoomView {
   error?: string;
 }
 
+/** A refused request's `error` (docs/CLIENT-API.md); `code` is for code,
+ *  `message` for the person. */
+interface Refusal {
+  code: string;
+  message: string;
+}
+
 /** One line of a room's event log, as the SSE stream carries it. */
 interface LogEvent {
   seq: number;
@@ -90,22 +97,30 @@ async function api<T>(
   method: string,
   path: string,
   body?: unknown,
-): Promise<{ status: number; body: T & { error?: string } }> {
+): Promise<{ status: number; body: T; error?: Refusal }> {
   const res = await fetch(`http://127.0.0.1:${d.port}${path}`, {
     method,
-    headers: { authorization: `Bearer ${d.token}` },
+    headers: {
+      authorization: `Bearer ${d.token}`,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
-  if (!text) return { status: res.status, body: {} as T & { error?: string } };
+  let parsed: unknown;
   try {
-    return {
-      status: res.status,
-      body: JSON.parse(text) as T & { error?: string },
-    };
+    parsed = text ? JSON.parse(text) : undefined;
   } catch {
     throw new Error(`HTTP ${res.status}: response was not JSON`);
   }
+  if (res.ok) return { status: res.status, body: (parsed ?? {}) as T };
+  // A refusal Node sends itself — a 408, a 400 for malformed HTTP — has no
+  // envelope, so the status stands in for the message, as in `cli.ts`.
+  const error = (parsed as { error?: Refusal } | null | undefined)?.error ?? {
+    code: "",
+    message: `HTTP ${res.status}`,
+  };
+  return { status: res.status, body: {} as T, error };
 }
 
 /**
@@ -123,8 +138,11 @@ async function follow(
     signal,
   });
   if (!res.ok || !res.body) {
-    const { error } = (await res.json()) as { error?: string };
-    throw new Error(error ?? `events: HTTP ${res.status}`);
+    const body = (await res.json().catch(() => null)) as {
+      error?: Refusal;
+    } | null;
+    const error = body?.error;
+    throw new Error(error?.message ?? `events: HTTP ${res.status}`);
   }
   const decoder = new TextDecoder();
   let buf = "";
@@ -318,7 +336,7 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
     if (text === "/dismiss") {
       const r = await api<RoomView>(d, "DELETE", `/rooms/${room.id}`);
       if (r.status !== 200) {
-        console.error(`! ${r.body.error}`);
+        console.error(`! ${r.error?.message}`);
         code = 1;
         break;
       }
@@ -338,7 +356,7 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
     );
     if (r.status !== 202) {
       printer.pendingEcho -= Number(tty);
-      console.error(`! ${r.body.error}`);
+      console.error(`! ${r.error?.message}`);
       continue;
     }
     if (lastTurnEnd > r.body.seq) continue;
@@ -381,8 +399,8 @@ async function main(): Promise<number> {
       cmd: values.cmd,
     });
     if (r.status !== 201) {
-      console.error(`error: ${r.body.error}`);
-      if (r.status === 403) {
+      console.error(`error: ${r.error?.message}`);
+      if (r.error?.code === "repo_not_added") {
         console.error("add the repository first: kapelle daemon add <path>");
       }
       return 1;
@@ -393,7 +411,7 @@ async function main(): Promise<number> {
   if (verb === "attach" && arg) {
     const r = await api<RoomView>(d, "GET", `/rooms/${arg}`);
     if (r.status !== 200) {
-      console.error(`error: ${r.body.error}`);
+      console.error(`error: ${r.error?.message}`);
       return 1;
     }
     return chat(d, r.body);
@@ -410,7 +428,7 @@ async function main(): Promise<number> {
   if (verb === "dismiss" && arg) {
     const r = await api<RoomView>(d, "DELETE", `/rooms/${arg}`);
     if (r.status !== 200) {
-      console.error(`error: ${r.body.error}`);
+      console.error(`error: ${r.error?.message}`);
       return 1;
     }
     console.log(`dismissed ${arg}`);

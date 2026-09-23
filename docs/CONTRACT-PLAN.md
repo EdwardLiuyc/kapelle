@@ -277,6 +277,13 @@ an oversized body is refused before it is buffered.
 
 Decisions: **C7, C8, J1–J5**.
 
+**Closed for M5-3 (#135), 2026-09-23:** every refusal is `{error: {code, message}}`,
+one code per situation (`ErrorCode` in `client/contract.ts`, the table in
+`docs/CLIENT-API.md`); every write refuses an unknown field; J1–J5 as recommended. Two
+refusals stay outside the envelope because Node sends them, not the daemon: the read
+timeout is Node's `408` with an empty body, then a closed connection, and malformed HTTP
+gets Node's bare `400`.
+
 ### M5-4 · Permission resolution and settled decisions · M · needs M2-3, M5-1
 
 `_client_permission_queued` carries `id`; the resolution event `_client_permission` does
@@ -735,7 +742,7 @@ story, and the story moves into `STORIES.md`.
 | C4 | Extend `run.json` for restored parity? | (a) yes, agent/duration/warnings (b) keep minimal, mark absent | **Decided 2026-09-22 (#134):** (a) — agent/durationMs/warnings in the record; older records omit them |
 | C5 | Run times in DTO | (a) startedAt/endedAt ISO (b) epoch ms (c) omit | **Decided 2026-09-22 (#134):** (a) |
 | C6 | Event timestamps | (a) add `at` to `events.jsonl` and SSE (b) SSE only (c) omit | **Decided 2026-09-22 (#134):** (a), implemented by #137 (M5-5) |
-| C7 | Error shape | (a) keep `{error: string}` (b) `{error:{code,message}}` (c) full problem detail | **Decided 2026-09-22 (#134):** (b), implemented by #135 (M5-3) |
+| C7 | Error shape | (a) keep `{error: string}` (b) `{error:{code,message}}` (c) full problem detail | **Decided 2026-09-22 (#134):** (b), implemented by #135 (M5-3): one code per situation a client acts on differently, not one per status (decided 2026-09-23) |
 | C8 | Unknown request fields | (a) reject strictly (b) ignore (c) per endpoint | **Decided 2026-09-22 (#134):** (a) for writes, implemented by #135 (M5-3) |
 | C9 | Pagination | (a) limit/cursor (b) limit/offset (c) none | **Decided 2026-09-22 (#134):** (a), implemented by M5-9 |
 | C10 | Run order | (a) newest first by startedAt (b) insertion order | **Decided 2026-09-22 (#134):** (a), implemented by M5-9 |
@@ -804,11 +811,11 @@ story, and the story moves into `STORIES.md`.
 | I3 | Pagination shape | cursor by (startedAt, id), default 50 | confirm |
 | I4 | Reaped runs | absent from list, documented | confirm |
 | I5 | Repo metadata | (a) counts/last run from daemon (b) client joins | (a) |
-| J1 | Body cap | (a) 1 MiB (b) 4 MiB (c) per endpoint | (b), run files carry prompts |
-| J2 | Content type | (a) require JSON, 415 (b) liberal | (a) |
-| J3 | Read timeout | (a) 30s (b) none | (a) |
-| J4 | Rate limit | explicitly none, loopback single operator | confirm |
-| J5 | Response compression | none | confirm |
+| J1 | Body cap | (a) 1 MiB (b) 4 MiB (c) per endpoint | **Decided 2026-09-23 (#135):** (b), run files carry prompts; `Content-Length` checked before reading, a chunked body counted |
+| J2 | Content type | (a) require JSON, 415 (b) liberal | **Decided 2026-09-23 (#135):** (a) — strict can loosen after the v1 freeze, liberal cannot tighten; media-type parameters accepted |
+| J3 | Read timeout | (a) 30s (b) none | **Decided 2026-09-23 (#135):** (a), Node's `requestTimeout`: `408` with an empty body, then the connection is closed; a slow reply or SSE is never cut |
+| J4 | Rate limit | explicitly none, loopback single operator | **Decided 2026-09-23 (#135):** none |
+| J5 | Response compression | none | **Decided 2026-09-23 (#135):** none |
 | K1 | Browser fate | retired by A3: the TUI is the only front end | **Settled by spike** |
 | K2 | Token in URL | retired with K1 | **Settled by spike** |
 | K3 | Origin check | the M2-8 Host guard stays; no CORS because no browser UI | **Settled by spike** |

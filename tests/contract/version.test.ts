@@ -11,7 +11,11 @@ import { readFile } from "node:fs/promises";
 import { request } from "node:http";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { API_VERSION, CAPABILITIES } from "../../client/contract.ts";
+import {
+  API_VERSION,
+  CAPABILITIES,
+  type ErrorReply,
+} from "../../client/contract.ts";
 import { spawnCli, tempDir } from "../../integration/helpers.ts";
 
 async function boot(t: TestContext) {
@@ -30,7 +34,7 @@ async function boot(t: TestContext) {
 
 /** `fetch` takes the Host from the URL, so a forged Host needs node:http. */
 function versionReply(port: number, headers: Record<string, string>) {
-  return new Promise<{ status: number; body: { error?: unknown } }>(
+  return new Promise<{ status: number; body: ErrorReply }>(
     (resolve, reject) => {
       const req = request(
         { hostname: "127.0.0.1", port, path: "/version", headers },
@@ -73,15 +77,15 @@ test("GET /version needs the token like every other route", async (t) => {
   const { url, token } = await boot(t);
   const missing = await fetch(url);
   assert.equal(missing.status, 401);
-  const missingBody = (await missing.json()) as { error?: unknown };
-  assert.equal(typeof missingBody.error, "string");
+  const missingBody = (await missing.json()) as ErrorReply;
+  assert.equal(missingBody.error.code, "unauthorized");
 
   const wrong = await fetch(url, {
     headers: { authorization: "Bearer not-a-real-token" },
   });
   assert.equal(wrong.status, 401);
-  const wrongBody = (await wrong.json()) as { error?: unknown };
-  assert.equal(typeof wrongBody.error, "string");
+  const wrongBody = (await wrong.json()) as ErrorReply;
+  assert.equal(wrongBody.error.code, "unauthorized");
 
   // The real token still works, so the refusals above are not a broken route.
   const good = await fetch(url, {
@@ -98,7 +102,7 @@ test("GET /version is behind the Host guard", async (t) => {
   });
   assert.equal(forged.status, 403);
   // The doc promises `{error}` on every refusal, this one included.
-  assert.equal(typeof forged.body.error, "string");
+  assert.equal(forged.body.error.code, "host_not_allowed");
 });
 
 test("POST /version is a 404 with an {error} body", async (t) => {
@@ -108,6 +112,7 @@ test("POST /version is a 404 with an {error} body", async (t) => {
     headers: { authorization: `Bearer ${token}` },
   });
   assert.equal(res.status, 404);
-  const body = (await res.json()) as { error?: unknown };
-  assert.equal(typeof body.error, "string");
+  const body = (await res.json()) as ErrorReply;
+  assert.equal(body.error.code, "no_route");
+  assert.equal(typeof body.error.message, "string");
 });
