@@ -8,6 +8,10 @@ without an answer. **Amended 2026-09-22 (M5-1, #133):** tables A and B are decid
 `docs/CLIENT-API.md` is now the client-facing promise. Still open here: the contract
 tables C, D, E, F, G, H, I, J, K and M. The purpose remains to name every decision a
 story depends on before the work starts.
+**Amended 2026-09-23 (R43, interview):** composer addressing is decided — the room opens
+on the timeline, a leading `@name` resolves client-side to the target, no mention still
+goes to the orchestrator, and scanning an orchestrator's response for mentions is named
+as the deferred, experimental agent-to-agent path.
 
 Relationship to the other docs: `PROJECT-BRIEF.md` is the charter (why and what is in
 scope), `PROJECT-PLAN.md` is the milestone narrative, `STORIES.md` is the work
@@ -432,10 +436,17 @@ The spike is one room and one participant at a time. A room list from `GET /room
 rooms → participants tree, switching between rooms and participants without losing their
 streams, and unread/attention badges derived from events (`_client_turn_ended`, permission
 queued, stall warning). This is the "multiple chat rooms" requirement, one level richer
-because a room has a roster. The stall warning the badge reads is the one **R38** creates:
-a participant's watchdog warns and never cancels.
+because a room has a roster. **The room opens on the timeline**, and the composer — not the
+row cursor — names the target (R43): a leading `@name` resolves client-side in `client/`
+to a participant id, and a message with no mention goes to the orchestrator. The resolver
+is shared with piped `chat.ts`, so there is one behaviour (S8). The stall warning the
+badge reads is the one **R38** creates: a participant's watchdog warns and never cancels.
 
-Decisions: **R8, R19, S11, R38**.
+*Done when* the timeline is the landing view, switching rows changes the filtered thread
+without losing a stream, a message starting `@name` reaches that participant, and a
+message with no mention reaches the orchestrator.
+
+Decisions: **R8, R19, R43, S11, R38**.
 
 ### M4-3 · Answer per-participant permissions from the TUI · M · needs M4-2, M5-4, M6-5
 
@@ -450,10 +461,12 @@ Decisions: **R12, S2, S12, D1–D8**.
 
 Terminal bell and desktop notification for a room waiting on a permission or stalled,
 transcript search, and the block-splitting optimisation for the `Markdown` component if
-the measured re-parse cost grows past the spike's ~5 ms at 53k chars. The stall half needs
-**R38**; without it no room emits `_client_stall_warning` and there is nothing to ring for.
+the measured re-parse cost grows past the spike's ~5 ms at 53k chars. Mention
+autocomplete for the roster is the R43 polish this story owns; M4-2 ships the resolver
+with plain text. The stall half needs **R38**; without it no room emits
+`_client_stall_warning` and there is nothing to ring for.
 
-Decisions: **R19, F9, R38**.
+Decisions: **R19, R43, F9, R38**.
 
 ## M6 stories — the room container
 
@@ -545,7 +558,7 @@ vocabulary and the record sketch are the section at the end of this file.
 *Done when* every R decision that shapes an API has an answer, and M6-2..M6-9 can be
 picked up without re-opening the model.
 
-Decisions: **R1–R23, R31–R42, S10, S12, S13**.
+Decisions: **R1–R23, R31–R43, S10, S12, S13**.
 
 ### M6-2 · Room container: roster model, empty/starter, DTOs · M · needs M6-1, M5-1, M5-10
 
@@ -595,13 +608,15 @@ joins a bounded FIFO queue (R32a), and cross-agent context is human-composed in 
 with `contextFrom` as the next addition (R34b). **R41 sizes that queue**: bound 16, `429`
 when full, in memory and lost at restart. **R39** keeps a turn a conversation: no
 `RESULT_PREAMBLE`, no `crossCheck`. **R38** gives the turn a watchdog that only warns.
+**R43** keeps the daemon out of message text: the target is the nested route, and a
+leading `@name` resolves to a participant id in `client/`.
 
 *Done when* a client can replay one participant's conversation and the whole room
 timeline from one log, an event names its room, participant and turn, a turn can be
 cancelled without dismissing the room, a second message to a busy participant is
 queued FIFO and answered in order, and the seventeenth is refused with `429`.
 
-Decisions: **R6, R7, R8, R13, R32, R34, R38, R39, R41, S5, S10, S11** (R7, R8, R13, R32, R34, S5 and S10 settled).
+Decisions: **R6, R7, R8, R13, R32, R34, R38, R39, R41, R43, S5, S10, S11** (R7, R8, R13, R32, R34, S5 and S10 settled).
 
 ### M6-5 · Per-participant modes and permissions · M · needs M6-4, M5-4
 
@@ -683,11 +698,16 @@ coordinator whose messages the daemon relays, or supervisor-mediated context inj
 The charter says no agent-to-agent messaging; daemon-mediated handoff stays on the right
 side of that line.
 
+**Named deferred option (R43).** Scanning the orchestrator's responses for mentions — an
+experimental, supervisor-mediated agent-to-agent step — is the shape to build when the
+delegation choice is taken up. It is not v1 and needs its own decision first: it reopens
+`PROJECT-BRIEF.md`'s non-goal and R2/R34c, and the daemon stays free of chat-platform code.
+
 *Done when* the chosen behaviour is implemented or explicitly deferred behind a
 `Decided` note; a direct agent-to-agent channel is not built without re-opening the
-brief.
+brief. The orchestrator-response scan is recorded as the deferred option, not built.
 
-Decisions: **R2, R23**.
+Decisions: **R2, R23, R34, R43**.
 
 ### M6-9 · Room CLI and bridge readiness · S · needs M6-5, M4-2
 
@@ -856,7 +876,7 @@ no dependency relation between agents (R24–R30 retired).
 | R4 | Participant identity | opaque id + unique display name; harness fixed at add; mode mutable | **Decided (interview):** yes |
 | R5 | Workspace isolation | (a) one shared room worktree (b) one worktree+branch per participant (c) hybrid following M3 inheritance rules | **Retired (interview):** rooms have no dependency graph, so there is no hybrid and no inheritance. Every participant owns a worktree+branch forked from the room base; the base choice is R35 |
 | R6 | Concurrency | (a) one turn in the room at a time (b) per-participant turns in parallel (c) bounded global pool | **Decided (interview):** (b) per-participant turns in parallel; each participant has its own worktree, so there is no shared-checkout serialisation. A global resource cap stays config |
-| R7 | Routing | (a) explicit target per message (b) the orchestrator receives all and routes (c) broadcast to all | **Decided (interview):** (a), with the orchestrator as the default target |
+| R7 | Routing | (a) explicit target per message (b) the orchestrator receives all and routes (c) broadcast to all | **Decided (interview):** (a), with the orchestrator as the default target. **Clarified 2026-09-23 (R43):** the orchestrator is the default only when the message carries no `@name`; a room with participants but no orchestrator refuses locally instead of inventing one |
 | R8 | Transcript model | (a) per-participant threads (b) one interleaved room timeline (c) both | **Decided (interview):** (c), implemented over R13(a): one room log; a thread is a filter by `participantId` |
 | R9 | API shape | (a) nested `/rooms/:id/agents(/:agentId)/messages` and `/events` (b) flat agents with a `room` query (c) keep `/rooms/:id/messages` with an `agent` field | **Decided (interview):** (a) nested. **Amended 2026-09-21 (#145):** two shape facts nesting did not settle. `GET /rooms` carries the roster **inline and summarised** — `participants: [{id, name, status}]`, the shape `GET /runs` already gives its tasks (`daemon.ts:987`) — so M4-2's sidebar draws from one call rather than one per room; the full `ParticipantDto` is on `GET /rooms/:id`. And **dismiss moves off `DELETE`**: `POST /rooms/:id/dismiss` ends a room, while `DELETE /rooms/:id` keeps the meaning R18 always gave it. The MVP mapped both onto `close()`, which is why R18 and the code disagreed |
 | R10 | Participant lifecycle | add/remove/rename; mode change; harness fixed; crash marks exited; idle eviction | **Decided (interview):** yes, as described |
@@ -868,7 +888,7 @@ no dependency relation between agents (R24–R30 retired).
 | R16 | Room versus run | (a) separate; `POST /runs` unchanged (b) a room can dispatch a run from its roster (c) a run becomes a room | **Decided (interview):** (a) now; (b) deferred |
 | R17 | Persistence | room.json + participant records + event log(s); restore read-only; resume per participant, capability-gated | **Decided (interview):** `stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and event log(s); restore read-only; resume per participant, capability-gated. **Amended 2026-09-21 (#145):** restore is **not** read-only any more (R42), and the participant record carries the harness `sessionId` from its first version — the M2-6 precedent (`docs/STORIES.md:1800`): one field now, or a migration once resume lands |
 | R18 | Room lifecycle | close/archive/delete with N participants; retention; idle eviction | **Decided (interview), corrected 2026-09-21:** dismiss stops every participant and keeps its branch, its checkout and the room's history. **The supervisor commits nothing at dismiss (R37)** — the earlier "commits/releases" wording predates R37 and contradicted it. DELETE removes from the active list; retention reaps dismissed rooms; idle eviction configurable and off in v1; archive read-only deferred. **Amended 2026-09-21 (#145) — one word per idea, in code, URL and docs.** `dismiss`: a person ends the room; it stops, and its branch, checkout and history are kept (`POST /rooms/:id/dismiss`). `delete`: it is thrown away (`DELETE /rooms/:id`, the meaning this row already gave it). `pause`: the machine stopped (R42). `resume`: it comes back. A dismissed room is read, replayed, **merged** (R31) and finally deleted or reaped — merging is why the state earns its place, since the participant commits its own branch (R37) and landing it happens after the talking is over. Dismiss is final; pause is the reversible one. **Decided 2026-09-21 (#157 review):** DELETE removes a room's worktrees, branches, record and log at once, and answers `409` naming the files while any checkout has uncommitted changes — the house rule, since `release` (#85) and the sweep (`core/sweep.ts:388`) both keep a dirty checkout rather than lose it. A paused room can be dismissed or deleted without being revived first |
-| R19 | TUI shape | sidebar rooms → participants; active participant thread + room timeline; badges per participant; the permission overlay names the participant | **Decided (interview):** yes, as described |
+| R19 | TUI shape | sidebar rooms → participants; active participant thread + room timeline; badges per participant; the permission overlay names the participant | **Decided (interview):** yes, as described. **Amended 2026-09-23 (R43):** the room timeline is the default view; participant rows switch the filtered thread and carry badges; the composer, not the row cursor, names the target, and its status line shows the resolved participant |
 | R20 | Cost | per-participant usage labelled by harness; no cross-harness totals | **Decided (interview):** yes |
 | R21 | Starter/orchestrator creation | `POST /rooms {cwd, orchestrator?: {agent or cmd, name?, mode?}}`; empty body allowed; 201 | **Decided (interview):** yes; default orchestrator mode `auto` (R12); 201 |
 | R22 | Naming and ids | room id `newRunId()`; participant opaque id + validated unique name; branch names if R5 forks | **Decided (interview):** a distinct `newRoomId()` — do not reuse the run id; participant ids opaque and ref-safe |
@@ -877,7 +897,7 @@ no dependency relation between agents (R24–R30 retired).
 | R31 | Room merge entry point | (a) `kapelle merge <roomId>` detects the `room-` prefix and merges participant branches (b) a separate `kapelle room merge <roomId>` (c) merge stays per-participant, no room-level entry (d) integrate-then-land | **Decided 2026-09-20, wording corrected 2026-09-21:** the surface is (b), `kapelle room merge <roomId>`. The v1 **scope** is one participant at a time (`--participant`), with whole-room merge as the additive follow-up; the earlier note read "(c) as the v1 subset", which cannot be right — (c) says there is no room-level entry at all, and (b) adds one. (d) integrate-then-land is the internal shape when whole-room lands. No dependency order exists, so order is creation order and conflicts abort atomically. Answered inside M6-6, because chained bases (R35c) force that story to rework the preflight anyway, and the `done`/`warned` gate at `core/merge.ts:65` has to be replaced with participant states either way (R37) |
 | R32 | Per-participant turn queue | (a) FIFO queue, bounded, while the agent answers (b) refuse 409 while busy (c) interrupt/replace the live turn (d) latest-only queue | **Decided (interview):** (a) bounded FIFO; replacement goes through the explicit cancel endpoint (S5) |
 | R33 | Participant availability | (a) always available until removed or the room closes; no terminal state (b) an explicit pause/offline state (c) a display-only goal/done flag | **Decided (interview):** (a): runtime state (`idle`/`busy`/`exited`/`closed`) is the only participant state. (c) is retired: it reintroduces a task status the room model removed, and `idle` already answers "can I send now?". (b) needs no new state — see below; only its person-facing trigger stays deferred. **Amended 2026-09-21 (#145):** the state set is `idle`/`busy`/`exited`/`paused`/`dismissed` — `closed` is renamed `dismissed`, and `paused` is R42's. Pause is one state, whoever or whatever stopped the room: it means the room can be reloaded from what it left, with the harness stopped and its work kept. v1 reaches pause only through a daemon shutdown (R42); a person-facing pause would be a second trigger on that same state, not a new state, and no such route is in v1. `exited` — the harness died by itself — revives through that same path once M6-7 lands resume, so a crashed room stops being a dead end. |
-| R34 | Cross-agent context | (a) human-composed only; the client includes another agent's text in its message (b) `POST messages {contextFrom}` injects those participants' last turn or result (c) supervisor-mediated delegation, charter-gated | **Decided (interview):** (a) for v1; (b) as the next addition; (c) stays deferred with M6-8 |
+| R34 | Cross-agent context | (a) human-composed only; the client includes another agent's text in its message (b) `POST messages {contextFrom}` injects those participants' last turn or result (c) supervisor-mediated delegation, charter-gated | **Decided (interview):** (a) for v1; (b) as the next addition; (c) stays deferred with M6-8. **Amended 2026-09-23 (R43):** `@name` is routing only. Named and deferred: scanning the **orchestrator's responses** for mentions, an experimental supervisor-mediated agent-to-agent step — it would reopen the brief's non-goal and R2/R34c, and is not v1 |
 | R35 | Workspace base and rebase | (a) fork from the room base at add (b) fork at first turn (c) choose a base ref at add, including another participant's branch (d) allow a later re-base | **Decided (interview):** (c) with the room base as the default; (d) later |
 | R36 | Room topic/context | (a) a title only (b) a room-level topic or instructions injected into every participant at add (c) none | **Decided (interview):** (a) now: a title only; (b) as a follow-up addition |
 | R37 | Commit cadence for a participant | (a) the supervisor commits at every turn end (b) the supervisor commits at room close (c) the participant commits its own branch itself | **Decided 2026-09-20:** (c). It is the participant's own branch, so a lazy agent harms nobody else, and the supervisor stays out of the commit business entirely. There is **no auto-commit at dismiss**: uncommitted work is left in the checkout, which is kept. `core/worktree.ts` `release` therefore is never called with `done` for a participant — **M6-0 settled the non-committing path (2026-09-21, #144): `release` takes a `ReleaseAction` (`"commit" \| "keep"`), `RELEASES` moved to `core/run.ts`, and a room always passes `"keep"`.** A participant that never commits has nothing for R31 to merge, which is visible and is its own fault |
@@ -886,6 +906,7 @@ no dependency relation between agents (R24–R30 retired).
 | R40 | Global live-harness cap | (a) a daemon-wide cap, refuse at the limit (b) a daemon-wide cap, queue at the limit (c) none in v1 | **Decided 2026-09-20:** (c). `runs + Σ(busy participants)` across every room is unbounded, with the default mode `auto`. Recorded as a backlog item with a trigger in `STORIES.md` and as a `ponytail:` comment where the room runtime spawns a harness (M6-0), not built. This is the one accepted risk in the room model that is about resources rather than correctness |
 | R41 | Turn-queue bound and overflow | (a) bound 16, refuse with `429` (b) unbounded | **Decided 2026-09-20:** (a). Sixteen messages queued to one agent already means the human should stop typing. The queue is in memory and is **lost at a daemon restart** (R42), which the API documents rather than hides |
 | R42 | What a restart leaves | (a) re-spawn a participant with a fresh session, context lost (b) nothing until S3(c) (c) a shutdown is a pause, not a close | **Decided 2026-09-21 (#145): (c), a new option — a shutdown is a pause, not a close.** `dismiss` stays the person's verb; a daemon shutdown stops each harness and leaves the room `paused`, with roster, branch, checkout and history intact. A participant revives on its next message: `session/load` where the harness advertises it, otherwise a **fresh session with the loss reported** in the DTO (`resumed: "loaded" \| "fresh"`). That subsumes (a) without its silent amnesia, and keeps S3(c) an upgrade that changes a label rather than the API. The work splits: **Half A**, revive with a fresh session, is M6-7 and needs no probe; **Half B**, `session/load`, stays deferred with S3(c). *History:* **Decided 2026-09-20:** (b). A restored room is read-only: every participant reads `exited`, its history replays and its branch and checkout survive, but it cannot be messaged or revived until S3(c) lands `session/load`. M6-7 says this in its *Done when* rather than implying the roster is usable. **Re-opened 2026-09-21 (#144):** the owner wants a reboot to be resumable — idle agents with uncommitted work, restart, keep talking. That makes a daemon shutdown a pause, not the `close()` it calls today. |
+| R43 | Composer addressing | (a) sidebar selection is the target (b) timeline-first: a leading `@name` in the composer names the target, selection is view-only, no mention → orchestrator (c) both with precedence | **Decided 2026-09-23 (interview): (b).** The room opens on the timeline; the roster tree switches the filtered view and carries badges. A message beginning with `@name` — the exact unique display name, then removed — resolves **client-side** to the opaque participant id and goes to the nested `messages` route; an unknown or ambiguous name is a local error, and multiple mentions are a local error because R7a keeps one target per message. No mention → the orchestrator; a room without one refuses locally. `@` anywhere else is plain text. This is routing, never context injection (R34a), and the resolver lives in `client/` so the TUI and piped `chat.ts` behave the same (S8). The daemon parses no message text. *Later, deferred on purpose:* scanning the **orchestrator's responses** for mentions, an experimental supervisor-mediated agent-to-agent step — it reopens `PROJECT-BRIEF.md`'s non-goal and R2/R34c, and is not v1 |
 
 ### Spike integration and API decisions — revised
 
@@ -993,6 +1014,9 @@ from dismiss in three places:
 - Rooms stay a separate resource from runs. A room does not replace `POST /runs`, and a
   run does not become a room. Participants are independent long-lived sessions inside a
   room — not runs, and not nodes in a graph.
+- The daemon never parses message text. `@name` is client-side addressing (R43); scanning
+  an orchestrator's response for mentions is a deliberate later re-open of the brief's
+  non-goal, not a small addition.
 
 ## Risks
 

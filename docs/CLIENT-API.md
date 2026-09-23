@@ -819,6 +819,17 @@ room detail       the room fields above, plus every participant in full
 `resumed` is missing until a participant comes back. `loaded` means it kept its memory.
 `fresh` means it started a new session.
 
+### Addressing (planned)
+
+Every message has exactly one target participant. A client sends to
+`POST /rooms/:id/agents/:agentId/messages`, and a per-participant stream is the room's
+event log filtered by `participantId`. The TUI opens on the room timeline and lets the
+person name the target with a leading `@name`; the client resolves the unique display
+name to the opaque participant id itself (R43). The daemon never parses message text.
+A message with no `@name` goes to the orchestrator; a room with participants but no
+orchestrator refuses before the request, and an unknown or ambiguous name is a
+client-side error.
+
 ## A first client, step by step
 
 This example uses `curl` and `jq`. Any HTTP library works the same way.
