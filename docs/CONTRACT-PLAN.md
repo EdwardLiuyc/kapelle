@@ -580,12 +580,15 @@ imports them — and opaque, ref-safe participant ids; the run-id functions stay
 dependency field and no scheduler: the roster is a list of independent agents (R24–R30
 retired). For v1 the room carries a title only (R36a); a room-level topic injected at add
 is a follow-up (R36b).
+**Added 2026-09-23 (R44):** the participant record carries `role` from its first
+version, and the starter gets `role: "orchestrator"` (R21), so M4-2 can find the default
+target before M6-3 lets a person set or change a role. The `GET /rooms` roster summary carries it too.
 
 *Done when* an empty room and a room with a starter participant both round-trip through
-`GET /rooms/:id`, room and participant ids are validated by tests, and the DTOs are
+`GET /rooms/:id`, the starter reads `role: "orchestrator"`, room and participant ids are validated by tests, and the DTOs are
 covered by contract tests.
 
-Decisions: **R1, R3, R9, R17, R21, R22, R33, R36, S4, S13** (R36 settled: title now, topic later).
+Decisions: **R1, R3, R9, R17, R21, R22, R33, R36, R44, S4, S13** (R36 settled: title now, topic later).
 
 ### M6-3 · Participant lifecycle: add/remove/list, settings, names · M · needs M6-2
 
@@ -889,7 +892,7 @@ no dependency relation between agents (R24–R30 retired).
 | R6 | Concurrency | (a) one turn in the room at a time (b) per-participant turns in parallel (c) bounded global pool | **Decided (interview):** (b) per-participant turns in parallel; each participant has its own worktree, so there is no shared-checkout serialisation. A global resource cap stays config |
 | R7 | Routing | (a) explicit target per message (b) the orchestrator receives all and routes (c) broadcast to all | **Decided (interview):** (a), with the orchestrator as the default target. **Clarified 2026-09-23 (R43):** the orchestrator is the default only when the message carries no `@name`; a room with participants but no orchestrator refuses locally instead of inventing one |
 | R8 | Transcript model | (a) per-participant threads (b) one interleaved room timeline (c) both | **Decided (interview):** (c), implemented over R13(a): one room log; a thread is a filter by `participantId` |
-| R9 | API shape | (a) nested `/rooms/:id/agents(/:agentId)/messages` and `/events` (b) flat agents with a `room` query (c) keep `/rooms/:id/messages` with an `agent` field | **Decided (interview):** (a) nested. **Amended 2026-09-21 (#145):** two shape facts nesting did not settle. `GET /rooms` carries the roster **inline and summarised** — `participants: [{id, name, status}]`, the shape `GET /runs` already gives its tasks (`daemon.ts:987`) — so M4-2's sidebar draws from one call rather than one per room; the full `ParticipantDto` is on `GET /rooms/:id`. And **dismiss moves off `DELETE`**: `POST /rooms/:id/dismiss` ends a room, while `DELETE /rooms/:id` keeps the meaning R18 always gave it. The MVP mapped both onto `close()`, which is why R18 and the code disagreed |
+| R9 | API shape | (a) nested `/rooms/:id/agents(/:agentId)/messages` and `/events` (b) flat agents with a `room` query (c) keep `/rooms/:id/messages` with an `agent` field | **Decided (interview):** (a) nested. **Amended 2026-09-21 (#145):** two shape facts nesting did not settle. `GET /rooms` carries the roster **inline and summarised** — `participants: [{id, name, status}]`, the shape `GET /runs` already gives its tasks (`daemon.ts:987`) — so M4-2's sidebar draws from one call rather than one per room; the full `ParticipantDto` is on `GET /rooms/:id`. And **dismiss moves off `DELETE`**: `POST /rooms/:id/dismiss` ends a room, while `DELETE /rooms/:id` keeps the meaning R18 always gave it. The MVP mapped both onto `close()`, which is why R18 and the code disagreed. **Amended 2026-09-23 (R44):** the summary is `{id, name, role?, status}`, so a client finds the orchestrator from the list |
 | R10 | Participant lifecycle | add/remove/rename; mode change; harness fixed; crash marks exited; idle eviction | **Decided (interview):** yes, as described |
 | R11 | Empty room | messages refused 409 until a participant exists; roster operations still allowed | **Decided (interview):** yes |
 | R12 | Modes per participant | (a) `ask`/`safe`/`auto` at add, default `auto` (b) the same, default `ask` when a TTY client is attached | **Decided (interview):** (a) — `ask`/`safe`/`auto` at add, **default `auto`**, mutable after add; `auto` still warns about silent autonomy; the queue is scoped to the participant. **Re-confirmed 2026-09-20:** `ask` was reconsidered as the default, because the CLI defaults to `ask` and M4-3 makes answering possible. Rejected: a room is often left unattended, and an `ask` default would wedge one until a human returned. The containment warning, the per-participant worktree and `#guardPath` carry the risk instead |
@@ -963,12 +966,12 @@ the resume path (R33).
 ```text
 room.json         id, cwd, title, base, createdAt, updatedAt, status
                   status: active | paused | dismissed
-participant       id, name, harness, mode, purpose, settings,
+participant       id, name, role?, harness, mode, purpose, settings,
                   branch, worktree, baseSha,
                   sessionId, resumed?: "loaded" | "fresh",
                   status: idle | busy | exited | paused | dismissed
 room list         [{id, cwd, title, status, updatedAt,
-                    participants: [{id, name, status}]}]      (R9)
+                    participants: [{id, name, role?, status}]}]      (R9, R44)
 room detail       the room fields above + every participant in full
 ```
 

@@ -2252,11 +2252,14 @@ and `ParticipantDto` in `client/contract.ts`; `assertRoomId` and `roomBranchName
 something imports them (`newRoomId()` landed in M6-0, #144), opaque participant ids.
 No dependency field and no scheduler.
 **Added 2026-09-21 (#145):** `GET /rooms` carries the roster inline and summarised,
-`participants: [{id, name, status}]` — the shape `GET /runs` already gives its tasks
+`participants: [{id, name, role?, status}]` — the shape `GET /runs` already gives its tasks
 (`daemon.ts:987`) — so M4-2's sidebar costs one call, not one per room; the full
 `ParticipantDto` is on `GET /rooms/:id`. The participant record carries the harness
 `sessionId` from this first version (the M2-6 precedent at `:1800`), even though nothing
-loads it until Half B (`session/load`) lands. **And the rename lands here**, while `chat.ts` is the only client and
+loads it until Half B (`session/load`) lands.
+**Added 2026-09-23 (R44):** the participant record carries `role` from this first
+version, and the starter gets `role: "orchestrator"` (R21), so M4-2 can find the default
+target before M6-3 lets a person set or change a role. **And the rename lands here**, while `chat.ts` is the only client and
 marked experimental: status `closed` becomes `dismissed`, `Room.close()` becomes
 `dismiss()`, its inner closure — confusingly named `shutdown` today, one import from
 `daemon.ts`'s process `shutdown` — becomes `teardown()`, and dismiss moves to
@@ -2272,7 +2275,7 @@ from `room.status()` today.
 *Done when* empty and starter rooms round-trip through `GET /rooms/:id`, the list carries
 each roster inline, ids are tested, no file says `closed` of a dismissed room, and the
 DTOs are covered by contract tests.
-Decisions: R1, R3, R9, R17, R21, R22, R33, R36, S4, S13. (R22 settled: a new `roomId`.)
+Decisions: R1, R3, R9, R17, R21, R22, R33, R36, R44, S4, S13. (R22 settled: a new `roomId`.)
 
 **M6-3 · Participant lifecycle: add/remove/list, settings, names · M · needs M6-2**
 `POST /rooms/:id/agents` with `{name, agent or cmd, mode, settings}`; list, get, remove,
