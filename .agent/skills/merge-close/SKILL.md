@@ -156,7 +156,6 @@ gh project item-edit --id <itemId> --project-id <projectId> \
 
 Under `--dry-run`, print the moves instead of making them.
 
-
 ## Rules
 
 - Stop at the first unmet condition. Merge only when all ACs are met, the branch is synced,
