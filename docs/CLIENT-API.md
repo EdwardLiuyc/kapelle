@@ -643,7 +643,7 @@ harness name):
 
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
-| `_client_user_message` | `text` | A message a person sent into the room. |
+| `_client_user_message` | `text` | A message a person sent into the room. M6-4 adds `participantId` to the log line, not to this event. |
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer. The room takes the next message. `error` means the turn failed. |
 
 Ignore a `_client_*` name that you do not know. New ones can appear.
@@ -836,25 +836,33 @@ person name the target with a leading `@name`; the client resolves the name to t
 participant id itself (R43). The daemon never parses message text. Every client follows
 the same rules, so the TUI and piped `chat.ts` behave the same:
 
+- The client first removes whitespace at the start of the message. So a leading space
+  is not a way to write a literal `@`, and piped `chat.ts`, which already trims, cannot
+  differ from the TUI.
 - A **mention** is a word at the very start of the message that begins with `@`. The name
-  after `@` ends at a space or at one of `,` `:` `;` `.`. `@alice, look` and `@alice: look`
-  both send `look` to alice.
+  after `@` ends at whitespace (a space, a tab or a newline) or at one of `,` `:` `;` `.`.
+  `@alice, look`, `@alice: look` and `@alice` then a newline then `look` all send `look`
+  to alice.
 - The name matches a participant name with ASCII case folding, so `@Alice` is `@alice`.
 - **One mention** names the target. An unknown name is a client-side error.
-- **Two or more mentions** at the start are a client-side error, known names or not,
-  because a message has one target. `@edward @bab hi` is refused, so a typo in a second
-  name is caught.
+- **Two or more mentions** at the start are a client-side error, known names or not.
+  Taking the first and ignoring the rest would send `@edward @bab hi` to edward with
+  `@bab` as text, so a typo in the second name would pass unnoticed. Refusing catches it.
 - **No mention** sends the message to the participant whose `role` is `orchestrator`. A
   room with no orchestrator refuses before the request, and says: start with `@name`, or
   give a participant the orchestrator role.
 - After the first word that does not begin with `@`, an `@` is plain text. `@alice ask
   @bob` goes to alice. To start a message with a literal `@`, put it in backticks,
   like `` `@property` ``, or put a word before it.
-- The client **removes the mention**, its end mark and the spaces after it. The rest is
-  the text it sends, so it is what the agent gets and what `_client_user_message` records.
-  A replaying client draws that text and names the target from `participantId`.
-- A mention with nothing after it (`@alice`) is a client-side error. The daemon would
-  refuse the empty text with `400` `invalid_request`.
+- The client **removes the mention**, its end mark and the whitespace after it,
+  newlines included. The rest is the text it sends, so it is what the agent gets and
+  what `_client_user_message` records. A replaying client draws that text and names the
+  target from the log line's `participantId`, which M6-4 adds to every room log line
+  beside `seq` and `agent`.
+- A mention with nothing after it (`@alice`) is a client-side error **at submit**. The
+  daemon would refuse the empty text with `400` `invalid_request`. While the person
+  types, the composer only shows the resolved target, so a thread that opens with its
+  `@name` pre-filled is not in an error state.
 
 ## A first client, step by step
 

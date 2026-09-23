@@ -2289,9 +2289,10 @@ under ASCII lowercase folding (R22); harness fixed at add; mode mutable and defa
 `auto`; an optional, mutable `role` (`orchestrator`, `developer`, `tester`, `architect`),
 a label only, with a second `orchestrator` refused `409` `orchestrator_exists` at add and
 at a role change (R44). One route changes a participant:
-`PATCH /rooms/:id/agents/:agentId` with any of `{name, mode, role}`. Removal cancels the
-session and applies the worktree policy. Settings reuse run-file `Task` fields plus a
-purpose/instructions field.
+`PATCH /rooms/:id/agents/:agentId` with any of `{name, mode, role}`; this story adds its
+row to the CLIENT-API route table and drops `orchestrator_exists`'s "Not built yet" note.
+Removal cancels the session and applies the worktree policy. Settings reuse run-file
+`Task` fields plus a purpose/instructions field.
 Decisions: R4, R9, R10, R12, R15, R18, R22, R33, R44. (R33 settled as (a).)
 
 **M6-4 · Routing, room timeline, participant streams and cancel-turn · M · needs M6-3**
