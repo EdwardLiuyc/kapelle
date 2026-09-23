@@ -164,3 +164,61 @@ test("a body that is not a JSON object is invalid_request", async (t) => {
     assert.equal(r.body.error.code, "invalid_request", body);
   }
 });
+
+test("a body of exactly 4 MiB is read, and one byte more is refused", async (t) => {
+  const d = await boot(t);
+  const json = { "content-type": "application/json" };
+  const prefix = '{"path":"';
+  const suffix = '"}';
+  const exact =
+    prefix +
+    "a".repeat(MAX_BODY_BYTES - prefix.length - suffix.length) +
+    suffix;
+  assert.equal(Buffer.byteLength(exact), MAX_BODY_BYTES);
+
+  // Read to the end, then refused by the path validator: the cap is "at
+  // most 4 MiB", so this must not be the 413.
+  const atCap = await post(d, "/repos", json, exact);
+  assert.equal(atCap.status, 400);
+  assert.equal(atCap.body.error.code, "invalid_request");
+
+  const over = `${exact} `;
+  assert.equal(Buffer.byteLength(over), MAX_BODY_BYTES + 1);
+  const refused = await post(d, "/repos", json, over);
+  assert.equal(refused.status, 413);
+  assert.equal(refused.body.error.code, "body_too_large");
+});
+
+test("every write refuses a body that is not application/json", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const run = {
+    cmd: `node ${MOCK_AGENT}`,
+    mode: "auto",
+    tasks: [{ id: "one", prompt: "hi" }],
+  };
+  const room = await api<{ id: string }>(d, "POST", "/rooms", {
+    cwd,
+    cmd: `node ${MOCK_AGENT}`,
+  });
+  assert.equal(room.status, 201);
+
+  const writes: [string, Record<string, unknown>][] = [
+    ["/repos", { path: cwd }],
+    ["/runs", { cwd, run }],
+    ["/rooms", { cwd, cmd: `node ${MOCK_AGENT}` }],
+    [`/rooms/${room.body.id}/messages`, { text: "hi" }],
+    ["/permissions/nope", { allow: true }],
+  ];
+  for (const [path, body] of writes) {
+    const r = await post(
+      d,
+      path,
+      { "content-type": "text/plain" },
+      JSON.stringify(body),
+    );
+    assert.equal(r.status, 415, path);
+    assert.equal(r.body.error.code, "unsupported_media_type", path);
+  }
+  assert.equal((await api(d, "DELETE", `/rooms/${room.body.id}`)).status, 200);
+});

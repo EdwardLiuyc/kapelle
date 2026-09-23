@@ -281,7 +281,8 @@ Decisions: **C7, C8, J1–J5**.
 one code per situation (`ErrorCode` in `client/contract.ts`, the table in
 `docs/CLIENT-API.md`); every write refuses an unknown field; J1–J5 as recommended. Two
 refusals stay outside the envelope because Node sends them, not the daemon: the read
-timeout closes the connection, and malformed HTTP gets Node's bare `400`.
+timeout is Node's `408` with an empty body, then a closed connection, and malformed HTTP
+gets Node's bare `400`.
 
 ### M5-4 · Permission resolution and settled decisions · M · needs M2-3, M5-1
 
@@ -812,7 +813,7 @@ story, and the story moves into `STORIES.md`.
 | I5 | Repo metadata | (a) counts/last run from daemon (b) client joins | (a) |
 | J1 | Body cap | (a) 1 MiB (b) 4 MiB (c) per endpoint | **Decided 2026-09-23 (#135):** (b), run files carry prompts; `Content-Length` checked before reading, a chunked body counted |
 | J2 | Content type | (a) require JSON, 415 (b) liberal | **Decided 2026-09-23 (#135):** (a) — strict can loosen after the v1 freeze, liberal cannot tighten; media-type parameters accepted |
-| J3 | Read timeout | (a) 30s (b) none | **Decided 2026-09-23 (#135):** (a), Node's `requestTimeout`: the connection is closed with no body; a slow reply or SSE is never cut |
+| J3 | Read timeout | (a) 30s (b) none | **Decided 2026-09-23 (#135):** (a), Node's `requestTimeout`: `408` with an empty body, then the connection is closed; a slow reply or SSE is never cut |
 | J4 | Rate limit | explicitly none, loopback single operator | **Decided 2026-09-23 (#135):** none |
 | J5 | Response compression | none | **Decided 2026-09-23 (#135):** none |
 | K1 | Browser fate | retired by A3: the TUI is the only front end | **Settled by spike** |

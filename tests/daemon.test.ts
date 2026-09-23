@@ -1146,6 +1146,7 @@ test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the tok
 
   const nope = await api(d, "GET", "/runs/nope/events");
   assert.equal(nope.status, 404);
+  assert.equal(nope.body.error.code, "run_not_found");
   assert.match(nope.body.error.message, /no run nope/, "the 404 names the run");
   assert.equal(
     (await api(d, "GET", `/runs/${id}/events`, undefined, null)).status,
@@ -1158,11 +1159,15 @@ test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the tok
     "a wrong token is 401 on the events route too",
   );
   for (const bad of ["x", -1, 1.5, 100_000]) {
-    assert.equal(
-      (await stream(d, id, bad)).status,
-      400,
-      `Last-Event-ID ${bad}`,
-    );
+    const r = await fetch(`${d.url}/runs/${id}/events`, {
+      headers: {
+        authorization: `Bearer ${d.token}`,
+        "last-event-id": String(bad),
+      },
+    });
+    assert.equal(r.status, 400, `Last-Event-ID ${bad}`);
+    const refused = (await r.json()) as Reply;
+    assert.equal(refused.error.code, "invalid_request", `Last-Event-ID ${bad}`);
   }
 
   const done = await stream(d, id);
@@ -1176,6 +1181,53 @@ test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the tok
     done.frames,
     "Last-Event-ID: 0 is the full replay",
   );
+});
+
+test("a restored run whose event log is gone answers no_event_log", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  const posted = await api(first, "POST", "/runs", {
+    cwd: root,
+    run: mockRun([{ id: "a", prompt: "hi" }]),
+  });
+  const { id } = posted.body;
+  await settled(first, id);
+
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  // The record survives the restart, the log does not: the run exists, but
+  // there is nothing to stream and the code must say so rather than 404 the
+  // run itself.
+  await rm(join(stateDirFor(root), "runs", id, "events.jsonl"));
+
+  const second = await boot(t, runtime, [], state);
+  const events = await api(second, "GET", `/runs/${id}/events`);
+  assert.equal(events.status, 404);
+  assert.equal(events.body.error.code, "no_event_log");
+});
+
+test("a non-refusal error is a 500 internal, never a leaked code", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], {
+    cwd: root,
+    encoding: "utf8",
+  }).stdout.trim();
+  await writeFile(join(root, gitDir, "index"), "not an index\n");
+  const cwd = await added(d, root);
+
+  // `openWorktrees` runs `git status`, which now throws an execFile error
+  // whose own numeric `code` must not reach the envelope (M5-3, #135).
+  const r = await api(d, "POST", "/rooms", {
+    cwd,
+    cmd: `node ${MOCK_AGENT}`,
+  });
+  assert.equal(r.status, 500);
+  assert.equal(r.body.error.code, "internal");
+  assert.equal(typeof r.body.error.code, "string");
 });
 
 test("a client that disconnects mid-run leaves no reader holding the log open", {
@@ -2875,6 +2927,25 @@ test("chat.ts reports a daemon that went away instead of a dismissal, and exits 
   assert.match(r.stderr, /lost the daemon|lost the room stream/);
 });
 
+test("chat.ts new prints the daemon's refusal message, not an object", async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  const unadded = await tempDir(t);
+
+  // The daemon refuses an unadded cwd with `{error:{code,message}}`; the chat
+  // front end must show `error.message`, not stringify the object (M5-3,
+  // #135).
+  const refused = await spawnCli(
+    t,
+    ["new", "--cmd", REMEMBER, "--cwd", unadded],
+    "chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+  ).done;
+  assert.equal(refused.code, 1, refused.stderr);
+  assert.match(refused.stderr, /has not been added to the daemon/);
+  assert.doesNotMatch(refused.stderr, /\[object Object\]/);
+});
+
 test("a message while the harness is still answering is refused, and dismiss ends that turn", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
@@ -2925,10 +2996,11 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
   assert.equal(unknown.status, 400);
   assert.match(unknown.body.error.message, /unknown agent "nope"/);
 
-  assert.equal(
-    (await api(d, "POST", "/rooms/missing/messages", { text: "x" })).status,
-    404,
-  );
+  const missing = await api(d, "POST", "/rooms/missing/messages", {
+    text: "x",
+  });
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.error.code, "room_not_found");
   const open = await api<RoomReply>(d, "POST", "/rooms", {
     cwd,
     cmd: REMEMBER,
@@ -2938,6 +3010,34 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
   });
   assert.equal(empty.status, 400);
   await api(d, "DELETE", `/rooms/${open.body.id}`);
+});
+
+test("every room route answers room_not_found for an unknown id", async (t) => {
+  const d = await boot(t);
+  const routes: [string, string, unknown][] = [
+    ["GET", "/rooms/nope", undefined],
+    ["DELETE", "/rooms/nope", undefined],
+    ["POST", "/rooms/nope/messages", { text: "hi" }],
+    ["GET", "/rooms/nope/events", undefined],
+  ];
+  for (const [method, path, body] of routes) {
+    const r = await api(d, method, path, body);
+    assert.equal(r.status, 404, `${method} ${path}`);
+    assert.equal(r.body.error.code, "room_not_found", `${method} ${path}`);
+  }
+});
+
+test("a room whose harness cannot start is a 500 room_open_failed", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  // The harness binary is absent, so `openRoom` fails after the checkout is
+  // ready; that failure has its own code, not `internal` (M5-3, #135).
+  const r = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    cmd: "definitely-not-a-command",
+  });
+  assert.equal(r.status, 500);
+  assert.equal(r.body.error.code, "room_open_failed");
 });
 
 test("chat.ts talks to a room end to end: messages in, answers out, /dismiss stops it", async (t) => {

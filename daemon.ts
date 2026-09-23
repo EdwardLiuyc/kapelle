@@ -324,10 +324,23 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-/** An error that carries its HTTP status and contract code (M5-3). Anything
- *  thrown without them is a 500 `internal`. */
-function refusal(status: number, code: ErrorCode, message: string): Error {
-  return Object.assign(new Error(message), { status, code });
+/** An error that carries its HTTP status and contract code (M5-3). Only a
+ *  `Refusal` is trusted by the server's catch; anything else is a 500
+ *  `internal`, so a raw Node or `execFile` error cannot leak its own `code`
+ *  into the envelope. */
+class Refusal extends Error {
+  status: number;
+  code: ErrorCode;
+
+  constructor(status: number, code: ErrorCode, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function refusal(status: number, code: ErrorCode, message: string): Refusal {
+  return new Refusal(status, code, message);
 }
 
 /** The largest request body read (J1): run files carry prompts. */
@@ -1336,20 +1349,21 @@ async function route(req: IncomingMessage, res: ServerResponse) {
 }
 
 /**
- * J3: a request not fully received in 30 s has its connection closed. Node's
- * own timer, so the refusal has no body — the one exception to the envelope,
- * with Node's reply to malformed HTTP. It covers receiving the request only:
- * a slow reply and an SSE stream are never cut (measured 2026-09-23). Node
- * checks every 30 s, so the cut lands between 30 and 60 s.
+ * J3: a request not fully received in 30 s gets Node's own `408 Request
+ * Timeout`, with an empty body, and its connection is closed. Node sends it,
+ * not `route`, so it is the one exception to the envelope, with Node's reply
+ * to malformed HTTP. It covers receiving the request only: a slow reply and an
+ * SSE stream are never cut (measured 2026-09-23). Node checks every 30 s, so
+ * the 408 lands between 30 and 60 s.
  */
 const server = createServer(
   { requireHostHeader: false, requestTimeout: 30_000 },
   (req, res) => {
     route(req, res).catch((err) => {
-      const { status = 500, code = "internal" } = err as {
-        status?: number;
-        code?: ErrorCode;
-      };
+      const { status, code } =
+        err instanceof Refusal
+          ? err
+          : ({ status: 500, code: "internal" } as const);
       // A refusal sent before the body was read (a 413, a 415, a 404 on a
       // write) closes the connection rather than reading the rest.
       if (!req.complete) res.setHeader("connection", "close");

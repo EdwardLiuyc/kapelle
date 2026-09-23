@@ -207,9 +207,9 @@ must follow these rules:
   is too large, it reads none of the body.
 - Make it one JSON object. Send only the fields the route names. An unknown field gets
   `400`.
-- Send it all within 30 seconds. After that the daemon closes the connection with no
-  reply. This limit covers only the request. A slow reply or a long event stream is never
-  cut.
+- Send it all within 30 seconds. After that Node answers `408 Request Timeout` with an
+  empty body and closes the connection. This limit covers only the request. A slow reply
+  or a long event stream is never cut.
 
 `GET` and `DELETE` have no body and need no `Content-Type`.
 
@@ -225,8 +225,9 @@ must follow these rules:
 New codes can be added. A code is never removed or renamed within one `major` version. If
 you get a code that you do not know, decide from the HTTP status code.
 
-Two refusals have no JSON body. A request that runs past the 30-second limit gets its
-connection closed. A request that is not valid HTTP gets `400` from Node, with no body.
+Two refusals have no JSON body, because Node sends them before the daemon can answer. A
+request that runs past the 30-second limit gets `408`, and the connection closes. A
+request that is not valid HTTP gets `400`.
 
 **Error codes:**
 
@@ -251,7 +252,7 @@ connection closed. A request that is not valid HTTP gets `400` from Node, with n
 | `room_closed` | `409` | The room was dismissed, or its harness exited. | Stop. Open a new room. |
 | `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
 | `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. | Show the message. |
-| `internal` | `500` | A bug in the daemon. | Report it. |
+| `internal` | `500` | An error the daemon did not expect. For example, a bug, or a git command that failed in a broken repository. | Show the message. Report it if the repository is fine. |
 
 **Status codes you will see:**
 
@@ -264,14 +265,17 @@ connection closed. A request that is not valid HTTP gets `400` from Node, with n
 | `401` | Token missing or wrong. |
 | `403` | The `Host` is not allowed, or the folder is not in an added repository. |
 | `404` | No such route, run, room or permission. |
+| `408` | The request was not fully sent within 30 seconds. Empty body. |
 | `409` | The request is fine, but the thing is not in a state to accept it. |
 | `413` | The body is larger than 4 MiB. |
 | `415` | The body is not sent as `application/json`. |
-| `500` | A bug in the daemon, or a room's harness could not start. |
+| `500` | An error the daemon did not expect, or a room could not start. |
 | `503` | The daemon is shutting down. |
 
 **Checks run in this order:** the `Host`, then the token, then the route, then the body
-(`415`, then `413`, then `400`).
+(`415`, then `413`, then `400`). One route resolves a resource first:
+`POST /rooms/:id/messages` looks the room up, so an unknown room is `404 room_not_found`
+even when the body would be refused.
 
 ## Routes
 
