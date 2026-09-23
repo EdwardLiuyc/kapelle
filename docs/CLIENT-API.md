@@ -208,8 +208,9 @@ must follow these rules:
   so your upload can finish and you can read the `413`.
 - Make it one JSON object. Send only the fields the route names. An unknown field gets
   `400`.
-- Send it all within 30 seconds. After that Node answers `408 Request Timeout` with an
-  empty body and closes the connection. This limit covers only the request. A slow reply
+- Send it all within 30 seconds. If you do not, Node answers `408 Request Timeout` with
+  an empty body and closes the connection. Node checks only every 30 seconds, so the
+  `408` comes 30 to 60 seconds after the request started. This limit covers only the request. A slow reply
   or a long event stream is never cut.
 
 `GET` and `DELETE` have no body and need no `Content-Type`.
