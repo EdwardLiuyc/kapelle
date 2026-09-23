@@ -47,6 +47,14 @@ test("hostAllowed admits every loopback spelling, with or without a port", () =>
   }
 });
 
+test("hostAllowed ignores the port, by decision (M2-8)", () => {
+  // Rebinding needs an attacker-chosen name, not a port, so a loopback name on
+  // any port passes. `hostAllowed` never learns which port the daemon is on.
+  for (const host of ["127.0.0.1:9999", "localhost:1", "[::1]:65535"]) {
+    assert.equal(hostAllowed(fakeReq("/runs", [["Host", host]])), true, host);
+  }
+});
+
 test("hostAllowed refuses a forged, folded or missing Host", () => {
   for (const host of [
     "evil.example",

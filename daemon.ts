@@ -102,7 +102,6 @@ import {
   digest,
   existingDir,
   hostAllowed,
-  messageOf,
   Refusal,
   readBody,
   refusal,
@@ -117,6 +116,9 @@ import { AGENTS } from "./protocol/registry.ts";
 // ignored (they may be secrets); a known name with a bad value refuses the
 // start like any flag.
 const DEFAULT_PORT = 4719;
+
+const messageOf = (err: unknown) =>
+  err instanceof Error ? err.message : String(err);
 
 /** A startup refusal is one line and exit 1, never a stack trace. */
 function orExit<T>(f: () => T): T {

@@ -2258,7 +2258,7 @@ No dependency field and no scheduler.
 `participants: [{id, name, role?, status}]` — the shape `GET /runs` already gives its tasks
 (`daemon/dto.ts:188`) — so M4-2's sidebar costs one call, not one per room; the full
 `ParticipantDto` is on `GET /rooms/:id`. The participant record carries the harness
-`sessionId` from this first version (the M2-6 precedent at `:1800`), even though nothing
+`sessionId` from this first version (the M2-6 precedent), even though nothing
 loads it until Half B (`session/load`) lands.
 **Added 2026-09-23 (R44):** the participant record carries `role` from this first
 version, and the starter gets `role: "orchestrator"` (R21), so M4-2 can find the default

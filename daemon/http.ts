@@ -14,7 +14,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { isAbsolute } from "node:path";
 import type { ErrorCode } from "../client/contract.ts";
 
-export const messageOf = (err: unknown) =>
+const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
 /** Compared as digests: `timingSafeEqual` needs equal lengths, and hashing
