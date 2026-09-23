@@ -2080,11 +2080,16 @@ events (`_client_turn_ended`, permission queued, stall warning). This is the
 room opens on the timeline**, and the composer — not the row cursor — names the target
 (R43): a leading `@name` resolves client-side in `client/` to a participant id, and a
 message with no mention goes to the orchestrator. The resolver is shared with piped
-`chat.ts`, so there is one behaviour (S8). The stall warning the badge reads is the one
+`chat.ts`, so there is one behaviour (S8). It is the first runtime code in `client/`, so this
+story also widens the test that pins `chat.ts` to one repository import
+(`tests/daemon.test.ts`) to allow `client/` as well. Opening a participant's thread pre-fills `@name` in an empty
+composer, so the target is visible and the person can delete it; the timeline pre-fills
+nothing. The stall warning the badge reads is the one
 R38 creates: a participant's watchdog warns, never cancels.
 *Done when* the timeline is the landing view, switching rows changes the filtered thread
-without losing a stream, a message starting `@name` reaches that participant, and a
-message with no mention reaches the orchestrator.
+without losing a stream, a message starting `@name` reaches that participant, a
+message with no mention reaches the orchestrator, and opening a participant's thread
+pre-fills its `@name`.
 Decisions: R8, R19, R43, S11, R38. (S11 settled as (a) plus the additive `_client_room_closed`.)
 
 **M4-3 · Answer per-participant permissions from the TUI · M · needs M4-2, M5-4, M6-5**
@@ -2182,7 +2187,7 @@ Decisions: B8, M1–M6.
 A room is a long-lived container of independent agents on one repository: empty, or with a
 starter agent acting as the orchestrator. Each named agent has its own harness, mode,
 settings and long-lived multi-turn session; there is no dependency graph and no scheduler
-(R24–R30 retired). Decisions R1–R43 and S1–S14 live in `docs/CONTRACT-PLAN.md`. Every
+(R24–R30 retired). Decisions R1–R44 and S1–S14 live in `docs/CONTRACT-PLAN.md`. Every
 story below is **Proposed**. **Amended 2026-09-20 (plan review):** the spike port moves
 from last to **first, as M6-0** — it needs nothing, and it is the only story that gets
 more expensive the longer it waits. R37–R42 close six decisions the stories below were
@@ -2238,7 +2243,7 @@ room back. The status set is `idle`/`busy`/`exited`/`paused`/`dismissed` — `cl
 renamed. M6-2 does the rename while `chat.ts` is still the only client and experimental.
 *Done when* every R decision that shapes an API has an answer and M6-2..M6-9 can be
 picked up without re-opening the model.
-Decisions: R1–R23, R31–R43, S10, S12, S13.
+Decisions: R1–R23, R31–R44, S10, S12, S13.
 
 **M6-2 · Room container: roster, empty/starter, DTOs · M · needs M6-1, M5-1, M5-10**
 The room record (repo, roster, title, created/updated); `POST /rooms` accepts an empty
@@ -2273,10 +2278,13 @@ Decisions: R1, R3, R9, R17, R21, R22, R33, R36, S4, S13. (R22 settled: a new `ro
 `POST /rooms/:id/agents` with `{name, agent or cmd, mode, settings}`; list, get, remove,
 and rename — R10 grants it, so the story carries it: the display name is mutable, the
 opaque id and the branch name are not.
-Names unique and validated; harness fixed at add; mode mutable and default `auto`;
+Names unique without regard to case and limited to 1–32 letters, digits, `-` or `_`
+(R22); harness fixed at add; mode mutable and default `auto`; an optional, mutable `role`
+(`orchestrator`, `developer`, `tester`, `architect`), a label only, with a second
+`orchestrator` refused `409` `orchestrator_exists` at add and at a role change (R44);
 removal cancels the session and applies the worktree policy. Settings reuse run-file
 `Task` fields plus a purpose/instructions field.
-Decisions: R4, R9, R10, R12, R15, R18, R33. (R33 settled as (a).)
+Decisions: R4, R9, R10, R12, R15, R18, R22, R33, R44. (R33 settled as (a).)
 
 **M6-4 · Routing, room timeline, participant streams and cancel-turn · M · needs M6-3**
 A message names its target participant, orchestrator by default (R7a). One room log and
@@ -2346,7 +2354,7 @@ with no delegation powers. Kept for the later coordinator choice (R34c); the cha
 agent-to-agent non-goal still applies.
 
 **Named deferred option (R43).** Scanning the orchestrator's responses for mentions — an
-experimental, supervisor-mediated agent-to-agent step — is the shape to build when the
+experimental, supervisor-mediated agent-to-agent step — is one candidate shape for when the
 delegation choice is taken up. It is not v1 and needs its own decision first: it reopens
 `PROJECT-BRIEF.md`'s non-goal and R2/R34c, and the daemon stays free of chat-platform
 code.

@@ -615,7 +615,8 @@ on the same session with the first turn's context kept, on all four harnesses
   `ParticipantDto`, and a room id of its own (`newRoomId()`, never a run id).
 - **Participants** — add, remove, list, rename; an opaque id plus a unique display name;
   the harness fixed at add, the mode mutable.
-- **Routing and the timeline** — a message names its target, the orchestrator by default.
+- **Routing and the timeline** — a message names the target, the orchestrator by default —
+  the one participant whose `role` is `orchestrator` (R44).
   One room log and one sequence, every line carrying `roomId` and `participantId`; a
   per-participant thread is a filter over that log. A busy participant queues FIFO, bounded.
   In the TUI the timeline is the landing view and a leading `@name` in the composer names

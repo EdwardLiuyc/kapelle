@@ -807,28 +807,37 @@ against real fields. It is not an API yet.
 ```text
 room              id, cwd, title, base, createdAt, updatedAt, status
                   status: active | paused | dismissed
-participant       id, name, harness, mode, purpose, settings,
+participant       id, name, role?, harness, mode, purpose, settings,
                   branch, worktree, baseSha,
                   sessionId, resumed?: "loaded" | "fresh",
                   status: idle | busy | exited | paused | dismissed
 room list         [{id, cwd, title, status, updatedAt,
-                    participants: [{id, name, status}]}]
+                    participants: [{id, name, role?, status}]}]
 room detail       the room fields above, plus every participant in full
 ```
 
 `resumed` is missing until a participant comes back. `loaded` means it kept its memory.
 `fresh` means it started a new session.
 
+`role` is one of `orchestrator`, `developer`, `tester` or `architect`, or missing. It is a
+label. It sends no text to the agent. A room has at most one `orchestrator`: adding or
+changing a participant to that role is refused with `409` `orchestrator_exists` while
+another one exists. More roles may come later, so a client shows a role it does not know
+as plain text.
+
 ### Addressing (planned)
 
 Every message has exactly one target participant. A client sends to
 `POST /rooms/:id/agents/:agentId/messages`, and a per-participant stream is the room's
 event log filtered by `participantId`. The TUI opens on the room timeline and lets the
-person name the target with a leading `@name`; the client resolves the unique display
-name to the opaque participant id itself (R43). The daemon never parses message text.
-A message with no `@name` goes to the orchestrator; a room with participants but no
-orchestrator refuses before the request, and an unknown or ambiguous name is a
-client-side error.
+person name the target with a leading `@name`; the client resolves the name to the opaque
+participant id itself, ignoring case (R43). The daemon never parses message text.
+
+- Only the first word is a mention. `@alice ask @bob` goes to alice; `@bob` is plain text.
+- Two mentions back to back at the start (`@a @b hi`) are a client-side error.
+- An unknown name is a client-side error.
+- A message with no `@name` goes to the participant whose `role` is `orchestrator`. A room
+  with no orchestrator refuses before the request.
 
 ## A first client, step by step
 
