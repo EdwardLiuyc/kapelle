@@ -202,9 +202,10 @@ must follow these rules:
   `; charset=utf-8` is fine. Any other type, or no header, gets `415`. Note that `fetch`
   sends `text/plain` for a string body and `curl -d` sends a form type, so set the header
   yourself.
-- Keep it at 4 MiB (4 194 304 bytes) or less. A larger body gets `413`, and the daemon
-  closes the connection. It never holds more than 4 MiB of a body: when `Content-Length`
-  is too large, it reads none of the body.
+- Keep it at 4 MiB (4 194 304 bytes) or less. A larger body gets `413`. When
+  `Content-Length` is too large, the `413` comes before the daemon reads the body. The
+  daemon never holds more than 4 MiB of a body: it throws the rest away as it arrives,
+  so your upload can finish and you can read the `413`.
 - Make it one JSON object. Send only the fields the route names. An unknown field gets
   `400`.
 - Send it all within 30 seconds. After that Node answers `408 Request Timeout` with an

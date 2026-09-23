@@ -1365,8 +1365,10 @@ const server = createServer(
           ? err
           : ({ status: 500, code: "internal" } as const);
       // A refusal sent before the body was read (a 413, a 415, a 404 on a
-      // write) closes the connection rather than reading the rest.
-      if (!req.complete) res.setHeader("connection", "close");
+      // write) leaves the rest to Node, which reads and discards it, bounded
+      // by `requestTimeout`. Never `connection: close`: the client is often
+      // still uploading, and a close then reaches it as EPIPE instead of this
+      // reply (measured 2026-09-23, 4 runs in 10 on one core).
       send(res, status, {
         error: { code, message: messageOf(err) },
       } satisfies ErrorReply);
