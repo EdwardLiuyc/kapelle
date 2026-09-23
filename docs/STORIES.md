@@ -2072,24 +2072,27 @@ the import-boundary test says so, and the TTY test still leaves the transcript i
 scrollback.
 Decisions: S7, S8, S9, M6. (S8 settled as (a).)
 
-**M4-2 · Room and roster sidebar, switching, unread badges · M · needs M4-1, M6-3**
+**M4-2 · Room and roster sidebar, switching, unread badges · M · needs M4-1, M6-4**
 A room list from `GET /rooms`, a rooms → participants tree, switching between rooms and
 participants without losing their streams, and unread/attention badges derived from
 events (`_client_turn_ended`, permission queued, stall warning). This is the
 "multiple chat rooms" requirement, one level richer because a room has a roster. **The
 room opens on the timeline**, and the composer — not the row cursor — names the target
-(R43): a leading `@name` resolves client-side in `client/` to a participant id, and a
-message with no mention goes to the orchestrator. The resolver is shared with piped
-`chat.ts`, so there is one behaviour (S8). It is the first runtime code in `client/`, so this
-story also widens the test that pins `chat.ts` to one repository import
-(`tests/daemon.test.ts`) to allow `client/` as well. Opening a participant's thread pre-fills `@name` in an empty
-composer, so the target is visible and the person can delete it; the timeline pre-fills
-nothing. The stall warning the badge reads is the one
-R38 creates: a participant's watchdog warns, never cancels.
+(R43): a leading `@name` resolves client-side to a participant id, and a message with no
+mention goes to the orchestrator; the rules are `docs/CLIENT-API.md` § Addressing.
+Opening a participant's thread pre-fills `@name` in an empty composer; the timeline
+pre-fills nothing. The filtered streams and the nested `messages` route are M6-4's, which
+is why this story needs M6-4. The resolver is its own module, `client/mention.ts`, never
+an export on `client/contract.ts`, so `daemon.ts` never imports a message parser; piped
+`chat.ts` uses the same module (S8). It is the first logic in `client/`, so this story
+changes the `chat.ts` import rule in `tests/daemon.test.ts` and `CLAUDE.md` in one
+commit, and the widened test stays transitive: that module reaches nothing under `core/`
+or `protocol/` at runtime. The stall warning the badge reads is the one R38 creates: a
+participant's watchdog warns, never cancels.
 *Done when* the timeline is the landing view, switching rows changes the filtered thread
-without losing a stream, a message starting `@name` reaches that participant, a
-message with no mention reaches the orchestrator, and opening a participant's thread
-pre-fills its `@name`.
+without losing a stream, a message starting `@name` reaches that participant, a message
+with no mention reaches the orchestrator, opening a participant's thread pre-fills its
+`@name`, and every refusal in § Addressing has a resolver test.
 Decisions: R8, R19, R43, S11, R38. (S11 settled as (a) plus the additive `_client_room_closed`.)
 
 **M4-3 · Answer per-participant permissions from the TUI · M · needs M4-2, M5-4, M6-5**
@@ -2259,7 +2262,8 @@ No dependency field and no scheduler.
 loads it until Half B (`session/load`) lands.
 **Added 2026-09-23 (R44):** the participant record carries `role` from this first
 version, and the starter gets `role: "orchestrator"` (R21), so M4-2 can find the default
-target before M6-3 lets a person set or change a role. **And the rename lands here**, while `chat.ts` is the only client and
+target before M6-3 lets a person set or change a role.
+**And the rename lands here**, while `chat.ts` is the only client and
 marked experimental: status `closed` becomes `dismissed`, `Room.close()` becomes
 `dismiss()`, its inner closure — confusingly named `shutdown` today, one import from
 `daemon.ts`'s process `shutdown` — becomes `teardown()`, and dismiss moves to
@@ -2280,13 +2284,14 @@ Decisions: R1, R3, R9, R17, R21, R22, R33, R36, R44, S4, S13. (R22 settled: a ne
 **M6-3 · Participant lifecycle: add/remove/list, settings, names · M · needs M6-2**
 `POST /rooms/:id/agents` with `{name, agent or cmd, mode, settings}`; list, get, remove,
 and rename — R10 grants it, so the story carries it: the display name is mutable, the
-opaque id and the branch name are not.
-Names unique without regard to case and limited to 1–32 letters, digits, `-` or `_`
-(R22); harness fixed at add; mode mutable and default `auto`; an optional, mutable `role`
-(`orchestrator`, `developer`, `tester`, `architect`), a label only, with a second
-`orchestrator` refused `409` `orchestrator_exists` at add and at a role change (R44);
-removal cancels the session and applies the worktree policy. Settings reuse run-file
-`Task` fields plus a purpose/instructions field.
+opaque id and the branch name are not. Names match `^[A-Za-z0-9_-]{1,32}$` and are unique
+under ASCII lowercase folding (R22); harness fixed at add; mode mutable and default
+`auto`; an optional, mutable `role` (`orchestrator`, `developer`, `tester`, `architect`),
+a label only, with a second `orchestrator` refused `409` `orchestrator_exists` at add and
+at a role change (R44). One route changes a participant:
+`PATCH /rooms/:id/agents/:agentId` with any of `{name, mode, role}`. Removal cancels the
+session and applies the worktree policy. Settings reuse run-file `Task` fields plus a
+purpose/instructions field.
 Decisions: R4, R9, R10, R12, R15, R18, R22, R33, R44. (R33 settled as (a).)
 
 **M6-4 · Routing, room timeline, participant streams and cancel-turn · M · needs M6-3**
@@ -2354,13 +2359,14 @@ Decisions: R17, S3, S4, R42.
 **M6-8 · Orchestrator and delegation · M · needs M6-4 · deferred by R2**
 R2 is decided for v1: the orchestrator is a normal participant and the default recipient,
 with no delegation powers. Kept for the later coordinator choice (R34c); the charter's
-agent-to-agent non-goal still applies.
-
-**Named deferred option (R43).** Scanning the orchestrator's responses for mentions — an
-experimental, supervisor-mediated agent-to-agent step — is one candidate shape for when the
-delegation choice is taken up. It is not v1 and needs its own decision first: it reopens
-`PROJECT-BRIEF.md`'s non-goal and R2/R34c, and the daemon stays free of chat-platform
-code.
+agent-to-agent non-goal still applies. **Named deferred option (R43):** scanning the
+orchestrator's responses for mentions — an experimental, supervisor-mediated
+agent-to-agent step — is one candidate shape for when the delegation choice is taken up.
+It is not v1 and needs its own decision first: it reopens `PROJECT-BRIEF.md`'s non-goal
+and R2/R34c, and the daemon stays free of chat-platform code.
+*Done when* the chosen behaviour is implemented or explicitly deferred behind a `Decided`
+note; a direct agent-to-agent channel is not built without re-opening the brief. The
+orchestrator-response scan is recorded as the deferred option, not built.
 Decisions: R2, R23, R34, R43.
 
 **M6-9 · Room CLI and bridge readiness · S · needs M6-5, M4-2**
