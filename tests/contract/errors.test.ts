@@ -11,6 +11,7 @@
 
 import assert from "node:assert/strict";
 import { request } from "node:http";
+import { connect } from "node:net";
 import test from "node:test";
 import type { ErrorReply } from "../../client/contract.ts";
 import {
@@ -117,8 +118,45 @@ test("a body over 4 MiB is 413, whether or not it says its length", async (t) =>
   assert.equal(declared.status, 413);
   assert.equal(declared.body.error.code, "body_too_large");
 
-  // The daemon still serves: a refusal closes one connection, not the port.
+  // The daemon still serves after both refusals.
   assert.equal((await api(d, "GET", "/repos")).status, 200);
+});
+
+test("after a 413, the rest of an upload with no length is still read", async (t) => {
+  // The daemon answers once the count passes 4 MiB, then must keep reading
+  // and discard the rest. Destroying the request instead left the rest
+  // unread: the upload stalled after 8 MiB (measured 2026-09-23), and a
+  // client that reads the reply only after its upload would hang.
+  const d = await boot(t);
+  const { port } = new URL(d.url);
+  const socket = connect(Number(port), "127.0.0.1");
+  t.after(() => socket.destroy());
+  await new Promise((ok) => socket.once("connect", ok));
+  let reply = "";
+  socket.on("data", (c) => {
+    reply += c;
+  });
+  socket.write(
+    "POST /repos HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+      `Authorization: Bearer ${d.token}\r\n` +
+      "Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+  );
+  const mib = Buffer.alloc(1024 * 1024, 97);
+  const total = 64;
+  let sent = 0;
+  for (; sent < total; sent++) {
+    socket.write("100000\r\n");
+    socket.write(mib);
+    if (socket.write("\r\n")) continue;
+    const drained = await Promise.race([
+      new Promise((ok) => socket.once("drain", () => ok(true))),
+      new Promise((ok) => setTimeout(() => ok(false), 2000)),
+    ]);
+    if (!drained) break;
+  }
+  assert.equal(sent, total, `the upload stalled after ${sent} MiB`);
+  assert.match(reply, /^HTTP\/1\.1 413 /);
+  assert.match(reply, /"body_too_large"/);
 });
 
 test("every write refuses a field its route does not take", async (t) => {

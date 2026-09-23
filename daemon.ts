@@ -374,10 +374,22 @@ async function readBody(
   if (Number(req.headers["content-length"]) > MAX_BODY_BYTES) throw tooLarge();
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of req as AsyncIterable<Buffer>) {
-    size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw tooLarge();
-    chunks.push(chunk);
+  // `destroyOnReturn: false`, then `resume()`: leaving the loop early must
+  // not destroy the request, or nothing reads the rest of an oversized upload
+  // and it stalls (measured 2026-09-23: after 8 MiB). Resumed, the rest is
+  // discarded as it arrives, as Node does after a 413 on `Content-Length`.
+  let over = false;
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_BODY_BYTES) {
+      over = true;
+      break;
+    }
+    chunks.push(chunk as Buffer);
+  }
+  if (over) {
+    req.resume();
+    throw tooLarge();
   }
   // Joined as bytes, then decoded once: a character split across two chunks
   // would otherwise decode as two replacement characters.
@@ -395,12 +407,12 @@ async function readBody(
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw refusal(400, "invalid_request", "body must be a JSON object");
   }
-  const unknown = Object.keys(body).find((key) => !fields.includes(key));
-  if (unknown !== undefined) {
+  const extra = Object.keys(body).find((key) => !fields.includes(key));
+  if (extra !== undefined) {
     throw refusal(
       400,
       "invalid_request",
-      `unknown field "${unknown}"; this route takes ${fields.join(", ")}`,
+      `unknown field "${extra}"; this route takes ${fields.join(", ")}`,
     );
   }
   return body as Record<string, unknown>;
