@@ -107,15 +107,20 @@ async function api<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
-  if (!text) return { status: res.status, body: {} as T };
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(text);
-    return res.ok
-      ? { status: res.status, body: parsed as T }
-      : { status: res.status, body: {} as T, error: parsed.error };
+    parsed = text ? JSON.parse(text) : undefined;
   } catch {
     throw new Error(`HTTP ${res.status}: response was not JSON`);
   }
+  if (res.ok) return { status: res.status, body: (parsed ?? {}) as T };
+  // A refusal Node sends itself — a 408, a 400 for malformed HTTP — has no
+  // envelope, so the status stands in for the message, as in `cli.ts`.
+  const error = (parsed as { error?: Refusal } | null | undefined)?.error ?? {
+    code: "",
+    message: `HTTP ${res.status}`,
+  };
+  return { status: res.status, body: {} as T, error };
 }
 
 /**
@@ -133,7 +138,10 @@ async function follow(
     signal,
   });
   if (!res.ok || !res.body) {
-    const { error } = (await res.json()) as { error?: Refusal };
+    const body = (await res.json().catch(() => null)) as {
+      error?: Refusal;
+    } | null;
+    const error = body?.error;
     throw new Error(error?.message ?? `events: HTTP ${res.status}`);
   }
   const decoder = new TextDecoder();

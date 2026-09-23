@@ -23,7 +23,8 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
+import type { AddressInfo } from "node:net";
 import { userInfo } from "node:os";
 import { join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -2944,6 +2945,36 @@ test("chat.ts new prints the daemon's refusal message, not an object", async (t)
   assert.equal(refused.code, 1, refused.stderr);
   assert.match(refused.stderr, /has not been added to the daemon/);
   assert.doesNotMatch(refused.stderr, /\[object Object\]/);
+});
+
+test("chat.ts names the status for a refusal with no JSON envelope", async (t) => {
+  // Node's own 408 has an empty body, and a body of `null` is JSON with no
+  // `error`: both used to print "error: undefined" or "not JSON".
+  for (const body of ["", "null"]) {
+    const fake = createServer((_req, res) => {
+      res.writeHead(408, { "content-type": "application/json" });
+      res.end(body);
+    });
+    await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+    t.after(() => fake.close());
+    const runtime = await tempDir(t);
+    await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+    const { port } = fake.address() as AddressInfo;
+    await writeFile(
+      join(runtime, "kapelle", "daemon.json"),
+      JSON.stringify({ pid: process.pid, port, token: "t" }),
+      { mode: 0o600 },
+    );
+    const r = await spawnCli(t, ["attach", "room-x"], "chat.ts", {
+      XDG_RUNTIME_DIR: runtime,
+    }).done;
+    assert.equal(r.code, 1, r.stderr);
+    assert.equal(
+      r.stderr.trim(),
+      "error: HTTP 408",
+      `body ${JSON.stringify(body)}`,
+    );
+  }
 });
 
 test("a message while the harness is still answering is refused, and dismiss ends that turn", async (t) => {
