@@ -85,10 +85,11 @@ const BOOLEAN_FLAGS = new Set([
 
 /** The verdicts `core/run.ts` settles a task on. A restored record may carry
  *  one it does not — `queued`, or the sweep's `killed` — and the card-derived
- *  fallback below counts those as failed, never success. That fallback only
- *  runs when `GET /runs/:id` still says `running` or carries no status (a cut
- *  stream, or a daemon older than M5-2); the settled run status wins whenever
- *  the daemon has one (M5-5). */
+ *  fallback below counts those as failed, never success. Without `--task`,
+ *  that fallback only runs when `GET /runs/:id` still says `running` or
+ *  carries no status (a cut stream, or a daemon older than M5-2); the settled
+ *  run status wins whenever the daemon has one (M5-5). With `--task`, the one
+ *  card is the verdict and keeps its own word. */
 const TASK_STATUSES = new Set<string>([
   "done",
   "warned",
@@ -1090,16 +1091,24 @@ async function attachRun(): Promise<number> {
     }
   }
   const fromTasks = runStatus(statuses);
-  // A throw out of `runRun` fails the run whatever its tasks said. `--task`
-  // asks about one task, so its card is the verdict: the run's status would
-  // fail a task that is `done` because a sibling failed. Otherwise the
-  // daemon's settled status is the verdict; the cards only stand in when GET
-  // still reads `running` (a cut stream) or is missing (pre-M5-2 daemon).
-  const status: RunStatus = state.error
+  // A throw out of `runRun` fails the run whatever its tasks said: no card
+  // can be trusted then, `--task` or not. Otherwise `--task` asks about one
+  // task, so its card is the verdict, in its own word — the run's status would
+  // fail a task that is `done` because a sibling failed, and `fromTasks` would
+  // flatten a `killed` or `queued` card to `failed`. Only a card still
+  // `running` (a cut stream) reads as `failed`. Without `--task`, the daemon's
+  // settled status is the verdict; the cards only stand in when GET still
+  // reads `running` (a cut stream) or is missing (pre-M5-2 daemon).
+  const mine = only ? cards.get(only)?.status : undefined;
+  const status: string = state.error
     ? "failed"
-    : !only && state.status !== undefined && state.status !== "running"
-      ? state.status
-      : fromTasks;
+    : mine !== undefined
+      ? mine === "running"
+        ? "failed"
+        : mine
+      : state.status !== undefined && state.status !== "running"
+        ? state.status
+        : fromTasks;
   if (!quiet) {
     console.log(`\n${status} — ${plural(statuses.length, "task")}`);
   } else if (!only && status !== "done" && status !== "warned") {

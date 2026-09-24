@@ -2049,6 +2049,17 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   ).done;
   assert.equal(oneTask.code, 1, oneTask.stderr);
   assert.match(oneTask.stdout, /waiting \([^)]*\) queued/);
+  // `--task` keeps the card's own word in the summary, never `failed` (#170).
+  assert.match(oneTask.stdout, /queued — 1 task/);
+  const stuckTask = await spawnCli(
+    t,
+    ["attach", id, "--task", "stuck"],
+    "cli.ts",
+    attachEnv,
+  ).done;
+  assert.equal(stuckTask.code, 1, stuckTask.stderr);
+  assert.match(stuckTask.stdout, /stuck \([^)]*\) killed/);
+  assert.match(stuckTask.stdout, /killed — 1 task/);
 
   process.kill(second.pid, "SIGTERM");
   assert.equal((await second.done).code, 0);
