@@ -276,10 +276,12 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    than a fix for a live failure, and the `-32603` in the docs is no longer reproducible
    on that version. And M0-2 **dropped the `claude-code` entry** (deprecated
    `@zed-industries/claude-code-acp`), so `claude` is the single Claude harness id.
-8. Correct the safety claim in `CLAUDE.md` **and the README**: "even `--mode auto` cannot
-   write outside it" is true of `fs/*` only. A shelling agent bypasses `#guardPath`
-   entirely. The permission policy does still fire on the `execute` tool call — but it
-   judges an agent-supplied *title string*, not the actual command line.
+8. ~~Correct the safety claim in `CLAUDE.md` **and the README**.~~ **Done by M0-6**, and
+   corrected again by M0-7 (`docs/FINDINGS.md` §M0-1, "What re-verification changed").
+   The claim was that "even `--mode auto` cannot write outside it"; it is true of `fs/*`
+   only. A shelling agent bypasses `#guardPath` entirely. The permission policy does still
+   fire on the `execute` tool call — but it judges an agent-supplied *title string*, not
+   the actual command line.
    **M0-1 makes this correction bigger than a reword.** The positive claim drafted here —
    "`safe` blocks everything that crosses the protocol, and nothing that doesn't" — is
    still an overclaim, because against opencode *nothing* crosses the protocol: no `fs/*`,

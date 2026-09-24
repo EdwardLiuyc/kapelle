@@ -2506,9 +2506,10 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   a daemon restart with a fresh session, not this call; Half B uses the capability-gated
   call when it lands.
   **Two gaps recorded 2026-09-21 (#145), both to close before Half B is scheduled.** Every
-  `loadSession: true` we hold is a **handshake advertisement** (`docs/FINDINGS.md` §M0-1, `agentCapabilities`);
-  §Multi-turn measured two turns in *one* process, and nobody has loaded a session into a
-  **new** harness process — which is what a reboot needs. And pi-acp's measurement table
+  `loadSession: true` we hold is a **handshake advertisement** (`docs/FINDINGS.md`
+  §M0-1, `agentCapabilities`); §Multi-turn measured two turns in *one* process, and
+  nobody has loaded a session into a **new** harness process — which is what a reboot
+  needs. And pi-acp's measurement table
   (`docs/FINDINGS.md` §pi-acp) has no `loadSession` row at all, so "every measured harness
   advertises it" is true of three of the four. One probe answers both. M6-7's Half A does
   not wait on it.

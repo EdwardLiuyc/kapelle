@@ -560,8 +560,9 @@ machine reboots, and the operator expects to keep talking to them afterwards. To
 daemon shutdown calls the same `close()` as a dismiss, so a restart is a **stop**, not a
 pause. R42(b) then makes the restored room read-only. Nothing blocks the other answer —
 three of the four measured harnesses advertise `loadSession: true`
-(`docs/FINDINGS.md` §M0-1, `agentCapabilities`; pi-acp's `loadSession` was not measured — see the backlog note
-in `docs/STORIES.md`), so S3(c) is unscheduled rather than impossible. M6-1 decides whether
+(`docs/FINDINGS.md` §M0-1, `agentCapabilities`; pi-acp's `loadSession` was not
+measured — see the backlog note in `docs/STORIES.md`), so S3(c) is unscheduled rather
+than impossible. M6-1 decides whether
 shutdown and close stay the same verb, and R37's `keep` is what makes either answer
 possible: the checkout is still there.
 
