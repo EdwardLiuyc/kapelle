@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { RunStatus } from "./client/contract.ts";
 import { resolveRunDefaults, warnUnknownConfigEnv } from "./core/config.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
@@ -82,8 +83,12 @@ const BOOLEAN_FLAGS = new Set([
   "--squash",
 ]);
 
-/** The statuses `core/run.ts` settles on. A restored record may carry one it
- *  does not (`queued`), and `attach` counts that as failed, never success. */
+/** The verdicts `core/run.ts` settles a task on. A restored record may carry
+ *  one it does not — `queued`, or the sweep's `killed` — and the card-derived
+ *  fallback below counts those as failed, never success. That fallback only
+ *  runs when `GET /runs/:id` still says `running` or carries no status (a cut
+ *  stream, or a daemon older than M5-2); the settled run status wins whenever
+ *  the daemon has one (M5-5). */
 const TASK_STATUSES = new Set<string>([
   "done",
   "warned",
@@ -694,6 +699,8 @@ type RecordedTask = Omit<Partial<TaskRun>, "status"> & {
  */
 interface AttachState {
   error?: string;
+  /** The daemon's authoritative run status (M5-5); read once the stream ends. */
+  status?: RunStatus;
   report?: { tasks?: RecordedTask[] };
   tasks?: RecordedTask[];
   notices?: { taskId: string; text: string; kind?: Warning["kind"] }[];
@@ -1041,8 +1048,14 @@ async function attachRun(): Promise<number> {
   // them — `tasks`, one shape live or restored since M5-2 (the `report`
   // fallback only fits a daemon older than M5-2) — so it fills what the
   // stream left open.
-  // `state.status` is never read: it can still say `running` for a beat after
-  // the stream ends, and the tasks already decide the run (`runStatus`).
+  // `state.status` is the run's authority once the daemon has settled it
+  // (M5-5): the terminal record is written before `_client_run_finished`, so a
+  // run that ends normally — and a killed run the sweep rewrote — both answer
+  // with a terminal status here. A task card cannot be trusted over it: a
+  // crash can land after `_client_task_finished {status:"done"}` and before
+  // the task's record write, and the sweep then marks the run `killed`. A
+  // still-`running` GET means the stream was cut mid-run, and only then do the
+  // cards decide.
   for (const r of state.report?.tasks ?? state.tasks ?? []) {
     if (only && r.id !== only) continue;
     const c = card(r.id);
@@ -1061,8 +1074,10 @@ async function attachRun(): Promise<number> {
   }
 
   // Anything that is not a verdict — a card still `running`, a record's
-  // `queued` — counts as failed: an unfinished task is never a success.
+  // `queued` — counts as failed in the fallback: an unfinished task is never a
+  // success. The settled run status wins over this whenever GET has one.
   const statuses: TaskStatus[] = [];
+  let reported = false;
   for (const c of cards.values()) {
     statuses.push(
       TASK_STATUSES.has(c.status) ? (c.status as TaskStatus) : "failed",
@@ -1070,14 +1085,30 @@ async function attachRun(): Promise<number> {
     if (quiet) {
       if (c.status !== "done" && c.status !== "warned") {
         console.error(`error: [${c.id}] ${c.status}`);
+        reported = true;
       }
     } else {
       printTask(only ? { ...c, transcript: "" } : c);
     }
   }
-  // A throw out of `runRun` fails the run whatever its tasks said.
-  const status = state.error ? "failed" : runStatus(statuses);
-  if (!quiet) console.log(`\n${status} — ${plural(statuses.length, "task")}`);
+  const fromTasks = runStatus(statuses);
+  // A throw out of `runRun` fails the run whatever its tasks said. Otherwise
+  // the daemon's settled status is the verdict; the cards only stand in when
+  // GET still reads `running` (a cut stream) or is missing (pre-M5-2 daemon).
+  const status: RunStatus = state.error
+    ? "failed"
+    : state.status !== undefined && state.status !== "running"
+      ? state.status
+      : fromTasks;
+  if (!quiet) {
+    console.log(`\n${status} — ${plural(statuses.length, "task")}`);
+  } else if (!reported && status !== "done" && status !== "warned") {
+    // `--quiet` suppresses the summary, not the fact that the run failed. The
+    // verdict can come from the record while every card the log carries reads
+    // `done` — a crash between `_client_task_finished` and the record write
+    // leaves exactly that — so this run-level line is the only one left.
+    console.error(`error: run ${id} ${status}`);
+  }
   return status === "done" || status === "warned" ? 0 : 1;
 }
 

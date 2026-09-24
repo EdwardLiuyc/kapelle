@@ -315,7 +315,7 @@ const restoredLogs = new Map<string, string>();
  * **Only terminal runs.** A record still saying `running` belongs to a
  * process that is gone; calling it live here would list a run nothing is
  * running and hand `DELETE` a canceller that does not exist. The M2-5 sweep
- * ran just before this scan and rewrote those to `failed`; the guard below is
+ * ran just before this scan and rewrote those to `killed`; the guard below is
  * for a record the sweep could not write.
  */
 function restoreRuns(): void {
@@ -398,7 +398,7 @@ function restoreRuns(): void {
 }
 
 // M2-5 (#35): reconcile the previous daemon's debris before anything is
-// restored or served. This rewrites a record left `running` to `failed` with
+// restored or served. This rewrites a record left `running` to `killed` with
 // a fresh `endedAt`, so the scan below sees it as terminal; worktrees and runs
 // inside the retention window are left alone.
 // The real handlers are installed further down, once `server` and the run

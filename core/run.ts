@@ -631,10 +631,14 @@ interface TaskControl {
 /**
  * One task as the run record carries it (M2-6, #36).
  *
- * `status` widens `TaskStatus` with the two states a task can be *caught* in
- * by a crash. Neither is a verdict, which is why neither is a `TaskStatus`:
- * nothing in this module can settle on them, and `core/merge.ts` refuses both
- * as unfinished along with every other non-`done`/`warned` value.
+ * `status` widens `TaskStatus` with `queued` and `running`, the two states
+ * this module can leave in a record. A record the boot sweep rewrote can also
+ * carry `killed` on disk (M5-5), written on the sweep's own loose record
+ * shape; nothing here ever writes it, so it is not part of this type, and the
+ * DTO passes the record's word through as a string. None is a verdict, which
+ * is why none is a `TaskStatus`: nothing in this module can settle on them,
+ * and `core/merge.ts` refuses them as unfinished along with every other
+ * non-`done`/`warned` value.
  *
  * **M5-2 (#134):** the record also carries what a client card needs after a
  * restart — `agent`, `durationMs` and `warnings`. `usage`, `error` and the

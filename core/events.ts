@@ -26,7 +26,8 @@
  * above and none of the three supervisor variants. M2-2's persisted log
  * (`core/eventlog.ts`) is the consumer that reads all three, and it widened
  * the union once: `_client_task_started`, `_client_worktree_created` and
- * `_client_task_finished`.
+ * `_client_task_finished`. M5-5 put `_client_run_finished` on that same log,
+ * so it is in the union too.
  *
  * Not `node:events`: `EventEmitter.emit` propagates a listener's throw and
  * skips the listeners behind it, so a broken renderer would take the run down

@@ -1761,7 +1761,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     JSON.stringify({ runId: "not-this-one", status: "done", tasks: [] }),
   );
   // A record still saying `running` is a crash: M2-5's sweep rewrites it to
-  // `failed` before this daemon restores, so it is served, not skipped.
+  // `killed` before this daemon restores, so it is served, not skipped.
   await mkdir(join(runs, "live"));
   await writeFile(
     join(runs, "live", "run.json"),
@@ -1985,14 +1985,14 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
 
   // M2-9: the partial log carries no `_client_task_finished`, so `attach`
   // must reconcile with the record `restoreRuns` built. The regression: it
-  // printed only `stuck` and said `done — 1 task`, exit 0, for a failed run.
+  // printed only `stuck` and said `done — 1 task`, exit 0, for a crashed run.
   const attachEnv = dirs(runtime, state);
   const attached = await spawnCli(t, ["attach", id], "cli.ts", attachEnv).done;
   assert.equal(attached.code, 1, attached.stderr);
   assert.match(attached.stdout, /stuck \([^)]*\) killed/);
   assert.match(attached.stdout, /waiting \([^)]*\) queued/);
   assert.doesNotMatch(attached.stdout, /\bdone\b/);
-  assert.match(attached.stdout, /failed — 2 tasks/);
+  assert.match(attached.stdout, /killed — 2 tasks/);
 
   const oneTask = await spawnCli(
     t,
@@ -2002,6 +2002,83 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   ).done;
   assert.equal(oneTask.code, 1, oneTask.stderr);
   assert.match(oneTask.stdout, /waiting \([^)]*\) queued/);
+
+  process.kill(second.pid, "SIGTERM");
+  assert.equal((await second.done).code, 0);
+});
+
+test("attach trusts a killed run status over a log whose task_finished beat the record", async (t) => {
+  // M5-5 (#137): a crash can land after `_client_task_finished
+  // {status:"done"}` is emitted and before the task's record write, so the
+  // sweep marks the run — and the still-`running` task — `killed` while the
+  // log's only card reads done. `attach` must not call that run done.
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const id = "crashed-lag";
+  const dir = join(stateDirFor(root), "runs", id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, "run.json"),
+    `${JSON.stringify({
+      runId: id,
+      root,
+      cwd: root,
+      status: "running",
+      startedAt: new Date(Date.now() - 10_000).toISOString(),
+      tasks: [{ id: "one", status: "running", agent: "mock-agent" }],
+    })}\n`,
+  );
+  await writeFile(
+    join(dir, "events.jsonl"),
+    `${JSON.stringify({
+      seq: 1,
+      at: new Date().toISOString(),
+      agent: "one",
+      update: {
+        sessionUpdate: "_client_task_finished",
+        status: "done",
+        durationMs: 1,
+      },
+    })}\n`,
+  );
+
+  const second = await boot(t, runtime, [], state);
+  const restored = await api(second, "GET", `/runs/${id}`);
+  assert.equal(restored.body.status, "killed");
+  assert.deepEqual(
+    restored.body.tasks.map((task) => [task.id, task.status]),
+    [["one", "killed"]],
+  );
+
+  const attached = await spawnCli(
+    t,
+    ["attach", id],
+    "cli.ts",
+    dirs(runtime, state),
+  ).done;
+  assert.equal(attached.code, 1, attached.stderr);
+  // The card comes from the log and reads done; the run verdict must not.
+  assert.match(attached.stdout, /one \([^)]*\) done/);
+  assert.match(attached.stdout, /killed — 1 task/);
+  assert.doesNotMatch(attached.stdout, /done —/);
+
+  // `--quiet` suppresses the summary, not the fact that the run failed. The
+  // only card reads done, so the run-level `killed` verdict is the only thing
+  // left to report; failing silently on exit 1 would break that contract.
+  const quietAttach = await spawnCli(
+    t,
+    ["attach", id, "--quiet"],
+    "cli.ts",
+    dirs(runtime, state),
+  ).done;
+  assert.equal(quietAttach.code, 1, quietAttach.stderr);
+  assert.equal(quietAttach.stdout, "");
+  assert.match(quietAttach.stderr, /killed/);
 
   process.kill(second.pid, "SIGTERM");
   assert.equal((await second.done).code, 0);

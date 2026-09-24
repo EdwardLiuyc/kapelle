@@ -444,9 +444,10 @@ status:
 | `failed` | It failed. |
 | `killed` | The daemon stopped while the run was live, for example a crash or a power cut. Only a run read back after a restart has it. Since 1.2 (M5-5). |
 
-**Task status** is one of the words above, or `queued` (not started yet), or `running`.
-After a restart, a task that was running when the daemon stopped is `killed`, and a task
-that never started stays `queued`.
+**Task status** is one of the task words above, or `queued` (not started yet), or
+`running` (while the run is live). After a restart, a task that was running when the
+daemon stopped is `killed`, and a task that never started stays `queued`. In TypeScript,
+`TaskDto.status` is a `string`, so it can carry these words.
 Show a word that you do not know as it is. Do not fail on it; that goes for the run
 status too, which comes off the same record.
 

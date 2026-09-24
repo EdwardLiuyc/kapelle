@@ -833,12 +833,11 @@ test("the run's last event is _client_run_finished, after the record and onFinis
       .length,
     1,
   );
-  assert.ok(
-    lines.findLastIndex(
-      (l) => l.update.sessionUpdate === "_client_task_finished",
-    ) <
-      lines.length - 1,
+  const lastTask = lines.findLastIndex(
+    (l) => l.update.sessionUpdate === "_client_task_finished",
   );
+  assert.ok(lastTask >= 0, "a task-finished line exists");
+  assert.ok(lastTask < lines.length - 1, "the run event follows it");
 });
 
 test("the record names a running task and a queued one, before the run ends", async (t) => {
