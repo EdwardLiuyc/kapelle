@@ -297,6 +297,11 @@ test("--file runs write the same event log the daemon replays", async (t) => {
     events.map((e) => e.seq),
     Array.from({ length: events.length }, (_, i) => i + 1),
   );
+  // Every event is the task's, except the run's own last one (M5-5).
+  const last = events.pop();
+  assert.equal(last.agent, "");
+  assert.equal(last.update.sessionUpdate, "_client_run_finished");
+  assert.equal(last.update.status, "done");
   for (const e of events) {
     assert.equal(e.agent, "one");
     assert.equal(typeof e.update.sessionUpdate, "string");

@@ -353,7 +353,7 @@ function restoreRuns(): void {
         console.error(`skipping ${recordPath}: no status in the record`);
         continue;
       }
-      // The sweep rewrote these to `failed` before this scan, so one left
+      // The sweep rewrote these to `killed` before this scan, so one left
       // here is a record it could not write; expected after a crash, silent.
       if (status === "running") continue;
       const state: RunState = {
@@ -675,13 +675,18 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     onNotice: (taskId, text, kind) => {
       state.notices.push(kind ? { taskId, text, kind } : { taskId, text });
     },
+    // Before `_client_run_finished` is appended (M5-5), so a client that
+    // reads it and then asks `GET /runs/:id` sees this status, and the same
+    // `endedAt` the record carries.
+    onFinished: (report, endedAt) => {
+      state.status = report.status;
+      state.report = report;
+      state.endedAt = endedAt;
+    },
   })
     .then(
-      (report) => {
-        state.status = report.status;
-        state.report = report;
-        state.endedAt = new Date().toISOString();
-      },
+      // `onFinished` settled a run that ended; only a throw is left here.
+      () => {},
       (err) => {
         state.status = "failed";
         state.error = messageOf(err);

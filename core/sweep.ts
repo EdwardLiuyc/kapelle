@@ -13,8 +13,9 @@
  *    at spawn and this pass compares it before sending anything.
  * 2. **Records left `running`.** M2-6 writes `run.json` on every task
  *    transition, so a crash leaves a record mid-flight. Those are rewritten
- *    terminal (`failed`, the status `core/run.ts` gives a task that died with
- *    its supervisor) with `endedAt` = recovery time, which is also what makes
+ *    terminal (`killed`, M5-5: a status only this pass writes, so a client
+ *    can tell a run its daemon died under from one that failed) with
+ *    `endedAt` = recovery time, which is also what makes
  *    the run visible to the restore scan that follows.
  * 3. **Worktrees.** `git worktree list` is reconciled against the records: a
  *    run that is terminal **and** past the retention window loses its
@@ -306,7 +307,7 @@ function terminalSince(record: RunRecord): number | null {
  *
  * ponytail: the pid suffix keeps the write atomic, not the decision. A CLI run
  * that is genuinely live still reads as `running` to a daemon booting beside
- * it and is marked `failed` under it. Closing that needs the writer's pid in
+ * it and is marked `killed` under it. Closing that needs the writer's pid in
  * the record itself; M2-7 landed as config and did not add one, so this
  * stays open until a record carries its writer.
  */
@@ -528,9 +529,14 @@ function readRecords(pass: RepoPass): Map<string, RunRecord | null> | null {
 }
 
 /**
- * A run left mid-flight is terminal from here on: `failed` (the status
- * `core/run.ts` gives a task that died with its supervisor) with a fresh
- * `endedAt`, which is also what keeps it inside the retention window.
+ * A run left mid-flight is terminal from here on: `killed`, and so is each
+ * task it had running, with a fresh `endedAt`, which is also what keeps it
+ * inside the retention window. `killed` is a record word like `queued` and
+ * `running` — `core/run.ts` never settles on it — and it tells a client the
+ * daemon died under the run rather than that the run failed (M5-5, #137).
+ * `events.jsonl` is left alone: a `_client_run_finished` the run never wrote
+ * would be a lie, and a stream that ends without one already means "ask
+ * `GET /runs/:id`".
  */
 async function markCrashed(
   records: Map<string, RunRecord | null>,
@@ -541,10 +547,10 @@ async function markCrashed(
     if (record?.status !== "running") continue;
     const rewritten: RunRecord = {
       ...record,
-      status: "failed",
+      status: "killed",
       endedAt: new Date(now).toISOString(),
       tasks: taskEntries(record).map((task) =>
-        task.status === "running" ? { ...task, status: "failed" } : task,
+        task.status === "running" ? { ...task, status: "killed" } : task,
       ),
     };
     // Isolated per record: one unwritable `run.json` — a full disk, a
@@ -557,7 +563,7 @@ async function markCrashed(
       records.set(id, rewritten);
     } catch (err) {
       onNotice(
-        `cannot mark run ${id} in ${pass.root} as failed: ${messageOf(err)}`,
+        `cannot mark run ${id} in ${pass.root} as killed: ${messageOf(err)}`,
       );
     }
   }

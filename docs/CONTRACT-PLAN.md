@@ -711,6 +711,15 @@ claim, never a session loaded into a **new** harness process, and pi-acp's own t
 (`docs/M0-FINDINGS.md:1019`) has no `loadSession` row at all. `exited` revives through the
 same fresh-session path, so a crashed room is recoverable too (R33).
 
+**Open point (2026-09-24, found at #137):** nothing above says what a **daemon crash**
+leaves. The pause is written by the shutdown path, and a `kill -9` never runs it, so
+`room.json` still reads `idle` or `busy`, and the "crashed room" of R33 is a harness that
+exited, not a daemon that died. Runs settled the same case in M5-5: the boot sweep marks a
+run left `running` as `killed`, a status only the sweep writes, and adds no event to the
+log. This story must decide the room's answer: the sweep rewrites a live room to `paused`
+(a crash then reads like a shutdown), or it marks the room so a client can tell the two
+apart. Either way the log gets no line the room never wrote.
+
 *Done when* a restart lists the room with every participant `paused`, its history replays,
 a message to one revives it and is answered, the DTO reports `resumed: "fresh"`, and a
 dismissed room is **not** revived by the same path.
@@ -816,12 +825,12 @@ story, and the story moves into `STORIES.md`.
 
 | ID | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| E1 | Event shape | `{status, durationMs, turns, error?}`; tasks included? | status, durationMs, turns; tasks via GET |
-| E2 | Emitter | (a) `core/run.ts` last line (b) daemon wrapper | (a) |
-| E3 | Ordering | last line before `close()`; `_client_task_finished` first | confirm (a) |
-| E4 | Old logs without the event | (a) EOF fallback documented (b) backfill (c) ignore | (a) |
-| E5 | Daemon crash case | no event; sweep marks errored; client reconnects to status | confirm (a) |
-| E6 | Duplicate final summaries? | (a) status only (b) include result summaries | (a) |
+| E1 | Event shape | `{status, durationMs, turns, error?}`; tasks included? | **Decided 2026-09-24 (#137):** `_client_run_finished {status, durationMs, turns}`, `agent: ""`; tasks via GET |
+| E2 | Emitter | (a) `core/run.ts` last line (b) daemon wrapper | **Decided 2026-09-24 (#137):** (a) |
+| E3 | Ordering | last line before `close()`; `_client_task_finished` first | **Decided 2026-09-24 (#137):** (a), and the terminal `run.json` and the daemon's status are settled **before** the event (`RunOptions.onFinished`), so a `GET` after it never reads `running` |
+| E4 | Old logs without the event | (a) EOF fallback documented (b) backfill (c) ignore | **Decided 2026-09-24 (#137):** (a) |
+| E5 | Daemon crash case | no event; sweep marks errored; client reconnects to status | **Decided 2026-09-24 (#137):** no event — the sweep adds no line the run never wrote. It marks the run and each `running` task **`killed`**, a new record-only status (like `queued`), so a client tells a crash from a failure. Contract 1.2 |
+| E6 | Duplicate final summaries? | (a) status only (b) include result summaries | **Decided 2026-09-24 (#137):** (a) |
 
 ### SSE liveness and backpressure
 

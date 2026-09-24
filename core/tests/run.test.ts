@@ -9,6 +9,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -474,6 +475,7 @@ test("each task is bracketed by started and finished events, a pre-start cancel 
     "t0:agent_thought_chunk",
     "t0:finished:cancelled",
     "t1:finished:cancelled",
+    ":_client_run_finished",
   ]);
 });
 
@@ -763,6 +765,81 @@ async function recordIn(root: string, runId: string) {
 }
 
 const RECORD_RUN = "20260916-120000-abcd";
+
+test("the run's last event is _client_run_finished, after the record and onFinished", async (t) => {
+  // M5-5 (#137): a client that reads the event and then asks `GET /runs/:id`
+  // must get the same status, so the terminal record and the caller are
+  // settled before the line exists.
+  const root = await gitRepo(t);
+  const run = validateRun({
+    tasks: [
+      { id: "a", prompt: "x", agent: "opencode" },
+      { id: "b", prompt: "x", agent: "opencode" },
+    ],
+  });
+  const exec: TaskExecutor = async (task, ctx) => {
+    ctx.onTurn();
+    return task.id === "a"
+      ? { stopReason: "end_turn" }
+      : { stopReason: "refusal" };
+  };
+
+  const order: string[] = [];
+  const bus = createEventBus();
+  bus.addListener(({ update }) => {
+    if (update.sessionUpdate !== "_client_run_finished") return;
+    const path = join(stateDirFor(root), "runs", RECORD_RUN, "run.json");
+    order.push(
+      `event, record ${JSON.parse(readFileSync(path, "utf8")).status}`,
+    );
+  });
+  const report = await runRun(
+    run,
+    {
+      cwd: root,
+      runId: RECORD_RUN,
+      bus,
+      onFinished: (r, endedAt) =>
+        order.push(`onFinished ${r.status} ${endedAt}`),
+    },
+    exec,
+  );
+  const record = await recordIn(root, RECORD_RUN);
+  assert.deepEqual(order, [
+    `onFinished ${report.status} ${record.endedAt}`,
+    `event, record ${report.status}`,
+  ]);
+
+  const lines = (
+    await readFile(
+      join(stateDirFor(root), "runs", RECORD_RUN, "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  const last = lines.at(-1);
+  assert.equal(last.agent, "");
+  assert.equal(typeof last.at, "string");
+  assert.deepEqual(last.update, {
+    sessionUpdate: "_client_run_finished",
+    status: report.status,
+    durationMs: report.durationMs,
+    turns: 2,
+  });
+  assert.equal(
+    lines.filter((l) => l.update.sessionUpdate === "_client_run_finished")
+      .length,
+    1,
+  );
+  assert.ok(
+    lines.findLastIndex(
+      (l) => l.update.sessionUpdate === "_client_task_finished",
+    ) <
+      lines.length - 1,
+  );
+});
 
 test("the record names a running task and a queued one, before the run ends", async (t) => {
   const root = await gitRepo(t);

@@ -2,8 +2,8 @@
  * The event log — story M2-2, issue #32.
  *
  * One bus listener per run, appending every event to
- * `<stateDirFor(root)>/runs/<runId>/events.jsonl` as `{seq, agent, update}`,
- * one line each. Decided at pickup (2026-09-14):
+ * `<stateDirFor(root)>/runs/<runId>/events.jsonl` as `{seq, at, agent,
+ * update}`, one line each. Decided at pickup (2026-09-14):
  *
  * **Raw, never coalesced.** Every `agent_message_chunk` is its own line, with
  * its `_meta`. Joined text cannot be split again; a reader who wants messages
@@ -25,6 +25,10 @@
  *
  * **Committed, not appended.** A line counts once its write callback fires,
  * so no reader sees a line that is not on disk, or half of one.
+ *
+ * **`at` is stamped here** (M5-5, #137, decision C6): the ISO time the line
+ * was appended, on every log — a room's too — so a reader can order turns
+ * across logs. A line written before M5-5 has none.
  */
 
 import { createWriteStream } from "node:fs";
@@ -88,7 +92,8 @@ export function createEventLog(
       if (!accepting) return;
       appended += 1;
       const seq = appended;
-      const line = JSON.stringify({ seq, ...event });
+      const at = new Date().toISOString();
+      const line = JSON.stringify({ seq, at, ...event });
       const bytes = Buffer.byteLength(line) + 1;
       starts.push(appendedBytes);
       appendedBytes += bytes;

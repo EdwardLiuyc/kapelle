@@ -985,6 +985,9 @@ async function attachRun(): Promise<number> {
     for await (const event of sseEvents(res.body)) {
       const { agent, update } = event;
       if (only && agent !== only) continue;
+      // The run's own events carry `agent: ""` (M5-5) and belong to no card.
+      // The record below already settles the run; M5-10's reducer reads them.
+      if (agent === "") continue;
       const c = card(agent);
       // One task owns the cursor, so it can be drawn in full; the milestone
       // line below would repeat the tool call `render` has just drawn.

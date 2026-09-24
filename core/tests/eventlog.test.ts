@@ -79,13 +79,17 @@ test("every event lands unchanged, one line each, numbered from 1", async (t) =>
 
   const lines = (await readFile(path, "utf8")).split("\n");
   assert.equal(lines.pop(), "", "the file ends with a newline");
-  assert.deepEqual(
-    lines.map((l) => JSON.parse(l)),
-    [
-      { seq: 1, ...chunk("a") },
-      { seq: 2, ...withMeta },
-    ],
-  );
+  const parsed = lines.map((l) => JSON.parse(l));
+  // M5-5 (C6): every line carries the ISO time it was appended, after `seq`.
+  for (const line of parsed) {
+    assert.deepEqual(Object.keys(line).slice(0, 2), ["seq", "at"]);
+    assert.equal(new Date(line.at).toISOString(), line.at);
+    delete line.at;
+  }
+  assert.deepEqual(parsed, [
+    { seq: 1, ...chunk("a") },
+    { seq: 2, ...withMeta },
+  ]);
   assert.equal(log.size, 2);
 });
 

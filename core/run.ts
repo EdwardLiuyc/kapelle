@@ -340,6 +340,11 @@ export interface RunOptions {
    *  `daemon.ts` lists a live run's tasks from it (M2-10). Called whether or
    *  not the record could be written. */
   onTasks?: (tasks: RecordTask[]) => void;
+  /** Handed the report and the record's `endedAt` once the terminal record is
+   *  written, before `_client_run_finished` is emitted (M5-5) — `daemon.ts`
+   *  settles the run's status here, so no `GET` after the event reads it as
+   *  still running. */
+  onFinished?: (report: RunReport, endedAt: string) => void;
 }
 
 /**
@@ -572,25 +577,47 @@ export async function runRun(
   };
 
   const width = Math.min(run.maxConcurrency, run.tasks.length);
+  let report: RunReport;
   try {
-    await Promise.all(Array.from({ length: width }, worker));
+    try {
+      await Promise.all(Array.from({ length: width }, worker));
+    } finally {
+      clearInterval(sweep);
+    }
+
+    // The last record write is the terminal one: it is what M1c-3's merge
+    // reads, and what tells a restart that this run is over rather than
+    // abandoned.
+    const status = runStatus(results.map((r) => r.status));
+    const endedAt = new Date().toISOString();
+    await persist(status, endedAt);
+    report = {
+      status,
+      durationMs: Date.now() - started,
+      turns,
+      tasks: results,
+    };
+
+    // M5-5 (#137): the record, then the caller, then the event. A client that
+    // reads `_client_run_finished` and then asks `GET /runs/:id` must get the
+    // same status back, so both are settled before the line is appended.
+    options.onFinished?.(report, endedAt);
+    options.bus.emit({
+      agent: "",
+      update: {
+        sessionUpdate: "_client_run_finished",
+        status,
+        durationMs: report.durationMs,
+        turns,
+      },
+    });
   } finally {
-    clearInterval(sweep);
-    // Every task has emitted its last event by now, so readers can end.
+    // Every task has emitted its last event by now, and so has the run, so
+    // readers can end. A run that threw ends with no `_client_run_finished`,
+    // the same as an old log: the client falls back to `GET /runs/:id`.
     await eventLog?.close();
   }
-
-  // The last write is the terminal one: it is what M1c-3's merge reads, and
-  // what tells a restart that this run is over rather than abandoned.
-  const status = runStatus(results.map((r) => r.status));
-  await persist(status, new Date().toISOString());
-
-  return {
-    status,
-    durationMs: Date.now() - started,
-    turns,
-    tasks: results,
-  };
+  return report;
 }
 
 /** How the run-wide sweep reaches one task. `fired` is the supervisor's own

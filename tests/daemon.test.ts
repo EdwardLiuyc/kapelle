@@ -1135,6 +1135,48 @@ test("a stream attached mid-run gets the history then the live tail, contiguousl
   );
 });
 
+test("a stream-only client learns the run is over and its status, live and after a restart", async (t) => {
+  // M5-5 (#137): `_client_run_finished` is the last frame, and a `GET` sent
+  // after it has arrived already agrees with it — never `running`.
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const cwd = await added(first, await tempDir(t));
+  const posted = await api(first, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  assert.equal(posted.status, 202, posted.body.error?.message);
+  const { id } = posted.body;
+
+  const live = await stream(first, id);
+  const isEnd = (f: Stream["frames"][number]) =>
+    f.data.update.sessionUpdate === "_client_run_finished";
+  await until("the run's last event", () => live.frames.some(isEnd));
+  const got = await api(first, "GET", `/runs/${id}`);
+  await live.ended;
+  const end = live.frames.at(-1);
+  assert.ok(end && isEnd(end), "the run's event is the last frame");
+  assert.equal(end.data.agent, "");
+  assert.equal(got.body.status, end.data.update.status);
+  assert.equal(got.body.turns, 1);
+  assert.equal(live.frames.filter(isEnd).length, 1);
+  for (const f of live.frames) {
+    assert.equal(
+      typeof (f.data as { at?: unknown }).at,
+      "string",
+      "every frame has at",
+    );
+  }
+
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const second = await boot(t, runtime, [], state);
+  const replay = await stream(second, id);
+  await replay.ended;
+  assert.deepEqual(replay.frames, live.frames, "a replay ends the same way");
+});
+
 test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the token is required", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await tempDir(t));
@@ -1782,7 +1824,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   const list = await api<Reply[]>(second, "GET", "/runs");
   assert.equal(list.status, 200);
   // `live` was left `running` and the sweep rewrote it terminal: it reads
-  // `failed`. `corrupt-tasks` is trusted for its runId/status, so it is
+  // `killed` (M5-5). `corrupt-tasks` is trusted for its runId/status, so it is
   // served too, with the junk element dropped. Sorted: restore order is
   // readdir order, which is not part of the contract.
   const rows = [...list.body].sort((a, b) => a.id.localeCompare(b.id));
@@ -1790,7 +1832,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     rows.map((row) => [row.id, row.cwd, row.root, row.status, row.source]),
     [
       ["corrupt-tasks", root, root, "done", "restored"],
-      ["live", root, root, "failed", "restored"],
+      ["live", root, root, "killed", "restored"],
     ],
   );
   assert.deepEqual(
@@ -1811,7 +1853,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   assert.equal(rows[0]?.startedAt, undefined);
   const live = await api(second, "GET", "/runs/live");
   assert.equal(live.status, 200);
-  assert.equal(live.body.status, "failed");
+  assert.equal(live.body.status, "killed");
   const corrupt = await api(second, "GET", "/runs/corrupt-tasks");
   assert.deepEqual(corrupt.body.tasks, [
     {
@@ -1916,11 +1958,11 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   const second = await boot(t, runtime, [], state);
   const restored = await api(second, "GET", `/runs/${id}`);
   assert.equal(restored.status, 200);
-  assert.equal(restored.body.status, "failed");
+  assert.equal(restored.body.status, "killed");
   assert.deepEqual(
     restored.body.tasks.map((task) => [task.id, task.status]),
     [
-      ["stuck", "failed"],
+      ["stuck", "killed"],
       ["waiting", "queued"],
     ],
   );
@@ -1928,6 +1970,15 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
     await readFile(join(stateDirFor(root), "runs", id, "run.json"), "utf8"),
   );
   assert.equal(typeof record.endedAt, "string");
+  // M5-5: the sweep writes no `_client_run_finished` the run never wrote.
+  const replay = await stream(second, id);
+  await replay.ended;
+  assert.ok(replay.frames.length > 0, "the log still replays");
+  assert.ok(
+    !replay.frames.some(
+      (f) => f.data.update.sessionUpdate === "_client_run_finished",
+    ),
+  );
   assert.equal(existsSync(worktree), true, "a worktree inside retention stays");
   assert.equal(await gone(harness), true, "the harness outlived the restart");
   assert.equal(existsSync(childrenFile), false);
@@ -1938,7 +1989,7 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   const attachEnv = dirs(runtime, state);
   const attached = await spawnCli(t, ["attach", id], "cli.ts", attachEnv).done;
   assert.equal(attached.code, 1, attached.stderr);
-  assert.match(attached.stdout, /stuck \([^)]*\) failed/);
+  assert.match(attached.stdout, /stuck \([^)]*\) killed/);
   assert.match(attached.stdout, /waiting \([^)]*\) queued/);
   assert.doesNotMatch(attached.stdout, /\bdone\b/);
   assert.match(attached.stdout, /failed — 2 tasks/);
@@ -2023,7 +2074,7 @@ test("kill -9 with a harness that ignores stdin and SIGTERM: the next boot kills
   assert.equal(existsSync(childrenFile), false);
   const restored = await api(second, "GET", `/runs/${id}`);
   assert.equal(restored.status, 200);
-  assert.equal(restored.body.status, "failed");
+  assert.equal(restored.body.status, "killed");
 
   process.kill(second.pid, "SIGTERM");
   const out = await second.done;

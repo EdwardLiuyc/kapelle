@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.1** (M5-1, #133; minor bumped by M5-4, #136).
+Contract version: **1.2** (M5-1, #133; minor bumped by M5-4, #136, and M5-5, #137).
 
 ## Contents
 
@@ -98,6 +98,8 @@ Not every part of this API is final yet. Each part has one of three labels:
 | `POST /repos`, `GET /repos` | |
 | `POST /runs` request body | |
 | `POST /runs` reply (`{id}`) | |
+| End of a run's stream | `_client_run_finished` since 1.2 (M5-5). |
+| Event timestamps (`at`) | Since 1.2 (M5-5). Absent on older lines. |
 | `GET /runs/:id`, `DELETE /runs/:id` replies | One shape for live and restored runs (M5-2). |
 | SSE format, `seq`, `Last-Event-ID` | |
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
@@ -112,8 +114,6 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| End of a run's stream | Provisional | M5-5 (adds a "run finished" event) |
-| Event timestamps | Provisional | M5-5 (adds `at`) |
 | Heartbeat and reconnect | Provisional | M5-6 |
 | `POST /runs` retry safety | Provisional | M5-7 (adds `Idempotency-Key`) |
 | Everything under `/rooms` | Experimental | M6-2 and later |
@@ -307,7 +307,7 @@ even when the body would be refused.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 1 },
+  "apiVersion": { "major": 1, "minor": 2 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -442,8 +442,11 @@ status:
 | `skipped` | It did not run. |
 | `timed_out` | It ran past its time limit and was stopped. |
 | `failed` | It failed. |
+| `killed` | The daemon stopped while the run was live, for example a crash or a power cut. Only a run read back after a restart has it. Since 1.2 (M5-5). |
 
 **Task status** is one of the words above, or `queued` (not started yet), or `running`.
+After a restart, a task that was running when the daemon stopped is `killed`, and a task
+that never started stays `queued`.
 Show a word that you do not know as it is. Do not fail on it; that goes for the run
 status too, which comes off the same record.
 
@@ -520,18 +523,19 @@ The reply has `Content-Type: text/event-stream`. Each event is one block:
 
 ```text
 id: 7
-data: {"seq":7,"agent":"summarise","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}}
+data: {"seq":7,"at":"2026-09-24T10:15:02.113Z","agent":"summarise","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}}
 
 ```
 
 - `id` is the event's `seq`.
-- `data` is one line of JSON: `{seq, agent, update}`.
+- `data` is one line of JSON: `{seq, at, agent, update}`.
 - A blank line ends the block.
 
 | Field | Meaning |
 | --- | --- |
 | `seq` | The event's number in this log. The first event is `1`. It goes up by one each time, with no gaps. |
-| `agent` | For a run: the task id. For a room: the harness name. |
+| `at` | ISO 8601, when the daemon wrote the event. Since 1.2 (M5-5); older events have none. |
+| `agent` | For a run: the task id, or `""` for `_client_run_finished`. For a room: the harness name. |
 | `update` | The event itself. See [Events](#events). |
 
 An event may carry `_meta`, an object the harness attached to it. It is passed through
@@ -557,8 +561,12 @@ retired, so this is not on a current story.)
 
 ### End of the stream
 
-- For a run, the stream ends when the run ends. Then call `GET /runs/:id` for the result.
-  (Provisional: M5-5 adds an event that says the run finished.)
+- For a run, the last event is `_client_run_finished`, with the run's `status`. Then the
+  stream ends. When you get that event, `GET /runs/:id` already shows the same status.
+- A run's stream can also end with no `_client_run_finished`. This happens for a run
+  from before 1.2, a run that stopped when the daemon stopped, and a run that failed
+  inside the daemon. Then call `GET /runs/:id` for the result. If the status is still
+  `running`, the connection was cut: connect again with `Last-Event-ID`.
 - For a room, the stream ends when the room closes.
 - For a finished run, you get the history and then the end.
 
@@ -609,6 +617,12 @@ harness name):
 | `_client_task_started` | `harness` | The task left the queue. Its events follow. |
 | `_client_worktree_created` | `path`, `branch`, `baseSha` | The task's (or room's) own checkout exists. Missing when the run shares one folder. |
 | `_client_task_finished` | `status`, `durationMs` | The task's verdict. A task cancelled before it started has this event but no `_client_task_started`. |
+
+**Runs** (since 1.2, M5-5):
+
+| `sessionUpdate` | Fields | Meaning |
+| --- | --- | --- |
+| `_client_run_finished` | `status`, `durationMs`, `turns` | The run is over. `status` is the run status. It is the last event, after every `_client_task_finished`, and `agent` is `""`. See [End of the stream](#end-of-the-stream). |
 
 **Permissions:**
 
