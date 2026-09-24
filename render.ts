@@ -5,7 +5,7 @@
  * no protocol decision, which is why it sits outside `protocol/` and why the
  * dependency arrow only ever points at it.
  *
- * **The switch deliberately has no `default`** (CLAUDE.md). A variant nobody
+ * **The switch deliberately has no `default`** (AGENTS.md). A variant nobody
  * renders is dropped in silence rather than drawn wrong — M0-1 observed two
  * that arrive today and have no branch here: `available_commands_update` from
  * all three harnesses, and `config_option_update` from copilot. `assertNever`
@@ -46,7 +46,7 @@ let stream: "none" | "message" | "thought" = "none";
  * **This is a single-writer renderer and must stay one.** The erase moves the
  * cursor up over the rows it drew, which is only correct while one thing owns
  * the cursor — hence module-level state, one variable per process rather than
- * one per agent. `cli.ts:185` subscribes this on the single-agent path only;
+ * one per agent. `cli.ts` subscribes this on the single-agent path only;
  * the `--file` path prints milestones and buffers prose instead. Making the
  * state per-agent looks like the fix for that and is not: it stops the output
  * corrupting and leaves it unreadable.

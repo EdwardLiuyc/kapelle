@@ -6,9 +6,9 @@ requirements and their priority, and what is explicitly out of scope. This is th
 live state lives in the README and the plan.
 
 > **Role map:** this file = why, and what's in/out of scope · **README.md** = how to use
-> it today · **CLAUDE.md** = the agent-facing architecture map · **PROJECT-PLAN.md** =
+> it today · **AGENTS.md** = the agent-facing architecture map · **PROJECT-PLAN.md** =
 > what we're building and in what order · **STORIES.md** = the work breakdown ·
-> **M0-FINDINGS.md** = what the harnesses empirically do.
+> **FINDINGS.md** = what the harnesses empirically do.
 
 ## Goal
 
@@ -83,15 +83,15 @@ state, known gaps, protocol gotchas, open questions, and a first-session agenda.
 sections rotted during M0, so they are superseded, each by the doc that owns that concern
 now:
 
-- **Current MVP state & how to run it** → `README.md` (and `CLAUDE.md` for the
+- **Current MVP state & how to run it** → `README.md` (and `AGENTS.md` for the
   agent-facing architecture map).
-- **Known gaps / what's deliberately unimplemented** → `README.md` ("What's
-  deliberately missing") and `CLAUDE.md` ("Deliberately unimplemented").
+- **Known gaps / what's deliberately unimplemented** → `AGENTS.md` ("Deliberately
+  unimplemented").
 - **Protocol gotchas** — the `toolCallId → {title, kind, rawInput}` map, the client/supervisor
-  inversion, and capability negotiation → `CLAUDE.md` ("Two client invariants worth
-  preserving") and `README.md` ("Two things worth knowing"). One fact is preserved
+  inversion, and capability negotiation → `AGENTS.md` ("Rules that are easy to
+  break"). One fact is preserved
   here rather than migrated: ACP is pre-1.0 — no thread resume, no message editing,
   no remote transport — so agents are local subprocesses today.
 - **Open questions** → `PROJECT-PLAN.md` ("Open, deliberately unresolved") and the
   backlog in `STORIES.md`.
-- **Empirical answers** (what the harnesses actually do) → `docs/M0-FINDINGS.md`.
+- **Empirical answers** (what the harnesses actually do) → `docs/FINDINGS.md`.

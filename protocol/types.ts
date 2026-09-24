@@ -6,7 +6,7 @@
  *  1. What `acp.mjs` / `render.mjs` / `mock-agent.mjs` already do (the porting
  *     target — M1a-3/M1a-7 type against this file).
  *  2. What the harnesses actually sent on the wire during M0
- *     (`docs/M0-FINDINGS.md`).
+ *     (`docs/FINDINGS.md`).
  *  3. The official schema
  *     (https://github.com/agentclientprotocol/agent-client-protocol,
  *     schema.json, v1, fetched 2026-08-30) for field lists of variants no
@@ -262,7 +262,7 @@ export interface SessionMode extends Meta {
 }
 
 /** Mode vocabulary does not align across harnesses — M1a-4's `modeMap` exists
- *  because of this shape (M0-FINDINGS.md, "What M1a-4 should put in registry"). */
+ *  because of this shape (FINDINGS.md, "What M1a-4 should put in registry"). */
 export interface SessionModeState extends Meta {
   currentModeId: SessionModeId;
   availableModes: SessionMode[];
@@ -306,7 +306,7 @@ interface SessionConfigOptionBase extends Meta {
  * branches REQUIRE the payload (schema defs SessionConfigOption,
  * SessionConfigSelect, SessionConfigBoolean). `currentValue` is the "which
  * model ran" channel — observed on all three harnesses under
- * `category: "model"` (M0-FINDINGS.md §M0-5), consumed by M1a-4.
+ * `category: "model"` (FINDINGS.md §M0-5), consumed by M1a-4.
  */
 export type SessionConfigOption =
   | (SessionConfigOptionBase & {
@@ -384,7 +384,7 @@ export type StopReason =
   | "cancelled";
 
 // ---------------------------------------------------------------------------
-// Client-originated synthetic events — the `_client_` convention (CLAUDE.md).
+// Client-originated synthetic events — the `_client_` convention (AGENTS.md).
 // Not protocol traffic; emitted by this client onto its own event stream.
 // ---------------------------------------------------------------------------
 
@@ -657,7 +657,7 @@ export interface NewSessionResponse extends Meta {
   sessionId: SessionId;
   /** Mode discovery must read BOTH `modes` and `configOptions` here — they
    *  come on the session/new response, not `agentCapabilities`, and opencode
-   *  advertises no modes but honours set_mode (M0-FINDINGS.md §M0-1). */
+   *  advertises no modes but honours set_mode (FINDINGS.md §M0-1). */
   modes?: SessionModeState;
   configOptions?: SessionConfigOption[];
 }
@@ -676,21 +676,21 @@ export interface PromptRequest extends Meta {
  * The whole response is kept per #62 B3. `usage` is NOT in the current
  * official schema but M0-5 measured it on the wire (the only per-task token
  * count present on all three harnesses) — per-task on opencode and
- * claude-agent-acp, cumulative on copilot (M0-FINDINGS.md:828-841). Capture
- * only; M1 renders nothing.
+ * claude-agent-acp, cumulative on copilot (FINDINGS.md §M0-5, "The per-task
+ * token count has a source"). Capture only; M1 renders nothing.
  */
 export interface Usage extends Meta {
-  /** Observed on all three harnesses (M0-FINDINGS.md:828-829, :833). */
+  /** Observed on all three harnesses (same table). */
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  /** Absent on claude-agent-acp (M0-FINDINGS.md:830). */
+  /** Absent on claude-agent-acp (same table). */
   thoughtTokens?: number;
   // Deliberately optional despite being observed on all three harnesses in
-  // M0's turn-1 table (:831) — one turn of captures is thin evidence for a
+  // M0's turn-1 table — one turn of captures is thin evidence for a
   // required field; tighten only if a later probe confirms it everywhere.
   cachedReadTokens?: number;
-  /** Absent on opencode (M0-FINDINGS.md:832). */
+  /** Absent on opencode (same table). */
   cachedWriteTokens?: number;
 }
 
@@ -720,7 +720,7 @@ export interface LoadSessionRequest extends Meta {
 
 export interface LoadSessionResponse extends Meta {
   // Mode discovery reads BOTH fields (see NewSessionResponse); session/load
-  // returns the same shape (M0-FINDINGS.md §M0-1).
+  // returns the same shape (FINDINGS.md §M0-1).
   modes?: SessionModeState;
   configOptions?: SessionConfigOption[];
 }

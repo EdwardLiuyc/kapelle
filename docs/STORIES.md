@@ -72,7 +72,7 @@ Builds nothing except three papercut fixes. Every M1 default depends on its find
 
 ### M0-1 · Harness availability and handshake survey · S · DONE
 
-> Survey complete — `M0-FINDINGS.md`, M0-1 section. All three targets **available**
+> Survey complete — `FINDINGS.md`, M0-1 section. All three targets **available**
 > (opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78), none unavailable, none
 > untested. `loadSession: true` on all three. No harness calls `fs/*`. opencode never
 > sends `session/request_permission` and wrote a file under `safe`. The stories below
@@ -119,7 +119,7 @@ terminal call would happen.
 `terminal/create` ever arrive (scopes M3-5), and does it route commands across our boundary
 with real argv or run them internally (populates the containment label). The second
 outlives the first, which is why it is recorded separately.
-**Done 2026-08-21** (`docs/M0-FINDINGS.md` §M0-3). Two corrections to this text as written:
+**Done 2026-08-21** (`docs/FINDINGS.md` §M0-3). Two corrections to this text as written:
 the stub cannot be a "logging no-op" — `terminal/create` must return a `terminalId` or the
 turn dies, so it really executes; and the answer to question 2 is not binary. **No harness
 called `terminal/create`** even with the capability advertised, and the command text
@@ -132,7 +132,7 @@ with what `stopReason`. Confirm the expectation that none accepts a second `sess
 while a turn is in flight.
 *Done when* the note states the observed stop reason and latency per harness — M1c-1's TTL
 rung is only as good as this answer.
-**Done 2026-08-21** (`docs/M0-FINDINGS.md` §M0-4). Three corrections to this text as
+**Done 2026-08-21** (`docs/FINDINGS.md` §M0-4). Three corrections to this text as
 written. The probe could not be a `run.mjs` run: its SIGINT path kills at 2 s
 (`run.mjs`) and `#failAll` (`protocol/agent.ts`) would have turned any slower cancel into
 an exit error, so the answer needed tooling that cancels and waits — plus an **uninterrupted
@@ -152,7 +152,7 @@ anything naming the model actually selected are recorded too, but the price tabl
 is nice-to-have, not a deliverable.
 *Done when* the note states, per harness, whether the context numbers can be trusted as a
 budget and what exhaustion signal exists — and distinguishes occupancy from spend.
-**Done 2026-08-22** (`docs/M0-FINDINGS.md` §M0-5). Four corrections to this text as written.
+**Done 2026-08-22** (`docs/FINDINGS.md` §M0-5). Four corrections to this text as written.
 The story's `{used, size}` shape is right but **incomplete**: `cost` (cumulative USD) rides
 on the same notification from two of three harnesses, and `size` is per-model rather than the
 constant M0-1 recorded. The **cumulative-or-billable count the story went looking for is not
@@ -206,7 +206,7 @@ stays closed. The durable lesson is that a per-harness safety claim is a claim a
 **build**, and needs the version in the sentence.
 
 **M0-7 · Findings note · XS · needs M0-1, M0-3, M0-4, M0-5**
-`docs/M0-FINDINGS.md`. The input to M1a-4's containment labels and env list, M1c-1's TTL
+`docs/FINDINGS.md`. The input to M1a-4's containment labels and env list, M1c-1's TTL
 default, and M3-5's terminal scope.
 **Partially landed with M0-1** — the file exists, the M0-1 section is complete, and the
 M0-3/4/5 sections are stubbed with the partial input that survey already produced (no
@@ -237,14 +237,14 @@ into M1a-4's registry as a broken value.
 tool call was claimed to become a three-notification lifecycle carrying an **exit code**.
 **Already measured — not a probe.** M0-3's own second commit, `87cbfe3` on
 `spike/m0-3-terminal`, advertised `_meta.terminal_output: true`, and the result is recorded
-at `docs/M0-FINDINGS.md`: claude-agent-acp's Bash `tool_call` gains a `terminal_id`
+at `docs/FINDINGS.md`: claude-agent-acp's Bash `tool_call` gains a `terminal_id`
 and a `{type:"terminal"}` content block for a terminal that was **never created**, with
 still zero `terminal/*` calls and **no command output crossing the wire**, and **no exit
 code**. It is a rendering convention for a client that already draws the terminal, not the
 visibility M0-3 called unobtainable. `argvChannel` therefore gains no fourth value, and
 M1a-4 is not gated by this.
 **Decision (2026-08-23): park, no further action.** The capability axis is settled for the
-MVP; no backlog entry is scheduled. The record lives in §M0-3 (`M0-FINDINGS.md`), which
+MVP; no backlog entry is scheduled. The record lives in §M0-3 (`FINDINGS.md`), which
 already holds the finding, so no new §M0-8 is added to the findings note.
 
 ---
@@ -330,7 +330,7 @@ need it today. This answers the retro's B4. Three reasons it is decided here rat
 deferred. It is *preservation, not addition*: `protocol/agent.ts` already hands the whole update
 object to `onEvent`, so `_meta` reaches consumers today and only `render.mjs` ignores it —
 this port is where we would start losing it. The fleet's **only** exhaustion warning lives
-there (`_meta["_claude/rateLimit"]`, `M0-FINDINGS.md` §M0-5), M0-3 found harnesses gating
+there (`_meta["_claude/rateLimit"]`, `FINDINGS.md` §M0-5), M0-3 found harnesses gating
 behaviour on `_meta` extensions we do not advertise, and M0-3's `87cbfe3` already recorded
 the third (`terminal_output`). And
 the cost of deferring is **not** a refactor — adding the field later is one line — it is
@@ -466,7 +466,7 @@ running turn's context and reads as prompt injection; copilot aborts uncondition
 when idle (`github/copilot-cli#4555`). AgentPool has no such guard, so there is no prior art
 to copy. **The API half is part of this decision:** M2 exposes no endpoint that messages a
 running task.
-**Scope, measured 2026-09-15 (`docs/M0-FINDINGS.md` §Multi-turn).** The guard refuses a
+**Scope, measured 2026-09-15 (`docs/FINDINGS.md` §Multi-turn).** The guard refuses a
 prompt *during* a live turn, and only then. A second prompt sent after `end_turn`
 completed on the same session on opencode, claude-agent-acp, copilot and pi-acp, with the
 first turn's context intact. The API half reads the same way: no endpoint messages a
@@ -568,7 +568,7 @@ forced by the type to handle its absence. A `--cmd` spec has no measured half ei
 warns as unverified for the same reason.
 **The `measuredOn` "check first" could not be run.** It sends the reader to M0-1's captured
 `initialize` for `agentInfo.version`; those captures are not in the repo (the `spike/m0-*`
-branches kept only their probes) and `docs/M0-FINDINGS.md` records the handshake without
+branches kept only their probes) and `docs/FINDINGS.md` records the handshake without
 `agentInfo`. So the literal comes from the version rows in that note, and the check compares
 against `agentInfo.version` when the harness sends one and stays silent when it does not —
 warning only, never failing a run, as B2 decided.
@@ -655,7 +655,7 @@ them, killing any task that has to look around — while a read of an already-kn
 through a native `read` tool that `safe` allows. Safe mode does not make copilot cautious;
 it cripples it, and the failure presents as a clean `end_turn` with no output.
 **Re-verified 2026-08-23 and build-specific** — on 1.0.78 copilot shelled `cat` for reads
-too and `safe` refused those as well (`M0-FINDINGS.md` §M0-1, "What re-verification
+too and `safe` refused those as well (`FINDINGS.md` §M0-1, "What re-verification
 changed"), which is the strongest available argument that `argvChannel` and the kind
 mapping must be *measured per build*, not assumed. Second, opencode
 asks nothing, so no policy value changes its behaviour at all. Keep `READ_ONLY_KINDS` as
@@ -1147,7 +1147,7 @@ the previous turn's context where the model reads it as a suspected prompt injec
 retry would silently destroy the very work whose result it was trying to recover. The
 structural half is narrower than this story assumed: #62's R5 refuses a prompt only during
 a live turn (M1a-3), and a re-ask sent after `end_turn` would reach the harness
-(`docs/M0-FINDINGS.md` §Multi-turn, 2026-09-15). The retry stays struck as policy, not as
+(`docs/FINDINGS.md` §Multi-turn, 2026-09-15). The retry stays struck as policy, not as
 an impossibility: copilot's handler aborts background work on any prompt (#4555), so the
 client must not send one. The conflict predates today: it was written into M1b-4 before
 M0-4 measured the behaviour, and survived because nothing forced the two to be read together.
@@ -1319,7 +1319,7 @@ already maintained as a protocol invariant, so it needs only a per-task last-tit
 count. Both signals warn and the task keeps running; the separate, longer `ttlMs` calls
 `session/cancel`, preserves the branch and marks the task `timed_out`. Every knob disabled
 at `0`. Best-effort throughout — one task's failure must never halt the sweep.
-**M0-4 fills in the TTL rung** (`docs/M0-FINDINGS.md` §M0-4): every harness ended its turn
+**M0-4 fills in the TTL rung** (`docs/FINDINGS.md` §M0-4): every harness ended its turn
 within 64 ms of `session/cancel`, sent nothing afterwards, and accepted a further prompt — so
 **wait 2 s after cancelling, then force-kill**, and expect never to reach it. Mark
 `timed_out` from the watchdog's own record: copilot's cancelled turns come back `end_turn`.
@@ -1334,7 +1334,7 @@ session on *any* prompt, even one sent while idle
 per session per task.
 A token-based signal was considered and dropped — `usage_update` reports context occupancy
 in units that are not comparable between vendors.
-**M0-5 makes that drop evidence-backed rather than cautious** (`docs/M0-FINDINGS.md` §M0-5).
+**M0-5 makes that drop evidence-backed rather than cautious** (`docs/FINDINGS.md` §M0-5).
 Occupancy *is* comparable as a fraction, but its denominator is not trustworthy: claude
 reports `size: 200000` for the whole of a session's first turn whatever the real window, and
 copilot's `size` matches neither its own reported window nor its usable space. And opencode
@@ -1716,7 +1716,7 @@ instant (it was marked `ponytail:` in `daemon.ts`; this story replaced it), the 
 registry, kill-all, SIGTERM, and the `kapelle daemon start` and `kapelle daemon add <path>`
 verbs.
 **Amended at pickup 2026-09-15 (#34): stdin first, no process group.** Measured on all four
-harnesses (`docs/M0-FINDINGS.md` §M2-4): each runs its shell commands in a session of its
+harnesses (`docs/FINDINGS.md` §M2-4): each runs its shell commands in a session of its
 own, so a group kill never reaches them, and SIGTERM or SIGKILL left opencode's (and under
 SIGKILL copilot's) running command alive. Closing stdin left nothing on all four, which is
 also what a crash delivers. `AcpAgent.stop()` therefore closes stdin, waits, and SIGKILLs
@@ -2085,7 +2085,7 @@ pre-fills nothing. The filtered streams and the nested `messages` route are M6-4
 is why this story needs M6-4. The resolver is its own module, `client/mention.ts`, never
 an export on `client/contract.ts`, so `daemon.ts` never imports a message parser; piped
 `chat.ts` uses the same module (S8). It is the first logic in `client/`, so this story
-changes the `chat.ts` import rule in `tests/daemon.test.ts` and `CLAUDE.md` in one
+changes the `chat.ts` import rule in `tests/daemon.test.ts` and `AGENTS.md` in one
 commit, and the widened test stays transitive: that module reaches nothing under `core/`
 or `protocol/` at runtime. The stall warning the badge reads is the one R38 creates: a
 participant's watchdog warns, never cancels.
@@ -2412,7 +2412,7 @@ Three things are worth pulling forward, because everything queues behind them:
    cut to documentation, M3-6 survives without it. The containment label M1a-4 ships is now
    two fields, `shell` and `argvChannel`.
    **M0-8, its would-be successor, resolved instead of run** — `87cbfe3` had already
-   advertised the flag, and `M0-FINDINGS.md` records the result: no fourth
+   advertised the flag, and `FINDINGS.md` records the result: no fourth
    `argvChannel` value, so M1a-4's type is settled on the two fields M0-3 established.
 2. **M1a-2.** Every later module types against it, and it is the story that earns the
    TypeScript decision.
@@ -2506,10 +2506,11 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   a daemon restart with a fresh session, not this call; Half B uses the capability-gated
   call when it lands.
   **Two gaps recorded 2026-09-21 (#145), both to close before Half B is scheduled.** Every
-  `loadSession: true` we hold is a **handshake advertisement** (`docs/M0-FINDINGS.md:136`);
-  §Multi-turn measured two turns in *one* process, and nobody has loaded a session into a
-  **new** harness process — which is what a reboot needs. And pi-acp's measurement table
-  (`docs/M0-FINDINGS.md:1019`) has no `loadSession` row at all, so "every measured harness
+  `loadSession: true` we hold is a **handshake advertisement** (`docs/FINDINGS.md`
+  §M0-1, `agentCapabilities`); §Multi-turn measured two turns in *one* process, and
+  nobody has loaded a session into a **new** harness process — which is what a reboot
+  needs. And pi-acp's measurement table
+  (`docs/FINDINGS.md` §pi-acp) has no `loadSession` row at all, so "every measured harness
   advertises it" is true of three of the four. One probe answers both. M6-7's Half A does
   not wait on it.
 - **`#send` write backpressure.** `#send` ignores the return value of `write()`

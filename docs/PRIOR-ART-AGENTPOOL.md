@@ -299,7 +299,7 @@ from rendered output is the mistake this avoids.
 
 **Re-scored — decide it in M1a, not M2. Decided 2026-08-23.** Two things moved it. First,
 resume is real: all three harnesses advertise `loadSession: true`, opencode and
-claude-agent-acp add `resume` and `fork` (`M0-FINDINGS.md`, roll-up), so the plan's premise
+claude-agent-acp add `resume` and `fork` (`FINDINGS.md`, roll-up), so the plan's premise
 that ACP has no resume is dead and #62 lists it as a cheap win nobody scheduled. Second,
 this is the same decision as `_meta` below — a bus carrying rendered forms cannot replay,
 and cannot carry an extension field it never modelled.
@@ -368,7 +368,7 @@ The same convention is used by `codex-acp`.
 claude-agent-acp's Bash `tool_call` then carried `_meta.terminal_info.terminal_id` and a
 `{type: "terminal"}` content block for a terminal that was **never created**, with still
 zero `terminal/*` calls, no command output crossing the wire, and **no exit code**
-(`docs/M0-FINDINGS.md`). It is a rendering convention for a client that already
+(`docs/FINDINGS.md`). It is a rendering convention for a client that already
 draws the terminal, not the visibility M0-3 called unobtainable; `argvChannel` gains no
 fourth value. The `terminal_exit` lifecycle carrying `exit_code`/`signal` is **not
 reproduced** and stays AgentPool's citation into source this repo has not read.
@@ -525,7 +525,7 @@ Record these so a later reader doesn't "steal" a regression.
    `ask` mode exists to prevent.
 3. **Containment honesty.** Nothing in AgentPool records whether a harness routes commands
    through `terminal/*` or ever shows real argv, nor warns when a policy never fired. Our
-   `argvChannel` and `policyNeverFired` work (M0-1, M0-3, `docs/M0-FINDINGS.md`) has no
+   `argvChannel` and `policyNeverFired` work (M0-1, M0-3, `docs/FINDINGS.md`) has no
    counterpart there — and M0-1's finding that opencode never asks permission at all means
    a client without that labelling is quietly overclaiming.
 

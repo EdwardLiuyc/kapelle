@@ -993,7 +993,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
   //
   // M0-4 measured every harness ending its turn within 64 ms of
   // `session/cancel`, so a 2 s grace before `agent.stop()` is a safety net, not
-  // a normal path (`docs/M0-FINDINGS.md` §M0-4). Without it, a harness that
+  // a normal path (`docs/FINDINGS.md` §M0-4). Without it, a harness that
   // ignores the cancel would leave `session/prompt` pending forever.
   const CANCEL_GRACE_MS = 2_000;
   let cancelGrace: NodeJS.Timeout | undefined;

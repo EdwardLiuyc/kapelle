@@ -7,7 +7,7 @@
  * **The entry is split in two, and the split is load-bearing.** `launch` is a
  * recipe we choose: it is true until the harness changes its CLI. `measured`
  * is a lab report: every field is a claim about one *build*, and M0-7 watched
- * three of them change in three days (`docs/M0-FINDINGS.md`). Two entries
+ * three of them change in three days (`docs/FINDINGS.md`). Two entries
  * (`omp`, `gemini`) have a real recipe and no lab report — they were never
  * installed here — so `measured` is optional, and its absence is the only
  * marker of an unverified harness (#62 B5, one mechanism, no second flag to
@@ -41,7 +41,7 @@ interface LaunchSpec {
  * `shell` says *where* a command runs; `argvChannel` says whether the command
  * text ever reaches us and on which message. They are independent — two of
  * three harnesses run commands internally yet still hand us the argv
- * (`docs/M0-FINDINGS.md:57-66`).
+ * (`docs/FINDINGS.md` §Roll-up, "What M1a-4 should put in the registry").
  */
 interface MeasuredLabels {
   shell: "terminal" | "internal" | "unknown";
@@ -182,7 +182,7 @@ export const AGENTS: Record<string, AgentEntry> = {
       // both ids. **Two fields are carried forward, not re-verified**, and the
       // date does not cover them: `usage`, because telling per-turn from
       // cumulative needs two turns in one session, and no probe had run at this
-      // date — the second turn is reachable now (`docs/M0-FINDINGS.md`
+      // date — the second turn is reachable now (`docs/FINDINGS.md`
       // §Multi-turn, 2026-09-15), but `usage` is still carried forward, not
       // measured; and `meta`, because it describes what claude does when we
       // advertise `terminal_output`, which this client does not.

@@ -1,4 +1,23 @@
 #!/usr/bin/env node
+/**
+ * The CLI, and the `kapelle` bin (M1c-5). Hand-rolled argv parsing.
+ *
+ * Two paths. **One prompt**: one harness, drawn live through `render.ts`,
+ * which owns the cursor. **`run --file`** (a verb since M2-9; a bare `--file`
+ * is refused): N tasks through `core/run.ts`, with prose buffered per task
+ * and only milestones live. `--agent`, `--cmd` and `--mode` are refused beside
+ * `--file`, because the run file answers those per task.
+ *
+ * `--detach` posts the run to the daemon instead, and `attach`, `ps` and
+ * `daemon add` talk to that daemon through `daemonApi()`, the one reader of
+ * `daemon.json`. `attach` rebuilds the `--file` view from the event stream
+ * alone, because a restored run has no `report`. The verdict is not the
+ * view's: the settled run status on `GET /runs/:id` wins whenever the daemon
+ * has one (M5-5), and `--task` answers with its own card (`TASK_STATUSES`).
+ *
+ * ^C sends `session/cancel`, waits 2 s, then stops the harness, and the
+ * process exits only once the harness is gone.
+ */
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { RunStatus } from "./client/contract.ts";

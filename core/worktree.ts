@@ -21,7 +21,7 @@
  * `git` itself never minded — `worktree add` succeeds against a dirty main
  * tree, and a worktree is a separate checkout the operator's edits never
  * reach. What is left of the dirty check is one advisory line, because
- * `core/merge.ts:92` already refuses **per file** at the one moment a dirty
+ * `core/merge.ts` already refuses **per file** at the one moment a dirty
  * tree can cost work.
  *
  * **A cwd that cannot carry worktrees falls back rather than refusing**
@@ -239,7 +239,7 @@ export async function openWorktrees(
   // closes that. The count and the base, not the list: someone working
   // alongside a run has a long list and does not need it read back.
   //
-  // `core/merge.ts:92` keeps the refusal that matters, per file, at the one
+  // `core/merge.ts` keeps the refusal that matters, per file, at the one
   // moment a dirty tree can actually cost work.
   const dirty = (await changedPaths(root)).length;
   const advisory =

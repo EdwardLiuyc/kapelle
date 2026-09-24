@@ -454,7 +454,7 @@ message text" should hold in the import graph too. Piped `chat.ts` uses the same
 so there is one behaviour (S8). It is the first logic in `client/` — `contract.ts` holds
 types and two constants — so this story also changes the rule that `chat.ts`'s one
 repository import is `core/runtime.ts`: the test (`tests/daemon.test.ts`) and the
-`CLAUDE.md` sentence change in the same commit. The widened test stays transitive: the
+`AGENTS.md` sentence change in the same commit. The widened test stays transitive: the
 `client/` module `chat.ts` imports reaches nothing under `core/` or `protocol/` at
 runtime, so a later import cannot quietly break the HTTP-only property.
 
@@ -560,8 +560,9 @@ machine reboots, and the operator expects to keep talking to them afterwards. To
 daemon shutdown calls the same `close()` as a dismiss, so a restart is a **stop**, not a
 pause. R42(b) then makes the restored room read-only. Nothing blocks the other answer —
 three of the four measured harnesses advertise `loadSession: true`
-(`docs/M0-FINDINGS.md:136`; pi-acp's `loadSession` was not measured — see the backlog note
-in `docs/STORIES.md`), so S3(c) is unscheduled rather than impossible. M6-1 decides whether
+(`docs/FINDINGS.md` §M0-1, `agentCapabilities`; pi-acp's `loadSession` was not
+measured — see the backlog note in `docs/STORIES.md`), so S3(c) is unscheduled rather
+than impossible. M6-1 decides whether
 shutdown and close stay the same verb, and R37's `keep` is what makes either answer
 possible: the checkout is still there.
 
@@ -708,7 +709,7 @@ its next message: respawn the harness in its existing worktree with a fresh sess
 `loadSession: true` reattaches with `resumed: "loaded"` instead of a fresh session. Half B is
 gated on a measurement nobody has taken: every `loadSession: true` we hold is a handshake
 claim, never a session loaded into a **new** harness process, and pi-acp's own table
-(`docs/M0-FINDINGS.md:1019`) has no `loadSession` row at all. `exited` revives through the
+(`docs/FINDINGS.md` §pi-acp) has no `loadSession` row at all. `exited` revives through the
 same fresh-session path, so a crashed room is recoverable too (R33).
 
 **Open point (2026-09-24, found at #137):** nothing above says what a **daemon crash**
@@ -952,7 +953,7 @@ no dependency relation between agents (R24–R30 retired).
 | --- | --- | --- | --- |
 | S1 | How to land the spike | (a) rebase both commits onto master, resolve toward current M2 (b) cherry-pick the runtime files, rewrite the daemon integration (c) merge master into the branch, then land | **Decided (interview):** (a). **Amended 2026-09-20:** the port is **M6-0 and comes first**, not last. The branches are 13 commits behind and every story placed in front of the rebase makes it larger; nothing about the rebase gets cheaper by waiting for the room model, because the single-participant runtime it carries is already settled (P1–P9). It ships behind `chat.ts`, marked experimental, with no new features. **Landed 2026-09-21 (#144):** only the `chat-mvp` commit. `spike/chat-tui` is left unrebased for M4-1, which ratifies pi-tui and rebases it as its first step — rebasing it here too would be the same work done twice |
 | S2 | Participant mode default | (a) keep `auto` for v1 (b) mode at add, default `ask` for a TUI (c) per-message override | **Decided (interview):** mode per participant at add, default `auto`; `ask`/`safe` selectable |
-| S3 | Restart and resume | (a) ephemeral rooms, history replay only (b) persist metadata, restore read-only (c) restore + per-participant `session/load` | **Decided (interview):** (b) now; (c) later. **Amended 2026-09-21 (#145):** (b) keeps its place and changes its meaning — it read *restore read-only*, and now reads **restore and revive with a fresh session** (R42). (c) is still `session/load` and still later, now also gated on a measurement nobody has taken: every `loadSession: true` we hold is a handshake claim (`docs/M0-FINDINGS.md:136`), never a session loaded into a **new** harness process |
+| S3 | Restart and resume | (a) ephemeral rooms, history replay only (b) persist metadata, restore read-only (c) restore + per-participant `session/load` | **Decided (interview):** (b) now; (c) later. **Amended 2026-09-21 (#145):** (b) keeps its place and changes its meaning — it read *restore read-only*, and now reads **restore and revive with a fresh session** (R42). (c) is still `session/load` and still later, now also gated on a measurement nobody has taken: every `loadSession: true` we hold is a handshake claim (`docs/FINDINGS.md` §M0-1, `agentCapabilities`), never a session loaded into a **new** harness process |
 | S4 | Room and participant records | (a) events are the only record (b) `room.json` + participant records, turns derived from events (c) a file per turn | **Decided (interview):** (b). **Amended 2026-09-21 (#145):** the participant record carries the harness `sessionId` from its first version (R17) |
 | S5 | Cancel one turn | (a) `POST /rooms/:id/agents/:agentId/turns/current/cancel` (b) `DELETE .../messages/current` (c) keep room dismiss only | **Decided (interview):** (a) |
 | S6 | Room dismiss response | (a) synchronous 200 once every participant has stopped and its checkout is released per R37 (b) 202 like a run cancel (c) 204 | **Decided (interview), corrected 2026-09-21:** (a). The option's old wording said "commits/releases, as the spike", which R37 forbids: nothing is committed, the checkout is kept. **The bound needs participants stopped in parallel**, not one after another: `stop()` waits up to `stopGraceMs` (5 s) for a harness that ignores end of file, so a serial dismiss of N participants bounds at 5N seconds — half a minute of a hanging request on a room of six. Parallel makes the documented bound `stopGraceMs` + overhead, a number that can actually be written down. **Renamed 2026-09-21 (#145):** this is the **dismiss** response — `POST /rooms/:id/dismiss` — and the same parallel bound covers `pause`, which stops harnesses the same way but never releases a worktree (the sketch's naming trap) |
@@ -1033,7 +1034,7 @@ from dismiss in three places:
 | M2 | Fixtures | golden DTO JSON in `tests/contract/fixtures/` | confirm |
 | M3 | Browser visual checks in CI | (a) no (b) yes headless | (a) |
 | M4 | M5 done-when | a client written from the doc alone passes the suite | confirm |
-| M5 | Docs to update | README, CLAUDE.md, PROJECT-PLAN, STORIES, CONFIG, this file | confirm the list |
+| M5 | Docs to update | README, AGENTS.md, PROJECT-PLAN, STORIES, CONFIG, this file | confirm the list |
 | M6 | Shared module visibility | (a) internal module (b) exported package | (a), `private: true` stays |
 
 ## What this plan deliberately leaves alone
