@@ -577,7 +577,6 @@ export async function runRun(
   };
 
   const width = Math.min(run.maxConcurrency, run.tasks.length);
-  let report: RunReport;
   try {
     try {
       await Promise.all(Array.from({ length: width }, worker));
@@ -591,7 +590,7 @@ export async function runRun(
     const status = runStatus(results.map((r) => r.status));
     const endedAt = new Date().toISOString();
     await persist(status, endedAt);
-    report = {
+    const report: RunReport = {
       status,
       durationMs: Date.now() - started,
       turns,
@@ -611,13 +610,13 @@ export async function runRun(
         turns,
       },
     });
+    return report;
   } finally {
     // Every task has emitted its last event by now, and so has the run, so
     // readers can end. A run that threw ends with no `_client_run_finished`,
     // the same as an old log: the client falls back to `GET /runs/:id`.
     await eventLog?.close();
   }
-  return report;
 }
 
 /** How the run-wide sweep reaches one task. `fired` is the supervisor's own

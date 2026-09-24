@@ -1077,7 +1077,6 @@ async function attachRun(): Promise<number> {
   // `queued` — counts as failed in the fallback: an unfinished task is never a
   // success. The settled run status wins over this whenever GET has one.
   const statuses: TaskStatus[] = [];
-  let reported = false;
   for (const c of cards.values()) {
     statuses.push(
       TASK_STATUSES.has(c.status) ? (c.status as TaskStatus) : "failed",
@@ -1085,28 +1084,30 @@ async function attachRun(): Promise<number> {
     if (quiet) {
       if (c.status !== "done" && c.status !== "warned") {
         console.error(`error: [${c.id}] ${c.status}`);
-        reported = true;
       }
     } else {
       printTask(only ? { ...c, transcript: "" } : c);
     }
   }
   const fromTasks = runStatus(statuses);
-  // A throw out of `runRun` fails the run whatever its tasks said. Otherwise
-  // the daemon's settled status is the verdict; the cards only stand in when
-  // GET still reads `running` (a cut stream) or is missing (pre-M5-2 daemon).
+  // A throw out of `runRun` fails the run whatever its tasks said. `--task`
+  // asks about one task, so its card is the verdict: the run's status would
+  // fail a task that is `done` because a sibling failed. Otherwise the
+  // daemon's settled status is the verdict; the cards only stand in when GET
+  // still reads `running` (a cut stream) or is missing (pre-M5-2 daemon).
   const status: RunStatus = state.error
     ? "failed"
-    : state.status !== undefined && state.status !== "running"
+    : !only && state.status !== undefined && state.status !== "running"
       ? state.status
       : fromTasks;
   if (!quiet) {
     console.log(`\n${status} — ${plural(statuses.length, "task")}`);
-  } else if (!reported && status !== "done" && status !== "warned") {
-    // `--quiet` suppresses the summary, not the fact that the run failed. The
-    // verdict can come from the record while every card the log carries reads
-    // `done` — a crash between `_client_task_finished` and the record write
-    // leaves exactly that — so this run-level line is the only one left.
+  } else if (!only && status !== "done" && status !== "warned") {
+    // `--quiet` drops the summary, not the run's verdict. The card lines above
+    // cannot carry it: every card can read `done` while the record says
+    // `killed` — a crash between `_client_task_finished` and the record write
+    // leaves exactly that — and a `failed` card does not say the run was
+    // `killed`. Under `--task` the card line already is the verdict.
     console.error(`error: run ${id} ${status}`);
   }
   return status === "done" || status === "warned" ? 0 : 1;

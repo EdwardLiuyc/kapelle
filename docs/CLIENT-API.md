@@ -442,7 +442,7 @@ status:
 | `skipped` | It did not run. |
 | `timed_out` | It ran past its time limit and was stopped. |
 | `failed` | It failed. |
-| `killed` | The daemon stopped while the run was live, for example a crash or a power cut. Only a run read back after a restart has it. Since 1.2 (M5-5). |
+| `killed` | The daemon stopped while the run was live, for example a crash or a power cut. Only a run or a task read back after a restart has it. Since 1.2 (M5-5). |
 
 **Task status** is one of the task words above, or `queued` (not started yet), or
 `running` (while the run is live). After a restart, a task that was running when the
@@ -567,7 +567,9 @@ retired, so this is not on a current story.)
 - A run's stream can also end with no `_client_run_finished`. This happens for a run
   from before 1.2, a run that stopped when the daemon stopped, and a run that failed
   inside the daemon. Then call `GET /runs/:id` for the result. If the status is still
-  `running`, the connection was cut: connect again with `Last-Event-ID`.
+  `running`, connect again with `Last-Event-ID`. Either the connection was cut, or the
+  run failed inside the daemon a moment ago and its status is not saved yet. In the
+  second case, the new stream ends at once, and `GET` then shows `failed`.
 - For a room, the stream ends when the room closes.
 - For a finished run, you get the history and then the end.
 

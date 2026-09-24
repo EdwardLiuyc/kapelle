@@ -1993,6 +1993,17 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   assert.match(attached.stdout, /waiting \([^)]*\) queued/);
   assert.doesNotMatch(attached.stdout, /\bdone\b/);
   assert.match(attached.stdout, /killed — 2 tasks/);
+  // `--quiet` keeps the run's verdict even when card lines were printed: a
+  // `killed` card and a `queued` one do not say the run itself was killed.
+  const quiet = await spawnCli(
+    t,
+    ["attach", id, "--quiet"],
+    "cli.ts",
+    attachEnv,
+  ).done;
+  assert.equal(quiet.code, 1, quiet.stderr);
+  assert.match(quiet.stderr, /error: \[stuck\] killed/);
+  assert.match(quiet.stderr, new RegExp(`error: run ${id} killed`));
 
   const oneTask = await spawnCli(
     t,
@@ -2078,7 +2089,7 @@ test("attach trusts a killed run status over a log whose task_finished beat the 
   ).done;
   assert.equal(quietAttach.code, 1, quietAttach.stderr);
   assert.equal(quietAttach.stdout, "");
-  assert.match(quietAttach.stderr, /killed/);
+  assert.match(quietAttach.stderr, new RegExp(`error: run ${id} killed`));
 
   process.kill(second.pid, "SIGTERM");
   assert.equal((await second.done).code, 0);
@@ -2575,11 +2586,12 @@ test("attach --task draws that one task in full, and refuses a task the run lack
     env,
     cwd,
     mockRun([
-      { id: "a", prompt: "hi" },
+      // A failed sibling: `--task b` must still answer for b alone (#170).
+      { id: "a", prompt: "hi", cmd: `node ${MOCK_AGENT} --scenario refuse` },
       { id: "b", prompt: "hi" },
     ]),
   );
-  await settled(d, id);
+  assert.equal((await settled(d, id)).status, "failed");
 
   const r = await spawnCli(t, ["attach", id, "--task", "b"], "cli.ts", env)
     .done;
