@@ -402,7 +402,7 @@ test("a symlink that stays inside the root is still followed", async (t) => {
 
 test("a second prompt after end_turn runs on the same live session", async (t) => {
   // #62 R5 guards a prompt *during* a live turn. The multi-turn probe
-  // (`docs/M0-FINDINGS.md` §Multi-turn, 2026-09-15) measured a follow-up prompt
+  // (`docs/FINDINGS.md` §Multi-turn, 2026-09-15) measured a follow-up prompt
   // completing on all four harnesses once the first turn had ended. This pins
   // the client half: after `end_turn` the guard is clear,
   // the session id is unchanged, no second harness is spawned, and the session

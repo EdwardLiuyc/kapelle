@@ -216,7 +216,7 @@ export function runCli(
 /** A daemon under test: its address, its token, and how to read its exit.
  *
  *  Shared by `tests/daemon.test.ts` and `tests/contract/run-dto.test.ts`, so
- *  neither suite copies the boot/HTTP plumbing (CLAUDE.md: share, don't
+ *  neither suite copies the boot/HTTP plumbing (AGENTS.md: share, don't
  *  copy). */
 export interface Daemon {
   url: string;
@@ -365,7 +365,7 @@ export interface TwoTurns {
  * The one integration helper that drives `AcpAgent` rather than `cli.ts`: the
  * CLI sends one prompt per session, so no argv reaches a second turn. #62 R5
  * refuses a prompt *during* a live turn; this is the other case, measured on
- * all four harnesses on 2026-09-15 (`docs/M0-FINDINGS.md` §Multi-turn). The
+ * all four harnesses on 2026-09-15 (`docs/FINDINGS.md` §Multi-turn). The
  * prompts carry a codeword so a human reading a failure can see whether context
  * held, but the caller asserts only stop reasons, the session id and the spawn
  * count. `policy: () => false` because nothing here needs a tool.

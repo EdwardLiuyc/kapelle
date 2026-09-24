@@ -22,7 +22,7 @@ import {
 
 // --- fixtures ---------------------------------------------------------------
 // One sample per protocol variant, taken from the M0 wire captures
-// (docs/M0-FINDINGS.md) and mock-agent.mjs where available.
+// (docs/FINDINGS.md) and mock-agent.mjs where available.
 
 const FIXTURES: SessionUpdate[] = [
   {
@@ -40,9 +40,9 @@ const FIXTURES: SessionUpdate[] = [
   },
   {
     // Composite of fields claude-agent-acp 0.49.0 announces on tool_call
-    // (M0-FINDINGS.md §M0-3). The real capture (M0-FINDINGS.md:448-450) also
+    // (FINDINGS.md §M0-3). The real capture (FINDINGS.md:448-450) also
     // carries a _meta terminal block; rawInput is {} here, real argv arrives
-    // on tool_call_update ~0.5s later (M0-FINDINGS.md:403-404).
+    // on tool_call_update ~0.5s later (FINDINGS.md:403-404).
     sessionUpdate: "tool_call",
     toolCallId: "toolu_01FDY",
     title: "Terminal",
@@ -54,7 +54,7 @@ const FIXTURES: SessionUpdate[] = [
   },
   {
     // Composite: claude-agent-acp announces {} on tool_call and the real argv
-    // arrives here ~0.5s later (M0-FINDINGS.md:403-404)
+    // arrives here ~0.5s later (FINDINGS.md:403-404)
     sessionUpdate: "tool_call_update",
     toolCallId: "toolu_01FDY",
     status: "completed",
@@ -73,7 +73,7 @@ const FIXTURES: SessionUpdate[] = [
   { sessionUpdate: "current_mode_update", currentModeId: "plan" },
   {
     // Copilot only (M0-1); currentValue "claude-sonnet-5" measured on the
-    // wire under category "model" (M0-FINDINGS.md:863-864) — the "which model
+    // wire under category "model" (FINDINGS.md:863-864) — the "which model
     // ran" channel M1a-4 consumes.
     sessionUpdate: "config_option_update",
     configOptions: [

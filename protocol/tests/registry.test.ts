@@ -88,7 +88,7 @@ test("measuredOn stays silent when the harness sends no version", () => {
 });
 
 test("copilot's mode ids are the full canonical URLs, not the bare fragment", () => {
-  // The bare `#plan` fragment returns -32602 (docs/M0-FINDINGS.md:63).
+  // The bare `#plan` fragment returns -32602 (docs/FINDINGS.md:63).
   for (const id of Object.values(AGENTS.copilot.measured?.modeMap ?? {})) {
     assert.ok(
       id.startsWith("https://"),

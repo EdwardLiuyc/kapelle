@@ -58,7 +58,7 @@ const TIMED_METHODS = new Set([
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 // M2-4 measured every harness exiting within 1 s of stdin closing, mid shell
-// command included (`docs/M0-FINDINGS.md` §M2-4), so this is a safety net.
+// command included (`docs/FINDINGS.md` §M2-4), so this is a safety net.
 const DEFAULT_STOP_GRACE_MS = 5_000;
 
 // How long a harness's stdio has to drain after the process exits before we
@@ -220,6 +220,10 @@ function errorMessage(err: unknown): string {
  *
  * We are the CLIENT. We spawn the agent, own the workspace, answer its
  * requests for file access, and decide its permissions.
+ *
+ * It handles exactly three inbound requests — `fs/read_text_file`,
+ * `fs/write_text_file` and `session/request_permission` — and one
+ * notification, `session/update`, which it forwards to `onEvent`.
  *
  * Ported from `acp.mjs` (M1a-3), then grown one behaviour at a time. Landed so
  * far: the per-request timeout (#62 B1), the in-flight prompt guard (#62 R5),

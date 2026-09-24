@@ -6,7 +6,7 @@
  * its own numbers, so per-task settings and a single timer are not in tension.
  * The alternative — a deadline timer per signal per task — would have to be
  * cleared and re-armed on *every* event, and M0-4 measured 443 events in one
- * opencode turn (`docs/M0-FINDINGS.md` §M0-4). Polling is the cheaper shape.
+ * opencode turn (`docs/FINDINGS.md` §M0-4). Polling is the cheaper shape.
  *
  * Two signals, both chosen because they port across vendors:
  *

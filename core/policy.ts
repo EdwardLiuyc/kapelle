@@ -15,7 +15,7 @@
  * - The **filter** has no jurisdiction wherever `measured.asksPermission` is
  *   false. opencode never sends `session/request_permission`, so no policy
  *   value is ever consulted and none changes what it does: it wrote the file
- *   under `safe`, over a denial (`docs/M0-FINDINGS.md` §M0-1).
+ *   under `safe`, over a denial (`docs/FINDINGS.md` §M0-1).
  * - **Negotiation** did change what opencode does — measured 2026-09-02, the
  *   same prompt wrote the file without it and was refused with it. What it
  *   does not do is *bind*: the refusal arrived as agent prose, so the harness

@@ -5,7 +5,7 @@
  * prompt and stops it (`core/run.ts`). A room spawns it once, sends a prompt
  * per message, and stops it only when the room is dismissed. Measured safe on
  * all four harnesses: a prompt sent after `end_turn` completes on the same
- * session with the first turn's context kept (`docs/M0-FINDINGS.md`
+ * session with the first turn's context kept (`docs/FINDINGS.md`
  * §Multi-turn). A prompt *during* a live turn is still refused, here as
  * `busy` and below as `AcpAgent`'s in-flight guard (#62 R5).
  *

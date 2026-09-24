@@ -2,16 +2,181 @@
 
 Instructions for any coding agent working in this repo. Harness-neutral by design — this
 repo drives several harnesses, so a procedure only one of them can follow is a bug.
+`CLAUDE.md` is one line that imports this file, so Claude Code reads the same text.
 
-- Project context, architecture and invariants: **`CLAUDE.md`** (named for the tool that
-  loads it automatically; the contents apply to every agent).
-- Plan, stories and empirical findings: **`docs/`**.
+Use plain language and short sentences in code comments and docs.
+
+This file holds only what an agent cannot learn by reading the code. **The detail lives
+at the top of each source file** — read that comment before you change the file. The
+history and the measurements live in `docs/`:
+
+- `docs/FINDINGS.md` — what each harness was measured to do. A section named `§M0-4`
+  or `§Multi-turn` below is a section of this file.
+- `docs/STORIES.md` — the work breakdown, with the reason for each decision.
+- `docs/CLIENT-API.md` — the daemon's API, for client authors. `docs/CONFIG.md` — the
+  config keys.
+- `docs/PROJECT-BRIEF.md` (why), `docs/PROJECT-PLAN.md` (what, in what order),
+  `docs/CONTRACT-PLAN.md` (the decision register for M4–M6).
+
+**Do not read `docs/archive/`.** It holds recaps for people, such as a milestone summary.
+They are snapshots, and they go out of date. The code and the files above are the
+source of truth.
+
+## What this is
+
+`kapelle` is a minimal [Agent Client Protocol](https://agentclientprotocol.com)
+**client**, in TypeScript with ES modules. Node ≥24, `"type": "module"`, no build step.
+It has one runtime dependency, `marked`, and it is used for presentation only
+(`core/markdown.ts`).
+
+**This code is the client. The coding harness is the agent.** We spawn the harness as a
+subprocess, own the workspace, serve its filesystem requests and decide its permissions.
+Harnesses (opencode, claude, copilot, pi, …) log in by themselves. This client never
+touches a key.
+
+## Commands
+
+```bash
+npm run check          # tsc --noEmit
+npm run fmt            # biome format + lint, with fixes
+npm run fmt:check      # biome format + lint, check only
+npm run test           # node:test: pure functions and wire behaviour; no harness needed
+npm run knip           # unused files and exports
+npm run selftest       # end to end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
+npm run test:harness   # the real harnesses; local only, needs credentials, spends tokens
+node cli.ts "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
+node cli.ts run --file <run.json> [--detach]   # N tasks (tasks.json is the example); --detach hands them to the daemon
+node cli.ts attach <runId> [--task <id>]       # replay then follow a detached run
+node cli.ts ps                                 # every run the daemon knows, with its tasks
+node cli.ts merge <runId>
+node cli.ts workspace [--cwd dir]              # where this repo's worktrees and records live
+node cli.ts workspace move <old-repo> <new-repo>
+node cli.ts daemon start [--port n] [--permission-timeout s]   # same as: node daemon.ts
+node cli.ts daemon add <path>
+node chat.ts new --agent <id> [--cwd dir]      # experimental chat room
+node chat.ts attach <roomId> | list | dismiss <roomId>
+```
+
+`ACP_TEST.md` is selftest output, not source. You can delete it.
+
+## Where things are
+
+Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`.
+**`core/` may import `protocol/`. `protocol/` never imports `core/`.** That is why
+`AcpAgent`'s default policy refuses everything instead of being `safePolicy`.
+`client/` imports only `protocol/types.ts`, and nothing in `core/` or `protocol/` imports
+`client/`. `render.ts` → `core/markdown.ts` is the one arrow that points back.
+
+| Path | What it is |
+| --- | --- |
+| `protocol/agent.ts` | `AcpAgent`: one harness subprocess, JSON-RPC over stdio, the path guard. |
+| `protocol/registry.ts` | The whole adapter layer: one entry per harness, `launch` plus `measured`. |
+| `protocol/types.ts` | Hand-written wire types, and the `_client_*` synthetic events. |
+| `core/policy.ts` | `safe` / `ask` / `auto`, mode negotiation, `resolvePolicy`. |
+| `core/events.ts` | The event bus. |
+| `core/runfile.ts` | Run-file validation (`validateRun`). |
+| `core/run.ts` | The task pool, and how a status is worked out. |
+| `core/worktree.ts` | One git worktree per task. |
+| `core/result.ts` | The `<task-result>` contract and its cross-check. |
+| `core/merge.ts` | `kapelle merge`. |
+| `core/watchdog.ts` | Stall detection: idle, repeat, TTL. |
+| `core/notify.ts` | Bell and desktop notification for the two attention events. |
+| `core/permissions.ts` | The daemon's queue of pending `ask` decisions. |
+| `core/eventlog.ts` | `events.jsonl`: write, replay and follow. |
+| `core/sweep.ts` | The daemon's boot sweep. |
+| `core/config.ts` | The config files and `KAPELLE_*` variables. |
+| `core/runtime.ts` | The user-level directories and `stateDirFor(root)`. |
+| `core/room.ts` | A chat room: one harness kept alive across turns. |
+| `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
+| `render.ts` | Terminal drawing of `session/update` events. |
+| `cli.ts` | The CLI and the `kapelle` bin. |
+| `daemon.ts` | The HTTP daemon: one for all of the operator's repositories. |
+| `daemon/` | The parts of `daemon.ts` that tests can import (`daemon.ts` starts a daemon when imported). |
+| `client/contract.ts` | The client API as types, plus `API_VERSION`. |
+| `chat.ts` | Chat front end. It talks HTTP only and imports only `core/runtime.ts`. |
+| `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
+
+Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`
+(`stateDirFor`). The only file a run reads inside the repository is
+`.kapelle/config.json`.
+
+## Rules that are easy to break
+
+- **The policy is a filter, not a sandbox.** It decides what a harness *asks*, and the
+  one change a harness can make through us: `fs/write_text_file`. A harness that edits
+  through its own shell is outside its reach. opencode and pi never ask at all.
+  `core/policy.ts` is the one policy file, and `policyFor(mode)` is the only map from a
+  mode to a decider.
+- **Keep the path guard separate from the policy.** `#guardPath` compares realpaths and
+  applies in every mode, `auto` included.
+- **Keep the `toolCallId → {title, kind, rawInput}` map in `AcpAgent`.** A permission
+  request can carry only a `toolCallId`. Without the map, every decision goes blind.
+- **An approval covers one write.** A denial is sticky. `pickOption` returns `null`
+  rather than guess; never fall back to `options[0]` (#13).
+- **`safe` negotiates, then filters.** `negotiateSafeMode` sends
+  `measured.modeMap.safe`. Never send a mode id for `ask` or `auto`: `auto`'s id puts
+  claude into `bypassPermissions`.
+- **`--quiet` never hides the containment notice** or the "not negotiated" line (#13).
+- **Status comes from our own record** (did we cancel, did the watchdog fire), not from
+  `stopReason`. copilot answers `end_turn` for a turn it cancelled (§M0-4).
+- **Never add up `usage` across tasks or harnesses.** copilot counts cumulatively;
+  the others count per turn.
+- **No second prompt during a turn, and no re-ask after it** (§M0-4).
+- **A new synthetic event starts with `_client_`.** The `render.ts` switch has no
+  `default`, so an unknown event is dropped rather than drawn wrong.
+- **A missing `measured` half means "not verified".** Do not add a second flag for it.
+- **Do not rename the package to `agent-team`.** That npm name and `bin` belong to an
+  unrelated live package. `private: true` stays; it blocks `npm publish` only.
+
+## Tests
+
+- Suites live in a `tests/` folder beside their sources. `npm run test` needs no harness,
+  so CI needs no credentials.
+- `mock-agent.mjs` is the offline, well-behaved harness. **Check a change to
+  `protocol/agent.ts` against it before a real harness.** When you add a client
+  capability, add a path to it. Scenarios are picked with `--scenario <name>` on argv,
+  never with a keyword in the prompt.
+- `hostile-agent.mjs` has one attack per `--scenario` and no default. Each attack must
+  end its turn normally, so a test proves "refused, and the run continues".
+- `tests/cli.test.ts` and `tests/daemon.test.ts` drive the real entry points as
+  subprocesses. Each daemon under test gets its own temp `XDG_RUNTIME_DIR` and
+  `XDG_STATE_HOME`. Share the helpers in `integration/helpers.ts`; do not copy them.
+- `integration/*.itest.ts` drives the real harnesses. `node --test` does not discover the
+  `.itest.ts` suffix, and that is the only thing that keeps them out of CI, so do not
+  rename them. Assert on what the client controls (exit code, our notice lines), never
+  on the agent's prose. A missing harness skips.
+- `--mode ask` needs a TTY. Without one it becomes `safe`, so tests cannot reach it.
+
+## When something fails
+
+- A harness that fails to start shows as an opaque JSON-RPC error, often
+  `Internal error (code -32603)` on `session/new`. Run with `--verbose`, or read
+  `<stateDirFor(root)>/runs/<runId>/<taskId>.stderr.log`.
+- The `claude` registry entry removes the parent Claude Code session's variables
+  (`CLAUDECODE`, …). You do not need `env -u`.
+
+## Deliberately unimplemented
+
+Do not add these unless asked:
+
+- `terminal/*`: we send `terminal: false`, and turning it on changes nothing (§M0-3).
+- `session/load` and resume.
+- Elicitation, slash commands and session modes.
+
+Cancellation is best-effort.
 
 ## Git discipline
 
 **Never commit, push, or create branches/PRs unless the user explicitly asks in that
 instruction.** Keep edits in the working tree until then. When asked to commit, commit on
 the story's branch — never directly on `master`.
+
+**Commits.** Keep the message short and clear, and say what changed. Prefer a single
+line. Add no `Co-Authored-By:` line or any other trailer.
+
+**Pull requests.** Never write that an agent or a tool made the PR. No "Generated with
+Claude Code" line, no agent name, no robot emoji — not in the title, the body or a
+comment.
 
 ## Markdown lint
 

@@ -44,10 +44,10 @@ policy across all of them and returning machine-readable results.
 | Containment honesty | The registry records whether each harness routes commands through `terminal/*` or runs them internally, **and separately whether we ever see the command text** (`argvChannel`). `safe` warns when it cannot actually contain. **Measured (M0-1, M0-3): all three run internally and none calls `terminal/*` even when offered; opencode never asks permission and never shows us a command, so the policy has no jurisdiction over it; claude-agent-acp and copilot do show real argv, on `session/update` notifications. All three accept `session/set_mode`, so modes are a second containment channel.** |
 | Unattended `ask` | Pending decision published on the event stream; **timeout → deny**. |
 | Silent autonomy | Detect and warn — flag runs with a non-empty diff and zero permission requests. **Required, not optional: M0-1 found this is opencode's default behaviour, not an anomaly.** |
-| Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. **Capability axis measured too, 2026-08-23 — parked.** M0-3's `87cbfe3` advertised `_meta.terminal_output: true`; claude-agent-acp's Bash `tool_call` then carried a `terminal_id` and `{type:"terminal"}` block for a terminal never created, with still no `terminal/*` calls, no command output, and no exit code (`M0-FINDINGS.md`). It is a rendering convention, not visibility — `argvChannel` gains no fourth value, and no follow-up is scheduled. |
+| Terminals | ~~Spike first (M0).~~ **Settled by M0-3: not implemented.** With `terminal: true` advertised, no harness called `terminal/create` — all three used their own shell. M3-5 is cut to per-harness documentation, and `terminal: false` on master is now a recorded decision rather than a default. **Capability axis measured too, 2026-08-23 — parked.** M0-3's `87cbfe3` advertised `_meta.terminal_output: true`; claude-agent-acp's Bash `tool_call` then carried a `terminal_id` and `{type:"terminal"}` block for a terminal never created, with still no `terminal/*` calls, no command output, and no exit code (`FINDINGS.md`). It is a rendering convention, not visibility — `argvChannel` gains no fourth value, and no follow-up is scheduled. |
 | Protocol `_meta` | **Retained end-to-end, both directions (decided 2026-08-23).** `_meta` on the base of M1a-2's message types and carried through M1a-6's bus as part of the wire object; nothing consumes it yet. Answers the retro's B4 (#62). It is preservation rather than addition — `protocol/agent.ts` already forwards the whole update object — and the cost of deferring is not a refactor but runs whose event log never recorded it. The fleet's only exhaustion warning (`_meta["_claude/rateLimit"]`, M0-5), and the capability flags M0-3 found harnesses gating on (measured for `terminal_output` via `87cbfe3`) all live there. |
 | Language | TypeScript on Node 24, run directly via type stripping — **no build step**. Four devDependencies — `typescript`, `@types/node`, `biome`, `knip` (amended 2026-08-31, M1a-1; the story's original *"only devDependency"* is history). **Zero runtime deps until M1c-7 (2026-09-09), which ratified a presentation-only exception and took `marked`** — see `README.md` for the rule. |
-| Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, with **pi-acp a measured fourth since 2026-09-09 (#99)**, re-confirmed by M0-1 (`M0-FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
+| Harness targets | opencode, claude-agent-acp, copilot — all three verified end-to-end, with **pi-acp a measured fourth since 2026-09-09 (#99)**, re-confirmed by M0-1 (`FINDINGS.md`): opencode 1.18.18, claude-agent-acp 0.49.0, copilot 1.0.78, all completing a turn at protocol v1. |
 | CLI | **One front end, one core (amended 2026-09-06, M2-9).** `kapelle run --file <file>` drives in-process (the bare `kapelle --file` is gone, amended 2026-09-18, #39); `--detach` hands the same file to the daemon; `kapelle attach <run-id>` streams a detached run. The original "two front ends, `run` and `runs`" is dropped: `runs` leaked the `POST /runs` path into a name people type, read as "many runs" when the difference is *local versus detached*, and a second CLI is a second place to keep the flags, notice rules and SIGINT grace in step. |
 
 ### Notes on some of these
@@ -210,11 +210,11 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
 > **Status: M0 is complete.** Item 1 — M0-1. Items 2 and 7 — M0-2, which also retired the
 > `claude-code` registry entry. Items 3 and 4 — M0-3. Item 5 — M0-4. Item 6 — M0-5. Item 8 —
 > M0-6, corrected again by M0-7 after copilot changed behaviour between builds. The findings
-> note is assembled and carries a per-harness roll-up at the top: `M0-FINDINGS.md`.
+> note is assembled and carries a per-harness roll-up at the top: `FINDINGS.md`.
 >
 > **One story added after that completion, and resolved rather than scheduled: M0-8**, from the AgentPool review
 > (`docs/PRIOR-ART-AGENTPOOL.md`). M0-3's `87cbfe3` had already advertised `_meta.terminal_output`;
-> the result (`M0-FINDINGS.md`) recorded no visibility and no exit code, so the story
+> the result (`FINDINGS.md`) recorded no visibility and no exit code, so the story
 > closed as a docs reconciliation. **Parked, no backlog entry** — see the Terminals row above.
 
 1. ~~Run today's MVP against real **opencode** and **claude-agent-acp**.~~ **Done, and
@@ -227,7 +227,7 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    **Fixed by M0-2.** It is `copilot --acp` (a flag), not `copilot acp` (a subcommand) as
    `agents.mjs` guessed; `opencode acp` confirmed correct. The registry now says `--acp`,
    verified against Copilot 1.0.78 completing a turn; the old arg exits 1.
-3. ~~**Terminal spike.**~~ **Done by M0-3** (`docs/M0-FINDINGS.md` §M0-3, branch
+3. ~~**Terminal spike.**~~ **Done by M0-3** (`docs/FINDINGS.md` §M0-3, branch
    `spike/m0-3-terminal`, kept unmerged). **No harness called `terminal/create`** with
    `terminal: true` advertised — opencode, claude-agent-acp and copilot all ran the tests
    through their own shell. Two corrections to this item as written: a "logging stub" is
@@ -242,7 +242,7 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    gated by argv at all; claude-agent-acp's argv arrives late, on `tool_call_update`.
    **M3-6 therefore survives without M3-5.**
 5. ~~**Cancellation probe.**~~ **Done by M0-4, and the expectation was wrong**
-   (`docs/M0-FINDINGS.md` §M0-4). Cancellation itself is the easy half: all three end the
+   (`docs/FINDINGS.md` §M0-4). Cancellation itself is the easy half: all three end the
    turn within 64 ms, emit nothing afterwards, and leave the session reusable — so the TTL
    rung gets a 2 s grace and never needs to kill. Two results this plan did not anticipate.
    **Copilot answers `end_turn` for a turn it cancelled**, contrary to ACP's MUST, so
@@ -253,7 +253,7 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    (`github/copilot-cli#4555` reports the mechanism: `session/prompt` aborts the session
    unconditionally, even when idle). There is no safe way to nudge a turn in flight.
 6. ~~**Usage reporting.**~~ **Answered by M0-5, and refocused on the context window**
-   (`docs/M0-FINDINGS.md` §M0-5). `usage_update` arrives from all three and `used` is
+   (`docs/FINDINGS.md` §M0-5). `usage_update` arrives from all three and `used` is
    occupancy and a snapshot, as assumed — but **`size` is not a usable denominator**:
    claude-agent-acp reports 200k for the whole of a session's first turn whatever the real
    window, and copilot's 200000 matches neither its own 264k window nor the ~175k it leaves
@@ -287,7 +287,7 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    per-harness, and it belongs next to the registry's containment label rather than in a
    single sentence.
 
-**Output:** the findings note, `M0-FINDINGS.md` — all four survey sections filled, opened
+**Output:** the findings note, `FINDINGS.md` — all four survey sections filled, opened
 by a per-harness roll-up that answers the M0 exit criterion below in one table, and closed
 by an explicit list of what it does not cover. No production code beyond items 2, 7 and 8.
 Spike tooling lives on four unmerged `spike/*` branches, named per section in the note.
@@ -352,7 +352,7 @@ driven from a run file, fully verifiable offline.
   Reading a file whose path is already known goes through a native `read` tool on 1.0.80
   and `safe` allows it, so the harness is crippled rather than wholly unusable. **This is
   build-specific**: on 1.0.78 copilot shelled `cat` for reads too, and `safe` refused those
-  as well (`M0-FINDINGS.md` §M0-1, "What re-verification changed"). Either way it is an
+  as well (`FINDINGS.md` §M0-1, "What re-verification changed"). Either way it is an
   argument for `defaultMode` being per harness, which this design already allows.
 - **`core/policy.ts`** — small in lines, load-bearing. Change the policy signature from
   `async () => boolean` to a form answerable by an external, asynchronous decider, so `ask`
@@ -604,7 +604,7 @@ therefore irrelevant to rooms — its graph belongs to run files.
 
 The multi-turn session this rests on is measured: a prompt sent after `end_turn` completes
 on the same session with the first turn's context kept, on all four harnesses
-(`docs/M0-FINDINGS.md` §Multi-turn).
+(`docs/FINDINGS.md` §Multi-turn).
 
 - **M6-0 — land the spike first.** `chat-mvp` and `spike/chat-tui` already prove the
   single-participant runtime and the screen. They are 13 commits behind master, so the

@@ -1,6 +1,8 @@
-# M0 findings
+# Findings
 
-Empirical answers to the M0 spikes. This note is the input to M1a-4's containment labels
+What the harnesses actually do, measured. It began as the answers to the M0 spikes, and
+later measurements (pi-acp, M2-4's stop, multi-turn) join it here; it was
+`M0-FINDINGS.md` until 2026-09-24. This note is the input to M1a-4's containment labels
 and env list, M1c-1's TTL default, and M3-5's terminal scope — where a story asks "what do
 the harnesses actually do", this file is the answer, not the plan.
 
