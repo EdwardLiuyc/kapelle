@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.0** (story M5-1, #133).
+Contract version: **1.1** (M5-1, #133; minor bumped by M5-4, #136).
 
 ## Contents
 
@@ -102,7 +102,7 @@ Not every part of this API is final yet. Each part has one of three labels:
 | SSE format, `seq`, `Last-Event-ID` | |
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
 | `_client_*` events | Except the room events. See [Events](#events). |
-| `GET /permissions`, `POST /permissions/:id` | |
+| `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). |
 | Error replies (`{error: {code, message}}`) and the error codes | Codes are only added (M5-3). |
 | Request limits: `Content-Type`, body size, unknown fields, read timeout | M5-3. |
 
@@ -115,7 +115,6 @@ changes each one.
 | End of a run's stream | Provisional | M5-5 (adds a "run finished" event) |
 | Event timestamps | Provisional | M5-5 (adds `at`) |
 | Heartbeat and reconnect | Provisional | M5-6 |
-| How a permission ended (reason) | Provisional | M5-4 (adds an "answered" event) |
 | `POST /runs` retry safety | Provisional | M5-7 (adds `Idempotency-Key`) |
 | Everything under `/rooms` | Experimental | M6-2 and later |
 
@@ -246,10 +245,10 @@ request that is not valid HTTP gets `400`.
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
 | `run_not_found` | `404` | No run has this id. | |
 | `room_not_found` | `404` | No room has this id. | |
-| `permission_not_found` | `404` | The daemon never gave out this permission id. | |
+| `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
-| `already_decided` | `409` | The permission was already answered, timed out, or cancelled. | Stop. Your answer was not used. |
+| `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `room_busy` | `409` | The room still answers the last message. | Wait for `_client_turn_ended`, then send again. |
 | `room_closed` | `409` | The room was dismissed, or its harness exited. | Stop. Open a new room. |
 | `orchestrator_exists` | `409` | Not built yet (M6-3). The room already has an orchestrator. | Change the other participant's role first. |
@@ -293,6 +292,7 @@ even when the body would be refused.
 | `DELETE /runs/:id` | Cancel a run. |
 | `GET /runs/:id/events` | A run's [event stream](#the-event-stream). |
 | `GET /permissions` | Decisions that wait for an answer. |
+| `GET /permissions/:id` | One decision, open or closed. |
 | `POST /permissions/:id` | Answer one decision. |
 | `POST /rooms` | Open a room. Experimental. |
 | `GET /rooms` | List rooms. Experimental. |
@@ -307,7 +307,7 @@ even when the body would be refused.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 0 },
+  "apiVersion": { "major": 1, "minor": 1 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -616,6 +616,7 @@ harness name):
 | --- | --- | --- |
 | `_client_permission_pending` | `title`, `kind` | A decision is about to be taken. It fires for every decision, also ones that need no person. |
 | `_client_permission_queued` | `id`, `title`, `kind` | A decision waits for a person. Answer it with `POST /permissions/:id`. |
+| `_client_permission_answered` | `id`, `allow`, `reason` | A queued decision closed. `id` is the one from `_client_permission_queued`. `reason` says why: see [Why a question closed](#why-a-question-closed). |
 | `_client_permission` | `allow`, `title`, `kind`, `optionId?` | The decision was taken. |
 
 **Files and cancel:**
@@ -671,8 +672,28 @@ asks a person through the API. Reading, searching, fetching and thinking never a
 - A stream replay also shows old `_client_permission_queued` events. Check
   `GET /permissions` before you ask a person. If the id is not there, the question is
   already closed.
+- Every client sees the same close. Each queued question closes exactly once, with one
+  `_client_permission_answered` event in the stream.
 
-(Provisional: today no event says *why* a question closed. M5-4 adds that.)
+### Why a question closed
+
+`_client_permission_answered` and `GET /permissions/:id` give one of these reasons:
+
+| `reason` | `allow` | What closed the question |
+| --- | --- | --- |
+| `client` | `true` or `false` | A client answered with `POST /permissions/:id`. |
+| `timeout` | `false` | Nobody answered in time. |
+| `cancel` | `false` | The run was cancelled, or the daemon stopped. |
+| `task_end` | `false` | The question's task ended, for example at its time limit. |
+| `run_end` | `false` | The run ended with the question still open. |
+
+New reasons can be added. If you get a reason you do not know, use `allow`.
+
+A daemon restart forgets closed questions. `GET /permissions/:id` then answers `404`, but
+the run's event stream still has the `_client_permission_answered` event. The one
+exception is `run_end`: the run's stream has already ended by then, so only
+`GET /permissions/:id` has it. Today no question is still open at the end of a run, so
+this does not happen.
 
 ### `GET /permissions`
 
@@ -693,6 +714,26 @@ asks a person through the API. Reading, searching, fetching and thinking never a
 `kind` is one of `read`, `edit`, `delete`, `move`, `search`, `execute`, `think`, `fetch`,
 `switch_mode`, `other`. Treat `id` as an opaque string.
 
+### `GET /permissions/:id`
+
+**Reply `200`:** one decision. An open one looks the same as in `GET /permissions`. A
+closed one also has `allow` and `reason`:
+
+```json
+{
+  "id": "7d4c1e0a-5b2f-4a61-9c3e-2f8b1d6a9e40",
+  "runId": "20260922-101500-a1b2",
+  "taskId": "summarise",
+  "kind": "edit",
+  "title": "Edit README.md",
+  "allow": false,
+  "reason": "timeout"
+}
+```
+
+Use it after a `409` to learn who won. **Refusals:** `404` `permission_not_found` for an
+id the daemon never gave out, or one it forgot at a restart.
+
 ### `POST /permissions/:id`
 
 **Request:**
@@ -708,8 +749,9 @@ asks a person through the API. Reading, searching, fetching and thinking never a
 ```
 
 **Refusals:** `400` `invalid_request` when `allow` is not `true` or `false`. `404`
-`permission_not_found` for an id the daemon never gave out. `409` `already_decided` when
-the question is already closed (answered, timed out, or cancelled).
+`permission_not_found` for an id the daemon never gave out, or one it forgot at a
+restart. `409` `already_decided` when the question is already closed, for any reason in
+[Why a question closed](#why-a-question-closed); `GET /permissions/:id` names it.
 
 ## Rooms
 

@@ -6,7 +6,7 @@ register behind them.** The room model is the no-dependency roster, R24–R30 re
 (A2 restated), and R31 plus R37–R42 close the room decisions the stories were reading
 without an answer. **Amended 2026-09-22 (M5-1, #133):** tables A and B are decided, and
 `docs/CLIENT-API.md` is now the client-facing promise. Still open here: the contract
-tables C, D, E, F, G, H, I, J, K and M. The purpose remains to name every decision a
+tables C, E, F, G, H, I, J, K and M. The purpose remains to name every decision a
 story depends on before the work starts.
 **Amended 2026-09-23 (R43, interview):** composer addressing is decided — the room opens
 on the timeline, a leading `@name` resolves client-side to the target, no mention still
@@ -803,14 +803,14 @@ story, and the story moves into `STORIES.md`.
 
 | ID | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| D1 | Event shape | (a) add id/reason to `_client_permission` (b) new `_client_permission_answered` (c) both | (b), keep the existing event |
-| D2 | Reason vocabulary | `client`, `timeout`, `cancel`, `task_end`; add `run_end`? | all five |
-| D3 | Emitter | (a) `core/permissions.ts` (b) `protocol/agent.ts` (c) daemon wrapper | (a) |
-| D4 | `_client_permission_pending` | (a) advisory only (b) also gain an id | (a) |
-| D5 | Settled history | (a) `GET /permissions/:id` outcome (b) list with `include=settled` (c) event-only | (a) |
-| D6 | `409` body | (a) message only (b) winning outcome + reason | (b) |
-| D7 | Settled-id cleanup | (a) drop with run lifetime (b) TTL (c) keep for process | (a) |
-| D8 | Emit resolved for TTY asks? | (a) no id, no queue event (b) unify | (a) |
+| D1 | Event shape | (a) add id/reason to `_client_permission` (b) new `_client_permission_answered` (c) both | **Decided 2026-09-24 (#136):** (b), keep the existing event |
+| D2 | Reason vocabulary | `client`, `timeout`, `cancel`, `task_end`; add `run_end`? | **Decided 2026-09-24 (#136):** all five; daemon shutdown is `cancel` |
+| D3 | Emitter | (a) `core/permissions.ts` (b) `protocol/agent.ts` (c) daemon wrapper | **Decided 2026-09-24 (#136):** (a) |
+| D4 | `_client_permission_pending` | (a) advisory only (b) also gain an id | **Decided 2026-09-24 (#136):** (a) |
+| D5 | Settled history | (a) `GET /permissions/:id` outcome (b) list with `include=settled` (c) event-only | **Decided 2026-09-24 (#136):** (a) |
+| D6 | `409` body | (a) message only (b) winning outcome + reason | **Decided 2026-09-24 (#136):** (a) — a client that loses reads `GET /permissions/:id`, so the error envelope keeps one shape |
+| D7 | Settled-id cleanup | (a) drop with run lifetime (b) TTL (c) keep for process | **Decided 2026-09-24 (#136):** (c) for now — the daemon never drops a run, so (a) has no hook; the first story that evicts runs drops their decisions with them |
+| D8 | Emit resolved for TTY asks? | (a) no id, no queue event (b) unify | **Decided 2026-09-24 (#136):** (a) |
 
 ### Terminal event and times
 

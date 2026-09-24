@@ -103,6 +103,12 @@ const CLIENT_EVENTS: AgentEvent[] = [
     title: "Bash",
     kind: "execute",
   },
+  {
+    sessionUpdate: "_client_permission_answered",
+    id: "7d4c1e0a-5b2f-4a61-9c3e-2f8b1d6a9e40",
+    allow: false,
+    reason: "timeout",
+  },
   { sessionUpdate: "_client_wrote_file", path: "/abs/path" },
   { sessionUpdate: "_client_cancel_requested", sessionId: "sess_1" },
   {

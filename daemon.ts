@@ -60,6 +60,7 @@ import {
   type MessageAccepted,
   type PendingDecision,
   type PermissionAnswered,
+  type PermissionDecision,
   type RepoAdded,
   type RepoRoots,
   type RoomView,
@@ -689,8 +690,9 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     )
     .finally(() => {
       // A task the watchdog cut can leave a decision behind; the run is over,
-      // so deny it now rather than list it until the timer.
-      canceller.abort();
+      // so deny it now rather than list it until the timer. The reason is
+      // what the queue reports as the decision's `reason` (M5-4).
+      canceller.abort("run_end");
       cancels.delete(id);
       inFlight.delete(done);
       settleLog(undefined);
@@ -998,6 +1000,16 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     send(res, 200, toRunDto(state) satisfies RunDto);
   } else if (req.method === "GET" && pathname === "/permissions") {
     send(res, 200, permissions.list() satisfies PendingDecision[]);
+  } else if (req.method === "GET" && decision) {
+    const found = permissions.get(decision[1] as string);
+    if (!found) {
+      throw refusal(
+        404,
+        "permission_not_found",
+        `no permission ${decision[1]}`,
+      );
+    }
+    send(res, 200, found satisfies PermissionDecision);
   } else if (req.method === "POST" && decision) {
     await postPermission(decision[1] as string, req, res);
   } else if (req.method === "DELETE" && one) {
@@ -1016,7 +1028,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
         `run ${id} already ended: ${state.status}`,
       );
     } else {
-      canceller.abort();
+      canceller.abort("cancel");
       state.cancelRequested = true;
       send(res, 202, toRunDto(state) satisfies RunDto);
     }
@@ -1070,7 +1082,7 @@ async function shutdown(signal: string): Promise<void> {
   stopping = true;
   console.log(`${signal}: cancelling ${inFlight.size} run(s), then exiting`);
   server.close();
-  for (const canceller of cancels.values()) canceller.abort();
+  for (const canceller of cancels.values()) canceller.abort("cancel");
   await Promise.all([
     ...inFlight,
     ...[...rooms.values()].map(({ room }) => room.close()),
