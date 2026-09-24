@@ -181,7 +181,7 @@ async function sigtermIgnorer(
 
 // --- records left mid-flight (M2-6 -> M2-5) ---------------------------------
 
-test("a crashed record is rewritten: running tasks failed, queued left", async (t) => {
+test("a crashed record is rewritten: running tasks killed, queued left, log untouched", async (t) => {
   const root = await gitRepo(t);
   const dir = await writeRun(root, {
     runId: RUN_ID,
@@ -194,22 +194,27 @@ test("a crashed record is rewritten: running tasks failed, queued left", async (
       { id: "b", status: "queued" },
     ],
   });
+  // A crash can leave a half-written last line. M5-5 (#137): the sweep never
+  // adds a `_client_run_finished` the run did not write, and touches nothing.
+  const log = `${JSON.stringify({ seq: 1, agent: "a", update: {} })}\n{"seq":2,`;
+  await writeFile(join(dir, "events.jsonl"), log);
 
   await sweep(root, join(await tempDir(t), "children.json"));
 
   const record = await readRun(dir);
-  assert.equal(record.status, "failed");
+  assert.equal(record.status, "killed");
   assert.equal(record.endedAt, new Date(NOW).toISOString());
   assert.deepEqual(
     record.tasks.map((task) => [task.id, task.status]),
     [
-      ["a", "failed"],
+      ["a", "killed"],
       ["b", "queued"],
     ],
   );
+  assert.equal(await readFile(join(dir, "events.jsonl"), "utf8"), log);
 });
 
-test("a running record with missing or malformed tasks still becomes failed", async (t) => {
+test("a running record with missing or malformed tasks still becomes killed", async (t) => {
   const root = await gitRepo(t);
   const startedAt = "2026-09-01T00:00:00.000Z";
   const dirs = {
@@ -259,7 +264,7 @@ test("a running record with missing or malformed tasks still becomes failed", as
 
   for (const [id, dir] of Object.entries(dirs)) {
     const record = JSON.parse(await readFile(join(dir, "run.json"), "utf8"));
-    assert.equal(record.status, "failed", id);
+    assert.equal(record.status, "killed", id);
     assert.equal(record.endedAt, new Date(NOW).toISOString(), id);
     assert.equal(record.root, root, id);
     assert.equal(record.cwd, root, id);
@@ -277,7 +282,7 @@ test("a running record with missing or malformed tasks still becomes failed", as
     await readFile(join(dirs.mixed, "run.json"), "utf8"),
   );
   assert.deepEqual(mixed.tasks, [
-    { id: "a", status: "failed", branch: "kapelle/mixed/a", sessionId: "s" },
+    { id: "a", status: "killed", branch: "kapelle/mixed/a", sessionId: "s" },
     { id: "b", status: "done" },
   ]);
 });
@@ -646,7 +651,7 @@ test("a second sweep with the same clock says nothing and changes nothing", asyn
   const second = await sweep(root, childrenFile);
 
   assert.equal(await readFile(join(dir, "run.json"), "utf8"), after);
-  assert.equal((await readRun(dir)).status, "failed");
+  assert.equal((await readRun(dir)).status, "killed");
   assert.equal(existsSync(path), true);
   assert.equal(existsSync(childrenFile), false);
   assert.deepEqual(second, []);

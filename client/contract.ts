@@ -44,7 +44,7 @@ export type { AgentEvent, PermissionReason, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 1 } as const;
+export const API_VERSION = { major: 1, minor: 2 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -117,8 +117,10 @@ export type TaskStatus =
   | "timed_out"
   | "failed";
 
-/** @public */
-export type RunStatus = "running" | TaskStatus;
+/** `killed` is written only by the daemon's boot sweep, for a run — and each
+ *  task it had running — that was live when the daemon died (M5-5). It is
+ *  never a verdict a run reaches on its own. @public */
+export type RunStatus = "running" | TaskStatus | "killed";
 
 /** `POST /runs` answers only the new run's id. */
 export interface RunAccepted {
@@ -127,7 +129,7 @@ export interface RunAccepted {
 
 /** One task in a run, live or restored (M5-2). A field a restored record
  *  cannot fill is omitted, never `null`. `status` is a `TaskStatus`, or
- *  `queued` or `running` while the run is live; typed as `string` because a
+ *  `queued` or `running` while the run is live, or `killed` after a crash; typed as `string` because a
  *  run read back from disk passes its record's word through unchecked: a
  *  client shows a word it does not know rather than failing on it. @public */
 export interface TaskDto {
@@ -249,6 +251,9 @@ export interface MessageAccepted {
  */
 export interface EventLine {
   seq: number;
+  /** ISO 8601, when the line was written (M5-5). Absent on older lines. */
+  at?: string;
+  /** `""` for the run's own `_client_run_finished`, which is no task's. */
   agent: string;
   update: AgentEvent;
 }

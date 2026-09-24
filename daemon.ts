@@ -315,7 +315,7 @@ const restoredLogs = new Map<string, string>();
  * **Only terminal runs.** A record still saying `running` belongs to a
  * process that is gone; calling it live here would list a run nothing is
  * running and hand `DELETE` a canceller that does not exist. The M2-5 sweep
- * ran just before this scan and rewrote those to `failed`; the guard below is
+ * ran just before this scan and rewrote those to `killed`; the guard below is
  * for a record the sweep could not write.
  */
 function restoreRuns(): void {
@@ -353,7 +353,7 @@ function restoreRuns(): void {
         console.error(`skipping ${recordPath}: no status in the record`);
         continue;
       }
-      // The sweep rewrote these to `failed` before this scan, so one left
+      // The sweep rewrote these to `killed` before this scan, so one left
       // here is a record it could not write; expected after a crash, silent.
       if (status === "running") continue;
       const state: RunState = {
@@ -398,7 +398,7 @@ function restoreRuns(): void {
 }
 
 // M2-5 (#35): reconcile the previous daemon's debris before anything is
-// restored or served. This rewrites a record left `running` to `failed` with
+// restored or served. This rewrites a record left `running` to `killed` with
 // a fresh `endedAt`, so the scan below sees it as terminal; worktrees and runs
 // inside the retention window are left alone.
 // The real handlers are installed further down, once `server` and the run
@@ -675,13 +675,18 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     onNotice: (taskId, text, kind) => {
       state.notices.push(kind ? { taskId, text, kind } : { taskId, text });
     },
+    // Before `_client_run_finished` is appended (M5-5), so a client that
+    // reads it and then asks `GET /runs/:id` sees this status, and the same
+    // `endedAt` the record carries.
+    onFinished: (report, endedAt) => {
+      state.status = report.status;
+      state.report = report;
+      state.endedAt = endedAt;
+    },
   })
     .then(
-      (report) => {
-        state.status = report.status;
-        state.report = report;
-        state.endedAt = new Date().toISOString();
-      },
+      // `onFinished` settled a run that ended; only a throw is left here.
+      () => {},
       (err) => {
         state.status = "failed";
         state.error = messageOf(err);

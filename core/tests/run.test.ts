@@ -9,6 +9,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -281,9 +282,17 @@ test("cancelling the run cancels what is live and what is still queued", async (
     return { stopReason: "end_turn" };
   };
 
+  const bus = createEventBus();
+  let runEvent: { status?: string; turns?: number } = {};
+  bus.addListener((event) => {
+    if (event.update.sessionUpdate === "_client_run_finished") {
+      runEvent = event.update;
+    }
+  });
+
   const report = await runRun(
     runOf(6, 1),
-    { ...options(), signal: abort.signal },
+    { ...options(), signal: abort.signal, bus },
     exec,
   );
 
@@ -293,6 +302,10 @@ test("cancelling the run cancels what is live and what is still queued", async (
   assert.deepEqual(started, ["t0"]);
   assert.equal(report.turns, 1, "a task that never started is not a turn");
   assert.ok(report.tasks.every((t) => t.status === "cancelled"));
+  // M5-5 (#137): the bracket test records only the event's name, so pin the
+  // cancelled run's own verdict and turn count on the terminal event.
+  assert.equal(runEvent.status, "cancelled");
+  assert.equal(runEvent.turns, 1);
 });
 
 test("a task that finished before the cancel still reads as done", async () => {
@@ -474,6 +487,7 @@ test("each task is bracketed by started and finished events, a pre-start cancel 
     "t0:agent_thought_chunk",
     "t0:finished:cancelled",
     "t1:finished:cancelled",
+    ":_client_run_finished",
   ]);
 });
 
@@ -573,9 +587,12 @@ test("askPolicy reaches the asking task and nothing else", async () => {
 test("a warning promotes a done task, and the run, to warned", async () => {
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
+  let runEventStatus: string | undefined;
   bus.addListener((event) => {
     if (event.update.sessionUpdate === "_client_result_warning") {
       events.push(event);
+    } else if (event.update.sessionUpdate === "_client_run_finished") {
+      runEventStatus = event.update.status;
     }
   });
 
@@ -597,6 +614,10 @@ test("a warning promotes a done task, and the run, to warned", async () => {
   );
   assert.equal(report.tasks.filter((t) => t.status === "done").length, 2);
   assert.equal(report.status, "warned");
+  // M5-5 (#137): the terminal event carries the run's verdict, not the two
+  // done tasks'. A mutant emitting "done" here survives the report assertion
+  // alone.
+  assert.equal(runEventStatus, "warned");
   // The report is not the only publication: a bus subscriber — a quiet CLI,
   // M2's log, M4's stream — sees the disagreement tagged with the task.
   const warnings = events.filter(
@@ -686,9 +707,12 @@ test("the TTL cancels the stalled task alone and marks it timed_out", {
 
   const bus = createEventBus();
   const stalls: string[] = [];
+  let runEventStatus: string | undefined;
   bus.addListener(({ agent, update }) => {
     if (update.sessionUpdate === "_client_stall_warning") {
       stalls.push(`${agent}:${update.kind}`);
+    } else if (update.sessionUpdate === "_client_run_finished") {
+      runEventStatus = update.status;
     }
   });
 
@@ -698,6 +722,9 @@ test("the TTL cancels the stalled task alone and marks it timed_out", {
   assert.equal(byId.stall, "timed_out");
   assert.equal(byId.quick, "done", "a sibling must not be cancelled with it");
   assert.equal(report.status, "timed_out");
+  // M5-5 (#137): the terminal event carries the run's worst-task verdict, so
+  // the timeout reaches a stream-only client too.
+  assert.equal(runEventStatus, "timed_out");
   assert.deepEqual(stalls, ["stall:idle"], "the idle warning reached the bus");
 });
 
@@ -763,6 +790,80 @@ async function recordIn(root: string, runId: string) {
 }
 
 const RECORD_RUN = "20260916-120000-abcd";
+
+test("the run's last event is _client_run_finished, after the record and onFinished", async (t) => {
+  // M5-5 (#137): a client that reads the event and then asks `GET /runs/:id`
+  // must get the same status, so the terminal record and the caller are
+  // settled before the line exists.
+  const root = await gitRepo(t);
+  const run = validateRun({
+    tasks: [
+      { id: "a", prompt: "x", agent: "opencode" },
+      { id: "b", prompt: "x", agent: "opencode" },
+    ],
+  });
+  const exec: TaskExecutor = async (task, ctx) => {
+    ctx.onTurn();
+    return task.id === "a"
+      ? { stopReason: "end_turn" }
+      : { stopReason: "refusal" };
+  };
+
+  const order: string[] = [];
+  const bus = createEventBus();
+  bus.addListener(({ update }) => {
+    if (update.sessionUpdate !== "_client_run_finished") return;
+    const path = join(stateDirFor(root), "runs", RECORD_RUN, "run.json");
+    order.push(
+      `event, record ${JSON.parse(readFileSync(path, "utf8")).status}`,
+    );
+  });
+  const report = await runRun(
+    run,
+    {
+      cwd: root,
+      runId: RECORD_RUN,
+      bus,
+      onFinished: (r, endedAt) =>
+        order.push(`onFinished ${r.status} ${endedAt}`),
+    },
+    exec,
+  );
+  const record = await recordIn(root, RECORD_RUN);
+  assert.deepEqual(order, [
+    `onFinished ${report.status} ${record.endedAt}`,
+    `event, record ${report.status}`,
+  ]);
+
+  const lines = (
+    await readFile(
+      join(stateDirFor(root), "runs", RECORD_RUN, "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  const last = lines.at(-1);
+  assert.equal(last.agent, "");
+  assert.equal(typeof last.at, "string");
+  assert.deepEqual(last.update, {
+    sessionUpdate: "_client_run_finished",
+    status: report.status,
+    durationMs: report.durationMs,
+    turns: 2,
+  });
+  assert.equal(
+    lines.filter((l) => l.update.sessionUpdate === "_client_run_finished")
+      .length,
+    1,
+  );
+  const lastTask = lines.findLastIndex(
+    (l) => l.update.sessionUpdate === "_client_task_finished",
+  );
+  assert.ok(lastTask >= 0, "a task-finished line exists");
+  assert.ok(lastTask < lines.length - 1, "the run event follows it");
+});
 
 test("the record names a running task and a queued one, before the run ends", async (t) => {
   const root = await gitRepo(t);

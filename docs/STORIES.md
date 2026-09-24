@@ -2155,7 +2155,9 @@ no room asks anything until M6-5, which emits the same event.
 
 **M5-5 · Run terminal event and event timestamps · S · needs M5-1**
 `_client_run_finished` before the log closes, plus `at` timestamps on events.
-Decisions: E1–E6, C5, C6.
+Decisions: E1–E6, C5, C6. **Decided 2026-09-24 (#137):** the plan's E1–E4 and E6; E5
+amended — a crashed run gets no event, and the sweep marks it and its running tasks
+`killed`, a new status, rather than `failed`.
 
 **M5-6 · SSE liveness, reconnect and backpressure · M · needs M5-1**
 Heartbeat, `retry:`, a reconnect consumer with `Last-Event-ID`, and a `follow` seam that
@@ -2355,6 +2357,9 @@ reattaches with `resumed: "loaded"` instead. `exited` revives through the same f
 path, so a crashed room is recoverable too (R33). Pause never releases the worktree,
 resume reattaches it rather than creating one, and the log is reopened for appending with
 `seq` carried on — the sketch in `docs/CONTRACT-PLAN.md` names the code each one replaces.
+**Open point (2026-09-24):** what a daemon **crash** leaves — the pause is written only on
+shutdown, so a `kill -9` leaves `room.json` live. Runs mark this `killed` (M5-5); see the
+note in `docs/CONTRACT-PLAN.md` M6-7.
 *Done when* a restart lists the room with every participant `paused`, its history replays,
 a message to one revives it and is answered, the DTO reports `resumed: "fresh"`, and a
 dismissed room is not revived by the same path.

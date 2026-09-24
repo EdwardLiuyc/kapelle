@@ -506,6 +506,19 @@ export interface ClientTaskFinishedEvent extends Meta {
   durationMs: number;
 }
 
+/** The run is over, and this is its verdict (M5-5, #137): the worst task
+ *  status, the run's wall time and its prompt count. The last line of a run's
+ *  log, written after every `_client_task_finished` and after the run record,
+ *  so a client that reads it and then asks `GET /runs/:id` sees the same
+ *  status. `agent` is `""` on its envelope: it belongs to no task, and a task
+ *  id is never empty. A run that died with its daemon has no such line. */
+export interface ClientRunFinishedEvent extends Meta {
+  sessionUpdate: "_client_run_finished";
+  status: ClientTaskFinishedEvent["status"];
+  durationMs: number;
+  turns: number;
+}
+
 /** A harness subprocess started, and the pid it runs as (M2-4). The daemon
  *  keeps the live ones in a file, so a harness that outlives a crash can be
  *  found by M2-5's sweep. */
@@ -551,6 +564,7 @@ export type AgentEvent =
   | ClientTaskStartedEvent
   | ClientWorktreeCreatedEvent
   | ClientTaskFinishedEvent
+  | ClientRunFinishedEvent
   | ClientHarnessSpawnedEvent
   | ClientHarnessExitedEvent
   | ClientUserMessageEvent
@@ -842,6 +856,7 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_task_started"
         | "_client_worktree_created"
         | "_client_task_finished"
+        | "_client_run_finished"
         | "_client_harness_spawned"
         | "_client_harness_exited"
         | "_client_user_message"

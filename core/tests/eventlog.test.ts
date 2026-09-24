@@ -73,19 +73,31 @@ test("every event lands unchanged, one line each, numbered from 1", async (t) =>
     },
   };
 
+  const before = Date.now();
   log.append(chunk("a"));
   log.append(withMeta);
+  const after = Date.now();
   await log.close();
 
   const lines = (await readFile(path, "utf8")).split("\n");
   assert.equal(lines.pop(), "", "the file ends with a newline");
-  assert.deepEqual(
-    lines.map((l) => JSON.parse(l)),
-    [
-      { seq: 1, ...chunk("a") },
-      { seq: 2, ...withMeta },
-    ],
-  );
+  const parsed = lines.map((l) => JSON.parse(l));
+  // M5-5 (C6): `at` is the ISO time the line was appended. The window proves
+  // it is a write clock — a pinned `new Date(0)` passes the ISO round-trip but
+  // fails this — without pinning serialization key order, which the contract
+  // does not require.
+  for (const line of parsed) {
+    assert.equal(new Date(line.at).toISOString(), line.at);
+    assert.ok(
+      before <= Date.parse(line.at) && Date.parse(line.at) <= after,
+      `at ${line.at} is inside the append window`,
+    );
+    delete line.at;
+  }
+  assert.deepEqual(parsed, [
+    { seq: 1, ...chunk("a") },
+    { seq: 2, ...withMeta },
+  ]);
   assert.equal(log.size, 2);
 });
 
@@ -403,4 +415,24 @@ test("a half-written last line is not replayed, the way it was never committed",
   const { seqs, done } = collect(replay, 0);
   await done;
   assert.deepEqual(seqs, [1]);
+});
+
+test("a pre-M5-5 line without at replays unchanged", async (t) => {
+  // The contract says older lines have no `at` (CLIENT-API.md, M5-5), so a
+  // reader passes the shape through rather than synthesizing one. A future
+  // reader that assumed `at` exists is the regression this pins.
+  const { log, path } = await logIn(t);
+  await log.close();
+  const old = JSON.stringify({
+    seq: 1,
+    agent: "t0",
+    update: chunk("old").update,
+  });
+  await writeFile(path, `${old}\n`);
+
+  const replay = await openEventLog(path);
+  const { seqs, lines, done } = collect(replay, 0);
+  await done;
+  assert.deepEqual(seqs, [1]);
+  assert.equal(JSON.parse(lines[0] as string).at, undefined);
 });

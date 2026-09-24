@@ -1135,6 +1135,84 @@ test("a stream attached mid-run gets the history then the live tail, contiguousl
   );
 });
 
+test("a stream-only client learns the run is over and its status, live and after a restart", async (t) => {
+  // M5-5 (#137): `_client_run_finished` is the last frame, and a `GET` sent
+  // after it has arrived already agrees with it — never `running`.
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const cwd = await added(first, await tempDir(t));
+  const posted = await api(first, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  assert.equal(posted.status, 202, posted.body.error?.message);
+  const { id } = posted.body;
+
+  const live = await stream(first, id);
+  const isEnd = (f: Stream["frames"][number]) =>
+    f.data.update.sessionUpdate === "_client_run_finished";
+  await until("the run's last event", () => live.frames.some(isEnd));
+  const got = await api(first, "GET", `/runs/${id}`);
+  await live.ended;
+  const end = live.frames.at(-1);
+  assert.ok(end && isEnd(end), "the run's event is the last frame");
+  assert.equal(end.data.agent, "");
+  assert.equal(got.body.status, end.data.update.status);
+  assert.equal(got.body.turns, 1);
+  assert.equal(live.frames.filter(isEnd).length, 1);
+  for (const f of live.frames) {
+    const at = (f.data as { at?: unknown }).at;
+    assert.equal(typeof at, "string", "every frame has at");
+    assert.equal(new Date(at as string).toISOString(), at);
+  }
+
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const second = await boot(t, runtime, [], state);
+  const replay = await stream(second, id);
+  await replay.ended;
+  assert.deepEqual(replay.frames, live.frames, "a replay ends the same way");
+  // The restart half must prove the criterion at the source too: a GET after
+  // the replayed event agrees with that event's status.
+  const replayEnd = replay.frames.at(-1);
+  assert.ok(replayEnd && isEnd(replayEnd), "the replayed run event is last");
+  const replayed = await api(second, "GET", `/runs/${id}`);
+  assert.equal(replayed.status, 200);
+  assert.equal(replayed.body.status, replayEnd?.data.update.status);
+});
+
+test("a run that fails before its log exists answers no_event_log, and GET still has the status", async (t) => {
+  // M5-5 (#137): `openWorktrees` runs before the run's log is created
+  // (core/run.ts:381, :426), so a pre-flight failure leaves no stream at all.
+  // The events route answers `no_event_log` while `GET /runs/:id` settles
+  // `failed` — the real fallback, not a stream that ends with the event.
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], {
+    cwd: root,
+    encoding: "utf8",
+  }).stdout.trim();
+  await writeFile(join(root, gitDir, "index"), "not an index\n");
+  const cwd = await added(d, root);
+
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  // The 202 is sent before the async failure lands, so the client is told the
+  // run exists and must ask for its status.
+  assert.equal(posted.status, 202, posted.body.error?.message);
+  const { id } = posted.body;
+
+  const settledRun = await settled(d, id);
+  assert.equal(settledRun.status, "failed");
+
+  const events = await api(d, "GET", `/runs/${id}/events`);
+  assert.equal(events.status, 404);
+  assert.equal(events.body.error.code, "no_event_log");
+});
+
 test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the token is required", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await tempDir(t));
@@ -1719,7 +1797,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     JSON.stringify({ runId: "not-this-one", status: "done", tasks: [] }),
   );
   // A record still saying `running` is a crash: M2-5's sweep rewrites it to
-  // `failed` before this daemon restores, so it is served, not skipped.
+  // `killed` before this daemon restores, so it is served, not skipped.
   await mkdir(join(runs, "live"));
   await writeFile(
     join(runs, "live", "run.json"),
@@ -1782,7 +1860,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   const list = await api<Reply[]>(second, "GET", "/runs");
   assert.equal(list.status, 200);
   // `live` was left `running` and the sweep rewrote it terminal: it reads
-  // `failed`. `corrupt-tasks` is trusted for its runId/status, so it is
+  // `killed` (M5-5). `corrupt-tasks` is trusted for its runId/status, so it is
   // served too, with the junk element dropped. Sorted: restore order is
   // readdir order, which is not part of the contract.
   const rows = [...list.body].sort((a, b) => a.id.localeCompare(b.id));
@@ -1790,7 +1868,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
     rows.map((row) => [row.id, row.cwd, row.root, row.status, row.source]),
     [
       ["corrupt-tasks", root, root, "done", "restored"],
-      ["live", root, root, "failed", "restored"],
+      ["live", root, root, "killed", "restored"],
     ],
   );
   assert.deepEqual(
@@ -1811,7 +1889,7 @@ test("a boot skips a record it cannot trust with a notice, and answers anyway", 
   assert.equal(rows[0]?.startedAt, undefined);
   const live = await api(second, "GET", "/runs/live");
   assert.equal(live.status, 200);
-  assert.equal(live.body.status, "failed");
+  assert.equal(live.body.status, "killed");
   const corrupt = await api(second, "GET", "/runs/corrupt-tasks");
   assert.deepEqual(corrupt.body.tasks, [
     {
@@ -1916,11 +1994,11 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   const second = await boot(t, runtime, [], state);
   const restored = await api(second, "GET", `/runs/${id}`);
   assert.equal(restored.status, 200);
-  assert.equal(restored.body.status, "failed");
+  assert.equal(restored.body.status, "killed");
   assert.deepEqual(
     restored.body.tasks.map((task) => [task.id, task.status]),
     [
-      ["stuck", "failed"],
+      ["stuck", "killed"],
       ["waiting", "queued"],
     ],
   );
@@ -1928,20 +2006,40 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
     await readFile(join(stateDirFor(root), "runs", id, "run.json"), "utf8"),
   );
   assert.equal(typeof record.endedAt, "string");
+  // M5-5: the sweep writes no `_client_run_finished` the run never wrote.
+  const replay = await stream(second, id);
+  await replay.ended;
+  assert.ok(replay.frames.length > 0, "the log still replays");
+  assert.ok(
+    !replay.frames.some(
+      (f) => f.data.update.sessionUpdate === "_client_run_finished",
+    ),
+  );
   assert.equal(existsSync(worktree), true, "a worktree inside retention stays");
   assert.equal(await gone(harness), true, "the harness outlived the restart");
   assert.equal(existsSync(childrenFile), false);
 
   // M2-9: the partial log carries no `_client_task_finished`, so `attach`
   // must reconcile with the record `restoreRuns` built. The regression: it
-  // printed only `stuck` and said `done — 1 task`, exit 0, for a failed run.
+  // printed only `stuck` and said `done — 1 task`, exit 0, for a crashed run.
   const attachEnv = dirs(runtime, state);
   const attached = await spawnCli(t, ["attach", id], "cli.ts", attachEnv).done;
   assert.equal(attached.code, 1, attached.stderr);
-  assert.match(attached.stdout, /stuck \([^)]*\) failed/);
+  assert.match(attached.stdout, /stuck \([^)]*\) killed/);
   assert.match(attached.stdout, /waiting \([^)]*\) queued/);
   assert.doesNotMatch(attached.stdout, /\bdone\b/);
-  assert.match(attached.stdout, /failed — 2 tasks/);
+  assert.match(attached.stdout, /killed — 2 tasks/);
+  // `--quiet` keeps the run's verdict even when card lines were printed: a
+  // `killed` card and a `queued` one do not say the run itself was killed.
+  const quiet = await spawnCli(
+    t,
+    ["attach", id, "--quiet"],
+    "cli.ts",
+    attachEnv,
+  ).done;
+  assert.equal(quiet.code, 1, quiet.stderr);
+  assert.match(quiet.stderr, /error: \[stuck\] killed/);
+  assert.match(quiet.stderr, new RegExp(`error: run ${id} killed`));
 
   const oneTask = await spawnCli(
     t,
@@ -1951,6 +2049,94 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   ).done;
   assert.equal(oneTask.code, 1, oneTask.stderr);
   assert.match(oneTask.stdout, /waiting \([^)]*\) queued/);
+  // `--task` keeps the card's own word in the summary, never `failed` (#170).
+  assert.match(oneTask.stdout, /queued — 1 task/);
+  const stuckTask = await spawnCli(
+    t,
+    ["attach", id, "--task", "stuck"],
+    "cli.ts",
+    attachEnv,
+  ).done;
+  assert.equal(stuckTask.code, 1, stuckTask.stderr);
+  assert.match(stuckTask.stdout, /stuck \([^)]*\) killed/);
+  assert.match(stuckTask.stdout, /killed — 1 task/);
+
+  process.kill(second.pid, "SIGTERM");
+  assert.equal((await second.done).code, 0);
+});
+
+test("attach trusts a killed run status over a log whose task_finished beat the record", async (t) => {
+  // M5-5 (#137): a crash can land after `_client_task_finished
+  // {status:"done"}` is emitted and before the task's record write, so the
+  // sweep marks the run — and the still-`running` task — `killed` while the
+  // log's only card reads done. `attach` must not call that run done.
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const root = await realpath(await added(first, await gitRepo(t)));
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const id = "crashed-lag";
+  const dir = join(stateDirFor(root), "runs", id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, "run.json"),
+    `${JSON.stringify({
+      runId: id,
+      root,
+      cwd: root,
+      status: "running",
+      startedAt: new Date(Date.now() - 10_000).toISOString(),
+      tasks: [{ id: "one", status: "running", agent: "mock-agent" }],
+    })}\n`,
+  );
+  await writeFile(
+    join(dir, "events.jsonl"),
+    `${JSON.stringify({
+      seq: 1,
+      at: new Date().toISOString(),
+      agent: "one",
+      update: {
+        sessionUpdate: "_client_task_finished",
+        status: "done",
+        durationMs: 1,
+      },
+    })}\n`,
+  );
+
+  const second = await boot(t, runtime, [], state);
+  const restored = await api(second, "GET", `/runs/${id}`);
+  assert.equal(restored.body.status, "killed");
+  assert.deepEqual(
+    restored.body.tasks.map((task) => [task.id, task.status]),
+    [["one", "killed"]],
+  );
+
+  const attached = await spawnCli(
+    t,
+    ["attach", id],
+    "cli.ts",
+    dirs(runtime, state),
+  ).done;
+  assert.equal(attached.code, 1, attached.stderr);
+  // The card comes from the log and reads done; the run verdict must not.
+  assert.match(attached.stdout, /one \([^)]*\) done/);
+  assert.match(attached.stdout, /killed — 1 task/);
+  assert.doesNotMatch(attached.stdout, /done —/);
+
+  // `--quiet` suppresses the summary, not the fact that the run failed. The
+  // only card reads done, so the run-level `killed` verdict is the only thing
+  // left to report; failing silently on exit 1 would break that contract.
+  const quietAttach = await spawnCli(
+    t,
+    ["attach", id, "--quiet"],
+    "cli.ts",
+    dirs(runtime, state),
+  ).done;
+  assert.equal(quietAttach.code, 1, quietAttach.stderr);
+  assert.equal(quietAttach.stdout, "");
+  assert.match(quietAttach.stderr, new RegExp(`error: run ${id} killed`));
 
   process.kill(second.pid, "SIGTERM");
   assert.equal((await second.done).code, 0);
@@ -2023,7 +2209,7 @@ test("kill -9 with a harness that ignores stdin and SIGTERM: the next boot kills
   assert.equal(existsSync(childrenFile), false);
   const restored = await api(second, "GET", `/runs/${id}`);
   assert.equal(restored.status, 200);
-  assert.equal(restored.body.status, "failed");
+  assert.equal(restored.body.status, "killed");
 
   process.kill(second.pid, "SIGTERM");
   const out = await second.done;
@@ -2447,11 +2633,12 @@ test("attach --task draws that one task in full, and refuses a task the run lack
     env,
     cwd,
     mockRun([
-      { id: "a", prompt: "hi" },
+      // A failed sibling: `--task b` must still answer for b alone (#170).
+      { id: "a", prompt: "hi", cmd: `node ${MOCK_AGENT} --scenario refuse` },
       { id: "b", prompt: "hi" },
     ]),
   );
-  await settled(d, id);
+  assert.equal((await settled(d, id)).status, "failed");
 
   const r = await spawnCli(t, ["attach", id, "--task", "b"], "cli.ts", env)
     .done;
@@ -2770,7 +2957,7 @@ async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
 async function roomEvents(
   d: Daemon,
   id: string,
-): Promise<{ agent: string; update: Record<string, unknown> }[]> {
+): Promise<{ at?: string; agent: string; update: Record<string, unknown> }[]> {
   const res = await fetch(`${d.url}/rooms/${id}/events`, {
     headers: { authorization: `Bearer ${d.token}` },
   });
@@ -2818,6 +3005,13 @@ test("a room keeps one harness and its context across messages, until it is dism
   assert.equal(gone.body.status, "closed");
 
   const events = await roomEvents(d, id);
+  // M5-5 (#137): a room's log carries `at` too, but no run terminal event —
+  // rooms get the timestamp and no `_client_run_finished` (C6).
+  for (const e of events) {
+    assert.equal(typeof e.at, "string", "every room event has at");
+    assert.equal(new Date(e.at as string).toISOString(), e.at);
+    assert.notEqual(e.update.sessionUpdate, "_client_run_finished");
+  }
   const of = (kind: string) =>
     events.filter((e) => e.update.sessionUpdate === kind);
   assert.deepEqual(
