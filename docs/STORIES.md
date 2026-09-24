@@ -2085,7 +2085,7 @@ pre-fills nothing. The filtered streams and the nested `messages` route are M6-4
 is why this story needs M6-4. The resolver is its own module, `client/mention.ts`, never
 an export on `client/contract.ts`, so `daemon.ts` never imports a message parser; piped
 `chat.ts` uses the same module (S8). It is the first logic in `client/`, so this story
-changes the `chat.ts` import rule in `tests/daemon.test.ts` and `CLAUDE.md` in one
+changes the `chat.ts` import rule in `tests/daemon.test.ts` and `AGENTS.md` in one
 commit, and the widened test stays transitive: that module reaches nothing under `core/`
 or `protocol/` at runtime. The stall warning the badge reads is the one R38 creates: a
 participant's watchdog warns, never cancels.
@@ -2506,10 +2506,10 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   a daemon restart with a fresh session, not this call; Half B uses the capability-gated
   call when it lands.
   **Two gaps recorded 2026-09-21 (#145), both to close before Half B is scheduled.** Every
-  `loadSession: true` we hold is a **handshake advertisement** (`docs/FINDINGS.md:136`);
+  `loadSession: true` we hold is a **handshake advertisement** (`docs/FINDINGS.md` §M0-1, `agentCapabilities`);
   §Multi-turn measured two turns in *one* process, and nobody has loaded a session into a
   **new** harness process — which is what a reboot needs. And pi-acp's measurement table
-  (`docs/FINDINGS.md:1019`) has no `loadSession` row at all, so "every measured harness
+  (`docs/FINDINGS.md` §pi-acp) has no `loadSession` row at all, so "every measured harness
   advertises it" is true of three of the four. One probe answers both. M6-7's Half A does
   not wait on it.
 - **`#send` write backpressure.** `#send` ignores the return value of `write()`

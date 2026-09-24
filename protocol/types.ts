@@ -676,21 +676,21 @@ export interface PromptRequest extends Meta {
  * The whole response is kept per #62 B3. `usage` is NOT in the current
  * official schema but M0-5 measured it on the wire (the only per-task token
  * count present on all three harnesses) — per-task on opencode and
- * claude-agent-acp, cumulative on copilot (FINDINGS.md:828-841). Capture
- * only; M1 renders nothing.
+ * claude-agent-acp, cumulative on copilot (FINDINGS.md §M0-5, "The per-task
+ * token count has a source"). Capture only; M1 renders nothing.
  */
 export interface Usage extends Meta {
-  /** Observed on all three harnesses (FINDINGS.md:828-829, :833). */
+  /** Observed on all three harnesses (same table). */
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  /** Absent on claude-agent-acp (FINDINGS.md:830). */
+  /** Absent on claude-agent-acp (same table). */
   thoughtTokens?: number;
   // Deliberately optional despite being observed on all three harnesses in
-  // M0's turn-1 table (:831) — one turn of captures is thin evidence for a
+  // M0's turn-1 table — one turn of captures is thin evidence for a
   // required field; tighten only if a later probe confirms it everywhere.
   cachedReadTokens?: number;
-  /** Absent on opencode (FINDINGS.md:832). */
+  /** Absent on opencode (same table). */
   cachedWriteTokens?: number;
 }
 

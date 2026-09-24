@@ -11,7 +11,9 @@
  * `--detach` posts the run to the daemon instead, and `attach`, `ps` and
  * `daemon add` talk to that daemon through `daemonApi()`, the one reader of
  * `daemon.json`. `attach` rebuilds the `--file` view from the event stream
- * alone, because a restored run has no `report`.
+ * alone, because a restored run has no `report`. The verdict is not the
+ * view's: the settled run status on `GET /runs/:id` wins whenever the daemon
+ * has one (M5-5), and `--task` answers with its own card (`TASK_STATUSES`).
  *
  * ^C sends `session/cancel`, waits 2 s, then stops the harness, and the
  * process exits only once the harness is gone.

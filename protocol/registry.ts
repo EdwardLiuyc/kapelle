@@ -41,7 +41,7 @@ interface LaunchSpec {
  * `shell` says *where* a command runs; `argvChannel` says whether the command
  * text ever reaches us and on which message. They are independent — two of
  * three harnesses run commands internally yet still hand us the argv
- * (`docs/FINDINGS.md:57-66`).
+ * (`docs/FINDINGS.md` §M0-1, "What M1a-4 should put in the registry").
  */
 interface MeasuredLabels {
   shell: "terminal" | "internal" | "unknown";

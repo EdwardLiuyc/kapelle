@@ -10,8 +10,9 @@ This file holds only what an agent cannot learn by reading the code. **The detai
 at the top of each source file** — read that comment before you change the file. The
 history and the measurements live in `docs/`:
 
-- `docs/FINDINGS.md` — what each harness was measured to do. A section named `§M0-4`
-  or `§Multi-turn` below is a section of this file.
+- `docs/FINDINGS.md` — what each harness was measured to do. When this file or a source
+  comment names a section such as `§M0-4` or `§Multi-turn`, it is a section of
+  `docs/FINDINGS.md`.
 - `docs/STORIES.md` — the work breakdown, with the reason for each decision.
 - `docs/CLIENT-API.md` — the daemon's API, for client authors. `docs/CONFIG.md` — the
   config keys.
@@ -48,7 +49,7 @@ node cli.ts "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<
 node cli.ts run --file <run.json> [--detach]   # N tasks (tasks.json is the example); --detach hands them to the daemon
 node cli.ts attach <runId> [--task <id>]       # replay then follow a detached run
 node cli.ts ps                                 # every run the daemon knows, with its tasks
-node cli.ts merge <runId>
+node cli.ts merge <runId> [--squash] [--cwd dir]
 node cli.ts workspace [--cwd dir]              # where this repo's worktrees and records live
 node cli.ts workspace move <old-repo> <new-repo>
 node cli.ts daemon start [--port n] [--permission-timeout s]   # same as: node daemon.ts
