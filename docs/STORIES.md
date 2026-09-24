@@ -2148,7 +2148,10 @@ Decisions: C7, C8, J1–J5.
 An answered event with the queued id, outcome and reason (`client`, `timeout`, `cancel`,
 `task_end`, `run_end`), every settle path covered, settled decisions queryable.
 *Done when* two clients on one room or run attribute a decision to the same id and reason.
-Decisions: D1–D8.
+Decisions: D1–D8. **Decided 2026-09-24 (#136):** a new `_client_permission_answered`
+`{id, allow, reason}` from `core/permissions.ts`, all five reasons, and
+`GET /permissions/:id` for a closed decision; the `409` body is unchanged. Runs only —
+no room asks anything until M6-5, which emits the same event.
 
 **M5-5 · Run terminal event and event timestamps · S · needs M5-1**
 `_client_run_finished` before the log closes, plus `at` timestamps on events.

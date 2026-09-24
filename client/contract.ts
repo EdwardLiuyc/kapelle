@@ -14,18 +14,24 @@
  * reply itself. Two parts come from `core/`, which may not import this file,
  * and are checked for assignability only — an added field there is not
  * caught: a finished run's `report` (`core/run.ts`) and `GET /permissions`
- * (`core/permissions.ts`). Which shapes are stable and which will change is
+ * and `GET /permissions/:id` (`core/permissions.ts`). Which shapes are stable and which will change is
  * the stability table in the doc, not this file.
  *
  * Types only, plus two constants (decided 2026-09-22, B7): a JSON Schema can
  * be added for a client in another language once one exists.
  */
 
-import type { AgentEvent, ToolKind, Usage } from "../protocol/types.ts";
+import type {
+  AgentEvent,
+  PermissionReason,
+  ToolKind,
+  Usage,
+} from "../protocol/types.ts";
 
-/** The event types a stream carries, and the tool kinds a permission names.
- *  Re-exported, not copied, so there is one definition. @public */
-export type { AgentEvent, ToolKind };
+/** The event types a stream carries, the tool kinds a permission names, and
+ *  why a permission closed. Re-exported, not copied, so there is one
+ *  definition. @public */
+export type { AgentEvent, PermissionReason, ToolKind };
 
 /**
  * The contract version (B2, amended 2026-09-22). `major` goes up for a change
@@ -38,7 +44,7 @@ export type { AgentEvent, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 0 } as const;
+export const API_VERSION = { major: 1, minor: 1 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -199,6 +205,12 @@ export interface PendingDecision {
   kind: ToolKind;
   title: string;
 }
+
+/** `GET /permissions/:id` (M5-4, #136): an open decision as the list shows
+ *  it, or a closed one with its answer and why it closed. */
+export type PermissionDecision =
+  | PendingDecision
+  | (PendingDecision & { allow: boolean; reason: PermissionReason });
 
 /** `POST /permissions/:id` answers what was decided. */
 export interface PermissionAnswered {

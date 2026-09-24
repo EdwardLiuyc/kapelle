@@ -1475,6 +1475,67 @@ test("cancelling a run denies its pending decision at once, not at the timeout",
   );
 });
 
+// --- M5-4, #136: two clients agree on which question closed, and why ---------
+
+/** The reasons one stream gave for the decisions it saw close, by id. */
+function reasonsIn(s: Stream): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const { data } of s.frames) {
+    const u = data.update as {
+      sessionUpdate: string;
+      id?: string;
+      reason?: string;
+    };
+    if (u.sessionUpdate === "_client_permission_answered") {
+      out[u.id as string] = u.reason as string;
+    }
+  }
+  return out;
+}
+
+for (const [how, args, close] of [
+  ["the timeout", ["--permission-timeout", "2"], async () => {}],
+  [
+    "a DELETE",
+    [],
+    async (d: Daemon, id: string) => {
+      assert.equal((await api(d, "DELETE", `/runs/${id}`)).status, 202);
+    },
+  ],
+] as const) {
+  const reason = how === "the timeout" ? "timeout" : "cancel";
+  test(`two stream readers attribute ${how} to the same id and reason, and GET /permissions/:id agrees`, async (t) => {
+    const d = await boot(t, undefined, [...args]);
+    const cwd = await added(d, await tempDir(t));
+    const posted = await api(d, "POST", "/runs", askRun(cwd));
+    assert.equal(posted.status, 202, posted.body.error?.message);
+    const pending = await pendingOne(d);
+
+    const open = await api(d, "GET", `/permissions/${pending.id}`);
+    assert.equal(open.status, 200);
+    assert.deepEqual(open.body, pending, "open: exactly as the list shows it");
+
+    const [a, b] = [
+      await stream(d, posted.body.id),
+      await stream(d, posted.body.id),
+    ];
+    await close(d, posted.body.id);
+    await settled(d, posted.body.id);
+    await Promise.all([a.ended, b.ended]);
+
+    const seen = reasonsIn(a);
+    assert.equal(seen[pending.id], reason);
+    assert.deepEqual(reasonsIn(b), seen, "both clients saw the same closes");
+
+    const done = await api(d, "GET", `/permissions/${pending.id}`);
+    assert.equal(done.status, 200);
+    assert.deepEqual(done.body, { ...pending, allow: false, reason });
+    const unknown = await api(d, "GET", "/permissions/nope");
+    assert.equal(unknown.status, 404);
+    assert.equal(unknown.body.error.code, "permission_not_found");
+  });
+}
+
 test("a --permission-timeout that is not above 0 refuses to start", async (t) => {
   const r = await exitOf(
     start(t, await tempDir(t), ["--permission-timeout", "0"]),

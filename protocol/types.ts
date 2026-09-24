@@ -413,6 +413,26 @@ export interface ClientPermissionQueuedEvent extends Meta {
   kind: ToolKind;
 }
 
+/** Why a queued decision closed (M5-4, #136): a client answered, nobody did
+ *  in time, the run was cancelled, its task ended, or the run ended. */
+export type PermissionReason =
+  | "client"
+  | "timeout"
+  | "cancel"
+  | "task_end"
+  | "run_end";
+
+/** A queued decision closed (M5-4, #136). Same `id` as its
+ *  `_client_permission_queued`, so every reader of the stream can match the
+ *  answer to the question and say why it closed. Emitted by the daemon's
+ *  queue only, once per id. */
+export interface ClientPermissionAnsweredEvent extends Meta {
+  sessionUpdate: "_client_permission_answered";
+  id: string;
+  allow: boolean;
+  reason: PermissionReason;
+}
+
 export interface ClientPermissionEvent extends Meta {
   sessionUpdate: "_client_permission";
   allow: boolean;
@@ -522,6 +542,7 @@ export type AgentEvent =
   | SessionUpdate
   | ClientPermissionPendingEvent
   | ClientPermissionQueuedEvent
+  | ClientPermissionAnsweredEvent
   | ClientPermissionEvent
   | ClientWroteFileEvent
   | ClientCancelRequestedEvent
@@ -812,6 +833,7 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
       const fallthrough:
         | "_client_permission_pending"
         | "_client_permission_queued"
+        | "_client_permission_answered"
         | "_client_permission"
         | "_client_wrote_file"
         | "_client_cancel_requested"
