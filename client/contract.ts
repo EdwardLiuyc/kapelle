@@ -207,9 +207,13 @@ export interface PendingDecision {
 }
 
 /** `GET /permissions/:id` (M5-4, #136): an open decision as the list shows
- *  it, or a closed one with its answer and why it closed. */
+ *  it, or a closed one with its answer and why it closed. `allow` and
+ *  `reason` come together or not at all; the `never` members make a reply
+ *  with only one of them fail `satisfies`, which a plain
+ *  `PendingDecision | (PendingDecision & {…})` would accept, the second
+ *  member being a subtype of the first. */
 export type PermissionDecision =
-  | PendingDecision
+  | (PendingDecision & { allow?: never; reason?: never })
   | (PendingDecision & { allow: boolean; reason: PermissionReason });
 
 /** `POST /permissions/:id` answers what was decided. */

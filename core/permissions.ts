@@ -63,9 +63,12 @@ export function createPermissionQueue(timeoutMs: number) {
   >();
   // ponytail: every settled decision is kept for the daemon's lifetime, so a
   // late answer reads 409 rather than 404 and `get` can still say how it
-  // closed; about two hundred bytes each. `daemon.ts` never drops a run from
+  // closed. The growth term is `title`: it comes from the harness's
+  // `tool_call`, bounded only by `MAX_LINE_LENGTH` (32 MiB), so "a couple
+  // of hundred bytes" is the typical entry, not the bound, and a harness that
+  // loops on requests grows the map. `daemon.ts` never drops a run from
   // memory either, so both live equally long. Drop them with their run once
-  // the daemon evicts runs.
+  // the daemon evicts runs, or truncate `title` here if a loop shows up.
   const settled = new Map<string, SettledDecision>();
 
   return {

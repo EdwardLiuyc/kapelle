@@ -690,7 +690,10 @@ asks a person through the API. Reading, searching, fetching and thinking never a
 New reasons can be added. If you get a reason you do not know, use `allow`.
 
 A daemon restart forgets closed questions. `GET /permissions/:id` then answers `404`, but
-the run's event stream still has the `_client_permission_answered` event.
+the run's event stream still has the `_client_permission_answered` event. The one
+exception is `run_end`: the run's stream has already ended by then, so only
+`GET /permissions/:id` has it. Today no question is still open at the end of a run, so
+this does not happen.
 
 ### `GET /permissions`
 
