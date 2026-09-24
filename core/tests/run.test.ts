@@ -282,9 +282,17 @@ test("cancelling the run cancels what is live and what is still queued", async (
     return { stopReason: "end_turn" };
   };
 
+  const bus = createEventBus();
+  let runEvent: { status?: string; turns?: number } = {};
+  bus.addListener((event) => {
+    if (event.update.sessionUpdate === "_client_run_finished") {
+      runEvent = event.update;
+    }
+  });
+
   const report = await runRun(
     runOf(6, 1),
-    { ...options(), signal: abort.signal },
+    { ...options(), signal: abort.signal, bus },
     exec,
   );
 
@@ -294,6 +302,10 @@ test("cancelling the run cancels what is live and what is still queued", async (
   assert.deepEqual(started, ["t0"]);
   assert.equal(report.turns, 1, "a task that never started is not a turn");
   assert.ok(report.tasks.every((t) => t.status === "cancelled"));
+  // M5-5 (#137): the bracket test records only the event's name, so pin the
+  // cancelled run's own verdict and turn count on the terminal event.
+  assert.equal(runEvent.status, "cancelled");
+  assert.equal(runEvent.turns, 1);
 });
 
 test("a task that finished before the cancel still reads as done", async () => {
@@ -575,9 +587,12 @@ test("askPolicy reaches the asking task and nothing else", async () => {
 test("a warning promotes a done task, and the run, to warned", async () => {
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
+  let runEventStatus: string | undefined;
   bus.addListener((event) => {
     if (event.update.sessionUpdate === "_client_result_warning") {
       events.push(event);
+    } else if (event.update.sessionUpdate === "_client_run_finished") {
+      runEventStatus = event.update.status;
     }
   });
 
@@ -599,6 +614,10 @@ test("a warning promotes a done task, and the run, to warned", async () => {
   );
   assert.equal(report.tasks.filter((t) => t.status === "done").length, 2);
   assert.equal(report.status, "warned");
+  // M5-5 (#137): the terminal event carries the run's verdict, not the two
+  // done tasks'. A mutant emitting "done" here survives the report assertion
+  // alone.
+  assert.equal(runEventStatus, "warned");
   // The report is not the only publication: a bus subscriber — a quiet CLI,
   // M2's log, M4's stream — sees the disagreement tagged with the task.
   const warnings = events.filter(
@@ -688,9 +707,12 @@ test("the TTL cancels the stalled task alone and marks it timed_out", {
 
   const bus = createEventBus();
   const stalls: string[] = [];
+  let runEventStatus: string | undefined;
   bus.addListener(({ agent, update }) => {
     if (update.sessionUpdate === "_client_stall_warning") {
       stalls.push(`${agent}:${update.kind}`);
+    } else if (update.sessionUpdate === "_client_run_finished") {
+      runEventStatus = update.status;
     }
   });
 
@@ -700,6 +722,9 @@ test("the TTL cancels the stalled task alone and marks it timed_out", {
   assert.equal(byId.stall, "timed_out");
   assert.equal(byId.quick, "done", "a sibling must not be cancelled with it");
   assert.equal(report.status, "timed_out");
+  // M5-5 (#137): the terminal event carries the run's worst-task verdict, so
+  // the timeout reaches a stream-only client too.
+  assert.equal(runEventStatus, "timed_out");
   assert.deepEqual(stalls, ["stall:idle"], "the idle warning reached the bus");
 });
 

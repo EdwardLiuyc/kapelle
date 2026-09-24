@@ -1162,11 +1162,9 @@ test("a stream-only client learns the run is over and its status, live and after
   assert.equal(got.body.turns, 1);
   assert.equal(live.frames.filter(isEnd).length, 1);
   for (const f of live.frames) {
-    assert.equal(
-      typeof (f.data as { at?: unknown }).at,
-      "string",
-      "every frame has at",
-    );
+    const at = (f.data as { at?: unknown }).at;
+    assert.equal(typeof at, "string", "every frame has at");
+    assert.equal(new Date(at as string).toISOString(), at);
   }
 
   process.kill(first.pid, "SIGTERM");
@@ -1175,6 +1173,44 @@ test("a stream-only client learns the run is over and its status, live and after
   const replay = await stream(second, id);
   await replay.ended;
   assert.deepEqual(replay.frames, live.frames, "a replay ends the same way");
+  // The restart half must prove the criterion at the source too: a GET after
+  // the replayed event agrees with that event's status.
+  const replayEnd = replay.frames.at(-1);
+  assert.ok(replayEnd && isEnd(replayEnd), "the replayed run event is last");
+  const replayed = await api(second, "GET", `/runs/${id}`);
+  assert.equal(replayed.status, 200);
+  assert.equal(replayed.body.status, replayEnd?.data.update.status);
+});
+
+test("a run that fails before its log exists answers no_event_log, and GET still has the status", async (t) => {
+  // M5-5 (#137): `openWorktrees` runs before the run's log is created
+  // (core/run.ts:381, :426), so a pre-flight failure leaves no stream at all.
+  // The events route answers `no_event_log` while `GET /runs/:id` settles
+  // `failed` — the real fallback, not a stream that ends with the event.
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], {
+    cwd: root,
+    encoding: "utf8",
+  }).stdout.trim();
+  await writeFile(join(root, gitDir, "index"), "not an index\n");
+  const cwd = await added(d, root);
+
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  // The 202 is sent before the async failure lands, so the client is told the
+  // run exists and must ask for its status.
+  assert.equal(posted.status, 202, posted.body.error?.message);
+  const { id } = posted.body;
+
+  const settledRun = await settled(d, id);
+  assert.equal(settledRun.status, "failed");
+
+  const events = await api(d, "GET", `/runs/${id}/events`);
+  assert.equal(events.status, 404);
+  assert.equal(events.body.error.code, "no_event_log");
 });
 
 test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the token is required", async (t) => {
@@ -2910,7 +2946,7 @@ async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
 async function roomEvents(
   d: Daemon,
   id: string,
-): Promise<{ agent: string; update: Record<string, unknown> }[]> {
+): Promise<{ at?: string; agent: string; update: Record<string, unknown> }[]> {
   const res = await fetch(`${d.url}/rooms/${id}/events`, {
     headers: { authorization: `Bearer ${d.token}` },
   });
@@ -2958,6 +2994,13 @@ test("a room keeps one harness and its context across messages, until it is dism
   assert.equal(gone.body.status, "closed");
 
   const events = await roomEvents(d, id);
+  // M5-5 (#137): a room's log carries `at` too, but no run terminal event —
+  // rooms get the timestamp and no `_client_run_finished` (C6).
+  for (const e of events) {
+    assert.equal(typeof e.at, "string", "every room event has at");
+    assert.equal(new Date(e.at as string).toISOString(), e.at);
+    assert.notEqual(e.update.sessionUpdate, "_client_run_finished");
+  }
   const of = (kind: string) =>
     events.filter((e) => e.update.sessionUpdate === kind);
   assert.deepEqual(

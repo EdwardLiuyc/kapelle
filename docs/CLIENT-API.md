@@ -566,10 +566,14 @@ retired, so this is not on a current story.)
   stream ends. When you get that event, `GET /runs/:id` already shows the same status.
 - A run's stream can also end with no `_client_run_finished`. This happens for a run
   from before 1.2, a run that stopped when the daemon stopped, and a run that failed
-  inside the daemon. Then call `GET /runs/:id` for the result. If the status is still
-  `running`, connect again with `Last-Event-ID`. Either the connection was cut, or the
-  run failed inside the daemon a moment ago and its status is not saved yet. In the
-  second case, the new stream ends at once, and `GET` then shows `failed`.
+  inside the daemon after its log was opened. Then call `GET /runs/:id` for the result.
+  If the status is still `running`, connect again with `Last-Event-ID`. Either the
+  connection was cut, or the run failed inside the daemon a moment ago and its status
+  is not saved yet. In the second case, the new stream ends at once, and `GET` then
+  shows `failed`.
+- A run that failed before the daemon opened its log — the worktree preflight can
+  fail before the log exists — has no stream at all. `GET /runs/:id/events` answers
+  `404 no_event_log`, and `GET /runs/:id` still carries the `failed` status.
 - For a room, the stream ends when the room closes.
 - For a finished run, you get the history and then the end.
 
