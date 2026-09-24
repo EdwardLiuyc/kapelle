@@ -108,6 +108,7 @@ import {
   refusal,
   send,
 } from "./daemon/http.ts";
+import { streamLog } from "./daemon/sse.ts";
 import { AGENTS } from "./protocol/registry.ts";
 
 // M2-7: the user-level config is read once here, after the startup helpers
@@ -728,47 +729,6 @@ async function getEvents(
     throw refusal(404, "no_event_log", `run ${id} has no event log`);
   }
   await streamLog(log, req, res, gone.signal);
-}
-
-/** SSE over one event log: replay after `Last-Event-ID`, then the live tail,
- *  ending when the log closes. Shared by runs and rooms. */
-async function streamLog(
-  log: EventLog,
-  req: IncomingMessage,
-  res: ServerResponse,
-  signal: AbortSignal,
-) {
-  const header = req.headers["last-event-id"];
-  const after = header === undefined ? 0 : Number(header);
-  if (!Number.isInteger(after) || after < 0 || after > log.size) {
-    throw refusal(
-      400,
-      "invalid_request",
-      `Last-Event-ID must be a whole number from 0 to ${log.size}; got ${header}`,
-    );
-  }
-
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-  });
-  // Headers go out now, not on the first write: a reconnecting client whose
-  // `Last-Event-ID` is already the tail has no history to replay, and without
-  // this it would sit in "connecting" until the next event.
-  res.flushHeaders();
-  try {
-    await log.follow(
-      after,
-      (seq, line) => res.write(`id: ${seq}\ndata: ${line}\n\n`),
-      signal,
-    );
-  } catch {
-    // Headers are sent, so no error body can follow. A cut stream is what
-    // tells an SSE client to reconnect with its `Last-Event-ID`.
-    res.destroy();
-    return;
-  }
-  res.end();
 }
 
 /** One chat room as the API reports it, less the live `status`. In memory

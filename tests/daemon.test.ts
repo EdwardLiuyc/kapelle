@@ -2065,6 +2065,79 @@ test("kill -9 then restart rewrites the run, keeps queued tasks queued, and keep
   assert.equal((await second.done).code, 0);
 });
 
+/** A detached run whose one task stalls mid-turn, with `attach` following
+ *  it. Resolves once the task's record reads `running`. */
+async function attachedToStall(
+  t: TestContext,
+  d: Daemon,
+  env: Record<string, string>,
+) {
+  const root = await realpath(await added(d, await gitRepo(t)));
+  const posted = await api(d, "POST", "/runs", {
+    cwd: root,
+    run: mockRun([
+      { id: "stuck", prompt: "hi", cmd: `node ${MOCK_AGENT} --scenario stall` },
+    ]),
+  });
+  assert.equal(posted.status, 202, posted.body.error?.message);
+  const { id } = posted.body;
+  const attached = spawnCli(t, ["attach", id], "cli.ts", env);
+  await attached.waitFor(`attached to ${id}`);
+  await until("the task to run", async () => {
+    const r = await api(d, "GET", `/runs/${id}`);
+    return r.body.tasks?.[0]?.status === "running";
+  });
+  return { id, attached };
+}
+
+test("attach rides out a kill -9 and a restart, and ends on the killed status", async (t) => {
+  // M5-6 (#138): the new daemon has a new token and, with --port 0, a new
+  // port, so attach must read daemon.json again on every try.
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const { id, attached } = await attachedToStall(
+    t,
+    first,
+    dirs(runtime, state),
+  );
+
+  process.kill(first.pid, "SIGKILL");
+  await first.done;
+  const second = await boot(t, runtime, [], state);
+
+  const r = await attached.done;
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(r.stderr, /lost the daemon .*reconnecting/);
+  assert.match(r.stderr, new RegExp(`reconnected to ${id}`));
+  assert.match(r.stdout, /killed — 1 task/);
+  assert.equal(
+    r.stdout.split(`attached to ${id}`).length,
+    2,
+    "one attach line",
+  );
+
+  process.kill(second.pid, "SIGTERM");
+  assert.equal((await second.done).code, 0);
+});
+
+test("attach exits, and does not wait for a new daemon, after a clean stop", async (t) => {
+  // M5-6 (#138): a clean stop removes daemon.json, which is how attach tells
+  // it from a crash. The daemon exits as soon as its runs settle, so the
+  // stream can end cleanly or be cut, and attach may read the run's status or
+  // not. Either way it must exit, with the verdict or the hint.
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const d = await boot(t, runtime, [], state);
+  const { attached } = await attachedToStall(t, d, dirs(runtime, state));
+
+  process.kill(d.pid, "SIGTERM");
+  assert.equal((await d.done).code, 0);
+  const r = await attached.done;
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(`${r.stdout}${r.stderr}`, /cancelled — 1 task|attach again/);
+});
+
 test("attach trusts a killed run status over a log whose task_finished beat the record", async (t) => {
   // M5-5 (#137): a crash can land after `_client_task_finished
   // {status:"done"}` is emitted and before the task's record write, so the

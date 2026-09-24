@@ -21,6 +21,7 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { RunStatus } from "./client/contract.ts";
+import { type Connect, followEvents } from "./client/stream.ts";
 import { resolveRunDefaults, warnUnknownConfigEnv } from "./core/config.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
@@ -43,7 +44,7 @@ import {
 import { type Task, validateRun } from "./core/runfile.ts";
 import { runtimeDir, stateDirFor } from "./core/runtime.ts";
 import { moveWorkspace, stateDirRoot } from "./core/worktree.ts";
-import { AcpAgent, type AgentEventEnvelope } from "./protocol/agent.ts";
+import { AcpAgent } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
 import {
   AGENTS,
@@ -750,23 +751,37 @@ function printTask(task: Card): void {
 /** A request to the running daemon, with its token already on it. */
 type DaemonApi = (path: string, init?: RequestInit) => Promise<Response>;
 
+// A declaration, not a `const`: the commands at the top of this file run
+// before a `const` down here is set.
+function daemonFile(): string {
+  return join(runtimeDir(), "daemon.json");
+}
+
 /**
- * The daemon named in `daemon.json`, or `undefined` with the reason printed.
- * Every verb that talks to the daemon reads it here, so none of them can
- * disagree about what "no daemon is listening" means.
+ * `daemon.json`'s port and token. `"missing"` when there is no file — no
+ * daemon, or one that stopped cleanly and removed it — and `"unready"` when
+ * the file has no port or token: a daemon between its claim and its listen,
+ * or a malformed file.
  */
-async function daemonApi(): Promise<DaemonApi | undefined> {
-  const file = join(runtimeDir(), "daemon.json");
+async function daemonHolder(): Promise<
+  { port: number; token: string } | "missing" | "unready"
+> {
+  let text: string;
+  try {
+    text = await readFile(daemonFile(), "utf8");
+  } catch {
+    return "missing";
+  }
   let holder: { port?: unknown; token?: unknown } = {};
   try {
-    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-    // A non-object (`null`, `[]`, `42`) is as unready as a missing file: it
-    // must fall through to the message below, not throw on destructuring.
+    const parsed: unknown = JSON.parse(text);
+    // A non-object (`null`, `[]`, `42`) is as unready as a missing port: it
+    // must fall through to the check below, not throw on destructuring.
     if (typeof parsed === "object" && parsed !== null) {
       holder = parsed as { port?: unknown; token?: unknown };
     }
   } catch {
-    // Missing or malformed: treated as "no daemon is listening" below.
+    // Malformed: unready, below.
   }
   const { port, token } = holder;
   if (
@@ -775,16 +790,17 @@ async function daemonApi(): Promise<DaemonApi | undefined> {
     typeof token !== "string" ||
     !token
   ) {
-    console.error(
-      `no daemon is listening (${file} is missing or not ready). ` +
-        "Start one with: kapelle daemon start",
-    );
-    return undefined;
+    return "unready";
   }
+  return { port, token };
+}
+
+function apiFor({ port, token }: { port: number; token: string }): DaemonApi {
   return (path, init) =>
     fetch(`http://127.0.0.1:${port}${path}`, {
       ...init,
       headers: {
+        ...(init?.headers as Record<string, string> | undefined),
         authorization: `Bearer ${token}`,
         // Every body this CLI sends is JSON, and the daemon refuses any other
         // type with a 415 (M5-3).
@@ -793,6 +809,23 @@ async function daemonApi(): Promise<DaemonApi | undefined> {
           : { "content-type": "application/json" }),
       },
     });
+}
+
+/**
+ * The daemon named in `daemon.json`, or `undefined` with the reason printed.
+ * Every verb that talks to the daemon reads it here, so none of them can
+ * disagree about what "no daemon is listening" means.
+ */
+async function daemonApi(): Promise<DaemonApi | undefined> {
+  const holder = await daemonHolder();
+  if (typeof holder === "string") {
+    console.error(
+      `no daemon is listening (${daemonFile()} is missing or not ready). ` +
+        "Start one with: kapelle daemon start",
+    );
+    return undefined;
+  }
+  return apiFor(holder);
 }
 
 /** The message of the daemon's `{error: {code, message}}` for a refusal. */
@@ -866,35 +899,6 @@ async function listRuns(): Promise<number> {
 }
 
 /**
- * The events of an SSE response, as `core/eventlog.ts` wrote them. A stream
- * cut before the daemon ended it throws, which is what tells `attach` the
- * daemon went away rather than the run finishing.
- */
-async function* sseEvents(
-  body: ReadableStream<Uint8Array>,
-): AsyncGenerator<AgentEventEnvelope> {
-  let buffered = "";
-  for await (const text of body.pipeThrough(new TextDecoderStream())) {
-    buffered += text;
-    let end = buffered.indexOf("\n\n");
-    while (end !== -1) {
-      for (const line of buffered.slice(0, end).split("\n")) {
-        if (!line.startsWith("data: ")) continue;
-        try {
-          yield JSON.parse(line.slice(6));
-        } catch {
-          // The caller reports a cut stream the same way; a corrupt frame is
-          // no different from one the daemon never finished writing.
-          throw new Error("malformed event from the daemon stream");
-        }
-      }
-      buffered = buffered.slice(end + 2);
-      end = buffered.indexOf("\n\n");
-    }
-  }
-}
-
-/**
  * `kapelle attach <runId>`: a detached run's history, then its live tail
  * (M2-9, #39). It shows what `run --file` shows — milestones live, a card per
  * task at the end — and builds every card from the stream, because a run read
@@ -923,9 +927,26 @@ async function attachRun(): Promise<number> {
   // every task, so a one-task view keeps them.
   const shown = (taskId: string) =>
     !only || taskId === only || taskId === "run";
-  const api = await daemonApi();
-  if (!api) return 1;
+  if (!(await daemonApi())) return 1;
+  // `daemon.json` is read again on every call: a daemon that restarts while
+  // this is attached has a new token, and maybe a new port (M5-6).
+  const api: DaemonApi = async (p, init) => {
+    const holder = await daemonHolder();
+    if (typeof holder === "string") throw new Error("no daemon is listening");
+    return apiFor(holder)(p, init);
+  };
   const path = `/runs/${encodeURIComponent(id)}`;
+  // Stops when `daemon.json` is gone, which is a clean stop (F3). After a
+  // crash the file stays, and the reader waits for the next daemon.
+  const connect: Connect = async (after, signal) => {
+    const holder = await daemonHolder();
+    if (holder === "missing") return undefined;
+    if (holder === "unready") throw new Error("the daemon is starting");
+    return apiFor(holder)(`${path}/events`, {
+      signal,
+      headers: { "last-event-id": String(after) },
+    });
+  };
 
   // Notices live on the run record, not the stream: the containment lines
   // (#13) print whatever `--quiet` says, and the advisory ones do not. The
@@ -949,15 +970,6 @@ async function attachRun(): Promise<number> {
     return state;
   };
   const initial = await refreshState();
-
-  const res = await api(`${path}/events`);
-  if (!res.ok || !res.body) {
-    // A `runRun` throw before it opens a log (the only real setter of
-    // `state.error`) leaves the record as the one place its reason survives.
-    console.error(`error: ${initial.error ?? (await refusalOf(res))}`);
-    return 1;
-  }
-  if (!quiet) console.log(`attached to ${id}`);
 
   process.on("SIGINT", () => process.exit(130));
   const asker = process.stdin.isTTY ? makeAskPolicy() : undefined;
@@ -1008,8 +1020,26 @@ async function attachRun(): Promise<number> {
     return c;
   };
 
+  let connected = false;
+  let retrying = false;
+  const events = followEvents(connect, {
+    onConnect() {
+      if (!connected && !quiet) console.log(`attached to ${id}`);
+      if (retrying) console.error(`! reconnected to ${id}`);
+      connected = true;
+      retrying = false;
+    },
+    onRetry(err) {
+      // Once per outage, not once per try.
+      if (retrying) return;
+      retrying = true;
+      console.error(
+        `! lost the daemon (${messageOf(err)}); reconnecting — ^C to stop`,
+      );
+    },
+  });
   try {
-    for await (const event of sseEvents(res.body)) {
+    for await (const event of events) {
       const { agent, update } = event;
       if (only && agent !== only) continue;
       // The run's own events carry `agent: ""` (M5-5) and belong to no card.
@@ -1050,7 +1080,14 @@ async function attachRun(): Promise<number> {
       }
     }
   } catch (err) {
+    if (!connected) {
+      // A `runRun` throw before it opens a log (the only real setter of
+      // `state.error`) leaves the record as the one place its reason survives.
+      console.error(`error: ${initial.error ?? messageOf(err)}`);
+      return 1;
+    }
     console.error(`error: lost the daemon mid-run: ${messageOf(err)}`);
+    console.error(`  start it, then attach again: kapelle attach ${id}`);
     return 1;
   } finally {
     flushStream();
@@ -1060,7 +1097,16 @@ async function attachRun(): Promise<number> {
     // awaits it. A POST still in flight keeps the loop alive on its own.
     asker?.close();
   }
-  const state = await refreshState();
+  let state: AttachState;
+  try {
+    state = await refreshState();
+  } catch (err) {
+    // A clean stop ends every stream, then the daemon is gone before this
+    // reads the run's status.
+    console.error(`error: lost the daemon at the end: ${messageOf(err)}`);
+    console.error(`  start it, then attach again: kapelle attach ${id}`);
+    return 1;
+  }
 
   // The stream is not the whole story. A run killed mid-turn and restored has
   // no `_client_task_finished` for the task it cut, and nothing at all for one

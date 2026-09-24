@@ -376,6 +376,77 @@ test("a line larger than one 64 KiB chunk survives a mid-read commit", async (t)
   );
 });
 
+// --- a full reader pauses (M5-6, #138) --------------------------------------
+
+/** A reader that reports "full" after every send while `blocked`, the way a
+ *  socket does once `write` returns false. `open()` is its `drain`. */
+function slowReader(log: EventLog, after: number) {
+  const seqs: number[] = [];
+  let blocked = true;
+  let drain = () => {};
+  const done = log.follow(after, (seq) => {
+    seqs.push(seq);
+    if (!blocked) return undefined;
+    return new Promise<void>((ok) => {
+      drain = ok;
+    });
+  });
+  const open = () => {
+    blocked = false;
+    drain();
+  };
+  return { seqs, done, open };
+}
+
+test("a full reader gets nothing more, the rest of its chunk included, until it drains", async (t) => {
+  const { log } = await logIn(t);
+  for (const text of ["a", "b", "c"]) log.append(chunk(text));
+  await waitFor(() => log.size >= 3, "the lines to commit");
+
+  const r = slowReader(log, 0);
+  await waitFor(() => r.seqs.length >= 1, "the first line");
+  // Live lines too: the bell must stay quiet for a full reader.
+  for (const text of ["d", "e"]) log.append(chunk(text));
+  await waitFor(() => log.size >= 5, "the live lines to commit");
+  for (let i = 0; i < 20; i++) await tick();
+  assert.deepEqual(r.seqs, [1], "one send, then the reader waits");
+
+  r.open();
+  log.append(chunk("f"));
+  await log.close();
+  await r.done;
+  assert.deepEqual(r.seqs, range(1, 6), "no gap and no repeat after the pause");
+});
+
+test("a caught-up reader that fills on a live line catches up from the file", async (t) => {
+  const { log } = await logIn(t);
+  log.append(chunk("a"));
+  await waitFor(() => log.size >= 1, "the first line to commit");
+  const r = slowReader(log, 1); // caught up: the next line comes from the bell
+  log.append(chunk("b"));
+  await waitFor(() => r.seqs.length >= 1, "the live line");
+  for (const text of ["c", "d"]) log.append(chunk(text));
+  await waitFor(() => log.size >= 4, "the missed lines to commit");
+  assert.deepEqual(r.seqs, [2]);
+
+  r.open();
+  await waitFor(() => r.seqs.length >= 3, "the missed lines, from the file");
+  await log.close();
+  await r.done;
+  assert.deepEqual(r.seqs, [2, 3, 4]);
+});
+
+test("an abort ends a reader that waits on a full socket", async (t) => {
+  const { log } = await logIn(t);
+  log.append(chunk("a"));
+  const stop = new AbortController();
+  const done = log.follow(0, () => new Promise<void>(() => {}), stop.signal);
+  await waitFor(() => log.size >= 1, "the line to commit");
+  stop.abort();
+  await done;
+  await log.close();
+});
+
 // --- replay after a restart (M2-6, #36) -------------------------------------
 
 test("a log on disk replays without a writer, and the file survives it", async (t) => {
@@ -435,4 +506,18 @@ test("a pre-M5-5 line without at replays unchanged", async (t) => {
   await done;
   assert.deepEqual(seqs, [1]);
   assert.equal(JSON.parse(lines[0] as string).at, undefined);
+});
+
+test("a replay pauses for a full reader and resumes where it stopped", async (t) => {
+  const { log, path } = await logIn(t);
+  for (const text of ["a", "b", "c"]) log.append(chunk(text));
+  await log.close();
+
+  const r = slowReader(await openEventLog(path), 0);
+  await waitFor(() => r.seqs.length >= 1, "the first line");
+  for (let i = 0; i < 20; i++) await tick();
+  assert.deepEqual(r.seqs, [1]);
+  r.open();
+  await r.done;
+  assert.deepEqual(r.seqs, [1, 2, 3]);
 });

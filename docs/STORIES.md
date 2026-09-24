@@ -2110,7 +2110,7 @@ component if the measured re-parse cost grows past the spike's ~5 ms at 53k char
 stall half needs R38; without it no room emits `_client_stall_warning` and there is
 nothing to ring for. Mention autocomplete for the roster is the R43 polish this story
 owns; M4-2 ships the resolver with plain text.
-Decisions: R19, R43, F9, R38.
+Decisions: R19, R43, R38. (F9 dropped by M5-6, #138.)
 
 ---
 
@@ -2162,7 +2162,9 @@ amended — a crashed run gets no event, and the sweep marks it and its running 
 **M5-6 · SSE liveness, reconnect and backpressure · M · needs M5-1**
 Heartbeat, `retry:`, a reconnect consumer with `Last-Event-ID`, and a `follow` seam that
 pauses on a full socket; a slow-client policy.
-Decisions: F1–F9.
+Decisions: F1–F9. **Decided 2026-09-24 (#138):** a 15 s ping and no `retry:`; `follow`
+pauses on a full socket and never disconnects; `attach` reconnects through
+`client/stream.ts` until `daemon.json` is gone; F9 dropped.
 
 **M5-7 · Idempotent dispatch · S · needs M5-1, M2-6**
 `Idempotency-Key` on `POST /runs`; a replay and a conflict response.
@@ -2181,7 +2183,8 @@ Decisions: I1–I5.
 `chat.ts` are refactored onto it.
 *Done when* `attach` contains no protocol parsing of its own and the reducer is tested
 from recorded streams for live, restored, cancelled and replay cases.
-Decisions: B6, B7, F3, K6. (B6 settled as (a).)
+Decisions: B6, B7, F3, K6. (B6 settled as (a). F3 settled by M5-6: `client/stream.ts`
+is the reader this story grows.)
 
 **M5-11 · Conformance suite and v1 freeze · M · needs M5-1..M5-6**
 Contract tests that treat the daemon as an external process: mock client, golden DTO
