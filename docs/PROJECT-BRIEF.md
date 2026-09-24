@@ -85,11 +85,11 @@ now:
 
 - **Current MVP state & how to run it** → `README.md` (and `AGENTS.md` for the
   agent-facing architecture map).
-- **Known gaps / what's deliberately unimplemented** → `README.md` ("What's
-  deliberately missing") and `AGENTS.md` ("Deliberately unimplemented").
+- **Known gaps / what's deliberately unimplemented** → `AGENTS.md` ("Deliberately
+  unimplemented").
 - **Protocol gotchas** — the `toolCallId → {title, kind, rawInput}` map, the client/supervisor
   inversion, and capability negotiation → `AGENTS.md` ("Rules that are easy to
-  break") and `README.md` ("Two things worth knowing"). One fact is preserved
+  break"). One fact is preserved
   here rather than migrated: ACP is pre-1.0 — no thread resume, no message editing,
   no remote transport — so agents are local subprocesses today.
 - **Open questions** → `PROJECT-PLAN.md` ("Open, deliberately unresolved") and the
