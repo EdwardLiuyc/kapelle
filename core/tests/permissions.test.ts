@@ -164,3 +164,50 @@ test("an abort with no reason reads as cancel, and denyTask spares other tasks",
     2,
   );
 });
+
+test("a client answer wins over an in-flight timeout, and emits once", async () => {
+  const { queue, events, policy } = setup(20);
+  const decided = policy(req("edit"));
+  const [pending] = queue.list();
+  assert.ok(pending);
+
+  assert.equal(queue.answer(pending.id, true), "ok");
+  assert.equal(await decided, true);
+  // Well past the timer: a timer that was not cleared would emit again here.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  const answered = events.filter(
+    (e) => e.update.sessionUpdate === "_client_permission_answered",
+  );
+  assert.equal(answered.length, 1, "one answered event per queued id");
+  assert.deepEqual(queue.get(pending.id), {
+    ...pending,
+    allow: true,
+    reason: "client",
+  });
+});
+
+test("a late abort or denyTask after a client answer adds nothing", async () => {
+  const { queue, events, cancel, policy } = setup();
+  const decided = policy(req("edit"));
+  const [pending] = queue.list();
+  assert.ok(pending);
+
+  assert.equal(queue.answer(pending.id, false), "ok");
+  assert.equal(await decided, false);
+
+  // Both deniers would settle the id a second time if the queue had not
+  // removed the abort listener and deleted the entry.
+  cancel.abort("cancel");
+  queue.denyTask("run-1", "task-a");
+
+  const answered = events.filter(
+    (e) => e.update.sessionUpdate === "_client_permission_answered",
+  );
+  assert.equal(answered.length, 1, "only the client close emitted");
+  assert.deepEqual(queue.get(pending.id), {
+    ...pending,
+    allow: false,
+    reason: "client",
+  });
+});

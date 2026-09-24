@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.0** (story M5-1, #133).
+Contract version: **1.1** (M5-1, #133; minor bumped by M5-4, #136).
 
 ## Contents
 
@@ -245,10 +245,10 @@ request that is not valid HTTP gets `400`.
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
 | `run_not_found` | `404` | No run has this id. | |
 | `room_not_found` | `404` | No room has this id. | |
-| `permission_not_found` | `404` | The daemon never gave out this permission id. | |
+| `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
-| `already_decided` | `409` | The permission was already answered, timed out, or cancelled. | Stop. Your answer was not used. `GET /permissions/:id` says who won. |
+| `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `room_busy` | `409` | The room still answers the last message. | Wait for `_client_turn_ended`, then send again. |
 | `room_closed` | `409` | The room was dismissed, or its harness exited. | Stop. Open a new room. |
 | `orchestrator_exists` | `409` | Not built yet (M6-3). The room already has an orchestrator. | Change the other participant's role first. |
@@ -746,8 +746,9 @@ id the daemon never gave out, or one it forgot at a restart.
 ```
 
 **Refusals:** `400` `invalid_request` when `allow` is not `true` or `false`. `404`
-`permission_not_found` for an id the daemon never gave out. `409` `already_decided` when
-the question is already closed (answered, timed out, or cancelled).
+`permission_not_found` for an id the daemon never gave out, or one it forgot at a
+restart. `409` `already_decided` when the question is already closed, for any reason in
+[Why a question closed](#why-a-question-closed); `GET /permissions/:id` names it.
 
 ## Rooms
 
