@@ -7,7 +7,8 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.2** (M5-1, #133; minor bumped by M5-4, #136, and M5-5, #137).
+Contract version: **1.3** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137, and
+M5-6, #138).
 
 ## Contents
 
@@ -102,6 +103,7 @@ Not every part of this API is final yet. Each part has one of three labels:
 | Event timestamps (`at`) | Since 1.2 (M5-5). Absent on older lines. |
 | `GET /runs/:id`, `DELETE /runs/:id` replies | One shape for live and restored runs (M5-2). |
 | SSE format, `seq`, `Last-Event-ID` | |
+| Heartbeat (`: ping`) and a paused slow reader | Since 1.3 (M5-6). |
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
 | `_client_*` events | Except the room events. See [Events](#events). |
 | `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). |
@@ -114,7 +116,6 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| Heartbeat and reconnect | Provisional | M5-6 |
 | `POST /runs` retry safety | Provisional | M5-7 (adds `Idempotency-Key`) |
 | Everything under `/rooms` | Experimental | M6-2 and later |
 
@@ -307,7 +308,7 @@ even when the body would be refused.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 2 },
+  "apiVersion": { "major": 1, "minor": 3 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -559,6 +560,45 @@ gets `400`.
 A browser `EventSource` sends this header for you when it reconnects. Other clients must
 send it themselves. (A browser also cannot send the token header; the browser path is
 retired, so this is not on a current story.)
+
+The daemon keeps no cursor for you. Your client keeps the last `seq`. A new process that
+has no cursor starts from `seq` 1 and builds its view again from the replay.
+
+### Heartbeat
+
+Every 15 seconds the daemon writes a comment line into the stream (since 1.3, M5-6):
+
+```text
+: ping
+
+```
+
+An SSE parser ignores a line that starts with `:`. The ping lets you tell a quiet run
+from a daemon that stopped answering. There is no `retry:` line.
+
+### When to reconnect
+
+This is the rule `kapelle attach` follows. A client can follow the same rule.
+
+- Treat the connection as cut when it fails, when it ends with an error, or when no byte
+  arrives for 45 seconds (three missed pings).
+- Connect again with `Last-Event-ID`. Wait 250 ms before the first try. Double the wait
+  after each failed try, up to 5 s. Go back to 250 ms once a connection gets data, not
+  when it only connects: a stream can be accepted and then cut at once.
+- Read `daemon.json` again before each try. A daemon that restarts has a new token, and
+  it can have a new port.
+- Stop when `daemon.json` is gone. The daemon removes it only when it stops cleanly, so no
+  new daemon is coming. After a crash the file stays, so keep trying.
+- Stop on any refusal: a status that is not 2xx, such as `404`, `400` or `500`. A new
+  try gets the same answer.
+- Drop any event whose `seq` is at or below the last one you have.
+
+### A slow reader
+
+If your client reads more slowly than events arrive, the daemon waits for you (since 1.3,
+M5-6). It keeps at most about 64 KiB for your connection, plus the one event that went
+past that mark. It reads the rest from the event file when you catch up. It does not close
+your connection and it does not slow the run. No ping is written while it waits.
 
 ### End of the stream
 

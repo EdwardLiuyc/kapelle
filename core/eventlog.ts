@@ -23,6 +23,13 @@
  * nothing in between, which is why a second thread would add a race and no
  * speed — the write itself already runs on libuv's pool.
  *
+ * **A full reader pauses** (M5-6, #138, decision F5). `send` returns a
+ * promise when the reader cannot take more — a socket whose `write` returned
+ * false — and `follow` stops until it settles. The bell stays quiet while a
+ * reader is paused, and the reader goes back to the file for what it missed.
+ * So a client that stops reading costs one chunk and its socket buffer, never
+ * the rest of the run: the file is the buffer.
+ *
  * **Committed, not appended.** A line counts once its write callback fires,
  * so no reader sees a line that is not on disk, or half of one.
  *
@@ -39,7 +46,10 @@ import type { AgentEventEnvelope } from "../protocol/agent.ts";
 const CHUNK_BYTES = 64 * 1024;
 const NEWLINE = 0x0a;
 
-type Send = (seq: number, line: string) => void;
+/** Sends one line. A promise back means "full": send no more until it
+ *  settles. */
+type Send = (seq: number, line: string) => Promise<void> | undefined;
+type Bell = (seq: number, line: string) => void;
 
 export interface EventLog {
   /** The bus listener. Ignored once the log is closed or has failed. */
@@ -47,10 +57,7 @@ export interface EventLog {
   /**
    * Sends every committed line after `after`, then each new one as it
    * commits, until the log closes or `signal` aborts. `line` has no newline.
-   *
-   * ponytail: `send` has no backpressure, so a client that stops reading
-   * buffers the rest of the run in its socket. Pause on `res.write` returning
-   * false if a slow viewer ever shows up in memory.
+   * When `send` returns a promise, nothing more is sent until it settles.
    */
   follow(after: number, send: Send, signal?: AbortSignal): Promise<void>;
   /** Lines committed so far — the highest `seq` any reader can have seen. */
@@ -71,11 +78,18 @@ export function createEventLog(
   let committed = 0;
   let committedBytes = 0;
   let accepting = true;
-  const bells = new Set<Send>();
+  const bells = new Set<Bell>();
+  /** One per reader: wakes it from its park, so it sees `over` and ends. */
+  const wakers = new Set<() => void>();
 
+  let over = false;
   let markEnded = () => {};
   const ended = new Promise<void>((ok) => {
-    markEnded = ok;
+    markEnded = () => {
+      over = true;
+      for (const waker of wakers) waker();
+      ok();
+    };
   });
 
   out.on("error", (err) => {
@@ -109,30 +123,62 @@ export function createEventLog(
 
     async follow(after, send, signal) {
       let next = after + 1;
-      const bell: Send = (seq, line) => {
-        // `signal` can abort while the reader is parked; the bell must go
-        // quiet then, not on the microtask that removes it.
-        if (seq !== next || signal?.aborted) return;
-        send(seq, line);
+      /** Set while the reader is full; nothing is sent until it settles. */
+      let full: Promise<void> | undefined;
+      let wake = () => {};
+      const push = (line: string) => {
+        full = send(next, line);
         next += 1;
       };
+      const bell: Bell = (seq, line) => {
+        // `signal` can abort while the reader is parked; the bell must go
+        // quiet then, not on the microtask that removes it.
+        if (seq !== next || full || signal?.aborted) return;
+        push(line);
+        if (full) wake();
+      };
+      // Not `wake` itself: each park replaces it.
+      const waker = () => wake();
       bells.add(bell);
+      wakers.add(waker);
       let file: FileHandle | undefined;
       try {
-        while (next <= committed && !signal?.aborted) {
-          file ??= await open(path, "r");
-          const to = committedBytes;
-          await readLines(file, starts[next - 1] ?? to, to, signal, (line) => {
-            send(next, line);
-            next += 1;
-          });
-        }
-        if (signal?.aborted) return;
-        if (accepting || committed < appended) {
-          await Promise.race([ended, aborted(signal)]);
+        while (!signal?.aborted) {
+          if (full) {
+            await withAbort(full, signal);
+            full = undefined;
+          } else if (next <= committed) {
+            file ??= await open(path, "r");
+            const to = committedBytes;
+            await readLines(
+              file,
+              starts[next - 1] ?? to,
+              to,
+              signal,
+              (line) => {
+                push(line);
+                return !full;
+              },
+            );
+          } else if (over) {
+            return;
+          } else {
+            // Parked: the bell sends each new line. It wakes the loop when a
+            // send fills the reader, and `markEnded` wakes it at the end.
+            // Never a race on `ended`: that promise lives as long as the
+            // log, and a race leaves a handler on it for every park, which
+            // a slow reader repeats once per pause.
+            await withAbort(
+              new Promise<void>((ok) => {
+                wake = ok;
+              }),
+              signal,
+            );
+          }
         }
       } finally {
         bells.delete(bell);
+        wakers.delete(waker);
         await file?.close();
       }
     },
@@ -187,16 +233,21 @@ export async function openEventLog(path: string): Promise<EventLog> {
       const file = await open(path, "r");
       try {
         let next = after + 1;
-        await readLines(
-          file,
-          starts[after] as number,
-          bytes,
-          signal,
-          (line) => {
-            send(next, line);
-            next += 1;
-          },
-        );
+        while (next <= starts.length && !signal?.aborted) {
+          let full: Promise<void> | undefined;
+          await readLines(
+            file,
+            starts[next - 1] as number,
+            bytes,
+            signal,
+            (line) => {
+              full = send(next, line);
+              next += 1;
+              return !full;
+            },
+          );
+          if (full) await withAbort(full, signal);
+        }
       } finally {
         await file.close();
       }
@@ -212,13 +263,15 @@ export async function openEventLog(path: string): Promise<EventLog> {
   };
 }
 
-/** Sends each whole line in `[from, to)`; `to` always sits on a line end. */
+/** Sends each whole line in `[from, to)`; `to` always sits on a line end.
+ *  Stops early, mid-chunk too, when `onLine` returns false. */
 async function readLines(
   file: FileHandle,
   from: number,
   to: number,
   signal: AbortSignal | undefined,
-  onLine: (line: string) => void,
+  // biome-ignore lint/suspicious/noConfusingVoidType: the index scan returns nothing.
+  onLine: (line: string) => boolean | void,
 ): Promise<void> {
   const buf = Buffer.alloc(CHUNK_BYTES);
   let carry = Buffer.alloc(0);
@@ -238,7 +291,7 @@ async function readLines(
     // inside a multi-byte character, never inside a newline.
     let data = Buffer.concat([carry, buf.subarray(0, bytesRead)]);
     for (let nl = data.indexOf(NEWLINE); nl !== -1 && !signal?.aborted; ) {
-      onLine(data.toString("utf8", 0, nl));
+      if (onLine(data.toString("utf8", 0, nl)) === false) return;
       data = data.subarray(nl + 1);
       nl = data.indexOf(NEWLINE);
     }
@@ -246,10 +299,34 @@ async function readLines(
   }
 }
 
-function aborted(signal: AbortSignal | undefined): Promise<void> {
-  if (!signal) return new Promise(() => {});
-  return new Promise((ok) => {
-    if (signal.aborted) ok();
-    else signal.addEventListener("abort", () => ok(), { once: true });
+/**
+ * `promise`, or a settle when `signal` aborts, with the abort listener
+ * detached as soon as either side settles. Without a signal it is the promise
+ * alone: a parked reader waits forever. The detach is the point — `follow`
+ * races on every pause and re-park, and a listener left behind would grow
+ * without bound for a slow reader on a long-lived stream.
+ */
+function withAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T | undefined> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise<T | undefined>((ok, fail) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      ok(undefined);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        ok(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        fail(err);
+      },
+    );
   });
 }

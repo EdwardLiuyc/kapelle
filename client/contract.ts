@@ -44,7 +44,7 @@ export type { AgentEvent, PermissionReason, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 2 } as const;
+export const API_VERSION = { major: 1, minor: 3 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or

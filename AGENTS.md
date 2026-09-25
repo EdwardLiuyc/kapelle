@@ -94,6 +94,7 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 | `daemon.ts` | The HTTP daemon: one for all of the operator's repositories. |
 | `daemon/` | The parts of `daemon.ts` that tests can import (`daemon.ts` starts a daemon when imported). |
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
+| `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
 | `chat.ts` | Chat front end. It talks HTTP only and imports only `core/runtime.ts`. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 

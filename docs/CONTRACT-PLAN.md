@@ -6,7 +6,7 @@ register behind them.** The room model is the no-dependency roster, R24–R30 re
 (A2 restated), and R31 plus R37–R42 close the room decisions the stories were reading
 without an answer. **Amended 2026-09-22 (M5-1, #133):** tables A and B are decided, and
 `docs/CLIENT-API.md` is now the client-facing promise. Still open here: the contract
-tables C, E, F, G, H, I, J, K and M. The purpose remains to name every decision a
+tables C, E, G, H, I, J, K and M. The purpose remains to name every decision a
 story depends on before the work starts.
 **Amended 2026-09-23 (R43, interview):** composer addressing is decided — the room opens
 on the timeline, a leading `@name` resolves client-side to the target, no mention still
@@ -115,7 +115,8 @@ R31–R36; R24–R30 retired).
 - `chat.ts` is a second front end with its own `Daemon`, `RoomView`, `LogEvent`, HTTP and
   SSE code. The shared client module (M5-10) folds it in, and `attach` with it (S7).
 - The TUI's `follow` has no `Last-Event-ID`, no heartbeat and no reconnect; M5-6 lands those
-  in the shared client, then both front ends get them (F1–F4, S8).
+  in the shared client, then both front ends get them (F1–F4, S8). **Amended 2026-09-24
+  (#138):** M5-6 gives reconnect to `attach` only; `chat.ts` gets it through M5-10.
 
 ## Milestone shape
 
@@ -483,7 +484,7 @@ autocomplete for the roster is the R43 polish this story owns; M4-2 ships the re
 with plain text. The stall half needs **R38**; without it no room emits
 `_client_stall_warning` and there is nothing to ring for.
 
-Decisions: **R19, R43, F9, R38**.
+Decisions: **R19, R43, R38**. (F9 dropped by M5-6, #138.)
 
 ## M6 stories — the room container
 
@@ -837,15 +838,15 @@ story, and the story moves into `STORIES.md`.
 
 | ID | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| F1 | Heartbeat | (a) comment `: ping` every 15s (b) 30s (c) none | (a), configurable |
-| F2 | `retry:` | (a) send 3s initially (b) client default (c) omit | (a) |
-| F3 | Reference-client reconnect | (a) auto with backoff + dedupe (b) remain fatal | (a) |
-| F4 | Delivery guarantee | (a) at-least-once + client dedupe (b) exactly-once effort | (a) |
-| F5 | Backpressure seam | (a) `follow` pauses on false (b) per-client ring (c) leave unbounded | (a) |
-| F6 | Slow-client policy | (a) disconnect after high-water (b) block the run (c) unbounded | (a) |
-| F7 | Ping and buffer interaction | (a) count pings in the bound (b) bypass | (a) |
-| F8 | Bad `Last-Event-ID` | keep 400 with documented range | confirm |
-| F9 | Lag observability | (a) none (b) `_client_stream_lagged` event | (b) if cheap |
+| F1 | Heartbeat | (a) comment `: ping` every 15s (b) 30s (c) none | **Decided 2026-09-24 (#138):** (a), fixed, no config key; the reference client treats 45 s of silence as a cut |
+| F2 | `retry:` | (a) send 3s initially (b) client default (c) omit | **Decided 2026-09-24 (#138):** (c) — only a browser `EventSource` reads it, and the browser path is retired |
+| F3 | Reference-client reconnect | (a) auto with backoff + dedupe (b) remain fatal | **Decided 2026-09-24 (#138):** (a), in `client/stream.ts`, used by `attach` only; `daemon.json` read on each try; stop when it is gone (a clean stop); backoff 250 ms to 5 s |
+| F4 | Delivery guarantee | (a) at-least-once + client dedupe (b) exactly-once effort | **Decided 2026-09-24 (#138):** (a) — the `seq` cursor already gives no repeat; the client drops `seq` at or below its last as a guard |
+| F5 | Backpressure seam | (a) `follow` pauses on false (b) per-client ring (c) leave unbounded | **Decided 2026-09-24 (#138):** (a) |
+| F6 | Slow-client policy | (a) disconnect after high-water (b) block the run (c) unbounded | **Decided 2026-09-24 (#138):** none past F5 — a paused reader holds one socket buffer, and the file keeps the rest |
+| F7 | Ping and buffer interaction | (a) count pings in the bound (b) bypass | **Decided 2026-09-24 (#138):** no ping while the socket is full |
+| F8 | Bad `Last-Event-ID` | keep 400 with documented range | **Decided 2026-09-24 (#138):** kept |
+| F9 | Lag observability | (a) none (b) `_client_stream_lagged` event | **Decided 2026-09-24 (#138):** (a) — a paused reader costs no memory, and a lagging client could not get the event in time |
 
 ### Idempotency, cancel, listing, limits, auth
 
