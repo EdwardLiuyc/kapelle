@@ -625,6 +625,21 @@ function idempotencyKey(req: IncomingMessage): string | undefined {
   return key;
 }
 
+/** The digest of a parsed body with every object's keys sorted, so a retry
+ *  that sends the same fields in another order is the same body. Arrays keep
+ *  their order: task order means something. */
+function bodyDigest(body: Record<string, unknown>): Buffer {
+  return digest(
+    JSON.stringify(body, (_key, value) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1)),
+          )
+        : value,
+    ),
+  );
+}
+
 /**
  * `POST /runs`, with an optional `Idempotency-Key` (M5-7, #139). The key is
  * reserved before the body is read, so a retry that arrives while the first
@@ -649,7 +664,7 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
   }
   if (seen) {
     const body = await readBody(req, ["cwd", "run"]);
-    if (!digest(JSON.stringify(body)).equals(seen.hash)) {
+    if (!bodyDigest(body).equals(seen.hash)) {
       throw refusal(
         409,
         "idempotency_conflict",
@@ -660,15 +675,18 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
     return;
   }
   idempotencyKeys.set(key, null);
+  let id: string;
   try {
     const body = await readBody(req, ["cwd", "run"]);
-    const id = await startRun(body);
-    idempotencyKeys.set(key, { hash: digest(JSON.stringify(body)), id });
-    send(res, 202, { id } satisfies RunAccepted);
+    id = await startRun(body);
+    idempotencyKeys.set(key, { hash: bodyDigest(body), id });
   } catch (err) {
+    // Only when no run started: a key freed after that would let a retry
+    // start a second run.
     idempotencyKeys.delete(key);
     throw err;
   }
+  send(res, 202, { id } satisfies RunAccepted);
 }
 
 /** Validate a `POST /runs` body, start the run, and return its id. */

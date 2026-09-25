@@ -413,21 +413,24 @@ Idempotency-Key: 9b2f6c1e-4d7a-4b8e-a0c3-5f1d2e3a4b5c
 - The key is 1 to 255 visible ASCII characters, with no space.
 - Send the same key and the same body again. You get the same `202 {id}`, and no second
   run starts.
-- The daemon compares the parsed body, so spaces between JSON tokens do not matter. The
-  order of fields does matter.
+- The daemon compares the parsed body. Spaces between JSON tokens and the order of fields
+  in an object do not matter. The order of items in a list does matter.
 - One key covers all repositories. A key sent again with a different `cwd` is a
   different body.
 - The daemon keeps a key until it stops. After a restart, it forgets all keys.
 - The daemon keeps a key only after a `202`. If a request is refused, fix it and send it
   again with the same key.
 - A request without the header works as before. Each one starts a run.
+- Only `POST /runs` reads the header. Every other route ignores it.
 
 **Refusals for a request with a key:**
 
 1. `400` `invalid_request`: the key is not 1 to 255 visible ASCII characters. A header
    sent twice is refused too.
 2. `409` `idempotency_in_progress`: a request with this key has not answered yet. Wait,
-   then send the same request again.
+   then send the same request again. This normally lasts less than a second. If it lasts
+   more than a minute, the daemon is stuck: stop, and tell the person. Do not switch to a
+   new key, because the first request can still start its run.
 3. A key that already started a run: the daemon reads the body (so `415`, `413` or
    `400 invalid_request` can come first), but it does not check the run again. A
    different body is `409 idempotency_conflict`. The same body gets the same `202 {id}`.
