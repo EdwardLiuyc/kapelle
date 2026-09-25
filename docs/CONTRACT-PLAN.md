@@ -343,8 +343,9 @@ Decisions: **F1–F9**.
 
 ### M5-7 · Idempotent dispatch · S · needs M5-1, M2-6
 
-`POST /runs` has no retry key. A chat bridge or a TUI reconnect can dispatch the same
-run twice.
+`POST /runs` has no retry key. A chat bridge that retries can dispatch the same run
+twice. (The TUI never calls `POST /runs`: its stories use rooms only, and R16 keeps rooms
+apart from runs. Corrected 2026-09-25, #139.)
 
 Deliverables: the chosen idempotency mechanism; the scope of a key; retention and
 whether it survives a restart; replay and conflict responses; and the same treatment
@@ -852,12 +853,12 @@ story, and the story moves into `STORIES.md`.
 
 | ID | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| G1 | Idempotency now? | (a) yes (b) trigger at first bridge | (a) |
-| G2 | Key location | (a) `Idempotency-Key` header (b) body field | (a) |
-| G3 | Scope | (a) operator-wide (b) per repo (c) key + body hash | (c) |
-| G4 | Storage | (a) in-memory TTL 24h (b) persisted (c) never expire | (a), persist only if a bridge must survive restart |
-| G5 | Conflict response | (a) same 202 replay (b) 409 on different body (c) both | (c) |
-| G6 | Other writes | (a) runs only (b) repos too (c) all writes | (a) |
+| G1 | Idempotency now? | (a) yes (b) trigger at first bridge | **Decided 2026-09-25 (#139):** (a) — small, and cheaper before the v1 freeze than after |
+| G2 | Key location | (a) `Idempotency-Key` header (b) body field | **Decided 2026-09-25 (#139):** (a); 1–255 visible ASCII, no space, so a header sent twice is refused |
+| G3 | Scope | (a) operator-wide (b) per repo (c) key + body hash | **Decided 2026-09-25 (#139):** (a), with a body digest for G5. `cwd` is in the body, so a key reused in another repository is a conflict |
+| G4 | Storage | (a) in-memory TTL 24h (b) persisted (c) never expire | **Decided 2026-09-25 (#139):** in memory for the daemon's life, no TTL: `runs` is never pruned either, so a TTL saves nothing. A restart forgets every key. Persist in `run.json` only if a bridge must survive a crash |
+| G5 | Conflict response | (a) same 202 replay (b) 409 on different body (c) both | **Decided 2026-09-25 (#139):** (c): `409 idempotency_conflict`. A key whose request has not answered gets `409 idempotency_in_progress`. Only a `202` is kept, so a refused request frees its key |
+| G6 | Other writes | (a) runs only (b) repos too (c) all writes | **Decided 2026-09-25 (#139):** (a). A room message sent twice is left for its own issue |
 | H1 | Cancel endpoint | (a) DELETE task path (b) POST cancel subresource | (a) |
 | H2 | Terminal status | (a) `cancelled` (b) `timed_out` | (a) |
 | H3 | Worktree outcome | (a) keep work (b) roll back if untouched (c) differ by task state | (b) |

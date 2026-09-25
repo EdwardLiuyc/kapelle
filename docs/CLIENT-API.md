@@ -7,8 +7,8 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.3** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137, and
-M5-6, #138).
+Contract version: **1.4** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+M5-6, #138, and M5-7, #139).
 
 ## Contents
 
@@ -99,6 +99,7 @@ Not every part of this API is final yet. Each part has one of three labels:
 | `POST /repos`, `GET /repos` | |
 | `POST /runs` request body | |
 | `POST /runs` reply (`{id}`) | |
+| `Idempotency-Key` on `POST /runs` | Since 1.4 (M5-7). |
 | End of a run's stream | `_client_run_finished` since 1.2 (M5-5). |
 | Event timestamps (`at`) | Since 1.2 (M5-5). Absent on older lines. |
 | `GET /runs/:id`, `DELETE /runs/:id` replies | One shape for live and restored runs (M5-2). |
@@ -116,7 +117,6 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| `POST /runs` retry safety | Provisional | M5-7 (adds `Idempotency-Key`) |
 | Everything under `/rooms` | Experimental | M6-2 and later |
 
 **Planned, not built yet:** cancel one task (M5-8).
@@ -252,6 +252,8 @@ request that is not valid HTTP gets `400`.
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `room_busy` | `409` | The room still answers the last message. | Wait for `_client_turn_ended`, then send again. |
 | `room_closed` | `409` | The room was dismissed, or its harness exited. | Stop. Open a new room. |
+| `idempotency_conflict` | `409` | This `Idempotency-Key` already started a run with a different body. | Use a new key for new work. |
+| `idempotency_in_progress` | `409` | A request with this `Idempotency-Key` has not answered yet. | Wait, then send the same request again. |
 | `orchestrator_exists` | `409` | Not built yet (M6-3). The room already has an orchestrator. | Change the other participant's role first. |
 | `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
 | `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. | Show the message. |
@@ -276,9 +278,13 @@ request that is not valid HTTP gets `400`.
 | `503` | The daemon is shutting down. |
 
 **Checks run in this order:** the `Host`, then the token, then the route, then the body
-(`415`, then `413`, then `400`). One route resolves a resource first:
-`POST /rooms/:id/messages` looks the room up, so an unknown room is `404 room_not_found`
-even when the body would be refused.
+(`415`, then `413`, then `400`). `POST /runs` with an `Idempotency-Key` checks the key
+format, and whether its first request has answered, before the body. For a key that
+already started a run, the daemon reads the body, but does not check the run again,
+before it compares the digest: see
+[Sending a run again safely](#sending-a-run-again-safely). One route resolves a resource
+first: `POST /rooms/:id/messages` looks the room up, so an unknown room is
+`404 room_not_found` even when the body would be refused.
 
 ## Routes
 
@@ -308,7 +314,7 @@ even when the body would be refused.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 3 },
+  "apiVersion": { "major": 1, "minor": 4 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -393,6 +399,41 @@ Treat the id as an opaque string. Do not parse it.
 3. `400` `invalid_config`: the repository's `.kapelle/config.json` is not valid.
 4. `400` `invalid_run`: the run file is not valid. The message names the field.
 5. `503` `shutting_down`: the daemon is shutting down.
+
+##### Sending a run again safely
+
+A network error can hide the reply. Then you do not know if the run started. To make a
+retry safe, send an `Idempotency-Key` header (since 1.4, M5-7):
+
+```http
+Idempotency-Key: 9b2f6c1e-4d7a-4b8e-a0c3-5f1d2e3a4b5c
+```
+
+- Make a new key for each new run. A random UUID is a good key.
+- The key is 1 to 255 visible ASCII characters, with no space.
+- Send the same key and the same body again. You get the same `202 {id}`, and no second
+  run starts.
+- The daemon compares the parsed body. Spaces between JSON tokens and the order of fields
+  in an object do not matter. The order of items in a list does matter.
+- One key covers all repositories. A key sent again with a different `cwd` is a
+  different body.
+- The daemon keeps a key until it stops. After a restart, it forgets all keys.
+- The daemon keeps a key only after a `202`. If a request is refused, fix it and send it
+  again with the same key.
+- A request without the header works as before. Each one starts a run.
+- Only `POST /runs` reads the header. Every other route ignores it.
+
+**Refusals for a request with a key:**
+
+1. `400` `invalid_request`: the key is not 1 to 255 visible ASCII characters. A header
+   sent twice is refused too.
+2. `409` `idempotency_in_progress`: a request with this key has not answered yet. Wait,
+   then send the same request again. This normally lasts less than a second. If it lasts
+   more than a minute, the daemon is stuck: stop, and tell the person. Do not switch to a
+   new key, because the first request can still start its run.
+3. A key that already started a run: the daemon reads the body (so `415`, `413` or
+   `400 invalid_request` can come first), but it does not check the run again. A
+   different body is `409 idempotency_conflict`. The same body gets the same `202 {id}`.
 
 #### `GET /runs`
 

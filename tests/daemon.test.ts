@@ -729,6 +729,160 @@ test("an invalid body is 400 in the validator's words, and creates no run", asyn
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
 });
 
+// --- Idempotency-Key on POST /runs (M5-7, #139) ---------------------------------
+
+/** `POST /runs` with an `Idempotency-Key`. */
+async function postKeyed(
+  d: Daemon,
+  key: string,
+  body: unknown,
+  type = "application/json",
+) {
+  const res = await fetch(`${d.url}/runs`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${d.token}`,
+      "content-type": type,
+      "idempotency-key": key,
+    },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json()) as Reply };
+}
+
+test("one key and one body start one run; a different body is a conflict", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const body = { cwd, run: mockRun([{ id: "one", prompt: "hi" }]) };
+
+  const first = await postKeyed(d, "key-1", body);
+  assert.equal(first.status, 202);
+  const again = await postKeyed(d, "key-1", body);
+  assert.deepEqual(again, first);
+  // The same fields in another order, at every depth, are the same body.
+  const reordered = {
+    run: {
+      tasks: [{ prompt: "hi", id: "one" }],
+      mode: "auto",
+      cmd: body.run.cmd,
+    },
+    cwd,
+  };
+  assert.deepEqual(await postKeyed(d, "key-1", reordered), first);
+
+  const other = { cwd, run: mockRun([{ id: "two", prompt: "hi" }]) };
+  const conflict = await postKeyed(d, "key-1", other);
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.body.error.code, "idempotency_conflict");
+  // A conflict leaves the key bound to its first run.
+  assert.deepEqual(await postKeyed(d, "key-1", body), first);
+
+  // The order of items in a list does matter: swapped tasks are another body.
+  const two = [
+    { id: "a", prompt: "hi" },
+    { id: "b", prompt: "hi" },
+  ];
+  const pair = await postKeyed(d, "key-list", { cwd, run: mockRun(two) });
+  assert.equal(pair.status, 202);
+  const swapped = await postKeyed(d, "key-list", {
+    cwd,
+    run: mockRun(two.toReversed()),
+  });
+  assert.equal(swapped.status, 409);
+  assert.equal(swapped.body.error.code, "idempotency_conflict");
+
+  // No key: a second run, as before.
+  assert.equal((await api(d, "POST", "/runs", body)).status, 202);
+  const listed = await api<Reply[]>(d, "GET", "/runs");
+  assert.equal(listed.body.length, 3);
+  await settled(d, first.body.id);
+  await settled(d, pair.body.id);
+});
+
+test("a refused request frees its key; a malformed key is 400", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+
+  const refused = await postKeyed(d, "key-2", { cwd, run: { tasks: [] } });
+  assert.equal(refused.body.error.code, "invalid_run");
+  const fixed = await postKeyed(d, "key-2", {
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  assert.equal(fixed.status, 202);
+
+  // "a, b" is what Node makes of a header sent twice; fetch cannot send one.
+  for (const bad of ["has space", "x".repeat(256), "a, b"]) {
+    const r = await postKeyed(d, bad, { cwd, run: mockRun([]) });
+    assert.equal(r.status, 400, bad);
+    assert.equal(r.body.error.code, "invalid_request");
+  }
+  await settled(d, fixed.body.id);
+});
+
+test("a retry while the first request has not answered is 409 in progress", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await tempDir(t));
+  const body = JSON.stringify({
+    cwd,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+
+  // The first request sends half its body and waits, so it holds the key.
+  const { port } = new URL(d.url);
+  let answer: (r: { status: number; body: string }) => void = () => {};
+  const firstDone = new Promise<{ status: number; body: string }>((ok) => {
+    answer = ok;
+  });
+  const first = request(
+    {
+      host: "127.0.0.1",
+      port,
+      method: "POST",
+      path: "/runs",
+      headers: {
+        authorization: `Bearer ${d.token}`,
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        "idempotency-key": "key-3",
+      },
+    },
+    (res) => {
+      let text = "";
+      res.on("data", (c) => {
+        text += c;
+      });
+      res.on("end", () => answer({ status: res.statusCode ?? 0, body: text }));
+    },
+  );
+  first.write(body.slice(0, 10));
+  await new Promise((ok) => first.once("socket", (s) => s.once("connect", ok)));
+
+  // Poll until the daemon holds the first request's key. The poll is sent as
+  // text/plain: a poll that arrives first is refused 415 before its body is
+  // read, so it frees the key in the same turn of the event loop, and the
+  // first request can never find it taken.
+  let busy: Awaited<ReturnType<typeof postKeyed>> | undefined;
+  for (const until = Date.now() + 5_000; Date.now() < until; ) {
+    busy = await postKeyed(d, "key-3", {}, "text/plain");
+    if (busy.status === 409) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.equal(busy?.status, 409);
+  assert.equal(busy?.body.error.code, "idempotency_in_progress");
+
+  first.end(body.slice(10));
+  const done = await firstDone;
+  assert.equal(done.status, 202);
+  const { id } = JSON.parse(done.body) as { id: string };
+  assert.deepEqual(await postKeyed(d, "key-3", JSON.parse(body)), {
+    status: 202,
+    body: { id },
+  });
+  assert.equal((await api<Reply[]>(d, "GET", "/runs")).body.length, 1);
+  await settled(d, id);
+});
+
 test("a dirty tree runs, and says so on the record (#129)", async (t) => {
   // It used to be a 409. The operator working alongside their own agents is
   // the normal case, and the daemon has no terminal to print a notice on, so
