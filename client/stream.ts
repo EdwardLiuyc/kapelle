@@ -10,12 +10,22 @@
  * **A cut is any of these:** the connection fails, the body errors before its
  * end, or no byte arrives for `silenceMs` — the daemon pings every 15 s, so 45 s
  * of silence means a daemon that hangs. The wait between tries doubles from
- * 250 ms up to 5 s, and goes back to 250 ms after a connect that works.
+ * 250 ms up to 5 s, and goes back to 250 ms once a connection gets data. Not
+ * on the connect itself: a daemon can answer `200` and then cut the stream at
+ * once (its event file is gone, say), and that must still back off.
+ *
+ * **The silence timer runs only while the caller reads.** It is re-armed as
+ * bytes are read, and bytes are read only while the caller pulls the next
+ * event. So a caller that holds an event for more than `silenceMs` cuts its
+ * own stream, and the reader reconnects. `attach` never holds one: its asks
+ * run beside the loop, not in it. A caller that must wait, such as a TUI,
+ * reads into its own queue.
  *
  * **When to stop is the caller's `connect`.** It returns `undefined` when the
  * daemon stopped on purpose (the CLI: `daemon.json` is gone), and the reader
- * throws `StreamClosed`. A refusal (`404`, `400`) and a malformed event also
- * throw: trying again gets the same answer. Only a clean end of the body is the end of the stream.
+ * throws `StreamClosed`. Any refusal (a status that is not 2xx) and a
+ * malformed event also throw: trying again gets the same answer. Only a clean
+ * end of the body is the end of the stream.
  *
  * The SSE parser lives here too, so M5-10's shared module starts from it.
  */
@@ -66,9 +76,12 @@ export async function* followEvents(
       const res = await connect(last, cut.signal);
       if (res === undefined) throw new StreamClosed("the daemon stopped");
       if (!res.ok || !res.body) throw new StreamClosed(await refusalOf(res));
-      delay = FIRST_DELAY_MS;
       onConnect?.();
-      for await (const event of sseEvents(res.body, arm, cut.signal)) {
+      const heard = () => {
+        delay = FIRST_DELAY_MS;
+        arm();
+      };
+      for await (const event of sseEvents(res.body, heard, cut.signal)) {
         if (event.seq <= last) continue;
         last = event.seq;
         yield event;

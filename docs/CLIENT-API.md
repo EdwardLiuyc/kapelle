@@ -583,20 +583,22 @@ This is the rule `kapelle attach` follows. A client can follow the same rule.
 - Treat the connection as cut when it fails, when it ends with an error, or when no byte
   arrives for 45 seconds (three missed pings).
 - Connect again with `Last-Event-ID`. Wait 250 ms before the first try. Double the wait
-  after each failed try, up to 5 s. Go back to 250 ms after a connect that works.
+  after each failed try, up to 5 s. Go back to 250 ms once a connection gets data, not
+  when it only connects: a stream can be accepted and then cut at once.
 - Read `daemon.json` again before each try. A daemon that restarts has a new token, and
   it can have a new port.
 - Stop when `daemon.json` is gone. The daemon removes it only when it stops cleanly, so no
   new daemon is coming. After a crash the file stays, so keep trying.
-- Stop on a refusal such as `404` or `400`. A new try gets the same answer.
+- Stop on any refusal: a status that is not 2xx, such as `404`, `400` or `500`. A new
+  try gets the same answer.
 - Drop any event whose `seq` is at or below the last one you have.
 
 ### A slow reader
 
 If your client reads more slowly than events arrive, the daemon waits for you (since 1.3,
-M5-6). It keeps at most about 64 KiB for your connection and reads the rest from the event
-file when you catch up. It does not close your connection and it does not slow the run.
-No ping is written while it waits.
+M5-6). It keeps at most about 64 KiB for your connection, plus the one event that went
+past that mark. It reads the rest from the event file when you catch up. It does not close
+your connection and it does not slow the run. No ping is written while it waits.
 
 ### End of the stream
 

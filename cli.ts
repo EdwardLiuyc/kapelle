@@ -938,6 +938,17 @@ async function attachRun(): Promise<number> {
   const path = `/runs/${encodeURIComponent(id)}`;
   // Stops when `daemon.json` is gone, which is a clean stop (F3). After a
   // crash the file stays, and the reader waits for the next daemon.
+  // This leans on the daemon's start order (`claim`, then `listen`, then the
+  // token is written): while a new daemon starts, the file has no token, so
+  // this throws "starting" and tries again, and an old token never reaches
+  // the new daemon, whose `401` would stop the reader for good. Change that
+  // order and this breaks.
+  // ponytail: two narrow windows remain. `claim` removes a stale file just
+  // before it writes its own, so a read in that gap looks like a clean stop;
+  // and a file read just before a restart on a fixed port meets the new
+  // daemon with the old token. Both need a restart inside one read-to-fetch
+  // gap of a millisecond or so. Retry once on "missing" and on 401 if either
+  // is ever seen.
   const connect: Connect = async (after, signal) => {
     const holder = await daemonHolder();
     if (holder === "missing") return undefined;

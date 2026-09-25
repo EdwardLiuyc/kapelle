@@ -72,6 +72,21 @@ test("a cut body reconnects from the last seq and drops what it already passed o
   assert.equal(retries.length, 1);
 });
 
+test("a connect that is accepted, then cut with no data, still backs off", async () => {
+  // A daemon can answer 200 and then destroy the stream, for example when the
+  // event file is gone. The wait must still grow, or the retry loop spins.
+  const { connect } = script([
+    () => new Response(body([], "error")),
+    () => new Response(body([], "error")),
+    () => new Response(body([], "error")),
+    () => new Response(body([1])),
+  ]);
+  const started = Date.now();
+  assert.deepEqual(await all(followEvents(connect)), [1]);
+  // 250 + 500 + 1000 ms. Without the growth it is 3 × 250 ms.
+  assert.ok(Date.now() - started >= 1_500, `took ${Date.now() - started} ms`);
+});
+
 test("a refused connect is tried again", async () => {
   const { connect, afters } = script([
     () => {
