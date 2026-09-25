@@ -1012,7 +1012,9 @@ async function stream(
         buffer = buffer.slice(end + 2);
         const id = /^id: (\d+)$/m.exec(frame)?.[1];
         const data = /^data: (.*)$/m.exec(frame)?.[1];
-        out.frames.push({ id: Number(id), data: JSON.parse(data as string) });
+        // A `: ping` block (M5-6) has no data and is no event.
+        if (data === undefined) continue;
+        out.frames.push({ id: Number(id), data: JSON.parse(data) });
       }
     }
   })();
