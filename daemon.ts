@@ -200,13 +200,19 @@ function alive(pid: number): boolean {
  * replaces and the file it publishes already has the pid in it. An exclusive
  * `open` published an empty file for an instant, and a second daemon reading
  * it then took it for stale.
+ *
+ * `replace` swaps a stale file out with `rename` instead, for `claim` under
+ * its lock. The file then exists at every instant: removing it first left a
+ * gap in which a reconnecting `attach` read "no file", which means a clean
+ * stop, and gave up for good (M5-6, #172).
  */
-function create(file: string): number {
+function create(file: string, replace = false): number {
   const tmp = `${file}.${process.pid}`;
   const fd = openSync(tmp, "w", 0o600);
   try {
     writeSync(fd, JSON.stringify({ pid: process.pid }));
-    linkSync(tmp, file);
+    if (replace) renameSync(tmp, file);
+    else linkSync(tmp, file);
   } catch (err) {
     closeSync(fd);
     throw err;
@@ -262,8 +268,7 @@ function claim(file: string): number {
           `(${file}).`,
       );
     }
-    rmSync(file, { force: true });
-    return create(file);
+    return create(file, true);
   } finally {
     rmSync(lock, { recursive: true, force: true });
   }
