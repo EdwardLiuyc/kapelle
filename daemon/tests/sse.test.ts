@@ -74,7 +74,15 @@ test("a client that stops reading holds one socket buffer, then gets every event
   const res = await open();
   res.pause();
   const text = `${"x".repeat(10_000)}`;
-  const events = 500; // about 5 MB, far past any socket buffer
+  const events = 500; // about 5 MB, far past Node's buffer
+  // Sample the daemon's own buffer the whole time. Not `writableNeedDrain`:
+  // the kernel keeps taking bytes from a paused client, several MB on
+  // loopback, so whether Node ever reports "full" is the kernel's call, and
+  // under load it did not (a flaky wait). The buffer is what the pause bounds.
+  let most = 0;
+  const sample = setInterval(() => {
+    most = Math.max(most, served.res?.writableLength ?? 0);
+  }, 2);
   for (let i = 0; i < events; i++) {
     log.append({
       agent: "t0",
@@ -84,17 +92,14 @@ test("a client that stops reading holds one socket buffer, then gets every event
       },
     });
   }
-  await until(() => log.size === events, "the events to commit");
-  await until(() => served.res?.writableNeedDrain === true, "a full socket");
-  await new Promise((r) => setTimeout(r, 100));
+  await until(() => log.size === events, "the events to commit", 30_000);
+  await new Promise((r) => setTimeout(r, 200));
+  clearInterval(sample);
   // Node's buffer, not the kernel's: the high-water mark (64 KiB on Node 24)
   // plus the one event that crossed it. Without the pause it held the run.
   const res0 = served.res as ServerResponse;
   const bound = res0.writableHighWaterMark + text.length + 1_000;
-  assert.ok(
-    res0.writableLength < bound,
-    `the daemon buffered ${res0.writableLength} bytes, over ${bound}`,
-  );
+  assert.ok(most < bound, `the daemon buffered ${most} bytes, over ${bound}`);
 
   const ids: number[] = [];
   let buffered = "";
@@ -112,7 +117,7 @@ test("a client that stops reading holds one socket buffer, then gets every event
     buffered = buffered.slice(end);
   });
   res.resume();
-  await until(() => ids.length >= events, "every event");
+  await until(() => ids.length >= events, "every event", 30_000);
   assert.deepEqual(
     ids,
     Array.from({ length: events }, (_, i) => i + 1),
