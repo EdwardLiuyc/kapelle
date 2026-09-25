@@ -777,11 +777,26 @@ test("one key and one body start one run; a different body is a conflict", async
   // A conflict leaves the key bound to its first run.
   assert.deepEqual(await postKeyed(d, "key-1", body), first);
 
+  // The order of items in a list does matter: swapped tasks are another body.
+  const two = [
+    { id: "a", prompt: "hi" },
+    { id: "b", prompt: "hi" },
+  ];
+  const pair = await postKeyed(d, "key-list", { cwd, run: mockRun(two) });
+  assert.equal(pair.status, 202);
+  const swapped = await postKeyed(d, "key-list", {
+    cwd,
+    run: mockRun(two.toReversed()),
+  });
+  assert.equal(swapped.status, 409);
+  assert.equal(swapped.body.error.code, "idempotency_conflict");
+
   // No key: a second run, as before.
   assert.equal((await api(d, "POST", "/runs", body)).status, 202);
   const listed = await api<Reply[]>(d, "GET", "/runs");
-  assert.equal(listed.body.length, 2);
+  assert.equal(listed.body.length, 3);
   await settled(d, first.body.id);
+  await settled(d, pair.body.id);
 });
 
 test("a refused request frees its key; a malformed key is 400", async (t) => {
