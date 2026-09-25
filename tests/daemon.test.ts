@@ -1059,11 +1059,14 @@ test("a stream attached mid-run gets the history then the live tail, contiguousl
       (f) => f.data.agent === agent && f.data.update.sessionUpdate === kind,
     );
   // Mid-run for certain: `one` is over and `stuck` never answers its prompt.
+  // Wait for the spawn, not the start: `_client_task_started` comes before the
+  // harness is spawned, and a spawn line that lands after the tail cursor was
+  // read reaches the caught-up stream below as a live event (CI, #172).
   await until(
-    "the second task to start",
+    "the second task's harness to spawn",
     () =>
       has(first, "one", "_client_task_finished") &&
-      has(first, "stuck", "_client_task_started"),
+      has(first, "stuck", "_client_harness_spawned"),
   );
   const finished = first.frames.find(
     (f) =>
