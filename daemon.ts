@@ -305,6 +305,12 @@ const eventLogs = new Map<string, Promise<EventLog | undefined>>();
  *  path rather than an open log: opening one scans the whole file, and most
  *  restored runs are never asked for. */
 const restoredLogs = new Map<string, string>();
+/** `Idempotency-Key` → the body's digest and the run it started (M5-7,
+ *  #139), or `null` while that request has not answered. One map for every
+ *  repository (G3): `cwd` is in the body, so a key reused in another
+ *  repository is a conflict. Kept for the daemon's life, like `runs` (G4);
+ *  a restart forgets every key. */
+const idempotencyKeys = new Map<string, { hash: Buffer; id: string } | null>();
 
 /**
  * Read every added repository's finished runs back into memory (M2-6, #36).
@@ -603,8 +609,70 @@ async function refuseUnadded(cwd: string): Promise<string> {
   return root;
 }
 
+/** The `Idempotency-Key` header, `undefined` when absent, or a 400. Visible
+ *  ASCII with no space, so a duplicated header, which Node joins with ", ",
+ *  is refused rather than read as one key. */
+function idempotencyKey(req: IncomingMessage): string | undefined {
+  const key = req.headers["idempotency-key"];
+  if (key === undefined) return undefined;
+  if (typeof key !== "string" || !/^[\x21-\x7e]{1,255}$/.test(key)) {
+    throw refusal(
+      400,
+      "invalid_request",
+      "Idempotency-Key must be 1 to 255 visible ASCII characters, with no space",
+    );
+  }
+  return key;
+}
+
+/**
+ * `POST /runs`, with an optional `Idempotency-Key` (M5-7, #139). The key is
+ * reserved before the body is read, so a retry that arrives while the first
+ * request has not answered gets `idempotency_in_progress` rather than a second
+ * run. Only a `202` is kept: a refused request frees its key, so the client
+ * can fix it and send it again with the same key.
+ */
 async function postRun(req: IncomingMessage, res: ServerResponse) {
-  const body = await readBody(req, ["cwd", "run"]);
+  const key = idempotencyKey(req);
+  if (key === undefined) {
+    const id = await startRun(await readBody(req, ["cwd", "run"]));
+    send(res, 202, { id } satisfies RunAccepted);
+    return;
+  }
+  const seen = idempotencyKeys.get(key);
+  if (seen === null) {
+    throw refusal(
+      409,
+      "idempotency_in_progress",
+      `a request with Idempotency-Key ${key} has not answered yet`,
+    );
+  }
+  if (seen) {
+    const body = await readBody(req, ["cwd", "run"]);
+    if (!digest(JSON.stringify(body)).equals(seen.hash)) {
+      throw refusal(
+        409,
+        "idempotency_conflict",
+        `Idempotency-Key ${key} was used with a different body`,
+      );
+    }
+    send(res, 202, { id: seen.id } satisfies RunAccepted);
+    return;
+  }
+  idempotencyKeys.set(key, null);
+  try {
+    const body = await readBody(req, ["cwd", "run"]);
+    const id = await startRun(body);
+    idempotencyKeys.set(key, { hash: digest(JSON.stringify(body)), id });
+    send(res, 202, { id } satisfies RunAccepted);
+  } catch (err) {
+    idempotencyKeys.delete(key);
+    throw err;
+  }
+}
+
+/** Validate a `POST /runs` body, start the run, and return its id. */
+async function startRun(body: Record<string, unknown>): Promise<string> {
   const cwd = existingDir(body.cwd, "cwd");
   const root = await refuseUnadded(cwd);
 
@@ -709,7 +777,7 @@ async function postRun(req: IncomingMessage, res: ServerResponse) {
       settleLog(undefined);
     });
   inFlight.add(done);
-  send(res, 202, { id } satisfies RunAccepted);
+  return id;
 }
 
 /**

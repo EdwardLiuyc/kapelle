@@ -2168,7 +2168,9 @@ pauses on a full socket and never disconnects; `attach` reconnects through
 
 **M5-7 · Idempotent dispatch · S · needs M5-1, M2-6**
 `Idempotency-Key` on `POST /runs`; a replay and a conflict response.
-Decisions: G1–G6.
+Decisions: G1–G6. **Decided 2026-09-25 (#139):** a header, one key space for the daemon,
+kept in memory until the daemon stops; `409 idempotency_conflict` for a different body,
+`409 idempotency_in_progress` while the first request has not answered; runs only.
 
 **M5-8 · Task-level cancel · S · needs M2-3, M2-9**
 `DELETE /runs/:id/tasks/:taskId`; status vocabulary, worktree outcome, permission deny.
