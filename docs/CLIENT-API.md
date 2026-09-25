@@ -279,9 +279,12 @@ request that is not valid HTTP gets `400`.
 
 **Checks run in this order:** the `Host`, then the token, then the route, then the body
 (`415`, then `413`, then `400`). `POST /runs` with an `Idempotency-Key` checks the key
-before the body: see [Sending a run again safely](#sending-a-run-again-safely). One route
-resolves a resource first: `POST /rooms/:id/messages` looks the room up, so an unknown
-room is `404 room_not_found` even when the body would be refused.
+format, and whether its first request has answered, before the body. For a key that
+already started a run, the daemon reads the body, but does not check the run again,
+before it compares the digest: see
+[Sending a run again safely](#sending-a-run-again-safely). One route resolves a resource
+first: `POST /rooms/:id/messages` looks the room up, so an unknown room is
+`404 room_not_found` even when the body would be refused.
 
 ## Routes
 
@@ -311,7 +314,7 @@ room is `404 room_not_found` even when the body would be refused.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 3 },
+  "apiVersion": { "major": 1, "minor": 4 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -419,13 +422,15 @@ Idempotency-Key: 9b2f6c1e-4d7a-4b8e-a0c3-5f1d2e3a4b5c
   again with the same key.
 - A request without the header works as before. Each one starts a run.
 
-**Refusals for a request with a key, before the ones above:**
+**Refusals for a request with a key:**
 
 1. `400` `invalid_request`: the key is not 1 to 255 visible ASCII characters. A header
    sent twice is refused too.
 2. `409` `idempotency_in_progress`: a request with this key has not answered yet. Wait,
    then send the same request again.
-3. `409` `idempotency_conflict`: this key already started a run with a different body.
+3. A key that already started a run: the daemon reads the body (so `415`, `413` or
+   `400 invalid_request` can come first), but it does not check the run again. A
+   different body is `409 idempotency_conflict`. The same body gets the same `202 {id}`.
 
 #### `GET /runs`
 
