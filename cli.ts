@@ -1025,7 +1025,7 @@ async function attachRun(): Promise<number> {
   const events = followEvents(connect, {
     onConnect() {
       if (!connected && !quiet) console.log(`attached to ${id}`);
-      if (retrying) console.error(`! reconnected to ${id}`);
+      if (connected && retrying) console.error(`! reconnected to ${id}`);
       connected = true;
       retrying = false;
     },

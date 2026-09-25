@@ -308,7 +308,7 @@ even when the body would be refused.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 2 },
+  "apiVersion": { "major": 1, "minor": 3 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```

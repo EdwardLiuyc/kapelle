@@ -79,12 +79,15 @@ export function createEventLog(
   let committedBytes = 0;
   let accepting = true;
   const bells = new Set<Bell>();
+  /** One per reader: wakes it from its park, so it sees `over` and ends. */
+  const wakers = new Set<() => void>();
 
   let over = false;
   let markEnded = () => {};
   const ended = new Promise<void>((ok) => {
     markEnded = () => {
       over = true;
+      for (const waker of wakers) waker();
       ok();
     };
   });
@@ -134,12 +137,15 @@ export function createEventLog(
         push(line);
         if (full) wake();
       };
+      // Not `wake` itself: each park replaces it.
+      const waker = () => wake();
       bells.add(bell);
+      wakers.add(waker);
       let file: FileHandle | undefined;
       try {
         while (!signal?.aborted) {
           if (full) {
-            await Promise.race([full, aborted(signal)]);
+            await withAbort(full, signal);
             full = undefined;
           } else if (next <= committed) {
             file ??= await open(path, "r");
@@ -157,19 +163,22 @@ export function createEventLog(
           } else if (over) {
             return;
           } else {
-            // Parked: the bell sends each new line. It wakes the loop only
-            // when a send fills the reader.
-            await Promise.race([
+            // Parked: the bell sends each new line. It wakes the loop when a
+            // send fills the reader, and `markEnded` wakes it at the end.
+            // Never a race on `ended`: that promise lives as long as the
+            // log, and a race leaves a handler on it for every park, which
+            // a slow reader repeats once per pause.
+            await withAbort(
               new Promise<void>((ok) => {
                 wake = ok;
               }),
-              ended,
-              aborted(signal),
-            ]);
+              signal,
+            );
           }
         }
       } finally {
         bells.delete(bell);
+        wakers.delete(waker);
         await file?.close();
       }
     },
@@ -237,7 +246,7 @@ export async function openEventLog(path: string): Promise<EventLog> {
               return !full;
             },
           );
-          if (full) await Promise.race([full, aborted(signal)]);
+          if (full) await withAbort(full, signal);
         }
       } finally {
         await file.close();
@@ -290,10 +299,34 @@ async function readLines(
   }
 }
 
-function aborted(signal: AbortSignal | undefined): Promise<void> {
-  if (!signal) return new Promise(() => {});
-  return new Promise((ok) => {
-    if (signal.aborted) ok();
-    else signal.addEventListener("abort", () => ok(), { once: true });
+/**
+ * `promise`, or a settle when `signal` aborts, with the abort listener
+ * detached as soon as either side settles. Without a signal it is the promise
+ * alone: a parked reader waits forever. The detach is the point — `follow`
+ * races on every pause and re-park, and a listener left behind would grow
+ * without bound for a slow reader on a long-lived stream.
+ */
+function withAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T | undefined> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise<T | undefined>((ok, fail) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      ok(undefined);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        ok(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        fail(err);
+      },
+    );
   });
 }

@@ -5,6 +5,7 @@
  */
 
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -445,6 +446,100 @@ test("an abort ends a reader that waits on a full socket", async (t) => {
   stop.abort();
   await done;
   await log.close();
+});
+
+test("a settled live pause leaves no abort listener behind", async (t) => {
+  const { log } = await logIn(t);
+  log.append(chunk("a"));
+  await waitFor(() => log.size >= 1, "the first line to commit");
+
+  const stop = new AbortController();
+  let release = () => {};
+  const seqs: number[] = [];
+  const done = log.follow(
+    0,
+    (seq) => {
+      seqs.push(seq);
+      return new Promise<void>((ok) => {
+        release = ok;
+      });
+    },
+    stop.signal,
+  );
+
+  // Each round lets one send through and fills the reader again. A listener
+  // that outlives its wait is the leak this pins: the count must not grow
+  // with the number of settled pauses.
+  for (let round = 1; round <= 20; round++) {
+    await waitFor(() => seqs.length >= round, `send ${round}`);
+    assert.ok(
+      getEventListeners(stop.signal, "abort").length <= 1,
+      `one outstanding wait at most, after ${round - 1} settled pauses`,
+    );
+    release();
+    log.append(chunk(`x${round}`));
+  }
+
+  // The last send is still parked; the abort must end it and leave nothing.
+  stop.abort();
+  await done;
+  assert.equal(getEventListeners(stop.signal, "abort").length, 0);
+  await log.close();
+});
+
+test("a reader parked again after many pauses still ends when the log closes", async (t) => {
+  // The park waits on `wake` alone, never on `ended`, so `close` must wake it.
+  // Each park makes a new `wake`; `close` must reach the latest one.
+  const { log } = await logIn(t);
+  let release = () => {};
+  const seqs: number[] = [];
+  const done = log.follow(0, (seq) => {
+    seqs.push(seq);
+    return new Promise<void>((ok) => {
+      release = ok;
+    });
+  });
+  for (let round = 1; round <= 20; round++) {
+    log.append(chunk(`x${round}`));
+    await waitFor(() => seqs.length >= round, `send ${round}`);
+    release();
+  }
+  await log.close();
+  await done;
+  assert.deepEqual(seqs, range(1, 20));
+});
+
+test("a settled replay pause leaves no abort listener behind", async (t) => {
+  const { log, path } = await logIn(t);
+  for (const text of ["a", "b", "c", "d"]) log.append(chunk(text));
+  await log.close();
+
+  const replay = await openEventLog(path);
+  const stop = new AbortController();
+  let release = () => {};
+  const seqs: number[] = [];
+  const done = replay.follow(
+    0,
+    (seq) => {
+      seqs.push(seq);
+      return new Promise<void>((ok) => {
+        release = ok;
+      });
+    },
+    stop.signal,
+  );
+
+  for (let round = 1; round <= 4; round++) {
+    await waitFor(() => seqs.length >= round, `replay send ${round}`);
+    assert.ok(
+      getEventListeners(stop.signal, "abort").length <= 1,
+      `one outstanding wait at most, after ${round - 1} settled replay pauses`,
+    );
+    release();
+  }
+  await done;
+  assert.equal(getEventListeners(stop.signal, "abort").length, 0);
+  stop.abort();
 });
 
 // --- replay after a restart (M2-6, #36) -------------------------------------

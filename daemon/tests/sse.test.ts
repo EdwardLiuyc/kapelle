@@ -119,3 +119,56 @@ test("a client that stops reading holds one socket buffer, then gets every event
   );
   res.destroy();
 });
+
+test("no ping while the socket reports full, and retry: is never sent", async (t) => {
+  const { log, served, open } = await serve(t, 20);
+  const res = await open();
+  const res0 = served.res as ServerResponse;
+
+  // Pin the one thing the ping guard reads. A paused client does not freeze
+  // the kernel buffer, so `writableNeedDrain` can drop on its own and make a
+  // race flaky; F7 is a property of the guard, so hold it true.
+  Object.defineProperty(res0, "writableNeedDrain", {
+    configurable: true,
+    get: () => true,
+  });
+  const writes: string[] = [];
+  const target = res0 as unknown as {
+    write(chunk: string, ...rest: unknown[]): boolean;
+  };
+  const original = target.write.bind(res0);
+  target.write = (chunk, ...rest) => {
+    writes.push(chunk);
+    return original(chunk, ...rest);
+  };
+
+  for (const text of ["a", "b"]) {
+    log.append({
+      agent: "t0",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text },
+      },
+    });
+  }
+  await until(() => log.size === 2, "the events to commit");
+  await new Promise((r) => setTimeout(r, 150)); // several 20 ms ping intervals
+  assert.deepEqual(
+    writes.filter((chunk) => chunk.includes(": ping")),
+    [],
+    "no ping while the socket is full",
+  );
+
+  // Not full any more: the ping must come back, and nothing ever writes
+  // `retry:` (F2).
+  Reflect.deleteProperty(res0, "writableNeedDrain");
+  let received = "";
+  res.setEncoding("utf8");
+  res.on("data", (s: string) => {
+    received += s;
+  });
+  res.resume();
+  await until(() => received.includes(": ping\n\n"), "a ping once not full");
+  assert.ok(!received.includes("retry:"), "no retry: line on the wire");
+  res.destroy();
+});
