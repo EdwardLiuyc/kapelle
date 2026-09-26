@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -23,6 +23,7 @@ import {
   readDaemonFile,
   VersionRefused,
 } from "../daemon.ts";
+import { type Connect, followEvents, StreamClosed } from "../stream.ts";
 
 /** A daemon that answers every request with `reply`, and records the
  *  `authorization` header it saw. */
@@ -81,12 +82,87 @@ test("a daemon with no GET /version is refused", async (t) => {
   await assert.rejects(checkVersion(d), VersionRefused);
 });
 
-test("a refusal answers the envelope; one with no envelope answers the status", async (t) => {
-  const d = await fake(t, (res, path) =>
-    path === "/envelope"
-      ? json(res, 409, { error: { code: "run_ended", message: "ended" } })
-      : res.writeHead(408).end(),
+test("a 2xx non-JSON /version is a fatal refusal, not a retry", async (t) => {
+  const d = await fake(t, (res) =>
+    res.writeHead(200, { "content-type": "text/plain" }).end("not json"),
   );
+  await assert.rejects(checkVersion(d), (err) => {
+    assert.ok(err instanceof VersionRefused);
+    assert.ok(err instanceof StreamClosed);
+    assert.match(err.message, /no readable API version/);
+    assert.match(err.message, /non-JSON/);
+    assert.doesNotMatch(err.message, /undefined/);
+    return true;
+  });
+
+  // The same refusal out of `connect` must end the stream, not retry it.
+  let tries = 0;
+  const connect: Connect = async () => {
+    tries += 1;
+    if (tries === 1) await checkVersion(d);
+    return undefined;
+  };
+  const events: unknown[] = [];
+  await assert.rejects(
+    (async () => {
+      for await (const event of followEvents(connect)) events.push(event);
+    })(),
+    VersionRefused,
+  );
+  assert.equal(tries, 1, "a non-JSON /version must not be retried");
+  assert.deepEqual(events, []);
+});
+
+test("a non-404 /version refusal keeps the daemon's message", async (t) => {
+  const d = await fake(t, (res) =>
+    json(res, 401, {
+      error: { code: "unauthorized", message: "missing or wrong token" },
+    }),
+  );
+  await assert.rejects(checkVersion(d), (err) => {
+    assert.ok(err instanceof VersionRefused);
+    assert.ok(err instanceof StreamClosed);
+    assert.equal(err.message, "missing or wrong token");
+    return true;
+  });
+});
+
+test("a /version with no readable major/minor is refused without undefined", async (t) => {
+  for (const apiVersion of [
+    { major: 1 },
+    { minor: 4 },
+    {},
+    { major: "1", minor: 4 },
+    { major: 1, minor: 4.5 },
+    "1.4",
+    null,
+  ]) {
+    const d = await fake(t, (res) =>
+      json(res, 200, { apiVersion, capabilities: [] }),
+    );
+    await assert.rejects(checkVersion(d), (err) => {
+      assert.ok(err instanceof VersionRefused);
+      assert.match(err.message, /no readable API version/);
+      assert.doesNotMatch(err.message, /undefined/);
+      return true;
+    });
+  }
+});
+
+test("a refusal answers the envelope; one with no envelope answers the status", async (t) => {
+  const d = await fake(t, (res, path) => {
+    if (path === "/envelope") {
+      json(res, 409, { error: { code: "run_ended", message: "ended" } });
+    } else if (path === "/no-message") {
+      json(res, 409, { error: { code: "x" } });
+    } else if (path === "/empty-message") {
+      json(res, 409, { error: { code: "x", message: "" } });
+    } else if (path === "/bad-code") {
+      json(res, 409, { error: { code: 42 } });
+    } else {
+      res.writeHead(408).end();
+    }
+  });
   assert.deepEqual(await call(d, "/envelope"), {
     ok: false,
     status: 409,
@@ -96,6 +172,23 @@ test("a refusal answers the envelope; one with no envelope answers the status", 
     ok: false,
     status: 408,
     error: { code: "", message: "HTTP 408" },
+  });
+  // An envelope whose `message` is missing or empty is unusable: the status
+  // stands in, and a string `code` is kept when there is one.
+  assert.deepEqual(await call(d, "/no-message"), {
+    ok: false,
+    status: 409,
+    error: { code: "x", message: "HTTP 409" },
+  });
+  assert.deepEqual(await call(d, "/empty-message"), {
+    ok: false,
+    status: 409,
+    error: { code: "x", message: "HTTP 409" },
+  });
+  assert.deepEqual(await call(d, "/bad-code"), {
+    ok: false,
+    status: 409,
+    error: { code: "", message: "HTTP 409" },
   });
 });
 
@@ -116,6 +209,12 @@ test("client/ loads nothing under core/ or protocol/ at runtime", async () => {
   // A child process, so the hook sees every module load from a cold start.
   // `import type` is erased, so contract.ts's types from protocol/ load nothing.
   const root = join(import.meta.dirname, "..", "..");
+  // Enumerate top-level `client/*.ts` so a new module cannot escape the
+  // import. `client/tests/` is a subdirectory, not a top-level file.
+  const files = (await readdir(join(root, "client"), { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+    .map((entry) => entry.name)
+    .sort();
   const script = `
     import { registerHooks } from "node:module";
     const seen = [];
@@ -126,7 +225,7 @@ test("client/ loads nothing under core/ or protocol/ at runtime", async () => {
         return r;
       },
     });
-    for (const f of ["contract.ts", "daemon.ts", "stream.ts"]) {
+    for (const f of ${JSON.stringify(files)}) {
       await import(new URL("client/" + f, ${JSON.stringify(`file://${root}/`)}));
     }
     console.log(JSON.stringify(seen));

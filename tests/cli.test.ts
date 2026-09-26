@@ -491,20 +491,28 @@ async function fakeDaemon(
 
 test("a daemon with a different API major is refused, one with a different minor warns", async (t) => {
   const { major, minor } = API_VERSION;
-  const ps = async (version: [number, number]) => {
+  const ps = async (version: [number, number], flags: string[] = []) => {
     const runtime = await tempDir(t);
     await fakeDaemon(t, runtime, "tok", version);
-    return spawnCli(t, ["ps"], "cli.ts", { XDG_RUNTIME_DIR: runtime }).done;
+    return spawnCli(t, ["ps", ...flags], "cli.ts", {
+      XDG_RUNTIME_DIR: runtime,
+    }).done;
   };
 
   const refused = await ps([major + 1, 0]);
   assert.equal(refused.code, 1);
   assert.match(refused.stderr, /^error: .*update the client or the daemon/m);
 
-  // `--quiet` is not passed, but the warning is on stderr either way.
   const warned = await ps([major, minor + 1]);
   assert.equal(warned.code, 0, warned.stderr);
   assert.equal(warned.stderr.match(/something was added/g)?.length, 1);
+
+  // `--quiet` never hides the version warning (#142): exactly one line.
+  const quietWarned = await ps([major, minor + 1], ["--quiet"]);
+  assert.equal(quietWarned.code, 0, quietWarned.stderr);
+  const quietLines = quietWarned.stderr.trim().split("\n").filter(Boolean);
+  assert.equal(quietLines.length, 1, quietWarned.stderr);
+  assert.match(quietLines[0], /something was added/);
 
   const same = await ps([major, minor]);
   assert.equal(same.code, 0);
