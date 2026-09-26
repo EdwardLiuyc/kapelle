@@ -2345,10 +2345,9 @@ Decisions: R1, R3, R9, R17, R21, R22, R33, R36, R44, S4, S13. (R22 settled: a ne
 **Amended 2026-09-26:** a second participant needs a checkout of its own, and today a room
 has one (`core/room.ts`, `ROOM_TASK`). M6-6a gives each participant one, so this story
 needs it. The add body also takes `base`: a ref, or another participant's branch, which
-M6-6a's runtime already accepts. *Done when* two participants added through the route
-work in parallel without touching each other's files, and one added with the other's
-branch as `base` starts from that branch's head.
-`POST /rooms/:id/agents` with `{name, agent or cmd, mode, settings}`; list, get, remove,
+M6-6a's runtime already accepts. This story documents `base` as a request field in
+`docs/CLIENT-API.md`.
+`POST /rooms/:id/agents` with `{name, agent or cmd, mode, settings, base?}`; list, get, remove,
 and rename — R10 grants it, so the story carries it: the display name is mutable, the
 opaque id and the branch name are not. Names match `^[A-Za-z0-9_-]{1,32}$` and are unique
 under ASCII lowercase folding (R22); harness fixed at add; mode mutable and default
@@ -2359,6 +2358,12 @@ at a role change (R44). One route changes a participant:
 row to the CLIENT-API route table and drops `orchestrator_exists`'s "Not built yet" note.
 Removal cancels the session and applies the worktree policy. Settings reuse run-file
 `Task` fields plus a purpose/instructions field.
+*Done when* a room holds several named participants added through the route, each with
+its own harness and mode; list, get, rename and `PATCH` of `name`, `mode` and `role` work;
+a second `orchestrator` is refused `409` `orchestrator_exists` at add and at a role change;
+removing one leaves the others untouched; two participants work in parallel without
+touching each other's files; and one added with the other's branch as `base` starts from
+that branch's head.
 Decisions: R4, R9, R10, R12, R15, R18, R22, R33, R44. (R33 settled as (a).)
 
 **M6-4 · Routing, room timeline, participant streams and cancel-turn · M · needs M6-3**
@@ -2387,7 +2392,8 @@ participant is on the TUI's path: M6-3 needs it. The merge rework is size `L` an
 **M6-6a · Per-participant worktrees and base choice · M · needs M6-2**
 Each participant owns one worktree and branch, `kapelle/<roomId>/<participantId>`, forked
 from the base named at add, room base by default. The base may be **another participant's
-branch** (R35c), so a reviewer can start from the developer's work. Nothing is inherited
+branch** (R35c), so a reviewer can start from the developer's work. The runtime call that
+adds a participant takes that base; M6-3 exposes it as the route's `base` field. Nothing is inherited
 and no checkout is shared (R24–R30 retired). This replaces the room's one checkout
 (`core/room.ts`, `ROOM_TASK`). Parallel turns are safe; nothing caps the live harness count
 in v1 (R40). Under R37 the participant commits its own branch, so the supervisor adds no
@@ -2555,8 +2561,10 @@ too. **M4-5** also needs M6-5. **M4-3** also needs M4-2 and M5-4. **M6-7b** also
 **M0-9** probe. **M6-11b** also needs M4-5. **M4-4** needs M4-2. **M6-9** needs M6-5 and
 M4-2. **M6-7a** needs only M6-2, but goes after M6-4, which changes the log line it saves.
 
-Off the path, because the TUI shows no run (R16): M5-7, M5-8, M5-9, M5-10b and M5-11. No
-story freezes the contract while the project is private (M5-11).
+Off the path, because the TUI shows no run (R16): M5-7, M5-8, M5-9, M5-10b and M5-11.
+M5-11 adds an idempotency test *if* M5-7 has landed — a condition, not a dependency. No
+story freezes the contract while the project is private (M5-11). **M5-10a is the gate:**
+both M4-1 and M6-2 need it, and it is ready now.
 
 Three things are worth pulling forward, because everything queues behind them:
 

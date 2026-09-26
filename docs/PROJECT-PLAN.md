@@ -538,6 +538,10 @@ the paint now lives in the TUI.
 - **M4-4 — notifications and polish**: bell and desktop attention for a waiting
   participant, transcript search, and the block-splitting optimisation if the markdown
   re-parse cost grows.
+- **M4-5 — room and roster commands** (added 2026-09-26): open and dismiss a room; add,
+  remove and rename a participant, with its role, mode and base branch; cancel a turn;
+  change a mode. Each command calls one documented route. M6-11a and M6-11b add the merge
+  commands on top of it.
 - **Deferred to M5+** — composing and dispatching runs from the TUI. Named here because
   it is the stated trajectory and it is why M2's API has to be complete rather than
   observability-only. Not built at M4.

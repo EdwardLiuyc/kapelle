@@ -175,7 +175,7 @@ Needs are hard ordering only.
 | M5-7 | S | M5-1, M2-6 | Idempotent dispatch for `POST /runs` |
 | M5-8 | S | M2-3, M2-9 | Task-level cancel |
 | M5-9 | S | M5-2 | Run filtering and repository removal |
-| M5-10a | S | M5-3, M5-6 | Shared client transport: `daemon.json`, HTTP client (split 2026-09-26) |
+| M5-10a | S | M5-1, M5-3, M5-6 | Shared client transport: `daemon.json`, HTTP client, version check (split 2026-09-26) |
 | M5-10b | M | M5-10a, M5-2, M5-4, M5-5 | Run reducer; `attach` refactored onto it (split 2026-09-26) |
 | M5-11 | M | M5-1..M5-6 | Conformance suite (no freeze, 2026-09-26) |
 | M6-0 | M | — | Land the spike on master: rebase, reconcile with M2-3..M2-10, `chat.ts` experimental |
@@ -598,7 +598,7 @@ Decisions: **R1, R3, R9, R17, R21, R22, R33, R36, R44, S4, S13** (R36 settled: t
 
 **Amended 2026-09-26:** also needs M6-6a — a second participant needs its own checkout.
 
-`POST /rooms/:id/agents` with `{name, agent|cmd, mode, settings}`; list, get, remove, and
+`POST /rooms/:id/agents` with `{name, agent|cmd, mode, settings, base?}`; list, get, remove, and
 **rename** (R10 grants it, so the story carries it: the display name is mutable, the
 opaque id and the branch name are not). Names are unique in the room and validated by
 R22's rules; harness is fixed at add; mode is mutable and defaults to `auto` (R12). An

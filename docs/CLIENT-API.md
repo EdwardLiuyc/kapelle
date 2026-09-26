@@ -941,8 +941,8 @@ built yet. M6-2 and M6-7a build them.
 | kill | the machine, during a turn (crash, harness death, a cancel that does not end) | participant `killed`; the room reads `paused` after a crash or a shutdown, and stays `active` when only the harness died | stopped by force | kept; may not match the harness's memory |
 
 A paused room can be dismissed or deleted as it is. Neither word starts a harness first.
-A room where every participant has `exited` or is `killed` still reads `active`, because
-the next message brings each one back.
+A room whose participants have all `exited`, or were `killed` while the daemon stayed up,
+still reads `active`, because the next message brings each one back.
 
 Today's `DELETE /rooms/:id` is **dismiss**. The status it reports is still `closed`.
 
