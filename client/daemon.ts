@@ -67,15 +67,16 @@ export async function readDaemonFile(
   }
   const { port, token } = holder;
   if (
+    typeof port !== "number" ||
     !Number.isInteger(port) ||
-    (port as number) < 1 ||
-    (port as number) > 65535 ||
+    port < 1 ||
+    port > 65535 ||
     typeof token !== "string" ||
     !token
   ) {
     return "unready";
   }
-  return { port: port as number, token };
+  return { port, token };
 }
 
 /** One request, with the token on it. A body is JSON: the daemon refuses any

@@ -879,8 +879,9 @@ async function attachRun(): Promise<number> {
   // The token of the last daemon whose version passed (B5). A restart brings
   // a new token, and maybe a new version. The check runs when the stream
   // connects, not on every call: a permission answer sent between a restart
-  // and the next connect is not checked. At worst it fails and prints, and
-  // the connect that follows checks the new daemon.
+  // and the next connect is not checked. At worst it lands on a daemon whose
+  // contract has changed; the connect that follows refuses that daemon and
+  // ends the stream.
   let checked = first.token;
   // `daemon.json` is read again on every call: a daemon that restarts while
   // this is attached has a new token, and maybe a new port (M5-6).
