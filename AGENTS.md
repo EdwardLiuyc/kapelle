@@ -248,6 +248,10 @@ carry discovery metadata only.
 - **[`address-comment`](.agent/skills/address-comment/SKILL.md)** — run when asked to
   address, handle, triage or answer review comments on a pull request. Ends with CI read
   and a reply on every thread, including the rejected ones.
+- **[`review-local`](.agent/skills/review-local/SKILL.md)** — run when asked to review
+  local work on an issue, before the push. The issue gives the scope. Each role
+  (developer, tester, security, …) is one file in its `roles/` folder. The gate and the
+  proofs run in a temporary worktree, and nothing is posted.
 - **[`merge-close`](.agent/skills/merge-close/SKILL.md)** — run when asked to merge-close
   a pull request after verifying all acceptance criteria are met. Merges, cleans up the
   branch, checks whether a linked issue auto-closed without closing it manually, and
