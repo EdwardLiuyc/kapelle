@@ -9,7 +9,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingHttpHeaders,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,24 +25,25 @@ import {
   checkVersion,
   type DaemonAddress,
   readDaemonFile,
+  request,
   VersionRefused,
 } from "../daemon.ts";
 import { type Connect, followEvents, StreamClosed } from "../stream.ts";
 
 /** A daemon that answers every request with `reply`, and records the
- *  `authorization` header it saw. */
+ *  headers it saw. */
 async function fake(
   t: TestContext,
   reply: (res: ServerResponse, path: string) => void,
-): Promise<DaemonAddress & { auth: (string | undefined)[] }> {
-  const auth: (string | undefined)[] = [];
+): Promise<DaemonAddress & { seen: IncomingHttpHeaders[] }> {
+  const seen: IncomingHttpHeaders[] = [];
   const server = createServer((req, res) => {
-    auth.push(req.headers.authorization);
+    seen.push(req.headers);
     reply(res, req.url ?? "/");
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
   t.after(() => server.close());
-  return { port: (server.address() as AddressInfo).port, token: "tok", auth };
+  return { port: (server.address() as AddressInfo).port, token: "tok", seen };
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) =>
@@ -52,7 +57,26 @@ const version = (major: number, minor: number) => (res: ServerResponse) =>
 test("the same version passes silently, with the token sent", async (t) => {
   const d = await fake(t, version(API_VERSION.major, API_VERSION.minor));
   assert.equal(await checkVersion(d), undefined);
-  assert.deepEqual(d.auth, ["Bearer tok"]);
+  assert.deepEqual(
+    d.seen.map((h) => h.authorization),
+    ["Bearer tok"],
+  );
+});
+
+test("request keeps the caller's headers in every form fetch takes", async (t) => {
+  const d = await fake(t, (res) => res.end());
+  for (const headers of [
+    { "last-event-id": "3" },
+    new Headers({ "last-event-id": "3" }),
+    [["last-event-id", "3"]] as [string, string][],
+  ]) {
+    await (await request(d, "/x", { headers })).text();
+  }
+  for (const h of d.seen) {
+    assert.equal(h["last-event-id"], "3");
+    assert.equal(h.authorization, "Bearer tok");
+  }
+  assert.equal(d.seen.length, 3);
 });
 
 test("a different minor is a warning that names both versions", async (t) => {
@@ -122,7 +146,10 @@ test("a non-404 /version refusal keeps the daemon's message", async (t) => {
   await assert.rejects(checkVersion(d), (err) => {
     assert.ok(err instanceof VersionRefused);
     assert.ok(err instanceof StreamClosed);
-    assert.equal(err.message, "missing or wrong token");
+    assert.equal(
+      err.message,
+      "the daemon refused GET /version: missing or wrong token",
+    );
     return true;
   });
 });
@@ -197,7 +224,15 @@ test("daemon.json: missing, unready or an address", async (t) => {
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = join(dir, "daemon.json");
   assert.equal(await readDaemonFile(file), "missing");
-  for (const text of ["null", "{", '{"port":1}', '{"port":0,"token":"x"}']) {
+  for (const text of [
+    "null",
+    "{",
+    '{"port":1}',
+    '{"port":0,"token":"x"}',
+    '{"port":-1,"token":"x"}',
+    '{"port":1.5,"token":"x"}',
+    '{"port":65536,"token":"x"}',
+  ]) {
     await writeFile(file, text);
     assert.equal(await readDaemonFile(file), "unready", text);
   }

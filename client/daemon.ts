@@ -67,33 +67,29 @@ export async function readDaemonFile(
   }
   const { port, token } = holder;
   if (
-    typeof port !== "number" ||
-    !port ||
+    !Number.isInteger(port) ||
+    (port as number) < 1 ||
+    (port as number) > 65535 ||
     typeof token !== "string" ||
     !token
   ) {
     return "unready";
   }
-  return { port, token };
+  return { port: port as number, token };
 }
 
 /** One request, with the token on it. A body is JSON: the daemon refuses any
- *  other type with a 415 (M5-3). */
+ *  other type with a 415 (M5-3). `init.headers` may take any form `fetch`
+ *  takes: an object, a `Headers` or a list of pairs. */
 export function request(
   d: DaemonAddress,
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
-  return fetch(`http://127.0.0.1:${d.port}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers as Record<string, string> | undefined),
-      authorization: `Bearer ${d.token}`,
-      ...(init?.body === undefined
-        ? {}
-        : { "content-type": "application/json" }),
-    },
-  });
+  const headers = new Headers(init?.headers);
+  headers.set("authorization", `Bearer ${d.token}`);
+  if (init?.body !== undefined) headers.set("content-type", "application/json");
+  return fetch(`http://127.0.0.1:${d.port}${path}`, { ...init, headers });
 }
 
 export type Reply<T> =
@@ -173,7 +169,9 @@ export async function checkVersion(
           "update the daemon",
       );
     }
-    throw new VersionRefused(r.error.message);
+    throw new VersionRefused(
+      `the daemon refused GET /version: ${r.error.message}`,
+    );
   }
   const theirs = r.body?.apiVersion;
   if (

@@ -877,7 +877,10 @@ async function attachRun(): Promise<number> {
   const first = await findDaemon();
   if (!first) return 1;
   // The token of the last daemon whose version passed (B5). A restart brings
-  // a new token, and maybe a new version.
+  // a new token, and maybe a new version. The check runs when the stream
+  // connects, not on every call: a permission answer sent between a restart
+  // and the next connect is not checked. At worst it fails and prints, and
+  // the connect that follows checks the new daemon.
   let checked = first.token;
   // `daemon.json` is read again on every call: a daemon that restarts while
   // this is attached has a new token, and maybe a new port (M5-6).
@@ -899,6 +902,8 @@ async function attachRun(): Promise<number> {
   // ponytail: one narrow window remains. A file read just before a restart
   // on a fixed port meets the new daemon with the old token. That needs the
   // whole restart inside one read-to-fetch gap. Retry on 401 if it is seen.
+  // The window covers the version check below too: a 401 there is a
+  // `VersionRefused`, and it also ends the stream.
   // A new token is checked before its stream opens, and a different `major`
   // is a `VersionRefused`, which ends the stream rather than retries it.
   const connect: Connect = async (after, signal) => {
