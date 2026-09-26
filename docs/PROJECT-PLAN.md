@@ -538,12 +538,16 @@ the paint now lives in the TUI.
 - **M4-4 — notifications and polish**: bell and desktop attention for a waiting
   participant, transcript search, and the block-splitting optimisation if the markdown
   re-parse cost grows.
+- **M4-5 — room and roster commands** (added 2026-09-26): open and dismiss a room; add,
+  remove and rename a participant, with its role, mode and base branch; cancel a turn;
+  change a mode. Each command calls one documented route. M6-11a and M6-11b add the merge
+  commands on top of it.
 - **Deferred to M5+** — composing and dispatching runs from the TUI. Named here because
   it is the stated trajectory and it is why M2's API has to be complete rather than
   observability-only. Not built at M4.
 
 **M4 is numbered before M5 and M6 and built after both.** M4-1 needs the spike on master
-(M6-0) and the shared client module (M5-10); the numbering is historical, from when M4 was
+(M6-0) and the shared client transport (M5-10a); the numbering is historical, from when M4 was
 the browser dashboard.
 
 ---
@@ -584,9 +588,10 @@ an internal `RunState` type to understand what it sees.
 - **The shared client module** — `client/` owns the DTOs, the HTTP client, the SSE parser
   and a pure reducer; `attach` is refactored onto it with no visible behaviour change, and
   `chat.ts` follows at M4-1. Two client implementations exist today and drift without this.
-- **Conformance and the v1 freeze** — contract tests that treat the daemon as an external
-  process and fail when a DTO field is renamed. The freeze note names what may change only
-  additively.
+  **Split 2026-09-26:** the transport (M5-10a) serves runs and rooms and is on the TUI's
+  path; the run reducer (M5-10b) is not. The room reducer is M6-10.
+- **Conformance** — contract tests that treat the daemon as an external process and fail
+  when a DTO field is renamed. **No freeze while the project is private** (2026-09-26).
 
 ---
 
@@ -630,11 +635,15 @@ on the same session with the first turn's context kept, on all four harnesses
   `kapelle/<roomId>/<participantId>`. Nothing is inherited and no checkout is shared, so
   parallel turns are safe. **The participant commits its own branch; the supervisor never
   commits.** A participant may fork from another participant's branch, which is what forces
-  the merge rework: `core/merge.ts` assumes one base per run.
+  the merge rework: `core/merge.ts` assumes one base per run. **Amended 2026-09-26:** the
+  TUI merges too, through daemon routes: a fast-forward from one participant to another
+  (R45) and a participant into the main checkout (R47).
 - **Persistence and restart** — `stateDirFor(root)/rooms/<roomId>/`. A restored room comes
   back `paused`: every participant `paused`, harness stopped, history and branch intact. A
-  participant revives on its next message with a fresh session (Half A); `session/load`
-  (Half B) stays deferred and capability-gated.
+  participant revives on its next message with a fresh session (Half A). **Amended
+  2026-09-26:** a shutdown cancels each busy turn first, so it leaves a participant as a
+  cancel does; `session/load` (Half B, M6-7b) keeps its memory across the restart, after
+  the M0-9 probe. A participant stopped by force during a turn reads `killed` (R46).
 - **Room CLI and bridges** — `kapelle chat` runs the same HTTP-only binary; a bridge is a
   local process that subscribes to a stream and answers permissions. **No chat SDK enters
   the daemon.**

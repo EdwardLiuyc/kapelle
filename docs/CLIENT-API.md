@@ -121,7 +121,8 @@ changes each one.
 
 **Planned, not built yet:** cancel one task (M5-8).
 
-Version 1 stops changing at story M5-11. After that, only additions are allowed.
+No version is frozen yet. The project is private, so a freeze waits until a second client
+needs one. Until then, a change to a stable part still bumps the version.
 
 ### Types for TypeScript clients
 
@@ -929,18 +930,19 @@ room. `409` `room_closed` when the room was already closed.
 ### Words for the room lifecycle (planned)
 
 These words are fixed now, so every client uses the same ones. Most of them are not
-built yet. M6-2 and M6-7 build them.
+built yet. M6-2 and M6-7a build them.
 
 | Word | Who does it | Room after | Harness | Work on disk |
 | --- | --- | --- | --- | --- |
 | dismiss | a person | `dismissed`, final | stopped | branch and checkout kept |
 | delete | a person | gone | stopped | removed; refused with `409` while a checkout has work that nobody committed |
 | pause | the machine (shutdown, reboot) | `paused` | stopped | branch and checkout kept |
-| resume | the next message to a paused or exited participant | `active` | started again in its own checkout | untouched |
+| resume | the next message to a paused, killed or exited participant | `active` | started again in its own checkout | untouched |
+| kill | the machine, during a turn (crash, harness death, a cancel that does not end) | participant `killed`; the room reads `paused` after a crash or a shutdown, and stays `active` when only the harness died | stopped by force | kept; may not match the harness's memory |
 
 A paused room can be dismissed or deleted as it is. Neither word starts a harness first.
-A room where every participant has `exited` still reads `active`, because the next
-message brings each one back.
+A room whose participants have all `exited`, or were `killed` while the daemon stayed up,
+still reads `active`, because the next message brings each one back.
 
 Today's `DELETE /rooms/:id` is **dismiss**. The status it reports is still `closed`.
 
@@ -955,7 +957,7 @@ room              id, cwd, title, base, createdAt, updatedAt, status
 participant       id, name, role?, harness, mode, purpose, settings,
                   branch, worktree, baseSha,
                   sessionId, resumed?: "loaded" | "fresh",
-                  status: idle | busy | exited | paused | dismissed
+                  status: idle | busy | exited | paused | killed | dismissed
 room list         [{id, cwd, title, status, updatedAt,
                     participants: [{id, name, role?, status}]}]
 room detail       the room fields above, plus every participant in full
