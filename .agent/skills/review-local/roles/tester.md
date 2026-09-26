@@ -47,5 +47,7 @@ If this change broke, would the tests catch it?
 
 ## Not this role
 
+If the owner role named here is not selected, report the finding in this role instead.
+
 Bugs in the product code. If a broken line shows a real bug, leave it to the developer, and
 say which test would have caught it.

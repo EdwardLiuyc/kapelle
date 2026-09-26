@@ -10,7 +10,7 @@ This is a discovery shim, not the skill. The procedure is harness-neutral and li
 
 **Read that file now and follow it** — resolve the path from the repository root, not from
 this shim's directory — passing through whatever arguments came with the invocation
-(issue number, `--role`, `--base`, `--repo`, focus text).
+(issue number, `--role`, `--base`, focus text).
 
 Keep edits in that file. Anything harness-specific added here would apply to pi and
 silently not the other harnesses.

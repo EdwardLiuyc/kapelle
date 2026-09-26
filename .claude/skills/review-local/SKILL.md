@@ -9,7 +9,7 @@ This is a discovery shim, not the skill. The procedure is harness-neutral and li
 `.agent/skills/review-local/SKILL.md`, so every agent runs the same one.
 
 **Read `.agent/skills/review-local/SKILL.md` now and follow it**, passing through whatever
-arguments came with the invocation (issue number, `--role`, `--base`, `--repo`, focus text).
+arguments came with the invocation (issue number, `--role`, `--base`, focus text).
 
 Keep edits in that file. Anything harness-specific added here would apply to one agent and
 silently not the others.

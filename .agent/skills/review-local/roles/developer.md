@@ -44,5 +44,7 @@ A D1 to D4 finding needs no run. It is `confirmed` when you can point to the lin
 
 ## Not this role
 
+If the owner role named here is not selected, report the finding in this role instead.
+
 - Test coverage and test quality. If you see a gap, leave it to the tester.
 - Anything an attacker can reach. Leave it to the security role.

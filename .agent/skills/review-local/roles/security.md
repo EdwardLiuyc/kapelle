@@ -46,6 +46,8 @@ test.
 
 ## Not this role
 
+If the owner role named here is not selected, report the finding in this role instead.
+
 - Bugs that need no attacker. Leave them to the developer.
 - Test coverage. If no test covers an attack, say which test would have caught it. The
   tester owns the gap.
