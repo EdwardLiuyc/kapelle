@@ -27,14 +27,17 @@ import {
   realpath,
   writeFile,
 } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 const execFile = promisify(execFileCb);
 const git = async (cwd: string, ...args: string[]) =>
   (await execFile("git", args, { cwd })).stdout.trim();
 
+import { API_VERSION } from "../client/contract.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import {
   gitRepo,
@@ -442,6 +445,96 @@ test("run --detach against a stale daemon record is one line, not a stack", asyn
   assert.equal(r.stdout, "");
   assert.match(r.stderr, /^error: /m);
   assert.doesNotMatch(r.stderr, /TypeError|triggerUncaughtException/);
+});
+
+// --- the API version (M5-10a, #142) ------------------------------------------
+
+/**
+ * A fake daemon that speaks `major.minor`, named in `runtime`'s daemon.json
+ * with `token`. `routes` answers anything but `GET /version`; the default is
+ * an empty run list, which is all `ps` needs.
+ */
+async function fakeDaemon(
+  t: TestContext,
+  runtime: string,
+  token: string,
+  [major, minor]: [number, number],
+  routes: (path: string, res: ServerResponse) => void = (_, res) =>
+    void res.end("[]"),
+) {
+  const server = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/version") {
+      res.end(
+        JSON.stringify({ apiVersion: { major, minor }, capabilities: [] }),
+      );
+    } else {
+      routes(req.url ?? "/", res);
+    }
+  });
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const port = (server.address() as AddressInfo).port;
+  const write = () =>
+    writeFile(
+      join(runtime, "kapelle", "daemon.json"),
+      JSON.stringify({ pid: process.pid, port, token }),
+      { mode: 0o600 },
+    );
+  await mkdir(join(runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  await write();
+  return { write };
+}
+
+test("a daemon with a different API major is refused, one with a different minor warns", async (t) => {
+  const { major, minor } = API_VERSION;
+  const ps = async (version: [number, number]) => {
+    const runtime = await tempDir(t);
+    await fakeDaemon(t, runtime, "tok", version);
+    return spawnCli(t, ["ps"], "cli.ts", { XDG_RUNTIME_DIR: runtime }).done;
+  };
+
+  const refused = await ps([major + 1, 0]);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stderr, /^error: .*update the client or the daemon/m);
+
+  // `--quiet` is not passed, but the warning is on stderr either way.
+  const warned = await ps([major, minor + 1]);
+  assert.equal(warned.code, 0, warned.stderr);
+  assert.equal(warned.stderr.match(/something was added/g)?.length, 1);
+
+  const same = await ps([major, minor]);
+  assert.equal(same.code, 0);
+  assert.equal(same.stderr, "");
+});
+
+test("attach checks the version again after a restart, and stops on a new major", async (t) => {
+  const runtime = await tempDir(t);
+  const { major, minor } = API_VERSION;
+  // The second daemon exists before the first cuts its stream, so attach's
+  // next try meets its token: a restart that brings a new version.
+  const second = await fakeDaemon(t, runtime, "two", [major + 1, 0]);
+  await fakeDaemon(t, runtime, "one", [major, minor], (path, res) => {
+    if (path === "/runs/r1") {
+      res.end(JSON.stringify({ id: "r1", status: "running", tasks: [] }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const event = { seq: 1, agent: "", update: { sessionUpdate: "x" } };
+    res.write(`id: 1\ndata: ${JSON.stringify(event)}\n\n`);
+    void second.write().then(() => res.destroy());
+  });
+
+  const r = await spawnCli(t, ["attach", "r1"], "cli.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  }).done;
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(r.stdout, /attached to r1/);
+  assert.match(r.stderr, /^error: .*update the client or the daemon/m);
+  assert.doesNotMatch(r.stderr, /attach again/);
 });
 
 test("one asking task with no TTY runs as safe, and says so", async (t) => {

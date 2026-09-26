@@ -2223,6 +2223,9 @@ calls onto it. M4-1 moves `chat.ts`'s `Daemon` and `api` onto it.
 different `major` is refused and a different `minor` warns, and the module reaches nothing
 under `core/` or `protocol/` at runtime.
 Decisions: B5, B6, F3, K6. (B6 settled as (a). F3 settled by M5-6.)
+**Decided 2026-09-26 (#142):** K6 is (a), no client id. `attach` checks the version
+again when `daemon.json` names a new token, since a restart is when a new version arrives.
+Every daemon verb moves onto `client/daemon.ts`, not only `attach`.
 
 **M5-10b · Run reducer and `attach` on it · M · needs M5-10a, M5-2, M5-4, M5-5**
 A pure run reducer in `client/`: task status, joined prose, pending permission, final
