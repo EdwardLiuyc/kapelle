@@ -9,18 +9,33 @@
  * `--file`, because the run file answers those per task.
  *
  * `--detach` posts the run to the daemon instead, and `attach`, `ps` and
- * `daemon add` talk to that daemon through `daemonApi()`, the one reader of
- * `daemon.json`. `attach` rebuilds the `--file` view from the event stream
- * alone, because a restored run has no `report`. The verdict is not the
- * view's: the settled run status on `GET /runs/:id` wins whenever the daemon
- * has one (M5-5), and `--task` answers with its own card (`TASK_STATUSES`).
+ * `daemon add` talk to that daemon through `client/daemon.ts`; `findDaemon()`
+ * is where each of them starts, and it checks the API version. `attach`
+ * rebuilds the `--file` view from the event stream alone, because a restored
+ * run has no `report`. The verdict is not the view's: the settled run status
+ * on `GET /runs/:id` wins whenever the daemon has one (M5-5), and `--task`
+ * answers with its own card (`TASK_STATUSES`).
  *
  * ^C sends `session/cancel`, waits 2 s, then stops the harness, and the
  * process exits only once the harness is gone.
  */
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { RunStatus } from "./client/contract.ts";
+import type {
+  PendingDecision,
+  RepoAdded,
+  RunAccepted,
+  RunListEntry,
+  RunStatus,
+} from "./client/contract.ts";
+import {
+  call,
+  checkVersion,
+  type DaemonAddress,
+  readDaemonFile,
+  request,
+  VersionRefused,
+} from "./client/daemon.ts";
 import { type Connect, followEvents } from "./client/stream.ts";
 import { resolveRunDefaults, warnUnknownConfigEnv } from "./core/config.ts";
 import { createEventBus } from "./core/events.ts";
@@ -748,9 +763,6 @@ function printTask(task: Card): void {
   if (prose) console.log(prose);
 }
 
-/** A request to the running daemon, with its token already on it. */
-type DaemonApi = (path: string, init?: RequestInit) => Promise<Response>;
-
 // A declaration, not a `const`: the commands at the top of this file run
 // before a `const` down here is set.
 function daemonFile(): string {
@@ -758,82 +770,23 @@ function daemonFile(): string {
 }
 
 /**
- * `daemon.json`'s port and token. `"missing"` when there is no file — no
- * daemon, or one that stopped cleanly and removed it — and `"unready"` when
- * the file has no port or token: a daemon between its claim and its listen,
- * or a malformed file.
- */
-async function daemonHolder(): Promise<
-  { port: number; token: string } | "missing" | "unready"
-> {
-  let text: string;
-  try {
-    text = await readFile(daemonFile(), "utf8");
-  } catch {
-    return "missing";
-  }
-  let holder: { port?: unknown; token?: unknown } = {};
-  try {
-    const parsed: unknown = JSON.parse(text);
-    // A non-object (`null`, `[]`, `42`) is as unready as a missing port: it
-    // must fall through to the check below, not throw on destructuring.
-    if (typeof parsed === "object" && parsed !== null) {
-      holder = parsed as { port?: unknown; token?: unknown };
-    }
-  } catch {
-    // Malformed: unready, below.
-  }
-  const { port, token } = holder;
-  if (
-    typeof port !== "number" ||
-    !port ||
-    typeof token !== "string" ||
-    !token
-  ) {
-    return "unready";
-  }
-  return { port, token };
-}
-
-function apiFor({ port, token }: { port: number; token: string }): DaemonApi {
-  return (path, init) =>
-    fetch(`http://127.0.0.1:${port}${path}`, {
-      ...init,
-      headers: {
-        ...(init?.headers as Record<string, string> | undefined),
-        authorization: `Bearer ${token}`,
-        // Every body this CLI sends is JSON, and the daemon refuses any other
-        // type with a 415 (M5-3).
-        ...(init?.body === undefined
-          ? {}
-          : { "content-type": "application/json" }),
-      },
-    });
-}
-
-/**
  * The daemon named in `daemon.json`, or `undefined` with the reason printed.
- * Every verb that talks to the daemon reads it here, so none of them can
- * disagree about what "no daemon is listening" means.
+ * Every verb that talks to the daemon starts here, so none of them can
+ * disagree about what "no daemon is listening" means. It also checks the API
+ * version (B5): a different `major` throws, a different `minor` warns.
  */
-async function daemonApi(): Promise<DaemonApi | undefined> {
-  const holder = await daemonHolder();
-  if (typeof holder === "string") {
+async function findDaemon(): Promise<DaemonAddress | undefined> {
+  const d = await readDaemonFile(daemonFile());
+  if (typeof d === "string") {
     console.error(
       `no daemon is listening (${daemonFile()} is missing or not ready). ` +
         "Start one with: kapelle daemon start",
     );
     return undefined;
   }
-  return apiFor(holder);
-}
-
-/** The message of the daemon's `{error: {code, message}}` for a refusal. */
-async function refusalOf(res: Response): Promise<string> {
-  const body = (await res.json().catch(() => ({}))) as {
-    error?: { message?: string };
-  };
-  return body.error?.message ?? `HTTP ${res.status}`;
+  const warning = await checkVersion(d);
+  if (warning) console.error(`! ${warning}`);
+  return d;
 }
 
 /**
@@ -846,17 +799,17 @@ async function refusalOf(res: Response): Promise<string> {
 async function detachRun(path: string): Promise<number> {
   const run = await loadRunFile(path);
   if (run === undefined) return 1;
-  const api = await daemonApi();
-  if (!api) return 1;
-  const res = await api("/runs", {
+  const d = await findDaemon();
+  if (!d) return 1;
+  const r = await call<RunAccepted>(d, "/runs", {
     method: "POST",
-    body: JSON.stringify({ cwd: resolve(flag("cwd", process.cwd())), run }),
+    body: { cwd: resolve(flag("cwd", process.cwd())), run },
   });
-  if (!res.ok) {
-    console.error(`error: ${await refusalOf(res)}`);
+  if (!r.ok) {
+    console.error(`error: ${r.error.message}`);
     return 1;
   }
-  const { id } = (await res.json()) as { id: string };
+  const { id } = r.body;
   console.log(id);
   if (!quiet) {
     // The ids come from the file as sent: the 202 says the daemon's
@@ -876,20 +829,14 @@ async function detachRun(path: string): Promise<number> {
  * under it (M2-10, #121). A finished run's status is its verdict.
  */
 async function listRuns(): Promise<number> {
-  const api = await daemonApi();
-  if (!api) return 1;
-  const res = await api("/runs");
-  if (!res.ok) {
-    console.error(`error: ${await refusalOf(res)}`);
+  const d = await findDaemon();
+  if (!d) return 1;
+  const r = await call<RunListEntry[]>(d, "/runs");
+  if (!r.ok) {
+    console.error(`error: ${r.error.message}`);
     return 1;
   }
-  const runs = (await res.json()) as {
-    id: string;
-    cwd: string;
-    status: string;
-    tasks?: { id: string; status: string }[];
-  }[];
-  for (const run of runs) {
+  for (const run of r.body) {
     console.log(`${run.id}  ${run.status}  ${run.cwd}`);
     for (const task of run.tasks ?? []) {
       console.log(`  ${task.id}  ${task.status}`);
@@ -927,13 +874,21 @@ async function attachRun(): Promise<number> {
   // every task, so a one-task view keeps them.
   const shown = (taskId: string) =>
     !only || taskId === only || taskId === "run";
-  if (!(await daemonApi())) return 1;
+  const first = await findDaemon();
+  if (!first) return 1;
+  // The token of the last daemon whose version passed (B5). A restart brings
+  // a new token, and maybe a new version. The check runs when the stream
+  // connects, not on every call: a permission answer sent between a restart
+  // and the next connect is not checked. At worst it lands on a daemon whose
+  // contract has changed; the connect that follows refuses that daemon and
+  // ends the stream.
+  let checked = first.token;
   // `daemon.json` is read again on every call: a daemon that restarts while
   // this is attached has a new token, and maybe a new port (M5-6).
-  const api: DaemonApi = async (p, init) => {
-    const holder = await daemonHolder();
-    if (typeof holder === "string") throw new Error("no daemon is listening");
-    return apiFor(holder)(p, init);
+  const daemon = async (): Promise<DaemonAddress> => {
+    const d = await readDaemonFile(daemonFile());
+    if (typeof d === "string") throw new Error("no daemon is listening");
+    return d;
   };
   const path = `/runs/${encodeURIComponent(id)}`;
   // Stops when `daemon.json` is gone, which is a clean stop (F3). After a
@@ -948,11 +903,20 @@ async function attachRun(): Promise<number> {
   // ponytail: one narrow window remains. A file read just before a restart
   // on a fixed port meets the new daemon with the old token. That needs the
   // whole restart inside one read-to-fetch gap. Retry on 401 if it is seen.
+  // The window covers the version check below too: a 401 there is a
+  // `VersionRefused`, and it also ends the stream.
+  // A new token is checked before its stream opens, and a different `major`
+  // is a `VersionRefused`, which ends the stream rather than retries it.
   const connect: Connect = async (after, signal) => {
-    const holder = await daemonHolder();
-    if (holder === "missing") return undefined;
-    if (holder === "unready") throw new Error("the daemon is starting");
-    return apiFor(holder)(`${path}/events`, {
+    const d = await readDaemonFile(daemonFile());
+    if (d === "missing") return undefined;
+    if (d === "unready") throw new Error("the daemon is starting");
+    if (d.token !== checked) {
+      const warning = await checkVersion(d, signal);
+      if (warning) console.error(`! ${warning}`);
+      checked = d.token;
+    }
+    return request(d, `${path}/events`, {
       signal,
       headers: { "last-event-id": String(after) },
     });
@@ -965,9 +929,9 @@ async function attachRun(): Promise<number> {
   // stream cut mid-run has no `_client_task_finished` for what it missed.
   let printed = 0;
   const refreshState = async (): Promise<AttachState> => {
-    const res = await api(path);
-    if (!res.ok) throw new Error(await refusalOf(res));
-    const state = (await res.json()) as AttachState;
+    const r = await call<AttachState>(await daemon(), path);
+    if (!r.ok) throw new Error(r.error.message);
+    const state = r.body;
     const notices = state.notices ?? [];
     for (const { taskId, text, kind } of notices.slice(printed)) {
       if (!shown(taskId)) continue;
@@ -987,9 +951,12 @@ async function attachRun(): Promise<number> {
   const answer = (agent: string, decision: ClientPermissionQueuedEvent) => {
     answering = answering
       .then(async () => {
-        const openRes = await api("/permissions");
-        const open = (await openRes.json()) as { id: string }[];
-        if (!open.some((p) => p.id === decision.id)) return;
+        const open = await call<PendingDecision[]>(
+          await daemon(),
+          "/permissions",
+        );
+        if (!open.ok) throw new Error(open.error.message);
+        if (!open.body.some((p) => p.id === decision.id)) return;
         if (!asker) {
           console.error(
             `! [${agent}] waiting on [${decision.kind}] ${decision.title} — ` +
@@ -1004,11 +971,12 @@ async function attachRun(): Promise<number> {
           toolCall: { kind: decision.kind, title: decision.title },
           options: [],
         });
-        const posted = await api(`/permissions/${decision.id}`, {
-          method: "POST",
-          body: JSON.stringify({ allow }),
-        });
-        if (!posted.ok) console.error(`error: ${await refusalOf(posted)}`);
+        const posted = await call(
+          await daemon(),
+          `/permissions/${decision.id}`,
+          { method: "POST", body: { allow } },
+        );
+        if (!posted.ok) console.error(`error: ${posted.error.message}`);
       })
       .catch((err) => console.error(`error: ${messageOf(err)}`));
   };
@@ -1090,6 +1058,10 @@ async function attachRun(): Promise<number> {
       }
     }
   } catch (err) {
+    if (err instanceof VersionRefused) {
+      console.error(`error: ${err.message}`);
+      return 1;
+    }
     if (!connected) {
       // A `runRun` throw before it opens a log (the only real setter of
       // `state.error`) leaves the record as the one place its reason survives.
@@ -1209,17 +1181,16 @@ async function runDaemonCommand(): Promise<number> {
     );
     return 1;
   }
-  const api = await daemonApi();
-  if (!api) return 1;
-  const res = await api("/repos", {
+  const d = await findDaemon();
+  if (!d) return 1;
+  const r = await call<RepoAdded>(d, "/repos", {
     method: "POST",
-    body: JSON.stringify({ path: resolve(rest[0] as string) }),
+    body: { path: resolve(rest[0] as string) },
   });
-  if (!res.ok) {
-    console.error(`error: ${await refusalOf(res)}`);
+  if (!r.ok) {
+    console.error(`error: ${r.error.message}`);
     return 1;
   }
-  const body = (await res.json()) as { root: string };
-  console.log(`added ${body.root}`);
+  console.log(`added ${r.body.root}`);
   return 0;
 }

@@ -785,7 +785,7 @@ story, and the story moves into `STORIES.md`.
 | B2 | Version scheme | (a) integer `apiVersion: 1` (b) semver (c) capability-only (d) date | **Decided 2026-09-22 (#133):** **amended to `major.minor`**, sent as `{"apiVersion": {"major": 1, "minor": 0}}` — two integers, so no client splits a string. `major` for a break, `minor` for an addition |
 | B3 | Version surface | (a) `GET /version` (b) `GET /` (c) response header (d) a + c | **Decided 2026-09-22 (#133):** (a) |
 | B4 | Capability list | endpoint names, feature flags, or both; exact names to fix here | **Decided 2026-09-22 (#133):** feature flags, additive, never removed within a major: `repos`, `runs`, `events`, `permissions`, `rooms` |
-| B5 | Mismatch behaviour | (a) refuse with 426 (b) warn and continue (c) best effort | **Decided 2026-09-22 (#133):** a client refuses a different `major` and warns on a different `minor`. Written in the doc; no client enforces it until M5-10a (split 2026-09-26) |
+| B5 | Mismatch behaviour | (a) refuse with 426 (b) warn and continue (c) best effort | **Decided 2026-09-22 (#133):** a client refuses a different `major` and warns on a different `minor`. `client/daemon.ts` enforces it since M5-10a (#142), and `attach` checks again after a restart |
 | B6 | Shared module location | (a) `client/contract.ts` (b) `protocol/contract.ts` (c) `api/` | **Decided 2026-09-22 (#133):** (a), `client/` for now |
 | B7 | Machine-readable schema | (a) TS types + contract tests (b) hand-written JSON Schema (c) OpenAPI | **Decided 2026-09-22 (#133):** (a). A JSON Schema can be added later for a client in another language; the daemon declares its runs and rooms with the types and checks the other replies with `satisfies` |
 | B8 | Conformance suite home | (a) `tests/contract/` (b) `integration/` (c) per-module tests only | **Decided 2026-09-22 (#133):** (a) |
@@ -881,7 +881,7 @@ story, and the story moves into `STORIES.md`.
 | K3 | Origin check | the M2-8 Host guard stays; no CORS because no browser UI | **Settled by spike** |
 | K4 | Static UI | the daemon stays API-only; `chat.ts` and the TUI own presentation | **Settled by spike** |
 | K5 | Bridge tokens | one operator token; bridge local | confirm |
-| K6 | Per-client id | (a) none (single operator) (b) optional `clientId` on writes | (a) now, (b) if audit needs it |
+| K6 | Per-client id | (a) none (single operator) (b) optional `clientId` on writes | **Decided 2026-09-26 (#142):** (a); (b) if an audit needs it |
 
 ### Participant runtime — settled by the spike
 

@@ -27,7 +27,8 @@
  * malformed event also throw: trying again gets the same answer. Only a clean
  * end of the body is the end of the stream.
  *
- * The SSE parser lives here too, so M5-10's shared module starts from it.
+ * The SSE parser lives here too. `daemon.ts` beside it is the rest of the
+ * transport (M5-10a): `daemon.json`, the HTTP calls and the version check.
  */
 
 import type { ErrorReply, EventLine } from "./contract.ts";
