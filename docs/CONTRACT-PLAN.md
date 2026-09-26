@@ -178,7 +178,6 @@ Needs are hard ordering only.
 | M5-10a | S | M5-3, M5-6 | Shared client transport: `daemon.json`, HTTP client (split 2026-09-26) |
 | M5-10b | M | M5-10a, M5-2, M5-4, M5-5 | Run reducer; `attach` refactored onto it (split 2026-09-26) |
 | M5-11 | M | M5-1..M5-6 | Conformance suite (no freeze, 2026-09-26) |
-| M0-9 | S | M0-1 | Probe: `session/load` into a new process, after a clean stop and after a kill |
 | M6-0 | M | — | Land the spike on master: rebase, reconcile with M2-3..M2-10, `chat.ts` experimental |
 | M6-1 | S | M6-0 | Design the room container on the landed runtime (no code) |
 | M4-1 | M | M6-0, M5-10a | pi-tui screen as the first shared-client consumer |
@@ -194,31 +193,14 @@ Needs are hard ordering only.
 | M6-6b | L | M6-6a | Merge rework for per-participant bases (split 2026-09-26) |
 | M6-7a | M | M6-2, M2-6 | Persistence, restart, fresh revive, `killed` (split 2026-09-26) |
 | M6-7b | M | M6-7a, M0-9 | `session/load` for a paused participant (split 2026-09-26) |
+| M0-9 | S | M0-1 | Probe: `session/load` into a new process, after a clean stop and after a kill |
 | M6-8 | M | M6-4 | Orchestrator delegation — deferred by R2 |
 | M6-9 | S | M6-5, M4-2 | Room CLI and bridge readiness |
 | M6-10 | M | M6-4, M5-10a | Room reducer in `client/` |
 | M6-11a | S | M6-6a, M4-5 | Fast-forward one participant to another, from the TUI |
 | M6-11b | S | M6-6b, M4-5 | Land a participant into the main checkout, from the TUI |
 
-Critical path (updated 2026-09-26). M6-0, M6-1 and M5-1..M5-6 are done.
-
-```text
-M5-10a ─ M6-2 ─ M6-6a ─ M6-3 ─ M6-4 ─┬─ M6-10 ─ M4-2 ─ M4-5 ─ M6-11a
-                                      ├─ M6-5 ─ M4-3
-                                      ├─ M6-7a ─ M6-7b
-                                      └─ M6-8 (deferred by R2)
-M6-6a ─ M6-6b ─ M6-11b
-```
-
-The edges the drawing leaves out: **M4-1** needs M6-0 and M5-10a, and **M4-2** needs M4-1
-too. **M4-5** also needs M6-5. **M4-3** also needs M4-2 and M5-4. **M6-7b** also needs the
-**M0-9** probe. **M6-11b** also needs M4-5. **M4-4** needs M4-2. **M6-9** needs M6-5 and
-M4-2. **M6-7a** needs only M6-2, but goes after M6-4, which changes the log line it saves.
-
-Off this path, because the TUI shows no run (R16): **M5-7**, **M5-8**, **M5-9** and
-**M5-10b** (which needs M5-10a), and **M5-11**, which needs M5-1..M5-6 and adds an
-idempotency test *if* M5-7 has landed — a condition, not a dependency. **M5-10a is the
-gate**: both M4-1 and M6-2 need it, and it is ready now.
+Critical path: `docs/STORIES.md` § Critical path owns it, so there is one copy.
 
 ## M5 stories
 
@@ -406,7 +388,7 @@ from recorded event streams for live, restored, cancelled and replay cases.
 
 Decisions: **B6, B7, F3, K6**.
 
-### M5-11 · Conformance suite and v1 freeze · M · needs M5-1..M5-6
+### M5-11 · Conformance suite · M · needs M5-1..M5-6
 
 **Amended 2026-09-26:** no freeze while the project is private. The suite stays.
 
@@ -414,8 +396,8 @@ Contract tests that treat the daemon as an external process: start it, speak doc
 requests, assert documented shapes, and fail on undocumented field changes.
 
 Deliverables: a `tests/contract/` suite with a minimal mock client and `mock-agent`;
-golden DTO fixtures; a replay test; a permission race test; an idempotency test if M5-7
-lands; and the v1 freeze note naming what may change only additively.
+golden DTO fixtures; a replay test; a permission race test; and an idempotency test if
+M5-7 lands.
 
 *Done when* CI runs the suite with no credentials, and the suite fails when a DTO field
 is renamed.
@@ -427,7 +409,7 @@ Decisions: **B8, M1–M6**.
 M4 is no longer the browser dashboard. `spike/chat-tui` already proves the screen; these
 stories move it onto the shared client and add what the spike deliberately left out.
 
-### M4-1 · pi-tui screen as the first shared-client consumer · M · needs M6-0, M5-10
+### M4-1 · pi-tui screen as the first shared-client consumer · M · needs M6-0, M5-10a
 
 The spike screen becomes a consumer of `client/`. Its `Daemon`, `api`, `follow`,
 `RoomView` and `LogEvent` move into the module; `chat.ts` keeps only the screen and the
@@ -515,7 +497,7 @@ S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
 
 **Only `chat-mvp` lands (decided 2026-09-21, #144).** `spike/chat-tui` is left alone —
 not landed and not rebased: M4-1 is the story that ratifies `@earendil-works/pi-tui`
-0.85.1 under M1c-7's rule and dedupes its nested `marked`, and it needs M5-10 first.
+0.85.1 under M1c-7's rule and dedupes its nested `marked`, and it needs M5-10a first.
 Landing the screen here would ratify a second runtime dependency ahead of the story that
 vets it, so `package.json` keeps `marked` as its only one. Rebasing it here as well would
 be the same work done twice, since its base moves again when M6-0 reaches master.
@@ -589,7 +571,7 @@ picked up without re-opening the model.
 
 Decisions: **R1–R23, R31–R44, S10, S12, S13**.
 
-### M6-2 · Room container: roster model, empty/starter, DTOs · M · needs M6-1, M5-1, M5-10
+### M6-2 · Room container: roster model, empty/starter, DTOs · M · needs M6-1, M5-1, M5-10a
 
 Define the room record: repo, roster, created/updated, title; `POST /rooms` accepts an
 empty room or a starter participant (the orchestrator) and answers `201` once the session
@@ -803,7 +785,7 @@ story, and the story moves into `STORIES.md`.
 | B2 | Version scheme | (a) integer `apiVersion: 1` (b) semver (c) capability-only (d) date | **Decided 2026-09-22 (#133):** **amended to `major.minor`**, sent as `{"apiVersion": {"major": 1, "minor": 0}}` — two integers, so no client splits a string. `major` for a break, `minor` for an addition |
 | B3 | Version surface | (a) `GET /version` (b) `GET /` (c) response header (d) a + c | **Decided 2026-09-22 (#133):** (a) |
 | B4 | Capability list | endpoint names, feature flags, or both; exact names to fix here | **Decided 2026-09-22 (#133):** feature flags, additive, never removed within a major: `repos`, `runs`, `events`, `permissions`, `rooms` |
-| B5 | Mismatch behaviour | (a) refuse with 426 (b) warn and continue (c) best effort | **Decided 2026-09-22 (#133):** a client refuses a different `major` and warns on a different `minor`. Written in the doc; no client enforces it until M5-10 |
+| B5 | Mismatch behaviour | (a) refuse with 426 (b) warn and continue (c) best effort | **Decided 2026-09-22 (#133):** a client refuses a different `major` and warns on a different `minor`. Written in the doc; no client enforces it until M5-10a (split 2026-09-26) |
 | B6 | Shared module location | (a) `client/contract.ts` (b) `protocol/contract.ts` (c) `api/` | **Decided 2026-09-22 (#133):** (a), `client/` for now |
 | B7 | Machine-readable schema | (a) TS types + contract tests (b) hand-written JSON Schema (c) OpenAPI | **Decided 2026-09-22 (#133):** (a). A JSON Schema can be added later for a client in another language; the daemon declares its runs and rooms with the types and checks the other replies with `satisfies` |
 | B8 | Conformance suite home | (a) `tests/contract/` (b) `integration/` (c) per-module tests only | **Decided 2026-09-22 (#133):** (a) |
@@ -993,7 +975,7 @@ no dependency relation between agents (R24–R30 retired).
 
 **Superseded 2026-09-22 (M5-1, #133):** the table and the record now live in
 `docs/CLIENT-API.md` §Rooms, which is the promise. This section stays as the history of
-how they were checked, and the implementation notes for M6-2 and M6-7 below still apply.
+how they were checked, and the implementation notes for M6-2 and M6-7a below still apply.
 
 Deliberately short. The routes are not restated here: R9(a) fixes them as nested, and the
 M6-2..M6-5 story bodies name them. What follows is the **check** that the decided rows can
@@ -1027,11 +1009,11 @@ precedent (`docs/STORIES.md:1800`): one field now, or a migration when Half B la
 `resumed` is absent until the participant has been revived; it is how a client tells a
 participant that kept its memory from one that did not.
 
-**Naming trap for M6-7.** `core/room.ts` already has an inner closure named `shutdown`
+**Naming trap for M6-7a.** `core/room.ts` already has an inner closure named `shutdown`
 that means *dismiss*, returned as `close()`, while `shutdown` in `daemon.ts` means the
 process dying. Same word, opposite meanings, one import apart. M6-2 renames: `close()`
 becomes `dismiss()`, and the part both verbs share becomes `teardown()` — cancel the live
-turn, stop the harness, close the log. M6-7 adds `pause()` and `resume()`, and pause differs
+turn, stop the harness, close the log. M6-7a adds `pause()` and `resume()`, and pause differs
 from dismiss in three places:
 
 - **Only dismiss releases the worktree.** `release(id, "keep")` is not inert: on an
@@ -1041,7 +1023,7 @@ from dismiss in three places:
   `release`. The harness is stopped, and nothing else holds the checkout.
 - **Resume reattaches the worktree; it does not acquire one.** `acquire` always runs
   `git worktree add -b` (`core/worktree.ts:289`), which fails when the branch or the path
-  already exists. M6-7 owns a reattach path that refills `held` from the persisted `branch`,
+  already exists. M6-7a owns a reattach path that refills `held` from the persisted `branch`,
   `worktree` and `baseSha` — fields the record above already carries.
 - **Resume reopens the log for appending.** `core/eventlog.ts` opens a new log with
   `flags: "w"`, which truncates (`:62`); `openEventLog` is read-only on purpose, and that
@@ -1089,7 +1071,7 @@ from dismiss in three places:
 - **Independent worktrees mean agents do not see each other's changes.** That is the
   price of no dependencies; collaboration on one file needs the human to route and merge,
   and `kapelle merge` must handle N branches with conflicts (R31).
-- **Chained bases (R35c) make the merge preflight wrong until M6-6 fixes it.**
+- **Chained bases (R35c) make the merge preflight wrong until M6-6b fixes it.**
   `core/merge.ts` measures every branch's diff from its own `baseSha` and assumes one base
   per run, so two participants on different bases can pass the overlap check and still have
   the squash replay the parent's work. This is the only new, untested git logic the room

@@ -2078,7 +2078,8 @@ the commands. Ratify `@earendil-works/pi-tui` 0.85.1 under M1c-7's rule (present
 only, worst failure cosmetic, pinned exactly), dedupe the nested `marked` 18.0.5 with an
 override to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
 loaded, try/catch-guarded, Shift+Enter only on Apple Terminal, never on Linux.
-*Done when* `chat.ts` imports `client/` and pi-tui and nothing else from the repository,
+*Done when* `chat.ts` imports `client/`, pi-tui and `core/runtime.ts` (for the
+`daemon.json` path, M5-10a) and nothing else from the repository,
 the import-boundary test says so, and the TTY test still leaves the transcript in
 scrollback.
 Decisions: S7, S8, S9, M6. (S8 settled as (a).)
@@ -2096,10 +2097,9 @@ Opening a participant's thread pre-fills `@name` in an empty composer; the timel
 pre-fills nothing. The filtered streams and the nested `messages` route are M6-4's, which
 is why this story needs M6-4. The resolver is its own module, `client/mention.ts`, never
 an export on `client/contract.ts`, so `daemon.ts` never imports a message parser; piped
-`chat.ts` uses the same module (S8). It is the first logic in `client/`, so this story
-changes the `chat.ts` import rule in `tests/daemon.test.ts` and `AGENTS.md` in one
-commit, and the widened test stays transitive: that module reaches nothing under `core/`
-or `protocol/` at runtime. The stall warning the badge reads is the one R38 creates: a
+`chat.ts` uses the same module (S8). **Amended 2026-09-26:** M4-1 already widened the
+`chat.ts` import rule to `client/`, so this story changes no rule; the test stays
+transitive, and this module reaches nothing under `core/` or `protocol/` at runtime. The stall warning the badge reads is the one R38 creates: a
 participant's watchdog warns, never cancels.
 *Done when* the timeline is the landing view, switching rows changes the filtered thread
 without losing a stream, a message starting `@name` reaches that participant, a message
@@ -2129,8 +2129,8 @@ Decisions: R19, R43, R38. (F9 dropped by M5-6, #138.)
 and switches, so no story let a person drive a room from the screen. Today `chat.ts` has
 only `new`, `attach`, `list` and `dismiss`, as shell verbs. This story adds, inside the
 TUI: open a room (empty, or with an orchestrator) and dismiss it; add a participant
-(harness, name, role, mode, and a base ref, so a reviewer can start from the developer's
-branch — M6-6a), remove it, rename it and change its role; cancel a participant's current
+(harness, name, role, mode, and a `base` ref, so a reviewer can start from the developer's
+branch — the field M6-3 adds), remove it, rename it and change its role; cancel a participant's current
 turn; and change its mode. Each command calls one documented route. A refusal shows its
 error code's message; the screen never guesses.
 *Done when* every command above reaches its route against `mock-agent.mjs`, and each
@@ -2158,7 +2158,7 @@ Decisions: A1–A7, B1–B10. **Closed for M5-1 (#133):** all now follow
 `docs/CONTRACT-PLAN.md` — A2 was decided 2026-09-20 and A3/A7 were settled by the
 `spike/chat-tui` spike, the rest on 2026-09-22 — except B2, which is `major.minor`
 rather than one integer, so B5 reads "warn on a minor difference, refuse a major one". No
-client checks the version in this story; M5-10 adds that.
+client checks the version in this story; M5-10a adds that.
 
 **M5-2 · Curated run DTOs · M · needs M5-1**
 `RunDto` and `TaskDto`, one shape for live and restored runs, mapped at the daemon edge.
@@ -2210,15 +2210,19 @@ half is on the TUI's path. The transport serves runs and rooms. The reducer it d
 task status, cards, the final result — is a **run** reducer, and a room has no task. The
 room reducer is M6-10.
 
-**M5-10a · Shared client transport · S · needs M5-3, M5-6**
-`client/` gains what every client needs before it reads one event: find the daemon through
-`daemon.json`, and an HTTP client that returns the typed reply or the `{error: {code,
-message}}` envelope. `client/stream.ts` (M5-6) is the SSE reader it pairs with. `attach`
-moves its discovery and HTTP calls onto it. M4-1 moves `chat.ts`'s `Daemon` and `api` onto
-it.
-*Done when* `attach` finds the daemon and makes every HTTP call through `client/`, and the
-module reaches nothing under `core/` or `protocol/` at runtime.
-Decisions: B6, F3, K6. (B6 settled as (a). F3 settled by M5-6.)
+**M5-10a · Shared client transport · S · needs M5-1, M5-3, M5-6**
+`client/` gains what every client needs before it reads one event: read `daemon.json`, an
+HTTP client that returns the typed reply or the `{error: {code, message}}` envelope, and
+the version check B5 asks for — refuse a different `major` of `GET /version`, warn on a
+different `minor`. `client/stream.ts` (M5-6) is the SSE reader it pairs with. **The caller
+passes the `daemon.json` path.** `cli.ts` and `chat.ts` get it from `core/runtime.ts`, as
+today, so the folder rule and its ownership check (`ours()`, which `stateDirFor` shares)
+keep one copy, and `client/` still imports nothing under `core/`. `attach` moves its HTTP
+calls onto it. M4-1 moves `chat.ts`'s `Daemon` and `api` onto it.
+*Done when* `attach` reads `daemon.json` and makes every HTTP call through `client/`, a
+different `major` is refused and a different `minor` warns, and the module reaches nothing
+under `core/` or `protocol/` at runtime.
+Decisions: B5, B6, F3, K6. (B6 settled as (a). F3 settled by M5-6.)
 
 **M5-10b · Run reducer and `attach` on it · M · needs M5-10a, M5-2, M5-4, M5-5**
 A pure run reducer in `client/`: task status, joined prose, pending permission, final
@@ -2258,7 +2262,7 @@ state moves out of `.kapelle/rooms/` to `stateDirFor(root)` (#129), and `childre
 takes S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
 **Only `chat-mvp` lands, and `spike/chat-tui` is left where it is** — not rebased here
 either, because M4-1 rebases it anyway and doing it twice buys nothing. M4-1 is where
-`@earendil-works/pi-tui` is ratified and its nested `marked` deduped, and it needs M5-10
+`@earendil-works/pi-tui` is ratified and its nested `marked` deduped, and it needs M5-10a
 first; `package.json` keeps `marked` as its only runtime dependency.
 **No new features** — one participant per room, `auto` only, no roster and no permission
 answering — and `chat.ts` ships marked **experimental**, so the room API is not a
@@ -2292,6 +2296,8 @@ its next message. `session/load` where the harness advertises it, otherwise a fr
 with the loss reported as `resumed: "fresh"`. **Half A** — revive with a fresh session — is
 M6-7 and needs no probe; **Half B** — `session/load` — stays deferred with S3(c). R37's
 `keep` is what made either answer possible: the checkout never left.
+**Amended 2026-09-26:** Half A is M6-7a, and Half B is no longer deferred: it is M6-7b,
+after the M0-9 probe (R42).
 
 **One word per idea, decided with it.** `dismiss` is a person ending a room
 (`POST /rooms/:id/dismiss`); `delete` throws it away (`DELETE /rooms/:id`, R18's own
@@ -2338,7 +2344,10 @@ Decisions: R1, R3, R9, R17, R21, R22, R33, R36, R44, S4, S13. (R22 settled: a ne
 **M6-3 · Participant lifecycle: add/remove/list, settings, names · M · needs M6-2, M6-6a**
 **Amended 2026-09-26:** a second participant needs a checkout of its own, and today a room
 has one (`core/room.ts`, `ROOM_TASK`). M6-6a gives each participant one, so this story
-needs it.
+needs it. The add body also takes `base`: a ref, or another participant's branch, which
+M6-6a's runtime already accepts. *Done when* two participants added through the route
+work in parallel without touching each other's files, and one added with the other's
+branch as `base` starts from that branch's head.
 `POST /rooms/:id/agents` with `{name, agent or cmd, mode, settings}`; list, get, remove,
 and rename — R10 grants it, so the story carries it: the display name is mutable, the
 opaque id and the branch name are not. Names match `^[A-Za-z0-9_-]{1,32}$` and are unique
@@ -2384,9 +2393,11 @@ and no checkout is shared (R24–R30 retired). This replaces the room's one chec
 in v1 (R40). Under R37 the participant commits its own branch, so the supervisor adds no
 commits of its own. Removing a participant keeps its branch and checkout, as dismiss does.
 No merge here: until M6-6b lands, a person lands a participant's branch with git by hand.
-*Done when* two participants work in parallel without touching each other's files, a
-participant added with another participant's branch as its base starts from that branch's
-head, and a room dismiss leaves every participant branch.
+*Done when* tests drive the room runtime (`core/room.ts`) directly, with no route: two
+participants work in parallel without touching each other's files, one given another's
+branch as its base starts from that branch's head, and a dismiss leaves every participant
+branch. The add route and its `base` field are M6-3's, and M6-3 proves the same through
+HTTP.
 Decisions: R6, R14, R35, R37.
 
 **M6-6b · Merge rework for per-participant bases · L · needs M6-6a**
@@ -2493,8 +2504,12 @@ Decisions: R8, R13, S10, S11.
 reviewer's commit. **Fast-forward only**: it works when the developer made no commits
 since, and it can never conflict. A daemon route does the move in the target's checkout,
 and a TUI command calls it. It refuses, by code, when the target is `busy` and when a
-fast-forward is not possible. It writes a `_client_` event to the room log, so every
-observer sees the move. The daemon tells the target agent nothing: the person does, in a
+fast-forward is not possible. **The move runs `git merge --ff-only` inside the target's
+checkout**, never `git update-ref`: the branch is checked out there, and moving only the
+ref leaves the index and files at the old commit, which the agent would then commit on
+top of. It writes a `_client_` event to the room log, so every observer sees the move.
+**Accepted consequence:** an `idle` target's harness is still alive, and its memory
+describes the files before the move. The daemon tells it nothing; the person does, in a
 message. **Open at pickup:** the route's path and name, and whether uncommitted work in
 the target's checkout is refused.
 *Done when* after the move the target's branch and checkout are at the source's commit, a
@@ -2507,6 +2522,8 @@ Decisions: R37, R45.
 This story adds a daemon route that runs the same M6-6b code for one participant, and a
 TUI command that calls it. It is the first time the **daemon**, not the CLI, writes to the
 operator's own checkout, so the route keeps every M6-6b preflight and refuses by code.
+That includes the check `core/merge.ts` already runs on the operator's checkout —
+uncommitted changes, or new commits, where a branch writes — which M6-6b keeps.
 *Done when* a participant's work lands in the main checkout from the TUI with the same
 result as `kapelle room merge --participant`, and a refused merge leaves nothing
 half-landed.
@@ -2523,7 +2540,7 @@ M0 ─ M1a ─ M1b ─ M1c ─ M2
   └─ M5-1..M5-6    (done: the contract document and the shared wire rules)
 ```
 
-**The path to the TUI (amended 2026-09-26).** Every story on it, in order:
+**The path to the TUI (amended 2026-09-26).** The spine, in order:
 
 ```text
 M5-10a ─ M6-2 ─ M6-6a ─ M6-3 ─ M6-4 ─┬─ M6-10 ─ M4-2 ─ M4-5 ─ M6-11a

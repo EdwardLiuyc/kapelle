@@ -930,7 +930,7 @@ room. `409` `room_closed` when the room was already closed.
 ### Words for the room lifecycle (planned)
 
 These words are fixed now, so every client uses the same ones. Most of them are not
-built yet. M6-2 and M6-7 build them.
+built yet. M6-2 and M6-7a build them.
 
 | Word | Who does it | Room after | Harness | Work on disk |
 | --- | --- | --- | --- | --- |
@@ -938,11 +938,11 @@ built yet. M6-2 and M6-7 build them.
 | delete | a person | gone | stopped | removed; refused with `409` while a checkout has work that nobody committed |
 | pause | the machine (shutdown, reboot) | `paused` | stopped | branch and checkout kept |
 | resume | the next message to a paused, killed or exited participant | `active` | started again in its own checkout | untouched |
-| kill | the machine, during a turn (crash, harness death, a cancel that does not end) | participant `killed`; room `paused` after a crash | stopped by force | kept; may not match the harness's memory |
+| kill | the machine, during a turn (crash, harness death, a cancel that does not end) | participant `killed`; the room reads `paused` after a crash or a shutdown, and stays `active` when only the harness died | stopped by force | kept; may not match the harness's memory |
 
 A paused room can be dismissed or deleted as it is. Neither word starts a harness first.
-A room where every participant has `exited` still reads `active`, because the next
-message brings each one back.
+A room where every participant has `exited` or is `killed` still reads `active`, because
+the next message brings each one back.
 
 Today's `DELETE /rooms/:id` is **dismiss**. The status it reports is still `closed`.
 
