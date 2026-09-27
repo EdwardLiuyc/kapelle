@@ -2083,6 +2083,18 @@ loaded, try/catch-guarded, Shift+Enter only on Apple Terminal, never on Linux.
 the import-boundary test says so, and the TTY test still leaves the transcript in
 scrollback.
 Decisions: S7, S8, S9, M6. (S8 settled as (a).)
+**Built 2026-09-27 (#47).** The spike is rebased; its `daemon.ts` and `CLAUDE.md` hunks
+were dropped, because master rewrote both. pi-tui 0.85.1 is ratified under M1c-7's rule
+and pinned exactly. 0.87.1 was out, but the spike measured 0.85.1, and a bump is its own
+change. `overrides` points pi-tui's `marked` at ours (`$marked`), so `npm ls marked`
+shows one copy. npm reads `overrides` only in the root project, so if kapelle were ever
+installed as a dependency, pi-tui would get its own `marked` again. That is two copies,
+and it still works. pi-tui ships two native helpers, both loaded lazily inside a
+try/catch: `darwin-modifiers.node` (Shift+Enter in Apple Terminal only) and
+`win32-console-mode.node` (Windows only). Linux loads neither. `chat.ts` now reads its
+room with `followEvents`. It reconnects after a cut only while the daemon still
+answers: a room does not survive a restart, so waiting for a new daemon would wait
+forever.
 
 **M4-2 · Room and roster sidebar, switching, unread badges · M · needs M4-1, M6-4, M6-10**
 **Amended 2026-09-26:** the screen state comes from M6-10's room reducer; this story only

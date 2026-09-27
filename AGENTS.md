@@ -27,8 +27,9 @@ source of truth.
 
 `kapelle` is a minimal [Agent Client Protocol](https://agentclientprotocol.com)
 **client**, in TypeScript with ES modules. Node ≥24, `"type": "module"`, no build step.
-It has one runtime dependency, `marked`, and it is used for presentation only
-(`core/markdown.ts`).
+It has two runtime dependencies, both for presentation only: `marked`
+(`core/markdown.ts`) and `@earendil-works/pi-tui` (the `chat.ts` screen). Both are
+pinned exactly, and an npm `overrides` entry keeps pi-tui on our `marked`.
 
 **This code is the client. The coding harness is the agent.** We spawn the harness as a
 subprocess, own the workspace, serve its filesystem requests and decide its permissions.
@@ -94,9 +95,9 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 | `daemon.ts` | The HTTP daemon: one for all of the operator's repositories. |
 | `daemon/` | The parts of `daemon.ts` that tests can import (`daemon.ts` starts a daemon when imported). |
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
-| `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb uses it; `chat.ts` moves onto it in M4-1 (#47). |
+| `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
-| `chat.ts` | Chat front end. It talks HTTP only and imports only `core/runtime.ts`. |
+| `chat.ts` | Chat front end: a pi-tui screen on a TTY, plain lines when piped. It talks HTTP only, and imports only `client/`, pi-tui and `core/runtime.ts`. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 
 Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`

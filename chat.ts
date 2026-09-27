@@ -9,19 +9,61 @@
  *
  * **A front end, not part of the daemon.** It speaks HTTP to `daemon.ts` and
  * nothing else, so anything it can do, a bridge to another chat app can do
- * too. The one import from this repository is `core/runtime.ts`, which says
- * where `daemon.json` lives; `tests/daemon.test.ts` holds that line.
+ * too. From this repository it imports `client/`, which is the transport and
+ * the contract's types, and `core/runtime.ts`, which says where `daemon.json`
+ * lives (M4-1, S8). `tests/daemon.test.ts` holds that line.
  *
  * One room is one harness kept alive between messages, until `/dismiss`.
  * Leaving (`/leave`, end of input, ^C) keeps the room, and `attach` replays
  * its whole conversation from the room's event log.
+ *
+ * **Two screens over one stream.** On a TTY the room is a full-screen
+ * `pi-tui` app: a scrolling transcript with each answer rendered as markdown
+ * while it streams, and an editor below it. Piped, it is plain lines, which
+ * is what a script or a test reads.
+ *
+ * **pi-tui is ratified under M1c-7's rule (M4-1).** It is presentation only,
+ * so its worst failure is a broken screen, never a changed decision; it is
+ * pinned exactly; and its nested `marked` is overridden to ours, so one copy
+ * is installed. It ships two native helpers, both loaded lazily inside a
+ * try/catch: `darwin-modifiers.node` reads Shift for Shift+Enter in Apple
+ * Terminal only, and `win32-console-mode.node` runs on Windows only. Linux
+ * never loads either.
  */
 
-import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
+import {
+  type Component,
+  Container,
+  Editor,
+  Key,
+  Markdown,
+  type MarkdownTheme,
+  matchesKey,
+  ProcessTerminal,
+  ScrollView,
+  Text,
+  TuiAltScreen,
+  VStack,
+} from "@earendil-works/pi-tui";
+
+import type {
+  EventLine,
+  MessageAccepted,
+  RoomDto,
+  RoomListEntry,
+} from "./client/contract.ts";
+import {
+  call,
+  checkVersion,
+  type DaemonAddress,
+  readDaemonFile,
+  request,
+} from "./client/daemon.ts";
+import { type Connect, followEvents } from "./client/stream.ts";
 import { runtimeDir } from "./core/runtime.ts";
 
 const USAGE = `usage: (experimental — the room API may change without notice)
@@ -39,146 +81,88 @@ in a room, type a message and press enter:
   /dismiss   stop the harness and exit; uncommitted work stays in its
              checkout, because the supervisor never commits for it (R37)`;
 
-interface Daemon {
-  port: number;
-  token: string;
-}
+const daemonFile = () => join(runtimeDir(), "daemon.json");
 
-/** The fields of `RoomDto` this front end reads (`client/contract.ts`). */
-interface RoomView {
-  id: string;
-  cwd: string;
-  status: string;
-  participants: {
-    name: string;
-    harness: string;
-    worktree: string;
-    notices: { text: string }[];
-  }[];
-}
-
-/** `GET /rooms` entries carry a short roster. */
-interface RoomListEntry {
-  id: string;
-  cwd: string;
-  status: string;
-  participants: { name: string }[];
-}
-
-/** A refused request's `error` (docs/CLIENT-API.md); `code` is for code,
- *  `message` for the person. */
-interface Refusal {
-  code: string;
-  message: string;
-}
-
-/** One line of a room's event log, as the SSE stream carries it. */
-interface LogEvent {
-  seq: number;
-  agent: string;
-  update: {
-    sessionUpdate: string;
-    text?: string;
-    title?: string;
-    stopReason?: string;
-    error?: string;
-    content?: { type: string; text?: string };
-  };
-}
-
-/** The daemon named in `daemon.json`, or a throw that says how to start one. */
-async function findDaemon(): Promise<Daemon> {
-  const file = join(runtimeDir(), "daemon.json");
-  let holder: { port?: unknown; token?: unknown } = {};
-  try {
-    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-    if (typeof parsed === "object" && parsed !== null) holder = parsed;
-  } catch {
-    // Missing or malformed: the same answer as "not listening", below.
-  }
-  const { port, token } = holder;
-  if (typeof port !== "number" || typeof token !== "string" || !token) {
+/** The daemon named in `daemon.json`, or a throw that says how to start one.
+ *  Read again on every call: a daemon that restarts has a new token. */
+async function address(): Promise<DaemonAddress> {
+  const d = await readDaemonFile(daemonFile());
+  if (typeof d === "string") {
     throw new Error(
-      `no daemon is listening (${file} is missing or not ready). ` +
+      `no daemon is listening (${daemonFile()} is missing or not ready). ` +
         "Start one with: kapelle daemon start",
     );
   }
-  return { port, token };
-}
-
-async function api<T>(
-  d: Daemon,
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<{ status: number; body: T; error?: Refusal }> {
-  const res = await fetch(`http://127.0.0.1:${d.port}${path}`, {
-    method,
-    headers: {
-      authorization: `Bearer ${d.token}`,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
-  let parsed: unknown;
-  try {
-    parsed = text ? JSON.parse(text) : undefined;
-  } catch {
-    throw new Error(`HTTP ${res.status}: response was not JSON`);
-  }
-  if (res.ok) return { status: res.status, body: (parsed ?? {}) as T };
-  // A refusal Node sends itself — a 408, a 400 for malformed HTTP — has no
-  // envelope, so the status stands in for the message, as in `cli.ts`.
-  const error = (parsed as { error?: Refusal } | null | undefined)?.error ?? {
-    code: "",
-    message: `HTTP ${res.status}`,
-  };
-  return { status: res.status, body: {} as T, error };
+  return d;
 }
 
 /**
- * Reads a room's SSE stream until the daemon ends it — which it does when
- * the room is dismissed — or `signal` aborts.
+ * Reads a room's events into `onEvent` until the daemon ends the stream —
+ * which it does when the room is dismissed. A cut while the daemon still
+ * answers reconnects and resumes after the last event seen
+ * (`client/stream.ts`). Throws when the daemon stops or refuses the stream.
  */
-async function follow(
-  d: Daemon,
+async function readRoom(
   id: string,
-  onEvent: (event: LogEvent) => void,
-  signal: AbortSignal,
+  onEvent: (event: EventLine) => void,
 ): Promise<void> {
-  const res = await fetch(`http://127.0.0.1:${d.port}/rooms/${id}/events`, {
-    headers: { authorization: `Bearer ${d.token}` },
-    signal,
-  });
-  if (!res.ok || !res.body) {
-    const body = (await res.json().catch(() => null)) as {
-      error?: Refusal;
-    } | null;
-    const error = body?.error;
-    throw new Error(error?.message ?? `events: HTTP ${res.status}`);
-  }
-  const decoder = new TextDecoder();
-  let buf = "";
-  for await (const chunk of res.body) {
-    buf += decoder.decode(chunk, { stream: true });
-    for (let end = buf.indexOf("\n\n"); end >= 0; end = buf.indexOf("\n\n")) {
-      const block = buf.slice(0, end);
-      buf = buf.slice(end + 2);
-      for (const line of block.split("\n")) {
-        if (!line.startsWith("data: ")) continue;
-        try {
-          onEvent(JSON.parse(line.slice(6)));
-        } catch {
-          throw new Error("malformed SSE frame from the daemon");
-        }
-      }
+  // A room does not survive a daemon restart, so there is nothing to wait
+  // for: no daemon, or one that does not answer, ends the stream at once.
+  // That is also why there is no version check here.
+  const connect: Connect = async (after, signal) => {
+    const d = await readDaemonFile(daemonFile());
+    if (typeof d === "string") return undefined;
+    try {
+      return await request(d, `/rooms/${encodeURIComponent(id)}/events`, {
+        signal,
+        headers: { "last-event-id": String(after) },
+      });
+    } catch (err) {
+      // An abort is the reader's own silence timer: try again.
+      if (signal.aborted) throw err;
+      return undefined;
     }
+  };
+  for await (const event of followEvents(connect)) onEvent(event);
+}
+
+/** The stream ended without our dismiss: ask the daemon what happened.
+ *  `dismissed` is someone else's dismissal; anything else means the daemon or
+ *  its stream is gone and the room's fate is unknown. */
+async function reconcile(id: string): Promise<{ code: number; line: string }> {
+  try {
+    const r = await call<RoomDto>(await address(), `/rooms/${id}`);
+    if (r.ok) {
+      if (r.body.status === "dismissed") {
+        return { code: 0, line: "the room was dismissed" };
+      }
+      // The stream died, the room did not. Name the state the daemon
+      // reports rather than the status of the GET that reported it, and
+      // say how to get back in.
+      return {
+        code: 1,
+        line:
+          `! lost the room stream; the room is still ${r.body.status} — ` +
+          `rejoin with: chat.ts attach ${id}`,
+      };
+    }
+    if (r.status === 404) {
+      return {
+        code: 1,
+        line: `! the daemon no longer knows room ${id}; it may have restarted`,
+      };
+    }
+    return {
+      code: 1,
+      line: `! lost the room stream (HTTP ${r.status}); the room may still be alive`,
+    };
+  } catch (err) {
+    return { code: 1, line: `! lost the daemon: ${(err as Error).message}` };
   }
 }
 
-/** Prints a room's events as a conversation. */
-function makePrinter(tty: boolean) {
+/** Prints a room's events as a conversation, for a piped stdin. */
+function makePrinter() {
   let atLineStart = true;
   let speaking = false;
   const write = (s: string) => {
@@ -191,27 +175,20 @@ function makePrinter(tty: boolean) {
     write(`${s}\n`);
   };
   return {
-    /** Messages this terminal sent and already shows as typed input. */
-    pendingEcho: 0,
-    show(event: LogEvent) {
-      const u = event.update;
+    show({ agent, update: u }: EventLine) {
       switch (u.sessionUpdate) {
         case "_client_user_message":
           speaking = false;
-          if (tty && this.pendingEcho > 0) {
-            this.pendingEcho -= 1;
-            return;
-          }
           line(`you: ${u.text}`);
           return;
         case "agent_message_chunk":
           if (u.content?.type !== "text") return;
           if (!speaking) {
             if (!atLineStart) write("\n");
-            write(`${event.agent}: `);
+            write(`${agent}: `);
             speaking = true;
           }
-          write(u.content.text ?? "");
+          write(u.content.text);
           return;
         case "tool_call":
           line(`  · ${u.title}`);
@@ -236,8 +213,201 @@ function makePrinter(tty: boolean) {
   };
 }
 
+const sgr = (open: number, close: number) => (s: string) =>
+  `\x1b[${open}m${s}\x1b[${close}m`;
+const bold = sgr(1, 22);
+const dim = sgr(2, 22);
+const italic = sgr(3, 23);
+const underline = sgr(4, 24);
+const cyan = sgr(36, 39);
+const green = sgr(32, 39);
+const yellow = sgr(33, 39);
+
+const MARKDOWN_THEME: MarkdownTheme = {
+  heading: (s) => bold(cyan(s)),
+  link: (s) => underline(cyan(s)),
+  linkUrl: dim,
+  code: yellow,
+  codeBlock: (s) => s,
+  codeBlockBorder: dim,
+  quote: italic,
+  quoteBorder: dim,
+  hr: dim,
+  listBullet: cyan,
+  bold,
+  italic,
+  strikethrough: sgr(9, 29),
+  underline,
+};
+
+const EDITOR_THEME = {
+  borderColor: dim,
+  selectList: {
+    selectedPrefix: cyan,
+    selectedText: bold,
+    description: dim,
+    scrollInfo: dim,
+    noMatch: dim,
+  },
+};
+
+/**
+ * The full-screen chat for one room. Resolves with the exit code.
+ *
+ * Busy is read from the stream, not from this terminal's own requests: a
+ * `_client_user_message` starts a turn and `_client_turn_ended` ends it. So a
+ * replayed history, or a message another client sent, leaves the editor in
+ * the right state with no bookkeeping of which turn is ours.
+ */
+function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
+  const [agent] = room.participants;
+  const tui = new TuiAltScreen(new ProcessTerminal());
+  const transcript = new Container();
+  const status = new Text("", 1, 0);
+  const editor = new Editor(tui, EDITOR_THEME, { paddingX: 1 });
+  tui.setLayoutRoot(
+    new VStack([
+      {
+        component: new ScrollView(transcript, { follow: "end", primary: true }),
+        basis: "auto",
+        grow: 1,
+        shrink: 1,
+        minSize: 1,
+      },
+      { component: status, basis: "auto", shrink: 0 },
+      { component: editor, basis: "auto", shrink: 1, minSize: 1 },
+    ]),
+  );
+  tui.setFocus(editor);
+
+  const add = (c: Component) => {
+    transcript.addChild(c);
+    tui.requestRender();
+  };
+  const note = (s: string) => add(new Text(dim(s), 1, 0));
+  const warn = (s: string) => add(new Text(yellow(s), 1, 0));
+  const setBusy = (busy: boolean) => {
+    editor.disableSubmit = busy;
+    status.setText(
+      dim(
+        busy
+          ? `${agent?.name ?? "the agent"} is answering…`
+          : "enter to send · /leave keeps the room · /dismiss stops it",
+      ),
+    );
+    tui.requestRender();
+  };
+
+  note(
+    agent
+      ? `room ${room.id} · ${agent.name} (${agent.harness}) · ${agent.worktree}`
+      : `room ${room.id} · no agents`,
+  );
+  for (const { text } of agent?.notices ?? []) warn(`! ${text}`);
+  setBusy(agent?.status === "busy");
+
+  // The answer being streamed: chunks are joined and the whole text re-set,
+  // because markdown only parses correctly as a whole.
+  // ponytail: re-parses the whole answer per frame (~5 ms at 53k chars,
+  // measured); split finished blocks into their own components if it lags.
+  let answer: { md: Markdown; text: string } | undefined;
+  const show = ({ agent: name, update: u }: EventLine) => {
+    switch (u.sessionUpdate) {
+      case "_client_user_message":
+        answer = undefined;
+        add(new Text(`\n${bold(cyan("you"))}\n${u.text}`, 1, 0));
+        setBusy(true);
+        return;
+      case "agent_message_chunk":
+        if (u.content?.type !== "text") return;
+        if (!answer) {
+          add(new Text(`\n${bold(green(name))}`, 1, 0));
+          answer = { md: new Markdown("", 1, 0, MARKDOWN_THEME), text: "" };
+          add(answer.md);
+        }
+        answer.text += u.content.text;
+        answer.md.setText(answer.text);
+        tui.requestRender();
+        return;
+      case "tool_call":
+        answer = undefined;
+        note(`  · ${u.title}`);
+        return;
+      case "_client_turn_ended":
+        answer = undefined;
+        if (u.error) warn(`! the turn failed: ${u.error}`);
+        else if (u.stopReason !== "end_turn") {
+          warn(`! the turn ended: ${u.stopReason}`);
+        }
+        setBusy(false);
+        return;
+      case "_client_harness_exited":
+        warn("! the harness exited");
+        return;
+      default:
+        // Dropped, as in the piped printer.
+        break;
+    }
+  };
+
+  return new Promise((finish) => {
+    let done = false;
+    // `tui.stop()` leaves the alternate screen and prints the whole transcript
+    // to the normal one, so the conversation stays in scrollback on exit.
+    const end = (code: number, ...last: string[]) => {
+      if (done) return;
+      done = true;
+      tui.stop();
+      for (const line of last) console.log(line);
+      finish(code);
+    };
+    const left = `left room ${room.id}; rejoin with: node chat.ts attach ${room.id}`;
+
+    tui.addInputListener((data) => {
+      if (!matchesKey(data, Key.ctrl("c"))) return undefined;
+      end(0, left);
+      return { consume: true };
+    });
+
+    editor.onSubmit = async (text) => {
+      if (!text) return;
+      if (text === "/leave") return end(0, left);
+      if (text === "/dismiss") {
+        status.setText(dim("dismissing: stopping the harness…"));
+        tui.requestRender();
+        const r = await call<RoomDto>(d, `/rooms/${room.id}/dismiss`, {
+          method: "POST",
+        });
+        // A 200 ends the stream, and that ends the chat below.
+        if (!r.ok) end(1, `! ${r.error.message}`);
+        return;
+      }
+      editor.addToHistory(text);
+      const r = await call<MessageAccepted>(d, `/rooms/${room.id}/messages`, {
+        method: "POST",
+        body: { text },
+      });
+      if (!r.ok) warn(`! ${r.error.message}`);
+    };
+
+    tui.start();
+    readRoom(room.id, show).then(
+      async () => {
+        const { code, line } = await reconcile(room.id);
+        end(code, line);
+      },
+      async (err) => {
+        const { code, line } = await reconcile(room.id);
+        end(code, `! ${(err as Error).message}`, line);
+      },
+    );
+  });
+}
+
 /** The chat loop for one room. Resolves with the exit code. */
-async function chat(d: Daemon, room: RoomView): Promise<number> {
+async function chat(d: DaemonAddress, room: RoomDto): Promise<number> {
+  if (process.stdin.isTTY && process.stdout.isTTY) return chatTui(d, room);
+
   const [agent] = room.participants;
   console.log(
     agent
@@ -247,45 +417,30 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
   for (const { text } of agent?.notices ?? []) console.log(`! ${text}`);
   console.log("type a message; /leave to exit, /dismiss to stop the room");
 
-  const tty = Boolean(process.stdin.isTTY);
-  const printer = makePrinter(tty);
+  const printer = makePrinter();
 
   // The highest `_client_turn_ended` seen, and the one turn being waited on.
   let lastTurnEnd = 0;
   let waiting: { after: number; done: () => void } | undefined;
 
-  const stop = new AbortController();
-  const ended = follow(
-    d,
-    room.id,
-    (event) => {
-      printer.show(event);
-      if (event.update.sessionUpdate === "_client_turn_ended") {
-        lastTurnEnd = event.seq;
-        if (waiting && event.seq > waiting.after) {
-          waiting.done();
-          waiting = undefined;
-        }
+  const ended = readRoom(room.id, (event) => {
+    printer.show(event);
+    if (event.update.sessionUpdate === "_client_turn_ended") {
+      lastTurnEnd = event.seq;
+      if (waiting && event.seq > waiting.after) {
+        waiting.done();
+        waiting = undefined;
       }
-    },
-    stop.signal,
-  ).then(
+    }
+  }).then(
     () => "ended" as const,
     (err) => {
-      if (!stop.signal.aborted) console.error(`! ${(err as Error).message}`);
+      console.error(`! ${(err as Error).message}`);
       return "ended" as const;
     },
   );
 
-  // `output` is not optional on a TTY: terminal mode switches the terminal's
-  // own echo off and draws typed keys and the prompt itself, to `output`.
-  // Without it nothing typed was visible at all.
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: tty,
-  });
-  rl.setPrompt("> ");
+  const rl = createInterface({ input: process.stdin, terminal: false });
   const lines: string[] = [];
   let inputDone = false;
   let wake = () => {};
@@ -307,45 +462,13 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
     return lines.shift() ?? null;
   };
 
-  /** The stream ended without our dismiss: ask the daemon what happened.
-   *  `dismissed` is someone else's dismissal; anything else means the daemon or
-   *  its stream is gone and the room's fate is unknown. */
-  const reconcile = async (): Promise<number> => {
-    try {
-      const r = await api<RoomView>(d, "GET", `/rooms/${room.id}`);
-      if (r.status === 200) {
-        if (r.body.status === "dismissed") {
-          console.log("the room was dismissed");
-          return 0;
-        }
-        // The stream died, the room did not. Name the state the daemon
-        // reports rather than the status of the GET that reported it, and
-        // say how to get back in.
-        console.error(
-          `! lost the room stream; the room is still ${r.body.status} — ` +
-            `rejoin with: chat.ts attach ${room.id}`,
-        );
-      } else if (r.status === 404) {
-        console.error(
-          `! the daemon no longer knows room ${room.id}; it may have restarted`,
-        );
-      } else {
-        console.error(
-          `! lost the room stream (HTTP ${r.status}); the room may still be alive`,
-        );
-      }
-    } catch (err) {
-      console.error(`! lost the daemon: ${(err as Error).message}`);
-    }
-    return 1;
-  };
-
   let code = 0;
   for (;;) {
-    if (tty) rl.prompt();
     const next = await Promise.race([nextLine(), ended]);
     if (next === "ended") {
-      code = await reconcile();
+      const r = await reconcile(room.id);
+      (r.code ? console.error : console.log)(r.line);
+      code = r.code;
       break;
     }
     if (next === null || next.trim() === "/leave") break;
@@ -353,9 +476,11 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
     if (!text) continue;
 
     if (text === "/dismiss") {
-      const r = await api<RoomView>(d, "POST", `/rooms/${room.id}/dismiss`);
-      if (r.status !== 200) {
-        console.error(`! ${r.error?.message}`);
+      const r = await call<RoomDto>(d, `/rooms/${room.id}/dismiss`, {
+        method: "POST",
+      });
+      if (!r.ok) {
+        console.error(`! ${r.error.message}`);
         code = 1;
         break;
       }
@@ -364,18 +489,12 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
       break;
     }
 
-    // Counted before the request: the message can reach the log, and this
-    // stream, before the response does.
-    printer.pendingEcho += Number(tty);
-    const r = await api<{ seq: number }>(
-      d,
-      "POST",
-      `/rooms/${room.id}/messages`,
-      { text },
-    );
-    if (r.status !== 202) {
-      printer.pendingEcho -= Number(tty);
-      console.error(`! ${r.error?.message}`);
+    const r = await call<MessageAccepted>(d, `/rooms/${room.id}/messages`, {
+      method: "POST",
+      body: { text },
+    });
+    if (!r.ok) {
+      console.error(`! ${r.error.message}`);
       continue;
     }
     if (lastTurnEnd > r.body.seq) continue;
@@ -387,7 +506,6 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
     ]);
   }
 
-  stop.abort();
   rl.close();
   return code;
 }
@@ -409,24 +527,31 @@ async function main(): Promise<number> {
     return values.help ? 0 : 1;
   }
 
-  const d = await findDaemon();
+  const d = await address();
+  // B5: a different `major` throws `VersionRefused`, which `main`'s caller
+  // prints; a different `minor` is a warning.
+  const warning = await checkVersion(d);
+  if (warning) console.error(`! ${warning}`);
 
   if (verb === "new") {
     const cwd = resolve(values.cwd ?? process.cwd());
-    const r = await api<RoomView>(d, "POST", "/rooms", {
-      cwd,
-      agents: [
-        {
-          agent: values.agent,
-          cmd: values.cmd,
-          name: values.name,
-          role: "orchestrator",
-        },
-      ],
+    const r = await call<RoomDto>(d, "/rooms", {
+      method: "POST",
+      body: {
+        cwd,
+        agents: [
+          {
+            agent: values.agent,
+            cmd: values.cmd,
+            name: values.name,
+            role: "orchestrator",
+          },
+        ],
+      },
     });
-    if (r.status !== 201) {
-      console.error(`error: ${r.error?.message}`);
-      if (r.error?.code === "repo_not_added") {
+    if (!r.ok) {
+      console.error(`error: ${r.error.message}`);
+      if (r.error.code === "repo_not_added") {
         console.error("add the repository first: kapelle daemon add <path>");
       }
       return 1;
@@ -435,16 +560,20 @@ async function main(): Promise<number> {
   }
 
   if (verb === "attach" && arg) {
-    const r = await api<RoomView>(d, "GET", `/rooms/${arg}`);
-    if (r.status !== 200) {
-      console.error(`error: ${r.error?.message}`);
+    const r = await call<RoomDto>(d, `/rooms/${arg}`);
+    if (!r.ok) {
+      console.error(`error: ${r.error.message}`);
       return 1;
     }
     return chat(d, r.body);
   }
 
   if (verb === "list") {
-    const r = await api<RoomListEntry[]>(d, "GET", "/rooms");
+    const r = await call<RoomListEntry[]>(d, "/rooms");
+    if (!r.ok) {
+      console.error(`error: ${r.error.message}`);
+      return 1;
+    }
     for (const room of r.body) {
       const names = room.participants.map((p) => p.name).join(",") || "-";
       console.log(`${room.id}  ${room.status}  ${names}  ${room.cwd}`);
@@ -453,9 +582,11 @@ async function main(): Promise<number> {
   }
 
   if (verb === "dismiss" && arg) {
-    const r = await api<RoomView>(d, "POST", `/rooms/${arg}/dismiss`);
-    if (r.status !== 200) {
-      console.error(`error: ${r.error?.message}`);
+    const r = await call<RoomDto>(d, `/rooms/${arg}/dismiss`, {
+      method: "POST",
+    });
+    if (!r.ok) {
+      console.error(`error: ${r.error.message}`);
       return 1;
     }
     console.log(`dismissed ${arg}`);
