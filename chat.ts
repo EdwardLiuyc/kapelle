@@ -369,7 +369,12 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
       return { consume: true };
     });
 
-    editor.onSubmit = async (text) => {
+    // pi-tui calls this and drops the promise, so a throw (the daemon gone
+    // mid-request) must end the chat here, or it crashes on the alt screen.
+    editor.onSubmit = (text) => {
+      submit(text).catch((err) => end(1, `! ${(err as Error).message}`));
+    };
+    const submit = async (text: string) => {
       if (!text) return;
       if (text === "/leave") return end(0, left);
       if (text === "/dismiss") {

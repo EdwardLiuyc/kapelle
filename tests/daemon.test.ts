@@ -3775,9 +3775,12 @@ test("chat.ts reaches the daemon over HTTP only: client/, pi-tui and core/runtim
   const root = join(import.meta.dirname, "..");
   const importsOf = async (file: string) => {
     const source = await readFile(join(root, file), "utf8");
-    return [...source.matchAll(/^import( type)?[^;]*?from "([^"]+)";/gms)].map(
-      (m) => ({ spec: m[2] ?? "", typeOnly: Boolean(m[1]) }),
-    );
+    // `export … from` and a bare `import "x"` load a module too.
+    return [
+      ...source.matchAll(
+        /^(?:(?:import|export)( type)?[^;]*?from|import) "([^"]+)";/gms,
+      ),
+    ].map((m) => ({ spec: m[2] ?? "", typeOnly: Boolean(m[1]) }));
   };
   const queue: string[] = [];
   for (const { spec } of await importsOf("chat.ts")) {
@@ -3849,11 +3852,13 @@ const noPty =
     ? "needs util-linux script(1) for a pseudo-terminal"
     : false;
 
-test("chat.ts on a real terminal is the full-screen chat, and leaves the conversation in scrollback", {
-  skip: noPty,
-}, async (t) => {
-  // Pipes never reach this path: only a TTY gets the pi-tui screen. A pty
-  // made by `script` from a pipe has no size, so the command sets one.
+/**
+ * `chat.ts new` on a pseudo-terminal, against a fresh daemon, once the
+ * screen is up. Pipes never reach this path: only a TTY gets the pi-tui
+ * screen. A pty made by `script` from a pipe has no size, so the command
+ * sets one.
+ */
+async function chatOnPty(t: TestContext) {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
@@ -3890,10 +3895,18 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   // The status line, not the banner: keys sent before the screen takes the
   // terminal would be echoed by the terminal itself and prove nothing.
   await seen("enter to send");
+  return { child, seen, exited, out: () => out };
+}
+
+test("chat.ts on a real terminal is the full-screen chat, and leaves the conversation in scrollback", {
+  skip: noPty,
+}, async (t) => {
+  const { child, seen, exited, out: screen } = await chatOnPty(t);
   child.stdin.write("alpha\r");
   await seen("previous: (none)");
   child.stdin.write("/dismiss\r");
   await seen("the room was dismissed");
+  const out = screen();
   assert.equal(await exited, 0, out);
 
   // What stays on the normal screen once the alternate one is left.
@@ -3912,3 +3925,20 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
     "the typed message, the answer, then the exit line",
   );
 });
+
+for (const [how, keys] of [
+  ["^C", "\x03"],
+  ["/leave", "/leave\r"],
+] as const) {
+  test(`chat.ts on a real terminal: ${how} leaves the chat with exit 0`, {
+    skip: noPty,
+  }, async (t) => {
+    // Raw mode turns ^C into a key, not a SIGINT: only the screen's own
+    // listener gets the operator out.
+    const { child, seen, exited, out } = await chatOnPty(t);
+    child.stdin.write(keys);
+    await seen("rejoin with");
+    assert.equal(await exited, 0, out());
+    assert.match(out(), /left room \S+; rejoin with/);
+  });
+}
