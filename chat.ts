@@ -27,8 +27,8 @@
  * pinned exactly; and its nested `marked` is overridden to ours, so one copy
  * is installed. It ships two native helpers, both loaded lazily inside a
  * try/catch: `darwin-modifiers.node` reads Shift for Shift+Enter in Apple
- * Terminal only, and `win32-console-mode.node` runs on Windows only. Linux
- * never loads either.
+ * Terminal only, and `win32-console-mode.node` runs on Windows only, which
+ * `package.json`'s `os` leaves out. Linux never loads either.
  */
 
 import { join, resolve } from "node:path";
@@ -371,7 +371,13 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
     const end = (code: number, ...last: string[]) => {
       if (done) return;
       done = true;
-      const lines = transcript.render(process.stdout.columns || 80);
+      let lines: string[] = [];
+      try {
+        lines = transcript.render(process.stdout.columns || 80);
+      } catch {
+        // The transcript is what failed to draw: leave the screen without
+        // it. `attach` replays the conversation.
+      }
       tui.stop({ preserveScreen: true });
       for (const line of lines) console.log(unpad(line));
       for (const line of last) console.log(line);
@@ -411,7 +417,19 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
       if (!r.ok) warn(`! ${r.error.message}`);
     };
 
-    tui.start();
+    // pi-tui draws off our call stack, so a bug in it is an uncaught throw
+    // that would end the process on the alternate screen. Leave the screen
+    // first: M1c-7 needs its worst failure to stay cosmetic.
+    const crash = (err: unknown) =>
+      end(1, `! the chat screen failed: ${(err as Error).message}`);
+    process.on("uncaughtException", crash);
+    process.on("unhandledRejection", crash);
+    try {
+      tui.start();
+    } catch (err) {
+      crash(err);
+      return;
+    }
     readRoom(room.id, show).then(
       async () => {
         const { code, line } = await reconcile(room.id);

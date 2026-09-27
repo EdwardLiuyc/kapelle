@@ -3795,8 +3795,9 @@ test("chat.ts reaches the daemon over HTTP only: client/, pi-tui and core/runtim
     }
   }
   assert.ok(queue.length > 0, "chat.ts imports client/");
-  // The folder too, not only what chat.ts imports: a client/ runtime file
-  // that nothing imports yet is under the same S8 boundary.
+  // Every file directly in client/ too, not only what chat.ts imports: one
+  // that nothing imports yet is under the same S8 boundary. client/tests/
+  // is not swept: a test may import anything.
   for (const entry of await readdir(join(root, "client"), {
     withFileTypes: true,
   })) {
@@ -3810,6 +3811,7 @@ test("chat.ts reaches the daemon over HTTP only: client/, pi-tui and core/runtim
     seen.add(file);
     for (const { spec, typeOnly } of await importsOf(file)) {
       if (typeOnly || spec.startsWith("node:")) continue;
+      assert.ok(spec.startsWith("."), `${file} imports the package ${spec}`);
       const target = join(dirname(file), spec);
       assert.ok(
         target.startsWith(`client${sep}`),
@@ -3916,8 +3918,9 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   await seen("previous: (none)");
   child.stdin.write("/dismiss\r");
   await seen("the room was dismissed");
+  const code = await exited;
   const out = screen();
-  assert.equal(await exited, 0, out);
+  assert.equal(code, 0, out);
 
   // What stays on the normal screen once the alternate one is left.
   // CSI, OSC and APC sequences; pi-tui writes all three.
