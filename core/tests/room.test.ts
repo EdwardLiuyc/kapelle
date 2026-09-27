@@ -144,7 +144,7 @@ test("a failed add leaves no checkout or branch, and the room keeps working", as
   assert.equal(alice.status(), "idle");
 });
 
-test("a failed add whose harness wrote into its checkout keeps it, and says so", async (t) => {
+test("failed adds whose harness wrote into its checkout keep it, and each says so", async (t) => {
   const repo = await gitRepo(t);
   const { room, alice, roomId } = await roomWithAlice(t, repo);
   // A harness that writes into its cwd, then dies before its session.
@@ -152,19 +152,33 @@ test("a failed add whose harness wrote into its checkout keeps it, and says so",
   await writeFile(bin, "#!/bin/sh\necho x > scribble.txt\nexit 1\n", {
     mode: 0o755,
   });
-  const dead = roomAgents([{ cmd: bin, name: "carol" }])[0];
+  const dead = (name: string) =>
+    roomAgents([{ cmd: bin, name }])[0] as ReturnType<typeof mock>;
 
-  await assert.rejects(room.add(dead as ReturnType<typeof mock>));
+  // Two at once, so each rollback must name its own checkout.
+  const failed = await Promise.allSettled([
+    room.add(dead("carol")),
+    room.add(dead("dave")),
+  ]);
+  assert.deepEqual(
+    failed.map((r) => r.status),
+    ["rejected", "rejected"],
+  );
 
   assert.equal(room.participants.length, 1);
   const kept = (await roomBranches(repo, roomId)).filter(
     (b) => b !== alice.branch,
   );
-  assert.equal(kept.length, 1, "the written checkout keeps its branch");
-  assert.match(
-    alice.notices.map((n) => n.text).join("\n"),
-    /did not join left its checkout/,
-  );
+  assert.equal(kept.length, 2, "each written checkout keeps its branch");
+  const notices = alice.notices.map((n) => n.text).join("\n");
+  for (const branch of kept) {
+    const id = branch.split("/").pop() as string;
+    const path = join(stateDirFor(repo), "wt", roomId, id);
+    assert.ok(existsSync(join(path, "scribble.txt")), `${path} is kept`);
+    assert.ok(notices.includes(path), `no notice names ${path}`);
+  }
+  await alice.send("still here");
+  assert.equal(alice.status(), "idle");
 });
 
 test("a base is refused in a folder that is not a repository", async (t) => {

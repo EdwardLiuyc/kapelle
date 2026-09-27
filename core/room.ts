@@ -20,7 +20,8 @@
  * **A kept checkout lasts until the next daemon boot.** A room writes no
  * record until M6-7a, so the boot sweep (`core/sweep.ts`) takes every room
  * checkout for an orphan: it removes a clean one and keeps its branch, and
- * keeps a dirty one. No work is lost; the directory may be.
+ * keeps a dirty one or one on a detached HEAD. No work is lost; the
+ * directory may be.
  *
  * **At most one participant through the route, for now.** `POST /rooms`
  * creates a room empty or with one agent; M6-3 adds the route that calls
@@ -285,16 +286,27 @@ export async function openRoom({
   // strand the room: the log still closes, `dismiss()` still resolves, and
   // the checkout is left in place rather than committed or deleted. The
   // participant is told, because a dismissed room can never be retried.
-  const release = async (id: string, onNotice: Notify) => {
+  // The line names the path: after a failed add it is the only record.
+  //
+  // Returns whether it wrote a notice, so the caller never adds a second
+  // line about the same checkout.
+  const release = async (
+    id: string,
+    worktree: string | undefined,
+    onNotice: Notify,
+  ): Promise<boolean> => {
     try {
       const kept = await worktrees?.release(id, "keep");
       if (kept) onNotice(kept);
+      return Boolean(kept);
     } catch (err) {
       onNotice(
-        `could not release the participant's checkout: ` +
+        `could not release the participant's checkout` +
+          `${worktree ? ` at ${worktree}` : ""}: ` +
           `${err instanceof Error ? err.message : String(err)}; ` +
           "it is left in place",
       );
+      return true;
     }
   };
 
@@ -304,17 +316,11 @@ export async function openRoom({
   // participant that never joined has no notices of its own, so both lines
   // go to the room's, which every participant shows.
   const rollback = async (id: string, worktree: string | undefined) => {
-    const before = roomNotices.length;
-    await release(id, onRoomNotice);
-    if (
-      worktrees &&
-      worktree &&
-      roomNotices.length === before &&
-      existsSync(worktree)
-    ) {
+    const named = await release(id, worktree, onRoomNotice);
+    if (!named && worktrees && worktree && existsSync(worktree)) {
       onRoomNotice(
-        `a participant that did not join left its checkout at ${worktree}: ` +
-          "its harness wrote into it, so the checkout and its branch are kept",
+        `a participant that did not join left its worktree at ${worktree}: ` +
+          "its harness wrote into it, so the worktree and its branch are kept",
       );
     }
   };
@@ -328,7 +334,9 @@ export async function openRoom({
       try {
         await Promise.allSettled(adding);
         await Promise.all(members.map((m) => m.stop()));
-        for (const m of members) await release(m.participant.id, m.onNotice);
+        for (const { participant: p, onNotice } of members) {
+          await release(p.id, p.worktree, onNotice);
+        }
       } finally {
         await eventLog?.close();
       }
