@@ -2,10 +2,10 @@
 /**
  * `chat.ts` — a terminal chat over the daemon's rooms (chat MVP).
  *
- * **Experimental.** One participant per room, `auto` only, no roster and no
- * permission answering. The room API is not a promise until M5-1 documents
- * it, and M6-1..M6-9 will reshape it; nothing here is a compatibility
- * commitment.
+ * **Experimental.** One participant per room — the orchestrator — `auto`
+ * only, and no permission answering. The room API is Experimental in
+ * `docs/CLIENT-API.md`, and M6-3..M6-9 will reshape it; nothing here is a
+ * compatibility commitment.
  *
  * **A front end, not part of the daemon.** It speaks HTTP to `daemon.ts` and
  * nothing else, so anything it can do, a bridge to another chat app can do
@@ -25,11 +25,14 @@ import { parseArgs } from "node:util";
 import { runtimeDir } from "./core/runtime.ts";
 
 const USAGE = `usage: (experimental — the room API may change without notice)
-  node chat.ts new --agent <id> [--cwd dir]       open a room and chat in it
-  node chat.ts new --cmd "<command>" [--cwd dir]
-  node chat.ts attach <roomId>                    rejoin a room; its history replays
-  node chat.ts list                               every room the daemon holds
-  node chat.ts dismiss <roomId>                   stop a room's harness
+  node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
+  node chat.ts new --cmd "<command>" [--name n] [--cwd dir]
+  node chat.ts attach <roomId>                              rejoin a room; its history replays
+  node chat.ts list                                         every room the daemon holds
+  node chat.ts dismiss <roomId>                             stop a room's harness
+
+--name is the agent's name; the harness name by default. Give one when that
+is not a valid name, as for --cmd "/opt/bin/my-agent".
 
 in a room, type a message and press enter:
   /leave     exit; the room and its harness stay alive
@@ -41,14 +44,25 @@ interface Daemon {
   token: string;
 }
 
+/** The fields of `RoomDto` this front end reads (`client/contract.ts`). */
 interface RoomView {
   id: string;
   cwd: string;
-  harness: string;
-  workspace: string;
   status: string;
-  notices: { text: string }[];
-  error?: string;
+  participants: {
+    name: string;
+    harness: string;
+    worktree: string;
+    notices: { text: string }[];
+  }[];
+}
+
+/** `GET /rooms` entries carry a short roster. */
+interface RoomListEntry {
+  id: string;
+  cwd: string;
+  status: string;
+  participants: { name: string }[];
 }
 
 /** A refused request's `error` (docs/CLIENT-API.md); `code` is for code,
@@ -224,8 +238,13 @@ function makePrinter(tty: boolean) {
 
 /** The chat loop for one room. Resolves with the exit code. */
 async function chat(d: Daemon, room: RoomView): Promise<number> {
-  console.log(`room ${room.id} · ${room.harness} · ${room.workspace}`);
-  for (const { text } of room.notices) console.log(`! ${text}`);
+  const [agent] = room.participants;
+  console.log(
+    agent
+      ? `room ${room.id} · ${agent.name} (${agent.harness}) · ${agent.worktree}`
+      : `room ${room.id} · no agents`,
+  );
+  for (const { text } of agent?.notices ?? []) console.log(`! ${text}`);
   console.log("type a message; /leave to exit, /dismiss to stop the room");
 
   const tty = Boolean(process.stdin.isTTY);
@@ -288,14 +307,14 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
     return lines.shift() ?? null;
   };
 
-  /** The stream ended without our `DELETE`: ask the daemon what happened.
-   *  `closed` is someone else's dismissal; anything else means the daemon or
+  /** The stream ended without our dismiss: ask the daemon what happened.
+   *  `dismissed` is someone else's dismissal; anything else means the daemon or
    *  its stream is gone and the room's fate is unknown. */
   const reconcile = async (): Promise<number> => {
     try {
       const r = await api<RoomView>(d, "GET", `/rooms/${room.id}`);
       if (r.status === 200) {
-        if (r.body.status === "closed") {
+        if (r.body.status === "dismissed") {
           console.log("the room was dismissed");
           return 0;
         }
@@ -334,7 +353,7 @@ async function chat(d: Daemon, room: RoomView): Promise<number> {
     if (!text) continue;
 
     if (text === "/dismiss") {
-      const r = await api<RoomView>(d, "DELETE", `/rooms/${room.id}`);
+      const r = await api<RoomView>(d, "POST", `/rooms/${room.id}/dismiss`);
       if (r.status !== 200) {
         console.error(`! ${r.error?.message}`);
         code = 1;
@@ -379,6 +398,7 @@ async function main(): Promise<number> {
     options: {
       agent: { type: "string" },
       cmd: { type: "string" },
+      name: { type: "string" },
       cwd: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
@@ -395,8 +415,14 @@ async function main(): Promise<number> {
     const cwd = resolve(values.cwd ?? process.cwd());
     const r = await api<RoomView>(d, "POST", "/rooms", {
       cwd,
-      agent: values.agent,
-      cmd: values.cmd,
+      agents: [
+        {
+          agent: values.agent,
+          cmd: values.cmd,
+          name: values.name,
+          role: "orchestrator",
+        },
+      ],
     });
     if (r.status !== 201) {
       console.error(`error: ${r.error?.message}`);
@@ -418,15 +444,16 @@ async function main(): Promise<number> {
   }
 
   if (verb === "list") {
-    const r = await api<RoomView[]>(d, "GET", "/rooms");
+    const r = await api<RoomListEntry[]>(d, "GET", "/rooms");
     for (const room of r.body) {
-      console.log(`${room.id}  ${room.status}  ${room.harness}  ${room.cwd}`);
+      const names = room.participants.map((p) => p.name).join(",") || "-";
+      console.log(`${room.id}  ${room.status}  ${names}  ${room.cwd}`);
     }
     return 0;
   }
 
   if (verb === "dismiss" && arg) {
-    const r = await api<RoomView>(d, "DELETE", `/rooms/${arg}`);
+    const r = await api<RoomView>(d, "POST", `/rooms/${arg}/dismiss`);
     if (r.status !== 200) {
       console.error(`error: ${r.error?.message}`);
       return 1;

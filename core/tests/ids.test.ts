@@ -17,6 +17,7 @@ import {
   assertRunId,
   assertTaskId,
   branchName,
+  newParticipantId,
   newRoomId,
   newRunId,
 } from "../ids.ts";
@@ -84,6 +85,15 @@ test("a room id is its own namespace: branchName takes it, assertRunId does not"
   // But nothing that takes a run id from the command line may accept one —
   // `kapelle merge <runId>` must not reach into a room's branches (S9).
   assert.throws(() => assertRunId(roomId), /invalid run id/);
+});
+
+test("a participant id is opaque, ref-safe, and a legal task id", () => {
+  const id = newParticipantId();
+  assert.match(id, /^p-[0-9a-z]{8}$/);
+  // M6-6a names the participant's branch with it.
+  const roomId = newRoomId();
+  assert.equal(branchName(roomId, id), `kapelle/${roomId}/${id}`);
+  assert.notEqual(newParticipantId(), newParticipantId());
 });
 
 test("minted branch names round-trip through git check-ref-format", () => {

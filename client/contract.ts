@@ -68,7 +68,9 @@ export interface VersionReply {
 /**
  * What went wrong, one code per situation a client acts on differently (C7,
  * M5-3) — not one per status: `room_busy` means send again later, while
- * `already_decided` and `run_ended` mean stop. Codes are only ever added.
+ * `already_decided` and `run_ended` mean stop. Codes are only ever added,
+ * except a room's while `/rooms` is Experimental: M6-2 split `room_closed`
+ * into `room_dismissed` and `agent_exited`.
  */
 export type ErrorCode =
   | "host_not_allowed"
@@ -87,7 +89,9 @@ export type ErrorCode =
   | "run_ended"
   | "already_decided"
   | "room_busy"
-  | "room_closed"
+  | "room_dismissed"
+  | "agent_exited"
+  | "no_orchestrator"
   | "idempotency_conflict"
   | "idempotency_in_progress"
   | "shutting_down"
@@ -226,15 +230,77 @@ export interface PermissionAnswered {
   allow: boolean;
 }
 
-/** A room, from `POST /rooms`, `GET /rooms`, `GET /rooms/:id` and
- *  `DELETE /rooms/:id`. Experimental until M6-2. */
-export interface RoomView {
+/** A room's status (M6-2). `paused` is set only once M6-7a lands. A room
+ *  whose participant has exited still reads `active`. @public */
+export type RoomStatus = "active" | "paused" | "dismissed";
+
+/** A participant's status (M6-2). `paused` and `killed` are set only once
+ *  M6-7a lands. @public */
+export type ParticipantStatus =
+  | "idle"
+  | "busy"
+  | "exited"
+  | "paused"
+  | "killed"
+  | "dismissed";
+
+/** A label only (R44): it picks the default target and sends no text to the
+ *  harness. More roles may be added; a client shows one it does not know as
+ *  plain text. @public */
+export type ParticipantRole =
+  | "orchestrator"
+  | "developer"
+  | "tester"
+  | "architect";
+
+/** One participant in full, from `GET /rooms/:id`. Experimental. */
+export interface ParticipantDto {
+  /** Opaque; a rename never moves it. */
+  id: string;
+  name: string;
+  role?: ParticipantRole;
+  /** The harness that runs it. */
+  harness: string;
+  mode: "auto";
+  /** Where the harness runs: the room's checkout, or the cwd itself when
+   *  the cwd cannot carry worktrees. */
+  worktree: string;
+  /** The checkout's branch and the SHA it forked from, when it has one. */
+  branch?: string;
+  baseSha?: string;
+  /** The harness session, kept for a future `session/load`. */
+  sessionId: string;
+  status: ParticipantStatus;
+  notices: Notice[];
+}
+
+/** A room, from `POST /rooms`, `GET /rooms/:id` and
+ *  `POST /rooms/:id/dismiss`. Experimental. */
+export interface RoomDto {
   id: string;
   cwd: string;
-  harness: string;
-  workspace: string;
-  notices: Notice[];
-  status: "idle" | "busy" | "exited" | "closed";
+  title?: string;
+  /** ISO 8601. `updatedAt` moves on a message and on dismiss. */
+  createdAt: string;
+  updatedAt: string;
+  status: RoomStatus;
+  participants: ParticipantDto[];
+}
+
+/** One entry of `GET /rooms`: the roster inline and short, so a list of
+ *  rooms is one call (R9). Experimental. */
+export interface RoomListEntry {
+  id: string;
+  cwd: string;
+  title?: string;
+  status: RoomStatus;
+  updatedAt: string;
+  participants: {
+    id: string;
+    name: string;
+    role?: ParticipantRole;
+    status: ParticipantStatus;
+  }[];
 }
 
 /** `POST /rooms/:id/messages`: the log's size before the message. The turn

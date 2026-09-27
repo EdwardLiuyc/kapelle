@@ -12,7 +12,7 @@
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
  * `stateDirFor`, `validateRun`, `sweepBoot`, `runRun`,
  * `processIdentity` and the permission queue, and for chat rooms
- * `roomHarness` and `openRoom`; worktrees, policy and harnesses
+ * `roomAgents` and `openRoom`; worktrees, policy and harnesses
  * stay behind them. If orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
  * implementation (`docs/STORIES.md`, M2-1).
@@ -63,7 +63,8 @@ import {
   type PermissionDecision,
   type RepoAdded,
   type RepoRoots,
-  type RoomView,
+  type RoomDto,
+  type RoomListEntry,
   type RunAccepted,
   type RunDto,
   type RunListEntry,
@@ -81,7 +82,7 @@ import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
-import { openRoom, type Room, roomHarness } from "./core/room.ts";
+import { openRoom, type Room, roomAgents } from "./core/room.ts";
 import { runRun } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import {
@@ -93,7 +94,10 @@ import {
 import { processIdentity, sweepBoot } from "./core/sweep.ts";
 import { openWorktrees, stateDirRoot } from "./core/worktree.ts";
 import {
+  type RoomState,
   type RunState,
+  toRoomDto,
+  toRoomListEntry,
   toRunDto,
   toRunListEntry,
   toTaskDto,
@@ -822,45 +826,36 @@ async function getEvents(
   await streamLog(log, req, res, gone.signal);
 }
 
-/** One chat room as the API reports it, less the live `status`. In memory
- *  only, like a run. */
-type RoomState = Omit<RoomView, "status">;
-
 const rooms = new Map<
   string,
-  /** `dismissed` is set only once a `DELETE` has *finished* tearing the room
-   *  down, so it tells a settled close from one still in flight. */
+  /** `dismissed` is set only once a dismiss has *finished* tearing the room
+   *  down, so it tells a settled dismiss from one still in flight. */
   { room: Room; state: RoomState; dismissed?: boolean }
 >();
 
-const roomView = ({
-  room,
-  state,
-}: {
-  room: Room;
-  state: RoomState;
-}): RoomView => ({
-  ...state,
-  status: room.status(),
-});
-
 /**
- * `POST /rooms {cwd, agent | cmd}` — a chat room: one harness, kept alive
- * until `DELETE` (chat MVP). The refusals keep `POST /runs`'s order — not
- * added (403), then a bad harness (400) — and the answer waits for the
- * harness's session, so a harness that cannot start is this request's error,
- * not a room that is silently dead.
- * Always `auto`: the MVP has no one to answer a permission prompt.
+ * `POST /rooms {cwd, title?, agents?: [{agent | cmd, name?, role?}]}` — a
+ * room, empty or with one agent, kept until it is dismissed (M6-2). The
+ * refusals keep `POST /runs`'s order — not added (403), then a bad request
+ * (400) — and the answer waits for every harness's session, so a harness
+ * that cannot start is this request's error, not a dead participant (S13).
+ * Always `auto`: nobody answers a room's permission prompts yet (M6-5).
  */
 async function postRoom(req: IncomingMessage, res: ServerResponse) {
-  const body = await readBody(req, ["cwd", "agent", "cmd"]);
+  const body = await readBody(req, ["cwd", "title", "agents"]);
   const cwd = existingDir(body.cwd, "cwd");
   await refuseUnadded(cwd);
 
-  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
-  let spec: ReturnType<typeof roomHarness>;
+  // No length cap beyond the 4 MiB body limit, the same as a message.
+  if (
+    body.title !== undefined &&
+    (typeof body.title !== "string" || !body.title.trim())
+  ) {
+    throw refusal(400, "invalid_request", '"title" must be a non-empty string');
+  }
+  let agents: ReturnType<typeof roomAgents>;
   try {
-    spec = roomHarness(str(body.agent), str(body.cmd));
+    agents = roomAgents(body.agents);
   } catch (err) {
     throw refusal(400, "invalid_request", messageOf(err));
   }
@@ -873,70 +868,106 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
     throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
 
-  const notices: RoomState["notices"] = [];
   const bus = createEventBus();
+  // ponytail: a room's `unitId` is the harness name, the bus's `agent`, not
+  // the participant id. One agent per room keeps it unambiguous; M6-4 puts
+  // the participant id on each event, and this then records it.
   trackChildren(bus, "room", id);
   let room: Room;
   try {
-    room = await openRoom({
-      roomId: id,
-      cwd,
-      spec,
-      setup,
-      bus,
-      onNotice: (text, kind) => notices.push(kind ? { text, kind } : { text }),
-    });
+    room = await openRoom({ roomId: id, cwd, agents, setup, bus });
   } catch (err) {
     throw refusal(500, "room_open_failed", messageOf(err));
   }
-  // A shutdown that began while the harness was starting has already closed
-  // every room it knew of; this one must not outlive the daemon.
+  // A shutdown that began while the harness was starting has already
+  // dismissed every room it knew of; this one must not outlive the daemon.
   if (stopping) {
-    await room.close();
+    await room.dismiss();
     throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
-  const state: RoomState = {
-    id,
-    cwd,
-    harness: room.harness,
-    workspace: room.workspace,
-    notices,
-  };
-  const entry = { room, state };
-  rooms.set(id, entry);
-  send(res, 201, roomView(entry) satisfies RoomView);
+  const now = new Date().toISOString();
+  const state: RoomState = { id, cwd, createdAt: now, updatedAt: now };
+  if (typeof body.title === "string") state.title = body.title.trim();
+  rooms.set(id, { room, state });
+  send(res, 201, toRoomDto(state, room) satisfies RoomDto);
+}
+
+/** The room `id` names, or a 404. */
+function roomEntry(id: string) {
+  const entry = rooms.get(id);
+  if (!entry) throw refusal(404, "room_not_found", `no room ${id}`);
+  return entry;
 }
 
 /**
- * `POST /rooms/:id/messages {text}` — one turn. 202 once the message is on
- * the room's log; the answer arrives on `GET /rooms/:id/events`. `seq` is the
- * log's size before the message, so a client waits for the first
- * `_client_turn_ended` after it rather than one it is still replaying.
+ * `POST /rooms/:id/messages {text}` — one turn, to the room's orchestrator.
+ * 202 once the message is on the room's log; the answer arrives on
+ * `GET /rooms/:id/events`. `seq` is the log's size before the message, so a
+ * client waits for the first `_client_turn_ended` after it rather than one
+ * it is still replaying. M6-4 adds a route per participant.
  */
 async function postMessage(
   id: string,
   req: IncomingMessage,
   res: ServerResponse,
 ) {
-  const entry = rooms.get(id);
-  if (!entry) throw refusal(404, "room_not_found", `no room ${id}`);
+  const entry = roomEntry(id);
   const { text } = await readBody(req, ["text"]);
   if (typeof text !== "string" || !text.trim()) {
     throw refusal(400, "invalid_request", '"text" must be a non-empty string');
   }
+  if (entry.room.status() === "dismissed") {
+    throw refusal(409, "room_dismissed", `room ${id} is dismissed`);
+  }
+  const target = entry.room.participants.find((p) => p.role === "orchestrator");
+  if (!target) {
+    throw refusal(
+      409,
+      "no_orchestrator",
+      `room ${id} has no participant with the orchestrator role`,
+    );
+  }
   const seq = entry.room.eventLog?.size ?? 0;
   let turn: Promise<void>;
   try {
-    turn = entry.room.send(text);
+    turn = target.send(text);
   } catch (err) {
-    // `send` refuses a live turn (`busy`) or a room that is over; the status
-    // is read after the throw, so the code names the refusal that happened.
-    const code = entry.room.status() === "busy" ? "room_busy" : "room_closed";
+    // `send` refuses a live turn (`busy`) or a harness that has exited; the
+    // status is read after the throw, so the code names the refusal that
+    // happened.
+    const code = target.status() === "busy" ? "room_busy" : "agent_exited";
     throw refusal(409, code, messageOf(err));
   }
+  entry.state.updatedAt = new Date().toISOString();
   // Settles with the turn; a failed turn is already on the log as an event.
   turn.catch(() => {});
   send(res, 202, { seq } satisfies MessageAccepted);
+}
+
+/**
+ * `POST /rooms/:id/dismiss` — a person ends the room. Synchronous, unlike a
+ * run's cancel: it waits for the harness to stop and the checkout to be
+ * released — kept, never committed (R37) — which `stop()` bounds at 5 s.
+ */
+async function dismissRoom(id: string, res: ServerResponse) {
+  const entry = roomEntry(id);
+  if (entry.dismissed) {
+    throw refusal(409, "room_dismissed", `room ${id} is already dismissed`);
+  }
+  // **Not `status() === "dismissed"`**, which reads so the instant a dismiss
+  // begins: a second request arriving mid-teardown would then be told the
+  // room was already dismissed while its harness was still alive and its
+  // checkout unreleased, which is exactly what S6(a) promises does not
+  // happen. `dismiss()` hands every caller the same promise, so two racing
+  // dismissals both wait for the one teardown and both get their 200.
+  // `dismissed` is set after the await, so only a request that arrives once
+  // the dismiss has settled is refused.
+  await entry.room.dismiss();
+  if (!entry.dismissed) {
+    entry.dismissed = true;
+    entry.state.updatedAt = new Date().toISOString();
+  }
+  send(res, 200, toRoomDto(entry.state, entry.room) satisfies RoomDto);
 }
 
 /** `POST /permissions/:id {"allow": boolean}` — the first answer wins. */
@@ -987,7 +1018,9 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const events = /^\/runs\/([^/]+)\/events$/.exec(pathname);
   const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
   const room = /^\/rooms\/([^/]+)$/.exec(pathname);
-  const roomSub = /^\/rooms\/([^/]+)\/(events|messages)$/.exec(pathname);
+  const roomSub = /^\/rooms\/([^/]+)\/(events|messages|dismiss)$/.exec(
+    pathname,
+  );
 
   if (req.method === "GET" && pathname === "/version") {
     send(res, 200, {
@@ -1009,45 +1042,28 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   } else if (req.method === "POST" && pathname === "/rooms") {
     await postRoom(req, res);
   } else if (req.method === "GET" && pathname === "/rooms") {
-    send(res, 200, [...rooms.values()].map(roomView) satisfies RoomView[]);
+    send(
+      res,
+      200,
+      [...rooms.values()].map(({ state, room }) =>
+        toRoomListEntry(state, room),
+      ) satisfies RoomListEntry[],
+    );
   } else if (req.method === "GET" && room) {
-    const entry = rooms.get(room[1] as string);
-    if (!entry) throw refusal(404, "room_not_found", `no room ${room[1]}`);
-    send(res, 200, roomView(entry) satisfies RoomView);
+    const { state, room: live } = roomEntry(room[1] as string);
+    send(res, 200, toRoomDto(state, live) satisfies RoomDto);
   } else if (req.method === "POST" && roomSub?.[2] === "messages") {
     await postMessage(roomSub[1] as string, req, res);
+  } else if (req.method === "POST" && roomSub?.[2] === "dismiss") {
+    await dismissRoom(roomSub[1] as string, res);
   } else if (req.method === "GET" && roomSub?.[2] === "events") {
-    const entry = rooms.get(roomSub[1] as string);
-    if (!entry) throw refusal(404, "room_not_found", `no room ${roomSub[1]}`);
-    const log = entry.room.eventLog;
+    const log = roomEntry(roomSub[1] as string).room.eventLog;
     if (!log) {
       throw refusal(404, "no_event_log", `room ${roomSub[1]} has no event log`);
     }
     const gone = new AbortController();
     res.on("close", () => gone.abort());
     await streamLog(log, req, res, gone.signal);
-  } else if (req.method === "DELETE" && room) {
-    // Synchronous, unlike a run's cancel: dismissing waits for the harness to
-    // stop and the checkout to be released — kept, never committed (R37) —
-    // which `stop()` bounds at 5 s.
-    const entry = rooms.get(room[1] as string);
-    if (!entry) {
-      throw refusal(404, "room_not_found", `no room ${room[1]}`);
-    } else if (entry.dismissed) {
-      throw refusal(409, "room_closed", `room ${room[1]} is already dismissed`);
-    } else {
-      // **Not `status() === "closed"`**, which reads `closed` the instant a
-      // close begins: a second DELETE arriving mid-teardown would then be told
-      // the room was already dismissed while its harness was still alive and
-      // its checkout unreleased, which is exactly what S6(a) promises does not
-      // happen. `close()` hands every caller the same promise, so two racing
-      // dismissals both wait for the one teardown and both get their 200.
-      // `dismissed` is set after the await, so only a request that arrives
-      // once the close has settled is refused.
-      await entry.room.close();
-      entry.dismissed = true;
-      send(res, 200, roomView(entry) satisfies RoomView);
-    }
   } else if (req.method === "GET" && events) {
     await getEvents(events[1] as string, req, res);
   } else if (req.method === "GET" && one) {
@@ -1141,7 +1157,7 @@ async function shutdown(signal: string): Promise<void> {
   for (const canceller of cancels.values()) canceller.abort("cancel");
   await Promise.all([
     ...inFlight,
-    ...[...rooms.values()].map(({ room }) => room.close()),
+    ...[...rooms.values()].map(({ room }) => room.dismiss()),
   ]);
   rmSync(file, { force: true });
   process.exit(0);

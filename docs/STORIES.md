@@ -2273,7 +2273,7 @@ promise until M5-1 documents it. The `kapelle chat` verb stays with M6-9 (S7a). 
 applies from here. The spike's `close()` releases as
 `done`, which commits the work and removes the checkout; both must stop. `release` already
 behaves as R37 wants under a non-releasing status, but every such label (`failed`,
-`cancelled`, `timed_out`) misdescribes a room that simply closed. **Settled: `release`
+`cancelled`, `timed_out`) misdescribes a room that was simply dismissed. **Settled: `release`
 takes a `ReleaseAction` (`"commit" | "keep"`)**, `RELEASES` moves to `core/run.ts` beside
 `TaskStatus` and converts at its one call site, and a room always passes `"keep"` — so
 `core/worktree.ts` imports no run word at all. Add R40's `ponytail:` comment where the
@@ -2339,6 +2339,14 @@ rename also splits today's single `RoomStatus` (`core/room.ts:43`: `idle`/`busy`
 `dismissed`, the sketch's record. A mechanical `closed`→`dismissed` rename alone would
 publish participant-shaped values as the room status, which `daemon.ts`'s `roomView` reads
 from `room.status()` today.
+**Amended 2026-09-27 (#146 pickup).** The body is
+`{cwd, title?, agents?: [{agent | cmd, name?, role?}]}`, not R21's `orchestrator?` field:
+R44 made the orchestrator a label on any participant, so the body names none. An agent has
+only the role it is sent; nothing is promoted. A room holds **at most one** agent until
+M6-3, because a second needs its own checkout (M6-6a) and a route to reach it (M6-4).
+`POST /rooms/:id/messages` goes to the orchestrator and answers `409 no_orchestrator`
+without one. `DELETE /rooms/:id` is freed, not built: it answers `404` until M6-7a builds
+R18's delete. `room_closed` splits into `room_dismissed` and `agent_exited`.
 *Done when* empty and starter rooms round-trip through `GET /rooms/:id`, the list carries
 each roster inline, ids are tested, no file says `closed` of a dismissed room, and the
 DTOs are covered by contract tests.
@@ -2456,12 +2464,18 @@ shutdown sets it when a cancel outlives the grace and the harness is killed.
 pick it up after M6-4, which changes the log line this story saves. **Open at
 pickup:** whether the sweep also reports a stale `.git/index.lock` in a `killed`
 participant's checkout.
+**Added 2026-09-27 (#146): R18's delete lands here.** M6-2 freed `DELETE /rooms/:id` and
+left it unrouted. This story owns the room's record and its retention, so it also builds
+delete: remove the room's worktrees, branches, record and log at once, refused with `409`
+naming the files while any checkout has uncommitted work. It lands after M6-6a, so it
+removes one checkout per participant.
 *Done when* a restart lists the room `paused` and every participant `paused`, a shutdown
 during a turn ends that turn in the log and leaves the participant `paused`, a `kill -9`
 during a turn leaves that participant `killed` after the next boot, its history replays, a
-message to one revives it and is answered, the DTO reports `resumed: "fresh"`, and a
-dismissed room is not revived by the same path.
-Decisions: R17, R33, R42, R46, S3, S4.
+message to one revives it and is answered, the DTO reports `resumed: "fresh"`, a
+dismissed room is not revived by the same path, and `DELETE /rooms/:id` removes a clean
+room's checkouts, branches, record and log and refuses a dirty one with `409`.
+Decisions: R17, R18, R33, R42, R46, S3, S4.
 
 **M6-7b · `session/load` for a paused participant · M · needs M6-7a, M0-9**
 **Half B.** A participant revives with `session/load` where the harness advertises

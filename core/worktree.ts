@@ -67,7 +67,7 @@ export const STATE_DIR = ".kapelle";
  * at all and always keeps, because the supervisor never commits a
  * participant's branch (R37). Passing a status here would force a room to
  * borrow a task word — `done` commits work nobody approved, and `failed`
- * libels a room that simply closed.
+ * libels a room that was simply dismissed.
  */
 type ReleaseAction = "commit" | "keep";
 
