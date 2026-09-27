@@ -16,7 +16,7 @@ client commit and spike branch — they differ, and by enough to matter:
 | M0-4 | 2026-08-21 | `ae6a885` | `spike/m0-4-cancel-probe` |
 | M0-5 | 2026-08-22 | `97eeb1e` | `spike/m0-5-usage-probe` |
 | M0-1 copilot re-verification | 2026-08-23 | `c4307f3` | `spike/m0-7-reverify` |
-| M0-9 | 2026-09-27 | `a6b3663` or `457bfb5`, same `protocol/` | `spike/m0-9-load-probe` (`load-probe.mjs`) |
+| M0-9 | 2026-09-27 | `04d6ac9` (run 1), `457bfb5` (run 2); same `protocol/` and `core/policy.ts` | `spike/m0-9-load-probe` (`load-probe.mjs`) |
 
 Method throughout: each harness spawned behind a transparent stdio proxy that logged every
 JSON-RPC line in both directions, so "did not happen" below means *absent from the wire*,
@@ -1028,6 +1028,9 @@ spawning pi v0.85.1, one machine, throwaway workspaces, wire-tap captures.
 | `usage` | `absent` — no `usage_update` and no `usage` on the `session/prompt` response in the turns measured |
 | `measuredOn` | `{ version: "0.0.33", date: "2026-09-09" }` |
 
+`loadSession` was not recorded here. §M0-9 measured it on pi-acp 0.0.34: it is `true`, and
+the load works in a new process.
+
 Other wire notes that matter for downstream consumers:
 
 - `session/new` returns `modes.currentModeId: "medium"` and `configOptions` for `model` and
@@ -1149,15 +1152,15 @@ end state is `counter.txt` = `4` and rounds 1–4 in `log.txt` once each. A roun
 shows on disk. Two runs per harness per stop, 24 in all. An earlier, simpler probe (one run
 each, stopped once one file existed) gave the same load results and is not in the table.
 
-| | claude-agent-acp 0.81.1 | pi-acp 0.0.34 / pi 0.87.1 | opencode 2.0.18 | copilot 1.0.88 |
+| | opencode 2.0.18 | claude-agent-acp 0.81.1 | copilot 1.0.88 | pi-acp 0.0.34 / pi 0.87.1 |
 | --- | --- | --- | --- | --- |
-| `loadSession` | true | **true** | true | true |
-| `sessionCapabilities` | `additionalDirectories`, `close`, `delete`, `fork`, `list`, `resume`, `subagents` | `delete`, `list` | `close`, `delete`, `fork`, `list`, `resume` | `close`, `list` |
+| `loadSession` | true | true | true | **true** |
+| `sessionCapabilities` | `close`, `delete`, `fork`, `list`, `resume` | `additionalDirectories`, `close`, `delete`, `fork`, `list`, `resume`, `subagents` | `close`, `list` | `delete`, `list` |
 | load works (clean / eof / sigkill) | 2/2 · 2/2 · 2/2 | 2/2 · 2/2 · 2/2 | 2/2 · 2/2 · 2/2 | 2/2 · 2/2 · 2/2 |
-| turn 2 answer on eof | none, exit 0 | none, exit 0 | none, exit 0 | **`cancelled`, then exit**, about 1 s later than the others |
-| memory matches the files (clean / eof / sigkill) | **1** · 2 · 2 of 2 | 2 · 2 · 2 of 2 | 2 · 2 · 2 of 2 | 1 · 1 · **0** of 2 |
-| end state after "finish" | **1 run did round 2 twice** | exact, 6 of 6 | exact, 6 of 6 | exact, 6 of 6 |
-| `session/load` result keys | `sessionId`, `modes`, `configOptions` | `configOptions`, `models`, `modes`, `_meta` | `configOptions` | `models`, `modes`, `configOptions` |
+| turn 2 answer on eof | none, exit 0 | none, exit 0 | **`cancelled`, then exit**, about 1 s later than the others | none, exit 0 |
+| memory matches the files (clean / eof / sigkill) | 2 · 2 · 2 of 2 | **1** · 2 · 2 of 2 | 1 · 1 · **0** of 2 | 2 · 2 · 2 of 2 |
+| end state after "finish" | 6 of 6 exact | **5 of 6 exact; 1 did round 2 twice** | 6 of 6 exact | 6 of 6 exact |
+| `session/load` result keys | `configOptions` | `sessionId`, `modes`, `configOptions` | `models`, `modes`, `configOptions` | `configOptions`, `models`, `modes`, `_meta` |
 
 *Memory matches* was graded by hand: the answer about rounds and the counter, against
 `counter.txt` and `log.txt` at the stop. On clean, every harness answered turn 2 with
@@ -1200,10 +1203,14 @@ user message for it. The cause was not checked.
   participant cancelled during a turn, not only one that reads `killed`.
 - **The replay arrives as ordinary `session/update`.** M6-7b has to keep it out of the room
   log and off the screen, or the history shows twice.
+- **claude's unsent "continue" is inside the loaded session.** It appeared after both
+  SIGKILL runs. A revived claude participant can believe it was told something the person
+  never said. M6-7b should expect it.
 
 **Coverage.** One machine, two runs per cell. Every stop came at the same point: the
 second `log.txt` write. An idle participant was not stopped as a case of its own; turn 1
-is the only evidence for it. `session/resume` was not measured.
+is the only evidence for it. `session/resume` was not measured. **Open:** where claude's
+unsent "continue" comes from, and whether any notification carries it.
 
 ---
 
