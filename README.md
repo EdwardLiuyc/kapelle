@@ -5,12 +5,15 @@
 
 A minimal Agent Client Protocol client. Two runtime dependencies, Node 24+.
 
-They are `marked` and `@earendil-works/pi-tui` (the `chat.ts` screen, M4-1), and the
-rule they arrived under (ratified 2026-09-09, M1c-7) is narrow: a runtime dependency is acceptable only **downstream of the bus,
-in presentation**, where its worst failure is cosmetic — it can change no permission
-decision, path guard, policy, mode negotiation, or anything that reaches a
-subprocess. It is pinned exactly, and `core/markdown.ts` falls back to the raw text
-if it throws, so a bad release costs the screen and never the run.
+They are `marked` and `@earendil-works/pi-tui` (the `chat.ts` screen, M4-1). pi-tui
+brings one package of its own, `get-east-asian-width`. The rule they arrived under
+(ratified 2026-09-09, M1c-7) is narrow: a runtime dependency is acceptable only
+**downstream of the bus, in presentation**, where its worst failure is cosmetic — it
+can change no permission decision, path guard, policy, mode negotiation, or anything
+that reaches a subprocess. Both are pinned exactly, and each has a net, so a bad
+release costs the screen and never the run: `core/markdown.ts` falls back to the raw
+text if `marked` throws, and `chat.ts` leaves pi-tui's screen before it exits on a
+throw. A room lives in the daemon, so the chat can always be rejoined.
 
 You are the **client**: you spawn the harness as a subprocess, own the workspace,
 answer its file-system requests, and decide its permissions. The harness is the

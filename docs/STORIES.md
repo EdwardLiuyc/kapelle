@@ -2086,8 +2086,12 @@ Decisions: S7, S8, S9, M6. (S8 settled as (a).)
 **Built 2026-09-27 (#47).** The spike is rebased; its `daemon.ts` and `CLAUDE.md` hunks
 were dropped, because master rewrote both. pi-tui 0.85.1 is ratified under M1c-7's rule
 and pinned exactly. 0.87.1 was out, but the spike measured 0.85.1, and a bump is its own
-change. `overrides` points pi-tui's `marked` at ours (`$marked`), so `npm ls marked`
-shows one copy. npm reads `overrides` only in the root project, so if kapelle were ever
+change. It brings one transitive runtime package, `get-east-asian-width` 1.6.0 (MIT, no
+dependencies). pi-tui pins `marked` 18.0.5 exactly, and `overrides` points it at ours
+(`$marked`), so `npm ls marked` shows one copy. That is an override of a pin, not a
+dedupe of a range: pi-tui's markdown runs on a `marked` its author did not test. It is
+taken because the worst case is a badly drawn answer. Look here first when a pi-tui
+render goes wrong. npm reads `overrides` only in the root project, so if kapelle were ever
 installed as a dependency, pi-tui would get its own `marked` again. That is two copies,
 and it still works. pi-tui ships two native helpers, both loaded lazily inside a
 try/catch: `darwin-modifiers.node` (Shift+Enter in Apple Terminal only) and
