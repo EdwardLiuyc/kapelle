@@ -17,6 +17,11 @@
  * branch (R35c). A branch holds only what its participant committed, so a
  * participant started from it never sees the other's uncommitted files (R37).
  *
+ * **A kept checkout lasts until the next daemon boot.** A room writes no
+ * record until M6-7a, so the boot sweep (`core/sweep.ts`) takes every room
+ * checkout for an orphan: it removes a clean one and keeps its branch, and
+ * keeps a dirty one. No work is lost; the directory may be.
+ *
  * **At most one participant through the route, for now.** `POST /rooms`
  * creates a room empty or with one agent; M6-3 adds the route that calls
  * `add`. The request shape is already a list, so lifting it changes no
@@ -38,7 +43,7 @@
  * when a machine actually runs out of memory or file handles, not before.
  */
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { AcpAgent } from "../protocol/agent.ts";
@@ -76,8 +81,9 @@ type Role = (typeof ROLES)[number];
 
 /** R22: ASCII on purpose, so the first word of an `@name` message is always
  *  the whole name, and Unicode case folding cannot make two names one.
- *  Uniqueness in a room under that folding arrives with M6-3's second
- *  participant; one agent cannot clash. */
+ *  Uniqueness in a room under that folding is M6-3's. Until then `add`
+ *  takes a name already in use, and only the route's one-agent limit keeps
+ *  two apart. */
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
 /** A line the room kept for the operator, as `Warning` has it. */
@@ -129,8 +135,9 @@ export interface Room {
   status(): RoomStatus;
   /** Adds one participant in a checkout of its own, forked from `base` — a
    *  ref, such as another participant's `branch` — or from the repository's
-   *  HEAD. Resolves once its harness has a session. A throw leaves the room
-   *  as it was: no participant, no checkout and no branch. */
+   *  HEAD. Resolves once its harness has a session. A throw adds no
+   *  participant, and removes the checkout and branch if the harness left
+   *  them untouched. One it wrote into is kept, and a room notice names it. */
   add(request: AgentRequest, base?: string): Promise<Participant>;
   /** Cancels every live turn, stops every harness, releases every checkout
    *  **without committing** (R37) and closes the log. Safe to call twice. A
@@ -291,6 +298,31 @@ export async function openRoom({
     }
   };
 
+  // The rollback half of the spawn, for an add that failed or met a dismiss.
+  // `keep` removes an untouched checkout and its branch, so the room is as it
+  // was. One the harness already wrote into is kept, as at dismiss. A
+  // participant that never joined has no notices of its own, so both lines
+  // go to the room's, which every participant shows.
+  const rollback = async (id: string, worktree: string | undefined) => {
+    const before = roomNotices.length;
+    await release(id, onRoomNotice);
+    if (
+      worktrees &&
+      worktree &&
+      roomNotices.length === before &&
+      existsSync(worktree)
+    ) {
+      onRoomNotice(
+        `a participant that did not join left its checkout at ${worktree}: ` +
+          "its harness wrote into it, so the checkout and its branch are kept",
+      );
+    }
+  };
+
+  // A dismiss waits for every add in flight, so nothing an add started
+  // outlives `dismiss()`: the add sees the dismiss and rolls itself back.
+  const adding = new Set<Promise<Participant>>();
+
   const teardown = () => {
     dismissing ??= (async () => {
       try {
@@ -320,14 +352,17 @@ export async function openRoom({
       own.push(kind ? { text, kind } : { text });
     if (notice) onNotice(notice);
 
+    // Taken here rather than in `startParticipant`, so a rollback knows
+    // which path to look at.
+    let worktree: string | undefined;
     let started: Awaited<ReturnType<typeof startParticipant>>;
     try {
+      worktree = worktrees ? await worktrees.acquire(id, base) : cwd;
       started = await startParticipant({
         id,
         request,
-        base,
-        cwd,
-        worktrees,
+        worktree,
+        info: worktrees?.info(id),
         bus,
         notices: () => [...roomNotices, ...own],
         onNotice,
@@ -335,15 +370,13 @@ export async function openRoom({
         dismissed: () => dismissing !== undefined,
       });
     } catch (err) {
-      // The rollback half of the spawn: an untouched checkout and its
-      // branch go, so a failed add leaves the room as it was.
-      await release(id, onNotice);
+      await rollback(id, worktree);
       throw err;
     }
     // A dismiss that began while this harness was starting did not see it.
     if (dismissing) {
       await started.stop();
-      await release(id, onNotice);
+      await rollback(id, worktree);
       throw new Error("the room is dismissed");
     }
     members.push({ ...started, onNotice });
@@ -351,9 +384,6 @@ export async function openRoom({
     return started.participant;
   };
 
-  // A dismiss waits for every add in flight, so nothing an add started
-  // outlives `dismiss()`: the add sees the dismiss and rolls itself back.
-  const adding = new Set<Promise<Participant>>();
   const add = (request: AgentRequest, base?: string) => {
     const p = start(request, base);
     adding.add(p);
@@ -381,15 +411,14 @@ export async function openRoom({
   };
 }
 
-/** Takes the participant's own checkout, starts one harness in it and opens
- *  its session. On a throw it has stopped whatever it started; the caller
- *  releases the checkout. */
+/** Starts one harness in the participant's checkout and opens its session.
+ *  On a throw it has stopped whatever it started; the caller releases the
+ *  checkout. */
 async function startParticipant({
   id,
   request: { spec, name, role },
-  base,
-  cwd,
-  worktrees,
+  worktree,
+  info,
   bus,
   notices,
   onNotice,
@@ -398,17 +427,15 @@ async function startParticipant({
 }: {
   id: string;
   request: AgentRequest;
-  base: string | undefined;
-  cwd: string;
-  worktrees: WorktreeSetup["worktrees"];
+  /** Its own checkout, or the cwd when there are no worktrees. */
+  worktree: string;
+  info: { branch: string; baseSha: string } | undefined;
   bus: EventBus;
   notices: () => readonly RoomNotice[];
   onNotice: Notify;
   stderrLog: string | undefined;
   dismissed: () => boolean;
 }): Promise<{ participant: Participant; stop: () => Promise<void> }> {
-  const worktree = worktrees ? await worktrees.acquire(id, base) : cwd;
-  const info = worktrees?.info(id);
   if (info) {
     bus.emit({
       agent: spec.name,

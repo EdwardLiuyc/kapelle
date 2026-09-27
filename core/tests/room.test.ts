@@ -67,6 +67,20 @@ async function commitIn(p: Participant, file: string) {
 const branchExists = async (repo: string, branch: string) =>
   (await git(repo, "branch", "--list", branch)) !== "";
 
+/** The room's branches, by name only: `git branch --list` would add a `+`
+ *  for a branch checked out in a worktree. */
+const roomBranches = async (repo: string, roomId: string) =>
+  (
+    await git(
+      repo,
+      "for-each-ref",
+      "--format=%(refname:short)",
+      `refs/heads/kapelle/${roomId}/`,
+    )
+  )
+    .split("\n")
+    .filter(Boolean);
+
 test("each participant has its own checkout and branch, and turns run in parallel", async (t) => {
   const repo = await gitRepo(t);
   const { room, alice, roomId } = await roomWithAlice(t, repo);
@@ -124,13 +138,33 @@ test("a failed add leaves no checkout or branch, and the room keeps working", as
   await assert.rejects(room.add(dead as ReturnType<typeof mock>));
 
   assert.equal(room.participants.length, 1);
-  assert.equal(
-    await git(repo, "branch", "--list", `kapelle/${roomId}/*`),
-    `+ ${alice.branch}`,
-  );
+  assert.deepEqual(await roomBranches(repo, roomId), [alice.branch]);
   assert.equal(room.status(), "active");
   await alice.send("still here");
   assert.equal(alice.status(), "idle");
+});
+
+test("a failed add whose harness wrote into its checkout keeps it, and says so", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice, roomId } = await roomWithAlice(t, repo);
+  // A harness that writes into its cwd, then dies before its session.
+  const bin = join(await tempDir(t), "scribble.sh");
+  await writeFile(bin, "#!/bin/sh\necho x > scribble.txt\nexit 1\n", {
+    mode: 0o755,
+  });
+  const dead = roomAgents([{ cmd: bin, name: "carol" }])[0];
+
+  await assert.rejects(room.add(dead as ReturnType<typeof mock>));
+
+  assert.equal(room.participants.length, 1);
+  const kept = (await roomBranches(repo, roomId)).filter(
+    (b) => b !== alice.branch,
+  );
+  assert.equal(kept.length, 1, "the written checkout keeps its branch");
+  assert.match(
+    alice.notices.map((n) => n.text).join("\n"),
+    /did not join left its checkout/,
+  );
 });
 
 test("a base is refused in a folder that is not a repository", async (t) => {
@@ -165,7 +199,7 @@ test("a dismiss during an add leaves nothing behind once it resolves", async (t)
   );
   await room.dismiss();
   assert.ok(settled, "dismiss() resolved while an add was still starting");
-  assert.equal(await git(repo, "branch", "--list", `kapelle/${roomId}/*`), "");
+  assert.deepEqual(await roomBranches(repo, roomId), []);
   await assert.rejects(adding, /dismissed/);
 });
 
