@@ -1203,9 +1203,9 @@ user message for it. The cause was not checked.
   participant cancelled during a turn, not only one that reads `killed`.
 - **The replay arrives as ordinary `session/update`.** M6-7b has to keep it out of the room
   log and off the screen, or the history shows twice.
-- **claude's unsent "continue" is inside the loaded session.** It appeared after both
-  SIGKILL runs. A revived claude participant can believe it was told something the person
-  never said. M6-7b should expect it.
+- **claude can report a prompt nobody sent.** It did so after both SIGKILL runs. A revived
+  claude participant can believe it was told something the person never said. The replay
+  does not carry it, so a replay filter will not find it. M6-7b should expect it.
 
 **Coverage.** One machine, two runs per cell. Every stop came at the same point: the
 second `log.txt` write. An idle participant was not stopped as a case of its own; turn 1
