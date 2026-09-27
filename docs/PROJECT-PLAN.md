@@ -643,7 +643,9 @@ on the same session with the first turn's context kept, on all four harnesses
   participant revives on its next message with a fresh session (Half A). **Amended
   2026-09-26:** a shutdown cancels each busy turn first, so it leaves a participant as a
   cancel does; `session/load` (Half B, M6-7b) keeps its memory across the restart, after
-  the M0-9 probe. A participant stopped by force during a turn reads `killed` (R46).
+  the M0-9 probe. A participant stopped by force during a turn reads `killed` (R46). **Amended
+  2026-09-27 (M0-9):** the load works on all four harnesses, but a participant stopped
+  during a turn, by a cancel too, can come back with memory behind the files (R46).
 - **Room CLI and bridges** — `kapelle chat` runs the same HTTP-only binary; a bridge is a
   local process that subscribes to a stream and answers permissions. **No chat SDK enters
   the daemon.**

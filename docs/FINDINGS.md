@@ -16,6 +16,7 @@ client commit and spike branch — they differ, and by enough to matter:
 | M0-4 | 2026-08-21 | `ae6a885` | `spike/m0-4-cancel-probe` |
 | M0-5 | 2026-08-22 | `97eeb1e` | `spike/m0-5-usage-probe` |
 | M0-1 copilot re-verification | 2026-08-23 | `c4307f3` | `spike/m0-7-reverify` |
+| M0-9 | 2026-09-27 | `04d6ac9` (run 1), `457bfb5` (run 2); same `protocol/` and `core/policy.ts` | `spike/m0-9-load-probe` (`load-probe.mjs`) |
 
 Method throughout: each harness spawned behind a transparent stdio proxy that logged every
 JSON-RPC line in both directions, so "did not happen" below means *absent from the wire*,
@@ -1027,6 +1028,9 @@ spawning pi v0.85.1, one machine, throwaway workspaces, wire-tap captures.
 | `usage` | `absent` — no `usage_update` and no `usage` on the `session/prompt` response in the turns measured |
 | `measuredOn` | `{ version: "0.0.33", date: "2026-09-09" }` |
 
+`loadSession` was not recorded here. §M0-9 measured it on pi-acp 0.0.34: it is `true`, and
+the load works in a new process.
+
 Other wire notes that matter for downstream consumers:
 
 - `session/new` returns `modes.currentModeId: "medium"` and `configOptions` for `model` and
@@ -1122,6 +1126,94 @@ previous turn's prompt, and `protocol/tests/agent.test.ts` pins the client half 
 
 ---
 
+## M0-9 · `session/load` into a new harness process — measured 2026-09-27 (#176)
+
+**Question.** Every `loadSession: true` above is a handshake claim. Does `session/load`
+work in a **new** harness process, after a clean stop and after a kill during a turn? And
+after the stop, does the harness remember all of its work, less than the files show, or
+nothing?
+
+**Method.** A probe script drove `AcpAgent` with `policyFor("auto")`, one temp workspace
+per run. The client has no load method, so the script sent `session/load` through
+`request()`. In process 1, turn 1 wrote `notes.txt` (a codeword) and `counter.txt` (`0`).
+Turn 2 ran four rounds: read `counter.txt`, add 1, write it back, append `round N` to
+`log.txt`, run `sleep 5`. The probe read `log.txt` every 20 ms and stopped process 1 the
+moment `round 2` appeared, in one of three ways:
+
+- **clean**: `session/cancel`, wait for the turn to end, then `stop()` (stdin end of file).
+- **eof**: `stop()` during the turn, with the SIGKILL grace set to 60 s so that it never
+  fired. This is what a daemon crash delivers (§M2-4).
+- **sigkill**: SIGKILL to the harness pid during the turn.
+
+Process 2 started in the same cwd and sent `session/load` with the old id. Then it asked,
+with no tools: the codeword, which rounds finished, what `counter.txt` holds, and whether
+the task finished. Last, it told the harness to finish without redoing a round. The right
+end state is `counter.txt` = `4` and rounds 1–4 in `log.txt` once each. A round done twice
+shows on disk. Two runs per harness per stop, 24 in all. An earlier, simpler probe (one run
+each, stopped once one file existed) gave the same load results and is not in the table.
+
+| | opencode 2.0.18 | claude-agent-acp 0.81.1 | copilot 1.0.88 | pi-acp 0.0.34 / pi 0.87.1 |
+| --- | --- | --- | --- | --- |
+| `loadSession` | true | true | true | **true** |
+| `sessionCapabilities` | `close`, `delete`, `fork`, `list`, `resume` | `additionalDirectories`, `close`, `delete`, `fork`, `list`, `resume`, `subagents` | `close`, `list` | `delete`, `list` |
+| load works (clean / eof / sigkill) | 2/2 · 2/2 · 2/2 | 2/2 · 2/2 · 2/2 | 2/2 · 2/2 · 2/2 | 2/2 · 2/2 · 2/2 |
+| turn 2 answer on eof | none, exit 0 | none, exit 0 | **`cancelled`, then exit**, about 1 s later than the others | none, exit 0 |
+| memory matches the files (clean / eof / sigkill) | 2 · 2 · 2 of 2 | **1** · 2 · 2 of 2 | 1 · 1 · **0** of 2 | 2 · 2 · 2 of 2 |
+| end state after "finish" | 6 of 6 exact | **5 of 6 exact; 1 did round 2 twice** | 6 of 6 exact | 6 of 6 exact |
+| `session/load` result keys | `configOptions` | `sessionId`, `modes`, `configOptions` | `models`, `modes`, `configOptions` | `configOptions`, `models`, `modes`, `_meta` |
+
+*Memory matches* was graded by hand: the answer about rounds and the counter, against
+`counter.txt` and `log.txt` at the stop. On clean, every harness answered turn 2 with
+`cancelled`. On sigkill, none answered.
+
+**Answer: `session/load` works on all four, after all three stops.** pi-acp's
+`loadSession` was not recorded before (§pi-acp). It is `true`, and the load works.
+
+**Memory can be behind the files, and not only after a kill.** It happened in two ways:
+
+- **claude, after a clean cancel (1 of 2).** The cancel arrived while
+  `echo 'round 2' >> log.txt` ran. The line reached the disk, but the replayed history
+  marks that tool call `failed`. After the load, claude said the line was missing. Told to
+  finish, it appended `round 2` again. The counter stayed right, because each round reads
+  it from disk. This is the only run of 24 with a wrong end state.
+- **copilot, after every kind of stop (4 of 6).** The last write before the stop was on
+  disk, but its `tool_call` replayed as `pending`, with no update that completes it.
+  copilot then said that write had not happened. It still finished exactly in all four
+  runs, because it read the files before it wrote again.
+
+opencode and pi matched the files in all 12 runs, SIGKILL included. Turn 1, which ended
+normally before every stop, was remembered correctly in all 24 runs.
+
+**The load replays the history.** During the load, every harness sends the old
+conversation as ordinary `session/update` notifications: `user_message_chunk`, `tool_call`
+and `tool_call_update` with titles and statuses, and `agent_message_chunk`. opencode adds
+`agent_thought_chunk`, and pi adds `usage_update`.
+
+**claude reports a prompt nobody sent.** After both SIGKILL runs, claude said "you said
+continue" and that it did not resume. The probe sent no such prompt, and the replay has no
+user message for it. The cause was not checked.
+
+**Consequences.**
+
+- **M6-7b:** all four harnesses pass its gate: they advertise `loadSession: true`, and the
+  load works here.
+- **R46** draws its line between a cancel and a kill. These runs draw it between
+  *stopped during a turn* and *idle*. Any of the three stops during a turn can leave memory
+  behind the files. So when M6-7b says "the revive says so", that must also cover a
+  participant cancelled during a turn, not only one that reads `killed`.
+- **The replay arrives as ordinary `session/update`.** M6-7b has to keep it out of the room
+  log and off the screen, or the history shows twice.
+- **claude can report a prompt nobody sent.** It did so after both SIGKILL runs. A revived
+  claude participant can believe it was told something the person never said. The replay
+  does not carry it, so a replay filter will not find it. M6-7b should expect it.
+
+**Coverage.** One machine, two runs per cell. Every stop came at the same point: the
+second `log.txt` write. An idle participant was not stopped as a case of its own; turn 1
+is the only evidence for it. `session/resume` was not measured. **Open:** where claude's
+unsent "continue" comes from, and whether any notification carries it.
+
+---
+
 ## What this note does not cover
 
 M0's questions are answered; these are the edges, collected so that no downstream story
@@ -1137,6 +1229,7 @@ mistakes silence for a negative result.
   moment either updates.
 - **Nothing was driven near a real limit**, nothing was compacted automatically, and no
   harness was cancelled mid-*edit* — the three named gaps under §M0-5 and §M0-4 coverage.
+  §M0-9 cancelled one claude run during a shell append, which is the nearest case so far.
 - **`safe` was measured, `auto` was not bounded.** §M0-3's verdicts are all under
   `--mode auto`, so they describe what a harness does when nothing is refused. A harness
   that reaches for `terminal/*` only after its own shell is denied would not appear here.

@@ -2505,8 +2505,18 @@ Decisions: R17, R18, R33, R42, R46, S3, S4.
 participant loads follows M0-9's kill-case finding: if the memory can be behind the files,
 the revive says so. `AGENTS.md` drops `session/load` from "Deliberately unimplemented" in
 the same change.
+**Amended 2026-09-27 (M0-9, #176):** the load works on all four harnesses. Two findings
+change this story. First, the warning is not for `killed` alone: a participant cancelled
+during a turn, which reads `paused`, can also come back with memory behind the files (R46).
+Second, the load replays the old conversation as ordinary `session/update`
+notifications. They must not reach the room log or the screen a second time. Also, after
+a SIGKILL, claude said it had been told "continue", which nobody sent; the replay does not
+carry it, so the revive cannot filter it out.
 *Done when* after a shutdown and a restart, a participant on each harness M0-9 marked
-working answers a question about a turn before the restart, and the DTO says `loaded`.
+working answers a question about a turn before the restart, and the DTO says `loaded`. A
+participant stopped during a turn gets the warning, and the replay adds no line to the
+room log and draws nothing on either `chat.ts` surface (the pi-tui screen and the piped
+lines).
 Decisions: R42, S3.
 
 **M6-8 · Orchestrator and delegation · M · needs M6-4 · deferred by R2**
