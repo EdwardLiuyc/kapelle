@@ -846,8 +846,12 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   const cwd = existingDir(body.cwd, "cwd");
   await refuseUnadded(cwd);
 
-  if (body.title !== undefined && typeof body.title !== "string") {
-    throw refusal(400, "invalid_request", '"title" must be a string');
+  // No length cap beyond the 4 MiB body limit, the same as a message.
+  if (
+    body.title !== undefined &&
+    (typeof body.title !== "string" || !body.title.trim())
+  ) {
+    throw refusal(400, "invalid_request", '"title" must be a non-empty string');
   }
   let agents: ReturnType<typeof roomAgents>;
   try {
@@ -865,6 +869,9 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   }
 
   const bus = createEventBus();
+  // ponytail: a room's `unitId` is the harness name, the bus's `agent`, not
+  // the participant id. One agent per room keeps it unambiguous; M6-4 puts
+  // the participant id on each event, and this then records it.
   trackChildren(bus, "room", id);
   let room: Room;
   try {
@@ -880,7 +887,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   }
   const now = new Date().toISOString();
   const state: RoomState = { id, cwd, createdAt: now, updatedAt: now };
-  if (body.title) state.title = body.title;
+  if (typeof body.title === "string") state.title = body.title;
   rooms.set(id, { room, state });
   send(res, 201, toRoomDto(state, room) satisfies RoomDto);
 }

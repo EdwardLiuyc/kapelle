@@ -874,7 +874,7 @@ participant is one harness with one session that stays alive between messages. T
 
 ### `POST /rooms`
 
-**Request:** `cwd`, plus an optional `title` and an optional `agents` list. Without
+**Request:** `cwd`, plus an optional `title` (not blank) and an optional `agents` list. Without
 `agents`, or with an empty list, the room is empty.
 
 ```json

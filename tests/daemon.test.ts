@@ -3539,6 +3539,7 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
     [[{ cmd: REMEMBER }, { cmd: REMEMBER }], /at most one agent/],
     [[{ cmd: REMEMBER, name: "no spaces" }], /invalid agent name/],
     [[{ cmd: REMEMBER, name: "a".repeat(33) }], /invalid agent name/],
+    [[{ cmd: REMEMBER, name: null }], /invalid agent name null/],
     // A default name that breaks R22 asks for one rather than mangling it.
     [[{ cmd: "/bin/true" }], /give the agent a "name"/],
     [[{ cmd: REMEMBER, role: "boss" }], /invalid role "boss"/],
@@ -3550,9 +3551,11 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
     assert.equal(r.body.error.code, "invalid_request");
     assert.match(r.body.error.message, message);
   }
-  const title = await api<RoomReply>(d, "POST", "/rooms", { cwd, title: 7 });
-  assert.equal(title.status, 400);
-  assert.match(title.body.error.message, /"title" must be a string/);
+  for (const title of [7, "", "  "]) {
+    const r = await api<RoomReply>(d, "POST", "/rooms", { cwd, title });
+    assert.equal(r.status, 400, JSON.stringify(title));
+    assert.match(r.body.error.message, /"title" must be a non-empty string/);
+  }
 
   const missing = await api(d, "POST", "/rooms/missing/messages", {
     text: "x",

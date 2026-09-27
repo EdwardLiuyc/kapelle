@@ -67,7 +67,9 @@ const ROLES = ["orchestrator", "developer", "tester", "architect"] as const;
 type Role = (typeof ROLES)[number];
 
 /** R22: ASCII on purpose, so the first word of an `@name` message is always
- *  the whole name, and Unicode case folding cannot make two names one. */
+ *  the whole name, and Unicode case folding cannot make two names one.
+ *  Uniqueness in a room under that folding arrives with M6-3's second
+ *  participant; one agent cannot clash. */
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
 /** The task id the room's one worktree and branch are named with:
@@ -168,7 +170,8 @@ export function roomAgents(raw: unknown): AgentRequest[] {
     }
     const { agent, cmd, name, role } = entry as Record<string, unknown>;
     const spec = roomHarness(agent, cmd);
-    const chosen = name ?? spec.name;
+    // `=== undefined`, not `??`: a JSON `null` is a bad name, not a missing one.
+    const chosen = name === undefined ? spec.name : name;
     if (typeof chosen !== "string" || !NAME_PATTERN.test(chosen)) {
       throw new Error(
         `invalid agent name ${JSON.stringify(chosen)}: must match ` +
@@ -211,8 +214,11 @@ export async function openRoom({
 }: RoomOptions): Promise<Room> {
   const { worktrees, notice, root } = setup;
   // ponytail: one list for the room and its one participant. With no
-  // participant a log failure has nowhere to show but `no_event_log` on
-  // `GET /rooms/:id/events`; M6-3 splits the list when a room holds several.
+  // participant nothing publishes it: a log failure shows only as
+  // `no_event_log` on `GET /rooms/:id/events`, and `setup.notice` (no
+  // worktree for this cwd) is dropped, since no harness runs uncontained.
+  // M6-3 splits the list and must carry `setup` to the add path, so the
+  // first participant added to an empty room still gets that notice.
   const notices: RoomNotice[] = [];
   const onNotice = (text: string, kind?: Warning["kind"]) =>
     notices.push(kind ? { text, kind } : { text });
@@ -327,8 +333,11 @@ async function startParticipant({
       agent: spec.name,
       update: {
         sessionUpdate: "_client_worktree_created",
+        // Listed, not spread, as `core/run.ts` does: a wider `info` must not
+        // shadow `path` (#85).
         path: worktree,
-        ...info,
+        branch: info.branch,
+        baseSha: info.baseSha,
       },
     });
   }
@@ -384,7 +393,7 @@ async function startParticipant({
     harness: spec.name,
     mode: "auto",
     worktree,
-    ...info,
+    ...(info && { branch: info.branch, baseSha: info.baseSha }),
     sessionId,
     notices,
     status: () => {

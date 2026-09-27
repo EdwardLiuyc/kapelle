@@ -227,11 +227,18 @@ function toParticipantDto(p: Participant): ParticipantDto {
 
 /** `GET /rooms/:id`: the room and every participant in full. */
 export function toRoomDto(state: RoomState, room: Room): RoomDto {
-  return {
-    ...state,
+  // Key by key, not `...state`: a spread skips the excess-property check, so
+  // a field added to `RoomState` would reach the wire unnoticed.
+  const dto: RoomDto = {
+    id: state.id,
+    cwd: state.cwd,
+    createdAt: state.createdAt,
+    updatedAt: state.updatedAt,
     status: room.status(),
     participants: room.participants.map(toParticipantDto),
   };
+  if (state.title !== undefined) dto.title = state.title;
+  return dto;
 }
 
 /** One `GET /rooms` entry: the room and a short roster (R9, R44). */
