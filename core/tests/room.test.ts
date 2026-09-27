@@ -169,6 +169,41 @@ test("a dismiss during an add leaves nothing behind once it resolves", async (t)
   await assert.rejects(adding, /dismissed/);
 });
 
+test("a dismiss stops every participant's harness", async (t) => {
+  const repo = await gitRepo(t);
+  const bus = createEventBus();
+  const exits: string[] = [];
+  bus.addListener((e) => {
+    if (e.update.sessionUpdate === "_client_harness_exited")
+      exits.push(e.agent);
+  });
+
+  const roomId = newRoomId();
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [mock("alice")],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+  });
+  t.after(() => room.dismiss());
+  const bob = await room.add(mock("bob"));
+  const alice = room.participants[0] as Participant;
+
+  const turns = [alice.send("hi"), bob.send("hi")];
+  assert.equal(alice.status(), "busy");
+  assert.equal(bob.status(), "busy");
+  await room.dismiss();
+  await Promise.allSettled(turns);
+  await new Promise((ok) => setImmediate(ok));
+
+  assert.equal(
+    exits.length,
+    2,
+    `both harnesses should have exited, got ${JSON.stringify(exits)}`,
+  );
+});
+
 test("every participant shows the room's notices and the shared-cwd notice", async (t) => {
   const cwd = await tempDir(t);
   const roomId = newRoomId();
