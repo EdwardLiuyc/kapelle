@@ -3538,6 +3538,7 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
     [{ cmd: REMEMBER }, /"agents" must be a list/],
     [[{ cmd: REMEMBER }, { cmd: REMEMBER }], /at most one agent/],
     [[{ cmd: REMEMBER, name: "no spaces" }], /invalid agent name/],
+    [[{ cmd: REMEMBER, name: "a".repeat(33) }], /invalid agent name/],
     // A default name that breaks R22 asks for one rather than mangling it.
     [[{ cmd: "/bin/true" }], /give the agent a "name"/],
     [[{ cmd: REMEMBER, role: "boss" }], /invalid role "boss"/],
@@ -3588,6 +3589,80 @@ test("every room route answers room_not_found for an unknown id", async (t) => {
   const del = await api(d, "DELETE", "/rooms/nope");
   assert.equal(del.status, 404);
   assert.equal(del.body.error.code, "no_route");
+});
+
+test("an explicit empty agents list, a 32-character name and every role open a room", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+
+  const empty = await api<RoomReply>(d, "POST", "/rooms", { cwd, agents: [] });
+  assert.equal(empty.status, 201, empty.body.error?.message);
+  assert.deepEqual(empty.body.participants, []);
+  await api(d, "POST", `/rooms/${empty.body.id}/dismiss`);
+
+  const agents: { cmd: string; name?: string; role?: string }[] = [
+    { cmd: REMEMBER, name: "a".repeat(32) },
+    ...["developer", "tester", "architect"].map((role) => ({
+      cmd: REMEMBER,
+      role,
+    })),
+  ];
+  for (const agent of agents) {
+    const open = await api<RoomReply>(d, "POST", "/rooms", {
+      cwd,
+      agents: [agent],
+    });
+    assert.equal(open.status, 201, open.body.error?.message);
+    const got = await api<RoomReply>(d, "GET", `/rooms/${open.body.id}`);
+    assert.equal(only(got.body).name, agent.name ?? "mock-agent");
+    assert.equal(only(got.body).role, agent.role);
+    await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+  }
+});
+
+test("a harness that dies leaves its participant exited, the room active, and a message refused", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+
+  // The harness pid is on the room's log; the SSE stream would not end
+  // while the room lives, so the file is read directly.
+  const log = join(stateDirFor(root), "rooms", id, "events.jsonl");
+  let pid: number | undefined;
+  for (const until = Date.now() + 10_000; !pid && Date.now() < until; ) {
+    const lines = (await readFile(log, "utf8").catch(() => ""))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    pid = lines.find(
+      (e) => e.update.sessionUpdate === "_client_harness_spawned",
+    )?.update.pid;
+    if (!pid) await new Promise((ok) => setTimeout(ok, 25));
+  }
+  assert.ok(pid, "the harness pid is on the log");
+  process.kill(pid, "SIGKILL");
+
+  let room: RoomReply | undefined;
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    room = (await api<RoomReply>(d, "GET", `/rooms/${id}`)).body;
+    if (only(room).status === "exited") break;
+    await new Promise((ok) => setTimeout(ok, 25));
+  }
+  assert.equal(room && only(room).status, "exited");
+  assert.equal(room?.status, "active", "the room outlives its harness (R33)");
+
+  const r = await api(d, "POST", `/rooms/${id}/messages`, { text: "hi" });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error.code, "agent_exited");
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
 });
 
 test("a message needs an orchestrator: an empty room and a room without one refuse it", async (t) => {
