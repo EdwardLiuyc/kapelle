@@ -24,8 +24,9 @@
  *
  * **pi-tui is ratified under M1c-7's rule (M4-1).** It is presentation only,
  * so its worst failure is a broken screen, never a changed decision; it is
- * pinned exactly; and its nested `marked` is overridden to ours, so one copy
- * is installed. It ships two native helpers, both loaded lazily inside a
+ * pinned exactly; its nested `marked` is overridden to ours, so one copy is
+ * installed; and a throw from it leaves the screen before the process exits,
+ * with the command to rejoin the room, which lives on in the daemon. It ships two native helpers, both loaded lazily inside a
  * try/catch: `darwin-modifiers.node` reads Shift for Shift+Enter in Apple
  * Terminal only, and `win32-console-mode.node` runs on Windows only, which
  * `package.json`'s `os` leaves out. Linux never loads either.
@@ -371,6 +372,10 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
     const end = (code: number, ...last: string[]) => {
       if (done) return;
       done = true;
+      // The screen is going: a later throw gets Node's default again, a
+      // stack and a non-zero exit, instead of being swallowed here.
+      process.off("uncaughtException", crash);
+      process.off("unhandledRejection", crash);
       let lines: string[] = [];
       try {
         lines = transcript.render(process.stdout.columns || 80);
@@ -421,7 +426,11 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
     // that would end the process on the alternate screen. Leave the screen
     // first: M1c-7 needs its worst failure to stay cosmetic.
     const crash = (err: unknown) =>
-      end(1, `! the chat screen failed: ${(err as Error).message}`);
+      end(
+        1,
+        `! the chat screen failed: ${err instanceof Error ? err.message : String(err)}`,
+        left,
+      );
     process.on("uncaughtException", crash);
     process.on("unhandledRejection", crash);
     try {
