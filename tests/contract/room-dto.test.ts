@@ -76,10 +76,13 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
     })
   ).body.root;
 
-  const empty = await api<RoomDto>(d, "POST", "/rooms", { cwd, title: "t" });
+  const empty = await api<RoomDto>(d, "POST", "/rooms", {
+    cwd,
+    title: "  t  ",
+  });
   assert.equal(empty.status, 201);
   assert.match(empty.body.id, /^room-\d{8}-\d{6}-[0-9a-z]{4}$/);
-  assert.equal(empty.body.title, "t");
+  assert.equal(empty.body.title, "t", "the title is kept trimmed");
   assert.equal(empty.body.status, "active");
   assert.deepEqual(empty.body.participants, []);
   assert.equal(

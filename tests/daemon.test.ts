@@ -3535,6 +3535,8 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
   const refused: [unknown, RegExp][] = [
     [[{}], /"agent" or "cmd"/],
     [[{ agent: "nope" }], /unknown agent "nope"/],
+    [[{ agent: 7, cmd: REMEMBER }], /"agent" must be a non-empty string/],
+    [[{ agent: "opencode", cmd: null }], /"cmd" must be a non-empty string/],
     [{ cmd: REMEMBER }, /"agents" must be a list/],
     [[{ cmd: REMEMBER }, { cmd: REMEMBER }], /at most one agent/],
     [[{ cmd: REMEMBER, name: "no spaces" }], /invalid agent name/],

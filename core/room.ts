@@ -133,10 +133,19 @@ export interface Room {
 
 /** The harness `agent` or `cmd` names, or a throw naming what is wrong. */
 function roomHarness(agent: unknown, cmd: unknown): ResolvedAgent {
-  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
-  if (!str(agent) && !str(cmd))
-    throw new Error('an agent needs "agent" or "cmd"');
-  const spec = resolveAgent(str(agent) ?? "", str(cmd));
+  // A field that is present must be a string, as for `name`: a `7` or a
+  // `null` is a bad value, not a missing one.
+  const str = (field: string, v: unknown) => {
+    if (v === undefined) return undefined;
+    if (typeof v !== "string" || !v) {
+      throw new Error(`"${field}" must be a non-empty string`);
+    }
+    return v;
+  };
+  const byName = str("agent", agent);
+  const byCmd = str("cmd", cmd);
+  if (!byName && !byCmd) throw new Error('an agent needs "agent" or "cmd"');
+  const spec = resolveAgent(byName ?? "", byCmd);
   // The ceiling check `resolvePolicy` owns; every measured entry allows
   // `auto` today, and a future one that does not must be refused, not run.
   resolvePolicy({

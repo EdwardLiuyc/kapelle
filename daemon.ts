@@ -887,7 +887,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   }
   const now = new Date().toISOString();
   const state: RoomState = { id, cwd, createdAt: now, updatedAt: now };
-  if (typeof body.title === "string") state.title = body.title;
+  if (typeof body.title === "string") state.title = body.title.trim();
   rooms.set(id, { room, state });
   send(res, 201, toRoomDto(state, room) satisfies RoomDto);
 }
