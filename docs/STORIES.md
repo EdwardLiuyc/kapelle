@@ -2468,7 +2468,12 @@ participant's checkout.
 left it unrouted. This story owns the room's record and its retention, so it also builds
 delete: remove the room's worktrees, branches, record and log at once, refused with `409`
 naming the files while any checkout has uncommitted work. It lands after M6-6a, so it
-removes one checkout per participant.
+removes one checkout per participant. **Amended 2026-09-27 (#187 review):** delete finds
+the checkouts on disk, under `stateDirFor(root)/wt/<roomId>/`, as `managedWorktrees` in
+`core/sweep.ts` does, and not from the roster. A failed add whose harness wrote into its
+checkout keeps that checkout and its branch. No participant owns them, and only a room
+notice names them. A delete that walked the roster would answer `200` and leave that work
+on disk.
 *Done when* a restart lists the room `paused` and every participant `paused`, a shutdown
 during a turn ends that turn in the log and leaves the participant `paused`, a `kill -9`
 during a turn leaves that participant `killed` after the next boot, its history replays, a
