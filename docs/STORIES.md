@@ -2075,8 +2075,8 @@ this story rebases it onto master as its first step. The spike screen becomes a 
 of `client/`: its `Daemon`, `api`, `follow`,
 `RoomView` and `LogEvent` move into the module, and `chat.ts` keeps only the screen and
 the commands. Ratify `@earendil-works/pi-tui` 0.85.1 under M1c-7's rule (presentation
-only, worst failure cosmetic, pinned exactly), dedupe the nested `marked` 18.0.5 with an
-override to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
+only, worst failure cosmetic, pinned exactly), override the nested `marked` 18.0.5 pin
+to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
 loaded, try/catch-guarded, Shift+Enter only on Apple Terminal, never on Linux.
 *Done when* `chat.ts` imports `client/`, pi-tui and `core/runtime.ts` (for the
 `daemon.json` path, M5-10a) and nothing else from the repository,
@@ -2281,7 +2281,7 @@ state moves out of `.kapelle/rooms/` to `stateDirFor(root)` (#129), and `childre
 takes S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
 **Only `chat-mvp` lands, and `spike/chat-tui` is left where it is** — not rebased here
 either, because M4-1 rebases it anyway and doing it twice buys nothing. M4-1 is where
-`@earendil-works/pi-tui` is ratified and its nested `marked` deduped, and it needs M5-10a
+`@earendil-works/pi-tui` is ratified and its nested `marked` pin overridden, and it needs M5-10a
 first; `package.json` keeps `marked` as its only runtime dependency.
 **No new features** — one participant per room, `auto` only, no roster and no permission
 answering — and `chat.ts` ships marked **experimental**, so the room API is not a

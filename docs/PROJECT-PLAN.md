@@ -525,8 +525,8 @@ component re-set as chunks arrive); M4 turns it into the first client of the sha
 the paint now lives in the TUI.
 
 - **M4-1 — the pi-tui screen** as the first `client/` consumer. `@earendil-works/pi-tui`
-  0.85.1 is ratified under M1c-7's presentation rule, the nested `marked` 18.0.5 is
-  deduped with an override to 18.0.12, and the optional `darwin-modifiers.node` helper is
+  0.85.1 is ratified under M1c-7's presentation rule, the nested `marked` 18.0.5 pin is
+  overridden to 18.0.12, and the optional `darwin-modifiers.node` helper is
   recorded (lazily loaded, try/catch-guarded, Shift+Enter on Apple Terminal only).
 - **M4-2 — room and roster sidebar**: rooms → participants, switching between rooms and
   participants, unread and attention badges. The room opens on the timeline; the composer,

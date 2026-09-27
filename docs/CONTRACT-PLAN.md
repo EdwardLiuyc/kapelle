@@ -157,7 +157,7 @@ not a browser dashboard.
 
 The old M4 browser stories (HTML serving, EventSource token, XSS escaping, toasts) are
 retired by A3/A7. The pi-tui dependency ratification is folded into M4-1, including the
-`marked` dedupe and the optional `darwin-modifiers.node` caveat.
+`marked` override and the optional `darwin-modifiers.node` caveat.
 
 ## Story index
 
@@ -414,8 +414,8 @@ stories move it onto the shared client and add what the spike deliberately left 
 The spike screen becomes a consumer of `client/`. Its `Daemon`, `api`, `follow`,
 `RoomView` and `LogEvent` move into the module; `chat.ts` keeps only the screen and the
 commands. Also ratify `@earendil-works/pi-tui` 0.85.1 under M1c-7's rule (presentation
-only, worst failure cosmetic, pinned exactly), dedupe the nested `marked` 18.0.5 with an
-override to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
+only, worst failure cosmetic, pinned exactly), override the nested `marked` 18.0.5 pin
+to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
 loaded, try/catch-guarded, used only for Shift+Enter on Apple Terminal, never on Linux.
 
 *Done when* `chat.ts` imports `client/`, pi-tui and `core/runtime.ts` (for the
@@ -498,7 +498,7 @@ S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
 
 **Only `chat-mvp` lands (decided 2026-09-21, #144).** `spike/chat-tui` is left alone —
 not landed and not rebased: M4-1 is the story that ratifies `@earendil-works/pi-tui`
-0.85.1 under M1c-7's rule and dedupes its nested `marked`, and it needs M5-10a first.
+0.85.1 under M1c-7's rule and overrides its nested `marked` pin, and it needs M5-10a first.
 Landing the screen here would ratify a second runtime dependency ahead of the story that
 vets it, so `package.json` keeps `marked` as its only one. Rebasing it here as well would
 be the same work done twice, since its base moves again when M6-0 reaches master.
