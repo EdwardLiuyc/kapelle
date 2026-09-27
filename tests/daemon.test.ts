@@ -17,6 +17,7 @@ import { existsSync, readdirSync, readlinkSync } from "node:fs";
 import {
   chmod,
   mkdir,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -3794,6 +3795,15 @@ test("chat.ts reaches the daemon over HTTP only: client/, pi-tui and core/runtim
     }
   }
   assert.ok(queue.length > 0, "chat.ts imports client/");
+  // The folder too, not only what chat.ts imports: a client/ runtime file
+  // that nothing imports yet is under the same S8 boundary.
+  for (const entry of await readdir(join(root, "client"), {
+    withFileTypes: true,
+  })) {
+    if (entry.isFile() && entry.name.endsWith(".ts")) {
+      queue.push(`client/${entry.name}`);
+    }
+  }
   const seen = new Set<string>();
   for (const file of queue) {
     if (seen.has(file)) continue;

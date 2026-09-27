@@ -256,8 +256,10 @@ const EDITOR_THEME = {
  *
  * Busy is read from the stream, not from this terminal's own requests: a
  * `_client_user_message` starts a turn and `_client_turn_ended` ends it. So a
- * replayed history, or a message another client sent, leaves the editor in
- * the right state with no bookkeeping of which turn is ours.
+ * replayed history, or a message another client sent, leaves the status line
+ * right with no bookkeeping of which turn is ours. Busy never locks the
+ * editor: `/dismiss` and `/leave` must work mid-turn, and a message sent then
+ * gets the daemon's `room_busy` refusal as a warning.
  */
 function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
   const [agent] = room.participants;
@@ -287,7 +289,6 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
   const note = (s: string) => add(new Text(dim(s), 1, 0));
   const warn = (s: string) => add(new Text(yellow(s), 1, 0));
   const setBusy = (busy: boolean) => {
-    editor.disableSubmit = busy;
     status.setText(
       dim(
         busy
