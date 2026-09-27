@@ -9,10 +9,18 @@
  * (`docs/FINDINGS.md` §Multi-turn). A prompt *during* a live turn is still
  * refused, here as `busy` and below as `AcpAgent`'s in-flight guard (#62 R5).
  *
- * **At most one participant, for now.** A room is created empty or with one
- * agent. A second needs a checkout of its own (M6-6a) and a route to reach
- * it (M6-4); M6-3 lifts the limit. The request shape is already a list, so
- * lifting it changes no client.
+ * **One checkout per participant** (M6-6a, R14). Each one runs in
+ * `stateDirFor(root)/wt/<roomId>/<participantId>`, on the branch
+ * `kapelle/<roomId>/<participantId>`, so turns run in parallel without
+ * touching each other's files (R6). Nothing is shared or inherited. `add`
+ * takes the base to fork from: any ref, including another participant's
+ * branch (R35c). A branch holds only what its participant committed, so a
+ * participant started from it never sees the other's uncommitted files (R37).
+ *
+ * **At most one participant through the route, for now.** `POST /rooms`
+ * creates a room empty or with one agent; M6-3 adds the route that calls
+ * `add`. The request shape is already a list, so lifting it changes no
+ * client.
  *
  * **The orchestrator is a label, not a slot** (R44). A participant has the
  * role it was given and no other; nothing is promoted by default.
@@ -72,11 +80,6 @@ type Role = (typeof ROLES)[number];
  *  participant; one agent cannot clash. */
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
-/** The task id the room's one worktree and branch are named with:
- *  `stateDirFor(root)/wt/<roomId>/room`, on `kapelle/<roomId>/room`.
- *  M6-6a replaces it with one per participant. */
-const ROOM_TASK = "room";
-
 /** A line the room kept for the operator, as `Warning` has it. */
 interface RoomNotice {
   text: string;
@@ -97,7 +100,7 @@ export interface Participant {
   readonly role?: Role;
   readonly harness: string;
   readonly mode: "auto";
-  /** Where the harness runs: the room's checkout, or the cwd itself. */
+  /** Where the harness runs: its own checkout, or the cwd itself. */
   readonly worktree: string;
   /** The checkout's branch and the SHA it forked from, when there is one. */
   readonly branch?: string;
@@ -105,8 +108,9 @@ export interface Participant {
   /** Recorded from the first version, though nothing loads it until
    *  `session/load` lands (R17, the M2-6 precedent). */
   readonly sessionId: string;
-  /** Containment and worktree notices. #13's lines are never dropped, and a
-   *  room has no terminal of its own, so the caller publishes them. */
+  /** The room's notices, then this participant's containment and worktree
+   *  notices. #13's lines are never dropped, and a room has no terminal of
+   *  its own, so the caller publishes them. */
   readonly notices: readonly RoomNotice[];
   status(): ParticipantStatus;
   /**
@@ -123,7 +127,12 @@ export interface Room {
   /** The room's persisted events, or undefined when it could not be written. */
   readonly eventLog: EventLog | undefined;
   status(): RoomStatus;
-  /** Cancels a live turn, stops every harness, releases the room's worktree
+  /** Adds one participant in a checkout of its own, forked from `base` — a
+   *  ref, such as another participant's `branch` — or from the repository's
+   *  HEAD. Resolves once its harness has a session. A throw leaves the room
+   *  as it was: no participant, no checkout and no branch. */
+  add(request: AgentRequest, base?: string): Promise<Participant>;
+  /** Cancels every live turn, stops every harness, releases every checkout
    *  **without committing** (R37) and closes the log. Safe to call twice. A
    *  release that fails is reported as a notice and the checkout is left
    *  where it is; `dismiss()` still resolves, because a dismissed room can
@@ -211,6 +220,15 @@ export interface RoomOptions {
   bus: EventBus;
 }
 
+type Notify = (text: string, kind?: Warning["kind"]) => void;
+
+/** One participant, and what the room needs to end it. */
+interface Member {
+  participant: Participant;
+  stop: () => Promise<void>;
+  onNotice: Notify;
+}
+
 /** Opens a room and resolves once every participant's harness has a
  *  session. A harness that cannot start is a throw, never a dead
  *  participant (S13). */
@@ -222,15 +240,13 @@ export async function openRoom({
   bus,
 }: RoomOptions): Promise<Room> {
   const { worktrees, notice, root } = setup;
-  // ponytail: one list for the room and its one participant. With no
-  // participant nothing publishes it: a log failure shows only as
-  // `no_event_log` on `GET /rooms/:id/events`, and `setup.notice` (no
-  // worktree for this cwd) is dropped, since no harness runs uncontained.
-  // M6-3 splits the list and must carry `setup` to the add path, so the
-  // first participant added to an empty room still gets that notice.
-  const notices: RoomNotice[] = [];
-  const onNotice = (text: string, kind?: Warning["kind"]) =>
-    notices.push(kind ? { text, kind } : { text });
+  // The room's own lines: only the event log's today. With no participant
+  // nothing publishes them, and a log failure shows only as `no_event_log`
+  // on `GET /rooms/:id/events`. A room has no notices on the wire, so every
+  // participant shows them before its own.
+  const roomNotices: RoomNotice[] = [];
+  const onRoomNotice: Notify = (text, kind) =>
+    roomNotices.push(kind ? { text, kind } : { text });
 
   // #129: a room asks nothing of the operator's repository either — its log
   // and stderr live in the same workspace as a run's, outside the checkout.
@@ -239,42 +255,48 @@ export async function openRoom({
   try {
     mkdirSync(logDir, { recursive: true });
     eventLog = createEventLog(join(logDir, "events.jsonl"), (err) =>
-      onNotice(`cannot write event log: ${err.message}`),
+      onRoomNotice(`cannot write event log: ${err.message}`),
     );
     bus.addListener(eventLog.append);
   } catch (err) {
-    onNotice(
+    onRoomNotice(
       `cannot write room logs to ${logDir}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
   let dismissing: Promise<void> | undefined;
-  let stop: (() => Promise<void>) | undefined;
+  const members: Member[] = [];
+  const participants: Participant[] = [];
 
   // **Never `commit` (R37).** The supervisor stays out of the commit business:
   // a participant commits its own branch, and whatever is left uncommitted at
   // dismiss stays in the checkout for a person to look at. `keep` is also the
-  // right answer for a room whose harness never got a session — an untouched
-  // worktree is removed and its branch rolled back either way.
+  // right answer for a participant whose harness never got a session — an
+  // untouched worktree is removed and its branch rolled back either way.
+  //
+  // A release that throws — a locked worktree, a missing git — must not
+  // strand the room: the log still closes, `dismiss()` still resolves, and
+  // the checkout is left in place rather than committed or deleted. The
+  // participant is told, because a dismissed room can never be retried.
+  const release = async (id: string, onNotice: Notify) => {
+    try {
+      const kept = await worktrees?.release(id, "keep");
+      if (kept) onNotice(kept);
+    } catch (err) {
+      onNotice(
+        `could not release the participant's checkout: ` +
+          `${err instanceof Error ? err.message : String(err)}; ` +
+          "it is left in place",
+      );
+    }
+  };
+
   const teardown = () => {
     dismissing ??= (async () => {
       try {
-        await stop?.();
-        // A release that throws — a locked worktree, a missing git — must
-        // not strand the room: the log still closes below, `dismiss()` still
-        // resolves, and the checkout is left in place rather than committed
-        // or deleted. The caller is told, because a dismissed room can never
-        // be retried.
-        try {
-          const kept = await worktrees?.release(ROOM_TASK, "keep");
-          if (kept) onNotice(kept);
-        } catch (err) {
-          onNotice(
-            `could not release the room's checkout: ` +
-              `${err instanceof Error ? err.message : String(err)}; ` +
-              "it is left in place",
-          );
-        }
+        await Promise.allSettled(adding);
+        await Promise.all(members.map((m) => m.stop()));
+        for (const m of members) await release(m.participant.id, m.onNotice);
       } finally {
         await eventLog?.close();
       }
@@ -282,23 +304,68 @@ export async function openRoom({
     return dismissing;
   };
 
-  const participants: Participant[] = [];
-  const [request] = agents;
-  if (request) {
+  const start = async (request: AgentRequest, base?: string) => {
+    if (dismissing) throw new Error("the room is dismissed");
+    // Refused, not ignored: the caller asked to start from someone's work,
+    // and a shared cwd has no branch to start from.
+    if (base !== undefined && !worktrees) {
+      throw new Error(
+        `cannot start from ${JSON.stringify(base)}: ${cwd} is not a git ` +
+          "repository with a commit, so no participant has a branch",
+      );
+    }
+    const id = newParticipantId();
+    const own: RoomNotice[] = [];
+    const onNotice: Notify = (text, kind) =>
+      own.push(kind ? { text, kind } : { text });
     if (notice) onNotice(notice);
+
+    let started: Awaited<ReturnType<typeof startParticipant>>;
     try {
-      const started = await startParticipant({
+      started = await startParticipant({
+        id,
         request,
+        base,
         cwd,
-        setup,
+        worktrees,
         bus,
-        notices,
+        notices: () => [...roomNotices, ...own],
         onNotice,
-        stderrLog: eventLog ? join(logDir, "stderr.log") : undefined,
+        stderrLog: eventLog ? join(logDir, `${id}.stderr.log`) : undefined,
         dismissed: () => dismissing !== undefined,
       });
-      stop = started.stop;
-      participants.push(started.participant);
+    } catch (err) {
+      // The rollback half of the spawn: an untouched checkout and its
+      // branch go, so a failed add leaves the room as it was.
+      await release(id, onNotice);
+      throw err;
+    }
+    // A dismiss that began while this harness was starting did not see it.
+    if (dismissing) {
+      await started.stop();
+      await release(id, onNotice);
+      throw new Error("the room is dismissed");
+    }
+    members.push({ ...started, onNotice });
+    participants.push(started.participant);
+    return started.participant;
+  };
+
+  // A dismiss waits for every add in flight, so nothing an add started
+  // outlives `dismiss()`: the add sees the dismiss and rolls itself back.
+  const adding = new Set<Promise<Participant>>();
+  const add = (request: AgentRequest, base?: string) => {
+    const p = start(request, base);
+    adding.add(p);
+    const done = () => adding.delete(p);
+    p.then(done, done);
+    return p;
+  };
+
+  const [request] = agents;
+  if (request) {
+    try {
+      await add(request);
     } catch (err) {
       await teardown();
       throw err;
@@ -309,34 +376,39 @@ export async function openRoom({
     participants,
     eventLog,
     status: () => (dismissing ? "dismissed" : "active"),
+    add,
     dismiss: teardown,
   };
 }
 
-/** Takes the room's checkout, starts one harness in it and opens its
- *  session. On a throw, whatever it started is stopped by the caller's
- *  `teardown`, which releases the checkout. */
+/** Takes the participant's own checkout, starts one harness in it and opens
+ *  its session. On a throw it has stopped whatever it started; the caller
+ *  releases the checkout. */
 async function startParticipant({
+  id,
   request: { spec, name, role },
+  base,
   cwd,
-  setup: { worktrees },
+  worktrees,
   bus,
   notices,
   onNotice,
   stderrLog,
   dismissed,
 }: {
+  id: string;
   request: AgentRequest;
+  base: string | undefined;
   cwd: string;
-  setup: WorktreeSetup;
+  worktrees: WorktreeSetup["worktrees"];
   bus: EventBus;
-  notices: readonly RoomNotice[];
-  onNotice: (text: string, kind?: Warning["kind"]) => void;
+  notices: () => readonly RoomNotice[];
+  onNotice: Notify;
   stderrLog: string | undefined;
   dismissed: () => boolean;
 }): Promise<{ participant: Participant; stop: () => Promise<void> }> {
-  const worktree = worktrees ? await worktrees.acquire(ROOM_TASK) : cwd;
-  const info = worktrees?.info(ROOM_TASK);
+  const worktree = worktrees ? await worktrees.acquire(id, base) : cwd;
+  const info = worktrees?.info(id);
   if (info) {
     bus.emit({
       agent: spec.name,
@@ -396,7 +468,7 @@ async function startParticipant({
   }
 
   const participant: Participant = {
-    id: newParticipantId(),
+    id,
     name,
     ...(role && { role }),
     harness: spec.name,
@@ -404,7 +476,9 @@ async function startParticipant({
     worktree,
     ...(info && { branch: info.branch, baseSha: info.baseSha }),
     sessionId,
-    notices,
+    get notices() {
+      return notices();
+    },
     status: () => {
       if (dismissed()) return "dismissed";
       if (exited) return "exited";

@@ -3222,13 +3222,13 @@ test("a room keeps one harness and its context across messages, until it is dism
   assert.equal(only(open.body).status, "idle");
   const { id } = open.body;
   const { worktree } = only(open.body);
-  // Its own checkout, named by the room id (S9), in the repository's
-  // workspace under `stateDirFor(root)` rather than inside the repository
-  // itself (#129).
+  // The participant's own checkout, named by the room id (S9) and its own id
+  // (M6-6a), in the repository's workspace under `stateDirFor(root)` rather
+  // than inside the repository itself (#129).
   assert.match(
     worktree,
-    /\/wt\/room-\d{8}-\d{6}-[0-9a-z]{4}\/room$/,
-    "the room has its own checkout",
+    /\/wt\/room-\d{8}-\d{6}-[0-9a-z]{4}\/p-[0-9a-z]{8}$/,
+    "the participant has its own checkout",
   );
   assert.ok(
     !worktree.startsWith(cwd),
@@ -3303,7 +3303,7 @@ test("dismissing a room commits nothing and leaves the checkout (R37)", async (t
   );
   assert.equal(open.status, 201, open.body.error?.message);
   const { id } = open.body;
-  const workspace = only(open.body).worktree;
+  const { worktree: workspace, id: participantId } = only(open.body);
   const base = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
@@ -3323,12 +3323,13 @@ test("dismissing a room commits nothing and leaves the checkout (R37)", async (t
     "the work is still there",
   );
   assert.equal(
-    spawnSync("git", ["rev-parse", `refs/heads/kapelle/${id}/room`], {
-      cwd: root,
-      encoding: "utf8",
-    }).stdout.trim(),
+    spawnSync(
+      "git",
+      ["rev-parse", `refs/heads/kapelle/${id}/${participantId}`],
+      { cwd: root, encoding: "utf8" },
+    ).stdout.trim(),
     base,
-    "the room's branch is still at the base commit",
+    "the participant's branch is still at the base commit",
   );
 });
 
@@ -3405,7 +3406,7 @@ test("a release that fails is reported and the room is still dismissed, not a 50
   assert.equal(only(gone.body).status, "dismissed");
   assert.ok(
     only(gone.body).notices.some((n) =>
-      /could not release the room's checkout/.test(n.text),
+      /could not release the participant's checkout/.test(n.text),
     ),
     `release failure not reported: ${JSON.stringify(only(gone.body).notices)}`,
   );
