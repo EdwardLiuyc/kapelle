@@ -17,6 +17,7 @@ import { existsSync, readdirSync, readlinkSync } from "node:fs";
 import {
   chmod,
   mkdir,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -26,9 +27,13 @@ import {
 import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { userInfo } from "node:os";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
-import type { ParticipantDto, RoomDto } from "../client/contract.ts";
+import {
+  API_VERSION,
+  type ParticipantDto,
+  type RoomDto,
+} from "../client/contract.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import { processIdentity } from "../core/sweep.ts";
 import { openWorktrees } from "../core/worktree.ts";
@@ -3462,7 +3467,13 @@ test("chat.ts names the status for a refusal with no JSON envelope", async (t) =
   // Node's own 408 has an empty body, and a body of `null` is JSON with no
   // `error`: both used to print "error: undefined" or "not JSON".
   for (const body of ["", "null"]) {
-    const fake = createServer((_req, res) => {
+    // `GET /version` is answered, so the refusal under test is the room's.
+    const fake = createServer((req, res) => {
+      if (req.url === "/version") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ apiVersion: API_VERSION }));
+        return;
+      }
       res.writeHead(408, { "content-type": "application/json" });
       res.end(body);
     });
@@ -3756,16 +3767,59 @@ test("chat.ts talks to a room end to end: messages in, answers out, /dismiss sto
   );
 });
 
-test("chat.ts reaches the daemon over HTTP only: its one repo import is core/runtime.ts", async () => {
-  const source = await readFile(
-    join(import.meta.dirname, "..", "chat.ts"),
-    "utf8",
-  );
-  const imports = [...source.matchAll(/^import[^;]*?from "([^"]+)";/gms)].map(
-    (m) => m[1],
-  );
-  const local = imports.filter((spec) => !spec?.startsWith("node:"));
-  assert.deepEqual(local, ["./core/runtime.ts"]);
+test("chat.ts reaches the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
+  // S8, widened by M4-1: chat.ts imports `client/`, pi-tui and
+  // `core/runtime.ts` (the `daemon.json` path), type imports included.
+  // `client/` is then followed file by file, so a `client/` file that
+  // reached `core/` or `protocol/` at runtime fails here too. A type-only
+  // import there is allowed: it is erased before the code runs.
+  const root = join(import.meta.dirname, "..");
+  const importsOf = async (file: string) => {
+    const source = await readFile(join(root, file), "utf8");
+    // `export … from` and a bare `import "x"` load a module too.
+    return [
+      ...source.matchAll(
+        /^(?:(?:import|export)( type)?[^;]*?from|import) "([^"]+)";/gms,
+      ),
+    ].map((m) => ({ spec: m[2] ?? "", typeOnly: Boolean(m[1]) }));
+  };
+  const queue: string[] = [];
+  for (const { spec } of await importsOf("chat.ts")) {
+    if (spec.startsWith("node:")) continue;
+    if (spec.startsWith("./client/")) queue.push(spec.slice(2));
+    else {
+      assert.ok(
+        spec === "@earendil-works/pi-tui" || spec === "./core/runtime.ts",
+        `chat.ts imports ${spec}`,
+      );
+    }
+  }
+  assert.ok(queue.length > 0, "chat.ts imports client/");
+  // Every file directly in client/ too, not only what chat.ts imports: one
+  // that nothing imports yet is under the same S8 boundary. client/tests/
+  // is not swept: a test may import anything.
+  for (const entry of await readdir(join(root, "client"), {
+    withFileTypes: true,
+  })) {
+    if (entry.isFile() && entry.name.endsWith(".ts")) {
+      queue.push(`client/${entry.name}`);
+    }
+  }
+  const seen = new Set<string>();
+  for (const file of queue) {
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const { spec, typeOnly } of await importsOf(file)) {
+      if (typeOnly || spec.startsWith("node:")) continue;
+      assert.ok(spec.startsWith("."), `${file} imports the package ${spec}`);
+      const target = join(dirname(file), spec);
+      assert.ok(
+        target.startsWith(`client${sep}`),
+        `${file} reaches ${spec} at runtime`,
+      );
+      queue.push(target);
+    }
+  }
 });
 
 test("chat.ts /leave keeps the room alive, and attach replays the conversation before the next turn", async (t) => {
@@ -3810,16 +3864,17 @@ const noPty =
     ? "needs util-linux script(1) for a pseudo-terminal"
     : false;
 
-test("chat.ts on a real terminal shows what the operator types", {
-  skip: noPty,
-}, async (t) => {
-  // Terminal mode switches the terminal's own echo off, so readline has to
-  // draw typed keys itself; without an `output` stream it drew none, and the
-  // operator typed blind. Pipes never showed it: only a TTY reaches that path.
+/**
+ * `chat.ts new` on a pseudo-terminal, against a fresh daemon, once the
+ * screen is up. Pipes never reach this path: only a TTY gets the pi-tui
+ * screen. A pty made by `script` from a pipe has no size, so the command
+ * sets one.
+ */
+async function chatOnPty(t: TestContext) {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
-  const cmd = `node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`;
+  const cmd = `stty cols 100 rows 30; node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`;
   const child = spawn("script", ["-qfec", cmd, "/dev/null"], {
     cwd: join(import.meta.dirname, ".."),
     env: { ...process.env, XDG_RUNTIME_DIR: runtime },
@@ -3845,24 +3900,65 @@ test("chat.ts on a real terminal shows what the operator types", {
   child.stdout.setEncoding("utf8").on("data", (c: string) => {
     out += c;
   });
-  const exited = new Promise((ok) => child.on("close", ok));
+  const exited = new Promise<number | null>((ok) =>
+    child.on("close", (code) => ok(code)),
+  );
 
-  // The prompt, not the banner: keys sent before readline takes the terminal
-  // would be echoed by the terminal itself and prove nothing.
-  await seen("> ");
+  // The status line, not the banner: keys sent before the screen takes the
+  // terminal would be echoed by the terminal itself and prove nothing.
+  await seen("enter to send");
+  return { child, seen, exited, out: () => out };
+}
+
+test("chat.ts on a real terminal is the full-screen chat, and leaves the conversation in scrollback", {
+  skip: noPty,
+}, async (t) => {
+  const { child, seen, exited, out: screen } = await chatOnPty(t);
   child.stdin.write("alpha\r");
   await seen("previous: (none)");
   child.stdin.write("/dismiss\r");
   await seen("the room was dismissed");
-  await exited;
+  const code = await exited;
+  const out = screen();
+  assert.equal(code, 0, out);
 
-  // Readline redraws with cursor codes between the prompt and the text.
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
-  const screen = out.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
-  assert.match(screen, /> alpha/, "the typed line is on screen");
-  assert.doesNotMatch(
-    screen,
-    /you: alpha/,
-    "and it is not printed a second time",
+  // What stays on the normal screen once the alternate one is left.
+  // CSI, OSC and APC sequences; pi-tui writes all three.
+  const escapes =
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
+    /\x1b(\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(\x07|\x1b\\)|_[^\x1b]*\x1b\\)/g;
+  const raw = out
+    .slice(out.lastIndexOf("\x1b[?1049l"))
+    .replace(escapes, "")
+    .replace(/\r/g, "");
+  const text = raw.replace(/[ \t]+$/gm, "");
+  assert.match(
+    text,
+    /you\n\s*alpha\n[\s\S]*mock-agent\n\s*previous: \(none\)\n[\s\S]*the room was dismissed/,
+    "the typed message, the answer, then the exit line",
   );
+  // A line as wide as the terminal gets an empty line after it where the
+  // terminal wraps at the last column at once: Windows ConPTY, and some
+  // multiplexers. The pty is 100 columns wide.
+  for (const line of raw.split("\n")) {
+    assert.ok(line.length < 100, `a full-width line: ${JSON.stringify(line)}`);
+  }
+  assert.doesNotMatch(text, /enter to send/, "the status line is not chat");
 });
+
+for (const [how, keys] of [
+  ["^C", "\x03"],
+  ["/leave", "/leave\r"],
+] as const) {
+  test(`chat.ts on a real terminal: ${how} leaves the chat with exit 0`, {
+    skip: noPty,
+  }, async (t) => {
+    // Raw mode turns ^C into a key, not a SIGINT: only the screen's own
+    // listener gets the operator out.
+    const { child, seen, exited, out } = await chatOnPty(t);
+    child.stdin.write(keys);
+    await seen("rejoin with");
+    assert.equal(await exited, 0, out());
+    assert.match(out(), /left room \S+; rejoin with/);
+  });
+}

@@ -2075,14 +2075,30 @@ this story rebases it onto master as its first step. The spike screen becomes a 
 of `client/`: its `Daemon`, `api`, `follow`,
 `RoomView` and `LogEvent` move into the module, and `chat.ts` keeps only the screen and
 the commands. Ratify `@earendil-works/pi-tui` 0.85.1 under M1c-7's rule (presentation
-only, worst failure cosmetic, pinned exactly), dedupe the nested `marked` 18.0.5 with an
-override to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
+only, worst failure cosmetic, pinned exactly), override the nested `marked` 18.0.5 pin
+to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
 loaded, try/catch-guarded, Shift+Enter only on Apple Terminal, never on Linux.
 *Done when* `chat.ts` imports `client/`, pi-tui and `core/runtime.ts` (for the
 `daemon.json` path, M5-10a) and nothing else from the repository,
 the import-boundary test says so, and the TTY test still leaves the transcript in
 scrollback.
 Decisions: S7, S8, S9, M6. (S8 settled as (a).)
+**Built 2026-09-27 (#47).** The spike is rebased; its `daemon.ts` and `CLAUDE.md` hunks
+were dropped, because master rewrote both. pi-tui 0.85.1 is ratified under M1c-7's rule
+and pinned exactly. 0.87.1 was out, but the spike measured 0.85.1, and a bump is its own
+change. It brings one transitive runtime package, `get-east-asian-width` 1.6.0 (MIT, no
+dependencies). pi-tui pins `marked` 18.0.5 exactly, and `overrides` points it at ours
+(`$marked`), so `npm ls marked` shows one copy. That is an override of a pin, not a
+dedupe of a range: pi-tui's markdown runs on a `marked` its author did not test. It is
+taken because the worst case is a badly drawn answer. Look here first when a pi-tui
+render goes wrong. npm reads `overrides` only in the root project, so if kapelle were ever
+installed as a dependency, pi-tui would get its own `marked` again. That is two copies,
+and it still works. pi-tui ships two native helpers, both loaded lazily inside a
+try/catch: `darwin-modifiers.node` (Shift+Enter in Apple Terminal only) and
+`win32-console-mode.node` (Windows only). Linux loads neither. `chat.ts` now reads its
+room with `followEvents`. It reconnects after a cut only while the daemon still
+answers: a room does not survive a restart, so waiting for a new daemon would wait
+forever.
 
 **M4-2 · Room and roster sidebar, switching, unread badges · M · needs M4-1, M6-4, M6-10**
 **Amended 2026-09-26:** the screen state comes from M6-10's room reducer; this story only
@@ -2265,7 +2281,7 @@ state moves out of `.kapelle/rooms/` to `stateDirFor(root)` (#129), and `childre
 takes S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
 **Only `chat-mvp` lands, and `spike/chat-tui` is left where it is** — not rebased here
 either, because M4-1 rebases it anyway and doing it twice buys nothing. M4-1 is where
-`@earendil-works/pi-tui` is ratified and its nested `marked` deduped, and it needs M5-10a
+`@earendil-works/pi-tui` is ratified and its nested `marked` pin overridden, and it needs M5-10a
 first; `package.json` keeps `marked` as its only runtime dependency.
 **No new features** — one participant per room, `auto` only, no roster and no permission
 answering — and `chat.ts` ships marked **experimental**, so the room API is not a

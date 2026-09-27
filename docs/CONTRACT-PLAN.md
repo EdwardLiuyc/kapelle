@@ -157,7 +157,7 @@ not a browser dashboard.
 
 The old M4 browser stories (HTML serving, EventSource token, XSS escaping, toasts) are
 retired by A3/A7. The pi-tui dependency ratification is folded into M4-1, including the
-`marked` dedupe and the optional `darwin-modifiers.node` caveat.
+`marked` override and the optional `darwin-modifiers.node` caveat.
 
 ## Story index
 
@@ -414,11 +414,12 @@ stories move it onto the shared client and add what the spike deliberately left 
 The spike screen becomes a consumer of `client/`. Its `Daemon`, `api`, `follow`,
 `RoomView` and `LogEvent` move into the module; `chat.ts` keeps only the screen and the
 commands. Also ratify `@earendil-works/pi-tui` 0.85.1 under M1c-7's rule (presentation
-only, worst failure cosmetic, pinned exactly), dedupe the nested `marked` 18.0.5 with an
-override to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
+only, worst failure cosmetic, pinned exactly), override the nested `marked` 18.0.5 pin
+to 18.0.12, and record the optional `darwin-modifiers.node` helper: lazily
 loaded, try/catch-guarded, used only for Shift+Enter on Apple Terminal, never on Linux.
 
-*Done when* `chat.ts` imports `client/` and pi-tui and nothing else from the repository,
+*Done when* `chat.ts` imports `client/`, pi-tui and `core/runtime.ts` (for the
+`daemon.json` path, M5-10a) and nothing else from the repository,
 the import-boundary test says so, and the TTY test still leaves the transcript in
 scrollback.
 
@@ -497,7 +498,7 @@ S14's `{pid, kind, ownerId, unitId}` shape with the legacy entry read as a run.
 
 **Only `chat-mvp` lands (decided 2026-09-21, #144).** `spike/chat-tui` is left alone —
 not landed and not rebased: M4-1 is the story that ratifies `@earendil-works/pi-tui`
-0.85.1 under M1c-7's rule and dedupes its nested `marked`, and it needs M5-10a first.
+0.85.1 under M1c-7's rule and overrides its nested `marked` pin, and it needs M5-10a first.
 Landing the screen here would ratify a second runtime dependency ahead of the story that
 vets it, so `package.json` keeps `marked` as its only one. Rebasing it here as well would
 be the same work done twice, since its base moves again when M6-0 reaches master.
@@ -966,7 +967,7 @@ no dependency relation between agents (R24–R30 retired).
 | S5 | Cancel one turn | (a) `POST /rooms/:id/agents/:agentId/turns/current/cancel` (b) `DELETE .../messages/current` (c) keep room dismiss only | **Decided (interview):** (a) |
 | S6 | Room dismiss response | (a) synchronous 200 once every participant has stopped and its checkout is released per R37 (b) 202 like a run cancel (c) 204 | **Decided (interview), corrected 2026-09-21:** (a). The option's old wording said "commits/releases, as the spike", which R37 forbids: nothing is committed, the checkout is kept. **The bound needs participants stopped in parallel**, not one after another: `stop()` waits up to `stopGraceMs` (5 s) for a harness that ignores end of file, so a serial dismiss of N participants bounds at 5N seconds — half a minute of a hanging request on a room of six. Parallel makes the documented bound `stopGraceMs` + overhead, a number that can actually be written down. **Renamed 2026-09-21 (#145):** this is the **dismiss** response — `POST /rooms/:id/dismiss` — and the same parallel bound covers `pause`, which stops harnesses the same way but never releases a worktree (the sketch's naming trap) |
 | S7 | Command surface | (a) `chat.ts` standalone, add `kapelle chat` that runs it (b) move verbs into `cli.ts` (c) retire `chat.ts` | **Decided (interview):** (a) |
-| S8 | Shared client and chat | (a) `client/` owns DTOs, HTTP, SSE, reducer; `chat.ts` imports `client/` only (b) chat keeps its own client (c) put the client under `protocol/` | **Decided (interview):** (a); the import-boundary test allows `client/` and pi-tui, forbids `core/`, `protocol/` and `daemon.ts` |
+| S8 | Shared client and chat | (a) `client/` owns DTOs, HTTP, SSE, reducer; `chat.ts` imports `client/` only (b) chat keeps its own client (c) put the client under `protocol/` | **Decided (interview):** (a); the import-boundary test allows `client/` and pi-tui, forbids `core/`, `protocol/` and `daemon.ts`. **Amended 2026-09-26 (#175):** `core/runtime.ts` is allowed too, for the `daemon.json` path. **Built in M4-1 (#47):** the test follows `client/` file by file, so a `client/` file that reaches `core/` or `protocol/` at runtime fails it too |
 | S9 | Room and participant ids | (a) reuse `newRunId()` for rooms, opaque ids for participants (b) a distinct room prefix (c) uuid for both | **Decided (interview):** (b): a new `newRoomId()`, never the run id; participant ids opaque. **Built in M6-0, not M6-2 (2026-09-21, #144):** `newRoomId()` plus a private `assertOwnerId` that `branchName` validates with; `assertRunId` still rejects a room id |
 | S10 | Event identity | (a) `agent` is the participant name, room from the URL (b) add `roomId` + `participantId` to every room event (c) `agent` is the room id | **Decided (interview):** (b). Room log/SSE line: `{seq, roomId, participantId, update}`; run lines stay `{seq, agent, update}` with `agent` as the task id |
 | S11 | Stream end on room dismiss | (a) close closes the log and the stream ends, as the spike (b) final event then end (c) reopen read-only | **Decided (interview):** (a) now: close ends the log and every stream, and a client reconciles with `GET /rooms/:id` (dismissed vs 404). Additive follow-up: `_client_room_closed {reason}` with `dismissed`, `deleted` or `shutdown`, emitted before the log closes, when a second observer must distinguish a deliberate dismiss from a cut. **Corrected 2026-09-21 (#145):** `shutdown` is **not** one of those reasons. Under R42 a shutdown does not close the room — the stream ends because the process died, not because the log closed. A client reconciles with `GET /rooms/:id`: `paused`, `dismissed`, or 404. The additive event keeps `dismissed` and `deleted` |
