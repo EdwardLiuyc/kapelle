@@ -28,6 +28,7 @@ import type { AddressInfo } from "node:net";
 import { userInfo } from "node:os";
 import { join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
+import type { ParticipantDto, RoomDto } from "../client/contract.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import { processIdentity } from "../core/sweep.ts";
 import { openWorktrees } from "../core/worktree.ts";
@@ -1461,7 +1462,7 @@ test("a non-refusal error is a 500 internal, never a leaked code", async (t) => 
   // whose own numeric `code` must not reach the envelope (M5-3, #135).
   const r = await api(d, "POST", "/rooms", {
     cwd,
-    cmd: `node ${MOCK_AGENT}`,
+    agents: [{ cmd: `node ${MOCK_AGENT}` }],
   });
   assert.equal(r.status, 500);
   assert.equal(r.body.error.code, "internal");
@@ -3163,22 +3164,28 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
 
 const REMEMBER = `node ${MOCK_AGENT} --scenario remember`;
 
-interface RoomReply {
-  id: string;
-  status: string;
-  harness: string;
-  workspace: string;
+interface RoomReply extends RoomDto {
   error: { code: string; message: string };
-  seq: number;
-  notices: { text: string }[];
 }
 
-/** Polls `GET /rooms/:id` until the room is no longer `busy`. */
+/** A `POST /rooms` body with one orchestrator running `cmd`. */
+const withAgent = (cwd: string, cmd: string) => ({
+  cwd,
+  agents: [{ cmd, role: "orchestrator" }],
+});
+
+/** The room's one participant. */
+const only = (room: RoomDto): ParticipantDto => {
+  assert.equal(room.participants.length, 1);
+  return room.participants[0] as ParticipantDto;
+};
+
+/** Polls `GET /rooms/:id` until its participant is no longer `busy`. */
 async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
   for (const until = Date.now() + 20_000; Date.now() < until; ) {
     const r = await api<RoomReply>(d, "GET", `/rooms/${id}`);
     assert.equal(r.status, 200);
-    if (r.body.status !== "busy") return r.body;
+    if (only(r.body).status !== "busy") return r.body;
     await new Promise((ok) => setTimeout(ok, 25));
   }
   throw new Error(`room ${id} never went idle`);
@@ -3204,24 +3211,28 @@ test("a room keeps one harness and its context across messages, until it is dism
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
 
-  const open = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd,
-    cmd: REMEMBER,
-  });
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
   assert.equal(open.status, 201, open.body.error?.message);
-  assert.equal(open.body.status, "idle");
+  assert.equal(open.body.status, "active");
+  assert.equal(only(open.body).status, "idle");
   const { id } = open.body;
+  const { worktree } = only(open.body);
   // Its own checkout, named by the room id (S9), in the repository's
   // workspace under `stateDirFor(root)` rather than inside the repository
   // itself (#129).
   assert.match(
-    open.body.workspace,
+    worktree,
     /\/wt\/room-\d{8}-\d{6}-[0-9a-z]{4}\/room$/,
     "the room has its own checkout",
   );
   assert.ok(
-    !open.body.workspace.startsWith(cwd),
-    `the checkout is outside the repository, got ${open.body.workspace}`,
+    !worktree.startsWith(cwd),
+    `the checkout is outside the repository, got ${worktree}`,
   );
 
   for (const text of ["alpha", "beta"]) {
@@ -3232,9 +3243,10 @@ test("a room keeps one harness and its context across messages, until it is dism
     await roomIdle(d, id);
   }
 
-  const gone = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
+  const gone = await api<RoomReply>(d, "POST", `/rooms/${id}/dismiss`);
   assert.equal(gone.status, 200, gone.body.error?.message);
-  assert.equal(gone.body.status, "closed");
+  assert.equal(gone.body.status, "dismissed");
+  assert.equal(only(gone.body).status, "dismissed");
 
   const events = await roomEvents(d, id);
   // M5-5 (#137): a room's log carries `at` too, but no run terminal event —
@@ -3272,10 +3284,10 @@ test("a room keeps one harness and its context across messages, until it is dism
     text: "gamma",
   });
   assert.equal(late.status, 409);
-  assert.equal(late.body.error.code, "room_closed");
-  const again = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
+  assert.equal(late.body.error.code, "room_dismissed");
+  const again = await api<RoomReply>(d, "POST", `/rooms/${id}/dismiss`);
   assert.equal(again.status, 409);
-  assert.equal(again.body.error.code, "room_closed");
+  assert.equal(again.body.error.code, "room_dismissed");
 });
 
 test("dismissing a room commits nothing and leaves the checkout (R37)", async (t) => {
@@ -3283,12 +3295,15 @@ test("dismissing a room commits nothing and leaves the checkout (R37)", async (t
   const root = await gitRepo(t);
   const cwd = await added(d, root);
 
-  const open = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd,
-    cmd: REMEMBER,
-  });
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
   assert.equal(open.status, 201, open.body.error?.message);
-  const { id, workspace } = open.body;
+  const { id } = open.body;
+  const workspace = only(open.body).worktree;
   const base = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
@@ -3298,7 +3313,7 @@ test("dismissing a room commits nothing and leaves the checkout (R37)", async (t
   // supervisor never commits for it — not at close, not ever.
   await writeFile(join(workspace, "draft.txt"), "half a thought\n");
 
-  assert.equal((await api(d, "DELETE", `/rooms/${id}`)).status, 200);
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
 
   // The checkout is still there, with the work still uncommitted in it, and
   // the branch has not moved. The spike released as `done`, which committed
@@ -3321,20 +3336,22 @@ test("two dismissals racing both wait for the one teardown, and both get 200", a
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
 
-  const open = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd,
-    cmd: REMEMBER,
-  });
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
   assert.equal(open.status, 201, open.body.error?.message);
   const { id } = open.body;
 
   // S6(a): a dismissal answers only once the harness has stopped and the
-  // checkout is released. `status()` reads `closed` the instant a close
-  // begins, so keying the 409 on it told the second caller the room was
+  // checkout is released. `status()` reads `dismissed` the instant a
+  // dismiss begins, so keying the 409 on it told the second caller the room was
   // already dismissed while the harness was still alive.
   const [first, second] = await Promise.all([
-    api<RoomReply>(d, "DELETE", `/rooms/${id}`),
-    api<RoomReply>(d, "DELETE", `/rooms/${id}`),
+    api<RoomReply>(d, "POST", `/rooms/${id}/dismiss`),
+    api<RoomReply>(d, "POST", `/rooms/${id}/dismiss`),
   ]);
   assert.equal(first.status, 200, first.body.error?.message);
   assert.equal(second.status, 200, second.body.error?.message);
@@ -3348,25 +3365,31 @@ test("two dismissals racing both wait for the one teardown, and both get 200", a
     "one harness, stopped once",
   );
 
-  // A dismissal that arrives after the close has settled is still a 409.
-  assert.equal((await api<RoomReply>(d, "DELETE", `/rooms/${id}`)).status, 409);
+  // A dismissal that arrives after the teardown has settled is a 409.
+  assert.equal(
+    (await api<RoomReply>(d, "POST", `/rooms/${id}/dismiss`)).status,
+    409,
+  );
 });
 
-test("a release that fails is reported and the room still closes, not a 500 (R37)", async (t) => {
+test("a release that fails is reported and the room is still dismissed, not a 500 (R37)", async (t) => {
   const d = await boot(t);
   const root = await gitRepo(t);
   const cwd = await added(d, root);
 
-  const open = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd,
-    cmd: REMEMBER,
-  });
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
   assert.equal(open.status, 201, open.body.error?.message);
-  const { id, workspace } = open.body;
+  const { id } = open.body;
+  const workspace = only(open.body).worktree;
 
   // A locked worktree makes `git worktree remove --force` fail — the sweep
   // suite relies on the same trick — so `release` throws on this untouched
-  // checkout. The room still has to close, the failure has to be visible, and
+  // checkout. The room still has to be dismissed, the failure has to be visible, and
   // the daemon must not be left unable to shut down.
   assert.equal(
     spawnSync("git", ["worktree", "lock", workspace], { cwd: root }).status,
@@ -3376,17 +3399,18 @@ test("a release that fails is reported and the room still closes, not a 500 (R37
     spawnSync("git", ["worktree", "unlock", workspace], { cwd: root });
   });
 
-  const gone = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
+  const gone = await api<RoomReply>(d, "POST", `/rooms/${id}/dismiss`);
   assert.equal(gone.status, 200, gone.body.error?.message);
-  assert.equal(gone.body.status, "closed");
+  assert.equal(gone.body.status, "dismissed");
+  assert.equal(only(gone.body).status, "dismissed");
   assert.ok(
-    gone.body.notices.some((n) =>
+    only(gone.body).notices.some((n) =>
       /could not release the room's checkout/.test(n.text),
     ),
-    `release failure not reported: ${JSON.stringify(gone.body.notices)}`,
+    `release failure not reported: ${JSON.stringify(only(gone.body).notices)}`,
   );
 
-  // A rejected close used to escape `shutdown()`'s `Promise.all`, leaving
+  // A rejected teardown used to escape `shutdown()`'s `Promise.all`, leaving
   // `daemon.json` behind and skipping `process.exit(0)`.
   process.kill(d.pid, "SIGTERM");
   const r = await d.done;
@@ -3467,10 +3491,12 @@ test("chat.ts names the status for a refusal with no JSON envelope", async (t) =
 test("a message while the harness is still answering is refused, and dismiss ends that turn", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
-  const open = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd,
-    cmd: `node ${MOCK_AGENT} --scenario stall`,
-  });
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario stall`),
+  );
   assert.equal(open.status, 201, open.body.error?.message);
   const { id } = open.body;
 
@@ -3485,7 +3511,7 @@ test("a message while the harness is still answering is refused, and dismiss end
   assert.equal(busy.body.error.code, "room_busy");
   assert.match(busy.body.error.message, /still answering/);
 
-  assert.equal((await api(d, "DELETE", `/rooms/${id}`)).status, 200);
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
   const ended = (await roomEvents(d, id)).filter(
     (e) => e.update.sessionUpdate === "_client_turn_ended",
   );
@@ -3496,45 +3522,60 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
   const d = await boot(t);
   const repo = await gitRepo(t);
 
-  const unadded = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd: repo,
-    cmd: REMEMBER,
-  });
+  const unadded = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(repo, REMEMBER),
+  );
   assert.equal(unadded.status, 403);
   assert.equal(unadded.body.error.code, "repo_not_added");
 
   const cwd = await added(d, repo);
-  const none = await api<RoomReply>(d, "POST", "/rooms", { cwd });
-  assert.equal(none.status, 400);
-  assert.match(none.body.error.message, /"agent" or "cmd"/);
-  const unknown = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd,
-    agent: "nope",
-  });
-  assert.equal(unknown.status, 400);
-  assert.match(unknown.body.error.message, /unknown agent "nope"/);
+  const refused: [unknown, RegExp][] = [
+    [[{}], /"agent" or "cmd"/],
+    [[{ agent: "nope" }], /unknown agent "nope"/],
+    [{ cmd: REMEMBER }, /"agents" must be a list/],
+    [[{ cmd: REMEMBER }, { cmd: REMEMBER }], /at most one agent/],
+    [[{ cmd: REMEMBER, name: "no spaces" }], /invalid agent name/],
+    // A default name that breaks R22 asks for one rather than mangling it.
+    [[{ cmd: "/bin/true" }], /give the agent a "name"/],
+    [[{ cmd: REMEMBER, role: "boss" }], /invalid role "boss"/],
+    [[{ cmd: REMEMBER, mode: "ask" }], /unknown agent field "mode"/],
+  ];
+  for (const [agents, message] of refused) {
+    const r = await api<RoomReply>(d, "POST", "/rooms", { cwd, agents });
+    assert.equal(r.status, 400, JSON.stringify(agents));
+    assert.equal(r.body.error.code, "invalid_request");
+    assert.match(r.body.error.message, message);
+  }
+  const title = await api<RoomReply>(d, "POST", "/rooms", { cwd, title: 7 });
+  assert.equal(title.status, 400);
+  assert.match(title.body.error.message, /"title" must be a string/);
 
   const missing = await api(d, "POST", "/rooms/missing/messages", {
     text: "x",
   });
   assert.equal(missing.status, 404);
   assert.equal(missing.body.error.code, "room_not_found");
-  const open = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd,
-    cmd: REMEMBER,
-  });
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
   const empty = await api(d, "POST", `/rooms/${open.body.id}/messages`, {
     text: " ",
   });
   assert.equal(empty.status, 400);
-  await api(d, "DELETE", `/rooms/${open.body.id}`);
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
 });
 
 test("every room route answers room_not_found for an unknown id", async (t) => {
   const d = await boot(t);
   const routes: [string, string, unknown][] = [
     ["GET", "/rooms/nope", undefined],
-    ["DELETE", "/rooms/nope", undefined],
+    ["POST", "/rooms/nope/dismiss", undefined],
     ["POST", "/rooms/nope/messages", { text: "hi" }],
     ["GET", "/rooms/nope/events", undefined],
   ];
@@ -3543,6 +3584,30 @@ test("every room route answers room_not_found for an unknown id", async (t) => {
     assert.equal(r.status, 404, `${method} ${path}`);
     assert.equal(r.body.error.code, "room_not_found", `${method} ${path}`);
   }
+  // Dismiss moved off `DELETE`, which waits for R18's delete (M6-7a).
+  const del = await api(d, "DELETE", "/rooms/nope");
+  assert.equal(del.status, 404);
+  assert.equal(del.body.error.code, "no_route");
+});
+
+test("a message needs an orchestrator: an empty room and a room without one refuse it", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const empty = await api<RoomReply>(d, "POST", "/rooms", { cwd });
+  const plain = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER }],
+  });
+  assert.equal(plain.status, 201, plain.body.error?.message);
+  assert.equal(only(plain.body).role, undefined, "no role is given by default");
+  for (const room of [empty.body, plain.body]) {
+    const r = await api(d, "POST", `/rooms/${room.id}/messages`, {
+      text: "hi",
+    });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.error.code, "no_orchestrator");
+    await api(d, "POST", `/rooms/${room.id}/dismiss`);
+  }
 });
 
 test("a room whose harness cannot start is a 500 room_open_failed", async (t) => {
@@ -3550,10 +3615,12 @@ test("a room whose harness cannot start is a 500 room_open_failed", async (t) =>
   const cwd = await added(d, await gitRepo(t));
   // The harness binary is absent, so `openRoom` fails after the checkout is
   // ready; that failure has its own code, not `internal` (M5-3, #135).
-  const r = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd,
-    cmd: "definitely-not-a-command",
-  });
+  const r = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, "definitely-not-a-command"),
+  );
   assert.equal(r.status, 500);
   assert.equal(r.body.error.code, "room_open_failed");
 });
@@ -3576,7 +3643,7 @@ test("chat.ts talks to a room end to end: messages in, answers out, /dismiss sto
   const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
   assert.deepEqual(
     rooms.body.map((room) => room.status),
-    ["closed"],
+    ["dismissed"],
   );
 });
 
@@ -3610,7 +3677,7 @@ test("chat.ts /leave keeps the room alive, and attach replays the conversation b
   const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
   assert.deepEqual(
     rooms.body.map((room) => room.status),
-    ["idle"],
+    ["active"],
     "leaving kept it",
   );
   const id = rooms.body[0]?.id as string;

@@ -1,11 +1,14 @@
 /**
- * Run ids, task ids and branch names — story M1a-8, issue #16.
+ * Run, room, task and participant ids, and branch names — story M1a-8,
+ * issue #16; rooms since M6-0 (#144) and M6-2 (#146).
  *
- * Three strings the rest of the system agrees on: `runId` names a run,
- * `taskId` names a task inside it, and the branch that carries a task's work
- * is built from both. `<stateDirFor(root)>/wt/<runId>/<taskId>` is a
- * filesystem path and `kapelle/<runId>/<taskId>` is a git ref, so these ids
- * have to be legal in both places before anything is created.
+ * The strings the rest of the system agrees on: `runId` names a run and
+ * `taskId` a task inside it; `roomId` names a room and a participant id one
+ * participant inside it. The branch that carries the work is built from an
+ * owner (run or room) and a unit (task or participant).
+ * `<stateDirFor(root)>/wt/<ownerId>/<unitId>` is a filesystem path and
+ * `kapelle/<ownerId>/<unitId>` is a git ref, so these ids have to be legal in
+ * both places before anything is created.
  *
  * **Validation never sanitises** (`docs/STORIES.md:708`). The id in the run
  * file is the id in the path and in the ref; rewriting a bad id here would
@@ -52,6 +55,17 @@ const ROOM_ID_PATTERN = /^room-\d{8}-\d{6}-[0-9a-z]{4}$/;
 
 export function newRoomId(now: Date = new Date()): string {
   return `room-${newRunId(now)}`;
+}
+
+/** A participant id: `p-` and 8 base36 characters. Opaque, so a rename
+ *  never moves it (R10), and a legal task id, so M6-6a can name the
+ *  participant's branch `kapelle/<roomId>/<participantId>` with
+ *  `branchName`. Unique within one room is all it needs to be. */
+export function newParticipantId(): string {
+  const suffix = Math.floor(Math.random() * 36 ** 8)
+    .toString(36)
+    .padStart(8, "0");
+  return `p-${suffix}`;
 }
 
 /**

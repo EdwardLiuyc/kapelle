@@ -9,11 +9,15 @@
 
 import type {
   Notice,
+  ParticipantDto,
+  RoomDto,
+  RoomListEntry,
   RunDto,
   RunListEntry,
   RunStatus,
   TaskDto,
 } from "../client/contract.ts";
+import type { Participant, Room } from "../core/room.ts";
 import type { RunReport, TaskRun } from "../core/run.ts";
 
 const USAGE_SEMANTICS = new Set(["per-turn", "cumulative", "unknown"]);
@@ -189,5 +193,61 @@ export function toRunListEntry(state: RunState): RunListEntry {
   };
   if (state.startedAt !== undefined) entry.startedAt = state.startedAt;
   if (state.endedAt !== undefined) entry.endedAt = state.endedAt;
+  return entry;
+}
+
+/** What the daemon keeps about a room beyond the live `Room` itself. In
+ *  memory only until M6-7a writes `room.json`. */
+export interface RoomState {
+  id: string;
+  cwd: string;
+  title?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One participant in full. Built key by key, so a field `core/room.ts`
+ *  adds does not reach the wire until the contract names it. */
+function toParticipantDto(p: Participant): ParticipantDto {
+  const dto: ParticipantDto = {
+    id: p.id,
+    name: p.name,
+    harness: p.harness,
+    mode: p.mode,
+    worktree: p.worktree,
+    sessionId: p.sessionId,
+    status: p.status(),
+    notices: [...p.notices],
+  };
+  if (p.role !== undefined) dto.role = p.role;
+  if (p.branch !== undefined) dto.branch = p.branch;
+  if (p.baseSha !== undefined) dto.baseSha = p.baseSha;
+  return dto;
+}
+
+/** `GET /rooms/:id`: the room and every participant in full. */
+export function toRoomDto(state: RoomState, room: Room): RoomDto {
+  return {
+    ...state,
+    status: room.status(),
+    participants: room.participants.map(toParticipantDto),
+  };
+}
+
+/** One `GET /rooms` entry: the room and a short roster (R9, R44). */
+export function toRoomListEntry(state: RoomState, room: Room): RoomListEntry {
+  const entry: RoomListEntry = {
+    id: state.id,
+    cwd: state.cwd,
+    status: room.status(),
+    updatedAt: state.updatedAt,
+    participants: room.participants.map((p) => ({
+      id: p.id,
+      name: p.name,
+      ...(p.role && { role: p.role }),
+      status: p.status(),
+    })),
+  };
+  if (state.title !== undefined) entry.title = state.title;
   return entry;
 }

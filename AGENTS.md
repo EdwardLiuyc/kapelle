@@ -87,7 +87,7 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 | `core/sweep.ts` | The daemon's boot sweep. |
 | `core/config.ts` | The config files and `KAPELLE_*` variables. |
 | `core/runtime.ts` | The user-level directories and `stateDirFor(root)`. |
-| `core/room.ts` | A chat room: one harness kept alive across turns. |
+| `core/room.ts` | A chat room: a roster of participants, each one harness kept alive across turns. |
 | `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
 | `render.ts` | Terminal drawing of `session/update` events. |
 | `cli.ts` | The CLI and the `kapelle` bin. |

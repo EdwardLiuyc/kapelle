@@ -167,16 +167,14 @@ test("every write refuses a field its route does not take", async (t) => {
     mode: "auto",
     tasks: [{ id: "one", prompt: "hi" }],
   };
-  const room = await api<{ id: string }>(d, "POST", "/rooms", {
-    cwd,
-    cmd: `node ${MOCK_AGENT}`,
-  });
+  // An empty room: the refusals below come before any harness is needed.
+  const room = await api<{ id: string }>(d, "POST", "/rooms", { cwd });
   assert.equal(room.status, 201);
 
   const writes: [string, Record<string, unknown>][] = [
     ["/repos", { path: cwd }],
     ["/runs", { cwd, run }],
-    ["/rooms", { cwd, cmd: `node ${MOCK_AGENT}` }],
+    ["/rooms", { cwd }],
     [`/rooms/${room.body.id}/messages`, { text: "hi" }],
     ["/permissions/nope", { allow: true }],
   ];
@@ -190,7 +188,10 @@ test("every write refuses a field its route does not take", async (t) => {
   assert.deepEqual((await api(d, "GET", "/runs")).body, []);
   // Dismissed here, not in `t.after`: the daemon's own hook, registered
   // first, would already have stopped it.
-  assert.equal((await api(d, "DELETE", `/rooms/${room.body.id}`)).status, 200);
+  assert.equal(
+    (await api(d, "POST", `/rooms/${room.body.id}/dismiss`)).status,
+    200,
+  );
 });
 
 test("a body that is not a JSON object is invalid_request", async (t) => {
@@ -235,16 +236,14 @@ test("every write refuses a body that is not application/json", async (t) => {
     mode: "auto",
     tasks: [{ id: "one", prompt: "hi" }],
   };
-  const room = await api<{ id: string }>(d, "POST", "/rooms", {
-    cwd,
-    cmd: `node ${MOCK_AGENT}`,
-  });
+  // An empty room: the refusals below come before any harness is needed.
+  const room = await api<{ id: string }>(d, "POST", "/rooms", { cwd });
   assert.equal(room.status, 201);
 
   const writes: [string, Record<string, unknown>][] = [
     ["/repos", { path: cwd }],
     ["/runs", { cwd, run }],
-    ["/rooms", { cwd, cmd: `node ${MOCK_AGENT}` }],
+    ["/rooms", { cwd }],
     [`/rooms/${room.body.id}/messages`, { text: "hi" }],
     ["/permissions/nope", { allow: true }],
   ];
@@ -258,5 +257,8 @@ test("every write refuses a body that is not application/json", async (t) => {
     assert.equal(r.status, 415, path);
     assert.equal(r.body.error.code, "unsupported_media_type", path);
   }
-  assert.equal((await api(d, "DELETE", `/rooms/${room.body.id}`)).status, 200);
+  assert.equal(
+    (await api(d, "POST", `/rooms/${room.body.id}/dismiss`)).status,
+    200,
+  );
 });

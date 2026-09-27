@@ -117,7 +117,7 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| Everything under `/rooms` | Experimental | M6-2 and later |
+| Everything under `/rooms` | Experimental | M6-3 and later |
 
 **Planned, not built yet:** cancel one task (M5-8).
 
@@ -252,7 +252,9 @@ request that is not valid HTTP gets `400`.
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `room_busy` | `409` | The room still answers the last message. | Wait for `_client_turn_ended`, then send again. |
-| `room_closed` | `409` | The room was dismissed, or its harness exited. | Stop. Open a new room. |
+| `room_dismissed` | `409` | The room was dismissed. | Stop. Open a new room. |
+| `agent_exited` | `409` | The participant's harness exited by itself. | Stop. Open a new room. M6-7a brings the participant back on the next message. |
+| `no_orchestrator` | `409` | The room has no participant with the `orchestrator` role, so a message has no target. | Open a room with an orchestrator. |
 | `idempotency_conflict` | `409` | This `Idempotency-Key` already started a run with a different body. | Use a new key for new work. |
 | `idempotency_in_progress` | `409` | A request with this `Idempotency-Key` has not answered yet. | Wait, then send the same request again. |
 | `orchestrator_exists` | `409` | Not built yet (M6-3). The room already has an orchestrator. | Change the other participant's role first. |
@@ -307,7 +309,7 @@ first: `POST /rooms/:id/messages` looks the room up, so an unknown room is
 | `GET /rooms/:id` | One room. Experimental. |
 | `POST /rooms/:id/messages` | Send a message into a room. Experimental. |
 | `GET /rooms/:id/events` | A room's event stream. Experimental. |
-| `DELETE /rooms/:id` | Close a room. Experimental. |
+| `POST /rooms/:id/dismiss` | End a room. Experimental. |
 
 ### `GET /version`
 
@@ -858,22 +860,41 @@ restart. `409` `already_decided` when the question is already closed, for any re
 
 ## Rooms
 
-**Everything in this section is experimental.** The room API will change in M6-2 and
+**Everything in this section is experimental.** The room API will change in M6-3 and
 after. `chat.ts` uses it today.
 
-A room is one harness with one session that stays alive between messages. The room has its
-own git branch and checkout. Today a room always runs in `auto` mode, so it never asks a
-permission.
+A room is a container on one repository. It holds a list of participants. Each
+participant is one harness with one session that stays alive between messages. Today:
+
+- A room holds **at most one** participant. M6-3 lifts the limit.
+- The room has one git branch and checkout, and its participant runs in it. M6-6a gives
+  each participant its own.
+- A participant always runs in `auto` mode, so it never asks a permission. M6-5 adds
+  the other modes.
 
 ### `POST /rooms`
 
-**Request:** `cwd` plus either `agent` (a harness name) or `cmd` (a command line).
+**Request:** `cwd`, plus an optional `title` and an optional `agents` list. Without
+`agents`, or with an empty list, the room is empty.
 
 ```json
-{ "cwd": "/home/me/src/app", "agent": "opencode" }
+{
+  "cwd": "/home/me/src/app",
+  "title": "fix login",
+  "agents": [{ "agent": "opencode", "name": "alice", "role": "orchestrator" }]
+}
 ```
 
-The reply comes when the harness is ready. This can take some seconds.
+An agent takes:
+
+- `agent` (a harness name) or `cmd` (a command line). One of them is required.
+- `name`: optional. It must match `^[A-Za-z0-9_-]{1,32}$`. The default is the harness
+  name. When that name does not match, give a `name`.
+- `role`: optional. One of `orchestrator`, `developer`, `tester` or `architect`. No role
+  is given by default. A message goes to the `orchestrator`, so give that role to the
+  agent that should answer.
+
+The reply comes when every harness is ready. This can take some seconds.
 
 **Reply `201`:** the room.
 
@@ -881,27 +902,71 @@ The reply comes when the harness is ready. This can take some seconds.
 {
   "id": "room-20260922-101500-a1b2",
   "cwd": "/home/me/src/app",
-  "harness": "opencode",
-  "workspace": "/home/me/.local/state/kapelle/repos/app-1a2b3c/wt/room-…/room",
-  "notices": [{ "text": "…", "kind": "containment" }],
-  "status": "idle"
+  "title": "fix login",
+  "createdAt": "2026-09-22T10:15:00.000Z",
+  "updatedAt": "2026-09-22T10:15:00.000Z",
+  "status": "active",
+  "participants": [
+    {
+      "id": "p-0k3x9a2b",
+      "name": "alice",
+      "role": "orchestrator",
+      "harness": "opencode",
+      "mode": "auto",
+      "worktree": "/home/me/.local/state/kapelle/repos/app-1a2b3c/wt/room-…/room",
+      "branch": "kapelle/room-20260922-101500-a1b2/room",
+      "baseSha": "3f2a…",
+      "sessionId": "ses_…",
+      "status": "idle",
+      "notices": [{ "text": "…", "kind": "containment" }]
+    }
+  ]
 }
 ```
 
+A room's `status` is `active` or `dismissed`. `paused` comes with M6-7a. A participant's
 `status` is `idle` (waits for a message), `busy` (answers a message), `exited` (the
-harness died) or `closed`.
+harness died) or `dismissed`. `paused` and `killed` come with M6-7a.
+
+The participant `id` is opaque. `title`, `role`, `branch` and `baseSha` are missing when
+there is no value. `branch` and `baseSha` are missing when `cwd` cannot carry a git
+checkout; then `worktree` is `cwd` itself.
 
 **Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
-bad or missing harness; `503` `shutting_down` when the daemon shuts down; `500`
-`room_open_failed` when the harness cannot start (for example its binary is not
-installed).
+bad `title`, a bad or missing harness, a bad `name` or `role`, an unknown agent field, or
+more than one agent; `503` `shutting_down` when the daemon shuts down; `500`
+`room_open_failed` when a harness cannot start (for example its binary is not installed).
 
-### `GET /rooms` and `GET /rooms/:id`
+### `GET /rooms`
 
-**Reply `200`:** a list of rooms, or one room. `404` `room_not_found` for an unknown id.
+**Reply `200`:** a list. Each room carries its participants in short, so a list of rooms
+is one call.
+
+```json
+[
+  {
+    "id": "room-20260922-101500-a1b2",
+    "cwd": "/home/me/src/app",
+    "title": "fix login",
+    "status": "active",
+    "updatedAt": "2026-09-22T10:15:00.000Z",
+    "participants": [
+      { "id": "p-0k3x9a2b", "name": "alice", "role": "orchestrator", "status": "idle" }
+    ]
+  }
+]
+```
+
+### `GET /rooms/:id`
+
+**Reply `200`:** the room, in the same shape as `POST /rooms` answers. `404`
+`room_not_found` for an unknown id.
 
 ### `POST /rooms/:id/messages`
+
+The message goes to the participant with the `orchestrator` role. M6-4 adds a route for
+each participant.
 
 **Request:** `{ "text": "What does this repo do?" }`
 
@@ -909,8 +974,10 @@ installed).
 at the first `_client_turn_ended` with a `seq` above 41.
 
 **Refusals:** `404` `room_not_found` for an unknown room. `400` `invalid_request` for
-empty text. `409` `room_busy` while the room answers, and `409` `room_closed` after it
-exited or closed. Send one message at a time.
+empty text. `409` `room_dismissed` for a dismissed room. `409` `no_orchestrator` when no
+participant has that role, which includes an empty room. `409` `room_busy` while the
+orchestrator answers, and `409` `agent_exited` after its harness exited. Send one message
+at a time.
 
 ### `GET /rooms/:id/events`
 
@@ -919,18 +986,20 @@ The room's event stream. Same format as a run's. `agent` is the harness name.
 **Refusals:** `404` `room_not_found` for an unknown room, `404` `no_event_log` for one
 with no event log; `400` `invalid_request` for a bad `Last-Event-ID`.
 
-### `DELETE /rooms/:id`
+### `POST /rooms/:id/dismiss`
 
-Stops the harness and closes the room. The reply waits until that is done. The daemon
-never commits the room's work. Changes that nobody committed stay in the checkout.
+Stops every harness and ends the room. The reply waits until that is done. The daemon
+never commits the room's work. Changes that nobody committed stay in the checkout, and
+the branch stays.
 
-**Reply `200`:** the room, with `status: "closed"`. `404` `room_not_found` for an unknown
-room. `409` `room_closed` when the room was already closed.
+**Reply `200`:** the room, with `status: "dismissed"`, and each participant
+`dismissed`. `404` `room_not_found` for an unknown room. `409` `room_dismissed` when the
+room was already dismissed.
 
-### Words for the room lifecycle (planned)
+### Words for the room lifecycle
 
-These words are fixed now, so every client uses the same ones. Most of them are not
-built yet. M6-2 and M6-7a build them.
+These words are fixed now, so every client uses the same ones. **dismiss** is built.
+M6-7a builds the others.
 
 | Word | Who does it | Room after | Harness | Work on disk |
 | --- | --- | --- | --- | --- |
@@ -944,12 +1013,14 @@ A paused room can be dismissed or deleted as it is. Neither word starts a harnes
 A room whose participants have all `exited`, or were `killed` while the daemon stayed up,
 still reads `active`, because the next message brings each one back.
 
-Today's `DELETE /rooms/:id` is **dismiss**. The status it reports is still `closed`.
+`DELETE /rooms/:id` is kept for **delete**, and answers `404` `no_route` until M6-7a
+builds it. Today a daemon shutdown dismisses every room; M6-7a makes it a pause.
 
 ### Room record (planned)
 
-This is the shape that M6-2 builds. It is here so that the words above can be checked
-against real fields. It is not an API yet.
+This is the whole record. M6-2 built the part the replies above show. The rest comes with
+the story that fills it: `purpose` and `settings` (M6-3), `resumed` (M6-7a) and the room's
+`base` (M6-6a).
 
 ```text
 room              id, cwd, title, base, createdAt, updatedAt, status
