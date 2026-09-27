@@ -304,7 +304,7 @@ export async function openRoom({
         `could not release the participant's checkout` +
           `${worktree ? ` at ${worktree}` : ""}: ` +
           `${err instanceof Error ? err.message : String(err)}; ` +
-          "it is left in place",
+          "the checkout, its branch or both may be left in place",
       );
       return true;
     }

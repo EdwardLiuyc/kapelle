@@ -144,7 +144,7 @@ test("a failed add leaves no checkout or branch, and the room keeps working", as
   assert.equal(alice.status(), "idle");
 });
 
-test("failed adds whose harness wrote into its checkout keep it, and each says so", async (t) => {
+test("failed adds whose harnesses wrote into their checkouts keep them, and each says so", async (t) => {
   const repo = await gitRepo(t);
   const { room, alice, roomId } = await roomWithAlice(t, repo);
   // A harness that writes into its cwd, then dies before its session.

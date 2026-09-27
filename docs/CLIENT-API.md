@@ -996,7 +996,8 @@ still in the checkout. When it changed nothing, both are removed.
 
 A kept checkout lasts only until the next daemon start. Until M6-7a, rooms are not
 saved, so the start-up cleanup removes a kept checkout that has no uncommitted changes.
-Its branch stays. A checkout with uncommitted changes is kept.
+Its branch stays. A checkout with uncommitted changes is kept, and so is one whose HEAD
+is detached, that is, not on a branch.
 
 **Reply `200`:** the room, with `status: "dismissed"`, and each participant
 `dismissed`. `404` `room_not_found` for an unknown room. `409` `room_dismissed` when the
