@@ -3924,16 +3924,23 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   const escapes =
     // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
     /\x1b(\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(\x07|\x1b\\)|_[^\x1b]*\x1b\\)/g;
-  const text = out
+  const raw = out
     .slice(out.lastIndexOf("\x1b[?1049l"))
     .replace(escapes, "")
-    .replace(/\r/g, "")
-    .replace(/[ \t]+$/gm, "");
+    .replace(/\r/g, "");
+  const text = raw.replace(/[ \t]+$/gm, "");
   assert.match(
     text,
     /you\n\s*alpha\n[\s\S]*mock-agent\n\s*previous: \(none\)\n[\s\S]*the room was dismissed/,
     "the typed message, the answer, then the exit line",
   );
+  // A line as wide as the terminal gets an empty line after it where the
+  // terminal wraps at the last column at once: Windows ConPTY, and some
+  // multiplexers. The pty is 100 columns wide.
+  for (const line of raw.split("\n")) {
+    assert.ok(line.length < 100, `a full-width line: ${JSON.stringify(line)}`);
+  }
+  assert.doesNotMatch(text, /enter to send/, "the status line is not chat");
 });
 
 for (const [how, keys] of [

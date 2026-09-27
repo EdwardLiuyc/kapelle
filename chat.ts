@@ -223,6 +223,15 @@ const cyan = sgr(36, 39);
 const green = sgr(32, 39);
 const yellow = sgr(33, 39);
 
+/** A rendered line without its padding: the trailing spaces and the style
+ *  codes among them go, and a styled line ends with a reset, because a
+ *  wrapped line can open a style and leave it open. */
+const unpad = (line: string) => {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const text = line.replace(/(?: |\x1b\[[0-9;]*m)+$/, "");
+  return text.includes("\x1b") ? `${text}\x1b[0m` : text;
+};
+
 const MARKDOWN_THEME: MarkdownTheme = {
   heading: (s) => bold(cyan(s)),
   link: (s) => underline(cyan(s)),
@@ -353,12 +362,18 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
 
   return new Promise((finish) => {
     let done = false;
-    // `tui.stop()` leaves the alternate screen and prints the whole transcript
-    // to the normal one, so the conversation stays in scrollback on exit.
+    // The transcript is printed to the normal screen on exit, so the
+    // conversation stays in scrollback. Not by `tui.stop()`'s own reprint:
+    // that pads every line to the full width, and a terminal that wraps at
+    // the last column at once (Windows ConPTY, some multiplexers) then shows
+    // an empty line after each one. It would also copy the status line and
+    // the editor. So only the transcript is printed, with the padding cut.
     const end = (code: number, ...last: string[]) => {
       if (done) return;
       done = true;
-      tui.stop();
+      const lines = transcript.render(process.stdout.columns || 80);
+      tui.stop({ preserveScreen: true });
+      for (const line of lines) console.log(unpad(line));
       for (const line of last) console.log(line);
       finish(code);
     };
