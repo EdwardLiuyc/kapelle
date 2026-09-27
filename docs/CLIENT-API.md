@@ -914,8 +914,8 @@ The reply comes when every harness is ready. This can take some seconds.
       "role": "orchestrator",
       "harness": "opencode",
       "mode": "auto",
-      "worktree": "/home/me/.local/state/kapelle/repos/app-1a2b3c/wt/room-…/room",
-      "branch": "kapelle/room-20260922-101500-a1b2/room",
+      "worktree": "/home/me/.local/state/kapelle/repos/app-1a2b3c/wt/room-…/p-0k3x9a2b",
+      "branch": "kapelle/room-20260922-101500-a1b2/p-0k3x9a2b",
       "baseSha": "3f2a…",
       "sessionId": "ses_…",
       "status": "idle",
@@ -990,8 +990,14 @@ with no event log; `400` `invalid_request` for a bad `Last-Event-ID`.
 ### `POST /rooms/:id/dismiss`
 
 Stops every harness and ends the room. The reply waits until that is done. The daemon
-never commits the room's work. Changes that nobody committed stay in the checkout, and
-the branch stays.
+never commits the room's work. Each participant has its own checkout and branch. When a
+participant changed something, its checkout and branch stay, with uncommitted changes
+still in the checkout. When it changed nothing, both are removed.
+
+A kept checkout lasts only until the next daemon start. Until M6-7a, rooms are not
+saved, so the start-up cleanup removes a kept checkout that has no uncommitted changes.
+Its branch stays. A checkout with uncommitted changes is kept, and so is one whose HEAD
+is detached, that is, not on a branch.
 
 **Reply `200`:** the room, with `status: "dismissed"`, and each participant
 `dismissed`. `404` `room_not_found` for an unknown room. `409` `room_dismissed` when the
@@ -1004,7 +1010,7 @@ M6-7a builds the others.
 
 | Word | Who does it | Room after | Harness | Work on disk |
 | --- | --- | --- | --- | --- |
-| dismiss | a person | `dismissed`, final | stopped | branch and checkout kept |
+| dismiss | a person | `dismissed`, final | stopped | branch and checkout kept for a participant that changed something; both removed for one that did not |
 | delete | a person | gone | stopped | removed; refused with `409` while a checkout has work that nobody committed |
 | pause | the machine (shutdown, reboot) | `paused` | stopped | branch and checkout kept |
 | resume | the next message to a paused, killed or exited participant | `active` | started again in its own checkout | untouched |

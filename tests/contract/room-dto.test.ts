@@ -106,7 +106,7 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
   assert.equal(alice.harness, "mock-agent");
   assert.equal(alice.mode, "auto");
   assert.equal(alice.status, "idle");
-  assert.equal(alice.branch, `kapelle/${starter.body.id}/room`);
+  assert.equal(alice.branch, `kapelle/${starter.body.id}/${alice.id}`);
   assert.match(alice.baseSha ?? "", /^[0-9a-f]{40}$/);
   assert.equal(typeof alice.sessionId, "string");
 

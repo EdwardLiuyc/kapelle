@@ -262,7 +262,7 @@ export interface ParticipantDto {
   /** The harness that runs it. */
   harness: string;
   mode: "auto";
-  /** Where the harness runs: the room's checkout, or the cwd itself when
+  /** Where the harness runs: its own checkout, or the cwd itself when
    *  the cwd cannot carry worktrees. */
   worktree: string;
   /** The checkout's branch and the SHA it forked from, when it has one. */
