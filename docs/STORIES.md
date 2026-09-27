@@ -2273,7 +2273,7 @@ promise until M5-1 documents it. The `kapelle chat` verb stays with M6-9 (S7a). 
 applies from here. The spike's `close()` releases as
 `done`, which commits the work and removes the checkout; both must stop. `release` already
 behaves as R37 wants under a non-releasing status, but every such label (`failed`,
-`cancelled`, `timed_out`) misdescribes a room that simply closed. **Settled: `release`
+`cancelled`, `timed_out`) misdescribes a room that was simply dismissed. **Settled: `release`
 takes a `ReleaseAction` (`"commit" | "keep"`)**, `RELEASES` moves to `core/run.ts` beside
 `TaskStatus` and converts at its one call site, and a room always passes `"keep"` — so
 `core/worktree.ts` imports no run word at all. Add R40's `ponytail:` comment where the

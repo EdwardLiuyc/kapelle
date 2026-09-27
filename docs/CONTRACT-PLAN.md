@@ -515,7 +515,7 @@ the checkout. The rebase must stop doing both. `core/worktree.ts` `release` alre
 behaviour R37 wants under a **non-releasing** status — the checkout is kept uncommitted,
 and a participant that committed its own work is not `untouched`, so its branch survives —
 but every existing non-releasing label (`failed`, `cancelled`, `timed_out`) is a lie about
-a room that simply closed. **Settled 2026-09-21 (#144): `release` takes the decision.** Its second parameter is a
+a room that was simply dismissed. **Settled 2026-09-21 (#144): `release` takes the decision.** Its second parameter is a
 `ReleaseAction` — `"commit" | "keep"` — and `RELEASES` moves to `core/run.ts` beside
 `TaskStatus`, converting at its one call site; a room always passes `"keep"`. The
 alternative, a seventh `TaskStatus`, was rejected: `BY_SEVERITY`, `statusFor`, `runStatus`

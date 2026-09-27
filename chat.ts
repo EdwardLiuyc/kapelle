@@ -25,11 +25,14 @@ import { parseArgs } from "node:util";
 import { runtimeDir } from "./core/runtime.ts";
 
 const USAGE = `usage: (experimental — the room API may change without notice)
-  node chat.ts new --agent <id> [--cwd dir]       open a room and chat in it
-  node chat.ts new --cmd "<command>" [--cwd dir]
-  node chat.ts attach <roomId>                    rejoin a room; its history replays
-  node chat.ts list                               every room the daemon holds
-  node chat.ts dismiss <roomId>                   stop a room's harness
+  node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
+  node chat.ts new --cmd "<command>" [--name n] [--cwd dir]
+  node chat.ts attach <roomId>                              rejoin a room; its history replays
+  node chat.ts list                                         every room the daemon holds
+  node chat.ts dismiss <roomId>                             stop a room's harness
+
+--name is the agent's name; the harness name by default. Give one when that
+is not a valid name, as for --cmd "/opt/bin/my-agent".
 
 in a room, type a message and press enter:
   /leave     exit; the room and its harness stay alive
@@ -395,6 +398,7 @@ async function main(): Promise<number> {
     options: {
       agent: { type: "string" },
       cmd: { type: "string" },
+      name: { type: "string" },
       cwd: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
@@ -411,7 +415,14 @@ async function main(): Promise<number> {
     const cwd = resolve(values.cwd ?? process.cwd());
     const r = await api<RoomView>(d, "POST", "/rooms", {
       cwd,
-      agents: [{ agent: values.agent, cmd: values.cmd, role: "orchestrator" }],
+      agents: [
+        {
+          agent: values.agent,
+          cmd: values.cmd,
+          name: values.name,
+          role: "orchestrator",
+        },
+      ],
     });
     if (r.status !== 201) {
       console.error(`error: ${r.error?.message}`);

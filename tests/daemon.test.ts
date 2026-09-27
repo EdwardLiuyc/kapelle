@@ -3700,6 +3700,35 @@ test("a room whose harness cannot start is a 500 room_open_failed", async (t) =>
   assert.equal(r.body.error.code, "room_open_failed");
 });
 
+test("chat.ts new --name names an agent whose harness label is not a valid name", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const env = { XDG_RUNTIME_DIR: runtime };
+  // A full path is the label, and a path breaks R22's name rule.
+  const cmd = `${process.execPath} ${MOCK_AGENT}`;
+
+  const unnamed = await spawnCli(
+    t,
+    ["new", "--cmd", cmd, "--cwd", cwd],
+    "chat.ts",
+    env,
+  ).done;
+  assert.equal(unnamed.code, 1);
+  assert.match(unnamed.stderr, /give the agent a "name"/);
+
+  const named = spawnCli(
+    t,
+    ["new", "--cmd", cmd, "--name", "bob", "--cwd", cwd],
+    "chat.ts",
+    env,
+  );
+  named.child.stdin.end("/dismiss\n");
+  const r = await named.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /· bob \(/);
+});
+
 test("chat.ts talks to a room end to end: messages in, answers out, /dismiss stops it", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
