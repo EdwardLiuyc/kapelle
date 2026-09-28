@@ -292,7 +292,8 @@ before it compares the digest: see
 first: `POST /rooms/:id/messages`, `POST /rooms/:id/agents/:agentId/messages`,
 `POST /rooms/:id/agents` and `PATCH /rooms/:id/agents/:agentId` look the room up, so an
 unknown room is
-`404 room_not_found` even when the body would be refused. `DELETE` carries no body, and
+`404 room_not_found` even when the body would be refused. They look the participant up
+only after the body, so a bad body to an unknown participant is `400`, not `404`. `DELETE` carries no body, and
 the `GET` routes take none.
 
 ## Routes
@@ -1130,6 +1131,9 @@ the participant's harness exited. `429` `queue_full` when 16 messages already wa
 One participant's view of the room: the room's stream with only the lines whose
 `participantId` is this one. `seq` and `Last-Event-ID` are the room's, so the numbers have
 gaps. The stream ends when the room's log closes.
+
+A removed participant has no stream: this route answers `404` for it. Its lines stay in
+[`GET /rooms/:id/events`](#get-roomsidevents); filter them there by `participantId`.
 
 **Refusals:** as for [`GET /rooms/:id/events`](#get-roomsidevents), and `404`
 `participant_not_found`.
