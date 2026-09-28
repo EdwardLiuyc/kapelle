@@ -19,6 +19,7 @@ import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import {
   gitRepo,
+  HOSTILE_AGENT,
   isolateStateHome,
   MOCK_AGENT,
   tempDir,
@@ -412,4 +413,63 @@ test("an agent request checks mode, settings and names in one list", () => {
       ]),
     { code: "orchestrator_exists" },
   );
+});
+
+test("a rename cannot take the name of an add still in flight", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  const carol = room.add(mock("carol"));
+  assert.throws(() => room.update(alice.id, { name: "Carol" }), {
+    code: "name_taken",
+  });
+  await carol;
+});
+
+test("a dismiss waits for a remove in flight to release its checkout", async (t) => {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [mock("bob")],
+    setup: await openWorktrees(repo, roomId),
+    bus: createEventBus(),
+  });
+  const bob = room.participants[0] as Participant;
+  const removing = room.remove(bob.id);
+  await room.dismiss();
+  // bob wrote nothing, so its release removes the checkout.
+  assert.ok(!existsSync(bob.worktree), "released before the dismiss resolved");
+  await removing;
+});
+
+test("allowReadOutsideRoot reaches the harness's file service", async (t) => {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  let said = "";
+  bus.addListener(({ update }) => {
+    said += JSON.stringify(update);
+  });
+  const reader = (name: string, allowReadOutsideRoot: boolean) =>
+    roomAgent({
+      cmd: `node ${HOSTILE_AGENT} --scenario absolute-path`,
+      name,
+      settings: { allowReadOutsideRoot },
+    });
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [reader("closed", false), reader("open", true)],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+  });
+  t.after(() => room.dismiss());
+  const [closed, open] = room.participants as [Participant, Participant];
+
+  await closed.send("read");
+  assert.match(said, /OUTCOME=refused/);
+  said = "";
+  await open.send("read");
+  assert.match(said, /OUTCOME=allowed/);
 });
