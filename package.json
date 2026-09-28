@@ -5,6 +5,7 @@
   "type": "module",
   "description": "A minimal Agent Client Protocol client — supervise coding agents from Node",
   "license": "MIT",
+  "author": "Yongchuan Liu",
   "bin": {
     "kapelle": "./cli.ts"
   },

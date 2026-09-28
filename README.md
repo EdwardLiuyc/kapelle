@@ -53,6 +53,8 @@ pi                     # type /login, then quit
 kapelle "summarise this repo in three sentences"
 ```
 
+pi works in your own checkout here, and it never asks for permission, so no mode can stop its changes. Read [Safety](#what-the-modes-do-and-do-not-do) before you give it real work.
+
 Other options: `--agent <id>` picks another agent. `--cwd <dir>` works in another folder. `--mode` sets what the agent may do (see [Safety](#what-the-modes-do-and-do-not-do)). `--verbose` shows the agent's own error output. `--quiet` hides normal output, but never the safety notices.
 
 ## Rooms
@@ -75,7 +77,7 @@ node chat.ts attach <roomId>        # rejoin a room; its history replays
 node chat.ts dismiss <roomId>       # stop the room's agents
 ```
 
-In a room, type a message and press Enter. `/leave` exits and keeps the agents alive. `/dismiss` stops them. Uncommitted work stays in each agent's checkout: kapelle never commits for an agent.
+In a room, type a message and press Enter. `/leave` exits and keeps the agents alive. `/dismiss` stops them. In a room, kapelle never commits for an agent: uncommitted work stays in the agent's checkout.
 
 The room API is new, and it can still change.
 
@@ -99,6 +101,8 @@ kapelle run --file tasks.json
 ```
 
 In a git repository, each task gets its own `git worktree`, on a branch named `kapelle/<runId>/<taskId>`. Keep working in your own checkout while the agents work in theirs. Your uncommitted changes do not reach the tasks, and kapelle tells you so. Outside a git repository, the tasks share the folder.
+
+When a task ends `done` or `warned`, kapelle commits its work on the task's branch. Look at one task's work with `git log -p kapelle/<runId>/<taskId>` before you merge.
 
 See `schema/run.schema.json` for every field. Task ids name git branches, so kapelle checks them and never changes them.
 
@@ -156,7 +160,7 @@ Any other ACP agent works too: `--cmd "some-agent --acp"`.
 | Mode | What it does |
 | --- | --- |
 | `safe` | Allows reads. Refuses every change the agent asks about. |
-| `ask` | Allows reads. Asks you about each change. Needs a terminal. |
+| `ask` | Allows reads. Asks you about each change. Needs a terminal: without one, kapelle uses `safe` and prints a notice. |
 | `auto` | Allows everything. File paths outside the workspace are still refused. |
 
 **A mode is a filter, not a sandbox.** It decides the answer when an agent asks for permission. An agent that changes files through its own shell does not ask. pi and opencode never ask, so `safe` does not stop them.
