@@ -601,6 +601,10 @@ export async function openRoom({
     // second remove is told it is gone.
     members.splice(members.indexOf(found), 1);
     participants.splice(participants.indexOf(found.participant), 1);
+    // No `finally` for the release: `stop()` cannot reject. It awaits the
+    // harness's exit, which only resolves, and a turn whose handlers only
+    // emit on a bus that catches every listener. A step that can reject,
+    // added to `stop()`, would strand this checkout with no notice.
     await found.stop();
     // The participant is gone, so a kept checkout is the room's to report.
     await release(id, found.participant.worktree, onRoomNotice);

@@ -968,7 +968,9 @@ daemon shuts down; `500` `room_open_failed` when a harness cannot start (for exa
 binary is not installed).
 
 A `base` is bad when it is not a commit, or when its commit has no copy of the folder
-`cwd` names inside the repository.
+`cwd` names inside the repository. That folder must be in the commit even when no `base`
+is sent, because the default is `HEAD`: a folder that is not committed yet gives the same
+`400`.
 
 ### `GET /rooms`
 
@@ -1086,8 +1088,10 @@ is free again.
 
 ### Words for the room lifecycle
 
-These words are fixed now, so every client uses the same ones. **dismiss** is built.
-M6-7a builds the others.
+These words are fixed now, so every client uses the same ones. They describe the whole
+room, not one participant: removing a participant is
+[`DELETE /rooms/:id/agents/:agentId`](#delete-roomsidagentsagentid), which keeps its work.
+**dismiss** is built. M6-7a builds the others.
 
 | Word | Who does it | Room after | Harness | Work on disk |
 | --- | --- | --- | --- | --- |

@@ -319,10 +319,11 @@ export async function openWorktrees(
         }
 
         if (!existsSync(inside)) {
+          // Worded for runs and rooms alike: a room client reads it too.
           throw new BadBase(
-            `${prefix} does not exist at ${baseRef} — the run was asked for ` +
-              `that subdirectory as its workspace root, and the base commit ` +
-              `has no such path to give each task.`,
+            `the folder ${prefix} is not in ${baseRef}, so a checkout of that ` +
+              "commit has no such folder to work in. Commit the folder, or " +
+              "start from a commit that has it.",
           );
         }
         return inside;

@@ -480,7 +480,9 @@ test("a role change cannot take the orchestrator role from an add still in fligh
   assert.throws(() => room.update(alice.id, { role: "orchestrator" }), {
     code: "orchestrator_exists",
   });
-  await carol;
+  // The add got the role it held, and alice kept none.
+  assert.equal((await carol).role, "orchestrator");
+  assert.equal(alice.role, undefined);
 });
 
 test("a base that lacks the room's subdirectory is a refusal, not a failure", async (t) => {
@@ -492,6 +494,22 @@ test("a base that lacks the room's subdirectory is a refusal, not a failure", as
   const { room } = await roomWithAlice(t, join(repo, "app"));
   await assert.rejects(room.add(mock("bob", { base: "HEAD~1" })), {
     code: "invalid_request",
-    message: /app does not exist at HEAD~1/,
+    message: /the folder app is not in HEAD~1/,
   });
+});
+
+test("a room in a folder that is not committed refuses an add, naming the folder", async (t) => {
+  const repo = await gitRepo(t);
+  await mkdir(join(repo, "newdir"));
+  const roomId = newRoomId();
+  await assert.rejects(
+    openRoom({
+      roomId,
+      cwd: join(repo, "newdir"),
+      agents: [mock("alice")],
+      setup: await openWorktrees(join(repo, "newdir"), roomId),
+      bus: createEventBus(),
+    }),
+    { code: "invalid_request", message: /the folder newdir is not in HEAD/ },
+  );
 });

@@ -560,7 +560,7 @@ test("a subdirectory missing at the base ref throws naming it", async (t) => {
   assert.ok(worktrees);
 
   await assert.rejects(worktrees.acquire("plan"), (err: Error) => {
-    assert.match(err.message, /packages\/app does not exist/);
+    assert.match(err.message, /the folder packages\/app is not in HEAD/);
     return true;
   });
 });

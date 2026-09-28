@@ -940,7 +940,7 @@ async function postAgent(
   try {
     request = roomAgent(body);
   } catch (err) {
-    throw refusal(400, "invalid_request", messageOf(err));
+    throw roomRefused(err) ?? refusal(400, "invalid_request", messageOf(err));
   }
   const shuttingDown = () =>
     refusal(503, "shutting_down", "the daemon is shutting down");
