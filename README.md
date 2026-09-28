@@ -3,9 +3,11 @@
   <img src="assets/icon.svg" alt="kapelle logo" width="128">
 </p>
 
-# kapelle
+> A *Kapelle* is the ensemble a *Kapellmeister* directs: the players, not the conductor. kapelle directs, and the agents play.
 
-**A terminal workspace for a team of coding agents.**
+# Kapelle
+
+**A terminal chatting workspace for a team of coding agents.**
 
 kapelle runs different coding agents side by side on one repository: pi, Claude Code, Copilot, opencode and more. Each agent works in its own git worktree, on its own branch. You talk to them in your terminal, answer their permission requests, and merge their work when you are ready.
 
@@ -171,10 +173,6 @@ Two optional JSON files and `KAPELLE_*` environment variables:
 - `.kapelle/config.json` in your repository: stall limits, time limits, how many tasks run at once, and how long records are kept. This is the only file kapelle reads from your repository. You write it yourself.
 
 Every key, its range and its order of precedence: [`docs/CONFIG.md`](docs/CONFIG.md).
-
-## The name
-
-A *Kapelle* is the ensemble a *Kapellmeister* directs: the players, not the conductor. kapelle directs, and the agents play.
 
 ## Docs
 
