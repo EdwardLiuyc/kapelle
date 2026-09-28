@@ -117,7 +117,7 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| Everything under `/rooms` | Experimental | M6-3 and later |
+| Everything under `/rooms` | Experimental | M6-4 and later |
 
 **Planned, not built yet:** cancel one task (M5-8).
 
@@ -247,17 +247,19 @@ request that is not valid HTTP gets `400`.
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
 | `run_not_found` | `404` | No run has this id. | |
 | `room_not_found` | `404` | No room has this id. | |
+| `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `room_busy` | `409` | The room still answers the last message. | Wait for `_client_turn_ended`, then send again. |
 | `room_dismissed` | `409` | The room was dismissed. | Stop. Open a new room. |
-| `agent_exited` | `409` | The participant's harness exited by itself. | Stop. Open a new room. M6-7a brings the participant back on the next message. |
+| `agent_exited` | `409` | The participant's harness exited by itself. | Remove the participant and add a new one. M6-7a brings the participant back on the next message. |
 | `no_orchestrator` | `409` | The room has no participant with the `orchestrator` role, so a message has no target. | Open a room with an orchestrator. |
 | `idempotency_conflict` | `409` | This `Idempotency-Key` already started a run with a different body. | Use a new key for new work. |
 | `idempotency_in_progress` | `409` | A request with this `Idempotency-Key` has not answered yet. | Wait, then send the same request again. |
-| `orchestrator_exists` | `409` | Not built yet (M6-3). The room already has an orchestrator. | Change the other participant's role first. |
+| `orchestrator_exists` | `409` | The room already has an orchestrator. | Change the other participant's role first. |
+| `name_taken` | `409` | Another participant in the room has this name. Names are compared without ASCII case, so `Alice` takes `alice`. | Choose another name. |
 | `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
 | `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. | Show the message. |
 | `internal` | `500` | An error the daemon did not expect. For example, a bug, or a git command that failed in a broken repository. | Show the message. Report it if the repository is fine. |
@@ -267,7 +269,7 @@ request that is not valid HTTP gets `400`.
 | Code | Meaning |
 | --- | --- |
 | `200` | Done. |
-| `201` | Created (a room). |
+| `201` | Created (a room or a participant). |
 | `202` | Accepted. The work goes on after the reply. |
 | `400` | Your request is wrong. The message says what is wrong. |
 | `401` | Token missing or wrong. |
@@ -285,9 +287,11 @@ request that is not valid HTTP gets `400`.
 format, and whether its first request has answered, before the body. For a key that
 already started a run, the daemon reads the body, but does not check the run again,
 before it compares the digest: see
-[Sending a run again safely](#sending-a-run-again-safely). One route resolves a resource
-first: `POST /rooms/:id/messages` looks the room up, so an unknown room is
-`404 room_not_found` even when the body would be refused.
+[Sending a run again safely](#sending-a-run-again-safely). Some routes resolve a resource
+first: `POST /rooms/:id/messages`, `POST /rooms/:id/agents` and
+`PATCH /rooms/:id/agents/:agentId` look the room up, so an unknown room is
+`404 room_not_found` even when the body would be refused. `DELETE` carries no body, and
+the `GET` routes take none.
 
 ## Routes
 
@@ -310,6 +314,11 @@ first: `POST /rooms/:id/messages` looks the room up, so an unknown room is
 | `POST /rooms/:id/messages` | Send a message into a room. Experimental. |
 | `GET /rooms/:id/events` | A room's event stream. Experimental. |
 | `POST /rooms/:id/dismiss` | End a room. Experimental. |
+| `POST /rooms/:id/agents` | Add a participant. Experimental. |
+| `GET /rooms/:id/agents` | List a room's participants. Experimental. |
+| `GET /rooms/:id/agents/:agentId` | One participant. Experimental. |
+| `PATCH /rooms/:id/agents/:agentId` | Rename a participant, or change its mode or role. Experimental. |
+| `DELETE /rooms/:id/agents/:agentId` | Remove a participant. Experimental. |
 
 ### `GET /version`
 
@@ -860,17 +869,17 @@ restart. `409` `already_decided` when the question is already closed, for any re
 
 ## Rooms
 
-**Everything in this section is experimental.** The room API will change in M6-3 and
+**Everything in this section is experimental.** The room API will change in M6-4 and
 after. `chat.ts` uses it today.
 
 A room is a container on one repository. It holds a list of participants. Each
-participant is one harness with one session that stays alive between messages. Today:
+participant is one harness with one session that stays alive between messages. Each
+participant has its own git branch and checkout. Today:
 
-- A room holds **at most one** participant. M6-3 lifts the limit.
-- The room has one git branch and checkout, and its participant runs in it. M6-6a gives
-  each participant its own.
 - A participant always runs in `auto` mode, so it never asks a permission. M6-5 adds
   the other modes.
+- A message goes only to the participant with the `orchestrator` role. M6-4 adds a route
+  for each participant.
 
 ### `POST /rooms`
 
@@ -894,6 +903,22 @@ An agent takes:
 - `role`: optional. One of `orchestrator`, `developer`, `tester` or `architect`. No role
   is given by default. A message goes to the `orchestrator`, so give that role to the
   agent that should answer.
+- `mode`: optional. Only `auto` is accepted today, and it is the default. `ask` and `safe`
+  come with M6-5.
+- `base`: optional. The git ref the participant's branch starts from. It can be another
+  participant's `branch`, so a reviewer starts from the developer's commits. The default
+  is the repository's `HEAD`. Only committed work is on a branch.
+- `settings`: optional. `{ "allowReadOutsideRoot": false }` is the only setting today, and
+  that is its default. `true` lets the harness read files outside its checkout through
+  the daemon. The daemon never writes there for it. This is not isolation: it covers only
+  the files a harness asks the daemon for. A harness that reads or writes with its own
+  tools, such as a shell, is outside it.
+
+Names in one room are unique, without ASCII case. At most one agent has the
+`orchestrator` role. The agents are added in the order of the list.
+
+There is no field for instructions. Send them as the first message, so every client sees
+what the agent was told.
 
 The reply comes when every harness is ready. This can take some seconds.
 
@@ -914,6 +939,7 @@ The reply comes when every harness is ready. This can take some seconds.
       "role": "orchestrator",
       "harness": "opencode",
       "mode": "auto",
+      "settings": { "allowReadOutsideRoot": false },
       "worktree": "/home/me/.local/state/kapelle/repos/app-1a2b3c/wt/room-…/p-0k3x9a2b",
       "branch": "kapelle/room-20260922-101500-a1b2/p-0k3x9a2b",
       "baseSha": "3f2a…",
@@ -935,9 +961,16 @@ checkout; then `worktree` is `cwd` itself.
 
 **Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
-bad `title`, a bad or missing harness, a bad `name` or `role`, an unknown agent field, or
-more than one agent; `503` `shutting_down` when the daemon shuts down; `500`
-`room_open_failed` when a harness cannot start (for example its binary is not installed).
+bad `title`, a bad or missing harness, a bad `name`, `role`, `mode` or `settings`, or an
+unknown agent field; `409` `name_taken` or `orchestrator_exists` when two agents in the
+list clash; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when the
+daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example its
+binary is not installed).
+
+A `base` is bad when it is not a commit, or when its commit has no copy of the folder
+`cwd` names inside the repository. That folder must be in the commit even when no `base`
+is sent, because the default is `HEAD`: a folder that is not committed yet gives the same
+`400`.
 
 ### `GET /rooms`
 
@@ -1003,10 +1036,62 @@ is detached, that is, not on a branch.
 `dismissed`. `404` `room_not_found` for an unknown room. `409` `room_dismissed` when the
 room was already dismissed.
 
+### `POST /rooms/:id/agents`
+
+Adds one participant to a room. The request is one agent, in the same shape as an entry of
+the `agents` list of [`POST /rooms`](#post-rooms).
+
+```json
+{ "agent": "claude", "name": "reviewer", "role": "tester", "base": "kapelle/room-…/p-0k3x9a2b" }
+```
+
+The reply comes when the harness is ready.
+
+**Reply `201`:** the participant, in the shape `GET /rooms/:id` gives it.
+
+**Refusals:** `404` `room_not_found`; `400` `invalid_request` for a bad field, or a bad
+`base` (see [`POST /rooms`](#post-rooms)); `409` `name_taken`; `409` `orchestrator_exists`; `409`
+`room_dismissed`; `503` `shutting_down`; `500` `room_open_failed` when the harness cannot
+start.
+
+### `GET /rooms/:id/agents` and `GET /rooms/:id/agents/:agentId`
+
+**Reply `200`:** every participant, in the order they were added, or one participant.
+`404` `room_not_found` or `participant_not_found`.
+
+### `PATCH /rooms/:id/agents/:agentId`
+
+Changes one participant. Send one or more of:
+
+- `name`: a new name. The `id` and the `branch` do not change.
+- `mode`: only `auto` today.
+- `role`: a new role, or `null` to remove the role. To move the `orchestrator` role, first
+  remove it from the participant that has it.
+
+The daemon checks every field before it changes any. The harness and its session stay
+as they are. No event on the stream says that a participant changed, so another client
+sees the change only when it reads `GET /rooms/:id` again.
+
+**Reply `200`:** the participant. **Refusals:** `404` `room_not_found` or
+`participant_not_found`; `400` `invalid_request` for a bad field or an empty body; `409`
+`name_taken`; `409` `orchestrator_exists`; `409` `room_dismissed`.
+
+### `DELETE /rooms/:id/agents/:agentId`
+
+Removes one participant. The daemon cancels its turn if it has one, stops its harness and
+keeps its work, as for a dismiss: a checkout with changes and its branch stay. The other
+participants do not change. The participant leaves the room's list at once, so its name
+is free again.
+
+**Reply `200`:** the room, without that participant. **Refusals:** `404`
+`room_not_found` or `participant_not_found`; `409` `room_dismissed`.
+
 ### Words for the room lifecycle
 
-These words are fixed now, so every client uses the same ones. **dismiss** is built.
-M6-7a builds the others.
+These words are fixed now, so every client uses the same ones. They describe the whole
+room, not one participant: removing a participant is
+[`DELETE /rooms/:id/agents/:agentId`](#delete-roomsidagentsagentid), which keeps its work.
+**dismiss** is built. M6-7a builds the others.
 
 | Word | Who does it | Room after | Harness | Work on disk |
 | --- | --- | --- | --- | --- |
@@ -1025,14 +1110,13 @@ builds it. Today a daemon shutdown dismisses every room; M6-7a makes it a pause.
 
 ### Room record (planned)
 
-This is the whole record. M6-2 built the part the replies above show. The rest comes with
-the story that fills it: `purpose` and `settings` (M6-3), `resumed` (M6-7a) and the room's
-`base` (M6-6a).
+This is the whole record. The replies above show the part that is built. The rest comes
+with the story that fills it: `resumed` (M6-7a) and the room's `base` (M6-6a).
 
 ```text
 room              id, cwd, title, base, createdAt, updatedAt, status
                   status: active | paused | dismissed
-participant       id, name, role?, harness, mode, purpose, settings,
+participant       id, name, role?, harness, mode, settings,
                   branch, worktree, baseSha,
                   sessionId, resumed?: "loaded" | "fresh",
                   status: idle | busy | exited | paused | killed | dismissed

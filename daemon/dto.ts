@@ -208,12 +208,13 @@ export interface RoomState {
 
 /** One participant in full. Built key by key, so a field `core/room.ts`
  *  adds does not reach the wire until the contract names it. */
-function toParticipantDto(p: Participant): ParticipantDto {
+export function toParticipantDto(p: Participant): ParticipantDto {
   const dto: ParticipantDto = {
     id: p.id,
     name: p.name,
     harness: p.harness,
     mode: p.mode,
+    settings: { allowReadOutsideRoot: p.settings.allowReadOutsideRoot },
     worktree: p.worktree,
     sessionId: p.sessionId,
     status: p.status(),

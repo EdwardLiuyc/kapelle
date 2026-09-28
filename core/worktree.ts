@@ -147,6 +147,11 @@ export async function stateDirRoot(
   return { root, isRepo: true };
 }
 
+/** A base the caller cannot use: a ref that is not a commit, or a commit
+ *  without the subdirectory the workspace asked for. The caller's mistake,
+ *  not a failure of git. */
+export class BadBase extends Error {}
+
 /** One task's checkout, held from `acquire` to `release`. */
 interface Held {
   /** The checkout root — what `git worktree remove` is given. Not what the
@@ -279,7 +284,7 @@ export async function openWorktrees(
           `${baseRef}^{commit}`,
         ]);
         if (baseSha === null) {
-          throw new Error(
+          throw new BadBase(
             `base ref ${JSON.stringify(baseRef)} does not resolve to a commit ` +
               `in ${root}.`,
           );
@@ -314,10 +319,11 @@ export async function openWorktrees(
         }
 
         if (!existsSync(inside)) {
-          throw new Error(
-            `${prefix} does not exist at ${baseRef} — the run was asked for ` +
-              `that subdirectory as its workspace root, and the base commit ` +
-              `has no such path to give each task.`,
+          // Worded for runs and rooms alike: a room client reads it too.
+          throw new BadBase(
+            `the folder ${prefix} is not in ${baseRef}, so a checkout of that ` +
+              "commit has no such folder to work in. Commit the folder, or " +
+              "start from a commit that has it.",
           );
         }
         return inside;

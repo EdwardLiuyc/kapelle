@@ -33,6 +33,7 @@ import {
   API_VERSION,
   type ParticipantDto,
   type RoomDto,
+  type RoomListEntry,
 } from "../client/contract.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import { processIdentity } from "../core/sweep.ts";
@@ -3550,20 +3551,42 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
     [[{ agent: 7, cmd: REMEMBER }], /"agent" must be a non-empty string/],
     [[{ agent: "opencode", cmd: null }], /"cmd" must be a non-empty string/],
     [{ cmd: REMEMBER }, /"agents" must be a list/],
-    [[{ cmd: REMEMBER }, { cmd: REMEMBER }], /at most one agent/],
     [[{ cmd: REMEMBER, name: "no spaces" }], /invalid agent name/],
     [[{ cmd: REMEMBER, name: "a".repeat(33) }], /invalid agent name/],
     [[{ cmd: REMEMBER, name: null }], /invalid agent name null/],
     // A default name that breaks R22 asks for one rather than mangling it.
     [[{ cmd: "/bin/true" }], /give the agent a "name"/],
     [[{ cmd: REMEMBER, role: "boss" }], /invalid role "boss"/],
-    [[{ cmd: REMEMBER, mode: "ask" }], /unknown agent field "mode"/],
+    [[{ cmd: REMEMBER, mode: "ask" }], /comes with M6-5/],
+    [[{ cmd: REMEMBER, turbo: true }], /unknown agent field "turbo"/],
+    [[{ cmd: REMEMBER, name: "c", base: "no-such-ref" }], /does not resolve/],
   ];
   for (const [agents, message] of refused) {
     const r = await api<RoomReply>(d, "POST", "/rooms", { cwd, agents });
     assert.equal(r.status, 400, JSON.stringify(agents));
     assert.equal(r.body.error.code, "invalid_request");
     assert.match(r.body.error.message, message);
+  }
+  const clashes: [unknown, string][] = [
+    [
+      [
+        { cmd: REMEMBER, name: "a" },
+        { cmd: REMEMBER, name: "A" },
+      ],
+      "name_taken",
+    ],
+    [
+      [
+        { cmd: REMEMBER, name: "a", role: "orchestrator" },
+        { cmd: REMEMBER, name: "b", role: "orchestrator" },
+      ],
+      "orchestrator_exists",
+    ],
+  ];
+  for (const [agents, code] of clashes) {
+    const r = await api<RoomReply>(d, "POST", "/rooms", { cwd, agents });
+    assert.equal(r.status, 409, JSON.stringify(agents));
+    assert.equal(r.body.error.code, code);
   }
   for (const title of [7, "", "  "]) {
     const r = await api<RoomReply>(d, "POST", "/rooms", { cwd, title });
@@ -3596,6 +3619,11 @@ test("every room route answers room_not_found for an unknown id", async (t) => {
     ["POST", "/rooms/nope/dismiss", undefined],
     ["POST", "/rooms/nope/messages", { text: "hi" }],
     ["GET", "/rooms/nope/events", undefined],
+    ["POST", "/rooms/nope/agents", { cmd: REMEMBER }],
+    ["GET", "/rooms/nope/agents", undefined],
+    ["GET", "/rooms/nope/agents/p-x", undefined],
+    ["PATCH", "/rooms/nope/agents/p-x", { name: "a" }],
+    ["DELETE", "/rooms/nope/agents/p-x", undefined],
   ];
   for (const [method, path, body] of routes) {
     const r = await api(d, method, path, body);
@@ -3606,6 +3634,243 @@ test("every room route answers room_not_found for an unknown id", async (t) => {
   const del = await api(d, "DELETE", "/rooms/nope");
   assert.equal(del.status, 404);
   assert.equal(del.body.error.code, "no_route");
+});
+
+/** `POST /rooms/:id/agents` with `fields`, asserted 201. */
+async function addAgent(
+  d: Daemon,
+  id: string,
+  fields: Record<string, unknown>,
+): Promise<ParticipantDto> {
+  const r = await api<ParticipantDto & RoomReply>(
+    d,
+    "POST",
+    `/rooms/${id}/agents`,
+    fields,
+  );
+  assert.equal(r.status, 201, r.body.error?.message);
+  return r.body;
+}
+
+/** Polls one participant until it is no longer `busy`. */
+async function agentIdle(d: Daemon, id: string, agentId: string) {
+  for (const until = Date.now() + 20_000; Date.now() < until; ) {
+    const r = await api<ParticipantDto>(
+      d,
+      "GET",
+      `/rooms/${id}/agents/${agentId}`,
+    );
+    assert.equal(r.status, 200);
+    if (r.body.status !== "busy") return r.body;
+    await new Promise((ok) => setTimeout(ok, 25));
+  }
+  throw new Error(`participant ${agentId} never went idle`);
+}
+
+test("participants are added, listed, changed and removed through the routes", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", { cwd });
+  const { id } = open.body;
+  const base = `/rooms/${id}/agents`;
+
+  const alice = await addAgent(d, id, {
+    cmd: REMEMBER,
+    name: "alice",
+    role: "orchestrator",
+  });
+  const bob = await addAgent(d, id, {
+    cmd: REMEMBER,
+    name: "bob",
+    mode: "auto",
+    settings: { allowReadOutsideRoot: true },
+  });
+  assert.equal(alice.mode, "auto");
+  assert.deepEqual(alice.settings, { allowReadOutsideRoot: false });
+  assert.deepEqual(bob.settings, { allowReadOutsideRoot: true });
+  assert.notEqual(alice.worktree, bob.worktree);
+  assert.notEqual(alice.branch, bob.branch);
+
+  const list = await api<ParticipantDto[]>(d, "GET", base);
+  assert.deepEqual(
+    list.body.map((p) => p.name),
+    ["alice", "bob"],
+  );
+  const one = await api<ParticipantDto>(d, "GET", `${base}/${bob.id}`);
+  assert.equal(one.body.name, "bob");
+
+  const renamed = await api<ParticipantDto>(d, "PATCH", `${base}/${bob.id}`, {
+    name: "Bobby",
+    mode: "auto",
+    role: "tester",
+  });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.body.name, "Bobby");
+  assert.equal(renamed.body.role, "tester");
+  assert.equal(renamed.body.id, bob.id, "a rename never moves the id");
+  assert.equal(renamed.body.branch, bob.branch, "nor the branch");
+  const cleared = await api<ParticipantDto>(d, "PATCH", `${base}/${bob.id}`, {
+    role: null,
+  });
+  assert.equal(cleared.body.role, undefined);
+
+  const refused: [string, string, unknown, number, string][] = [
+    ["POST", base, { cmd: REMEMBER, name: "ALICE" }, 409, "name_taken"],
+    [
+      "POST",
+      base,
+      { cmd: REMEMBER, name: "carol", role: "orchestrator" },
+      409,
+      "orchestrator_exists",
+    ],
+    [
+      "POST",
+      base,
+      { cmd: REMEMBER, name: "c", mode: "safe" },
+      400,
+      "invalid_request",
+    ],
+    [
+      "POST",
+      base,
+      { cmd: REMEMBER, name: "c", base: "nope" },
+      400,
+      "invalid_request",
+    ],
+    ["PATCH", `${base}/${bob.id}`, { name: "Alice" }, 409, "name_taken"],
+    [
+      "PATCH",
+      `${base}/${bob.id}`,
+      { role: "orchestrator" },
+      409,
+      "orchestrator_exists",
+    ],
+    ["PATCH", `${base}/${bob.id}`, { mode: "ask" }, 400, "invalid_request"],
+    ["PATCH", `${base}/${bob.id}`, {}, 400, "invalid_request"],
+    ["PATCH", `${base}/${bob.id}`, { harness: "x" }, 400, "invalid_request"],
+    ["GET", `${base}/p-nope`, undefined, 404, "participant_not_found"],
+    ["PATCH", `${base}/p-nope`, { name: "x" }, 404, "participant_not_found"],
+    ["DELETE", `${base}/p-nope`, undefined, 404, "participant_not_found"],
+  ];
+  for (const [method, path, body, status, code] of refused) {
+    const r = await api(d, method, path, body);
+    const label = `${method} ${path} ${JSON.stringify(body)}`;
+    assert.equal(r.status, status, label);
+    assert.equal(r.body.error.code, code, label);
+  }
+  assert.equal(
+    (await api<ParticipantDto[]>(d, "GET", base)).body.length,
+    2,
+    "no refused add joined",
+  );
+
+  const gone = await api<RoomReply>(d, "DELETE", `${base}/${bob.id}`);
+  assert.equal(gone.status, 200, gone.body.error?.message);
+  assert.deepEqual(
+    gone.body.participants.map((p) => p.id),
+    [alice.id],
+  );
+  const listed = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  assert.deepEqual(
+    listed.body[0]?.participants.map((p) => p.name),
+    ["alice"],
+  );
+
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  for (const [method, path, body] of [
+    ["POST", base, { cmd: REMEMBER, name: "carol" }],
+    ["PATCH", `${base}/${alice.id}`, { name: "a" }],
+    ["DELETE", `${base}/${alice.id}`, undefined],
+  ] as const) {
+    const r = await api(d, method, path, body);
+    assert.equal(r.status, 409, `${method} ${path}`);
+    assert.equal(r.body.error.code, "room_dismissed", `${method} ${path}`);
+  }
+});
+
+test("two participants work in parallel in their own checkouts, and a third starts from one's branch", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT} --scenario stall`,
+        name: "stuck",
+        role: "orchestrator",
+      },
+      { cmd: `node ${MOCK_AGENT}`, name: "writer" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const [stuck, writer] = open.body.participants as [
+    ParticipantDto,
+    ParticipantDto,
+  ];
+  const agent = (p: ParticipantDto) => `/rooms/${id}/agents/${p.id}`;
+  const message = (text: string) =>
+    api(d, "POST", `/rooms/${id}/messages`, { text });
+
+  // Until M6-4 a message reaches only the orchestrator, so the role moves
+  // from the stuck participant to the writer while the stuck one is busy.
+  assert.equal((await message("hang")).status, 202);
+  const cleared = await api(d, "PATCH", agent(stuck), { role: null });
+  assert.equal(cleared.status, 200, cleared.body.error?.message);
+  const moved = await api(d, "PATCH", agent(writer), { role: "orchestrator" });
+  assert.equal(moved.status, 200, moved.body.error?.message);
+  assert.equal((await message("write")).status, 202);
+  await agentIdle(d, id, writer.id);
+  const still = await api<ParticipantDto>(d, "GET", agent(stuck));
+  assert.equal(still.body.status, "busy", "the two turns overlapped");
+
+  assert.ok(existsSync(join(stuck.worktree, "stalled.txt")));
+  assert.ok(!existsSync(join(stuck.worktree, "ACP_TEST.md")));
+  assert.ok(existsSync(join(writer.worktree, "ACP_TEST.md")));
+  assert.ok(!existsSync(join(writer.worktree, "stalled.txt")));
+
+  // The stuck participant commits its own work (R37), and a third starts
+  // from that branch through the route.
+  for (const args of [
+    ["add", "stalled.txt"],
+    ["commit", "-m", "stuck: stalled.txt"],
+  ]) {
+    const r = spawnSync("git", args, { cwd: stuck.worktree });
+    assert.equal(r.status, 0, String(r.stderr));
+  }
+  const head = spawnSync("git", ["rev-parse", stuck.branch as string], {
+    cwd,
+    encoding: "utf8",
+  }).stdout.trim();
+  const reviewer = await addAgent(d, id, {
+    cmd: REMEMBER,
+    name: "reviewer",
+    base: stuck.branch,
+  });
+  assert.equal(reviewer.baseSha, head);
+  assert.ok(existsSync(join(reviewer.worktree, "stalled.txt")));
+
+  // Removing the busy one ends its turn and leaves the others as they were.
+  const gone = await api<RoomReply>(d, "DELETE", agent(stuck));
+  assert.equal(gone.status, 200, gone.body.error?.message);
+  assert.deepEqual(
+    gone.body.participants.map((p) => [p.name, p.status]),
+    [
+      ["writer", "idle"],
+      ["reviewer", "idle"],
+    ],
+  );
+  const kept = spawnSync(
+    "git",
+    ["rev-parse", "--verify", stuck.branch as string],
+    { cwd },
+  );
+  assert.equal(kept.status, 0, "the removed participant's branch is kept");
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const ended = (await roomEvents(d, id)).filter(
+    (e) => e.update.sessionUpdate === "_client_turn_ended",
+  );
+  assert.equal(ended.length, 2, "the removed participant's turn ended too");
 });
 
 test("an explicit empty agents list, a 32-character name and every role open a room", async (t) => {

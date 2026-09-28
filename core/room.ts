@@ -23,10 +23,13 @@
  * keeps a dirty one or one on a detached HEAD. No work is lost; the
  * directory may be.
  *
- * **At most one participant through the route, for now.** `POST /rooms`
- * creates a room empty or with one agent; M6-3 adds the route that calls
- * `add`. The request shape is already a list, so lifting it changes no
- * client.
+ * **A roster that changes** (M6-3). `add`, `update` and `remove` change it
+ * after the room opens. A name is unique under ASCII case folding (R22), and
+ * at most one participant is the orchestrator (R44). An add still in flight
+ * holds its name and role, so two racing adds cannot both take one. A
+ * removed participant leaves the roster. Its checkout is released as at
+ * dismiss, and a release notice goes to the room's notices, since the
+ * participant that would show it is gone.
  *
  * **The orchestrator is a label, not a slot** (R44). A participant has the
  * role it was given and no other; nothing is promoted by default.
@@ -39,7 +42,8 @@
  * replays when it attaches.
  *
  * ponytail: nothing caps the live harness count across runs and rooms (R40).
- * `runs + Σ(busy participants)` is unbounded, with the default mode `auto`.
+ * `runs + Σ(busy participants)` is unbounded, with the default mode `auto`,
+ * and so is the `agents` list of one `POST /rooms`, which starts them in turn.
  * A daemon-wide cap belongs in `daemon.ts`, where both spawners meet; add one
  * when a machine actually runs out of memory or file handles, not before.
  */
@@ -60,7 +64,22 @@ import type { EventBus } from "./events.ts";
 import { newParticipantId } from "./ids.ts";
 import { policyFor, resolvePolicy } from "./policy.ts";
 import { stateDirFor } from "./runtime.ts";
-import type { WorktreeSetup } from "./worktree.ts";
+import { BadBase, type WorktreeSetup } from "./worktree.ts";
+
+/** A refusal the daemon answers with its own error code. Any other throw
+ *  from `add`, `update` or `remove` is a failure, not a refusal. */
+export class RoomRefusal extends Error {
+  readonly code:
+    | "invalid_request"
+    | "name_taken"
+    | "orchestrator_exists"
+    | "participant_not_found"
+    | "room_dismissed";
+  constructor(code: RoomRefusal["code"], message: string) {
+    super(message);
+    this.code = code;
+  }
+}
 
 /** `paused` is M6-7a's; nothing sets it yet. A room whose participant has
  *  exited still reads `active` (R33). */
@@ -82,10 +101,15 @@ type Role = (typeof ROLES)[number];
 
 /** R22: ASCII on purpose, so the first word of an `@name` message is always
  *  the whole name, and Unicode case folding cannot make two names one.
- *  Uniqueness in a room under that folding is M6-3's. Until then `add`
- *  takes a name already in use, and only the route's one-agent limit keeps
- *  two apart. */
+ *  Because a name is ASCII, `toLowerCase` is ASCII case folding here. */
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+
+/** R15, amended 2026-09-28 (#147): the run-file `Task` fields that act in a
+ *  room today. The watchdog knobs come with M6-4 (R38). No `purpose`: a
+ *  person sends instructions as a message, never as a hidden prefix. */
+interface Settings {
+  allowReadOutsideRoot: boolean;
+}
 
 /** A line the room kept for the operator, as `Warning` has it. */
 interface RoomNotice {
@@ -98,15 +122,27 @@ export interface AgentRequest {
   spec: ResolvedAgent;
   name: string;
   role?: Role;
+  /** The ref to fork from, such as another participant's `branch`; the
+   *  repository's HEAD when absent. */
+  base?: string;
+  settings: Settings;
+}
+
+/** What `PATCH` may change. A `null` role clears it. */
+export interface ParticipantChanges {
+  name?: string;
+  role?: Role | null;
 }
 
 export interface Participant {
   /** Opaque (`newParticipantId`); a rename never moves it. */
   readonly id: string;
-  readonly name: string;
-  readonly role?: Role;
+  /** Changed only through `Room.update`, which checks it. */
+  name: string;
+  role?: Role;
   readonly harness: string;
   readonly mode: "auto";
+  readonly settings: Settings;
   /** Where the harness runs: its own checkout, or the cwd itself. */
   readonly worktree: string;
   /** The checkout's branch and the SHA it forked from, when there is one. */
@@ -134,12 +170,18 @@ export interface Room {
   /** The room's persisted events, or undefined when it could not be written. */
   readonly eventLog: EventLog | undefined;
   status(): RoomStatus;
-  /** Adds one participant in a checkout of its own, forked from `base` — a
-   *  ref, such as another participant's `branch` — or from the repository's
-   *  HEAD. Resolves once its harness has a session. A throw adds no
-   *  participant, and removes the checkout and branch if the harness left
-   *  them untouched. One it wrote into is kept, and a room notice names it. */
-  add(request: AgentRequest, base?: string): Promise<Participant>;
+  /** Adds one participant in a checkout of its own, forked from
+   *  `request.base` or from the repository's HEAD. Resolves once its harness
+   *  has a session. A throw adds no participant, and removes the checkout and
+   *  branch if the harness left them untouched. One it wrote into is kept,
+   *  and a room notice names it. */
+  add(request: AgentRequest): Promise<Participant>;
+  /** Renames a participant or changes its role. Checks every change before
+   *  it applies any. */
+  update(id: string, changes: ParticipantChanges): Participant;
+  /** Cancels the participant's turn, stops its harness and releases its
+   *  checkout without committing (R37). It leaves the roster at once. */
+  remove(id: string): Promise<void>;
   /** Cancels every live turn, stops every harness, releases every checkout
    *  **without committing** (R37) and closes the log. Safe to call twice. A
    *  release that fails is reported as a notice and the checkout is left
@@ -172,48 +214,159 @@ function roomHarness(agent: unknown, cmd: unknown): ResolvedAgent {
   return spec;
 }
 
+/** The fields one agent takes, at `POST /rooms` and at
+ *  `POST /rooms/:id/agents`. */
+export const AGENT_FIELDS: readonly string[] = [
+  "agent",
+  "cmd",
+  "name",
+  "role",
+  "mode",
+  "base",
+  "settings",
+];
+
+/** A name, or a throw naming what is wrong. `fallback` is the harness name
+ *  an add uses when the request gave none. */
+function checkName(name: unknown, fallback?: string): string {
+  // `=== undefined`, not `??`: a JSON `null` is a bad name, not a missing one.
+  const chosen = name === undefined ? fallback : name;
+  if (typeof chosen !== "string" || !NAME_PATTERN.test(chosen)) {
+    throw new Error(
+      `invalid agent name ${JSON.stringify(chosen)}: must match ` +
+        `${NAME_PATTERN.source}` +
+        (name === undefined ? '; give the agent a "name"' : ""),
+    );
+  }
+  return chosen;
+}
+
+function checkRole(role: unknown): Role {
+  if (!ROLES.includes(role as Role)) {
+    throw new Error(
+      `invalid role ${JSON.stringify(role)}: one of ${ROLES.join(", ")}`,
+    );
+  }
+  return role as Role;
+}
+
+/** `auto` only until M6-5 (#149) builds the permission queue a room needs
+ *  for `ask`, and the negotiation `safe` does at session start. */
+function checkMode(mode: unknown) {
+  if (mode === undefined || mode === "auto") return;
+  if (mode === "ask" || mode === "safe") {
+    throw new Error(
+      `mode "${mode}" comes with M6-5; a participant runs in "auto" for now`,
+    );
+  }
+  throw new Error(`invalid mode ${JSON.stringify(mode)}: must be "auto"`);
+}
+
+function checkSettings(raw: unknown): Settings {
+  if (raw === undefined) return { allowReadOutsideRoot: false };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error('"settings" must be an object');
+  }
+  const extra = Object.keys(raw).find((key) => key !== "allowReadOutsideRoot");
+  if (extra !== undefined) {
+    throw new Error(
+      `unknown setting "${extra}"; "settings" takes allowReadOutsideRoot`,
+    );
+  }
+  const { allowReadOutsideRoot = false } = raw as Record<string, unknown>;
+  if (typeof allowReadOutsideRoot !== "boolean") {
+    throw new Error('"allowReadOutsideRoot" must be true or false');
+  }
+  return { allowReadOutsideRoot };
+}
+
+/** The refusal a name or role meets among `others`, or undefined (R22,
+ *  R44). */
+function clash(
+  others: Iterable<{ name: string; role?: Role | undefined }>,
+  next: { name?: string | undefined; role?: Role | null | undefined },
+): RoomRefusal | undefined {
+  for (const other of others) {
+    if (next.name?.toLowerCase() === other.name.toLowerCase()) {
+      return new RoomRefusal(
+        "name_taken",
+        `the name "${next.name}" is taken by "${other.name}"`,
+      );
+    }
+    if (next.role === "orchestrator" && other.role === "orchestrator") {
+      return new RoomRefusal(
+        "orchestrator_exists",
+        `"${other.name}" is already the orchestrator; change its role first`,
+      );
+    }
+  }
+  return undefined;
+}
+
+/** One agent of a request body, checked, or a throw naming what is wrong. */
+export function roomAgent(entry: unknown): AgentRequest {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    throw new Error("an agent must be an object");
+  }
+  const extra = Object.keys(entry).find((key) => !AGENT_FIELDS.includes(key));
+  if (extra !== undefined) {
+    throw new Error(
+      `unknown agent field "${extra}"; an agent takes ${AGENT_FIELDS.join(", ")}`,
+    );
+  }
+  const { agent, cmd, name, role, mode, base, settings } = entry as Record<
+    string,
+    unknown
+  >;
+  const spec = roomHarness(agent, cmd);
+  const request: AgentRequest = {
+    spec,
+    name: checkName(name, spec.name),
+    settings: checkSettings(settings),
+  };
+  if (role !== undefined) request.role = checkRole(role);
+  checkMode(mode);
+  if (base !== undefined) {
+    if (typeof base !== "string" || !base) {
+      throw new Error('"base" must be a non-empty string');
+    }
+    request.base = base;
+  }
+  return request;
+}
+
 /**
  * The `agents` of a `POST /rooms` body, checked, or a throw naming what is
- * wrong. Split from `openRoom` so the daemon can answer a bad request with a
- * 400 before it touches the repository.
+ * wrong. Split from `openRoom` so the daemon can answer a bad request before
+ * it touches the repository. A name or role that clashes inside the list is
+ * a `RoomRefusal`, as it would be at add.
  */
 export function roomAgents(raw: unknown): AgentRequest[] {
   if (raw === undefined) return [];
   if (!Array.isArray(raw)) throw new Error('"agents" must be a list');
-  if (raw.length > 1) {
-    throw new Error("a room takes at most one agent for now");
+  const requests: AgentRequest[] = [];
+  for (const entry of raw) {
+    const request = roomAgent(entry);
+    const refused = clash(requests, request);
+    if (refused) throw refused;
+    requests.push(request);
   }
-  return raw.map((entry) => {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      throw new Error("an agent must be an object");
-    }
-    const fields = ["agent", "cmd", "name", "role"];
-    const extra = Object.keys(entry).find((key) => !fields.includes(key));
-    if (extra !== undefined) {
-      throw new Error(
-        `unknown agent field "${extra}"; an agent takes ${fields.join(", ")}`,
-      );
-    }
-    const { agent, cmd, name, role } = entry as Record<string, unknown>;
-    const spec = roomHarness(agent, cmd);
-    // `=== undefined`, not `??`: a JSON `null` is a bad name, not a missing one.
-    const chosen = name === undefined ? spec.name : name;
-    if (typeof chosen !== "string" || !NAME_PATTERN.test(chosen)) {
-      throw new Error(
-        `invalid agent name ${JSON.stringify(chosen)}: must match ` +
-          `${NAME_PATTERN.source}` +
-          (name === undefined ? '; give the agent a "name"' : ""),
-      );
-    }
-    if (role !== undefined && !ROLES.includes(role as Role)) {
-      throw new Error(
-        `invalid role ${JSON.stringify(role)}: one of ${ROLES.join(", ")}`,
-      );
-    }
-    return role === undefined
-      ? { spec, name: chosen }
-      : { spec, name: chosen, role: role as Role };
-  });
+  return requests;
+}
+
+/** A `PATCH /rooms/:id/agents/:agentId` body, checked. */
+export function participantChanges(
+  body: Record<string, unknown>,
+): ParticipantChanges {
+  const { name, mode, role } = body;
+  if (name === undefined && mode === undefined && role === undefined) {
+    throw new Error('send at least one of "name", "mode" or "role"');
+  }
+  checkMode(mode);
+  const changes: ParticipantChanges = {};
+  if (name !== undefined) changes.name = checkName(name);
+  if (role !== undefined) changes.role = role === null ? null : checkRole(role);
+  return changes;
 }
 
 export interface RoomOptions {
@@ -221,7 +374,7 @@ export interface RoomOptions {
   /** The folder the room was asked for; the harness runs here when there is
    *  no worktree, and at the same subdirectory inside one when there is. */
   cwd: string;
-  /** From `roomAgents`: none, or one. */
+  /** From `roomAgents`, added in this order. */
   agents: AgentRequest[];
   /** The preflight the caller already ran (`openWorktrees`). */
   setup: WorktreeSetup;
@@ -325,14 +478,26 @@ export async function openRoom({
     }
   };
 
-  // A dismiss waits for every add in flight, so nothing an add started
-  // outlives `dismiss()`: the add sees the dismiss and rolls itself back.
-  const adding = new Set<Promise<Participant>>();
+  // A dismiss waits for every add and remove in flight, so nothing either
+  // started outlives `dismiss()`: an add sees the dismiss and rolls itself
+  // back, and a remove finishes its release.
+  const inflight = new Set<Promise<unknown>>();
+  const track = <T>(p: Promise<T>) => {
+    inflight.add(p);
+    const done = () => inflight.delete(p);
+    p.then(done, done);
+    return p;
+  };
+  // The adds that have not joined yet. Each holds its name and role, so a
+  // second add or a rename cannot take them while the harness starts.
+  const pending = new Set<AgentRequest>();
+  const dismissed = () =>
+    new RoomRefusal("room_dismissed", "the room is dismissed");
 
   const teardown = () => {
     dismissing ??= (async () => {
       try {
-        await Promise.allSettled(adding);
+        await Promise.allSettled(inflight);
         await Promise.all(members.map((m) => m.stop()));
         for (const { participant: p, onNotice } of members) {
           await release(p.id, p.worktree, onNotice);
@@ -344,16 +509,7 @@ export async function openRoom({
     return dismissing;
   };
 
-  const start = async (request: AgentRequest, base?: string) => {
-    if (dismissing) throw new Error("the room is dismissed");
-    // Refused, not ignored: the caller asked to start from someone's work,
-    // and a shared cwd has no branch to start from.
-    if (base !== undefined && !worktrees) {
-      throw new Error(
-        `cannot start from ${JSON.stringify(base)}: ${cwd} is not a git ` +
-          "repository with a commit, so no participant has a branch",
-      );
-    }
+  const spawn = async (request: AgentRequest, base: string | undefined) => {
     const id = newParticipantId();
     const own: RoomNotice[] = [];
     const onNotice: Notify = (text, kind) =>
@@ -379,31 +535,84 @@ export async function openRoom({
       });
     } catch (err) {
       await rollback(id, worktree);
-      throw err;
+      throw err instanceof BadBase
+        ? new RoomRefusal("invalid_request", err.message)
+        : err;
     }
     // A dismiss that began while this harness was starting did not see it.
     if (dismissing) {
       await started.stop();
       await rollback(id, worktree);
-      throw new Error("the room is dismissed");
+      throw dismissed();
     }
     members.push({ ...started, onNotice });
     participants.push(started.participant);
     return started.participant;
   };
 
-  const add = (request: AgentRequest, base?: string) => {
-    const p = start(request, base);
-    adding.add(p);
-    const done = () => adding.delete(p);
-    p.then(done, done);
+  const start = async (request: AgentRequest) => {
+    // Everything up to the first `await` runs at once, so the check and the
+    // reservation cannot interleave with another add.
+    if (dismissing) throw dismissed();
+    const refused = clash([...participants, ...pending], request);
+    if (refused) throw refused;
+    const { base } = request;
+    // Refused, not ignored: the caller asked to start from someone's work,
+    // and a shared cwd has no branch to start from.
+    if (base !== undefined && !worktrees) {
+      throw new RoomRefusal(
+        "invalid_request",
+        `cannot start from ${JSON.stringify(base)}: ${cwd} is not a git ` +
+          "repository with a commit, so no participant has a branch",
+      );
+    }
+    pending.add(request);
+    try {
+      return await spawn(request, base);
+    } finally {
+      pending.delete(request);
+    }
+  };
+
+  const member = (id: string) => {
+    const found = members.find((m) => m.participant.id === id);
+    if (!found) {
+      throw new RoomRefusal("participant_not_found", `no participant ${id}`);
+    }
+    return found;
+  };
+
+  const update = (id: string, changes: ParticipantChanges) => {
+    if (dismissing) throw dismissed();
+    const { participant: p } = member(id);
+    const others = participants.filter((o) => o !== p);
+    const refused = clash([...others, ...pending], changes);
+    if (refused) throw refused;
+    if (changes.name !== undefined) p.name = changes.name;
+    if (changes.role === null) delete p.role;
+    else if (changes.role !== undefined) p.role = changes.role;
     return p;
   };
 
-  const [request] = agents;
-  if (request) {
+  const remove = async (id: string) => {
+    if (dismissing) throw dismissed();
+    const found = member(id);
+    // Off the roster before the first `await`, so its name is free and a
+    // second remove is told it is gone.
+    members.splice(members.indexOf(found), 1);
+    participants.splice(participants.indexOf(found.participant), 1);
+    // No `finally` for the release: `stop()` cannot reject. It awaits the
+    // harness's exit, which only resolves, and a turn whose handlers only
+    // emit on a bus that catches every listener. A step that can reject,
+    // added to `stop()`, would strand this checkout with no notice.
+    await found.stop();
+    // The participant is gone, so a kept checkout is the room's to report.
+    await release(id, found.participant.worktree, onRoomNotice);
+  };
+
+  for (const request of agents) {
     try {
-      await add(request);
+      await track(start(request));
     } catch (err) {
       await teardown();
       throw err;
@@ -414,7 +623,9 @@ export async function openRoom({
     participants,
     eventLog,
     status: () => (dismissing ? "dismissed" : "active"),
-    add,
+    add: (request) => track(start(request)),
+    update,
+    remove: (id) => track(remove(id)),
     dismiss: teardown,
   };
 }
@@ -424,7 +635,7 @@ export async function openRoom({
  *  checkout. */
 async function startParticipant({
   id,
-  request: { spec, name, role },
+  request: { spec, name, role, settings },
   worktree,
   info,
   bus,
@@ -466,6 +677,7 @@ async function startParticipant({
     env: resolveEnv(spec.launch.env),
     cwd: worktree,
     policy: policyFor("auto"),
+    allowReadOutsideRoot: settings.allowReadOutsideRoot,
     stderrLog,
     onEvent: (event) => {
       if (event.update.sessionUpdate === "_client_harness_exited") {
@@ -508,6 +720,7 @@ async function startParticipant({
     ...(role && { role }),
     harness: spec.name,
     mode: "auto",
+    settings,
     worktree,
     ...(info && { branch: info.branch, baseSha: info.baseSha }),
     sessionId,
