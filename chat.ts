@@ -2,8 +2,9 @@
 /**
  * `chat.ts` — a terminal chat over the daemon's rooms (chat MVP).
  *
- * **Experimental.** One participant per room — the orchestrator — `auto`
- * only, and no permission answering. The room API is Experimental in
+ * **Experimental.** One participant per room — the first on its roster, which
+ * is the one it shows and the one it sends to by id — `auto` only, and no
+ * permission answering. The room API is Experimental in
  * `docs/CLIENT-API.md`, and M6-3..M6-9 will reshape it; nothing here is a
  * compatibility commitment.
  *
@@ -163,6 +164,15 @@ async function reconcile(id: string): Promise<{ code: number; line: string }> {
     return { code: 1, line: `! lost the daemon: ${(err as Error).message}` };
   }
 }
+
+/** Where a message goes: the participant this chat shows, by id (M6-4). A
+ *  room with none gets the room route, so the daemon's refusal says why. */
+const messagesPath = (room: RoomDto) => {
+  const [agent] = room.participants;
+  return agent
+    ? `/rooms/${room.id}/agents/${agent.id}/messages`
+    : `/rooms/${room.id}/messages`;
+};
 
 /** A participant's name from the roster read at join, or its id for one
  *  added since. A line names the id only (S10). */
@@ -437,7 +447,7 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
         return;
       }
       editor.addToHistory(text);
-      const r = await call<MessageAccepted>(d, `/rooms/${room.id}/messages`, {
+      const r = await call<MessageAccepted>(d, messagesPath(room), {
         method: "POST",
         body: { text },
       });
@@ -559,7 +569,7 @@ async function chat(d: DaemonAddress, room: RoomDto): Promise<number> {
       break;
     }
 
-    const r = await call<MessageAccepted>(d, `/rooms/${room.id}/messages`, {
+    const r = await call<MessageAccepted>(d, messagesPath(room), {
       method: "POST",
       body: { text },
     });

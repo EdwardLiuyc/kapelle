@@ -4391,3 +4391,22 @@ test("chat.ts attributes an answer to the roster name, not the harness label", a
   assert.match(r.stdout, /alice: previous: \(none\)/);
   assert.doesNotMatch(r.stdout, /mock-agent: previous/);
 });
+
+test("chat.ts attach talks to the participant it names, even with no orchestrator", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  // Built through the API, so no participant has the orchestrator role.
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, name: "bob" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("hi\n/dismiss\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /bob: previous: \(none\)/);
+});
