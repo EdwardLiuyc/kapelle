@@ -909,8 +909,10 @@ An agent takes:
   participant's `branch`, so a reviewer starts from the developer's commits. The default
   is the repository's `HEAD`. Only committed work is on a branch.
 - `settings`: optional. `{ "allowReadOutsideRoot": false }` is the only setting today, and
-  that is its default. `true` lets the harness read files outside its checkout. It can
-  never write there.
+  that is its default. `true` lets the harness read files outside its checkout through
+  the daemon. The daemon never writes there for it. This is not isolation: it covers only
+  the files a harness asks the daemon for. A harness that reads or writes with its own
+  tools, such as a shell, is outside it.
 
 Names in one room are unique, without ASCII case. At most one agent has the
 `orchestrator` role. The agents are added in the order of the list.
@@ -961,8 +963,12 @@ checkout; then `worktree` is `cwd` itself.
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
 bad `title`, a bad or missing harness, a bad `name`, `role`, `mode` or `settings`, or an
 unknown agent field; `409` `name_taken` or `orchestrator_exists` when two agents in the
-list clash; `400` `invalid_request` for a `base` that is not a commit; `503` `shutting_down` when the daemon shuts down; `500`
-`room_open_failed` when a harness cannot start (for example its binary is not installed).
+list clash; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when the
+daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example its
+binary is not installed).
+
+A `base` is bad when it is not a commit, or when its commit has no copy of the folder
+`cwd` names inside the repository.
 
 ### `GET /rooms`
 
@@ -1041,8 +1047,8 @@ The reply comes when the harness is ready.
 
 **Reply `201`:** the participant, in the shape `GET /rooms/:id` gives it.
 
-**Refusals:** `404` `room_not_found`; `400` `invalid_request` for a bad field, or a `base`
-that is not a commit; `409` `name_taken`; `409` `orchestrator_exists`; `409`
+**Refusals:** `404` `room_not_found`; `400` `invalid_request` for a bad field, or a bad
+`base` (see [`POST /rooms`](#post-rooms)); `409` `name_taken`; `409` `orchestrator_exists`; `409`
 `room_dismissed`; `503` `shutting_down`; `500` `room_open_failed` when the harness cannot
 start.
 
@@ -1061,7 +1067,8 @@ Changes one participant. Send one or more of:
   remove it from the participant that has it.
 
 The daemon checks every field before it changes any. The harness and its session stay
-as they are.
+as they are. No event on the stream says that a participant changed, so another client
+sees the change only when it reads `GET /rooms/:id` again.
 
 **Reply `200`:** the participant. **Refusals:** `404` `room_not_found` or
 `participant_not_found`; `400` `invalid_request` for a bad field or an empty body; `409`
