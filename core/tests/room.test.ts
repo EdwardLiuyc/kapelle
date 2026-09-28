@@ -1,11 +1,12 @@
 /**
- * Room runtime tests — stories M6-6a (#150) and M6-3 (#147).
+ * Room runtime tests — stories M6-6a (#150), M6-3 (#147) and M6-4 (#148).
  *
  * Drives `core/room.ts` directly, with no daemon and no route: each
  * participant owns a checkout and a branch, turns run in parallel, a base
  * may be another participant's branch, and a dismiss keeps the work. The
  * roster changes after the room opens: names stay unique, one orchestrator
- * at most, and a remove leaves the others alone.
+ * at most, and a remove leaves the others alone. A busy participant queues
+ * messages, and a cancel drops them (M6-4).
  * `mock-agent.mjs`'s default turn writes `ACP_TEST.md` through the client,
  * which is the file each test looks for.
  */
@@ -24,12 +25,15 @@ import {
   MOCK_AGENT,
   tempDir,
 } from "../../integration/helpers.ts";
+import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { createEventBus } from "../events.ts";
 import { newRoomId } from "../ids.ts";
 import {
   openRoom,
   type Participant,
+  QUEUE_BOUND,
   type Room,
+  RoomRefusal,
   roomAgent,
   roomAgents,
 } from "../room.ts";
@@ -511,5 +515,159 @@ test("a room in a folder that is not committed refuses an add, naming the folder
       bus: createEventBus(),
     }),
     { code: "invalid_request", message: /the folder newdir is not in HEAD/ },
+  );
+});
+
+/** A room with one participant running the mock's `scenario`, and every
+ *  event its bus carried. */
+async function roomOn(
+  t: TestContext,
+  scenario: string,
+  limits?: { stallIdleMs: number; stallRepeatCount: number },
+) {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  const events: AgentEventEnvelope[] = [];
+  bus.addListener((e) => events.push(e));
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [
+      roomAgent({
+        cmd: `node ${MOCK_AGENT} --scenario ${scenario}`,
+        name: "alice",
+      }),
+    ],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+    ...(limits && { limits }),
+  });
+  t.after(() => room.dismiss());
+  const p = room.participants[0] as Participant;
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  return { room, p, events, of };
+}
+
+test("a busy participant queues messages and answers them in order, on one session", async (t) => {
+  const { p, events, of } = await roomOn(t, "remember");
+
+  const turns = ["a", "b", "c"].map((text) => p.send(text));
+  assert.equal(p.status(), "busy");
+  assert.equal(p.queued, 2);
+  await Promise.all(turns);
+
+  assert.equal(p.queued, 0);
+  assert.equal(of("_client_message_queued").length, 2);
+  assert.deepEqual(
+    of("_client_user_message").map((e) => (e.update as { text: string }).text),
+    ["a", "b", "c"],
+  );
+  assert.deepEqual(
+    of("agent_message_chunk").map(
+      (e) => (e.update as { content: { text: string } }).content.text,
+    ),
+    ["previous: (none)", "previous: a", "previous: b"],
+  );
+  // S10: the bus names the participant, never the harness.
+  assert.ok(events.every((e) => e.agent === p.id));
+});
+
+test(`the queue holds ${QUEUE_BOUND}, and a cancel drops it and keeps the session`, async (t) => {
+  const { p, of } = await roomOn(t, "stall");
+
+  const live = p.send("live");
+  const waiting = Array.from({ length: QUEUE_BOUND }, (_, i) =>
+    p.send(`wait ${i}`),
+  );
+  assert.equal(p.queued, QUEUE_BOUND);
+  assert.throws(
+    () => p.send("one too many"),
+    (err) => err instanceof RoomRefusal && err.code === "queue_full",
+  );
+
+  assert.equal(p.cancel(), true);
+  assert.equal(p.queued, 0);
+  await Promise.all([live, ...waiting]);
+  assert.equal(p.status(), "idle");
+  assert.equal(p.cancel(), false, "nothing is live to cancel");
+  assert.deepEqual(
+    of("_client_queue_cleared").map((e) => e.update),
+    [{ sessionUpdate: "_client_queue_cleared", count: QUEUE_BOUND }],
+  );
+  assert.deepEqual(
+    of("_client_user_message").map((e) => (e.update as { text: string }).text),
+    ["live"],
+    "a dropped message never reached the harness",
+  );
+
+  // Same harness, same session: the next message starts a turn.
+  const next = p.send("next");
+  assert.equal(p.status(), "busy");
+  p.cancel();
+  await next;
+  assert.equal(of("_client_harness_spawned").length, 1);
+});
+
+test("a harness that dies takes its queue with it", async (t) => {
+  const { p, of } = await roomOn(t, "stall");
+  const turns = [p.send("live"), p.send("queued")];
+  const [spawned] = of("_client_harness_spawned");
+  assert.ok(spawned);
+  const { pid } = spawned.update as { pid: number };
+  process.kill(pid, "SIGKILL");
+  await Promise.all(turns);
+
+  assert.equal(p.status(), "exited");
+  assert.deepEqual(
+    of("_client_queue_cleared").map((e) => e.update),
+    [{ sessionUpdate: "_client_queue_cleared", count: 1 }],
+  );
+  assert.throws(
+    () => p.send("hi"),
+    (err) => err instanceof RoomRefusal && err.code === "agent_exited",
+  );
+});
+
+test("the watchdog warns about a silent turn and never cancels it (R38)", async (t) => {
+  const { p, of } = await roomOn(t, "stall", {
+    stallIdleMs: 100,
+    stallRepeatCount: 0,
+  });
+  const turn = p.send("hi");
+  for (
+    const until = Date.now() + 5_000;
+    of("_client_stall_warning").length === 0 && Date.now() < until;
+  ) {
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+
+  const [warning] = of("_client_stall_warning");
+  assert.ok(warning, "no stall warning within 5 s");
+  assert.equal(warning.agent, p.id);
+  assert.equal((warning.update as { kind: string }).kind, "idle");
+  assert.equal(p.status(), "busy", "a warning is not a cancel");
+  assert.equal(of("_client_cancel_requested").length, 0);
+  p.cancel();
+  await turn;
+});
+
+test("removing a participant drops its queue and reports it", async (t) => {
+  const { room, p, of } = await roomOn(t, "stall");
+  const live = p.send("live");
+  const waiting = [p.send("a"), p.send("b")];
+  assert.equal(p.queued, 2);
+
+  await room.remove(p.id);
+  assert.deepEqual(
+    of("_client_queue_cleared").map((e) => e.update),
+    [{ sessionUpdate: "_client_queue_cleared", count: 2 }],
+  );
+  await live;
+  await Promise.all(waiting);
+  assert.throws(
+    () => p.send("after"),
+    (err) => err instanceof RoomRefusal && err.code === "agent_exited",
   );
 });

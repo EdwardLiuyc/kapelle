@@ -2,8 +2,9 @@
 /**
  * `chat.ts` — a terminal chat over the daemon's rooms (chat MVP).
  *
- * **Experimental.** One participant per room — the orchestrator — `auto`
- * only, and no permission answering. The room API is Experimental in
+ * **Experimental.** One participant per room — the first on its roster, which
+ * is the one it shows and the one it sends to by id — `auto` only, and no
+ * permission answering. The room API is Experimental in
  * `docs/CLIENT-API.md`, and M6-3..M6-9 will reshape it; nothing here is a
  * compatibility commitment.
  *
@@ -52,9 +53,9 @@ import {
 } from "@earendil-works/pi-tui";
 
 import type {
-  EventLine,
   MessageAccepted,
   RoomDto,
+  RoomEventLine,
   RoomListEntry,
 } from "./client/contract.ts";
 import {
@@ -105,7 +106,7 @@ async function address(): Promise<DaemonAddress> {
  */
 async function readRoom(
   id: string,
-  onEvent: (event: EventLine) => void,
+  onEvent: (event: RoomEventLine) => void,
 ): Promise<void> {
   // A room does not survive a daemon restart, so there is nothing to wait
   // for: no daemon, or one that does not answer, ends the stream at once.
@@ -124,7 +125,9 @@ async function readRoom(
       return undefined;
     }
   };
-  for await (const event of followEvents(connect)) onEvent(event);
+  for await (const event of followEvents<RoomEventLine>(connect)) {
+    onEvent(event);
+  }
 }
 
 /** The stream ended without our dismiss: ask the daemon what happened.
@@ -162,8 +165,24 @@ async function reconcile(id: string): Promise<{ code: number; line: string }> {
   }
 }
 
+/** Where a message goes: the participant this chat shows, by id (M6-4). A
+ *  room with none gets the room route, so the daemon's refusal says why. */
+const messagesPath = (room: RoomDto) => {
+  const [agent] = room.participants;
+  return agent
+    ? `/rooms/${room.id}/agents/${agent.id}/messages`
+    : `/rooms/${room.id}/messages`;
+};
+
+/** A participant's name from the roster read at join, or its id for one
+ *  added since. A line names the id only (S10). */
+const namer = (room: RoomDto) => {
+  const names = new Map(room.participants.map((p) => [p.id, p.name]));
+  return (id: string) => names.get(id) ?? id;
+};
+
 /** Prints a room's events as a conversation, for a piped stdin. */
-function makePrinter() {
+function makePrinter(nameOf: (id: string) => string) {
   let atLineStart = true;
   let speaking = false;
   const write = (s: string) => {
@@ -176,17 +195,23 @@ function makePrinter() {
     write(`${s}\n`);
   };
   return {
-    show({ agent, update: u }: EventLine) {
+    show({ participantId, update: u }: RoomEventLine) {
       switch (u.sessionUpdate) {
         case "_client_user_message":
           speaking = false;
           line(`you: ${u.text}`);
           return;
+        case "_client_message_queued":
+          line(`  (queued for ${nameOf(participantId)}) ${u.text}`);
+          return;
+        case "_client_queue_cleared":
+          line(`! ${u.count} queued message(s) dropped, unsent`);
+          return;
         case "agent_message_chunk":
           if (u.content?.type !== "text") return;
           if (!speaking) {
             if (!atLineStart) write("\n");
-            write(`${agent}: `);
+            write(`${nameOf(participantId)}: `);
             speaking = true;
           }
           write(u.content.text);
@@ -269,10 +294,11 @@ const EDITOR_THEME = {
  * replayed history, or a message another client sent, leaves the status line
  * right with no bookkeeping of which turn is ours. Busy never locks the
  * editor: `/dismiss` and `/leave` must work mid-turn, and a message sent then
- * gets the daemon's `room_busy` refusal as a warning.
+ * waits in the agent's queue (M6-4).
  */
 function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
   const [agent] = room.participants;
+  const nameOf = namer(room);
   const tui = new TuiAltScreen(new ProcessTerminal());
   const transcript = new Container();
   const status = new Text("", 1, 0);
@@ -322,17 +348,23 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
   // ponytail: re-parses the whole answer per frame (~5 ms at 53k chars,
   // measured); split finished blocks into their own components if it lags.
   let answer: { md: Markdown; text: string } | undefined;
-  const show = ({ agent: name, update: u }: EventLine) => {
+  const show = ({ participantId, update: u }: RoomEventLine) => {
     switch (u.sessionUpdate) {
       case "_client_user_message":
         answer = undefined;
         add(new Text(`\n${bold(cyan("you"))}\n${u.text}`, 1, 0));
         setBusy(true);
         return;
+      case "_client_message_queued":
+        note(`queued for ${nameOf(participantId)}: ${u.text}`);
+        return;
+      case "_client_queue_cleared":
+        warn(`! ${u.count} queued message(s) dropped, unsent`);
+        return;
       case "agent_message_chunk":
         if (u.content?.type !== "text") return;
         if (!answer) {
-          add(new Text(`\n${bold(green(name))}`, 1, 0));
+          add(new Text(`\n${bold(green(nameOf(participantId)))}`, 1, 0));
           answer = { md: new Markdown("", 1, 0, MARKDOWN_THEME), text: "" };
           add(answer.md);
         }
@@ -415,7 +447,7 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
         return;
       }
       editor.addToHistory(text);
-      const r = await call<MessageAccepted>(d, `/rooms/${room.id}/messages`, {
+      const r = await call<MessageAccepted>(d, messagesPath(room), {
         method: "POST",
         body: { text },
       });
@@ -465,7 +497,7 @@ async function chat(d: DaemonAddress, room: RoomDto): Promise<number> {
   for (const { text } of agent?.notices ?? []) console.log(`! ${text}`);
   console.log("type a message; /leave to exit, /dismiss to stop the room");
 
-  const printer = makePrinter();
+  const printer = makePrinter(namer(room));
 
   // The highest `_client_turn_ended` seen, and the one turn being waited on.
   let lastTurnEnd = 0;
@@ -537,7 +569,7 @@ async function chat(d: DaemonAddress, room: RoomDto): Promise<number> {
       break;
     }
 
-    const r = await call<MessageAccepted>(d, `/rooms/${room.id}/messages`, {
+    const r = await call<MessageAccepted>(d, messagesPath(room), {
       method: "POST",
       body: { text },
     });

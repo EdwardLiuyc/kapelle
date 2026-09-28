@@ -535,10 +535,28 @@ export interface ClientHarnessExitedEvent extends Meta {
 
 /** A message the operator sent into a chat room (`core/room.ts`). On the log
  *  so a client that attaches later replays both sides of the conversation,
- *  not only the harness's answers. */
+ *  not only the harness's answers. It is logged when the turn starts, so a
+ *  queued message is logged twice: `_client_message_queued` on arrival, and
+ *  this when the harness gets it (M6-4). */
 export interface ClientUserMessageEvent extends Meta {
   sessionUpdate: "_client_user_message";
   text: string;
+}
+
+/** A message reached a busy participant and waits in its queue (M6-4, R32).
+ *  `_client_user_message` follows when its turn starts. A queued message with
+ *  no `_client_user_message` after it was dropped: by `_client_queue_cleared`,
+ *  or by a daemon restart, which loses the queue (R41). */
+export interface ClientMessageQueuedEvent extends Meta {
+  sessionUpdate: "_client_message_queued";
+  text: string;
+}
+
+/** A participant's queued messages were dropped, unsent: a cancel of its
+ *  turn, its removal, or its harness gone (M6-4). `count` is how many. */
+export interface ClientQueueClearedEvent extends Meta {
+  sessionUpdate: "_client_queue_cleared";
+  count: number;
 }
 
 /** A chat room's turn is over, and the room takes the next message.
@@ -568,6 +586,8 @@ export type AgentEvent =
   | ClientHarnessSpawnedEvent
   | ClientHarnessExitedEvent
   | ClientUserMessageEvent
+  | ClientMessageQueuedEvent
+  | ClientQueueClearedEvent
   | ClientTurnEndedEvent;
 
 /** The `session/update` notification as it arrives. */
@@ -860,6 +880,8 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_harness_spawned"
         | "_client_harness_exited"
         | "_client_user_message"
+        | "_client_message_queued"
+        | "_client_queue_cleared"
         | "_client_turn_ended" = u.sessionUpdate;
       void fallthrough;
       return false;

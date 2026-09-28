@@ -34,9 +34,21 @@
  * **The orchestrator is a label, not a slot** (R44). A participant has the
  * role it was given and no other; nothing is promoted by default.
  *
+ * **A message names its participant, and a busy one queues it** (M6-4).
+ * `send` starts a turn, or puts the message in a FIFO queue behind the live
+ * one (R32a); 16 wait at most, and the next is refused `queue_full` (R41).
+ * The queue is in memory only, so a daemon restart loses it. `cancel` drops
+ * the queue, then cancels the live turn; the session stays (S5a). A dropped
+ * message is never sent, and `_client_queue_cleared` says how many.
+ *
+ * **One log for the room** (S10). The bus names each event's participant by
+ * its id in `agent`, and the log writes it as `participantId` beside the
+ * `roomId`. A thread is that log filtered by `participantId` (R8c over R13a).
+ *
  * **MVP scope, deliberately.** The mode is `auto`, so nobody answers
- * permission prompts. No watchdog, no result preamble, no cross-check: a chat
- * turn is conversation, not a deliverable. What stays is what makes a room
+ * permission prompts. The watchdog only warns, and only during a turn (R38):
+ * a chat turn is never cut by a clock. No result preamble, no cross-check: a
+ * chat turn is conversation, not a deliverable (R39). What stays is what makes a room
  * safe to leave running: its own worktree, the path guard `AcpAgent` always
  * applies, the containment notices, and the persisted event log a client
  * replays when it attaches.
@@ -64,7 +76,17 @@ import type { EventBus } from "./events.ts";
 import { newParticipantId } from "./ids.ts";
 import { policyFor, resolvePolicy } from "./policy.ts";
 import { stateDirFor } from "./runtime.ts";
+import {
+  createWatchdog,
+  sweepIntervalMs,
+  WATCHDOG_DEFAULTS,
+  type Watchdog,
+  type WatchdogLimits,
+} from "./watchdog.ts";
 import { BadBase, type WorktreeSetup } from "./worktree.ts";
+
+/** How many messages may wait behind a participant's live turn (R41). */
+export const QUEUE_BOUND = 16;
 
 /** A refusal the daemon answers with its own error code. Any other throw
  *  from `add`, `update` or `remove` is a failure, not a refusal. */
@@ -74,7 +96,9 @@ export class RoomRefusal extends Error {
     | "name_taken"
     | "orchestrator_exists"
     | "participant_not_found"
-    | "room_dismissed";
+    | "room_dismissed"
+    | "agent_exited"
+    | "queue_full";
   constructor(code: RoomRefusal["code"], message: string) {
     super(message);
     this.code = code;
@@ -105,8 +129,9 @@ type Role = (typeof ROLES)[number];
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
 /** R15, amended 2026-09-28 (#147): the run-file `Task` fields that act in a
- *  room today. The watchdog knobs come with M6-4 (R38). No `purpose`: a
- *  person sends instructions as a message, never as a hidden prefix. */
+ *  room today. The watchdog limits are the room's, from the daemon's config,
+ *  not a participant's. No `purpose`: a person sends instructions as a
+ *  message, never as a hidden prefix. */
 interface Settings {
   allowReadOutsideRoot: boolean;
 }
@@ -156,13 +181,21 @@ export interface Participant {
    *  its own, so the caller publishes them. */
   readonly notices: readonly RoomNotice[];
   status(): ParticipantStatus;
+  /** Messages waiting behind the live turn. */
+  readonly queued: number;
   /**
-   * Sends one message and resolves when that turn ends. Refuses — before any
-   * byte reaches the harness — while a turn is live or once it is over.
-   * A turn that fails is not a rejection: it ends with `_client_turn_ended`
-   * carrying `error`, which is how every client learns of it.
+   * Starts a turn with this message, or queues it behind the live one.
+   * Resolves when its turn ends, or when it is dropped from the queue.
+   * Refuses with a `RoomRefusal` — before any byte reaches the harness — once
+   * the room is dismissed or the harness is gone, and when `QUEUE_BOUND`
+   * messages already wait. A turn that fails is not a rejection: it ends with
+   * `_client_turn_ended` carrying `error`, which is how every client learns
+   * of it.
    */
   send(text: string): Promise<void>;
+  /** Drops the queue, then asks the harness to end the live turn. The
+   *  session stays (S5a). False when no turn is live. */
+  cancel(): boolean;
 }
 
 export interface Room {
@@ -379,6 +412,9 @@ export interface RoomOptions {
   /** The preflight the caller already ran (`openWorktrees`). */
   setup: WorktreeSetup;
   bus: EventBus;
+  /** The watchdog's warn limits; `WATCHDOG_DEFAULTS` when absent. There is
+   *  no TTL in a room (R38). */
+  limits?: Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount">;
 }
 
 type Notify = (text: string, kind?: Warning["kind"]) => void;
@@ -399,6 +435,7 @@ export async function openRoom({
   agents,
   setup,
   bus,
+  limits = WATCHDOG_DEFAULTS,
 }: RoomOptions): Promise<Room> {
   const { worktrees, notice, root } = setup;
   // The room's own lines: only the event log's today. With no participant
@@ -415,15 +452,40 @@ export async function openRoom({
   let eventLog: EventLog | undefined;
   try {
     mkdirSync(logDir, { recursive: true });
-    eventLog = createEventLog(join(logDir, "events.jsonl"), (err) =>
+    const log = createEventLog(join(logDir, "events.jsonl"), (err) =>
       onRoomNotice(`cannot write event log: ${err.message}`),
     );
-    bus.addListener(eventLog.append);
+    eventLog = log;
+    // The bus's `agent` is the participant id (S10).
+    bus.addListener(({ agent, update }) =>
+      log.append({ roomId, participantId: agent, update }),
+    );
   } catch (err) {
     onRoomNotice(
       `cannot write room logs to ${logDir}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+
+  // One sweep for the room, as for a run. `ttlMs` is 0, so it never cancels.
+  const watchLimits: WatchdogLimits = {
+    stallIdleMs: limits.stallIdleMs,
+    stallRepeatCount: limits.stallRepeatCount,
+    ttlMs: 0,
+  };
+  const watchdog = createWatchdog({
+    onWarn: (id, kind, text) =>
+      bus.emit({
+        agent: id,
+        update: { sessionUpdate: "_client_stall_warning", kind, text },
+      }),
+    onTimeout: () => {},
+  });
+  const sweep = setInterval(
+    () => watchdog.sweep(),
+    sweepIntervalMs([watchLimits]),
+  );
+  // It watches harnesses that already keep the loop alive.
+  sweep.unref();
 
   let dismissing: Promise<void> | undefined;
   const members: Member[] = [];
@@ -503,6 +565,7 @@ export async function openRoom({
           await release(p.id, p.worktree, onNotice);
         }
       } finally {
+        clearInterval(sweep);
         await eventLog?.close();
       }
     })();
@@ -532,6 +595,8 @@ export async function openRoom({
         onNotice,
         stderrLog: eventLog ? join(logDir, `${id}.stderr.log`) : undefined,
         dismissed: () => dismissing !== undefined,
+        watchdog,
+        limits: watchLimits,
       });
     } catch (err) {
       await rollback(id, worktree);
@@ -643,6 +708,8 @@ async function startParticipant({
   onNotice,
   stderrLog,
   dismissed,
+  watchdog,
+  limits,
 }: {
   id: string;
   request: AgentRequest;
@@ -654,10 +721,12 @@ async function startParticipant({
   onNotice: Notify;
   stderrLog: string | undefined;
   dismissed: () => boolean;
+  watchdog: Watchdog;
+  limits: WatchdogLimits;
 }): Promise<{ participant: Participant; stop: () => Promise<void> }> {
   if (info) {
     bus.emit({
-      agent: spec.name,
+      agent: id,
       update: {
         sessionUpdate: "_client_worktree_created",
         // Listed, not spread, as `core/run.ts` does: a wider `info` must not
@@ -679,19 +748,74 @@ async function startParticipant({
     policy: policyFor("auto"),
     allowReadOutsideRoot: settings.allowReadOutsideRoot,
     stderrLog,
-    onEvent: (event) => {
-      if (event.update.sessionUpdate === "_client_harness_exited") {
-        exited = true;
-      }
+    onEvent: ({ update }) => {
+      if (update.sessionUpdate === "_client_harness_exited") exited = true;
+      // Named by id, not by harness name (S10). Only the harness's own
+      // events feed the watchdog, so its warning never resets it.
+      const event = { agent: id, update };
+      watchdog.note(event);
       bus.emit(event);
     },
   });
 
   let turn: Promise<void> | undefined;
+  let stopping = false;
+  const waiting: { text: string; done: () => void }[] = [];
+
+  // Never sent, so each waiting `send` resolves here.
+  const drop = () => {
+    if (waiting.length === 0) return;
+    const dropped = waiting.splice(0);
+    bus.emit({
+      agent: id,
+      update: { sessionUpdate: "_client_queue_cleared", count: dropped.length },
+    });
+    for (const { done } of dropped) done();
+  };
+
+  const begin = (text: string): Promise<void> => {
+    bus.emit({
+      agent: id,
+      update: { sessionUpdate: "_client_user_message", text },
+    });
+    const watch = watchdog.watch(id, limits);
+    turn = agent
+      .prompt(text)
+      .then(
+        ({ stopReason }) => {
+          bus.emit({
+            agent: id,
+            update: { sessionUpdate: "_client_turn_ended", stopReason },
+          });
+        },
+        (err) => {
+          bus.emit({
+            agent: id,
+            update: {
+              sessionUpdate: "_client_turn_ended",
+              error: err instanceof Error ? err.message : String(err),
+            },
+          });
+        },
+      )
+      .finally(() => {
+        watch.close();
+        turn = undefined;
+        // A harness that is gone takes its queue with it. The harness
+        // reports its exit before the prompt fails (`protocol/agent.ts`).
+        if (exited || stopping || dismissed()) return drop();
+        const next = waiting.shift();
+        if (next) void begin(next.text).then(next.done);
+      });
+    return turn;
+  };
+
   // The harness answers a cancel within 64 ms on every measured build
   // (§M0-4), and `stop()` closes stdin after it, which ends the turn for one
   // that ignores the cancel.
   const stop = async () => {
+    stopping = true;
+    drop();
     if (turn) agent.cancel();
     await agent.stop();
     await turn;
@@ -732,37 +856,35 @@ async function startParticipant({
       if (exited) return "exited";
       return turn ? "busy" : "idle";
     },
+    get queued() {
+      return waiting.length;
+    },
     send(text) {
-      if (dismissed()) throw new Error("the room is dismissed");
-      if (exited) throw new Error("the agent's harness has exited");
-      if (turn) throw new Error("the harness is still answering");
+      if (dismissed()) {
+        throw new RoomRefusal("room_dismissed", "the room is dismissed");
+      }
+      if (exited || stopping) {
+        throw new RoomRefusal("agent_exited", "the agent's harness has exited");
+      }
+      if (!turn) return begin(text);
+      if (waiting.length >= QUEUE_BOUND) {
+        throw new RoomRefusal(
+          "queue_full",
+          `${QUEUE_BOUND} messages already wait for this agent; ` +
+            "wait for a turn to end, or cancel the turn to drop them",
+        );
+      }
       bus.emit({
-        agent: spec.name,
-        update: { sessionUpdate: "_client_user_message", text },
+        agent: id,
+        update: { sessionUpdate: "_client_message_queued", text },
       });
-      turn = agent
-        .prompt(text)
-        .then(
-          ({ stopReason }) => {
-            bus.emit({
-              agent: spec.name,
-              update: { sessionUpdate: "_client_turn_ended", stopReason },
-            });
-          },
-          (err) => {
-            bus.emit({
-              agent: spec.name,
-              update: {
-                sessionUpdate: "_client_turn_ended",
-                error: err instanceof Error ? err.message : String(err),
-              },
-            });
-          },
-        )
-        .finally(() => {
-          turn = undefined;
-        });
-      return turn;
+      return new Promise<void>((done) => waiting.push({ text, done }));
+    },
+    cancel() {
+      if (!turn) return false;
+      drop();
+      agent.cancel();
+      return true;
     },
   };
   return { participant, stop };

@@ -101,6 +101,7 @@ import {
   writeRepos,
 } from "./core/runtime.ts";
 import { processIdentity, sweepBoot } from "./core/sweep.ts";
+import { WATCHDOG_DEFAULTS, type WatchdogLimits } from "./core/watchdog.ts";
 import { openWorktrees, stateDirRoot } from "./core/worktree.ts";
 import {
   type RoomState,
@@ -852,7 +853,9 @@ function roomRefused(err: unknown) {
       ? 400
       : err.code === "participant_not_found"
         ? 404
-        : 409;
+        : err.code === "queue_full"
+          ? 429
+          : 409;
   return refusal(status, err.code, err.message);
 }
 
@@ -888,19 +891,36 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   // No 409 wrapper (#129): since the state directory moved out of the
   // repository, `openWorktrees` throws for nothing a repository can be in.
   const setup = await openWorktrees(cwd, id);
+  // The watchdog's warn limits, from the same layers as a run's (R38).
+  let limits: Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount">;
+  try {
+    const defaults = resolveRunDefaults(setup.root);
+    limits = {
+      stallIdleMs: defaults.stallIdleMs ?? WATCHDOG_DEFAULTS.stallIdleMs,
+      stallRepeatCount:
+        defaults.stallRepeatCount ?? WATCHDOG_DEFAULTS.stallRepeatCount,
+    };
+  } catch (err) {
+    throw refusal(400, "invalid_config", messageOf(err));
+  }
   if (stopping) {
     throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
 
   const bus = createEventBus();
-  // ponytail: a room's `unitId` is the harness name, the bus's `agent`, not
-  // the participant id. Two participants on one harness share it, which only
-  // blurs the sweep's notice line; M6-4 puts the participant id on each
-  // event, and this then records it.
+  // A room's bus names each event by participant id, so that is the
+  // `unitId` the sweep records.
   trackChildren(bus, "room", id);
   let room: Room;
   try {
-    room = await openRoom({ roomId: id, cwd, agents, setup, bus });
+    room = await openRoom({
+      roomId: id,
+      cwd,
+      agents,
+      setup,
+      bus,
+      limits,
+    });
   } catch (err) {
     throw roomRefused(err) ?? refusal(500, "room_open_failed", messageOf(err));
   }
@@ -1008,14 +1028,18 @@ function participantEntry(id: string, agentId: string) {
 }
 
 /**
- * `POST /rooms/:id/messages {text}` — one turn, to the room's orchestrator.
- * 202 once the message is on the room's log; the answer arrives on
- * `GET /rooms/:id/events`. `seq` is the log's size before the message, so a
- * client waits for the first `_client_turn_ended` after it rather than one
- * it is still replaying. M6-4 adds a route per participant.
+ * `POST /rooms/:id/agents/:agentId/messages {text}` — one message to the
+ * participant it names; `POST /rooms/:id/messages {text}` (no `agentId`) —
+ * one to the room's orchestrator (R7a). The daemon never reads the text: a
+ * client turns `@name` into the id (R43). 202 once the message is on the
+ * room's log, as a turn that started or as one queued behind the live turn
+ * (R32a); a full queue is `429` (R41). `seq` is the log's size before the
+ * message, and `queued` is how many turns come first, so a client knows
+ * which `_client_turn_ended` is its answer.
  */
 async function postMessage(
   id: string,
+  agentId: string | undefined,
   req: IncomingMessage,
   res: ServerResponse,
 ) {
@@ -1027,7 +1051,10 @@ async function postMessage(
   if (entry.room.status() === "dismissed") {
     throw refusal(409, "room_dismissed", `room ${id} is dismissed`);
   }
-  const target = entry.room.participants.find((p) => p.role === "orchestrator");
+  const target =
+    agentId === undefined
+      ? entry.room.participants.find((p) => p.role === "orchestrator")
+      : participantEntry(id, agentId);
   if (!target) {
     throw refusal(
       409,
@@ -1036,20 +1063,58 @@ async function postMessage(
     );
   }
   const seq = entry.room.eventLog?.size ?? 0;
+  const queued = target.status() === "busy" ? target.queued + 1 : 0;
   let turn: Promise<void>;
   try {
     turn = target.send(text);
   } catch (err) {
-    // `send` refuses a live turn (`busy`) or a harness that has exited; the
-    // status is read after the throw, so the code names the refusal that
-    // happened.
-    const code = target.status() === "busy" ? "room_busy" : "agent_exited";
-    throw refusal(409, code, messageOf(err));
+    throw roomRefused(err) ?? err;
   }
   entry.state.updatedAt = new Date().toISOString();
   // Settles with the turn; a failed turn is already on the log as an event.
   turn.catch(() => {});
-  send(res, 202, { seq } satisfies MessageAccepted);
+  send(res, 202, { seq, queued } satisfies MessageAccepted);
+}
+
+/**
+ * `POST /rooms/:id/agents/:agentId/turns/current/cancel` — drops the
+ * participant's queue and asks its harness to end the live turn. The
+ * session and the room stay (S5a). 202, as a run's cancel: the turn ends on
+ * the stream with `_client_turn_ended`.
+ */
+function cancelTurn(id: string, agentId: string, res: ServerResponse) {
+  const entry = roomEntry(id);
+  if (entry.room.status() === "dismissed") {
+    throw refusal(409, "room_dismissed", `room ${id} is dismissed`);
+  }
+  const p = participantEntry(id, agentId);
+  if (!p.cancel()) {
+    throw refusal(409, "no_turn", `${p.name} has no turn to cancel`);
+  }
+  send(res, 202, toParticipantDto(p) satisfies ParticipantDto);
+}
+
+/** `GET /rooms/:id/events`, the room timeline, or with `agentId`
+ *  `GET /rooms/:id/agents/:agentId/events`: the same log, only that
+ *  participant's lines (R8c). `seq` and `Last-Event-ID` are the room's. */
+async function roomEvents(
+  id: string,
+  agentId: string | undefined,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const log = roomEntry(id).room.eventLog;
+  if (agentId !== undefined) participantEntry(id, agentId);
+  if (!log) {
+    throw refusal(404, "no_event_log", `room ${id} has no event log`);
+  }
+  const gone = new AbortController();
+  res.on("close", () => gone.abort());
+  const keep =
+    agentId === undefined
+      ? undefined
+      : (line: string) => JSON.parse(line).participantId === agentId;
+  await streamLog(log, req, res, gone.signal, { keep });
 }
 
 /**
@@ -1130,6 +1195,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     pathname,
   );
   const agentOne = /^\/rooms\/([^/]+)\/agents\/([^/]+)$/.exec(pathname);
+  const agentSub =
+    /^\/rooms\/([^/]+)\/agents\/([^/]+)\/(messages|events|turns\/current\/cancel)$/.exec(
+      pathname,
+    );
 
   if (req.method === "GET" && pathname === "/version") {
     send(res, 200, {
@@ -1162,7 +1231,16 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const { state, room: live } = roomEntry(room[1] as string);
     send(res, 200, toRoomDto(state, live) satisfies RoomDto);
   } else if (req.method === "POST" && roomSub?.[2] === "messages") {
-    await postMessage(roomSub[1] as string, req, res);
+    await postMessage(roomSub[1] as string, undefined, req, res);
+  } else if (req.method === "POST" && agentSub?.[3] === "messages") {
+    await postMessage(agentSub[1] as string, agentSub[2], req, res);
+  } else if (req.method === "GET" && agentSub?.[3] === "events") {
+    await roomEvents(agentSub[1] as string, agentSub[2], req, res);
+  } else if (
+    req.method === "POST" &&
+    agentSub?.[3] === "turns/current/cancel"
+  ) {
+    cancelTurn(agentSub[1] as string, agentSub[2] as string, res);
   } else if (req.method === "POST" && roomSub?.[2] === "agents") {
     await postAgent(roomSub[1] as string, req, res);
   } else if (req.method === "GET" && roomSub?.[2] === "agents") {
@@ -1183,13 +1261,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   } else if (req.method === "POST" && roomSub?.[2] === "dismiss") {
     await dismissRoom(roomSub[1] as string, res);
   } else if (req.method === "GET" && roomSub?.[2] === "events") {
-    const log = roomEntry(roomSub[1] as string).room.eventLog;
-    if (!log) {
-      throw refusal(404, "no_event_log", `room ${roomSub[1]} has no event log`);
-    }
-    const gone = new AbortController();
-    res.on("close", () => gone.abort());
-    await streamLog(log, req, res, gone.signal);
+    await roomEvents(roomSub[1] as string, undefined, req, res);
   } else if (req.method === "GET" && events) {
     await getEvents(events[1] as string, req, res);
   } else if (req.method === "GET" && one) {

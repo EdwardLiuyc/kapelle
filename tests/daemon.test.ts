@@ -31,8 +31,10 @@ import { dirname, join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   API_VERSION,
+  type MessageAccepted,
   type ParticipantDto,
   type RoomDto,
+  type RoomEventLine,
   type RoomListEntry,
 } from "../client/contract.ts";
 import { stateDirFor } from "../core/runtime.ts";
@@ -3197,13 +3199,18 @@ async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
   throw new Error(`room ${id} never went idle`);
 }
 
-/** Every event of a room, read from its SSE stream. Only call once the room
- *  is dismissed: the stream ends only when its log closes. */
+/** Every event of a room, read from its SSE stream, or of one participant
+ *  when `agentId` is given. Only call once the room is dismissed: the stream
+ *  ends only when its log closes. */
 async function roomEvents(
   d: Daemon,
   id: string,
-): Promise<{ at?: string; agent: string; update: Record<string, unknown> }[]> {
-  const res = await fetch(`${d.url}/rooms/${id}/events`, {
+  agentId?: string,
+): Promise<
+  (Omit<RoomEventLine, "update"> & { update: Record<string, unknown> })[]
+> {
+  const path = agentId ? `agents/${agentId}/events` : "events";
+  const res = await fetch(`${d.url}/rooms/${id}/${path}`, {
     headers: { authorization: `Bearer ${d.token}` },
   });
   assert.equal(res.status, 200);
@@ -3501,7 +3508,10 @@ test("chat.ts names the status for a refusal with no JSON envelope", async (t) =
   }
 });
 
-test("a message while the harness is still answering is refused, and dismiss ends that turn", async (t) => {
+/** A reply to a message, or its refusal. */
+type MessageReply = MessageAccepted & RoomReply;
+
+test("a busy participant queues 16 messages, refuses the seventeenth with 429, and a cancel drops them", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
   const open = await api<RoomReply>(
@@ -3512,23 +3522,156 @@ test("a message while the harness is still answering is refused, and dismiss end
   );
   assert.equal(open.status, 201, open.body.error?.message);
   const { id } = open.body;
+  const to = `/rooms/${id}/agents/${only(open.body).id}`;
+  const say = (text: string) =>
+    api<MessageReply>(d, "POST", `${to}/messages`, { text });
 
+  const live = await say("live");
+  assert.equal(live.status, 202, live.body.error?.message);
+  assert.equal(live.body.queued, 0);
+  for (let i = 1; i <= 16; i++) {
+    const r = await say(`wait ${i}`);
+    assert.equal(r.status, 202, r.body.error?.message);
+    assert.equal(r.body.queued, i, "the live turn and the ones before");
+  }
+  const full = await say("one too many");
+  assert.equal(full.status, 429);
+  assert.equal(full.body.error.code, "queue_full");
+
+  const cancel = await api<RoomReply>(d, "POST", `${to}/turns/current/cancel`);
+  assert.equal(cancel.status, 202, cancel.body.error?.message);
+  await roomIdle(d, id);
+  const none = await api<RoomReply>(d, "POST", `${to}/turns/current/cancel`);
+  assert.equal(none.status, 409);
+  assert.equal(none.body.error.code, "no_turn");
   assert.equal(
-    (await api(d, "POST", `/rooms/${id}/messages`, { text: "one" })).status,
-    202,
+    (await api<RoomReply>(d, "GET", `/rooms/${id}`)).body.status,
+    "active",
+    "a cancel is not a dismiss",
   );
-  const busy = await api<RoomReply>(d, "POST", `/rooms/${id}/messages`, {
-    text: "two",
-  });
-  assert.equal(busy.status, 409);
-  assert.equal(busy.body.error.code, "room_busy");
-  assert.match(busy.body.error.message, /still answering/);
+  // The session stays: the same harness takes the next message.
+  assert.equal((await say("next")).body.queued, 0);
 
   assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
-  const ended = (await roomEvents(d, id)).filter(
-    (e) => e.update.sessionUpdate === "_client_turn_ended",
+  const events = await roomEvents(d, id);
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  assert.equal(of("_client_message_queued").length, 16);
+  assert.deepEqual(
+    of("_client_queue_cleared").map((e) => e.update.count),
+    [16],
   );
-  assert.equal(ended.length, 1, "the live turn ended on dismiss");
+  assert.deepEqual(
+    of("_client_user_message").map((e) => e.update.text),
+    ["live", "next"],
+  );
+  assert.equal(of("_client_turn_ended").length, 2, "dismiss ended the second");
+  assert.equal(of("_client_harness_spawned").length, 1);
+});
+
+test("messages to a busy participant are answered in order, and a cancel keeps its memory", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario slow`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const to = `/rooms/${id}/agents/${only(open.body).id}`;
+  const say = async (text: string) =>
+    (await api<MessageReply>(d, "POST", `${to}/messages`, { text })).body;
+
+  // Each `slow` turn lasts a second, so b and c arrive while a runs.
+  const queued = [];
+  for (const text of ["a", "b", "c"]) queued.push((await say(text)).queued);
+  assert.deepEqual(queued, [0, 1, 2]);
+  await roomIdle(d, id);
+  await say("d");
+  assert.equal(
+    (await api(d, "POST", `${to}/turns/current/cancel`)).status,
+    202,
+  );
+  await roomIdle(d, id);
+  await say("e");
+  await roomIdle(d, id);
+
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const events = await roomEvents(d, id);
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  assert.deepEqual(
+    of("_client_user_message").map((e) => e.update.text),
+    ["a", "b", "c", "d", "e"],
+  );
+  assert.deepEqual(
+    of("agent_message_chunk").map(
+      (e) => (e.update.content as { text: string }).text,
+    ),
+    ["previous: (none)", "previous: a", "previous: b", "previous: d"],
+    "in order, on one session, and the cancelled turn is remembered",
+  );
+  assert.deepEqual(
+    of("_client_turn_ended").map((e) => e.update.stopReason),
+    ["end_turn", "end_turn", "end_turn", "cancelled", "end_turn"],
+  );
+});
+
+test("one room log names each line's room and participant, and a participant's stream is its own lines", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", { cwd });
+  const { id } = open.body;
+  // One harness for both, so only the participant id tells them apart.
+  const alice = await addAgent(d, id, {
+    cmd: REMEMBER,
+    name: "alice",
+    role: "orchestrator",
+  });
+  const bob = await addAgent(d, id, { cmd: REMEMBER, name: "bob" });
+
+  const toAlice = await api(d, "POST", `/rooms/${id}/messages`, {
+    text: "to alice",
+  });
+  assert.equal(toAlice.status, 202);
+  const toBob = await api(d, "POST", `/rooms/${id}/agents/${bob.id}/messages`, {
+    text: "to bob",
+  });
+  assert.equal(toBob.status, 202);
+  await agentIdle(d, id, alice.id);
+  await agentIdle(d, id, bob.id);
+  const nobody = `/rooms/${id}/agents/p-nobody`;
+  for (const [method, path, body] of [
+    ["POST", `${nobody}/messages`, { text: "hi" }],
+    ["GET", `${nobody}/events`, undefined],
+    ["POST", `${nobody}/turns/current/cancel`, undefined],
+  ] as const) {
+    const r = await api(d, method, path, body);
+    assert.equal(r.status, 404, `${method} ${path}`);
+    assert.equal(r.body.error.code, "participant_not_found");
+  }
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+
+  const all = await roomEvents(d, id);
+  for (const line of all) {
+    assert.equal(line.roomId, id);
+    assert.ok([alice.id, bob.id].includes(line.participantId));
+    assert.ok(!("agent" in line), "a room line has no agent (S10)");
+  }
+  const bobs = await roomEvents(d, id, bob.id);
+  assert.deepEqual(
+    bobs,
+    all.filter((e) => e.participantId === bob.id),
+    "the same lines, with the room's seq",
+  );
+  const said = (lines: typeof all) =>
+    lines
+      .filter((e) => e.update.sessionUpdate === "_client_user_message")
+      .map((e) => e.update.text);
+  assert.deepEqual(said(bobs), ["to bob"]);
+  assert.deepEqual(said(await roomEvents(d, id, alice.id)), ["to alice"]);
 });
 
 test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a bad message", async (t) => {
@@ -3619,6 +3762,9 @@ test("every room route answers room_not_found for an unknown id", async (t) => {
     ["POST", "/rooms/nope/dismiss", undefined],
     ["POST", "/rooms/nope/messages", { text: "hi" }],
     ["GET", "/rooms/nope/events", undefined],
+    ["POST", "/rooms/nope/agents/p-x/messages", { text: "hi" }],
+    ["GET", "/rooms/nope/agents/p-x/events", undefined],
+    ["POST", "/rooms/nope/agents/p-x/turns/current/cancel", undefined],
     ["POST", "/rooms/nope/agents", { cmd: REMEMBER }],
     ["GET", "/rooms/nope/agents", undefined],
     ["GET", "/rooms/nope/agents/p-x", undefined],
@@ -4228,3 +4374,39 @@ for (const [how, keys] of [
     assert.match(out(), /left room \S+; rejoin with/);
   });
 }
+
+test("chat.ts attributes an answer to the roster name, not the harness label", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const c = spawnCli(
+    t,
+    ["new", "--cmd", REMEMBER, "--name", "alice", "--cwd", cwd],
+    "chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  c.child.stdin.end("alpha\n/dismiss\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /alice: previous: \(none\)/);
+  assert.doesNotMatch(r.stdout, /mock-agent: previous/);
+});
+
+test("chat.ts attach talks to the participant it names, even with no orchestrator", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  // Built through the API, so no participant has the orchestrator role.
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, name: "bob" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("hi\n/dismiss\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /bob: previous: \(none\)/);
+});

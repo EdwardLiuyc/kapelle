@@ -117,7 +117,7 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| Everything under `/rooms` | Experimental | M6-4 and later |
+| Everything under `/rooms` | Experimental | M6-5 and later |
 
 **Planned, not built yet:** cancel one task (M5-8).
 
@@ -252,7 +252,8 @@ request that is not valid HTTP gets `400`.
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
-| `room_busy` | `409` | The room still answers the last message. | Wait for `_client_turn_ended`, then send again. |
+| `queue_full` | `429` | 16 messages already wait for this participant. | Wait for a `_client_turn_ended`, then send again. Or cancel its turn, which drops the queue. |
+| `no_turn` | `409` | You cancelled a turn, but the participant has none. | Stop. Its turn already ended. |
 | `room_dismissed` | `409` | The room was dismissed. | Stop. Open a new room. |
 | `agent_exited` | `409` | The participant's harness exited by itself. | Remove the participant and add a new one. M6-7a brings the participant back on the next message. |
 | `no_orchestrator` | `409` | The room has no participant with the `orchestrator` role, so a message has no target. | Open a room with an orchestrator. |
@@ -288,9 +289,11 @@ format, and whether its first request has answered, before the body. For a key t
 already started a run, the daemon reads the body, but does not check the run again,
 before it compares the digest: see
 [Sending a run again safely](#sending-a-run-again-safely). Some routes resolve a resource
-first: `POST /rooms/:id/messages`, `POST /rooms/:id/agents` and
-`PATCH /rooms/:id/agents/:agentId` look the room up, so an unknown room is
-`404 room_not_found` even when the body would be refused. `DELETE` carries no body, and
+first: `POST /rooms/:id/messages`, `POST /rooms/:id/agents/:agentId/messages`,
+`POST /rooms/:id/agents` and `PATCH /rooms/:id/agents/:agentId` look the room up, so an
+unknown room is
+`404 room_not_found` even when the body would be refused. They look the participant up
+only after the body, so a bad body to an unknown participant is `400`, not `404`. `DELETE` carries no body, and
 the `GET` routes take none.
 
 ## Routes
@@ -311,7 +314,7 @@ the `GET` routes take none.
 | `POST /rooms` | Open a room. Experimental. |
 | `GET /rooms` | List rooms. Experimental. |
 | `GET /rooms/:id` | One room. Experimental. |
-| `POST /rooms/:id/messages` | Send a message into a room. Experimental. |
+| `POST /rooms/:id/messages` | Send a message to the room's orchestrator. Experimental. |
 | `GET /rooms/:id/events` | A room's event stream. Experimental. |
 | `POST /rooms/:id/dismiss` | End a room. Experimental. |
 | `POST /rooms/:id/agents` | Add a participant. Experimental. |
@@ -319,6 +322,9 @@ the `GET` routes take none.
 | `GET /rooms/:id/agents/:agentId` | One participant. Experimental. |
 | `PATCH /rooms/:id/agents/:agentId` | Rename a participant, or change its mode or role. Experimental. |
 | `DELETE /rooms/:id/agents/:agentId` | Remove a participant. Experimental. |
+| `POST /rooms/:id/agents/:agentId/messages` | Send a message to one participant. Experimental. |
+| `GET /rooms/:id/agents/:agentId/events` | One participant's lines of the room's stream. Experimental. |
+| `POST /rooms/:id/agents/:agentId/turns/current/cancel` | Cancel a participant's turn and drop its queue. Experimental. |
 
 ### `GET /version`
 
@@ -583,14 +589,17 @@ data: {"seq":7,"at":"2026-09-24T10:15:02.113Z","agent":"summarise","update":{"se
 ```
 
 - `id` is the event's `seq`.
-- `data` is one line of JSON: `{seq, at, agent, update}`.
+- `data` is one line of JSON: `{seq, at, agent, update}` for a run, and
+  `{seq, at, roomId, participantId, update}` for a room.
 - A blank line ends the block.
 
 | Field | Meaning |
 | --- | --- |
 | `seq` | The event's number in this log. The first event is `1`. It goes up by one each time, with no gaps. |
 | `at` | ISO 8601, when the daemon wrote the event. Since 1.2 (M5-5); older events have none. |
-| `agent` | For a run: the task id, or `""` for `_client_run_finished`. For a room: the harness name. |
+| `agent` | Runs only: the task id, or `""` for `_client_run_finished`. |
+| `roomId` | Rooms only: the room. |
+| `participantId` | Rooms only: the participant's opaque id. Its name is in `GET /rooms/:id`, because a rename changes the name and never the id. |
 | `update` | The event itself. See [Events](#events). |
 
 An event may carry `_meta`, an object the harness attached to it. It is passed through
@@ -709,8 +718,7 @@ Ignore a `sessionUpdate` that you do not know. New ones can appear.
 The daemon adds its own events. Their names all start with `_client_`, so they never clash
 with ACP names.
 
-**Tasks** (runs; a room also emits `_client_worktree_created`, where `agent` is the
-harness name):
+**Tasks** (runs; a room also emits `_client_worktree_created`, one per participant):
 
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
@@ -745,7 +753,7 @@ harness name):
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
 | `_client_result_warning` | `kind`, `text` | The task's report and its changes do not agree. `kind` is `noResultBlock`, `filesNotInDiff`, `filesUnclaimed` or `policyNeverFired`. |
-| `_client_stall_warning` | `kind`, `text` | The task looks stuck. `kind` is `idle` (quiet too long) or `repeat` (same tool again and again). The task keeps running. |
+| `_client_stall_warning` | `kind`, `text` | The task, or a room participant's turn, looks stuck. `kind` is `idle` (quiet too long) or `repeat` (same tool again and again). It keeps running: in a room, only a cancel ends a turn. |
 
 **Harness process:**
 
@@ -758,8 +766,14 @@ harness name):
 
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
-| `_client_user_message` | `text` | A message a person sent into the room. M6-4 adds `participantId` to the log line, not to this event. |
-| `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer. The room takes the next message. `error` means the turn failed. |
+| `_client_message_queued` | `text` | A message reached a busy participant and waits. `_client_user_message` follows when its turn starts. |
+| `_client_user_message` | `text` | The participant's turn starts with this message. The line's `participantId` names who got it. |
+| `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
+| `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
+
+A turn is the span from `_client_user_message` to `_client_turn_ended` of one
+participant. A `_client_message_queued` with no `_client_user_message` after it was
+dropped: by `_client_queue_cleared`, or by a daemon restart, which loses the queue.
 
 Ignore a `_client_*` name that you do not know. New ones can appear.
 
@@ -869,7 +883,7 @@ restart. `409` `already_decided` when the question is already closed, for any re
 
 ## Rooms
 
-**Everything in this section is experimental.** The room API will change in M6-4 and
+**Everything in this section is experimental.** The room API will change in M6-5 and
 after. `chat.ts` uses it today.
 
 A room is a container on one repository. It holds a list of participants. Each
@@ -878,8 +892,10 @@ participant has its own git branch and checkout. Today:
 
 - A participant always runs in `auto` mode, so it never asks a permission. M6-5 adds
   the other modes.
-- A message goes only to the participant with the `orchestrator` role. M6-4 adds a route
-  for each participant.
+- A message goes to one participant. A busy participant keeps up to 16 messages in a
+  queue and answers them in order. The queue is in memory: a daemon restart loses it.
+- A turn is never cut by a clock. A quiet turn gets `_client_stall_warning`, and only a
+  cancel ends it.
 
 ### `POST /rooms`
 
@@ -963,7 +979,9 @@ checkout; then `worktree` is `cwd` itself.
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
 bad `title`, a bad or missing harness, a bad `name`, `role`, `mode` or `settings`, or an
 unknown agent field; `409` `name_taken` or `orchestrator_exists` when two agents in the
-list clash; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when the
+list clash; `400` `invalid_config` when the repository's `.kapelle/config.json` is not
+valid, because the room reads its watchdog limits from it; `400` `invalid_request` for a
+bad `base`; `503` `shutting_down` when the
 daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example its
 binary is not installed).
 
@@ -999,23 +1017,21 @@ is one call.
 
 ### `POST /rooms/:id/messages`
 
-The message goes to the participant with the `orchestrator` role. M6-4 adds a route for
-each participant.
+The message goes to the participant with the `orchestrator` role. Everything else is as
+for [`POST /rooms/:id/agents/:agentId/messages`](#post-roomsidagentsagentidmessages).
 
 **Request:** `{ "text": "What does this repo do?" }`
 
-**Reply `202`:** `{ "seq": 41 }`. The answer arrives on the room's stream. The turn is over
-at the first `_client_turn_ended` with a `seq` above 41.
+**Reply `202`:** `{ "seq": 41, "queued": 0 }`, as below.
 
-**Refusals:** `404` `room_not_found` for an unknown room. `400` `invalid_request` for
-empty text. `409` `room_dismissed` for a dismissed room. `409` `no_orchestrator` when no
-participant has that role, which includes an empty room. `409` `room_busy` while the
-orchestrator answers, and `409` `agent_exited` after its harness exited. Send one message
-at a time.
+**Refusals:** as below, and `409` `no_orchestrator` when no participant has that role,
+which includes an empty room.
 
 ### `GET /rooms/:id/events`
 
-The room's event stream. Same format as a run's. `agent` is the harness name.
+The room's event stream: one log and one `seq` for the whole room. Same format as a run's,
+but each line names `roomId` and `participantId` in place of `agent`. See
+[Format](#format).
 
 **Refusals:** `404` `room_not_found` for an unknown room, `404` `no_event_log` for one
 with no event log; `400` `invalid_request` for a bad `Last-Event-ID`.
@@ -1086,6 +1102,55 @@ is free again.
 **Reply `200`:** the room, without that participant. **Refusals:** `404`
 `room_not_found` or `participant_not_found`; `409` `room_dismissed`.
 
+### `POST /rooms/:id/agents/:agentId/messages`
+
+One message to one participant. The daemon never reads the text. A client turns a leading
+`@name` into the participant id itself: see [Addressing](#addressing).
+
+**Request:** `{ "text": "Review the login change." }`
+
+**Reply `202`:** `{ "seq": 41, "queued": 1 }`. The message is on the room's log.
+
+- `seq` is the log's size before the message.
+- `queued` is how many of this participant's turns come before this message, the live
+  one included. `0` means its turn started at once, with `_client_user_message`.
+  Otherwise the log has `_client_message_queued` now, and `_client_user_message` when
+  its turn starts.
+- The answer is over at this participant's `queued + 1`th `_client_turn_ended` with a
+  `seq` above `seq`.
+
+A participant keeps at most 16 messages waiting behind its live turn. They are in memory
+only: a daemon restart loses them.
+
+**Refusals:** `404` `room_not_found` or `participant_not_found`. `400` `invalid_request`
+for empty text. `409` `room_dismissed` for a dismissed room. `409` `agent_exited` after
+the participant's harness exited. `429` `queue_full` when 16 messages already wait.
+
+### `GET /rooms/:id/agents/:agentId/events`
+
+One participant's view of the room: the room's stream with only the lines whose
+`participantId` is this one. `seq` and `Last-Event-ID` are the room's, so the numbers have
+gaps. The stream ends when the room's log closes.
+
+A removed participant has no stream: this route answers `404` for it. Its lines stay in
+[`GET /rooms/:id/events`](#get-roomsidevents); filter them there by `participantId`.
+
+**Refusals:** as for [`GET /rooms/:id/events`](#get-roomsidevents), and `404`
+`participant_not_found`.
+
+### `POST /rooms/:id/agents/:agentId/turns/current/cancel`
+
+Cancels the participant's live turn. First it drops the participant's queue; if it held any
+messages, the log gets `_client_queue_cleared`. Then it asks the harness to stop. The
+session stays, so the participant remembers the turn, and the room stays `active`. To
+replace a message, cancel, then send the new one.
+
+**Reply `202`:** the participant. The turn ends later, on the stream, with
+`_client_turn_ended`.
+
+**Refusals:** `404` `room_not_found` or `participant_not_found`; `409` `room_dismissed`;
+`409` `no_turn` when the participant has no live turn.
+
 ### Words for the room lifecycle
 
 These words are fixed now, so every client uses the same ones. They describe the whole
@@ -1135,7 +1200,7 @@ changing a participant to that role is refused with `409` `orchestrator_exists` 
 another one exists. More roles may come later, so a client shows a role it does not know
 as plain text.
 
-### Addressing (planned)
+### Addressing
 
 Every message has exactly one target participant. A client sends to
 `POST /rooms/:id/agents/:agentId/messages`, and a per-participant stream is the room's
@@ -1165,8 +1230,7 @@ the same rules, so the TUI and piped `chat.ts` behave the same:
 - The client **removes the mention**, its end mark and the whitespace after it,
   newlines included. The rest is the text it sends, so it is what the agent gets and
   what `_client_user_message` records. A replaying client draws that text and names the
-  target from the log line's `participantId`, which M6-4 adds to every room log line
-  beside `seq` and `agent`.
+  target from the log line's `participantId`.
 - A mention with nothing after it (`@alice`) is a client-side error **at submit**. The
   daemon would refuse the empty text with `400` `invalid_request`. While the person
   types, the composer only shows the resolved target, so a thread that opens with its

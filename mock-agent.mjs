@@ -33,6 +33,7 @@ const SCENARIOS = {
     "like stall, but ignores SIGTERM and stays alive after its stdin closes",
   repeat: "the same tool title on a loop, then ends the turn itself",
   remember: "answers each turn with the previous turn's prompt, per session",
+  slow: "like remember, but answers after SLOW_MS; a cancel ends the turn at once",
 };
 
 const at = process.argv.indexOf("--scenario");
@@ -155,6 +156,10 @@ const REPEAT_GAP_MS = 150;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** How long a `slow` turn lasts: long enough that a test's next messages
+ *  reach the room while it runs, so they queue (M6-4). */
+const SLOW_MS = 1000;
+
 /** The prompt `stall` never answered, kept so `session/cancel` can end it.
  *  M0-4 measured every real harness ending its turn within 64 ms of a cancel,
  *  so answering is the realistic half; a harness that ignores the cancel is
@@ -253,10 +258,17 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // A second turn on one session, after the first ended. The answer carries
     // the previous turn's prompt, so a test can tell a session that kept its
     // context from a client that silently opened a new one.
-    if (scenario === "remember") {
+    if (scenario === "remember" || scenario === "slow") {
       const text = msg.params.prompt?.[0]?.text ?? "";
       const previous = lastPrompt.get(sid) ?? "(none)";
       lastPrompt.set(sid, text);
+      if (scenario === "slow") {
+        // Kept where `session/cancel` finds it, which answers `cancelled`.
+        stalledPromptId = msg.id;
+        await sleep(SLOW_MS);
+        if (stalledPromptId !== msg.id) return;
+        stalledPromptId = null;
+      }
       update(sid, {
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: `previous: ${previous}` },

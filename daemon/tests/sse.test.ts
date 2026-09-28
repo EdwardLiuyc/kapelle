@@ -33,7 +33,7 @@ async function serve(t: TestContext, pingMs: number) {
     served.res = res;
     const gone = new AbortController();
     res.on("close", () => gone.abort());
-    void streamLog(log, req, res, gone.signal, pingMs);
+    void streamLog(log, req, res, gone.signal, { pingMs });
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
   t.after(async () => {
