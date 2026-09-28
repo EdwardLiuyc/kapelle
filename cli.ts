@@ -148,6 +148,9 @@ const promptText = positional.join(" ").trim();
 // the arg parsing in step. A verb since M2-9 (#39), like `merge` and `attach`.
 const runFilePath = flag("file");
 
+/** The agent a one-prompt run starts when neither --agent nor --cmd names one. */
+const DEFAULT_AGENT = "pi";
+
 if ((!promptText && !runFilePath) || has("help")) {
   console.log(`
 kapelle — a minimal Agent Client Protocol client
@@ -166,7 +169,7 @@ kapelle — a minimal Agent Client Protocol client
   kapelle daemon add <path>          adds a repository to the running daemon
 
 Options:
-  --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: pi)
+  --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: ${DEFAULT_AGENT})
   --cmd "<cmd>"    custom agent command, e.g. --cmd "opencode acp"
   --cwd <dir>      workspace root (default: current directory)
   --mode <mode>    ask | safe | auto      (default: the agent's own)
@@ -274,7 +277,9 @@ if (positional[0] === "daemon" && positional[1] === "start") {
   );
   process.exitCode = 1;
 } else {
-  const spec = orExit(() => resolveAgent(flag("agent", "pi"), flag("cmd")));
+  const spec = orExit(() =>
+    resolveAgent(flag("agent", DEFAULT_AGENT), flag("cmd")),
+  );
 
   // `task > run > harness > default`: cli.ts is one task, so `--mode` is the run
   // layer and the registry entry is the harness layer. An unknown mode, or one
