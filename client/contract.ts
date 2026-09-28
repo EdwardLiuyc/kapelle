@@ -92,6 +92,9 @@ export type ErrorCode =
   | "room_dismissed"
   | "agent_exited"
   | "no_orchestrator"
+  | "orchestrator_exists"
+  | "name_taken"
+  | "participant_not_found"
   | "idempotency_conflict"
   | "idempotency_in_progress"
   | "shutting_down"
@@ -253,7 +256,14 @@ export type ParticipantRole =
   | "tester"
   | "architect";
 
-/** One participant in full, from `GET /rooms/:id`. Experimental. */
+/** A participant's settings (R15, amended 2026-09-28): the run-file `Task`
+ *  fields that act in a room today. Experimental. @public */
+export interface ParticipantSettings {
+  allowReadOutsideRoot: boolean;
+}
+
+/** One participant in full, from `GET /rooms/:id` and the
+ *  `/rooms/:id/agents` routes. Experimental. */
 export interface ParticipantDto {
   /** Opaque; a rename never moves it. */
   id: string;
@@ -262,6 +272,7 @@ export interface ParticipantDto {
   /** The harness that runs it. */
   harness: string;
   mode: "auto";
+  settings: ParticipantSettings;
   /** Where the harness runs: its own checkout, or the cwd itself when
    *  the cwd cannot carry worktrees. */
   worktree: string;

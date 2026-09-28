@@ -1,9 +1,11 @@
 /**
- * Room runtime tests — story M6-6a, issue #150.
+ * Room runtime tests — stories M6-6a (#150) and M6-3 (#147).
  *
  * Drives `core/room.ts` directly, with no daemon and no route: each
  * participant owns a checkout and a branch, turns run in parallel, a base
- * may be another participant's branch, and a dismiss keeps the work.
+ * may be another participant's branch, and a dismiss keeps the work. The
+ * roster changes after the room opens: names stay unique, one orchestrator
+ * at most, and a remove leaves the others alone.
  * `mock-agent.mjs`'s default turn writes `ACP_TEST.md` through the client,
  * which is the file each test looks for.
  */
@@ -23,7 +25,13 @@ import {
 } from "../../integration/helpers.ts";
 import { createEventBus } from "../events.ts";
 import { newRoomId } from "../ids.ts";
-import { openRoom, type Participant, type Room, roomAgents } from "../room.ts";
+import {
+  openRoom,
+  type Participant,
+  type Room,
+  roomAgent,
+  roomAgents,
+} from "../room.ts";
 import { stateDirFor } from "../runtime.ts";
 import { changedPaths, openWorktrees } from "../worktree.ts";
 
@@ -34,10 +42,8 @@ const git = async (cwd: string, ...args: string[]) =>
 isolateStateHome();
 
 /** One checked agent request running the mock, named `name`. */
-const mock = (name: string) =>
-  roomAgents([{ cmd: `node ${MOCK_AGENT}`, name }])[0] as NonNullable<
-    ReturnType<typeof roomAgents>[number]
-  >;
+const mock = (name: string, fields: Record<string, unknown> = {}) =>
+  roomAgent({ cmd: `node ${MOCK_AGENT}`, name, ...fields });
 
 /** A room in `cwd` with `alice` as its starter, dismissed after the test. */
 async function roomWithAlice(
@@ -107,7 +113,7 @@ test("a participant given another's branch as its base starts from that branch's
   const { room, alice } = await roomWithAlice(t, repo);
   await commitIn(alice, "alice.txt");
 
-  const bob = await room.add(mock("bob"), alice.branch);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
 
   assert.equal(bob.baseSha, await git(repo, "rev-parse", `${alice.branch}`));
   assert.ok(existsSync(join(bob.worktree, "alice.txt")));
@@ -133,7 +139,10 @@ test("a failed add leaves no checkout or branch, and the room keeps working", as
   const repo = await gitRepo(t);
   const { room, alice, roomId } = await roomWithAlice(t, repo);
 
-  await assert.rejects(room.add(mock("bob"), "no-such-ref"), /no-such-ref/);
+  await assert.rejects(
+    room.add(mock("bob", { base: "no-such-ref" })),
+    /no-such-ref/,
+  );
   const dead = roomAgents([{ cmd: "false", name: "carol" }])[0];
   await assert.rejects(room.add(dead as ReturnType<typeof mock>));
 
@@ -183,7 +192,10 @@ test("failed adds whose harnesses wrote into their checkouts keep them, and each
 
 test("a base is refused in a folder that is not a repository", async (t) => {
   const { room } = await roomWithAlice(t, await tempDir(t));
-  await assert.rejects(room.add(mock("bob"), "main"), /git repository/);
+  await assert.rejects(
+    room.add(mock("bob", { base: "main" })),
+    /git repository/,
+  );
 });
 
 test("a participant cannot be added to a dismissed room", async (t) => {
@@ -283,4 +295,121 @@ test("each participant writes its own stderr log", async (t) => {
   const logs = join(stateDirFor(repo), "rooms", roomId);
   assert.ok(existsSync(join(logs, `${alice.id}.stderr.log`)));
   assert.ok(existsSync(join(logs, `${bob.id}.stderr.log`)));
+});
+
+const STALL = `node ${MOCK_AGENT} --scenario stall`;
+
+test("a name is unique under ASCII case folding, at add, at rename and while an add is in flight", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+
+  await assert.rejects(room.add(mock("ALICE")), { code: "name_taken" });
+  // An add still starting holds its name.
+  const bob = room.add(mock("bob"));
+  await assert.rejects(room.add(mock("Bob")), { code: "name_taken" });
+  const bobP = await bob;
+  assert.throws(() => room.update(bobP.id, { name: "Alice" }), {
+    code: "name_taken",
+  });
+  // Its own name in another case is not a clash.
+  assert.equal(room.update(alice.id, { name: "Alice" }).name, "Alice");
+  assert.equal(room.participants.length, 2);
+});
+
+test("one orchestrator at most, at add and at a role change, and a null role clears it", async (t) => {
+  const repo = await gitRepo(t);
+  const { room } = await roomWithAlice(t, repo);
+  await room.add(mock("carol", { role: "orchestrator" }));
+  await assert.rejects(room.add(mock("bob", { role: "orchestrator" })), {
+    code: "orchestrator_exists",
+  });
+  const bob = await room.add(mock("bob", { role: "tester" }));
+  assert.throws(() => room.update(bob.id, { role: "orchestrator" }), {
+    code: "orchestrator_exists",
+  });
+
+  const carol = room.participants.find((p) => p.name === "carol");
+  room.update(carol?.id as string, { role: null });
+  assert.equal(carol?.role, undefined);
+  assert.equal(
+    room.update(bob.id, { role: "orchestrator" }).role,
+    "orchestrator",
+  );
+});
+
+test("a remove cancels a live turn, keeps the branch with work, and leaves the others alone", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { cmd: STALL }));
+  await commitIn(bob, "bob.txt");
+  const turn = bob.send("hang");
+  assert.equal(bob.status(), "busy");
+
+  await room.remove(bob.id);
+  await turn;
+
+  assert.deepEqual(
+    room.participants.map((p) => p.name),
+    ["alice"],
+  );
+  assert.ok(await branchExists(repo, bob.branch as string));
+  assert.ok(existsSync(bob.worktree), "the checkout is kept, as at dismiss");
+  await assert.rejects(room.remove(bob.id), { code: "participant_not_found" });
+  // Its name is free again, and alice still answers.
+  await room.add(mock("bob"));
+  await alice.send("still here");
+  assert.equal(alice.status(), "idle");
+});
+
+test("update and remove refuse a dismissed room", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  await room.dismiss();
+  assert.throws(() => room.update(alice.id, { name: "a" }), {
+    code: "room_dismissed",
+  });
+  await assert.rejects(room.remove(alice.id), { code: "room_dismissed" });
+});
+
+test("an unknown base is a refusal, not a failure", async (t) => {
+  const repo = await gitRepo(t);
+  const { room } = await roomWithAlice(t, repo);
+  await assert.rejects(room.add(mock("bob", { base: "no-such-ref" })), {
+    code: "invalid_request",
+  });
+});
+
+test("an agent request checks mode, settings and names in one list", () => {
+  const cmd = `node ${MOCK_AGENT}`;
+  assert.throws(() => roomAgent({ cmd, name: "a", mode: "safe" }), /M6-5/);
+  assert.throws(() => roomAgent({ cmd, name: "a", mode: "ask" }), /M6-5/);
+  assert.throws(() => roomAgent({ cmd, name: "a", mode: "yolo" }), /mode/);
+  assert.throws(
+    () => roomAgent({ cmd, name: "a", settings: { ttlMs: 5 } }),
+    /unknown setting "ttlMs"/,
+  );
+  assert.throws(
+    () => roomAgent({ cmd, name: "a", settings: { allowReadOutsideRoot: 1 } }),
+    /true or false/,
+  );
+  assert.deepEqual(
+    roomAgent({ cmd, name: "a", mode: "auto", settings: {} }).settings,
+    { allowReadOutsideRoot: false },
+  );
+  assert.throws(
+    () =>
+      roomAgents([
+        { cmd, name: "a" },
+        { cmd, name: "A" },
+      ]),
+    { code: "name_taken" },
+  );
+  assert.throws(
+    () =>
+      roomAgents([
+        { cmd, name: "a", role: "orchestrator" },
+        { cmd, name: "b", role: "orchestrator" },
+      ]),
+    { code: "orchestrator_exists" },
+  );
 });

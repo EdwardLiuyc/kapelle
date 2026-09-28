@@ -147,6 +147,10 @@ export async function stateDirRoot(
   return { root, isRepo: true };
 }
 
+/** A base ref that does not resolve to a commit: the caller's mistake, not
+ *  a failure of git. */
+export class UnknownRef extends Error {}
+
 /** One task's checkout, held from `acquire` to `release`. */
 interface Held {
   /** The checkout root — what `git worktree remove` is given. Not what the
@@ -279,7 +283,7 @@ export async function openWorktrees(
           `${baseRef}^{commit}`,
         ]);
         if (baseSha === null) {
-          throw new Error(
+          throw new UnknownRef(
             `base ref ${JSON.stringify(baseRef)} does not resolve to a commit ` +
               `in ${root}.`,
           );

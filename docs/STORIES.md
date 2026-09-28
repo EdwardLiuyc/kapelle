@@ -2391,6 +2391,11 @@ a second `orchestrator` is refused `409` `orchestrator_exists` at add and at a r
 removing one leaves the others untouched; two participants work in parallel without
 touching each other's files; and one added with the other's branch as `base` starts from
 that branch's head.
+**Amended 2026-09-28 (#147 pickup).** No purpose field: R15 is amended, and instructions
+are the first message. `settings` is `allowReadOutsideRoot` only. `mode` accepts only
+`auto`; M6-5 owns `ask` and `safe`. The HTTP proof of parallel turns moves the orchestrator
+role from a busy participant to another, because a message reaches only the orchestrator
+until M6-4.
 Decisions: R4, R9, R10, R12, R15, R18, R22, R33, R44. (R33 settled as (a).)
 
 **M6-4 · Routing, room timeline, participant streams and cancel-turn · M · needs M6-3**

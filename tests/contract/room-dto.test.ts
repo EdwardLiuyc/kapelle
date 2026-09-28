@@ -43,6 +43,7 @@ const PARTICIPANT_KEYS = new Set(
     role: 0,
     harness: 0,
     mode: 0,
+    settings: 0,
     worktree: 0,
     branch: 0,
     baseSha: 0,

@@ -58,6 +58,7 @@ import {
   CAPABILITIES,
   type ErrorReply,
   type MessageAccepted,
+  type ParticipantDto,
   type PendingDecision,
   type PermissionAnswered,
   type PermissionDecision,
@@ -82,7 +83,15 @@ import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
-import { openRoom, type Room, roomAgents } from "./core/room.ts";
+import {
+  AGENT_FIELDS,
+  openRoom,
+  participantChanges,
+  type Room,
+  RoomRefusal,
+  roomAgent,
+  roomAgents,
+} from "./core/room.ts";
 import { runRun } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
 import {
@@ -96,6 +105,7 @@ import { openWorktrees, stateDirRoot } from "./core/worktree.ts";
 import {
   type RoomState,
   type RunState,
+  toParticipantDto,
   toRoomDto,
   toRoomListEntry,
   toRunDto,
@@ -833,9 +843,23 @@ const rooms = new Map<
   { room: Room; state: RoomState; dismissed?: boolean }
 >();
 
+/** A room's own refusal as the daemon answers it, or undefined when `err`
+ *  is a failure rather than a refusal. */
+function roomRefused(err: unknown) {
+  if (!(err instanceof RoomRefusal)) return undefined;
+  const status =
+    err.code === "invalid_request"
+      ? 400
+      : err.code === "participant_not_found"
+        ? 404
+        : 409;
+  return refusal(status, err.code, err.message);
+}
+
 /**
- * `POST /rooms {cwd, title?, agents?: [{agent | cmd, name?, role?}]}` — a
- * room, empty or with one agent, kept until it is dismissed (M6-2). The
+ * `POST /rooms {cwd, title?, agents?: [agent]}` — a room, empty or with
+ * agents added in order, kept until it is dismissed (M6-2). An agent is what
+ * `POST /rooms/:id/agents` takes. The
  * refusals keep `POST /runs`'s order — not added (403), then a bad request
  * (400) — and the answer waits for every harness's session, so a harness
  * that cannot start is this request's error, not a dead participant (S13).
@@ -857,7 +881,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   try {
     agents = roomAgents(body.agents);
   } catch (err) {
-    throw refusal(400, "invalid_request", messageOf(err));
+    throw roomRefused(err) ?? refusal(400, "invalid_request", messageOf(err));
   }
 
   const id = newRoomId();
@@ -870,14 +894,15 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
 
   const bus = createEventBus();
   // ponytail: a room's `unitId` is the harness name, the bus's `agent`, not
-  // the participant id. One agent per room keeps it unambiguous; M6-4 puts
-  // the participant id on each event, and this then records it.
+  // the participant id. Two participants on one harness share it, which only
+  // blurs the sweep's notice line; M6-4 puts the participant id on each
+  // event, and this then records it.
   trackChildren(bus, "room", id);
   let room: Room;
   try {
     room = await openRoom({ roomId: id, cwd, agents, setup, bus });
   } catch (err) {
-    throw refusal(500, "room_open_failed", messageOf(err));
+    throw roomRefused(err) ?? refusal(500, "room_open_failed", messageOf(err));
   }
   // A shutdown that began while the harness was starting has already
   // dismissed every room it knew of; this one must not outlive the daemon.
@@ -897,6 +922,89 @@ function roomEntry(id: string) {
   const entry = rooms.get(id);
   if (!entry) throw refusal(404, "room_not_found", `no room ${id}`);
   return entry;
+}
+
+/**
+ * `POST /rooms/:id/agents {agent | cmd, name?, role?, mode?, base?,
+ * settings?}` — one more participant (M6-3). 201 once its harness has a
+ * session, as for `POST /rooms` (S13).
+ */
+async function postAgent(
+  id: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const entry = roomEntry(id);
+  const body = await readBody(req, AGENT_FIELDS);
+  let request: ReturnType<typeof roomAgent>;
+  try {
+    request = roomAgent(body);
+  } catch (err) {
+    throw refusal(400, "invalid_request", messageOf(err));
+  }
+  const shuttingDown = () =>
+    refusal(503, "shutting_down", "the daemon is shutting down");
+  if (stopping) throw shuttingDown();
+  let participant: Awaited<ReturnType<Room["add"]>>;
+  try {
+    participant = await entry.room.add(request);
+  } catch (err) {
+    // A shutdown dismisses the room under the add, which then reads as
+    // dismissed; the daemon's own reason is the true one.
+    if (stopping) throw shuttingDown();
+    throw roomRefused(err) ?? refusal(500, "room_open_failed", messageOf(err));
+  }
+  entry.state.updatedAt = new Date().toISOString();
+  send(res, 201, toParticipantDto(participant) satisfies ParticipantDto);
+}
+
+/** `PATCH /rooms/:id/agents/:agentId {name?, mode?, role?}` — the one route
+ *  that changes a participant (R10, R44). `role: null` clears the role. */
+async function patchAgent(
+  id: string,
+  agentId: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const entry = roomEntry(id);
+  const body = await readBody(req, ["name", "mode", "role"]);
+  let changes: ReturnType<typeof participantChanges>;
+  try {
+    changes = participantChanges(body);
+  } catch (err) {
+    throw refusal(400, "invalid_request", messageOf(err));
+  }
+  let participant: ReturnType<Room["update"]>;
+  try {
+    participant = entry.room.update(agentId, changes);
+  } catch (err) {
+    throw roomRefused(err) ?? err;
+  }
+  entry.state.updatedAt = new Date().toISOString();
+  send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
+}
+
+/** `DELETE /rooms/:id/agents/:agentId` — cancels the participant's turn,
+ *  stops its harness and keeps its work, as a dismiss does (R37). Answers
+ *  the room, without it. */
+async function deleteAgent(id: string, agentId: string, res: ServerResponse) {
+  const entry = roomEntry(id);
+  try {
+    await entry.room.remove(agentId);
+  } catch (err) {
+    throw roomRefused(err) ?? err;
+  }
+  entry.state.updatedAt = new Date().toISOString();
+  send(res, 200, toRoomDto(entry.state, entry.room) satisfies RoomDto);
+}
+
+/** The participant `agentId` names in room `id`, or a 404. */
+function participantEntry(id: string, agentId: string) {
+  const found = roomEntry(id).room.participants.find((p) => p.id === agentId);
+  if (!found) {
+    throw refusal(404, "participant_not_found", `no participant ${agentId}`);
+  }
+  return found;
 }
 
 /**
@@ -1018,9 +1126,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const events = /^\/runs\/([^/]+)\/events$/.exec(pathname);
   const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
   const room = /^\/rooms\/([^/]+)$/.exec(pathname);
-  const roomSub = /^\/rooms\/([^/]+)\/(events|messages|dismiss)$/.exec(
+  const roomSub = /^\/rooms\/([^/]+)\/(events|messages|dismiss|agents)$/.exec(
     pathname,
   );
+  const agentOne = /^\/rooms\/([^/]+)\/agents\/([^/]+)$/.exec(pathname);
 
   if (req.method === "GET" && pathname === "/version") {
     send(res, 200, {
@@ -1054,6 +1163,23 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     send(res, 200, toRoomDto(state, live) satisfies RoomDto);
   } else if (req.method === "POST" && roomSub?.[2] === "messages") {
     await postMessage(roomSub[1] as string, req, res);
+  } else if (req.method === "POST" && roomSub?.[2] === "agents") {
+    await postAgent(roomSub[1] as string, req, res);
+  } else if (req.method === "GET" && roomSub?.[2] === "agents") {
+    send(
+      res,
+      200,
+      roomEntry(roomSub[1] as string).room.participants.map(
+        toParticipantDto,
+      ) satisfies ParticipantDto[],
+    );
+  } else if (req.method === "GET" && agentOne) {
+    const p = participantEntry(agentOne[1] as string, agentOne[2] as string);
+    send(res, 200, toParticipantDto(p) satisfies ParticipantDto);
+  } else if (req.method === "PATCH" && agentOne) {
+    await patchAgent(agentOne[1] as string, agentOne[2] as string, req, res);
+  } else if (req.method === "DELETE" && agentOne) {
+    await deleteAgent(agentOne[1] as string, agentOne[2] as string, res);
   } else if (req.method === "POST" && roomSub?.[2] === "dismiss") {
     await dismissRoom(roomSub[1] as string, res);
   } else if (req.method === "GET" && roomSub?.[2] === "events") {
