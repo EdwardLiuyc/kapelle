@@ -25,13 +25,18 @@ import { refusal } from "./http.ts";
 const PING_MS = 15_000;
 
 /** SSE over one event log: replay after `Last-Event-ID`, then the live tail,
- *  ending when the log closes. Shared by runs and rooms. */
+ *  ending when the log closes. Shared by runs and rooms. `keep` skips a line
+ *  it answers false for, which is how one participant's view of a room log
+ *  is served (M6-4); `seq` stays the log's. */
 export async function streamLog(
   log: EventLog,
   req: IncomingMessage,
   res: ServerResponse,
   signal: AbortSignal,
-  pingMs = PING_MS,
+  {
+    pingMs = PING_MS,
+    keep,
+  }: { pingMs?: number; keep?: (line: string) => boolean } = {},
 ) {
   const header = req.headers["last-event-id"];
   const after = header === undefined ? 0 : Number(header);
@@ -57,8 +62,9 @@ export async function streamLog(
   try {
     await log.follow(
       after,
-      (seq, line) =>
-        res.write(`id: ${seq}\ndata: ${line}\n\n`)
+      (seq, line) => {
+        if (keep && !keep(line)) return undefined;
+        return res.write(`id: ${seq}\ndata: ${line}\n\n`)
           ? undefined
           : // A socket error ends the wait too; `signal` then stops the reader
             // on `close`. A rejection here would be unhandled once `follow`
@@ -66,7 +72,8 @@ export async function streamLog(
             once(res, "drain").then(
               () => {},
               () => {},
-            ),
+            );
+      },
       signal,
     );
   } catch {

@@ -67,10 +67,11 @@ export interface VersionReply {
 
 /**
  * What went wrong, one code per situation a client acts on differently (C7,
- * M5-3) — not one per status: `room_busy` means send again later, while
+ * M5-3) — not one per status: `queue_full` means send again later, while
  * `already_decided` and `run_ended` mean stop. Codes are only ever added,
  * except a room's while `/rooms` is Experimental: M6-2 split `room_closed`
- * into `room_dismissed` and `agent_exited`.
+ * into `room_dismissed` and `agent_exited`, and M6-4 replaced `room_busy`
+ * with a queue and `queue_full`.
  */
 export type ErrorCode =
   | "host_not_allowed"
@@ -88,7 +89,8 @@ export type ErrorCode =
   | "no_event_log"
   | "run_ended"
   | "already_decided"
-  | "room_busy"
+  | "queue_full"
+  | "no_turn"
   | "room_dismissed"
   | "agent_exited"
   | "no_orchestrator"
@@ -315,16 +317,21 @@ export interface RoomListEntry {
   }[];
 }
 
-/** `POST /rooms/:id/messages`: the log's size before the message. The turn
- *  is over at the first `_client_turn_ended` with a `seq` above this one. */
+/** `POST /rooms/:id/messages` and `POST /rooms/:id/agents/:agentId/messages`.
+ *  `seq` is the log's size before the message. `queued` is how many of the
+ *  participant's turns come first, the live one included: 0 means it
+ *  started at once. Its turn is over at the `queued + 1`th
+ *  `_client_turn_ended` of that participant with a `seq` above `seq`.
+ *  Experimental. */
 export interface MessageAccepted {
   seq: number;
+  queued: number;
 }
 
 /**
- * The JSON in one SSE `data:` line. `agent` is the task id for a run, and the
- * harness name for a room. `update` is the raw ACP `session/update` value or
- * one of this client's `_client_*` events.
+ * The JSON in one SSE `data:` line of a run. `agent` is the task id.
+ * `update` is the raw ACP `session/update` value or one of this client's
+ * `_client_*` events.
  *
  * @public — read by clients, never built by the daemon, which writes the
  * line as text.
@@ -335,5 +342,20 @@ export interface EventLine {
   at?: string;
   /** `""` for the run's own `_client_run_finished`, which is no task's. */
   agent: string;
+  update: AgentEvent;
+}
+
+/**
+ * The JSON in one SSE `data:` line of a room (S10). A room line has no
+ * `agent`: `participantId` is the opaque id, and the name is the roster's,
+ * which a rename changes. Experimental.
+ *
+ * @public — read by clients, never built by the daemon.
+ */
+export interface RoomEventLine {
+  seq: number;
+  at: string;
+  roomId: string;
+  participantId: string;
   update: AgentEvent;
 }

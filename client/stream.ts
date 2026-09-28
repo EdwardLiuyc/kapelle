@@ -56,10 +56,11 @@ export interface FollowOptions {
   silenceMs?: number;
 }
 
-export async function* followEvents(
+/** `T` is `RoomEventLine` for a room's stream; the reader needs only `seq`. */
+export async function* followEvents<T extends { seq: number } = EventLine>(
   connect: Connect,
   { onConnect, onRetry, silenceMs = SILENCE_MS }: FollowOptions = {},
-): AsyncGenerator<EventLine> {
+): AsyncGenerator<T> {
   let last = 0;
   let delay = FIRST_DELAY_MS;
   for (;;) {
@@ -82,7 +83,7 @@ export async function* followEvents(
         delay = FIRST_DELAY_MS;
         arm();
       };
-      for await (const event of sseEvents(res.body, heard, cut.signal)) {
+      for await (const event of sseEvents<T>(res.body, heard, cut.signal)) {
         if (event.seq <= last) continue;
         last = event.seq;
         yield event;
@@ -104,11 +105,11 @@ export async function* followEvents(
  * runs for every chunk, pings included. A body cut before its end, or an
  * abort of `signal`, throws.
  */
-async function* sseEvents(
+async function* sseEvents<T>(
   body: ReadableStream<Uint8Array>,
   onBytes: () => void = () => {},
   signal?: AbortSignal,
-): AsyncGenerator<EventLine> {
+): AsyncGenerator<T> {
   let buffered = "";
   // `signal` errors the pipe itself, so a quiet body ends even when the
   // fetch that made it did not get the signal.

@@ -36,12 +36,18 @@
  * **`at` is stamped here** (M5-5, #137, decision C6): the ISO time the line
  * was appended, on every log — a room's too — so a reader can order turns
  * across logs. A line written before M5-5 has none.
+ *
+ * **A room's line names its room and participant** (M6-4, S10):
+ * `{seq, at, roomId, participantId, update}`, one log and one `seq` for the
+ * whole room. No `agent`: a harness name is not unique in a room, and a
+ * display name changes on a rename, while the id never does.
  */
 
 import { createWriteStream } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import { finished } from "node:stream/promises";
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
+import type { AgentEvent } from "../protocol/types.ts";
 
 const CHUNK_BYTES = 64 * 1024;
 const NEWLINE = 0x0a;
@@ -51,9 +57,16 @@ const NEWLINE = 0x0a;
 type Send = (seq: number, line: string) => Promise<void> | undefined;
 type Bell = (seq: number, line: string) => void;
 
+/** One line of a room's log, before `seq` and `at` (S10). */
+interface RoomEventEnvelope {
+  roomId: string;
+  participantId: string;
+  update: AgentEvent;
+}
+
 export interface EventLog {
   /** The bus listener. Ignored once the log is closed or has failed. */
-  append: (event: AgentEventEnvelope) => void;
+  append: (event: AgentEventEnvelope | RoomEventEnvelope) => void;
   /**
    * Sends every committed line after `after`, then each new one as it
    * commits, until the log closes or `signal` aborts. `line` has no newline.

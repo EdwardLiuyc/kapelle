@@ -2410,6 +2410,13 @@ text: the target is the nested route, and `@name` resolution lives in `client/` 
 *Done when* one participant's thread and the room timeline replay from one log, a second
 message to a busy participant is queued and answered in order, and the seventeenth is
 refused with `429`.
+**Amended 2026-09-28 (#148 pickup).** A room line is `{seq, at, roomId, participantId,
+update}` with no `agent`: a harness name is not unique in a room, and a rename would make
+a name stale. A queued message is two events, `_client_message_queued` on arrival and
+`_client_user_message` when its turn starts, so a turn stays one span and a queue lost at
+restart reads as never sent. A cancel drops the queue first and logs
+`_client_queue_cleared {count}`; removing a participant and a harness exit do the same.
+The bound is 16 waiting behind the live turn. No turn id: S12's `turn` is M6-5's.
 Decisions: R6, R7, R8, R13, R32, R34, R38, R39, R41, R43, S5, S10, S11.
 
 **M6-5 · Per-participant modes and permissions · M · needs M6-4, M5-4**
