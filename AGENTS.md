@@ -31,6 +31,13 @@ It has two runtime dependencies, both for presentation only: `marked`
 (`core/markdown.ts`) and `@earendil-works/pi-tui` (the `chat.ts` screen). Both are
 pinned exactly, and an npm `overrides` entry keeps pi-tui on our `marked`.
 
+**The rule for a runtime dependency** (M1c-7, 2026-09-09): it is allowed only in
+presentation, after the event bus, where its worst failure is cosmetic. It must not
+change a permission decision, the path guard, the policy, mode negotiation, or anything
+that reaches a subprocess. Pin it exactly, and give it a fallback so a bad release costs
+the screen, never the run: `core/markdown.ts` returns the raw text if `marked` throws,
+and `chat.ts` leaves pi-tui's screen before it exits on a throw.
+
 **This code is the client. The coding harness is the agent.** We spawn the harness as a
 subprocess, own the workspace, serve its filesystem requests and decide its permissions.
 Harnesses (opencode, claude, copilot, pi, …) log in by themselves. This client never
