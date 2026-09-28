@@ -1,10 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="kapelle">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800" role="img" aria-label="kapelle">
   <title>kapelle</title>
-  <rect width="512" height="512" rx="96" fill="#0D1117"/>
-  <polygon points="256,66 420.54,161 420.54,351 256,446 91.46,351 91.46,161"
-           fill="none" stroke="#4C5A6E" stroke-width="34" stroke-linejoin="round"/>
-  <circle cx="256" cy="138" r="42" fill="#5CC8FF"/>
-  <polygon points="153.81,273 117.4,336 190.2,336" fill="#C792EA" stroke="#C792EA" stroke-width="14" stroke-linejoin="round"/>
-  <rect x="323.19" y="280" width="70" height="70" rx="18" fill="#FFB454"/>
-  <circle cx="256" cy="256" r="42" fill="#F2F5F9"/>
+  <!-- icon.svg on a dark tile, for small sizes where the background is not known. -->
+  <rect width="800" height="800" rx="150" fill="#0D1117"/>
+  <path fill="#5CC8FF" d="M165.29 165.29H282.65V634.72H165.29Z"/>
+  <path fill="#C792EA" d="M400 165.29H634.72V282.65H517.36V400H282.65V282.65H400Z"/>
+  <path fill="#FFB454" d="M282.65 400H517.36V517.36H634.72V634.72H400V517.36H282.65Z"/>
 </svg>

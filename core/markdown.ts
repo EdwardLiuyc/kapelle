@@ -13,7 +13,7 @@
  * bought with a config exception is worse than the line M4 will write.
  *
  * **`marked` 18 is the project's first runtime dependency** (exception
- * ratified 2026-09-09, see `README.md`): presentation only, downstream of the
+ * ratified 2026-09-09, see `AGENTS.md`): presentation only, downstream of the
  * bus, pinned exactly, and `toAnsi` falls back to the raw source on any throw,
  * so a bad release costs the screen and never the run.
  *

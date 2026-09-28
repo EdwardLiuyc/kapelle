@@ -734,6 +734,18 @@ test("a spawn failure is written to the per-task log, not just printed", async (
   );
 });
 
+test("with no --agent and no --cmd, one prompt starts pi", async (t) => {
+  // Every other test names its agent, so this is the one test that pins the
+  // default. An empty PATH makes the spawn fail: the error names the binary
+  // we tried, and no real harness starts.
+  const cwd = await tempDir(t);
+  const r = await spawnCli(t, ["hi", "--cwd", cwd], "cli.ts", {
+    PATH: cwd,
+  }).done;
+
+  assert.match(r.stderr, /failed to spawn "pi-acp"/);
+});
+
 test("a missing --cwd is not created by the stderr log directory", async (t) => {
   // M1b-7's log directory is `mkdir -p`-shaped, which must not turn a typo'd
   // workspace root into an empty real one. Before the log landed, each task
