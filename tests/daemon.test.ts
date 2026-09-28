@@ -4374,3 +4374,20 @@ for (const [how, keys] of [
     assert.match(out(), /left room \S+; rejoin with/);
   });
 }
+
+test("chat.ts attributes an answer to the roster name, not the harness label", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const c = spawnCli(
+    t,
+    ["new", "--cmd", REMEMBER, "--name", "alice", "--cwd", cwd],
+    "chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  c.child.stdin.end("alpha\n/dismiss\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /alice: previous: \(none\)/);
+  assert.doesNotMatch(r.stdout, /mock-agent: previous/);
+});

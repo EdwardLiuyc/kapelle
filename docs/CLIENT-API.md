@@ -768,7 +768,7 @@ with ACP names.
 | `_client_message_queued` | `text` | A message reached a busy participant and waits. `_client_user_message` follows when its turn starts. |
 | `_client_user_message` | `text` | The participant's turn starts with this message. The line's `participantId` names who got it. |
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
-| `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, or its harness exited. |
+| `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 
 A turn is the span from `_client_user_message` to `_client_turn_ended` of one
 participant. A `_client_message_queued` with no `_client_user_message` after it was
@@ -1136,8 +1136,8 @@ gaps. The stream ends when the room's log closes.
 
 ### `POST /rooms/:id/agents/:agentId/turns/current/cancel`
 
-Cancels the participant's live turn. First it drops every message in the participant's
-queue, and the log gets `_client_queue_cleared`. Then it asks the harness to stop. The
+Cancels the participant's live turn. First it drops the participant's queue; if it held any
+messages, the log gets `_client_queue_cleared`. Then it asks the harness to stop. The
 session stays, so the participant remembers the turn, and the room stays `active`. To
 replace a message, cancel, then send the new one.
 

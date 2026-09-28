@@ -652,3 +652,22 @@ test("the watchdog warns about a silent turn and never cancels it (R38)", async 
   p.cancel();
   await turn;
 });
+
+test("removing a participant drops its queue and reports it", async (t) => {
+  const { room, p, of } = await roomOn(t, "stall");
+  const live = p.send("live");
+  const waiting = [p.send("a"), p.send("b")];
+  assert.equal(p.queued, 2);
+
+  await room.remove(p.id);
+  assert.deepEqual(
+    of("_client_queue_cleared").map((e) => e.update),
+    [{ sessionUpdate: "_client_queue_cleared", count: 2 }],
+  );
+  await live;
+  await Promise.all(waiting);
+  assert.throws(
+    () => p.send("after"),
+    (err) => err instanceof RoomRefusal && err.code === "agent_exited",
+  );
+});
