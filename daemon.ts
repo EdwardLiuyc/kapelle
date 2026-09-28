@@ -892,9 +892,14 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   // repository, `openWorktrees` throws for nothing a repository can be in.
   const setup = await openWorktrees(cwd, id);
   // The watchdog's warn limits, from the same layers as a run's (R38).
-  let limits: WatchdogLimits;
+  let limits: Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount">;
   try {
-    limits = { ...WATCHDOG_DEFAULTS, ...resolveRunDefaults(setup.root) };
+    const defaults = resolveRunDefaults(setup.root);
+    limits = {
+      stallIdleMs: defaults.stallIdleMs ?? WATCHDOG_DEFAULTS.stallIdleMs,
+      stallRepeatCount:
+        defaults.stallRepeatCount ?? WATCHDOG_DEFAULTS.stallRepeatCount,
+    };
   } catch (err) {
     throw refusal(400, "invalid_config", messageOf(err));
   }
