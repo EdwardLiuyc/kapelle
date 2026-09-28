@@ -42,7 +42,8 @@
  * replays when it attaches.
  *
  * ponytail: nothing caps the live harness count across runs and rooms (R40).
- * `runs + Σ(busy participants)` is unbounded, with the default mode `auto`.
+ * `runs + Σ(busy participants)` is unbounded, with the default mode `auto`,
+ * and so is the `agents` list of one `POST /rooms`, which starts them in turn.
  * A daemon-wide cap belongs in `daemon.ts`, where both spawners meet; add one
  * when a machine actually runs out of memory or file handles, not before.
  */
@@ -63,7 +64,7 @@ import type { EventBus } from "./events.ts";
 import { newParticipantId } from "./ids.ts";
 import { policyFor, resolvePolicy } from "./policy.ts";
 import { stateDirFor } from "./runtime.ts";
-import { UnknownRef, type WorktreeSetup } from "./worktree.ts";
+import { BadBase, type WorktreeSetup } from "./worktree.ts";
 
 /** A refusal the daemon answers with its own error code. Any other throw
  *  from `add`, `update` or `remove` is a failure, not a refusal. */
@@ -215,7 +216,7 @@ function roomHarness(agent: unknown, cmd: unknown): ResolvedAgent {
 
 /** The fields one agent takes, at `POST /rooms` and at
  *  `POST /rooms/:id/agents`. */
-export const AGENT_FIELDS = [
+export const AGENT_FIELDS: readonly string[] = [
   "agent",
   "cmd",
   "name",
@@ -534,7 +535,7 @@ export async function openRoom({
       });
     } catch (err) {
       await rollback(id, worktree);
-      throw err instanceof UnknownRef
+      throw err instanceof BadBase
         ? new RoomRefusal("invalid_request", err.message)
         : err;
     }

@@ -473,3 +473,25 @@ test("allowReadOutsideRoot reaches the harness's file service", async (t) => {
   await open.send("read");
   assert.match(said, /OUTCOME=allowed/);
 });
+
+test("a role change cannot take the orchestrator role from an add still in flight", async (t) => {
+  const { room, alice } = await roomWithAlice(t, await gitRepo(t));
+  const carol = room.add(mock("carol", { role: "orchestrator" }));
+  assert.throws(() => room.update(alice.id, { role: "orchestrator" }), {
+    code: "orchestrator_exists",
+  });
+  await carol;
+});
+
+test("a base that lacks the room's subdirectory is a refusal, not a failure", async (t) => {
+  const repo = await gitRepo(t);
+  await mkdir(join(repo, "app"));
+  await writeFile(join(repo, "app", "x.txt"), "x\n");
+  await git(repo, "add", "app");
+  await git(repo, "commit", "-m", "app");
+  const { room } = await roomWithAlice(t, join(repo, "app"));
+  await assert.rejects(room.add(mock("bob", { base: "HEAD~1" })), {
+    code: "invalid_request",
+    message: /app does not exist at HEAD~1/,
+  });
+});
