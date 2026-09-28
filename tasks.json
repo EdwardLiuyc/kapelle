@@ -1,6 +1,6 @@
 {
   "note": "A worked example: two independent tasks sharing one agent and one mode.",
-  "agent": "opencode",
+  "agent": "pi",
   "mode": "safe",
   "tasks": [
     {
