@@ -3559,12 +3559,34 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
     [[{ cmd: REMEMBER, role: "boss" }], /invalid role "boss"/],
     [[{ cmd: REMEMBER, mode: "ask" }], /comes with M6-5/],
     [[{ cmd: REMEMBER, turbo: true }], /unknown agent field "turbo"/],
+    [[{ cmd: REMEMBER, name: "c", base: "no-such-ref" }], /does not resolve/],
   ];
   for (const [agents, message] of refused) {
     const r = await api<RoomReply>(d, "POST", "/rooms", { cwd, agents });
     assert.equal(r.status, 400, JSON.stringify(agents));
     assert.equal(r.body.error.code, "invalid_request");
     assert.match(r.body.error.message, message);
+  }
+  const clashes: [unknown, string][] = [
+    [
+      [
+        { cmd: REMEMBER, name: "a" },
+        { cmd: REMEMBER, name: "A" },
+      ],
+      "name_taken",
+    ],
+    [
+      [
+        { cmd: REMEMBER, name: "a", role: "orchestrator" },
+        { cmd: REMEMBER, name: "b", role: "orchestrator" },
+      ],
+      "orchestrator_exists",
+    ],
+  ];
+  for (const [agents, code] of clashes) {
+    const r = await api<RoomReply>(d, "POST", "/rooms", { cwd, agents });
+    assert.equal(r.status, 409, JSON.stringify(agents));
+    assert.equal(r.body.error.code, code);
   }
   for (const title of [7, "", "  "]) {
     const r = await api<RoomReply>(d, "POST", "/rooms", { cwd, title });

@@ -269,7 +269,7 @@ request that is not valid HTTP gets `400`.
 | Code | Meaning |
 | --- | --- |
 | `200` | Done. |
-| `201` | Created (a room). |
+| `201` | Created (a room or a participant). |
 | `202` | Accepted. The work goes on after the reply. |
 | `400` | Your request is wrong. The message says what is wrong. |
 | `401` | Token missing or wrong. |
@@ -287,9 +287,11 @@ request that is not valid HTTP gets `400`.
 format, and whether its first request has answered, before the body. For a key that
 already started a run, the daemon reads the body, but does not check the run again,
 before it compares the digest: see
-[Sending a run again safely](#sending-a-run-again-safely). One route resolves a resource
-first: `POST /rooms/:id/messages` looks the room up, so an unknown room is
-`404 room_not_found` even when the body would be refused.
+[Sending a run again safely](#sending-a-run-again-safely). Some routes resolve a resource
+first: `POST /rooms/:id/messages`, `POST /rooms/:id/agents` and
+`PATCH /rooms/:id/agents/:agentId` look the room up, so an unknown room is
+`404 room_not_found` even when the body would be refused. `DELETE` carries no body, and
+the `GET` routes take none.
 
 ## Routes
 

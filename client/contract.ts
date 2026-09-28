@@ -291,8 +291,9 @@ export interface RoomDto {
   id: string;
   cwd: string;
   title?: string;
-  /** ISO 8601. `updatedAt` moves on a message and on dismiss. */
+  /** ISO 8601. */
   createdAt: string;
+  /** ISO 8601. `updatedAt` moves on a message, a dismiss, or a roster change. */
   updatedAt: string;
   status: RoomStatus;
   participants: ParticipantDto[];
