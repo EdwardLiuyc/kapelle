@@ -414,13 +414,15 @@ export interface ClientPermissionQueuedEvent extends Meta {
 }
 
 /** Why a queued decision closed (M5-4, #136): a client answered, nobody did
- *  in time, the run was cancelled, its task ended, or the run ended. */
+ *  in time, the run was cancelled, its task ended, or the run ended. A room
+ *  participant's mode left `ask` (M6-5): `auto` allows, `safe` denies. */
 export type PermissionReason =
   | "client"
   | "timeout"
   | "cancel"
   | "task_end"
-  | "run_end";
+  | "run_end"
+  | "mode_change";
 
 /** A queued decision closed (M5-4, #136). Same `id` as its
  *  `_client_permission_queued`, so every reader of the stream can match the
@@ -538,11 +540,12 @@ export interface ClientHarnessExitedEvent extends Meta {
  *  not only the harness's answers. It is logged when the turn starts, so a
  *  queued message is logged twice: `_client_message_queued` on arrival, and
  *  this when the harness gets it (M6-4). `turn` counts the participant's
- *  turns from 1; a queued decision names the same number (M6-5, S12). */
+ *  turns from 1; a queued decision names the same number (M6-5, S12). A room
+ *  logs it on every new line, but a line written before M6-5 has none. */
 export interface ClientUserMessageEvent extends Meta {
   sessionUpdate: "_client_user_message";
   text: string;
-  turn: number;
+  turn?: number;
 }
 
 /** A message reached a busy participant and waits in its queue (M6-4, R32).

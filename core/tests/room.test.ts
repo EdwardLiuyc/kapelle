@@ -767,6 +767,7 @@ test("a room sets the harness mode: safe's id, or ask's for ask and auto, never 
   assert.equal(p.mode, "auto");
   assert.deepEqual(sent(), ["id-safe"], "nothing is sent between turns");
   assert.ok(line("auto"), "the change posts the new mode's containment line");
+  assert.ok(!line("safe"), "and it replaces the old mode's line");
 
   await p.send("one");
   assert.deepEqual(sent(), ["id-safe", "id-ask"], "sent before the turn");
@@ -802,10 +803,12 @@ test("a harness with no mode ids gets none, and a line that says so once", async
   room.update(p.id, { mode: "safe" });
   await p.send("two");
   assert.equal(of("current_mode_update").length, 0);
-  const lines = p.notices.filter((n) =>
-    /safe mode was not negotiated/.test(n.text),
+  const lines = p.notices.filter((n) => /mode was not negotiated/.test(n.text));
+  assert.deepEqual(
+    lines.map((n) => n.text.match(/(\w+) mode was/)?.[1]),
+    ["safe"],
+    "one line, for the current mode",
   );
-  assert.equal(lines.length, 1, JSON.stringify(p.notices));
 });
 
 test("a mode above the harness's ceiling is refused, and nothing applies", async (t) => {
@@ -945,3 +948,55 @@ test("a safe participant's write is refused, and it reads nothing outside", asyn
   room.update(p.id, { mode: "auto" });
   assert.deepEqual(p.settings, { allowReadOutsideRoot: true });
 });
+
+test("a mode send that failed is sent again before the next turn", async (t) => {
+  const { p, of } = await modeRoom(
+    t,
+    { mode: "safe" },
+    { scenario: "mode-refused-once", spec: { measured: MEASURED } },
+  );
+  assert.equal(of("current_mode_update").length, 0, "the first send failed");
+  assert.ok(p.notices.some((n) => /refused, once/.test(n.text)));
+
+  await p.send("go");
+  assert.deepEqual(
+    of("current_mode_update").map(
+      (e) => (e.update as { currentModeId: string }).currentModeId,
+    ),
+    ["id-safe"],
+  );
+  assert.ok(
+    !p.notices.some((n) => /refused, once/.test(n.text)),
+    "the failure line is gone once the send worked",
+  );
+});
+
+for (const [to, allow] of [
+  ["auto", true],
+  ["safe", false],
+] as const) {
+  test(`a change from ask to ${to} closes the waiting decision as mode_change`, async (t) => {
+    const { room, p, of } = await modeRoom(t, { mode: "ask" });
+    const turn = p.send("go");
+    const { id } = await queued(of, 1);
+    room.update(p.id, { mode: to });
+    await turn;
+    assert.deepEqual(
+      of("_client_permission_answered").map((e) => e.update),
+      [
+        {
+          sessionUpdate: "_client_permission_answered",
+          id,
+          allow,
+          reason: "mode_change",
+        },
+      ],
+    );
+    assert.equal(
+      of("_client_permission_queued").length,
+      1,
+      "the rest of the turn asks nobody",
+    );
+    assert.equal(existsSync(join(p.worktree, "ACP_TEST.md")), allow);
+  });
+}

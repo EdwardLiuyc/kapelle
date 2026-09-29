@@ -23,9 +23,10 @@
  * **A room asks through the same queue** (M6-5, S12a). `roomPolicy` hands a
  * participant's turn a `Policy`, and its entries name the room, the
  * participant and the turn instead of a run and a task. A room closes an open
- * decision only through the turn's signal, so every room path that is not an
- * answer or the timeout reads `cancel`: cancel-turn, removal, a harness that
- * exits and a dismiss (decided 2026-09-28, #149).
+ * decision through the turn's signal, so a room path that is not an answer,
+ * the timeout or a mode change reads `cancel`: cancel-turn, removal, a harness
+ * that exits and a dismiss (decided 2026-09-28, #149). A mode that leaves
+ * `ask` answers what waits as `mode_change` (`answerParticipant`).
  *
  * The queue hands `runRun` a plain `Policy` through `RunOptions.askPolicy`,
  * so neither the pool nor `protocol/` knows it exists. It knows no HTTP
@@ -173,6 +174,24 @@ export function createPermissionQueue(timeoutMs: number) {
           decision.taskId === taskId
         ) {
           settle(false, "task_end");
+        }
+      }
+    },
+
+    /** Answers everything one room participant has open: its mode left
+     *  `ask`, so `auto` allows and `safe` denies (decided 2026-09-29, #194). */
+    answerParticipant(
+      roomId: string,
+      participantId: string,
+      allow: boolean,
+    ): void {
+      for (const { decision, settle } of [...pending.values()]) {
+        if (
+          "roomId" in decision &&
+          decision.roomId === roomId &&
+          decision.participantId === participantId
+        ) {
+          settle(allow, "mode_change");
         }
       }
     },

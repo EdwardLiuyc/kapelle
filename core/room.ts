@@ -616,7 +616,6 @@ export async function openRoom({
         info: worktrees?.info(id),
         bus,
         notices: () => [...roomNotices, ...own],
-        onNotice,
         stderrLog: eventLog ? join(logDir, `${id}.stderr.log`) : undefined,
         dismissed: () => dismissing !== undefined,
         watchdog,
@@ -744,7 +743,6 @@ async function startParticipant({
   info,
   bus,
   notices,
-  onNotice,
   stderrLog,
   dismissed,
   watchdog,
@@ -758,8 +756,9 @@ async function startParticipant({
   worktree: string;
   info: { branch: string; baseSha: string } | undefined;
   bus: EventBus;
+  /** The room's and the checkout's notices; the participant adds the lines
+   *  that depend on its mode. */
   notices: () => readonly RoomNotice[];
-  onNotice: Notify;
   stderrLog: string | undefined;
   dismissed: () => boolean;
   watchdog: Watchdog;
@@ -823,22 +822,25 @@ async function startParticipant({
     },
   });
 
-  // A notice the participant does not show yet. A mode that goes back and
-  // forth posts each of its lines once.
-  const once: Notify = (text, kind) => {
-    if (!notices().some((n) => n.text === text)) onNotice(text, kind);
-  };
+  // The lines that name the mode: `warningsFor`'s, and what the last mode
+  // send said. A mode change replaces them, so `notices` shows the current
+  // mode only (decided 2026-09-29, #194).
+  let modeLines: RoomNotice[] = [];
+  let modeSend: RoomNotice | undefined;
 
   // The harness's own mode: `safe`'s id, or `ask`'s for the other two. Sent
   // at session start, then before the first turn after a change that moves
-  // it, never during a turn. `sent` is what the harness was last told.
+  // it, never during a turn. `sent` is what the harness was last told. A
+  // send that failed is tried again before the next turn; a harness with no
+  // ids is told nothing, ever.
   let sent: "safe" | "ask" | undefined;
   const unsent = () => sent !== (mode === "safe" ? "safe" : "ask");
   const syncMode = async () => {
-    sent = mode === "safe" ? "safe" : "ask";
+    const want = mode === "safe" ? "safe" : "ask";
     const line = await negotiateMode(agent, spec, mode);
     // No kind: the not-negotiated line is never suppressible (#13).
-    if (line) once(line);
+    modeSend = line ? { text: line } : undefined;
+    sent = line && spec.measured?.modeMap ? undefined : want;
   };
 
   let turn: Promise<void> | undefined;
@@ -917,13 +919,11 @@ async function startParticipant({
     await turn;
   };
 
-  // The containment lines for a mode, once each: a change posts only the
-  // lines the new mode adds, such as `--mode auto does not bound it`.
   let version: string | undefined;
   const warn = () => {
-    for (const w of warningsFor(spec.name, spec, mode, version)) {
-      once(w.text, w.kind);
-    }
+    modeLines = warningsFor(spec.name, spec, mode, version).map(
+      ({ text, kind }) => (kind ? { text, kind } : { text }),
+    );
   };
 
   let sessionId: string;
@@ -939,8 +939,11 @@ async function startParticipant({
   }
 
   // The filter follows at once; the harness's own mode before the next turn.
+  // A question that waits under `ask` gets the new mode's answer.
   const setMode = (next: ClientMode) => {
+    const leftAsk = mode === "ask" && next !== "ask";
     mode = next;
+    if (leftAsk) permissions.answerParticipant(roomId, id, next === "auto");
     agent.allowReadOutsideRoot = readsOutside();
     warn();
   };
@@ -960,7 +963,7 @@ async function startParticipant({
     ...(info && { branch: info.branch, baseSha: info.baseSha }),
     sessionId,
     get notices() {
-      return notices();
+      return [...notices(), ...modeLines, ...(modeSend ? [modeSend] : [])];
     },
     status: () => {
       if (dismissed()) return "dismissed";

@@ -34,6 +34,7 @@ const SCENARIOS = {
   repeat: "the same tool title on a loop, then ends the turn itself",
   remember: "answers each turn with the previous turn's prompt, per session",
   slow: "like remember, but answers after SLOW_MS; a cancel ends the turn at once",
+  "mode-refused-once": "refuses the first session/set_mode, then accepts",
 };
 
 const at = process.argv.indexOf("--scenario");
@@ -166,6 +167,9 @@ const SLOW_MS = 1000;
  *  already covered by `tests/cli.test.ts`'s inline stubborn agent. */
 let stalledPromptId = null;
 
+/** Whether `mode-refused-once` has refused its one `session/set_mode`. */
+let modeRefused = false;
+
 let nextId = 1000;
 let sessionCount = 0;
 const pending = new Map();
@@ -232,6 +236,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   // from the event stream which harness-side id the client sent.
   if (msg.method === "session/set_mode") {
     const { sessionId: sid, modeId } = msg.params;
+    if (scenario === "mode-refused-once" && !modeRefused) {
+      modeRefused = true;
+      fail(msg.id, `mode "${modeId}" refused, once`);
+      return;
+    }
     update(sid, {
       sessionUpdate: "current_mode_update",
       currentModeId: modeId,

@@ -767,7 +767,7 @@ with ACP names.
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
 | `_client_message_queued` | `text` | A message reached a busy participant and waits. `_client_user_message` follows when its turn starts. |
-| `_client_user_message` | `text`, `turn` | The participant's turn starts with this message. The line's `participantId` names who got it. `turn` counts that participant's turns from 1. |
+| `_client_user_message` | `text`, `turn` | The participant's turn starts with this message. The line's `participantId` names who got it. `turn` counts that participant's turns from 1. It is absent on lines written before 1.5. |
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 
@@ -799,6 +799,8 @@ fetching and thinking never ask.
 - **Cancel means no.** When a run is cancelled or ends, or its task stops, its open
   questions are denied. In a room, the open questions of a turn are denied when the turn
   ends for any reason: a cancel, a removal, a dismiss or a harness that exits.
+- **A mode change answers.** When a room participant leaves `ask`, its open questions
+  close: `auto` answers yes, and `safe` answers no.
 - A stream replay also shows old `_client_permission_queued` events. Check
   `GET /permissions` before you ask a person. If the id is not there, the question is
   already closed.
@@ -816,6 +818,7 @@ fetching and thinking never ask.
 | `cancel` | `false` | The run was cancelled, or the daemon stopped. In a room: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `task_end` | `false` | The question's task ended, for example at its time limit. |
 | `run_end` | `false` | The run ended with the question still open. |
+| `mode_change` | `true` or `false` | A room participant left `ask`: `true` for `auto`, `false` for `safe`. Since 1.5. |
 
 New reasons can be added. If you get a reason you do not know, use `allow`.
 
@@ -1092,8 +1095,9 @@ start.
 Changes one participant. Send one or more of:
 
 - `name`: a new name. The `id` and the `branch` do not change.
-- `mode`: `ask`, `safe` or `auto`. The next question uses the new mode at once. The
-  harness hears of it before its next turn, never during one. See [Modes](#modes).
+- `mode`: `ask`, `safe` or `auto`. The next question uses the new mode at once, and a
+  question that waits under `ask` gets the new mode's answer. The harness hears of it
+  before its next turn, never during one. See [Modes](#modes).
 - `role`: a new role, or `null` to remove the role. To move the `orchestrator` role, first
   remove it from the participant that has it.
 
@@ -1174,8 +1178,11 @@ A participant's mode says what happens when its harness asks to change something
 | `ask` | Waits for a person in [Permissions](#permissions). No answer in time means no. | Its normal mode. |
 | `safe` | No. Reading, searching, fetching and thinking still work. | Its read-only mode, for example claude's `plan`. |
 
+- A mode change acts at once on our side. A question that waits under `ask` closes with
+  reason `mode_change`: yes for `auto`, no for `safe`.
 - The daemon sets the harness's own mode when the participant starts, and before the
-  first turn after a change. It never sends the mode that stops a harness from asking,
+  first turn after a change. If the harness refuses, the daemon tries again before the
+  next turn. It never sends the mode that stops a harness from asking,
   such as claude's `bypassPermissions`: under `auto` the harness still asks, and the
   daemon says yes.
 - A harness with no measured mode ids, such as pi or any `cmd`, keeps its own mode. Its
@@ -1183,8 +1190,8 @@ A participant's mode says what happens when its harness asks to change something
 - `safe` turns `allowReadOutsideRoot` off while it lasts. `settings` shows the value in
   use.
 - A mode is not a sandbox. A harness that never asks, such as opencode or pi, is not held
-  by `ask` or `safe`. Its `notices` say so, and a mode change adds the line for the new
-  mode.
+  by `ask` or `safe`. Its `notices` say so. The lines that name a mode always name the
+  current one: a mode change replaces them.
 
 ### Words for the room lifecycle
 

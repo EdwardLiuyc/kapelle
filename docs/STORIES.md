@@ -2431,6 +2431,9 @@ and before the first turn after a change. No start mode is kept. A room decision
 timeout reads `cancel`. The TUI answer is M4-3's; this story proves it over HTTP. Runs keep
 `safe`-only negotiation (#193). **2026-09-29:** a mode does not survive `session/load`
 reliably (`docs/FINDINGS.md` §Mode after load), so M6-7b sends it again after a load.
+**Amended 2026-09-29 (#194 review).** A mode that leaves `ask` answers what waits, as the
+new reason `mode_change`: yes for `auto`, no for `safe`. A mode send that failed is tried
+again before the next turn. The notices that name a mode are replaced on a change.
 Decisions: R12, S2, S12.
 
 **Split 2026-09-26.** M6-6 held two jobs. The worktree for each
