@@ -89,9 +89,12 @@ async function record(t: TestContext): Promise<Recording> {
     stalled = ok;
   });
   const hang = carol.send("hang");
+  const also = carol.send("also");
   await warned;
   carol.cancel();
   await hang;
+  // The cancel drops the queued message; its send resolves on the clear.
+  await also;
 
   await room.remove(bob.id);
   await room.dismiss();
@@ -178,7 +181,17 @@ test("replay: the whole history gives the roster, threads, turns and questions",
   const c = who(state, carol);
   assert.equal(c.turns[0]?.state, "ended");
   assert.equal(c.turns[0]?.stopReason, "cancelled");
-  assert.ok(thread(state, carol).some((e) => e.type === "stall"));
+  assert.deepEqual(c.queue, [], "the clear dropped the queued message");
+  const carolThread = thread(state, carol);
+  assert.deepEqual(texts(carolThread, "queued"), ["also"]);
+  assert.deepEqual(
+    carolThread
+      .filter((e) => e.type === "queue_cleared")
+      .map((e) => (e.type === "queue_cleared" ? e.count : 0)),
+    [1],
+    "the clear is on the timeline with its count",
+  );
+  assert.ok(carolThread.some((e) => e.type === "stall"));
   for (const id of [alice, bob, carol]) {
     assert.equal(needsAttention(state, id), false, id);
   }
@@ -222,6 +235,11 @@ test("live: the state is right at each line, not only at the end", async (t) => 
       assert.equal(needsAttention(state, carol), false, "seen clears a stall");
       checked.add("stall");
     }
+    if (u.sessionUpdate === "_client_queue_cleared") {
+      assert.equal(changed?.type, "queue_cleared");
+      assert.deepEqual(who(state, carol).queue, []);
+      checked.add("clear");
+    }
     if (u.sessionUpdate === "_client_participant_changed" && u.role) {
       assert.equal(who(state, bob).role, "tester");
       checked.add("role");
@@ -232,6 +250,7 @@ test("live: the state is right at each line, not only at the end", async (t) => 
   }
   assert.deepEqual([...checked].sort(), [
     "answer",
+    "clear",
     "question",
     "queue",
     "role",
@@ -304,4 +323,51 @@ test("a harness that exits mid-turn stays exited when the turn ends", async (t) 
   for (const line of crashed.slice(0, end + 2)) applyLine(state, line);
   assert.equal(who(state, carol).turns[0]?.state, "ended");
   assert.equal(who(state, carol).status, "exited");
+});
+
+test("a turn that ends with an error keeps the error on the turn and the entry", () => {
+  const update = (
+    seq: number,
+    value: RoomEventLine["update"],
+  ): RoomEventLine => ({
+    seq,
+    at: "2026-09-29T00:00:00Z",
+    roomId: "room",
+    participantId: "alice",
+    update: value,
+  });
+  const state = replay([
+    update(1, {
+      sessionUpdate: "_client_participant_added",
+      name: "alice",
+      harness: "mock-agent",
+      mode: "auto",
+    }),
+    update(2, {
+      sessionUpdate: "_client_user_message",
+      text: "a",
+      turn: 1,
+    }),
+    update(3, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "half" },
+    }),
+    update(4, { sessionUpdate: "_client_harness_exited", pid: 123 }),
+    update(5, {
+      sessionUpdate: "_client_turn_ended",
+      error: "the harness died",
+    }),
+  ]);
+
+  const turn = who(state, "alice").turns[0];
+  assert.equal(turn?.state, "ended", "the failed turn is still ended");
+  assert.equal(turn?.error, "the harness died", "the turn keeps the error");
+  const ended = state.timeline.at(-1);
+  assert.equal(ended?.type, "turn_ended");
+  assert.equal(
+    ended?.type === "turn_ended" ? ended.error : undefined,
+    "the harness died",
+    "the timeline entry keeps the error",
+  );
+  assert.equal(who(state, "alice").status, "exited");
 });

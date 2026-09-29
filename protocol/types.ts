@@ -574,10 +574,11 @@ export interface ClientTurnEndedEvent extends Meta {
 }
 
 /** A participant joined the room: a starter at open, or an add (M6-10). It
- *  follows the participant's `_client_worktree_created` and
- *  `_client_harness_spawned`, because it is logged once the harness has a
- *  session. An add that fails logs those two and never this. The roster is
- *  on the log, so a replay shows the roster as it was at each `seq`. */
+ *  follows the participant's `_client_harness_spawned`, and follows
+ *  `_client_worktree_created` when the room gives it its own checkout. An
+ *  add that fails never logs this, though it may have logged either of the
+ *  other two. The roster is on the log, so a replay shows the roster as it
+ *  was at each `seq`. */
 export interface ClientParticipantAddedEvent extends Meta {
   sessionUpdate: "_client_participant_added";
   name: string;
