@@ -217,10 +217,9 @@ all three tests, and a `--mode auto` probe running one `echo` re-verified the re
 - **`asksPermission: true`** holds — under `safe` the refusal fires on `switch_mode`, exactly
   as measured 2026-09-04.
 - **`modeMap`**: `safe: "plan"` negotiates, `auto: "bypassPermissions"` is accepted by
-  `session/set_mode`. `ask: "default"` is still unverified and still unread — only
-  `modeMap.safe` has a consumer (`core/policy.ts:191`). **2026-09-29:** `default` is
-  accepted on claude-agent-acp 0.75.1 (§Mode after load), and a room now sends it for
-  `ask` and `auto` (#149).
+  `session/set_mode`. **2026-09-29:** `ask: "default"` is accepted on claude-agent-acp
+  0.75.1 (§Mode after load). A room sends it for `ask` and `auto` (#149); a run still
+  sends only `safe`'s (#193).
 - **Not re-verified, and the new date does not cover them:** `usage`, because separating
   per-turn from cumulative needs two turns in one session, and no probe had run at this date;
   §Multi-turn below (2026-09-15) makes the second turn reachable but leaves `usage` carried

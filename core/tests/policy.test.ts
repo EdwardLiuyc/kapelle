@@ -182,7 +182,7 @@ test("ask falls back to safe, since a policy cannot invent a TTY", async () => {
 
 // --- negotiation -------------------------------------------------------------
 
-/** Only `name` and `setMode` are reachable from `negotiateSafeMode`. */
+/** Only `name` and `setMode` are reachable from `negotiateMode`. */
 function stubAgent(setMode: (id: string) => Promise<unknown>): {
   agent: AcpAgent;
   calls: string[];

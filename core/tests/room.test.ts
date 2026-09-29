@@ -705,11 +705,12 @@ const MEASURED = {
 } as const;
 
 /** A room whose one participant runs the mock with `fields`, and every
- *  event its bus carried. `measured` gives the mock a registry half. */
+ *  event its bus carried. `spec` overrides registry fields, such as a
+ *  `measured` half. */
 async function modeRoom(
   t: TestContext,
   fields: Record<string, unknown>,
-  { scenario, measured }: { scenario?: string; measured?: object } = {},
+  { scenario, spec }: { scenario?: string; spec?: object } = {},
 ) {
   const repo = await gitRepo(t);
   const roomId = newRoomId();
@@ -721,9 +722,7 @@ async function modeRoom(
     name: "alice",
     ...fields,
   });
-  if (measured) {
-    request.spec = { ...request.spec, measured } as typeof request.spec;
-  }
+  if (spec) request.spec = { ...request.spec, ...spec } as typeof request.spec;
   const room = await openRoom({
     roomId,
     cwd: repo,
@@ -753,7 +752,7 @@ test("a room sets the harness mode: safe's id, or ask's for ask and auto, never 
   const { room, p, of, events } = await modeRoom(
     t,
     { mode: "safe" },
-    { scenario: "remember", measured: MEASURED },
+    { scenario: "remember", spec: { measured: MEASURED } },
   );
   const sent = () =>
     of("current_mode_update").map(
@@ -796,13 +795,49 @@ test("a room sets the harness mode: safe's id, or ask's for ask and auto, never 
   assert.ok(!sent().includes("id-auto"));
 });
 
-test("a harness with no mode ids gets none, and a line that says so", async (t) => {
-  const { p, of } = await modeRoom(t, { mode: "safe" });
+test("a harness with no mode ids gets none, and a line that says so once", async (t) => {
+  const { room, p, of } = await modeRoom(t, { mode: "safe" });
+  room.update(p.id, { mode: "auto" });
+  await p.send("one");
+  room.update(p.id, { mode: "safe" });
+  await p.send("two");
   assert.equal(of("current_mode_update").length, 0);
-  assert.ok(
-    p.notices.some((n) => /safe mode was not negotiated/.test(n.text)),
-    JSON.stringify(p.notices),
+  const lines = p.notices.filter((n) =>
+    /safe mode was not negotiated/.test(n.text),
   );
+  assert.equal(lines.length, 1, JSON.stringify(p.notices));
+});
+
+test("a mode above the harness's ceiling is refused, and nothing applies", async (t) => {
+  const { room, p } = await modeRoom(
+    t,
+    { mode: "safe" },
+    { spec: { maxMode: "safe" } },
+  );
+  assert.throws(
+    () => room.update(p.id, { name: "bob", mode: "auto" }),
+    (err) => err instanceof RoomRefusal && err.code === "invalid_request",
+  );
+  assert.deepEqual([p.name, p.mode], ["alice", "safe"]);
+});
+
+test("a turn cancelled while its mode is sent never sends its prompt", async (t) => {
+  const { room, p, of } = await modeRoom(
+    t,
+    { mode: "safe" },
+    { spec: { measured: MEASURED } },
+  );
+  room.update(p.id, { mode: "auto" });
+  const turn = p.send("go");
+  assert.equal(p.cancel(), true);
+  await turn;
+  assert.deepEqual(
+    of("_client_turn_ended").map(
+      (e) => (e.update as { stopReason?: string }).stopReason,
+    ),
+    ["cancelled"],
+  );
+  assert.ok(!existsSync(join(p.worktree, "ACP_TEST.md")));
 });
 
 test("an ask participant's write waits in the queue, named by room, participant and turn", async (t) => {

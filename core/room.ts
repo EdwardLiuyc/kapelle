@@ -823,6 +823,12 @@ async function startParticipant({
     },
   });
 
+  // A notice the participant does not show yet. A mode that goes back and
+  // forth posts each of its lines once.
+  const once: Notify = (text, kind) => {
+    if (!notices().some((n) => n.text === text)) onNotice(text, kind);
+  };
+
   // The harness's own mode: `safe`'s id, or `ask`'s for the other two. Sent
   // at session start, then before the first turn after a change that moves
   // it, never during a turn. `sent` is what the harness was last told.
@@ -832,7 +838,7 @@ async function startParticipant({
     sent = mode === "safe" ? "safe" : "ask";
     const line = await negotiateMode(agent, spec, mode);
     // No kind: the not-negotiated line is never suppressible (#13).
-    if (line) onNotice(line);
+    if (line) once(line);
   };
 
   let turn: Promise<void> | undefined;
@@ -916,7 +922,7 @@ async function startParticipant({
   let version: string | undefined;
   const warn = () => {
     for (const w of warningsFor(spec.name, spec, mode, version)) {
-      if (!notices().some((n) => n.text === w.text)) onNotice(w.text, w.kind);
+      once(w.text, w.kind);
     }
   };
 
