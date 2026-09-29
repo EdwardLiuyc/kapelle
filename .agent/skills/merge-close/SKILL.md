@@ -149,7 +149,7 @@ gh project item-edit --id <itemId> --project-id <projectId> \
   --field-id <statusFieldId> --single-select-option-id <readyOptionId>
 ```
 
-  In this repo the board is project **3**, `Agent Team`, owner `EdwardLiuyc`, and its
+  In this repo the board is project **3**, `Kapelle`, owner `EdwardLiuyc`, and its
   Status options are `Backlog`, `Ready`, `In progress`, `In review`, `Done`.
 
 - Report each move as `#D -> Ready`, and each skip with its reason.
