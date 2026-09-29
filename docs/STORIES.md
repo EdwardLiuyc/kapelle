@@ -2519,6 +2519,9 @@ during a turn leaves that participant `killed` after the next boot, its history 
 message to one revives it and is answered, the DTO reports `resumed: "fresh"`, a
 dismissed room is not revived by the same path, and `DELETE /rooms/:id` removes a clean
 room's checkouts, branches, record and log and refuses a dirty one with `409`.
+**Added 2026-09-29 (#180):** after a restart, the room reducer (`client/room.ts`) shows the
+`paused` or `killed` state that `GET /rooms/:id` reports, and a turn the crash cut reads
+as cut, tested from a recorded stream. M6-10 moved this case here.
 Decisions: R17, R18, R33, R42, R46, S3, S4.
 
 **M6-7b · `session/load` for a paused participant · M · needs M6-7a, M0-9**
@@ -2573,7 +2576,13 @@ and `LogEvent` logic ends here.
 *Done when* the reducer is tested from recorded room streams for live, replay, reconnect,
 restart (`paused` and `killed`) and a cut turn, and M4-2 draws from it with no event
 parsing of its own.
-Decisions: R8, R13, S10, S11.
+Decisions: R8, R13, S10, S11. **Decided 2026-09-29 (#180):** the roster is on the log.
+The room writes `_client_participant_added`, `_changed` and `_removed`, starters included,
+and the reducer (`client/room.ts`) reads the stream only; `GET /rooms/:id` stays for the
+reconcile after the stream ends. Rooms are Experimental, so no version step. `chat.ts`
+moves onto the reducer in this story, and M6-5's questions are in it. The restart case
+moves to M6-7a: the boot sweep adds no line to the log, and nothing sets `paused` or
+`killed` yet. "M4-2 draws from it" is M4-2's to check.
 
 **M6-11a · Fast-forward one participant to another, from the TUI · S · needs M6-6a, M4-5**
 **Added 2026-09-26, R45.** A reviewer starts from the developer's branch
