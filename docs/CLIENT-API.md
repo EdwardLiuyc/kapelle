@@ -7,8 +7,8 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.4** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
-M5-6, #138, and M5-7, #139).
+Contract version: **1.5** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+M5-6, #138, M5-7, #139, and M6-5, #149).
 
 ## Contents
 
@@ -107,7 +107,7 @@ Not every part of this API is final yet. Each part has one of three labels:
 | Heartbeat (`: ping`) and a paused slow reader | Since 1.3 (M5-6). |
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
 | `_client_*` events | Except the room events. See [Events](#events). |
-| `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). |
+| `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). Questions from rooms since 1.5 (M6-5). |
 | Error replies (`{error: {code, message}}`) and the error codes | Codes are only added (M5-3). |
 | Request limits: `Content-Type`, body size, unknown fields, read timeout | M5-3. |
 
@@ -117,7 +117,7 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| Everything under `/rooms` | Experimental | M6-5 and later |
+| Everything under `/rooms` | Experimental | M6-7a and later |
 
 **Planned, not built yet:** cancel one task (M5-8).
 
@@ -332,7 +332,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 4 },
+  "apiVersion": { "major": 1, "minor": 5 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -767,7 +767,7 @@ with ACP names.
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
 | `_client_message_queued` | `text` | A message reached a busy participant and waits. `_client_user_message` follows when its turn starts. |
-| `_client_user_message` | `text` | The participant's turn starts with this message. The line's `participantId` names who got it. |
+| `_client_user_message` | `text`, `turn` | The participant's turn starts with this message. The line's `participantId` names who got it. `turn` counts that participant's turns from 1. It is absent on lines written before 1.5. |
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 
@@ -779,8 +779,9 @@ Ignore a `_client_*` name that you do not know. New ones can appear.
 
 ## Permissions
 
-Some harness actions need a yes or no, for example "edit this file". A run in `ask` mode
-asks a person through the API. Reading, searching, fetching and thinking never ask.
+Some harness actions need a yes or no, for example "edit this file". A run in `ask` mode,
+and a room participant in `ask` mode, asks a person through the API. Reading, searching,
+fetching and thinking never ask.
 
 **How to answer:**
 
@@ -796,7 +797,10 @@ asks a person through the API. Reading, searching, fetching and thinking never a
 - **No answer means no.** A question with no answer is denied after a time limit. The
   default is 120 seconds. The daemon's owner sets it with `--permission-timeout`.
 - **Cancel means no.** When a run is cancelled or ends, or its task stops, its open
-  questions are denied.
+  questions are denied. In a room, the open questions of a turn are denied when the turn
+  ends for any reason: a cancel, a removal, a dismiss or a harness that exits.
+- **A mode change answers.** When a room participant leaves `ask`, its open questions
+  close: `auto` answers yes, and `safe` answers no.
 - A stream replay also shows old `_client_permission_queued` events. Check
   `GET /permissions` before you ask a person. If the id is not there, the question is
   already closed.
@@ -811,9 +815,10 @@ asks a person through the API. Reading, searching, fetching and thinking never a
 | --- | --- | --- |
 | `client` | `true` or `false` | A client answered with `POST /permissions/:id`. |
 | `timeout` | `false` | Nobody answered in time. |
-| `cancel` | `false` | The run was cancelled, or the daemon stopped. |
+| `cancel` | `false` | The run was cancelled, or the daemon stopped. In a room: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `task_end` | `false` | The question's task ended, for example at its time limit. |
 | `run_end` | `false` | The run ended with the question still open. |
+| `mode_change` | `true` or `false` | A room participant left `ask`: `true` for `auto`, `false` for `safe`. Since 1.5. |
 
 New reasons can be added. If you get a reason you do not know, use `allow`.
 
@@ -825,7 +830,9 @@ this does not happen.
 
 ### `GET /permissions`
 
-**Reply `200`:** every open question, from all runs.
+**Reply `200`:** every open question, from all runs and rooms. A question from a run has
+`runId` and `taskId`. A question from a room has `roomId`, `participantId` and `turn`
+instead. `turn` is the number on that turn's `_client_user_message`.
 
 ```json
 [
@@ -835,6 +842,14 @@ this does not happen.
     "taskId": "summarise",
     "kind": "edit",
     "title": "Edit README.md"
+  },
+  {
+    "id": "0b9e6f3c-2d71-4e8a-b5c4-7a1f3e9d2c68",
+    "roomId": "room-20260929-101500-a1b2",
+    "participantId": "p-4f2a9c",
+    "turn": 3,
+    "kind": "execute",
+    "title": "npm test"
   }
 ]
 ```
@@ -883,15 +898,16 @@ restart. `409` `already_decided` when the question is already closed, for any re
 
 ## Rooms
 
-**Everything in this section is experimental.** The room API will change in M6-5 and
+**Everything in this section is experimental.** The room API will change in M6-7a and
 after. `chat.ts` uses it today.
 
 A room is a container on one repository. It holds a list of participants. Each
 participant is one harness with one session that stays alive between messages. Each
 participant has its own git branch and checkout. Today:
 
-- A participant always runs in `auto` mode, so it never asks a permission. M6-5 adds
-  the other modes.
+- A participant has its own mode, `auto` by default. An `ask` participant asks through
+  [Permissions](#permissions), and a question nobody answers is denied at the time limit.
+  See [Modes](#modes).
 - A message goes to one participant. A busy participant keeps up to 16 messages in a
   queue and answers them in order. The queue is in memory: a daemon restart loses it.
 - A turn is never cut by a clock. A quiet turn gets `_client_stall_warning`, and only a
@@ -919,8 +935,7 @@ An agent takes:
 - `role`: optional. One of `orchestrator`, `developer`, `tester` or `architect`. No role
   is given by default. A message goes to the `orchestrator`, so give that role to the
   agent that should answer.
-- `mode`: optional. Only `auto` is accepted today, and it is the default. `ask` and `safe`
-  come with M6-5.
+- `mode`: optional. `ask`, `safe` or `auto`. The default is `auto`. See [Modes](#modes).
 - `base`: optional. The git ref the participant's branch starts from. It can be another
   participant's `branch`, so a reviewer starts from the developer's commits. The default
   is the repository's `HEAD`. Only committed work is on a branch.
@@ -1080,7 +1095,9 @@ start.
 Changes one participant. Send one or more of:
 
 - `name`: a new name. The `id` and the `branch` do not change.
-- `mode`: only `auto` today.
+- `mode`: `ask`, `safe` or `auto`. The next question uses the new mode at once, and a
+  question that waits under `ask` gets the new mode's answer. The harness hears of it
+  before its next turn, never during one. See [Modes](#modes).
 - `role`: a new role, or `null` to remove the role. To move the `orchestrator` role, first
   remove it from the participant that has it.
 
@@ -1150,6 +1167,31 @@ replace a message, cancel, then send the new one.
 
 **Refusals:** `404` `room_not_found` or `participant_not_found`; `409` `room_dismissed`;
 `409` `no_turn` when the participant has no live turn.
+
+### Modes
+
+A participant's mode says what happens when its harness asks to change something.
+
+| `mode` | A question from the harness | The harness's own mode |
+| --- | --- | --- |
+| `auto` (default) | Yes, always. | Its normal mode. |
+| `ask` | Waits for a person in [Permissions](#permissions). No answer in time means no. | Its normal mode. |
+| `safe` | No. Reading, searching, fetching and thinking still work. | Its read-only mode, for example claude's `plan`. |
+
+- A mode change acts at once on our side. A question that waits under `ask` closes with
+  reason `mode_change`: yes for `auto`, no for `safe`.
+- The daemon sets the harness's own mode when the participant starts, and before the
+  first turn after a change. If the harness refuses, the daemon tries again before the
+  next turn. It never sends the mode that stops a harness from asking,
+  such as claude's `bypassPermissions`: under `auto` the harness still asks, and the
+  daemon says yes.
+- A harness with no measured mode ids, such as pi or any `cmd`, keeps its own mode. Its
+  `notices` say so.
+- `safe` turns `allowReadOutsideRoot` off while it lasts. `settings` shows the value in
+  use.
+- A mode is not a sandbox. A harness that never asks, such as opencode or pi, is not held
+  by `ask` or `safe`. Its `notices` say so. The lines that name a mode always name the
+  current one: a mode change replaces them.
 
 ### Words for the room lifecycle
 

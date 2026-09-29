@@ -5,9 +5,9 @@
  * Lets you exercise the client with no harness installed:
  *   node cli.ts "hello" --cmd "node mock-agent.mjs" --mode safe
  *
- * It answers initialize / session/new / session/prompt, streams a message,
- * calls back into the client's fs/read_text_file, and asks permission for a
- * write — enough to prove every path in the client works.
+ * It answers initialize / session/new / session/set_mode / session/prompt,
+ * streams a message, calls back into the client's fs/read_text_file, and asks
+ * permission for a write — enough to prove every path in the client works.
  *
  * `--scenario <name>` selects a named fixture instead (M1b-5). Argv,
  * never a keyword in the prompt: `silent-session` fires during the handshake,
@@ -34,6 +34,7 @@ const SCENARIOS = {
   repeat: "the same tool title on a loop, then ends the turn itself",
   remember: "answers each turn with the previous turn's prompt, per session",
   slow: "like remember, but answers after SLOW_MS; a cancel ends the turn at once",
+  "mode-refused-once": "refuses the first session/set_mode, then accepts",
 };
 
 const at = process.argv.indexOf("--scenario");
@@ -166,6 +167,9 @@ const SLOW_MS = 1000;
  *  already covered by `tests/cli.test.ts`'s inline stubborn agent. */
 let stalledPromptId = null;
 
+/** Whether `mode-refused-once` has refused its one `session/set_mode`. */
+let modeRefused = false;
+
 let nextId = 1000;
 let sessionCount = 0;
 const pending = new Map();
@@ -226,6 +230,23 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     const sid = `sess_mock_${++sessionCount}`;
     sessions.add(sid);
     reply(msg.id, { sessionId: sid });
+  }
+
+  // Any id is accepted, and echoed as `current_mode_update`, so a test reads
+  // from the event stream which harness-side id the client sent.
+  if (msg.method === "session/set_mode") {
+    const { sessionId: sid, modeId } = msg.params;
+    if (scenario === "mode-refused-once" && !modeRefused) {
+      modeRefused = true;
+      fail(msg.id, `mode "${modeId}" refused, once`);
+      return;
+    }
+    update(sid, {
+      sessionUpdate: "current_mode_update",
+      currentModeId: modeId,
+    });
+    reply(msg.id, {});
+    return;
   }
 
   if (msg.method === "session/cancel") {

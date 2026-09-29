@@ -45,8 +45,17 @@
  * its id in `agent`, and the log writes it as `participantId` beside the
  * `roomId`. A thread is that log filtered by `participantId` (R8c over R13a).
  *
- * **MVP scope, deliberately.** The mode is `auto`, so nobody answers
- * permission prompts. The watchdog only warns, and only during a turn (R38):
+ * **Each participant has its own mode** (M6-5, R12): `auto` by default,
+ * `ask` or `safe` at add, and changed by `update` at any time. The filter
+ * reads the mode live, so a change applies to the next request. The
+ * harness's own mode follows before the next turn: `harnessModeId` picks
+ * `modeMap.safe` for `safe` and `modeMap.ask` for the other two, never
+ * `modeMap.auto`. An `ask` request waits in the daemon's queue, named by
+ * room, participant and turn (S12a). When a turn ends for any reason, its
+ * open decisions are denied as `cancel`; a mode that leaves `ask` answers
+ * them as `mode_change`.
+ *
+ * **MVP scope, deliberately.** The watchdog only warns, and only during a turn (R38):
  * a chat turn is never cut by a clock. No result preamble, no cross-check: a
  * chat turn is conversation, not a deliverable (R39). What stays is what makes a room
  * safe to leave running: its own worktree, the path guard `AcpAgent` always
@@ -63,8 +72,9 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { AcpAgent } from "../protocol/agent.ts";
+import { AcpAgent, type Policy } from "../protocol/agent.ts";
 import {
+  type ClientMode,
   type ResolvedAgent,
   resolveAgent,
   resolveEnv,
@@ -74,7 +84,8 @@ import {
 import { createEventLog, type EventLog } from "./eventlog.ts";
 import type { EventBus } from "./events.ts";
 import { newParticipantId } from "./ids.ts";
-import { policyFor, resolvePolicy } from "./policy.ts";
+import type { PermissionQueue } from "./permissions.ts";
+import { harnessModeId, modeLine, policyFor, resolvePolicy } from "./policy.ts";
 import { stateDirFor } from "./runtime.ts";
 import {
   createWatchdog,
@@ -150,6 +161,7 @@ export interface AgentRequest {
   /** The ref to fork from, such as another participant's `branch`; the
    *  repository's HEAD when absent. */
   base?: string;
+  mode: ClientMode;
   settings: Settings;
 }
 
@@ -157,6 +169,7 @@ export interface AgentRequest {
 export interface ParticipantChanges {
   name?: string;
   role?: Role | null;
+  mode?: ClientMode;
 }
 
 export interface Participant {
@@ -166,7 +179,9 @@ export interface Participant {
   name: string;
   role?: Role;
   readonly harness: string;
-  readonly mode: "auto";
+  /** Changed only through `Room.update`. */
+  readonly mode: ClientMode;
+  /** As they act: `safe` reads `allowReadOutsideRoot` as false. */
   readonly settings: Settings;
   /** Where the harness runs: its own checkout, or the cwd itself. */
   readonly worktree: string;
@@ -209,8 +224,8 @@ export interface Room {
    *  branch if the harness left them untouched. One it wrote into is kept,
    *  and a room notice names it. */
   add(request: AgentRequest): Promise<Participant>;
-  /** Renames a participant or changes its role. Checks every change before
-   *  it applies any. */
+  /** Renames a participant, or changes its role or mode. Checks every
+   *  change before it applies any. */
   update(id: string, changes: ParticipantChanges): Participant;
   /** Cancels the participant's turn, stops its harness and releases its
    *  checkout without committing (R37). It leaves the roster at once. */
@@ -237,14 +252,16 @@ function roomHarness(agent: unknown, cmd: unknown): ResolvedAgent {
   const byName = str("agent", agent);
   const byCmd = str("cmd", cmd);
   if (!byName && !byCmd) throw new Error('an agent needs "agent" or "cmd"');
-  const spec = resolveAgent(byName ?? "", byCmd);
-  // The ceiling check `resolvePolicy` owns; every measured entry allows
-  // `auto` today, and a future one that does not must be refused, not run.
+  return resolveAgent(byName ?? "", byCmd);
+}
+
+/** The ceiling check `resolvePolicy` owns: a mode above the harness's
+ *  `maxMode` is refused, never run more contained than asked. */
+function checkCeiling(spec: ResolvedAgent, mode: ClientMode) {
   resolvePolicy({
-    run: { mode: "auto" },
+    run: { mode },
     harness: { name: spec.name, maxMode: spec.maxMode },
   });
-  return spec;
 }
 
 /** The fields one agent takes, at `POST /rooms` and at
@@ -283,16 +300,15 @@ function checkRole(role: unknown): Role {
   return role as Role;
 }
 
-/** `auto` only until M6-5 (#149) builds the permission queue a room needs
- *  for `ask`, and the negotiation `safe` does at session start. */
-function checkMode(mode: unknown) {
-  if (mode === undefined || mode === "auto") return;
-  if (mode === "ask" || mode === "safe") {
+const MODES: readonly ClientMode[] = ["ask", "safe", "auto"];
+
+function checkMode(mode: unknown): ClientMode {
+  if (!MODES.includes(mode as ClientMode)) {
     throw new Error(
-      `mode "${mode}" comes with M6-5; a participant runs in "auto" for now`,
+      `invalid mode ${JSON.stringify(mode)}: one of ${MODES.join(", ")}`,
     );
   }
-  throw new Error(`invalid mode ${JSON.stringify(mode)}: must be "auto"`);
+  return mode as ClientMode;
 }
 
 function checkSettings(raw: unknown): Settings {
@@ -355,10 +371,12 @@ export function roomAgent(entry: unknown): AgentRequest {
   const request: AgentRequest = {
     spec,
     name: checkName(name, spec.name),
+    // R12: `auto` by default, so an unattended room never waits on a person.
+    mode: mode === undefined ? "auto" : checkMode(mode),
     settings: checkSettings(settings),
   };
+  checkCeiling(spec, request.mode);
   if (role !== undefined) request.role = checkRole(role);
-  checkMode(mode);
   if (base !== undefined) {
     if (typeof base !== "string" || !base) {
       throw new Error('"base" must be a non-empty string');
@@ -395,8 +413,8 @@ export function participantChanges(
   if (name === undefined && mode === undefined && role === undefined) {
     throw new Error('send at least one of "name", "mode" or "role"');
   }
-  checkMode(mode);
   const changes: ParticipantChanges = {};
+  if (mode !== undefined) changes.mode = checkMode(mode);
   if (name !== undefined) changes.name = checkName(name);
   if (role !== undefined) changes.role = role === null ? null : checkRole(role);
   return changes;
@@ -412,6 +430,8 @@ export interface RoomOptions {
   /** The preflight the caller already ran (`openWorktrees`). */
   setup: WorktreeSetup;
   bus: EventBus;
+  /** Where an `ask` participant's requests wait for a person. */
+  permissions: PermissionQueue;
   /** The watchdog's warn limits; `WATCHDOG_DEFAULTS` when absent. There is
    *  no TTL in a room (R38). */
   limits?: Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount">;
@@ -422,7 +442,9 @@ type Notify = (text: string, kind?: Warning["kind"]) => void;
 /** One participant, and what the room needs to end it. */
 interface Member {
   participant: Participant;
+  spec: ResolvedAgent;
   stop: () => Promise<void>;
+  setMode: (mode: ClientMode) => void;
   onNotice: Notify;
 }
 
@@ -435,6 +457,7 @@ export async function openRoom({
   agents,
   setup,
   bus,
+  permissions,
   limits = WATCHDOG_DEFAULTS,
 }: RoomOptions): Promise<Room> {
   const { worktrees, notice, root } = setup;
@@ -587,12 +610,13 @@ export async function openRoom({
       worktree = worktrees ? await worktrees.acquire(id, base) : cwd;
       started = await startParticipant({
         id,
+        roomId,
+        permissions,
         request,
         worktree,
         info: worktrees?.info(id),
         bus,
         notices: () => [...roomNotices, ...own],
-        onNotice,
         stderrLog: eventLog ? join(logDir, `${id}.stderr.log`) : undefined,
         dismissed: () => dismissing !== undefined,
         watchdog,
@@ -610,7 +634,7 @@ export async function openRoom({
       await rollback(id, worktree);
       throw dismissed();
     }
-    members.push({ ...started, onNotice });
+    members.push({ ...started, spec: request.spec, onNotice });
     participants.push(started.participant);
     return started.participant;
   };
@@ -649,10 +673,23 @@ export async function openRoom({
 
   const update = (id: string, changes: ParticipantChanges) => {
     if (dismissing) throw dismissed();
-    const { participant: p } = member(id);
+    const found = member(id);
+    const p = found.participant;
     const others = participants.filter((o) => o !== p);
     const refused = clash([...others, ...pending], changes);
     if (refused) throw refused;
+    if (changes.mode !== undefined) {
+      try {
+        checkCeiling(found.spec, changes.mode);
+      } catch (err) {
+        throw new RoomRefusal(
+          "invalid_request",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+      // The last check has passed, so the changes apply from here.
+      found.setMode(changes.mode);
+    }
     if (changes.name !== undefined) p.name = changes.name;
     if (changes.role === null) delete p.role;
     else if (changes.role !== undefined) p.role = changes.role;
@@ -700,30 +737,38 @@ export async function openRoom({
  *  checkout. */
 async function startParticipant({
   id,
-  request: { spec, name, role, settings },
+  roomId,
+  permissions,
+  request: { spec, name, role, settings, mode: initialMode },
   worktree,
   info,
   bus,
   notices,
-  onNotice,
   stderrLog,
   dismissed,
   watchdog,
   limits,
 }: {
   id: string;
+  roomId: string;
+  permissions: PermissionQueue;
   request: AgentRequest;
   /** Its own checkout, or the cwd when there are no worktrees. */
   worktree: string;
   info: { branch: string; baseSha: string } | undefined;
   bus: EventBus;
+  /** The room's and the checkout's notices; the participant adds the lines
+   *  that depend on its mode. */
   notices: () => readonly RoomNotice[];
-  onNotice: Notify;
   stderrLog: string | undefined;
   dismissed: () => boolean;
   watchdog: Watchdog;
   limits: WatchdogLimits;
-}): Promise<{ participant: Participant; stop: () => Promise<void> }> {
+}): Promise<{
+  participant: Participant;
+  stop: () => Promise<void>;
+  setMode: (mode: ClientMode) => void;
+}> {
   if (info) {
     bus.emit({
       agent: id,
@@ -739,14 +784,34 @@ async function startParticipant({
   }
 
   let exited = false;
+  let mode = initialMode;
+  // Counts this participant's turns from 1 (S12's `turn`), and the live
+  // turn's cancel. A turn that ends for any reason aborts it, which denies
+  // what it left open in the queue as `cancel`. Between turns it is already
+  // aborted, so a request there is denied, not queued.
+  let turns = 0;
+  let turnAbort = new AbortController();
+  turnAbort.abort();
+  // Read live, so a mode change applies to the next request.
+  const policy: Policy = (req) =>
+    mode === "ask"
+      ? permissions.roomPolicy(
+          { roomId, participantId: id, turn: turns },
+          bus,
+          turnAbort.signal,
+        )(req)
+      : policyFor(mode)(req);
+  // `safe` reads nothing outside the checkout, whatever the setting says,
+  // as `resolvePolicy` has it for a run.
+  const readsOutside = () => mode !== "safe" && settings.allowReadOutsideRoot;
   const agent = new AcpAgent({
     name: spec.name,
     command: spec.launch.command,
     args: spec.launch.args,
     env: resolveEnv(spec.launch.env),
     cwd: worktree,
-    policy: policyFor("auto"),
-    allowReadOutsideRoot: settings.allowReadOutsideRoot,
+    policy,
+    allowReadOutsideRoot: readsOutside(),
     stderrLog,
     onEvent: ({ update }) => {
       if (update.sessionUpdate === "_client_harness_exited") exited = true;
@@ -757,6 +822,47 @@ async function startParticipant({
       bus.emit(event);
     },
   });
+
+  // The lines that name the mode: `warningsFor`'s, and what the last mode
+  // send said. A mode change replaces them, so `notices` shows the current
+  // mode only (decided 2026-09-29, #194).
+  let modeLines: RoomNotice[] = [];
+
+  // The harness's own mode: `safe`'s id, or `ask`'s for the other two
+  // (`harnessModeId`). Sent at session start, then before the first turn
+  // after a change that moves it, never during a turn. `sent` is the id the
+  // harness was last told. A send that failed is tried again before the next
+  // turn; a mode with no id is never sent.
+  let sent: string | undefined;
+  let failure: { modeId: string; why: string } | undefined;
+  const unsent = () => {
+    const modeId = harnessModeId(spec, mode);
+    return modeId !== undefined && modeId !== sent;
+  };
+  const syncMode = async () => {
+    const modeId = harnessModeId(spec, mode);
+    if (!modeId) return;
+    try {
+      await agent.setMode(modeId);
+      sent = modeId;
+      failure = undefined;
+    } catch (err) {
+      failure = {
+        modeId,
+        why: err instanceof Error ? err.message : String(err),
+      };
+    }
+  };
+  // What the harness was not told, named by the mode it is in now. No kind:
+  // the not-negotiated line is never suppressible (#13).
+  const modeSend = (): RoomNotice[] => {
+    const modeId = harnessModeId(spec, mode);
+    if (!modeId) return [{ text: modeLine(agent.name, mode) }];
+    if (failure?.modeId === modeId) {
+      return [{ text: modeLine(agent.name, mode, failure) }];
+    }
+    return [];
+  };
 
   let turn: Promise<void> | undefined;
   let stopping = false;
@@ -774,13 +880,22 @@ async function startParticipant({
   };
 
   const begin = (text: string): Promise<void> => {
+    turns += 1;
+    const controller = new AbortController();
+    turnAbort = controller;
     bus.emit({
       agent: id,
-      update: { sessionUpdate: "_client_user_message", text },
+      update: { sessionUpdate: "_client_user_message", text, turn: turns },
     });
     const watch = watchdog.watch(id, limits);
-    turn = agent
-      .prompt(text)
+    // At once when the harness's mode is current, so a cancel that follows
+    // `send` reaches a turn the harness already has. A turn cancelled while
+    // its mode was being sent never sends its prompt.
+    const prompt = () =>
+      controller.signal.aborted
+        ? { stopReason: "cancelled" as const }
+        : agent.prompt(text);
+    turn = (unsent() ? syncMode().then(prompt) : Promise.resolve(prompt()))
       .then(
         ({ stopReason }) => {
           bus.emit({
@@ -799,6 +914,7 @@ async function startParticipant({
         },
       )
       .finally(() => {
+        controller.abort();
         watch.close();
         turn = undefined;
         // A harness that is gone takes its queue with it. The harness
@@ -816,40 +932,59 @@ async function startParticipant({
   const stop = async () => {
     stopping = true;
     drop();
-    if (turn) agent.cancel();
+    if (turn) {
+      turnAbort.abort();
+      agent.cancel();
+    }
     await agent.stop();
     await turn;
+  };
+
+  let version: string | undefined;
+  const warn = () => {
+    modeLines = warningsFor(spec.name, spec, mode, version).map(
+      ({ text, kind }) => (kind ? { text, kind } : { text }),
+    );
   };
 
   let sessionId: string;
   try {
     const init = await agent.start();
-    for (const w of warningsFor(
-      spec.name,
-      spec,
-      "auto",
-      init.agentInfo?.version,
-    )) {
-      onNotice(w.text, w.kind);
-    }
+    version = init.agentInfo?.version;
+    warn();
     sessionId = await agent.newSession();
+    await syncMode();
   } catch (err) {
     await agent.stop();
     throw err;
   }
+
+  // The filter follows at once; the harness's own mode before the next turn.
+  // A question that waits under `ask` gets the new mode's answer.
+  const setMode = (next: ClientMode) => {
+    const leftAsk = mode === "ask" && next !== "ask";
+    mode = next;
+    if (leftAsk) permissions.answerParticipant(roomId, id, next === "auto");
+    agent.allowReadOutsideRoot = readsOutside();
+    warn();
+  };
 
   const participant: Participant = {
     id,
     name,
     ...(role && { role }),
     harness: spec.name,
-    mode: "auto",
-    settings,
+    get mode() {
+      return mode;
+    },
+    get settings() {
+      return { allowReadOutsideRoot: agent.allowReadOutsideRoot };
+    },
     worktree,
     ...(info && { branch: info.branch, baseSha: info.baseSha }),
     sessionId,
     get notices() {
-      return notices();
+      return [...notices(), ...modeLines, ...modeSend()];
     },
     status: () => {
       if (dismissed()) return "dismissed";
@@ -883,9 +1018,12 @@ async function startParticipant({
     cancel() {
       if (!turn) return false;
       drop();
+      // Before the harness hears of the cancel, so the request it waits on
+      // is answered at once.
+      turnAbort.abort();
       agent.cancel();
       return true;
     },
   };
-  return { participant, stop };
+  return { participant, stop, setMode };
 }

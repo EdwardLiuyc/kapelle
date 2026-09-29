@@ -217,8 +217,9 @@ all three tests, and a `--mode auto` probe running one `echo` re-verified the re
 - **`asksPermission: true`** holds — under `safe` the refusal fires on `switch_mode`, exactly
   as measured 2026-09-04.
 - **`modeMap`**: `safe: "plan"` negotiates, `auto: "bypassPermissions"` is accepted by
-  `session/set_mode`. `ask: "default"` is still unverified and still unread — only
-  `modeMap.safe` has a consumer (`core/policy.ts:191`).
+  `session/set_mode`. **2026-09-29:** `ask: "default"` is accepted on claude-agent-acp
+  0.75.1 (§Mode after load). A room sends it for `ask` and `auto` (#149); a run still
+  sends only `safe`'s (#193).
 - **Not re-verified, and the new date does not cover them:** `usage`, because separating
   per-turn from cumulative needs two turns in one session, and no probe had run at this date;
   §Multi-turn below (2026-09-15) makes the second turn reachable but leaves `usage` carried
@@ -1211,6 +1212,67 @@ user message for it. The cause was not checked.
 second `log.txt` write. An idle participant was not stopped as a case of its own; turn 1
 is the only evidence for it. `session/resume` was not measured. **Open:** where claude's
 unsent "continue" comes from, and whether any notification carries it.
+
+---
+
+## Mode after load · `session/set_mode`, then `session/load` — measured 2026-09-29 (#149)
+
+**Question.** #149 lets kapelle set a harness's own mode: `modeMap.safe` for `safe`, and
+`modeMap.ask` for `ask` and `auto`. M6-7b will revive a participant with `session/load`
+into a new process. Does the mode a client set survive that load? And does it leak into a
+new session?
+
+**Method.** A scratch script drove `AcpAgent` directly, not through a room. Its policy
+approved read kinds only and recorded every request, so a harness's mode showed in what it
+asked. Three cases per harness, one run each, a fresh temp workspace each:
+
+- **v1**: `session/new`, set `modeMap.safe`, one turn, stop.
+- **v2**: `session/new`, one turn, set `modeMap.safe`, stop at once, with no turn after.
+- **v3**: `session/new`, set `modeMap.safe`, one turn, set `modeMap.ask`, stop at once.
+
+Every stop was idle and clean (`stop()`, stdin end of file). Process 2 sent `session/load`
+in the same cwd and read the mode from its result (`modes.currentModeId`, or
+`configOptions` with `category: "mode"` for opencode). Then it asked the harness to create
+a file. Process 3 opened a new session and read its start mode. Each turn asked for one
+file, so the behaviour could be checked against the reported mode. pi has no `modeMap`: its
+ACP modes are thinking levels, so the probe set `minimal` (start `medium`) and, in v3, set
+`medium` back.
+
+| | opencode 1.18.30 | claude-agent-acp 0.75.1 | copilot 1.0.86 | pi-acp 0.0.33 |
+| --- | --- | --- | --- | --- |
+| start mode | `build` | `default` | `#agent` | `medium` |
+| `set_mode` accepted | yes, all | yes, all, **`default` included** | yes, all | yes, all |
+| v1: mode after load | `plan` — kept | **`default` — lost** | `#plan` — kept | `low` — neither |
+| v2: mode after load | **`build` — lost; it wrote the file** | **`default` — lost** | `#plan` — kept | `low` — neither |
+| v3: mode after load | **`plan` — the change back is lost** | `default` | `#agent` — kept | `high` — neither |
+| new session in process 3 | `build` | `default` | `#agent` | `medium` |
+
+**Answer: the mode does not reliably survive a load.** Each harness behaves differently:
+
+- **claude drops it every time.** A loaded session starts in `default`.
+- **opencode keeps the mode of its last turn.** A `set_mode` with no turn after it is lost,
+  in both directions. In v2 that left a `safe` session in `build`, and the loaded harness
+  wrote the file with no question: opencode never asks (§M0-1).
+- **copilot keeps it**, in both directions. Its load replays the mode changes as
+  `current_mode_update`.
+- **pi reports a thinking level after a load that is neither the one set nor the start
+  one.** The cause was not checked. It has no safety effect: pi has no `modeMap`.
+
+**What the harness reported was what it did** in all 12 runs: opencode in `plan` refused in
+prose, claude in `default` asked for `edit`, and copilot in `#plan` wrote a plan and no
+file. claude in `plan`, in process 1, asked for `switch_mode` first. **A new session never
+inherited a mode.**
+
+**Consequences.**
+
+- **Send the mode again after every `session/load`.** Without it, a `safe` claude or
+  opencode participant comes back unrestricted. This is M6-7b's (#179). `AGENTS.md` says so
+  beside the mode-id rule.
+- **No start mode needs to be kept.** A load cannot be trusted to report the mode the
+  client wants, so the client sends it; it never needs to restore one.
+
+**Coverage.** One machine, one run per case, idle stops only. A stop during a turn was not
+measured. Versions are the handshake's `agentInfo.version`.
 
 ---
 

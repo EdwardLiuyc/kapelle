@@ -14,6 +14,7 @@ import { test } from "node:test";
 import type { AcpAgent } from "../../protocol/agent.ts";
 import type { AgentEntry } from "../../protocol/registry.ts";
 import {
+  negotiateMode,
   negotiateSafeMode,
   policyFor,
   READ_ONLY_KINDS,
@@ -181,7 +182,7 @@ test("ask falls back to safe, since a policy cannot invent a TTY", async () => {
 
 // --- negotiation -------------------------------------------------------------
 
-/** Only `name` and `setMode` are reachable from `negotiateSafeMode`. */
+/** Only `name` and `setMode` are reachable from `negotiateMode`. */
 function stubAgent(setMode: (id: string) => Promise<unknown>): {
   agent: AcpAgent;
   calls: string[];
@@ -211,6 +212,19 @@ test("safe negotiates; ask and auto do not", async () => {
   assert.equal(await negotiateSafeMode(agent, MEASURED, "ask"), null);
   assert.equal(await negotiateSafeMode(agent, MEASURED, "auto"), null);
   assert.deepEqual(calls, ["plan"], "no id is sent for the other two modes");
+});
+
+test("negotiateMode sends safe's id, or ask's for ask and auto, never auto's", async () => {
+  const { agent, calls } = stubAgent(async () => ({}));
+  const auto = {
+    launch: { command: "x" },
+    measured: { modeMap: { safe: "plan", ask: "default", auto: "bypass" } },
+  } as unknown as AgentEntry;
+
+  for (const mode of ["safe", "ask", "auto"] as const) {
+    assert.equal(await negotiateMode(agent, auto, mode), null);
+  }
+  assert.deepEqual(calls, ["plan", "default", "default"]);
 });
 
 test("an unmeasured harness is skipped, loudly, and the run continues", async () => {
