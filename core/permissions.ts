@@ -79,9 +79,10 @@ export function createPermissionQueue(timeoutMs: number) {
   // closed. The growth term is `title`: it comes from the harness's
   // `tool_call`, bounded only by `MAX_LINE_LENGTH` (32 MiB), so "a couple
   // of hundred bytes" is the typical entry, not the bound, and a harness that
-  // loops on requests grows the map. `daemon.ts` never drops a run from
-  // memory either, so both live equally long. Drop them with their run once
-  // the daemon evicts runs, or truncate `title` here if a loop shows up.
+  // loops on requests grows the map. `daemon.ts` never drops a run or a room
+  // from memory either, so all three live equally long; an `ask` room that
+  // lives for days is the longest. Drop them with their run or room once the
+  // daemon evicts those, or truncate `title` here if a loop shows up.
   const settled = new Map<string, SettledDecision>();
 
   /**

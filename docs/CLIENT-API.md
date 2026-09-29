@@ -332,7 +332,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 4 },
+  "apiVersion": { "major": 1, "minor": 5 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```

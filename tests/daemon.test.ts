@@ -4467,6 +4467,16 @@ test("an ask participant asks through /permissions, and nobody answering denies 
     .trimEnd()
     .split("\n")
     .map((line) => JSON.parse(line));
+  // Both permission events are in the room log, under the participant.
+  assert.deepEqual(
+    log
+      .filter((e) => e.update.sessionUpdate === "_client_permission_queued")
+      .map((e) => [e.participantId, e.update.id]),
+    [
+      [alice.id, first.id],
+      [alice.id, second.id],
+    ],
+  );
   const answered = log.filter(
     (e) => e.update.sessionUpdate === "_client_permission_answered",
   );
