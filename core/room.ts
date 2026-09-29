@@ -48,11 +48,12 @@
  * **Each participant has its own mode** (M6-5, R12): `auto` by default,
  * `ask` or `safe` at add, and changed by `update` at any time. The filter
  * reads the mode live, so a change applies to the next request. The
- * harness's own mode follows before the next turn: `negotiateMode` sends
+ * harness's own mode follows before the next turn: `harnessModeId` picks
  * `modeMap.safe` for `safe` and `modeMap.ask` for the other two, never
  * `modeMap.auto`. An `ask` request waits in the daemon's queue, named by
  * room, participant and turn (S12a). When a turn ends for any reason, its
- * open decisions are denied as `cancel`.
+ * open decisions are denied as `cancel`; a mode that leaves `ask` answers
+ * them as `mode_change`.
  *
  * **MVP scope, deliberately.** The watchdog only warns, and only during a turn (R38):
  * a chat turn is never cut by a clock. No result preamble, no cross-check: a
@@ -84,7 +85,7 @@ import { createEventLog, type EventLog } from "./eventlog.ts";
 import type { EventBus } from "./events.ts";
 import { newParticipantId } from "./ids.ts";
 import type { PermissionQueue } from "./permissions.ts";
-import { negotiateMode, policyFor, resolvePolicy } from "./policy.ts";
+import { harnessModeId, modeLine, policyFor, resolvePolicy } from "./policy.ts";
 import { stateDirFor } from "./runtime.ts";
 import {
   createWatchdog,
@@ -826,21 +827,41 @@ async function startParticipant({
   // send said. A mode change replaces them, so `notices` shows the current
   // mode only (decided 2026-09-29, #194).
   let modeLines: RoomNotice[] = [];
-  let modeSend: RoomNotice | undefined;
 
-  // The harness's own mode: `safe`'s id, or `ask`'s for the other two. Sent
-  // at session start, then before the first turn after a change that moves
-  // it, never during a turn. `sent` is what the harness was last told. A
-  // send that failed is tried again before the next turn; a harness with no
-  // ids is told nothing, ever.
-  let sent: "safe" | "ask" | undefined;
-  const unsent = () => sent !== (mode === "safe" ? "safe" : "ask");
+  // The harness's own mode: `safe`'s id, or `ask`'s for the other two
+  // (`harnessModeId`). Sent at session start, then before the first turn
+  // after a change that moves it, never during a turn. `sent` is the id the
+  // harness was last told. A send that failed is tried again before the next
+  // turn; a mode with no id is never sent.
+  let sent: string | undefined;
+  let failure: { modeId: string; why: string } | undefined;
+  const unsent = () => {
+    const modeId = harnessModeId(spec, mode);
+    return modeId !== undefined && modeId !== sent;
+  };
   const syncMode = async () => {
-    const want = mode === "safe" ? "safe" : "ask";
-    const line = await negotiateMode(agent, spec, mode);
-    // No kind: the not-negotiated line is never suppressible (#13).
-    modeSend = line ? { text: line } : undefined;
-    sent = line && spec.measured?.modeMap ? undefined : want;
+    const modeId = harnessModeId(spec, mode);
+    if (!modeId) return;
+    try {
+      await agent.setMode(modeId);
+      sent = modeId;
+      failure = undefined;
+    } catch (err) {
+      failure = {
+        modeId,
+        why: err instanceof Error ? err.message : String(err),
+      };
+    }
+  };
+  // What the harness was not told, named by the mode it is in now. No kind:
+  // the not-negotiated line is never suppressible (#13).
+  const modeSend = (): RoomNotice[] => {
+    const modeId = harnessModeId(spec, mode);
+    if (!modeId) return [{ text: modeLine(agent.name, mode) }];
+    if (failure?.modeId === modeId) {
+      return [{ text: modeLine(agent.name, mode, failure) }];
+    }
+    return [];
   };
 
   let turn: Promise<void> | undefined;
@@ -963,7 +984,7 @@ async function startParticipant({
     ...(info && { branch: info.branch, baseSha: info.baseSha }),
     sessionId,
     get notices() {
-      return [...notices(), ...modeLines, ...(modeSend ? [modeSend] : [])];
+      return [...notices(), ...modeLines, ...modeSend()];
     },
     status: () => {
       if (dismissed()) return "dismissed";

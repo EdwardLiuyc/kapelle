@@ -111,6 +111,9 @@ export function createPermissionQueue(timeoutMs: number) {
     };
     return new Promise<boolean>((resolve) => {
       const settle = (allow: boolean, reason: PermissionReason) => {
+        // Once only, whoever calls: an answer, the timer, an abort, the end
+        // of a task or a mode change.
+        if (!pending.has(id)) return;
         clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
         pending.delete(id);

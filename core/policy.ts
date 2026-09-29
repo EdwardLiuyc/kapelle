@@ -6,7 +6,7 @@
  * 1. **Negotiate.** Under `safe` we set the harness's own nearest restrictive
  *    mode with `session/set_mode` before the first prompt. This is the only
  *    half that reaches a harness which never asks us anything. A room sets
- *    the harness mode in every mode (`negotiateMode`); a run only in `safe`.
+ *    the harness mode in every mode (`harnessModeId`); a run only in `safe`.
  * 2. **Filter.** `READ_ONLY_KINDS` decides every `session/request_permission`
  *    that still arrives.
  *
@@ -198,21 +198,40 @@ export async function negotiateMode(
   entry: AgentEntry,
   mode: ClientMode,
 ): Promise<string | null> {
-  // The spec says modeId must be one of `availableModes`, but opencode
-  // advertises no modes and honours set_mode anyway (§M0-1), so the registry's
-  // measured ids are the source here, not the handshake.
-  const modeId = entry.measured?.modeMap?.[mode === "safe" ? "safe" : "ask"];
-  if (!modeId) {
-    return `${agent.name}: no measured mode ids, so ${mode} mode was not negotiated — it filters only what this harness asks.`;
-  }
-
+  const modeId = harnessModeId(entry, mode);
+  if (!modeId) return modeLine(agent.name, mode);
   try {
     await agent.setMode(modeId);
     return null;
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
-    return `${agent.name}: session/set_mode "${modeId}" failed (${why}) — ${mode} mode is filtering only.`;
+    return modeLine(agent.name, mode, { modeId, why });
   }
+}
+
+/** The harness-side id for our mode: `safe`'s, or `ask`'s for `ask` and
+ *  `auto`, never `auto`'s. `undefined` when the registry has no id for it. */
+export function harnessModeId(
+  entry: AgentEntry,
+  mode: ClientMode,
+): string | undefined {
+  // The spec says modeId must be one of `availableModes`, but opencode
+  // advertises no modes and honours set_mode anyway (§M0-1), so the registry's
+  // measured ids are the source here, not the handshake.
+  return entry.measured?.modeMap?.[mode === "safe" ? "safe" : "ask"];
+}
+
+/** The notice for a mode the harness was not told: it has no id for it, or
+ *  `failure` says why the send did not work. Built from `mode` each time, so
+ *  a room can name the mode its participant is in now. */
+export function modeLine(
+  name: string,
+  mode: ClientMode,
+  failure?: { modeId: string; why: string },
+): string {
+  return failure
+    ? `${name}: session/set_mode "${failure.modeId}" failed (${failure.why}) — ${mode} mode is filtering only.`
+    : `${name}: no measured mode ids, so ${mode} mode was not negotiated — it filters only what this harness asks.`;
 }
 
 /**

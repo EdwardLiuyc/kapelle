@@ -124,7 +124,7 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   request can carry only a `toolCallId`. Without the map, every decision goes blind.
 - **An approval covers one write.** A denial is sticky. `pickOption` returns `null`
   rather than guess; never fall back to `options[0]` (#13).
-- **We send a harness two mode ids at most.** `negotiateMode` sends
+- **We send a harness two mode ids at most.** `harnessModeId` picks
   `measured.modeMap.safe` for `safe` and `measured.modeMap.ask` for `ask` and `auto`.
   **Never send `modeMap.auto`**: claude's is `bypassPermissions`, where it stops asking
   us. A room sends one at session start and before the first turn after a change; a run

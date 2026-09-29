@@ -1000,3 +1000,33 @@ for (const [to, allow] of [
     assert.equal(existsSync(join(p.worktree, "ACP_TEST.md")), allow);
   });
 }
+
+test("the mode-send line names the current mode, within ask and auto too", async (t) => {
+  const { room, p } = await modeRoom(t, {});
+  const named = () =>
+    p.notices
+      .map((n) => n.text.match(/so (\w+) mode was not negotiated/)?.[1])
+      .filter(Boolean);
+  assert.deepEqual(named(), ["auto"]);
+  room.update(p.id, { mode: "ask" });
+  assert.deepEqual(named(), ["ask"], "at once, with no turn between");
+  room.update(p.id, { mode: "safe" });
+  assert.deepEqual(named(), ["safe"]);
+});
+
+test("a failed mode send names the current mode until it is sent again", async (t) => {
+  const { room, p } = await modeRoom(
+    t,
+    { mode: "ask" },
+    { scenario: "mode-refused-once", spec: { measured: MEASURED } },
+  );
+  const failed = () =>
+    p.notices
+      .map((n) => n.text.match(/failed .* (\w+) mode is filtering only/)?.[1])
+      .filter(Boolean);
+  assert.deepEqual(failed(), ["ask"]);
+  room.update(p.id, { mode: "auto" });
+  assert.deepEqual(failed(), ["auto"], "the same id failed, for auto too");
+  room.update(p.id, { mode: "safe" });
+  assert.deepEqual(failed(), [], "safe's id was never sent, so nothing failed");
+});
