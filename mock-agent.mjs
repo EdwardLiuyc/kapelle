@@ -5,9 +5,9 @@
  * Lets you exercise the client with no harness installed:
  *   node cli.ts "hello" --cmd "node mock-agent.mjs" --mode safe
  *
- * It answers initialize / session/new / session/prompt, streams a message,
- * calls back into the client's fs/read_text_file, and asks permission for a
- * write — enough to prove every path in the client works.
+ * It answers initialize / session/new / session/set_mode / session/prompt,
+ * streams a message, calls back into the client's fs/read_text_file, and asks
+ * permission for a write — enough to prove every path in the client works.
  *
  * `--scenario <name>` selects a named fixture instead (M1b-5). Argv,
  * never a keyword in the prompt: `silent-session` fires during the handshake,
@@ -226,6 +226,18 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     const sid = `sess_mock_${++sessionCount}`;
     sessions.add(sid);
     reply(msg.id, { sessionId: sid });
+  }
+
+  // Any id is accepted, and echoed as `current_mode_update`, so a test reads
+  // from the event stream which harness-side id the client sent.
+  if (msg.method === "session/set_mode") {
+    const { sessionId: sid, modeId } = msg.params;
+    update(sid, {
+      sessionUpdate: "current_mode_update",
+      currentModeId: modeId,
+    });
+    reply(msg.id, {});
+    return;
   }
 
   if (msg.method === "session/cancel") {

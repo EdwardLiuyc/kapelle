@@ -44,7 +44,7 @@ export type { AgentEvent, PermissionReason, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 4 } as const;
+export const API_VERSION = { major: 1, minor: 5 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -210,14 +210,17 @@ export interface Notice {
   kind?: "containment" | "unverified" | "version" | "advisory";
 }
 
-/** One entry of `GET /permissions`. */
-export interface PendingDecision {
+/** One entry of `GET /permissions`: a run's task asked, or a room
+ *  participant's turn did (M6-5, S12a). `turn` is the number on that turn's
+ *  `_client_user_message`. */
+export type PendingDecision = {
   id: string;
-  runId: string;
-  taskId: string;
   kind: ToolKind;
   title: string;
-}
+} & (
+  | { runId: string; taskId: string }
+  | { roomId: string; participantId: string; turn: number }
+);
 
 /** `GET /permissions/:id` (M5-4, #136): an open decision as the list shows
  *  it, or a closed one with its answer and why it closed. `allow` and
@@ -273,7 +276,9 @@ export interface ParticipantDto {
   role?: ParticipantRole;
   /** The harness that runs it. */
   harness: string;
-  mode: "auto";
+  /** Changed with `PATCH`. `auto` by default (R12). */
+  mode: "ask" | "safe" | "auto";
+  /** As they act: `safe` reads `allowReadOutsideRoot` as false. */
   settings: ParticipantSettings;
   /** Where the harness runs: its own checkout, or the cwd itself when
    *  the cwd cannot carry worktrees. */

@@ -5,7 +5,8 @@
  *
  * 1. **Negotiate.** Under `safe` we set the harness's own nearest restrictive
  *    mode with `session/set_mode` before the first prompt. This is the only
- *    half that reaches a harness which never asks us anything.
+ *    half that reaches a harness which never asks us anything. A room sets
+ *    the harness mode in every mode (`negotiateMode`); a run only in `safe`.
  * 2. **Filter.** `READ_ONLY_KINDS` decides every `session/request_permission`
  *    that still arrives.
  *
@@ -167,37 +168,42 @@ export function policyFor(mode: ClientMode): Policy {
 // --- negotiation -------------------------------------------------------------
 
 /**
- * Ask the harness to enter its own nearest restrictive mode, under `safe` only.
+ * Set the harness's own mode to match ours: `modeMap.safe` for `safe`, and
+ * `modeMap.ask` for `ask` and `auto`. **Never `modeMap.auto`**: claude's is
+ * `bypassPermissions`, where the harness stops asking us at all, so our
+ * filter would see nothing. Under `ask` and `auto` the harness keeps asking,
+ * and our filter answers.
  *
- * Measured: opencode wrote the file without this and declined with it, so this
- * is the only half of `safe` that reaches a harness which never asks us
- * anything. Mode ids come from the registry's `measured.modeMap` — they are a
- * claim about one build, so a harness with no `measured` half has no ids and
+ * Measured: opencode wrote the file without `safe`'s id and declined with it,
+ * so this is the only half of `safe` that reaches a harness which never asks
+ * us anything. Sending `ask`'s id also moves a harness out of a start mode
+ * set in its own settings, such as claude's `bypassPermissions`, and back out
+ * of `safe`. claude accepts `default` (measured 2026-09-29).
+ *
+ * Mode ids come from the registry's `measured.modeMap` — they are a claim
+ * about one build, so a harness with no `measured` half has no ids and
  * negotiation is skipped rather than guessed at. A measured harness can also
  * omit `modeMap` when its ACP modes are not safety/behaviour modes (pi-acp's
  * are thinking-effort levels); that is the same skip, not a guess.
  *
- * Deliberately not done for `ask` and `auto`. The map has ids for them, but
- * sending `auto`'s would put claude into `bypassPermissions` — an escalation
- * nothing asked for. Widening this needs its own measurement.
+ * **A harness does not reliably keep its mode across `session/load`**
+ * (`docs/FINDINGS.md` §Mode after load): after a load, call this again.
  *
  * Returns a line for the containment notice, or `null` when there is nothing
- * to say. It never throws: failing to negotiate makes `safe` weaker, which is
- * a thing to say out loud, not a reason to kill the run.
+ * to say. It never throws: failing to negotiate makes the mode weaker, which
+ * is a thing to say out loud, not a reason to stop.
  */
-export async function negotiateSafeMode(
+export async function negotiateMode(
   agent: AcpAgent,
   entry: AgentEntry,
   mode: ClientMode,
 ): Promise<string | null> {
-  if (mode !== "safe") return null;
-
   // The spec says modeId must be one of `availableModes`, but opencode
   // advertises no modes and honours set_mode anyway (§M0-1), so the registry's
   // measured ids are the source here, not the handshake.
-  const modeId = entry.measured?.modeMap?.safe;
+  const modeId = entry.measured?.modeMap?.[mode === "safe" ? "safe" : "ask"];
   if (!modeId) {
-    return `${agent.name}: no measured mode ids, so safe mode was not negotiated — it filters only what this harness asks.`;
+    return `${agent.name}: no measured mode ids, so ${mode} mode was not negotiated — it filters only what this harness asks.`;
   }
 
   try {
@@ -205,6 +211,18 @@ export async function negotiateSafeMode(
     return null;
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
-    return `${agent.name}: session/set_mode "${modeId}" failed (${why}) — safe mode is filtering only.`;
+    return `${agent.name}: session/set_mode "${modeId}" failed (${why}) — ${mode} mode is filtering only.`;
   }
+}
+
+/**
+ * A run's negotiation: `safe` only, so a run under `ask` or `auto` leaves the
+ * harness in its start mode. #193 moves runs to `negotiateMode`.
+ */
+export async function negotiateSafeMode(
+  agent: AcpAgent,
+  entry: AgentEntry,
+  mode: ClientMode,
+): Promise<string | null> {
+  return mode === "safe" ? negotiateMode(agent, entry, mode) : null;
 }

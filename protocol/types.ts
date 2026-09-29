@@ -537,10 +537,12 @@ export interface ClientHarnessExitedEvent extends Meta {
  *  so a client that attaches later replays both sides of the conversation,
  *  not only the harness's answers. It is logged when the turn starts, so a
  *  queued message is logged twice: `_client_message_queued` on arrival, and
- *  this when the harness gets it (M6-4). */
+ *  this when the harness gets it (M6-4). `turn` counts the participant's
+ *  turns from 1; a queued decision names the same number (M6-5, S12). */
 export interface ClientUserMessageEvent extends Meta {
   sessionUpdate: "_client_user_message";
   text: string;
+  turn: number;
 }
 
 /** A message reached a busy participant and waits in its queue (M6-4, R32).

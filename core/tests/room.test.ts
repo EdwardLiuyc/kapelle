@@ -1,12 +1,15 @@
 /**
- * Room runtime tests — stories M6-6a (#150), M6-3 (#147) and M6-4 (#148).
+ * Room runtime tests — stories M6-6a (#150), M6-3 (#147), M6-4 (#148) and
+ * M6-5 (#149).
  *
  * Drives `core/room.ts` directly, with no daemon and no route: each
  * participant owns a checkout and a branch, turns run in parallel, a base
  * may be another participant's branch, and a dismiss keeps the work. The
  * roster changes after the room opens: names stay unique, one orchestrator
  * at most, and a remove leaves the others alone. A busy participant queues
- * messages, and a cancel drops them (M6-4).
+ * messages, and a cancel drops them (M6-4). Each participant has a mode: the
+ * room sets the harness's own mode, and an `ask` participant's write waits in
+ * the permission queue, named by room, participant and turn (M6-5).
  * `mock-agent.mjs`'s default turn writes `ACP_TEST.md` through the client,
  * which is the file each test looks for.
  */
@@ -28,6 +31,7 @@ import {
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { createEventBus } from "../events.ts";
 import { newRoomId } from "../ids.ts";
+import { createPermissionQueue } from "../permissions.ts";
 import {
   openRoom,
   type Participant,
@@ -46,6 +50,10 @@ const git = async (cwd: string, ...args: string[]) =>
 
 isolateStateHome();
 
+/** Every room's `ask` queue. Nothing waits out this timeout: a turn's end
+ *  settles what it left open. */
+const queue = createPermissionQueue(60_000);
+
 /** One checked agent request running the mock, named `name`. */
 const mock = (name: string, fields: Record<string, unknown> = {}) =>
   roomAgent({ cmd: `node ${MOCK_AGENT}`, name, ...fields });
@@ -62,6 +70,7 @@ async function roomWithAlice(
     agents: [mock("alice")],
     setup: await openWorktrees(cwd, roomId),
     bus: createEventBus(),
+    permissions: queue,
   });
   t.after(() => room.dismiss());
   return { room, alice: room.participants[0] as Participant, roomId };
@@ -219,6 +228,7 @@ test("a dismiss during an add leaves nothing behind once it resolves", async (t)
     agents: [],
     setup: await openWorktrees(repo, roomId),
     bus: createEventBus(),
+    permissions: queue,
   });
   const adding = room.add(mock("bob"));
   // Checked the moment `dismiss()` resolves. A look at the branches alone
@@ -250,6 +260,7 @@ test("a dismiss stops every participant's harness", async (t) => {
     agents: [mock("alice")],
     setup: await openWorktrees(repo, roomId),
     bus,
+    permissions: queue,
   });
   t.after(() => room.dismiss());
   const bob = await room.add(mock("bob"));
@@ -282,6 +293,7 @@ test("every participant shows the room's notices and the shared-cwd notice", asy
     agents: [mock("alice")],
     setup: await openWorktrees(cwd, roomId),
     bus: createEventBus(),
+    permissions: queue,
   });
   t.after(() => room.dismiss());
   await room.add(mock("bob"));
@@ -386,9 +398,12 @@ test("an unknown base is a refusal, not a failure", async (t) => {
 
 test("an agent request checks mode, settings and names in one list", () => {
   const cmd = `node ${MOCK_AGENT}`;
-  assert.throws(() => roomAgent({ cmd, name: "a", mode: "safe" }), /M6-5/);
-  assert.throws(() => roomAgent({ cmd, name: "a", mode: "ask" }), /M6-5/);
+  // R12: `auto` unless the request names another mode.
+  assert.equal(roomAgent({ cmd, name: "a" }).mode, "auto");
+  assert.equal(roomAgent({ cmd, name: "a", mode: "safe" }).mode, "safe");
+  assert.equal(roomAgent({ cmd, name: "a", mode: "ask" }).mode, "ask");
   assert.throws(() => roomAgent({ cmd, name: "a", mode: "yolo" }), /mode/);
+  assert.throws(() => roomAgent({ cmd, name: "a", mode: null }), /mode/);
   assert.throws(
     () => roomAgent({ cmd, name: "a", settings: { ttlMs: 5 } }),
     /unknown setting "ttlMs"/,
@@ -438,6 +453,7 @@ test("a dismiss waits for a remove in flight to release its checkout", async (t)
     agents: [mock("bob")],
     setup: await openWorktrees(repo, roomId),
     bus: createEventBus(),
+    permissions: queue,
   });
   const bob = room.participants[0] as Participant;
   const removing = room.remove(bob.id);
@@ -467,6 +483,7 @@ test("allowReadOutsideRoot reaches the harness's file service", async (t) => {
     agents: [reader("closed", false), reader("open", true)],
     setup: await openWorktrees(repo, roomId),
     bus,
+    permissions: queue,
   });
   t.after(() => room.dismiss());
   const [closed, open] = room.participants as [Participant, Participant];
@@ -513,6 +530,7 @@ test("a room in a folder that is not committed refuses an add, naming the folder
       agents: [mock("alice")],
       setup: await openWorktrees(join(repo, "newdir"), roomId),
       bus: createEventBus(),
+      permissions: queue,
     }),
     { code: "invalid_request", message: /the folder newdir is not in HEAD/ },
   );
@@ -541,6 +559,7 @@ async function roomOn(
     ],
     setup: await openWorktrees(repo, roomId),
     bus,
+    permissions: queue,
     ...(limits && { limits }),
   });
   t.after(() => room.dismiss());
@@ -670,4 +689,224 @@ test("removing a participant drops its queue and reports it", async (t) => {
     () => p.send("after"),
     (err) => err instanceof RoomRefusal && err.code === "agent_exited",
   );
+});
+
+// --- modes and permissions (M6-5, #149) --------------------------------------
+
+/** A `measured` half for the mock: ids the test can tell apart, and a
+ *  harness that never asks, so its containment line names the mode. */
+const MEASURED = {
+  shell: "internal",
+  argvChannel: "notification",
+  asksPermission: false,
+  modeMap: { safe: "id-safe", ask: "id-ask", auto: "id-auto" },
+  usage: "per-turn",
+  measuredOn: { version: "0.1.0", date: "2026-09-29" },
+} as const;
+
+/** A room whose one participant runs the mock with `fields`, and every
+ *  event its bus carried. `measured` gives the mock a registry half. */
+async function modeRoom(
+  t: TestContext,
+  fields: Record<string, unknown>,
+  { scenario, measured }: { scenario?: string; measured?: object } = {},
+) {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  const events: AgentEventEnvelope[] = [];
+  bus.addListener((e) => events.push(e));
+  const request = roomAgent({
+    cmd: `node ${MOCK_AGENT}${scenario ? ` --scenario ${scenario}` : ""}`,
+    name: "alice",
+    ...fields,
+  });
+  if (measured) {
+    request.spec = { ...request.spec, measured } as typeof request.spec;
+  }
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [request],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+    permissions: queue,
+  });
+  t.after(() => room.dismiss());
+  const p = room.participants[0] as Participant;
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  return { room, p, of, events, roomId };
+}
+
+/** The `n`th `_client_permission_queued` event, once it has arrived. */
+async function queued(of: (kind: string) => AgentEventEnvelope[], n: number) {
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    const found = of("_client_permission_queued")[n - 1];
+    if (found) return found.update as { id: string; kind: string };
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  throw new Error(`no permission #${n} was queued`);
+}
+
+test("a room sets the harness mode: safe's id, or ask's for ask and auto, never auto's", async (t) => {
+  const { room, p, of, events } = await modeRoom(
+    t,
+    { mode: "safe" },
+    { scenario: "remember", measured: MEASURED },
+  );
+  const sent = () =>
+    of("current_mode_update").map(
+      (e) => (e.update as { currentModeId: string }).currentModeId,
+    );
+  assert.deepEqual(sent(), ["id-safe"], "sent at session start");
+  const line = (mode: string) =>
+    p.notices.some((n) => n.text.includes(`--mode ${mode} does not bound`));
+  assert.ok(line("safe"));
+
+  room.update(p.id, { mode: "auto" });
+  assert.equal(p.mode, "auto");
+  assert.deepEqual(sent(), ["id-safe"], "nothing is sent between turns");
+  assert.ok(line("auto"), "the change posts the new mode's containment line");
+
+  await p.send("one");
+  assert.deepEqual(sent(), ["id-safe", "id-ask"], "sent before the turn");
+  const order = events
+    .map((e) => e.update.sessionUpdate)
+    .filter((u) =>
+      [
+        "_client_user_message",
+        "current_mode_update",
+        "agent_message_chunk",
+      ].includes(u),
+    );
+  assert.deepEqual(order.slice(-3), [
+    "_client_user_message",
+    "current_mode_update",
+    "agent_message_chunk",
+  ]);
+
+  room.update(p.id, { mode: "ask" });
+  await p.send("two");
+  assert.deepEqual(sent(), ["id-safe", "id-ask"], "ask and auto share an id");
+
+  room.update(p.id, { mode: "safe" });
+  await p.send("three");
+  assert.deepEqual(sent(), ["id-safe", "id-ask", "id-safe"]);
+  assert.ok(!sent().includes("id-auto"));
+});
+
+test("a harness with no mode ids gets none, and a line that says so", async (t) => {
+  const { p, of } = await modeRoom(t, { mode: "safe" });
+  assert.equal(of("current_mode_update").length, 0);
+  assert.ok(
+    p.notices.some((n) => /safe mode was not negotiated/.test(n.text)),
+    JSON.stringify(p.notices),
+  );
+});
+
+test("an ask participant's write waits in the queue, named by room, participant and turn", async (t) => {
+  const { p, of, roomId } = await modeRoom(t, { mode: "ask" });
+  const turn = p.send("go");
+  const first = await queued(of, 1);
+  assert.deepEqual(queue.get(first.id), {
+    id: first.id,
+    roomId,
+    participantId: p.id,
+    turn: 1,
+    kind: "edit",
+    title: "Write ACP_TEST.md",
+  });
+  const [message] = of("_client_user_message");
+  assert.ok(message);
+  assert.equal((message.update as { turn: number }).turn, 1);
+
+  assert.equal(queue.answer(first.id, true), "ok");
+  const second = await queued(of, 2);
+  assert.equal(queue.answer(second.id, false), "ok");
+  await turn;
+  assert.equal(queue.answer(first.id, false), "settled", "first writer wins");
+  assert.ok(existsSync(join(p.worktree, "ACP_TEST.md")));
+  assert.deepEqual(
+    of("_client_permission_answered").map((e) => e.update),
+    [
+      {
+        sessionUpdate: "_client_permission_answered",
+        id: first.id,
+        allow: true,
+        reason: "client",
+      },
+      {
+        sessionUpdate: "_client_permission_answered",
+        id: second.id,
+        allow: false,
+        reason: "client",
+      },
+    ],
+  );
+  // S10: the room log names the participant, never the harness.
+  assert.ok(
+    [
+      ...of("_client_permission_queued"),
+      ...of("_client_permission_answered"),
+    ].every((e) => e.agent === p.id),
+  );
+
+  // The next turn is turn 2.
+  const next = p.send("again");
+  const third = await queued(of, 3);
+  assert.equal((queue.get(third.id) as { turn: number }).turn, 2);
+  p.cancel();
+  await next;
+});
+
+for (const [how, end] of [
+  ["a cancel", async ({ p }) => void p.cancel()],
+  ["a removal", async ({ room, p }) => room.remove(p.id)],
+  ["a dismiss", async ({ room }) => room.dismiss()],
+  [
+    "a harness that exits",
+    async ({ of }) => {
+      const [spawned] = of("_client_harness_spawned");
+      assert.ok(spawned);
+      process.kill((spawned.update as { pid: number }).pid, "SIGKILL");
+    },
+  ],
+] as [
+  string,
+  (r: Awaited<ReturnType<typeof modeRoom>>) => Promise<unknown>,
+][]) {
+  test(`${how} closes an open decision as cancel`, async (t) => {
+    const r = await modeRoom(t, { mode: "ask" });
+    const turn = r.p.send("go");
+    const { id } = await queued(r.of, 1);
+    await end(r);
+    await turn;
+    assert.deepEqual(
+      r.of("_client_permission_answered").map((e) => e.update),
+      [
+        {
+          sessionUpdate: "_client_permission_answered",
+          id,
+          allow: false,
+          reason: "cancel",
+        },
+      ],
+    );
+    assert.equal((queue.get(id) as { reason: string }).reason, "cancel");
+  });
+}
+
+test("a safe participant's write is refused, and it reads nothing outside", async (t) => {
+  const { room, p, of } = await modeRoom(t, {
+    mode: "safe",
+    settings: { allowReadOutsideRoot: true },
+  });
+  assert.deepEqual(p.settings, { allowReadOutsideRoot: false });
+  await p.send("go");
+  assert.ok(!existsSync(join(p.worktree, "ACP_TEST.md")));
+  assert.equal(of("_client_permission_queued").length, 0, "nothing asks");
+
+  room.update(p.id, { mode: "auto" });
+  assert.deepEqual(p.settings, { allowReadOutsideRoot: true });
 });

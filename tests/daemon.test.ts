@@ -33,6 +33,7 @@ import {
   API_VERSION,
   type MessageAccepted,
   type ParticipantDto,
+  type PermissionDecision,
   type RoomDto,
   type RoomEventLine,
   type RoomListEntry,
@@ -3700,7 +3701,7 @@ test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a
     // A default name that breaks R22 asks for one rather than mangling it.
     [[{ cmd: "/bin/true" }], /give the agent a "name"/],
     [[{ cmd: REMEMBER, role: "boss" }], /invalid role "boss"/],
-    [[{ cmd: REMEMBER, mode: "ask" }], /comes with M6-5/],
+    [[{ cmd: REMEMBER, mode: "turbo" }], /invalid mode "turbo"/],
     [[{ cmd: REMEMBER, turbo: true }], /unknown agent field "turbo"/],
     [[{ cmd: REMEMBER, name: "c", base: "no-such-ref" }], /does not resolve/],
   ];
@@ -3872,7 +3873,7 @@ test("participants are added, listed, changed and removed through the routes", a
     [
       "POST",
       base,
-      { cmd: REMEMBER, name: "c", mode: "safe" },
+      { cmd: REMEMBER, name: "c", mode: null },
       400,
       "invalid_request",
     ],
@@ -3891,7 +3892,7 @@ test("participants are added, listed, changed and removed through the routes", a
       409,
       "orchestrator_exists",
     ],
-    ["PATCH", `${base}/${bob.id}`, { mode: "ask" }, 400, "invalid_request"],
+    ["PATCH", `${base}/${bob.id}`, { mode: "turbo" }, 400, "invalid_request"],
     ["PATCH", `${base}/${bob.id}`, {}, 400, "invalid_request"],
     ["PATCH", `${base}/${bob.id}`, { harness: "x" }, 400, "invalid_request"],
     ["GET", `${base}/p-nope`, undefined, 404, "participant_not_found"],
@@ -4409,4 +4410,85 @@ test("chat.ts attach talks to the participant it names, even with no orchestrato
   const r = await c.done;
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /bob: previous: \(none\)/);
+});
+
+test("an ask participant asks through /permissions, and nobody answering denies it at the timeout", async (t) => {
+  const d = await boot(t, undefined, ["--permission-timeout", "2"]);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+  const { id } = (await api<RoomReply>(d, "POST", "/rooms", { cwd })).body;
+  const alice = await addAgent(d, id, {
+    cmd: `node ${MOCK_AGENT}`,
+    name: "alice",
+    role: "orchestrator",
+    mode: "ask",
+  });
+  assert.equal(alice.mode, "ask");
+
+  const sent = await api(d, "POST", `/rooms/${id}/messages`, { text: "go" });
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  const first = (await pendingOne(d)) as unknown as Record<string, unknown>;
+  assert.deepEqual(
+    { ...first, id: undefined },
+    {
+      id: undefined,
+      roomId: id,
+      participantId: alice.id,
+      turn: 1,
+      kind: "edit",
+      title: "Write ACP_TEST.md",
+    },
+  );
+  const allowed = await api(d, "POST", `/permissions/${first.id}`, {
+    allow: true,
+  });
+  assert.equal(allowed.status, 200, allowed.body.error?.message);
+  assert.equal(
+    (await api(d, "POST", `/permissions/${first.id}`, { allow: false })).status,
+    409,
+  );
+
+  // The second question (the delete) waits for nobody: the 2 s timeout.
+  const second = await pendingOne(d);
+  assert.notEqual(second.id, first.id);
+  let closed: PermissionDecision | undefined;
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    closed = (
+      await api<PermissionDecision>(d, "GET", `/permissions/${second.id}`)
+    ).body;
+    if (closed.reason) break;
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.deepEqual([closed?.allow, closed?.reason], [false, "timeout"]);
+
+  const log = (
+    await readFile(join(stateDirFor(root), "rooms", id, "events.jsonl"), "utf8")
+  )
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const answered = log.filter(
+    (e) => e.update.sessionUpdate === "_client_permission_answered",
+  );
+  assert.deepEqual(
+    answered.map((e) => [e.participantId, e.update.reason]),
+    [
+      [alice.id, "client"],
+      [alice.id, "timeout"],
+    ],
+  );
+  assert.equal(
+    log.find((e) => e.update.sessionUpdate === "_client_user_message")?.update
+      .turn,
+    1,
+  );
+
+  const changed = await api<ParticipantDto & RoomReply>(
+    d,
+    "PATCH",
+    `/rooms/${id}/agents/${alice.id}`,
+    { mode: "safe" },
+  );
+  assert.equal(changed.status, 200, changed.body.error?.message);
+  assert.equal(changed.body.mode, "safe");
 });

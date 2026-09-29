@@ -866,7 +866,7 @@ function roomRefused(err: unknown) {
  * refusals keep `POST /runs`'s order — not added (403), then a bad request
  * (400) — and the answer waits for every harness's session, so a harness
  * that cannot start is this request's error, not a dead participant (S13).
- * Always `auto`: nobody answers a room's permission prompts yet (M6-5).
+ * An agent's `mode` is `auto` unless it names `ask` or `safe` (R12, M6-5).
  */
 async function postRoom(req: IncomingMessage, res: ServerResponse) {
   const body = await readBody(req, ["cwd", "title", "agents"]);
@@ -919,6 +919,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
       agents,
       setup,
       bus,
+      permissions,
       limits,
     });
   } catch (err) {

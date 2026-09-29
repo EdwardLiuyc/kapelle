@@ -20,6 +20,13 @@
  * `"run_end"`, passed to `abort()` by `daemon.ts` — and anything else reads
  * as `cancel`.
  *
+ * **A room asks through the same queue** (M6-5, S12a). `roomPolicy` hands a
+ * participant's turn a `Policy`, and its entries name the room, the
+ * participant and the turn instead of a run and a task. A room closes an open
+ * decision only through the turn's signal, so every room path that is not an
+ * answer or the timeout reads `cancel`: cancel-turn, removal, a harness that
+ * exits and a dismiss (decided 2026-09-28, #149).
+ *
  * The queue hands `runRun` a plain `Policy` through `RunOptions.askPolicy`,
  * so neither the pool nor `protocol/` knows it exists. It knows no HTTP
  * either; `daemon.ts` maps its three answers to status codes.
@@ -32,26 +39,32 @@ import type { PermissionReason, ToolKind } from "../protocol/types.ts";
 import type { EventBus } from "./events.ts";
 import { READ_ONLY_KINDS } from "./policy.ts";
 
+/** Who asked: a run's task, or a room participant's turn. `turn` counts
+ *  the participant's turns from 1, as `_client_user_message` does. */
+type Asker =
+  | { runId: string; taskId: string }
+  | { roomId: string; participantId: string; turn: number };
+
 /** One decision waiting for an answer, as `GET /permissions` lists it. */
-export interface PendingDecision {
+export type PendingDecision = Asker & {
   id: string;
-  runId: string;
-  taskId: string;
   kind: ToolKind;
   title: string;
-}
+};
 
 /** A decision that has closed, as `GET /permissions/:id` returns it. */
-export interface SettledDecision extends PendingDecision {
+export type SettledDecision = PendingDecision & {
   allow: boolean;
   reason: PermissionReason;
-}
+};
 
 export type AnswerResult = "ok" | "settled" | "unknown";
 
 /** The run signal's reason, when it is one the queue knows. */
 const abortReason = (signal: AbortSignal): PermissionReason =>
   signal.reason === "run_end" ? "run_end" : "cancel";
+
+export type PermissionQueue = ReturnType<typeof createPermissionQueue>;
 
 export function createPermissionQueue(timeoutMs: number) {
   const pending = new Map<
@@ -71,68 +84,93 @@ export function createPermissionQueue(timeoutMs: number) {
   // the daemon evicts runs, or truncate `title` here if a loop shows up.
   const settled = new Map<string, SettledDecision>();
 
-  return {
-    /**
-     * The `ask` decider for one run. Read-only kinds are approved without a
-     * question, exactly as `makeAskPolicy` does. `signal` is the run's cancel:
-     * aborting it denies every decision this run still has open, so a
-     * cancelled run settles instead of waiting out the timer.
-     */
-    policyFor(runId: string, bus: EventBus, signal: AbortSignal): Policy {
-      return ({ agent, toolCall }) => {
-        if (READ_ONLY_KINDS.has(toolCall.kind)) return true;
-        if (signal.aborted) return false;
-        const id = randomUUID();
-        const decision: PendingDecision = {
+  /**
+   * Queues one decision and resolves with the answer. Read-only kinds are
+   * approved without a question, exactly as `makeAskPolicy` does. `signal`
+   * is the owner's cancel: aborting it denies every decision it still has
+   * open, so a cancel settles instead of waiting out the timer. `agent` is
+   * the bus's name for the asker: the task id, or the participant id.
+   */
+  const ask = (
+    asker: Asker,
+    agent: string,
+    bus: EventBus,
+    signal: AbortSignal,
+    toolCall: { kind: ToolKind; title: string },
+  ): boolean | Promise<boolean> => {
+    if (READ_ONLY_KINDS.has(toolCall.kind)) return true;
+    if (signal.aborted) return false;
+    const id = randomUUID();
+    const decision: PendingDecision = {
+      id,
+      ...asker,
+      kind: toolCall.kind,
+      title: toolCall.title,
+    };
+    return new Promise<boolean>((resolve) => {
+      const settle = (allow: boolean, reason: PermissionReason) => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        pending.delete(id);
+        settled.set(id, { ...decision, allow, reason });
+        // ponytail: a `run_end` deny comes after `core/run.ts` has closed
+        // the event log, so only `get` records it; unreachable today,
+        // since `denyTask` runs at every task's end. M5-5's run-finished
+        // event is the hook that would put it in the log.
+        bus.emit({
+          agent,
+          update: {
+            sessionUpdate: "_client_permission_answered",
+            id,
+            allow,
+            reason,
+          },
+        });
+        resolve(allow);
+      };
+      const onAbort = () => settle(false, abortReason(signal));
+      const timer = setTimeout(() => settle(false, "timeout"), timeoutMs);
+      signal.addEventListener("abort", onAbort, { once: true });
+      pending.set(id, { decision, settle });
+      // After the entry exists, so a client reacting to the event finds it.
+      bus.emit({
+        agent,
+        update: {
+          sessionUpdate: "_client_permission_queued",
           id,
-          runId,
-          taskId: agent,
           kind: toolCall.kind,
           title: toolCall.title,
-        };
-        return new Promise<boolean>((resolve) => {
-          const settle = (allow: boolean, reason: PermissionReason) => {
-            clearTimeout(timer);
-            signal.removeEventListener("abort", onAbort);
-            pending.delete(id);
-            settled.set(id, { ...decision, allow, reason });
-            // ponytail: a `run_end` deny comes after `core/run.ts` has closed
-            // the event log, so only `get` records it; unreachable today,
-            // since `denyTask` runs at every task's end. M5-5's run-finished
-            // event is the hook that would put it in the log.
-            bus.emit({
-              agent,
-              update: {
-                sessionUpdate: "_client_permission_answered",
-                id,
-                allow,
-                reason,
-              },
-            });
-            resolve(allow);
-          };
-          const onAbort = () => settle(false, abortReason(signal));
-          const timer = setTimeout(() => settle(false, "timeout"), timeoutMs);
-          signal.addEventListener("abort", onAbort, { once: true });
-          pending.set(id, { decision, settle });
-          // After the entry exists, so a client reacting to the event finds it.
-          bus.emit({
-            agent,
-            update: {
-              sessionUpdate: "_client_permission_queued",
-              id,
-              kind: toolCall.kind,
-              title: toolCall.title,
-            },
-          });
-        });
-      };
+        },
+      });
+    });
+  };
+
+  return {
+    /** The `ask` decider for one run. `signal` is the run's cancel. */
+    policyFor(runId: string, bus: EventBus, signal: AbortSignal): Policy {
+      return ({ agent, toolCall }) =>
+        ask({ runId, taskId: agent }, agent, bus, signal, toolCall);
+    },
+
+    /** The `ask` decider for one participant's turn. `signal` is the turn's:
+     *  the room aborts it when the turn ends for any reason. */
+    roomPolicy(
+      asker: { roomId: string; participantId: string; turn: number },
+      bus: EventBus,
+      signal: AbortSignal,
+    ): Policy {
+      return ({ toolCall }) =>
+        ask(asker, asker.participantId, bus, signal, toolCall);
     },
 
     /** Deny everything one task left open, once that task has ended. */
     denyTask(runId: string, taskId: string): void {
       for (const { decision, settle } of [...pending.values()]) {
-        if (decision.runId === runId && decision.taskId === taskId) {
+        if (
+          "runId" in decision &&
+          decision.runId === runId &&
+          decision.taskId === taskId
+        ) {
           settle(false, "task_end");
         }
       }

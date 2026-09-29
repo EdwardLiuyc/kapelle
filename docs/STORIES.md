@@ -2423,6 +2423,14 @@ Decisions: R6, R7, R8, R13, R32, R34, R38, R39, R41, R43, S5, S10, S11.
 Per-participant mode at add, default `auto`; `ask`/`safe` selectable (S2). The permission
 queue gains `roomId`, `participantId`, `turn` (S12); first-writer-wins and timeout deny;
 the answered event from M5-4. `auto` still warns about silent autonomy.
+**Amended 2026-09-28 (#149 pickup).** A room sets the harness's own mode: `modeMap.safe`
+for `safe`, `modeMap.ask` for `ask` and `auto`, never `modeMap.auto`; at session start
+and before the first turn after a change. No start mode is kept. A room decision names
+`roomId`, `participantId` and `turn` in place of `runId`/`taskId`, and `turn` is also on
+`_client_user_message`. Every room path that closes a decision without an answer or the
+timeout reads `cancel`. The TUI answer is M4-3's; this story proves it over HTTP. Runs keep
+`safe`-only negotiation (#193). **2026-09-29:** a mode does not survive `session/load`
+reliably (`docs/FINDINGS.md` §Mode after load), so M6-7b sends it again after a load.
 Decisions: R12, S2, S12.
 
 **Split 2026-09-26.** M6-6 held two jobs. The worktree for each

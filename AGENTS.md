@@ -124,9 +124,12 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   request can carry only a `toolCallId`. Without the map, every decision goes blind.
 - **An approval covers one write.** A denial is sticky. `pickOption` returns `null`
   rather than guess; never fall back to `options[0]` (#13).
-- **`safe` negotiates, then filters.** `negotiateSafeMode` sends
-  `measured.modeMap.safe`. Never send a mode id for `ask` or `auto`: `auto`'s id puts
-  claude into `bypassPermissions`.
+- **We send a harness two mode ids at most.** `negotiateMode` sends
+  `measured.modeMap.safe` for `safe` and `measured.modeMap.ask` for `ask` and `auto`.
+  **Never send `modeMap.auto`**: claude's is `bypassPermissions`, where it stops asking
+  us. A room sends one at session start and before the first turn after a change; a run
+  sends only `safe`'s (#193). A harness does not keep its mode across `session/load`
+  (§Mode after load), so send it again after a load.
 - **`--quiet` never hides the containment notice** or the "not negotiated" line (#13).
 - **Status comes from our own record** (did we cancel, did the watchdog fire), not from
   `stopReason`. copilot answers `end_turn` for a turn it cancelled (§M0-4).
