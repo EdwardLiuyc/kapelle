@@ -4180,6 +4180,25 @@ test("chat.ts talks to a room end to end: messages in, answers out, /dismiss sto
   );
 });
 
+test("chat.ts prints an answer that comes in two chunks once", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+
+  const c = spawnCli(
+    t,
+    ["new", "--cmd", `node ${MOCK_AGENT} --scenario split`, "--cwd", cwd],
+    "chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  c.child.stdin.end("alpha\nbeta\n/dismiss\n");
+  const r = await c.done;
+
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /you: alpha\nmock-agent: previous: \(none\)\n/);
+  assert.match(r.stdout, /you: beta\nmock-agent: previous: alpha\n/);
+});
+
 test("chat.ts reaches the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
   // S8, widened by M4-1: chat.ts imports `client/`, pi-tui and
   // `core/runtime.ts` (the `daemon.json` path), type imports included.

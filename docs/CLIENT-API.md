@@ -770,6 +770,13 @@ with ACP names.
 | `_client_user_message` | `text`, `turn` | The participant's turn starts with this message. The line's `participantId` names who got it. `turn` counts that participant's turns from 1. It is absent on lines written before 1.5. |
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
+| `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
+| `_client_participant_changed` | `name?`, `role?`, `mode?` | A rename, or a new role or mode. Only the changed fields are present. `role: null` means the role was cleared. |
+| `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
+
+Build the roster from these three events. Then a replay shows the roster as it was at
+each `seq`, and a rename by another client shows too. `client/room.ts` does this for a
+TypeScript client.
 
 A turn is the span from `_client_user_message` to `_client_turn_ended` of one
 participant. A `_client_message_queued` with no `_client_user_message` after it was

@@ -29,7 +29,9 @@
  * holds its name and role, so two racing adds cannot both take one. A
  * removed participant leaves the roster. Its checkout is released as at
  * dismiss, and a release notice goes to the room's notices, since the
- * participant that would show it is gone.
+ * participant that would show it is gone. Each change is on the log —
+ * `_client_participant_added`, `_changed` and `_removed`, starters included —
+ * so a client builds the roster from the stream alone (M6-10).
  *
  * **The orchestrator is a label, not a slot** (R44). A participant has the
  * role it was given and no other; nothing is promoted by default.
@@ -636,6 +638,17 @@ export async function openRoom({
     }
     members.push({ ...started, spec: request.spec, onNotice });
     participants.push(started.participant);
+    const { role } = request;
+    bus.emit({
+      agent: id,
+      update: {
+        sessionUpdate: "_client_participant_added",
+        name: request.name,
+        ...(role && { role }),
+        harness: request.spec.name,
+        mode: request.mode,
+      },
+    });
     return started.participant;
   };
 
@@ -693,6 +706,10 @@ export async function openRoom({
     if (changes.name !== undefined) p.name = changes.name;
     if (changes.role === null) delete p.role;
     else if (changes.role !== undefined) p.role = changes.role;
+    bus.emit({
+      agent: id,
+      update: { sessionUpdate: "_client_participant_changed", ...changes },
+    });
     return p;
   };
 
@@ -708,6 +725,12 @@ export async function openRoom({
     // emit on a bus that catches every listener. A step that can reject,
     // added to `stop()`, would strand this checkout with no notice.
     await found.stop();
+    // After the stop, so the turn's end and the harness's exit come first
+    // and this is the participant's last line.
+    bus.emit({
+      agent: id,
+      update: { sessionUpdate: "_client_participant_removed" },
+    });
     // The participant is gone, so a kept checkout is the room's to report.
     await release(id, found.participant.worktree, onRoomNotice);
   };

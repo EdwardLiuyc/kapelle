@@ -222,13 +222,20 @@ test("a participant cannot be added to a dismissed room", async (t) => {
 test("a dismiss during an add leaves nothing behind once it resolves", async (t) => {
   const repo = await gitRepo(t);
   const roomId = newRoomId();
+  const bus = createEventBus();
   const room = await openRoom({
     roomId,
     cwd: repo,
     agents: [],
     setup: await openWorktrees(repo, roomId),
-    bus: createEventBus(),
+    bus,
     permissions: queue,
+  });
+  const joined: string[] = [];
+  bus.addListener(({ update }) => {
+    if (update.sessionUpdate === "_client_participant_added") {
+      joined.push(update.name);
+    }
   });
   const adding = room.add(mock("bob"));
   // Checked the moment `dismiss()` resolves. A look at the branches alone
@@ -242,6 +249,7 @@ test("a dismiss during an add leaves nothing behind once it resolves", async (t)
   assert.ok(settled, "dismiss() resolved while an add was still starting");
   assert.deepEqual(await roomBranches(repo, roomId), []);
   await assert.rejects(adding, /dismissed/);
+  assert.deepEqual(joined, [], "a rolled-back add never joined the log");
 });
 
 test("a dismiss stops every participant's harness", async (t) => {
@@ -376,6 +384,69 @@ test("a remove cancels a live turn, keeps the branch with work, and leaves the o
   await room.add(mock("bob"));
   await alice.send("still here");
   assert.equal(alice.status(), "idle");
+});
+
+test("every roster change is on the log, and a removed participant's last line says so (M6-10)", async (t) => {
+  const { room, p: alice, events, of } = await roomOn(t, "remember");
+  const bob = await room.add(mock("bob", { role: "tester" }));
+  room.update(bob.id, { name: "robert", mode: "safe" });
+  room.update(bob.id, { role: null });
+  await room.remove(bob.id);
+
+  const roster = events
+    .filter((e) => e.update.sessionUpdate.startsWith("_client_participant_"))
+    .map(({ agent, update }) => ({ agent, update }));
+  assert.deepEqual(roster, [
+    {
+      agent: alice.id,
+      update: {
+        sessionUpdate: "_client_participant_added",
+        name: "alice",
+        harness: "mock-agent",
+        mode: "auto",
+      },
+    },
+    {
+      agent: bob.id,
+      update: {
+        sessionUpdate: "_client_participant_added",
+        name: "bob",
+        role: "tester",
+        harness: "mock-agent",
+        mode: "auto",
+      },
+    },
+    {
+      agent: bob.id,
+      update: {
+        sessionUpdate: "_client_participant_changed",
+        name: "robert",
+        mode: "safe",
+      },
+    },
+    {
+      agent: bob.id,
+      update: { sessionUpdate: "_client_participant_changed", role: null },
+    },
+    { agent: bob.id, update: { sessionUpdate: "_client_participant_removed" } },
+  ]);
+  // Joined once the harness has a session, and nothing of bob's after he left.
+  const bobs = events.filter((e) => e.agent === bob.id);
+  assert.equal(
+    bobs.at(-1)?.update.sessionUpdate,
+    "_client_participant_removed",
+  );
+  assert.ok(
+    of("_client_harness_spawned").every(
+      (e) =>
+        events.indexOf(e) <
+        events.findIndex(
+          (a) =>
+            a.agent === e.agent &&
+            a.update.sessionUpdate === "_client_participant_added",
+        ),
+    ),
+  );
 });
 
 test("update and remove refuse a dismissed room", async (t) => {

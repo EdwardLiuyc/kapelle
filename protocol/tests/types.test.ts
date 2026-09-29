@@ -124,6 +124,14 @@ const CLIENT_EVENTS: AgentEvent[] = [
     baseSha: "0123456789abcdef",
   },
   { sessionUpdate: "_client_task_finished", status: "done", durationMs: 1234 },
+  {
+    sessionUpdate: "_client_participant_added",
+    name: "alice",
+    harness: "claude",
+    mode: "auto",
+  },
+  { sessionUpdate: "_client_participant_changed", role: null },
+  { sessionUpdate: "_client_participant_removed" },
 ];
 
 // --- the exhaustive switch ---------------------------------------------------
