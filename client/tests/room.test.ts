@@ -3,11 +3,12 @@
  *
  * The stream is recorded, not written by hand: a real room (`core/room.ts`)
  * with three mock participants runs once, and its `events.jsonl` is what the
- * reducer reads. alice queues and answers three messages, bob asks a
- * permission question under `ask` that is answered, then is renamed and
- * removed, and carol stalls until her turn is cancelled. Live, replay,
- * reconnect and a cut turn all read that one recording. The restart case
- * (`paused`, `killed`) is M6-7a's (#151).
+ * reducer reads. alice queues and answers three messages, each in two
+ * chunks. bob asks a permission question under `ask` that is answered. Then
+ * he is renamed, his role is set then cleared, his mode changes, and he is
+ * removed. carol stalls until her turn is cancelled. Live, replay, reconnect
+ * and a cut turn all read that one recording. The restart case (`paused`,
+ * `killed`) is M6-7a's (#151).
  */
 
 import assert from "node:assert/strict";
@@ -69,7 +70,7 @@ async function record(t: TestContext): Promise<Recording> {
   const room = await openRoom({
     roomId,
     cwd: repo,
-    agents: [agent("alice", "remember")],
+    agents: [agent("alice", "split")],
     setup: await openWorktrees(repo, roomId),
     bus,
     permissions: queue,
@@ -81,6 +82,7 @@ async function record(t: TestContext): Promise<Recording> {
   const bob = await room.add(agent("bob", undefined, "ask"));
   await bob.send("write it");
   room.update(bob.id, { name: "robert", role: "tester" });
+  room.update(bob.id, { mode: "safe", role: null });
 
   const carol = await room.add(agent("carol", "stall"));
   const warned = new Promise<void>((ok) => {
@@ -136,8 +138,8 @@ test("replay: the whole history gives the roster, threads, turns and questions",
   );
   const b = who(state, bob);
   assert.equal(b.name, "robert");
-  assert.equal(b.role, "tester");
-  assert.equal(b.mode, "ask");
+  assert.equal(b.role, undefined, "a null role cleared it");
+  assert.equal(b.mode, "safe");
   assert.equal(b.removed, true);
 
   const a = who(state, alice);
@@ -216,7 +218,13 @@ test("live: the state is right at each line, not only at the end", async (t) => 
     }
     if (u.sessionUpdate === "_client_stall_warning") {
       assert.equal(needsAttention(state, carol), true);
+      seen(state, carol);
+      assert.equal(needsAttention(state, carol), false, "seen clears a stall");
       checked.add("stall");
+    }
+    if (u.sessionUpdate === "_client_participant_changed" && u.role) {
+      assert.equal(who(state, bob).role, "tester");
+      checked.add("role");
     }
     if (u.sessionUpdate === "agent_message_chunk") {
       assert.equal(changed?.type, "answer");
@@ -226,6 +234,7 @@ test("live: the state is right at each line, not only at the end", async (t) => 
     "answer",
     "question",
     "queue",
+    "role",
     "stall",
   ]);
 });
@@ -275,4 +284,24 @@ test("unread counts what the participants said, and seen clears it", async (t) =
   assert.equal(a.unread, 7);
   seen(state, alice);
   assert.equal(a.unread, 0);
+});
+
+test("a harness that exits mid-turn stays exited when the turn ends", async (t) => {
+  const { lines, carol } = await recorded(t);
+  const of = (kind: string) =>
+    lines.findIndex(
+      (l) => l.participantId === carol && l.update.sessionUpdate === kind,
+    );
+  // Its exit moved before its turn end, as a crash writes them.
+  const exit = lines[of("_client_harness_exited")] as RoomEventLine;
+  const end = of("_client_turn_ended");
+  const crashed = [
+    ...lines.slice(0, end).filter((l) => l !== exit),
+    exit,
+    ...lines.slice(end).filter((l) => l !== exit),
+  ].map((line, i) => ({ ...line, seq: i + 1 }));
+  const state = newRoomState();
+  for (const line of crashed.slice(0, end + 2)) applyLine(state, line);
+  assert.equal(who(state, carol).turns[0]?.state, "ended");
+  assert.equal(who(state, carol).status, "exited");
 });

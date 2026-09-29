@@ -104,6 +104,7 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
 | `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
+| `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. `chat.ts` draws from it. |
 | `chat.ts` | Chat front end: a pi-tui screen on a TTY, plain lines when piped. It talks HTTP only, and imports only `client/`, pi-tui and `core/runtime.ts`. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 

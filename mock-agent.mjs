@@ -33,6 +33,7 @@ const SCENARIOS = {
     "like stall, but ignores SIGTERM and stays alive after its stdin closes",
   repeat: "the same tool title on a loop, then ends the turn itself",
   remember: "answers each turn with the previous turn's prompt, per session",
+  split: "remember, with each answer sent in two chunks",
   slow: "like remember, but answers after SLOW_MS; a cancel ends the turn at once",
   "mode-refused-once": "refuses the first session/set_mode, then accepts",
 };
@@ -279,7 +280,13 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // A second turn on one session, after the first ended. The answer carries
     // the previous turn's prompt, so a test can tell a session that kept its
     // context from a client that silently opened a new one.
-    if (scenario === "remember" || scenario === "slow") {
+    // `split` is `remember` with the answer in two chunks, so a client must
+    // join the pieces of one answer.
+    if (
+      scenario === "remember" ||
+      scenario === "slow" ||
+      scenario === "split"
+    ) {
       const text = msg.params.prompt?.[0]?.text ?? "";
       const previous = lastPrompt.get(sid) ?? "(none)";
       lastPrompt.set(sid, text);
@@ -290,10 +297,16 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         if (stalledPromptId !== msg.id) return;
         stalledPromptId = null;
       }
-      update(sid, {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: `previous: ${previous}` },
-      });
+      const chunks =
+        scenario === "split"
+          ? ["previous: ", previous]
+          : [`previous: ${previous}`];
+      for (const text of chunks) {
+        update(sid, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        });
+      }
       reply(msg.id, { stopReason: "end_turn", usage: USAGE });
       return;
     }

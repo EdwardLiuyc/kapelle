@@ -222,13 +222,20 @@ test("a participant cannot be added to a dismissed room", async (t) => {
 test("a dismiss during an add leaves nothing behind once it resolves", async (t) => {
   const repo = await gitRepo(t);
   const roomId = newRoomId();
+  const bus = createEventBus();
   const room = await openRoom({
     roomId,
     cwd: repo,
     agents: [],
     setup: await openWorktrees(repo, roomId),
-    bus: createEventBus(),
+    bus,
     permissions: queue,
+  });
+  const joined: string[] = [];
+  bus.addListener(({ update }) => {
+    if (update.sessionUpdate === "_client_participant_added") {
+      joined.push(update.name);
+    }
   });
   const adding = room.add(mock("bob"));
   // Checked the moment `dismiss()` resolves. A look at the branches alone
@@ -242,6 +249,7 @@ test("a dismiss during an add leaves nothing behind once it resolves", async (t)
   assert.ok(settled, "dismiss() resolved while an add was still starting");
   assert.deepEqual(await roomBranches(repo, roomId), []);
   await assert.rejects(adding, /dismissed/);
+  assert.deepEqual(joined, [], "a rolled-back add never joined the log");
 });
 
 test("a dismiss stops every participant's harness", async (t) => {
