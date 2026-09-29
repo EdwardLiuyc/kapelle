@@ -1030,3 +1030,111 @@ test("a failed mode send names the current mode until it is sent again", async (
   room.update(p.id, { mode: "safe" });
   assert.deepEqual(failed(), [], "safe's id was never sent, so nothing failed");
 });
+
+for (const [mode, id] of [
+  ["safe", "id-safe"],
+  ["ask", "id-ask"],
+  ["auto", "id-ask"],
+] as const) {
+  test(`a room opened in ${mode} sends ${id} at session start`, async (t) => {
+    const { of } = await modeRoom(
+      t,
+      { mode },
+      { spec: { measured: MEASURED } },
+    );
+    assert.deepEqual(
+      of("current_mode_update").map(
+        (e) => (e.update as { currentModeId: string }).currentModeId,
+      ),
+      [id],
+    );
+  });
+}
+
+test("a mode change answers only that participant's question", async (t) => {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  const request = (name: string) => {
+    const one = roomAgent({ cmd: `node ${MOCK_AGENT}`, name, mode: "ask" });
+    one.spec = { ...one.spec, measured: MEASURED } as typeof one.spec;
+    return one;
+  };
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [request("alice"), request("bob")],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+    permissions: queue,
+  });
+  t.after(() => room.dismiss());
+  const [alice, bob] = room.participants as [Participant, Participant];
+  const turns = [alice.send("go"), bob.send("go")];
+
+  let asks: { id: string; participantId: string }[] = [];
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    asks = queue
+      .list()
+      .flatMap((d) =>
+        "roomId" in d && d.roomId === roomId
+          ? [{ id: d.id, participantId: d.participantId }]
+          : [],
+      );
+    if (asks.length === 2) break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.equal(asks.length, 2, "both participants asked");
+  const aliceAsk = asks.find((a) => a.participantId === alice.id);
+  const bobAsk = asks.find((a) => a.participantId === bob.id);
+  assert.ok(aliceAsk && bobAsk);
+
+  room.update(bob.id, { mode: "auto" });
+
+  const bobSettled = queue.get(bobAsk.id) as {
+    allow?: boolean;
+    reason?: string;
+  };
+  assert.deepEqual(
+    [bobSettled.allow, bobSettled.reason],
+    [true, "mode_change"],
+  );
+  assert.equal(
+    (queue.get(aliceAsk.id) as { reason?: string }).reason,
+    undefined,
+    "alice's question is still open",
+  );
+
+  alice.cancel();
+  bob.cancel();
+  await Promise.all(turns);
+});
+
+test("a safe participant refuses a read outside the root, whatever the request said", async (t) => {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  let said = "";
+  bus.addListener(({ update }) => {
+    said += JSON.stringify(update);
+  });
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [
+      roomAgent({
+        cmd: `node ${HOSTILE_AGENT} --scenario absolute-path`,
+        name: "alice",
+        mode: "safe",
+        settings: { allowReadOutsideRoot: true },
+      }),
+    ],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+    permissions: queue,
+  });
+  t.after(() => room.dismiss());
+  const alice = room.participants[0] as Participant;
+  await alice.send("read /etc/passwd");
+  assert.match(said, /OUTCOME=refused/);
+});

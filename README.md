@@ -160,7 +160,7 @@ Any other ACP agent works too: `--cmd "some-agent --acp"`.
 | Mode | What it does |
 | --- | --- |
 | `safe` | Allows reads. Refuses every change the agent asks about. |
-| `ask` | Allows reads. Asks you about each change. Needs a terminal: without one, kapelle uses `safe` and prints a notice. |
+| `ask` | Allows reads. Asks you about each change. A run in your terminal needs the terminal: without one, kapelle uses `safe` and prints a notice. A room, or a run started with `--detach`, asks through the daemon instead: the question waits for your answer, and is refused at the time limit. |
 | `auto` | Allows everything. File paths outside the workspace are still refused. |
 
 **A mode is a filter, not a sandbox.** It decides the answer when an agent asks for permission. An agent that changes files through its own shell does not ask. pi and opencode never ask, so `safe` does not stop them.
