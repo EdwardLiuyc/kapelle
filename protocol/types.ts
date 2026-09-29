@@ -573,6 +573,36 @@ export interface ClientTurnEndedEvent extends Meta {
   error?: string;
 }
 
+/** A participant joined the room: a starter at open, or an add (M6-10). It
+ *  follows the participant's `_client_worktree_created` and
+ *  `_client_harness_spawned`, because it is logged once the harness has a
+ *  session. An add that fails logs those two and never this. The roster is
+ *  on the log, so a replay shows the roster as it was at each `seq`. */
+export interface ClientParticipantAddedEvent extends Meta {
+  sessionUpdate: "_client_participant_added";
+  name: string;
+  /** A label only (R44). A client shows a role it does not know as text. */
+  role?: string;
+  harness: string;
+  mode: "ask" | "safe" | "auto";
+}
+
+/** A participant was renamed, or its role or mode changed (M6-10). Only the
+ *  fields that changed are present; a `null` role cleared it. */
+export interface ClientParticipantChangedEvent extends Meta {
+  sessionUpdate: "_client_participant_changed";
+  name?: string;
+  role?: string | null;
+  mode?: "ask" | "safe" | "auto";
+}
+
+/** A participant left the roster (M6-10). The last line it has: its
+ *  harness is stopped and its turn is over first. A dismiss logs none; the
+ *  stream ends instead (S11). */
+export interface ClientParticipantRemovedEvent extends Meta {
+  sessionUpdate: "_client_participant_removed";
+}
+
 /** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
@@ -593,7 +623,10 @@ export type AgentEvent =
   | ClientUserMessageEvent
   | ClientMessageQueuedEvent
   | ClientQueueClearedEvent
-  | ClientTurnEndedEvent;
+  | ClientTurnEndedEvent
+  | ClientParticipantAddedEvent
+  | ClientParticipantChangedEvent
+  | ClientParticipantRemovedEvent;
 
 /** The `session/update` notification as it arrives. */
 export interface SessionNotification extends Meta {
@@ -887,7 +920,10 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_user_message"
         | "_client_message_queued"
         | "_client_queue_cleared"
-        | "_client_turn_ended" = u.sessionUpdate;
+        | "_client_turn_ended"
+        | "_client_participant_added"
+        | "_client_participant_changed"
+        | "_client_participant_removed" = u.sessionUpdate;
       void fallthrough;
       return false;
     }

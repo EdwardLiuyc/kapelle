@@ -14,6 +14,10 @@
  * the contract's types, and `core/runtime.ts`, which says where `daemon.json`
  * lives (M4-1, S8). `tests/daemon.test.ts` holds that line.
  *
+ * **It parses no event itself.** Each line goes through the room reducer
+ * (`client/room.ts`, M6-10), and both screens draw the entry it returns. The
+ * names come from the reducer too, so a rename shows.
+ *
  * One room is one harness kept alive between messages, until `/dismiss`.
  * Leaving (`/leave`, end of input, ^C) keeps the room, and `attach` replays
  * its whole conversation from the room's event log.
@@ -65,6 +69,13 @@ import {
   readDaemonFile,
   request,
 } from "./client/daemon.ts";
+import {
+  applyLine,
+  type Entry,
+  nameOf,
+  newRoomState,
+  type RoomState,
+} from "./client/room.ts";
 import { type Connect, followEvents } from "./client/stream.ts";
 import { runtimeDir } from "./core/runtime.ts";
 
@@ -174,17 +185,13 @@ const messagesPath = (room: RoomDto) => {
     : `/rooms/${room.id}/messages`;
 };
 
-/** A participant's name from the roster read at join, or its id for one
- *  added since. A line names the id only (S10). */
-const namer = (room: RoomDto) => {
-  const names = new Map(room.participants.map((p) => [p.id, p.name]));
-  return (id: string) => names.get(id) ?? id;
-};
-
-/** Prints a room's events as a conversation, for a piped stdin. */
-function makePrinter(nameOf: (id: string) => string) {
+/** Prints the reducer's entries as a conversation, for a piped stdin. An
+ *  answer that grows prints only its new text, and its name again when
+ *  another line came between. */
+function makePrinter(state: RoomState) {
   let atLineStart = true;
-  let speaking = false;
+  let last: Entry | undefined;
+  const printed = new WeakMap<Entry, number>();
   const write = (s: string) => {
     if (!s) return;
     process.stdout.write(s);
@@ -195,46 +202,43 @@ function makePrinter(nameOf: (id: string) => string) {
     write(`${s}\n`);
   };
   return {
-    show({ participantId, update: u }: RoomEventLine) {
-      switch (u.sessionUpdate) {
-        case "_client_user_message":
-          speaking = false;
-          line(`you: ${u.text}`);
-          return;
-        case "_client_message_queued":
-          line(`  (queued for ${nameOf(participantId)}) ${u.text}`);
-          return;
-        case "_client_queue_cleared":
-          line(`! ${u.count} queued message(s) dropped, unsent`);
-          return;
-        case "agent_message_chunk":
-          if (u.content?.type !== "text") return;
-          if (!speaking) {
-            if (!atLineStart) write("\n");
-            write(`${nameOf(participantId)}: `);
-            speaking = true;
-          }
-          write(u.content.text);
-          return;
-        case "tool_call":
-          line(`  · ${u.title}`);
-          speaking = false;
-          return;
-        case "_client_turn_ended":
-          if (u.error) line(`! the turn failed: ${u.error}`);
-          else if (u.stopReason !== "end_turn") {
-            line(`! the turn ended: ${u.stopReason}`);
-          } else if (!atLineStart) write("\n");
-          speaking = false;
-          return;
-        case "_client_harness_exited":
-          line("! the harness exited");
-          return;
-        default:
-          // An update this client does not render is dropped: the room emits
-          // more kinds than chat.ts draws, and a new one must not crash a chat.
+    show(e: Entry) {
+      switch (e.type) {
+        case "user":
+          line(`you: ${e.text}`);
           break;
+        case "queued":
+          line(`  (queued for ${nameOf(state, e.participantId)}) ${e.text}`);
+          break;
+        case "queue_cleared":
+          line(`! ${e.count} queued message(s) dropped, unsent`);
+          break;
+        case "answer":
+          if (last !== e) {
+            if (!atLineStart) write("\n");
+            write(`${nameOf(state, e.participantId)}: `);
+          }
+          write(e.text.slice(printed.get(e) ?? 0));
+          printed.set(e, e.text.length);
+          break;
+        case "tool":
+          line(`  · ${e.title}`);
+          break;
+        case "turn_ended":
+          if (e.error) line(`! the turn failed: ${e.error}`);
+          else if (e.stopReason !== "end_turn") {
+            line(`! the turn ended: ${e.stopReason}`);
+          } else if (!atLineStart) write("\n");
+          break;
+        case "exited":
+          line("! the harness exited");
+          break;
+        default:
+          // Questions and stall warnings: this chat runs `auto` and answers
+          // nothing yet (M4-3, M4-4). Nothing was written.
+          return;
       }
+      last = e;
     },
   };
 }
@@ -289,16 +293,16 @@ const EDITOR_THEME = {
 /**
  * The full-screen chat for one room. Resolves with the exit code.
  *
- * Busy is read from the stream, not from this terminal's own requests: a
- * `_client_user_message` starts a turn and `_client_turn_ended` ends it. So a
- * replayed history, or a message another client sent, leaves the status line
- * right with no bookkeeping of which turn is ours. Busy never locks the
- * editor: `/dismiss` and `/leave` must work mid-turn, and a message sent then
- * waits in the agent's queue (M6-4).
+ * Busy is the reducer's status for the agent, which it reads from the stream,
+ * not from this terminal's own requests. So a replayed history, or a message
+ * another client sent, leaves the status line right with no bookkeeping of
+ * which turn is ours. Busy never locks the editor: `/dismiss` and `/leave`
+ * must work mid-turn, and a message sent then waits in the agent's queue
+ * (M6-4).
  */
 function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
   const [agent] = room.participants;
-  const nameOf = namer(room);
+  const state = newRoomState();
   const tui = new TuiAltScreen(new ProcessTerminal());
   const transcript = new Container();
   const status = new Text("", 1, 0);
@@ -341,56 +345,62 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
       : `room ${room.id} · no agents`,
   );
   for (const { text } of agent?.notices ?? []) warn(`! ${text}`);
-  setBusy(agent?.status === "busy");
+  let busy = agent?.status === "busy";
+  setBusy(busy);
 
-  // The answer being streamed: chunks are joined and the whole text re-set,
-  // because markdown only parses correctly as a whole.
+  // Each answer's component. The reducer joins the chunks, and the whole
+  // text is re-set, because markdown only parses correctly as a whole.
   // ponytail: re-parses the whole answer per frame (~5 ms at 53k chars,
   // measured); split finished blocks into their own components if it lags.
-  let answer: { md: Markdown; text: string } | undefined;
-  const show = ({ participantId, update: u }: RoomEventLine) => {
-    switch (u.sessionUpdate) {
-      case "_client_user_message":
-        answer = undefined;
-        add(new Text(`\n${bold(cyan("you"))}\n${u.text}`, 1, 0));
-        setBusy(true);
+  const answers = new WeakMap<Entry, Markdown>();
+  const draw = (e: Entry) => {
+    switch (e.type) {
+      case "user":
+        add(new Text(`\n${bold(cyan("you"))}\n${e.text}`, 1, 0));
         return;
-      case "_client_message_queued":
-        note(`queued for ${nameOf(participantId)}: ${u.text}`);
+      case "queued":
+        note(`queued for ${nameOf(state, e.participantId)}: ${e.text}`);
         return;
-      case "_client_queue_cleared":
-        warn(`! ${u.count} queued message(s) dropped, unsent`);
+      case "queue_cleared":
+        warn(`! ${e.count} queued message(s) dropped, unsent`);
         return;
-      case "agent_message_chunk":
-        if (u.content?.type !== "text") return;
-        if (!answer) {
-          add(new Text(`\n${bold(green(nameOf(participantId)))}`, 1, 0));
-          answer = { md: new Markdown("", 1, 0, MARKDOWN_THEME), text: "" };
-          add(answer.md);
+      case "answer": {
+        let md = answers.get(e);
+        if (!md) {
+          const name = nameOf(state, e.participantId);
+          add(new Text(`\n${bold(green(name))}`, 1, 0));
+          md = new Markdown("", 1, 0, MARKDOWN_THEME);
+          answers.set(e, md);
+          add(md);
         }
-        answer.text += u.content.text;
-        answer.md.setText(answer.text);
+        md.setText(e.text);
         tui.requestRender();
         return;
-      case "tool_call":
-        answer = undefined;
-        note(`  · ${u.title}`);
+      }
+      case "tool":
+        note(`  · ${e.title}`);
         return;
-      case "_client_turn_ended":
-        answer = undefined;
-        if (u.error) warn(`! the turn failed: ${u.error}`);
-        else if (u.stopReason !== "end_turn") {
-          warn(`! the turn ended: ${u.stopReason}`);
+      case "turn_ended":
+        if (e.error) warn(`! the turn failed: ${e.error}`);
+        else if (e.stopReason !== "end_turn") {
+          warn(`! the turn ended: ${e.stopReason}`);
         }
-        setBusy(false);
         return;
-      case "_client_harness_exited":
+      case "exited":
         warn("! the harness exited");
         return;
       default:
-        // Dropped, as in the piped printer.
-        break;
+        // Not drawn yet, as in the piped printer.
+        return;
     }
+  };
+  const show = (line: RoomEventLine) => {
+    const e = applyLine(state, line);
+    if (e) draw(e);
+    const now = state.participants.get(agent?.id ?? "")?.status === "busy";
+    if (now === busy) return;
+    busy = now;
+    setBusy(busy);
   };
 
   return new Promise((finish) => {
@@ -497,17 +507,20 @@ async function chat(d: DaemonAddress, room: RoomDto): Promise<number> {
   for (const { text } of agent?.notices ?? []) console.log(`! ${text}`);
   console.log("type a message; /leave to exit, /dismiss to stop the room");
 
-  const printer = makePrinter(namer(room));
+  const state = newRoomState();
+  const printer = makePrinter(state);
 
-  // The highest `_client_turn_ended` seen, and the one turn being waited on.
+  // The highest turn end seen, and the one turn being waited on.
   let lastTurnEnd = 0;
   let waiting: { after: number; done: () => void } | undefined;
 
-  const ended = readRoom(room.id, (event) => {
-    printer.show(event);
-    if (event.update.sessionUpdate === "_client_turn_ended") {
-      lastTurnEnd = event.seq;
-      if (waiting && event.seq > waiting.after) {
+  const ended = readRoom(room.id, (line) => {
+    const e = applyLine(state, line);
+    if (!e) return;
+    printer.show(e);
+    if (e.type === "turn_ended") {
+      lastTurnEnd = e.seq;
+      if (waiting && e.seq > waiting.after) {
         waiting.done();
         waiting = undefined;
       }
