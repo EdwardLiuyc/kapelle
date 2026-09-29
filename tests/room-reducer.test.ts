@@ -9,25 +9,16 @@
  * removed. carol stalls until her turn is cancelled. Live, replay, reconnect
  * and a cut turn all read that one recording. The restart case (`paused`,
  * `killed`) is M6-7a's (#151).
+ *
+ * Here and not in `client/tests/`: recording needs `core/`, and a suite in
+ * `client/` imports only `client/`.
  */
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-
-import { createEventBus } from "../../core/events.ts";
-import { newRoomId } from "../../core/ids.ts";
-import { createPermissionQueue } from "../../core/permissions.ts";
-import { openRoom, type Participant, roomAgent } from "../../core/room.ts";
-import { stateDirFor } from "../../core/runtime.ts";
-import { openWorktrees } from "../../core/worktree.ts";
-import {
-  gitRepo,
-  isolateStateHome,
-  MOCK_AGENT,
-} from "../../integration/helpers.ts";
-import type { RoomEventLine } from "../contract.ts";
+import type { RoomEventLine } from "../client/contract.ts";
 import {
   applyLine,
   type Entry,
@@ -37,7 +28,18 @@ import {
   roster,
   seen,
   thread,
-} from "../room.ts";
+} from "../client/room.ts";
+import { createEventBus } from "../core/events.ts";
+import { newRoomId } from "../core/ids.ts";
+import { createPermissionQueue } from "../core/permissions.ts";
+import { openRoom, type Participant, roomAgent } from "../core/room.ts";
+import { stateDirFor } from "../core/runtime.ts";
+import { openWorktrees } from "../core/worktree.ts";
+import {
+  gitRepo,
+  isolateStateHome,
+  MOCK_AGENT,
+} from "../integration/helpers.ts";
 
 isolateStateHome();
 
