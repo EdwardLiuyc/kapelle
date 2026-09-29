@@ -245,7 +245,9 @@ export function applyLine(
   }
 }
 
-/** One participant's thread: the timeline filtered by id (R8c). */
+/** One participant's thread: the timeline filtered by id (R8c). It walks
+ *  the whole timeline, so call it when a screen opens a thread, not per
+ *  line: a streamed line redraws the one entry `applyLine` returns. */
 export const thread = (state: RoomState, id: string) =>
   state.timeline.filter((e) => e.participantId === id);
 

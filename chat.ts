@@ -16,7 +16,8 @@
  *
  * **It parses no event itself.** Each line goes through the room reducer
  * (`client/room.ts`, M6-10), and both screens draw the entry it returns. The
- * names come from the reducer too, so a rename shows.
+ * names come from the reducer too, so a rename shows on the lines after it.
+ * A line already drawn keeps the name it had.
  *
  * One room is one harness kept alive between messages, until `/dismiss`.
  * Leaving (`/leave`, end of input, ^C) keeps the room, and `attach` replays

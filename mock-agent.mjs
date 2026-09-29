@@ -301,10 +301,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         scenario === "split"
           ? ["previous: ", previous]
           : [`previous: ${previous}`];
-      for (const text of chunks) {
+      for (const chunk of chunks) {
         update(sid, {
           sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text },
+          content: { type: "text", text: chunk },
         });
       }
       reply(msg.id, { stopReason: "end_turn", usage: USAGE });
