@@ -62,7 +62,7 @@ node cli.ts workspace [--cwd dir]              # where this repo's worktrees and
 node cli.ts workspace move <old-repo> <new-repo>
 node cli.ts daemon start [--port n] [--permission-timeout s]   # same as: node daemon.ts
 node cli.ts daemon add <path>
-node chat.ts new --agent <id> [--cwd dir]      # experimental chat room
+node cli.ts chat [new --agent <id> [--cwd dir]]   # experimental chat rooms: runs chat.ts
 node chat.ts attach <roomId> | list | dismiss <roomId>
 ```
 
@@ -105,7 +105,8 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 | `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
 | `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. `chat.ts` draws from it. |
-| `chat.ts` | Chat front end: a pi-tui screen on a TTY, plain lines when piped. It talks HTTP only, and imports only `client/`, pi-tui and `core/runtime.ts`. |
+| `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). Both `chat.ts` screens send through it. |
+| `chat.ts` | Chat front end: a pi-tui screen over every room on a TTY, one room as plain lines when piped. It talks HTTP only, and imports only `client/`, pi-tui and `core/runtime.ts`. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 
 Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`

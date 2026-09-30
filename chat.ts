@@ -2,11 +2,9 @@
 /**
  * `chat.ts` — a terminal chat over the daemon's rooms (chat MVP).
  *
- * **Experimental.** One participant per room — the first on its roster, which
- * is the one it shows and the one it sends to by id — `auto` only, and no
- * permission answering. The room API is Experimental in
- * `docs/CLIENT-API.md`, and M6-3..M6-9 will reshape it; nothing here is a
- * compatibility commitment.
+ * **Experimental.** The room API is Experimental in `docs/CLIENT-API.md`,
+ * and nothing here is a compatibility commitment. `kapelle chat` runs this
+ * file (S7a).
  *
  * **A front end, not part of the daemon.** It speaks HTTP to `daemon.ts` and
  * nothing else, so anything it can do, a bridge to another chat app can do
@@ -19,14 +17,19 @@
  * names come from the reducer too, so a rename shows on the lines after it.
  * A line already drawn keeps the name it had.
  *
- * One room is one harness kept alive between messages, until `/dismiss`.
- * Leaving (`/leave`, end of input, ^C) keeps the room, and `attach` replays
- * its whole conversation from the room's event log.
+ * **The composer names the target** (R43): a leading `@name` goes to that
+ * participant, and no mention goes to the orchestrator. Both screens resolve
+ * it with `client/mention.ts`, so they cannot differ.
  *
- * **Two screens over one stream.** On a TTY the room is a full-screen
- * `pi-tui` app: a scrolling transcript with each answer rendered as markdown
- * while it streams, and an editor below it. Piped, it is plain lines, which
- * is what a script or a test reads.
+ * A room keeps its harnesses alive between messages, until `/dismiss`.
+ * Leaving (`/leave`, end of input, ^C) keeps every room, and `attach`
+ * replays a room's whole conversation from its event log.
+ *
+ * **Two screens.** On a TTY it is a full-screen `pi-tui` app over every
+ * room the daemon holds (M4-2): a sidebar of rooms and their participants,
+ * a transcript with each answer rendered as markdown while it streams, and
+ * an editor below it. Piped, it is one room as plain lines, which is what a
+ * script or a test reads.
  *
  * **pi-tui is ratified under M1c-7's rule (M4-1).** It is presentation only,
  * so its worst failure is a broken screen, never a changed decision; it is
@@ -38,7 +41,7 @@
  * `package.json`'s `os` leaves out. Linux never loads either.
  */
 
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
@@ -46,14 +49,17 @@ import {
   type Component,
   Container,
   Editor,
+  HStack,
   Key,
   Markdown,
   type MarkdownTheme,
   matchesKey,
   ProcessTerminal,
   ScrollView,
+  Spacer,
   Text,
   TuiAltScreen,
+  truncateToWidth,
   VStack,
 } from "@earendil-works/pi-tui";
 
@@ -70,17 +76,23 @@ import {
   readDaemonFile,
   request,
 } from "./client/daemon.ts";
+import { type Named, resolveTarget, targetOf } from "./client/mention.ts";
 import {
   applyLine,
   type Entry,
   nameOf,
+  needsAttention,
   newRoomState,
   type RoomState,
+  roster,
+  seen,
+  thread,
 } from "./client/room.ts";
 import { type Connect, followEvents } from "./client/stream.ts";
 import { runtimeDir } from "./core/runtime.ts";
 
 const USAGE = `usage: (experimental — the room API may change without notice)
+  node chat.ts                                              every room, on a terminal
   node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
   node chat.ts new --cmd "<command>" [--name n] [--cwd dir]
   node chat.ts attach <roomId>                              rejoin a room; its history replays
@@ -90,10 +102,16 @@ const USAGE = `usage: (experimental — the room API may change without notice)
 --name is the agent's name; the harness name by default. Give one when that
 is not a valid name, as for --cmd "/opt/bin/my-agent".
 
-in a room, type a message and press enter:
-  /leave     exit; the room and its harness stay alive
-  /dismiss   stop the harness and exit; uncommitted work stays in its
-             checkout, because the supervisor never commits for it (R37)`;
+kapelle chat takes the same verbs.
+
+in a room, type a message and press enter. It goes to the orchestrator;
+start it with @name to send it to that agent instead.
+  /leave     exit; the rooms and their harnesses stay alive
+  /dismiss   stop the room's harnesses; uncommitted work stays in each
+             checkout, because the supervisor never commits for it (R37)
+
+on a terminal: alt+up/down or ctrl+p/n (or a click) picks a room's timeline
+or one agent's thread; ctrl+t (or a click on « ») hides the rooms`;
 
 const daemonFile = () => join(runtimeDir(), "daemon.json");
 
@@ -177,21 +195,16 @@ async function reconcile(id: string): Promise<{ code: number; line: string }> {
   }
 }
 
-/** Where a message goes: the participant this chat shows, by id (M6-4). A
- *  room with none gets the room route, so the daemon's refusal says why. */
-const messagesPath = (room: RoomDto) => {
-  const [agent] = room.participants;
-  return agent
-    ? `/rooms/${room.id}/agents/${agent.id}/messages`
-    : `/rooms/${room.id}/messages`;
-};
-
 /** Prints the reducer's entries as a conversation, for a piped stdin. An
- *  answer that grows prints only its new text, and its name again when
- *  another line came between. */
+ *  answer that grows prints only its new text. A participant's name comes
+ *  before its first line, tool calls included, since someone else's, as on
+ *  the screen. */
 function makePrinter(state: RoomState) {
   let atLineStart = true;
   let last: Entry | undefined;
+  /** The participant whose name was printed last; unset after the
+   *  person's own message. */
+  let speaker: string | undefined;
   const printed = new WeakMap<Entry, number>();
   const write = (s: string) => {
     if (!s) return;
@@ -206,7 +219,8 @@ function makePrinter(state: RoomState) {
     show(e: Entry) {
       switch (e.type) {
         case "user":
-          line(`you: ${e.text}`);
+          speaker = undefined;
+          line(`you → ${nameOf(state, e.participantId)}: ${e.text}`);
           break;
         case "queued":
           line(`  (queued for ${nameOf(state, e.participantId)}) ${e.text}`);
@@ -217,12 +231,19 @@ function makePrinter(state: RoomState) {
         case "answer":
           if (last !== e) {
             if (!atLineStart) write("\n");
-            write(`${nameOf(state, e.participantId)}: `);
+            if (speaker !== e.participantId) {
+              write(`${nameOf(state, e.participantId)}: `);
+            }
           }
+          speaker = e.participantId;
           write(e.text.slice(printed.get(e) ?? 0));
           printed.set(e, e.text.length);
           break;
         case "tool":
+          if (speaker !== e.participantId) {
+            line(`${nameOf(state, e.participantId)}:`);
+          }
+          speaker = e.participantId;
           line(`  · ${e.title}`);
           break;
         case "turn_ended":
@@ -253,6 +274,8 @@ const underline = sgr(4, 24);
 const cyan = sgr(36, 39);
 const green = sgr(32, 39);
 const yellow = sgr(33, 39);
+const magenta = sgr(35, 39);
+const plain = (s: string) => s;
 
 /** A rendered line without its padding: the trailing spaces and the style
  *  codes among them go, and a styled line ends with a reset, because a
@@ -291,37 +314,86 @@ const EDITOR_THEME = {
   },
 };
 
+/** One room the screen follows: its stream runs into its own reducer for as
+ *  long as the screen is up, whichever view is drawn. */
+interface Followed {
+  entry: RoomListEntry;
+  state: RoomState;
+  /** From `GET /rooms/:id`: each participant's checkout and notices. */
+  dto?: RoomDto;
+  /** Set when its stream ended and the room did not: the reason. */
+  lost?: string;
+}
+
+/** What the transcript shows: a room's timeline, or one participant's
+ *  thread when `participantId` is set. It is also a sidebar row. */
+interface View {
+  roomId: string;
+  participantId?: string;
+}
+
+const same = (a: View, b: View) =>
+  a.roomId === b.roomId && a.participantId === b.participantId;
+
+/** The roster the resolver reads. Before the stream replays the roster
+ *  lines, the one the daemon sent with the room stands in. */
+const rosterOf = (state: RoomState, fallback: readonly Named[]) => {
+  const now = roster(state);
+  return now.length > 0 ? now : fallback;
+};
+
+/** Whether a question from this participant waits. */
+const asks = (state: RoomState, id: string) =>
+  [...state.questions.values()].some((q) => q.participantId === id);
+
+/** Colour only says why a participant needs the person: magenta for a
+ *  question, yellow for a stall. The circle says that something waits. */
+const SIDEBAR_WIDTH = 26;
+/** Below this many columns the sidebar starts hidden. */
+const NARROW = 70;
+
 /**
- * The full-screen chat for one room. Resolves with the exit code.
+ * The full-screen chat over every room the daemon holds. Resolves with the
+ * exit code.
  *
- * Busy is the reducer's status for the agent, which it reads from the stream,
- * not from this terminal's own requests. So a replayed history, or a message
- * another client sent, leaves the status line right with no bookkeeping of
- * which turn is ours. Busy never locks the editor: `/dismiss` and `/leave`
- * must work mid-turn, and a message sent then waits in the agent's queue
- * (M6-4).
+ * **One stream per room, all the time** (M4-2). Each room's stream runs into
+ * its own reducer whichever view is drawn, so switching rows only redraws
+ * the transcript from a reducer; nothing reconnects, and a line for a room
+ * off screen still marks its row. A room made elsewhere joins on the next
+ * `GET /rooms`, every 5 s. A dismissed room leaves the list; the screen
+ * exits when no room has a live stream left.
+ *
+ * **The composer names the target** (R43), through `client/mention.ts`, and
+ * the status line shows it while the person types. The sidebar only picks
+ * what is drawn. In a thread, an empty composer always holds `@name `
+ * (decided 2026-09-30); a pre-fill the person did not touch follows the
+ * view.
+ *
+ * **What is on screen is seen**: the timeline marks every participant of
+ * its room seen, and a thread marks its participant.
  */
-function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
-  const [agent] = room.participants;
-  const state = newRoomState();
+function chatTui(
+  d: DaemonAddress,
+  list: RoomListEntry[],
+  selected?: string,
+): Promise<number> {
+  const rooms = new Map<string, Followed>();
   const tui = new TuiAltScreen(new ProcessTerminal());
   const transcript = new Container();
+  const scroll = new ScrollView(transcript, { follow: "end", primary: true });
   const status = new Text("", 1, 0);
   const editor = new Editor(tui, EDITOR_THEME, { paddingX: 1 });
-  tui.setLayoutRoot(
-    new VStack([
-      {
-        component: new ScrollView(transcript, { follow: "end", primary: true }),
-        basis: "auto",
-        grow: 1,
-        shrink: 1,
-        minSize: 1,
-      },
-      { component: status, basis: "auto", shrink: 0 },
-      { component: editor, basis: "auto", shrink: 1, minSize: 1 },
-    ]),
-  );
-  tui.setFocus(editor);
+  let view: View = { roomId: selected ?? list[0]?.id ?? "" };
+  let shown = (process.stdout.columns || 80) >= NARROW;
+  /** One line about a room that ended, until the next view change. */
+  let flash = "";
+  /** The `@name ` this screen put in the composer, while it is untouched. */
+  let prefill = "";
+  /** The component drawn for each entry of the current view. */
+  let drawn = new WeakMap<Entry, Markdown | Text>();
+  /** The participant whose name heads the lines drawn last; unset after
+   *  the person's own message. */
+  let speaker: string | undefined;
 
   const add = (c: Component) => {
     transcript.addChild(c);
@@ -329,49 +401,182 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
   };
   const note = (s: string) => add(new Text(dim(s), 1, 0));
   const warn = (s: string) => add(new Text(yellow(s), 1, 0));
-  const setBusy = (busy: boolean) => {
-    status.setText(
-      dim(
-        busy
-          ? `${agent?.name ?? "the agent"} is answering…`
-          : "enter to send · /leave keeps the room · /dismiss stops it",
-      ),
-    );
-    tui.requestRender();
+
+  /** Every row, in sidebar order: a room, then its roster. */
+  const rows = (): View[] =>
+    [...rooms.values()].flatMap(({ entry, state }) => [
+      { roomId: entry.id },
+      ...roster(state).map((p) => ({ roomId: entry.id, participantId: p.id })),
+    ]);
+
+  /** A participant's mark: `●` when something waits, coloured by why. */
+  const mark = (state: RoomState, id: string) => {
+    const p = state.participants.get(id);
+    const waits = Boolean(p?.unread) || needsAttention(state, id);
+    const paint = asks(state, id) ? magenta : p?.stalled ? yellow : plain;
+    return { circle: waits ? "●" : "○", paint };
+  };
+  /** A room's mark: its most urgent participant's. */
+  const roomMark = (state: RoomState) => {
+    const ps = roster(state);
+    const waits = ps.some((p) => mark(state, p.id).circle === "●");
+    const paint = ps.some((p) => asks(state, p.id))
+      ? magenta
+      : ps.some((p) => p.stalled)
+        ? yellow
+        : plain;
+    return { circle: waits ? "●" : "○", paint };
   };
 
-  note(
-    agent
-      ? `room ${room.id} · ${agent.name} (${agent.harness}) · ${agent.worktree}`
-      : `room ${room.id} · no agents`,
+  // ponytail: no scrolling in the sidebar; rows past the screen's height are
+  // cut. Put it in a ScrollView when rooms outgrow a screen.
+  const sidebar: Component = {
+    render(width) {
+      const inner = width - 2;
+      const fit = (s: string) =>
+        `${truncateToWidth(s, inner, "…", true)} ${dim("│")}`;
+      const lines = [fit(`${dim("rooms")}${" ".repeat(inner - 6)}«`)];
+      for (const row of rows()) {
+        const r = rooms.get(row.roomId);
+        if (!r) continue;
+        const cursor = same(row, view) ? "▸" : " ";
+        if (!row.participantId) {
+          const { circle, paint } = roomMark(r.state);
+          const label = r.entry.title ?? r.entry.id;
+          const lost = r.lost ? yellow(" !") : "";
+          lines.push(
+            fit(
+              `${cursor} ${paint(`${circle} ${label}`)} ${dim(basename(r.entry.cwd))}${lost}`,
+            ),
+          );
+          continue;
+        }
+        const p = r.state.participants.get(row.participantId);
+        if (!p) continue;
+        const { circle, paint } = mark(r.state, p.id);
+        const star = p.role === "orchestrator" ? " ★" : "";
+        const busy = p.status === "busy" ? " …" : "";
+        const unread = p.unread ? ` ${p.unread}` : "";
+        lines.push(
+          fit(
+            `${cursor}   ${paint(`${circle} ${p.name}`)}${star}${busy}${unread}`,
+          ),
+        );
+      }
+      // Full height, so the border reaches the status line.
+      while (lines.length < (process.stdout.rows || 24)) lines.push(fit(""));
+      return lines;
+    },
+    handleMouse(e) {
+      if (e.type !== "click" || e.button !== "left") return undefined;
+      if (e.y === 0) {
+        if (e.x >= e.width - 4) toggle();
+        return { handled: true };
+      }
+      const row = rows()[e.y - 1];
+      if (row) open(row);
+      return { handled: true };
+    },
+    invalidate() {},
+  };
+  /** What stands in for the sidebar while it is hidden. */
+  const strip: Component = {
+    render: () => ["»"],
+    handleMouse(e) {
+      if (e.type !== "click" || e.button !== "left") return undefined;
+      toggle();
+      return { handled: true };
+    },
+    invalidate() {},
+  };
+
+  tui.setLayoutRoot(
+    new VStack([
+      {
+        component: new HStack([
+          {
+            component: sidebar,
+            basis: SIDEBAR_WIDTH,
+            shrink: 0,
+            visible: () => shown,
+          },
+          { component: strip, basis: 2, shrink: 0, visible: () => !shown },
+          { component: scroll, basis: "auto", grow: 1, shrink: 1, minSize: 1 },
+        ]),
+        basis: "auto",
+        grow: 1,
+        shrink: 1,
+        minSize: 1,
+      },
+      // A gap between the conversation and the status line.
+      { component: new Spacer(1), basis: 1, shrink: 0 },
+      { component: status, basis: "auto", shrink: 0 },
+      // Never shrinks: pi-tui's shrink takes at least one row from every
+      // entry that may, so a full-height sidebar or a long conversation cut
+      // the box's bottom border. The editor caps itself at 30% of the rows.
+      { component: editor, basis: "auto", shrink: 0 },
+    ]),
   );
-  for (const { text } of agent?.notices ?? []) warn(`! ${text}`);
-  let busy = agent?.status === "busy";
-  setBusy(busy);
+  tui.setFocus(editor);
+
+  const setStatus = () => {
+    const r = rooms.get(view.roomId);
+    const parts: string[] = [];
+    if (r) {
+      const t = targetOf(
+        editor.getText(),
+        rosterOf(r.state, r.entry.participants),
+      );
+      parts.push(
+        "id" in t ? bold(`→ ${nameOf(r.state, t.id)}`) : yellow(`! ${t.error}`),
+      );
+    }
+    if (flash) parts.push(yellow(flash));
+    if (!shown) {
+      const waiting = [...rooms.values()].filter(
+        ({ state }) => roomMark(state).circle === "●",
+      ).length;
+      if (waiting) parts.push(`● ${waiting} room${waiting > 1 ? "s" : ""}`);
+    }
+    parts.push(dim("enter to send · alt+↑↓ rows · ctrl+t rooms"));
+    status.setText(parts.join(dim(" · ")));
+    tui.requestRender();
+  };
+  const toggle = () => {
+    shown = !shown;
+    setStatus();
+  };
 
   // Each answer's component. The reducer joins the chunks, and the whole
   // text is re-set, because markdown only parses correctly as a whole.
   // ponytail: re-parses the whole answer per frame (~5 ms at 53k chars,
   // measured); split finished blocks into their own components if it lags.
-  const answers = new WeakMap<Entry, Markdown>();
-  const draw = (e: Entry) => {
+  /** A participant's name, before the first of its lines, tool calls
+   *  included, since someone else's. */
+  const heading = (id: string, name: string) => {
+    if (speaker === id) return;
+    speaker = id;
+    add(new Text(`\n${bold(green(name))}`, 1, 0));
+  };
+  const draw = (state: RoomState, e: Entry) => {
+    const name = nameOf(state, e.participantId);
     switch (e.type) {
       case "user":
-        add(new Text(`\n${bold(cyan("you"))}\n${e.text}`, 1, 0));
+        speaker = undefined;
+        add(new Text(`\n${bold(cyan(`you → ${name}`))}\n${e.text}`, 1, 0));
         return;
       case "queued":
-        note(`queued for ${nameOf(state, e.participantId)}: ${e.text}`);
+        note(`queued for ${name}: ${e.text}`);
         return;
       case "queue_cleared":
-        warn(`! ${e.count} queued message(s) dropped, unsent`);
+        warn(`! ${e.count} queued message(s) for ${name} dropped, unsent`);
         return;
       case "answer": {
-        let md = answers.get(e);
+        let md = drawn.get(e) as Markdown | undefined;
         if (!md) {
-          const name = nameOf(state, e.participantId);
-          add(new Text(`\n${bold(green(name))}`, 1, 0));
+          heading(e.participantId, name);
           md = new Markdown("", 1, 0, MARKDOWN_THEME);
-          answers.set(e, md);
+          drawn.set(e, md);
           add(md);
         }
         md.setText(e.text);
@@ -379,29 +584,101 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
         return;
       }
       case "tool":
+        heading(e.participantId, name);
         note(`  · ${e.title}`);
         return;
       case "turn_ended":
-        if (e.error) warn(`! the turn failed: ${e.error}`);
+        if (e.error) warn(`! ${name}'s turn failed: ${e.error}`);
         else if (e.stopReason !== "end_turn") {
-          warn(`! the turn ended: ${e.stopReason}`);
+          warn(`! ${name}'s turn ended: ${e.stopReason}`);
         }
         return;
       case "exited":
-        warn("! the harness exited");
+        warn(`! ${name}'s harness exited`);
         return;
-      default:
-        // Not drawn yet, as in the piped printer.
+      case "stall":
+        warn(`! ${name}: ${e.text}`);
         return;
+      case "permission": {
+        // Answering is M4-3's; this only shows the question and its answer.
+        let line = drawn.get(e) as Text | undefined;
+        if (!line) {
+          line = new Text("", 1, 0);
+          drawn.set(e, line);
+          add(line);
+        }
+        const answer =
+          e.allow === undefined
+            ? ""
+            : ` — ${e.allow ? "allowed" : "denied"} (${e.reason})`;
+        line.setText(magenta(`? ${name} asks: ${e.title}${answer}`));
+        tui.requestRender();
+        return;
+      }
     }
   };
-  const show = (line: RoomEventLine) => {
-    const e = applyLine(state, line);
-    if (e) draw(e);
-    const now = state.participants.get(agent?.id ?? "")?.status === "busy";
-    if (now === busy) return;
-    busy = now;
-    setBusy(busy);
+
+  /** Draws the current view from its reducer, from the start. */
+  // ponytail: a switch rebuilds every component of the view; keep one
+  // transcript per view if a long history makes switching slow.
+  const redraw = () => {
+    transcript.clear();
+    drawn = new WeakMap();
+    speaker = undefined;
+    const r = rooms.get(view.roomId);
+    if (r) {
+      const id = view.participantId;
+      const dto = r.dto?.participants.filter((p) => !id || p.id === id) ?? [];
+      if (id) {
+        const p = r.state.participants.get(id);
+        const where = dto[0]?.worktree ? ` · ${dto[0].worktree}` : "";
+        note(`${p?.name ?? id} (${p?.harness ?? "?"})${where}`);
+      } else {
+        note(`room ${r.entry.id} · ${r.entry.cwd}`);
+      }
+      for (const p of dto) for (const { text } of p.notices) warn(`! ${text}`);
+      if (r.lost) warn(r.lost);
+      const entries = id ? thread(r.state, id) : r.state.timeline;
+      for (const e of entries) draw(r.state, e);
+    }
+    scroll.scrollToEnd();
+    setStatus();
+  };
+
+  /** The person looks at a view: its lines are seen. */
+  const markSeen = (r: Followed, participantId?: string) => {
+    if (participantId) seen(r.state, participantId);
+    else for (const p of r.state.participants.keys()) seen(r.state, p);
+  };
+
+  const open = (next: View) => {
+    view = next;
+    flash = "";
+    const r = rooms.get(next.roomId);
+    const text = editor.getText();
+    if (r && (text === "" || text === prefill)) {
+      const id = next.participantId;
+      prefill = id ? `@${nameOf(r.state, id)} ` : "";
+      editor.setText(prefill);
+    }
+    if (r) markSeen(r, next.participantId);
+    redraw();
+  };
+
+  const onLine = (roomId: string, line: RoomEventLine) => {
+    const r = rooms.get(roomId);
+    if (!r) return;
+    const e = applyLine(r.state, line);
+    const here =
+      roomId === view.roomId &&
+      (!view.participantId || view.participantId === line.participantId);
+    if (here) {
+      seen(r.state, line.participantId);
+      if (e) draw(r.state, e);
+    }
+    // A roster line can rename the target, and any line can change the
+    // count of rooms that wait while the sidebar is hidden.
+    setStatus();
   };
 
   return new Promise((finish) => {
@@ -415,6 +692,7 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
     const end = (code: number, ...last: string[]) => {
       if (done) return;
       done = true;
+      clearInterval(poll);
       // The screen is going: a later throw gets Node's default again, a
       // stack and a non-zero exit, instead of being swallowed here.
       process.off("uncaughtException", crash);
@@ -431,38 +709,134 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
       for (const line of last) console.log(line);
       finish(code);
     };
-    const left = `left room ${room.id}; rejoin with: node chat.ts attach ${room.id}`;
+    const left = () =>
+      `left room ${view.roomId}; rejoin with: node chat.ts attach ${view.roomId}`;
+
+    /** A room's stream ended: ask the daemon why. The screen ends with the
+     *  last live stream. */
+    const closed = async (id: string, err?: unknown) => {
+      const { code, line } = await reconcile(id);
+      const r = rooms.get(id);
+      if (code === 0) rooms.delete(id);
+      else if (r) r.lost = line;
+      if (![...rooms.values()].some((x) => !x.lost)) {
+        const why = err ? [`! ${(err as Error).message}`] : [];
+        end(code, ...why, line);
+        return;
+      }
+      const label = r?.entry.title ?? id;
+      if (code === 0 && view.roomId === id) {
+        const [next] = rows();
+        if (next) open(next);
+      }
+      flash = code === 0 ? `${label} was dismissed` : line;
+      setStatus();
+    };
+
+    const follow = (entry: RoomListEntry) => {
+      if (rooms.has(entry.id)) return;
+      const r: Followed = { entry, state: newRoomState() };
+      rooms.set(entry.id, r);
+      call<RoomDto>(d, `/rooms/${entry.id}`).then(
+        (res) => {
+          if (!res.ok) return;
+          r.dto = res.body;
+          if (view.roomId === entry.id) redraw();
+        },
+        // The stream says what happened to the daemon; a header can wait.
+        () => {},
+      );
+      readRoom(entry.id, (line) => onLine(entry.id, line)).then(
+        () => closed(entry.id),
+        (err) => closed(entry.id, err),
+      );
+    };
+
+    // Rooms made in another terminal join here. A failed poll changes
+    // nothing: a stream that ends says what happened.
+    const poll = setInterval(() => {
+      call<RoomListEntry[]>(d, "/rooms").then(
+        (res) => {
+          if (!res.ok) return;
+          for (const entry of res.body) {
+            const r = rooms.get(entry.id);
+            if (r) r.entry = entry;
+            else if (entry.status !== "dismissed") follow(entry);
+          }
+          tui.requestRender();
+        },
+        () => {},
+      );
+    }, 5000);
 
     tui.addInputListener((data) => {
-      if (!matchesKey(data, Key.ctrl("c"))) return undefined;
-      end(0, left);
+      if (matchesKey(data, Key.ctrl("c"))) {
+        end(0, left());
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.ctrl("t"))) {
+        toggle();
+        return { consume: true };
+      }
+      const down =
+        matchesKey(data, Key.alt("down")) || matchesKey(data, Key.ctrl("n"));
+      const up =
+        matchesKey(data, Key.alt("up")) || matchesKey(data, Key.ctrl("p"));
+      if (!down && !up) return undefined;
+      const all = rows();
+      const next =
+        all[all.findIndex((row) => same(row, view)) + (down ? 1 : -1)];
+      if (next) open(next);
       return { consume: true };
     });
 
+    editor.onChange = (text) => {
+      if (text !== prefill) prefill = "";
+      // In a thread, an empty composer always holds the thread's `@name `:
+      // when the thread opens, after a send, and after a delete by hand.
+      // The editor has already cleared its state when it reports "".
+      const r = rooms.get(view.roomId);
+      if (text === "" && view.participantId && r) {
+        prefill = `@${nameOf(r.state, view.participantId)} `;
+        editor.setText(prefill);
+        return;
+      }
+      setStatus();
+    };
     // pi-tui calls this and drops the promise, so a throw (the daemon gone
     // mid-request) must end the chat here, or it crashes on the alt screen.
     editor.onSubmit = (text) => {
       submit(text).catch((err) => end(1, `! ${(err as Error).message}`));
     };
     const submit = async (text: string) => {
-      if (!text) return;
-      if (text === "/leave") return end(0, left);
+      if (!text.trim()) return;
+      if (text === "/leave") return end(0, left());
+      const r = rooms.get(view.roomId);
+      if (!r) return;
       if (text === "/dismiss") {
-        status.setText(dim("dismissing: stopping the harness…"));
-        tui.requestRender();
-        const r = await call<RoomDto>(d, `/rooms/${room.id}/dismiss`, {
+        flash = `dismissing ${r.entry.title ?? r.entry.id}: stopping its harnesses…`;
+        setStatus();
+        const res = await call<RoomDto>(d, `/rooms/${r.entry.id}/dismiss`, {
           method: "POST",
         });
-        // A 200 ends the stream, and that ends the chat below.
-        if (!r.ok) end(1, `! ${r.error.message}`);
+        // A 200 ends the room's stream, and `closed` takes it from there.
+        if (!res.ok) warn(`! ${res.error.message}`);
+        return;
+      }
+      const t = resolveTarget(text, rosterOf(r.state, r.entry.participants));
+      if ("error" in t) {
+        // Refused before any request: give the text back to fix.
+        warn(`! ${t.error}`);
+        editor.setText(text);
         return;
       }
       editor.addToHistory(text);
-      const r = await call<MessageAccepted>(d, messagesPath(room), {
-        method: "POST",
-        body: { text },
-      });
-      if (!r.ok) warn(`! ${r.error.message}`);
+      const res = await call<MessageAccepted>(
+        d,
+        `/rooms/${r.entry.id}/agents/${t.id}/messages`,
+        { method: "POST", body: { text: t.text } },
+      );
+      if (!res.ok) warn(`! ${res.error.message}`);
     };
 
     // pi-tui draws off our call stack, so a bug in it is an uncaught throw
@@ -472,7 +846,7 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
       end(
         1,
         `! the chat screen failed: ${err instanceof Error ? err.message : String(err)}`,
-        left,
+        left(),
       );
     process.on("uncaughtException", crash);
     process.on("unhandledRejection", crash);
@@ -482,49 +856,45 @@ function chatTui(d: DaemonAddress, room: RoomDto): Promise<number> {
       crash(err);
       return;
     }
-    readRoom(room.id, show).then(
-      async () => {
-        const { code, line } = await reconcile(room.id);
-        end(code, line);
-      },
-      async (err) => {
-        const { code, line } = await reconcile(room.id);
-        end(code, `! ${(err as Error).message}`, line);
-      },
-    );
+    for (const entry of list) follow(entry);
+    open(view);
   });
 }
 
-/** The chat loop for one room. Resolves with the exit code. */
-async function chat(d: DaemonAddress, room: RoomDto): Promise<number> {
-  if (process.stdin.isTTY && process.stdout.isTTY) return chatTui(d, room);
-
-  const [agent] = room.participants;
+/** The chat loop for one room on a pipe: what a script or a test reads.
+ *  Resolves with the exit code. */
+async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
+  if (room.participants.length === 0)
+    console.log(`room ${room.id} · no agents`);
+  for (const p of room.participants) {
+    console.log(`room ${room.id} · ${p.name} (${p.harness}) · ${p.worktree}`);
+    for (const { text } of p.notices) console.log(`! ${text}`);
+  }
   console.log(
-    agent
-      ? `room ${room.id} · ${agent.name} (${agent.harness}) · ${agent.worktree}`
-      : `room ${room.id} · no agents`,
+    "type a message; @name picks the agent; /leave to exit, /dismiss to stop the room",
   );
-  for (const { text } of agent?.notices ?? []) console.log(`! ${text}`);
-  console.log("type a message; /leave to exit, /dismiss to stop the room");
 
   const state = newRoomState();
   const printer = makePrinter(state);
 
-  // The highest turn end seen, and the one turn being waited on.
-  let lastTurnEnd = 0;
-  let waiting: { after: number; done: () => void } | undefined;
+  // The one answer being waited on: `left` more turn ends of `id` above `after`.
+  let waiting:
+    | { id: string; after: number; left: number; done: () => void }
+    | undefined;
 
   const ended = readRoom(room.id, (line) => {
     const e = applyLine(state, line);
     if (!e) return;
     printer.show(e);
-    if (e.type === "turn_ended") {
-      lastTurnEnd = e.seq;
-      if (waiting && e.seq > waiting.after) {
-        waiting.done();
-        waiting = undefined;
-      }
+    if (
+      e.type === "turn_ended" &&
+      waiting &&
+      e.participantId === waiting.id &&
+      e.seq > waiting.after &&
+      --waiting.left === 0
+    ) {
+      waiting.done();
+      waiting = undefined;
     }
   }).then(
     () => "ended" as const,
@@ -583,18 +953,33 @@ async function chat(d: DaemonAddress, room: RoomDto): Promise<number> {
       break;
     }
 
-    const r = await call<MessageAccepted>(d, messagesPath(room), {
-      method: "POST",
-      body: { text },
-    });
+    const t = resolveTarget(text, rosterOf(state, room.participants));
+    if ("error" in t) {
+      console.error(`! ${t.error}`);
+      continue;
+    }
+    const r = await call<MessageAccepted>(
+      d,
+      `/rooms/${room.id}/agents/${t.id}/messages`,
+      { method: "POST", body: { text: t.text } },
+    );
     if (!r.ok) {
       console.error(`! ${r.error.message}`);
       continue;
     }
-    if (lastTurnEnd > r.body.seq) continue;
+    // Turn ends the stream already delivered count toward this answer.
+    const after = r.body.seq;
+    const left =
+      r.body.queued +
+      1 -
+      state.timeline.filter(
+        (e) =>
+          e.type === "turn_ended" && e.participantId === t.id && e.seq > after,
+      ).length;
+    if (left <= 0) continue;
     await Promise.race([
       new Promise<void>((done) => {
-        waiting = { after: r.body.seq, done };
+        waiting = { id: t.id, after, left, done };
       }),
       ended,
     ]);
@@ -602,6 +987,32 @@ async function chat(d: DaemonAddress, room: RoomDto): Promise<number> {
 
   rl.close();
   return code;
+}
+
+const isTty = () => Boolean(process.stdin.isTTY && process.stdout.isTTY);
+
+/** A terminal gets every room, with `room` selected; a pipe gets `room`
+ *  alone. A dismissed room is listed only when it is the one asked for, so
+ *  `attach` still replays it. */
+async function chat(d: DaemonAddress, room?: RoomDto): Promise<number> {
+  if (!isTty()) {
+    if (room) return chatPiped(d, room);
+    console.error(USAGE);
+    return 1;
+  }
+  const r = await call<RoomListEntry[]>(d, "/rooms");
+  if (!r.ok) {
+    console.error(`error: ${r.error.message}`);
+    return 1;
+  }
+  const list = r.body.filter(
+    (x) => x.status !== "dismissed" || x.id === room?.id,
+  );
+  if (list.length === 0) {
+    console.error("no rooms: start one with kapelle chat new --agent pi");
+    return 1;
+  }
+  return chatTui(d, list, room?.id);
 }
 
 async function main(): Promise<number> {
@@ -616,7 +1027,7 @@ async function main(): Promise<number> {
     },
   });
   const [verb, arg] = positionals;
-  if (values.help || !verb) {
+  if (values.help || (!verb && !isTty())) {
     console.log(USAGE);
     return values.help ? 0 : 1;
   }
@@ -626,6 +1037,8 @@ async function main(): Promise<number> {
   // prints; a different `minor` is a warning.
   const warning = await checkVersion(d);
   if (warning) console.error(`! ${warning}`);
+
+  if (!verb) return chat(d);
 
   if (verb === "new") {
     const cwd = resolve(values.cwd ?? process.cwd());

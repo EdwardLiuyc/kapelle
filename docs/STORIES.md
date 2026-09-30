@@ -2122,6 +2122,21 @@ without losing a stream, a message starting `@name` reaches that participant, a 
 with no mention reaches the orchestrator, opening a participant's thread pre-fills its
 `@name`, and every refusal in § Addressing has a resolver test.
 Decisions: R8, R19, R43, S11, R38. (S11 settled as (a) plus the additive `_client_room_closed`.)
+**Decided at pickup 2026-09-30 (#48):** the sidebar lists every active room the daemon
+holds, from all repositories; a filter for one repository comes later. A click,
+`alt+↑↓` or `ctrl+p/n` picks a row, so `↑ ↓ Enter` stay with the composer and Tab stays
+free for M4-4's completion. A row's circle is `●` when something waits (unseen lines, a
+question or a stall) and `○` when nothing does; the name is magenta for a question and
+yellow for a stall. `«`/`»` and `ctrl+t` hide the sidebar, and it starts hidden below 70
+columns. **`kapelle chat` moves here from M6-9**, with S7a's name.
+**Built 2026-09-30 (#48).** `client/mention.ts` resolves the target, and both screens
+send through it: piped `chat.ts` no longer sends to the first participant. The screen
+keeps one stream and one reducer per room, polls `GET /rooms` every 5 s for rooms made
+elsewhere, and exits when no room has a live stream left. What is on screen counts as
+seen: the timeline marks its whole room, and a thread marks its participant. A
+`@name` pre-fill the person did not touch follows the view, so it never names the
+thread just left. In a thread, an empty composer always holds the thread's `@name`: after a
+send, and after a delete by hand (R43, amended the same day).
 
 **M4-3 · Answer per-participant permissions from the TUI · M · needs M4-2, M5-4, M6-5**
 With a person at the keyboard, a participant can run `ask`: a queued permission names the
@@ -2285,7 +2300,7 @@ either, because M4-1 rebases it anyway and doing it twice buys nothing. M4-1 is 
 first; `package.json` keeps `marked` as its only runtime dependency.
 **No new features** — one participant per room, `auto` only, no roster and no permission
 answering — and `chat.ts` ships marked **experimental**, so the room API is not a
-promise until M5-1 documents it. The `kapelle chat` verb stays with M6-9 (S7a). R37
+promise until M5-1 documents it. The `kapelle chat` verb stays with M6-9 (S7a); M4-2 built it (#48). R37
 applies from here. The spike's `close()` releases as
 `done`, which commits the work and removes the checkout; both must stop. `release` already
 behaves as R37 wants under a non-releasing status, but every such label (`failed`,
@@ -2559,7 +2574,7 @@ orchestrator-response scan is recorded as the deferred option, not built.
 Decisions: R2, R23, R34, R43.
 
 **M6-9 · Room CLI and bridge readiness · S · needs M6-5, M4-2**
-Keep `chat.ts` standalone and add `kapelle chat` that runs it (S7a); document the bridge
+Keep `chat.ts` standalone and add `kapelle chat` that runs it (S7a; built by M4-2, #48); document the bridge
 pattern in `CLIENT-API.md` — a local process subscribes to a room or participant stream
 and answers permissions; no chat SDK enters the daemon.
 Decisions: S7, K5, R19.

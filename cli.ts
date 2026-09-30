@@ -151,7 +151,10 @@ const runFilePath = flag("file");
 /** The agent a one-prompt run starts when neither --agent nor --cmd names one. */
 const DEFAULT_AGENT = "pi";
 
-if ((!promptText && !runFilePath) || has("help")) {
+// `kapelle chat` is `chat.ts` (S7a), with its own usage and its own flags.
+const chatVerb = positional[0] === "chat";
+
+if (!chatVerb && ((!promptText && !runFilePath) || has("help"))) {
   console.log(`
 kapelle — a minimal Agent Client Protocol client
 
@@ -167,6 +170,8 @@ kapelle — a minimal Agent Client Protocol client
   kapelle daemon start [--port n] [--permission-timeout s]
                                      runs in this terminal until ^C or SIGTERM
   kapelle daemon add <path>          adds a repository to the running daemon
+  kapelle chat [new | attach | list | dismiss]
+                                     the chat rooms; kapelle chat --help
 
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: ${DEFAULT_AGENT})
@@ -221,7 +226,15 @@ function orExit<T>(f: () => T): T {
 // `else` for the same reason — there is nothing left to skip past.
 // `positional[0]`, not `argv[0]`: options such as `--cwd` can precede the
 // subcommand, and `flag()`/`has()` deliberately parse flags from anywhere.
-if (positional[0] === "daemon" && positional[1] === "start") {
+if (chatVerb) {
+  // As for `daemon start`: `chat.ts` parses `process.argv` itself and runs
+  // when imported, so the word that chose it is taken out and the rest is
+  // handed over as typed.
+  const rest = [...argv];
+  rest.splice(rest.indexOf("chat"), 1);
+  process.argv.splice(2, Infinity, ...rest);
+  await import("./chat.ts");
+} else if (positional[0] === "daemon" && positional[1] === "start") {
   // `daemon.ts` parses its own flags from `process.argv`, so the words that
   // chose it — and the global presentation flags it does not define — are
   // taken out, and the rest is handed over as typed so `--port n` reaches it.

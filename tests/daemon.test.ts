@@ -50,6 +50,7 @@ import {
   gitRepo,
   MOCK_AGENT,
   REPO,
+  runCli,
   spawnCli,
   startDaemon as start,
   tempDir,
@@ -4170,14 +4171,41 @@ test("chat.ts talks to a room end to end: messages in, answers out, /dismiss sto
   const r = await c.done;
 
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /you: alpha\nmock-agent: previous: \(none\)\n/);
-  assert.match(r.stdout, /you: beta\nmock-agent: previous: alpha\n/);
+  assert.match(
+    r.stdout,
+    /you → mock-agent: alpha\nmock-agent: previous: \(none\)\n/,
+  );
+  assert.match(
+    r.stdout,
+    /you → mock-agent: beta\nmock-agent: previous: alpha\n/,
+  );
   assert.match(r.stdout, /the room was dismissed/);
   const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
   assert.deepEqual(
     rooms.body.map((room) => room.status),
     ["dismissed"],
   );
+});
+
+test("piped chat.ts prints an agent's tool calls under its name, and names it once per answer", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  // The default mock turn: text, a tool call, text, a tool call, text.
+  const c = spawnCli(
+    t,
+    ["new", "--cmd", `node ${MOCK_AGENT}`, "--cwd", cwd],
+    "chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  c.child.stdin.end("go\n/dismiss\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(
+    r.stdout,
+    /you → mock-agent: go\nmock-agent: Reading package\.json via the client… *\n {2}· Read package\.json\ngot \d+ chars\.\n {2}· Write ACP_TEST\.md\nWrote ACP_TEST\.md\./,
+  );
+  assert.equal(r.stdout.match(/^mock-agent:/gm)?.length, 1, r.stdout);
 });
 
 test("chat.ts prints an answer that comes in two chunks once", async (t) => {
@@ -4195,8 +4223,14 @@ test("chat.ts prints an answer that comes in two chunks once", async (t) => {
   const r = await c.done;
 
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /you: alpha\nmock-agent: previous: \(none\)\n/);
-  assert.match(r.stdout, /you: beta\nmock-agent: previous: alpha\n/);
+  assert.match(
+    r.stdout,
+    /you → mock-agent: alpha\nmock-agent: previous: \(none\)\n/,
+  );
+  assert.match(
+    r.stdout,
+    /you → mock-agent: beta\nmock-agent: previous: alpha\n/,
+  );
 });
 
 test("chat.ts reaches the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
@@ -4283,7 +4317,7 @@ test("chat.ts /leave keeps the room alive, and attach replays the conversation b
   assert.equal(r.code, 0, r.stderr);
   assert.match(
     r.stdout,
-    /you: alpha\nmock-agent: previous: \(none\)\n[\s\S]*you: beta\nmock-agent: previous: alpha\n/,
+    /you → mock-agent: alpha\nmock-agent: previous: \(none\)\n[\s\S]*you → mock-agent: beta\nmock-agent: previous: alpha\n/,
     "history first, then the new turn — on the same harness",
   );
 });
@@ -4302,11 +4336,11 @@ const noPty =
  * screen. A pty made by `script` from a pipe has no size, so the command
  * sets one.
  */
-async function chatOnPty(t: TestContext) {
+async function chatOnPty(t: TestContext, agent = REMEMBER) {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
-  const cmd = `stty cols 100 rows 30; node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`;
+  const cmd = `stty cols 100 rows 30; node chat.ts new --cmd '${agent}' --cwd '${cwd}'`;
   const child = spawn("script", ["-qfec", cmd, "/dev/null"], {
     cwd: join(import.meta.dirname, ".."),
     env: { ...process.env, XDG_RUNTIME_DIR: runtime },
@@ -4339,8 +4373,20 @@ async function chatOnPty(t: TestContext) {
   // The status line, not the banner: keys sent before the screen takes the
   // terminal would be echoed by the terminal itself and prove nothing.
   await seen("enter to send");
-  return { child, seen, exited, out: () => out };
+  return { child, seen, exited, out: () => out, d, cwd };
 }
+
+/** CSI, OSC and APC sequences; pi-tui writes all three. */
+const ESCAPES =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
+  /\x1b(\[[0-9;?<>]*[A-Za-z~]|\][^\x07\x1b]*(\x07|\x1b\\)|_[^\x1b]*\x1b\\)/g;
+
+/** Terminal output as text: no escapes, no carriage returns. */
+const plainText = (out: string) => out.replace(ESCAPES, "").replace(/\r/g, "");
+
+/** What stays on the normal screen once the alternate one is left. */
+const scrollback = (out: string) =>
+  plainText(out.slice(out.lastIndexOf("\x1b[?1049l")));
 
 test("chat.ts on a real terminal is the full-screen chat, and leaves the conversation in scrollback", {
   skip: noPty,
@@ -4354,19 +4400,11 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   const out = screen();
   assert.equal(code, 0, out);
 
-  // What stays on the normal screen once the alternate one is left.
-  // CSI, OSC and APC sequences; pi-tui writes all three.
-  const escapes =
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
-    /\x1b(\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(\x07|\x1b\\)|_[^\x1b]*\x1b\\)/g;
-  const raw = out
-    .slice(out.lastIndexOf("\x1b[?1049l"))
-    .replace(escapes, "")
-    .replace(/\r/g, "");
+  const raw = scrollback(out);
   const text = raw.replace(/[ \t]+$/gm, "");
   assert.match(
     text,
-    /you\n\s*alpha\n[\s\S]*mock-agent\n\s*previous: \(none\)\n[\s\S]*the room was dismissed/,
+    /you → mock-agent\n\s*alpha\n[\s\S]*mock-agent\n\s*previous: \(none\)\n[\s\S]*the room was dismissed/,
     "the typed message, the answer, then the exit line",
   );
   // A line as wide as the terminal gets an empty line after it where the
@@ -4395,6 +4433,129 @@ for (const [how, keys] of [
   });
 }
 
+test("chat.ts on a real terminal keeps the typing box's bottom border on the last row, and an empty row above the status line", {
+  skip: noPty,
+}, async (t) => {
+  // The editor used to be allowed to shrink, and pi-tui's shrink takes at
+  // least one row from every entry that may: with the sidebar drawn full
+  // height, or a long conversation, the box lost its bottom border.
+  const { child, exited, out, seen } = await chatOnPty(t);
+  // The pty is 30 rows; pi-tui writes a row as CSI row;1H, CSI 2K, text.
+  // The pty is 30 rows. pi-tui writes a row as CSI row;1H, CSI 2K, then
+  // its text, and ends a frame with CSI ?2026l.
+  const rowAt = (n: number) => {
+    const last = out().split(`\x1b[${n};1H\x1b[2K`).slice(1).at(-1);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
+    const end = last?.search(/\x1b\[(\d+;\d+H|\?2026l)/) ?? -1;
+    return last && end !== -1 ? last.slice(0, end) : undefined;
+  };
+  for (const until = Date.now() + 10_000; rowAt(30) === undefined; ) {
+    assert.ok(Date.now() < until, `row 30 never drawn: ${out()}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.match(rowAt(30) ?? "", /─/, `row 30: ${JSON.stringify(rowAt(30))}`);
+  // The box is rows 28-30 and the status line row 27; the row above it
+  // stays empty, a gap between the conversation and the hint.
+  assert.match(plainText(rowAt(27) ?? ""), /enter to send/);
+  const gap = plainText(rowAt(26) ?? "?");
+  assert.equal(gap.trim(), "", `row 26: ${JSON.stringify(rowAt(26))}`);
+  // The status line names the target once the roster arrives, not its id.
+  await seen("→ mock-agent");
+  child.stdin.write("/leave\r");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts on a real terminal draws an agent's tool calls under its name, and names it once per answer", {
+  skip: noPty,
+}, async (t) => {
+  // The default mock turn: text, a tool call, text, a tool call, text.
+  const { child, exited, out } = await chatOnPty(t, `node ${MOCK_AGENT}`);
+  child.stdin.write("go\r");
+  // The turn's last text; colour codes can split it in the raw output.
+  for (const until = Date.now() + 20_000; ; ) {
+    if (plainText(out()).includes("</task-result>")) break;
+    assert.ok(Date.now() < until, `the turn never finished: ${out()}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  child.stdin.write("/leave\r");
+  assert.equal(await exited, 0, out());
+  const lines = scrollback(out())
+    .split("\n")
+    .map((l) => l.trim());
+  const you = lines.indexOf("you → mock-agent");
+  const heading = lines.indexOf("mock-agent");
+  const tool = lines.indexOf("· Read package.json");
+  assert.ok(you !== -1 && you < heading && heading < tool, lines.join("\n"));
+  assert.equal(
+    lines.filter((l) => l === "mock-agent").length,
+    1,
+    lines.join("\n"),
+  );
+});
+
+test("chat.ts on a real terminal follows a second room off screen, switches to its thread, and @name pre-filled reaches it", {
+  skip: noPty,
+}, async (t) => {
+  const { child, seen, exited, out, d, cwd } = await chatOnPty(t);
+  const b = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, name: "bob" }],
+  });
+  assert.equal(b.status, 201, b.body.error?.message);
+  // The sidebar polls `GET /rooms` every 5 s.
+  await seen("○ bob");
+  const bob = b.body.participants[0]?.id as string;
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${b.body.id}/agents/${bob}/messages`,
+    {
+      text: "hello-b",
+    },
+  );
+  assert.equal(sent.status, 202);
+  // Answered while the first room is on screen: its row marks it.
+  await seen("● bob");
+  // Rows: room A, its agent, room B, bob. Three steps down open bob's thread.
+  child.stdin.write("\x0e\x0e\x0e");
+  await seen("previous: (none)");
+  await seen("→ bob");
+  // The composer holds "@bob "; no orchestrator is needed for it.
+  child.stdin.write("again\r");
+  await seen("previous: hello-b");
+  // After a send, the thread's @name is back: "more" reaches bob too, though
+  // room B has no orchestrator to take a message with no mention.
+  child.stdin.write("more\r");
+  await seen("previous: again");
+  // Deleted by hand, it comes back as well.
+  child.stdin.write("\x7f".repeat(5));
+  await new Promise((ok) => setTimeout(ok, 200));
+  child.stdin.write("last\r");
+  await seen("previous: more");
+  // An untouched pre-fill follows the view: two rows up is room A's agent.
+  /** Sends keys, then waits for `text` in what the screen draws after. */
+  const press = async (keys: string, text: string) => {
+    const from = out().length;
+    child.stdin.write(keys);
+    for (const until = Date.now() + 10_000; ; ) {
+      if (out().slice(from).includes(text)) return;
+      assert.ok(Date.now() < until, `${JSON.stringify(keys)}: ${out()}`);
+      await new Promise((ok) => setTimeout(ok, 50));
+    }
+  };
+  // An untouched pre-fill follows the view: two rows up is room A's agent,
+  // so the target is it, not bob.
+  await press("\x10\x10", "→ mock-agent");
+  // A left click on the first row (SGR mouse, 1-based) opens room A's
+  // timeline, whose header names the room.
+  await press("\x1b[<0;4;2M\x1b[<0;4;2m", "room room-");
+  // ctrl+t hides the sidebar; the strip that stands in for it shows.
+  child.stdin.write("\x14");
+  await seen("»");
+  child.stdin.write("/leave\r");
+  assert.equal(await exited, 0, out());
+});
+
 test("chat.ts attributes an answer to the roster name, not the harness label", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
@@ -4412,7 +4573,7 @@ test("chat.ts attributes an answer to the roster name, not the harness label", a
   assert.doesNotMatch(r.stdout, /mock-agent: previous/);
 });
 
-test("chat.ts attach talks to the participant it names, even with no orchestrator", async (t) => {
+test("piped chat.ts refuses a message with no mention in a room with no orchestrator, and @name reaches the participant", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
@@ -4425,10 +4586,43 @@ test("chat.ts attach talks to the participant it names, even with no orchestrato
   const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
   });
-  c.child.stdin.end("hi\n/dismiss\n");
+  c.child.stdin.end("hi\n@Bob, hi\n/dismiss\n");
   const r = await c.done;
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /bob: previous: \(none\)/);
+  assert.match(r.stderr, /no orchestrator: start with @name/);
+  assert.match(r.stdout, /you → bob: hi\nbob: previous: \(none\)/);
+});
+
+test("piped chat.ts sends a message with no mention to the orchestrator, and @name to that participant", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "alice", role: "orchestrator" },
+      { cmd: REMEMBER, name: "bob" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("one\n@bob two\nthree\n@alice @bob four\n@bob\n/dismiss\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  // Each answers with its own previous prompt: two memories, one room.
+  assert.match(r.stdout, /you → alice: one\nalice: previous: \(none\)/);
+  assert.match(r.stdout, /you → bob: two\nbob: previous: \(none\)/);
+  assert.match(r.stdout, /you → alice: three\nalice: previous: one/);
+  assert.match(r.stderr, /name one participant/);
+  assert.match(r.stderr, /nothing to send/);
+});
+
+test("kapelle chat runs chat.ts", async (t) => {
+  const r = await runCli(t, ["chat", "--help"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /node chat\.ts new --agent/);
 });
 
 test("an ask participant asks through /permissions, and nobody answering denies it at the timeout", async (t) => {
