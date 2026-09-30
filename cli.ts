@@ -134,11 +134,12 @@ const TASK_STATUSES = new Set<string>([
   "failed",
 ]);
 
-const positional = argv.filter((a, i) => {
-  if (a.startsWith("--")) return false;
+const positionalAt = argv.flatMap((a, i) => {
+  if (a.startsWith("--")) return [];
   const prev = argv[i - 1];
-  return !(prev?.startsWith("--") && !BOOLEAN_FLAGS.has(prev));
+  return prev?.startsWith("--") && !BOOLEAN_FLAGS.has(prev) ? [] : [i];
 });
+const positional = positionalAt.map((i) => argv[i]);
 
 const promptText = positional.join(" ").trim();
 
@@ -151,7 +152,10 @@ const runFilePath = flag("file");
 /** The agent a one-prompt run starts when neither --agent nor --cmd names one. */
 const DEFAULT_AGENT = "pi";
 
-if ((!promptText && !runFilePath) || has("help")) {
+// `kapelle chat` is `chat.ts` (S7a), with its own usage and its own flags.
+const chatVerb = positional[0] === "chat";
+
+if (!chatVerb && ((!promptText && !runFilePath) || has("help"))) {
   console.log(`
 kapelle — a minimal Agent Client Protocol client
 
@@ -167,6 +171,8 @@ kapelle — a minimal Agent Client Protocol client
   kapelle daemon start [--port n] [--permission-timeout s]
                                      runs in this terminal until ^C or SIGTERM
   kapelle daemon add <path>          adds a repository to the running daemon
+  kapelle chat [new | attach | list | dismiss]
+                                     the chat rooms; kapelle chat --help
 
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: ${DEFAULT_AGENT})
@@ -221,15 +227,28 @@ function orExit<T>(f: () => T): T {
 // `else` for the same reason — there is nothing left to skip past.
 // `positional[0]`, not `argv[0]`: options such as `--cwd` can precede the
 // subcommand, and `flag()`/`has()` deliberately parse flags from anywhere.
-if (positional[0] === "daemon" && positional[1] === "start") {
+if (chatVerb) {
+  // As for `daemon start`: `chat.ts` parses `process.argv` itself and runs
+  // when imported, so the word that chose it is taken out and the rest is
+  // handed over as typed. `positionalAt[0]` is that word's argv index: a
+  // flag value that happens to be `chat` must stay. The global presentation
+  // flags go too, as for `daemon start`: `chat.ts` defines neither.
+  const chatAt = positionalAt[0];
+  const rest = argv.filter(
+    (a, i) => i !== chatAt && a !== "--quiet" && a !== "--verbose",
+  );
+  process.argv.splice(2, Infinity, ...rest);
+  await import("./chat.ts");
+} else if (positional[0] === "daemon" && positional[1] === "start") {
   // `daemon.ts` parses its own flags from `process.argv`, so the words that
-  // chose it — and the global presentation flags it does not define — are
-  // taken out, and the rest is handed over as typed so `--port n` reaches it.
-  const rest = [...argv];
-  for (const word of ["daemon", "start", "--quiet", "--verbose"]) {
-    const i = rest.indexOf(word);
-    if (i !== -1) rest.splice(i, 1);
-  }
+  // chose it — by their argv index, as for `chat` — and the global
+  // presentation flags it does not define are taken out, and the rest is
+  // handed over as typed so `--port n` reaches it.
+  const [daemonAt, startAt] = positionalAt;
+  const rest = argv.filter(
+    (a, i) =>
+      i !== daemonAt && i !== startAt && a !== "--quiet" && a !== "--verbose",
+  );
   process.argv.splice(2, Infinity, ...rest);
   await import("./daemon.ts");
 } else if (positional[0] === "daemon") {
