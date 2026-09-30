@@ -644,7 +644,13 @@ function chatTui(
     const r = rooms.get(view.roomId);
     if (r) {
       const id = view.participantId;
-      const dto = r.dto?.participants.filter((p) => !id || p.id === id) ?? [];
+      // `r.dto` is read when a participant joins, not when one leaves: the
+      // reducer says who left, so a removed one's notices are not drawn.
+      const dto =
+        r.dto?.participants.filter(
+          (p) =>
+            (!id || p.id === id) && !r.state.participants.get(p.id)?.removed,
+        ) ?? [];
       if (id) {
         const p = r.state.participants.get(id);
         const where = dto[0]?.worktree ? ` · ${dto[0].worktree}` : "";

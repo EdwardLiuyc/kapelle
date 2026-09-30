@@ -4980,7 +4980,7 @@ test("chat.ts on a real terminal gives a bare @name back with its space on the t
   assert.equal(await exited, 0, out());
 });
 
-test("chat.ts on a real terminal takes /leave and /dismiss after a thread's @name", {
+test("chat.ts on a real terminal takes /dismiss after a thread's @name", {
   skip: noPty,
 }, async (t) => {
   // In a thread the composer always holds `@name `, so a command typed there
@@ -5091,4 +5091,38 @@ test("kapelle chat takes the global --quiet and --verbose", async (t) => {
   const r = await runCli(t, ["chat", "--quiet", "--verbose", "--help"]);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /node chat\.ts new --agent/);
+});
+
+test("chat.ts on a real terminal drops a removed participant's notices from the timeline", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out, d } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const bob = await api<ParticipantDto>(
+    d,
+    "POST",
+    `/rooms/${room?.id}/agents`,
+    {
+      cmd: REMEMBER,
+      name: "bob",
+    },
+  );
+  assert.equal(bob.status, 201);
+  await seen("○ bob");
+  const gone = await api(
+    d,
+    "DELETE",
+    `/rooms/${room?.id}/agents/${bob.body.id}`,
+  );
+  assert.equal(gone.status, 200, JSON.stringify(gone.body));
+  // Away and back redraws the timeline, header and notices included.
+  await press("\x1b[1;3B", "@mock-agent");
+  await press("\x1b[1;3A", "room room-");
+  child.stdin.write("/leave\r");
+  assert.equal(await exited, 0, out());
+  // Each mock participant has one "no measured labels" notice; the
+  // transcript left in scrollback is the timeline's.
+  const notices = scrollback(out()).match(/no measured labels/g) ?? [];
+  assert.equal(notices.length, 1, scrollback(out()));
 });
