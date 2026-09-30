@@ -109,6 +109,7 @@ start it with @name to send it to that agent instead.
   /leave     exit; the rooms and their harnesses stay alive
   /dismiss   stop the room's harnesses; uncommitted work stays in each
              checkout, because the supervisor never commits for it (R37)
+both work in any view, after a thread's @name too, and never reach an agent
 
 on a terminal: alt+up/down or ctrl+p/n (or a click) picks a room's timeline
 or one agent's thread; ctrl+t (or a click on « ») hides the rooms`;
@@ -342,6 +343,17 @@ const rosterOf = (state: RoomState, fallback: readonly Named[]) => {
   return now.length > 0 ? now : fallback;
 };
 
+/**
+ * The chat command a message is, if any: `/leave` or `/dismiss`, alone or
+ * after a mention, since a thread's composer always holds one. A command
+ * never reaches an agent, on the screen or on a pipe.
+ */
+const commandOf = (text: string, roster: readonly Named[]) => {
+  const t = targetOf(text, roster);
+  const rest = ("id" in t ? t.text : text).trim();
+  return rest === "/leave" || rest === "/dismiss" ? rest : undefined;
+};
+
 /** Whether a question from this participant waits. */
 const asks = (state: RoomState, id: string) =>
   [...state.questions.values()].some((q) => q.participantId === id);
@@ -432,10 +444,14 @@ function chatTui(
   // cut. Put it in a ScrollView when rooms outgrow a screen.
   const sidebar: Component = {
     render(width) {
-      const inner = width - 2;
+      // pi-tui measures each part at the full width first, so this can be
+      // any width, not only the sidebar's own 26.
+      const inner = Math.max(0, width - 2);
       const fit = (s: string) =>
         `${truncateToWidth(s, inner, "…", true)} ${dim("│")}`;
-      const lines = [fit(`${dim("rooms")}${" ".repeat(inner - 6)}«`)];
+      const lines = [
+        fit(`${dim("rooms")}${" ".repeat(Math.max(0, inner - 6))}«`),
+      ];
       for (const row of rows()) {
         const r = rooms.get(row.roomId);
         if (!r) continue;
@@ -665,10 +681,43 @@ function chatTui(
     redraw();
   };
 
+  /** Reads the room again for each participant's checkout and notices. */
+  const loadDto = (r: Followed) => {
+    call<RoomDto>(d, `/rooms/${r.entry.id}`).then(
+      (res) => {
+        if (!res.ok) return;
+        r.dto = res.body;
+        if (view.roomId === r.entry.id) redraw();
+      },
+      // The stream says what happened to the daemon; a header can wait.
+      () => {},
+    );
+  };
+
   const onLine = (roomId: string, line: RoomEventLine) => {
     const r = rooms.get(roomId);
     if (!r) return;
     const e = applyLine(r.state, line);
+    const kind = line.update.sessionUpdate;
+    // A participant who joined after the room was read has no checkout or
+    // notices in the header until the room is read again.
+    if (
+      kind === "_client_participant_added" &&
+      r.dto &&
+      !r.dto.participants.some((p) => p.id === line.participantId)
+    ) {
+      loadDto(r);
+    }
+    // The open thread's participant left the roster: its @name can no
+    // longer resolve, and it has no row. Back to the room's timeline.
+    if (
+      kind === "_client_participant_removed" &&
+      roomId === view.roomId &&
+      view.participantId === line.participantId
+    ) {
+      open({ roomId });
+      return;
+    }
     const here =
       roomId === view.roomId &&
       (!view.participantId || view.participantId === line.participantId);
@@ -745,15 +794,7 @@ function chatTui(
       if (rooms.has(entry.id)) return;
       const r: Followed = { entry, state: newRoomState() };
       rooms.set(entry.id, r);
-      call<RoomDto>(d, `/rooms/${entry.id}`).then(
-        (res) => {
-          if (!res.ok) return;
-          r.dto = res.body;
-          if (view.roomId === entry.id) redraw();
-        },
-        // The stream says what happened to the daemon; a header can wait.
-        () => {},
-      );
+      loadDto(r);
       readRoom(entry.id, (line) => onLine(entry.id, line)).then(
         () => closed(entry.id),
         (err) => closed(entry.id, err),
@@ -818,10 +859,12 @@ function chatTui(
     };
     const submit = async (text: string) => {
       if (!text.trim()) return;
-      if (text === "/leave") return end(0, left());
       const r = rooms.get(view.roomId);
+      const roster = r ? rosterOf(r.state, r.entry.participants) : [];
+      const command = commandOf(text, roster);
+      if (command === "/leave") return end(0, left());
       if (!r) return;
-      if (text === "/dismiss") {
+      if (command === "/dismiss") {
         flash = `dismissing ${r.entry.title ?? r.entry.id}: stopping its harnesses…`;
         setStatus();
         const res = await call<RoomDto>(d, `/rooms/${r.entry.id}/dismiss`, {
@@ -831,15 +874,14 @@ function chatTui(
         if (!res.ok) warn(`! ${res.error.message}`);
         return;
       }
-      const t = resolveTarget(text, rosterOf(r.state, r.entry.participants));
+      const t = resolveTarget(text, roster);
       if ("error" in t) {
         // Refused before any request: give the text back to fix. The
         // editor trims what it submits, so a bare mention gets its space
         // back, or the next letter would join the name (`@bobx`). In a
         // thread the pre-fill put back on the clear is already this.
         warn(`! ${t.error}`);
-        const bare =
-          "id" in targetOf(text, rosterOf(r.state, r.entry.participants));
+        const bare = "id" in targetOf(text, roster);
         const back = bare ? `${text} ` : text;
         if (editor.getText() !== back) editor.setText(back);
         return;
@@ -949,11 +991,13 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       code = r.code;
       break;
     }
-    if (next === null || next.trim() === "/leave") break;
+    if (next === null) break;
     const text = next.trim();
     if (!text) continue;
+    const command = commandOf(text, rosterOf(state, room.participants));
+    if (command === "/leave") break;
 
-    if (text === "/dismiss") {
+    if (command === "/dismiss") {
       const r = await call<RoomDto>(d, `/rooms/${room.id}/dismiss`, {
         method: "POST",
       });
@@ -1009,11 +1053,8 @@ const isTty = () => Boolean(process.stdin.isTTY && process.stdout.isTTY);
  *  alone. A dismissed room is listed only when it is the one asked for, so
  *  `attach` still replays it. */
 async function chat(d: DaemonAddress, room?: RoomDto): Promise<number> {
-  if (!isTty()) {
-    if (room) return chatPiped(d, room);
-    console.error(USAGE);
-    return 1;
-  }
+  // `main` prints the usage for a pipe with no verb, so a pipe has a room.
+  if (!isTty() && room) return chatPiped(d, room);
   const r = await call<RoomListEntry[]>(d, "/rooms");
   if (!r.ok) {
     console.error(`error: ${r.error.message}`);

@@ -4979,3 +4979,116 @@ test("chat.ts on a real terminal gives a bare @name back with its space on the t
   child.stdin.write("\x03");
   assert.equal(await exited, 0, out());
 });
+
+test("chat.ts on a real terminal takes /leave and /dismiss after a thread's @name", {
+  skip: noPty,
+}, async (t) => {
+  // In a thread the composer always holds `@name `, so a command typed there
+  // is `@name /dismiss`. It must act, not reach the agent as a prompt.
+  const { press, seen, exited, out } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  await press("\x1b[1;3B", "@mock-agent");
+  await press("/dismiss\r", "the room was dismissed");
+  assert.equal(await exited, 0, out());
+  assert.doesNotMatch(plainText(out()), /you → mock-agent/);
+});
+
+test("piped chat.ts takes /leave after an @name, as the screen does", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("@mock-agent /leave\nnever sent\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /you → /);
+});
+
+test("chat.ts on a real terminal falls back to the timeline when the open thread's participant is removed", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out, d } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const bob = await api<ParticipantDto>(
+    d,
+    "POST",
+    `/rooms/${room?.id}/agents`,
+    {
+      cmd: REMEMBER,
+      name: "bob",
+    },
+  );
+  assert.equal(bob.status, 201);
+  await seen("○ bob");
+  // Rows: the room, mock-agent, bob. Two steps down open bob's thread.
+  await press("\x1b[1;3B\x1b[1;3B", "@bob");
+  // Looked for from before the DELETE: the screen may switch before the
+  // daemon's reply arrives.
+  const from = out().length;
+  const gone = await api(
+    d,
+    "DELETE",
+    `/rooms/${room?.id}/agents/${bob.body.id}`,
+  );
+  assert.equal(gone.status, 200, JSON.stringify(gone.body));
+  // The timeline's header names the room, and its target is the orchestrator.
+  for (const until = Date.now() + 20_000; ; ) {
+    if (out().slice(from).includes("room room-")) break;
+    assert.ok(Date.now() < until, `still in bob's thread: ${out()}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  await press("hi\r", "previous: (none)");
+  child.stdin.write("\x03");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts on a real terminal shows the checkout of a participant added after it started", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out, d } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const carol = await api<ParticipantDto>(
+    d,
+    "POST",
+    `/rooms/${room?.id}/agents`,
+    { cmd: REMEMBER, name: "carol" },
+  );
+  assert.equal(carol.status, 201);
+  await seen("○ carol");
+  // The thread header names the checkout, from `GET /rooms/:id`; the path
+  // itself wraps, so the " · " before it is what shows it was read.
+  await press("\x1b[1;3B\x1b[1;3B", "carol (mock-agent) · ");
+  child.stdin.write("\x03");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts on a terminal under 8 columns shows the sidebar without failing", {
+  skip: noPty,
+}, async (t) => {
+  // pi-tui measures each part at the full width first, so the sidebar is
+  // drawn at 7 columns once, though its own width is 26.
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const screen = await ptyScreen(
+    t,
+    `stty cols 7 rows 30; node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`,
+    { XDG_RUNTIME_DIR: runtime },
+    "»",
+  );
+  // Only the sidebar's first 7 columns fit: its "rooms" header.
+  await screen.press("\x14", "rooms");
+  screen.child.stdin.write("\x03");
+  assert.equal(await screen.exited, 0, screen.out());
+  assert.doesNotMatch(screen.out(), /screen failed/);
+});
+
+test("kapelle chat takes the global --quiet and --verbose", async (t) => {
+  const r = await runCli(t, ["chat", "--quiet", "--verbose", "--help"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /node chat\.ts new --agent/);
+});

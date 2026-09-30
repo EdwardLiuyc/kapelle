@@ -231,10 +231,12 @@ if (chatVerb) {
   // As for `daemon start`: `chat.ts` parses `process.argv` itself and runs
   // when imported, so the word that chose it is taken out and the rest is
   // handed over as typed. `positionalAt[0]` is that word's argv index: a
-  // flag value that happens to be `chat` must stay.
-  const rest = [...argv];
+  // flag value that happens to be `chat` must stay. The global presentation
+  // flags go too, as for `daemon start`: `chat.ts` defines neither.
   const chatAt = positionalAt[0];
-  if (chatAt !== undefined) rest.splice(chatAt, 1);
+  const rest = argv.filter(
+    (a, i) => i !== chatAt && a !== "--quiet" && a !== "--verbose",
+  );
   process.argv.splice(2, Infinity, ...rest);
   await import("./chat.ts");
 } else if (positional[0] === "daemon" && positional[1] === "start") {
