@@ -177,7 +177,7 @@ async function reconcile(id: string): Promise<{ code: number; line: string }> {
         code: 1,
         line:
           `! lost the room stream; the room is still ${r.body.status} — ` +
-          `rejoin with: chat.ts attach ${id}`,
+          `rejoin with: kapelle chat attach ${id}`,
       };
     }
     if (r.status === 404) {
@@ -676,6 +676,14 @@ function chatTui(
       seen(r.state, line.participantId);
       if (e) draw(r.state, e);
     }
+    // A rename moves an untouched thread pre-fill to the new name.
+    if (roomId === view.roomId && view.participantId && prefill) {
+      const next = `@${nameOf(r.state, view.participantId)} `;
+      if (next !== prefill && editor.getText() === prefill) {
+        prefill = next;
+        editor.setText(next);
+      }
+    }
     // A roster line can rename the target, and any line can change the
     // count of rooms that wait while the sidebar is hidden.
     setStatus();
@@ -710,7 +718,7 @@ function chatTui(
       finish(code);
     };
     const left = () =>
-      `left room ${view.roomId}; rejoin with: node chat.ts attach ${view.roomId}`;
+      `left room ${view.roomId}; rejoin with: kapelle chat attach ${view.roomId}`;
 
     /** A room's stream ended: ask the daemon why. The screen ends with the
      *  last live stream. */
@@ -825,9 +833,15 @@ function chatTui(
       }
       const t = resolveTarget(text, rosterOf(r.state, r.entry.participants));
       if ("error" in t) {
-        // Refused before any request: give the text back to fix.
+        // Refused before any request: give the text back to fix. The
+        // editor trims what it submits, so a bare mention gets its space
+        // back, or the next letter would join the name (`@bobx`). In a
+        // thread the pre-fill put back on the clear is already this.
         warn(`! ${t.error}`);
-        editor.setText(text);
+        const bare =
+          "id" in targetOf(text, rosterOf(r.state, r.entry.participants));
+        const back = bare ? `${text} ` : text;
+        if (editor.getText() !== back) editor.setText(back);
         return;
       }
       editor.addToHistory(text);

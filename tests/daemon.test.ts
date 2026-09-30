@@ -4681,6 +4681,8 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
     screen.out().includes("\x1b[35m● asker\x1b[39m … 5"),
     "the question row is magenta, busy and has an unread count",
   );
+  // Hidden, the sidebar leaves a count of the rooms that need the person.
+  await screen.press("\x14", "● 2 rooms");
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
@@ -4744,6 +4746,53 @@ test("chat.ts on a real terminal draws a permission question", {
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts attach on a real terminal opens the room it names, not the first", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const ids: string[] = [];
+  for (const _ of [1, 2]) {
+    const r = await api<RoomReply>(
+      d,
+      "POST",
+      "/rooms",
+      withAgent(cwd, REMEMBER),
+    );
+    assert.equal(r.status, 201, r.body.error?.message);
+    ids.push(r.body.id);
+  }
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${ids[1]}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen(`room ${ids[1]} ·`);
+  screen.child.stdin.write("/leave\r");
+  await screen.seen(`left room ${ids[1]}`);
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal moves an untouched thread @name to a new name", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out, d } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  await press("\x1b[1;3B", "@mock-agent");
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const agent = room?.participants[0]?.id as string;
+  const renamed = await api(d, "PATCH", `/rooms/${room?.id}/agents/${agent}`, {
+    name: "bob",
+  });
+  assert.equal(renamed.status, 200, renamed.body.error?.message);
+  await seen("→ bob");
+  child.stdin.write("hi\r");
+  await seen("previous: (none)");
+  child.stdin.write("\x03");
+  assert.equal(await exited, 0, out());
 });
 
 test("kapelle chat runs chat.ts", async (t) => {
@@ -4902,4 +4951,31 @@ test("an ask participant asks through /permissions, and nobody answering denies 
   );
   assert.equal(changed.status, 200, changed.body.error?.message);
   assert.equal(changed.body.mode, "safe");
+});
+
+test("chat.ts on a real terminal keeps a thread's @name whole after Enter on it alone", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  await press("\x1b[1;3B", "@mock-agent");
+  await press("\r", "nothing to send");
+  // The editor trims what it submits. Giving back "@mock-agent" with no
+  // space would make this "@mock-agentx", a name nobody has.
+  await press("x\r", "previous: (none)");
+  child.stdin.write("\x03");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts on a real terminal gives a bare @name back with its space on the timeline too", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, exited, out } = await chatOnPty(t);
+  // The timeline pre-fills nothing: the person typed this mention.
+  await press("@mock-agent \r", "nothing to send");
+  // The editor trims what it submits; without the space back, this would
+  // be "@mock-agentx".
+  await press("x\r", "previous: (none)");
+  child.stdin.write("\x03");
+  assert.equal(await exited, 0, out());
 });
