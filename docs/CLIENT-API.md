@@ -7,8 +7,8 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.5** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
-M5-6, #138, M5-7, #139, and M6-5, #149).
+Contract version: **1.6** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+M5-6, #138, M5-7, #139, M6-5, #149, and M4-3, #49).
 
 ## Contents
 
@@ -107,7 +107,7 @@ Not every part of this API is final yet. Each part has one of three labels:
 | Heartbeat (`: ping`) and a paused slow reader | Since 1.3 (M5-6). |
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
 | `_client_*` events | Except the room events. See [Events](#events). |
-| `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). Questions from rooms since 1.5 (M6-5). |
+| `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). Questions from rooms since 1.5 (M6-5). `input` since 1.6 (M4-3). |
 | Error replies (`{error: {code, message}}`) and the error codes | Codes are only added (M5-3). |
 | Request limits: `Content-Type`, body size, unknown fields, read timeout | M5-3. |
 
@@ -757,7 +757,7 @@ with ACP names.
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
 | `_client_permission_pending` | `title`, `kind` | A decision is about to be taken. It fires for every decision, also ones that need no person. |
-| `_client_permission_queued` | `id`, `title`, `kind` | A decision waits for a person. Answer it with `POST /permissions/:id`. |
+| `_client_permission_queued` | `id`, `title`, `kind`, `input?` | A decision waits for a person. Answer it with `POST /permissions/:id`. `input` is the tool's input: see [`GET /permissions`](#get-permissions). Since 1.6. |
 | `_client_permission_answered` | `id`, `allow`, `reason` | A queued decision closed. `id` is the one from `_client_permission_queued`. `reason` says why: see [Why a question closed](#why-a-question-closed). |
 | `_client_permission` | `allow`, `title`, `kind`, `optionId?` | The decision was taken. |
 
@@ -814,7 +814,8 @@ fetching and thinking never ask.
 
 1. See the question. Either watch a stream for `_client_permission_queued`, or poll
    `GET /permissions`.
-2. Show the `title` and `kind` to the person.
+2. Show the `title`, `kind` and `input` to the person. All three are the harness's text:
+   remove control characters before you draw them.
 3. Send the answer with `POST /permissions/:id`.
 
 **Rules:**
@@ -876,13 +877,20 @@ instead. `turn` is the number on that turn's `_client_user_message`.
     "participantId": "p-4f2a9c",
     "turn": 3,
     "kind": "execute",
-    "title": "npm test"
+    "title": "npm test",
+    "input": { "command": "npm test", "description": "Run the tests" }
   }
 ]
 ```
 
 `kind` is one of `read`, `edit`, `delete`, `move`, `search`, `execute`, `think`, `fetch`,
 `switch_mode`, `other`. Treat `id` as an opaque string.
+
+`input` is the tool's input as the harness sent it, so a person can judge the action. Since
+1.6. It is absent when the harness sent none. Each value is text: a value that was not a
+string is its JSON. It holds at most 8 fields. A key is cut at 64 characters and a value at
+400, so a cut value ends with `…`. Its fields differ by harness: for example `command`
+for a shell command, or `path` and `file_text` for a new file.
 
 ### `GET /permissions/:id`
 

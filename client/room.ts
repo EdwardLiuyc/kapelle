@@ -45,12 +45,24 @@ export type Entry = { seq: number; participantId: string } & (
       title: string;
       kind: ToolKind;
       turn?: number;
+      /** The tool's input, as `key: value` text (M4-3). */
+      input?: Record<string, string>;
       /** Both set once the question closed. */
       allow?: boolean;
       reason?: PermissionReason;
     }
   | { type: "stall"; kind: "idle" | "repeat"; text: string }
 );
+
+/**
+ * The harness's text with its control characters made spaces, so a title or
+ * an input can draw no escape sequence, clear no screen and break no line
+ * (M4-3). Only the question's text goes through it: an answer is markdown,
+ * which draws its own.
+ */
+export const printable = (s: string) =>
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the point is to match them
+  s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
 
 type Answer = Extract<Entry, { type: "answer" }>;
 type Question = Extract<Entry, { type: "permission" }>;
@@ -223,9 +235,17 @@ export function applyLine(
         ...at,
         type: "permission",
         id: u.id,
-        title: u.title,
+        title: printable(u.title),
         kind: u.kind,
         ...(number !== undefined && { turn: number }),
+        ...(u.input && {
+          input: Object.fromEntries(
+            Object.entries(u.input).map(([k, v]) => [
+              printable(k),
+              printable(String(v)),
+            ]),
+          ),
+        }),
       }) as Question;
       state.questions.set(u.id, question);
       return question;

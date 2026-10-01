@@ -4720,7 +4720,7 @@ test("chat.ts on a real terminal draws a stall warning", {
   assert.equal(await screen.exited, 0, screen.out());
 });
 
-test("chat.ts on a real terminal draws a permission question", {
+test("chat.ts on a real terminal answers a question in its pop-up, and a piped observer sees the same decision", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -4739,6 +4739,14 @@ test("chat.ts on a real terminal draws a permission question", {
   });
   assert.equal(open.status, 201, open.body.error?.message);
   const asker = only(open.body);
+  // The CLI observer (M4-3): a piped attach on the same room.
+  const observer = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  let watched = "";
+  observer.child.stdout.on("data", (c: string) => {
+    watched += c;
+  });
   const screen = await ptyScreen(
     t,
     `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
@@ -4751,7 +4759,84 @@ test("chat.ts on a real terminal draws a permission question", {
     { text: "go" },
   );
   assert.equal(sent.status, 202, sent.body.error?.message);
-  await screen.seen("? asker asks: Write ACP_TEST.md");
+
+  // The box opens by itself, with the tool's input, and deny comes first.
+  await screen.seen("edit · Write ACP_TEST.md");
+  await screen.seen("path: ACP_TEST.md");
+  const write = await pendingOne(d);
+  // Down to allow, then Enter. The next question opens in its place.
+  await screen.press("\x1b[B\r", "Delete something");
+  const del = await pendingOne(d);
+  assert.notEqual(del.id, write.id);
+  // A stray Enter says no.
+  screen.child.stdin.write("\r");
+  for (const until = Date.now() + 20_000; ; ) {
+    if (watched.includes("asker: denied (client)")) break;
+    assert.ok(Date.now() < until, watched);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  const decided = async (id: string) =>
+    (await api<PermissionDecision>(d, "GET", `/permissions/${id}`)).body;
+  assert.deepEqual(
+    [(await decided(write.id)).allow, (await decided(write.id)).reason],
+    [true, "client"],
+  );
+  assert.deepEqual(
+    [(await decided(del.id)).allow, (await decided(del.id)).reason],
+    [false, "client"],
+  );
+  assert.match(
+    watched,
+    /\? asker asks: Write ACP_TEST\.md\n {2}asker: allowed \(client\)\n/,
+  );
+  assert.match(
+    watched,
+    /\? asker asks: Delete something[^\n]*\n {2}asker: denied \(client\)\n/,
+  );
+  observer.child.stdin.end("/leave\n");
+  assert.equal((await observer.done).code, 0);
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal keeps a question waiting while the person types, and closes its box when another client answers", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "asker", mode: "ask" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const asker = only(open.body);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  // Text in the composer: the box must not take the next keys.
+  await screen.press("@asker hel", "→ asker");
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${asker.id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  await screen.seen("? 1 question · ctrl+o");
+  assert.doesNotMatch(plainText(screen.out()), /question 1 of 1/);
+  // The menu lists it first; Enter opens its box.
+  await screen.press("\x0f", "? asker asks: Write ACP_TEST.md");
+  await screen.press("\r", "question 1 of 1");
+  const write = await pendingOne(d);
+  const other = await api(d, "POST", `/permissions/${write.id}`, {
+    allow: true,
+  });
+  assert.equal(other.status, 200, other.body.error?.message);
+  await screen.seen("asker's question closed: allowed (client)");
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
@@ -4898,6 +4983,7 @@ test("an ask participant asks through /permissions, and nobody answering denies 
       turn: 1,
       kind: "edit",
       title: "Write ACP_TEST.md",
+      input: { path: "ACP_TEST.md" },
     },
   );
   const allowed = await api(d, "POST", `/permissions/${first.id}`, {

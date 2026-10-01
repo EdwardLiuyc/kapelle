@@ -24,6 +24,7 @@ import {
   type Entry,
   needsAttention,
   newRoomState,
+  printable,
   type RoomState,
   roster,
   seen,
@@ -372,4 +373,27 @@ test("a turn that ends with an error keeps the error on the turn and the entry",
     "the timeline entry keeps the error",
   );
   assert.equal(who(state, "alice").status, "exited");
+});
+
+test("a question's title and input lose their control characters", () => {
+  const state = newRoomState();
+  const e = applyLine(state, {
+    seq: 1,
+    roomId: "r",
+    participantId: "p",
+    at: "2026-10-01T00:00:00.000Z",
+    update: {
+      sessionUpdate: "_client_permission_queued",
+      id: "q",
+      kind: "execute",
+      title: "rm\x1b[2J -rf\n/",
+      input: { "cmd\x07": "a\x1b]0;owned\x07b\u009bc" },
+    },
+  });
+  assert.equal(e?.type, "permission");
+  assert.deepEqual(e?.type === "permission" && [e.title, e.input], [
+    "rm [2J -rf /",
+    { "cmd ": "a ]0;owned b c" },
+  ]);
+  assert.equal(printable("tab\there"), "tab here");
 });

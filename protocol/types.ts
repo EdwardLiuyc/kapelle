@@ -411,6 +411,9 @@ export interface ClientPermissionQueuedEvent extends Meta {
   id: string;
   title: string;
   kind: ToolKind;
+  /** The tool's input as the harness sent it, each value as text, cut by
+   *  `core/permissions.ts` (M4-3). Absent when the harness sent none. */
+  input?: Record<string, string>;
 }
 
 /** Why a queued decision closed (M5-4, #136): a client answered, nobody did

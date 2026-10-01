@@ -44,7 +44,7 @@ export type { AgentEvent, PermissionReason, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 5 } as const;
+export const API_VERSION = { major: 1, minor: 6 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -225,6 +225,10 @@ export type PendingDecision = {
   id: string;
   kind: ToolKind;
   title: string;
+  /** The tool's input, each value as text and cut (M4-3, 1.6). Absent when
+   *  the harness sent none. It is the harness's text: remove control
+   *  characters before you draw it. */
+  input?: Record<string, string>;
 } & (
   | { runId: string; taskId: string }
   | { roomId: string; participantId: string; turn: number }

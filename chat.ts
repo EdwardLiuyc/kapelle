@@ -23,6 +23,13 @@
  * (`/add`, `@name /mode ask`, …) go through `client/command.ts` the same way
  * (M4-5), and never reach an agent.
  *
+ * **A question opens its own box** (M4-3): when an `ask` participant waits
+ * on a permission, the TUI shows the room, the agent, the turn and the tool's
+ * input, with `deny` first, so a stray Enter says no, as the timeout would.
+ * It never opens over another pop-up or over typed text; then the status
+ * line counts it and `ctrl+o` lists it. The piped screen only prints the
+ * question and how it closed.
+ *
  * A room keeps its harnesses alive between messages, until `/dismiss`.
  * Leaving (`/leave`, end of input, ^C) keeps every room, and `attach`
  * replays a room's whole conversation from its event log.
@@ -81,6 +88,8 @@ import {
 import type {
   HarnessEntry,
   MessageAccepted,
+  PermissionAnswered,
+  PermissionDecision,
   RepoAdded,
   RoomDto,
   RoomEventLine,
@@ -278,9 +287,18 @@ function makePrinter(state: RoomState) {
         case "exited":
           line("! the harness exited");
           break;
+        case "permission": {
+          // The same entry comes back when the question closes. This screen
+          // only watches: the TUI or `POST /permissions/:id` answers (M4-3).
+          const name = nameOf(state, e.participantId);
+          if (e.allow === undefined) line(`? ${name} asks: ${e.title}`);
+          else {
+            line(`  ${name}: ${e.allow ? "allowed" : "denied"} (${e.reason})`);
+          }
+          break;
+        }
         default:
-          // Questions and stall warnings: this chat runs `auto` and answers
-          // nothing yet (M4-3, M4-4). Nothing was written.
+          // Stall warnings: M4-4's. Nothing was written.
           return;
       }
       last = e;
@@ -347,6 +365,9 @@ interface Followed {
   /** Set when its stream ended and the room did not: the reason. */
   lost?: string;
 }
+
+/** An open question, as the reducer keeps it. */
+type Question = Extract<Entry, { type: "permission" }>;
 
 /** What the transcript shows: a room's timeline, or one participant's
  *  thread when `participantId` is set. It is also a sidebar row. */
@@ -457,6 +478,28 @@ function chatTui(
   /** The pop-up, while one is open (M4-5), and pi-tui's handle on it. */
   let panel: Panel | undefined;
   let overlay: OverlayHandle | undefined;
+  /** The open questions in the order they came, each with its room (M4-3).
+   *  The reducers hold them; this keeps their order across rooms. */
+  const waiting = new Map<string, string>();
+  /** Put aside with Esc, or answered here before the close came back: these
+   *  never open by themselves again. `ctrl+o` still lists them. */
+  const aside = new Set<string>();
+  /** The question the pop-up shows, while it does. */
+  let asking: string | undefined;
+  /** Opens the next question when nothing is in the way; set where the
+   *  pop-up's helpers live. */
+  let offer = () => {};
+  /** The open questions, oldest first. A closed one leaves the order. */
+  const questions = () => {
+    const out: { r: Followed; q: Question }[] = [];
+    for (const [id, roomId] of waiting) {
+      const r = rooms.get(roomId);
+      const q = r?.state.questions.get(id);
+      if (r && q) out.push({ r, q });
+      else waiting.delete(id);
+    }
+    return out;
+  };
   /** How many rows a list in the pop-up may show. */
   const panelRoom = () =>
     Math.max(3, Math.min(12, (process.stdout.rows || 24) - 12));
@@ -630,6 +673,12 @@ function chatTui(
         "id" in t ? bold(`→ ${nameOf(r.state, t.id)}`) : yellow(`! ${t.error}`),
       );
     }
+    const asked = questions().length;
+    if (asked && !asking) {
+      parts.push(
+        magenta(`? ${asked} question${asked > 1 ? "s" : ""} · ctrl+o`),
+      );
+    }
     if (flash) parts.push(flash.startsWith("!") ? yellow(flash) : flash);
     if (!shown) {
       const waiting = [...rooms.values()].filter(
@@ -654,11 +703,14 @@ function chatTui(
     setStatus();
   };
   const hidePanel = () => {
+    if (asking) aside.add(asking);
+    asking = undefined;
     panel = undefined;
     overlay?.hide();
     overlay = undefined;
     tui.setFocus(editor);
     setStatus();
+    offer();
   };
 
   // Each answer's component. The reducer joins the chunks, and the whole
@@ -714,7 +766,8 @@ function chatTui(
         warn(`! ${name}: ${e.text}`);
         return;
       case "permission": {
-        // Answering is M4-3's; this only shows the question and its answer.
+        // The TUI answers in its pop-up (M4-3); this line shows the question
+        // and, once it closes, how.
         let line = drawn.get(e) as Text | undefined;
         if (!line) {
           line = new Text("", 1, 0);
@@ -807,7 +860,23 @@ function chatTui(
     const r = rooms.get(roomId);
     if (!r) return;
     const e = applyLine(r.state, line);
-    const kind = line.update.sessionUpdate;
+    const u = line.update;
+    const kind = u.sessionUpdate;
+    // After this chunk of lines: a replay can close a question in a later
+    // line, and its box should not flash open first.
+    if (kind === "_client_permission_queued") {
+      waiting.set(u.id, roomId);
+      setImmediate(offer);
+    }
+    // Closed elsewhere: another client, the timer, a cancel or a mode change.
+    if (
+      kind === "_client_permission_answered" &&
+      asking === u.id &&
+      e?.type === "permission"
+    ) {
+      hidePanel();
+      flash = `${nameOf(r.state, e.participantId)}'s question closed: ${e.allow ? "allowed" : "denied"} (${e.reason})`;
+    }
     // A participant who joined after the room was read has no checkout or
     // notices in the header until the room is read again.
     if (
@@ -1000,9 +1069,10 @@ function chatTui(
       if (text === "" && view.participantId && r) {
         prefill = `@${nameOf(r.state, view.participantId)} `;
         editor.setText(prefill);
-        return;
-      }
-      setStatus();
+      } else setStatus();
+      // A question that came while the person typed opens once the text is
+      // sent or deleted.
+      offer();
     };
     // pi-tui calls this and drops the promise, so a throw (the daemon gone
     // mid-request) must end the chat here, or it crashes on the alt screen.
@@ -1143,6 +1213,7 @@ function chatTui(
      *  the same box, as the menu gives way to a pick list. */
     const showPanel = (title: string, body: Component) => {
       panel = { title, body };
+      asking = undefined;
       if (!overlay) {
         // Centred on the timeline, not the terminal: pi-tui centres on
         // the terminal, so move right by half the sidebar.
@@ -1198,12 +1269,92 @@ function chatTui(
         invalidate() {},
       });
 
+    /**
+     * One question in the pop-up (M4-3): the room, the agent, the turn, what
+     * it wants to do, and the tool's input. `deny` comes first, so a stray
+     * Enter says no, as the timeout would; letters do nothing. Esc puts it
+     * aside, open.
+     */
+    const question = (id: string) => {
+      const all = questions();
+      const at = all.findIndex(({ q }) => q.id === id);
+      const found = all[at];
+      if (!found) return;
+      const { r, q } = found;
+      const list = new SelectList(
+        words(["deny", "allow"]),
+        2,
+        EDITOR_THEME.selectList,
+      );
+      list.onSelect = ({ value }) => void answer(q.id, value === "allow");
+      list.onCancel = hidePanel;
+      const turn = q.turn === undefined ? "" : ` · turn ${q.turn}`;
+      const info = [
+        `room   ${r.entry.title ?? r.entry.id}`,
+        `agent  ${nameOf(r.state, q.participantId)}${turn}`,
+        `${q.kind} · ${q.title}`,
+        ...Object.entries(q.input ?? {})
+          .slice(0, 8)
+          .map(([k, v]) => dim(`${k}: ${v}`)),
+        "",
+      ];
+      showPanel(`question ${at + 1} of ${all.length}`, {
+        render: (w) => [
+          ...info,
+          ...list.render(w),
+          dim("↑↓ pick · enter answer · esc later"),
+        ],
+        handleInput: (key) => list.handleInput(key),
+        invalidate: () => list.invalidate(),
+      });
+      asking = q.id;
+      setStatus();
+    };
+    /** Sends the answer. A lost race names who won: the reply to a late
+     *  answer is `409`, and `GET /permissions/:id` says why it closed. */
+    const answer = async (id: string, allow: boolean) => {
+      hidePanel();
+      const path = `/permissions/${encodeURIComponent(id)}`;
+      try {
+        const res = await call<PermissionAnswered>(d, path, {
+          method: "POST",
+          body: { allow },
+        });
+        if (res.ok) return;
+        let why = res.error.message;
+        if (res.status === 409) {
+          const got = await call<PermissionDecision>(d, path);
+          if (got.ok && got.body.reason) {
+            why = `already closed: ${got.body.reason}`;
+          }
+        }
+        flash = `! ${why}`;
+        setStatus();
+      } catch (err) {
+        // The daemon went away mid-request.
+        end(1, `! ${(err as Error).message}`);
+      }
+    };
+    // Decided 2026-10-01 (#49): a question opens by itself, but never over
+    // another pop-up or over text the person typed.
+    offer = () => {
+      if (panel || done) return;
+      const text = editor.getText();
+      if (text !== "" && text !== prefill) return;
+      const next = questions().find(({ q }) => !aside.has(q.id));
+      if (next) question(next.q.id);
+    };
+
     /** The ctrl+o menu. In a thread it is that agent's commands; `pid`
-     *  names another one, picked from the room's list. */
+     *  names another one, picked from the room's list. The open questions
+     *  come first, from every room. */
     const menu = (pid = view.participantId) => {
       const r = rooms.get(view.roomId);
       const p = pid ? r?.state.participants.get(pid) : undefined;
-      const items: SelectItem[] = [];
+      const items: SelectItem[] = questions().map(({ r: qr, q }) => ({
+        value: `?${q.id}`,
+        label: `? ${nameOf(qr.state, q.participantId)} asks: ${q.title}`,
+      }));
       if (p) {
         items.push(
           { value: "cancel", label: "cancel turn" },
@@ -1233,6 +1384,7 @@ function chatTui(
       p: ReturnType<typeof roster>[number] | undefined,
     ) => {
       const r = rooms.get(view.roomId);
+      if (value.startsWith("?")) return question(value.slice(1));
       if (value === "leave") return end(0, left());
       if (value === "help") return showHelp();
       if (value === "new") return newForm();
