@@ -2161,7 +2161,9 @@ reducer removes control characters (`printable`, `client/room.ts`); the event an
 `GET /permissions` carry `input` since 1.6. Four pty tests drive the box: one with a piped
 observer on the same room, one for a thread's `@name` pre-fill and Esc, one for a question
 closed elsewhere, and one whose fake daemon makes the `409` reply land, so the message
-comes from `GET /permissions/:id`.
+comes from `GET /permissions/:id`. **Review of #205:** Esc or `ctrl+o` on a question box
+means away, so the next question waits too; only an answer, or a close from elsewhere,
+opens the next. The box wraps the action and the input instead of cutting them.
 
 **M4-4 · Notifications and transcript polish · S · needs M4-2**
 Terminal bell and desktop notification for a participant waiting on a permission or
@@ -2711,8 +2713,9 @@ M6-6a ─ M6-6b ─ M6-11b
 
 The edges the drawing leaves out: **M4-1** needs M6-0 and M5-10a, and **M4-2** needs M4-1
 too. **M4-5** also needs M6-5. **M4-3** also needs M4-2 and M5-4. **M6-7b** also needs the
-**M0-9** probe. **M6-11b** also needs M4-5. **M6-11a** and **M6-11b** also need M4-6, for the diff view. **M4-4** needs M4-2. **M6-9** needs M6-5 and
-M4-2. **M6-7a** needs only M6-2, but goes after M6-4, which changes the log line it saves.
+**M0-9** probe. **M6-11b** also needs M4-5. **M6-11a** and **M6-11b** also need M4-6, for
+the diff view. **M4-4** needs M4-2. **M6-9** needs M6-5 and M4-2. **M6-7a** needs only
+M6-2, but goes after M6-4, which changes the log line it saves.
 
 Off the path, because the TUI shows no run (R16): M5-7, M5-8, M5-9, M5-10b and M5-11.
 M5-11 adds an idempotency test *if* M5-7 has landed — a condition, not a dependency. No

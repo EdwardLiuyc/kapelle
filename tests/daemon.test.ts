@@ -4916,11 +4916,24 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
       },
     ],
   };
+  // A second room, not the one on screen, to be dismissed with its
+  // question's box open.
+  const other = {
+    ...room,
+    id: "room-other",
+    title: "other room",
+    participants: [{ ...room.participants[0], id: "p2", name: "shipper" }],
+  };
   let answered = false;
-  // The room's event stream, so the test can send more lines.
+  const posted: string[] = [];
+  // Each room's event stream, so the test can send more lines.
   let stream: ServerResponse | undefined;
-  const event = (seq: number, update: object) =>
-    `id: ${seq}\ndata: ${JSON.stringify({ seq, roomId, participantId: "p1", update })}\n\n`;
+  let otherStream: ServerResponse | undefined;
+  const event = (
+    seq: number,
+    update: object,
+    where = { roomId, participantId: "p1" },
+  ) => `id: ${seq}\ndata: ${JSON.stringify({ seq, ...where, update })}\n\n`;
   const fake = createServer((req, res) => {
     const path = req.url ?? "";
     if (path === "/version") {
@@ -4935,12 +4948,38 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
     }
     if (path === "/rooms") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify([room]));
+      res.end(JSON.stringify([room, other]));
       return;
     }
     if (path === `/rooms/${roomId}`) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(room));
+      return;
+    }
+    if (path === `/rooms/${other.id}`) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(other));
+      return;
+    }
+    if (path === `/rooms/${other.id}/events`) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      otherStream = res;
+      const where = { roomId: other.id, participantId: "p2" };
+      res.write(
+        event(
+          1,
+          {
+            sessionUpdate: "_client_participant_added",
+            name: "shipper",
+            harness: "mock-agent",
+            mode: "ask",
+          },
+          where,
+        ),
+      );
       return;
     }
     if (path === `/rooms/${roomId}/events`) {
@@ -4969,6 +5008,7 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
       );
       return;
     }
+    if (req.method === "POST") posted.push(path);
     if (req.method === "POST" && path === "/permissions/q1") {
       answered = true;
       res.writeHead(409, { "content-type": "application/json" });
@@ -5025,14 +5065,21 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
       id: "q2",
       kind: "delete",
       title: "Delete something",
+      // Longer than the box: its end must wrap into view, not be cut.
+      input: { command: `rm -rf build/${"x".repeat(100)} END-OF-COMMAND` },
     }),
   );
   await screen.seen("question 1 of 2");
+  // Esc means away: the next question waits too, and both are counted.
+  await screen.press("\x1b", "? 2 questions · ctrl+o");
+  await screen.press("\x0f", "? asker asks: Delete something");
+  await screen.press("\r", "question 1 of 2");
   await screen.press("\r", "already closed: timeout");
   assert.ok(answered, "the TUI posted the answer");
   // q1 never closed on this stream, so q2 opens as the second of two. Its
   // close comes now: q2 is the only one left.
   await screen.seen("question 2 of 2");
+  await screen.seen("END-OF-COMMAND");
   stream?.write(
     event(4, {
       sessionUpdate: "_client_permission_answered",
@@ -5056,6 +5103,27 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
   );
   await screen.seen("denied (cancel)");
   await screen.press("\r", "that question already closed");
+  // A question in the other room opens its box. That room is then
+  // dismissed with no close line: the box must go with it.
+  otherStream?.write(
+    event(
+      2,
+      {
+        sessionUpdate: "_client_permission_queued",
+        id: "q3",
+        kind: "execute",
+        title: "Ship it",
+      },
+      { roomId: other.id, participantId: "p2" },
+    ),
+  );
+  await screen.seen("execute · Ship it");
+  other.status = "dismissed";
+  otherStream?.end();
+  await screen.seen("other room was dismissed");
+  screen.child.stdin.write("\r");
+  await new Promise((ok) => setTimeout(ok, 500));
+  assert.ok(!posted.includes("/permissions/q3"), posted.join(" "));
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

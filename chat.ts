@@ -503,10 +503,19 @@ function chatTui(
     }
     return out;
   };
-  /** A question box's title: where it stands among the open ones. */
-  const askTitle = (id: string) => {
+  /** Keeps an open question box true: its count follows the open
+   *  questions, and the box goes when its question left without a close
+   *  line, as when its room was dismissed elsewhere. */
+  const syncBox = () => {
+    if (!asking || !panel) return;
     const all = questions();
-    return `question ${all.findIndex(({ q }) => q.id === id) + 1} of ${all.length}`;
+    const at = all.findIndex(({ q }) => q.id === asking);
+    if (at < 0) {
+      // Not put aside: its id has already left the order, and nothing
+      // would ever take it out of `aside`.
+      asking = undefined;
+      hidePanel();
+    } else panel.title = `question ${at + 1} of ${all.length}`;
   };
   /** How many rows a list in the pop-up may show. */
   const panelRoom = () =>
@@ -689,10 +698,10 @@ function chatTui(
     }
     if (flash) parts.push(flash.startsWith("!") ? yellow(flash) : flash);
     if (!shown) {
-      const waiting = [...rooms.values()].filter(
+      const marked = [...rooms.values()].filter(
         ({ state }) => roomMark(state).circle === "●",
       ).length;
-      if (waiting) parts.push(`● ${waiting} room${waiting > 1 ? "s" : ""}`);
+      if (marked) parts.push(`● ${marked} room${marked > 1 ? "s" : ""}`);
     }
     // A pop-up takes the row keys and turns ctrl+o into close: name the
     // keys that work there instead.
@@ -710,7 +719,11 @@ function chatTui(
     shown = !shown;
     setStatus();
   };
+  /** Closes the pop-up. A question box the person closes means "away", so
+   *  the next question waits too; any other box makes way for one. An
+   *  answer, or a close from elsewhere, opens the next itself. */
   const hidePanel = () => {
+    const away = asking;
     if (asking) aside.add(asking);
     asking = undefined;
     panel = undefined;
@@ -718,7 +731,7 @@ function chatTui(
     overlay = undefined;
     tui.setFocus(editor);
     setStatus();
-    offer();
+    if (!away) offer();
   };
 
   // Each answer's component. The reducer joins the chunks, and the whole
@@ -871,7 +884,8 @@ function chatTui(
     const u = line.update;
     const kind = u.sessionUpdate;
     // After this chunk of lines: a replay can close a question in a later
-    // line, and its box should not flash open first.
+    // line, and its box should not flash open first. A chunk that splits
+    // the two lines still flashes it, then closes it: cosmetic.
     if (kind === "_client_permission_queued") {
       waiting.set(u.id, roomId);
       setImmediate(offer);
@@ -884,9 +898,10 @@ function chatTui(
     ) {
       hidePanel();
       flash = `${nameOf(r.state, e.participantId)}'s question closed: ${e.allow ? "allowed" : "denied"} (${e.reason})`;
+      offer();
     }
-    // A question came or closed behind the box: keep its count true.
-    if (asking && panel) panel.title = askTitle(asking);
+    // A question came or closed behind the box.
+    syncBox();
     // A participant who joined after the room was read has no checkout or
     // notices in the header until the room is read again.
     if (
@@ -969,8 +984,10 @@ function chatTui(
     const closed = async (id: string, err?: unknown) => {
       const { code, line } = await reconcile(id);
       const r = rooms.get(id);
-      if (code === 0) rooms.delete(id);
-      else if (r) r.lost = line;
+      if (code === 0) {
+        rooms.delete(id);
+        syncBox();
+      } else if (r) r.lost = line;
       const all = [...rooms.values()];
       if (all.length > 0 && !all.some((x) => !x.lost)) {
         const why = err ? [`! ${(err as Error).message}`] : [];
@@ -1301,31 +1318,47 @@ function chatTui(
       list.onSelect = ({ value }) => void answer(q.id, value === "allow");
       list.onCancel = hidePanel;
       const turn = q.turn === undefined ? "" : ` · turn ${q.turn}`;
-      const info = [
+      const who = [
         `room   ${r.entry.title ?? r.entry.id}`,
         `agent  ${nameOf(r.state, q.participantId)}${turn}`,
-        `${q.kind} · ${q.title}`,
-        ...Object.entries(q.input ?? {})
-          .slice(0, 8)
-          .map(([k, v]) => dim(`${k}: ${v}`)),
-        "",
       ];
-      showPanel(askTitle(id), {
-        render: (w) => [
-          ...info,
-          ...list.render(w),
-          dim("↑↓ pick · enter answer · esc later"),
-        ],
+      showPanel("question", {
+        render: (w) => {
+          // Wrapped, not cut: the end of a command or a path is what the
+          // person judges. Up to what the screen holds, so the answer rows
+          // stay in the box (80% of the rows, less 8 for the box's own).
+          const what = [
+            ...wrapTextWithAnsi(`${q.kind} · ${q.title}`, w),
+            ...Object.entries(q.input ?? {})
+              .slice(0, 8)
+              .flatMap(([k, v]) => wrapTextWithAnsi(`${k}: ${v}`, w))
+              .map(dim),
+          ];
+          const fits = Math.max(
+            1,
+            Math.floor((process.stdout.rows || 24) * 0.8) - 8,
+          );
+          if (what.length > fits) what.splice(fits - 1, Infinity, dim("…"));
+          return [
+            ...who,
+            ...what,
+            "",
+            ...list.render(w),
+            dim("↑↓ pick · enter answer · esc later"),
+          ];
+        },
         handleInput: (key) => list.handleInput(key),
         invalidate: () => list.invalidate(),
       });
       asking = q.id;
+      syncBox();
       setStatus();
     };
     /** Sends the answer. A lost race names who won: the reply to a late
      *  answer is `409`, and `GET /permissions/:id` says why it closed. */
     const answer = async (id: string, allow: boolean) => {
       hidePanel();
+      offer();
       const path = `/permissions/${encodeURIComponent(id)}`;
       try {
         const res = await call<PermissionAnswered>(d, path, {
