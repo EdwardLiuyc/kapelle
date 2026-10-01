@@ -5682,6 +5682,23 @@ test("the row keys do nothing while a pop-up is open, so a form keeps what was t
   assert.equal(await exited, 0, out());
 });
 
+test("the status line swaps its key hint while a pop-up is open", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out } = await chatOnPty(t);
+  // The box's own footer is `↑↓ Enter · Esc back`; the status line must not
+  // still promise the row keys the pop-up took.
+  await press("\x0f", "esc back · ctrl+o close");
+  // Closing it puts the composer's hint back.
+  await press(
+    "\x0f",
+    "enter to send · ctrl+o menu · alt+↑↓ rows · ctrl+t rooms",
+  );
+  child.stdin.write("\x03");
+  await seen("rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
 test("with no room open, the screen exits when the daemon is gone, and says how to start again", {
   skip: noPty,
 }, async (t) => {

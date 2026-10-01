@@ -637,7 +637,15 @@ function chatTui(
       ).length;
       if (waiting) parts.push(`● ${waiting} room${waiting > 1 ? "s" : ""}`);
     }
-    parts.push(dim("enter to send · ctrl+o menu · alt+↑↓ rows · ctrl+t rooms"));
+    // A pop-up takes the row keys and turns ctrl+o into close: name the
+    // keys that work there instead.
+    parts.push(
+      dim(
+        panel
+          ? "esc back · ctrl+o close"
+          : "enter to send · ctrl+o menu · alt+↑↓ rows · ctrl+t rooms",
+      ),
+    );
     status.setText(parts.join(dim(" · ")));
     tui.requestRender();
   };

@@ -2188,6 +2188,8 @@ only, `client/folder.ts`); the harness row lists the measured harnesses from a n
 Experimental `GET /harnesses`, then `other…`; and a `/new` refused with `repo_not_added`
 asks to add the folder, then opens the room. The piped screen prints
 `kapelle daemon add <path>` instead.
+**Added 2026-10-01 (#201):** while a pop-up is open the status line swaps its key hint
+for `esc back · ctrl+o close`; the composer's hint returns when the box closes.
 
 ---
 
