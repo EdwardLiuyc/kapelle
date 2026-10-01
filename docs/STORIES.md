@@ -2125,14 +2125,17 @@ Decisions: R8, R19, R43, S11, R38. (S11 settled as (a) plus the additive `_clien
 **Decided at pickup 2026-09-30 (#48):** the sidebar lists every active room the daemon
 holds, from all repositories; a filter for one repository comes later. A click,
 `alt+↑↓` or `ctrl+p/n` picks a row, so `↑ ↓ Enter` stay with the composer and Tab stays
-free for M4-4's completion. A row's circle is `●` when something waits (unseen lines, a
+free for M4-4's completion. Two keys do one job: `alt+↑↓` is the easy one, and `ctrl+p/n`
+works where a terminal sends no alt+arrow (macOS Terminal without "Option as Meta", some
+tmux setups). A row's circle is `●` when something waits (unseen lines, a
 question or a stall) and `○` when nothing does; the name is magenta for a question and
 yellow for a stall. `«`/`»` and `ctrl+t` hide the sidebar, and it starts hidden below 70
 columns. **`kapelle chat` moves here from M6-9**, with S7a's name.
 **Built 2026-09-30 (#48).** `client/mention.ts` resolves the target, and both screens
 send through it: piped `chat.ts` no longer sends to the first participant. The screen
 keeps one stream and one reducer per room, polls `GET /rooms` every 5 s for rooms made
-elsewhere, and exits when no room has a live stream left. What is on screen counts as
+elsewhere, and exits when every room it holds lost its stream (M4-5: with no room left,
+it stays open, so the person can open one). What is on screen counts as
 seen: the timeline marks its whole room, and a thread marks its participant. A
 `@name` pre-fill the person did not touch follows the view, so it never names the
 thread just left. In a thread, an empty composer always holds the thread's `@name`: after a
@@ -2167,6 +2170,24 @@ error code's message; the screen never guesses.
 *Done when* every command above reaches its route against `mock-agent.mjs`, and each
 refusal the route documents has a test that shows its message.
 Decisions: R10, R12, R21, R35, R44, S5.
+**Decided at pickup 2026-09-30 (#181):** each command has two ways in. `ctrl+o` opens a
+menu in a box at the centre of the timeline, wide enough for a folder or a command (moved
+there from the sidebar the same day); in a thread it lists that agent's commands at once.
+A typed command
+names its agent with a leading `@name`, as a message does, and is refused without one;
+`/new` or `/add` alone opens its form in the same box. A refusal stays in the form; a success is one
+status line. With no room, the screen stays open; it exits when the daemon is gone, until
+M6-7a lets it follow a restart. While a pop-up is open, the row keys do nothing: Esc first.
+The menu has a `help` row.
+**Built 2026-09-30 (#181).** `client/command.ts` parses the typed commands and calls
+the routes; both screens and the pop-up forms go through it. `--base @name` sends that
+participant's `branch`. The piped screen takes the same commands and has no forms.
+`shutting_down` has no test of its own: every refusal goes through one path.
+**Added 2026-10-01 (#181):** in the new-room form, Tab completes the folder (folders
+only, `client/folder.ts`); the harness row lists the measured harnesses from a new
+Experimental `GET /harnesses`, then `other…`; and a `/new` refused with `repo_not_added`
+asks to add the folder, then opens the room. The piped screen prints
+`kapelle daemon add <path>` instead.
 
 ---
 
@@ -2537,6 +2558,9 @@ room's checkouts, branches, record and log and refuses a dirty one with `409`.
 **Added 2026-09-29 (#180):** after a restart, the room reducer (`client/room.ts`) shows the
 `paused` or `killed` state that `GET /rooms/:id` reports, and a turn the crash cut reads
 as cut, tested from a recorded stream. M6-10 moved this case here.
+**Added 2026-10-01 (#200 review):** the chat screen rides out a restart as `attach` does:
+it reads `daemon.json` again, reconnects its streams, and checks the version again. This
+replaces M4-5's exit with no room open (`chat.ts`, the 5 s poll).
 Decisions: R17, R18, R33, R42, R46, S3, S4.
 
 **M6-7b · `session/load` for a paused participant · M · needs M6-7a, M0-9**

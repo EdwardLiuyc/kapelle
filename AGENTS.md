@@ -106,6 +106,8 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
 | `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. `chat.ts` draws from it. |
 | `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). Both `chat.ts` screens send through it. |
+| `client/folder.ts` | Tab completion for a folder path, folders only (M4-5). |
+| `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. Both screens and the pop-up forms use it. |
 | `chat.ts` | Chat front end: a pi-tui screen over every room on a TTY, one room as plain lines when piped. It talks HTTP only, and imports only `client/`, pi-tui and `core/runtime.ts`. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 

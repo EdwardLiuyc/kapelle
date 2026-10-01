@@ -118,6 +118,7 @@ changes each one.
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
 | Everything under `/rooms` | Experimental | M6-7a and later |
+| `GET /harnesses` | Experimental | M4-5 added it for `chat.ts` |
 
 **Planned, not built yet:** cancel one task (M5-8).
 
@@ -303,6 +304,7 @@ the `GET` routes take none.
 | `GET /version` | The contract version and the capabilities. |
 | `POST /repos` | Add a repository. |
 | `GET /repos` | List the added repositories. |
+| `GET /harnesses` | List the harnesses the daemon can start by name. Experimental. |
 | `POST /runs` | Start a run. |
 | `GET /runs` | List all runs. |
 | `GET /runs/:id` | One run in full. |
@@ -374,6 +376,24 @@ repository. The daemon finds the repository root for you.
 ```json
 ["/home/me/src/app", "/home/me/src/lib"]
 ```
+
+### `GET /harnesses`
+
+**Experimental.** The harnesses the daemon can start by name, as `agent` in a run, a room
+or a participant. `measured` is `true` when kapelle measured how the harness behaves.
+`false` means nobody checked it. Neither says the harness is installed here.
+
+**Reply `200`:**
+
+```json
+[
+  { "id": "opencode", "measured": true },
+  { "id": "gemini", "measured": false }
+]
+```
+
+A daemon older than this route answers `404` `no_route`. Then a client can still take a
+name typed by the person.
 
 ### Runs
 
@@ -1109,8 +1129,8 @@ Changes one participant. Send one or more of:
   remove it from the participant that has it.
 
 The daemon checks every field before it changes any. The harness and its session stay
-as they are. No event on the stream says that a participant changed, so another client
-sees the change only when it reads `GET /rooms/:id` again.
+as they are. The room's stream gets `_client_participant_changed`, with only the fields
+that changed, so every client sees the change.
 
 **Reply `200`:** the participant. **Refusals:** `404` `room_not_found` or
 `participant_not_found`; `400` `invalid_request` for a bad field or an empty body; `409`
