@@ -5109,8 +5109,10 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
   );
   await screen.seen("denied (cancel)");
   await screen.press("\r", "that question already closed");
-  // A question in the other room opens its box. That room is then
-  // dismissed with no close line: the box must go with it.
+  // A question in the other room opens its box. Its title is far taller
+  // than the box: the answer rows and their hint must still be drawn. That
+  // room is then dismissed with no close line: the box must go with it.
+  const before = screen.out().length;
   otherStream?.write(
     event(
       2,
@@ -5118,12 +5120,17 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
         sessionUpdate: "_client_permission_queued",
         id: "q3",
         kind: "execute",
-        title: "Ship it",
+        title: `Ship it ${"now ".repeat(1000)}`,
       },
       { roomId: other.id, participantId: "p2" },
     ),
   );
   await screen.seen("execute · Ship it");
+  for (const until = Date.now() + 20_000; ; ) {
+    if (screen.out().slice(before).includes("enter answer")) break;
+    assert.ok(Date.now() < until, "the answer rows were pushed out of the box");
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
   other.status = "dismissed";
   otherStream?.end();
   await screen.seen("other room was dismissed");

@@ -1325,17 +1325,22 @@ function chatTui(
       showPanel("question", {
         render: (w) => {
           // Wrapped, not cut: the end of a command or a path is what the
-          // person judges. The action always shows; the input gets what the
-          // screen holds after it, so the answer rows stay in the box (80%
-          // of the rows, less 8 for the box's own).
+          // person judges. Both share what the screen holds, so the answer
+          // rows stay in the box (80% of the rows, less 8 for the box's
+          // own). The action takes up to half, and always one line and its
+          // `…`: a harness's title has no cap. The input gets the rest.
+          const room = Math.floor((process.stdout.rows || 24) * 0.8) - 8;
           const action = wrapTextWithAnsi(`${q.kind} · ${q.title}`, w);
+          const most = Math.max(2, Math.ceil(room / 2));
+          if (action.length > most) {
+            action.splice(most - 1, Infinity, "…");
+          }
           const input = Object.entries(q.input ?? {})
             .slice(0, 8)
             .flatMap(([k, v]) => wrapTextWithAnsi(`${k}: ${v}`, w))
             .map(dim);
-          const fits =
-            Math.floor((process.stdout.rows || 24) * 0.8) - 8 - action.length;
-          if (input.length > fits) {
+          const fits = room - action.length;
+          if (input.length > 0 && input.length > fits) {
             input.splice(Math.max(0, fits - 1), Infinity, dim("…"));
           }
           return [
