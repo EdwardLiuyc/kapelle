@@ -24,7 +24,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { createServer, request } from "node:http";
+import { createServer, request, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { userInfo } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -4720,7 +4720,129 @@ test("chat.ts on a real terminal draws a stall warning", {
   assert.equal(await screen.exited, 0, screen.out());
 });
 
-test("chat.ts on a real terminal draws a permission question", {
+test("chat.ts on a real terminal answers a question in its pop-up, and a piped observer sees the same decision", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT}`,
+        name: "asker",
+        role: "orchestrator",
+        mode: "ask",
+      },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const asker = only(open.body);
+  // The CLI observer (M4-3): a piped attach on the same room.
+  const observer = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  let watched = "";
+  observer.child.stdout.on("data", (c: string) => {
+    watched += c;
+  });
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${asker.id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+
+  // The box opens by itself, with the tool's input, and deny comes first.
+  await screen.seen("edit · Write ACP_TEST.md");
+  await screen.seen("path: ACP_TEST.md");
+  const write = await pendingOne(d);
+  // Down to allow, then Enter. The next question opens in its place.
+  await screen.press("\x1b[B\r", "Delete something");
+  const del = await pendingOne(d);
+  assert.notEqual(del.id, write.id);
+  // A stray Enter says no.
+  screen.child.stdin.write("\r");
+  for (const until = Date.now() + 20_000; ; ) {
+    if (watched.includes("asker: denied (client)")) break;
+    assert.ok(Date.now() < until, watched);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  const decided = async (id: string) =>
+    (await api<PermissionDecision>(d, "GET", `/permissions/${id}`)).body;
+  assert.deepEqual(
+    [(await decided(write.id)).allow, (await decided(write.id)).reason],
+    [true, "client"],
+  );
+  assert.deepEqual(
+    [(await decided(del.id)).allow, (await decided(del.id)).reason],
+    [false, "client"],
+  );
+  assert.match(
+    watched,
+    /\? asker asks: Write ACP_TEST\.md\n {2}asker: allowed \(client\)\n/,
+  );
+  assert.match(
+    watched,
+    /\? asker asks: Delete something[^\n]*\n {2}asker: denied \(client\)\n/,
+  );
+  observer.child.stdin.end("/leave\n");
+  assert.equal((await observer.done).code, 0);
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal keeps a question waiting while the person types, and closes its box when another client answers", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "asker", mode: "ask" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const asker = only(open.body);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  // Text in the composer: the box must not take the next keys.
+  await screen.press("@asker hel", "→ asker");
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${asker.id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  await screen.seen("? 1 question · ctrl+o");
+  assert.doesNotMatch(plainText(screen.out()), /question 1 of 1/);
+  // The menu lists it first; Enter opens its box.
+  await screen.press("\x0f", "? asker asks: Write ACP_TEST.md");
+  await screen.press("\r", "question 1 of 1");
+  const write = await pendingOne(d);
+  const other = await api(d, "POST", `/permissions/${write.id}`, {
+    allow: true,
+  });
+  assert.equal(other.status, 200, other.body.error?.message);
+  await screen.seen("asker's question closed: allowed (client)");
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal opens over a thread's @name pre-fill, and Esc puts the question aside", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -4744,6 +4866,10 @@ test("chat.ts on a real terminal draws a permission question", {
     `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
   );
+  await screen.seen("○ asker");
+  // alt+down opens the thread, so the composer holds exactly `@asker `.
+  // That pre-fill is not typed text: the question must open by itself.
+  await screen.press("\x1b[1;3B", "@asker");
   const sent = await api(
     d,
     "POST",
@@ -4751,7 +4877,298 @@ test("chat.ts on a real terminal draws a permission question", {
     { text: "go" },
   );
   assert.equal(sent.status, 202, sent.body.error?.message);
-  await screen.seen("? asker asks: Write ACP_TEST.md");
+  await screen.seen("edit · Write ACP_TEST.md");
+  // Esc puts it aside: the box goes and the status line counts it. `press`
+  // reads only what is drawn after the key, and waits out pi-tui's alt-key
+  // window for a bare Esc.
+  await screen.press("\x1b", "? 1 question · ctrl+o");
+  // A decision from elsewhere closes it, and Esc already stopped it from
+  // reopening.
+  const q = await pendingOne(d);
+  const other = await api(d, "POST", `/permissions/${q.id}`, { allow: true });
+  assert.equal(other.status, 200, other.body.error?.message);
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal says why a lost answer lost, keeps the box's count true, and refuses a closed question from the menu", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const roomId = "room-fake";
+  const room = {
+    id: roomId,
+    cwd: process.cwd(),
+    status: "active",
+    title: "fake room",
+    updatedAt: new Date().toISOString(),
+    participants: [
+      {
+        id: "p1",
+        name: "asker",
+        harness: "mock-agent",
+        role: "orchestrator",
+        mode: "ask",
+        status: "busy",
+        notices: [],
+      },
+    ],
+  };
+  // A second room, not the one on screen, to be dismissed with its
+  // question's box open.
+  const other = {
+    ...room,
+    id: "room-other",
+    title: "other room",
+    participants: [{ ...room.participants[0], id: "p2", name: "shipper" }],
+  };
+  let answered = false;
+  const posted: string[] = [];
+  // Each room's event stream, so the test can send more lines.
+  let stream: ServerResponse | undefined;
+  let otherStream: ServerResponse | undefined;
+  const event = (
+    seq: number,
+    update: object,
+    where = { roomId, participantId: "p1" },
+  ) => `id: ${seq}\ndata: ${JSON.stringify({ seq, ...where, update })}\n\n`;
+  const fake = createServer((req, res) => {
+    const path = req.url ?? "";
+    if (path === "/version") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ apiVersion: API_VERSION }));
+      return;
+    }
+    if (path === "/harnesses") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("[]");
+      return;
+    }
+    if (path === "/rooms") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify([room, other]));
+      return;
+    }
+    if (path === `/rooms/${roomId}`) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(room));
+      return;
+    }
+    if (path === `/rooms/${other.id}`) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(other));
+      return;
+    }
+    if (path === `/rooms/${other.id}/events`) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      otherStream = res;
+      const where = { roomId: other.id, participantId: "p2" };
+      res.write(
+        event(
+          1,
+          {
+            sessionUpdate: "_client_participant_added",
+            name: "shipper",
+            harness: "mock-agent",
+            mode: "ask",
+          },
+          where,
+        ),
+      );
+      return;
+    }
+    if (path === `/rooms/${roomId}/events`) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      stream = res;
+      res.write(
+        event(1, {
+          sessionUpdate: "_client_participant_added",
+          name: "asker",
+          harness: "mock-agent",
+          role: "orchestrator",
+          mode: "ask",
+        }),
+      );
+      res.write(
+        event(2, {
+          sessionUpdate: "_client_permission_queued",
+          id: "q1",
+          kind: "edit",
+          title: "Write ACP_TEST.md",
+          input: { path: "ACP_TEST.md" },
+        }),
+      );
+      return;
+    }
+    if (req.method === "POST") posted.push(path);
+    if (req.method === "POST" && path === "/permissions/q1") {
+      answered = true;
+      res.writeHead(409, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: {
+            code: "already_decided",
+            message: "permission q1 was already decided",
+          },
+        }),
+      );
+      return;
+    }
+    if (req.method === "GET" && path === "/permissions/q1") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "q1",
+          roomId,
+          participantId: "p1",
+          turn: 1,
+          kind: "edit",
+          title: "Write ACP_TEST.md",
+          input: { path: "ACP_TEST.md" },
+          allow: false,
+          reason: "timeout",
+        }),
+      );
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({ error: { code: "no_route", message: `no ${path}` } }),
+    );
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${roomId}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen("edit · Write ACP_TEST.md");
+  // A second question while the box is open: its count follows.
+  stream?.write(
+    event(3, {
+      sessionUpdate: "_client_permission_queued",
+      id: "q2",
+      kind: "delete",
+      title: "Delete something",
+      // Longer than the box: its end must wrap into view, not be cut.
+      // A path has no space: only a wrap that breaks inside a word shows
+      // its last 80 characters, the Z's, at all.
+      input: {
+        command: `rm -rf build/${"x".repeat(100)} END-OF-COMMAND`,
+        path: `/${"y".repeat(220)}${"Z".repeat(80)}`,
+      },
+    }),
+  );
+  await screen.seen("question 1 of 2");
+  // Esc means away: the next question waits too, and both are counted.
+  await screen.press("\x1b", "? 2 questions · ctrl+o");
+  await screen.press("\x0f", "? asker asks: Delete something");
+  await screen.press("\r", "question 1 of 2");
+  await screen.press("\r", "already closed: timeout");
+  assert.ok(answered, "the TUI posted the answer");
+  // q1 never closed on this stream, so q2 opens as the second of two. Its
+  // close comes now: q2 is the only one left.
+  await screen.seen("question 2 of 2");
+  await screen.seen("END-OF-COMMAND");
+  await screen.seen("Z".repeat(20));
+  stream?.write(
+    event(4, {
+      sessionUpdate: "_client_permission_answered",
+      id: "q1",
+      allow: false,
+      reason: "timeout",
+    }),
+  );
+  await screen.press("", "question 1 of 1");
+  // Put q2 aside, list it, then it closes while the menu is open: picking
+  // it says so and closes the menu.
+  await screen.press("\x1b", "? 1 question · ctrl+o");
+  await screen.press("\x0f", "? asker asks: Delete something");
+  stream?.write(
+    event(5, {
+      sessionUpdate: "_client_permission_answered",
+      id: "q2",
+      allow: false,
+      reason: "cancel",
+    }),
+  );
+  await screen.seen("denied (cancel)");
+  await screen.press("\r", "that question already closed");
+  // A question in the other room opens its box. Its title is far taller
+  // than the box: the answer rows and their hint must still be drawn. That
+  // room is then dismissed with no close line: the box must go with it.
+  const before = screen.out().length;
+  otherStream?.write(
+    event(
+      2,
+      {
+        sessionUpdate: "_client_permission_queued",
+        id: "q3",
+        kind: "execute",
+        title: `Ship it ${"now ".repeat(1000)}`,
+      },
+      { roomId: other.id, participantId: "p2" },
+    ),
+  );
+  await screen.seen("execute · Ship it");
+  for (const until = Date.now() + 20_000; ; ) {
+    if (screen.out().slice(before).includes("enter answer")) break;
+    assert.ok(Date.now() < until, "the answer rows were pushed out of the box");
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  other.status = "dismissed";
+  otherStream?.end();
+  await screen.seen("other room was dismissed");
+  screen.child.stdin.write("\r");
+  await new Promise((ok) => setTimeout(ok, 500));
+  assert.ok(!posted.includes("/permissions/q3"), posted.join(" "));
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a short terminal keeps the question's action in its box", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "asker", mode: "ask" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const asker = only(open.body);
+  // 12 rows leave the box room for one line of what is asked: it must be
+  // the action, not a `…` in its place.
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 12; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${asker.id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  await screen.seen("edit · Write ACP_TEST.md");
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
@@ -4898,6 +5315,7 @@ test("an ask participant asks through /permissions, and nobody answering denies 
       turn: 1,
       kind: "edit",
       title: "Write ACP_TEST.md",
+      input: { path: "ACP_TEST.md" },
     },
   );
   const allowed = await api(d, "POST", `/permissions/${first.id}`, {
@@ -5507,11 +5925,12 @@ test("the menu opens over the timeline with the sidebar hidden; a typed agent co
 test("after the last agent is removed, the status line names no one and a message is refused before any request", {
   skip: noPty,
 }, async (t) => {
-  const { press, exited, out, d } = await chatOnPty(t);
+  const { press, seen, exited, out, d } = await chatOnPty(t);
   // The roster the daemon sent at the start named mock-agent; it must not
-  // stand in for the empty one now.
-  await press("@mock-agent /remove\r", "! no agents: ctrl+o → add agent");
-  assert.match(plainText(out()), /removed mock-agent/);
+  // stand in for the empty one now. The reply's status line and the
+  // stream's roster line race, so wait for each, in either order.
+  await press("@mock-agent /remove\r", "removed mock-agent");
+  await seen("! no agents: ctrl+o → add agent");
   const from = out().length;
   await press("hi\r", "! no agents: ctrl+o → add agent");
   assert.doesNotMatch(out().slice(from), /→ mock-agent|you → /);

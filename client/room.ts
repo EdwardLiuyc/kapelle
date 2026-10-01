@@ -45,12 +45,26 @@ export type Entry = { seq: number; participantId: string } & (
       title: string;
       kind: ToolKind;
       turn?: number;
+      /** The tool's input, as `key: value` text (M4-3). */
+      input?: Record<string, string>;
       /** Both set once the question closed. */
       allow?: boolean;
       reason?: PermissionReason;
     }
   | { type: "stall"; kind: "idle" | "repeat"; text: string }
 );
+
+/**
+ * The harness's text with its control and format characters made spaces, so
+ * a title or an input can draw no escape sequence, clear no screen and break
+ * no line (M4-3). Format characters (`Cf`: bidi overrides, zero-width
+ * marks, the soft hyphen, the Tags block) and the line and paragraph
+ * separators go too: they change what a person reads in the question box,
+ * not what runs, so a right-to-left override could flip a command. Only the
+ * question's text goes through it: an answer is markdown, which draws its own.
+ */
+export const printable = (s: string) =>
+  s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
 
 type Answer = Extract<Entry, { type: "answer" }>;
 type Question = Extract<Entry, { type: "permission" }>;
@@ -223,9 +237,17 @@ export function applyLine(
         ...at,
         type: "permission",
         id: u.id,
-        title: u.title,
+        title: printable(u.title),
         kind: u.kind,
         ...(number !== undefined && { turn: number }),
+        ...(u.input && {
+          input: Object.fromEntries(
+            Object.entries(u.input).map(([k, v]) => [
+              printable(k),
+              printable(String(v)),
+            ]),
+          ),
+        }),
       }) as Question;
       state.questions.set(u.id, question);
       return question;

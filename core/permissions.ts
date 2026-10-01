@@ -51,6 +51,7 @@ export type PendingDecision = Asker & {
   id: string;
   kind: ToolKind;
   title: string;
+  input?: Record<string, string>;
 };
 
 /** A decision that has closed, as `GET /permissions/:id` returns it. */
@@ -60,6 +61,69 @@ export type SettledDecision = PendingDecision & {
 };
 
 export type AnswerResult = "ok" | "settled" | "unknown";
+
+/** How much of a tool's input a question carries (M4-3): 8 fields of 64 +
+ *  400 characters, and the serialized object at most 4 KB. A harness can send
+ *  a whole file as one value, and every question is kept for the daemon's
+ *  life. */
+const INPUT_FIELDS = 8;
+const INPUT_KEY = 64;
+const INPUT_VALUE = 400;
+const INPUT_JSON_BYTES = 4096;
+
+const cut = (s: string, max: number) =>
+  s.length > max ? `${s.slice(0, max - 1)}…` : s;
+
+/** A value as text. Never throws: off the wire every value is JSON, but a
+ *  function, a symbol or a `BigInt` has no JSON, and a throw here would
+ *  lose the question. */
+const asText = (v: unknown): string => {
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v) ?? String(v);
+  } catch {
+    return String(v);
+  }
+};
+
+/**
+ * The tool's input for a person to judge: each value as text, cut. The
+ * fields past the eighth are dropped, and a later field is dropped too when
+ * its JSON escapes would push the object past 4 KB. `undefined` when there
+ * is nothing to show. The text is as the harness sent it; a screen removes
+ * control characters before it draws (`client/room.ts`).
+ */
+export function capInput(
+  // The protocol's own shape for raw tool input (`protocol/agent.ts`).
+  // pi-lens-ignore: no-unsafe-dictionary-unknown
+  raw: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const used = new Set<string>();
+  const fields: [string, string][] = Object.entries(raw)
+    .filter(([, v]) => v !== undefined)
+    .slice(0, INPUT_FIELDS)
+    .map(([k, v], i) => {
+      // Two long keys can cut to one: the later one gets a `#i` suffix, so
+      // no field hides another.
+      let key = cut(k, INPUT_KEY);
+      if (used.has(key)) key = `${cut(k, INPUT_KEY - 4)}#${i}`;
+      used.add(key);
+      return [key, cut(asText(v), INPUT_VALUE)];
+    });
+  // A quote or a control character becomes two or six bytes in JSON, so the
+  // character caps alone can still leave a larger object. Drop fields from
+  // the end until it fits; the first field always does.
+  while (
+    fields.length > 0 &&
+    Buffer.byteLength(JSON.stringify(Object.fromEntries(fields)), "utf8") >
+      INPUT_JSON_BYTES
+  ) {
+    fields.pop();
+  }
+  // `fromEntries`, not assignment: a `__proto__` key stays a plain field.
+  return fields.length > 0 ? Object.fromEntries(fields) : undefined;
+}
 
 /** The run signal's reason, when it is one the queue knows. */
 const abortReason = (signal: AbortSignal): PermissionReason =>
@@ -77,7 +141,7 @@ export function createPermissionQueue(timeoutMs: number) {
   >();
   // ponytail: every settled decision is kept for the daemon's lifetime, so a
   // late answer reads 409 rather than 404 and `get` can still say how it
-  // closed. The growth term is `title`: it comes from the harness's
+  // closed. The growth term is `title` (`input` is cut): it comes from the harness's
   // `tool_call`, bounded only by `MAX_LINE_LENGTH` (32 MiB), so "a couple
   // of hundred bytes" is the typical entry, not the bound, and a harness that
   // loops on requests grows the map. `daemon.ts` never drops a run or a room
@@ -98,16 +162,23 @@ export function createPermissionQueue(timeoutMs: number) {
     agent: string,
     bus: EventBus,
     signal: AbortSignal,
-    toolCall: { kind: ToolKind; title: string },
+    toolCall: {
+      kind: ToolKind;
+      title: string;
+      // pi-lens-ignore: no-unsafe-dictionary-unknown
+      rawInput?: Record<string, unknown>;
+    },
   ): boolean | Promise<boolean> => {
     if (READ_ONLY_KINDS.has(toolCall.kind)) return true;
     if (signal.aborted) return false;
     const id = randomUUID();
+    const input = capInput(toolCall.rawInput);
     const decision: PendingDecision = {
       id,
       ...asker,
       kind: toolCall.kind,
       title: toolCall.title,
+      ...(input && { input }),
     };
     return new Promise<boolean>((resolve) => {
       const settle = (allow: boolean, reason: PermissionReason) => {
@@ -145,6 +216,7 @@ export function createPermissionQueue(timeoutMs: number) {
           id,
           kind: toolCall.kind,
           title: toolCall.title,
+          ...(input && { input }),
         },
       });
     });

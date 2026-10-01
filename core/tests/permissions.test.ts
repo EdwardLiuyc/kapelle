@@ -10,7 +10,7 @@ import type {
 } from "../../protocol/agent.ts";
 import type { ToolKind } from "../../protocol/types.ts";
 import { createEventBus } from "../events.ts";
-import { createPermissionQueue } from "../permissions.ts";
+import { capInput, createPermissionQueue } from "../permissions.ts";
 
 const req = (kind: ToolKind): PolicyRequest => ({
   agent: "task-a",
@@ -210,4 +210,58 @@ test("a late abort or denyTask after a client answer adds nothing", async () => 
     allow: false,
     reason: "client",
   });
+});
+
+test("a question carries the tool's input as text, cut to stay under 4 KB", () => {
+  assert.equal(capInput(undefined), undefined);
+  assert.equal(capInput({}), undefined);
+  assert.deepEqual(capInput({ path: "a.ts", n: 2, list: ["x"] }), {
+    path: "a.ts",
+    n: "2",
+    list: '["x"]',
+  });
+  // A harness's `__proto__` key stays a plain field, not the prototype.
+  assert.deepEqual(
+    capInput(JSON.parse('{"__proto__":"x"}')),
+    JSON.parse('{"__proto__":"x"}'),
+  );
+  // A value with no JSON is still text, never a throw.
+  assert.deepEqual(capInput({ f: () => 1, n: 1n, s: Symbol("s") }), {
+    f: "() => 1",
+    n: "1",
+    s: "Symbol(s)",
+  });
+  const big = capInput({ file_text: "x".repeat(10_000) });
+  assert.equal(big?.file_text?.length, 400);
+  assert.ok(big?.file_text?.endsWith("…"));
+  const many = capInput(
+    Object.fromEntries(
+      Array.from({ length: 20 }, (_, i) => [
+        `${"k".repeat(100)}${i}`,
+        "v".repeat(1000),
+      ]),
+    ),
+  );
+  assert.equal(Object.keys(many ?? {}).length, 8);
+  assert.ok(JSON.stringify(many).length < 4096);
+});
+
+test("an escape-heavy input is still capped at 4 KB of JSON", () => {
+  const quoted = capInput(
+    Object.fromEntries(
+      Array.from({ length: 8 }, (_, i) => [`k${i}`, '"'.repeat(400)]),
+    ),
+  );
+  assert.ok(quoted);
+  assert.ok(Object.keys(quoted).length > 0);
+  assert.ok(Buffer.byteLength(JSON.stringify(quoted), "utf8") <= 4096);
+
+  const control = capInput(
+    Object.fromEntries(
+      Array.from({ length: 8 }, (_, i) => [`k${i}`, "\u0000".repeat(400)]),
+    ),
+  );
+  assert.ok(control);
+  assert.ok(Object.keys(control).length > 0);
+  assert.ok(Buffer.byteLength(JSON.stringify(control), "utf8") <= 4096);
 });

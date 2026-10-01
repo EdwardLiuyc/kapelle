@@ -2148,6 +2148,22 @@ other observer sees the same decision through the answered event.
 *Done when* answering in the TUI lets the turn proceed and a CLI observer on the same room
 sees the same decision.
 Decisions: R12, S2, S12, D1–D8. (S2 settled: per participant at add, default `auto`.)
+**Decided at pickup 2026-10-01 (#49):** the box opens by itself when the composer holds
+no typed text (an `@name` pre-fill counts as empty) and no pop-up is open; otherwise it
+waits, and `ctrl+o` lists the open questions first. `deny` is selected first, so a stray
+Enter says no, as a timeout does. One box at a time, oldest first, from any view. The
+question carries `input`, the harness's `rawInput` as it sent it, capped, and the box
+shows it as `key: value` lines. Control characters are removed before drawing. The piped
+screen prints the question and how it closed: that is the CLI observer. The diff moves
+to M4-6: a pop-up is no place for one.
+**Built 2026-10-01 (#49).** `core/permissions.ts` cuts the input (`capInput`), and the
+reducer removes control characters (`printable`, `client/room.ts`); the event and
+`GET /permissions` carry `input` since 1.6. Four pty tests drive the box: one with a piped
+observer on the same room, one for a thread's `@name` pre-fill and Esc, one for a question
+closed elsewhere, and one whose fake daemon makes the `409` reply land, so the message
+comes from `GET /permissions/:id`. **Review of #205:** Esc or `ctrl+o` on a question box
+means away, so the next question waits too; only an answer, or a close from elsewhere,
+opens the next. The box wraps the action and the input instead of cutting them.
 
 **M4-4 · Notifications and transcript polish · S · needs M4-2**
 Terminal bell and desktop notification for a participant waiting on a permission or
@@ -2190,6 +2206,24 @@ asks to add the folder, then opens the room. The piped screen prints
 `kapelle daemon add <path>` instead.
 **Added 2026-10-01 (#201):** while a pop-up is open the status line swaps its key hint
 for `esc back · ctrl+o close`; the composer's hint returns when the box closes.
+
+**M4-6 · Diff view in the TUI · M · needs M4-3**
+**Added 2026-10-01 (#49 pickup).** A question about an edit shows its diff in a view of
+its own, never in the answer box. The box gets one line, `± <path> +a −d`, and a
+`view diff` row. The view replaces the transcript, keeps the sidebar, scrolls, and
+answers with `y` or `n`; Esc goes back to the box. The view reads `git diff` text, so
+M6-11a and M6-11b hand it their own diff before a move or a land. Where a question's diff
+comes from: the harness's `diff` content block, when the tool call has one before the
+ask; else the daemon builds one from the new text (copilot's `rawInput.file_text`, or our
+own `fs/write_text_file`) against the file on disk, after the path guard, with
+`git diff --no-index`. A shell command has no diff. `_client_permission_queued` and
+`GET /permissions` gain `diff`, capped, and control characters are removed before
+drawing, as for M4-3's `input`.
+*Done when* a mock-agent `ask` write shows its diff in the view and is answered from it,
+a `file_text` ask gets a built diff, a path outside the checkout gets none, and the view
+draws a diff text a caller passes in.
+Decisions: R12, R45, R47. **Open at pickup:** the cap, and how a new or deleted file
+shows.
 
 ---
 
@@ -2625,7 +2659,7 @@ moves onto the reducer in this story, and M6-5's questions are in it. The restar
 moves to M6-7a: the boot sweep adds no line to the log, and nothing sets `paused` or
 `killed` yet. "M4-2 draws from it" is M4-2's to check.
 
-**M6-11a · Fast-forward one participant to another, from the TUI · S · needs M6-6a, M4-5**
+**M6-11a · Fast-forward one participant to another, from the TUI · S · needs M6-6a, M4-5, M4-6**
 **Added 2026-09-26, R45.** A reviewer starts from the developer's branch
 (M6-6a) and commits on top; the person then moves the developer's branch up to the
 reviewer's commit. **Fast-forward only**: it works when the developer made no commits
@@ -2644,7 +2678,7 @@ busy target and a diverged target are both refused with nothing changed, and a s
 client sees the event.
 Decisions: R37, R45.
 
-**M6-11b · Land a participant into the main checkout, from the TUI · S · needs M6-6b, M4-5**
+**M6-11b · Land a participant into the main checkout, from the TUI · S · needs M6-6b, M4-5, M4-6**
 **Added 2026-09-26, R47.** R31 made `kapelle room merge` the surface.
 This story adds a daemon route that runs the same M6-6b code for one participant, and a
 TUI command that calls it. It is the first time the **daemon**, not the CLI, writes to the
@@ -2671,7 +2705,7 @@ M0 ─ M1a ─ M1b ─ M1c ─ M2
 
 ```text
 M5-10a ─ M6-2 ─ M6-6a ─ M6-3 ─ M6-4 ─┬─ M6-10 ─ M4-2 ─ M4-5 ─ M6-11a
-                                      ├─ M6-5 ─ M4-3
+                                      ├─ M6-5 ─ M4-3 ─ M4-6
                                       ├─ M6-7a ─ M6-7b
                                       └─ M6-8 (deferred by R2)
 M6-6a ─ M6-6b ─ M6-11b
@@ -2679,8 +2713,9 @@ M6-6a ─ M6-6b ─ M6-11b
 
 The edges the drawing leaves out: **M4-1** needs M6-0 and M5-10a, and **M4-2** needs M4-1
 too. **M4-5** also needs M6-5. **M4-3** also needs M4-2 and M5-4. **M6-7b** also needs the
-**M0-9** probe. **M6-11b** also needs M4-5. **M4-4** needs M4-2. **M6-9** needs M6-5 and
-M4-2. **M6-7a** needs only M6-2, but goes after M6-4, which changes the log line it saves.
+**M0-9** probe. **M6-11b** also needs M4-5. **M6-11a** and **M6-11b** also need M4-6, for
+the diff view. **M4-4** needs M4-2. **M6-9** needs M6-5 and M4-2. **M6-7a** needs only
+M6-2, but goes after M6-4, which changes the log line it saves.
 
 Off the path, because the TUI shows no run (R16): M5-7, M5-8, M5-9, M5-10b and M5-11.
 M5-11 adds an idempotency test *if* M5-7 has landed — a condition, not a dependency. No

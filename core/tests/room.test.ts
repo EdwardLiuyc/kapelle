@@ -925,6 +925,8 @@ test("an ask participant's write waits in the queue, named by room, participant 
     turn: 1,
     kind: "edit",
     title: "Write ACP_TEST.md",
+    // The tool's input, as text (M4-3).
+    input: { path: "ACP_TEST.md" },
   });
   const [message] = of("_client_user_message");
   assert.ok(message);
