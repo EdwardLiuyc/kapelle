@@ -234,3 +234,23 @@ test("a question carries the tool's input as text, cut to stay under 4 KB", () =
   assert.equal(Object.keys(many ?? {}).length, 8);
   assert.ok(JSON.stringify(many).length < 4096);
 });
+
+test("an escape-heavy input is still capped at 4 KB of JSON", () => {
+  const quoted = capInput(
+    Object.fromEntries(
+      Array.from({ length: 8 }, (_, i) => [`k${i}`, '"'.repeat(400)]),
+    ),
+  );
+  assert.ok(quoted);
+  assert.ok(Object.keys(quoted).length > 0);
+  assert.ok(Buffer.byteLength(JSON.stringify(quoted), "utf8") <= 4096);
+
+  const control = capInput(
+    Object.fromEntries(
+      Array.from({ length: 8 }, (_, i) => [`k${i}`, "\u0000".repeat(400)]),
+    ),
+  );
+  assert.ok(control);
+  assert.ok(Object.keys(control).length > 0);
+  assert.ok(Buffer.byteLength(JSON.stringify(control), "utf8") <= 4096);
+});

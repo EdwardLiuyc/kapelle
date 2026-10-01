@@ -496,7 +496,10 @@ function chatTui(
       const r = rooms.get(roomId);
       const q = r?.state.questions.get(id);
       if (r && q) out.push({ r, q });
-      else waiting.delete(id);
+      else {
+        waiting.delete(id);
+        aside.delete(id);
+      }
     }
     return out;
   };
@@ -774,10 +777,10 @@ function chatTui(
           drawn.set(e, line);
           add(line);
         }
-        const answer =
-          e.allow === undefined
-            ? ""
-            : ` — ${e.allow ? "allowed" : "denied"} (${e.reason})`;
+        let answer = "";
+        if (e.allow !== undefined) {
+          answer = ` — ${e.allow ? "allowed" : "denied"} (${e.reason})`;
+        }
         line.setText(magenta(`? ${name} asks: ${e.title}${answer}`));
         tui.requestRender();
         return;

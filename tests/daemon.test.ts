@@ -4842,6 +4842,193 @@ test("chat.ts on a real terminal keeps a question waiting while the person types
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("chat.ts on a real terminal opens over a thread's @name pre-fill, and Esc puts the question aside", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT}`,
+        name: "asker",
+        role: "orchestrator",
+        mode: "ask",
+      },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const asker = only(open.body);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen("○ asker");
+  // alt+down opens the thread, so the composer holds exactly `@asker `.
+  // That pre-fill is not typed text: the question must open by itself.
+  await screen.press("\x1b[1;3B", "@asker");
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${asker.id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  await screen.seen("edit · Write ACP_TEST.md");
+  // Esc puts it aside: the box goes and the status line counts it. `press`
+  // reads only what is drawn after the key, and waits out pi-tui's alt-key
+  // window for a bare Esc.
+  await screen.press("\x1b", "? 1 question · ctrl+o");
+  // A decision from elsewhere closes it, and Esc already stopped it from
+  // reopening.
+  const q = await pendingOne(d);
+  const other = await api(d, "POST", `/permissions/${q.id}`, { allow: true });
+  assert.equal(other.status, 200, other.body.error?.message);
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal says why a lost answer lost", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const roomId = "room-fake";
+  const room = {
+    id: roomId,
+    cwd: process.cwd(),
+    status: "active",
+    title: "fake room",
+    updatedAt: new Date().toISOString(),
+    participants: [
+      {
+        id: "p1",
+        name: "asker",
+        harness: "mock-agent",
+        role: "orchestrator",
+        mode: "ask",
+        status: "busy",
+        notices: [],
+      },
+    ],
+  };
+  let answered = false;
+  const fake = createServer((req, res) => {
+    const path = req.url ?? "";
+    if (path === "/version") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ apiVersion: API_VERSION }));
+      return;
+    }
+    if (path === "/harnesses") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("[]");
+      return;
+    }
+    if (path === "/rooms") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify([room]));
+      return;
+    }
+    if (path === `/rooms/${roomId}`) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(room));
+      return;
+    }
+    if (path === `/rooms/${roomId}/events`) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      res.write(
+        `id: 1\ndata: ${JSON.stringify({
+          seq: 1,
+          roomId,
+          participantId: "p1",
+          update: {
+            sessionUpdate: "_client_participant_added",
+            name: "asker",
+            harness: "mock-agent",
+            mode: "ask",
+          },
+        })}\n\n`,
+      );
+      res.write(
+        `id: 2\ndata: ${JSON.stringify({
+          seq: 2,
+          roomId,
+          participantId: "p1",
+          update: {
+            sessionUpdate: "_client_permission_queued",
+            id: "q1",
+            kind: "edit",
+            title: "Write ACP_TEST.md",
+            input: { path: "ACP_TEST.md" },
+          },
+        })}\n\n`,
+      );
+      return;
+    }
+    if (req.method === "POST" && path === "/permissions/q1") {
+      answered = true;
+      res.writeHead(409, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: {
+            code: "already_decided",
+            message: "permission q1 was already decided",
+          },
+        }),
+      );
+      return;
+    }
+    if (req.method === "GET" && path === "/permissions/q1") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "q1",
+          roomId,
+          participantId: "p1",
+          turn: 1,
+          kind: "edit",
+          title: "Write ACP_TEST.md",
+          input: { path: "ACP_TEST.md" },
+          allow: false,
+          reason: "timeout",
+        }),
+      );
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({ error: { code: "no_route", message: `no ${path}` } }),
+    );
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${roomId}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen("edit · Write ACP_TEST.md");
+  await screen.press("\r", "already closed: timeout");
+  assert.ok(answered, "the TUI posted the answer");
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 test("chat.ts attach on a real terminal opens the room it names, not the first", {
   skip: noPty,
 }, async (t) => {

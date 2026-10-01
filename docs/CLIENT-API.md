@@ -334,7 +334,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 5 },
+  "apiVersion": { "major": 1, "minor": 6 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -889,8 +889,10 @@ instead. `turn` is the number on that turn's `_client_user_message`.
 `input` is the tool's input as the harness sent it, so a person can judge the action. Since
 1.6. It is absent when the harness sent none. Each value is text: a value that was not a
 string is its JSON. It holds at most 8 fields. A key is cut at 64 characters and a value at
-400, so a cut value ends with `…`. Its fields differ by harness: for example `command`
-for a shell command, or `path` and `file_text` for a new file.
+400, so a cut value ends with `…`. The whole object is held within 4 KB of JSON, so some
+of the 8 fields can be dropped when their text has long escapes. Its fields differ by
+harness: for example `command` for a shell command, or `path` and `file_text` for a new
+file.
 
 ### `GET /permissions/:id`
 

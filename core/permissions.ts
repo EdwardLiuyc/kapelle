@@ -63,20 +63,23 @@ export type SettledDecision = PendingDecision & {
 export type AnswerResult = "ok" | "settled" | "unknown";
 
 /** How much of a tool's input a question carries (M4-3): 8 fields of 64 +
- *  400 characters stay under 4 KB. A harness can send a whole file as one
- *  value, and every question is kept for the daemon's life. */
+ *  400 characters, and the serialized object at most 4 KB. A harness can send
+ *  a whole file as one value, and every question is kept for the daemon's
+ *  life. */
 const INPUT_FIELDS = 8;
 const INPUT_KEY = 64;
 const INPUT_VALUE = 400;
+const INPUT_JSON_BYTES = 4096;
 
 const cut = (s: string, max: number) =>
   s.length > max ? `${s.slice(0, max - 1)}…` : s;
 
 /**
  * The tool's input for a person to judge: each value as text, cut. The
- * fields past the eighth are dropped. `undefined` when there is nothing to
- * show. The text is as the harness sent it; a screen removes control
- * characters before it draws (`client/room.ts`).
+ * fields past the eighth are dropped, and a later field is dropped too when
+ * its JSON escapes would push the object past 4 KB. `undefined` when there
+ * is nothing to show. The text is as the harness sent it; a screen removes
+ * control characters before it draws (`client/room.ts`).
  */
 export function capInput(
   // The protocol's own shape for raw tool input (`protocol/agent.ts`).
@@ -85,7 +88,7 @@ export function capInput(
 ): Record<string, string> | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const used = new Set<string>();
-  const fields = Object.entries(raw)
+  const fields: [string, string][] = Object.entries(raw)
     .filter(([, v]) => v !== undefined)
     .slice(0, INPUT_FIELDS)
     .map(([k, v], i) => {
@@ -99,6 +102,16 @@ export function capInput(
         cut(typeof v === "string" ? v : JSON.stringify(v), INPUT_VALUE),
       ];
     });
+  // A quote or a control character becomes two or six bytes in JSON, so the
+  // character caps alone can still leave a larger object. Drop fields from
+  // the end until it fits; the first field always does.
+  while (
+    fields.length > 0 &&
+    Buffer.byteLength(JSON.stringify(Object.fromEntries(fields)), "utf8") >
+      INPUT_JSON_BYTES
+  ) {
+    fields.pop();
+  }
   // `fromEntries`, not assignment: a `__proto__` key stays a plain field.
   return fields.length > 0 ? Object.fromEntries(fields) : undefined;
 }

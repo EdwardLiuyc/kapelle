@@ -2158,9 +2158,10 @@ screen prints the question and how it closed: that is the CLI observer. The diff
 to M4-6: a pop-up is no place for one.
 **Built 2026-10-01 (#49).** `core/permissions.ts` cuts the input (`capInput`), and the
 reducer removes control characters (`printable`, `client/room.ts`); the event and
-`GET /permissions` carry `input` since 1.6. Two pty tests drive the box, one with a piped
-observer on the same room. The `409` line has no test: the box shows only an open
-question, so a lost race is the only way to reach it.
+`GET /permissions` carry `input` since 1.6. Four pty tests drive the box: one with a piped
+observer on the same room, one for a thread's `@name` pre-fill and Esc, one for a question
+closed elsewhere, and one whose fake daemon makes the `409` reply land, so the message
+comes from `GET /permissions/:id`.
 
 **M4-4 · Notifications and transcript polish · S · needs M4-2**
 Terminal bell and desktop notification for a participant waiting on a permission or
