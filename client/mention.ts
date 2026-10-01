@@ -21,11 +21,11 @@ export type Target = { id: string; text: string } | { error: string };
 
 /** A leading mention: `@`, the name, an optional end mark, and the
  *  whitespace after it, newlines included. */
-const MENTION = /^@([^\s,:;.]*)[,:;.]?\s*/;
+export const MENTION = /^@([^\s,:;.]*)[,:;.]?\s*/;
 
 /** ASCII case folding only (R22): `@Alice` is `@alice`, and nothing else
  *  changes. */
-const fold = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+export const fold = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
 
 /**
  * The target while the person types. It never refuses empty text, so a

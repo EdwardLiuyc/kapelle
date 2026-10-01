@@ -30,7 +30,14 @@ import { userInfo } from "node:os";
 import { dirname, join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
+  type Outcome,
+  parseCommand,
+  type RouteCommand,
+  runCommand,
+} from "../client/command.ts";
+import {
   API_VERSION,
+  type HarnessEntry,
   type MessageAccepted,
   type ParticipantDto,
   type PermissionDecision,
@@ -38,6 +45,7 @@ import {
   type RoomEventLine,
   type RoomListEntry,
 } from "../client/contract.ts";
+import type { Named } from "../client/mention.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import { processIdentity } from "../core/sweep.ts";
 import { openWorktrees } from "../core/worktree.ts";
@@ -55,6 +63,7 @@ import {
   startDaemon as start,
   tempDir,
 } from "../integration/helpers.ts";
+import { AGENTS } from "../protocol/registry.ts";
 
 /** The exit of a daemon expected to refuse, or `null` if it kept running. */
 async function exitOf(d: ReturnType<typeof start>): Promise<CliResult | null> {
@@ -4417,8 +4426,8 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   const { child, seen, exited, out: screen } = await chatOnPty(t);
   child.stdin.write("alpha\r");
   await seen("previous: (none)");
-  child.stdin.write("/dismiss\r");
-  await seen("the room was dismissed");
+  child.stdin.write("/leave\r");
+  await seen("rejoin with");
   const code = await exited;
   const out = screen();
   assert.equal(code, 0, out);
@@ -4427,7 +4436,7 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   const text = raw.replace(/[ \t]+$/gm, "");
   assert.match(
     text,
-    /you → mock-agent\n\s*alpha\n[\s\S]*mock-agent\n\s*previous: \(none\)\n[\s\S]*the room was dismissed/,
+    /you → mock-agent\n\s*alpha\n[\s\S]*mock-agent\n\s*previous: \(none\)\n[\s\S]*left room \S+; rejoin with/,
     "the typed message, the answer, then the exit line",
   );
   // A line as wide as the terminal gets an empty line after it where the
@@ -4848,7 +4857,7 @@ test("kapelle chat opens the first room, and below 70 columns the sidebar starts
   assert.equal(await screen.exited, 0, screen.out());
 });
 
-test("kapelle chat with no rooms says how to start one", {
+test("kapelle chat with no rooms opens the screen, and says how to open one", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -4857,9 +4866,11 @@ test("kapelle chat with no rooms says how to start one", {
     t,
     "stty cols 100 rows 30; node cli.ts chat",
     { XDG_RUNTIME_DIR: runtime },
-    "no rooms: start one with kapelle chat new --agent pi",
+    "ctrl+o → new room",
   );
-  assert.equal(await screen.exited, 1, screen.out());
+  screen.child.stdin.write("\x03");
+  await screen.seen("left the chat");
+  assert.equal(await screen.exited, 0, screen.out());
 });
 
 test("an ask participant asks through /permissions, and nobody answering denies it at the timeout", async (t) => {
@@ -4988,7 +4999,9 @@ test("chat.ts on a real terminal takes /dismiss after a thread's @name", {
   const { press, seen, exited, out } = await chatOnPty(t);
   await seen("○ mock-agent");
   await press("\x1b[1;3B", "@mock-agent");
-  await press("/dismiss\r", "the room was dismissed");
+  // The last room gone, the screen stays, empty, until ^C (M4-5).
+  await press("/dismiss\r", "ctrl+o → new room");
+  await press("\x03", "left the chat");
   assert.equal(await exited, 0, out());
   assert.doesNotMatch(plainText(out()), /you → mock-agent/);
 });
@@ -5125,4 +5138,427 @@ test("chat.ts on a real terminal drops a removed participant's notices from the 
   // transcript left in scrollback is the timeline's.
   const notices = scrollback(out()).match(/no measured labels/g) ?? [];
   assert.equal(notices.length, 1, scrollback(out()));
+});
+
+// --- room commands (M4-5) -----------------------------------------------------
+
+/** The address `client/` takes, from a test daemon. */
+const addressOf = (d: Daemon) => ({
+  port: Number(new URL(d.url).port),
+  token: d.token,
+});
+
+/** Parses a typed line and sends it; the line must be a route command. */
+async function typed(
+  d: Daemon,
+  roomId: string | undefined,
+  line: string,
+  roster: readonly Named[] = [],
+): Promise<Outcome> {
+  const c = parseCommand(line, roster);
+  assert.ok(c && "verb" in c, `not a command: ${line} → ${JSON.stringify(c)}`);
+  assert.ok(c.verb !== "leave" && c.verb !== "help" && c.verb !== "form", line);
+  return runCommand(addressOf(d), roomId, c as RouteCommand);
+}
+
+test("every typed room command reaches its route", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const opened = await typed(
+    d,
+    undefined,
+    `/new --cmd "${REMEMBER}" --name alice --title fix --cwd ${cwd}`,
+  );
+  assert.ok(opened.ok && opened.room, JSON.stringify(opened));
+  assert.equal(opened.line, "opened room fix");
+  const roomId = opened.room.id;
+  const alice = only(opened.room);
+  assert.equal(alice.role, "orchestrator");
+
+  // A commit on alice's branch, so `--base @alice` is not the room's HEAD.
+  const git = (...args: string[]) =>
+    spawnSync("git", ["-C", alice.worktree, ...args], { encoding: "utf8" });
+  assert.equal(git("commit", "--allow-empty", "-qm", "alice's").status, 0);
+  const aliceHead = git("rev-parse", "HEAD").stdout.trim();
+
+  const roster = () =>
+    api<RoomReply>(d, "GET", `/rooms/${roomId}`).then(
+      (r) => r.body.participants,
+    );
+  const addBob = await typed(
+    d,
+    roomId,
+    `/add --cmd "node ${MOCK_AGENT} --scenario stall" --name bob --role tester --mode ask --base @Alice`,
+    await roster(),
+  );
+  assert.ok(addBob.ok, JSON.stringify(addBob));
+  assert.equal(addBob.line, "added bob (mock-agent, tester, ask)");
+  let bob = (await roster()).find((p) => p.name === "bob");
+  assert.equal(bob?.baseSha, aliceHead, "bob starts from alice's branch");
+
+  for (const [line, want] of [
+    ["@bob /rename carol", "renamed bob to carol"],
+    ["@carol /role developer", "carol is now developer"],
+    ["@carol /role none", "carol has no role"],
+    ["@carol /mode safe", "carol is now in safe mode"],
+  ] as const) {
+    const r = await typed(d, roomId, line, await roster());
+    assert.ok(r.ok, `${line}: ${JSON.stringify(r)}`);
+    assert.equal(r.line, want);
+  }
+  bob = (await roster()).find((p) => p.id === bob?.id);
+  assert.equal(bob?.name, "carol");
+  assert.equal(bob?.role, undefined);
+  assert.equal(bob?.mode, "safe");
+
+  const said = await api(
+    d,
+    "POST",
+    `/rooms/${roomId}/agents/${bob?.id}/messages`,
+    { text: "hang" },
+  );
+  assert.equal(said.status, 202);
+  const cancel = await typed(d, roomId, "@carol /cancel", await roster());
+  assert.ok(cancel.ok, JSON.stringify(cancel));
+  assert.equal(cancel.line, "cancelling carol's turn");
+
+  const removed = await typed(d, roomId, "@carol /remove", await roster());
+  assert.ok(removed.ok, JSON.stringify(removed));
+  assert.deepEqual(
+    (await roster()).map((p) => p.name),
+    ["alice"],
+  );
+
+  const gone = await typed(d, roomId, "/dismiss");
+  assert.ok(gone.ok, JSON.stringify(gone));
+  assert.equal(gone.room?.status, "dismissed");
+});
+
+test("each room command shows the daemon's own message for each refusal its route documents", async (t) => {
+  const d = await boot(t);
+  const repo = await gitRepo(t);
+  const cwd = await added(d, repo);
+  const outside = await gitRepo(t);
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, name: "alice", role: "orchestrator" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const roomId = open.body.id;
+  const alice = only(open.body);
+  const ghost = [{ id: "p-nobody", name: "ghost" }];
+  const roster: Named[] = [
+    { id: alice.id, name: "alice", role: "orchestrator" },
+  ];
+
+  const refusals: [string, string | undefined, string, typeof roster][] = [
+    // POST /rooms
+    [
+      `/new --cmd "${REMEMBER}" --cwd ${outside}`,
+      undefined,
+      "repo_not_added",
+      [],
+    ],
+    [
+      `/new --cmd "${REMEMBER}" --cwd ${join(repo, "missing")}`,
+      undefined,
+      "invalid_request",
+      [],
+    ],
+    [
+      `/new --cmd "${REMEMBER}" --name "a b" --cwd ${cwd}`,
+      undefined,
+      "invalid_request",
+      [],
+    ],
+    [
+      `/new --cmd /no/such/harness --name x --cwd ${cwd}`,
+      undefined,
+      "room_open_failed",
+      [],
+    ],
+    // POST /rooms/:id/agents
+    [`/add --cmd "${REMEMBER}" --name dan`, "room-nope", "room_not_found", []],
+    [
+      `/add --cmd "${REMEMBER}" --name dan --mode loud`,
+      roomId,
+      "invalid_request",
+      [],
+    ],
+    [
+      `/add --cmd "${REMEMBER}" --name dan --base no-such-ref`,
+      roomId,
+      "invalid_request",
+      [],
+    ],
+    [`/add --cmd "${REMEMBER}" --name alice`, roomId, "name_taken", []],
+    [
+      `/add --cmd "${REMEMBER}" --name dan --role orchestrator`,
+      roomId,
+      "orchestrator_exists",
+      [],
+    ],
+    [`/add --cmd /no/such/harness --name dan`, roomId, "room_open_failed", []],
+    // PATCH /rooms/:id/agents/:agentId
+    ["@alice /mode ask", "room-nope", "room_not_found", roster],
+    ["@ghost /mode ask", roomId, "participant_not_found", ghost],
+    ["@alice /mode loud", roomId, "invalid_request", roster],
+    // DELETE /rooms/:id/agents/:agentId
+    ["@alice /remove", "room-nope", "room_not_found", roster],
+    ["@ghost /remove", roomId, "participant_not_found", ghost],
+    // POST /rooms/:id/agents/:agentId/turns/current/cancel
+    ["@alice /cancel", "room-nope", "room_not_found", roster],
+    ["@ghost /cancel", roomId, "participant_not_found", ghost],
+    ["@alice /cancel", roomId, "no_turn", roster],
+    // POST /rooms/:id/dismiss
+    ["/dismiss", "room-nope", "room_not_found", []],
+  ];
+  // A second participant, so a rename and a role change can clash.
+  const bob = await api<ParticipantDto>(d, "POST", `/rooms/${roomId}/agents`, {
+    cmd: REMEMBER,
+    name: "bob",
+  });
+  assert.equal(bob.status, 201);
+  const both = [...roster, { id: bob.body.id, name: "bob" }];
+  refusals.push(
+    ["@bob /rename alice", roomId, "name_taken", both],
+    ["@bob /role orchestrator", roomId, "orchestrator_exists", both],
+  );
+
+  const check = async (
+    line: string,
+    room: string | undefined,
+    code: string,
+    names: typeof roster,
+  ) => {
+    const r = await typed(d, room, line, names);
+    assert.ok(!r.ok, `${line}: expected ${code}, got ${JSON.stringify(r)}`);
+    assert.equal(r.code, code, `${line}: ${r.message}`);
+    // The daemon's sentence, passed through: never a bare status.
+    assert.ok(r.message && !/^HTTP \d+$/.test(r.message), r.message);
+  };
+  for (const [line, room, code, names] of refusals) {
+    await check(line, room, code, names);
+  }
+
+  // A `--base @name` the room lacks is refused before the POST.
+  const nobody = await typed(d, roomId, "/add pi --base @nobody", both);
+  assert.deepEqual(nobody, {
+    ok: false,
+    code: "",
+    message: "no participant named @nobody",
+  });
+
+  // A project config gone bad after the add: the room reads it at open.
+  await mkdir(join(repo, ".kapelle"), { recursive: true });
+  await writeFile(join(repo, ".kapelle", "config.json"), "{ nope");
+  await check(
+    `/new --cmd "${REMEMBER}" --cwd ${cwd}`,
+    undefined,
+    "invalid_config",
+    [],
+  );
+
+  // Every route on a dismissed room.
+  const dismissed = await api(d, "POST", `/rooms/${roomId}/dismiss`);
+  assert.equal(dismissed.status, 200);
+  for (const line of [
+    "/dismiss",
+    `/add --cmd "${REMEMBER}" --name carol`,
+    "@alice /mode ask",
+    "@alice /remove",
+    "@alice /cancel",
+  ]) {
+    await check(line, roomId, "room_dismissed", roster);
+  }
+});
+
+const DOWN = "\x1b[B";
+
+test("ctrl+o in a thread opens that agent's menu over the timeline, and a mode pick reaches its route", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out, d } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  await press("\x1b[1;3B", "@mock-agent");
+  await press("\x0f", "cancel turn");
+  // cancel turn, mode: Enter opens the pick list, on the current mode.
+  await press(`${DOWN}\r`, "mock-agent · mode");
+  await press(`${DOWN}\r`, "mock-agent is now in ask mode");
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const full = await api<RoomReply>(d, "GET", `/rooms/${room?.id}`);
+  assert.equal(only(full.body).mode, "ask");
+  // The menu names the new mode, and Esc closes it.
+  // Esc alone, or it and the next key read as alt+key.
+  await press("\x0f", "mode · ask");
+  child.stdin.write("\x1b");
+  await new Promise((ok) => setTimeout(ok, 300));
+  await press("x", "@mock-agent x");
+  await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
+  // The status line said it; the transcript never did.
+  assert.doesNotMatch(scrollback(out()), /is now in ask mode/);
+});
+
+test("/add alone opens its form; a refusal stays in the form, and a fix adds the agent", {
+  skip: noPty,
+}, async (t) => {
+  const { press, seen, exited, out, d } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  await press("/add\r", "add agent");
+  // command, then name: each Enter opens a text box, and Enter keeps it.
+  await press(`${DOWN}\r`, "> ");
+  await press(`${REMEMBER}\r`, "Enter/Space");
+  await press(`${DOWN}\rmock-agent\r`, "mock-agent");
+  // Down to the last row, `add`: the name is taken.
+  await press(`${DOWN.repeat(4)}\r`, "is taken");
+  // Up to the name, clear it, and send again.
+  await press(`${"\x1b[A".repeat(4)}\r\x15bob\r`, "bob");
+  await press(`${DOWN.repeat(4)}\r`, "added bob (mock-agent, auto)");
+  await seen("○ bob");
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  assert.deepEqual(
+    room?.participants.map((p) => p.name),
+    ["mock-agent", "bob"],
+  );
+  await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("kapelle chat with no rooms opens one with /new, and shows its timeline", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await screen.press(
+    `/new --cmd "${REMEMBER}" --title fix --cwd ${cwd}\r`,
+    "opened room fix",
+  );
+  await screen.press("hello\r", "previous: (none)");
+  await screen.press("\x03", "rejoin with");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("the menu opens over the timeline with the sidebar hidden; a typed agent command with no @name is refused on the status line", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const screen = await ptyScreen(t, "stty cols 60 rows 30; node cli.ts chat", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await screen.seen(`room ${open.body.id}`);
+  assert.ok(!screen.out().includes("«"), "the sidebar starts hidden");
+  // The timeline's menu: the agent list first, then the room's commands.
+  // It opens over the timeline, so the sidebar stays hidden.
+  await screen.press("\x0f", "agent …");
+  assert.ok(!screen.out().includes("«"), "the sidebar stays hidden");
+  // ctrl+o again closes it, and the composer has the keys again.
+  screen.child.stdin.write("\x0f");
+  await new Promise((ok) => setTimeout(ok, 300));
+  await screen.press("/remove\r", "! name the agent: @name /remove");
+  // Refused before any request: the agent is still there.
+  const room = await api<RoomReply>(d, "GET", `/rooms/${open.body.id}`);
+  assert.equal(room.body.participants.length, 1);
+  await screen.press("\x03", "rejoin with");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("after the last agent is removed, the status line names no one and a message is refused before any request", {
+  skip: noPty,
+}, async (t) => {
+  const { press, exited, out, d } = await chatOnPty(t);
+  // The roster the daemon sent at the start named mock-agent; it must not
+  // stand in for the empty one now.
+  await press("@mock-agent /remove\r", "! no agents: ctrl+o → add agent");
+  assert.match(plainText(out()), /removed mock-agent/);
+  const from = out().length;
+  await press("hi\r", "! no agents: ctrl+o → add agent");
+  assert.doesNotMatch(out().slice(from), /→ mock-agent|you → /);
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  assert.deepEqual(room?.participants, []);
+  await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("GET /harnesses lists every harness the daemon can launch, and which were measured", async (t) => {
+  const d = await boot(t);
+  const r = await api<HarnessEntry[]>(d, "GET", "/harnesses");
+  assert.equal(r.status, 200);
+  assert.deepEqual(
+    r.body,
+    Object.entries(AGENTS).map(([id, a]) => ({
+      id,
+      measured: a.measured !== undefined,
+    })),
+  );
+  assert.ok(r.body.some((h) => h.measured) && r.body.some((h) => !h.measured));
+});
+
+test("the new-room form completes a folder with Tab, lists the measured harnesses, and adds an unadded folder on yes", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const repo = await gitRepo(t); // never added
+  const tmp = await tempDir(t);
+  await mkdir(join(tmp, "alpha-1"));
+  await mkdir(join(tmp, "alpha-2"));
+  const { child, press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await press("\x0f", "new room …");
+  await press("\r", "folder");
+  // folder: Tab lists the two folders that match.
+  await press(`\r\x15${tmp}/al\t`, "alpha-1/  alpha-2/");
+  await press(`\x15${repo}\r`, "Enter/Space");
+  // harness: a pick list of the measured ones. Esc keeps the row as it was.
+  await press(`${DOWN}${DOWN}\r`, "claude");
+  child.stdin.write("\x1b");
+  await new Promise((ok) => setTimeout(ok, 300));
+  // command, then open: the folder is not added, so the form asks.
+  // Only the rows that change are drawn again, so wait for the value.
+  await press(`${DOWN}\r${REMEMBER}\r`, "mock-agent.mjs");
+  await press(`${DOWN}${DOWN}\r`, "is not added to the daemon. Add it?");
+  await press("\r", "opened room");
+  const repos = await api<string[]>(d, "GET", "/repos");
+  assert.deepEqual(repos.body, [await realpath(repo)]);
+  await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("piped chat.ts says how to add a folder that /new is refused for", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const other = await gitRepo(t);
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end(`/new --cmd "${REMEMBER}" --cwd ${other}\n/leave\n`);
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stderr, /has not been added to the daemon/);
+  assert.ok(
+    r.stderr.includes(`add it first: kapelle daemon add ${other}`),
+    r.stderr,
+  );
 });

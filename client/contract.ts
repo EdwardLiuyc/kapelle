@@ -58,6 +58,14 @@ export const CAPABILITIES = [
   "rooms",
 ] as const;
 
+/** One entry of `GET /harnesses` (M4-5): a harness the daemon can launch by
+ *  name, and whether its behaviour was measured (`protocol/registry.ts`).
+ *  Experimental. */
+export interface HarnessEntry {
+  id: string;
+  measured: boolean;
+}
+
 /** `GET /version`. `capabilities` is `string[]`, not the list above: a
  *  newer daemon sends names this file does not know yet. */
 export interface VersionReply {

@@ -57,6 +57,7 @@ import {
   API_VERSION,
   CAPABILITIES,
   type ErrorReply,
+  type HarnessEntry,
   type MessageAccepted,
   type ParticipantDto,
   type PendingDecision,
@@ -1206,6 +1207,15 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       apiVersion: API_VERSION,
       capabilities: [...CAPABILITIES],
     } satisfies VersionReply);
+  } else if (req.method === "GET" && pathname === "/harnesses") {
+    send(
+      res,
+      200,
+      Object.entries(AGENTS).map(([id, a]) => ({
+        id,
+        measured: a.measured !== undefined,
+      })) satisfies HarnessEntry[],
+    );
   } else if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
   } else if (req.method === "GET" && pathname === "/repos") {

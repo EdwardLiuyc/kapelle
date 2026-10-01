@@ -19,7 +19,9 @@
  *
  * **The composer names the target** (R43): a leading `@name` goes to that
  * participant, and no mention goes to the orchestrator. Both screens resolve
- * it with `client/mention.ts`, so they cannot differ.
+ * it with `client/mention.ts`, so they cannot differ. Room commands
+ * (`/add`, `@name /mode ask`, …) go through `client/command.ts` the same way
+ * (M4-5), and never reach an agent.
  *
  * A room keeps its harnesses alive between messages, until `/dismiss`.
  * Leaving (`/leave`, end of input, ^C) keeps every room, and `attach`
@@ -50,21 +52,36 @@ import {
   Container,
   Editor,
   HStack,
+  Input,
   Key,
   Markdown,
   type MarkdownTheme,
   matchesKey,
+  type OverlayHandle,
   ProcessTerminal,
   ScrollView,
+  type SelectItem,
+  SelectList,
+  type SettingItem,
+  SettingsList,
   Spacer,
   Text,
   TuiAltScreen,
   truncateToWidth,
   VStack,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-
+import {
+  USAGE as COMMAND_USAGE,
+  HELP,
+  parseCommand,
+  type RouteCommand,
+  runCommand,
+} from "./client/command.ts";
 import type {
+  HarnessEntry,
   MessageAccepted,
+  RepoAdded,
   RoomDto,
   RoomEventLine,
   RoomListEntry,
@@ -76,6 +93,7 @@ import {
   readDaemonFile,
   request,
 } from "./client/daemon.ts";
+import { completeFolder, expandHome } from "./client/folder.ts";
 import { type Named, resolveTarget, targetOf } from "./client/mention.ts";
 import {
   applyLine,
@@ -109,10 +127,13 @@ start it with @name to send it to that agent instead.
   /leave     exit; the rooms and their harnesses stay alive
   /dismiss   stop the room's harnesses; uncommitted work stays in each
              checkout, because the supervisor never commits for it (R37)
-both work in any view, after a thread's @name too, and never reach an agent
+  ${HELP.slice(0, 7).join("\n  ")}
+a command never reaches an agent. Room commands work after a thread's
+@name too; an agent's command needs its @name.
 
 on a terminal: alt+up/down or ctrl+p/n (or a click) picks a room's timeline
-or one agent's thread; ctrl+t (or a click on « ») hides the rooms`;
+or one agent's thread; ctrl+t (or a click on « ») hides the rooms; ctrl+o
+opens the menu over the conversation, and /new or /add alone opens its form`;
 
 const daemonFile = () => join(runtimeDir(), "daemon.json");
 
@@ -337,22 +358,13 @@ const same = (a: View, b: View) =>
   a.roomId === b.roomId && a.participantId === b.participantId;
 
 /** The roster the resolver reads. Before the stream replays the roster
- *  lines, the one the daemon sent with the room stands in. */
-const rosterOf = (state: RoomState, fallback: readonly Named[]) => {
-  const now = roster(state);
-  return now.length > 0 ? now : fallback;
-};
+ *  lines, the one the daemon sent with the room stands in. Only before:
+ *  once the last participant is removed, the stand-in would name it. */
+const rosterOf = (state: RoomState, fallback: readonly Named[]) =>
+  state.participants.size > 0 ? roster(state) : fallback;
 
-/**
- * The chat command a message is, if any: `/leave` or `/dismiss`, alone or
- * after a mention, since a thread's composer always holds one. A command
- * never reaches an agent, on the screen or on a pipe.
- */
-const commandOf = (text: string, roster: readonly Named[]) => {
-  const t = targetOf(text, roster);
-  const rest = ("id" in t ? t.text : text).trim();
-  return rest === "/leave" || rest === "/dismiss" ? rest : undefined;
-};
+/** What the screen says in a room with no participant (M4-5). */
+const NO_AGENTS = "no agents: ctrl+o → add agent";
 
 /** Whether a question from this participant waits. */
 const asks = (state: RoomState, id: string) =>
@@ -363,6 +375,35 @@ const asks = (state: RoomState, id: string) =>
 const SIDEBAR_WIDTH = 26;
 /** Below this many columns the sidebar starts hidden. */
 const NARROW = 70;
+/** The roles (R44) and modes (R12) the menu offers. The daemon checks
+ *  them; an unknown one it adds later is typed as `@name /role x`. */
+const ROLES = ["orchestrator", "developer", "tester", "architect"];
+const MODES = ["auto", "ask", "safe"];
+/** The last entry of the base and harness lists: it turns the list into a
+ *  text box, for a git ref or a harness the daemon did not list. */
+const OTHER_REF = "other ref…";
+const OTHER_HARNESS = "other…";
+const TYPE_IT = new Set([OTHER_REF, OTHER_HARNESS]);
+
+/**
+ * The pop-up (M4-5): the ctrl+o menu, a pick list, a text box or a form, in
+ * a box at the centre of the timeline, where a folder or a command fits on
+ * one line (decided 2026-09-30). While it is open it has the keys, and
+ * `error` holds the daemon's refusal.
+ */
+interface Panel {
+  title: string;
+  body: Component;
+  error?: string;
+}
+
+const SETTINGS_THEME = {
+  label: (s: string, on: boolean) => (on ? bold(s) : s),
+  value: (s: string, on: boolean) => (on ? cyan(s) : dim(s)),
+  description: dim,
+  cursor: cyan("▸ "),
+  hint: dim,
+};
 
 /**
  * The full-screen chat over every room the daemon holds. Resolves with the
@@ -372,8 +413,14 @@ const NARROW = 70;
  * its own reducer whichever view is drawn, so switching rows only redraws
  * the transcript from a reducer; nothing reconnects, and a line for a room
  * off screen still marks its row. A room made elsewhere joins on the next
- * `GET /rooms`, every 5 s. A dismissed room leaves the list; the screen
- * exits when no room has a live stream left.
+ * `GET /rooms`, every 5 s. A dismissed room leaves the list. The screen
+ * exits when every room it holds lost its stream; with no room left it
+ * stays open, so the person can open one (M4-5).
+ *
+ * **Room commands** (M4-5): `ctrl+o` opens a menu, a pick list or a form
+ * in a box at the centre of the timeline, and a typed command does the same
+ * work through `client/command.ts`. A refusal stays in the box; a success
+ * is one status line.
  *
  * **The composer names the target** (R43), through `client/mention.ts`, and
  * the status line shows it while the person types. The sidebar only picks
@@ -406,6 +453,40 @@ function chatTui(
   /** The participant whose name heads the lines drawn last; unset after
    *  the person's own message. */
   let speaker: string | undefined;
+  /** The pop-up, while one is open (M4-5), and pi-tui's handle on it. */
+  let panel: Panel | undefined;
+  let overlay: OverlayHandle | undefined;
+  /** How many rows a list in the pop-up may show. */
+  const panelRoom = () =>
+    Math.max(3, Math.min(12, (process.stdout.rows || 24) - 12));
+  /** The pop-up's box: the title in its top border, then the body, a key
+   *  hint for a list, and the refusal. */
+  const frame: Component = {
+    render(width) {
+      if (!panel) return [];
+      const inner = Math.max(1, width - 4);
+      const side = (l: string) =>
+        `${dim("│")} ${truncateToWidth(l, inner, "…", true)} ${dim("│")}`;
+      const lines = [
+        dim(
+          `${truncateToWidth(`┌ ${panel.title} ${"─".repeat(width)}`, width - 1, "")}┐`,
+        ),
+      ];
+      for (const l of panel.body.render(inner)) lines.push(side(l));
+      if (panel.body instanceof SelectList) {
+        lines.push(side(dim("↑↓ Enter · Esc back")));
+      }
+      if (panel.error) {
+        for (const l of wrapTextWithAnsi(yellow(`! ${panel.error}`), inner)) {
+          lines.push(side(l));
+        }
+      }
+      lines.push(dim(`└${"─".repeat(Math.max(0, width - 2))}┘`));
+      return lines;
+    },
+    handleInput: (key) => panel?.body.handleInput?.(key),
+    invalidate: () => panel?.body.invalidate(),
+  };
 
   const add = (c: Component) => {
     transcript.addChild(c);
@@ -539,27 +620,35 @@ function chatTui(
     const r = rooms.get(view.roomId);
     const parts: string[] = [];
     if (r) {
-      const t = targetOf(
-        editor.getText(),
-        rosterOf(r.state, r.entry.participants),
-      );
+      const roster = rosterOf(r.state, r.entry.participants);
+      const t =
+        roster.length > 0
+          ? targetOf(editor.getText(), roster)
+          : { error: NO_AGENTS };
       parts.push(
         "id" in t ? bold(`→ ${nameOf(r.state, t.id)}`) : yellow(`! ${t.error}`),
       );
     }
-    if (flash) parts.push(yellow(flash));
+    if (flash) parts.push(flash.startsWith("!") ? yellow(flash) : flash);
     if (!shown) {
       const waiting = [...rooms.values()].filter(
         ({ state }) => roomMark(state).circle === "●",
       ).length;
       if (waiting) parts.push(`● ${waiting} room${waiting > 1 ? "s" : ""}`);
     }
-    parts.push(dim("enter to send · alt+↑↓ rows · ctrl+t rooms"));
+    parts.push(dim("enter to send · ctrl+o menu · alt+↑↓ rows · ctrl+t rooms"));
     status.setText(parts.join(dim(" · ")));
     tui.requestRender();
   };
   const toggle = () => {
     shown = !shown;
+    setStatus();
+  };
+  const hidePanel = () => {
+    panel = undefined;
+    overlay?.hide();
+    overlay = undefined;
+    tui.setFocus(editor);
     setStatus();
   };
 
@@ -662,6 +751,9 @@ function chatTui(
       if (r.lost) warn(r.lost);
       const entries = id ? thread(r.state, id) : r.state.timeline;
       for (const e of entries) draw(r.state, e);
+    } else {
+      note("no rooms. ctrl+o → new room, or type /new <harness>.");
+      note("ctrl+c leaves.");
     }
     scroll.scrollToEnd();
     setStatus();
@@ -674,6 +766,8 @@ function chatTui(
   };
 
   const open = (next: View) => {
+    // A pop-up belongs to the view it opened on.
+    if (panel) hidePanel();
     view = next;
     flash = "";
     const r = rooms.get(next.roomId);
@@ -721,7 +815,11 @@ function chatTui(
       roomId === view.roomId &&
       view.participantId === line.participantId
     ) {
+      // Our own remove may have set the status line already.
+      const keep = flash;
       open({ roomId });
+      flash = keep;
+      setStatus();
       return;
     }
     const here =
@@ -773,25 +871,26 @@ function chatTui(
       finish(code);
     };
     const left = () =>
-      `left room ${view.roomId}; rejoin with: kapelle chat attach ${view.roomId}`;
+      view.roomId
+        ? `left room ${view.roomId}; rejoin with: kapelle chat attach ${view.roomId}`
+        : "left the chat";
 
-    /** A room's stream ended: ask the daemon why. The screen ends with the
-     *  last live stream. */
+    /** A room's stream ended: ask the daemon why. The screen ends when
+     *  every room it holds lost its stream. With no room left it stays, so
+     *  the person can open one (M4-5). */
     const closed = async (id: string, err?: unknown) => {
       const { code, line } = await reconcile(id);
       const r = rooms.get(id);
       if (code === 0) rooms.delete(id);
       else if (r) r.lost = line;
-      if (![...rooms.values()].some((x) => !x.lost)) {
+      const all = [...rooms.values()];
+      if (all.length > 0 && !all.some((x) => !x.lost)) {
         const why = err ? [`! ${(err as Error).message}`] : [];
         end(code, ...why, line);
         return;
       }
       const label = r?.entry.title ?? id;
-      if (code === 0 && view.roomId === id) {
-        const [next] = rows();
-        if (next) open(next);
-      }
+      if (code === 0 && view.roomId === id) open(rows()[0] ?? { roomId: "" });
       flash = code === 0 ? `${label} was dismissed` : line;
       setStatus();
     };
@@ -809,6 +908,21 @@ function chatTui(
 
     // Rooms made in another terminal join here. A failed poll changes
     // nothing: a stream that ends says what happened.
+    /** The measured harnesses, from `GET /harnesses`. Unset until it
+     *  answers, or when this daemon has no such route: then the harness
+     *  row is a text box. */
+    let measured: string[] | undefined;
+    call<HarnessEntry[]>(d, "/harnesses").then(
+      (res) => {
+        if (!res.ok) return;
+        measured = res.body
+          .filter((h) => h.measured)
+          .map((h) => h.id)
+          .sort();
+      },
+      () => {},
+    );
+
     const poll = setInterval(() => {
       call<RoomListEntry[]>(d, "/rooms").then(
         (res) => {
@@ -827,6 +941,11 @@ function chatTui(
     tui.addInputListener((data) => {
       if (matchesKey(data, Key.ctrl("c"))) {
         end(0, left());
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.ctrl("o"))) {
+        if (panel) hidePanel();
+        else menu();
         return { consume: true };
       }
       if (matchesKey(data, Key.ctrl("t"))) {
@@ -865,32 +984,45 @@ function chatTui(
     };
     const submit = async (text: string) => {
       if (!text.trim()) return;
+      flash = "";
       const r = rooms.get(view.roomId);
       const roster = r ? rosterOf(r.state, r.entry.participants) : [];
-      const command = commandOf(text, roster);
-      if (command === "/leave") return end(0, left());
-      if (!r) return;
-      if (command === "/dismiss") {
-        flash = `dismissing ${r.entry.title ?? r.entry.id}: stopping its harnesses…`;
-        setStatus();
-        const res = await call<RoomDto>(d, `/rooms/${r.entry.id}/dismiss`, {
-          method: "POST",
-        });
-        // A 200 ends the room's stream, and `closed` takes it from there.
-        if (!res.ok) warn(`! ${res.error.message}`);
-        return;
-      }
-      const t = resolveTarget(text, roster);
-      if ("error" in t) {
-        // Refused before any request: give the text back to fix. The
-        // editor trims what it submits, so a bare mention gets its space
-        // back, or the next letter would join the name (`@bobx`). In a
-        // thread the pre-fill put back on the clear is already this.
-        warn(`! ${t.error}`);
+      /** Refused before any request: give the text back to fix. The editor
+       *  trims what it submits, so a bare mention gets its space back, or
+       *  the next letter would join the name (`@bobx`). In a thread the
+       *  pre-fill put back on the clear is already this. */
+      const giveBack = () => {
         const bare = "id" in targetOf(text, roster);
         const back = bare ? `${text} ` : text;
         if (editor.getText() !== back) editor.setText(back);
+      };
+      const c = parseCommand(text, roster);
+      if (c && "error" in c) {
+        flash = `! ${c.error}`;
+        setStatus();
+        return giveBack();
+      }
+      if (c?.verb === "leave") return end(0, left());
+      if (c?.verb === "help") return showHelp();
+      if (c?.verb === "form") return c.form === "new" ? newForm() : addForm();
+      if (c) {
+        editor.addToHistory(text);
+        if (!(await run(c))) giveBack();
         return;
+      }
+      if (!r) {
+        flash = "! no room: ctrl+o → new room";
+        setStatus();
+        return giveBack();
+      }
+      if (roster.length === 0) {
+        warn(`! ${NO_AGENTS}`);
+        return giveBack();
+      }
+      const t = resolveTarget(text, roster);
+      if ("error" in t) {
+        warn(`! ${t.error}`);
+        return giveBack();
       }
       editor.addToHistory(text);
       const res = await call<MessageAccepted>(
@@ -900,6 +1032,421 @@ function chatTui(
       );
       if (!res.ok) warn(`! ${res.error.message}`);
     };
+
+    /**
+     * Sends a command from the composer or the pop-up. A refusal stays in
+     * the open pop-up, with its values, or goes to the status line; a
+     * success closes the pop-up and says so on the status line. The
+     * transcript is never written. Answers whether it went through.
+     */
+    const run = async (c: RouteCommand): Promise<boolean> => {
+      if (c.verb === "dismiss") {
+        const r = rooms.get(view.roomId);
+        flash = `dismissing ${r?.entry.title ?? view.roomId}: stopping its harnesses…`;
+        setStatus();
+      }
+      let out: Awaited<ReturnType<typeof runCommand>>;
+      try {
+        out = await runCommand(d, view.roomId || undefined, c);
+      } catch (err) {
+        // The daemon went away mid-request.
+        end(1, `! ${(err as Error).message}`);
+        return false;
+      }
+      if (!out.ok) {
+        if (out.code === "repo_not_added" && c.verb === "new") {
+          askToAdd(c);
+          return true;
+        }
+        if (panel) {
+          panel.error = out.message;
+          tui.requestRender();
+        } else {
+          flash = `! ${out.message}`;
+          setStatus();
+        }
+        return false;
+      }
+      if (panel) hidePanel();
+      if (c.verb === "new" && out.room) {
+        const { id, cwd, title, status, updatedAt, participants } = out.room;
+        follow({
+          id,
+          cwd,
+          title,
+          status,
+          updatedAt,
+          participants: participants.map((p) => ({
+            id: p.id,
+            name: p.name,
+            role: p.role,
+            status: p.status,
+          })),
+        });
+        open({ roomId: id });
+      }
+      // A dismiss ends the room's stream, and `closed` says so.
+      if (c.verb !== "dismiss") flash = out.line;
+      setStatus();
+      return true;
+    };
+
+    /** Shows `body` in the pop-up. A new body replaces the last one in
+     *  the same box, as the menu gives way to a pick list. */
+    const showPanel = (title: string, body: Component) => {
+      panel = { title, body };
+      if (!overlay) {
+        // Centred on the timeline, not the terminal: pi-tui centres on
+        // the terminal, so move right by half the sidebar.
+        // ponytail: placed once; a resize or ctrl+t while it is open
+        // leaves it where it was, until it closes.
+        const cols = process.stdout.columns || 80;
+        const left = shown ? SIDEBAR_WIDTH : 2;
+        overlay = tui.showOverlay(frame, {
+          anchor: "center",
+          offsetX: Math.floor(left / 2),
+          width: Math.max(10, Math.min(80, cols - left - 4)),
+          maxHeight: "80%",
+        });
+      }
+      tui.setFocus(frame);
+      setStatus();
+    };
+    /** A pick list in the pop-up. */
+    const pickList = (
+      title: string,
+      items: SelectItem[],
+      current: string | undefined,
+      then: (value: string) => void,
+    ) => {
+      const list = new SelectList(items, panelRoom(), EDITOR_THEME.selectList);
+      const at = items.findIndex((i) => i.value === current);
+      if (at > 0) list.setSelectedIndex(at);
+      list.onSelect = ({ value }) => then(value);
+      list.onCancel = hidePanel;
+      showPanel(title, list);
+    };
+    const words = (values: string[]) =>
+      values.map((v) => ({ value: v, label: v }));
+    /** A text box holding `value`, with the cursor after it: pi-tui's
+     *  `setValue` leaves it at the start, where typing would go in front. */
+    const textBox = (value: string) => {
+      const input = new Input();
+      input.setValue(value);
+      input.handleInput("\x05"); // ctrl+e: the line's end
+      input.focused = true;
+      return input;
+    };
+
+    /** The commands, short, in the pop-up. Esc or Enter closes it. */
+    const showHelp = () =>
+      showPanel("commands", {
+        render: (w) => HELP.flatMap((l) => wrapTextWithAnsi(l, w)),
+        handleInput(key) {
+          if (matchesKey(key, Key.escape) || matchesKey(key, Key.enter)) {
+            hidePanel();
+          }
+        },
+        invalidate() {},
+      });
+
+    /** The ctrl+o menu. In a thread it is that agent's commands; `pid`
+     *  names another one, picked from the room's list. */
+    const menu = (pid = view.participantId) => {
+      const r = rooms.get(view.roomId);
+      const p = pid ? r?.state.participants.get(pid) : undefined;
+      const items: SelectItem[] = [];
+      if (p) {
+        items.push(
+          { value: "cancel", label: "cancel turn" },
+          // The value is in the label: the sidebar is too narrow for a
+          // second column.
+          { value: "mode", label: `mode · ${p.mode}` },
+          { value: "role", label: `role · ${p.role ?? "none"}` },
+          { value: "rename", label: "rename …" },
+          { value: "remove", label: `remove ${p.name}` },
+        );
+      } else if (r && roster(r.state).length > 0) {
+        items.push({ value: "agent", label: "agent …" });
+      }
+      if (r) items.push({ value: "add", label: "add agent …" });
+      items.push({ value: "new", label: "new room …" });
+      if (r) items.push({ value: "dismiss", label: "dismiss room" });
+      items.push({ value: "leave", label: "leave" });
+      const title = p
+        ? `${p.name} · ${p.harness}${p.role ? ` · ${p.role}` : ""}`
+        : r
+          ? (r.entry.title ?? r.entry.id)
+          : "menu";
+      pickList(title, items, undefined, (value) => choose(value, p));
+    };
+
+    const choose = (
+      value: string,
+      p: ReturnType<typeof roster>[number] | undefined,
+    ) => {
+      const r = rooms.get(view.roomId);
+      if (value === "leave") return end(0, left());
+      if (value === "new") return newForm();
+      if (value === "add") return addForm();
+      if (value === "dismiss") return void run({ verb: "dismiss" });
+      if (value === "agent" && r) {
+        const ps = roster(r.state);
+        const items = ps.map((q) => ({
+          value: q.id,
+          label: q.name,
+          ...(q.role && { description: q.role }),
+        }));
+        return pickList("pick an agent", items, undefined, (id) => menu(id));
+      }
+      if (!p) return;
+      const who = { id: p.id, name: p.name };
+      if (value === "cancel") return void run({ verb: "cancel", ...who });
+      if (value === "remove") return void run({ verb: "remove", ...who });
+      if (value === "mode") {
+        return pickList(`${p.name} · mode`, words(MODES), p.mode, (mode) =>
+          run({ verb: "patch", ...who, change: { mode } }),
+        );
+      }
+      if (value === "role") {
+        const roles = words(["none", ...ROLES]);
+        return pickList(`${p.name} · role`, roles, p.role ?? "none", (role) =>
+          run({
+            verb: "patch",
+            ...who,
+            change: { role: role === "none" ? null : role },
+          }),
+        );
+      }
+      if (value === "rename") {
+        const input = textBox(p.name);
+        input.onSubmit = (name) =>
+          void run({ verb: "patch", ...who, change: { name: name.trim() } });
+        input.onEscape = hidePanel;
+        showPanel(`rename ${p.name}`, input);
+      }
+    };
+
+    /**
+     * A form in the pop-up: one row per field, then the row that sends it.
+     * Enter on a row opens a text box, or a pick list for a field with
+     * `pick`. A refusal keeps the form open with its values.
+     */
+    const form = (
+      title: string,
+      fields: {
+        id: string;
+        label: string;
+        value: string;
+        pick?: string[];
+        /** Tab completes a folder path. */
+        folder?: true;
+      }[],
+      go: string,
+      command: (v: Record<string, string>) => RouteCommand,
+    ) => {
+      const values: Record<string, string> = Object.fromEntries(
+        fields.map((f) => [f.id, f.value]),
+      );
+      const show = (v: string) => v || "–";
+      /** A text box that hands its value to `done`, or nothing on Esc.
+       *  For a folder, Tab completes it, and lists the folders that still
+       *  match below the box. */
+      const field = (
+        value: string,
+        done: (v?: string) => void,
+        folder = false,
+      ): Component => {
+        const input = textBox(value);
+        input.onSubmit = (v) => done(show(v.trim()));
+        input.onEscape = () => done();
+        if (!folder) return input;
+        let options: string[] = [];
+        return {
+          render(w) {
+            const lines = input.render(w);
+            if (!options.length) return lines;
+            const shown = options.slice(0, 12).map((o) => `${o}/`);
+            if (options.length > 12) shown.push("…");
+            return [...lines, ...wrapTextWithAnsi(dim(shown.join("  ")), w)];
+          },
+          handleInput(key) {
+            options = [];
+            if (!matchesKey(key, Key.tab)) return input.handleInput(key);
+            const c = completeFolder(input.getValue(), process.cwd());
+            input.setValue(c.value);
+            input.handleInput("\x05"); // ctrl+e: the line's end
+            options = c.options;
+            tui.requestRender();
+          },
+          invalidate: () => input.invalidate(),
+        };
+      };
+      const items: SettingItem[] = fields.map((f) => ({
+        id: f.id,
+        label: f.label,
+        currentValue: show(f.value),
+        submenu: (_, done) => {
+          const value = values[f.id] ?? "";
+          if (!f.pick) return field(value, done, f.folder);
+          // The last pick can turn the list into a text box: a git ref.
+          let now: Component;
+          const list = new SelectList(
+            words(f.pick),
+            panelRoom(),
+            EDITOR_THEME.selectList,
+          );
+          const at = f.pick.indexOf(value);
+          if (at > 0) list.setSelectedIndex(at);
+          list.onCancel = () => done();
+          list.onSelect = ({ value: v }) => {
+            if (!TYPE_IT.has(v)) return done(v);
+            now = field("", done);
+            tui.requestRender();
+          };
+          now = list;
+          return {
+            render: (w) => now.render(w),
+            handleInput: (k) => now.handleInput?.(k),
+            invalidate: () => now.invalidate(),
+          };
+        },
+      }));
+      items.push({ id: "", label: go, currentValue: "", values: [""] });
+      const list = new SettingsList(
+        items,
+        panelRoom(),
+        SETTINGS_THEME,
+        (id, v) => {
+          if (id) values[id] = v === "–" ? "" : v;
+          else void run(command(values));
+        },
+        hidePanel,
+      );
+      showPanel(title, list);
+    };
+
+    /** The harness row: a pick list of the measured harnesses the daemon
+     *  sent, then `other…` to type a name. A text box when the daemon sent
+     *  none. `–` is no harness: an empty room, or `command` instead. */
+    const harnessField = () => ({
+      id: "agent",
+      label: "harness",
+      value: "",
+      ...(measured && { pick: ["–", ...measured, OTHER_HARNESS] }),
+    });
+
+    /**
+     * `/new` in a folder the daemon has not added: ask, in the pop-up, and
+     * on yes add its repository and open the room in one step. The question
+     * is ours, from the code: the daemon's message is advice for a program.
+     */
+    const askToAdd = (c: Extract<RouteCommand, { verb: "new" }>) => {
+      const back = panel;
+      const items = [
+        { value: "add", label: "add and open" },
+        { value: "back", label: back ? "back to the form" : "cancel" },
+      ];
+      pickList("folder not added", items, undefined, async (v) => {
+        if (v !== "add") {
+          if (back) showPanel(back.title, back.body);
+          else hidePanel();
+          return;
+        }
+        let added: Awaited<ReturnType<typeof call<RepoAdded>>>;
+        try {
+          added = await call<RepoAdded>(d, "/repos", {
+            method: "POST",
+            body: { path: c.body.cwd },
+          });
+        } catch (err) {
+          end(1, `! ${(err as Error).message}`);
+          return;
+        }
+        if (!added.ok) {
+          if (panel) panel.error = added.error.message;
+          tui.requestRender();
+          return;
+        }
+        await run(c);
+      });
+      if (panel)
+        panel.error = `${c.body.cwd} is not added to the daemon. Add it?`;
+      tui.requestRender();
+    };
+
+    const addForm = () => {
+      const r = rooms.get(view.roomId);
+      if (!r) {
+        flash = "! no room: open one first";
+        return setStatus();
+      }
+      const others = roster(r.state).map((p) => `@${p.name}`);
+      form(
+        "add agent",
+        [
+          harnessField(),
+          { id: "cmd", label: "command", value: "" },
+          { id: "name", label: "name", value: "" },
+          {
+            id: "role",
+            label: "role",
+            value: "none",
+            pick: ["none", ...ROLES],
+          },
+          { id: "mode", label: "mode", value: "auto", pick: MODES },
+          {
+            id: "base",
+            label: "base",
+            value: "HEAD",
+            pick: ["HEAD", ...others, OTHER_REF],
+          },
+        ],
+        "add",
+        (v) => ({
+          verb: "add",
+          agent: {
+            agent: v.agent,
+            cmd: v.cmd,
+            name: v.name,
+            role: v.role === "none" ? undefined : v.role,
+            mode: v.mode,
+            base: v.base === "HEAD" ? undefined : v.base,
+          },
+        }),
+      );
+    };
+
+    const newForm = () =>
+      form(
+        "new room",
+        [
+          { id: "cwd", label: "folder", value: process.cwd(), folder: true },
+          { id: "title", label: "title", value: "" },
+          harnessField(),
+          { id: "cmd", label: "command", value: "" },
+          { id: "name", label: "name", value: "" },
+        ],
+        "open",
+        (v) => ({
+          verb: "new",
+          body: {
+            cwd: resolve(expandHome(v.cwd || ".")),
+            title: v.title || undefined,
+            agents:
+              v.agent || v.cmd
+                ? [
+                    {
+                      agent: v.agent,
+                      cmd: v.cmd,
+                      name: v.name,
+                      role: "orchestrator",
+                    },
+                  ]
+                : [],
+          },
+        }),
+      );
 
     // pi-tui draws off our call stack, so a bug in it is an uncaught throw
     // that would end the process on the alternate screen. Leave the screen
@@ -933,7 +1480,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     for (const { text } of p.notices) console.log(`! ${text}`);
   }
   console.log(
-    "type a message; @name picks the agent; /leave to exit, /dismiss to stop the room",
+    "type a message; @name picks the agent; /help lists the commands; /leave to exit",
   );
 
   const state = newRoomState();
@@ -1000,17 +1547,37 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     if (next === null) break;
     const text = next.trim();
     if (!text) continue;
-    const command = commandOf(text, rosterOf(state, room.participants));
-    if (command === "/leave") break;
-
-    if (command === "/dismiss") {
-      const r = await call<RoomDto>(d, `/rooms/${room.id}/dismiss`, {
-        method: "POST",
-      });
+    const c = parseCommand(text, rosterOf(state, room.participants));
+    if (c && "error" in c) {
+      console.error(`! ${c.error}`);
+      continue;
+    }
+    if (c?.verb === "leave") break;
+    if (c?.verb === "help") {
+      for (const l of HELP) console.log(l);
+      continue;
+    }
+    if (c?.verb === "form") {
+      console.error(`! a form needs a terminal: ${COMMAND_USAGE[c.form]}`);
+      continue;
+    }
+    if (c) {
+      const r = await runCommand(d, room.id, c);
       if (!r.ok) {
-        console.error(`! ${r.error.message}`);
-        code = 1;
-        break;
+        console.error(`! ${r.message}`);
+        // A pipe cannot ask, as the screen does: say how to add it.
+        if (r.code === "repo_not_added" && c.verb === "new") {
+          console.error(`add it first: kapelle daemon add ${c.body.cwd}`);
+        }
+        if (c.verb === "dismiss") {
+          code = 1;
+          break;
+        }
+        continue;
+      }
+      if (c.verb !== "dismiss") {
+        console.log(r.line);
+        continue;
       }
       await ended;
       console.log("the room was dismissed");
@@ -1069,10 +1636,7 @@ async function chat(d: DaemonAddress, room?: RoomDto): Promise<number> {
   const list = r.body.filter(
     (x) => x.status !== "dismissed" || x.id === room?.id,
   );
-  if (list.length === 0) {
-    console.error("no rooms: start one with kapelle chat new --agent pi");
-    return 1;
-  }
+  // With no room, the screen still opens: ctrl+o or /new opens one (M4-5).
   return chatTui(d, list, room?.id);
 }
 
