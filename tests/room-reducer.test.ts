@@ -402,4 +402,7 @@ test("a question's title and input lose their control characters", () => {
     printable("rm\u202e -rf\u2066x\u2069\u200b\ufeff\u2028\u061cy"),
     "rm  -rf x     y",
   );
+  // The soft hyphen and the Tags block draw as nothing: a common way to
+  // hide text in a string.
+  assert.equal(printable("a\u00adb\u{e0041}\u{e0001}c"), "a b  c");
 });
