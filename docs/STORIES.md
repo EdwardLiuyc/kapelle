@@ -2125,7 +2125,9 @@ Decisions: R8, R19, R43, S11, R38. (S11 settled as (a) plus the additive `_clien
 **Decided at pickup 2026-09-30 (#48):** the sidebar lists every active room the daemon
 holds, from all repositories; a filter for one repository comes later. A click,
 `alt+↑↓` or `ctrl+p/n` picks a row, so `↑ ↓ Enter` stay with the composer and Tab stays
-free for M4-4's completion. A row's circle is `●` when something waits (unseen lines, a
+free for M4-4's completion. Two keys do one job: `alt+↑↓` is the easy one, and `ctrl+p/n`
+works where a terminal sends no alt+arrow (macOS Terminal without "Option as Meta", some
+tmux setups). A row's circle is `●` when something waits (unseen lines, a
 question or a stall) and `○` when nothing does; the name is magenta for a question and
 yellow for a stall. `«`/`»` and `ctrl+t` hide the sidebar, and it starts hidden below 70
 columns. **`kapelle chat` moves here from M6-9**, with S7a's name.
@@ -2174,7 +2176,9 @@ there from the sidebar the same day); in a thread it lists that agent's commands
 A typed command
 names its agent with a leading `@name`, as a message does, and is refused without one;
 `/new` or `/add` alone opens its form in the same box. A refusal stays in the form; a success is one
-status line. With no room, the screen stays open.
+status line. With no room, the screen stays open; it exits when the daemon is gone, until
+M6-7a lets it follow a restart. While a pop-up is open, the row keys do nothing: Esc first.
+The menu has a `help` row.
 **Built 2026-09-30 (#181).** `client/command.ts` parses the typed commands and calls
 the routes; both screens and the pop-up forms go through it. `--base @name` sends that
 participant's `branch`. The piped screen takes the same commands and has no forms.
@@ -2554,6 +2558,9 @@ room's checkouts, branches, record and log and refuses a dirty one with `409`.
 **Added 2026-09-29 (#180):** after a restart, the room reducer (`client/room.ts`) shows the
 `paused` or `killed` state that `GET /rooms/:id` reports, and a turn the crash cut reads
 as cut, tested from a recorded stream. M6-10 moved this case here.
+**Added 2026-10-01 (#200 review):** the chat screen rides out a restart as `attach` does:
+it reads `daemon.json` again, reconnects its streams, and checks the version again. This
+replaces M4-5's exit with no room open (`chat.ts`, the 5 s poll).
 Decisions: R17, R18, R33, R42, R46, S3, S4.
 
 **M6-7b · `session/load` for a paused participant · M · needs M6-7a, M0-9**

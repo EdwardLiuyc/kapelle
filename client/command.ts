@@ -18,6 +18,9 @@
  *
  * Only a known verb is a command. `/usr/bin is slow` is a message, as it was
  * before M4-5.
+ *
+ * Quotes go around a value, not the whole option: `--cmd "node x.mjs"`.
+ * `--cmd="node x.mjs"` splits at the space.
  */
 
 import { resolve } from "node:path";
@@ -157,16 +160,18 @@ export function parseCommand(
     const [agent, ...extra] = o.positionals;
     if (extra.length) return { error: `one harness only; ${USAGE[verb]}` };
     const { cmd, name, title, cwd, role, mode, base } = o.values;
-    // `none` is no role, as in `@name /role none` and the form.
-    const spec: AgentSpec = {
-      agent,
-      cmd,
-      name,
-      role: role === "none" ? undefined : role,
-      mode,
-      base,
-    };
-    if (verb === "add") return { verb, agent: spec };
+    if (verb === "add") {
+      // `none` is no role, as in `@name /role none` and the form.
+      const spec: AgentSpec = {
+        agent,
+        cmd,
+        name,
+        role: role === "none" ? undefined : role,
+        mode,
+        base,
+      };
+      return { verb, agent: spec };
+    }
     if (!agent && !cmd && name) {
       return { error: `--name needs a harness or --cmd; ${USAGE.new}` };
     }

@@ -5564,7 +5564,10 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   // command, then open: the folder is not added, so the form asks.
   // Only the rows that change are drawn again, so wait for the value.
   await press(`${DOWN}\r${REMEMBER}\r`, "mock-agent.mjs");
-  await press(`${DOWN}${DOWN}\r`, "is not added to the daemon. Add it?");
+  await press(
+    `${DOWN}${DOWN}\r`,
+    "is not added to the daemon. Add its repository?",
+  );
   await press("\r", "opened room");
   const repos = await api<string[]>(d, "GET", "/repos");
   assert.deepEqual(repos.body, [await realpath(repo)]);
@@ -5659,5 +5662,58 @@ test("the room view's menu picks an agent, and a rename reaches its route", {
     ["bob"],
   );
   await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("the row keys do nothing while a pop-up is open, so a form keeps what was typed", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  await press("/add\r", "add agent");
+  // The command row's text box: type, press both row-key sets, type on.
+  await press(`${DOWN}\r`, "> ");
+  await press("abc", "abc");
+  // Nothing changes, so nothing is drawn: wait, then prove the box is there.
+  child.stdin.write("\x0e\x10\x1b[1;3B\x1b[1;3A");
+  await new Promise((ok) => setTimeout(ok, 300));
+  await press("d\r", "abcd");
+  await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("with no room open, the screen exits when the daemon is gone, and says how to start again", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  process.kill(d.pid, "SIGKILL");
+  // The room list is read every 5 s; the first one that fails ends it.
+  await screen.seen("the daemon stopped");
+  assert.equal(await screen.exited, 1, screen.out());
+  assert.match(plainText(screen.out()), /kapelle daemon start/);
+});
+
+test("the menu's help row shows the commands", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  // With no room, the menu is: new room …, help, leave.
+  await press("\x0f", "new room …");
+  await press(`${DOWN}\r`, "@name /mode <ask|safe|auto>");
+  await press("\x03", "left the chat");
   assert.equal(await exited, 0, out());
 });

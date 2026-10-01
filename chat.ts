@@ -127,6 +127,7 @@ start it with @name to send it to that agent instead.
   /leave     exit; the rooms and their harnesses stay alive
   /dismiss   stop the room's harnesses; uncommitted work stays in each
              checkout, because the supervisor never commits for it (R37)
+  /help      the commands below, on the screen
   ${HELP.slice(0, 7).join("\n  ")}
 a command never reaches an agent. Room commands work after a thread's
 @name too; an agent's command needs its @name.
@@ -906,11 +907,10 @@ function chatTui(
       );
     };
 
-    // Rooms made in another terminal join here. A failed poll changes
-    // nothing: a stream that ends says what happened.
-    /** The measured harnesses, from `GET /harnesses`. Unset until it
-     *  answers, or when this daemon has no such route: then the harness
-     *  row is a text box. */
+    /** The measured harnesses, from `GET /harnesses`, asked once at the
+     *  start and not awaited. Unset until it answers, and for good when this
+     *  daemon has no such route or the ask failed: then the harness row is
+     *  a text box. */
     let measured: string[] | undefined;
     call<HarnessEntry[]>(d, "/harnesses").then(
       (res) => {
@@ -922,10 +922,24 @@ function chatTui(
       () => {},
     );
 
+    // Rooms made in another terminal join here. While a room is open, a
+    // failed poll changes nothing: a stream that ends says what happened.
+    // With none open, no stream would: a daemon that is gone, or one that
+    // came back with a new token (`401`), ends the screen (M4-5).
+    // ponytail: exits rather than follows a restarted daemon; M6-7a makes
+    // the screen ride out a restart, as `attach` does.
+    const gone = () =>
+      end(
+        1,
+        "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat",
+      );
     const poll = setInterval(() => {
       call<RoomListEntry[]>(d, "/rooms").then(
         (res) => {
-          if (!res.ok) return;
+          if (!res.ok) {
+            if (res.status === 401 && rooms.size === 0) gone();
+            return;
+          }
           for (const entry of res.body) {
             const r = rooms.get(entry.id);
             if (r) r.entry = entry;
@@ -933,7 +947,9 @@ function chatTui(
           }
           tui.requestRender();
         },
-        () => {},
+        () => {
+          if (rooms.size === 0) gone();
+        },
       );
     }, 5000);
 
@@ -951,6 +967,10 @@ function chatTui(
         toggle();
         return { consume: true };
       }
+      // A pop-up keeps every key: switching rows would close it and drop
+      // what was typed. Esc first. Both sets are one job: `alt+↑↓` is the
+      // easy one, `ctrl+p/n` works where a terminal sends no alt+arrow.
+      if (panel) return undefined;
       const down =
         matchesKey(data, Key.alt("down")) || matchesKey(data, Key.ctrl("n"));
       const up =
@@ -1042,8 +1062,12 @@ function chatTui(
     let busy = false;
     const run = async (c: RouteCommand): Promise<boolean> => {
       if (busy) {
-        if (!panel) {
-          flash = "! wait: the last command is still running";
+        const wait = "wait: the last command is still running";
+        if (panel) {
+          panel.error = wait;
+          tui.requestRender();
+        } else {
+          flash = `! ${wait}`;
           setStatus();
         }
         return false;
@@ -1188,6 +1212,7 @@ function chatTui(
       if (r) items.push({ value: "add", label: "add agent …" });
       items.push({ value: "new", label: "new room …" });
       if (r) items.push({ value: "dismiss", label: "dismiss room" });
+      items.push({ value: "help", label: "help" });
       items.push({ value: "leave", label: "leave" });
       let title = "menu";
       if (p) title = `${p.name} · ${p.harness}${p.role ? ` · ${p.role}` : ""}`;
@@ -1201,6 +1226,7 @@ function chatTui(
     ) => {
       const r = rooms.get(view.roomId);
       if (value === "leave") return end(0, left());
+      if (value === "help") return showHelp();
       if (value === "new") return newForm();
       if (value === "add") return addForm();
       if (value === "dismiss") return void run({ verb: "dismiss" });
@@ -1344,8 +1370,9 @@ function chatTui(
     };
 
     /** The harness row: a pick list of the measured harnesses the daemon
-     *  sent, then `other…` to type a name. A text box when the daemon sent
-     *  none. `–` is no harness: an empty room, or `command` instead. */
+     *  sent, then `other…` to type a name. A text box while `measured` is
+     *  unset: the daemon has no `GET /harnesses`, or it has not answered.
+     *  `–` is no harness: an empty room, or `command` instead. */
     const harnessField = () => ({
       id: "agent",
       label: "harness",
@@ -1388,7 +1415,8 @@ function chatTui(
         await run(c);
       });
       if (panel)
-        panel.error = `${c.body.cwd} is not added to the daemon. Add it?`;
+        // The daemon adds the whole repository the folder is in.
+        panel.error = `${c.body.cwd} is not added to the daemon. Add its repository?`;
       tui.requestRender();
     };
 
@@ -1488,7 +1516,9 @@ function chatTui(
 }
 
 /** The chat loop for one room on a pipe: what a script or a test reads.
- *  Resolves with the exit code. */
+ *  Resolves with the exit code. A refused message or command prints to
+ *  stderr and the loop goes on, so the exit stays 0. A refused `/dismiss`
+ *  is the one that ends it, with 1: the person asked for the end. */
 async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
   if (room.participants.length === 0)
     console.log(`room ${room.id} · no agents`);
