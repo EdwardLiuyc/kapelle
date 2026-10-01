@@ -15,6 +15,12 @@ test("~ and ~/… are the home folder; nothing else changes", () => {
   for (const p of ["~bob", "/a/~/b", "src"]) assert.equal(expandHome(p), p);
 });
 
+test("a bare ~ completes like ~/", () => {
+  // The same folder, so the same value and the same names under it.
+  assert.deepEqual(completeFolder("~", "/"), completeFolder("~/", "/"));
+  assert.ok(completeFolder("~", "/").value.startsWith("~/"), "not ~/");
+});
+
 test("Tab completes folders only, as far as they agree", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "folder-"));
   t.after(() => rm(root, { recursive: true, force: true }));

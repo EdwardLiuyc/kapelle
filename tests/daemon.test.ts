@@ -5557,6 +5557,8 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   await press(`\x15${repo}\r`, "Enter/Space");
   // harness: a pick list of the measured ones. Esc keeps the row as it was.
   await press(`${DOWN}${DOWN}\r`, "claude");
+  // Only the measured ids are offered: gemini and omp have no lab report.
+  assert.doesNotMatch(plainText(out()), /\bgemini\b|\bomp\b/);
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
   // command, then open: the folder is not added, so the form asks.
@@ -5586,4 +5588,76 @@ test("piped chat.ts says how to add a folder that /new is refused for", async (t
     r.stderr.includes(`add it first: kapelle daemon add ${other}`),
     r.stderr,
   );
+});
+
+test("piped chat.ts takes the room commands, and names the room /new opened", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  // Both participants are in the room the pipe reads at the start, so each
+  // `@name` resolves without waiting for the stream to replay.
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "alice", role: "orchestrator" },
+      { cmd: REMEMBER, name: "bob" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end(
+    `/add --cmd "${REMEMBER}" --name carol\n` +
+      "@bob /role tester\n" +
+      "@bob /mode safe\n" +
+      "@bob /remove\n" +
+      `/new --cmd "${REMEMBER}" --title second --cwd ${cwd}\n` +
+      "/dismiss\n",
+  );
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  for (const line of [
+    "added carol (mock-agent, auto)",
+    "bob is now tester",
+    "bob is now in safe mode",
+    "removed bob",
+    "opened room second",
+    "the room was dismissed",
+  ]) {
+    assert.ok(
+      `${r.stdout}${r.stderr}`.includes(line),
+      `${line} not in:\n${r.stdout}\n${r.stderr}`,
+    );
+  }
+  // The pipe stays in the room it read; the new room is reached by attach.
+  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  const second = rooms.body.find((room) => room.title === "second");
+  assert.ok(second, JSON.stringify(rooms.body));
+  assert.ok(
+    r.stdout.includes(`attach with: kapelle chat attach ${second.id}`),
+    r.stdout,
+  );
+});
+
+test("the room view's menu picks an agent, and a rename reaches its route", {
+  skip: noPty,
+}, async (t) => {
+  const { press, seen, exited, out, d } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  // The room's menu lists the agents first; the agent's menu then holds its
+  // own commands. Rename is the fourth: cancel, mode, role, rename.
+  await press("\x0f", "agent …");
+  await press("\r", "pick an agent");
+  await press("\r", "mock-agent · mock-agent");
+  await press(`${DOWN.repeat(3)}\r`, "rename mock-agent");
+  await press("\x15bob\r", "renamed mock-agent to bob");
+  await seen("○ bob");
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  assert.deepEqual(
+    room?.participants.map((p) => p.name),
+    ["bob"],
+  );
+  await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
 });

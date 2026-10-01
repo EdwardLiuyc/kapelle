@@ -915,10 +915,9 @@ function chatTui(
     call<HarnessEntry[]>(d, "/harnesses").then(
       (res) => {
         if (!res.ok) return;
-        measured = res.body
-          .filter((h) => h.measured)
-          .map((h) => h.id)
-          .sort();
+        const ids: string[] = [];
+        for (const h of res.body) if (h.measured) ids.push(h.id);
+        measured = ids.sort((a, b) => a.localeCompare(b));
       },
       () => {},
     );
@@ -1190,11 +1189,9 @@ function chatTui(
       items.push({ value: "new", label: "new room …" });
       if (r) items.push({ value: "dismiss", label: "dismiss room" });
       items.push({ value: "leave", label: "leave" });
-      const title = p
-        ? `${p.name} · ${p.harness}${p.role ? ` · ${p.role}` : ""}`
-        : r
-          ? (r.entry.title ?? r.entry.id)
-          : "menu";
+      let title = "menu";
+      if (p) title = `${p.name} · ${p.harness}${p.role ? ` · ${p.role}` : ""}`;
+      else if (r) title = r.entry.title ?? r.entry.id;
       pickList(title, items, undefined, (value) => choose(value, p));
     };
 
@@ -1266,18 +1263,20 @@ function chatTui(
         fields.map((f) => [f.id, f.value]),
       );
       const show = (v: string) => v || "–";
-      /** A text box that hands its value to `done`, or nothing on Esc.
-       *  For a folder, Tab completes it, and lists the folders that still
-       *  match below the box. */
-      const field = (
-        value: string,
-        done: (v?: string) => void,
-        folder = false,
-      ): Component => {
+      /** A text box that hands its value to `done`, or nothing on Esc. */
+      const field = (value: string, done: (v?: string) => void): Input => {
         const input = textBox(value);
         input.onSubmit = (v) => done(show(v.trim()));
         input.onEscape = () => done();
-        if (!folder) return input;
+        return input;
+      };
+      /** A folder field: Tab completes the path, and the folders that still
+       *  match are listed below the box. */
+      const folderField = (
+        value: string,
+        done: (v?: string) => void,
+      ): Component => {
+        const input = field(value, done);
         let options: string[] = [];
         return {
           render(w) {
@@ -1305,7 +1304,8 @@ function chatTui(
         currentValue: show(f.value),
         submenu: (_, done) => {
           const value = values[f.id] ?? "";
-          if (!f.pick) return field(value, done, f.folder);
+          if (!f.pick)
+            return f.folder ? folderField(value, done) : field(value, done);
           // The last pick can turn the list into a text box: a git ref.
           let now: Component;
           const list = new SelectList(
@@ -1594,6 +1594,11 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       }
       if (c.verb !== "dismiss") {
         console.log(r.line);
+        // A pipe stays in the room it started in, so name the new room:
+        // its id is not on the line when it has a title.
+        if (c.verb === "new" && r.room) {
+          console.log(`attach with: kapelle chat attach ${r.room.id}`);
+        }
         continue;
       }
       await ended;

@@ -7,13 +7,24 @@
  * listens on loopback only, so the screen and the daemon share it.
  */
 
-import { readdirSync, statSync } from "node:fs";
+import { type Dirent, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** `~` and `~/…` as the home folder: no shell expands them in a form. */
 export const expandHome = (path: string) =>
   path === "~" || path.startsWith("~/") ? homedir() + path.slice(1) : path;
+
+/** Whether a folder entry is one, following a link; a broken link is not. */
+function isFolder(e: Dirent, where: string): boolean {
+  if (e.isDirectory()) return true;
+  if (!e.isSymbolicLink()) return false;
+  try {
+    return statSync(join(where, e.name)).isDirectory();
+  } catch {
+    return false; // a broken link
+  }
+}
 
 /** The typed path, completed as far as it can be, and the folder names that
  *  still match when there is more than one. Hidden folders are listed only
@@ -22,27 +33,23 @@ export function completeFolder(
   typed: string,
   cwd: string,
 ): { value: string; options: string[] } {
-  const cut = typed.lastIndexOf("/") + 1;
-  const dir = typed.slice(0, cut);
-  const prefix = typed.slice(cut);
+  // A bare `~` is the home folder itself, not a name under some parent:
+  // complete it to `~/`, or Tab would leave it and the next name would
+  // join the `~`.
+  const path = typed === "~" ? "~/" : typed;
+  const cut = path.lastIndexOf("/") + 1;
+  const dir = path.slice(0, cut);
+  const prefix = path.slice(cut);
   const real = expandHome(dir);
   const where = real.startsWith("/") ? real : join(cwd, real);
-  let names: string[];
+  const names: string[] = [];
   try {
-    names = readdirSync(where, { withFileTypes: true })
-      .filter((e) => e.name.startsWith(prefix))
-      .filter((e) => prefix.startsWith(".") || !e.name.startsWith("."))
-      .filter((e) => {
-        if (e.isDirectory()) return true;
-        if (!e.isSymbolicLink()) return false;
-        try {
-          return statSync(join(where, e.name)).isDirectory();
-        } catch {
-          return false; // a broken link
-        }
-      })
-      .map((e) => e.name)
-      .sort();
+    for (const e of readdirSync(where, { withFileTypes: true })) {
+      if (!e.name.startsWith(prefix)) continue;
+      if (e.name.startsWith(".") && !prefix.startsWith(".")) continue;
+      if (isFolder(e, where)) names.push(e.name);
+    }
+    names.sort((a, b) => a.localeCompare(b));
   } catch {
     return { value: typed, options: [] }; // no such folder, or no access
   }
