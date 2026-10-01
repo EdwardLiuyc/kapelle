@@ -2207,7 +2207,9 @@ asks to add the folder, then opens the room. The piped screen prints
 **Added 2026-10-01 (#201):** while a pop-up is open the status line swaps its key hint
 for `esc back · ctrl+o close`; the composer's hint returns when the box closes.
 
-**M4-6 · Diff view in the TUI · M · needs M4-3**
+**M4-6 · Diff view in the TUI · M · needs M4-3, M4-12**
+**Amended 2026-10-02:** it also needs M4-12, so its diff holds only the new view and no
+code that moved.
 **Added 2026-10-01 (#49 pickup).** A question about an edit shows its diff in a view of
 its own, never in the answer box. The box gets one line, `± <path> +a −d`, and a
 `view diff` row. The view replaces the transcript, keeps the sidebar, scrolls, and
@@ -2224,6 +2226,115 @@ a `file_text` ask gets a built diff, a path outside the checkout gets none, and 
 draws a diff text a caller passes in.
 Decisions: R12, R45, R47. **Open at pickup:** the cap, and how a new or deleted file
 shows.
+
+**M4-7..M4-12: take the logic out of the screen.** **Added 2026-10-02.** `chat.ts` is
+2000 lines, and `chatTui` is one function of about 1280 of them. It draws and reads keys,
+and it also decides things: which question opens next, what the composer pre-fills,
+which rooms it follows and when the screen ends. That logic has no unit test; only the
+pty tests reach it, and the bugs fixed in #205 were all there. The piped screen also
+repeats the TUI's send flow. These six stories move the logic out, one piece at a time,
+before M4-6 adds a view. The shape at the end:
+
+```text
+client/   any front end: no pi-tui, no stdout, unit tests (S8 already holds this)
+  daemon.ts  stream.ts  contract.ts          talk to the daemon
+  room.ts  roomset.ts (M4-11)                room data
+  mention.ts  command.ts  folder.ts          rules
+  submit.ts (M4-8)  questions.ts (M4-9)
+chat/     this command's screens: draw and read keys
+  view.ts (M4-10)                            screen-only rules, pure, unit tests
+  tui.ts  tui/*.ts (M4-12)  piped.ts  common.ts
+chat.ts   the entry: arguments, the daemon, which screen
+```
+
+**Decided 2026-10-02:** rules any front end needs go in `client/`, where a bridge to
+another chat app can use them. Rules only this screen has (rows, the `@name` pre-fill,
+seen marks) go in `chat/`, still pure and still unit-tested. The folder is named after
+the command, as `daemon.ts` and `daemon/` are. Each story moves code and changes no
+behaviour: every existing test passes unchanged, except the import-boundary test, which
+M4-7 and M4-12 widen to the new folders. A bug found during a move is reported, not
+fixed in the same story. Each story that adds a file also adds its row to the table in
+`AGENTS.md`. In order: M4-7, M4-8, M4-9, M4-10, M4-11, M4-12, then M4-6.
+
+**M4-7 · One file per screen · S · needs M4-3**
+Move code only. `chat.ts` keeps the entry: the usage, the arguments, the `new`,
+`attach`, `list` and `dismiss` verbs, and the choice of screen. `chatPiped` and
+`makePrinter` go to `chat/piped.ts`. `chatTui`, with its types and themes, goes to
+`chat/tui.ts`. What both use (`address`, `readRoom`, `reconcile`, the colours, `unpad`,
+`rosterOf`) goes to `chat/common.ts`. The comment at the top of `chat.ts` is split, so
+each file keeps the part about itself.
+*Done when* `git diff -M` shows the code moved and not changed, every other test passes
+unchanged, and the import-boundary test in `tests/daemon.test.ts` holds every file in
+`chat/` to the same rule as `chat.ts`. The test reads the files directly in `chat/`,
+not `chat/tests/`: a test may import anything. In `AGENTS.md`, the `chat.ts` row says
+it is the entry only, and `chat/` gets a row.
+Decisions: S8, M1c-7.
+
+**M4-8 · One send flow for both screens · S · needs M4-7**
+Both screens read a typed line the same way: `parseCommand`, then a refusal, `/leave`,
+`/help`, a form or a command; else `resolveTarget` and a message. Today each screen has
+its own copy. `client/submit.ts` decides, from the text and the roster, which of those
+the line is, and does no I/O. Each screen then does its own part: the TUI opens a form
+or asks to add a folder, and the piped screen prints the command to run or waits for the
+turn to end. A refusal that names a key, such as `ctrl+o`, keeps its words in the
+screen. **Decided 2026-10-02:** the TUI's "no room" and "no agents" checks stay in the
+TUI, before it calls `client/submit.ts`. Both name `ctrl+o`, and the piped screen has
+neither today, so moving them would change what a piped user sees.
+*Done when* neither screen calls `parseCommand` or `resolveTarget` itself, and
+`client/tests/submit.test.ts` covers each outcome.
+Decisions: R43, S8.
+
+**M4-9 · Question queue out of the screen · S · needs M4-7**
+`chatTui` keeps the queue of open questions itself: `waiting`, `aside`, `asking`,
+`questions()`, `syncBox` and `offer`. `client/questions.ts` takes the rules M4-3 decided:
+one queue over every room, oldest first; a question put aside (Esc, `ctrl+o`, or
+answered here before the close came back) never opens by itself again; a question
+closed elsewhere leaves the queue; nothing opens while something is in the way; and the
+box's place, `n of m`. The screen says whether something is in the way (a pop-up, or
+typed text), and keeps the timer that opens the next box.
+*Done when* `chat/tui.ts` holds none of that state, and `client/tests/questions.test.ts`
+covers each rule above.
+Decisions: R12, S8.
+
+**M4-10 · View and pre-fill out of the screen · S · needs M4-9**
+`chatTui` decides what the person looks at: `view`, `prefill`, `rows()`, `open`,
+`markSeen`, the row keys, and the branches of `onLine` that follow a rename or a removed
+participant. `chat/view.ts` takes those rules, pure: from the rooms, the view and the
+composer's text, it gives the next view, the pre-fill and what is seen. The screen sets
+the text and draws. It needs M4-9 because both change `onLine`.
+*Done when* `chat/tests/view.test.ts` covers: the row order and the row keys; an
+untouched pre-fill follows the view, and typed text stays; a rename moves an untouched
+pre-fill; a thread whose participant left goes back to the timeline; a dismissed room
+goes to the first row; the timeline marks its whole room seen, and a thread marks its
+participant.
+Decisions: R43.
+
+**M4-11 · The room set out of the screen · M · needs M4-10**
+`chatTui` follows the rooms itself: the `rooms` map, `follow`, `loadDto`, `closed`, the
+5 s poll of `GET /rooms` and `gone`. `client/roomset.ts` takes them: one stream and one
+reducer per room; a room made elsewhere joins on the next poll; a dismissed room
+leaves; and when the screen must end (every room lost its stream, or no room is left
+and the daemon is gone or answers `401`). `readRoom` and `reconcile` move with them,
+and the piped screen uses them from there. `reconcile` returns what happened, not a
+line: its lines name `kapelle chat attach`, so each screen writes the words, as M4-8's
+refusals do. `client/` may not import `core/runtime.ts`
+(S8), so the module takes a function that reads the daemon's address. The poll period
+is a parameter, so a test does not wait 5 s. Riding out a daemon restart stays M6-7a's,
+and will land in this module.
+*Done when* `chat/tui.ts` has no poll, no map of rooms and no `reconcile` call, and
+`client/tests/roomset.test.ts` covers each rule above against a fake daemon. The name
+is not `rooms.ts`, so it does not read as `client/room.ts`.
+Decisions: S8, M4-2's and M4-5's rules for when the screen ends.
+
+**M4-12 · TUI parts in their own files · S · needs M4-11**
+Move code only. The pop-up frame, the pick list, the text box and the forms go to
+`chat/tui/panel.ts`; the question box and its answer call to `chat/tui/question.ts`;
+the sidebar, the strip and the marks to `chat/tui/sidebar.ts`; drawing the transcript
+to `chat/tui/transcript.ts`. After M4-9..M4-11 most of the state they share lives in
+`client/` and `chat/view.ts`, so each file takes little from `chat/tui.ts`.
+*Done when* `chat/tui.ts` only builds the screen and routes keys, every other test
+passes unchanged, and the import-boundary test also reads the files in `chat/tui/`.
+Decisions: M1c-7.
 
 ---
 
@@ -2705,7 +2816,7 @@ M0 ─ M1a ─ M1b ─ M1c ─ M2
 
 ```text
 M5-10a ─ M6-2 ─ M6-6a ─ M6-3 ─ M6-4 ─┬─ M6-10 ─ M4-2 ─ M4-5 ─ M6-11a
-                                      ├─ M6-5 ─ M4-3 ─ M4-6
+                                      ├─ M6-5 ─ M4-3 ─ M4-7..M4-12 ─ M4-6
                                       ├─ M6-7a ─ M6-7b
                                       └─ M6-8 (deferred by R2)
 M6-6a ─ M6-6b ─ M6-11b
