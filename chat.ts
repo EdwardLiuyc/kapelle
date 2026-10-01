@@ -503,6 +503,11 @@ function chatTui(
     }
     return out;
   };
+  /** A question box's title: where it stands among the open ones. */
+  const askTitle = (id: string) => {
+    const all = questions();
+    return `question ${all.findIndex(({ q }) => q.id === id) + 1} of ${all.length}`;
+  };
   /** How many rows a list in the pop-up may show. */
   const panelRoom = () =>
     Math.max(3, Math.min(12, (process.stdout.rows || 24) - 12));
@@ -880,6 +885,8 @@ function chatTui(
       hidePanel();
       flash = `${nameOf(r.state, e.participantId)}'s question closed: ${e.allow ? "allowed" : "denied"} (${e.reason})`;
     }
+    // A question came or closed behind the box: keep its count true.
+    if (asking && panel) panel.title = askTitle(asking);
     // A participant who joined after the room was read has no checkout or
     // notices in the header until the room is read again.
     if (
@@ -1279,10 +1286,12 @@ function chatTui(
      * aside, open.
      */
     const question = (id: string) => {
-      const all = questions();
-      const at = all.findIndex(({ q }) => q.id === id);
-      const found = all[at];
-      if (!found) return;
+      const found = questions().find(({ q }) => q.id === id);
+      // Picked from a menu drawn before it closed elsewhere.
+      if (!found) {
+        flash = "! that question already closed";
+        return hidePanel();
+      }
       const { r, q } = found;
       const list = new SelectList(
         words(["deny", "allow"]),
@@ -1301,7 +1310,7 @@ function chatTui(
           .map(([k, v]) => dim(`${k}: ${v}`)),
         "",
       ];
-      showPanel(`question ${at + 1} of ${all.length}`, {
+      showPanel(askTitle(id), {
         render: (w) => [
           ...info,
           ...list.render(w),

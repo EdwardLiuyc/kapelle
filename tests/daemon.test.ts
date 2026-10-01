@@ -24,7 +24,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { createServer, request } from "node:http";
+import { createServer, request, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { userInfo } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -4892,7 +4892,7 @@ test("chat.ts on a real terminal opens over a thread's @name pre-fill, and Esc p
   assert.equal(await screen.exited, 0, screen.out());
 });
 
-test("chat.ts on a real terminal says why a lost answer lost", {
+test("chat.ts on a real terminal says why a lost answer lost, keeps the box's count true, and refuses a closed question from the menu", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -4917,6 +4917,10 @@ test("chat.ts on a real terminal says why a lost answer lost", {
     ],
   };
   let answered = false;
+  // The room's event stream, so the test can send more lines.
+  let stream: ServerResponse | undefined;
+  const event = (seq: number, update: object) =>
+    `id: ${seq}\ndata: ${JSON.stringify({ seq, roomId, participantId: "p1", update })}\n\n`;
   const fake = createServer((req, res) => {
     const path = req.url ?? "";
     if (path === "/version") {
@@ -4944,32 +4948,24 @@ test("chat.ts on a real terminal says why a lost answer lost", {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
       });
+      stream = res;
       res.write(
-        `id: 1\ndata: ${JSON.stringify({
-          seq: 1,
-          roomId,
-          participantId: "p1",
-          update: {
-            sessionUpdate: "_client_participant_added",
-            name: "asker",
-            harness: "mock-agent",
-            mode: "ask",
-          },
-        })}\n\n`,
+        event(1, {
+          sessionUpdate: "_client_participant_added",
+          name: "asker",
+          harness: "mock-agent",
+          role: "orchestrator",
+          mode: "ask",
+        }),
       );
       res.write(
-        `id: 2\ndata: ${JSON.stringify({
-          seq: 2,
-          roomId,
-          participantId: "p1",
-          update: {
-            sessionUpdate: "_client_permission_queued",
-            id: "q1",
-            kind: "edit",
-            title: "Write ACP_TEST.md",
-            input: { path: "ACP_TEST.md" },
-          },
-        })}\n\n`,
+        event(2, {
+          sessionUpdate: "_client_permission_queued",
+          id: "q1",
+          kind: "edit",
+          title: "Write ACP_TEST.md",
+          input: { path: "ACP_TEST.md" },
+        }),
       );
       return;
     }
@@ -5022,8 +5018,44 @@ test("chat.ts on a real terminal says why a lost answer lost", {
     { XDG_RUNTIME_DIR: runtime },
   );
   await screen.seen("edit · Write ACP_TEST.md");
+  // A second question while the box is open: its count follows.
+  stream?.write(
+    event(3, {
+      sessionUpdate: "_client_permission_queued",
+      id: "q2",
+      kind: "delete",
+      title: "Delete something",
+    }),
+  );
+  await screen.seen("question 1 of 2");
   await screen.press("\r", "already closed: timeout");
   assert.ok(answered, "the TUI posted the answer");
+  // q1 never closed on this stream, so q2 opens as the second of two. Its
+  // close comes now: q2 is the only one left.
+  await screen.seen("question 2 of 2");
+  stream?.write(
+    event(4, {
+      sessionUpdate: "_client_permission_answered",
+      id: "q1",
+      allow: false,
+      reason: "timeout",
+    }),
+  );
+  await screen.press("", "question 1 of 1");
+  // Put q2 aside, list it, then it closes while the menu is open: picking
+  // it says so and closes the menu.
+  await screen.press("\x1b", "? 1 question · ctrl+o");
+  await screen.press("\x0f", "? asker asks: Delete something");
+  stream?.write(
+    event(5, {
+      sessionUpdate: "_client_permission_answered",
+      id: "q2",
+      allow: false,
+      reason: "cancel",
+    }),
+  );
+  await screen.seen("denied (cancel)");
+  await screen.press("\r", "that question already closed");
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

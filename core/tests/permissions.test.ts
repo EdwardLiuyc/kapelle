@@ -220,6 +220,11 @@ test("a question carries the tool's input as text, cut to stay under 4 KB", () =
     n: "2",
     list: '["x"]',
   });
+  // A harness's `__proto__` key stays a plain field, not the prototype.
+  assert.deepEqual(
+    capInput(JSON.parse('{"__proto__":"x"}')),
+    JSON.parse('{"__proto__":"x"}'),
+  );
   const big = capInput({ file_text: "x".repeat(10_000) });
   assert.equal(big?.file_text?.length, 400);
   assert.ok(big?.file_text?.endsWith("…"));
