@@ -2208,8 +2208,6 @@ asks to add the folder, then opens the room. The piped screen prints
 for `esc back · ctrl+o close`; the composer's hint returns when the box closes.
 
 **M4-6 · Diff view in the TUI · M · needs M4-3, M4-12**
-**Amended 2026-10-02:** it also needs M4-12, so its diff holds only the new view and no
-code that moved.
 **Added 2026-10-01 (#49 pickup).** A question about an edit shows its diff in a view of
 its own, never in the answer box. The box gets one line, `± <path> +a −d`, and a
 `view diff` row. The view replaces the transcript, keeps the sidebar, scrolls, and
@@ -2226,6 +2224,8 @@ a `file_text` ask gets a built diff, a path outside the checkout gets none, and 
 draws a diff text a caller passes in.
 Decisions: R12, R45, R47. **Open at pickup:** the cap, and how a new or deleted file
 shows.
+**Amended 2026-10-02:** it also needs M4-12, so its diff holds only the new view and no
+code that moved.
 
 **M4-7..M4-12: take the logic out of the screen.** **Added 2026-10-02.** `chat.ts` is
 2000 lines, and `chatTui` is one function of about 1280 of them. It draws and reads keys,
@@ -2254,7 +2254,7 @@ the command, as `daemon.ts` and `daemon/` are. Each story moves code and changes
 behaviour: every existing test passes unchanged, except the import-boundary test, which
 M4-7 and M4-12 widen to the new folders. A bug found during a move is reported, not
 fixed in the same story. Each story that adds a file also adds its row to the table in
-`AGENTS.md`. In order: M4-7, M4-8, M4-9, M4-10, M4-11, M4-12, then M4-6.
+`AGENTS.md`, and the file opens with a comment that says what it holds and why. In order: M4-7, M4-8, M4-9, M4-10, M4-11, M4-12, then M4-6.
 
 **M4-7 · One file per screen · S · needs M4-3**
 Move code only. `chat.ts` keeps the entry: the usage, the arguments, the `new`,
@@ -2263,11 +2263,13 @@ Move code only. `chat.ts` keeps the entry: the usage, the arguments, the `new`,
 `chat/tui.ts`. What both use (`address`, `readRoom`, `reconcile`, the colours, `unpad`,
 `rosterOf`) goes to `chat/common.ts`. The comment at the top of `chat.ts` is split, so
 each file keeps the part about itself.
-*Done when* `git diff -M` shows the code moved and not changed, every other test passes
+*Done when* `git diff --color-moved` marks every moved line as moved, apart from the
+import blocks, every other test passes
 unchanged, and the import-boundary test in `tests/daemon.test.ts` holds every file in
 `chat/` to the same rule as `chat.ts`. The test reads the files directly in `chat/`,
 not `chat/tests/`: a test may import anything. In `AGENTS.md`, the `chat.ts` row says
-it is the entry only, and `chat/` gets a row.
+it is the entry only, `chat/` gets a row, and the dependency sentence under "Where things
+are" gains the arrow `chat.ts` → `chat/` → `client/`.
 Decisions: S8, M1c-7.
 
 **M4-8 · One send flow for both screens · S · needs M4-7**
@@ -2291,7 +2293,10 @@ one queue over every room, oldest first; a question put aside (Esc, `ctrl+o`, or
 answered here before the close came back) never opens by itself again; a question
 closed elsewhere leaves the queue; nothing opens while something is in the way; and the
 box's place, `n of m`. The screen says whether something is in the way (a pop-up, or
-typed text), and keeps the timer that opens the next box.
+typed text) as one boolean, and keeps the timer that opens the next box. **Decided
+2026-10-02 (#206 review):** the queue goes in `client/`, though only the TUI uses it
+today. A bridge to another chat app would want the same rules: oldest first, a question
+put aside stays aside, and `n of m`.
 *Done when* `chat/tui.ts` holds none of that state, and `client/tests/questions.test.ts`
 covers each rule above.
 Decisions: R12, S8.
@@ -2319,8 +2324,9 @@ and the piped screen uses them from there. `reconcile` returns what happened, no
 line: its lines name `kapelle chat attach`, so each screen writes the words, as M4-8's
 refusals do. `client/` may not import `core/runtime.ts`
 (S8), so the module takes a function that reads the daemon's address. The poll period
-is a parameter, so a test does not wait 5 s. Riding out a daemon restart stays M6-7a's,
-and will land in this module.
+is a parameter, so a test does not wait 5 s. Riding out a daemon restart stays M6-7a's.
+The two may land in either order: after M4-11, M6-7a's chat half changes
+`client/roomset.ts`; before it, M4-11 moves the reconnect with the rest.
 *Done when* `chat/tui.ts` has no poll, no map of rooms and no `reconcile` call, and
 `client/tests/roomset.test.ts` covers each rule above against a fake daemon. The name
 is not `rooms.ts`, so it does not read as `client/room.ts`.
@@ -2332,8 +2338,10 @@ Move code only. The pop-up frame, the pick list, the text box and the forms go t
 the sidebar, the strip and the marks to `chat/tui/sidebar.ts`; drawing the transcript
 to `chat/tui/transcript.ts`. After M4-9..M4-11 most of the state they share lives in
 `client/` and `chat/view.ts`, so each file takes little from `chat/tui.ts`.
-*Done when* `chat/tui.ts` only builds the screen and routes keys, every other test
-passes unchanged, and the import-boundary test also reads the files in `chat/tui/`.
+*Done when* `chat/tui.ts` defines none of the pop-up, question box, sidebar or transcript
+parts and imports each from `chat/tui/`; `git diff --color-moved` marks every moved line
+as moved, apart from the import blocks; every other test passes unchanged; and the
+import-boundary test also reads the files in `chat/tui/`.
 Decisions: M1c-7.
 
 ---
@@ -2826,7 +2834,8 @@ The edges the drawing leaves out: **M4-1** needs M6-0 and M5-10a, and **M4-2** n
 too. **M4-5** also needs M6-5. **M4-3** also needs M4-2 and M5-4. **M6-7b** also needs the
 **M0-9** probe. **M6-11b** also needs M4-5. **M6-11a** and **M6-11b** also need M4-6, for
 the diff view. **M4-4** needs M4-2. **M6-9** needs M6-5 and M4-2. **M6-7a** needs only
-M6-2, but goes after M6-4, which changes the log line it saves.
+M6-2, but goes after M6-4, which changes the log line it saves. Its chat half and
+**M4-11** change the same poll, in either order.
 
 Off the path, because the TUI shows no run (R16): M5-7, M5-8, M5-9, M5-10b and M5-11.
 M5-11 adds an idempotency test *if* M5-7 has landed — a condition, not a dependency. No
