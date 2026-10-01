@@ -57,12 +57,17 @@ export type Entry = { seq: number; participantId: string } & (
 /**
  * The harness's text with its control characters made spaces, so a title or
  * an input can draw no escape sequence, clear no screen and break no line
- * (M4-3). Only the question's text goes through it: an answer is markdown,
- * which draws its own.
+ * (M4-3). The bidi, zero-width and line-separator characters go too: they
+ * change what a person reads in the question box, not what runs, so a
+ * right-to-left override could flip a command. Only the question's text goes
+ * through it: an answer is markdown, which draws its own.
  */
 export const printable = (s: string) =>
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: the point is to match them
-  s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  s.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the point is to match them
+    /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g,
+    " ",
+  );
 
 type Answer = Extract<Entry, { type: "answer" }>;
 type Question = Extract<Entry, { type: "permission" }>;

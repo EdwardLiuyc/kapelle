@@ -396,4 +396,10 @@ test("a question's title and input lose their control characters", () => {
     { "cmd ": "a ]0;owned b c" },
   ]);
   assert.equal(printable("tab\there"), "tab here");
+  // Bidi, zero-width and line-separator characters change what a person
+  // reads, not what runs: a right-to-left override can flip a command.
+  assert.equal(
+    printable("rm\u202e -rf\u2066x\u2069\u200b\ufeff\u2028\u061cy"),
+    "rm  -rf x     y",
+  );
 });
