@@ -74,6 +74,18 @@ const INPUT_JSON_BYTES = 4096;
 const cut = (s: string, max: number) =>
   s.length > max ? `${s.slice(0, max - 1)}…` : s;
 
+/** A value as text. Never throws: off the wire every value is JSON, but a
+ *  function, a symbol or a `BigInt` has no JSON, and a throw here would
+ *  lose the question. */
+const asText = (v: unknown): string => {
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v) ?? String(v);
+  } catch {
+    return String(v);
+  }
+};
+
 /**
  * The tool's input for a person to judge: each value as text, cut. The
  * fields past the eighth are dropped, and a later field is dropped too when
@@ -92,15 +104,12 @@ export function capInput(
     .filter(([, v]) => v !== undefined)
     .slice(0, INPUT_FIELDS)
     .map(([k, v], i) => {
-      // Two long keys can cut to one: the later one gets its place, so no
-      // field hides another.
+      // Two long keys can cut to one: the later one gets a `#i` suffix, so
+      // no field hides another.
       let key = cut(k, INPUT_KEY);
       if (used.has(key)) key = `${cut(k, INPUT_KEY - 4)}#${i}`;
       used.add(key);
-      return [
-        key,
-        cut(typeof v === "string" ? v : JSON.stringify(v), INPUT_VALUE),
-      ];
+      return [key, cut(asText(v), INPUT_VALUE)];
     });
   // A quote or a control character becomes two or six bytes in JSON, so the
   // character caps alone can still leave a larger object. Drop fields from

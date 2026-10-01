@@ -225,6 +225,12 @@ test("a question carries the tool's input as text, cut to stay under 4 KB", () =
     capInput(JSON.parse('{"__proto__":"x"}')),
     JSON.parse('{"__proto__":"x"}'),
   );
+  // A value with no JSON is still text, never a throw.
+  assert.deepEqual(capInput({ f: () => 1, n: 1n, s: Symbol("s") }), {
+    f: "() => 1",
+    n: "1",
+    s: "Symbol(s)",
+  });
   const big = capInput({ file_text: "x".repeat(10_000) });
   assert.equal(big?.file_text?.length, 400);
   assert.ok(big?.file_text?.endsWith("…"));
