@@ -5066,7 +5066,12 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
       kind: "delete",
       title: "Delete something",
       // Longer than the box: its end must wrap into view, not be cut.
-      input: { command: `rm -rf build/${"x".repeat(100)} END-OF-COMMAND` },
+      // A path has no space: only a wrap that breaks inside a word shows
+      // its last 80 characters, the Z's, at all.
+      input: {
+        command: `rm -rf build/${"x".repeat(100)} END-OF-COMMAND`,
+        path: `/${"y".repeat(220)}${"Z".repeat(80)}`,
+      },
     }),
   );
   await screen.seen("question 1 of 2");
@@ -5080,6 +5085,7 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
   // close comes now: q2 is the only one left.
   await screen.seen("question 2 of 2");
   await screen.seen("END-OF-COMMAND");
+  await screen.seen("Z".repeat(20));
   stream?.write(
     event(4, {
       sessionUpdate: "_client_permission_answered",
@@ -5124,6 +5130,38 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
   screen.child.stdin.write("\r");
   await new Promise((ok) => setTimeout(ok, 500));
   assert.ok(!posted.includes("/permissions/q3"), posted.join(" "));
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a short terminal keeps the question's action in its box", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "asker", mode: "ask" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const asker = only(open.body);
+  // 12 rows leave the box room for one line of what is asked: it must be
+  // the action, not a `…` in its place.
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 12; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${asker.id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  await screen.seen("edit · Write ACP_TEST.md");
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
