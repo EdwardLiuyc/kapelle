@@ -5918,11 +5918,12 @@ test("the menu opens over the timeline with the sidebar hidden; a typed agent co
 test("after the last agent is removed, the status line names no one and a message is refused before any request", {
   skip: noPty,
 }, async (t) => {
-  const { press, exited, out, d } = await chatOnPty(t);
+  const { press, seen, exited, out, d } = await chatOnPty(t);
   // The roster the daemon sent at the start named mock-agent; it must not
-  // stand in for the empty one now.
-  await press("@mock-agent /remove\r", "! no agents: ctrl+o → add agent");
-  assert.match(plainText(out()), /removed mock-agent/);
+  // stand in for the empty one now. The reply's status line and the
+  // stream's roster line race, so wait for each, in either order.
+  await press("@mock-agent /remove\r", "removed mock-agent");
+  await seen("! no agents: ctrl+o → add agent");
   const from = out().length;
   await press("hi\r", "! no agents: ctrl+o → add agent");
   assert.doesNotMatch(out().slice(from), /→ mock-agent|you → /);
