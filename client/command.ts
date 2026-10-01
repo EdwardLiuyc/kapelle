@@ -157,7 +157,15 @@ export function parseCommand(
     const [agent, ...extra] = o.positionals;
     if (extra.length) return { error: `one harness only; ${USAGE[verb]}` };
     const { cmd, name, title, cwd, role, mode, base } = o.values;
-    const spec: AgentSpec = { agent, cmd, name, role, mode, base };
+    // `none` is no role, as in `@name /role none` and the form.
+    const spec: AgentSpec = {
+      agent,
+      cmd,
+      name,
+      role: role === "none" ? undefined : role,
+      mode,
+      base,
+    };
     if (verb === "add") return { verb, agent: spec };
     if (!agent && !cmd && name) {
       return { error: `--name needs a harness or --cmd; ${USAGE.new}` };

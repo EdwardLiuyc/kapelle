@@ -5425,6 +5425,31 @@ test("/add alone opens its form; a refusal stays in the form, and a fix adds the
   assert.equal(await exited, 0, out());
 });
 
+test("a double Enter on the new-room form opens one room", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await press("\x0f", "new room …");
+  await press("\r", "folder");
+  await press(`\r\x15${cwd}\r`, cwd);
+  // Down to `open`, and Enter twice before the first answer.
+  await press(`${DOWN.repeat(5)}\r\r`, "opened room");
+  // No event says a second request was not sent: give it time to land.
+  await new Promise((ok) => setTimeout(ok, 1500));
+  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  assert.equal(rooms.body.length, 1, JSON.stringify(rooms.body));
+  await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
 test("kapelle chat with no rooms opens one with /new, and shows its timeline", {
   skip: noPty,
 }, async (t) => {

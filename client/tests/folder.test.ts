@@ -4,10 +4,16 @@
 
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { completeFolder } from "../folder.ts";
+import { completeFolder, expandHome } from "../folder.ts";
+
+test("~ and ~/… are the home folder; nothing else changes", () => {
+  assert.equal(expandHome("~"), homedir());
+  assert.equal(expandHome("~/src"), `${homedir()}/src`);
+  for (const p of ["~bob", "/a/~/b", "src"]) assert.equal(expandHome(p), p);
+});
 
 test("Tab completes folders only, as far as they agree", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "folder-"));

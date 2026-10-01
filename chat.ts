@@ -1037,9 +1037,26 @@ function chatTui(
      * Sends a command from the composer or the pop-up. A refusal stays in
      * the open pop-up, with its values, or goes to the status line; a
      * success closes the pop-up and says so on the status line. The
-     * transcript is never written. Answers whether it went through.
+     * transcript is never written. Answers whether it went through. One
+     * at a time: a second Enter on a form would send it again.
      */
+    let busy = false;
     const run = async (c: RouteCommand): Promise<boolean> => {
+      if (busy) {
+        if (!panel) {
+          flash = "! wait: the last command is still running";
+          setStatus();
+        }
+        return false;
+      }
+      busy = true;
+      try {
+        return await send(c);
+      } finally {
+        busy = false;
+      }
+    };
+    const send = async (c: RouteCommand): Promise<boolean> => {
       if (c.verb === "dismiss") {
         const r = rooms.get(view.roomId);
         flash = `dismissing ${r?.entry.title ?? view.roomId}: stopping its harnesses…`;

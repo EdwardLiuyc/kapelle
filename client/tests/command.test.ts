@@ -53,6 +53,18 @@ test("/add takes a harness or --cmd, and quotes keep spaces", () => {
       },
     },
   );
+  // `none` is no role, as in `@name /role none`.
+  assert.deepEqual(parse("/add pi --role none"), {
+    verb: "add",
+    agent: {
+      agent: "pi",
+      cmd: undefined,
+      name: undefined,
+      role: undefined,
+      mode: undefined,
+      base: undefined,
+    },
+  });
   const bad = parse("/add claude --colour red");
   assert.ok(bad && "error" in bad && /colour/.test(bad.error), String(bad));
   const two = parse("/add claude pi");
