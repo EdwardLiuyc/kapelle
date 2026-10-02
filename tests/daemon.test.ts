@@ -4255,12 +4255,17 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
   const root = join(import.meta.dirname, "..");
   const importsOf = async (file: string) => {
     const source = await readFile(join(root, file), "utf8");
-    // `export … from` and a bare `import "x"` load a module too.
-    return [
+    // `export … from` and a bare `import "x"` load a module too. A literal
+    // `import("x")` loads one when it runs, so it gets the same check.
+    const staticImports = [
       ...source.matchAll(
         /^(?:(?:import|export)( type)?[^;]*?from|import) "([^"]+)";/gms,
       ),
     ].map((m) => ({ spec: m[2] ?? "", typeOnly: Boolean(m[1]) }));
+    const dynamicImports = [
+      ...source.matchAll(/\bimport\s*\(\s*(["'`])([^"'`]+)\1\s*\)/g),
+    ].map((m) => ({ spec: m[2], typeOnly: false }));
+    return [...staticImports, ...dynamicImports];
   };
   const screens = ["chat.ts"];
   for (const entry of await readdir(join(root, "chat"), {
@@ -4274,12 +4279,15 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
   for (const file of screens) {
     for (const { spec } of await importsOf(file)) {
       if (spec.startsWith("node:")) continue;
+      if (!spec.startsWith(".")) {
+        assert.ok(spec === "@earendil-works/pi-tui", `${file} imports ${spec}`);
+        continue;
+      }
       const target = join(dirname(file), spec);
       if (target.startsWith(`client${sep}`)) queue.push(target);
       else {
         assert.ok(
-          spec === "@earendil-works/pi-tui" ||
-            target === join("core", "runtime.ts") ||
+          target === join("core", "runtime.ts") ||
             (target !== "chat.ts" && screens.includes(target)),
           `${file} imports ${spec}`,
         );
