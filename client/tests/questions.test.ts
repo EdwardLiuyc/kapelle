@@ -76,6 +76,18 @@ test("a question closed elsewhere leaves the queue, aside or not", () => {
   assert.equal(queue.next(false), "q1");
 });
 
+test("a question asked again keeps its place while open, and goes last once closed", () => {
+  const { rooms, ask, queue } = setup();
+  ask("r1", "q1");
+  ask("r1", "q2");
+  ask("r1", "q1");
+  assert.deepEqual(queue.open(), ["q1", "q2"]);
+  rooms.get("r1")?.delete("q1");
+  assert.deepEqual(queue.open(), ["q2"]);
+  ask("r1", "q1");
+  assert.deepEqual(queue.open(), ["q2", "q1"]);
+});
+
 test("nothing opens while something is in the way", () => {
   const { ask, queue } = setup();
   ask("r1", "q1");
