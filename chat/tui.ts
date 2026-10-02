@@ -1129,7 +1129,7 @@ function chatTui(
     offer = () => {
       const text = editor.getText();
       const typed = text !== "" && text !== prefill;
-      const next = queue.next(!!panel || done || typed);
+      const next = queue.next(panel !== undefined || done || typed);
       if (next) question(next.q.id);
     };
 
