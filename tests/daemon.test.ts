@@ -4246,10 +4246,12 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
   // S8, widened by M4-1: chat.ts imports `client/`, pi-tui and
   // `core/runtime.ts` (the `daemon.json` path), type imports included.
   // Since M4-7 every file directly in chat/ holds the same rule, and they
-  // may import each other. chat/tests/ is not read: a test may import
-  // anything. `client/` is then followed file by file, so a `client/` file that
-  // reached `core/` or `protocol/` at runtime fails here too. A type-only
-  // import there is allowed: it is erased before the code runs.
+  // may import each other, but never chat.ts: the arrow is chat.ts → chat/,
+  // and chat.ts runs `main()` when it loads. chat/tests/ is not read: a test
+  // may import anything. `client/` is then followed file by file, so a
+  // `client/` file that reached `core/` or `protocol/` at runtime fails here
+  // too. A type-only import there is allowed: it is erased before the code
+  // runs.
   const root = join(import.meta.dirname, "..");
   const importsOf = async (file: string) => {
     const source = await readFile(join(root, file), "utf8");
@@ -4278,7 +4280,7 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
         assert.ok(
           spec === "@earendil-works/pi-tui" ||
             target === join("core", "runtime.ts") ||
-            screens.includes(target),
+            (target !== "chat.ts" && screens.includes(target)),
           `${file} imports ${spec}`,
         );
       }

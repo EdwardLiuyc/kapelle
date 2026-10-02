@@ -105,8 +105,8 @@ arrow that points back.
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
 | `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
-| `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. `chat.ts` draws from it. |
-| `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). Both `chat.ts` screens send through it. |
+| `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. Both `chat/` screens draw from it. |
+| `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). Both `chat/` screens send through it. |
 | `client/folder.ts` | Tab completion for a folder path, folders only (M4-5). |
 | `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. Both screens and the pop-up forms use it. |
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
