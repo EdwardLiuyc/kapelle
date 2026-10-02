@@ -203,8 +203,8 @@ const SETTINGS_THEME = {
  * is one status line.
  *
  * **The composer names the target** (R43), through `client/mention.ts`, and
- * the status line shows it while the person types. A sent line is read
- * by `client/submit.ts`, as the piped screen reads it. The sidebar only picks
+ * the status line shows it while the person types. A sent line is read by
+ * `client/submit.ts`, as the piped screen reads it. The sidebar only picks
  * what is drawn. In a thread, an empty composer always holds `@name `
  * (decided 2026-09-30); a pre-fill the person did not touch follows the
  * view.

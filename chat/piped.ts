@@ -2,9 +2,9 @@
  * `chat/piped.ts` — the chat screen for a pipe (M4-7).
  *
  * Piped, `chat.ts` is one room as plain lines, which is what a script or a
- * test reads. It reads a line through `client/submit.ts`, as the TUI
- * does. A question is not answered here: the piped screen only
- * prints the question and how it closed (M4-3).
+ * test reads. It reads a line through `client/submit.ts`, as the TUI does.
+ * A question is not answered here: the piped screen only prints the
+ * question and how it closed (M4-3).
  */
 
 import { createInterface } from "node:readline";
