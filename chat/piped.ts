@@ -2,22 +2,16 @@
  * `chat/piped.ts` — the chat screen for a pipe (M4-7).
  *
  * Piped, `chat.ts` is one room as plain lines, which is what a script or a
- * test reads. It sends through `client/mention.ts` and `client/command.ts`,
- * as the TUI does. A question is not answered here: the piped screen only
+ * test reads. It reads a line through `client/submit.ts`, as the TUI
+ * does. A question is not answered here: the piped screen only
  * prints the question and how it closed (M4-3).
  */
 
 import { createInterface } from "node:readline";
 
-import {
-  USAGE as COMMAND_USAGE,
-  HELP,
-  parseCommand,
-  runCommand,
-} from "../client/command.ts";
+import { USAGE as COMMAND_USAGE, HELP, runCommand } from "../client/command.ts";
 import type { MessageAccepted, RoomDto } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
-import { resolveTarget } from "../client/mention.ts";
 import {
   applyLine,
   type Entry,
@@ -25,6 +19,7 @@ import {
   newRoomState,
   type RoomState,
 } from "../client/room.ts";
+import { parseLine } from "../client/submit.ts";
 import { readRoom, reconcile, rosterOf } from "./common.ts";
 
 /** Prints the reducer's entries as a conversation, for a piped stdin. An
@@ -185,21 +180,21 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     if (next === null) break;
     const text = next.trim();
     if (!text) continue;
-    const c = parseCommand(text, rosterOf(state, room.participants));
-    if (c && "error" in c) {
+    const c = parseLine(text, rosterOf(state, room.participants));
+    if ("error" in c) {
       console.error(`! ${c.error}`);
       continue;
     }
-    if (c?.verb === "leave") break;
-    if (c?.verb === "help") {
+    if (c.verb === "leave") break;
+    if (c.verb === "help") {
       for (const l of HELP) console.log(l);
       continue;
     }
-    if (c?.verb === "form") {
+    if (c.verb === "form") {
       console.error(`! a form needs a terminal: ${COMMAND_USAGE[c.form]}`);
       continue;
     }
-    if (c) {
+    if (c.verb !== "message") {
       const r = await runCommand(d, room.id, c);
       if (!r.ok) {
         console.error(`! ${r.message}`);
@@ -227,7 +222,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       break;
     }
 
-    const t = resolveTarget(text, rosterOf(state, room.participants));
+    const t = c.target;
     if ("error" in t) {
       console.error(`! ${t.error}`);
       continue;
