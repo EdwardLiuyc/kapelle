@@ -23,7 +23,7 @@
  * `package.json`'s `os` leaves out. Linux never loads either.
  */
 
-import { basename, resolve } from "node:path";
+import { basename } from "node:path";
 
 import {
   type Component,
@@ -61,7 +61,11 @@ import type {
   RoomListEntry,
 } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
-import { completeFolder, expandHome } from "../client/folder.ts";
+import {
+  absoluteFolder,
+  completeFolder,
+  FOLDER_GONE,
+} from "../client/folder.ts";
 import { targetOf } from "../client/mention.ts";
 import { questionQueue } from "../client/questions.ts";
 import {
@@ -1231,7 +1235,7 @@ function chatTui(
         folder?: true;
       }[],
       go: string,
-      command: (v: Record<string, string>) => RouteCommand,
+      command: (v: Record<string, string>) => RouteCommand | { error: string },
     ) => {
       const values: Record<string, string> = Object.fromEntries(
         fields.map((f) => [f.id, f.value]),
@@ -1263,7 +1267,7 @@ function chatTui(
           handleInput(key) {
             options = [];
             if (!matchesKey(key, Key.tab)) return input.handleInput(key);
-            const c = completeFolder(input.getValue(), process.cwd());
+            const c = completeFolder(input.getValue(), absoluteFolder());
             input.setValue(c.value);
             input.handleInput("\x05"); // ctrl+e: the line's end
             options = c.options;
@@ -1310,7 +1314,14 @@ function chatTui(
         SETTINGS_THEME,
         (id, v) => {
           if (id) values[id] = v === "–" ? "" : v;
-          else void run(command(values));
+          else {
+            const c = command(values);
+            if (!("error" in c)) void run(c);
+            else if (panel) {
+              panel.error = c.error;
+              tui.requestRender();
+            }
+          }
         },
         hidePanel,
       );
@@ -1414,31 +1425,40 @@ function chatTui(
       form(
         "new room",
         [
-          { id: "cwd", label: "folder", value: process.cwd(), folder: true },
+          {
+            id: "cwd",
+            label: "folder",
+            value: absoluteFolder() ?? "",
+            folder: true,
+          },
           { id: "title", label: "title", value: "" },
           harnessField(),
           { id: "cmd", label: "command", value: "" },
           { id: "name", label: "name", value: "" },
         ],
         "open",
-        (v) => ({
-          verb: "new",
-          body: {
-            cwd: resolve(expandHome(v.cwd || ".")),
-            title: v.title || undefined,
-            agents:
-              v.agent || v.cmd
-                ? [
-                    {
-                      agent: v.agent,
-                      cmd: v.cmd,
-                      name: v.name,
-                      role: "orchestrator",
-                    },
-                  ]
-                : [],
-          },
-        }),
+        (v) => {
+          const cwd = absoluteFolder(v.cwd || ".");
+          if (!cwd) return { error: FOLDER_GONE };
+          return {
+            verb: "new",
+            body: {
+              cwd,
+              title: v.title || undefined,
+              agents:
+                v.agent || v.cmd
+                  ? [
+                      {
+                        agent: v.agent,
+                        cmd: v.cmd,
+                        name: v.name,
+                        role: "orchestrator",
+                      },
+                    ]
+                  : [],
+            },
+          };
+        },
       );
 
     // pi-tui draws off our call stack, so a bug in it is an uncaught throw

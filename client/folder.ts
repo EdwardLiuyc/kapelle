@@ -5,15 +5,35 @@
  * command, and every absolute path starts with `/`, so the form uses this.
  * It lists folders only, never files. It reads the local disk: the daemon
  * listens on loopback only, so the screen and the daemon share it.
+ *
+ * It also turns a typed folder into a full path. When the current folder was
+ * removed, `process.cwd()` throws, so `absoluteFolder` gives no path instead.
  */
 
 import { type Dirent, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 /** `~` and `~/…` as the home folder: no shell expands them in a form. */
 export const expandHome = (path: string) =>
   path === "~" || path.startsWith("~/") ? homedir() + path.slice(1) : path;
+
+/** Said when a path needs the current folder and that folder was removed. */
+export const FOLDER_GONE =
+  "the current folder was removed: give a full path, or cd to a folder that exists";
+
+/** `typed` as an absolute path: `~` expanded, relative to the current
+ *  folder. `undefined` when it needs the current folder and that folder was
+ *  removed: `process.cwd()` throws then. */
+export function absoluteFolder(typed = "."): string | undefined {
+  const path = expandHome(typed);
+  if (isAbsolute(path)) return resolve(path);
+  try {
+    return resolve(process.cwd(), path);
+  } catch {
+    return undefined;
+  }
+}
 
 /** Whether a folder entry is one, following a link; a broken link is not. */
 function isFolder(e: Dirent, where: string): boolean {
@@ -31,7 +51,7 @@ function isFolder(e: Dirent, where: string): boolean {
  *  when the typed name starts with `.`. */
 export function completeFolder(
   typed: string,
-  cwd: string,
+  cwd: string | undefined,
 ): { value: string; options: string[] } {
   // A bare `~` is the home folder itself, not a name under some parent:
   // complete it to `~/`, or Tab would leave it and the next name would
@@ -41,7 +61,9 @@ export function completeFolder(
   const dir = path.slice(0, cut);
   const prefix = path.slice(cut);
   const real = expandHome(dir);
-  const where = real.startsWith("/") ? real : join(cwd, real);
+  const where = real.startsWith("/") ? real : cwd && join(cwd, real);
+  // A relative path with the current folder removed: nothing to list.
+  if (!where) return { value: typed, options: [] };
   const names: string[] = [];
   try {
     for (const e of readdirSync(where, { withFileTypes: true })) {

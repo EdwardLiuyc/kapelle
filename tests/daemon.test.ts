@@ -3483,6 +3483,35 @@ test("chat.ts new prints the daemon's refusal message, not an object", async (t)
   assert.doesNotMatch(refused.stderr, /\[object Object\]/);
 });
 
+test("chat.ts in a removed folder says so, and still lists rooms", async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  // A child cannot start in a removed folder, so `sh` goes in, removes it,
+  // then runs chat.ts there.
+  const run = async (...args: string[]) =>
+    spawnSync(
+      "sh",
+      [
+        "-c",
+        'cd "$1" && rmdir "$1" && shift && exec "$@"',
+        "sh",
+        await tempDir(t),
+        process.execPath,
+        join(REPO, "chat.ts"),
+        ...args,
+      ],
+      { encoding: "utf8", env: { ...process.env, XDG_RUNTIME_DIR: runtime } },
+    );
+
+  const made = await run("new", "--cmd", REMEMBER);
+  assert.equal(made.status, 1, made.stderr);
+  assert.match(made.stderr, /the current folder was removed/);
+  assert.doesNotMatch(made.stderr, /uv_cwd/);
+
+  const listed = await run("list");
+  assert.equal(listed.status, 0, listed.stderr);
+});
+
 test("chat.ts names the status for a refusal with no JSON envelope", async (t) => {
   // Node's own 408 has an empty body, and a body of `null` is JSON with no
   // `error`: both used to print "error: undefined" or "not JSON".
@@ -6016,6 +6045,48 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   const repos = await api<string[]>(d, "GET", "/repos");
   assert.deepEqual(repos.body, [await realpath(repo)]);
   await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat in a removed folder: bare stops, attach opens and its /new form survives", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const room = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(room.status, 201, room.body.error?.message);
+  const inGone = async (verb: string, until?: string) => {
+    const gone = await tempDir(t);
+    const cmd =
+      `stty cols 120 rows 40; cd '${gone}' && rmdir '${gone}' && ` +
+      `exec node '${join(REPO, "chat.ts")}'${verb}`;
+    return ptyScreen(t, cmd, { XDG_RUNTIME_DIR: runtime }, until);
+  };
+
+  // Bare `kapelle chat` stops before the screen opens.
+  const bare = await inGone("", "the current folder was removed");
+  assert.equal(await bare.exited, 1, bare.out());
+
+  // `attach` needs no folder, so the screen opens.
+  const { child, seen, exited, out } = await inGone(
+    ` attach '${room.body.id}'`,
+  );
+  child.stdin.write("/new\r");
+  await seen("new room");
+  // A relative folder in a removed cwd is refused in the form, not a crash.
+  child.stdin.write(`\rsub\r${DOWN.repeat(5)}\r`);
+  await seen("the current folder was removed");
+  // Esc closes the form, so /leave still reaches the composer.
+  child.stdin.write("\x1b");
+  await new Promise((ok) => setTimeout(ok, 300));
+  child.stdin.write("/leave\r");
+  await seen("rejoin with");
   assert.equal(await exited, 0, out());
 });
 

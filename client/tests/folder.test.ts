@@ -3,11 +3,18 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  rmdir,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { completeFolder, expandHome } from "../folder.ts";
+import { absoluteFolder, completeFolder, expandHome } from "../folder.ts";
 
 test("~ and ~/… are the home folder; nothing else changes", () => {
   assert.equal(expandHome("~"), homedir());
@@ -59,6 +66,24 @@ test("Tab completes folders only, as far as they agree", async (t) => {
   });
   assert.deepEqual(completeFolder(`${root}/nope/x`, "/"), {
     value: `${root}/nope/x`,
+    options: [],
+  });
+});
+
+test("a removed current folder gives no path, never a throw", async (t) => {
+  const gone = await mkdtemp(join(tmpdir(), "folder-gone-"));
+  const back = process.cwd();
+  t.after(() => process.chdir(back));
+  process.chdir(gone);
+  await rmdir(gone);
+
+  // `process.cwd()` throws here: only a full path still resolves.
+  assert.equal(absoluteFolder(), undefined);
+  assert.equal(absoluteFolder("sub"), undefined);
+  assert.equal(absoluteFolder("/tmp/../tmp"), "/tmp");
+  assert.equal(absoluteFolder("~"), homedir());
+  assert.deepEqual(completeFolder("sub", absoluteFolder()), {
+    value: "sub",
     options: [],
   });
 });

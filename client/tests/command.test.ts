@@ -6,9 +6,12 @@
  */
 
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { mkdtemp, rmdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { parseCommand } from "../command.ts";
+import { FOLDER_GONE } from "../folder.ts";
 
 const roster = [
   { id: "p-a", name: "alice", role: "orchestrator" },
@@ -125,4 +128,18 @@ test("rename, role and mode are one PATCH each; role none clears it", () => {
     const r = parse(s);
     assert.ok(r && "error" in r && /^usage:/.test(r.error), s);
   }
+});
+
+test("/new in a removed folder is refused, unless --cwd is a full path", async (t) => {
+  const gone = await mkdtemp(join(tmpdir(), "command-gone-"));
+  const back = process.cwd();
+  t.after(() => process.chdir(back));
+  process.chdir(gone);
+  await rmdir(gone);
+
+  assert.deepEqual(parse("/new pi"), { error: FOLDER_GONE });
+  assert.deepEqual(parse("/new pi --cwd sub"), { error: FOLDER_GONE });
+  const full = parse("/new pi --cwd /tmp");
+  assert.ok(full && "body" in full, JSON.stringify(full));
+  assert.equal(full.body.cwd, "/tmp");
 });

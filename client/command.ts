@@ -23,12 +23,11 @@
  * `--cmd="node x.mjs"` splits at the space.
  */
 
-import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import type { ParticipantDto, RoomDto } from "./contract.ts";
 import { call, type DaemonAddress } from "./daemon.ts";
-import { expandHome } from "./folder.ts";
+import { absoluteFolder, FOLDER_GONE } from "./folder.ts";
 import { fold, MENTION, type Named, targetOf } from "./mention.ts";
 
 /** One agent, as `POST /rooms` and `POST /rooms/:id/agents` take it. A
@@ -175,10 +174,12 @@ export function parseCommand(
     if (!agent && !cmd && name) {
       return { error: `--name needs a harness or --cmd; ${USAGE.new}` };
     }
+    const folder = absoluteFolder(cwd);
+    if (!folder) return { error: FOLDER_GONE };
     return {
       verb,
       body: {
-        cwd: resolve(expandHome(cwd ?? process.cwd())),
+        cwd: folder,
         title,
         agents:
           agent || cmd ? [{ agent, cmd, name, role: "orchestrator" }] : [],
