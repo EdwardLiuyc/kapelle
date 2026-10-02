@@ -4242,31 +4242,56 @@ test("chat.ts prints an answer that comes in two chunks once", async (t) => {
   );
 });
 
-test("chat.ts reaches the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
+test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
   // S8, widened by M4-1: chat.ts imports `client/`, pi-tui and
   // `core/runtime.ts` (the `daemon.json` path), type imports included.
-  // `client/` is then followed file by file, so a `client/` file that
-  // reached `core/` or `protocol/` at runtime fails here too. A type-only
-  // import there is allowed: it is erased before the code runs.
+  // Since M4-7 every file directly in chat/ holds the same rule, and they
+  // may import each other, but never chat.ts: the arrow is chat.ts → chat/,
+  // and chat.ts runs `main()` when it loads. chat/tests/ is not read: a test
+  // may import anything. `client/` is then followed file by file, so a
+  // `client/` file that reached `core/` or `protocol/` at runtime fails here
+  // too. A type-only import there is allowed: it is erased before the code
+  // runs.
   const root = join(import.meta.dirname, "..");
   const importsOf = async (file: string) => {
     const source = await readFile(join(root, file), "utf8");
-    // `export … from` and a bare `import "x"` load a module too.
-    return [
+    // `export … from` and a bare `import "x"` load a module too. A literal
+    // `import("x")` loads one when it runs, so it gets the same check.
+    const staticImports = [
       ...source.matchAll(
         /^(?:(?:import|export)( type)?[^;]*?from|import) "([^"]+)";/gms,
       ),
     ].map((m) => ({ spec: m[2] ?? "", typeOnly: Boolean(m[1]) }));
+    const dynamicImports = [
+      ...source.matchAll(/\bimport\s*\(\s*(["'`])([^"'`]+)\1\s*\)/g),
+    ].map((m) => ({ spec: m[2], typeOnly: false }));
+    return [...staticImports, ...dynamicImports];
   };
+  const screens = ["chat.ts"];
+  for (const entry of await readdir(join(root, "chat"), {
+    withFileTypes: true,
+  })) {
+    if (entry.isFile() && entry.name.endsWith(".ts")) {
+      screens.push(join("chat", entry.name));
+    }
+  }
   const queue: string[] = [];
-  for (const { spec } of await importsOf("chat.ts")) {
-    if (spec.startsWith("node:")) continue;
-    if (spec.startsWith("./client/")) queue.push(spec.slice(2));
-    else {
-      assert.ok(
-        spec === "@earendil-works/pi-tui" || spec === "./core/runtime.ts",
-        `chat.ts imports ${spec}`,
-      );
+  for (const file of screens) {
+    for (const { spec } of await importsOf(file)) {
+      if (spec.startsWith("node:")) continue;
+      if (!spec.startsWith(".")) {
+        assert.ok(spec === "@earendil-works/pi-tui", `${file} imports ${spec}`);
+        continue;
+      }
+      const target = join(dirname(file), spec);
+      if (target.startsWith(`client${sep}`)) queue.push(target);
+      else {
+        assert.ok(
+          target === join("core", "runtime.ts") ||
+            (target !== "chat.ts" && screens.includes(target)),
+          `${file} imports ${spec}`,
+        );
+      }
     }
   }
   assert.ok(queue.length > 0, "chat.ts imports client/");

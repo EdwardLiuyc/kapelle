@@ -28,7 +28,7 @@ source of truth.
 `kapelle` is a minimal [Agent Client Protocol](https://agentclientprotocol.com)
 **client**, in TypeScript with ES modules. Node ≥24, `"type": "module"`, no build step.
 It has two runtime dependencies, both for presentation only: `marked`
-(`core/markdown.ts`) and `@earendil-works/pi-tui` (the `chat.ts` screen). Both are
+(`core/markdown.ts`) and `@earendil-works/pi-tui` (the `chat/tui.ts` screen). Both are
 pinned exactly, and an npm `overrides` entry keeps pi-tui on our `marked`.
 
 **The rule for a runtime dependency** (M1c-7, 2026-09-09): it is allowed only in
@@ -36,7 +36,7 @@ presentation, after the event bus, where its worst failure is cosmetic. It must 
 change a permission decision, the path guard, the policy, mode negotiation, or anything
 that reaches a subprocess. Pin it exactly, and give it a fallback so a bad release costs
 the screen, never the run: `core/markdown.ts` returns the raw text if `marked` throws,
-and `chat.ts` leaves pi-tui's screen before it exits on a throw.
+and `chat/tui.ts` leaves pi-tui's screen before it exits on a throw.
 
 **This code is the client. The coding harness is the agent.** We spawn the harness as a
 subprocess, own the workspace, serve its filesystem requests and decide its permissions.
@@ -74,7 +74,8 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 **`core/` may import `protocol/`. `protocol/` never imports `core/`.** That is why
 `AcpAgent`'s default policy refuses everything instead of being `safePolicy`.
 `client/` imports only `protocol/types.ts`, and nothing in `core/` or `protocol/` imports
-`client/`. `render.ts` → `core/markdown.ts` is the one arrow that points back.
+`client/`. `chat.ts` → `chat/` → `client/`. `render.ts` → `core/markdown.ts` is the one
+arrow that points back.
 
 | Path | What it is |
 | --- | --- |
@@ -104,11 +105,12 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
 | `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
-| `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. `chat.ts` draws from it. |
-| `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). Both `chat.ts` screens send through it. |
+| `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. Both `chat/` screens draw from it. |
+| `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). Both `chat/` screens send through it. |
 | `client/folder.ts` | Tab completion for a folder path, folders only (M4-5). |
 | `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. Both screens and the pop-up forms use it. |
-| `chat.ts` | Chat front end: a pi-tui screen over every room on a TTY, one room as plain lines when piped. It talks HTTP only, and imports only `client/`, pi-tui and `core/runtime.ts`. |
+| `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
+| `chat/` | The chat screens (M4-7): `tui.ts`, a pi-tui screen over every room on a TTY; `piped.ts`, one room as plain lines; `common.ts`, what both use. With `chat.ts`, they talk HTTP only, and import only `client/`, pi-tui, `core/runtime.ts` and each other. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 
 Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`
