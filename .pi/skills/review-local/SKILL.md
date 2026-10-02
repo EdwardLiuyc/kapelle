@@ -1,6 +1,6 @@
 ---
 name: review-local
-description: "Review local work on a GitHub issue before any pull request exists: take the issue's scope comment as the scope, snapshot the current branch (committed or not), run the offline gate and each role (developer, tester, security, and any role file added later) in a temporary worktree that links the main checkout's node_modules, prove each bug or test gap there, and print the findings with suggested diffs. Nothing is posted. Trigger: /skill:review-local <issue-number> [--role a,b] [--base branch], or any request to review local work on an issue."
+description: "Review local work on a GitHub issue before any pull request exists: take the issue's scope comment as the scope, snapshot the current branch (committed or not), run the offline gate and each role (developer, tester, security, and any role file added later) in a temporary worktree that links the main checkout's node_modules, prove each bug or test gap there, then apply the fixes in the working tree without committing and print one line per finding as comment -> fix. Nothing is committed or posted. Trigger: /skill:review-local <issue-number> [--role a,b] [--base branch], or any request to review local work on an issue."
 ---
 
 # review-local

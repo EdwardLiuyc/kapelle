@@ -270,7 +270,8 @@ carry discovery metadata only.
 - **[`review-local`](.agent/skills/review-local/SKILL.md)** — run when asked to review
   local work on an issue, before the push. The issue gives the scope. Each role
   (developer, tester, security, …) is one file in its `roles/` folder. The gate and the
-  proofs run in a temporary worktree, and nothing is posted.
+  proofs run in a temporary worktree. It then applies the fixes in the working tree,
+  uncommitted, and posts nothing.
 - **[`merge-close`](.agent/skills/merge-close/SKILL.md)** — run when asked to merge-close
   a pull request after verifying all acceptance criteria are met. Merges, cleans up the
   branch, checks whether a linked issue auto-closed without closing it manually, and
