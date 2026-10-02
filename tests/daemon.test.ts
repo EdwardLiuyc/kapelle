@@ -6048,6 +6048,48 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   assert.equal(await exited, 0, out());
 });
 
+test("chat in a removed folder: bare stops, attach opens and its /new form survives", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const room = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(room.status, 201, room.body.error?.message);
+  const inGone = async (verb: string, until?: string) => {
+    const gone = await tempDir(t);
+    const cmd =
+      `stty cols 120 rows 40; cd '${gone}' && rmdir '${gone}' && ` +
+      `exec node '${join(REPO, "chat.ts")}'${verb}`;
+    return ptyScreen(t, cmd, { XDG_RUNTIME_DIR: runtime }, until);
+  };
+
+  // Bare `kapelle chat` stops before the screen opens.
+  const bare = await inGone("", "the current folder was removed");
+  assert.equal(await bare.exited, 1, bare.out());
+
+  // `attach` needs no folder, so the screen opens.
+  const { child, seen, exited, out } = await inGone(
+    ` attach '${room.body.id}'`,
+  );
+  child.stdin.write("/new\r");
+  await seen("new room");
+  // A relative folder in a removed cwd is refused in the form, not a crash.
+  child.stdin.write(`\rsub\r${DOWN.repeat(5)}\r`);
+  await seen("the current folder was removed");
+  // Esc closes the form, so /leave still reaches the composer.
+  child.stdin.write("\x1b");
+  await new Promise((ok) => setTimeout(ok, 300));
+  child.stdin.write("/leave\r");
+  await seen("rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
 test("piped chat.ts says how to add a folder that /new is refused for", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
