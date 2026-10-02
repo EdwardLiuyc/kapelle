@@ -9,9 +9,9 @@
  * words in the screen.
  *
  * A command refused and a target refused stay apart: the TUI shows the first
- * on the status line and the second with a bell. The TUI checks "no room"
- * and "no agents" itself, on a message, before it shows the target's
- * refusal: both name `ctrl+o`, and the piped screen has neither.
+ * on the status line and the second as a line in the transcript. The TUI
+ * checks "no room" and "no agents" itself, on a message, before it shows the
+ * target's refusal: both name `ctrl+o`, and the piped screen has neither.
  */
 
 import { type Command, parseCommand } from "./command.ts";

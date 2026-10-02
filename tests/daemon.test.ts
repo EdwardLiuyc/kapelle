@@ -6037,6 +6037,20 @@ test("piped chat.ts says how to add a folder that /new is refused for", async (t
   );
 });
 
+test("piped chat.ts refuses a bare /new or /add: a form needs a terminal", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("/new\n/add\n/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stderr, /! a form needs a terminal: \/new/);
+  assert.match(r.stderr, /! a form needs a terminal: \/add </);
+});
+
 test("piped chat.ts takes the room commands, and names the room /new opened", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
