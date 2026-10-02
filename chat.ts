@@ -37,7 +37,6 @@
  * room the daemon holds (M4-2). Piped, it is one room as plain lines.
  */
 
-import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { address } from "./chat/common.ts";
 import { chatPiped } from "./chat/piped.ts";
@@ -45,6 +44,7 @@ import { chatTui } from "./chat/tui.ts";
 import { HELP } from "./client/command.ts";
 import type { RoomDto, RoomListEntry } from "./client/contract.ts";
 import { call, checkVersion, type DaemonAddress } from "./client/daemon.ts";
+import { absoluteFolder, FOLDER_GONE } from "./client/folder.ts";
 
 const USAGE = `usage: (experimental — the room API may change without notice)
   node chat.ts                                              every room, on a terminal
@@ -109,6 +109,15 @@ async function main(): Promise<number> {
     console.log(USAGE);
     return values.help ? 0 : 1;
   }
+  // The screen and `new` need the current folder, and `process.cwd()`
+  // throws when it was removed. Say so before the screen opens; the screen
+  // handles a folder removed after that. `list`, `attach` and `dismiss`
+  // need no folder.
+  const cwd = absoluteFolder(values.cwd);
+  if (!cwd && (!verb || verb === "new")) {
+    console.error(`error: ${FOLDER_GONE}`);
+    return 1;
+  }
 
   const d = await address();
   // B5: a different `major` throws `VersionRefused`, which `main`'s caller
@@ -118,8 +127,7 @@ async function main(): Promise<number> {
 
   if (!verb) return chat(d);
 
-  if (verb === "new") {
-    const cwd = resolve(values.cwd ?? process.cwd());
+  if (verb === "new" && cwd) {
     const r = await call<RoomDto>(d, "/rooms", {
       method: "POST",
       body: {

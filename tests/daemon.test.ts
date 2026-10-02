@@ -3483,6 +3483,35 @@ test("chat.ts new prints the daemon's refusal message, not an object", async (t)
   assert.doesNotMatch(refused.stderr, /\[object Object\]/);
 });
 
+test("chat.ts in a removed folder says so, and still lists rooms", async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  // A child cannot start in a removed folder, so `sh` goes in, removes it,
+  // then runs chat.ts there.
+  const run = async (...args: string[]) =>
+    spawnSync(
+      "sh",
+      [
+        "-c",
+        'cd "$1" && rmdir "$1" && shift && exec "$@"',
+        "sh",
+        await tempDir(t),
+        process.execPath,
+        join(REPO, "chat.ts"),
+        ...args,
+      ],
+      { encoding: "utf8", env: { ...process.env, XDG_RUNTIME_DIR: runtime } },
+    );
+
+  const made = await run("new", "--cmd", REMEMBER);
+  assert.equal(made.status, 1, made.stderr);
+  assert.match(made.stderr, /the current folder was removed/);
+  assert.doesNotMatch(made.stderr, /uv_cwd/);
+
+  const listed = await run("list");
+  assert.equal(listed.status, 0, listed.stderr);
+});
+
 test("chat.ts names the status for a refusal with no JSON envelope", async (t) => {
   // Node's own 408 has an empty body, and a body of `null` is JSON with no
   // `error`: both used to print "error: undefined" or "not JSON".
