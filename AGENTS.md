@@ -107,6 +107,7 @@ arrow that points back.
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
 | `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. Both `chat/` screens draw from it. |
 | `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). Both `chat/` screens send through it. |
+| `client/questions.ts` | The queue of open questions over every room (M4-9): which one opens next, and its `n of m`. No I/O. |
 | `client/folder.ts` | Tab completion for a folder path, folders only (M4-5). |
 | `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. Both screens and the pop-up forms use it. |
 | `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. Both `chat/` screens read a line through it. |

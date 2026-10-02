@@ -10,7 +10,8 @@
  * on a permission, the TUI shows the room, the agent, the turn and the tool's
  * input, with `deny` first, so a stray Enter says no, as the timeout would.
  * It never opens over another pop-up or over typed text; then the status
- * line counts it and `ctrl+o` lists it.
+ * line counts it and `ctrl+o` lists it. Which question opens, and when, is
+ * `client/questions.ts` (M4-9); this file keeps the box and the timer.
  *
  * **pi-tui is ratified under M1c-7's rule (M4-1).** It is presentation only,
  * so its worst failure is a broken screen, never a changed decision; it is
@@ -62,6 +63,7 @@ import type {
 import { call, type DaemonAddress } from "../client/daemon.ts";
 import { completeFolder, expandHome } from "../client/folder.ts";
 import { targetOf } from "../client/mention.ts";
+import { questionQueue } from "../client/questions.ts";
 import {
   applyLine,
   type Entry,
@@ -237,44 +239,24 @@ function chatTui(
   /** The pop-up, while one is open (M4-5), and pi-tui's handle on it. */
   let panel: Panel | undefined;
   let overlay: OverlayHandle | undefined;
-  /** The open questions in the order they came, each with its room (M4-3).
-   *  The reducers hold them; this keeps their order across rooms. */
-  const waiting = new Map<string, string>();
-  /** Put aside with Esc, or answered here before the close came back: these
-   *  never open by themselves again. `ctrl+o` still lists them. */
-  const aside = new Set<string>();
-  /** The question the pop-up shows, while it does. */
-  let asking: string | undefined;
+  /** The open questions over every room, oldest first (M4-3). The reducers
+   *  hold them; the queue keeps their order and the ones put aside. */
+  const queue = questionQueue<{ r: Followed; q: Question }>((roomId, id) => {
+    const r = rooms.get(roomId);
+    const q = r?.state.questions.get(id);
+    return r && q ? { r, q } : undefined;
+  });
   /** Opens the next question when nothing is in the way; set where the
    *  pop-up's helpers live. */
   let offer = () => {};
-  /** The open questions, oldest first. A closed one leaves the order. */
-  const questions = () => {
-    const out: { r: Followed; q: Question }[] = [];
-    for (const [id, roomId] of waiting) {
-      const r = rooms.get(roomId);
-      const q = r?.state.questions.get(id);
-      if (r && q) out.push({ r, q });
-      else {
-        waiting.delete(id);
-        aside.delete(id);
-      }
-    }
-    return out;
-  };
   /** Keeps an open question box true: its count follows the open
    *  questions, and the box goes when its question left without a close
    *  line, as when its room was dismissed elsewhere. */
   const syncBox = () => {
-    if (!asking || !panel) return;
-    const all = questions();
-    const at = all.findIndex(({ q }) => q.id === asking);
-    if (at < 0) {
-      // Not put aside: its id has already left the order, and nothing
-      // would ever take it out of `aside`.
-      asking = undefined;
-      hidePanel();
-    } else panel.title = `question ${at + 1} of ${all.length}`;
+    if (!queue.asking || !panel) return;
+    const at = queue.place();
+    if (!at) hidePanel();
+    else panel.title = `question ${at.at} of ${at.of}`;
   };
   /** How many rows a list in the pop-up may show. */
   const panelRoom = () =>
@@ -449,8 +431,8 @@ function chatTui(
         "id" in t ? bold(`→ ${nameOf(r.state, t.id)}`) : yellow(`! ${t.error}`),
       );
     }
-    const asked = questions().length;
-    if (asked && !asking) {
+    const asked = queue.open().length;
+    if (asked && !queue.asking) {
       parts.push(
         magenta(`? ${asked} question${asked > 1 ? "s" : ""} · ctrl+o`),
       );
@@ -482,9 +464,7 @@ function chatTui(
    *  the next question waits too; any other box makes way for one. An
    *  answer, or a close from elsewhere, opens the next itself. */
   const hidePanel = () => {
-    const away = asking;
-    if (asking) aside.add(asking);
-    asking = undefined;
+    const away = queue.away();
     panel = undefined;
     overlay?.hide();
     overlay = undefined;
@@ -646,13 +626,13 @@ function chatTui(
     // line, and its box should not flash open first. A chunk that splits
     // the two lines still flashes it, then closes it: cosmetic.
     if (kind === "_client_permission_queued") {
-      waiting.set(u.id, roomId);
+      queue.add(u.id, roomId);
       setImmediate(offer);
     }
     // Closed elsewhere: another client, the timer, a cancel or a mode change.
     if (
       kind === "_client_permission_answered" &&
-      asking === u.id &&
+      queue.asking === u.id &&
       e?.type === "permission"
     ) {
       hidePanel();
@@ -999,7 +979,7 @@ function chatTui(
      *  the same box, as the menu gives way to a pick list. */
     const showPanel = (title: string, body: Component) => {
       panel = { title, body };
-      asking = undefined;
+      queue.show(undefined);
       if (!overlay) {
         // Centred on the timeline, not the terminal: pi-tui centres on
         // the terminal, so move right by half the sidebar.
@@ -1062,7 +1042,7 @@ function chatTui(
      * aside, open.
      */
     const question = (id: string) => {
-      const found = questions().find(({ q }) => q.id === id);
+      const found = queue.open().find(({ q }) => q.id === id);
       // Picked from a menu drawn before it closed elsewhere.
       if (!found) {
         flash = "! that question already closed";
@@ -1114,7 +1094,7 @@ function chatTui(
         handleInput: (key) => list.handleInput(key),
         invalidate: () => list.invalidate(),
       });
-      asking = q.id;
+      queue.show(q.id);
       syncBox();
       setStatus();
     };
@@ -1147,10 +1127,9 @@ function chatTui(
     // Decided 2026-10-01 (#49): a question opens by itself, but never over
     // another pop-up or over text the person typed.
     offer = () => {
-      if (panel || done) return;
       const text = editor.getText();
-      if (text !== "" && text !== prefill) return;
-      const next = questions().find(({ q }) => !aside.has(q.id));
+      const typed = text !== "" && text !== prefill;
+      const next = queue.next(panel !== undefined || done || typed);
       if (next) question(next.q.id);
     };
 
@@ -1160,7 +1139,7 @@ function chatTui(
     const menu = (pid = view.participantId) => {
       const r = rooms.get(view.roomId);
       const p = pid ? r?.state.participants.get(pid) : undefined;
-      const items: SelectItem[] = questions().map(({ r: qr, q }) => ({
+      const items: SelectItem[] = queue.open().map(({ r: qr, q }) => ({
         value: `?${q.id}`,
         label: `? ${nameOf(qr.state, q.participantId)} asks: ${q.title}`,
       }));
