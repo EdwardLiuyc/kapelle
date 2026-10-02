@@ -2280,8 +2280,10 @@ the line is, and does no I/O. Each screen then does its own part: the TUI opens 
 or asks to add a folder, and the piped screen prints the command to run or waits for the
 turn to end. A refusal that names a key, such as `ctrl+o`, keeps its words in the
 screen. **Decided 2026-10-02:** the TUI's "no room" and "no agents" checks stay in the
-TUI, before it calls `client/submit.ts`. Both name `ctrl+o`, and the piped screen has
-neither today, so moving them would change what a piped user sees.
+TUI. Both name `ctrl+o`, and the piped screen has neither today, so moving them would
+change what a piped user sees. They run when `client/submit.ts` says the line is a
+message, before the target's refusal is shown. Run before the call, they would refuse
+`/new` with no room open (#214).
 *Done when* neither screen calls `parseCommand` or `resolveTarget` itself, and
 `client/tests/submit.test.ts` covers each outcome.
 Decisions: R43, S8.

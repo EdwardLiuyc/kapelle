@@ -48,12 +48,7 @@ import {
   VStack,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import {
-  HELP,
-  parseCommand,
-  type RouteCommand,
-  runCommand,
-} from "../client/command.ts";
+import { HELP, type RouteCommand, runCommand } from "../client/command.ts";
 import type {
   HarnessEntry,
   MessageAccepted,
@@ -66,7 +61,7 @@ import type {
 } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
 import { completeFolder, expandHome } from "../client/folder.ts";
-import { resolveTarget, targetOf } from "../client/mention.ts";
+import { targetOf } from "../client/mention.ts";
 import {
   applyLine,
   type Entry,
@@ -78,6 +73,7 @@ import {
   seen,
   thread,
 } from "../client/room.ts";
+import { parseLine } from "../client/submit.ts";
 import {
   bold,
   cyan,
@@ -207,7 +203,8 @@ const SETTINGS_THEME = {
  * is one status line.
  *
  * **The composer names the target** (R43), through `client/mention.ts`, and
- * the status line shows it while the person types. The sidebar only picks
+ * the status line shows it while the person types. A sent line is read by
+ * `client/submit.ts`, as the piped screen reads it. The sidebar only picks
  * what is drawn. In a thread, an empty composer always holds `@name `
  * (decided 2026-09-30); a pre-fill the person did not touch follows the
  * view.
@@ -882,16 +879,16 @@ function chatTui(
         const back = bare ? `${text} ` : text;
         if (editor.getText() !== back) editor.setText(back);
       };
-      const c = parseCommand(text, roster);
-      if (c && "error" in c) {
+      const c = parseLine(text, roster);
+      if ("error" in c) {
         flash = `! ${c.error}`;
         setStatus();
         return giveBack();
       }
-      if (c?.verb === "leave") return end(0, left());
-      if (c?.verb === "help") return showHelp();
-      if (c?.verb === "form") return c.form === "new" ? newForm() : addForm();
-      if (c) {
+      if (c.verb === "leave") return end(0, left());
+      if (c.verb === "help") return showHelp();
+      if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
+      if (c.verb !== "message") {
         editor.addToHistory(text);
         if (!(await run(c))) giveBack();
         return;
@@ -905,7 +902,7 @@ function chatTui(
         warn(`! ${NO_AGENTS}`);
         return giveBack();
       }
-      const t = resolveTarget(text, roster);
+      const t = c.target;
       if ("error" in t) {
         warn(`! ${t.error}`);
         return giveBack();
