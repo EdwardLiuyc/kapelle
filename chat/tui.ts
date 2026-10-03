@@ -96,6 +96,21 @@ import {
   unpad,
   yellow,
 } from "./common.ts";
+import {
+  type Composer,
+  dismissed,
+  edited,
+  left,
+  opened,
+  renamed,
+  rows,
+  same,
+  seenIn,
+  shows,
+  step,
+  touched,
+  type View,
+} from "./view.ts";
 
 const MARKDOWN_THEME: MarkdownTheme = {
   heading: (s) => bold(cyan(s)),
@@ -138,16 +153,6 @@ interface Followed {
 
 /** An open question, as the reducer keeps it. */
 type Question = Extract<Entry, { type: "permission" }>;
-
-/** What the transcript shows: a room's timeline, or one participant's
- *  thread when `participantId` is set. It is also a sidebar row. */
-interface View {
-  roomId: string;
-  participantId?: string;
-}
-
-const same = (a: View, b: View) =>
-  a.roomId === b.roomId && a.participantId === b.participantId;
 
 /** What the screen says in a room with no participant (M4-5). */
 const NO_AGENTS = "no agents: ctrl+o → add agent";
@@ -211,12 +216,8 @@ const SETTINGS_THEME = {
  * **The composer names the target** (R43), through `client/mention.ts`, and
  * the status line shows it while the person types. A sent line is read by
  * `client/submit.ts`, as the piped screen reads it. The sidebar only picks
- * what is drawn. In a thread, an empty composer always holds `@name `
- * (decided 2026-09-30); a pre-fill the person did not touch follows the
- * view.
- *
- * **What is on screen is seen**: the timeline marks every participant of
- * its room seen, and a thread marks its participant.
+ * what is drawn. The rows, the `@name ` pre-fill and what is seen are
+ * `chat/view.ts` (M4-10); this file sets the text and draws.
  */
 function chatTui(
   d: DaemonAddress,
@@ -301,13 +302,6 @@ function chatTui(
   const note = (s: string) => add(new Text(dim(s), 1, 0));
   const warn = (s: string) => add(new Text(yellow(s), 1, 0));
 
-  /** Every row, in sidebar order: a room, then its roster. */
-  const rows = (): View[] =>
-    [...rooms.values()].flatMap(({ entry, state }) => [
-      { roomId: entry.id },
-      ...roster(state).map((p) => ({ roomId: entry.id, participantId: p.id })),
-    ]);
-
   /** A participant's mark: `●` when something waits, coloured by why. */
   const mark = (state: RoomState, id: string) => {
     const p = state.participants.get(id);
@@ -339,7 +333,7 @@ function chatTui(
       const lines = [
         fit(`${dim("rooms")}${" ".repeat(Math.max(0, inner - 6))}«`),
       ];
-      for (const row of rows()) {
+      for (const row of rows(rooms)) {
         const r = rooms.get(row.roomId);
         if (!r) continue;
         const cursor = same(row, view) ? "▸" : " ";
@@ -376,7 +370,7 @@ function chatTui(
         if (e.x >= e.width - 4) toggle();
         return { handled: true };
       }
-      const row = rows()[e.y - 1];
+      const row = rows(rooms)[e.y - 1];
       if (row) open(row);
       return { handled: true };
     },
@@ -585,10 +579,11 @@ function chatTui(
     setStatus();
   };
 
-  /** The person looks at a view: its lines are seen. */
-  const markSeen = (r: Followed, participantId?: string) => {
-    if (participantId) seen(r.state, participantId);
-    else for (const p of r.state.participants.keys()) seen(r.state, p);
+  /** Sets what `chat/view.ts` decided the composer holds. The pre-fill
+   *  first: `setText` calls `onChange` at once. */
+  const compose = (c: Composer) => {
+    prefill = c.prefill;
+    if (c.text !== undefined) editor.setText(c.text);
   };
 
   const open = (next: View) => {
@@ -597,13 +592,9 @@ function chatTui(
     view = next;
     flash = "";
     const r = rooms.get(next.roomId);
-    const text = editor.getText();
-    if (r && (text === "" || text === prefill)) {
-      const id = next.participantId;
-      prefill = id ? `@${nameOf(r.state, id)} ` : "";
-      editor.setText(prefill);
-    }
-    if (r) markSeen(r, next.participantId);
+    compose(opened(r?.state, next, editor.getText(), prefill));
+    // The person looks at the view: its lines are seen.
+    if (r) for (const id of seenIn(r.state, next)) seen(r.state, id);
     redraw();
   };
 
@@ -654,35 +645,27 @@ function chatTui(
     ) {
       loadDto(r);
     }
-    // The open thread's participant left the roster: its @name can no
-    // longer resolve, and it has no row. Back to the room's timeline.
-    if (
-      kind === "_client_participant_removed" &&
-      roomId === view.roomId &&
-      view.participantId === line.participantId
-    ) {
+    // The open thread's participant left the roster: back to the room's
+    // timeline.
+    const back =
+      kind === "_client_participant_removed"
+        ? left(view, roomId, line.participantId)
+        : undefined;
+    if (back) {
       // Our own remove may have set the status line already.
       const keep = flash;
-      open({ roomId });
+      open(back);
       flash = keep;
       setStatus();
       return;
     }
-    const here =
-      roomId === view.roomId &&
-      (!view.participantId || view.participantId === line.participantId);
-    if (here) {
+    if (shows(view, roomId, line.participantId)) {
       seen(r.state, line.participantId);
       if (e) draw(r.state, e);
     }
     // A rename moves an untouched thread pre-fill to the new name.
-    if (roomId === view.roomId && view.participantId && prefill) {
-      const next = `@${nameOf(r.state, view.participantId)} `;
-      if (next !== prefill && editor.getText() === prefill) {
-        prefill = next;
-        editor.setText(next);
-      }
-    }
+    const c = renamed(r.state, roomId, view, editor.getText(), prefill);
+    if (c) compose(c);
     // A roster line can rename the target, and any line can change the
     // count of rooms that wait while the sidebar is hidden.
     setStatus();
@@ -738,7 +721,8 @@ function chatTui(
         return;
       }
       const label = r?.entry.title ?? id;
-      if (code === 0 && view.roomId === id) open(rows()[0] ?? { roomId: "" });
+      const next = code === 0 ? dismissed(rooms, view, id) : undefined;
+      if (next) open(next);
       flash = code === 0 ? `${label} was dismissed` : line;
       setStatus();
     };
@@ -823,23 +807,17 @@ function chatTui(
       const up =
         matchesKey(data, Key.alt("up")) || matchesKey(data, Key.ctrl("p"));
       if (!down && !up) return undefined;
-      const all = rows();
-      const next =
-        all[all.findIndex((row) => same(row, view)) + (down ? 1 : -1)];
+      const next = step(rooms, view, down);
       if (next) open(next);
       return { consume: true };
     });
 
     editor.onChange = (text) => {
-      if (text !== prefill) prefill = "";
-      // In a thread, an empty composer always holds the thread's `@name `:
-      // when the thread opens, after a send, and after a delete by hand.
-      // The editor has already cleared its state when it reports "".
-      const r = rooms.get(view.roomId);
-      if (text === "" && view.participantId && r) {
-        prefill = `@${nameOf(r.state, view.participantId)} `;
-        editor.setText(prefill);
-      } else setStatus();
+      // In a thread, an empty composer refills with `@name `. The editor
+      // has already cleared its state when it reports "".
+      const c = edited(rooms.get(view.roomId)?.state, view, text, prefill);
+      compose(c);
+      if (c.text === undefined) setStatus();
       // A question that came while the person typed opens once the text is
       // sent or deleted.
       offer();
@@ -1132,8 +1110,9 @@ function chatTui(
     // another pop-up or over text the person typed.
     offer = () => {
       const text = editor.getText();
-      const typed = text !== "" && text !== prefill;
-      const next = queue.next(panel !== undefined || done || typed);
+      const next = queue.next(
+        panel !== undefined || done || touched(text, prefill),
+      );
       if (next) question(next.q.id);
     };
 
