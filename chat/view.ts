@@ -130,6 +130,7 @@ export const left = (view: View, roomId: string, participantId: string) =>
     : undefined;
 
 /** A room was dismissed. When the view was in it, the view to go to: the
- *  first row, or none when no room is left. `rooms` no longer holds it. */
+ *  first row, or `{ roomId: "" }` when no room is left. `rooms` no longer
+ *  holds it. */
 export const dismissed = (rooms: Rooms, view: View, roomId: string) =>
   view.roomId === roomId ? (rows(rooms)[0] ?? { roomId: "" }) : undefined;
