@@ -100,8 +100,8 @@ import {
   type Composer,
   dismissed,
   edited,
-  left,
   opened,
+  participantLeft,
   renamed,
   rows,
   same,
@@ -649,7 +649,7 @@ function chatTui(
     // timeline.
     const back =
       kind === "_client_participant_removed"
-        ? left(view, roomId, line.participantId)
+        ? participantLeft(view, roomId, line.participantId)
         : undefined;
     if (back) {
       // Our own remove may have set the status line already.
@@ -817,6 +817,8 @@ function chatTui(
       // has already cleared its state when it reports "".
       const c = edited(rooms.get(view.roomId)?.state, view, text, prefill);
       compose(c);
+      // A text set above came back through this handler, which set the
+      // status line then.
       if (c.text === undefined) setStatus();
       // A question that came while the person typed opens once the text is
       // sent or deleted.

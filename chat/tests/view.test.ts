@@ -9,13 +9,14 @@ import { newRoomState, type RoomState } from "../../client/room.ts";
 import {
   dismissed,
   edited,
-  left,
   opened,
+  participantLeft,
   renamed,
   rows,
   seenIn,
   shows,
   step,
+  touched,
 } from "../view.ts";
 
 /** A room whose roster is these names, each id `p-<name>`. `gone` names
@@ -63,6 +64,12 @@ test("the row keys step one row, and stop at either end", () => {
   assert.equal(step(all, { roomId: "r2" }, true), undefined);
 });
 
+test("from a view that is not a row, down goes to the first row", () => {
+  const all = rooms(["r1", room([])]);
+  assert.deepEqual(step(all, { roomId: "" }, true), { roomId: "r1" });
+  assert.equal(step(all, { roomId: "" }, false), undefined);
+});
+
 test("an untouched pre-fill follows the view", () => {
   const s = room(["ann", "bob"]);
   const ann = { roomId: "r1", participantId: "p-ann" };
@@ -92,6 +99,15 @@ test("typing drops the pre-fill; an empty thread composer holds @name again", ()
   assert.deepEqual(edited(s, ann, "@ann ", "@ann "), { prefill: "@ann " });
   assert.deepEqual(edited(s, ann, "", ""), { prefill: "@ann ", text: "@ann " });
   assert.deepEqual(edited(s, { roomId: "r1" }, "", ""), { prefill: "" });
+  // No room: nothing to name, so an empty composer stays empty.
+  assert.deepEqual(edited(undefined, ann, "", ""), { prefill: "" });
+});
+
+test("only text other than the pre-fill counts as typed", () => {
+  assert.ok(!touched("", ""));
+  assert.ok(!touched("@ann ", "@ann "));
+  assert.ok(touched("@ann hi", "@ann "));
+  assert.ok(touched("hi", ""));
 });
 
 test("a rename moves an untouched pre-fill, and leaves typed text", () => {
@@ -111,10 +127,10 @@ test("a rename moves an untouched pre-fill, and leaves typed text", () => {
 
 test("a thread whose participant left goes back to the timeline", () => {
   const ann = { roomId: "r1", participantId: "p-ann" };
-  assert.deepEqual(left(ann, "r1", "p-ann"), { roomId: "r1" });
-  assert.equal(left(ann, "r1", "p-bob"), undefined);
-  assert.equal(left(ann, "r2", "p-ann"), undefined);
-  assert.equal(left({ roomId: "r1" }, "r1", "p-ann"), undefined);
+  assert.deepEqual(participantLeft(ann, "r1", "p-ann"), { roomId: "r1" });
+  assert.equal(participantLeft(ann, "r1", "p-bob"), undefined);
+  assert.equal(participantLeft(ann, "r2", "p-ann"), undefined);
+  assert.equal(participantLeft({ roomId: "r1" }, "r1", "p-ann"), undefined);
 });
 
 test("a dismissed room goes to the first row", () => {

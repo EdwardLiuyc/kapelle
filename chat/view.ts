@@ -50,7 +50,9 @@ export const rows = (rooms: Rooms): View[] =>
     ...roster(state).map((p) => ({ roomId, participantId: p.id })),
   ]);
 
-/** The row below `view`, or above it; `undefined` past the end. */
+/** The row below `view`, or above it; `undefined` past the end. A view
+ *  that is not a row, as `{ roomId: "" }` after the last room went, steps
+ *  down to the first row and up to nothing. */
 export function step(rooms: Rooms, view: View, down: boolean) {
   const all = rows(rooms);
   return all[all.findIndex((row) => same(row, view)) + (down ? 1 : -1)];
@@ -124,7 +126,11 @@ export const shows = (view: View, roomId: string, participantId: string) =>
 /** A participant left the roster. When the open thread was theirs, the view
  *  to go back to: the room's timeline. Its `@name` can no longer resolve,
  *  and it has no row. */
-export const left = (view: View, roomId: string, participantId: string) =>
+export const participantLeft = (
+  view: View,
+  roomId: string,
+  participantId: string,
+) =>
   roomId === view.roomId && view.participantId === participantId
     ? { roomId }
     : undefined;
