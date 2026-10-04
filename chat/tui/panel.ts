@@ -184,11 +184,11 @@ function panelParts({
       // ponytail: placed once; a resize or ctrl+t while it is open
       // leaves it where it was, until it closes.
       const cols = process.stdout.columns || 80;
-      const left = shown() ? SIDEBAR_WIDTH : 2;
+      const gutter = shown() ? SIDEBAR_WIDTH : 2;
       overlay = tui.showOverlay(frame, {
         anchor: "center",
-        offsetX: Math.floor(left / 2),
-        width: Math.max(10, Math.min(80, cols - left - 4)),
+        offsetX: Math.floor(gutter / 2),
+        width: Math.max(10, Math.min(80, cols - gutter - 4)),
         maxHeight: "80%",
       });
     }

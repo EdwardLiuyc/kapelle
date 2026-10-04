@@ -19,13 +19,14 @@ import { rows, same, type View } from "../view.ts";
 const asks = (state: RoomState, id: string) =>
   [...state.questions.values()].some((q) => q.participantId === id);
 
-/** Colour only says why a participant needs the person: magenta for a
- *  question, yellow for a stall. The circle says that something waits. */
+/** The sidebar's width, in columns. */
 const SIDEBAR_WIDTH = 26;
 /** Below this many columns the sidebar starts hidden. */
 const NARROW = 70;
 
-/** A participant's mark: `●` when something waits, coloured by why. */
+/** A participant's mark: `●` when something waits, coloured by why.
+ *  Colour only says why a participant needs the person: magenta for a
+ *  question, yellow for a stall. The circle says that something waits. */
 const mark = (state: RoomState, id: string) => {
   const p = state.participants.get(id);
   const waits = Boolean(p?.unread) || needsAttention(state, id);
