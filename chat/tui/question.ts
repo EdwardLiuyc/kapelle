@@ -1,0 +1,165 @@
+/**
+ * `chat/tui/question.ts` — the full-screen chat's question box (M4-3, M4-12).
+ *
+ * When an `ask` participant waits on a permission, the box shows the room,
+ * the agent, the turn and the tool's input, with `deny` first, so a stray
+ * Enter says no, as the timeout would. It sends the answer, and names who
+ * won a lost race. Which question opens, and when, is `client/questions.ts`;
+ * this file opens the box in the pop-up of `chat/tui/panel.ts`.
+ */
+
+import { SelectList, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type {
+  PermissionAnswered,
+  PermissionDecision,
+} from "../../client/contract.ts";
+import { call, type DaemonAddress } from "../../client/daemon.ts";
+import type { QuestionQueue } from "../../client/questions.ts";
+import { type Entry, nameOf } from "../../client/room.ts";
+import type { Followed } from "../../client/roomset.ts";
+import { dim } from "../common.ts";
+import { touched } from "../view.ts";
+import { EDITOR_THEME, type panelParts } from "./panel.ts";
+
+/** An open question, as the reducer keeps it. */
+type Question = Extract<Entry, { type: "permission" }>;
+/** The open questions over every room, oldest first. */
+type Queue = QuestionQueue<{ r: Followed; q: Question }>;
+
+/** The question box, in the pop-up `box`. `say` sets the status line's
+ *  message; `done` and `prefill` are read when a question may open. */
+function questionParts({
+  d,
+  queue,
+  editor,
+  box,
+  setStatus,
+  say,
+  end,
+  done,
+  prefill,
+}: {
+  d: DaemonAddress;
+  queue: Queue;
+  editor: { getText(): string };
+  box: ReturnType<typeof panelParts>;
+  setStatus: () => void;
+  say: (text: string) => void;
+  end: (code: number, ...last: string[]) => void;
+  done: () => boolean;
+  prefill: () => string;
+}) {
+  const { showPanel, hidePanel, words } = box;
+  /** Keeps an open question box true: its count follows the open
+   *  questions, and the box goes when its question left without a close
+   *  line, as when its room was dismissed elsewhere. */
+  const syncBox = () => {
+    if (!queue.asking || !box.panel) return;
+    const at = queue.place();
+    if (!at) hidePanel();
+    else box.panel.title = `question ${at.at} of ${at.of}`;
+  };
+  /**
+   * One question in the pop-up (M4-3): the room, the agent, the turn, what
+   * it wants to do, and the tool's input. `deny` comes first, so a stray
+   * Enter says no, as the timeout would; letters do nothing. Esc puts it
+   * aside, open.
+   */
+  const question = (id: string) => {
+    const found = queue.open().find(({ q }) => q.id === id);
+    // Picked from a menu drawn before it closed elsewhere.
+    if (!found) {
+      say("! that question already closed");
+      return hidePanel();
+    }
+    const { r, q } = found;
+    const list = new SelectList(
+      words(["deny", "allow"]),
+      2,
+      EDITOR_THEME.selectList,
+    );
+    list.onSelect = ({ value }) => void answer(q.id, value === "allow");
+    list.onCancel = hidePanel;
+    const turn = q.turn === undefined ? "" : ` · turn ${q.turn}`;
+    const who = [
+      `room   ${r.entry.title ?? r.entry.id}`,
+      `agent  ${nameOf(r.state, q.participantId)}${turn}`,
+    ];
+    showPanel("question", {
+      render: (w) => {
+        // Wrapped, not cut: the end of a command or a path is what the
+        // person judges. Both share what the screen holds, so the answer
+        // rows stay in the box (80% of the rows, less 8 for the box's
+        // own). The action takes up to half, and always one line and its
+        // `…`: a harness's title has no cap. The input gets the rest.
+        const room = Math.floor((process.stdout.rows || 24) * 0.8) - 8;
+        const action = wrapTextWithAnsi(`${q.kind} · ${q.title}`, w);
+        const most = Math.max(2, Math.ceil(room / 2));
+        if (action.length > most) {
+          action.splice(most - 1, Infinity, "…");
+        }
+        const input = Object.entries(q.input ?? {})
+          .slice(0, 8)
+          .flatMap(([k, v]) => wrapTextWithAnsi(`${k}: ${v}`, w))
+          .map(dim);
+        const fits = room - action.length;
+        if (input.length > 0 && input.length > fits) {
+          input.splice(Math.max(0, fits - 1), Infinity, dim("…"));
+        }
+        return [
+          ...who,
+          ...action,
+          ...input,
+          "",
+          ...list.render(w),
+          dim("↑↓ pick · enter answer · esc later"),
+        ];
+      },
+      handleInput: (key) => list.handleInput(key),
+      invalidate: () => list.invalidate(),
+    });
+    queue.show(q.id);
+    syncBox();
+    setStatus();
+  };
+  /** Sends the answer. A lost race names who won: the reply to a late
+   *  answer is `409`, and `GET /permissions/:id` says why it closed. */
+  const answer = async (id: string, allow: boolean) => {
+    hidePanel();
+    offer();
+    const path = `/permissions/${encodeURIComponent(id)}`;
+    try {
+      const res = await call<PermissionAnswered>(d, path, {
+        method: "POST",
+        body: { allow },
+      });
+      if (res.ok) return;
+      let why = res.error.message;
+      if (res.status === 409) {
+        const got = await call<PermissionDecision>(d, path);
+        if (got.ok && got.body.reason) {
+          why = `already closed: ${got.body.reason}`;
+        }
+      }
+      say(`! ${why}`);
+      setStatus();
+    } catch (err) {
+      // The daemon went away mid-request.
+      end(1, `! ${(err as Error).message}`);
+    }
+  };
+  // Decided 2026-10-01 (#49): a question opens by itself, but never over
+  // another pop-up or over text the person typed.
+  const offer = () => {
+    const text = editor.getText();
+    const next = queue.next(
+      box.panel !== undefined || done() || touched(text, prefill()),
+    );
+    if (next) question(next.q.id);
+  };
+
+  return { question, offer, syncBox };
+}
+
+export type { Question, Queue };
+export { questionParts };

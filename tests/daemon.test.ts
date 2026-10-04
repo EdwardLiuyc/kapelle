@@ -4274,9 +4274,10 @@ test("chat.ts prints an answer that comes in two chunks once", async (t) => {
 test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
   // S8, widened by M4-1: chat.ts imports `client/`, pi-tui and
   // `core/runtime.ts` (the `daemon.json` path), type imports included.
-  // Since M4-7 every file directly in chat/ holds the same rule, and they
-  // may import each other, but never chat.ts: the arrow is chat.ts → chat/,
-  // and chat.ts runs `main()` when it loads. chat/tests/ is not read: a test
+  // Since M4-7 every file directly in chat/ holds the same rule, and since
+  // M4-12 every file in chat/tui/ too. They may import each other, but
+  // never chat.ts: the arrow is chat.ts → chat/, and chat.ts runs `main()`
+  // when it loads. chat/tests/ is not read: a test
   // may import anything. `client/` is then followed file by file, so a
   // `client/` file that reached `core/` or `protocol/` at runtime fails here
   // too. A type-only import there is allowed: it is erased before the code
@@ -4297,11 +4298,13 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
     return [...staticImports, ...dynamicImports];
   };
   const screens = ["chat.ts"];
-  for (const entry of await readdir(join(root, "chat"), {
-    withFileTypes: true,
-  })) {
-    if (entry.isFile() && entry.name.endsWith(".ts")) {
-      screens.push(join("chat", entry.name));
+  for (const dir of ["chat", join("chat", "tui")]) {
+    for (const entry of await readdir(join(root, dir), {
+      withFileTypes: true,
+    })) {
+      if (entry.isFile() && entry.name.endsWith(".ts")) {
+        screens.push(join(dir, entry.name));
+      }
     }
   }
   const queue: string[] = [];
