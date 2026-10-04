@@ -6355,3 +6355,23 @@ test("the menu's help row shows the commands", {
   await press("\x03", "left the chat");
   assert.equal(await exited, 0, out());
 });
+
+test("Esc in a form opened from the menu goes back to the menu", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await press("\x0f", "new room …");
+  await press("\r", "folder");
+  // Esc returns to the menu; a second Esc still closes it.
+  await press("\x1b", "new room …");
+  await press("\x1b", "enter to send");
+  await press("\x03", "left the chat");
+  assert.equal(await exited, 0, out());
+});

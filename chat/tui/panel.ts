@@ -197,6 +197,8 @@ function panelParts({
   };
   /** A pick list in the pop-up. `back` is where Esc goes: the parent menu
    *  on a second-level list, and the whole pop-up closes by default. */
+  // The fifth parameter is the optional Esc fallback, not a required input.
+  // pi-lens-ignore: long-parameter-list
   const pickList = (
     title: string,
     items: SelectItem[],
@@ -277,8 +279,8 @@ function panelParts({
     if (value.startsWith("?")) return question(value.slice(1));
     if (value === "leave") return end(0, left());
     if (value === "help") return showHelp();
-    if (value === "new") return newForm();
-    if (value === "add") return addForm();
+    if (value === "new") return newForm(() => menu(p?.id));
+    if (value === "add") return addForm(() => menu(p?.id));
     if (value === "dismiss") return void run({ verb: "dismiss" });
     if (value === "agent" && r) {
       const ps = roster(r.state);
@@ -335,8 +337,11 @@ function panelParts({
   /**
    * A form in the pop-up: one row per field, then the row that sends it.
    * Enter on a row opens a text box, or a pick list for a field with
-   * `pick`. A refusal keeps the form open with its values.
+   * `pick`. A refusal keeps the form open with its values. `back` is where
+   * Esc goes; by default the pop-up closes.
    */
+  // The fifth parameter is the optional Esc fallback, not a required input.
+  // pi-lens-ignore: long-parameter-list
   const form = (
     title: string,
     fields: {
@@ -349,6 +354,7 @@ function panelParts({
     }[],
     go: string,
     command: (v: Record<string, string>) => RouteCommand | { error: string },
+    back: () => void = hidePanel,
   ) => {
     const values: Record<string, string> = Object.fromEntries(
       fields.map((f) => [f.id, f.value]),
@@ -436,7 +442,7 @@ function panelParts({
           }
         }
       },
-      hidePanel,
+      back,
     );
     showPanel(title, list);
   };
@@ -492,7 +498,7 @@ function panelParts({
     tui.requestRender();
   };
 
-  const addForm = () => {
+  const addForm = (back: () => void = hidePanel) => {
     const r = rooms.get(view().roomId);
     if (!r) {
       say("! no room: open one first");
@@ -531,10 +537,11 @@ function panelParts({
           base: v.base === "HEAD" ? undefined : v.base,
         },
       }),
+      back,
     );
   };
 
-  const newForm = () =>
+  const newForm = (back: () => void = hidePanel) =>
     form(
       "new room",
       [
@@ -572,6 +579,7 @@ function panelParts({
           },
         };
       },
+      back,
     );
 
   return {
