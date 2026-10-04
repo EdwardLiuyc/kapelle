@@ -56,7 +56,6 @@ import type {
   PermissionAnswered,
   PermissionDecision,
   RepoAdded,
-  RoomDto,
   RoomEventLine,
   RoomListEntry,
 } from "../client/contract.ts";
@@ -69,27 +68,32 @@ import {
 import { targetOf } from "../client/mention.ts";
 import { questionQueue } from "../client/questions.ts";
 import {
-  applyLine,
   type Entry,
   nameOf,
   needsAttention,
-  newRoomState,
   type RoomState,
   roster,
   seen,
   thread,
 } from "../client/room.ts";
+import {
+  codeOf,
+  type End,
+  type Ended,
+  type Followed,
+  roomSet,
+} from "../client/roomset.ts";
 import { parseLine } from "../client/submit.ts";
 import {
+  address,
   bold,
   cyan,
   dim,
+  endedLine,
   green,
   italic,
   magenta,
   plain,
-  readRoom,
-  reconcile,
   rosterOf,
   sgr,
   underline,
@@ -139,17 +143,6 @@ const EDITOR_THEME = {
     noMatch: dim,
   },
 };
-
-/** One room the screen follows: its stream runs into its own reducer for as
- *  long as the screen is up, whichever view is drawn. */
-interface Followed {
-  entry: RoomListEntry;
-  state: RoomState;
-  /** From `GET /rooms/:id`: each participant's checkout and notices. */
-  dto?: RoomDto;
-  /** Set when its stream ended and the room did not: the reason. */
-  lost?: string;
-}
 
 /** An open question, as the reducer keeps it. */
 type Question = Extract<Entry, { type: "permission" }>;
@@ -203,10 +196,8 @@ const SETTINGS_THEME = {
  * **One stream per room, all the time** (M4-2). Each room's stream runs into
  * its own reducer whichever view is drawn, so switching rows only redraws
  * the transcript from a reducer; nothing reconnects, and a line for a room
- * off screen still marks its row. A room made elsewhere joins on the next
- * `GET /rooms`, every 5 s. A dismissed room leaves the list. The screen
- * exits when every room it holds lost its stream; with no room left it
- * stays open, so the person can open one (M4-5).
+ * off screen still marks its row. Which rooms are followed, and when the
+ * screen ends, is `client/roomset.ts` (M4-11); this file says what happened.
  *
  * **Room commands** (M4-5): `ctrl+o` opens a menu, a pick list or a form
  * in a box at the centre of the timeline, and a typed command does the same
@@ -224,7 +215,18 @@ function chatTui(
   list: RoomListEntry[],
   selected?: string,
 ): Promise<number> {
-  const rooms = new Map<string, Followed>();
+  /** The screen's end, set where the screen's own end lives. */
+  let quit = (_why: End) => {};
+  const set = roomSet(d, address, {
+    line: (roomId, line, e) => onLine(roomId, line, e),
+    loaded: (roomId) => {
+      if (view.roomId === roomId) redraw();
+    },
+    polled: () => tui.requestRender(),
+    closed: (id, ended, r) => onClosed(id, ended, r),
+    end: (why) => quit(why),
+  });
+  const { rooms } = set;
   const tui = new TuiAltScreen(new ProcessTerminal());
   const transcript = new Container();
   const scroll = new ScrollView(transcript, { follow: "end", primary: true });
@@ -568,7 +570,7 @@ function chatTui(
         note(`room ${r.entry.id} · ${r.entry.cwd}`);
       }
       for (const p of dto) for (const { text } of p.notices) warn(`! ${text}`);
-      if (r.lost) warn(r.lost);
+      if (r.lost) warn(endedLine(r.lost, r.entry.id));
       const entries = id ? thread(r.state, id) : r.state.timeline;
       for (const e of entries) draw(r.state, e);
     } else {
@@ -598,23 +600,9 @@ function chatTui(
     redraw();
   };
 
-  /** Reads the room again for each participant's checkout and notices. */
-  const loadDto = (r: Followed) => {
-    call<RoomDto>(d, `/rooms/${r.entry.id}`).then(
-      (res) => {
-        if (!res.ok) return;
-        r.dto = res.body;
-        if (view.roomId === r.entry.id) redraw();
-      },
-      // The stream says what happened to the daemon; a header can wait.
-      () => {},
-    );
-  };
-
-  const onLine = (roomId: string, line: RoomEventLine) => {
+  const onLine = (roomId: string, line: RoomEventLine, e?: Entry) => {
     const r = rooms.get(roomId);
     if (!r) return;
-    const e = applyLine(r.state, line);
     const u = line.update;
     const kind = u.sessionUpdate;
     // After this chunk of lines: a replay can close a question in a later
@@ -636,15 +624,6 @@ function chatTui(
     }
     // A question came or closed behind the box.
     syncBox();
-    // A participant who joined after the room was read has no checkout or
-    // notices in the header until the room is read again.
-    if (
-      kind === "_client_participant_added" &&
-      r.dto &&
-      !r.dto.participants.some((p) => p.id === line.participantId)
-    ) {
-      loadDto(r);
-    }
     // The open thread's participant left the roster: back to the room's
     // timeline.
     const back =
@@ -671,6 +650,18 @@ function chatTui(
     setStatus();
   };
 
+  /** A room's stream ended and the screen goes on. With no room left it
+   *  stays, so the person can open one (M4-5). */
+  const onClosed = (id: string, ended: Ended, r?: Followed) => {
+    const gone = ended.kind === "dismissed";
+    if (gone) syncBox();
+    const label = r?.entry.title ?? id;
+    const next = gone ? dismissed(rooms, view, id) : undefined;
+    if (next) open(next);
+    flash = gone ? `${label} was dismissed` : endedLine(ended, id);
+    setStatus();
+  };
+
   return new Promise((finish) => {
     let done = false;
     // The transcript is printed to the normal screen on exit, so the
@@ -682,7 +673,7 @@ function chatTui(
     const end = (code: number, ...last: string[]) => {
       if (done) return;
       done = true;
-      clearInterval(poll);
+      set.stop();
       // The screen is going: a later throw gets Node's default again, a
       // stack and a non-zero exit, instead of being swallowed here.
       process.off("uncaughtException", crash);
@@ -704,40 +695,6 @@ function chatTui(
         ? `left room ${view.roomId}; rejoin with: kapelle chat attach ${view.roomId}`
         : "left the chat";
 
-    /** A room's stream ended: ask the daemon why. The screen ends when
-     *  every room it holds lost its stream. With no room left it stays, so
-     *  the person can open one (M4-5). */
-    const closed = async (id: string, err?: unknown) => {
-      const { code, line } = await reconcile(id);
-      const r = rooms.get(id);
-      if (code === 0) {
-        rooms.delete(id);
-        syncBox();
-      } else if (r) r.lost = line;
-      const all = [...rooms.values()];
-      if (all.length > 0 && !all.some((x) => !x.lost)) {
-        const why = err ? [`! ${(err as Error).message}`] : [];
-        end(code, ...why, line);
-        return;
-      }
-      const label = r?.entry.title ?? id;
-      const next = code === 0 ? dismissed(rooms, view, id) : undefined;
-      if (next) open(next);
-      flash = code === 0 ? `${label} was dismissed` : line;
-      setStatus();
-    };
-
-    const follow = (entry: RoomListEntry) => {
-      if (rooms.has(entry.id)) return;
-      const r: Followed = { entry, state: newRoomState() };
-      rooms.set(entry.id, r);
-      loadDto(r);
-      readRoom(entry.id, (line) => onLine(entry.id, line)).then(
-        () => closed(entry.id),
-        (err) => closed(entry.id, err),
-      );
-    };
-
     /** The measured harnesses, from `GET /harnesses`, asked once at the
      *  start and not awaited. Unset until it answers, and for good when this
      *  daemon has no such route or the ask failed: then the harness row is
@@ -753,36 +710,18 @@ function chatTui(
       () => {},
     );
 
-    // Rooms made in another terminal join here. While a room is open, a
-    // failed poll changes nothing: a stream that ends says what happened.
-    // With none open, no stream would: a daemon that is gone, or one that
-    // came back with a new token (`401`), ends the screen (M4-5).
-    // ponytail: exits rather than follows a restarted daemon; M6-7a makes
-    // the screen ride out a restart, as `attach` does.
-    const gone = () =>
-      end(
-        1,
-        "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat",
-      );
-    const poll = setInterval(() => {
-      call<RoomListEntry[]>(d, "/rooms").then(
-        (res) => {
-          if (!res.ok) {
-            if (res.status === 401 && rooms.size === 0) gone();
-            return;
-          }
-          for (const entry of res.body) {
-            const r = rooms.get(entry.id);
-            if (r) r.entry = entry;
-            else if (entry.status !== "dismissed") follow(entry);
-          }
-          tui.requestRender();
-        },
-        () => {
-          if (rooms.size === 0) gone();
-        },
-      );
-    }, 5000);
+    quit = (why) => {
+      if (why.kind === "gone") {
+        end(
+          1,
+          "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat",
+        );
+        return;
+      }
+      const { roomId, ended, err } = why;
+      const msg = err ? [`! ${(err as Error).message}`] : [];
+      end(codeOf(ended), ...msg, endedLine(ended, roomId));
+    };
 
     tui.addInputListener((data) => {
       if (matchesKey(data, Key.ctrl("c"))) {
@@ -938,7 +877,7 @@ function chatTui(
       if (panel) hidePanel();
       if (c.verb === "new" && out.room) {
         const { id, cwd, title, status, updatedAt, participants } = out.room;
-        follow({
+        set.add({
           id,
           cwd,
           title,
@@ -1459,7 +1398,7 @@ function chatTui(
       crash(err);
       return;
     }
-    for (const entry of list) follow(entry);
+    set.start(list);
     open(view);
   });
 }

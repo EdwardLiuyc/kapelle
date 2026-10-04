@@ -106,6 +106,7 @@ arrow that points back.
 | `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
 | `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. Both `chat/` screens draw from it. |
+| `client/roomset.ts` | The rooms a screen follows (M4-11): one stream and one reducer per room, the poll that adds rooms made elsewhere, and when the screen must end. `readRoom` and `reconcile` too. |
 | `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). Both `chat/` screens send through it. |
 | `client/questions.ts` | The queue of open questions over every room (M4-9): which one opens next, and its `n of m`. No I/O. |
 | `client/folder.ts` | Tab completion for a folder path, folders only (M4-5), and a typed folder as a full path, with no throw when the current folder was removed. |
