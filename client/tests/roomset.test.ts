@@ -39,7 +39,10 @@ async function fake(t: TestContext) {
     d: { port: 0, token: "tok" } as DaemonAddress,
     /** What `GET /rooms` answers, and with which status. */
     list: [] as RoomListEntry[],
+    /** `0` drops the connection instead. */
     listStatus: 200,
+    /** How many times `GET /rooms` was asked. */
+    polls: 0,
     status: new Map<string, RoomStatus | number>(),
     /** The lines each room's stream sends before it waits. */
     lines: new Map<string, RoomEventLine[]>(),
@@ -59,7 +62,11 @@ async function fake(t: TestContext) {
       .end(JSON.stringify(body));
   const server = createServer((req, res) => {
     const [, , id, events] = (req.url ?? "/").split("/");
-    if (!id) return json(res, daemon.listStatus, daemon.list);
+    if (!id) {
+      daemon.polls++;
+      if (daemon.listStatus === 0) return req.socket.destroy();
+      return json(res, daemon.listStatus, daemon.list);
+    }
     if (events) {
       res.writeHead(200, { "content-type": "text/event-stream" });
       for (const line of daemon.lines.get(id) ?? []) {
@@ -150,6 +157,21 @@ test("a room made elsewhere joins on the next poll", async (t) => {
   assert.deepEqual(said.ends, []);
 });
 
+test("a room followed already is not followed again, and the poll renews its entry", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.list = [{ ...entry("r1"), title: "renamed" }];
+  const { set } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => daemon.polls >= 3);
+  const r1 = set.rooms.get("r1");
+  assert.equal(r1?.entry.title, "renamed");
+  // As when the screen made the room and the poll saw it first.
+  set.add(entry("r1"));
+  assert.equal(set.rooms.get("r1"), r1);
+  assert.deepEqual(daemon.reads, ["r1"], "the room was read once");
+});
+
 test("a dismissed room leaves the set, and the set goes on", async (t) => {
   const daemon = await fake(t);
   daemon.status.set("r1", "active");
@@ -196,6 +218,18 @@ test("with no room left the set stays while the daemon answers", async (t) => {
   set.start([]);
   await until(() => said.polls >= 3);
   assert.deepEqual(said.ends, []);
+});
+
+test("with a room open a poll that fails or answers 401 does not end the set", async (t) => {
+  for (const listStatus of [0, 401]) {
+    const daemon = await fake(t);
+    daemon.status.set("r1", "active");
+    daemon.listStatus = listStatus;
+    const { set, said } = follow(t, daemon.d);
+    set.start([entry("r1")]);
+    await until(() => daemon.polls >= 3);
+    assert.deepEqual(said.ends, [], `poll answer ${listStatus}`);
+  }
 });
 
 test("with no room left the set ends when the daemon answers 401", async (t) => {
