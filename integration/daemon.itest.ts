@@ -20,17 +20,21 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type {
   ParticipantDto,
+  PendingDecision,
   RoomDto,
   RoomEventLine,
+  RunDto,
 } from "../client/contract.ts";
+import { READ_ONLY_KINDS } from "../core/policy.ts";
+import type { ClientPermissionEvent, ToolKind } from "../protocol/types.ts";
 import {
+  addRepo,
   bootDaemon,
-  type Daemon,
   daemonApi,
   gitRepo,
   needs,
@@ -53,16 +57,6 @@ async function poll<T>(
   throw new Error(`${what}: timed out`);
 }
 
-async function addRepo(d: Daemon, path: string): Promise<void> {
-  const r = await daemonApi<{ error?: { message: string } }>(
-    d,
-    "POST",
-    "/repos",
-    { path },
-  );
-  assert.equal(r.status, 200, r.body.error?.message);
-}
-
 /** Does `branch` carry `file`? False when the branch is gone, too. */
 function onBranch(root: string, branch: string, file: string): boolean {
   return (
@@ -71,27 +65,18 @@ function onBranch(root: string, branch: string, file: string): boolean {
   );
 }
 
-interface RunReply {
-  id: string;
-  status: string;
-  tasks: { id: string; status: string; branch?: string }[];
-  error?: { message: string };
-}
-
 /** The task ran to its end. `warned` is still an end: the harness's own
  *  report did not match its changes, and that report is the model's prose. */
 const finished = (status: string) => status === "done" || status === "warned";
+
+/** A kind `safe` refuses. Not only `edit`: a harness may write through its
+ *  shell (`execute`), and that request reaches the same queue. */
+const mutating = (kind: string) => !READ_ONLY_KINDS.has(kind as ToolKind);
 
 /** The suite's 180 s per-test cap is shorter than this file's waits: one
  *  start plus one 150 s poll can pass it, and the room test polls twice. A
  *  per-test cap this size lets `poll` report what timed out. */
 const SLOW = { timeout: 400_000 } as const;
-
-interface Pending {
-  id: string;
-  runId: string;
-  kind: string;
-}
 
 /**
  * Starts an `ask` run of one write task, answers every decision it queues
@@ -102,23 +87,28 @@ async function answeredRun(t: TestContext, agent: string, allow: boolean) {
   const cwd = await gitRepo(t);
   await addRepo(d, cwd);
 
-  const posted = await daemonApi<RunReply>(d, "POST", "/runs", {
+  const posted = await daemonApi<RunDto>(d, "POST", "/runs", {
     cwd,
     run: { agent, mode: "ask", tasks: [{ id: "one", prompt: WRITE_PROMPT }] },
   });
-  assert.equal(posted.status, 202, posted.body.error?.message);
+  assert.equal(posted.status, 202, JSON.stringify(posted.body));
   const runId = posted.body.id;
 
   const asked: string[] = [];
   const run = await poll("run settled", async () => {
-    const pending = await daemonApi<Pending[]>(d, "GET", "/permissions");
-    for (const p of pending.body.filter((p) => p.runId === runId)) {
+    const pending = await daemonApi<PendingDecision[]>(
+      d,
+      "GET",
+      "/permissions",
+    );
+    for (const p of pending.body) {
+      if (!("runId" in p) || p.runId !== runId) continue;
       asked.push(p.kind);
       const r = await daemonApi(d, "POST", `/permissions/${p.id}`, { allow });
       // 409: the decision closed between the list and the answer.
       assert.ok(r.status === 200 || r.status === 409, `answer: ${r.status}`);
     }
-    const r = await daemonApi<RunReply>(d, "GET", `/runs/${runId}`);
+    const r = await daemonApi<RunDto>(d, "GET", `/runs/${runId}`);
     return r.body.status === "running" ? undefined : r.body;
   });
   return { cwd, run, asked };
@@ -136,13 +126,16 @@ for (const [agent, bin] of [
   }, async (t) => {
     const { cwd, run, asked } = await answeredRun(t, agent, false);
 
-    assert.ok(asked.length > 0, "the harness asked the daemon at least once");
+    assert.ok(
+      asked.some(mutating),
+      `the harness asked the daemon to change something: ${JSON.stringify(asked)}`,
+    );
     assert.ok(
       finished(run.status),
       `a denial ends the turn, not the run: ${run.status}`,
     );
     const [task] = run.tasks;
-    assert.ok(task);
+    assert.ok(task, "the run has its one task");
     assert.equal(
       task.branch !== undefined && onBranch(cwd, task.branch, "PROOF.md"),
       false,
@@ -157,7 +150,10 @@ for (const [agent, bin] of [
   }, async (t) => {
     const { cwd, run, asked } = await answeredRun(t, agent, true);
 
-    assert.ok(asked.length > 0, "the harness asked the daemon at least once");
+    assert.ok(
+      asked.some(mutating),
+      `the harness asked the daemon to change something: ${JSON.stringify(asked)}`,
+    );
     assert.ok(finished(run.status), run.status);
     const [task] = run.tasks;
     assert.ok(task?.branch, "a task that wrote keeps its branch");
@@ -171,9 +167,6 @@ for (const [agent, bin] of [
 }
 
 type RoomReply = RoomDto & { error?: { message: string } };
-type RoomLine = Omit<RoomEventLine, "update"> & {
-  update: { sessionUpdate: string; allow?: boolean; kind?: string };
-};
 
 test("claude: a room participant moved from safe to auto is told, and still asks", {
   skip: needs("claude-agent-acp"),
@@ -189,7 +182,8 @@ test("claude: a room participant moved from safe to auto is told, and still asks
   });
   assert.equal(open.status, 201, open.body.error?.message);
   const roomId = open.body.id;
-  const [p] = open.body.participants as [ParticipantDto];
+  const [p] = open.body.participants;
+  assert.ok(p, "the room opened with its participant");
   const base = `/rooms/${roomId}/agents/${p.id}`;
 
   const turn = async () => {
@@ -197,18 +191,25 @@ test("claude: a room participant moved from safe to auto is told, and still asks
       text: WRITE_PROMPT,
     });
     assert.equal(sent.status, 202);
-    await poll("turn ended", async () => {
+    const status = await poll("turn ended", async () => {
       const r = await daemonApi<ParticipantDto>(d, "GET", base);
-      return r.body.status === "busy" ? undefined : true;
+      return r.body.status === "busy" ? undefined : r.body.status;
     });
+    // `exited` is a dead harness, not a mode bug: say so here.
+    assert.equal(status, "idle", "the turn ended with the harness alive");
   };
 
   await turn();
+  // Plan mode is advisory, so turn 1 may have written anyway
+  // (`claude.itest.ts`). Remove it, so the file below is turn 2's.
+  const proof = join(p.worktree, "PROOF.md");
+  rmSync(proof, { force: true });
   const patched = await daemonApi(d, "PATCH", base, { mode: "auto" });
   assert.equal(patched.status, 200);
   await turn();
-  // Read before the dismissal, which may remove the checkout.
-  const wrote = existsSync(join(p.worktree, "PROOF.md"));
+  // Read before the dismissal, which may remove the checkout. Claude writes
+  // with its own tool, not `fs/write_text_file`, so no `_client_wrote_file`.
+  const wrote = existsSync(proof);
 
   const dismissed = await daemonApi(d, "POST", `/rooms/${roomId}/dismiss`);
   assert.equal(dismissed.status, 200);
@@ -216,26 +217,31 @@ test("claude: a room participant moved from safe to auto is told, and still asks
   const res = await fetch(`${d.url}/rooms/${roomId}/agents/${p.id}/events`, {
     headers: { authorization: `Bearer ${d.token}` },
   });
+  assert.equal(res.status, 200, "the participant's stream opened");
   const text = await res.text();
-  const lines: RoomLine[] = [];
+  const lines: RoomEventLine[] = [];
   for (const raw of text.split("\n")) {
     if (!raw.startsWith("data: ")) continue;
     try {
-      lines.push(JSON.parse(raw.slice(6)) as RoomLine);
+      lines.push(JSON.parse(raw.slice(6)) as RoomEventLine);
     } catch {
       assert.fail(`bad SSE line from the room: ${raw.slice(0, 120)}`);
     }
   }
 
   // Split the decisions by turn, at each user message.
-  const turns: { allow?: boolean; kind?: string }[][] = [];
+  const turns: ClientPermissionEvent[][] = [];
   for (const { update } of lines) {
     if (update.sessionUpdate === "_client_user_message") turns.push([]);
-    if (update.sessionUpdate === "_client_permission")
+    if (update.sessionUpdate === "_client_permission") {
       turns.at(-1)?.push(update);
+    }
   }
   assert.equal(turns.length, 2);
-  const [safe, auto] = turns as [(typeof turns)[0], (typeof turns)[0]];
+  const [safe, auto] = turns as [
+    ClientPermissionEvent[],
+    ClientPermissionEvent[],
+  ];
 
   // Turn 1, safe: plan mode was sent, so claude asks to leave it, and is refused.
   assert.ok(
@@ -243,8 +249,8 @@ test("claude: a room participant moved from safe to auto is told, and still asks
     `safe refused a switch_mode: ${JSON.stringify(safe)}`,
   );
   assert.ok(
-    safe.every((u) => u.allow === false),
-    "safe allowed nothing",
+    safe.every((u) => u.allow === false || !mutating(u.kind)),
+    `safe allowed nothing that changes a file: ${JSON.stringify(safe)}`,
   );
 
   // Turn 2, auto: `default` was sent, so claude is out of plan mode and does
@@ -254,9 +260,5 @@ test("claude: a room participant moved from safe to auto is told, and still asks
     auto.every((u) => u.kind !== "switch_mode"),
     `auto: no switch_mode, so the mode change reached claude: ${JSON.stringify(auto)}`,
   );
-  assert.ok(
-    auto.every((u) => u.allow === true),
-    "auto allowed every request",
-  );
-  assert.ok(wrote, "PROOF.md is in the participant's checkout");
+  assert.ok(wrote, "turn 2 wrote PROOF.md in the participant's checkout");
 });

@@ -50,6 +50,7 @@ import { stateDirFor } from "../core/runtime.ts";
 import { processIdentity } from "../core/sweep.ts";
 import { openWorktrees } from "../core/worktree.ts";
 import {
+  addRepo as added,
   bootDaemon as boot,
   type CliResult,
   type Daemon,
@@ -112,13 +113,6 @@ const mockRun = (
   tasks: Record<string, unknown>[],
   rest: Record<string, unknown> = {},
 ) => ({ cmd: `node ${MOCK_AGENT}`, mode: "auto", ...rest, tasks });
-
-/** Registers `path` and returns it, so a test reads `cwd = await added(...)`. */
-async function added(d: Daemon, path: string): Promise<string> {
-  const r = await api(d, "POST", "/repos", { path });
-  assert.equal(r.status, 200, r.body.error?.message);
-  return path;
-}
 
 /** Polls `GET /runs/:id` until the run leaves `running`. */
 async function settled(d: Daemon, id: string): Promise<Reply> {

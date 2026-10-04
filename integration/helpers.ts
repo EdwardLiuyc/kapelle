@@ -13,6 +13,7 @@
  * goes red on a model update and teaches everyone to ignore the suite.
  */
 
+import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -332,6 +333,19 @@ export async function daemonApi<T>(
       }`,
     );
   }
+}
+
+/** Registers `path` with the daemon and returns it, so a test reads
+ *  `cwd = await addRepo(d, ...)`. */
+export async function addRepo(d: Daemon, path: string): Promise<string> {
+  const r = await daemonApi<{ error?: { message: string } }>(
+    d,
+    "POST",
+    "/repos",
+    { path },
+  );
+  assert.equal(r.status, 200, r.body?.error?.message);
+  return path;
 }
 
 /**
