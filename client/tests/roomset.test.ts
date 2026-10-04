@@ -238,7 +238,9 @@ test("with no room left the set ends when the daemon answers 401", async (t) => 
   const { set, said } = follow(t, daemon.d);
   set.start([]);
   await until(() => said.ends.length > 0);
-  assert.deepEqual(said.ends[0], { kind: "gone" });
+  // The polls after it must not end the set again.
+  await new Promise((r) => setTimeout(r, 5 * POLL_MS));
+  assert.deepEqual(said.ends, [{ kind: "gone" }]);
 });
 
 test("with no room left the set ends when the daemon is gone", async (t) => {
@@ -247,7 +249,9 @@ test("with no room left the set ends when the daemon is gone", async (t) => {
   set.start([]);
   daemon.stop();
   await until(() => said.ends.length > 0);
-  assert.deepEqual(said.ends[0], { kind: "gone" });
+  // The polls after it must not end the set again.
+  await new Promise((r) => setTimeout(r, 5 * POLL_MS));
+  assert.deepEqual(said.ends, [{ kind: "gone" }]);
 });
 
 test("reconcile says what happened, not a line", async (t) => {

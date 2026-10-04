@@ -136,8 +136,8 @@ export interface RoomSetEvents {
   /** A room's stream ended and the set goes on. `r` is the room, already
    *  out of the set when it was dismissed. */
   closed(roomId: string, ended: Ended, r: Followed | undefined): void;
-  /** The set ends. The screen calls `stop`; a stream that ends later still
-   *  calls `closed` or `end`. */
+  /** The set ends: called once, and the poll stops with it. A stream that
+   *  ends later still calls `closed`. */
   end(why: End): void;
 }
 
@@ -162,6 +162,14 @@ export function roomSet(
 ): RoomSet {
   const rooms = new Map<string, Followed>();
   let poll: NodeJS.Timeout | undefined;
+  let over = false;
+  /** Ends the set once: a poll that fails again must not end it again. */
+  const finish = (why: End) => {
+    if (over) return;
+    over = true;
+    clearInterval(poll);
+    on.end(why);
+  };
 
   /** Reads the room again for each participant's checkout and notices. */
   const loadDto = (r: Followed) => {
@@ -198,7 +206,7 @@ export function roomSet(
     else if (r) r.lost = ended;
     const all = [...rooms.values()];
     if (all.length > 0 && !all.some((x) => !x.lost)) {
-      on.end({ kind: "lost", roomId: id, ended, err });
+      finish({ kind: "lost", roomId: id, ended, err });
       return;
     }
     on.closed(id, ended, r);
@@ -225,7 +233,7 @@ export function roomSet(
     call<RoomListEntry[]>(d, "/rooms").then(
       (res) => {
         if (!res.ok) {
-          if (res.status === 401 && rooms.size === 0) on.end({ kind: "gone" });
+          if (res.status === 401 && rooms.size === 0) finish({ kind: "gone" });
           return;
         }
         for (const entry of res.body) {
@@ -236,7 +244,7 @@ export function roomSet(
         on.polled();
       },
       () => {
-        if (rooms.size === 0) on.end({ kind: "gone" });
+        if (rooms.size === 0) finish({ kind: "gone" });
       },
     );
   };
@@ -245,6 +253,7 @@ export function roomSet(
     rooms,
     add,
     start(list) {
+      clearInterval(poll);
       poll = setInterval(tick, pollMs);
       for (const entry of list) add(entry);
     },
