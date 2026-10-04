@@ -5347,6 +5347,73 @@ test("kapelle chat with no rooms opens the screen, and says how to open one", {
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("kapelle chat with no rooms refuses /add on the status line, and leave in the menu ends the chat", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await screen.press("/add\r", "no room: open one first");
+  // The menu's last row is leave; up from the first one wraps to it.
+  await screen.press("\x0f", "leave");
+  await screen.press("\x1b[A", "leave");
+  screen.child.stdin.write("\r");
+  await screen.seen("left the chat");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal hides the sidebar with a click on «, and shows it with a click on »", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out } = await chatOnPty(t);
+  // SGR mouse, 1-based: the « sits at the end of the sidebar's first row.
+  await press("\x1b[<0;25;1M\x1b[<0;25;1m", "»");
+  await press("\x1b[<0;1;1M\x1b[<0;1;1m", "rooms");
+  child.stdin.write("\x03");
+  await seen("left room");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts on a real terminal opens a question that came behind the menu once the menu closes", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "asker", mode: "ask" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const asker = only(open.body);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.press("\x0f", "esc back · ctrl+o close");
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${asker.id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  // It never opens over another pop-up: it waits on the status line, which
+  // wraps here, so the "? " can sit on the row above.
+  await screen.seen("1 question · ctrl+o");
+  assert.doesNotMatch(plainText(screen.out()), /question 1 of 1/);
+  await screen.press("\x1b", "question 1 of 1");
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 test("an ask participant asks through /permissions, and nobody answering denies it at the timeout", async (t) => {
   const d = await boot(t, undefined, ["--permission-timeout", "2"]);
   const root = await gitRepo(t);
