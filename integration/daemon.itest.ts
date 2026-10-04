@@ -82,6 +82,11 @@ interface RunReply {
  *  report did not match its changes, and that report is the model's prose. */
 const finished = (status: string) => status === "done" || status === "warned";
 
+/** The suite's 180 s per-test cap is shorter than this file's waits: one
+ *  start plus one 150 s poll can pass it, and the room test polls twice. A
+ *  per-test cap this size lets `poll` report what timed out. */
+const SLOW = { timeout: 400_000 } as const;
+
 interface Pending {
   id: string;
   runId: string;
@@ -127,6 +132,7 @@ for (const [agent, bin] of [
 
   test(`${agent}: an ask run denied over HTTP writes nothing`, {
     skip,
+    ...SLOW,
   }, async (t) => {
     const { cwd, run, asked } = await answeredRun(t, agent, false);
 
@@ -147,6 +153,7 @@ for (const [agent, bin] of [
 
   test(`${agent}: an ask run allowed over HTTP writes the file`, {
     skip,
+    ...SLOW,
   }, async (t) => {
     const { cwd, run, asked } = await answeredRun(t, agent, true);
 
@@ -170,6 +177,7 @@ type RoomLine = Omit<RoomEventLine, "update"> & {
 
 test("claude: a room participant moved from safe to auto is told, and still asks", {
   skip: needs("claude-agent-acp"),
+  ...SLOW,
 }, async (t) => {
   const d = await bootDaemon(t);
   const cwd = await gitRepo(t);
@@ -202,18 +210,22 @@ test("claude: a room participant moved from safe to auto is told, and still asks
   // Read before the dismissal, which may remove the checkout.
   const wrote = existsSync(join(p.worktree, "PROOF.md"));
 
-  assert.equal(
-    (await daemonApi(d, "POST", `/rooms/${roomId}/dismiss`)).status,
-    200,
-  );
+  const dismissed = await daemonApi(d, "POST", `/rooms/${roomId}/dismiss`);
+  assert.equal(dismissed.status, 200);
   // The stream ends once the room's log closes, so read it after the dismissal.
   const res = await fetch(`${d.url}/rooms/${roomId}/agents/${p.id}/events`, {
     headers: { authorization: `Bearer ${d.token}` },
   });
-  const lines: RoomLine[] = (await res.text())
-    .split("\n")
-    .filter((l) => l.startsWith("data: "))
-    .map((l) => JSON.parse(l.slice(6)));
+  const text = await res.text();
+  const lines: RoomLine[] = [];
+  for (const raw of text.split("\n")) {
+    if (!raw.startsWith("data: ")) continue;
+    try {
+      lines.push(JSON.parse(raw.slice(6)) as RoomLine);
+    } catch {
+      assert.fail(`bad SSE line from the room: ${raw.slice(0, 120)}`);
+    }
+  }
 
   // Split the decisions by turn, at each user message.
   const turns: { allow?: boolean; kind?: string }[][] = [];
