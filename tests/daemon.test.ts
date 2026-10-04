@@ -27,7 +27,7 @@ import {
 import { createServer, request, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { userInfo } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   type Outcome,
@@ -4274,11 +4274,11 @@ test("chat.ts prints an answer that comes in two chunks once", async (t) => {
 test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
   // S8, widened by M4-1: chat.ts imports `client/`, pi-tui and
   // `core/runtime.ts` (the `daemon.json` path), type imports included.
-  // Since M4-7 every file directly in chat/ holds the same rule, and since
-  // M4-12 every file in chat/tui/ too. They may import each other, but
-  // never chat.ts: the arrow is chat.ts → chat/, and chat.ts runs `main()`
-  // when it loads. chat/tests/ is not read: a test
-  // may import anything. `client/` is then followed file by file, so a
+  // Since M4-7 every file in chat/ holds the same rule, and the walk goes
+  // into every subfolder, such as chat/tui/ (M4-12). They may import each
+  // other, but never chat.ts: the arrow is chat.ts → chat/, and chat.ts
+  // runs `main()` when it loads. A tests/ folder is not read: a test may
+  // import anything. `client/` is then followed file by file, so a
   // `client/` file that reached `core/` or `protocol/` at runtime fails here
   // too. A type-only import there is allowed: it is erased before the code
   // runs.
@@ -4298,14 +4298,13 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
     return [...staticImports, ...dynamicImports];
   };
   const screens = ["chat.ts"];
-  for (const dir of ["chat", join("chat", "tui")]) {
-    for (const entry of await readdir(join(root, dir), {
-      withFileTypes: true,
-    })) {
-      if (entry.isFile() && entry.name.endsWith(".ts")) {
-        screens.push(join(dir, entry.name));
-      }
-    }
+  for (const entry of await readdir(join(root, "chat"), {
+    withFileTypes: true,
+    recursive: true,
+  })) {
+    const file = relative(root, join(entry.parentPath, entry.name));
+    if (file.split(sep).includes("tests")) continue;
+    if (entry.isFile() && entry.name.endsWith(".ts")) screens.push(file);
   }
   const queue: string[] = [];
   for (const file of screens) {
@@ -5359,7 +5358,8 @@ test("kapelle chat with no rooms refuses /add on the status line, and leave in t
     "ctrl+o → new room",
   );
   await screen.press("/add\r", "no room: open one first");
-  // The menu's last row is leave; up from the first one wraps to it.
+  // The menu's last row is leave; up from the first one wraps to it. The
+  // keys reach the screen in order, so Enter picks the row up moved to.
   await screen.press("\x0f", "leave");
   await screen.press("\x1b[A", "leave");
   screen.child.stdin.write("\r");
