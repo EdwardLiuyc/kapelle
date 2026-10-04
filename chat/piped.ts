@@ -19,8 +19,9 @@ import {
   newRoomState,
   type RoomState,
 } from "../client/room.ts";
+import { codeOf, readRoom, reconcile } from "../client/roomset.ts";
 import { parseLine } from "../client/submit.ts";
-import { readRoom, reconcile, rosterOf } from "./common.ts";
+import { address, endedLine, rosterOf } from "./common.ts";
 
 /** Prints the reducer's entries as a conversation, for a piped stdin. An
  *  answer that grows prints only its new text. A participant's name comes
@@ -124,7 +125,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     | { id: string; after: number; left: number; done: () => void }
     | undefined;
 
-  const ended = readRoom(room.id, (line) => {
+  const ended = readRoom(address, room.id, (line) => {
     const e = applyLine(state, line);
     if (!e) return;
     printer.show(e);
@@ -172,9 +173,9 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
   for (;;) {
     const next = await Promise.race([nextLine(), ended]);
     if (next === "ended") {
-      const r = await reconcile(room.id);
-      (r.code ? console.error : console.log)(r.line);
-      code = r.code;
+      const r = await reconcile(address, room.id);
+      code = codeOf(r);
+      (code ? console.error : console.log)(endedLine(r, room.id));
       break;
     }
     if (next === null) break;
