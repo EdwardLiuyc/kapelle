@@ -1,0 +1,195 @@
+/**
+ * `chat/tui/transcript.ts` — the full-screen chat's transcript (M4-12).
+ *
+ * Draws the current view from its room's reducer: a heading per speaker,
+ * each answer as markdown while it streams, a tool call, a question and how
+ * it closed, and the notices. It owns the components drawn for the view, so
+ * an answer's next chunk re-sets the same one.
+ */
+
+import {
+  type Component,
+  Container,
+  Markdown,
+  type MarkdownTheme,
+  ScrollView,
+  Text,
+  type TuiAltScreen,
+} from "@earendil-works/pi-tui";
+import {
+  type Entry,
+  nameOf,
+  type RoomState,
+  thread,
+} from "../../client/room.ts";
+import type { Followed } from "../../client/roomset.ts";
+import {
+  bold,
+  cyan,
+  dim,
+  endedLine,
+  green,
+  italic,
+  magenta,
+  sgr,
+  underline,
+  yellow,
+} from "../common.ts";
+import type { View } from "../view.ts";
+
+const MARKDOWN_THEME: MarkdownTheme = {
+  heading: (s) => bold(cyan(s)),
+  link: (s) => underline(cyan(s)),
+  linkUrl: dim,
+  code: yellow,
+  codeBlock: (s) => s,
+  codeBlockBorder: dim,
+  quote: italic,
+  quoteBorder: dim,
+  hr: dim,
+  listBullet: cyan,
+  bold,
+  italic,
+  strikethrough: sgr(9, 29),
+  underline,
+};
+
+/** The transcript, its scroll view, and how to draw into them. The view is
+ *  read at each redraw. */
+function transcriptParts({
+  tui,
+  rooms,
+  view,
+  setStatus,
+}: {
+  tui: TuiAltScreen;
+  rooms: ReadonlyMap<string, Followed>;
+  view: () => View;
+  setStatus: () => void;
+}) {
+  const transcript = new Container();
+  const scroll = new ScrollView(transcript, { follow: "end", primary: true });
+  /** The component drawn for each entry of the current view. */
+  let drawn = new WeakMap<Entry, Markdown | Text>();
+  /** The participant whose name heads the lines drawn last; unset after
+   *  the person's own message. */
+  let speaker: string | undefined;
+
+  const add = (c: Component) => {
+    transcript.addChild(c);
+    tui.requestRender();
+  };
+  const note = (s: string) => add(new Text(dim(s), 1, 0));
+  const warn = (s: string) => add(new Text(yellow(s), 1, 0));
+
+  // Each answer's component. The reducer joins the chunks, and the whole
+  // text is re-set, because markdown only parses correctly as a whole.
+  // ponytail: re-parses the whole answer per frame (~5 ms at 53k chars,
+  // measured); split finished blocks into their own components if it lags.
+  /** A participant's name, before the first of its lines, tool calls
+   *  included, since someone else's. */
+  const heading = (id: string, name: string) => {
+    if (speaker === id) return;
+    speaker = id;
+    add(new Text(`\n${bold(green(name))}`, 1, 0));
+  };
+  const draw = (state: RoomState, e: Entry) => {
+    const name = nameOf(state, e.participantId);
+    switch (e.type) {
+      case "user":
+        speaker = undefined;
+        add(new Text(`\n${bold(cyan(`you → ${name}`))}\n${e.text}`, 1, 0));
+        return;
+      case "queued":
+        note(`queued for ${name}: ${e.text}`);
+        return;
+      case "queue_cleared":
+        warn(`! ${e.count} queued message(s) for ${name} dropped, unsent`);
+        return;
+      case "answer": {
+        let md = drawn.get(e) as Markdown | undefined;
+        if (!md) {
+          heading(e.participantId, name);
+          md = new Markdown("", 1, 0, MARKDOWN_THEME);
+          drawn.set(e, md);
+          add(md);
+        }
+        md.setText(e.text);
+        tui.requestRender();
+        return;
+      }
+      case "tool":
+        heading(e.participantId, name);
+        note(`  · ${e.title}`);
+        return;
+      case "turn_ended":
+        if (e.error) warn(`! ${name}'s turn failed: ${e.error}`);
+        else if (e.stopReason !== "end_turn") {
+          warn(`! ${name}'s turn ended: ${e.stopReason}`);
+        }
+        return;
+      case "exited":
+        warn(`! ${name}'s harness exited`);
+        return;
+      case "stall":
+        warn(`! ${name}: ${e.text}`);
+        return;
+      case "permission": {
+        // The TUI answers in its pop-up (M4-3); this line shows the question
+        // and, once it closes, how.
+        let line = drawn.get(e) as Text | undefined;
+        if (!line) {
+          line = new Text("", 1, 0);
+          drawn.set(e, line);
+          add(line);
+        }
+        let answer = "";
+        if (e.allow !== undefined) {
+          answer = ` — ${e.allow ? "allowed" : "denied"} (${e.reason})`;
+        }
+        line.setText(magenta(`? ${name} asks: ${e.title}${answer}`));
+        tui.requestRender();
+        return;
+      }
+    }
+  };
+
+  /** Draws the current view from its reducer, from the start. */
+  // ponytail: a switch rebuilds every component of the view; keep one
+  // transcript per view if a long history makes switching slow.
+  const redraw = () => {
+    transcript.clear();
+    drawn = new WeakMap();
+    speaker = undefined;
+    const r = rooms.get(view().roomId);
+    if (r) {
+      const id = view().participantId;
+      // `r.dto` is read when a participant joins, not when one leaves: the
+      // reducer says who left, so a removed one's notices are not drawn.
+      const dto =
+        r.dto?.participants.filter(
+          (p) =>
+            (!id || p.id === id) && !r.state.participants.get(p.id)?.removed,
+        ) ?? [];
+      if (id) {
+        const p = r.state.participants.get(id);
+        const where = dto[0]?.worktree ? ` · ${dto[0].worktree}` : "";
+        note(`${p?.name ?? id} (${p?.harness ?? "?"})${where}`);
+      } else {
+        note(`room ${r.entry.id} · ${r.entry.cwd}`);
+      }
+      for (const p of dto) for (const { text } of p.notices) warn(`! ${text}`);
+      if (r.lost) warn(endedLine(r.lost, r.entry.id));
+      const entries = id ? thread(r.state, id) : r.state.timeline;
+      for (const e of entries) draw(r.state, e);
+    } else {
+      note("no rooms. ctrl+o → new room, or type /new <harness>.");
+      note("ctrl+c leaves.");
+    }
+    scroll.scrollToEnd();
+    setStatus();
+  };
+  return { transcript, scroll, warn, draw, redraw };
+}
+
+export { transcriptParts };

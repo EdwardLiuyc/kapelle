@@ -27,7 +27,7 @@ import {
 import { createServer, request, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { userInfo } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   type Outcome,
@@ -4268,10 +4268,11 @@ test("chat.ts prints an answer that comes in two chunks once", async (t) => {
 test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
   // S8, widened by M4-1: chat.ts imports `client/`, pi-tui and
   // `core/runtime.ts` (the `daemon.json` path), type imports included.
-  // Since M4-7 every file directly in chat/ holds the same rule, and they
-  // may import each other, but never chat.ts: the arrow is chat.ts → chat/,
-  // and chat.ts runs `main()` when it loads. chat/tests/ is not read: a test
-  // may import anything. `client/` is then followed file by file, so a
+  // Since M4-7 every file in chat/ holds the same rule, and the walk goes
+  // into every subfolder, such as chat/tui/ (M4-12). They may import each
+  // other, but never chat.ts: the arrow is chat.ts → chat/, and chat.ts
+  // runs `main()` when it loads. A tests/ folder is not read: a test may
+  // import anything. `client/` is then followed file by file, so a
   // `client/` file that reached `core/` or `protocol/` at runtime fails here
   // too. A type-only import there is allowed: it is erased before the code
   // runs.
@@ -4293,10 +4294,11 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
   const screens = ["chat.ts"];
   for (const entry of await readdir(join(root, "chat"), {
     withFileTypes: true,
+    recursive: true,
   })) {
-    if (entry.isFile() && entry.name.endsWith(".ts")) {
-      screens.push(join("chat", entry.name));
-    }
+    const file = relative(root, join(entry.parentPath, entry.name));
+    if (file.split(sep).includes("tests")) continue;
+    if (entry.isFile() && entry.name.endsWith(".ts")) screens.push(file);
   }
   const queue: string[] = [];
   for (const file of screens) {
@@ -5335,6 +5337,74 @@ test("kapelle chat with no rooms opens the screen, and says how to open one", {
   );
   screen.child.stdin.write("\x03");
   await screen.seen("left the chat");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("kapelle chat with no rooms refuses /add on the status line, and leave in the menu ends the chat", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await screen.press("/add\r", "no room: open one first");
+  // The menu's last row is leave; up from the first one wraps to it. The
+  // keys reach the screen in order, so Enter picks the row up moved to.
+  await screen.press("\x0f", "leave");
+  await screen.press("\x1b[A", "leave");
+  screen.child.stdin.write("\r");
+  await screen.seen("left the chat");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal hides the sidebar with a click on «, and shows it with a click on »", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out } = await chatOnPty(t);
+  // SGR mouse, 1-based: the « sits at the end of the sidebar's first row.
+  await press("\x1b[<0;25;1M\x1b[<0;25;1m", "»");
+  await press("\x1b[<0;1;1M\x1b[<0;1;1m", "rooms");
+  child.stdin.write("\x03");
+  await seen("left room");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts on a real terminal opens a question that came behind the menu once the menu closes", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "asker", mode: "ask" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const asker = only(open.body);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.press("\x0f", "esc back · ctrl+o close");
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${asker.id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  // It never opens over another pop-up: it waits on the status line, which
+  // wraps here, so the "? " can sit on the row above.
+  await screen.seen("1 question · ctrl+o");
+  assert.doesNotMatch(plainText(screen.out()), /question 1 of 1/);
+  await screen.press("\x1b", "question 1 of 1");
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
 
