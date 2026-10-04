@@ -113,6 +113,7 @@ arrow that points back.
 | `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. Both `chat/` screens read a line through it. |
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
 | `chat/` | The chat screens (M4-7): `tui.ts`, a pi-tui screen over every room on a TTY; `piped.ts`, one room as plain lines; `common.ts`, what both use. With `chat.ts`, they talk HTTP only, and import only `client/`, pi-tui, `core/runtime.ts` and each other. |
+| `chat/view.ts` | What the TUI shows (M4-10): the rows and the row keys, the `@name` pre-fill, where a thread goes when its participant left or its room was dismissed, and what is seen. Pure. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 
 Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`
