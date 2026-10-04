@@ -5936,6 +5936,34 @@ test("ctrl+o in a thread opens that agent's menu over the timeline, and a mode p
   assert.doesNotMatch(scrollback(out()), /is now in ask mode/);
 });
 
+test("Esc in a second-level pop-up goes back to the menu", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  // Room menu → agent list → agent menu.
+  await press("\x0f", "agent …");
+  await press("\r", "pick an agent");
+  await press("\r", "mock-agent · mock-agent");
+  // Each second-level list returns to the agent's menu on Esc.
+  await press(`${DOWN}\r`, "mock-agent · mode");
+  await press("\x1b", "role · orchestrator");
+  await press(`${DOWN.repeat(2)}\r`, "mock-agent · role");
+  await press("\x1b", "rename …");
+  await press(`${DOWN.repeat(3)}\r`, "rename mock-agent");
+  await press("\x1b", "mode · auto");
+  // A first-level menu still closes the pop-up.
+  await press("\x1b", "enter to send");
+  // `pick an agent` returns to the room's menu.
+  await press("\x0f", "agent …");
+  await press("\r", "pick an agent");
+  await press("\x1b", "add agent …");
+  await press("\x1b", "enter to send");
+  child.stdin.write("\x03");
+  await seen("rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
 test("/add alone opens its form; a refusal stays in the form, and a fix adds the agent", {
   skip: noPty,
 }, async (t) => {

@@ -195,18 +195,20 @@ function panelParts({
     tui.setFocus(frame);
     setStatus();
   };
-  /** A pick list in the pop-up. */
+  /** A pick list in the pop-up. `back` is where Esc goes: the parent menu
+   *  on a second-level list, and the whole pop-up closes by default. */
   const pickList = (
     title: string,
     items: SelectItem[],
     current: string | undefined,
     then: (value: string) => void,
+    back: () => void = hidePanel,
   ) => {
     const list = new SelectList(items, panelRoom(), EDITOR_THEME.selectList);
     const at = items.findIndex((i) => i.value === current);
     if (at > 0) list.setSelectedIndex(at);
     list.onSelect = ({ value }) => then(value);
-    list.onCancel = hidePanel;
+    list.onCancel = back;
     showPanel(title, list);
   };
   const words = (values: string[]) =>
@@ -285,32 +287,47 @@ function panelParts({
         label: q.name,
         ...(q.role && { description: q.role }),
       }));
-      return pickList("pick an agent", items, undefined, (id) => menu(id));
+      return pickList(
+        "pick an agent",
+        items,
+        undefined,
+        (id) => menu(id),
+        () => menu(),
+      );
     }
     if (!p) return;
     const who = { id: p.id, name: p.name };
     if (value === "cancel") return void run({ verb: "cancel", ...who });
     if (value === "remove") return void run({ verb: "remove", ...who });
     if (value === "mode") {
-      return pickList(`${p.name} · mode`, words(MODES), p.mode, (mode) =>
-        run({ verb: "patch", ...who, change: { mode } }),
+      return pickList(
+        `${p.name} · mode`,
+        words(MODES),
+        p.mode,
+        (mode) => run({ verb: "patch", ...who, change: { mode } }),
+        () => menu(p.id),
       );
     }
     if (value === "role") {
       const roles = words(["none", ...ROLES]);
-      return pickList(`${p.name} · role`, roles, p.role ?? "none", (role) =>
-        run({
-          verb: "patch",
-          ...who,
-          change: { role: role === "none" ? null : role },
-        }),
+      return pickList(
+        `${p.name} · role`,
+        roles,
+        p.role ?? "none",
+        (role) =>
+          run({
+            verb: "patch",
+            ...who,
+            change: { role: role === "none" ? null : role },
+          }),
+        () => menu(p.id),
       );
     }
     if (value === "rename") {
       const input = textBox(p.name);
       input.onSubmit = (name) =>
         void run({ verb: "patch", ...who, change: { name: name.trim() } });
-      input.onEscape = hidePanel;
+      input.onEscape = () => menu(p.id);
       showPanel(`rename ${p.name}`, input);
     }
   };
