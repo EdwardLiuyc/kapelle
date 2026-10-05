@@ -19,6 +19,10 @@
  * Both cut at a line end and add `… N more lines`. The counts are taken
  * before the cut.
  *
+ * A question's diff rides on `_client_permission_queued`, so the event log
+ * writes it to disk and replays it to every client that attaches, as it
+ * does the question's `input`.
+ *
  * Every git call turns off what a user's config could add: colour, an
  * external diff, a text conversion and renames, and quotes in a path.
  */

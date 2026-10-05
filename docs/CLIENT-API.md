@@ -264,7 +264,7 @@ request that is not valid HTTP gets `400`.
 | `name_taken` | `409` | Another participant in the room has this name. Names are compared without ASCII case, so `Alice` takes `alice`. | Choose another name. |
 | `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
 | `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. | Show the message. |
-| `no_diff` | `409` | The participant's changes cannot be shown: its checkout is not a git checkout, or it has no branch to compare with. | Show the message. |
+| `no_diff` | `409` | The participant's changes cannot be shown: its checkout is not a git checkout, it has no branch to compare with, or git failed for another reason. The message says which. | Show the message. |
 | `internal` | `500` | An error the daemon did not expect. For example, a bug, or a git command that failed in a broken repository. | Show the message. Report it if the repository is fine. |
 
 **Status codes you will see:**
@@ -913,7 +913,9 @@ checkout, and for an edit that changes nothing.
 
 The text is cut at 32 KB, at a line end, and then ends with `… N more lines`. `files`,
 `added` and `removed` are counted before the cut. A new file has git's `new file mode`
-line. The text is the files' own: remove control characters before you draw it.
+line. The text is the files' own: remove control characters before you draw it. Like
+`input`, it is part of `_client_permission_queued`, so it is written to the run's or the
+room's event log on disk and replayed to every client that attaches.
 
 ### `GET /permissions/:id`
 
@@ -1243,8 +1245,9 @@ a new snapshot; nothing is kept.
 A checkout with no changes gives `{"text": "", "files": 0, "added": 0, "removed": 0}`.
 
 **Refusals:** `404` `room_not_found` or `participant_not_found`; `400` `invalid_request`
-for another `against`; `409` `no_diff` when the checkout is not a git checkout, or for
-`base` when the participant has no branch.
+for another `against`; `409` `no_diff` when the checkout is not a git checkout, for `base`
+when the participant has no branch, or when git fails for another reason (the message
+says why).
 
 ### Modes
 
