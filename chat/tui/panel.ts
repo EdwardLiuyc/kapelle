@@ -199,6 +199,10 @@ function panelParts({
     tui.setFocus(frame);
     setStatus();
   };
+  /** Gives an open pop-up the keys back after another view took them. */
+  const focusPanel = () => {
+    if (panel) tui.setFocus(frame);
+  };
   /** A pick list in the pop-up. `back` is where Esc goes: the parent menu
    *  on a second-level list, and the whole pop-up closes by default. */
   // The fifth parameter is the optional Esc fallback, not a required input.
@@ -608,6 +612,7 @@ function panelParts({
     },
     hidePanel,
     showPanel,
+    focusPanel,
     words,
     menu,
     showHelp,

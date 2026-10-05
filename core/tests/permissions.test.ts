@@ -3,7 +3,11 @@
  */
 
 import assert from "node:assert/strict";
+import { readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import test from "node:test";
+import { tempDir } from "../../integration/helpers.ts";
 import type {
   AgentEventEnvelope,
   PolicyRequest,
@@ -304,4 +308,42 @@ test("a question about an edit carries its diff, built only once it waits for a 
   assert.equal(await late, false);
   assert.equal(await decided, false);
   assert.deepEqual(queue.list(), []);
+});
+
+test("a question whose diff path escapes the temp folder writes nothing before the answer", async (t) => {
+  const dir = await tempDir(t);
+  const victim = join(dir, "victim.txt");
+  await writeFile(victim, "VICTIM\n");
+  const link = join(
+    tmpdir(),
+    `kapelle-perm-escape-${process.pid}-${Date.now()}`,
+  );
+  await symlink(victim, link);
+  t.after(() => rm(link, { force: true }));
+  // The target a symlink outside the root produces: the real path is inside
+  // the workspace, so the guard accepts it, but the relative path has to
+  // climb back down to the link. The diff builder must refuse that write.
+  const placeholder = join(tmpdir(), "kapelle-diff-placeholder", "0");
+  const escaped = join("..", relative(placeholder, link));
+  const { queue, bus, cancel, policy } = setup();
+  const edit: PolicyRequest = {
+    agent: "task-a",
+    toolCall: {
+      title: "Write outside",
+      kind: "edit",
+      edits: [{ abs: link, path: escaped, newText: "NEW\n" }],
+    },
+    options: [],
+  };
+  const appeared = new Promise<void>((ok) =>
+    bus.addListener((e) => {
+      if (e.update.sessionUpdate === "_client_permission_queued") ok();
+    }),
+  );
+  const decided = policy(edit);
+  await appeared;
+  assert.equal(queue.list()[0]?.diff, undefined);
+  cancel.abort();
+  assert.equal(await decided, false);
+  assert.equal(await readFile(victim, "utf8"), "VICTIM\n");
 });

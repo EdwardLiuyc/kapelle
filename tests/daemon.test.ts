@@ -58,6 +58,7 @@ import {
   daemonApi,
   useDaemonDirs as dirs,
   gitRepo,
+  HOSTILE_AGENT,
   MOCK_AGENT,
   REPO,
   runCli,
@@ -6511,6 +6512,38 @@ for (const scenario of ["diff-first", "file-text"]) {
   });
 }
 
+test("a direct fs/write_text_file ask carries its built diff", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${HOSTILE_AGENT} --scenario write-no-ask`,
+        role: "orchestrator",
+        mode: "ask",
+      },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const p = only(open.body);
+  await api(d, "POST", `/rooms/${open.body.id}/agents/${p.id}/messages`, {
+    text: "go",
+  });
+  const q = (await pendingOne(d)) as Pending & { diff?: Diff };
+  assert.equal(q.kind, "edit");
+  assert.equal(q.title, `fs/write_text_file ${join(p.worktree, "SNEAKY.md")}`);
+  assert.deepEqual(
+    q.diff && [q.diff.files, q.diff.added, q.diff.removed],
+    [1, 1, 0],
+  );
+  assert.match(
+    q.diff?.text ?? "",
+    /^diff --git a\/SNEAKY\.md b\/SNEAKY\.md\nnew file mode[\s\S]*\n\+written without asking$/,
+  );
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+});
+
 test("chat.ts on a real terminal shows a question's diff beside the timeline, goes back to the box, and answers from the pane", {
   skip: noPty,
 }, async (t) => {
@@ -6553,9 +6586,19 @@ test("chat.ts on a real terminal shows a question's diff beside the timeline, go
   // Esc brings the box back; the pane opens again from it.
   await screen.press("\x1b", "↑↓ pick · enter answer · esc later");
   await screen.press("\x1b[B\x1b[B\r", "y allow · n deny");
-  await screen.press("y", "Delete something");
-  // The diff stays in view after the answer, and says how it closed.
-  await screen.seen("allowed (client)");
+  await screen.press("y", "question 1 of 1 · allowed (client)");
+  // The next question opens over the pane; Esc puts it aside and shows the
+  // pane content that stayed. The transcript's own "allowed (client)" line
+  // would not prove this.
+  await screen.seen("delete · Delete something");
+  await screen.press("\x1b", "? 1 question");
+  await screen.press("\x1d", "ctrl+] type");
+  await screen.press("\x18", "ctrl+x view");
+  const shownAgain = screen.out().length;
+  await screen.press("\x18", "question 1 of 1 · allowed (client)");
+  const answerFrame = screen.out().slice(shownAgain);
+  assert.match(answerFrame, /question 1 of 1 · allowed \(client\)/);
+  assert.match(answerFrame, /\+written by the mock agent through the client/);
   const decided = await api<PermissionDecision>(
     d,
     "GET",
@@ -6564,6 +6607,117 @@ test("chat.ts on a real terminal shows a question's diff beside the timeline, go
   assert.deepEqual([decided.body.allow, decided.body.reason], [true, "client"]);
   screen.child.stdin.write("\x03");
   assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal answers a question from the pane with n", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT} --scenario diff-first`,
+        name: "asker",
+        role: "orchestrator",
+        mode: "ask",
+      },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`,
+    { text: "go" },
+  );
+  await screen.seen("view diff");
+  const write = await pendingOne(d);
+  await screen.press("\x1b[B\x1b[B\r", "y allow · n deny · ctrl+] type");
+  await screen.press("n", "question 1 of 1 · denied (client)");
+  const decided = await api<PermissionDecision>(
+    d,
+    "GET",
+    `/permissions/${write.id}`,
+  );
+  assert.deepEqual(
+    [decided.body.allow, decided.body.reason],
+    [false, "client"],
+  );
+  screen.child.stdin.write("\x03");
+  assert.equal(await screen.exited, 0, screen.out());
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+});
+
+test("chat.ts on a real terminal keeps a waiting question's keys when view changes opens it", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT} --scenario diff-first`,
+        name: "alice",
+        role: "orchestrator",
+        mode: "ask",
+      },
+      {
+        cmd: `node ${MOCK_AGENT} --scenario diff-first`,
+        name: "bob",
+        role: "developer",
+        mode: "ask",
+      },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const alice = open.body.participants.find((p) => p.name === "alice");
+  const bob = open.body.participants.find((p) => p.name === "bob");
+  assert.ok(alice && bob);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+
+  // Alice asks; her box opens. Bob asks while it is open, so his question
+  // waits behind hers.
+  await api(d, "POST", `/rooms/${open.body.id}/agents/${alice.id}/messages`, {
+    text: "go",
+  });
+  await screen.seen("deny");
+  await api(d, "POST", `/rooms/${open.body.id}/agents/${bob.id}/messages`, {
+    text: "go",
+  });
+  await screen.seen("question 1 of 2");
+  await new Promise((ok) => setTimeout(ok, 1_000));
+
+  // ctrl+o closes Alice's box (puts her question aside); ctrl+o opens the
+  // menu; choose agent … -> bob -> view changes. Bob's box opens as the menu
+  // closes, and the pane must not take its keys.
+  await screen.press("\x0f", "? 2 questions");
+  await screen.press("\x0f", "agent …");
+  await screen.press("\x1b[B\x1b[B\r", "pick an agent");
+  await screen.press("\x1b[B\r", "view changes");
+  await screen.press(`${"\x1b[B".repeat(6)}\r`, "↑↓ pick");
+  await screen.seen("bob · uncommitted");
+
+  const before = screen.out().length;
+  screen.child.stdin.write("b");
+  await new Promise((ok) => setTimeout(ok, 300));
+  assert.doesNotMatch(screen.out().slice(before), /bob · whole branch/);
+  screen.child.stdin.write("\x03");
+  assert.equal(await screen.exited, 0, screen.out());
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
 });
 
 test("chat.ts on a real terminal under 120 columns puts the question's diff where the timeline was", {
@@ -6598,9 +6752,12 @@ test("chat.ts on a real terminal under 120 columns puts the question's diff wher
     },
   );
   await screen.seen("view diff");
+  const beforeOpen = screen.out().length;
   // The counts survive only in a pane that took the timeline's place: beside
-  // it the pane is half the width, and the head is cut before them.
+  // it the pane is half the width, and the head is cut before them. The
+  // timeline's own text must also be gone, not merely cut from this row.
   await screen.press("\x1b[B\x1b[B\r", "ACP_TEST.md (new) · +1 −0");
+  assert.doesNotMatch(screen.out().slice(beforeOpen), /you → asker/);
   screen.child.stdin.write("\x03");
   assert.equal(await screen.exited, 0, screen.out());
 });

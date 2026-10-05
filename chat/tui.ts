@@ -607,6 +607,8 @@ function chatTui(
           },
         ],
       });
+      // A menu close can open a waiting question: that box keeps the keys.
+      if (box.panel) box.focusPanel();
     };
 
     /**

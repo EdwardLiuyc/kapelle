@@ -33,7 +33,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import type { PolicyEdit } from "../protocol/agent.ts";
@@ -51,6 +51,15 @@ const DIFF_FLAGS = [
   "--no-textconv",
   "--no-renames",
 ];
+
+/** The absolute file path inside `dir`, or a throw when `path` leaves it. */
+function underDir(dir: string, path: string): string {
+  const target = resolve(dir, path);
+  const rel = relative(dir, target);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`))
+    throw new Error(`diff path leaves its temporary folder: ${path}`);
+  return target;
+}
 
 /** `git` with its stdout. `git diff` exits 1 when the two sides differ,
  *  which is not an error here. */
@@ -122,22 +131,29 @@ export async function editDiff(
   try {
     const parts: string[] = [];
     for (const [i, e] of edits.entries()) {
-      const old =
-        e.oldText !== undefined
-          ? e.oldText
-          : await readFile(e.abs, "utf8").catch(() => null);
+      // A path from a symlink outside the root can carry `..` back into the
+      // workspace. Refuse it before any write: the diff text is not worth
+      // changing a file before the person answers.
+      if (isAbsolute(e.path))
+        throw new Error(`diff path is absolute: ${e.path}`);
       // One folder per edit, so two edits of one path do not meet. git
       // names each side as it is passed: `a/<path>` and `b/<path>`.
       const dir = join(tmp, String(i));
       const a = join("a", e.path);
       const b = join("b", e.path);
-      for (const [side, text] of [
-        [a, old],
-        [b, e.newText],
+      const aFile = underDir(dir, a);
+      const bFile = underDir(dir, b);
+      const old =
+        e.oldText !== undefined
+          ? e.oldText
+          : await readFile(e.abs, "utf8").catch(() => null);
+      for (const [file, text] of [
+        [aFile, old],
+        [bFile, e.newText],
       ] as const) {
         if (text === null) continue;
-        await mkdir(dirname(join(dir, side)), { recursive: true });
-        await writeFile(join(dir, side), text, "utf8");
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(file, text, "utf8");
       }
       let out = await git(dir, [
         "diff",

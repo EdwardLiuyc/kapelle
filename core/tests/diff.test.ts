@@ -4,8 +4,9 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
@@ -72,6 +73,33 @@ test("editDiff reads the old text from disk, shows a missing file as new, and gi
     { abs: join(dir, "old.ts"), path: "old.ts", newText: "one\ntwo\n" },
   ]);
   assert.equal(same, undefined);
+});
+
+test("editDiff cannot write through a path that leaves its temporary folder", async (t) => {
+  const dir = await tempDir(t);
+  const victim = join(dir, "victim.txt");
+  await writeFile(victim, "VICTIM\n");
+
+  const link = join(
+    tmpdir(),
+    `kapelle-edit-escape-${process.pid}-${Date.now()}`,
+  );
+  await symlink(victim, link);
+  t.after(() => rm(link, { force: true }));
+  // The actual per-edit folder is one level under the mkdtemp root. A path
+  // that escapes it and reaches this symlink must be refused before a write.
+  const placeholder = join(tmpdir(), "kapelle-diff-placeholder", "0");
+  const escaped = join("..", relative(placeholder, link));
+
+  await assert.rejects(
+    editDiff([{ abs: link, path: escaped, newText: "NEW\n" }]),
+    /leaves its temporary folder/,
+  );
+  assert.equal(await readFile(victim, "utf8"), "VICTIM\n");
+  await assert.rejects(
+    editDiff([{ abs: victim, path: "/etc/passwd", newText: "NEW\n" }]),
+    /is absolute/,
+  );
 });
 
 test("editDiff cuts a large edit at the question's cap", async () => {
