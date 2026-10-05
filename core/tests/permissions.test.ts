@@ -25,7 +25,7 @@ function setup(timeoutMs = 60_000) {
   bus.addListener((e) => events.push(e));
   const cancel = new AbortController();
   const policy = queue.policyFor("run-1", bus, cancel.signal);
-  return { queue, events, cancel, policy };
+  return { queue, events, bus, cancel, policy };
 }
 
 test("a read-only kind is approved without queueing", async () => {
@@ -267,7 +267,7 @@ test("an escape-heavy input is still capped at 4 KB of JSON", () => {
 });
 
 test("a question about an edit carries its diff, built only once it waits for a person", async () => {
-  const { queue, events, cancel, policy } = setup();
+  const { queue, events, bus, cancel, policy } = setup();
   const edit: PolicyRequest = {
     agent: "task-a",
     toolCall: {
@@ -277,11 +277,14 @@ test("a question about an edit carries its diff, built only once it waits for a 
     },
     options: [],
   };
+  // The diff is built off the call stack: the question appears once it is.
+  const appeared = new Promise<void>((ok) =>
+    bus.addListener((e) => {
+      if (e.update.sessionUpdate === "_client_permission_queued") ok();
+    }),
+  );
   const decided = policy(edit);
-  // Built off the call stack: wait for the question to appear.
-  for (let i = 0; i < 100 && queue.list().length === 0; i++) {
-    await new Promise((ok) => setTimeout(ok, 10));
-  }
+  await appeared;
   const [pending] = queue.list();
   assert.ok(pending?.diff);
   assert.deepEqual(

@@ -6566,6 +6566,67 @@ test("chat.ts on a real terminal shows a question's diff beside the timeline, go
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("chat.ts on a real terminal under 120 columns puts the question's diff where the timeline was", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT} --scenario diff-first`,
+        name: "asker",
+        role: "orchestrator",
+        mode: "ask",
+      },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`,
+    {
+      text: "go",
+    },
+  );
+  await screen.seen("view diff");
+  // The counts survive only in a pane that took the timeline's place: beside
+  // it the pane is half the width, and the head is cut before them.
+  await screen.press("\x1b[B\x1b[B\r", "ACP_TEST.md (new) · +1 −0");
+  screen.child.stdin.write("\x03");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("the diff route says no branch when the participant has none", async (t) => {
+  const d = await boot(t);
+  // Not a git repository, so there are no worktrees and no branch to name.
+  const cwd = await added(d, await tempDir(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, role: "orchestrator" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const p = only(open.body);
+  type DiffReply = Diff & { error: { code: string; message: string } };
+  const route = `/rooms/${open.body.id}/agents/${p.id}/diff`;
+  const base = await api<DiffReply>(d, "GET", `${route}?against=base`);
+  assert.equal(base.status, 409);
+  assert.equal(base.body.error.code, "no_diff");
+  assert.match(base.body.error.message, /no branch to compare with/);
+  const head = await api<DiffReply>(d, "GET", route);
+  assert.equal(head.status, 409);
+  assert.equal(head.body.error.code, "no_diff");
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+});
+
 test("chat.ts on a real terminal shows what an auto agent changed, from /diff and from its menu, file by file and against its base", {
   skip: noPty,
 }, async (t) => {
