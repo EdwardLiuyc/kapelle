@@ -67,8 +67,9 @@ export type Entry = { seq: number; participantId: string } & (
  * no line (M4-3). Format characters (`Cf`: bidi overrides, zero-width
  * marks, the soft hyphen, the Tags block) and the line and paragraph
  * separators go too: they change what a person reads in the question box,
- * not what runs, so a right-to-left override could flip a command. Only the
- * question's text goes through it: an answer is markdown, which draws its own.
+ * not what runs, so a right-to-left override could flip a command. The
+ * question's text and a stall warning's go through it (M4-4: a repeat warning
+ * quotes a tool title); an answer is markdown, which draws its own.
  */
 export const printable = (s: string) =>
   s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
@@ -250,9 +251,11 @@ export function applyLine(
       return add({ ...at, type: "exited" });
     case "_client_stall_warning": {
       if (p) p.stalled = true;
+      // A repeat warning quotes the harness's tool title.
+      const text = printable(u.text);
       const turn = openTurn();
-      if (turn) turn.stall = u.text;
-      return add({ ...at, type: "stall", kind: u.kind, text: u.text });
+      if (turn) turn.stall = text;
+      return add({ ...at, type: "stall", kind: u.kind, text });
     }
     case "_client_permission_queued": {
       const number = openTurn()?.number;

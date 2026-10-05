@@ -49,15 +49,25 @@ const ANSWER = [
   "",
   "> a quote",
   "",
+  "$$",
+  "a = b",
+  "",
+  "c = d",
+  "$$",
+  "",
+  "$$e$$",
+  "",
   "End.",
 ].join("\n");
 
-test("a cut is after a blank line, before a line that is not indented, outside a fence", () => {
+test("a cut is after a blank line, before a line that is not indented, outside a fence or a math block", () => {
   assert.equal(settled("one\n\ntwo", 0), 5);
   assert.equal(settled("one\n\n", 0), 0, "the next block has not started");
   assert.equal(settled("- a\n\n  b", 0), 0, "an indented line continues");
   assert.equal(settled("```\na\n\nb", 0), 0, "inside an open fence");
   assert.equal(settled("x\n\n```\na\n\nb\n```\n\ny", 0), 17);
+  assert.equal(settled("x\n\n$$\na\n\nb\n$$\n\ny", 0), 3, "inside $$");
+  assert.equal(settled("x\n\n$$a$$\n\ny", 0), 3, "never right after $$");
   assert.equal(settled("one\n\ntwo", 5), 5, "nothing after from");
 });
 

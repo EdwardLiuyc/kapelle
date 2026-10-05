@@ -1302,8 +1302,10 @@ drew while its text and width stay.
   finished blocks of an answer go into their own `Markdown`, which is parsed once and then
   drawn from its keep. A chunk parses only the rest.
 - **A cut is safe only after a blank line, before a line that is not indented, and outside
-  a code fence.** There, the pieces draw the same rows as the whole text: a piece keeps its
-  trailing blank line, and the next piece starts a new block. The one difference measured
+  a code fence and a `$$` math block.** There, the pieces draw the same rows as the whole
+  text: a piece keeps its trailing blank line, and the next piece starts a new block. A
+  math block is the exception, found in review: at the end of a piece it draws no blank
+  row after it, so there is never a cut right after a line with `$$`. The one difference measured
   is a rest that is only `>`: alone it draws an empty row, and at the end of a whole text
   it draws none. That lasts until the quote's text comes.
 

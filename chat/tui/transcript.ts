@@ -58,10 +58,14 @@ const MARKDOWN_THEME: MarkdownTheme = {
 /**
  * Where a streamed answer's finished blocks end (M4-4): the start of the
  * last line at or after `from` that follows a blank line, is not indented,
- * and is outside a code fence. `from` when there is none. Markdown cut there
- * draws as it does whole, so the text before it is parsed once, and a chunk
- * re-parses only the rest: a whole 53k-char answer took 13 to 23 ms per
- * frame (§M4-4).
+ * and is outside a code fence and a `$$` math block. `from` when there is
+ * none. Markdown cut there draws as it does whole, so the text before it is
+ * parsed once, and a chunk re-parses only the rest: a whole 53k-char answer
+ * took 13 to 23 ms per frame (§M4-4).
+ *
+ * Never right after a line with `$$`: pi-tui draws a math block with no
+ * blank row after it when it ends a text, so the gap to the next block
+ * would be lost.
  */
 // ponytail: a fence is any ``` or ~~~ line, and a reference link defined
 // below its use is drawn as text in a finished block. Use marked's lexer if
@@ -69,11 +73,17 @@ const MARKDOWN_THEME: MarkdownTheme = {
 export function settled(text: string, from: number): number {
   let cut = from;
   let fenced = false;
+  /** Inside a `$$` block: an odd count of `$$` opens or closes one. */
+  let math = false;
+  /** The last line that is not blank holds `$$`. */
+  let afterMath = false;
   let blank = false;
   let at = from;
   for (const line of text.slice(from).split("\n")) {
-    if (!fenced && blank && /^\S/.test(line)) cut = at;
-    if (/^ {0,3}(```|~~~)/.test(line)) fenced = !fenced;
+    if (!fenced && !math && !afterMath && blank && /^\S/.test(line)) cut = at;
+    if (!math && /^ {0,3}(```|~~~)/.test(line)) fenced = !fenced;
+    else if (!fenced && (line.split("$$").length - 1) % 2) math = !math;
+    if (line.trim()) afterMath = !fenced && line.includes("$$");
     blank = line.trim() === "";
     at += line.length + 1;
   }
