@@ -5954,12 +5954,11 @@ test("Esc in a second-level pop-up goes back to the menu", {
   await press("\x1b", "mode · auto");
   // The agent's menu came from `pick an agent`, so Esc returns to the room menu.
   await press("\x1b", "add agent …");
-  // The room's menu is first-level: Esc closes the pop-up.
-  await press("\x1b", "enter to send");
-  // `pick an agent` returns to the room's menu.
-  await press("\x0f", "agent …");
+  // Enter proves it is the room menu: its first row opens `pick an agent`.
   await press("\r", "pick an agent");
+  // That list's Esc comes back to the room menu.
   await press("\x1b", "add agent …");
+  // The room's menu is first-level: Esc closes the pop-up.
   await press("\x1b", "enter to send");
   // The add-agent form returns to the room's menu too.
   await press("\x0f", "agent …");
@@ -6359,6 +6358,9 @@ test("the menu's help row shows the commands", {
   // With no room, the menu is: new room …, help, leave.
   await press("\x0f", "new room …");
   await press(`${DOWN}\r`, "@name /mode <ask|safe|auto>");
+  // Help is a second-level pop-up: Esc returns to the menu.
+  await press("\x1b", "new room …");
+  await press("\x1b", "enter to send");
   await press("\x03", "left the chat");
   assert.equal(await exited, 0, out());
 });

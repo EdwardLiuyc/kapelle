@@ -226,14 +226,13 @@ function panelParts({
     return input;
   };
 
-  /** The commands, short, in the pop-up. Esc or Enter closes it. */
-  const showHelp = () =>
+  /** The commands, short, in the pop-up. Esc goes back; Enter closes. */
+  const showHelp = (back: () => void = hidePanel) =>
     showPanel("commands", {
       render: (w) => HELP.flatMap((l) => wrapTextWithAnsi(l, w)),
       handleInput(key) {
-        if (matchesKey(key, Key.escape) || matchesKey(key, Key.enter)) {
-          hidePanel();
-        }
+        if (matchesKey(key, Key.escape)) back();
+        else if (matchesKey(key, Key.enter)) hidePanel();
       },
       invalidate() {},
     });
@@ -270,30 +269,22 @@ function panelParts({
     if (p) title = `${p.name} · ${p.harness}${p.role ? ` · ${p.role}` : ""}`;
     else if (r) title = r.entry.title ?? r.entry.id;
     const self = () => openMenu(pid, back);
-    pickList(
-      title,
-      items,
-      undefined,
-      (value) => choose(value, p, self, back),
-      back,
-    );
+    pickList(title, items, undefined, (value) => choose(value, p, self), back);
   };
 
-  /** The menu for the open view: an agent's commands in a thread, the
-   *  room's menu otherwise. First-level, so Esc closes the pop-up. */
-  const menu = (pid = view().participantId, back: () => void = hidePanel) =>
-    openMenu(pid, back);
+  /** The first-level menu for the open view: an agent's commands in a
+   *  thread, the room's menu otherwise. Esc closes the pop-up. */
+  const menu = () => openMenu(view().participantId, hidePanel);
 
   const choose = (
     value: string,
     p: ReturnType<typeof roster>[number] | undefined,
     self: () => void,
-    back: () => void,
   ) => {
     const r = rooms.get(view().roomId);
     if (value.startsWith("?")) return question(value.slice(1));
     if (value === "leave") return end(0, left());
-    if (value === "help") return showHelp();
+    if (value === "help") return showHelp(self);
     if (value === "new") return newForm(self);
     if (value === "add") return addForm(self);
     if (value === "dismiss") return void run({ verb: "dismiss" });
@@ -322,7 +313,7 @@ function panelParts({
         words(MODES),
         p.mode,
         (mode) => run({ verb: "patch", ...who, change: { mode } }),
-        () => openMenu(p.id, back),
+        self,
       );
     }
     if (value === "role") {
@@ -337,14 +328,14 @@ function panelParts({
             ...who,
             change: { role: role === "none" ? null : role },
           }),
-        () => openMenu(p.id, back),
+        self,
       );
     }
     if (value === "rename") {
       const input = textBox(p.name);
       input.onSubmit = (name) =>
         void run({ verb: "patch", ...who, change: { name: name.trim() } });
-      input.onEscape = () => openMenu(p.id, back);
+      input.onEscape = self;
       showPanel(`rename ${p.name}`, input);
     }
   };
