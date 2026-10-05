@@ -117,7 +117,7 @@ arrow that points back.
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
 | `chat/` | The chat screens (M4-7): `tui.ts`, a pi-tui screen over every room on a TTY; `piped.ts`, one room as plain lines; `common.ts`, what both use. With `chat.ts`, they talk HTTP only, and import only `client/`, pi-tui, `core/runtime.ts` and each other. |
 | `chat/view.ts` | What the TUI shows (M4-10): the rows and the row keys, the `@name` pre-fill, where a thread goes when its participant left or its room was dismissed, and what is seen. Pure. |
-| `chat/tui/` | The TUI's parts (M4-12): `panel.ts`, the pop-up, its menu and forms; `question.ts`, the question box and its answer; `sidebar.ts`, the sidebar, the strip and the marks; `transcript.ts`, drawing the transcript; `pane.ts`, the side view beside the timeline, with a diff (M4-6). `chat/tui.ts` puts them on the screen and keeps the keys, the send flow and the end. |
+| `chat/tui/` | The TUI's parts (M4-12): `panel.ts`, the pop-up, its menu and forms; `question.ts`, the question box and its answer; `sidebar.ts`, the sidebar, the strip and the marks; `transcript.ts`, drawing the transcript; `pane.ts`, the side view beside the timeline, with a diff (M4-6) or the history list (M4-4); `banner.ts`, the rows on top of the timeline for a participant that waits (M4-4). `chat/tui.ts` puts them on the screen and keeps the keys, the bell, the send flow and the end. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 
 Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`

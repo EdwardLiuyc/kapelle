@@ -375,6 +375,41 @@ test("a turn that ends with an error keeps the error on the turn and the entry",
   assert.equal(who(state, "alice").status, "exited");
 });
 
+test("a turn keeps its stall warning after seen, for the bell; the next turn starts without one", () => {
+  const update = (
+    seq: number,
+    value: RoomEventLine["update"],
+  ): RoomEventLine => ({
+    seq,
+    at: "2026-10-05T00:00:00Z",
+    roomId: "room",
+    participantId: "alice",
+    update: value,
+  });
+  const state = replay([
+    update(1, {
+      sessionUpdate: "_client_participant_added",
+      name: "alice",
+      harness: "mock-agent",
+      mode: "auto",
+    }),
+    update(2, { sessionUpdate: "_client_user_message", text: "a", turn: 1 }),
+    update(3, {
+      sessionUpdate: "_client_stall_warning",
+      kind: "idle",
+      text: "no activity for 5s",
+    }),
+  ]);
+  seen(state, "alice");
+  assert.equal(who(state, "alice").stalled, false, "seen clears the mark");
+  assert.equal(who(state, "alice").turns[0]?.stall, "no activity for 5s");
+  replay(
+    [update(4, { sessionUpdate: "_client_user_message", text: "b", turn: 2 })],
+    state,
+  );
+  assert.equal(who(state, "alice").turns[1]?.stall, undefined);
+});
+
 test("a question's title and input lose their control characters", () => {
   const state = newRoomState();
   const e = applyLine(state, {

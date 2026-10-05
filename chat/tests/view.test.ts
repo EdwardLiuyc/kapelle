@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { newRoomState, type RoomState } from "../../client/room.ts";
 import {
+  banner,
+  bell,
   dismissed,
   edited,
   opened,
@@ -17,6 +19,8 @@ import {
   shows,
   step,
   touched,
+  type View,
+  waiting,
 } from "../view.ts";
 
 /** A room whose roster is these names, each id `p-<name>`. `gone` names
@@ -151,4 +155,123 @@ test("the timeline marks its whole room seen, and a thread its participant", () 
   assert.ok(shows({ roomId: "r1", participantId: "p-ann" }, "r1", "p-ann"));
   assert.ok(!shows({ roomId: "r1", participantId: "p-ann" }, "r1", "p-bob"));
   assert.ok(!shows({ roomId: "r1" }, "r2", "p-ann"));
+});
+
+/** Ann asks a question; bob stalls in his open turn, and the person has
+ *  not seen it. */
+const waits = () => {
+  const s = room(["ann", "bob", "cid"]);
+  s.questions.set("q1", {
+    seq: 1,
+    participantId: "p-ann",
+    type: "permission",
+    id: "q1",
+    title: "Write x.ts",
+    kind: "edit",
+  });
+  const bob = s.participants.get("p-bob");
+  assert.ok(bob);
+  bob.turns.push({ text: "go", state: "open", stall: "no activity for 5s" });
+  bob.stalled = true;
+  return s;
+};
+
+test("who waits: a question, or a stall in the live turn, seen or not", () => {
+  const s = waits();
+  const all = rooms(["r1", s]);
+  assert.deepEqual(waiting(all), [
+    {
+      roomId: "r1",
+      participantId: "p-ann",
+      why: "question",
+      text: "Write x.ts",
+      question: "q1",
+    },
+    {
+      roomId: "r1",
+      participantId: "p-bob",
+      why: "stall",
+      text: "no activity for 5s",
+    },
+  ]);
+  // Seen, bob still waits: the bell is for a person looking elsewhere.
+  const bob = s.participants.get("p-bob");
+  assert.ok(bob);
+  bob.stalled = false;
+  assert.equal(waiting(all).length, 2);
+  // An ended turn does not wait.
+  const turn = bob.turns[0];
+  assert.ok(turn);
+  turn.state = "ended";
+  assert.deepEqual(
+    waiting(all).map((w) => w.participantId),
+    ["p-ann"],
+  );
+});
+
+test("the banner shows the waits off screen, and a stall only until it is seen", () => {
+  const s = waits();
+  const all = rooms(["r1", s], ["r2", room([])]);
+  const ids = (view: View) => banner(all, view).map((w) => w.participantId);
+  assert.deepEqual(ids({ roomId: "r2" }), ["p-ann", "p-bob"]);
+  // On screen: the timeline shows its whole room, a thread its participant.
+  assert.deepEqual(ids({ roomId: "r1" }), []);
+  assert.deepEqual(ids({ roomId: "r1", participantId: "p-ann" }), ["p-bob"]);
+  const bob = s.participants.get("p-bob");
+  assert.ok(bob);
+  bob.stalled = false;
+  assert.deepEqual(ids({ roomId: "r2" }), ["p-ann"], "a seen stall goes");
+});
+
+test("the bell rings once when a participant starts to wait", () => {
+  const s = waits();
+  const all = rooms(["r1", s]);
+  const first = bell(new Set(), waiting(all));
+  assert.equal(first.ring, true);
+  assert.equal(bell(first.keys, waiting(all)).ring, false, "still waiting");
+  // A second question from ann rings nothing: she waited already.
+  const q1 = s.questions.get("q1");
+  assert.ok(q1);
+  s.questions.set("q2", { ...q1, id: "q2" });
+  assert.equal(bell(first.keys, waiting(all)).ring, false);
+  // Once nobody waits, a new wait rings again.
+  s.questions.clear();
+  const turn = s.participants.get("p-bob")?.turns[0];
+  assert.ok(turn);
+  turn.state = "ended";
+  const none = bell(first.keys, waiting(all));
+  assert.equal(none.ring, false);
+  assert.equal(none.keys.size, 0);
+  s.questions.set("q3", { ...q1, id: "q3" });
+  assert.equal(bell(none.keys, waiting(all)).ring, true);
+});
+
+test("a question after a stall the person saw rings; the stall left when it closes does not", () => {
+  const s = room(["bob"]);
+  const bob = s.participants.get("p-bob");
+  assert.ok(bob);
+  bob.turns.push({ text: "go", state: "open", stall: "no activity for 5s" });
+  const all = rooms(["r1", s]);
+  const stalled = bell(new Set(), waiting(all));
+  assert.equal(stalled.ring, true);
+  // Seen: the banner drops the stall, and the bell still counts it.
+  bob.stalled = false;
+  assert.deepEqual(banner(all, { roomId: "r2" }), []);
+  s.questions.set("q1", {
+    seq: 2,
+    participantId: "p-bob",
+    type: "permission",
+    id: "q1",
+    title: "Write x.ts",
+    kind: "edit",
+  });
+  const asked = bell(stalled.keys, waiting(all));
+  assert.equal(asked.ring, true, "the question is new");
+  // One banner row for bob, the question's.
+  assert.deepEqual(
+    banner(all, { roomId: "r2" }).map((w) => w.why),
+    ["question"],
+  );
+  s.questions.clear();
+  assert.equal(bell(asked.keys, waiting(all)).ring, false, "the stall is old");
 });

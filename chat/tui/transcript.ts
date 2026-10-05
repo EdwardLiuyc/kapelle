@@ -4,7 +4,8 @@
  * Draws the current view from its room's reducer: a heading per speaker,
  * each answer as markdown while it streams, a tool call, a question and how
  * it closed, and the notices. It owns the components drawn for the view, so
- * an answer's next chunk re-sets the same one.
+ * an answer's next chunk re-sets the same one, and the history list can
+ * scroll to a message of the person's (M4-4).
  */
 
 import {
@@ -54,6 +55,53 @@ const MARKDOWN_THEME: MarkdownTheme = {
   underline,
 };
 
+/**
+ * Where a streamed answer's finished blocks end (M4-4): the start of the
+ * last line at or after `from` that follows a blank line, is not indented,
+ * and is outside a code fence and a `$$` math block. `from` when there is
+ * none. Markdown cut there draws as it does whole, so the text before it is
+ * parsed once, and a chunk re-parses only the rest: a whole 53k-char answer
+ * took 13 to 23 ms per frame (§M4-4).
+ *
+ * Never right after a line with `$$`: pi-tui draws a math block with no
+ * blank row after it when it ends a text, so the gap to the next block
+ * would be lost.
+ *
+ * The scan starts at `from` with no fence or math block open. That holds
+ * because `from` is always 0 or a cut, and a cut is never inside either.
+ */
+// ponytail: a fence is any ``` or ~~~ line, and a reference link defined
+// below its use is drawn as text in a finished block. Use marked's lexer if
+// either shows up.
+export function settled(text: string, from: number): number {
+  let cut = from;
+  let fenced = false;
+  /** Inside a `$$` block: an odd count of `$$` opens or closes one. */
+  let math = false;
+  /** The last line that is not blank holds `$$`. */
+  let afterMath = false;
+  let blank = false;
+  let at = from;
+  for (const line of text.slice(from).split("\n")) {
+    if (!fenced && !math && !afterMath && blank && /^\S/.test(line)) cut = at;
+    if (!math && /^ {0,3}(```|~~~)/.test(line)) fenced = !fenced;
+    else if (!fenced && (line.split("$$").length - 1) % 2) math = !math;
+    if (line.trim()) afterMath = !fenced && line.includes("$$");
+    blank = line.trim() === "";
+    at += line.length + 1;
+  }
+  return cut;
+}
+
+/** The transcript: it keeps the width it was drawn at, to find a row. */
+class Transcript extends Container {
+  width = 80;
+  override render(width: number) {
+    this.width = width;
+    return super.render(width);
+  }
+}
+
 /** The transcript, its scroll view, and how to draw into them. The view is
  *  read at each redraw. */
 function transcriptParts({
@@ -67,10 +115,17 @@ function transcriptParts({
   view: () => View;
   setStatus: () => void;
 }) {
-  const transcript = new Container();
+  const transcript = new Transcript();
   const scroll = new ScrollView(transcript, { follow: "end", primary: true });
-  /** The component drawn for each entry of the current view. */
-  let drawn = new WeakMap<Entry, Markdown | Text>();
+  /** The component drawn for each entry of the current view that changes
+   *  in place or can be jumped to. */
+  let drawn = new WeakMap<Entry, Text>();
+  /** Each answer's blocks: the finished ones, drawn once, then the rest,
+   *  which each chunk sets again. `done` is where the rest starts. */
+  let answers = new WeakMap<
+    Entry,
+    { box: Container; rest: Markdown; done: number }
+  >();
   /** The participant whose name heads the lines drawn last; unset after
    *  the person's own message. */
   let speaker: string | undefined;
@@ -82,10 +137,6 @@ function transcriptParts({
   const note = (s: string) => add(new Text(dim(s), 1, 0));
   const warn = (s: string) => add(new Text(yellow(s), 1, 0));
 
-  // Each answer's component. The reducer joins the chunks, and the whole
-  // text is re-set, because markdown only parses correctly as a whole.
-  // ponytail: re-parses the whole answer per frame (~5 ms at 53k chars,
-  // measured); split finished blocks into their own components if it lags.
   /** A participant's name, before the first of its lines, tool calls
    *  included, since someone else's. */
   const heading = (id: string, name: string) => {
@@ -96,10 +147,17 @@ function transcriptParts({
   const draw = (state: RoomState, e: Entry) => {
     const name = nameOf(state, e.participantId);
     switch (e.type) {
-      case "user":
+      case "user": {
         speaker = undefined;
-        add(new Text(`\n${bold(cyan(`you → ${name}`))}\n${e.text}`, 1, 0));
+        const line = new Text(
+          `\n${bold(cyan(`you → ${name}`))}\n${e.text}`,
+          1,
+          0,
+        );
+        drawn.set(e, line);
+        add(line);
         return;
+      }
       case "queued":
         note(`queued for ${name}: ${e.text}`);
         return;
@@ -107,14 +165,27 @@ function transcriptParts({
         warn(`! ${e.count} queued message(s) for ${name} dropped, unsent`);
         return;
       case "answer": {
-        let md = drawn.get(e) as Markdown | undefined;
-        if (!md) {
+        // The reducer joins the chunks. Markdown parses right only from a
+        // block's start, so the finished blocks are cut off (`settled`).
+        let a = answers.get(e);
+        if (!a) {
           heading(e.participantId, name);
-          md = new Markdown("", 1, 0, MARKDOWN_THEME);
-          drawn.set(e, md);
-          add(md);
+          const rest = new Markdown("", 1, 0, MARKDOWN_THEME);
+          const box = new Container();
+          box.addChild(rest);
+          a = { box, rest, done: 0 };
+          answers.set(e, a);
+          add(box);
         }
-        md.setText(e.text);
+        const cut = settled(e.text, a.done);
+        if (cut > a.done) {
+          const blocks = e.text.slice(a.done, cut);
+          a.box.removeChild(a.rest);
+          a.box.addChild(new Markdown(blocks, 1, 0, MARKDOWN_THEME));
+          a.box.addChild(a.rest);
+          a.done = cut;
+        }
+        a.rest.setText(e.text.slice(a.done));
         tui.requestRender();
         return;
       }
@@ -137,7 +208,7 @@ function transcriptParts({
       case "permission": {
         // The TUI answers in its pop-up (M4-3); this line shows the question
         // and, once it closes, how.
-        let line = drawn.get(e) as Text | undefined;
+        let line = drawn.get(e);
         if (!line) {
           line = new Text("", 1, 0);
           drawn.set(e, line);
@@ -160,6 +231,7 @@ function transcriptParts({
   const redraw = () => {
     transcript.clear();
     drawn = new WeakMap();
+    answers = new WeakMap();
     speaker = undefined;
     const r = rooms.get(view().roomId);
     if (r) {
@@ -189,7 +261,24 @@ function transcriptParts({
     scroll.scrollToEnd();
     setStatus();
   };
-  return { transcript, scroll, warn, draw, redraw };
+
+  /** Scrolls the transcript so the person's message `e` is at the top
+   *  (M4-4). It stays there while lines come, until the person scrolls to
+   *  the end. Each part above it is measured at the width drawn last;
+   *  pi-tui keeps what it drew, so only a new width costs a parse. */
+  const jump = (e: Entry) => {
+    const line = drawn.get(e);
+    if (!line) return;
+    let row = 0;
+    for (const c of transcript.children) {
+      if (c === line) break;
+      row += c.render(transcript.width).length;
+    }
+    // The message's first row is the gap above its name.
+    scroll.scrollTo(row + 1, { disableFollow: true });
+    tui.requestRender();
+  };
+  return { transcript, scroll, warn, draw, redraw, jump };
 }
 
 export { transcriptParts };

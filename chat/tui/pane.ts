@@ -5,7 +5,8 @@
  * `ctrl+x` shows and hides it, as `ctrl+t` does the sidebar, and what it
  * shows stays while it is hidden. Below `WIDE` columns it takes the
  * timeline's place. It shows any diff text: a question's edit, an agent's
- * checkout, and later the diff a merge hands in (M6-11a, M6-11b). Before
+ * checkout, and later the diff a merge hands in (M6-11a, M6-11b). It also
+ * shows a list to pick from: the person's messages, `ctrl+r` (M4-4). Before
  * anything is put in it, it says how to fill it. M4-13 puts a terminal in
  * the same place.
  *
@@ -32,30 +33,39 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Diff } from "../../client/contract.ts";
 import { type DiffFile, filesOf, named } from "../../client/diff.ts";
-import { bold, cyan, dim, green, red } from "../common.ts";
+import { bold, cyan, dim, green, inverse, red } from "../common.ts";
 
 /** At this many columns the pane sits beside the timeline; below, it takes
  *  the timeline's place. */
 const WIDE = 120;
 
-/** What the pane shows, and the keys that act on it. */
-interface PaneContent {
+/** A list to pick from (M4-4): its rows, read at each draw, and what a
+ *  pick does. */
+interface PaneList {
+  rows: () => string[];
+  pick: (at: number) => void;
+  /** What the view says with no row. */
+  empty: string;
+}
+
+/** What the pane shows, a diff or a list, and the keys that act on it. */
+type PaneContent = {
   /** What the diff is of, before the file: `bob · uncommitted`. */
   title: string;
-  diff: Diff;
   /** The content's own keys, after scrolling, `]` and `[`. */
   keys: { key: string; hint: string; run: () => void }[];
   /** Esc, after the keys go back to the composer. */
   back?: () => void;
   /** The question it shows, while that question is open. */
   question?: string;
-}
+} & ({ diff: Diff } | { list: PaneList });
 
 /** What the view says before anything is put in it. */
 const EMPTY = [
   "nothing here yet",
   "/diff @name   what an agent changed",
   "view diff     in a question",
+  "ctrl+r        your messages",
 ];
 
 /** A diff line in git's colours. */
@@ -122,9 +132,39 @@ function paneParts({
    *  every key and every streamed chunk, so only a new text or a new width
    *  draws it again. */
   let drawn: { lines: string[]; inner: number; out: string[] } | undefined;
+  /** The list's row that the keys and the mouse are on (M4-4). */
+  let cursor = 0;
+  const listOf = () =>
+    content && "list" in content ? content.list : undefined;
+  /** Moves the list's cursor, and scrolls to keep it in view. */
+  const move = (to: number) => {
+    const n = listOf()?.rows().length ?? 0;
+    cursor = Math.max(0, Math.min(n - 1, to));
+    const top = scroll.scrollTop;
+    const height = scroll.viewportHeight;
+    if (cursor < top) scroll.scrollTo(cursor, { disableFollow: true });
+    else if (cursor >= top + height) {
+      scroll.scrollTo(cursor - height + 1, { disableFollow: true });
+    }
+    tui.requestRender();
+  };
   const body: Component = {
     render: (w) => {
       const inner = Math.max(1, w - 2);
+      const list = listOf();
+      if (list) {
+        // Short, and it grows as messages come: drawn every time.
+        const rows = list.rows();
+        if (rows.length === 0) {
+          return [
+            `${dim("│")} ${dim(truncateToWidth(list.empty, inner, "…"))}`,
+          ];
+        }
+        return rows.map(
+          (l, i) =>
+            `${dim("│")} ${i === cursor ? inverse(truncateToWidth(l, inner, "…", true)) : truncateToWidth(l, inner, "…")}`,
+        );
+      }
       if (drawn?.lines === lines && drawn.inner === inner) return drawn.out;
       const draw = content ? paint : dim;
       const out = lines.map(
@@ -138,6 +178,17 @@ function paneParts({
       if (matchesKey(key, Key.escape)) {
         focus(false);
         return content?.back?.();
+      }
+      const list = listOf();
+      if (list) {
+        if (matchesKey(key, Key.up)) move(cursor - 1);
+        else if (matchesKey(key, Key.down)) move(cursor + 1);
+        else if (matchesKey(key, Key.pageUp)) move(cursor - page);
+        else if (matchesKey(key, Key.pageDown)) move(cursor + page);
+        else if (matchesKey(key, Key.enter)) {
+          if (cursor < list.rows().length) list.pick(cursor);
+        } else for (const k of content?.keys ?? []) if (key === k.key) k.run();
+        return;
       }
       if (matchesKey(key, Key.up)) scroll.scrollBy(-1);
       else if (matchesKey(key, Key.down)) scroll.scrollBy(1);
@@ -157,6 +208,22 @@ function paneParts({
       picked = undefined;
       tui.requestRender();
     },
+    /** A list's row lights up under the mouse, and a click picks it. A
+     *  multiplexer sends no move (pi-tui asks it for none), so there only
+     *  the keys move the light. */
+    handleMouse(e) {
+      const list = listOf();
+      if (!list || e.y >= list.rows().length) return undefined;
+      if (e.type === "move") {
+        const moved = cursor !== e.y;
+        cursor = e.y;
+        return { handled: true, render: moved };
+      }
+      if (e.type !== "click" || e.button !== "left") return undefined;
+      cursor = e.y;
+      list.pick(e.y);
+      return { handled: true };
+    },
     invalidate() {},
   };
   const scroll = new ScrollView(body, { follow: "none" });
@@ -164,6 +231,15 @@ function paneParts({
     render: (w) => {
       if (!content) {
         return [dim(truncateToWidth(`┌ side view ${"─".repeat(w)}`, w, ""))];
+      }
+      if ("list" in content) {
+        const n = content.list.rows().length;
+        const at = n ? ` · ${Math.min(cursor, n - 1) + 1} of ${n}` : "";
+        return [
+          dim(
+            truncateToWidth(`┌ ${content.title}${at} ${"─".repeat(w)}`, w, ""),
+          ),
+        ];
       }
       const d = content.diff;
       const at = current();
@@ -178,7 +254,11 @@ function paneParts({
   };
   const foot: Component = {
     render: (w) => {
-      const hints = content ? ["↑↓ scroll"] : [];
+      const hints = !content
+        ? []
+        : "list" in content
+          ? ["↑↓ move", "enter go"]
+          : ["↑↓ scroll"];
       if (files.length > 1) hints.push("] [ file");
       for (const k of content?.keys ?? []) hints.push(k.hint);
       hints.push("ctrl+] type", "ctrl+x hide");
@@ -217,9 +297,11 @@ function paneParts({
   /** Puts `c` in the view, from its first line, and shows it. */
   const fill = (c: PaneContent) => {
     content = c;
-    lines = c.diff.text ? c.diff.text.split("\n") : [];
+    const text = "diff" in c ? c.diff.text : "";
+    lines = text ? text.split("\n") : [];
     files = filesOf(lines);
     picked = undefined;
+    cursor = 0;
     scroll.scrollToStart();
     toggle(true);
   };

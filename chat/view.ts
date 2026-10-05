@@ -11,6 +11,8 @@
  *   view in a dismissed room goes to the first row.
  * - What is on screen is seen: the timeline marks its whole room, and a
  *   thread marks its participant.
+ * - Who waits on the person (M4-4): the banner shows the waits off screen,
+ *   and the bell rings once when a participant starts to wait.
  *
  * **In `chat/`, not `client/`** (decided 2026-10-02): rows, the `@name`
  * pre-fill and seen marks are this screen's own rules.
@@ -140,3 +142,63 @@ export const participantLeft = (
  *  holds it. */
 export const dismissed = (rooms: Rooms, view: View, roomId: string) =>
   view.roomId === roomId ? (rows(rooms)[0] ?? { roomId: "" }) : undefined;
+
+/** A thing a participant waits on the person for (M4-4): its oldest open
+ *  question, or a stall warning in its live turn. A participant can have
+ *  both. */
+export interface Wait {
+  roomId: string;
+  participantId: string;
+  why: "question" | "stall";
+  /** The question's title, or the stall warning's text. */
+  text: string;
+  /** The question's id. */
+  question?: string;
+}
+
+/** Every wait, seen or not, in sidebar order: a participant's question
+ *  before its stall. */
+export function waiting(rooms: Rooms): Wait[] {
+  const out: Wait[] = [];
+  for (const [roomId, { state }] of rooms) {
+    for (const p of roster(state)) {
+      const at = { roomId, participantId: p.id };
+      const q = [...state.questions.values()].find(
+        (x) => x.participantId === p.id,
+      );
+      const turn = p.turns.at(-1);
+      if (q) {
+        out.push({ ...at, why: "question", text: q.title, question: q.id });
+      }
+      if (turn?.state === "open" && turn.stall) {
+        out.push({ ...at, why: "stall", text: turn.stall });
+      }
+    }
+  }
+  return out;
+}
+
+/** The banner's rows (M4-4): one per participant that waits off screen,
+ *  its question first. A stall the person saw is gone; a question stays
+ *  until it closes. */
+export function banner(rooms: Rooms, view: View) {
+  const rows = new Map<string, Wait>();
+  for (const w of waiting(rooms)) {
+    const key = `${w.roomId} ${w.participantId}`;
+    if (rows.has(key) || shows(view, w.roomId, w.participantId)) continue;
+    const p = rooms.get(w.roomId)?.state.participants.get(w.participantId);
+    if (w.why === "question" || p?.stalled) rows.set(key, w);
+  }
+  return [...rows.values()];
+}
+
+/** The waits now, and whether one of them is new: the bell rings once for
+ *  a question and once for a stall, on screen or not. A question after a
+ *  stall the person saw rings; the stall left when the question closes
+ *  does not. */
+export function bell(before: ReadonlySet<string>, now: readonly Wait[]) {
+  const keys = new Set(
+    now.map((w) => `${w.roomId} ${w.participantId} ${w.why}`),
+  );
+  return { keys, ring: [...keys].some((k) => !before.has(k)) };
+}

@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveTarget, targetOf } from "../mention.ts";
+import { mentionsFor, resolveTarget, targetOf } from "../mention.ts";
 
 const ROSTER = [
   { id: "p-a", name: "alice", role: "orchestrator" },
@@ -97,4 +97,17 @@ test("refused at submit: nothing after the mention", () => {
 test("while typing, a pre-filled mention shows its target, not an error", () => {
   assert.deepEqual(targetOf("@bob ", ROSTER), { id: "p-b", text: "" });
   assert.deepEqual(targetOf("", ROSTER), { id: "p-a", text: "" });
+});
+
+test("a leading @ completes to the names that start with what is typed, folded", () => {
+  const names = (before: string) =>
+    mentionsFor(before, ROSTER)?.map((p) => p.name);
+  assert.deepEqual(names("@"), ["alice", "Bob"]);
+  assert.deepEqual(names("@B"), ["Bob"]);
+  assert.deepEqual(names("  @al"), ["alice"]);
+  assert.deepEqual(names("@zed"), []);
+  // Only a leading mention names a target, so nothing else completes.
+  for (const before of ["hi @b", "@bob ", "@bob, ", "text"]) {
+    assert.equal(mentionsFor(before, ROSTER), undefined, before);
+  }
 });

@@ -2173,6 +2173,24 @@ stall half needs R38; without it no room emits `_client_stall_warning` and there
 nothing to ring for. Mention autocomplete for the roster is the R43 polish this story
 owns; M4-2 ships the resolver with plain text.
 Decisions: R19, R43, R38. (F9 dropped by M5-6, #138.)
+**Decided at pickup 2026-10-05 (#50):** the TUI owns the room's attention signal, and the
+daemon does not ring. **No desktop pop-up**: it is too noisy. `core/notify.ts` stays as it
+is, for `cli.ts` runs. In its place, a **banner** on top of the timeline: one row per
+participant that waits off screen, magenta for a question and yellow for a stall, with who,
+which room and why. A click opens the thread, and the question's box. The terminal bell
+rings once when a participant starts to wait. **No plain search**: pi-tui already searches
+the transcript (`ctrl+shift+f`). In its place, a **history list**: the person's own
+messages in the view, in the side view, one row each, cut to its width. A click or Enter
+scrolls the transcript there, and the row under the mouse lights up.
+**Built 2026-10-05 (#50).** `chat/view.ts` says who waits (`waiting`), the banner's rows
+(`banner`) and when the bell rings (`bell`); `chat/tui/banner.ts` draws the rows. A wait is
+an open question, or a stall warning in the live turn: the reducer keeps the warning's
+text on the turn, so `seen` hides it from the banner but not from the bell. The bell looks
+after each chunk of lines, so a replay rings only for what is still open at its end.
+`ctrl+r` opens the history list; the side view shows a list as well as a diff. `@` at the
+start of the composer, or Tab after it, lists the room's names (`mentionsFor`,
+`client/mention.ts`). The re-parse cost was 13 to 23 ms at 53k chars (§M4-4), past the
+threshold, so an answer's finished blocks go into their own `Markdown` (`settled`).
 
 **M4-5 · Room and roster commands in the TUI · M · needs M4-2, M6-3, M6-4, M6-5**
 **Added 2026-09-26.** M6-2..M6-5 build the routes, and M4-2 only lists

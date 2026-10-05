@@ -535,9 +535,10 @@ the paint now lives in the TUI.
 - **M4-3 — permission answering**: the per-participant `ask` overlay, answered by id;
   a CLI observer on the same room sees the same decision. This is the write path that
   makes `ask` usable unattended.
-- **M4-4 — notifications and polish**: bell and desktop attention for a waiting
-  participant, transcript search, and the block-splitting optimisation if the markdown
-  re-parse cost grows.
+- **M4-4 — notifications and polish**: a banner and the bell for a waiting participant,
+  a history list of the person's messages, `@name` completion, and the block-splitting
+  optimisation if the markdown re-parse cost grows. Amended 2026-10-05 (#50): no desktop
+  pop-up, and the history list replaces search.
 - **M4-5 — room and roster commands** (added 2026-09-26): open and dismiss a room; add,
   remove and rename a participant, with its role, mode and base branch; cancel a turn;
   change a mode. Each command calls one documented route. M6-11a and M6-11b add the merge
