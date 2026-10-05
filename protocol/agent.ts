@@ -954,10 +954,13 @@ export class AcpAgent {
       if (c?.type !== "diff" || typeof c.path !== "string") continue;
       // pi-lens-ignore: no-runtime-typeof
       if (typeof c.newText !== "string") continue;
-      // No `oldText` is a new file (ACP).
+      // No `oldText` is a new file (ACP). One that is not text is read from
+      // disk instead, so a bad field costs the old side, not the whole diff.
+      const old: unknown = c.oldText;
       wanted.push({
         path: c.path,
-        oldText: c.oldText ?? null,
+        // pi-lens-ignore: no-runtime-typeof
+        oldText: old == null ? null : typeof old === "string" ? old : undefined,
         newText: c.newText,
       });
     }
