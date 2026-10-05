@@ -263,8 +263,19 @@ function chatTui(
    * The sidebar, the timeline and the side view. Every size is set, never
    * `auto`: an `auto` size makes pi-tui measure each line on every frame,
    * half a second for a 10,000-line diff (M4-6, measured). The banner is
-   * `auto`: three rows at most.
+   * `auto`: three rows at most. It sits over the timeline and the side
+   * view both, so it shows when the side view takes the timeline's place.
    */
+  const views = new HStack([
+    {
+      component: scroll,
+      basis: 0,
+      grow: 1,
+      shrink: 1,
+      minSize: 1,
+      visible: () => !side.shown || side.wide(),
+    },
+  ]);
   const row = new HStack([
     {
       component: sidebar,
@@ -276,13 +287,12 @@ function chatTui(
     {
       component: new VStack([
         { component: attention, basis: "auto", shrink: 0 },
-        { component: scroll, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+        { component: views, basis: 0, grow: 1, shrink: 1, minSize: 1 },
       ]),
       basis: 0,
       grow: 1,
       shrink: 1,
       minSize: 1,
-      visible: () => !side.shown || side.wide(),
     },
   ]);
   /** Sets the side view's width: half of what the sidebar leaves, and on a
@@ -292,8 +302,8 @@ function chatTui(
   // the first of two `grow` entries about two thirds of the space. Two
   // `grow: 1` entries will do once pi-tui shares evenly.
   const placeSide = () => {
-    row.removeChild(side.pane);
-    row.addChild(side.pane, {
+    views.removeChild(side.pane);
+    views.addChild(side.pane, {
       basis: side.columns(),
       shrink: 0,
       visible: () => side.shown,

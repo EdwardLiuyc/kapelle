@@ -4815,6 +4815,12 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
     assert.ok(Date.now() < until, `no bell: ${screen.out()}`);
     await new Promise((ok) => setTimeout(ok, 50));
   }
+  // Below 120 columns the side view takes the timeline's place; the banner
+  // stays on row 1, above it. pi-tui writes a row as CSI row;1H, CSI 2K.
+  await screen.press("\x18", "side view");
+  const row1 = screen.out().split("\x1b[1;1H\x1b[2K").at(-1) ?? "";
+  assert.match(plainText(row1.split("\x1b[2;1H")[0] ?? ""), /▌● asker/);
+  await screen.press("\x18", "ctrl+x view");
   // The banner is row 1 of the timeline, right of the 26-column sidebar.
   await screen.press("\x1b[<0;40;1M\x1b[<0;40;1m", "question 1 of 1");
   await screen.seen("→ asker");
@@ -4846,6 +4852,59 @@ test("chat.ts on a real terminal lists the person's messages on ctrl+r, lights t
   // A move with no button over the first row lights it.
   await screen.press("\x1b[<35;90;2M", "history · 1 of 2");
   await screen.press("\x1b[<0;90;3M\x1b[<0;90;3m", "history · 2 of 2");
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal maps the mouse to the right row of a history list that scrolled", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  // 16 rows: the list shows fewer rows than the 15 messages.
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 16; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  const path = `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`;
+  for (let i = 1; i <= 15; i++) {
+    const sent = await api(d, "POST", path, { text: `m${i}` });
+    assert.equal(sent.status, 202, sent.body.error?.message);
+  }
+  await screen.seen("previous: m14");
+  await screen.press("\x12", "history · 1 of 15");
+  // To the end: the list scrolls. Arrows, as pi-tui keeps the page keys.
+  await screen.press("\x1b[B".repeat(14), "history · 15 of 15");
+  // The mouse on the list's top row, row 2 of the screen, is not message 1.
+  const from = screen.out().length;
+  await screen.press("\x1b[<35;90;2M", "history · ");
+  for (const until = Date.now() + 10_000; ; ) {
+    const at = /history · (\d+) of 15/.exec(
+      plainText(screen.out().slice(from)),
+    );
+    if (at) {
+      const n = Number(at[1]);
+      assert.ok(n > 1 && n < 15, `the top row is message ${n}`);
+      // The lit row is that message.
+      assert.match(
+        screen.out().slice(from),
+        new RegExp(`\\x1b\\[7m→ mock-agent: m${n} `),
+      );
+      break;
+    }
+    assert.ok(Date.now() < until, screen.out().slice(from));
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

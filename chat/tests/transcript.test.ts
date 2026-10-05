@@ -5,7 +5,11 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Markdown, type TuiAltScreen } from "@earendil-works/pi-tui";
+import {
+  type Container,
+  Markdown,
+  type TuiAltScreen,
+} from "@earendil-works/pi-tui";
 import type { RoomEventLine } from "../../client/contract.ts";
 import { applyLine, newRoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
@@ -138,4 +142,51 @@ test("a jump puts the person's message at the top of the transcript", () => {
     "\x1b[1m\x1b[36myou → ann\x1b[39m\x1b[22m",
   );
   assert.equal(lines[scroll.scrollTop + 1], "alpha");
+});
+
+test("an answer streamed through draw, chunk by chunk, draws as its whole text", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (update: RoomEventLine["update"]) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-05T00:00:00Z",
+      roomId: "r1",
+      participantId: "p-ann",
+      update,
+    });
+  line({
+    sessionUpdate: "_client_participant_added",
+    name: "ann",
+    harness: "mock",
+    mode: "auto",
+  });
+  line({ sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+  });
+  parts.redraw();
+  for (let at = 0; at < ANSWER.length; at += 7) {
+    const e = line({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: ANSWER.slice(at, at + 7) },
+    });
+    assert.ok(e);
+    parts.draw(state, e);
+  }
+  // The theme only paints; the rows are the same without it.
+  const plain = (rows: string[]) =>
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+    rows.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  const whole = plain(draw(ANSWER));
+  const drawn = plain(parts.transcript.render(40));
+  assert.deepEqual(drawn.slice(-whole.length), whole);
+  const box = parts.transcript.children.at(-1) as Container;
+  assert.ok(box.children.length > 5, "the finished blocks were cut off");
 });

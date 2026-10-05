@@ -66,6 +66,9 @@ const MARKDOWN_THEME: MarkdownTheme = {
  * Never right after a line with `$$`: pi-tui draws a math block with no
  * blank row after it when it ends a text, so the gap to the next block
  * would be lost.
+ *
+ * The scan starts at `from` with no fence or math block open. That holds
+ * because `from` is always 0 or a cut, and a cut is never inside either.
  */
 // ponytail: a fence is any ``` or ~~~ line, and a reference link defined
 // below its use is drawn as text in a finished block. Use marked's lexer if
@@ -177,11 +180,9 @@ function transcriptParts({
         const cut = settled(e.text, a.done);
         if (cut > a.done) {
           const blocks = e.text.slice(a.done, cut);
-          a.box.children.splice(
-            -1,
-            0,
-            new Markdown(blocks, 1, 0, MARKDOWN_THEME),
-          );
+          a.box.removeChild(a.rest);
+          a.box.addChild(new Markdown(blocks, 1, 0, MARKDOWN_THEME));
+          a.box.addChild(a.rest);
           a.done = cut;
         }
         a.rest.setText(e.text.slice(a.done));

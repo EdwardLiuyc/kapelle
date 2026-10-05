@@ -245,3 +245,33 @@ test("the bell rings once when a participant starts to wait", () => {
   s.questions.set("q3", { ...q1, id: "q3" });
   assert.equal(bell(none.keys, waiting(all)).ring, true);
 });
+
+test("a question after a stall the person saw rings; the stall left when it closes does not", () => {
+  const s = room(["bob"]);
+  const bob = s.participants.get("p-bob");
+  assert.ok(bob);
+  bob.turns.push({ text: "go", state: "open", stall: "no activity for 5s" });
+  const all = rooms(["r1", s]);
+  const stalled = bell(new Set(), waiting(all));
+  assert.equal(stalled.ring, true);
+  // Seen: the banner drops the stall, and the bell still counts it.
+  bob.stalled = false;
+  assert.deepEqual(banner(all, { roomId: "r2" }), []);
+  s.questions.set("q1", {
+    seq: 2,
+    participantId: "p-bob",
+    type: "permission",
+    id: "q1",
+    title: "Write x.ts",
+    kind: "edit",
+  });
+  const asked = bell(stalled.keys, waiting(all));
+  assert.equal(asked.ring, true, "the question is new");
+  // One banner row for bob, the question's.
+  assert.deepEqual(
+    banner(all, { roomId: "r2" }).map((w) => w.why),
+    ["question"],
+  );
+  s.questions.clear();
+  assert.equal(bell(asked.keys, waiting(all)).ring, false, "the stall is old");
+});

@@ -143,8 +143,9 @@ export const participantLeft = (
 export const dismissed = (rooms: Rooms, view: View, roomId: string) =>
   view.roomId === roomId ? (rows(rooms)[0] ?? { roomId: "" }) : undefined;
 
-/** A participant that waits on the person (M4-4): its oldest open
- *  question, or else a stall warning in its live turn. */
+/** A thing a participant waits on the person for (M4-4): its oldest open
+ *  question, or a stall warning in its live turn. A participant can have
+ *  both. */
 export interface Wait {
   roomId: string;
   participantId: string;
@@ -155,7 +156,8 @@ export interface Wait {
   question?: string;
 }
 
-/** Every participant that waits, seen or not, in sidebar order. */
+/** Every wait, seen or not, in sidebar order: a participant's question
+ *  before its stall. */
 export function waiting(rooms: Rooms): Wait[] {
   const out: Wait[] = [];
   for (const [roomId, { state }] of rooms) {
@@ -165,9 +167,10 @@ export function waiting(rooms: Rooms): Wait[] {
         (x) => x.participantId === p.id,
       );
       const turn = p.turns.at(-1);
-      if (q)
+      if (q) {
         out.push({ ...at, why: "question", text: q.title, question: q.id });
-      else if (turn?.state === "open" && turn.stall) {
+      }
+      if (turn?.state === "open" && turn.stall) {
         out.push({ ...at, why: "stall", text: turn.stall });
       }
     }
@@ -175,20 +178,27 @@ export function waiting(rooms: Rooms): Wait[] {
   return out;
 }
 
-/** The banner's rows (M4-4): the waits off screen. A stall the person
- *  saw is gone; a question stays until it closes. */
-export const banner = (rooms: Rooms, view: View) =>
-  waiting(rooms).filter(
-    (w) =>
-      !shows(view, w.roomId, w.participantId) &&
-      (w.why === "question" ||
-        rooms.get(w.roomId)?.state.participants.get(w.participantId)?.stalled),
-  );
+/** The banner's rows (M4-4): one per participant that waits off screen,
+ *  its question first. A stall the person saw is gone; a question stays
+ *  until it closes. */
+export function banner(rooms: Rooms, view: View) {
+  const rows = new Map<string, Wait>();
+  for (const w of waiting(rooms)) {
+    const key = `${w.roomId} ${w.participantId}`;
+    if (rows.has(key) || shows(view, w.roomId, w.participantId)) continue;
+    const p = rooms.get(w.roomId)?.state.participants.get(w.participantId);
+    if (w.why === "question" || p?.stalled) rows.set(key, w);
+  }
+  return [...rows.values()];
+}
 
-/** The participants that wait now, and whether one of them did not wait
- *  before: the bell rings once when a participant starts to wait, on screen
- *  or not. */
+/** The waits now, and whether one of them is new: the bell rings once for
+ *  a question and once for a stall, on screen or not. A question after a
+ *  stall the person saw rings; the stall left when the question closes
+ *  does not. */
 export function bell(before: ReadonlySet<string>, now: readonly Wait[]) {
-  const keys = new Set(now.map((w) => `${w.roomId} ${w.participantId}`));
+  const keys = new Set(
+    now.map((w) => `${w.roomId} ${w.participantId} ${w.why}`),
+  );
   return { keys, ring: [...keys].some((k) => !before.has(k)) };
 }
