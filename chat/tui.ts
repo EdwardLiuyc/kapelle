@@ -14,6 +14,11 @@
  * `client/questions.ts` (M4-9); the box is `chat/tui/question.ts` (M4-12),
  * and this file keeps the timer.
  *
+ * **A wait off screen shows on top of the timeline** (M4-4): a banner row
+ * per participant with a question or a stall (`chat/tui/banner.ts`), and
+ * the terminal's bell when one starts to wait. No desktop pop-up: too noisy
+ * (decided 2026-10-05, #50).
+ *
  * **pi-tui is ratified under M1c-7's rule (M4-1).** It is presentation only,
  * so its worst failure is a broken screen, never a changed decision; it is
  * pinned exactly; its nested `marked` is overridden to ours, so one copy is
@@ -43,9 +48,16 @@ import type {
 } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
 import { agentDiff } from "../client/diff.ts";
-import { targetOf } from "../client/mention.ts";
+import { mentionsFor, targetOf } from "../client/mention.ts";
 import { questionQueue } from "../client/questions.ts";
-import { cleanDiff, type Entry, nameOf, seen } from "../client/room.ts";
+import {
+  cleanDiff,
+  type Entry,
+  nameOf,
+  printable,
+  seen,
+  thread,
+} from "../client/room.ts";
 import {
   codeOf,
   type End,
@@ -64,6 +76,7 @@ import {
   unpad,
   yellow,
 } from "./common.ts";
+import { bannerPart } from "./tui/banner.ts";
 import { paneParts } from "./tui/pane.ts";
 import { EDITOR_THEME, panelParts } from "./tui/panel.ts";
 import { type Question, questionParts } from "./tui/question.ts";
@@ -75,6 +88,7 @@ import {
 } from "./tui/sidebar.ts";
 import { transcriptParts } from "./tui/transcript.ts";
 import {
+  bell,
   type Composer,
   dismissed,
   edited,
@@ -85,6 +99,7 @@ import {
   shows,
   step,
   type View,
+  waiting,
 } from "./view.ts";
 
 /** What the screen says in a room with no participant (M4-5). */
@@ -169,10 +184,27 @@ function chatTui(
   const say = (text: string) => {
     flash = text;
   };
+  /** The participants that waited at the bell's last look (M4-4). */
+  let waited = new Set<string>();
+  let ringing = false;
+  /** Rings the terminal's bell once a participant starts to wait. After
+   *  this chunk of lines, as a question box opens: a replay rings only for
+   *  what is still open at its end. A chunk that splits a question from its
+   *  close still rings: cosmetic. */
+  const ring = () => {
+    if (ringing) return;
+    ringing = true;
+    setImmediate(() => {
+      ringing = false;
+      const b = bell(waited, waiting(rooms));
+      waited = b.keys;
+      if (b.ring && !done) process.stdout.write("\x07");
+    });
+  };
 
   // The parts of the screen (M4-12). A part calls back through an arrow,
   // as what it calls is set further down.
-  const { transcript, scroll, warn, draw, redraw } = transcriptParts({
+  const { transcript, scroll, warn, draw, redraw, jump } = transcriptParts({
     tui,
     rooms,
     view: () => view,
@@ -220,11 +252,18 @@ function chatTui(
     toggle: () => toggle(),
     open: (next) => open(next),
   });
+  const attention = bannerPart({
+    rooms,
+    view: () => view,
+    open: (next) => open(next),
+    question: (id) => question(id),
+  });
 
   /**
    * The sidebar, the timeline and the side view. Every size is set, never
    * `auto`: an `auto` size makes pi-tui measure each line on every frame,
-   * half a second for a 10,000-line diff (M4-6, measured).
+   * half a second for a 10,000-line diff (M4-6, measured). The banner is
+   * `auto`: three rows at most.
    */
   const row = new HStack([
     {
@@ -235,7 +274,10 @@ function chatTui(
     },
     { component: strip, basis: 2, shrink: 0, visible: () => !shown },
     {
-      component: scroll,
+      component: new VStack([
+        { component: attention, basis: "auto", shrink: 0 },
+        { component: scroll, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+      ]),
       basis: 0,
       grow: 1,
       shrink: 1,
@@ -280,6 +322,37 @@ function chatTui(
     ]),
   );
   tui.setFocus(editor);
+
+  // `@name` completion (M4-4): typing a leading `@`, or Tab after it, lists
+  // the view's room's participants. Only a leading mention: `targetOf`
+  // reads no other.
+  editor.setAutocompleteProvider({
+    triggerCharacters: ["@"],
+    getSuggestions: async (lines, line, col) => {
+      const r = rooms.get(view.roomId);
+      const before = line === 0 ? (lines[0] ?? "").slice(0, col) : "";
+      const roster = r ? rosterOf(r.state, r.entry.participants) : [];
+      const names = mentionsFor(before, roster);
+      if (!names?.length) return null;
+      return {
+        prefix: before.trimStart(),
+        items: names.map((p) => ({
+          value: p.name,
+          label: `@${p.name}`,
+          ...(p.role && { description: p.role }),
+        })),
+      };
+    },
+    applyCompletion: (lines, _line, col, item, prefix) => {
+      const first = lines[0] ?? "";
+      const head = `${first.slice(0, col - prefix.length)}@${item.value} `;
+      return {
+        lines: [head + first.slice(col).trimStart(), ...lines.slice(1)],
+        cursorLine: 0,
+        cursorCol: head.length,
+      };
+    },
+  });
 
   const setStatus = () => {
     const r = rooms.get(view.roomId);
@@ -330,6 +403,40 @@ function chatTui(
     setStatus();
   };
 
+  /** The person's messages in the view, oldest first. */
+  // ponytail: walks the view's entries on each frame while the list shows;
+  // keep the list per view if a long room makes it lag.
+  const sent = () => {
+    const r = rooms.get(view.roomId);
+    if (!r) return [];
+    const id = view.participantId;
+    const all = id ? thread(r.state, id) : r.state.timeline;
+    return all.flatMap((e) => (e.type === "user" ? [{ r, e }] : []));
+  };
+  /** The history list (M4-4, `ctrl+r`): the person's messages in the view,
+   *  one row each, in the side view. A pick scrolls the transcript to it;
+   *  on a narrow screen the view hides first, so the transcript shows. It
+   *  follows the view, and grows as messages are sent. */
+  const history = () =>
+    side.fill({
+      title: "history",
+      list: {
+        rows: () =>
+          sent().map(
+            ({ r, e }) =>
+              `→ ${nameOf(r.state, e.participantId)}: ${printable(e.text).replace(/\s+/g, " ").trim()}`,
+          ),
+        pick: (at) => {
+          const s = sent()[at];
+          if (!s) return;
+          if (!side.wide()) side.toggle(false);
+          jump(s.e);
+        },
+        empty: "nothing sent in this view yet",
+      },
+      keys: [],
+    });
+
   /** Sets what `chat/view.ts` decided the composer holds. The pre-fill
    *  first: `setText` calls `onChange` at once. */
   const compose = (c: Composer) => {
@@ -352,6 +459,7 @@ function chatTui(
   const onLine = (roomId: string, line: RoomEventLine, e?: Entry) => {
     const r = rooms.get(roomId);
     if (!r) return;
+    ring();
     const u = line.update;
     const kind = u.sessionUpdate;
     // After this chunk of lines: a replay can close a question in a later
@@ -483,6 +591,10 @@ function chatTui(
       // ctrl+] moves the keys between it and the composer.
       if (matchesKey(data, Key.ctrl("x"))) {
         side.toggle();
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.ctrl("r"))) {
+        history();
         return { consume: true };
       }
       if (side.shown && matchesKey(data, Key.ctrl("]"))) {

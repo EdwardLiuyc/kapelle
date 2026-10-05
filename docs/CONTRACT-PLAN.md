@@ -479,6 +479,11 @@ with plain text. The stall half needs **R38**; without it no room emits
 
 Decisions: **R19, R43, R38**. (F9 dropped by M5-6, #138.)
 
+**Amended 2026-10-05 (#50):** no desktop pop-up and no plain search. A banner on top of
+the timeline and the terminal bell are the attention signal, and a history list of the
+person's messages, in the side view, replaces search. `docs/STORIES.md` M4-4 has the
+detail.
+
 ## M6 stories — the room container
 
 M6 starts by **landing** the participant runtime the spike already proves, then builds the

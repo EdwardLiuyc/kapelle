@@ -1276,6 +1276,42 @@ measured. Versions are the handshake's `agentInfo.version`.
 
 ---
 
+## M4-4 · Markdown re-parse cost — measured 2026-10-05 (#50)
+
+**Question.** The TUI sets an answer's whole text on pi-tui's `Markdown` for each chunk,
+so each frame parses the whole answer again. The spike noted about 5 ms at 53k chars, and
+M4-4 builds a split only past that. What does it cost now?
+
+**Method.** A scratch script with pi-tui 0.85.1 on one machine. It built an answer of the
+given size, then 30 times added one character, called `setText`, and timed `render(100)`,
+as one streamed chunk does. Two kinds of text: prose paragraphs, and a mix of headings,
+paragraphs with code spans and links, lists and code blocks.
+
+| answer | prose, median | mixed, median | mixed, p90 |
+| --- | --- | --- | --- |
+| 10k chars | 2.6 ms | — | — |
+| 53k chars | 13.5 ms | 23.2 ms | 43.7 ms |
+| 200k chars | — | 115 ms | 126 ms |
+
+The same text drawn again at the same width took 0.03 ms or less: `Markdown` keeps what it
+drew while its text and width stay.
+
+**Consequences.**
+
+- **Past the threshold, so the split is built** (`settled`, `chat/tui/transcript.ts`). The
+  finished blocks of an answer go into their own `Markdown`, which is parsed once and then
+  drawn from its keep. A chunk parses only the rest.
+- **A cut is safe only after a blank line, before a line that is not indented, and outside
+  a code fence.** There, the pieces draw the same rows as the whole text: a piece keeps its
+  trailing blank line, and the next piece starts a new block. The one difference measured
+  is a rest that is only `>`: alone it draws an empty row, and at the end of a whole text
+  it draws none. That lasts until the quote's text comes.
+
+**Coverage.** One machine, one run per size, synthetic text. A long code block is never
+cut, so its whole text is parsed again on each chunk.
+
+---
+
 ## What this note does not cover
 
 M0's questions are answered; these are the edges, collected so that no downstream story

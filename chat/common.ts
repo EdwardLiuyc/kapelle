@@ -58,6 +58,7 @@ const bold = sgr(1, 22);
 const dim = sgr(2, 22);
 const italic = sgr(3, 23);
 const underline = sgr(4, 24);
+const inverse = sgr(7, 27);
 const cyan = sgr(36, 39);
 const green = sgr(32, 39);
 const red = sgr(31, 39);
@@ -87,6 +88,7 @@ export {
   dim,
   endedLine,
   green,
+  inverse,
   italic,
   magenta,
   plain,

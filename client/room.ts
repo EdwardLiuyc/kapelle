@@ -93,6 +93,9 @@ interface Turn {
   state: "open" | "ended" | "cut";
   stopReason?: string;
   error?: string;
+  /** The last stall warning's text. Unlike `stalled`, `seen` keeps it: the
+   *  bell (M4-4) rings for a person who looks somewhere else. */
+  stall?: string;
 }
 
 interface ParticipantState {
@@ -245,9 +248,12 @@ export function applyLine(
     case "_client_harness_exited":
       if (p) p.status = "exited";
       return add({ ...at, type: "exited" });
-    case "_client_stall_warning":
+    case "_client_stall_warning": {
       if (p) p.stalled = true;
+      const turn = openTurn();
+      if (turn) turn.stall = u.text;
       return add({ ...at, type: "stall", kind: u.kind, text: u.text });
+    }
     case "_client_permission_queued": {
       const number = openTurn()?.number;
       const question = add({

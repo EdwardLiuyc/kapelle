@@ -56,6 +56,20 @@ export function targetOf(input: string, roster: readonly Named[]): Target {
   return { id: p.id, text: rest };
 }
 
+/** The participants a leading `@` being typed can complete to (M4-4), by
+ *  the start of the name, folded as `targetOf` folds it. `before` is the
+ *  composer's text up to the cursor; `undefined` when that is not a leading
+ *  mention, since only a leading one names a target. */
+export function mentionsFor(
+  before: string,
+  roster: readonly Named[],
+): Named[] | undefined {
+  const m = /^\s*@([^\s,:;.]*)$/.exec(before);
+  if (!m) return undefined;
+  const typed = fold(m[1] ?? "");
+  return roster.filter((p) => fold(p.name).startsWith(typed));
+}
+
 /** The target at submit: `targetOf`, and nothing left to send is an error.
  *  The daemon would refuse empty text with `400`. */
 export function resolveTarget(input: string, roster: readonly Named[]): Target {
