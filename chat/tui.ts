@@ -159,7 +159,7 @@ function chatTui(
   let changes = (
     _who: { id: string; name: string },
     _against: "head" | "base",
-  ) => Promise.resolve();
+  ) => Promise.resolve(false);
   /** The daemon went away mid-request. */
   const gone = (err: unknown) => end(1, `! ${(err as Error).message}`);
   const left = () =>
@@ -545,7 +545,8 @@ function chatTui(
       if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
       if (c.verb === "diff") {
         editor.addToHistory(text);
-        return changes(c, c.against);
+        if (!(await changes(c, c.against))) giveBack();
+        return;
       }
       if (c.verb !== "message") {
         editor.addToHistory(text);
@@ -579,6 +580,7 @@ function chatTui(
      * What an agent changed, in the side pane (M4-6): what is not committed,
      * or the whole branch. `b` switches and `r` asks again; a refusal, such
      * as no branch, goes to the status line and leaves the pane as it was.
+     * Answers whether the view was filled.
      */
     changes = async (
       who: { id: string; name: string },
@@ -588,7 +590,7 @@ function chatTui(
       if (!res.ok) {
         flash = `! ${res.error.message}`;
         setStatus();
-        return;
+        return false;
       }
       const other = against === "head" ? "base" : "head";
       side.fill({
@@ -607,8 +609,13 @@ function chatTui(
           },
         ],
       });
-      // A menu close can open a waiting question: that box keeps the keys.
-      if (box.panel) box.focusPanel();
+      // A menu close can open a waiting question: that box keeps the keys,
+      // and the view lets go of them, so the composer gets them after it.
+      if (box.panel) {
+        side.focus(false);
+        box.focusPanel();
+      }
+      return true;
     };
 
     /**

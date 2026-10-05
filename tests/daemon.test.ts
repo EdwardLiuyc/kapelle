@@ -6715,6 +6715,10 @@ test("chat.ts on a real terminal keeps a waiting question's keys when view chang
   screen.child.stdin.write("b");
   await new Promise((ok) => setTimeout(ok, 300));
   assert.doesNotMatch(screen.out().slice(before), /bob · whole branch/);
+  // Closing the box hands the keys to the composer, not to the view that
+  // gave them up (#225 review): typed text reaches the composer.
+  await screen.press("\x1b", "ctrl+] view");
+  await screen.press("hello", "hello");
   screen.child.stdin.write("\x03");
   assert.equal(await screen.exited, 0, screen.out());
   await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
@@ -6832,6 +6836,30 @@ test("chat.ts on a real terminal shows what an auto agent changed, from /diff an
   // ctrl+x hides the view and keeps what it shows.
   await screen.press("\x18", "ctrl+x view");
   await screen.press("\x18", "bob · uncommitted · README.md (1 of 3)");
+  screen.child.stdin.write("\x03");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal gives a refused /diff its line back", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  // Not a git repository: the agent's changes cannot be shown.
+  const cwd = await added(d, await tempDir(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, name: "bob", role: "orchestrator" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.press("@bob /diff\r", "no diff for bob");
+  // As every refused command does (#225 review): the text comes back to fix.
+  await screen.press("x", "@bob /diff x");
   screen.child.stdin.write("\x03");
   assert.equal(await screen.exited, 0, screen.out());
 });
