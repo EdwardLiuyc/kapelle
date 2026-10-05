@@ -2,7 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
 import type {
@@ -103,6 +103,23 @@ interface PolicyToolCall {
   // same way on ToolCall/ToolCallUpdate; there is no narrower value type.
   // pi-lens-ignore: no-unsafe-dictionary-unknown
   rawInput?: Record<string, unknown>;
+  /** The files the call would write, inside the root (M4-6). */
+  edits?: PolicyEdit[];
+}
+
+/**
+ * One file a tool call would write, named after `#guardPath` (M4-6), so a
+ * path outside the root never gets here. `core/` turns it into a diff for a
+ * person; the policy never reads it.
+ */
+export interface PolicyEdit {
+  /** The absolute path. */
+  abs: string;
+  /** The path from the root, as the diff names it. */
+  path: string;
+  /** The text before: `null` for a new file, absent to read it from disk. */
+  oldText?: string | null;
+  newText: string;
 }
 
 export interface PolicyRequest {
@@ -765,6 +782,7 @@ export class AcpAgent {
         title: update.title,
         kind: update.kind ?? "other",
         rawInput: update.rawInput,
+        content: update.content,
       });
     }
     if (update.sessionUpdate === "tool_call_update") {
@@ -863,11 +881,12 @@ export class AcpAgent {
    * nothing offered any — this is our own decision point, not a reply to a
    * `session/request_permission`, so there is no option id to pick.
    */
-  async #guardWrite(abs: string): Promise<void> {
+  async #guardWrite(abs: string, content: string): Promise<void> {
     const toolCall: PolicyToolCall = {
       title: `fs/write_text_file ${abs}`,
       kind: "edit",
       rawInput: { path: abs },
+      edits: [{ abs, path: relative(this.cwd, abs), newText: content }],
     };
     this.#emitPending(toolCall);
     const allow = await this.policy({
@@ -896,7 +915,7 @@ export class AcpAgent {
     const abs = await this.#guardPath(path, { write: true });
     const decision = this.#writeDecisions.get(abs);
     if (decision === undefined) {
-      await this.#guardWrite(abs);
+      await this.#guardWrite(abs, content);
     } else if (decision === "denied") {
       throw new Error(`write refused by policy: ${abs}`);
     } else if (decision === "once") {
@@ -915,6 +934,58 @@ export class AcpAgent {
     return {};
   }
 
+  /**
+   * The files a tool call would write (M4-6): its `diff` blocks, when the
+   * harness sent them before the ask; else copilot's `rawInput` with `path`
+   * and `file_text`. A path the guard refuses is left out, so a question
+   * about a file outside the root shows no diff.
+   */
+  async #editsOf(
+    content: ToolCallContent[] | undefined | null,
+    // As in PolicyToolCall: arbitrary agent-supplied JSON.
+    // pi-lens-ignore: no-unsafe-dictionary-unknown
+    rawInput: Record<string, unknown> | undefined,
+  ): Promise<PolicyEdit[]> {
+    const wanted: { path: string; oldText?: string | null; newText: string }[] =
+      [];
+    for (const c of content ?? []) {
+      // Off the wire, unchecked: a block may lack its strings.
+      // pi-lens-ignore: no-runtime-typeof
+      if (c?.type !== "diff" || typeof c.path !== "string") continue;
+      // pi-lens-ignore: no-runtime-typeof
+      if (typeof c.newText !== "string") continue;
+      // No `oldText` is a new file (ACP). One that is not text is read from
+      // disk instead, so a bad field costs the old side, not the whole diff.
+      const old: unknown = c.oldText;
+      wanted.push({
+        path: c.path,
+        // pi-lens-ignore: no-runtime-typeof
+        oldText: old == null ? null : typeof old === "string" ? old : undefined,
+        newText: c.newText,
+      });
+    }
+    const path = rawInput?.path;
+    const text = rawInput?.file_text;
+    // pi-lens-ignore: no-runtime-typeof
+    if (
+      !wanted.length &&
+      typeof path === "string" &&
+      typeof text === "string"
+    ) {
+      wanted.push({ path, newText: text });
+    }
+    const edits: PolicyEdit[] = [];
+    for (const w of wanted) {
+      try {
+        const abs = await this.#guardPath(w.path, { write: true });
+        edits.push({ ...w, abs, path: relative(this.cwd, abs) });
+      } catch {
+        // Outside the root: no diff. The write itself is refused later.
+      }
+    }
+    return edits;
+  }
+
   async #requestPermission({
     toolCall,
     options,
@@ -926,6 +997,11 @@ export class AcpAgent {
       kind: toolCall?.kind ?? known.kind ?? "other",
       rawInput: toolCall?.rawInput ?? known.rawInput,
     };
+    const edits = await this.#editsOf(
+      toolCall?.content ?? known.content,
+      detail.rawInput,
+    );
+    if (edits.length > 0) detail.edits = edits;
 
     this.#emitPending(detail);
     const allow = await this.policy({

@@ -36,6 +36,11 @@ const SCENARIOS = {
   split: "remember, with each answer sent in two chunks",
   slow: "like remember, but answers after SLOW_MS; a cancel ends the turn at once",
   "mode-refused-once": "refuses the first session/set_mode, then accepts",
+  "diff-first":
+    "the default path, with the write's diff block sent before the ask",
+  "file-text": "the default path, asking with copilot's rawInput.file_text",
+  "diff-bad-old":
+    "like diff-first, but the diff block's oldText is a number, not text",
 };
 
 const at = process.argv.indexOf("--scenario");
@@ -444,13 +449,25 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       },
     });
 
-    // Exercise the permission path with a mutating tool.
+    // Exercise the permission path with a mutating tool. Two fixtures say
+    // what the write is before the ask (M4-6): claude's way, a `diff`
+    // block, and copilot's, `file_text` in the input.
+    const newText = "written by the mock agent through the client\n";
     update(sid, {
       sessionUpdate: "tool_call",
       toolCallId: "t2",
       title: "Write ACP_TEST.md",
       kind: "edit",
-      rawInput: { path: "ACP_TEST.md" },
+      rawInput:
+        scenario === "file-text"
+          ? { path: "ACP_TEST.md", file_text: newText }
+          : { path: "ACP_TEST.md" },
+      ...(scenario === "diff-first" && {
+        content: [{ type: "diff", path: "ACP_TEST.md", newText }],
+      }),
+      ...(scenario === "diff-bad-old" && {
+        content: [{ type: "diff", path: "ACP_TEST.md", oldText: 42, newText }],
+      }),
       status: "pending",
     });
     const perm = await callClient("session/request_permission", {

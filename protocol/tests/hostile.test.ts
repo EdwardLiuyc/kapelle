@@ -41,6 +41,8 @@ interface Run {
   cwd: string;
   /** `kind:title` for every call the policy was asked to judge, in order. */
   decisions: string[];
+  /** The files each of those calls named for a diff (M4-6). */
+  edits: unknown[];
 }
 
 /**
@@ -58,6 +60,7 @@ async function attack(
   const cwd = await tempDir(t);
   const chunks: string[] = [];
   const decisions: string[] = [];
+  const edits: unknown[] = [];
   const agent = new AcpAgent({
     name: `hostile-${scenario}`,
     command: process.execPath,
@@ -69,6 +72,7 @@ async function attack(
     // took without emitting one.
     policy: (req) => {
       decisions.push(`${req.toolCall.kind}:${req.toolCall.title}`);
+      edits.push(req.toolCall.edits);
       return policy(req);
     },
     requestTimeoutMs: 10_000,
@@ -87,7 +91,13 @@ async function attack(
   await agent.start();
   await agent.newSession();
   const res = await agent.prompt("do your worst");
-  return { text: chunks.join(""), stopReason: res.stopReason, cwd, decisions };
+  return {
+    text: chunks.join(""),
+    stopReason: res.stopReason,
+    cwd,
+    decisions,
+    edits,
+  };
 }
 
 /** True when the file is absent — the shape every "and nothing was written" check wants. */
@@ -147,6 +157,16 @@ test("the same write is allowed when the policy allows it", async (t) => {
   // and refusing every fs write would pass the test above.
   const run = await attack(t, "write-no-ask", ALLOW_ALL);
   assert.match(run.text, /OUTCOME=allowed/);
+  // Its text is named for a diff (M4-6), as an asked edit's is.
+  assert.deepEqual(run.edits, [
+    [
+      {
+        abs: join(run.cwd, "SNEAKY.md"),
+        path: "SNEAKY.md",
+        newText: "written without asking\n",
+      },
+    ],
+  ]);
   assert.equal(await absent(join(run.cwd, "SNEAKY.md")), false);
   assert.equal(run.stopReason, "end_turn");
 });
@@ -168,6 +188,18 @@ test("an allow-only menu grants one write, not the whole session", async (t) => 
     run.decisions[1] ?? "",
     /^edit:fs\/write_text_file .*notes\.md$/,
   );
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("an edit outside the root names no file for a diff, by diff block or by file_text", async (t) => {
+  // The diff reads the old text from disk (M4-6), so a path the guard
+  // refuses must never reach it: its text would land on a person's screen.
+  const run = await attack(t, "diff-escape");
+  assert.deepEqual(run.decisions, [
+    "edit:Edit outside (d1)",
+    "edit:Edit outside (d2)",
+  ]);
+  assert.deepEqual(run.edits, [undefined, undefined]);
   assert.equal(run.stopReason, "end_turn");
 });
 

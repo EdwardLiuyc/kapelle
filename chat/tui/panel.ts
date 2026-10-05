@@ -92,6 +92,7 @@ function panelParts({
   setStatus,
   offer,
   question,
+  changes,
   run,
   end,
   left,
@@ -107,6 +108,8 @@ function panelParts({
   setStatus: () => void;
   offer: () => void;
   question: (id: string) => void;
+  /** Opens what an agent changed in the side pane (M4-6). */
+  changes: (who: { id: string; name: string }) => void;
   run: (c: RouteCommand) => Promise<boolean>;
   end: (code: number, ...last: string[]) => void;
   left: () => string;
@@ -196,6 +199,10 @@ function panelParts({
     tui.setFocus(frame);
     setStatus();
   };
+  /** Gives an open pop-up the keys back after another view took them. */
+  const focusPanel = () => {
+    if (panel) tui.setFocus(frame);
+  };
   /** A pick list in the pop-up. `back` is where Esc goes: the parent menu
    *  on a second-level list, and the whole pop-up closes by default. */
   // The fifth parameter is the optional Esc fallback, not a required input.
@@ -255,6 +262,7 @@ function panelParts({
         { value: "mode", label: `mode · ${p.mode}` },
         { value: "role", label: `role · ${p.role ?? "none"}` },
         { value: "rename", label: "rename …" },
+        { value: "diff", label: "view changes" },
         { value: "remove", label: `remove ${p.name}` },
       );
     } else if (r && roster(r.state).length > 0) {
@@ -305,6 +313,10 @@ function panelParts({
     }
     if (!p) return;
     const who = { id: p.id, name: p.name };
+    if (value === "diff") {
+      hidePanel();
+      return changes(who);
+    }
     if (value === "cancel") return void run({ verb: "cancel", ...who });
     if (value === "remove") return void run({ verb: "remove", ...who });
     if (value === "mode") {
@@ -600,6 +612,7 @@ function panelParts({
     },
     hidePanel,
     showPanel,
+    focusPanel,
     words,
     menu,
     showHelp,

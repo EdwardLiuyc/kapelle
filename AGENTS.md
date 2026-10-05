@@ -92,6 +92,7 @@ arrow that points back.
 | `core/watchdog.ts` | Stall detection: idle, repeat, TTL. |
 | `core/notify.ts` | Bell and desktop notification for the two attention events. |
 | `core/permissions.ts` | The daemon's queue of pending `ask` decisions. |
+| `core/diff.ts` | `git diff` text for a person (M4-6): a question's edit, and an agent's checkout. |
 | `core/eventlog.ts` | `events.jsonl`: write, replay and follow. |
 | `core/sweep.ts` | The daemon's boot sweep. |
 | `core/config.ts` | The config files and `KAPELLE_*` variables. |
@@ -111,11 +112,12 @@ arrow that points back.
 | `client/questions.ts` | The queue of open questions over every room (M4-9): which one opens next, and its `n of m`. No I/O. |
 | `client/folder.ts` | Tab completion for a folder path, folders only (M4-5), and a typed folder as a full path, with no throw when the current folder was removed. |
 | `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. Both screens and the pop-up forms use it. |
+| `client/diff.ts` | A diff text read for a screen (M4-6): where each file starts, and the question box's `±` line. |
 | `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. Both `chat/` screens read a line through it. |
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
 | `chat/` | The chat screens (M4-7): `tui.ts`, a pi-tui screen over every room on a TTY; `piped.ts`, one room as plain lines; `common.ts`, what both use. With `chat.ts`, they talk HTTP only, and import only `client/`, pi-tui, `core/runtime.ts` and each other. |
 | `chat/view.ts` | What the TUI shows (M4-10): the rows and the row keys, the `@name` pre-fill, where a thread goes when its participant left or its room was dismissed, and what is seen. Pure. |
-| `chat/tui/` | The TUI's parts (M4-12): `panel.ts`, the pop-up, its menu and forms; `question.ts`, the question box and its answer; `sidebar.ts`, the sidebar, the strip and the marks; `transcript.ts`, drawing the transcript. `chat/tui.ts` puts them on the screen and keeps the keys, the send flow and the end. |
+| `chat/tui/` | The TUI's parts (M4-12): `panel.ts`, the pop-up, its menu and forms; `question.ts`, the question box and its answer; `sidebar.ts`, the sidebar, the strip and the marks; `transcript.ts`, drawing the transcript; `pane.ts`, the side view beside the timeline, with a diff (M4-6). `chat/tui.ts` puts them on the screen and keeps the keys, the send flow and the end. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 
 Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`

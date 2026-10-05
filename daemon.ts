@@ -56,6 +56,7 @@ import { parseArgs } from "node:util";
 import {
   API_VERSION,
   CAPABILITIES,
+  type Diff,
   type ErrorReply,
   type HarnessEntry,
   type MessageAccepted,
@@ -80,6 +81,7 @@ import {
   resolveRunDefaults,
   warnUnknownConfigEnv,
 } from "./core/config.ts";
+import { checkoutDiff } from "./core/diff.ts";
 import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
@@ -1096,6 +1098,43 @@ function cancelTurn(id: string, agentId: string, res: ServerResponse) {
   send(res, 202, toParticipantDto(p) satisfies ParticipantDto);
 }
 
+/**
+ * `GET /rooms/:id/agents/:agentId/diff?against=head|base` — what the
+ * participant changed in its checkout (M4-6), in any mode: `head` (the
+ * default) is what is not committed, `base` the whole branch. New files git
+ * does not track are in it. A snapshot: nothing is kept.
+ */
+async function agentDiff(
+  id: string,
+  agentId: string,
+  against: string | null,
+  res: ServerResponse,
+) {
+  const p = participantEntry(id, agentId);
+  if (against !== null && against !== "head" && against !== "base") {
+    throw refusal(
+      400,
+      "invalid_request",
+      `"against" must be head or base; got ${against}`,
+    );
+  }
+  const ref = against === "base" ? p.baseSha : "HEAD";
+  if (!ref) {
+    throw refusal(409, "no_diff", `${p.name} has no branch to compare with`);
+  }
+  let diff: Diff;
+  try {
+    diff = await checkoutDiff(p.worktree, ref);
+  } catch (err) {
+    throw refusal(
+      409,
+      "no_diff",
+      `no diff for ${p.name}: ${(err as Error).message.split("\n")[0]}`,
+    );
+  }
+  send(res, 200, diff satisfies Diff);
+}
+
 /** `GET /rooms/:id/events`, the room timeline, or with `agentId`
  *  `GET /rooms/:id/agents/:agentId/events`: the same log, only that
  *  participant's lines (R8c). `seq` and `Last-Event-ID` are the room's. */
@@ -1188,7 +1227,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (!authorised(req, expected)) {
     throw refusal(401, "unauthorized", "missing or wrong token");
   }
-  const { pathname } = new URL(req.url ?? "/", REQUEST_URL_BASE);
+  const { pathname, searchParams } = new URL(req.url ?? "/", REQUEST_URL_BASE);
   const one = /^\/runs\/([^/]+)$/.exec(pathname);
   const events = /^\/runs\/([^/]+)\/events$/.exec(pathname);
   const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
@@ -1198,7 +1237,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   );
   const agentOne = /^\/rooms\/([^/]+)\/agents\/([^/]+)$/.exec(pathname);
   const agentSub =
-    /^\/rooms\/([^/]+)\/agents\/([^/]+)\/(messages|events|turns\/current\/cancel)$/.exec(
+    /^\/rooms\/([^/]+)\/agents\/([^/]+)\/(messages|events|diff|turns\/current\/cancel)$/.exec(
       pathname,
     );
 
@@ -1245,6 +1284,13 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     await postMessage(roomSub[1] as string, undefined, req, res);
   } else if (req.method === "POST" && agentSub?.[3] === "messages") {
     await postMessage(agentSub[1] as string, agentSub[2], req, res);
+  } else if (req.method === "GET" && agentSub?.[3] === "diff") {
+    await agentDiff(
+      agentSub[1] as string,
+      agentSub[2] as string,
+      searchParams.get("against"),
+      res,
+    );
   } else if (req.method === "GET" && agentSub?.[3] === "events") {
     await roomEvents(agentSub[1] as string, agentSub[2], req, res);
   } else if (

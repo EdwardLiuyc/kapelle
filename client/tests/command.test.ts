@@ -143,3 +143,22 @@ test("/new in a removed folder is refused, unless --cwd is a full path", async (
   assert.ok(full && "body" in full, JSON.stringify(full));
   assert.equal(full.body.cwd, "/tmp");
 });
+
+test("@name /diff asks for what is not committed, and /diff base for the whole branch", () => {
+  assert.deepEqual(parse("@bob /diff"), {
+    verb: "diff",
+    id: "p-b",
+    name: "Bob",
+    against: "head",
+  });
+  assert.deepEqual(parse("@alice /diff base"), {
+    verb: "diff",
+    id: "p-a",
+    name: "alice",
+    against: "base",
+  });
+  assert.deepEqual(parse("/diff"), { error: "name the agent: @name /diff" });
+  assert.deepEqual(parse("@bob /diff main"), {
+    error: "usage: @name /diff [base]",
+  });
+});

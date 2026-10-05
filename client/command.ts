@@ -62,12 +62,14 @@ export type RouteCommand =
     };
 
 /** What a typed line is: a command, a form to open (a bare `/new` or
- *  `/add`), or a line that is refused before any request. */
+ *  `/add`), what an agent changed (`/diff`, M4-6), or a line that is
+ *  refused before any request. */
 export type Command =
   | RouteCommand
   | { verb: "leave" }
   | { verb: "help" }
-  | { verb: "form"; form: "new" | "add" };
+  | { verb: "form"; form: "new" | "add" }
+  | { verb: "diff"; id: string; name: string; against: "head" | "base" };
 
 export const HELP = [
   "/new [harness] [--cmd c] [--name n] [--title t] [--cwd dir]",
@@ -77,6 +79,7 @@ export const HELP = [
   "@name /mode <ask|safe|auto>",
   "@name /cancel",
   "@name /remove",
+  "@name /diff [base]",
   "/dismiss   /leave   /help",
   "/new and /add alone open a form; ctrl+o opens the menu",
 ];
@@ -89,10 +92,18 @@ export const USAGE: Record<string, string> = {
   mode: "usage: @name /mode <ask|safe|auto>",
   cancel: "usage: @name /cancel",
   remove: "usage: @name /remove",
+  diff: "usage: @name /diff [base]",
 };
 
 const ROOM_VERBS = new Set(["new", "add", "dismiss", "leave", "help"]);
-const AGENT_VERBS = new Set(["rename", "role", "mode", "cancel", "remove"]);
+const AGENT_VERBS = new Set([
+  "rename",
+  "role",
+  "mode",
+  "cancel",
+  "remove",
+  "diff",
+]);
 
 /** Words, with `"…"` or `'…'` keeping spaces: `--cmd "node x.mjs"`. */
 const words = (s: string) =>
@@ -192,6 +203,13 @@ export function parseCommand(
   if ("error" in t) return t;
   const name = roster.find((p) => p.id === t.id)?.name ?? t.id;
   const id = t.id;
+  if (verb === "diff") {
+    // What is not committed, or with `base` the whole branch.
+    if (args.length > 1 || (args[0] !== undefined && args[0] !== "base")) {
+      return { error: USAGE.diff as string };
+    }
+    return { verb, id, name, against: args[0] ? "base" : "head" };
+  }
   if (verb === "cancel" || verb === "remove") {
     return args.length ? { error: USAGE[verb] as string } : { verb, id, name };
   }

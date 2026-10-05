@@ -414,6 +414,22 @@ export interface ClientPermissionQueuedEvent extends Meta {
   /** The tool's input as the harness sent it, each value as text, cut by
    *  `core/permissions.ts` (M4-3). Absent when the harness sent none. */
   input?: Record<string, string>;
+  /** What the edit would change, as `git diff` text (M4-6). Absent for a
+   *  tool that is not an edit, and for a path outside the checkout. */
+  diff?: Diff;
+}
+
+/**
+ * `git diff` text and its size (M4-6): a question's edit, or an agent's
+ * checkout. `files`, `added` and `removed` are counted before the text is
+ * cut, so they stay true when the text ends in `… N more lines`. The text
+ * is the files' own: remove control characters before you draw it.
+ */
+export interface Diff {
+  text: string;
+  files: number;
+  added: number;
+  removed: number;
 }
 
 /** Why a queued decision closed (M5-4, #136): a client answered, nobody did

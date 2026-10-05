@@ -30,6 +30,8 @@ const SCENARIOS = {
   "malformed-json": "puts a non-JSON line on stdout, then carries on",
   oversized: "puts a line past the client's length cap on stdout",
   "unknown-method": "calls a client method that does not exist",
+  "diff-escape":
+    "asks to edit files outside the root, by diff block and by file_text",
 };
 
 const at = process.argv.indexOf("--scenario");
@@ -183,6 +185,39 @@ const ATTACKS = {
       });
     outcome(sid, await write());
     outcome(sid, await write());
+  },
+
+  "diff-escape": async (sid) => {
+    // The question's diff reads the file it names (M4-6): one outside the
+    // root must get no diff, so its text never reaches a person's screen.
+    for (const [id, call] of [
+      [
+        "d1",
+        {
+          rawInput: { path: "../../etc/passwd" },
+          content: [{ type: "diff", path: "/etc/passwd", newText: "x\n" }],
+        },
+      ],
+      ["d2", { rawInput: { path: "../outside.txt", file_text: "x\n" } }],
+    ]) {
+      update(sid, {
+        sessionUpdate: "tool_call",
+        toolCallId: id,
+        title: `Edit outside (${id})`,
+        kind: "edit",
+        status: "pending",
+        ...call,
+      });
+      const r = await callClient("session/request_permission", {
+        sessionId: sid,
+        toolCall: { toolCallId: id },
+        options: [
+          { optionId: "yes", name: "Allow once", kind: "allow_once" },
+          { optionId: "no", name: "Reject", kind: "reject_once" },
+        ],
+      });
+      outcome(sid, r);
+    }
   },
 
   "malformed-json": async (sid) => {

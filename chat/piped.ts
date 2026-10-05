@@ -12,8 +12,10 @@ import { createInterface } from "node:readline";
 import { USAGE as COMMAND_USAGE, HELP, runCommand } from "../client/command.ts";
 import type { MessageAccepted, RoomDto } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
+import { agentDiff } from "../client/diff.ts";
 import {
   applyLine,
+  cleanDiff,
   type Entry,
   nameOf,
   newRoomState,
@@ -193,6 +195,13 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     }
     if (c.verb === "form") {
       console.error(`! a form needs a terminal: ${COMMAND_USAGE[c.form]}`);
+      continue;
+    }
+    // A pipe has no pane: the diff is printed as it is (M4-6).
+    if (c.verb === "diff") {
+      const r = await agentDiff(d, room.id, c.id, c.against);
+      if (!r.ok) console.error(`! ${r.error.message}`);
+      else console.log(cleanDiff(r.body.text) || `${c.name}: no changes`);
       continue;
     }
     if (c.verb !== "message") {
