@@ -479,6 +479,43 @@ test("an allowed permission is not re-decided when the same write crosses the wi
   assert.match(editDecisions[0] ?? "", /Write ACP_TEST\.md/);
 });
 
+for (const [scenario, edit] of [
+  [undefined, undefined],
+  ["diff-first", { oldText: null }],
+  ["file-text", {}],
+] as const) {
+  test(`an edit names its file for a diff when the harness says it before the ask: ${scenario ?? "neither"}`, async (t) => {
+    // M4-6: a `diff` block (claude) or `file_text` (copilot) before the ask
+    // names the file, after the path guard. With neither, there is no diff.
+    const root = await tempDir(t, "acp-edits-");
+    const named: unknown[] = [];
+    const agent = new AcpAgent({
+      name: "mock-edits",
+      command: process.execPath,
+      args: scenario ? [MOCK_AGENT, "--scenario", scenario] : [MOCK_AGENT],
+      cwd: root,
+      requestTimeoutMs: 10_000,
+      policy: ({ toolCall }) => {
+        if (toolCall.title === "Write ACP_TEST.md") named.push(toolCall.edits);
+        return true;
+      },
+    });
+    t.after(() => agent.stop());
+    await agent.start();
+    await agent.newSession();
+    await agent.prompt("self test");
+    const want = edit && [
+      {
+        ...edit,
+        abs: join(root, "ACP_TEST.md"),
+        path: "ACP_TEST.md",
+        newText: "written by the mock agent through the client\n",
+      },
+    ];
+    assert.deepEqual(named, [want]);
+  });
+}
+
 test("a guardWrite emits the pending event before its policy is consulted", async (t) => {
   // M1c-4, issue #28. `#requestPermission` is already covered above; this
   // closes the other policy-await path, where a harness writes through

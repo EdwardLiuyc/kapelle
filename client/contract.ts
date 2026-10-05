@@ -23,6 +23,7 @@
 
 import type {
   AgentEvent,
+  Diff,
   PermissionReason,
   ToolKind,
   Usage,
@@ -31,7 +32,7 @@ import type {
 /** The event types a stream carries, the tool kinds a permission names, and
  *  why a permission closed. Re-exported, not copied, so there is one
  *  definition. @public */
-export type { AgentEvent, PermissionReason, ToolKind };
+export type { AgentEvent, Diff, PermissionReason, ToolKind };
 
 /**
  * The contract version (B2, amended 2026-09-22). `major` goes up for a change
@@ -44,7 +45,7 @@ export type { AgentEvent, PermissionReason, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 6 } as const;
+export const API_VERSION = { major: 1, minor: 7 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -109,6 +110,7 @@ export type ErrorCode =
   | "idempotency_in_progress"
   | "shutting_down"
   | "room_open_failed"
+  | "no_diff"
   | "internal";
 
 /** Every refusal, on every route. `code` is `string`, not `ErrorCode`: a
@@ -229,6 +231,10 @@ export type PendingDecision = {
    *  the harness sent none. It is the harness's text: remove control
    *  characters before you draw it. */
   input?: Record<string, string>;
+  /** What the edit would change, as `git diff` text (M4-6, 1.7), cut at
+   *  32 KB. Absent for a tool that is not an edit, and for a path outside
+   *  the checkout. Remove control characters before you draw it. */
+  diff?: Diff;
 } & (
   | { runId: string; taskId: string }
   | { roomId: string; participantId: string; turn: number }

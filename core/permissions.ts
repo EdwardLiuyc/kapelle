@@ -35,8 +35,9 @@
 
 import { randomUUID } from "node:crypto";
 
-import type { Policy } from "../protocol/agent.ts";
-import type { PermissionReason, ToolKind } from "../protocol/types.ts";
+import type { Policy, PolicyEdit } from "../protocol/agent.ts";
+import type { Diff, PermissionReason, ToolKind } from "../protocol/types.ts";
+import { editDiff } from "./diff.ts";
 import type { EventBus } from "./events.ts";
 import { READ_ONLY_KINDS } from "./policy.ts";
 
@@ -52,6 +53,8 @@ export type PendingDecision = Asker & {
   kind: ToolKind;
   title: string;
   input?: Record<string, string>;
+  /** What the edit would change (M4-6), cut at 32 KB. */
+  diff?: Diff;
 };
 
 /** A decision that has closed, as `GET /permissions/:id` returns it. */
@@ -141,7 +144,7 @@ export function createPermissionQueue(timeoutMs: number) {
   >();
   // ponytail: every settled decision is kept for the daemon's lifetime, so a
   // late answer reads 409 rather than 404 and `get` can still say how it
-  // closed. The growth term is `title` (`input` is cut): it comes from the harness's
+  // closed. The growth term is `title` (`input` and `diff` are cut): it comes from the harness's
   // `tool_call`, bounded only by `MAX_LINE_LENGTH` (32 MiB), so "a couple
   // of hundred bytes" is the typical entry, not the bound, and a harness that
   // loops on requests grows the map. `daemon.ts` never drops a run or a room
@@ -167,10 +170,37 @@ export function createPermissionQueue(timeoutMs: number) {
       title: string;
       // pi-lens-ignore: no-unsafe-dictionary-unknown
       rawInput?: Record<string, unknown>;
+      edits?: PolicyEdit[];
     },
   ): boolean | Promise<boolean> => {
     if (READ_ONLY_KINDS.has(toolCall.kind)) return true;
     if (signal.aborted) return false;
+    if (!toolCall.edits?.length)
+      return queue(asker, agent, bus, signal, toolCall);
+    // Only here, for a person: `auto` and `safe` never build one. A diff
+    // that fails to build costs the person the view, never the question.
+    return editDiff(toolCall.edits).then(
+      (diff) => queue(asker, agent, bus, signal, toolCall, diff),
+      () => queue(asker, agent, bus, signal, toolCall),
+    );
+  };
+
+  /** Queues one decision that a person answers. */
+  const queue = (
+    asker: Asker,
+    agent: string,
+    bus: EventBus,
+    signal: AbortSignal,
+    toolCall: {
+      kind: ToolKind;
+      title: string;
+      // pi-lens-ignore: no-unsafe-dictionary-unknown
+      rawInput?: Record<string, unknown>;
+    },
+    diff?: Diff,
+  ): Promise<boolean> => {
+    // The diff took a moment: a cancel may have come meanwhile.
+    if (signal.aborted) return Promise.resolve(false);
     const id = randomUUID();
     const input = capInput(toolCall.rawInput);
     const decision: PendingDecision = {
@@ -179,6 +209,7 @@ export function createPermissionQueue(timeoutMs: number) {
       kind: toolCall.kind,
       title: toolCall.title,
       ...(input && { input }),
+      ...(diff && { diff }),
     };
     return new Promise<boolean>((resolve) => {
       const settle = (allow: boolean, reason: PermissionReason) => {
@@ -217,6 +248,7 @@ export function createPermissionQueue(timeoutMs: number) {
           kind: toolCall.kind,
           title: toolCall.title,
           ...(input && { input }),
+          ...(diff && { diff }),
         },
       });
     });

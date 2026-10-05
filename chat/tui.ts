@@ -42,9 +42,10 @@ import type {
   RoomListEntry,
 } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
+import { agentDiff } from "../client/diff.ts";
 import { targetOf } from "../client/mention.ts";
 import { questionQueue } from "../client/questions.ts";
-import { type Entry, nameOf, seen } from "../client/room.ts";
+import { cleanDiff, type Entry, nameOf, seen } from "../client/room.ts";
 import {
   codeOf,
   type End,
@@ -63,6 +64,7 @@ import {
   unpad,
   yellow,
 } from "./common.ts";
+import { paneParts } from "./tui/pane.ts";
 import { EDITOR_THEME, panelParts } from "./tui/panel.ts";
 import { type Question, questionParts } from "./tui/question.ts";
 import {
@@ -102,6 +104,12 @@ const NO_AGENTS = "no agents: ctrl+o → add agent";
  * in a box at the centre of the timeline, and a typed command does the same
  * work through `client/command.ts`. A refusal stays in the box; a success
  * is one status line.
+ *
+ * **The side pane** (M4-6): a question's diff, or what an agent changed,
+ * beside the timeline, or in its place on a narrow screen. `ctrl+x` shows
+ * and hides it, and it keeps what it shows. It has the keys when shown;
+ * `ctrl+]` gives them to the composer and back, so a message can go out
+ * while the diff stays in view.
  *
  * **The composer names the target** (R43), through `client/mention.ts`, and
  * the status line shows it while the person types. A sent line is read by
@@ -148,6 +156,12 @@ function chatTui(
   let done = false;
   let end = (_code: number, ..._last: string[]) => {};
   let run = (_c: RouteCommand) => Promise.resolve(false);
+  let changes = (
+    _who: { id: string; name: string },
+    _against: "head" | "base",
+  ) => Promise.resolve();
+  /** The daemon went away mid-request. */
+  const gone = (err: unknown) => end(1, `! ${(err as Error).message}`);
   const left = () =>
     view.roomId
       ? `left room ${view.roomId}; rejoin with: kapelle chat attach ${view.roomId}`
@@ -164,6 +178,12 @@ function chatTui(
     view: () => view,
     setStatus: () => setStatus(),
   });
+  const side = paneParts({
+    tui,
+    editor,
+    setStatus: () => setStatus(),
+    gutter: () => (shown ? SIDEBAR_WIDTH : 2),
+  });
   const box = panelParts({
     d,
     tui,
@@ -176,6 +196,7 @@ function chatTui(
     setStatus: () => setStatus(),
     offer: () => offer(),
     question: (id) => question(id),
+    changes: (who) => void changes(who, "head").catch(gone),
     run: (c) => run(c),
     end: (code, ...last) => end(code, ...last),
     left,
@@ -186,6 +207,7 @@ function chatTui(
     queue,
     editor,
     box,
+    side,
     setStatus: () => setStatus(),
     say,
     end: (code, ...last) => end(code, ...last),
@@ -199,20 +221,51 @@ function chatTui(
     open: (next) => open(next),
   });
 
+  /**
+   * The sidebar, the timeline and the side view. Every size is set, never
+   * `auto`: an `auto` size makes pi-tui measure each line on every frame,
+   * half a second for a 10,000-line diff (M4-6, measured).
+   */
+  const row = new HStack([
+    {
+      component: sidebar,
+      basis: SIDEBAR_WIDTH,
+      shrink: 0,
+      visible: () => shown,
+    },
+    { component: strip, basis: 2, shrink: 0, visible: () => !shown },
+    {
+      component: scroll,
+      basis: 0,
+      grow: 1,
+      shrink: 1,
+      minSize: 1,
+      visible: () => !side.shown || side.wide(),
+    },
+  ]);
+  /** Sets the side view's width: half of what the sidebar leaves, and on a
+   *  narrow screen all of it, in the timeline's place (M4-6). A stack takes
+   *  a size when an entry is added, so the entry is added again. */
+  // ponytail: one grow entry and a set width, because pi-tui 0.85.1 gives
+  // the first of two `grow` entries about two thirds of the space. Two
+  // `grow: 1` entries will do once pi-tui shares evenly.
+  const placeSide = () => {
+    row.removeChild(side.pane);
+    row.addChild(side.pane, {
+      basis: side.columns(),
+      shrink: 0,
+      visible: () => side.shown,
+    });
+    tui.requestRender();
+  };
+  placeSide();
+  process.stdout.on("resize", placeSide);
+
   tui.setLayoutRoot(
     new VStack([
       {
-        component: new HStack([
-          {
-            component: sidebar,
-            basis: SIDEBAR_WIDTH,
-            shrink: 0,
-            visible: () => shown,
-          },
-          { component: strip, basis: 2, shrink: 0, visible: () => !shown },
-          { component: scroll, basis: "auto", grow: 1, shrink: 1, minSize: 1 },
-        ]),
-        basis: "auto",
+        component: row,
+        basis: 0,
         grow: 1,
         shrink: 1,
         minSize: 1,
@@ -242,7 +295,8 @@ function chatTui(
       );
     }
     const asked = queue.open().length;
-    if (asked && !queue.asking) {
+    // The question in the box or in the pane is not one that waits.
+    if (asked && !queue.asking && !(side.focused && side.content?.question)) {
       parts.push(
         magenta(`? ${asked} question${asked > 1 ? "s" : ""} · ctrl+o`),
       );
@@ -260,7 +314,11 @@ function chatTui(
       dim(
         box.panel
           ? "esc back · ctrl+o close"
-          : "enter to send · ctrl+o menu · alt+↑↓ rows · ctrl+t rooms",
+          : side.focused
+            ? "esc keys back · ctrl+] type · ctrl+x hide"
+            : side.shown
+              ? "enter to send · ctrl+] view · ctrl+x hide · ctrl+o menu"
+              : "enter to send · ctrl+o menu · alt+↑↓ rows · ctrl+t rooms · ctrl+x view",
       ),
     );
     status.setText(parts.join(dim(" · ")));
@@ -268,6 +326,7 @@ function chatTui(
   };
   const toggle = () => {
     shown = !shown;
+    placeSide();
     setStatus();
   };
 
@@ -311,6 +370,10 @@ function chatTui(
       hidePanel();
       flash = `${nameOf(r.state, e.participantId)}'s question closed: ${e.allow ? "allowed" : "denied"} (${e.reason})`;
       offer();
+    }
+    // The question the side view shows closed: its diff stays, and says how.
+    if (kind === "_client_permission_answered" && e?.type === "permission") {
+      side.closed(u.id, `${e.allow ? "allowed" : "denied"} (${e.reason})`);
     }
     // A question came or closed behind the box.
     syncBox();
@@ -366,6 +429,7 @@ function chatTui(
       // The screen is going: a later throw gets Node's default again, a
       // stack and a non-zero exit, instead of being swallowed here.
       process.off("uncaughtException", crash);
+      process.stdout.off("resize", placeSide);
       process.off("unhandledRejection", crash);
       let lines: string[] = [];
       try {
@@ -400,7 +464,11 @@ function chatTui(
       }
       if (matchesKey(data, Key.ctrl("o"))) {
         if (box.panel) hidePanel();
-        else menu();
+        else {
+          // The menu has the keys, and the composer after it.
+          side.focus(false);
+          menu();
+        }
         return { consume: true };
       }
       if (matchesKey(data, Key.ctrl("t"))) {
@@ -411,6 +479,20 @@ function chatTui(
       // what was typed. Esc first. Both sets are one job: `alt+↑↓` is the
       // easy one, `ctrl+p/n` works where a terminal sends no alt+arrow.
       if (box.panel) return undefined;
+      // The side view (decided 2026-10-05): ctrl+x shows and hides it, and
+      // ctrl+] moves the keys between it and the composer.
+      if (matchesKey(data, Key.ctrl("x"))) {
+        side.toggle();
+        return { consume: true };
+      }
+      if (side.shown && matchesKey(data, Key.ctrl("]"))) {
+        side.focus(!side.focused);
+        return { consume: true };
+      }
+      if (side.focused) {
+        side.key(data);
+        return { consume: true };
+      }
       const down =
         matchesKey(data, Key.alt("down")) || matchesKey(data, Key.ctrl("n"));
       const up =
@@ -461,6 +543,10 @@ function chatTui(
       if (c.verb === "leave") return end(0, left());
       if (c.verb === "help") return showHelp();
       if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
+      if (c.verb === "diff") {
+        editor.addToHistory(text);
+        return changes(c, c.against);
+      }
       if (c.verb !== "message") {
         editor.addToHistory(text);
         if (!(await run(c))) giveBack();
@@ -487,6 +573,40 @@ function chatTui(
         { method: "POST", body: { text: t.text } },
       );
       if (!res.ok) warn(`! ${res.error.message}`);
+    };
+
+    /**
+     * What an agent changed, in the side pane (M4-6): what is not committed,
+     * or the whole branch. `b` switches and `r` asks again; a refusal, such
+     * as no branch, goes to the status line and leaves the pane as it was.
+     */
+    changes = async (
+      who: { id: string; name: string },
+      against: "head" | "base",
+    ) => {
+      const res = await agentDiff(d, view.roomId, who.id, against);
+      if (!res.ok) {
+        flash = `! ${res.error.message}`;
+        setStatus();
+        return;
+      }
+      const other = against === "head" ? "base" : "head";
+      side.fill({
+        title: `${who.name} · ${against === "head" ? "uncommitted" : "whole branch"}`,
+        diff: { ...res.body, text: cleanDiff(res.body.text) },
+        keys: [
+          {
+            key: "b",
+            hint: `b ${other === "head" ? "uncommitted" : "whole branch"}`,
+            run: () => void changes(who, other).catch(gone),
+          },
+          {
+            key: "r",
+            hint: "r reload",
+            run: () => void changes(who, against).catch(gone),
+          },
+        ],
+      });
     };
 
     /**

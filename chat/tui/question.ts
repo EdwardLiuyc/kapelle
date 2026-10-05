@@ -8,17 +8,23 @@
  * this file opens the box in the pop-up of `chat/tui/panel.ts`.
  */
 
-import { SelectList, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+  SelectList,
+  truncateToWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type {
   PermissionAnswered,
   PermissionDecision,
 } from "../../client/contract.ts";
 import { call, type DaemonAddress } from "../../client/daemon.ts";
+import { diffLine } from "../../client/diff.ts";
 import type { QuestionQueue } from "../../client/questions.ts";
 import { type Entry, nameOf } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { dim } from "../common.ts";
 import { touched } from "../view.ts";
+import type { paneParts } from "./pane.ts";
 import { EDITOR_THEME, type panelParts } from "./panel.ts";
 
 /** An open question, as the reducer keeps it. */
@@ -26,13 +32,15 @@ type Question = Extract<Entry, { type: "permission" }>;
 /** The open questions over every room, oldest first. */
 type Queue = QuestionQueue<{ r: Followed; q: Question }>;
 
-/** The question box, in the pop-up `box`. `say` sets the status line's
- *  message; `done` and `prefill` are read when a question may open. */
+/** The question box, in the pop-up `box`, and its diff in the pane `side`
+ *  (M4-6). `say` sets the status line's message; `done` and `prefill` are
+ *  read when a question may open. */
 function questionParts({
   d,
   queue,
   editor,
   box,
+  side,
   setStatus,
   say,
   end,
@@ -43,6 +51,7 @@ function questionParts({
   queue: Queue;
   editor: { getText(): string };
   box: ReturnType<typeof panelParts>;
+  side: ReturnType<typeof paneParts>;
   setStatus: () => void;
   say: (text: string) => void;
   end: (code: number, ...last: string[]) => void;
@@ -73,12 +82,13 @@ function questionParts({
       return hidePanel();
     }
     const { r, q } = found;
-    const list = new SelectList(
-      words(["deny", "allow"]),
-      2,
-      EDITOR_THEME.selectList,
-    );
-    list.onSelect = ({ value }) => void answer(q.id, value === "allow");
+    // `view diff` last: deny stays first (M4-6).
+    const rows = q.diff ? ["deny", "allow", "view diff"] : ["deny", "allow"];
+    const list = new SelectList(words(rows), 3, EDITOR_THEME.selectList);
+    list.onSelect = ({ value }) => {
+      if (value === "view diff") return showDiff(q);
+      void answer(q.id, value === "allow");
+    };
     list.onCancel = hidePanel;
     const turn = q.turn === undefined ? "" : ` · turn ${q.turn}`;
     const who = [
@@ -102,7 +112,10 @@ function questionParts({
           .slice(0, 8)
           .flatMap(([k, v]) => wrapTextWithAnsi(`${k}: ${v}`, w))
           .map(dim);
-        const fits = room - action.length;
+        // One line for the diff, never cut, and one more row to pick it;
+        // the pane shows the rest (M4-6).
+        const diff = q.diff ? [truncateToWidth(diffLine(q.diff), w, "…")] : [];
+        const fits = room - action.length - 2 * diff.length;
         if (input.length > 0 && input.length > fits) {
           input.splice(Math.max(0, fits - 1), Infinity, dim("…"));
         }
@@ -110,6 +123,7 @@ function questionParts({
           ...who,
           ...action,
           ...input,
+          ...diff,
           "",
           ...list.render(w),
           dim("↑↓ pick · enter answer · esc later"),
@@ -121,6 +135,32 @@ function questionParts({
     queue.show(q.id);
     syncBox();
     setStatus();
+  };
+  /**
+   * The question's diff in the side view (M4-6). The box closes, and its
+   * question is put aside, so none opens while the view has the keys; `y`
+   * and `n` answer, and Esc brings the box back. The diff stays in the view
+   * after the question closes.
+   */
+  const showDiff = (q: Question) => {
+    const at = queue.place();
+    hidePanel();
+    if (!q.diff) return;
+    // The keys go back to the composer, so the next question can open.
+    const answerHere = (allow: boolean) => () => {
+      side.focus(false);
+      void answer(q.id, allow);
+    };
+    side.fill({
+      title: at ? `question ${at.at} of ${at.of}` : "question",
+      diff: q.diff,
+      question: q.id,
+      keys: [
+        { key: "y", hint: "y allow", run: answerHere(true) },
+        { key: "n", hint: "n deny", run: answerHere(false) },
+      ],
+      back: () => question(q.id),
+    });
   };
   /** Sends the answer. A lost race names who won: the reply to a late
    *  answer is `409`, and `GET /permissions/:id` says why it closed. */
@@ -153,7 +193,10 @@ function questionParts({
   const offer = () => {
     const text = editor.getText();
     const next = queue.next(
-      box.panel !== undefined || done() || touched(text, prefill()),
+      box.panel !== undefined ||
+        side.focused ||
+        done() ||
+        touched(text, prefill()),
     );
     if (next) question(next.q.id);
   };

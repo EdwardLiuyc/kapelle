@@ -406,3 +406,31 @@ test("a question's title and input lose their control characters", () => {
   // hide text in a string.
   assert.equal(printable("a\u00adb\u{e0041}\u{e0001}c"), "a b  c");
 });
+
+test("a question's diff keeps its lines and its counts, and loses its control characters", () => {
+  const state = newRoomState();
+  const e = applyLine(state, {
+    seq: 1,
+    roomId: "r",
+    participantId: "p",
+    at: "2026-10-05T00:00:00.000Z",
+    update: {
+      sessionUpdate: "_client_permission_queued",
+      id: "q",
+      kind: "edit",
+      title: "Write x",
+      diff: {
+        text: "diff --git a/x b/x\n@@ -1 +1 @@\n-\tone\x1b[2J\n+two\u202e",
+        files: 1,
+        added: 1,
+        removed: 1,
+      },
+    },
+  });
+  assert.deepEqual(e?.type === "permission" && e.diff, {
+    text: "diff --git a/x b/x\n@@ -1 +1 @@\n-    one [2J\n+two ",
+    files: 1,
+    added: 1,
+    removed: 1,
+  });
+});

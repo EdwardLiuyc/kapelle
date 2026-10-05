@@ -2207,7 +2207,7 @@ asks to add the folder, then opens the room. The piped screen prints
 **Added 2026-10-01 (#201):** while a pop-up is open the status line swaps its key hint
 for `esc back · ctrl+o close`; the composer's hint returns when the box closes.
 
-**M4-6 · Diff view in the TUI · M · needs M4-3, M4-12**
+**M4-6 · Diff view in the TUI · L · needs M4-3, M4-12**
 **Added 2026-10-01 (#49 pickup).** A question about an edit shows its diff in a view of
 its own, never in the answer box. The box gets one line, `± <path> +a −d`, and a
 `view diff` row. The view replaces the transcript, keeps the sidebar, scrolls, and
@@ -2226,6 +2226,51 @@ Decisions: R12, R45, R47. **Open at pickup:** the cap, and how a new or deleted 
 shows.
 **Amended 2026-10-02:** it also needs M4-12, so its diff holds only the new view and no
 code that moved.
+**Decided at pickup 2026-10-05 (#204), size now L:** the view is a **side pane** right of
+the timeline, not in its place; below 120 columns it replaces the timeline, as first
+written. It takes any `git diff` text, so M4-13 reuses it. **An agent's own changes, in
+any mode:** `auto` asks nothing, so a question diff misses the common case. `/diff @name`,
+or `view changes` in the agent's `ctrl+o` menu, opens them from a new
+`GET /rooms/:id/agents/:agentId/diff?against=head|base`: uncommitted by default
+(`git diff HEAD` and the untracked files, read without `git add`), and `b` switches to
+the whole branch, from `baseSha`. It is a snapshot; `r` reloads. **Many files are one
+scroll:** the title names the file (`2 of 20`), and `]` and `[` jump. A question's
+`AcpAgent` names the edit after the path guard, and `core/` builds the diff only for a
+queued question, so `auto` and `safe` pay nothing. **The cap:** 32 KB for a question,
+which the daemon keeps; 512 KB for the route, which it does not. Both cut at a line end,
+and `+a −d` is counted before the cut. **New and deleted files** show `(new)` and
+`(deleted)`, from git's header. Several files make one box line:
+`± cli.ts and 19 more files +120 −30`.
+**Built 2026-10-05 (#204).** `core/diff.ts` builds both diffs; `client/diff.ts` reads
+one for a screen; `chat/tui/pane.ts` is the pane. The piped screen prints `/diff` as text.
+Four things the build found. pi-tui 0.85.1 gives the first of two `grow` entries about
+two thirds of the space, so the pane gets a set width and the timeline the one `grow`.
+Every size in that row is set, because an `auto` size makes pi-tui measure each line on
+every frame: half a second for a 10,000-line diff, and about 10 ms per key after. pi-tui's
+screen takes the page keys for the timeline, so the chat hands the pane every key while it
+has them. A diff that fits the pane cannot scroll, so `]` and `[` remember the file they
+picked.
+**Added 2026-10-05 (#204): a view, not a box.** The side view is a second view beside the
+timeline, as the sidebar is: `ctrl+x` shows and hides it, and what it shows stays while it
+is hidden. Before anything is put in it, it says how to fill it. It has the keys when shown,
+and `ctrl+]` gives them to the composer and back, so a message goes out while the diff
+stays in view; its single-letter keys (`y`, `n`, `b`, `r`) would otherwise type into both.
+Esc gives the keys back without hiding it; for a question it also brings the box back.
+`ctrl+o` opens the menu as everywhere. An answered question's diff stays, and its title
+says how it closed. M4-13's terminal uses the same view and the same keys.
+
+**M4-13 · A terminal in the side pane · L · needs M4-6**
+**Added 2026-10-05 (#204 pickup).** The side pane M4-6 builds also holds a real
+terminal: a shell in the agent's checkout, beside the timeline, where full-screen
+programs such as `vim` and `less` work. M4-6's `ctrl+]` moves the keys between the
+composer and the terminal. It needs a pseudo-terminal (a pty) and a screen emulator. The
+likely pair is `node-pty` (native, starts the shell) and `@xterm/headless` (no dependencies); a pty
+starts a process, which M1c-7's rule forbids today, so this story first amends that rule
+and compares the options: `node-pty`, a prebuilt fork of it, or `script(1)`, which needs
+no native code but cannot resize. Not ACP `terminal/*`: that stays off (§M0-3).
+*Done when* a shell in the pane runs `vim` in the agent's checkout, resizes with the
+screen, and its exit leaves the chat running.
+Decisions: M1c-7 (amended here).
 
 **M4-7..M4-12: take the logic out of the screen.** **Added 2026-10-02.** `chat.ts` is
 2000 lines, and `chatTui` is one function of about 1280 of them. It draws and reads keys,
@@ -2826,7 +2871,7 @@ M0 ─ M1a ─ M1b ─ M1c ─ M2
 
 ```text
 M5-10a ─ M6-2 ─ M6-6a ─ M6-3 ─ M6-4 ─┬─ M6-10 ─ M4-2 ─ M4-5 ─ M6-11a
-                                      ├─ M6-5 ─ M4-3 ─ M4-7..M4-12 ─ M4-6
+                                      ├─ M6-5 ─ M4-3 ─ M4-7..M4-12 ─ M4-6 ─ M4-13
                                       ├─ M6-7a ─ M6-7b
                                       └─ M6-8 (deferred by R2)
 M6-6a ─ M6-6b ─ M6-11b

@@ -24,7 +24,12 @@
  * `GET /rooms/:id` when the stream ends (S11).
  */
 
-import type { PermissionReason, RoomEventLine, ToolKind } from "./contract.ts";
+import type {
+  Diff,
+  PermissionReason,
+  RoomEventLine,
+  ToolKind,
+} from "./contract.ts";
 
 type Mode = "ask" | "safe" | "auto";
 
@@ -47,6 +52,8 @@ export type Entry = { seq: number; participantId: string } & (
       turn?: number;
       /** The tool's input, as `key: value` text (M4-3). */
       input?: Record<string, string>;
+      /** What the edit would change, drawable (M4-6). */
+      diff?: Diff;
       /** Both set once the question closed. */
       allow?: boolean;
       reason?: PermissionReason;
@@ -65,6 +72,16 @@ export type Entry = { seq: number; participantId: string } & (
  */
 export const printable = (s: string) =>
   s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
+
+/**
+ * Diff text with each line drawable (M4-6): a tab is four spaces, and the
+ * rest goes through `printable`. The lines stay lines.
+ */
+export const cleanDiff = (text: string) =>
+  text
+    .split("\n")
+    .map((l) => printable(l.replaceAll("\t", "    ")))
+    .join("\n");
 
 type Answer = Extract<Entry, { type: "answer" }>;
 type Question = Extract<Entry, { type: "permission" }>;
@@ -248,6 +265,7 @@ export function applyLine(
             ]),
           ),
         }),
+        ...(u.diff && { diff: { ...u.diff, text: cleanDiff(u.diff.text) } }),
       }) as Question;
       state.questions.set(u.id, question);
       return question;

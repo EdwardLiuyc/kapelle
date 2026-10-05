@@ -60,6 +60,7 @@ const italic = sgr(3, 23);
 const underline = sgr(4, 24);
 const cyan = sgr(36, 39);
 const green = sgr(32, 39);
+const red = sgr(31, 39);
 const yellow = sgr(33, 39);
 const magenta = sgr(35, 39);
 const plain = (s: string) => s;
@@ -89,6 +90,7 @@ export {
   italic,
   magenta,
   plain,
+  red,
   rosterOf,
   sgr,
   underline,

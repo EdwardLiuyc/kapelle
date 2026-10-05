@@ -7,8 +7,8 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.6** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
-M5-6, #138, M5-7, #139, M6-5, #149, and M4-3, #49).
+Contract version: **1.7** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, and M4-6, #204).
 
 ## Contents
 
@@ -107,7 +107,7 @@ Not every part of this API is final yet. Each part has one of three labels:
 | Heartbeat (`: ping`) and a paused slow reader | Since 1.3 (M5-6). |
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
 | `_client_*` events | Except the room events. See [Events](#events). |
-| `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). Questions from rooms since 1.5 (M6-5). `input` since 1.6 (M4-3). |
+| `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). Questions from rooms since 1.5 (M6-5). `input` since 1.6 (M4-3). `diff` since 1.7 (M4-6). |
 | Error replies (`{error: {code, message}}`) and the error codes | Codes are only added (M5-3). |
 | Request limits: `Content-Type`, body size, unknown fields, read timeout | M5-3. |
 
@@ -264,6 +264,7 @@ request that is not valid HTTP gets `400`.
 | `name_taken` | `409` | Another participant in the room has this name. Names are compared without ASCII case, so `Alice` takes `alice`. | Choose another name. |
 | `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
 | `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. | Show the message. |
+| `no_diff` | `409` | The participant's changes cannot be shown: its checkout is not a git checkout, or it has no branch to compare with. | Show the message. |
 | `internal` | `500` | An error the daemon did not expect. For example, a bug, or a git command that failed in a broken repository. | Show the message. Report it if the repository is fine. |
 
 **Status codes you will see:**
@@ -327,6 +328,7 @@ the `GET` routes take none.
 | `POST /rooms/:id/agents/:agentId/messages` | Send a message to one participant. Experimental. |
 | `GET /rooms/:id/agents/:agentId/events` | One participant's lines of the room's stream. Experimental. |
 | `POST /rooms/:id/agents/:agentId/turns/current/cancel` | Cancel a participant's turn and drop its queue. Experimental. |
+| `GET /rooms/:id/agents/:agentId/diff` | What a participant changed in its checkout. Experimental. |
 
 ### `GET /version`
 
@@ -334,7 +336,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 6 },
+  "apiVersion": { "major": 1, "minor": 7 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -757,7 +759,7 @@ with ACP names.
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
 | `_client_permission_pending` | `title`, `kind` | A decision is about to be taken. It fires for every decision, also ones that need no person. |
-| `_client_permission_queued` | `id`, `title`, `kind`, `input?` | A decision waits for a person. Answer it with `POST /permissions/:id`. `input` is the tool's input: see [`GET /permissions`](#get-permissions). Since 1.6. |
+| `_client_permission_queued` | `id`, `title`, `kind`, `input?`, `diff?` | A decision waits for a person. Answer it with `POST /permissions/:id`. `input` is the tool's input, and `diff` what an edit would change: see [`GET /permissions`](#get-permissions). `input` since 1.6, `diff` since 1.7. |
 | `_client_permission_answered` | `id`, `allow`, `reason` | A queued decision closed. `id` is the one from `_client_permission_queued`. `reason` says why: see [Why a question closed](#why-a-question-closed). |
 | `_client_permission` | `allow`, `title`, `kind`, `optionId?` | The decision was taken. |
 
@@ -893,6 +895,25 @@ string is its JSON. It holds at most 8 fields. A key is cut at 64 characters and
 of the 8 fields can be dropped when their text has long escapes. Its fields differ by
 harness: for example `command` for a shell command, or `path` and `file_text` for a new
 file.
+
+`diff` is what an edit would change, as `git diff` text with its size. Since 1.7. The
+daemon builds it from what the harness said before it asked: a `diff` block on the tool
+call, or `path` and `file_text` in its input, or the text of a `fs/write_text_file` that
+did not ask. It is absent for a tool that is not an edit, for a path outside the
+checkout, and for an edit that changes nothing.
+
+```json
+"diff": {
+  "text": "diff --git a/notes.md b/notes.md\nnew file mode 100644\n…",
+  "files": 1,
+  "added": 12,
+  "removed": 0
+}
+```
+
+The text is cut at 32 KB, at a line end, and then ends with `… N more lines`. `files`,
+`added` and `removed` are counted before the cut. A new file has git's `new file mode`
+line. The text is the files' own: remove control characters before you draw it.
 
 ### `GET /permissions/:id`
 
@@ -1204,6 +1225,26 @@ replace a message, cancel, then send the new one.
 
 **Refusals:** `404` `room_not_found` or `participant_not_found`; `409` `room_dismissed`;
 `409` `no_turn` when the participant has no live turn.
+
+### `GET /rooms/:id/agents/:agentId/diff`
+
+What the participant changed in its checkout, in any mode. In `auto` it asks nothing, so
+this is how a person sees its work before they ask it to commit.
+
+- `?against=head` (the default): what is not committed yet.
+- `?against=base`: the whole branch, from the commit it started at. Its commits are in it
+  too.
+
+New files that git does not track are in both, as new files. Ignored files are not. The
+daemon reads the checkout and changes nothing in it, not even git's index. Each request is
+a new snapshot; nothing is kept.
+
+**Reply `200`:** the same shape as a question's [`diff`](#get-permissions), cut at 512 KB.
+A checkout with no changes gives `{"text": "", "files": 0, "added": 0, "removed": 0}`.
+
+**Refusals:** `404` `room_not_found` or `participant_not_found`; `400` `invalid_request`
+for another `against`; `409` `no_diff` when the checkout is not a git checkout, or for
+`base` when the participant has no branch.
 
 ### Modes
 

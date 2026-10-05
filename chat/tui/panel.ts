@@ -92,6 +92,7 @@ function panelParts({
   setStatus,
   offer,
   question,
+  changes,
   run,
   end,
   left,
@@ -107,6 +108,8 @@ function panelParts({
   setStatus: () => void;
   offer: () => void;
   question: (id: string) => void;
+  /** Opens what an agent changed in the side pane (M4-6). */
+  changes: (who: { id: string; name: string }) => void;
   run: (c: RouteCommand) => Promise<boolean>;
   end: (code: number, ...last: string[]) => void;
   left: () => string;
@@ -255,6 +258,7 @@ function panelParts({
         { value: "mode", label: `mode · ${p.mode}` },
         { value: "role", label: `role · ${p.role ?? "none"}` },
         { value: "rename", label: "rename …" },
+        { value: "diff", label: "view changes" },
         { value: "remove", label: `remove ${p.name}` },
       );
     } else if (r && roster(r.state).length > 0) {
@@ -305,6 +309,10 @@ function panelParts({
     }
     if (!p) return;
     const who = { id: p.id, name: p.name };
+    if (value === "diff") {
+      hidePanel();
+      return changes(who);
+    }
     if (value === "cancel") return void run({ verb: "cancel", ...who });
     if (value === "remove") return void run({ verb: "remove", ...who });
     if (value === "mode") {

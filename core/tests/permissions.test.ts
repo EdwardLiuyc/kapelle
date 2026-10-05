@@ -265,3 +265,40 @@ test("an escape-heavy input is still capped at 4 KB of JSON", () => {
   assert.ok(Object.keys(control).length > 0);
   assert.ok(Buffer.byteLength(JSON.stringify(control), "utf8") <= 4096);
 });
+
+test("a question about an edit carries its diff, built only once it waits for a person", async () => {
+  const { queue, events, cancel, policy } = setup();
+  const edit: PolicyRequest = {
+    agent: "task-a",
+    toolCall: {
+      title: "Write x.md",
+      kind: "edit",
+      edits: [{ abs: "/nowhere/x.md", path: "x.md", newText: "hi\n" }],
+    },
+    options: [],
+  };
+  const decided = policy(edit);
+  // Built off the call stack: wait for the question to appear.
+  for (let i = 0; i < 100 && queue.list().length === 0; i++) {
+    await new Promise((ok) => setTimeout(ok, 10));
+  }
+  const [pending] = queue.list();
+  assert.ok(pending?.diff);
+  assert.deepEqual(
+    { ...pending.diff, text: "" },
+    { text: "", files: 1, added: 1, removed: 0 },
+  );
+  assert.match(
+    pending.diff.text,
+    /^diff --git a\/x\.md b\/x\.md\nnew file mode/,
+  );
+  const queued = events[0]?.update as { diff?: unknown };
+  assert.deepEqual(queued.diff, pending.diff);
+
+  // A cancel while the diff builds still denies, and queues nothing.
+  const late = policy(edit);
+  cancel.abort();
+  assert.equal(await late, false);
+  assert.equal(await decided, false);
+  assert.deepEqual(queue.list(), []);
+});
