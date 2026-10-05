@@ -3,8 +3,9 @@
  *
  * The box at the centre of the timeline (M4-5) and what it shows: the
  * ctrl+o menu, a pick list, a text box, the help, and the two forms, new
- * room and add agent. It owns the open pop-up. A command it sends goes
- * through the screen's `run`; the question box is `chat/tui/question.ts`.
+ * room and add agent. It owns the open pop-up. Esc goes back one level,
+ * and a first-level menu closes it. A command it sends goes through the
+ * screen's `run`; the question box is `chat/tui/question.ts`.
  */
 
 import {
@@ -237,10 +238,10 @@ function panelParts({
       invalidate() {},
     });
 
-  /** The ctrl+o menu. In a thread it is that agent's commands; `pid`
-   *  names another one, picked from the room's list. The open questions
-   *  come first, from every room. */
-  const menu = (pid = view().participantId) => {
+  /** Opens the ctrl+o menu. `pid` is the agent whose commands it lists;
+   *  `back` is where Esc goes. It reopens itself as `self`, so a menu or
+   *  form it opens can return here. */
+  const openMenu = (pid: string | undefined, back: () => void) => {
     const r = rooms.get(view().roomId);
     const p = pid ? r?.state.participants.get(pid) : undefined;
     const items: SelectItem[] = queue.open().map(({ r: qr, q }) => ({
@@ -268,19 +269,33 @@ function panelParts({
     let title = "menu";
     if (p) title = `${p.name} · ${p.harness}${p.role ? ` · ${p.role}` : ""}`;
     else if (r) title = r.entry.title ?? r.entry.id;
-    pickList(title, items, undefined, (value) => choose(value, p));
+    const self = () => openMenu(pid, back);
+    pickList(
+      title,
+      items,
+      undefined,
+      (value) => choose(value, p, self, back),
+      back,
+    );
   };
+
+  /** The menu for the open view: an agent's commands in a thread, the
+   *  room's menu otherwise. First-level, so Esc closes the pop-up. */
+  const menu = (pid = view().participantId, back: () => void = hidePanel) =>
+    openMenu(pid, back);
 
   const choose = (
     value: string,
     p: ReturnType<typeof roster>[number] | undefined,
+    self: () => void,
+    back: () => void,
   ) => {
     const r = rooms.get(view().roomId);
     if (value.startsWith("?")) return question(value.slice(1));
     if (value === "leave") return end(0, left());
     if (value === "help") return showHelp();
-    if (value === "new") return newForm(() => menu(p?.id));
-    if (value === "add") return addForm(() => menu(p?.id));
+    if (value === "new") return newForm(self);
+    if (value === "add") return addForm(self);
     if (value === "dismiss") return void run({ verb: "dismiss" });
     if (value === "agent" && r) {
       const ps = roster(r.state);
@@ -293,8 +308,8 @@ function panelParts({
         "pick an agent",
         items,
         undefined,
-        (id) => menu(id),
-        () => menu(),
+        (id) => openMenu(id, self),
+        self,
       );
     }
     if (!p) return;
@@ -307,7 +322,7 @@ function panelParts({
         words(MODES),
         p.mode,
         (mode) => run({ verb: "patch", ...who, change: { mode } }),
-        () => menu(p.id),
+        () => openMenu(p.id, back),
       );
     }
     if (value === "role") {
@@ -322,14 +337,14 @@ function panelParts({
             ...who,
             change: { role: role === "none" ? null : role },
           }),
-        () => menu(p.id),
+        () => openMenu(p.id, back),
       );
     }
     if (value === "rename") {
       const input = textBox(p.name);
       input.onSubmit = (name) =>
         void run({ verb: "patch", ...who, change: { name: name.trim() } });
-      input.onEscape = () => menu(p.id);
+      input.onEscape = () => openMenu(p.id, back);
       showPanel(`rename ${p.name}`, input);
     }
   };
@@ -465,33 +480,39 @@ function panelParts({
    */
   const askToAdd = (c: Extract<RouteCommand, { verb: "new" }>) => {
     const back = panel;
+    const toForm = () => {
+      if (back) showPanel(back.title, back.body);
+      else hidePanel();
+    };
     const items = [
       { value: "add", label: "add and open" },
       { value: "back", label: back ? "back to the form" : "cancel" },
     ];
-    pickList("folder not added", items, undefined, async (v) => {
-      if (v !== "add") {
-        if (back) showPanel(back.title, back.body);
-        else hidePanel();
-        return;
-      }
-      let added: Awaited<ReturnType<typeof call<RepoAdded>>>;
-      try {
-        added = await call<RepoAdded>(d, "/repos", {
-          method: "POST",
-          body: { path: c.body.cwd },
-        });
-      } catch (err) {
-        end(1, `! ${(err as Error).message}`);
-        return;
-      }
-      if (!added.ok) {
-        if (panel) panel.error = added.error.message;
-        tui.requestRender();
-        return;
-      }
-      await run(c);
-    });
+    pickList(
+      "folder not added",
+      items,
+      undefined,
+      async (v) => {
+        if (v !== "add") return toForm();
+        let added: Awaited<ReturnType<typeof call<RepoAdded>>>;
+        try {
+          added = await call<RepoAdded>(d, "/repos", {
+            method: "POST",
+            body: { path: c.body.cwd },
+          });
+        } catch (err) {
+          end(1, `! ${(err as Error).message}`);
+          return;
+        }
+        if (!added.ok) {
+          if (panel) panel.error = added.error.message;
+          tui.requestRender();
+          return;
+        }
+        await run(c);
+      },
+      toForm,
+    );
     if (panel)
       // The daemon adds the whole repository the folder is in.
       panel.error = `${c.body.cwd} is not added to the daemon. Add its repository?`;
