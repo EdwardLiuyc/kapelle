@@ -5959,6 +5959,11 @@ test("Esc in a second-level pop-up goes back to the menu", {
   await press("\r", "pick an agent");
   await press("\x1b", "add agent …");
   await press("\x1b", "enter to send");
+  // The add-agent form returns to the room's menu too.
+  await press("\x0f", "agent …");
+  await press(`${DOWN}\r`, "harness");
+  await press("\x1b", "agent …");
+  await press("\x1b", "enter to send");
   child.stdin.write("\x03");
   await seen("rejoin with");
   assert.equal(await exited, 0, out());
