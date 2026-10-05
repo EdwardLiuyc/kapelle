@@ -1,8 +1,15 @@
 name: Code Checks
 
 on:
+    # A PR branch is checked by `pull_request` only, so one push makes one run.
     push:
+        branches: [master]
     pull_request:
+
+# A new push stops the older run on the same branch or PR.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
 
 permissions:
     contents: read
