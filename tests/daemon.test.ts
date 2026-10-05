@@ -5936,6 +5936,40 @@ test("ctrl+o in a thread opens that agent's menu over the timeline, and a mode p
   assert.doesNotMatch(scrollback(out()), /is now in ask mode/);
 });
 
+test("Esc in a second-level pop-up goes back to the menu", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  // Room menu → agent list → agent menu.
+  await press("\x0f", "agent …");
+  await press("\r", "pick an agent");
+  await press("\r", "mock-agent · mock-agent");
+  // Each second-level list returns to the agent's menu on Esc.
+  await press(`${DOWN}\r`, "mock-agent · mode");
+  await press("\x1b", "role · orchestrator");
+  await press(`${DOWN.repeat(2)}\r`, "mock-agent · role");
+  await press("\x1b", "rename …");
+  await press(`${DOWN.repeat(3)}\r`, "rename mock-agent");
+  await press("\x1b", "mode · auto");
+  // The agent's menu came from `pick an agent`, so Esc returns to the room menu.
+  await press("\x1b", "add agent …");
+  // Enter proves it is the room menu: its first row opens `pick an agent`.
+  await press("\r", "pick an agent");
+  // That list's Esc comes back to the room menu.
+  await press("\x1b", "add agent …");
+  // The room's menu is first-level: Esc closes the pop-up.
+  await press("\x1b", "enter to send");
+  // The add-agent form returns to the room's menu too.
+  await press("\x0f", "agent …");
+  await press(`${DOWN}\r`, "harness");
+  await press("\x1b", "agent …");
+  await press("\x1b", "enter to send");
+  child.stdin.write("\x03");
+  await seen("rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
 test("/add alone opens its form; a refusal stays in the form, and a fix adds the agent", {
   skip: noPty,
 }, async (t) => {
@@ -6324,6 +6358,62 @@ test("the menu's help row shows the commands", {
   // With no room, the menu is: new room …, help, leave.
   await press("\x0f", "new room …");
   await press(`${DOWN}\r`, "@name /mode <ask|safe|auto>");
+  // Help is a second-level pop-up: Esc returns to the menu.
+  await press("\x1b", "new room …");
+  await press("\x1b", "enter to send");
   await press("\x03", "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("Esc in a form opened from the menu goes back to the menu", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await press("\x0f", "new room …");
+  await press("\r", "folder");
+  // Esc returns to the menu; a second Esc still closes it.
+  await press("\x1b", "new room …");
+  await press("\x1b", "enter to send");
+  await press("\x03", "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("Esc in the folder-not-added prompt goes back to the new-room form", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await boot(t, runtime);
+  const repo = await gitRepo(t); // never added
+  const { child, press, seen, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await press("\x0f", "new room …");
+  await press("\r", "folder");
+  await press(`\r\x15${repo}`, repo);
+  await press("\r", "Enter/Space");
+  // Open on an unadded folder: the daemon asks to add the repo.
+  await press(
+    `${DOWN.repeat(5)}\r`,
+    "is not added to the daemon. Add its repository?",
+  );
+  // Esc returns to the form, with the folder still there.
+  const from = out().length;
+  await press("\x1b", "Enter/Space to change");
+  assert.ok(
+    plainText(out().slice(from)).includes(repo),
+    plainText(out().slice(from)),
+  );
+  child.stdin.write("\x03");
+  await seen("left the chat");
   assert.equal(await exited, 0, out());
 });
