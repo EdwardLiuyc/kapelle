@@ -483,6 +483,9 @@ for (const [scenario, edit] of [
   [undefined, undefined],
   ["diff-first", { oldText: null }],
   ["file-text", {}],
+  // Not text: the old side is read from disk, not the whole diff dropped
+  // (#225 review 3a).
+  ["diff-bad-old", { oldText: undefined }],
 ] as const) {
   test(`an edit names its file for a diff when the harness says it before the ask: ${scenario ?? "neither"}`, async (t) => {
     // M4-6: a `diff` block (claude) or `file_text` (copilot) before the ask
