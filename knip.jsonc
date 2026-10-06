@@ -19,7 +19,11 @@
   // from nowhere and calls all four unused. knip has no notion of a second,
   // opt-in test suite, so they are ignored rather than misdeclared as
   // production roots. `npm run check` still type-checks them.
-  "ignore": ["protocol/types.ts", "integration/**"],
+  //
+  // web/ is the browser page (spike/pwa). The daemon serves its files over
+  // HTTP (daemon/web.ts) and a browser loads them; nothing imports them, so
+  // knip reaches none of them.
+  "ignore": ["protocol/types.ts", "integration/**", "web/**"],
   // script(1) is util-linux's, spawned by tests/daemon.test.ts to give `attach`
   // (M2-9) and chat.ts a real pseudo-terminal. A system binary, not an npm one,
   // so nothing lists it.

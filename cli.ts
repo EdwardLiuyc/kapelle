@@ -173,6 +173,8 @@ kapelle — a minimal Agent Client Protocol client
   kapelle daemon add <path>          adds a repository to the running daemon
   kapelle chat [new | attach | list | dismiss]
                                      the chat rooms; kapelle chat --help
+  kapelle web                        a one-time link to the chat page in a
+                                     browser (spike/pwa)
 
 Options:
   --agent <id>     ${Object.keys(AGENTS).join(" | ")}   (default: ${DEFAULT_AGENT})
@@ -278,6 +280,11 @@ if (chatVerb) {
   } else {
     process.exitCode = await runFromFile(runFilePath);
   }
+} else if (positional[0] === "web") {
+  process.exitCode = await webLink().catch((err) => {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  });
 } else if (positional[0] === "ps") {
   process.exitCode = await listRuns().catch((err) => {
     console.error(`error: ${messageOf(err)}`);
@@ -850,6 +857,25 @@ async function detachRun(path: string): Promise<number> {
  * `kapelle ps`: every run the daemon knows, and each task's id and status
  * under it (M2-10, #121). A finished run's status is its verdict.
  */
+/**
+ * `kapelle web` (spike/pwa): a link that logs a browser in to the chat page.
+ * The code after `#` works once, for 60 s; the browser never sends the part
+ * after `#` to a server (`daemon/web.ts`).
+ */
+async function webLink(): Promise<number> {
+  const d = await findDaemon();
+  if (!d) return 1;
+  const r = await call<{ code: string }>(d, "/session/code", {
+    method: "POST",
+  });
+  if (!r.ok) {
+    console.error(`error: ${r.error.message}`);
+    return 1;
+  }
+  console.log(`http://127.0.0.1:${d.port}/app/#code=${r.body.code}`);
+  return 0;
+}
+
 async function listRuns(): Promise<number> {
   const d = await findDaemon();
   if (!d) return 1;

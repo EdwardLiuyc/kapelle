@@ -1,0 +1,63 @@
+<!doctype html>
+<!--
+  The chat page (spike/pwa): the TUI's screen, in a browser. The daemon
+  serves it at /app/ with no token (daemon/web.ts); the page logs in with
+  the one-time code from `kapelle web`, then sends the token on every call.
+  No inline script or style: the CSP allows neither.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>kapelle</title>
+    <link rel="manifest" href="manifest.json" />
+    <link rel="icon" href="icon.svg" />
+    <link rel="stylesheet" href="app.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <div id="message" hidden></div>
+    <div id="app" hidden>
+      <aside id="sidebar">
+        <header>
+          <span>rooms</span>
+          <button id="notify" type="button" hidden title="Notify me when an agent waits">notify</button>
+          <button id="hide" type="button" title="Hide the rooms (ctrl+b)">«</button>
+        </header>
+        <ul id="rows"></ul>
+      </aside>
+      <button id="strip" type="button" hidden title="Show the rooms (ctrl+b)">»</button>
+      <main>
+        <div id="banner"></div>
+        <div id="views">
+          <section id="transcript" aria-live="polite"></section>
+          <section id="pane" hidden>
+            <header>
+              <span id="pane-title"></span>
+              <span id="pane-keys"></span>
+              <button id="pane-close" type="button" title="Hide (alt+x)">×</button>
+            </header>
+            <div id="pane-body" tabindex="0"></div>
+          </section>
+        </div>
+        <footer>
+          <div id="status"></div>
+          <div id="compose">
+            <ul id="mentions" hidden></ul>
+            <textarea id="composer" rows="2" placeholder="message · @name for an agent · /help"></textarea>
+            <div id="tools">
+              <button id="menu" type="button" title="Menu (ctrl+k)">menu</button>
+              <button id="history" type="button" title="Your messages (alt+h)">history</button>
+              <button id="toggle-pane" type="button" title="Side view (alt+x)">view</button>
+            </div>
+          </div>
+        </footer>
+      </main>
+    </div>
+    <dialog id="box">
+      <header id="box-title"></header>
+      <div id="box-body"></div>
+      <p id="box-error" hidden></p>
+    </dialog>
+  </body>
+</html>

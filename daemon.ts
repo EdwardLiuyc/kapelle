@@ -50,6 +50,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
@@ -74,6 +75,7 @@ import {
   type RunStatus,
   type VersionReply,
 } from "./client/contract.ts";
+import { completeFolder } from "./client/folder.ts";
 import {
   readEnvConfig,
   readProjectConfig,
@@ -127,6 +129,7 @@ import {
   send,
 } from "./daemon/http.ts";
 import { streamLog } from "./daemon/sse.ts";
+import { loginCodes, serveApp } from "./daemon/web.ts";
 import { AGENTS } from "./protocol/registry.ts";
 
 // M2-7: the user-level config is read once here, after the startup helpers
@@ -1217,6 +1220,7 @@ async function postPermission(
 /** A parse base for `req.url`, which is a path, not a URL. Never fetched;
  *  named as a constant so it is not mistaken for a configurable endpoint. */
 const REQUEST_URL_BASE = "http://daemon";
+const codes = loginCodes();
 
 async function route(req: IncomingMessage, res: ServerResponse) {
   // Before the token and every route: a forged, duplicated or missing Host is
@@ -1224,10 +1228,25 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (!hostAllowed(req)) {
     throw refusal(403, "host_not_allowed", "host not allowed");
   }
+  const { pathname, searchParams } = new URL(req.url ?? "/", REQUEST_URL_BASE);
+  // spike/pwa: the page's files and its login need no token
+  // (`daemon/web.ts`). Every route below still does.
+  if (req.method === "GET" && serveApp(pathname, res)) return;
+  if (req.method === "POST" && pathname === "/session") {
+    const { code } = await readBody(req, ["code"]);
+    if (!codes.take(code)) {
+      throw refusal(
+        401,
+        "unauthorized",
+        "wrong or spent code: run kapelle web",
+      );
+    }
+    send(res, 200, { token });
+    return;
+  }
   if (!authorised(req, expected)) {
     throw refusal(401, "unauthorized", "missing or wrong token");
   }
-  const { pathname, searchParams } = new URL(req.url ?? "/", REQUEST_URL_BASE);
   const one = /^\/runs\/([^/]+)$/.exec(pathname);
   const events = /^\/runs\/([^/]+)\/events$/.exec(pathname);
   const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
@@ -1241,7 +1260,16 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       pathname,
     );
 
-  if (req.method === "GET" && pathname === "/version") {
+  if (req.method === "POST" && pathname === "/session/code") {
+    send(res, 200, { code: codes.make() });
+  } else if (req.method === "GET" && pathname === "/folders") {
+    // spike/pwa: the new-room form's folder completion, relative to home.
+    const home = homedir();
+    send(res, 200, {
+      home,
+      ...completeFolder(searchParams.get("path") ?? "", home),
+    });
+  } else if (req.method === "GET" && pathname === "/version") {
     send(res, 200, {
       apiVersion: API_VERSION,
       capabilities: [...CAPABILITIES],
