@@ -227,6 +227,23 @@ function paneParts({
     invalidate() {},
   };
   const scroll = new ScrollView(body, { follow: "none" });
+  /** The view takes every wheel turn over it (#228). Left to pi-tui, a turn
+   *  past either end scrolls the timeline, even with `overscroll:
+   *  "contain"`. A list's light stays on a row in view, so Enter picks a
+   *  row the person sees. */
+  scroll.handleMouse = (e) => {
+    if (e.type !== "wheel") return undefined;
+    scroll.scrollBy(e.wheelDelta ?? 0);
+    const top = scroll.scrollTop;
+    cursor = Math.max(top, Math.min(top + scroll.viewportHeight - 1, cursor));
+    // A container answers with its target, as pi-tui's `dispatchMouseEvent`.
+    const { x, y, screenX, screenY, width, height } = e;
+    const origin = { originX: screenX - x, originY: screenY - y };
+    return {
+      handled: true,
+      target: { component: scroll, ...origin, width, height },
+    };
+  };
   const head: Component = {
     render: (w) => {
       if (!content) {
@@ -335,7 +352,8 @@ function paneParts({
       return shown && focused;
     },
     /** One key for the view. The screen sends it every key while the view
-     *  has them: pi-tui's screen would take the page keys for the timeline. */
+     *  has them, and the page keys while it takes the timeline's place.
+     *  pi-tui's screen keeps no page key of its own (`chat/tui.ts`, #228). */
     key: (data: string) => body.handleInput?.(data),
     /** What the view shows, shown or hidden. */
     get content() {

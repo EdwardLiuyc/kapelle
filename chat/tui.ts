@@ -31,6 +31,7 @@
 
 import {
   Editor,
+  getKeybindings,
   HStack,
   Key,
   matchesKey,
@@ -150,6 +151,15 @@ function chatTui(
   });
   const { rooms } = set;
   const tui = new TuiAltScreen(new ProcessTerminal());
+  // pi-tui's screen reads keys before ours, and would take the page keys
+  // for the timeline while the side view has the keys. Ours route them
+  // (#228).
+  const keys = getKeybindings();
+  keys.setUserBindings({
+    ...keys.getUserBindings(),
+    "tui.altScreen.pageUp": [],
+    "tui.altScreen.pageDown": [],
+  });
   const status = new Text("", 1, 0);
   const editor = new Editor(tui, EDITOR_THEME, { paddingX: 1 });
   let view: View = { roomId: selected ?? list[0]?.id ?? "" };
@@ -613,6 +623,19 @@ function chatTui(
       }
       if (side.focused) {
         side.key(data);
+        return { consume: true };
+      }
+      // The page keys scroll what is drawn where the timeline goes. A page
+      // keeps 4 lines, as pi-tui's did.
+      const page = matchesKey(data, Key.pageUp)
+        ? -1
+        : matchesKey(data, Key.pageDown)
+          ? 1
+          : 0;
+      if (page) {
+        if (side.shown && !side.wide()) side.key(data);
+        else scroll.scrollBy(page * Math.max(1, scroll.viewportHeight - 4));
+        tui.requestRender();
         return { consume: true };
       }
       const down =

@@ -4883,8 +4883,9 @@ test("chat.ts on a real terminal maps the mouse to the right row of a history li
   }
   await screen.seen("previous: m14");
   await screen.press("\x12", "history · 1 of 15");
-  // To the end: the list scrolls. Arrows, as pi-tui keeps the page keys.
-  await screen.press("\x1b[B".repeat(14), "history · 15 of 15");
+  // To the end: the list scrolls. Page Down reaches the list, not only
+  // the timeline (#228).
+  await screen.press("\x1b[6~".repeat(14), "history · 15 of 15");
   // The mouse on the list's top row, row 2 of the screen, is not message 1.
   const from = screen.out().length;
   await screen.press("\x1b[<35;90;2M", "history · ");
@@ -4905,6 +4906,68 @@ test("chat.ts on a real terminal maps the mouse to the right row of a history li
     assert.ok(Date.now() < until, screen.out().slice(from));
     await new Promise((ok) => setTimeout(ok, 50));
   }
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal keeps the wheel over the side view out of the timeline, and the page keys with the composer", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 16; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  const path = `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`;
+  const send = async (text: string) => {
+    const sent = await api(d, "POST", path, { text });
+    assert.equal(sent.status, 202, sent.body.error?.message);
+  };
+  for (let i = 1; i <= 15; i++) await send(`m${i}`);
+  await screen.seen("previous: m14");
+  // Ten wheel turns up over the side view, at column 90.
+  const wheelUp = "\x1b[<64;90;5M".repeat(10);
+  // An empty view, then a list at its top: the wheel stops there. A
+  // timeline it moved would stop following, and draw no new answer.
+  await screen.press("\x18", "nothing here yet");
+  screen.child.stdin.write(wheelUp);
+  await send("m16");
+  await screen.seen("previous: m15");
+  await screen.press("\x12", "history · 1 of 16");
+  screen.child.stdin.write(wheelUp);
+  await send("m17");
+  await screen.seen("previous: m16");
+  // The wheel down scrolls the list, and the light stays on a row in view.
+  const from = screen.out().length;
+  screen.child.stdin.write("\x1b[<65;90;5M".repeat(10));
+  for (const until = Date.now() + 10_000; ; ) {
+    const at = /history · (\d+) of 17/.exec(
+      plainText(screen.out().slice(from)),
+    );
+    if (at && Number(at[1]) > 1) {
+      assert.match(
+        screen.out().slice(from),
+        new RegExp(`\\x1b\\[7m→ mock-agent: m${at[1]} `),
+      );
+      break;
+    }
+    assert.ok(Date.now() < until, screen.out().slice(from));
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  // With the keys at the composer, Page Up scrolls the timeline.
+  await screen.press("\x1d", "ctrl+] keys here");
+  await screen.press("\x1b[5~", "previous: m");
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
