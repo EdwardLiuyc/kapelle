@@ -4883,6 +4883,9 @@ test("chat.ts on a real terminal maps the mouse to the right row of a history li
   }
   await screen.seen("previous: m14");
   await screen.press("\x12", "history · 1 of 15");
+  // A key's release is not a second press. A terminal with the kitty
+  // keyboard protocol sends both.
+  await screen.press("\x1b[6;1:3~\x1b[B", "history · 2 of 15");
   // To the end: the list scrolls. Page Down reaches the list, not only
   // the timeline (#228).
   await screen.press("\x1b[6~".repeat(14), "history · 15 of 15");
@@ -4968,6 +4971,40 @@ test("chat.ts on a real terminal keeps the wheel over the side view out of the t
   // With the keys at the composer, Page Up scrolls the timeline.
   await screen.press("\x1d", "ctrl+] keys here");
   await screen.press("\x1b[5~", "previous: m");
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a narrow real terminal sends the page keys with the composer to the side view in the timeline's place", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  // Under 120 columns the side view takes the timeline's place.
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 16; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  const path = `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`;
+  for (let i = 1; i <= 15; i++) {
+    const sent = await api(d, "POST", path, { text: `m${i}` });
+    assert.equal(sent.status, 202, sent.body.error?.message);
+  }
+  await screen.seen("previous: m14");
+  await screen.press("\x12", "history · 1 of 15");
+  await screen.press("\x1d", "ctrl+] keys here");
+  // A page is the view's height less one row.
+  await screen.press("\x1b[6~", "history · 8 of 15");
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

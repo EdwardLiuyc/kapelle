@@ -33,6 +33,7 @@ import {
   Editor,
   getKeybindings,
   HStack,
+  isKeyRelease,
   Key,
   matchesKey,
   ProcessTerminal,
@@ -586,6 +587,10 @@ function chatTui(
     };
 
     tui.addInputListener((data) => {
+      // A terminal with the kitty keyboard protocol also sends each key's
+      // release, and `matchesKey` matches it. pi-tui drops it before the
+      // focused component; drop it here too, or a key acts twice.
+      if (isKeyRelease(data)) return undefined;
       if (matchesKey(data, Key.ctrl("c"))) {
         end(0, left());
         return { consume: true };
