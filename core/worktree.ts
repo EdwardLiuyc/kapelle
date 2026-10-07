@@ -36,6 +36,10 @@
  * `kill -9` mid-spawn can still orphan one; `core/sweep.ts` reconciles orphans
  * at the next daemon boot, for the repositories the daemon knows
  * (`repos.json`).
+ *
+ * **A room's fast-forward runs here** (M6-11a): `fastForwardCheckout` moves
+ * the target's checked-out branch with `git merge --ff-only`, and only
+ * tracked changes in that checkout refuse (2c).
  */
 
 import { execFile } from "node:child_process";
@@ -94,9 +98,23 @@ type ReleaseAction = "commit" | "keep";
  * the operator's own `.gitignore` covers reads as agent work.
  */
 export async function changedPaths(cwd: string): Promise<string[]> {
+  return statusPaths(cwd, "--untracked-files=all");
+}
+
+/**
+ * The tracked paths the working tree shows as changed (M6-11a, decided 2c).
+ * Untracked and ignored files are left out: an untracked file does not stop a
+ * fast-forward, and a collision with one is Git's own refusal at merge time.
+ * The parser is the one `changedPaths` uses, so a rename consumes both sides.
+ */
+async function trackedChangedPaths(cwd: string): Promise<string[]> {
+  return statusPaths(cwd, "--untracked-files=no");
+}
+
+async function statusPaths(cwd: string, untracked: string): Promise<string[]> {
   const { stdout } = await run(
     "git",
-    ["status", "--porcelain", "-z", "--untracked-files=all"],
+    ["status", "--porcelain", "-z", untracked],
     { cwd },
   );
   const entries = stdout.split("\0");
@@ -151,6 +169,104 @@ export async function stateDirRoot(
  *  without the subdirectory the workspace asked for. The caller's mistake,
  *  not a failure of git. */
 export class BadBase extends Error {}
+
+/** The checkout has work the move must not touch (M6-11a, decided 2c):
+ *  tracked changes, or an untracked file the incoming files would overwrite.
+ *  The message says which. */
+export class DirtyCheckout extends Error {}
+
+/** The move is not possible: the target branch is not an ancestor of the
+ *  source, or the checkout is not on the branch it would move. Nothing has
+ *  changed. */
+export class NotFastForward extends Error {}
+
+/**
+ * `git merge --ff-only <sourceRef>` inside `cwd` (M6-11a).
+ *
+ * **The target's own checkout**, never `git update-ref`: the branch is checked
+ * out there, and moving only the ref leaves the index and files behind, which
+ * the agent would commit on top of. A run through this returns the new HEAD
+ * sha; the caller writes the room event.
+ *
+ * Throws `DirtyCheckout` for tracked changes (2c) or a merge Git refuses
+ * because an untracked file collides, `NotFastForward` when the source is not
+ * ahead of the target or the checkout is not on `expectedBranch`, and
+ * `BadBase` when `sourceRef` does not resolve.
+ */
+export async function fastForwardCheckout(
+  cwd: string,
+  sourceRef: string,
+  expectedBranch: string,
+): Promise<string> {
+  const on = await tryGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (on !== expectedBranch) {
+    throw new NotFastForward(
+      `the checkout is on ${on === null ? "a detached HEAD" : `branch ${on}`}, ` +
+        `not ${expectedBranch}; refusing to move a branch it is not on.`,
+    );
+  }
+  const dirty = await trackedChangedPaths(cwd);
+  if (dirty.length > 0) {
+    throw new DirtyCheckout(
+      `the checkout has ${dirty.length} uncommitted tracked ` +
+        `${dirty.length === 1 ? "change" : "changes"}: ${dirty.join(", ")}. ` +
+        "Commit or stash them first.",
+    );
+  }
+  const source = await tryGit(cwd, [
+    "rev-parse",
+    "--verify",
+    `${sourceRef}^{commit}`,
+  ]);
+  if (source === null) {
+    throw new BadBase(
+      `source branch ${JSON.stringify(sourceRef)} does not resolve to a commit ` +
+        `in ${cwd}.`,
+    );
+  }
+  if (!(await isAncestor(cwd, "HEAD", source))) {
+    throw new NotFastForward(
+      `${JSON.stringify(sourceRef)} is not ahead of the target branch; ` +
+        "this is a merge, not a fast-forward.",
+    );
+  }
+  try {
+    await git(cwd, ["merge", "--ff-only", source]);
+  } catch (err) {
+    const stderr = (err as { stderr?: unknown }).stderr;
+    const text = typeof stderr === "string" ? stderr : "";
+    if (
+      /would be overwritten|untracked working tree files|local changes/i.test(
+        text,
+      )
+    ) {
+      throw new DirtyCheckout(
+        "the checkout has files the move would overwrite; commit, stash or " +
+          "remove them first.",
+      );
+    }
+    throw err;
+  }
+  return git(cwd, ["rev-parse", "HEAD"]);
+}
+
+/** `git merge-base --is-ancestor`: exit 1 is false, anything else is a real
+ *  failure. The plain `git` helper would read both as `null`. */
+async function isAncestor(
+  cwd: string,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean> {
+  try {
+    await run("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+      cwd,
+    });
+    return true;
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 1) return false;
+    throw err;
+  }
+}
 
 /** One task's checkout, held from `acquire` to `release`. */
 interface Held {

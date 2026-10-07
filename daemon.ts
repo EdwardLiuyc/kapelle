@@ -81,7 +81,7 @@ import {
   resolveRunDefaults,
   warnUnknownConfigEnv,
 } from "./core/config.ts";
-import { checkoutDiff } from "./core/diff.ts";
+import { checkoutDiff, rangeDiff } from "./core/diff.ts";
 import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
@@ -1135,6 +1135,77 @@ async function agentDiff(
   send(res, 200, diff satisfies Diff);
 }
 
+/**
+ * `GET /rooms/:id/agents/:agentId/fast-forward?from=<participantId>` — the
+ * commits the move would bring (M6-11a, 3b): `HEAD` to the source branch.
+ * Read-only, so the TUI can show the diff before it confirms. No busy or
+ * dirty check here: a preview is still useful when the move itself would be
+ * refused.
+ */
+async function fastForwardPreview(
+  id: string,
+  agentId: string,
+  from: string | null,
+  res: ServerResponse,
+) {
+  if (!from) {
+    throw refusal(
+      400,
+      "invalid_request",
+      'add "?from=<participantId>" for the source participant',
+    );
+  }
+  const target = participantEntry(id, agentId);
+  const source = participantEntry(id, from);
+  if (!target.branch || !source.branch) {
+    const who = target.branch ? source : target;
+    throw refusal(409, "no_branch", `${who.name} has no branch to compare`);
+  }
+  let diff: Diff;
+  try {
+    diff = await rangeDiff(target.worktree, "HEAD", source.branch);
+  } catch (err) {
+    throw refusal(
+      409,
+      "no_diff",
+      `no fast-forward preview for ${target.name}: ` +
+        `${(err as Error).message.split("\n")[0]}`,
+    );
+  }
+  send(res, 200, diff satisfies Diff);
+}
+
+/**
+ * `POST /rooms/:id/agents/:agentId/fast-forward {"from":"<id>"}` — move the
+ * target's branch and checkout up to the source participant's commit
+ * (M6-11a, R45). The move runs inside the target's checkout; a refusal names
+ * the code and leaves branch, index and files alone.
+ */
+async function fastForwardAgent(
+  id: string,
+  agentId: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const entry = roomEntry(id);
+  const body = await readBody(req, ["from"]);
+  if (typeof body.from !== "string" || !body.from) {
+    throw refusal(
+      400,
+      "invalid_request",
+      '"from" must be the source participant id',
+    );
+  }
+  let participant: Awaited<ReturnType<Room["fastForward"]>>;
+  try {
+    participant = await entry.room.fastForward(agentId, body.from);
+  } catch (err) {
+    throw roomRefused(err) ?? err;
+  }
+  entry.state.updatedAt = new Date().toISOString();
+  send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
+}
+
 /** `GET /rooms/:id/events`, the room timeline, or with `agentId`
  *  `GET /rooms/:id/agents/:agentId/events`: the same log, only that
  *  participant's lines (R8c). `seq` and `Last-Event-ID` are the room's. */
@@ -1154,7 +1225,16 @@ async function roomEvents(
   const keep =
     agentId === undefined
       ? undefined
-      : (line: string) => JSON.parse(line).participantId === agentId;
+      : (line: string) => {
+          try {
+            const event = JSON.parse(line) as { participantId?: unknown };
+            return event.participantId === agentId;
+          } catch {
+            // A malformed line is not this participant's; drop it rather
+            // than throw from inside the stream's filter.
+            return false;
+          }
+        };
   await streamLog(log, req, res, gone.signal, { keep });
 }
 
@@ -1237,7 +1317,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   );
   const agentOne = /^\/rooms\/([^/]+)\/agents\/([^/]+)$/.exec(pathname);
   const agentSub =
-    /^\/rooms\/([^/]+)\/agents\/([^/]+)\/(messages|events|diff|turns\/current\/cancel)$/.exec(
+    /^\/rooms\/([^/]+)\/agents\/([^/]+)\/(messages|events|diff|fast-forward|turns\/current\/cancel)$/.exec(
       pathname,
     );
 
@@ -1284,6 +1364,20 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     await postMessage(roomSub[1] as string, undefined, req, res);
   } else if (req.method === "POST" && agentSub?.[3] === "messages") {
     await postMessage(agentSub[1] as string, agentSub[2], req, res);
+  } else if (req.method === "GET" && agentSub?.[3] === "fast-forward") {
+    await fastForwardPreview(
+      agentSub[1] as string,
+      agentSub[2] as string,
+      searchParams.get("from"),
+      res,
+    );
+  } else if (req.method === "POST" && agentSub?.[3] === "fast-forward") {
+    await fastForwardAgent(
+      agentSub[1] as string,
+      agentSub[2] as string,
+      req,
+      res,
+    );
   } else if (req.method === "GET" && agentSub?.[3] === "diff") {
     await agentDiff(
       agentSub[1] as string,

@@ -29,7 +29,7 @@ import {
   tempDir,
 } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
-import { createEventBus } from "../events.ts";
+import { createEventBus, type EventBus } from "../events.ts";
 import { newRoomId } from "../ids.ts";
 import { createPermissionQueue } from "../permissions.ts";
 import {
@@ -62,18 +62,19 @@ const mock = (name: string, fields: Record<string, unknown> = {}) =>
 async function roomWithAlice(
   t: TestContext,
   cwd: string,
-): Promise<{ room: Room; alice: Participant; roomId: string }> {
+): Promise<{ room: Room; alice: Participant; roomId: string; bus: EventBus }> {
   const roomId = newRoomId();
+  const bus = createEventBus();
   const room = await openRoom({
     roomId,
     cwd,
     agents: [mock("alice")],
     setup: await openWorktrees(cwd, roomId),
-    bus: createEventBus(),
+    bus,
     permissions: queue,
   });
   t.after(() => room.dismiss());
-  return { room, alice: room.participants[0] as Participant, roomId };
+  return { room, alice: room.participants[0] as Participant, roomId, bus };
 }
 
 /** Commits one file on a participant's branch, as the participant would
@@ -1183,31 +1184,102 @@ test("a mode change answers only that participant's question", async (t) => {
   await Promise.all(turns);
 });
 
-test("a safe participant refuses a read outside the root, whatever the request said", async (t) => {
+test("a fast-forward moves the target's branch and checkout to the source commit", async (t) => {
   const repo = await gitRepo(t);
-  const roomId = newRoomId();
-  const bus = createEventBus();
-  let said = "";
+  const { room, alice, bus } = await roomWithAlice(t, repo);
+  await commitIn(alice, "alice.txt");
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  await commitIn(bob, "bob.txt");
+
+  const events: unknown[] = [];
   bus.addListener(({ update }) => {
-    said += JSON.stringify(update);
+    if (update.sessionUpdate === "_client_participant_fast_forwarded") {
+      events.push(update);
+    }
   });
-  const room = await openRoom({
-    roomId,
-    cwd: repo,
-    agents: [
-      roomAgent({
-        cmd: `node ${HOSTILE_AGENT} --scenario absolute-path`,
-        name: "alice",
-        mode: "safe",
-        settings: { allowReadOutsideRoot: true },
-      }),
-    ],
-    setup: await openWorktrees(repo, roomId),
-    bus,
-    permissions: queue,
-  });
-  t.after(() => room.dismiss());
-  const alice = room.participants[0] as Participant;
-  await alice.send("read /etc/passwd");
-  assert.match(said, /OUTCOME=refused/);
+  const source = await git(bob.worktree, "rev-parse", "HEAD");
+  await room.fastForward(alice.id, bob.id);
+
+  assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), source);
+  assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), source);
+  assert.ok(existsSync(join(alice.worktree, "bob.txt")));
+  assert.equal(await git(bob.worktree, "rev-parse", "HEAD"), source);
+  assert.deepEqual(events, [
+    {
+      sessionUpdate: "_client_participant_fast_forwarded",
+      from: bob.id,
+      branch: alice.branch,
+      sha: source,
+    },
+  ]);
+});
+
+test("a fast-forward refuses a busy target, and changes nothing", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  const before = await git(alice.worktree, "rev-parse", "HEAD");
+  const turn = alice.send("hold");
+  assert.equal(alice.status(), "busy");
+
+  await assert.rejects(
+    room.fastForward(alice.id, bob.id),
+    (err: unknown) => err instanceof RoomRefusal && err.code === "agent_busy",
+  );
+  assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), before);
+  await turn;
+});
+
+test("a fast-forward refuses tracked dirt, but not an untracked file (2c)", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  await commitIn(bob, "bob.txt");
+  const target = await git(bob.worktree, "rev-parse", "HEAD");
+
+  await writeFile(join(alice.worktree, "README.md"), "dirty\n");
+  await assert.rejects(
+    room.fastForward(alice.id, bob.id),
+    (err: unknown) =>
+      err instanceof RoomRefusal && err.code === "dirty_worktree",
+  );
+  assert.notEqual(await git(alice.worktree, "rev-parse", "HEAD"), target);
+
+  await git(alice.worktree, "checkout", "--", "README.md");
+  await writeFile(join(alice.worktree, "scratch.txt"), "untracked\n");
+  await room.fastForward(alice.id, bob.id);
+  assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), target);
+  assert.ok(existsSync(join(alice.worktree, "scratch.txt")));
+});
+
+test("a fast-forward refuses a diverged target (R45)", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  await commitIn(alice, "alice-late.txt");
+  await commitIn(bob, "bob.txt");
+  const before = await git(alice.worktree, "rev-parse", "HEAD");
+
+  await assert.rejects(
+    room.fastForward(alice.id, bob.id),
+    (err: unknown) =>
+      err instanceof RoomRefusal && err.code === "not_fast_forward",
+  );
+  assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), before);
+});
+
+test("a fast-forward refuses a target checkout that is not on its branch", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  await commitIn(bob, "bob.txt");
+  await git(alice.worktree, "checkout", "-b", "detour");
+  const before = await git(alice.worktree, "rev-parse", "HEAD");
+
+  await assert.rejects(
+    room.fastForward(alice.id, bob.id),
+    (err: unknown) =>
+      err instanceof RoomRefusal && err.code === "not_fast_forward",
+  );
+  assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), before);
 });

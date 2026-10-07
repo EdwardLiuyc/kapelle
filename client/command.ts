@@ -55,6 +55,13 @@ export type RouteCommand =
   | { verb: "dismiss" }
   | { verb: "remove" | "cancel"; id: string; name: string }
   | {
+      verb: "forward";
+      id: string;
+      name: string;
+      fromId: string;
+      fromName: string;
+    }
+  | {
       verb: "patch";
       id: string;
       name: string;
@@ -69,7 +76,13 @@ export type Command =
   | { verb: "leave" }
   | { verb: "help" }
   | { verb: "form"; form: "new" | "add" }
-  | { verb: "diff"; id: string; name: string; against: "head" | "base" };
+  | { verb: "diff"; id: string; name: string; against: "head" | "base" }
+  | {
+      verb: "ff";
+      id: string;
+      name: string;
+      from: { id: string; name: string };
+    };
 
 export const HELP = [
   "/new [harness] [--cmd c] [--name n] [--title t] [--cwd dir]",
@@ -80,6 +93,7 @@ export const HELP = [
   "@name /cancel",
   "@name /remove",
   "@name /diff [base]",
+  "@name /ff --from @name",
   "/dismiss   /leave   /help",
   "/new and /add alone open a form; ctrl+o opens the menu",
 ];
@@ -93,6 +107,7 @@ export const USAGE: Record<string, string> = {
   cancel: "usage: @name /cancel",
   remove: "usage: @name /remove",
   diff: "usage: @name /diff [base]",
+  ff: "usage: @name /ff --from @name",
 };
 
 const ROOM_VERBS = new Set(["new", "add", "dismiss", "leave", "help"]);
@@ -103,6 +118,7 @@ const AGENT_VERBS = new Set([
   "cancel",
   "remove",
   "diff",
+  "ff",
 ]);
 
 /** Words, with `"…"` or `'…'` keeping spaces: `--cmd "node x.mjs"`. */
@@ -201,8 +217,27 @@ export function parseCommand(
   if (!m) return { error: `name the agent: @name /${verb}` };
   const t = targetOf(text, roster);
   if ("error" in t) return t;
-  const name = roster.find((p) => p.id === t.id)?.name ?? t.id;
+  const target = roster.find((p) => p.id === t.id);
+  const name = target?.name ?? t.id;
   const id = t.id;
+  if (verb === "ff") {
+    const o = options(args, ["from"]);
+    if ("error" in o) return { error: `${o.error}; ${USAGE.ff}` };
+    const [extra, ...more] = o.positionals;
+    const source = o.values.from;
+    if (extra !== undefined || more.length > 0 || !source?.startsWith("@")) {
+      return { error: USAGE.ff as string };
+    }
+    const wanted = fold(source.slice(1));
+    const from = roster.find((p) => fold(p.name) === wanted);
+    if (!from) return { error: `no participant named ${source}` };
+    return {
+      verb: "ff",
+      id,
+      name,
+      from: { id: from.id, name: from.name },
+    };
+  }
   if (verb === "diff") {
     // What is not committed, or with `base` the whole branch.
     if (args.length > 1 || (args[0] !== undefined && args[0] !== "base")) {
@@ -319,6 +354,18 @@ export async function runCommand(
       );
       if (!r.ok) return refused(r.error.message, r.error.code);
       return { ok: true, line: `cancelling ${c.name}'s turn` };
+    }
+    case "forward": {
+      const r = await call<ParticipantDto>(
+        d,
+        `${room}/agents/${c.id}/fast-forward`,
+        { method: "POST", body: { from: c.fromId } },
+      );
+      if (!r.ok) return refused(r.error.message, r.error.code);
+      return {
+        ok: true,
+        line: `moved ${c.name} up to ${c.fromName}'s commit`,
+      };
     }
     case "patch": {
       const r = await call<ParticipantDto>(d, `${room}/agents/${c.id}`, {

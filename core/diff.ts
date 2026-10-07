@@ -212,3 +212,26 @@ export async function checkoutDiff(
     await rm(tmp, { recursive: true, force: true });
   }
 }
+
+/**
+ * What `toRef` adds over `fromRef` (M6-11a): the commits a fast-forward
+ * would bring, with no working-tree changes and no untracked files. Used by
+ * the TUI's preview before it confirms the move.
+ */
+export async function rangeDiff(
+  cwd: string,
+  fromRef: string,
+  toRef: string,
+  cap = ROUTE_CAP,
+): Promise<Diff> {
+  const text = await git(cwd, [
+    "diff",
+    ...DIFF_FLAGS,
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    fromRef,
+    toRef,
+    "--",
+  ]);
+  return capDiff(text, cap);
+}

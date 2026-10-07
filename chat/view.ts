@@ -23,6 +23,7 @@
  * `onChange` at once.
  */
 
+import type { RoomDto } from "../client/contract.ts";
 import { nameOf, type RoomState, roster } from "../client/room.ts";
 
 /** What the transcript shows: a room's timeline, or one participant's
@@ -30,6 +31,23 @@ import { nameOf, type RoomState, roster } from "../client/room.ts";
 export interface View {
   roomId: string;
   participantId?: string;
+}
+
+/**
+ * The new line under the composer (M6-11a, 4a): the open view's checkout and
+ * branch. An agent thread shows its worktree and branch; the room timeline
+ * shows the room's `cwd`, because a room owns neither a checkout nor a
+ * branch (R14). `dto` is the full `GET /rooms/:id` reply, so until it loads
+ * there is nothing better than the room's folder.
+ */
+export function where(
+  view: View,
+  room: { cwd: string; dto?: RoomDto },
+): string {
+  if (!view.participantId) return room.cwd;
+  const p = room.dto?.participants.find((x) => x.id === view.participantId);
+  if (!p) return room.cwd;
+  return `${p.worktree} · ${p.branch ?? "(no branch)"}`;
 }
 
 /** The rooms by id, in sidebar order. */

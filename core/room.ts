@@ -36,6 +36,11 @@
  * **The orchestrator is a label, not a slot** (R44). A participant has the
  * role it was given and no other; nothing is promoted by default.
  *
+ * **One participant's branch can fast-forward to another's** (M6-11a, R45).
+ * `fastForward` runs `git merge --ff-only` inside the target's checkout,
+ * refuses a busy target, a dirty one (2c) and a diverged one, moves no source
+ * branch, and logs `_client_participant_fast_forwarded` for every observer.
+ *
  * **A message names its participant, and a busy one queues it** (M6-4).
  * `send` starts a turn, or puts the message in a FIFO queue behind the live
  * one (R32a); 16 wait at most, and the next is refused `queue_full` (R41).
@@ -96,7 +101,13 @@ import {
   type Watchdog,
   type WatchdogLimits,
 } from "./watchdog.ts";
-import { BadBase, type WorktreeSetup } from "./worktree.ts";
+import {
+  BadBase,
+  DirtyCheckout,
+  fastForwardCheckout,
+  NotFastForward,
+  type WorktreeSetup,
+} from "./worktree.ts";
 
 /** How many messages may wait behind a participant's live turn (R41). */
 export const QUEUE_BOUND = 16;
@@ -111,6 +122,10 @@ export class RoomRefusal extends Error {
     | "participant_not_found"
     | "room_dismissed"
     | "agent_exited"
+    | "agent_busy"
+    | "not_fast_forward"
+    | "dirty_worktree"
+    | "no_branch"
     | "queue_full";
   constructor(code: RoomRefusal["code"], message: string) {
     super(message);
@@ -232,6 +247,11 @@ export interface Room {
   /** Cancels the participant's turn, stops its harness and releases its
    *  checkout without committing (R37). It leaves the roster at once. */
   remove(id: string): Promise<void>;
+  /** Moves `targetId`'s branch and checkout up to `fromId`'s branch,
+   *  fast-forward only (M6-11a, R45). Runs `git merge --ff-only` inside the
+   *  target's checkout; refuses a busy target, a dirty one (2c) and a
+   *  diverged one, and nothing changes on a refusal. */
+  fastForward(targetId: string, fromId: string): Promise<Participant>;
   /** Cancels every live turn, stops every harness, releases every checkout
    *  **without committing** (R37) and closes the log. Safe to call twice. A
    *  release that fails is reported as a notice and the checkout is left
@@ -735,6 +755,66 @@ export async function openRoom({
     await release(id, found.participant.worktree, onRoomNotice);
   };
 
+  const forward = async (targetId: string, fromId: string) => {
+    if (dismissing) throw dismissed();
+    if (targetId === fromId) {
+      throw new RoomRefusal(
+        "invalid_request",
+        "the target and source are the same participant",
+      );
+    }
+    const target = member(targetId).participant;
+    const source = member(fromId).participant;
+    if (target.status() === "busy") {
+      throw new RoomRefusal(
+        "agent_busy",
+        `${target.name} is busy; wait for its turn to end`,
+      );
+    }
+    if (!target.branch) {
+      throw new RoomRefusal(
+        "no_branch",
+        `${target.name} has no branch; its checkout is shared with the ` +
+          "repository",
+      );
+    }
+    if (!source.branch) {
+      throw new RoomRefusal(
+        "no_branch",
+        `${source.name} has no branch to move to`,
+      );
+    }
+    let sha: string;
+    try {
+      sha = await fastForwardCheckout(
+        target.worktree,
+        source.branch,
+        target.branch,
+      );
+    } catch (err) {
+      if (err instanceof DirtyCheckout) {
+        throw new RoomRefusal("dirty_worktree", err.message);
+      }
+      if (err instanceof NotFastForward) {
+        throw new RoomRefusal("not_fast_forward", err.message);
+      }
+      if (err instanceof BadBase) {
+        throw new RoomRefusal("invalid_request", err.message);
+      }
+      throw err;
+    }
+    bus.emit({
+      agent: target.id,
+      update: {
+        sessionUpdate: "_client_participant_fast_forwarded",
+        from: source.id,
+        branch: target.branch,
+        sha,
+      },
+    });
+    return target;
+  };
+
   for (const request of agents) {
     try {
       await track(start(request));
@@ -751,6 +831,7 @@ export async function openRoom({
     add: (request) => track(start(request)),
     update,
     remove: (id) => track(remove(id)),
+    fastForward: (targetId, fromId) => track(forward(targetId, fromId)),
     dismiss: teardown,
   };
 }

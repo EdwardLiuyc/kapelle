@@ -193,6 +193,12 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       for (const l of HELP) console.log(l);
       continue;
     }
+    if (c.verb === "ff") {
+      console.error(
+        "! a fast-forward needs the TUI preview; run it from kapelle chat on a terminal",
+      );
+      continue;
+    }
     if (c.verb === "form") {
       console.error(`! a form needs a terminal: ${COMMAND_USAGE[c.form]}`);
       continue;

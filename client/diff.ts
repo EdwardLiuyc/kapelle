@@ -4,9 +4,9 @@
  * safe to draw.
  *
  * **Any `git diff` text**, not only the daemon's: a question's edit, an
- * agent's checkout (`GET /rooms/:id/agents/:agentId/diff`), or a diff a
- * later story hands in before a merge (M6-11a, M6-11b). The counts come
- * from the daemon's `Diff`, taken before it cut the text.
+ * agent's checkout (`GET /rooms/:id/agents/:agentId/diff`), or a
+ * fast-forward's preview (M6-11a). The counts come from the daemon's `Diff`,
+ * taken before it cut the text.
  *
  * `agentDiff` is the one call; the rest does no I/O.
  */
@@ -79,3 +79,16 @@ export const agentDiff = (
   against: "head" | "base",
 ) =>
   call<Diff>(d, `/rooms/${roomId}/agents/${agentId}/diff?against=${against}`);
+
+/** `GET /rooms/:id/agents/:agentId/fast-forward?from=`: the commits a move
+ *  from `fromId` would bring, for the TUI's preview (M6-11a, 3b). */
+export const agentForwardDiff = (
+  d: DaemonAddress,
+  roomId: string,
+  agentId: string,
+  fromId: string,
+) =>
+  call<Diff>(
+    d,
+    `/rooms/${roomId}/agents/${agentId}/fast-forward?from=${encodeURIComponent(fromId)}`,
+  );

@@ -623,6 +623,17 @@ export interface ClientParticipantRemovedEvent extends Meta {
   sessionUpdate: "_client_participant_removed";
 }
 
+/** The target participant's branch and checkout moved to the source
+ *  participant's commit, from the TUI (M6-11a). `from` is the source's
+ *  participant id; `branch` is the target's branch name and `sha` the commit
+ *  it now points at. */
+export interface ClientParticipantFastForwardedEvent extends Meta {
+  sessionUpdate: "_client_participant_fast_forwarded";
+  from: string;
+  branch: string;
+  sha: string;
+}
+
 /** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
@@ -646,7 +657,8 @@ export type AgentEvent =
   | ClientTurnEndedEvent
   | ClientParticipantAddedEvent
   | ClientParticipantChangedEvent
-  | ClientParticipantRemovedEvent;
+  | ClientParticipantRemovedEvent
+  | ClientParticipantFastForwardedEvent;
 
 /** The `session/update` notification as it arrives. */
 export interface SessionNotification extends Meta {
@@ -943,7 +955,8 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_turn_ended"
         | "_client_participant_added"
         | "_client_participant_changed"
-        | "_client_participant_removed" = u.sessionUpdate;
+        | "_client_participant_removed"
+        | "_client_participant_fast_forwarded" = u.sessionUpdate;
       void fallthrough;
       return false;
     }

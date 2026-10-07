@@ -5,10 +5,10 @@
  * `ctrl+x` shows and hides it, as `ctrl+t` does the sidebar, and what it
  * shows stays while it is hidden. Below `WIDE` columns it takes the
  * timeline's place. It shows any diff text: a question's edit, an agent's
- * checkout, and later the diff a merge hands in (M6-11a, M6-11b). It also
- * shows a list to pick from: the person's messages, `ctrl+r` (M4-4). Before
- * anything is put in it, it says how to fill it. M4-13 puts a terminal in
- * the same place.
+ * checkout, and the preview a fast-forward hands in before it moves
+ * (M6-11a). It also shows a list to pick from: the person's messages,
+ * `ctrl+r` (M4-4). Before anything is put in it, it says how to fill it.
+ * M4-13 puts a terminal in the same place.
  *
  * **Many files are one scroll.** The title names the file at the top of the
  * pane, `2 of 20`, and `]` and `[` jump between files. Each diff line is one
@@ -201,9 +201,11 @@ function paneParts({
         const inside =
           picked === undefined && (files[at]?.line ?? 0) < scroll.scrollTop;
         return jump(inside ? at : at - 1);
-      } else {
-        for (const k of content?.keys ?? []) if (key === k.key) return k.run();
-        return;
+      }
+      for (const k of content?.keys ?? []) {
+        if (k.key === "enter" ? matchesKey(key, Key.enter) : key === k.key) {
+          return k.run();
+        }
       }
       picked = undefined;
       tui.requestRender();

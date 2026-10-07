@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { ParticipantDto, RoomDto } from "../../client/contract.ts";
 import { newRoomState, type RoomState } from "../../client/room.ts";
 import {
   banner,
@@ -21,6 +22,7 @@ import {
   touched,
   type View,
   waiting,
+  where,
 } from "../view.ts";
 
 /** A room whose roster is these names, each id `p-<name>`. `gone` names
@@ -274,4 +276,50 @@ test("a question after a stall the person saw rings; the stall left when it clos
   );
   s.questions.clear();
   assert.equal(bell(asked.keys, waiting(all)).ring, false, "the stall is old");
+});
+
+test("the where bar names the open view's checkout and branch (4a)", () => {
+  const participant = (
+    id: string,
+    worktree: string,
+    branch?: string,
+  ): ParticipantDto => ({
+    id,
+    name: id,
+    harness: "mock",
+    mode: "auto",
+    settings: { allowReadOutsideRoot: false },
+    worktree,
+    ...(branch && { branch }),
+    sessionId: "s",
+    status: "idle",
+    notices: [],
+  });
+  const dto = {
+    id: "r1",
+    cwd: "/repo",
+    createdAt: "now",
+    updatedAt: "now",
+    status: "active",
+    participants: [
+      participant("p-ann", "/repo/wt/ann", "kapelle/r1/p-ann"),
+      participant("p-bob", "/repo/shared"),
+    ],
+  } satisfies RoomDto;
+  const room = { cwd: dto.cwd, dto };
+
+  assert.equal(where({ roomId: "r1" }, room), "/repo");
+  assert.equal(
+    where({ roomId: "r1", participantId: "p-ann" }, room),
+    "/repo/wt/ann · kapelle/r1/p-ann",
+  );
+  assert.equal(
+    where({ roomId: "r1", participantId: "p-bob" }, room),
+    "/repo/shared · (no branch)",
+  );
+  // Until `GET /rooms/:id` lands, the room's folder is all there is.
+  assert.equal(
+    where({ roomId: "r1", participantId: "p-ann" }, { cwd: "/repo" }),
+    "/repo",
+  );
 });

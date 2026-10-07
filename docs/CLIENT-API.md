@@ -255,6 +255,10 @@ request that is not valid HTTP gets `400`.
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `queue_full` | `429` | 16 messages already wait for this participant. | Wait for a `_client_turn_ended`, then send again. Or cancel its turn, which drops the queue. |
 | `no_turn` | `409` | You cancelled a turn, but the participant has none. | Stop. Its turn already ended. |
+| `agent_busy` | `409` | A fast-forward target has a live turn. | Wait for its `_client_turn_ended`, then try again. |
+| `not_fast_forward` | `409` | The target branch is not an ancestor of the source branch, or the target checkout is not on its branch, so the move would be a merge or land somewhere else. | Nothing changed. Let a person merge by hand, or choose another source. |
+| `dirty_worktree` | `409` | The target checkout has tracked changes, or files the move would overwrite. | Commit or stash them first. Untracked files alone do not refuse. |
+| `no_branch` | `409` | A participant has no branch: its checkout is the shared repository folder, or the branch ref is gone. | There is nothing to move; inspect the participant's worktree. |
 | `room_dismissed` | `409` | The room was dismissed. | Stop. Open a new room. |
 | `agent_exited` | `409` | The participant's harness exited by itself. | Remove the participant and add a new one. M6-7a brings the participant back on the next message. |
 | `no_orchestrator` | `409` | The room has no participant with the `orchestrator` role, so a message has no target. | Open a room with an orchestrator. |
@@ -329,6 +333,8 @@ the `GET` routes take none.
 | `GET /rooms/:id/agents/:agentId/events` | One participant's lines of the room's stream. Experimental. |
 | `POST /rooms/:id/agents/:agentId/turns/current/cancel` | Cancel a participant's turn and drop its queue. Experimental. |
 | `GET /rooms/:id/agents/:agentId/diff` | What a participant changed in its checkout. Experimental. |
+| `POST /rooms/:id/agents/:agentId/fast-forward` | Move a participant's branch and checkout to another participant's commit. Experimental. |
+| `GET /rooms/:id/agents/:agentId/fast-forward` | The diff a fast-forward would bring. Experimental. |
 
 ### `GET /version`
 
@@ -794,6 +800,7 @@ with ACP names.
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
 | `_client_participant_changed` | `name?`, `role?`, `mode?` | A rename, or a new role or mode. Only the changed fields are present. `role: null` means the role was cleared. |
+| `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. |
 | `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
 
 Build the roster from these three events. Then a replay shows the roster as it was at
@@ -1248,6 +1255,37 @@ A checkout with no changes gives `{"text": "", "files": 0, "added": 0, "removed"
 for another `against`; `409` `no_diff` when the checkout is not a git checkout, for `base`
 when the participant has no branch, or when git fails for another reason (the message
 says why).
+
+### `POST /rooms/:id/agents/:agentId/fast-forward`
+
+Moves the target participant's branch and checkout up to the source participant's commit
+(M6-11a, R45). **Fast-forward only:** the target must not be `busy`, its branch must be
+an ancestor of the source's branch, and its checkout must have no tracked changes
+(decided 2c). The move runs `git merge --ff-only <source branch>` inside the target's
+checkout, so the branch, index and files move together. The source's branch and checkout
+are not touched. Untracked files alone do not refuse; a collision with one is Git's own
+refusal.
+
+**Request:** `{ "from": "<participantId>" }`.
+
+**Reply `200`:** the target participant, in the shape `GET /rooms/:id` gives it, with the
+same `branch` name as before. The room's stream also gets
+`_client_participant_fast_forwarded` with `from`, `branch` and `sha`.
+
+**Refusals:** `404` `room_not_found` or `participant_not_found`; `400` `invalid_request`
+for a missing or blank `from`, or when it names the target itself; `409` `room_dismissed`;
+`409` `agent_busy`; `409` `not_fast_forward`; `409` `dirty_worktree`; `409` `no_branch`.
+
+### `GET /rooms/:id/agents/:agentId/fast-forward?from=<participantId>`
+
+Read-only preview of what the move would bring: the commits in `from`'s branch that are
+not in the target's `HEAD`. Same shape and 512 KB cap as
+[`GET /rooms/:id/agents/:agentId/diff`](#get-roomsidagentsagentiddiff). The TUI shows it
+before the person confirms.
+
+**Refusals:** `404` `room_not_found` or `participant_not_found`; `400` `invalid_request`
+when `from` is missing; `409` `no_branch` when either participant has none; `409`
+`no_diff` when git fails.
 
 ### Modes
 
