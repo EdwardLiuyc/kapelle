@@ -819,7 +819,7 @@ export async function openRoom({
         throw new RoomRefusal("not_fast_forward", err.message);
       }
       if (err instanceof BadBase) {
-        throw new RoomRefusal("invalid_request", err.message);
+        throw new RoomRefusal("no_branch", err.message);
       }
       throw err;
     }

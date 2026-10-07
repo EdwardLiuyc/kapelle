@@ -201,11 +201,13 @@ function paneParts({
         const inside =
           picked === undefined && (files[at]?.line ?? 0) < scroll.scrollTop;
         return jump(inside ? at : at - 1);
-      }
-      for (const k of content?.keys ?? []) {
-        if (k.key === "enter" ? matchesKey(key, Key.enter) : key === k.key) {
-          return k.run();
+      } else {
+        for (const k of content?.keys ?? []) {
+          if (k.key === "enter" ? matchesKey(key, Key.enter) : key === k.key) {
+            return k.run();
+          }
         }
+        return;
       }
       picked = undefined;
       tui.requestRender();

@@ -85,6 +85,12 @@ function makePrinter(state: RoomState) {
         case "exited":
           line("! the harness exited");
           break;
+        case "forward":
+          line(
+            `↪ ${nameOf(state, e.participantId)} moved to ` +
+              `${nameOf(state, e.from)}'s commit`,
+          );
+          break;
         case "permission": {
           // The same entry comes back when the question closes. This screen
           // only watches: the TUI or `POST /permissions/:id` answers (M4-3).

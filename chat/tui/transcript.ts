@@ -202,6 +202,9 @@ function transcriptParts({
       case "exited":
         warn(`! ${name}'s harness exited`);
         return;
+      case "forward":
+        note(`↪ ${name} moved to ${nameOf(state, e.from)}'s commit`);
+        return;
       case "stall":
         warn(`! ${name}: ${e.text}`);
         return;

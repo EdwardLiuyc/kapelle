@@ -1344,3 +1344,57 @@ test("a fast-forward refuses an untracked file the move would overwrite, and kee
     "alice's own\n",
   );
 });
+
+test("a safe participant refuses a read outside the root, whatever the request said", async (t) => {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  let said = "";
+  bus.addListener(({ update }) => {
+    said += JSON.stringify(update);
+  });
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [
+      roomAgent({
+        cmd: `node ${HOSTILE_AGENT} --scenario absolute-path`,
+        name: "alice",
+        mode: "safe",
+        settings: { allowReadOutsideRoot: true },
+      }),
+    ],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+    permissions: queue,
+  });
+  t.after(() => room.dismiss());
+  const alice = room.participants[0] as Participant;
+  await alice.send("read /etc/passwd");
+  assert.match(said, /OUTCOME=refused/);
+});
+
+test("a fast-forward refuses when the source branch ref is gone", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  await commitIn(bob, "bob.txt");
+  await git(repo, "update-ref", "-d", `refs/heads/${bob.branch}`);
+
+  await assert.rejects(
+    room.fastForward(alice.id, bob.id),
+    (err: unknown) => err instanceof RoomRefusal && err.code === "no_branch",
+  );
+});
+
+test("a fast-forward refuses when the target branch ref is gone", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  await git(repo, "update-ref", "-d", `refs/heads/${alice.branch}`);
+
+  await assert.rejects(
+    room.fastForward(alice.id, bob.id),
+    (err: unknown) => err instanceof RoomRefusal && err.code === "no_branch",
+  );
+});

@@ -192,7 +192,9 @@ export class NotFastForward extends Error {}
  * Throws `DirtyCheckout` for tracked changes (2c) or a merge Git refuses
  * because an untracked file collides, `NotFastForward` when the source is not
  * ahead of the target or the checkout is not on `expectedBranch`, and
- * `BadBase` when `sourceRef` does not resolve.
+ * `BadBase` when a branch ref does not resolve. The merge runs the target
+ * checkout's own `post-merge`/`post-checkout` hooks; the harness can already
+ * run shell there, so this adds no trust.
  */
 export async function fastForwardCheckout(
   cwd: string,
@@ -204,6 +206,13 @@ export async function fastForwardCheckout(
     throw new NotFastForward(
       `the checkout is on ${on === null ? "a detached HEAD" : `branch ${on}`}, ` +
         `not ${expectedBranch}; refusing to move a branch it is not on.`,
+    );
+  }
+  const target = await tryGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  if (target === null) {
+    throw new BadBase(
+      `the target branch ${JSON.stringify(expectedBranch)} does not resolve ` +
+        `to a commit in ${cwd}.`,
     );
   }
   const dirty = await trackedChangedPaths(cwd);
@@ -225,7 +234,7 @@ export async function fastForwardCheckout(
         `in ${cwd}.`,
     );
   }
-  if (!(await isAncestor(cwd, "HEAD", source))) {
+  if (!(await isAncestor(cwd, target, source))) {
     throw new NotFastForward(
       `${JSON.stringify(sourceRef)} is not ahead of the target branch; ` +
         "this is a merge, not a fast-forward.",

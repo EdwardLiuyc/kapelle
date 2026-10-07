@@ -2872,7 +2872,8 @@ checkout refuse (`dirty_worktree`); untracked files do not. (3b)
 side pane; Enter confirms. (4a) a bar under the composer shows the open view's
 `worktree · branch` for an agent and `cwd` for a room, because a room owns no branch.
 The route refuses `agent_busy`, `not_fast_forward`, `dirty_worktree` and `no_branch`, and
-never moves the source.
+never moves the source. The piped screen refuses `/ff`: its preview is a TUI pane, and a
+pipe cannot show it before the move.
 
 **M6-11b · Land a participant into the main checkout, from the TUI · S · needs M6-6b, M4-5, M4-6**
 **Added 2026-09-26, R47.** R31 made `kapelle room merge` the surface.

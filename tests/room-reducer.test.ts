@@ -469,3 +469,28 @@ test("a question's diff keeps its lines and its counts, and loses its control ch
     removed: 1,
   });
 });
+
+test("a fast-forward becomes a timeline entry for a second client", () => {
+  const state = newRoomState();
+  const e = applyLine(state, {
+    seq: 1,
+    roomId: "r",
+    participantId: "p-dev",
+    at: "2026-10-07T00:00:00.000Z",
+    update: {
+      sessionUpdate: "_client_participant_fast_forwarded",
+      from: "p-rev",
+      branch: "kapelle/r/p-dev",
+      sha: "abc123",
+    },
+  });
+  assert.deepEqual(e, {
+    seq: 1,
+    participantId: "p-dev",
+    type: "forward",
+    from: "p-rev",
+    branch: "kapelle/r/p-dev",
+    sha: "abc123",
+  });
+  assert.deepEqual(state.timeline, [e]);
+});

@@ -1277,7 +1277,8 @@ changed the commit.
 
 **Refusals:** `404` `room_not_found` or `participant_not_found`; `400` `invalid_request`
 for a missing or blank `from`, or when it names the target itself; `409` `room_dismissed`;
-`409` `agent_busy`; `409` `not_fast_forward`; `409` `dirty_worktree`; `409` `no_branch`.
+`409` `agent_busy`; `409` `not_fast_forward`; `409` `dirty_worktree`; `409` `no_branch`. A
+branch ref that no longer resolves is `409` `no_branch`, never a bare git failure.
 
 ### `GET /rooms/:id/agents/:agentId/fast-forward?from=<participantId>`
 
