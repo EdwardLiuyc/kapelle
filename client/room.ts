@@ -44,6 +44,7 @@ export type Entry = { seq: number; participantId: string } & (
   | { type: "tool"; title: string }
   | { type: "turn_ended"; stopReason?: string; error?: string }
   | { type: "exited" }
+  | { type: "forward"; from: string; branch: string; sha: string }
   | {
       type: "permission";
       id: string;
@@ -188,6 +189,14 @@ export function applyLine(
     case "_client_participant_removed":
       if (p) p.removed = true;
       return undefined;
+    case "_client_participant_fast_forwarded":
+      return add({
+        ...at,
+        type: "forward",
+        from: u.from,
+        branch: u.branch,
+        sha: u.sha,
+      });
     case "_client_user_message": {
       const cut = openTurn();
       if (cut) cut.state = "cut";

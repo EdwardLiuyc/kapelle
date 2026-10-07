@@ -3206,6 +3206,26 @@ async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
   throw new Error(`room ${id} never went idle`);
 }
 
+/** Commits one file in a participant's checkout, as the agent itself would
+ *  (R37: the supervisor never commits). */
+async function commitAt(worktree: string, file: string) {
+  await writeFile(join(worktree, file), `${file}\n`);
+  for (const args of [
+    ["add", file],
+    ["commit", "-qm", file],
+  ]) {
+    const r = spawnSync("git", args, { cwd: worktree, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+  }
+}
+
+/** A checkout's HEAD sha. */
+const headAt = (worktree: string) =>
+  spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: worktree,
+    encoding: "utf8",
+  }).stdout.trim();
+
 /** Every event of a room, read from its SSE stream, or of one participant
  *  when `agentId` is given. Only call once the room is dismissed: the stream
  *  ends only when its log closes. */
@@ -4517,7 +4537,7 @@ for (const [how, keys] of [
   });
 }
 
-test("chat.ts on a real terminal keeps the typing box's bottom border on the last row, and an empty row above the status line", {
+test("chat.ts on a real terminal keeps the typing box's bottom border, then the where bar on the last row", {
   skip: noPty,
 }, async (t) => {
   // The editor used to be allowed to shrink, and pi-tui's shrink takes at
@@ -4537,14 +4557,86 @@ test("chat.ts on a real terminal keeps the typing box's bottom border on the las
     assert.ok(Date.now() < until, `row 30 never drawn: ${out()}`);
     await new Promise((ok) => setTimeout(ok, 50));
   }
-  assert.match(rowAt(30) ?? "", /─/, `row 30: ${JSON.stringify(rowAt(30))}`);
-  // The box is rows 28-30 and the status line row 27; the row above it
+  // Row 30 is the where bar; the timeline view shows the room's cwd.
+  assert.match(
+    plainText(rowAt(30) ?? ""),
+    /\/tmp\//,
+    `row 30: ${JSON.stringify(rowAt(30))}`,
+  );
+  assert.match(rowAt(29) ?? "", /─/, `row 29: ${JSON.stringify(rowAt(29))}`);
+  // The box is rows 27-29 and the status line row 26; the row above it
   // stays empty, a gap between the conversation and the hint.
-  assert.match(plainText(rowAt(27) ?? ""), /enter to send/);
-  const gap = plainText(rowAt(26) ?? "?");
-  assert.equal(gap.trim(), "", `row 26: ${JSON.stringify(rowAt(26))}`);
+  assert.match(plainText(rowAt(26) ?? ""), /enter to send/);
+  const gap = plainText(rowAt(25) ?? "?");
+  assert.equal(gap.trim(), "", `row 25: ${JSON.stringify(rowAt(25))}`);
   // The status line names the target once the roster arrives, not its id.
   await seen("→ mock-agent");
+  child.stdin.write("/leave\r");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts on a real terminal previews a fast-forward and moves on Enter", {
+  skip: noPty,
+}, async (t) => {
+  const { child, seen, press, exited, out, d } = await chatOnPty(t);
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  assert.ok(room);
+  const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
+  assert.equal(full.status, 200, JSON.stringify(full.body));
+  const dev = only(full.body);
+  await commitAt(dev.worktree, "dev.txt");
+
+  const addedRev = await api<ParticipantDto>(
+    d,
+    "POST",
+    `/rooms/${room.id}/agents`,
+    { cmd: REMEMBER, name: "reviewer", base: dev.branch },
+  );
+  assert.equal(addedRev.status, 201, JSON.stringify(addedRev.body));
+  const reviewer = addedRev.body;
+  await commitAt(reviewer.worktree, "review.txt");
+  const revHead = headAt(reviewer.worktree);
+
+  await seen("○ reviewer");
+  child.stdin.write("@mock-agent /ff --from @reviewer\r");
+  await seen("mock-agent ← reviewer · fast-forward");
+  await seen("review.txt");
+  await press("\r", "moved mock-agent up to reviewer's commit");
+  assert.equal(headAt(dev.worktree), revHead);
+  child.stdin.write("/leave\r");
+  assert.equal(await exited, 0, out());
+});
+
+test("the target's ctrl+o menu previews a fast-forward from another participant", {
+  skip: noPty,
+}, async (t) => {
+  const { child, seen, press, exited, out, d } = await chatOnPty(t);
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  assert.ok(room);
+  const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
+  assert.equal(full.status, 200, JSON.stringify(full.body));
+  const dev = only(full.body);
+  await commitAt(dev.worktree, "dev.txt");
+
+  const addedRev = await api<ParticipantDto>(
+    d,
+    "POST",
+    `/rooms/${room.id}/agents`,
+    { cmd: REMEMBER, name: "reviewer", base: dev.branch },
+  );
+  assert.equal(addedRev.status, 201, JSON.stringify(addedRev.body));
+  await commitAt(addedRev.body.worktree, "review.txt");
+  const revHead = headAt(addedRev.body.worktree);
+  await seen("○ reviewer");
+
+  // Room menu → mock-agent → its menu → fast-forward from … → reviewer.
+  await press("\x0f", "agent …");
+  await press("\r", "pick an agent");
+  await press("\r", "mock-agent · mock-agent");
+  await press(`${DOWN.repeat(5)}\r`, "fast-forward mock-agent from");
+  await press("\r", "mock-agent ← reviewer · fast-forward");
+  await press("\r", "moved mock-agent up to reviewer's commit");
+  assert.equal(headAt(dev.worktree), revHead);
   child.stdin.write("/leave\r");
   assert.equal(await exited, 0, out());
 });
@@ -4605,6 +4697,9 @@ test("chat.ts on a real terminal follows a second room off screen, switches to i
   // bob's thread.
   await press("\x1b[1;3B\x0e\x0e", "→ bob");
   await seen("previous: (none)");
+  // The where bar follows the view: bob's thread names its branch too. The
+  // 100-column pty cuts it after the branch's first letter.
+  await seen(" · k");
   // The composer holds "@bob "; no orchestrator is needed for it.
   child.stdin.write("again\r");
   await seen("previous: hello-b");
@@ -5830,6 +5925,168 @@ test("chat.ts on a real terminal drops a removed participant's notices from the 
   assert.equal(notices.length, 1, scrollback(out()));
 });
 
+test("a room fast-forwards a target to a source, previews it, and logs the move", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, name: "dev", role: "orchestrator" }],
+  });
+  assert.equal(open.status, 201, JSON.stringify(open.body));
+  const roomId = open.body.id;
+  const dev = only(open.body);
+  await commitAt(dev.worktree, "dev.txt");
+
+  const addedRev = await api<ParticipantDto>(
+    d,
+    "POST",
+    `/rooms/${roomId}/agents`,
+    { cmd: REMEMBER, name: "reviewer", base: dev.branch },
+  );
+  assert.equal(addedRev.status, 201, JSON.stringify(addedRev.body));
+  const reviewer = addedRev.body;
+  await commitAt(reviewer.worktree, "review.txt");
+  const revHead = headAt(reviewer.worktree);
+
+  const preview = await api<Diff>(
+    d,
+    "GET",
+    `/rooms/${roomId}/agents/${dev.id}/fast-forward?from=${reviewer.id}`,
+  );
+  assert.equal(preview.status, 200, JSON.stringify(preview.body));
+  assert.equal(preview.body.files, 1, JSON.stringify(preview.body));
+  assert.match(preview.body.text, /review\.txt/);
+
+  const moved = await api<ParticipantDto>(
+    d,
+    "POST",
+    `/rooms/${roomId}/agents/${dev.id}/fast-forward`,
+    { from: reviewer.id },
+  );
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.equal(moved.body.branch, dev.branch);
+  assert.equal(headAt(dev.worktree), revHead);
+  assert.equal(headAt(reviewer.worktree), revHead, "the source is untouched");
+  assert.ok(existsSync(join(dev.worktree, "review.txt")));
+
+  await api(d, "POST", `/rooms/${roomId}/dismiss`);
+  const events = await roomEvents(d, roomId);
+  const forwarded = events.filter(
+    (e) => e.update.sessionUpdate === "_client_participant_fast_forwarded",
+  );
+  assert.deepEqual(
+    forwarded.map((e) => e.update),
+    [
+      {
+        sessionUpdate: "_client_participant_fast_forwarded",
+        from: reviewer.id,
+        branch: dev.branch,
+        sha: revHead,
+      },
+    ],
+  );
+});
+
+test("a fast-forward refuses a busy or dirty target and a diverged one, with codes", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  type Refusal = { error: { code: string; message: string } };
+
+  const pair = async (devCmd = REMEMBER) => {
+    const open = await api<RoomReply>(d, "POST", "/rooms", {
+      cwd,
+      agents: [{ cmd: devCmd, name: "dev", role: "orchestrator" }],
+    });
+    assert.equal(open.status, 201, JSON.stringify(open.body));
+    const dev = only(open.body);
+    const addedRev = await api<ParticipantDto>(
+      d,
+      "POST",
+      `/rooms/${open.body.id}/agents`,
+      { cmd: REMEMBER, name: "reviewer", base: dev.branch },
+    );
+    assert.equal(addedRev.status, 201, JSON.stringify(addedRev.body));
+    return { roomId: open.body.id, dev, reviewer: addedRev.body };
+  };
+
+  // A busy target is refused before anything else.
+  {
+    const { roomId, dev, reviewer } = await pair(
+      `node ${MOCK_AGENT} --scenario slow`,
+    );
+    const sent = await api(
+      d,
+      "POST",
+      `/rooms/${roomId}/agents/${dev.id}/messages`,
+      {
+        text: "hold",
+      },
+    );
+    assert.equal(sent.status, 202);
+    const refused = await api<Refusal>(
+      d,
+      "POST",
+      `/rooms/${roomId}/agents/${dev.id}/fast-forward`,
+      { from: reviewer.id },
+    );
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.error.code, "agent_busy");
+    await api(d, "POST", `/rooms/${roomId}/dismiss`);
+  }
+
+  // Tracked dirt refuses; an untracked file does not, once the dirt is gone.
+  {
+    const { roomId, dev, reviewer } = await pair();
+    await commitAt(reviewer.worktree, "review.txt");
+    const before = headAt(dev.worktree);
+    await writeFile(join(dev.worktree, "README.md"), "dirty\n");
+
+    const refused = await api<Refusal>(
+      d,
+      "POST",
+      `/rooms/${roomId}/agents/${dev.id}/fast-forward`,
+      { from: reviewer.id },
+    );
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.error.code, "dirty_worktree");
+    assert.equal(headAt(dev.worktree), before);
+
+    const clean = spawnSync("git", ["checkout", "--", "README.md"], {
+      cwd: dev.worktree,
+      encoding: "utf8",
+    });
+    assert.equal(clean.status, 0, clean.stderr);
+    await writeFile(join(dev.worktree, "scratch.txt"), "untracked\n");
+    const moved = await api<ParticipantDto>(
+      d,
+      "POST",
+      `/rooms/${roomId}/agents/${dev.id}/fast-forward`,
+      { from: reviewer.id },
+    );
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.ok(existsSync(join(dev.worktree, "scratch.txt")));
+    await api(d, "POST", `/rooms/${roomId}/dismiss`);
+  }
+
+  // A target commit since the fork makes this a merge, not a fast-forward.
+  {
+    const { roomId, dev, reviewer } = await pair();
+    await commitAt(dev.worktree, "late.txt");
+    await commitAt(reviewer.worktree, "review.txt");
+    const before = headAt(dev.worktree);
+    const refused = await api<Refusal>(
+      d,
+      "POST",
+      `/rooms/${roomId}/agents/${dev.id}/fast-forward`,
+      { from: reviewer.id },
+    );
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.error.code, "not_fast_forward");
+    assert.equal(headAt(dev.worktree), before);
+    await api(d, "POST", `/rooms/${roomId}/dismiss`);
+  }
+});
+
 // --- room commands (M4-5) -----------------------------------------------------
 
 /** The address `client/` takes, from a test daemon. */
@@ -5848,6 +6105,16 @@ async function typed(
   const c = parseCommand(line, roster);
   assert.ok(c && "verb" in c, `not a command: ${line} → ${JSON.stringify(c)}`);
   assert.ok(c.verb !== "leave" && c.verb !== "help" && c.verb !== "form", line);
+  if (c.verb === "ff") {
+    // The screen turns the parsed command into its route call (M6-11a).
+    return runCommand(addressOf(d), roomId, {
+      verb: "forward",
+      id: c.id,
+      name: c.name,
+      fromId: c.from.id,
+      fromName: c.from.name,
+    });
+  }
   return runCommand(addressOf(d), roomId, c as RouteCommand);
 }
 
@@ -5911,6 +6178,15 @@ test("every typed room command reaches its route", async (t) => {
   const cancel = await typed(d, roomId, "@carol /cancel", await roster());
   assert.ok(cancel.ok, JSON.stringify(cancel));
   assert.equal(cancel.line, "cancelling carol's turn");
+
+  const forward = await typed(
+    d,
+    roomId,
+    "@alice /ff --from @carol",
+    await roster(),
+  );
+  assert.ok(forward.ok, JSON.stringify(forward));
+  assert.equal(forward.line, "moved alice up to carol's commit");
 
   const removed = await typed(d, roomId, "@carol /remove", await roster());
   assert.ok(removed.ok, JSON.stringify(removed));

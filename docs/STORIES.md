@@ -2856,11 +2856,24 @@ top of. It writes a `_client_` event to the room log, so every observer sees the
 **Accepted consequence:** an `idle` target's harness is still alive, and its memory
 describes the files before the move. The daemon tells it nothing; the person does, in a
 message. **Open at pickup:** the route's path and name, and whether uncommitted work in
-the target's checkout is refused.
+the target's checkout is refused. **Answered 2026-10-07 (#182 pickup):** 1a and 2c — see
+*Scoped* below.
 *Done when* after the move the target's branch and checkout are at the source's commit, a
 busy target and a diverged target are both refused with nothing changed, and a second
 client sees the event.
 Decisions: R37, R45.
+**Scoped 2026-10-07 (#182 pickup).** (1a) `POST /rooms/:id/agents/:agentId/fast-forward`
+with `{from}`, `200` target `ParticipantDto`, event
+`_client_participant_fast_forwarded {from, branch, sha}`, plus read-only
+`GET .../fast-forward?from=…` for the preview. A move to the commit the target
+already has succeeds and writes no event. (2c) only tracked changes in the target
+checkout refuse (`dirty_worktree`); untracked files do not. (3b)
+`@target /ff --from @source` and the target's `ctrl+o` entry open the preview in M4-6's
+side pane; Enter confirms. (4a) a bar under the composer shows the open view's
+`worktree · branch` for an agent and `cwd` for a room, because a room owns no branch.
+The route refuses `agent_busy`, `not_fast_forward`, `dirty_worktree` and `no_branch`, and
+never moves the source. The piped screen refuses `/ff`: its preview is a TUI pane, and a
+pipe cannot show it before the move.
 
 **M6-11b · Land a participant into the main checkout, from the TUI · S · needs M6-6b, M4-5, M4-6**
 **Added 2026-09-26, R47.** R31 made `kapelle room merge` the surface.

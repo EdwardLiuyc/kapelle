@@ -93,6 +93,7 @@ function panelParts({
   offer,
   question,
   changes,
+  forward,
   run,
   end,
   left,
@@ -110,6 +111,11 @@ function panelParts({
   question: (id: string) => void;
   /** Opens what an agent changed in the side pane (M4-6). */
   changes: (who: { id: string; name: string }) => void;
+  /** Opens the fast-forward preview in the side pane (M6-11a, 3b). */
+  forward: (
+    target: { id: string; name: string },
+    from: { id: string; name: string },
+  ) => void;
   run: (c: RouteCommand) => Promise<boolean>;
   end: (code: number, ...last: string[]) => void;
   left: () => string;
@@ -255,6 +261,9 @@ function panelParts({
       label: `? ${nameOf(qr.state, q.participantId)} asks: ${q.title}`,
     }));
     if (p) {
+      const forwardable = r
+        ? roster(r.state).some((q) => q.id !== p.id)
+        : false;
       items.push(
         { value: "cancel", label: "cancel turn" },
         // The value is in the label: the sidebar is too narrow for a
@@ -263,8 +272,11 @@ function panelParts({
         { value: "role", label: `role · ${p.role ?? "none"}` },
         { value: "rename", label: "rename …" },
         { value: "diff", label: "view changes" },
-        { value: "remove", label: `remove ${p.name}` },
       );
+      if (forwardable) {
+        items.push({ value: "forward", label: "fast-forward from …" });
+      }
+      items.push({ value: "remove", label: `remove ${p.name}` });
     } else if (r && roster(r.state).length > 0) {
       items.push({ value: "agent", label: "agent …" });
     }
@@ -316,6 +328,26 @@ function panelParts({
     if (value === "diff") {
       hidePanel();
       return changes(who);
+    }
+    if (value === "forward" && r) {
+      const ps = roster(r.state).filter((q) => q.id !== p.id);
+      const items = ps.map((q) => ({
+        value: q.id,
+        label: q.name,
+        ...(q.role && { description: q.role }),
+      }));
+      return pickList(
+        `fast-forward ${p.name} from`,
+        items,
+        undefined,
+        (id) => {
+          const from = ps.find((q) => q.id === id);
+          if (!from) return;
+          hidePanel();
+          forward({ id: p.id, name: p.name }, { id: from.id, name: from.name });
+        },
+        self,
+      );
     }
     if (value === "cancel") return void run({ verb: "cancel", ...who });
     if (value === "remove") return void run({ verb: "remove", ...who });

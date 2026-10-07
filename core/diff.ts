@@ -1,7 +1,7 @@
 /**
  * `git diff` text for a person to read (M4-6).
  *
- * Two sources, one shape (`Diff`):
+ * Three sources, one shape (`Diff`):
  *
  * - **A question's edit.** `AcpAgent` names the files a tool call would
  *   write, after the path guard (`PolicyEdit`). `editDiff` writes the old and
@@ -13,6 +13,9 @@
  *   `HEAD` for what is not committed, or the base for the whole branch. New
  *   files git does not track yet are in it too: `git add -N` marks them in a
  *   copy of the index, so the agent's own index never changes.
+ * - **A fast-forward preview.** `rangeDiff` diffs `from...to`, so it starts at
+ *   the two refs' merge base: a target's own commits are not shown as
+ *   deletions, and the source's additions are (M6-11a).
  *
  * **The cap** (decided 2026-10-05, #204): a question's diff is kept for the
  * daemon's life, so it is cut at 32 KB; the route's is not kept, so 512 KB.
@@ -211,4 +214,28 @@ export async function checkoutDiff(
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
+}
+
+/**
+ * What `toRef` adds over `fromRef` (M6-11a): the commits a fast-forward
+ * would bring, with no working-tree changes and no untracked files. Used by
+ * the TUI's preview before it confirms the move.
+ */
+export async function rangeDiff(
+  cwd: string,
+  fromRef: string,
+  toRef: string,
+  cap = ROUTE_CAP,
+): Promise<Diff> {
+  const text = await git(cwd, [
+    "diff",
+    ...DIFF_FLAGS,
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    // Three dots: from where the two meet, so a target commit the source
+    // lacks is not shown as removed.
+    `${fromRef}...${toRef}`,
+    "--",
+  ]);
+  return capDiff(text, cap);
 }

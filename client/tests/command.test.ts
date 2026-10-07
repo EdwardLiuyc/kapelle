@@ -162,3 +162,27 @@ test("@name /diff asks for what is not committed, and /diff base for the whole b
     error: "usage: @name /diff [base]",
   });
 });
+
+test("@name /ff --from @name names the target and the source", () => {
+  assert.deepEqual(parse("@bob /ff --from @alice"), {
+    verb: "ff",
+    id: "p-b",
+    name: "Bob",
+    from: { id: "p-a", name: "alice" },
+  });
+  assert.deepEqual(parse("@BOB /ff --from @ALICE"), {
+    verb: "ff",
+    id: "p-b",
+    name: "Bob",
+    from: { id: "p-a", name: "alice" },
+  });
+  for (const line of [
+    "@bob /ff",
+    "@bob /ff @alice",
+    "@bob /ff --from @nobody",
+    "/ff --from @alice",
+  ]) {
+    const r = parse(line);
+    assert.ok(r && "error" in r, line);
+  }
+});

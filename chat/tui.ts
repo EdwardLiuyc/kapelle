@@ -30,6 +30,7 @@
  */
 
 import {
+  type Component,
   Editor,
   HStack,
   Key,
@@ -38,6 +39,7 @@ import {
   Spacer,
   Text,
   TuiAltScreen,
+  truncateToWidth,
   VStack,
 } from "@earendil-works/pi-tui";
 import { type RouteCommand, runCommand } from "../client/command.ts";
@@ -47,7 +49,7 @@ import type {
   RoomListEntry,
 } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
-import { agentDiff } from "../client/diff.ts";
+import { agentDiff, agentForwardDiff } from "../client/diff.ts";
 import { mentionsFor, targetOf } from "../client/mention.ts";
 import { questionQueue } from "../client/questions.ts";
 import {
@@ -100,6 +102,7 @@ import {
   step,
   type View,
   waiting,
+  where,
 } from "./view.ts";
 
 /** What the screen says in a room with no participant (M4-5). */
@@ -126,6 +129,11 @@ const NO_AGENTS = "no agents: ctrl+o → add agent";
  * `ctrl+]` gives them to the composer and back, so a message can go out
  * while the diff stays in view.
  *
+ * **A fast-forward previews before it moves** (M6-11a). `@target /ff --from
+ * @source`, or the target's `ctrl+o` menu, puts the commits the move would
+ * bring in the side pane; Enter confirms. A line under the composer always
+ * names the open view's checkout and branch.
+ *
  * **The composer names the target** (R43), through `client/mention.ts`, and
  * the status line shows it while the person types. A sent line is read by
  * `client/submit.ts`, as the piped screen reads it. The sidebar only picks
@@ -151,6 +159,14 @@ function chatTui(
   const { rooms } = set;
   const tui = new TuiAltScreen(new ProcessTerminal());
   const status = new Text("", 1, 0);
+  /** The one-line bar under the composer (M6-11a, 4a). Empty until the
+   *  room set has something to show; `setWhere` fills it. */
+  let whereText = "";
+  const whereBar: Component = {
+    render: (width) =>
+      whereText ? [dim(truncateToWidth(whereText, width, "…", true))] : [],
+    invalidate: () => {},
+  };
   const editor = new Editor(tui, EDITOR_THEME, { paddingX: 1 });
   let view: View = { roomId: selected ?? list[0]?.id ?? "" };
   let shown = (process.stdout.columns || 80) >= NARROW;
@@ -174,6 +190,10 @@ function chatTui(
   let changes = (
     _who: { id: string; name: string },
     _against: "head" | "base",
+  ) => Promise.resolve(false);
+  let forward = (
+    _target: { id: string; name: string },
+    _from: { id: string; name: string },
   ) => Promise.resolve(false);
   /** The daemon went away mid-request. */
   const gone = (err: unknown) => end(1, `! ${(err as Error).message}`);
@@ -229,6 +249,7 @@ function chatTui(
     offer: () => offer(),
     question: (id) => question(id),
     changes: (who) => void changes(who, "head").catch(gone),
+    forward: (target, from) => void forward(target, from).catch(gone),
     run: (c) => run(c),
     end: (code, ...last) => end(code, ...last),
     left,
@@ -329,6 +350,8 @@ function chatTui(
       // entry that may, so a full-height sidebar or a long conversation cut
       // the box's bottom border. The editor caps itself at 30% of the rows.
       { component: editor, basis: "auto", shrink: 0 },
+      // The bar under the composer: the open view's checkout and branch.
+      { component: whereBar, basis: "auto", shrink: 0 },
     ]),
   );
   tui.setFocus(editor);
@@ -364,7 +387,13 @@ function chatTui(
     },
   });
 
+  const setWhere = () => {
+    const r = rooms.get(view.roomId);
+    whereText = r ? where(view, { cwd: r.entry.cwd, dto: r.dto }) : "";
+  };
+
   const setStatus = () => {
+    setWhere();
     const r = rooms.get(view.roomId);
     const parts: string[] = [];
     if (r) {
@@ -665,6 +694,11 @@ function chatTui(
       if (c.verb === "leave") return end(0, left());
       if (c.verb === "help") return showHelp();
       if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
+      if (c.verb === "ff") {
+        editor.addToHistory(text);
+        if (!(await forward(c, c.from))) giveBack();
+        return;
+      }
       if (c.verb === "diff") {
         editor.addToHistory(text);
         if (!(await changes(c, c.against))) giveBack();
@@ -815,6 +849,41 @@ function chatTui(
       }
       // A dismiss ends the room's stream, and `closed` says so.
       if (c.verb !== "dismiss") flash = out.line;
+      setStatus();
+      return true;
+    };
+
+    /** Shows what a fast-forward would bring in the side pane, and confirms
+     *  the move on Enter (M6-11a, 3b). Answers whether the pane was filled. */
+    forward = async (target, from) => {
+      const res = await agentForwardDiff(d, view.roomId, target.id, from.id);
+      if (!res.ok) {
+        flash = `! ${res.error.message}`;
+        setStatus();
+        return false;
+      }
+      side.fill({
+        title: `${target.name} ← ${from.name} · fast-forward`,
+        diff: { ...res.body, text: cleanDiff(res.body.text) },
+        keys: [
+          {
+            key: "enter",
+            hint: `enter fast-forward ${target.name}`,
+            run: () =>
+              void run({
+                verb: "forward",
+                id: target.id,
+                name: target.name,
+                fromId: from.id,
+                fromName: from.name,
+              })
+                .then((ok) => {
+                  if (ok) side.toggle(false);
+                })
+                .catch(gone),
+          },
+        ],
+      });
       setStatus();
       return true;
     };

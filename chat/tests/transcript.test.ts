@@ -190,3 +190,53 @@ test("an answer streamed through draw, chunk by chunk, draws as its whole text",
   const box = parts.transcript.children.at(-1) as Container;
   assert.ok(box.children.length > 5, "the finished blocks were cut off");
 });
+
+test("a fast-forward draws a line naming both participants", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (participantId: string, update: RoomEventLine["update"]) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-07T00:00:00Z",
+      roomId: "r1",
+      participantId,
+      update,
+    });
+  line("p-dev", {
+    sessionUpdate: "_client_participant_added",
+    name: "dev",
+    harness: "mock",
+    mode: "auto",
+  });
+  line("p-rev", {
+    sessionUpdate: "_client_participant_added",
+    name: "rev",
+    harness: "mock",
+    mode: "auto",
+  });
+  line("p-dev", {
+    sessionUpdate: "_client_participant_fast_forwarded",
+    from: "p-rev",
+    branch: "kapelle/r1/p-dev",
+    sha: "abc123",
+  });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+  });
+  parts.redraw();
+  const plain = (rows: string[]) =>
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+    rows.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  assert.ok(
+    plain(parts.transcript.render(80)).some((l) =>
+      l.includes("↪ dev moved to rev's commit"),
+    ),
+    parts.transcript.render(80).join("\n"),
+  );
+});
