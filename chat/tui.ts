@@ -32,7 +32,9 @@
 import {
   type Component,
   Editor,
+  getKeybindings,
   HStack,
+  isKeyRelease,
   Key,
   matchesKey,
   ProcessTerminal,
@@ -158,6 +160,15 @@ function chatTui(
   });
   const { rooms } = set;
   const tui = new TuiAltScreen(new ProcessTerminal());
+  // pi-tui's screen reads keys before ours, and would take the page keys
+  // for the timeline while the side view has the keys. Ours route them
+  // (#228).
+  const keys = getKeybindings();
+  keys.setUserBindings({
+    ...keys.getUserBindings(),
+    "tui.altScreen.pageUp": [],
+    "tui.altScreen.pageDown": [],
+  });
   const status = new Text("", 1, 0);
   /** The one-line bar under the composer (M6-11a, 4a). Empty until the
    *  room set has something to show; `setWhere` fills it. */
@@ -605,6 +616,10 @@ function chatTui(
     };
 
     tui.addInputListener((data) => {
+      // A terminal with the kitty keyboard protocol also sends each key's
+      // release, and `matchesKey` matches it. pi-tui drops it before the
+      // focused component; drop it here too, or a key acts twice.
+      if (isKeyRelease(data)) return undefined;
       if (matchesKey(data, Key.ctrl("c"))) {
         end(0, left());
         return { consume: true };
@@ -642,6 +657,21 @@ function chatTui(
       }
       if (side.focused) {
         side.key(data);
+        return { consume: true };
+      }
+      // The page keys scroll what is drawn where the timeline goes. A page
+      // keeps 4 lines, as pi-tui's did; the side view's keeps 1, as it did
+      // since #204. `scrollBy` stops following above the end and follows
+      // again at it, as pi-tui's page keys did.
+      const page = matchesKey(data, Key.pageUp)
+        ? -1
+        : matchesKey(data, Key.pageDown)
+          ? 1
+          : 0;
+      if (page) {
+        if (side.shown && !side.wide()) side.key(data);
+        else scroll.scrollBy(page * Math.max(1, scroll.viewportHeight - 4));
+        tui.requestRender();
         return { consume: true };
       }
       const down =
