@@ -4901,12 +4901,17 @@ async function lightMoves(
 ): Promise<number> {
   const from = screen.out().length;
   screen.child.stdin.write(keys);
+  // Every title drawn, not the first: a repaint at a turn's end can draw
+  // the title with `was` before the keys act.
+  const title = new RegExp(`history · (\\d+) of ${of}`, "g");
   for (const until = Date.now() + 10_000; ; ) {
     const drawn = screen.out().slice(from);
-    const at = new RegExp(`history · (\\d+) of ${of}`).exec(plainText(drawn));
-    if (at && Number(at[1]) !== was) {
-      assert.match(drawn, new RegExp(`\\x1b\\[7m→ mock-agent: m${at[1]} `));
-      return Number(at[1]);
+    const at = [...plainText(drawn).matchAll(title)]
+      .map((m) => Number(m[1]))
+      .find((n) => n !== was);
+    if (at !== undefined) {
+      assert.match(drawn, new RegExp(`\\x1b\\[7m→ mock-agent: m${at} `));
+      return at;
     }
     assert.ok(Date.now() < until, drawn);
     await new Promise((ok) => setTimeout(ok, 50));
