@@ -5003,8 +5003,18 @@ test("chat.ts on a narrow real terminal sends the page keys with the composer to
   await screen.seen("previous: m14");
   await screen.press("\x12", "history · 1 of 15");
   await screen.press("\x1d", "ctrl+] keys here");
-  // A page is the view's height less one row.
-  await screen.press("\x1b[6~", "history · 8 of 15");
+  // A page is the view's height less one row. That height moves with the
+  // rows under the composer, so the test asks only that the light left row 1.
+  const from = screen.out().length;
+  screen.child.stdin.write("\x1b[6~");
+  for (const until = Date.now() + 10_000; ; ) {
+    const at = /history · (\d+) of 15/.exec(
+      plainText(screen.out().slice(from)),
+    );
+    if (at && Number(at[1]) > 1) break;
+    assert.ok(Date.now() < until, screen.out().slice(from));
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
