@@ -2267,8 +2267,8 @@ Every size in that row is set, because an `auto` size makes pi-tui measure each 
 every frame: half a second for a 10,000-line diff, and about 10 ms per key after. pi-tui's
 screen reads keys before the chat and took the page keys for the timeline, so the chat
 turns its page keys off and routes them itself (#228). The pane's wheel stops at its ends
-instead of scrolling the timeline. A diff that fits the pane cannot scroll, so `]` and `[` remember the file they
-picked.
+instead of scrolling the timeline. A diff that fits the pane cannot scroll, so `]` and `[`
+remember the file they picked.
 **Added 2026-10-05 (#204): a view, not a box.** The side view is a second view beside the
 timeline, as the sidebar is: `ctrl+x` shows and hides it, and what it shows stays while it
 is hidden. Before anything is put in it, it says how to fill it. It has the keys when shown,

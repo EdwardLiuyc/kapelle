@@ -230,10 +230,11 @@ function paneParts({
   /** The view takes every wheel turn over it (#228). Left to pi-tui, a turn
    *  past either end scrolls the timeline, even with `overscroll:
    *  "contain"`. A list's light stays on a row in view, so Enter picks a
-   *  row the person sees. */
+   *  row the person sees. `ScrollView` has no mouse handler of its own:
+   *  pi-tui skips it, and drags a scrollbar itself. */
   scroll.handleMouse = (e) => {
-    if (e.type !== "wheel") return undefined;
-    scroll.scrollBy(e.wheelDelta ?? 0);
+    if (e.type !== "wheel" || !e.wheelDelta) return undefined;
+    scroll.scrollBy(e.wheelDelta);
     const top = scroll.scrollTop;
     cursor = Math.max(top, Math.min(top + scroll.viewportHeight - 1, cursor));
     // A container answers with its target, as pi-tui's `dispatchMouseEvent`.

@@ -4857,66 +4857,12 @@ test("chat.ts on a real terminal lists the person's messages on ctrl+r, lights t
   assert.equal(await screen.exited, 0, screen.out());
 });
 
-test("chat.ts on a real terminal maps the mouse to the right row of a history list that scrolled", {
-  skip: noPty,
-}, async (t) => {
-  const runtime = await tempDir(t);
-  const d = await boot(t, runtime);
-  const cwd = await added(d, await gitRepo(t));
-  const open = await api<RoomReply>(
-    d,
-    "POST",
-    "/rooms",
-    withAgent(cwd, REMEMBER),
-  );
-  assert.equal(open.status, 201, open.body.error?.message);
-  // 16 rows: the list shows fewer rows than the 15 messages.
-  const screen = await ptyScreen(
-    t,
-    `stty cols 130 rows 16; node chat.ts attach ${open.body.id}`,
-    { XDG_RUNTIME_DIR: runtime },
-  );
-  const path = `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`;
-  for (let i = 1; i <= 15; i++) {
-    const sent = await api(d, "POST", path, { text: `m${i}` });
-    assert.equal(sent.status, 202, sent.body.error?.message);
-  }
-  await screen.seen("previous: m14");
-  await screen.press("\x12", "history · 1 of 15");
-  // A key's release is not a second press. A terminal with the kitty
-  // keyboard protocol sends both.
-  await screen.press("\x1b[6;1:3~\x1b[B", "history · 2 of 15");
-  // To the end: the list scrolls. Page Down reaches the list, not only
-  // the timeline (#228).
-  await screen.press("\x1b[6~".repeat(14), "history · 15 of 15");
-  // The mouse on the list's top row, row 2 of the screen, is not message 1.
-  const from = screen.out().length;
-  await screen.press("\x1b[<35;90;2M", "history · ");
-  for (const until = Date.now() + 10_000; ; ) {
-    const at = /history · (\d+) of 15/.exec(
-      plainText(screen.out().slice(from)),
-    );
-    if (at) {
-      const n = Number(at[1]);
-      assert.ok(n > 1 && n < 15, `the top row is message ${n}`);
-      // The lit row is that message.
-      assert.match(
-        screen.out().slice(from),
-        new RegExp(`\\x1b\\[7m→ mock-agent: m${n} `),
-      );
-      break;
-    }
-    assert.ok(Date.now() < until, screen.out().slice(from));
-    await new Promise((ok) => setTimeout(ok, 50));
-  }
-  screen.child.stdin.write("\x03");
-  await screen.seen("left room");
-  assert.equal(await screen.exited, 0, screen.out());
-});
-
-test("chat.ts on a real terminal keeps the wheel over the side view out of the timeline, and the page keys with the composer", {
-  skip: noPty,
-}, async (t) => {
+/**
+ * A room with 15 messages sent, attached on a pseudo-terminal 16 rows high,
+ * so the history list shows fewer rows than it has. At 120 columns and more
+ * the side view sits beside the timeline; below, it takes its place.
+ */
+async function fifteenSent(t: TestContext, cols: number) {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
@@ -4929,7 +4875,7 @@ test("chat.ts on a real terminal keeps the wheel over the side view out of the t
   assert.equal(open.status, 201, open.body.error?.message);
   const screen = await ptyScreen(
     t,
-    `stty cols 130 rows 16; node chat.ts attach ${open.body.id}`,
+    `stty cols ${cols} rows 16; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
   );
   const path = `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`;
@@ -4939,6 +4885,57 @@ test("chat.ts on a real terminal keeps the wheel over the side view out of the t
   };
   for (let i = 1; i <= 15; i++) await send(`m${i}`);
   await screen.seen("previous: m14");
+  return { ...screen, send };
+}
+
+/**
+ * Writes `keys`, and waits for the history title to name a row other than
+ * `was` in what is drawn after them. Checks that the lit row is the one the
+ * title names, and returns it.
+ */
+async function lightMoves(
+  screen: Awaited<ReturnType<typeof ptyScreen>>,
+  keys: string,
+  of: number,
+  was: number,
+): Promise<number> {
+  const from = screen.out().length;
+  screen.child.stdin.write(keys);
+  for (const until = Date.now() + 10_000; ; ) {
+    const drawn = screen.out().slice(from);
+    const at = new RegExp(`history · (\\d+) of ${of}`).exec(plainText(drawn));
+    if (at && Number(at[1]) !== was) {
+      assert.match(drawn, new RegExp(`\\x1b\\[7m→ mock-agent: m${at[1]} `));
+      return Number(at[1]);
+    }
+    assert.ok(Date.now() < until, drawn);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+}
+
+test("chat.ts on a real terminal maps the mouse to the right row of a history list that scrolled", {
+  skip: noPty,
+}, async (t) => {
+  const screen = await fifteenSent(t, 130);
+  await screen.press("\x12", "history · 1 of 15");
+  // A key's release is not a second press. A terminal with the kitty
+  // keyboard protocol sends both.
+  await screen.press("\x1b[6;1:3~\x1b[B", "history · 2 of 15");
+  // To the end: the list scrolls. Page Down reaches the list, not only
+  // the timeline (#228).
+  await screen.press("\x1b[6~".repeat(14), "history · 15 of 15");
+  // The mouse on the list's top row, row 2 of the screen, is not message 1.
+  const n = await lightMoves(screen, "\x1b[<35;90;2M", 15, 15);
+  assert.ok(n > 1, `the top row is message ${n}`);
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal keeps the wheel over the side view out of the timeline, and the page keys with the composer", {
+  skip: noPty,
+}, async (t) => {
+  const { send, ...screen } = await fifteenSent(t, 130);
   // Ten wheel turns up over the side view, at column 90.
   const wheelUp = "\x1b[<64;90;5M".repeat(10);
   // An empty view, then a list at its top: the wheel stops there. A
@@ -4952,25 +4949,15 @@ test("chat.ts on a real terminal keeps the wheel over the side view out of the t
   await send("m17");
   await screen.seen("previous: m16");
   // The wheel down scrolls the list, and the light stays on a row in view.
-  const from = screen.out().length;
-  screen.child.stdin.write("\x1b[<65;90;5M".repeat(10));
-  for (const until = Date.now() + 10_000; ; ) {
-    const at = /history · (\d+) of 17/.exec(
-      plainText(screen.out().slice(from)),
-    );
-    if (at && Number(at[1]) > 1) {
-      assert.match(
-        screen.out().slice(from),
-        new RegExp(`\\x1b\\[7m→ mock-agent: m${at[1]} `),
-      );
-      break;
-    }
-    assert.ok(Date.now() < until, screen.out().slice(from));
-    await new Promise((ok) => setTimeout(ok, 50));
-  }
-  // With the keys at the composer, Page Up scrolls the timeline.
+  await lightMoves(screen, "\x1b[<65;90;5M".repeat(10), 17, 1);
+  // With the keys at the composer, the page keys scroll the timeline: up
+  // to the notice on its first lines, and down to its end, where it
+  // follows again.
   await screen.press("\x1d", "ctrl+] keys here");
-  await screen.press("\x1b[5~", "previous: m");
+  await screen.press("\x1b[5~".repeat(20), "no measured labels");
+  await screen.press("\x1b[6~".repeat(20), "previous: m16");
+  await send("m18");
+  await screen.seen("previous: m17");
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
@@ -4979,42 +4966,12 @@ test("chat.ts on a real terminal keeps the wheel over the side view out of the t
 test("chat.ts on a narrow real terminal sends the page keys with the composer to the side view in the timeline's place", {
   skip: noPty,
 }, async (t) => {
-  const runtime = await tempDir(t);
-  const d = await boot(t, runtime);
-  const cwd = await added(d, await gitRepo(t));
-  const open = await api<RoomReply>(
-    d,
-    "POST",
-    "/rooms",
-    withAgent(cwd, REMEMBER),
-  );
-  assert.equal(open.status, 201, open.body.error?.message);
-  // Under 120 columns the side view takes the timeline's place.
-  const screen = await ptyScreen(
-    t,
-    `stty cols 100 rows 16; node chat.ts attach ${open.body.id}`,
-    { XDG_RUNTIME_DIR: runtime },
-  );
-  const path = `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`;
-  for (let i = 1; i <= 15; i++) {
-    const sent = await api(d, "POST", path, { text: `m${i}` });
-    assert.equal(sent.status, 202, sent.body.error?.message);
-  }
-  await screen.seen("previous: m14");
+  const screen = await fifteenSent(t, 100);
   await screen.press("\x12", "history · 1 of 15");
   await screen.press("\x1d", "ctrl+] keys here");
   // A page is the view's height less one row. That height moves with the
   // rows under the composer, so the test asks only that the light left row 1.
-  const from = screen.out().length;
-  screen.child.stdin.write("\x1b[6~");
-  for (const until = Date.now() + 10_000; ; ) {
-    const at = /history · (\d+) of 15/.exec(
-      plainText(screen.out().slice(from)),
-    );
-    if (at && Number(at[1]) > 1) break;
-    assert.ok(Date.now() < until, screen.out().slice(from));
-    await new Promise((ok) => setTimeout(ok, 50));
-  }
+  await lightMoves(screen, "\x1b[6~", 15, 1);
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

@@ -631,7 +631,9 @@ function chatTui(
         return { consume: true };
       }
       // The page keys scroll what is drawn where the timeline goes. A page
-      // keeps 4 lines, as pi-tui's did.
+      // keeps 4 lines, as pi-tui's did; the side view's keeps 1, as it did
+      // since #204. `scrollBy` stops following above the end and follows
+      // again at it, as pi-tui's page keys did.
       const page = matchesKey(data, Key.pageUp)
         ? -1
         : matchesKey(data, Key.pageDown)
