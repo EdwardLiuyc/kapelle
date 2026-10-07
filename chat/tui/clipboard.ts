@@ -50,11 +50,11 @@ const runTool = (tool: Tool, text: string): Promise<boolean> =>
   });
 
 /** pi-tui's `copySelection`. `write` is the terminal's, for the OSC 52
- *  fallback. */
+ *  fallback. Tests pass their own `tools`. */
 const copySelection =
-  (write: (data: string) => void) =>
+  (write: (data: string) => void, tools: Tool[] = clipboardTools()) =>
   async (text: string): Promise<boolean> => {
-    for (const tool of clipboardTools()) {
+    for (const tool of tools) {
       if (await runTool(tool, text)) return true;
     }
     // ponytail: the OSC 52 fallback cannot know if the terminal copied, so
