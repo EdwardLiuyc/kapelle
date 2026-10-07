@@ -81,6 +81,7 @@ import {
   yellow,
 } from "./common.ts";
 import { bannerPart } from "./tui/banner.ts";
+import { copySelection } from "./tui/clipboard.ts";
 import { paneParts } from "./tui/pane.ts";
 import { EDITOR_THEME, panelParts } from "./tui/panel.ts";
 import { type Question, questionParts } from "./tui/question.ts";
@@ -159,7 +160,12 @@ function chatTui(
     end: (why) => quit(why),
   });
   const { rooms } = set;
-  const tui = new TuiAltScreen(new ProcessTerminal());
+  // A selection goes through the system's clipboard tool, not only OSC 52,
+  // so "Copied!" is true under WSL (`chat/tui/clipboard.ts`).
+  const terminal = new ProcessTerminal();
+  const tui = new TuiAltScreen(terminal, undefined, undefined, {
+    copySelection: copySelection((data) => terminal.write(data)),
+  });
   // pi-tui's screen reads keys before ours, and would take the page keys
   // for the timeline while the side view has the keys. Ours route them
   // (#228).
