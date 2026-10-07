@@ -11,7 +11,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 
 import { gitRepo, tempDir } from "../../integration/helpers.ts";
-import { capDiff, checkoutDiff, editDiff } from "../diff.ts";
+import { capDiff, checkoutDiff, editDiff, rangeDiff } from "../diff.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   promisify(execFile)("git", args, { cwd }).then((r) => r.stdout.trim());
@@ -148,4 +148,22 @@ test("checkoutDiff throws outside a git checkout and for a ref that does not res
   const clean = await checkoutDiff(cwd, "HEAD");
   assert.deepEqual(clean, { text: "", files: 0, added: 0, removed: 0 });
   assert.equal(await readFile(join(cwd, "README.md"), "utf8"), "first\n");
+});
+
+test("rangeDiff shows only what the source adds, not the target's own commits", async (t) => {
+  const cwd = await gitRepo(t);
+  await git(cwd, "branch", "source");
+  await writeFile(join(cwd, "late.txt"), "the target's own\n");
+  await git(cwd, "add", "late.txt");
+  await git(cwd, "commit", "-qm", "late");
+  await git(cwd, "checkout", "-q", "source");
+  await writeFile(join(cwd, "review.txt"), "review\n");
+  await git(cwd, "add", "review.txt");
+  await git(cwd, "commit", "-qm", "review");
+  await git(cwd, "checkout", "-q", "-");
+
+  const diff = await rangeDiff(cwd, "HEAD", "source");
+  assert.equal(diff.files, 1, diff.text);
+  assert.match(diff.text, /review\.txt/);
+  assert.doesNotMatch(diff.text, /late\.txt/);
 });

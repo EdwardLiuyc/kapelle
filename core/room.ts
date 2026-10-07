@@ -39,7 +39,9 @@
  * **One participant's branch can fast-forward to another's** (M6-11a, R45).
  * `fastForward` runs `git merge --ff-only` inside the target's checkout,
  * refuses a busy target, a dirty one (2c) and a diverged one, moves no source
- * branch, and logs `_client_participant_fast_forwarded` for every observer.
+ * branch, and logs `_client_participant_fast_forwarded` when it actually moves
+ * a commit. A move to the commit the target already has is a silent no-op.
+ * The move counts as busy, so a message sent during it queues behind it.
  *
  * **A message names its participant, and a busy one queues it** (M6-4).
  * `send` starts a turn, or puts the message in a FIFO queue behind the live
@@ -467,6 +469,7 @@ interface Member {
   spec: ResolvedAgent;
   stop: () => Promise<void>;
   setMode: (mode: ClientMode) => void;
+  hold: <T>(work: Promise<T>) => Promise<T>;
   onNotice: Notify;
 }
 
@@ -763,7 +766,8 @@ export async function openRoom({
         "the target and source are the same participant",
       );
     }
-    const target = member(targetId).participant;
+    const found = member(targetId);
+    const target = found.participant;
     const source = member(fromId).participant;
     if (target.status() === "busy") {
       throw new RoomRefusal(
@@ -784,13 +788,29 @@ export async function openRoom({
         `${source.name} has no branch to move to`,
       );
     }
-    let sha: string;
-    try {
-      sha = await fastForwardCheckout(
+    const branch = target.branch;
+    const sourceBranch = source.branch;
+    // The event goes out inside the hold, so a message that queued during
+    // the move starts its turn after every observer has seen the move.
+    const move = async () => {
+      const { sha, moved } = await fastForwardCheckout(
         target.worktree,
-        source.branch,
-        target.branch,
+        sourceBranch,
+        branch,
       );
+      if (!moved) return;
+      bus.emit({
+        agent: target.id,
+        update: {
+          sessionUpdate: "_client_participant_fast_forwarded",
+          from: source.id,
+          branch,
+          sha,
+        },
+      });
+    };
+    try {
+      await found.hold(move());
     } catch (err) {
       if (err instanceof DirtyCheckout) {
         throw new RoomRefusal("dirty_worktree", err.message);
@@ -803,15 +823,6 @@ export async function openRoom({
       }
       throw err;
     }
-    bus.emit({
-      agent: target.id,
-      update: {
-        sessionUpdate: "_client_participant_fast_forwarded",
-        from: source.id,
-        branch: target.branch,
-        sha,
-      },
-    });
     return target;
   };
 
@@ -872,6 +883,7 @@ async function startParticipant({
   participant: Participant;
   stop: () => Promise<void>;
   setMode: (mode: ClientMode) => void;
+  hold: <T>(work: Promise<T>) => Promise<T>;
 }> {
   if (info) {
     bus.emit({
@@ -969,6 +981,9 @@ async function startParticipant({
   };
 
   let turn: Promise<void> | undefined;
+  /** A fast-forward of this checkout (M6-11a). It counts as busy, so a
+   *  message queues behind it rather than start a turn on moving files. */
+  let held: Promise<unknown> | undefined;
   let stopping = false;
   const waiting: { text: string; done: () => void }[] = [];
 
@@ -1021,13 +1036,28 @@ async function startParticipant({
         controller.abort();
         watch.close();
         turn = undefined;
-        // A harness that is gone takes its queue with it. The harness
-        // reports its exit before the prompt fails (`protocol/agent.ts`).
-        if (exited || stopping || dismissed()) return drop();
-        const next = waiting.shift();
-        if (next) void begin(next.text).then(next.done);
+        next();
       });
     return turn;
+  };
+
+  // A harness that is gone takes its queue with it. The harness reports its
+  // exit before the prompt fails (`protocol/agent.ts`).
+  const next = () => {
+    if (exited || stopping || dismissed()) return drop();
+    const queued = waiting.shift();
+    if (queued) void begin(queued.text).then(queued.done);
+  };
+
+  // The caller has checked the participant is idle, with no await since.
+  // The caller gets the work's own result; `held` only marks the time.
+  const hold = <T>(work: Promise<T>): Promise<T> => {
+    const release = () => {
+      held = undefined;
+      next();
+    };
+    held = work.then(release, release);
+    return work;
   };
 
   // The harness answers a cancel within 64 ms on every measured build
@@ -1042,6 +1072,7 @@ async function startParticipant({
     }
     await agent.stop();
     await turn;
+    await held;
   };
 
   let version: string | undefined;
@@ -1093,7 +1124,7 @@ async function startParticipant({
     status: () => {
       if (dismissed()) return "dismissed";
       if (exited) return "exited";
-      return turn ? "busy" : "idle";
+      return turn || held ? "busy" : "idle";
     },
     get queued() {
       return waiting.length;
@@ -1105,7 +1136,7 @@ async function startParticipant({
       if (exited || stopping) {
         throw new RoomRefusal("agent_exited", "the agent's harness has exited");
       }
-      if (!turn) return begin(text);
+      if (!turn && !held) return begin(text);
       if (waiting.length >= QUEUE_BOUND) {
         throw new RoomRefusal(
           "queue_full",
@@ -1129,5 +1160,5 @@ async function startParticipant({
       return true;
     },
   };
-  return { participant, stop, setMode };
+  return { participant, stop, setMode, hold };
 }

@@ -185,8 +185,9 @@ export class NotFastForward extends Error {}
  *
  * **The target's own checkout**, never `git update-ref`: the branch is checked
  * out there, and moving only the ref leaves the index and files behind, which
- * the agent would commit on top of. A run through this returns the new HEAD
- * sha; the caller writes the room event.
+ * the agent would commit on top of. The return value says whether the branch
+ * actually changed: a move to the commit it already has is a no-op the caller
+ * does not log.
  *
  * Throws `DirtyCheckout` for tracked changes (2c) or a merge Git refuses
  * because an untracked file collides, `NotFastForward` when the source is not
@@ -197,7 +198,7 @@ export async function fastForwardCheckout(
   cwd: string,
   sourceRef: string,
   expectedBranch: string,
-): Promise<string> {
+): Promise<{ sha: string; moved: boolean }> {
   const on = await tryGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   if (on !== expectedBranch) {
     throw new NotFastForward(
@@ -230,8 +231,14 @@ export async function fastForwardCheckout(
         "this is a merge, not a fast-forward.",
     );
   }
+  const before = await git(cwd, ["rev-parse", "HEAD"]);
   try {
-    await git(cwd, ["merge", "--ff-only", source]);
+    // `LC_ALL=C` so the stderr pattern below is the one Git prints; a
+    // localized message would otherwise read as a 500, not `dirty_worktree`.
+    await run("git", ["merge", "--ff-only", source], {
+      cwd,
+      env: { ...process.env, LC_ALL: "C" },
+    });
   } catch (err) {
     const stderr = (err as { stderr?: unknown }).stderr;
     const text = typeof stderr === "string" ? stderr : "";
@@ -247,7 +254,8 @@ export async function fastForwardCheckout(
     }
     throw err;
   }
-  return git(cwd, ["rev-parse", "HEAD"]);
+  const sha = await git(cwd, ["rev-parse", "HEAD"]);
+  return { sha, moved: sha !== before };
 }
 
 /** `git merge-base --is-ancestor`: exit 1 is false, anything else is a real

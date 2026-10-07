@@ -2865,7 +2865,8 @@ Decisions: R37, R45.
 **Scoped 2026-10-07 (#182 pickup).** (1a) `POST /rooms/:id/agents/:agentId/fast-forward`
 with `{from}`, `200` target `ParticipantDto`, event
 `_client_participant_fast_forwarded {from, branch, sha}`, plus read-only
-`GET .../fast-forward?from=…` for the preview. (2c) only tracked changes in the target
+`GET .../fast-forward?from=…` for the preview. A move to the commit the target
+already has succeeds and writes no event. (2c) only tracked changes in the target
 checkout refuse (`dirty_worktree`); untracked files do not. (3b)
 `@target /ff --from @source` and the target's `ctrl+o` entry open the preview in M4-6's
 side pane; Enter confirms. (4a) a bar under the composer shows the open view's

@@ -800,7 +800,7 @@ with ACP names.
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
 | `_client_participant_changed` | `name?`, `role?`, `mode?` | A rename, or a new role or mode. Only the changed fields are present. `role: null` means the role was cleared. |
-| `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. |
+| `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. A no-op move writes none. |
 | `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
 
 Build the roster from these three events. Then a replay shows the roster as it was at
@@ -1264,13 +1264,16 @@ an ancestor of the source's branch, and its checkout must have no tracked change
 (decided 2c). The move runs `git merge --ff-only <source branch>` inside the target's
 checkout, so the branch, index and files move together. The source's branch and checkout
 are not touched. Untracked files alone do not refuse; a collision with one is Git's own
-refusal.
+refusal. While the move runs, the target is `busy`: a message sent to it then queues, and
+its turn starts after `_client_participant_fast_forwarded`. A move to the commit the
+target already has is a successful no-op and writes no event.
 
 **Request:** `{ "from": "<participantId>" }`.
 
 **Reply `200`:** the target participant, in the shape `GET /rooms/:id` gives it, with the
 same `branch` name as before. The room's stream also gets
-`_client_participant_fast_forwarded` with `from`, `branch` and `sha`.
+`_client_participant_fast_forwarded` with `from`, `branch` and `sha` when the move
+changed the commit.
 
 **Refusals:** `404` `room_not_found` or `participant_not_found`; `400` `invalid_request`
 for a missing or blank `from`, or when it names the target itself; `409` `room_dismissed`;

@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
@@ -1201,7 +1201,10 @@ test("a fast-forward moves the target's branch and checkout to the source commit
   await room.fastForward(alice.id, bob.id);
 
   assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), source);
-  assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), source);
+  assert.equal(
+    await git(alice.worktree, "rev-parse", alice.branch as string),
+    source,
+  );
   assert.ok(existsSync(join(alice.worktree, "bob.txt")));
   assert.equal(await git(bob.worktree, "rev-parse", "HEAD"), source);
   assert.deepEqual(events, [
@@ -1212,6 +1215,24 @@ test("a fast-forward moves the target's branch and checkout to the source commit
       sha: source,
     },
   ]);
+});
+
+test("a fast-forward to the commit the target already has is a silent no-op", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice, bus } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  const events: unknown[] = [];
+  bus.addListener(({ update }) => {
+    if (update.sessionUpdate === "_client_participant_fast_forwarded") {
+      events.push(update);
+    }
+  });
+  const before = await git(alice.worktree, "rev-parse", "HEAD");
+
+  await room.fastForward(alice.id, bob.id);
+
+  assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), before);
+  assert.deepEqual(events, []);
 });
 
 test("a fast-forward refuses a busy target, and changes nothing", async (t) => {
@@ -1282,4 +1303,44 @@ test("a fast-forward refuses a target checkout that is not on its branch", async
       err instanceof RoomRefusal && err.code === "not_fast_forward",
   );
   assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), before);
+});
+
+test("a message during a fast-forward does not start a turn on the moving checkout", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice, bus } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  await commitIn(bob, "bob.txt");
+  const order: string[] = [];
+  bus.addListener(({ agent, update }) => {
+    if (agent !== alice.id) return;
+    if (update.sessionUpdate === "_client_user_message") order.push("turn");
+    if (update.sessionUpdate === "_client_participant_fast_forwarded") {
+      order.push("moved");
+    }
+  });
+  const moving = room.fastForward(alice.id, bob.id);
+  const turn = alice.send("hello");
+  await moving;
+  await turn;
+  assert.deepEqual(order, ["moved", "turn"]);
+});
+
+test("a fast-forward refuses an untracked file the move would overwrite, and keeps it", async (t) => {
+  const repo = await gitRepo(t);
+  const { room, alice } = await roomWithAlice(t, repo);
+  const bob = await room.add(mock("bob", { base: alice.branch }));
+  await commitIn(bob, "bob.txt");
+  await writeFile(join(alice.worktree, "bob.txt"), "alice's own\n");
+  const before = await git(alice.worktree, "rev-parse", "HEAD");
+
+  await assert.rejects(
+    room.fastForward(alice.id, bob.id),
+    (err: unknown) =>
+      err instanceof RoomRefusal && err.code === "dirty_worktree",
+  );
+  assert.equal(await git(alice.worktree, "rev-parse", "HEAD"), before);
+  assert.equal(
+    await readFile(join(alice.worktree, "bob.txt"), "utf8"),
+    "alice's own\n",
+  );
 });

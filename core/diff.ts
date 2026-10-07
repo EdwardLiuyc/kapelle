@@ -229,8 +229,9 @@ export async function rangeDiff(
     ...DIFF_FLAGS,
     "--src-prefix=a/",
     "--dst-prefix=b/",
-    fromRef,
-    toRef,
+    // Three dots: from where the two meet, so a target commit the source
+    // lacks is not shown as removed.
+    `${fromRef}...${toRef}`,
     "--",
   ]);
   return capDiff(text, cap);
