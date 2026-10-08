@@ -499,15 +499,21 @@ test("a fast-forward becomes a timeline entry for a second client", () => {
 
 // --- after a restart (M6-7a, #151) ------------------------------------------
 
-/** What `GET /rooms/:id` answers after a restart, as far as `applyStatus`
- *  reads it: each participant's status. */
-const reply = (statuses: Record<string, string>) =>
+/** What `GET /rooms/:id` answers, as far as `applyStatus` reads it: each
+ *  participant's status, and `seq`, the log's size when the daemon
+ *  answered. */
+const reply = (statuses: Record<string, string>, seq: number) =>
   ({
+    seq,
     participants: Object.entries(statuses).map(([id, status]) => ({
       id,
       status,
     })),
   }) as unknown as RoomDto;
+
+/** The `seq` of `lines[i]`. */
+const seqAt = (lines: RoomEventLine[], i: number) =>
+  (lines[i] as RoomEventLine).seq;
 
 test("after a crash: GET's killed and paused hold, and the turn the crash cut reads cut, in either order", async (t) => {
   const { lines, alice, carol } = await recorded(t);
@@ -518,7 +524,10 @@ test("after a crash: GET's killed and paused hold, and the turn the crash cut re
       l.update.sessionUpdate === "_client_turn_ended",
   );
   const log = lines.slice(0, end);
-  const got = reply({ [alice]: "paused", [carol]: "killed" });
+  const got = reply(
+    { [alice]: "paused", [carol]: "killed" },
+    seqAt(log, log.length - 1),
+  );
 
   const after = replay(log);
   applyStatus(after, got);
@@ -554,7 +563,7 @@ test("after a shutdown: a turn the log ended is ended, whatever GET came first",
   const state = newRoomState();
   replay(log.slice(0, end), state);
   // GET answered while carol's turn was still open in the replay.
-  applyStatus(state, reply({ [carol]: "paused" }));
+  applyStatus(state, reply({ [carol]: "paused" }, seqAt(log, end)));
   replay(log.slice(end), state);
   const c = who(state, carol);
   assert.equal(c.status, "paused");
@@ -619,7 +628,8 @@ test("a revive is a timeline entry, clears GET's status and leaves the participa
   // After a restart, GET said killed before the revive's lines arrived.
   const state = newRoomState();
   replay(lines.slice(0, revived - 2), state);
-  applyStatus(state, reply({ [dora]: "killed" }));
+  // The daemon answered before the message that revived her.
+  applyStatus(state, reply({ [dora]: "killed" }, seqAt(lines, revived - 3)));
   assert.equal(who(state, dora).status, "killed");
   replay(lines.slice(revived - 2, revived + 1), state);
   assert.equal(who(state, dora).reported, undefined, "the revive clears it");
@@ -631,6 +641,21 @@ test("a revive is a timeline entry, clears GET's status and leaves the participa
   replay(lines.slice(revived + 1, end + 1), state);
   assert.equal(who(state, dora).status, "idle");
   assert.equal(who(state, dora).turns.at(-1)?.state, "ended");
+});
+
+test("a GET reply that arrived after the revive does not re-mark it", async (t) => {
+  const { lines, dora } = await recordRevive(t);
+  const revived = lines.findIndex(
+    (l) => l.update.sessionUpdate === "_client_participant_revived",
+  );
+  assert.ok(revived > 0, "the recording has a revive");
+
+  const state = replay(lines.slice(0, revived + 1));
+  // The room was read before the revive, and the reply lands after its line.
+  applyStatus(state, reply({ [dora]: "killed" }, seqAt(lines, revived - 3)));
+  assert.equal(who(state, dora).reported, undefined);
+  assert.equal(who(state, dora).status, "busy", "the revived turn is live");
+  assert.equal(who(state, dora).turns.at(-1)?.state, "open");
 });
 
 test("after a shutdown: the harness's exit on the log keeps GET's paused", async (t) => {
@@ -648,7 +673,39 @@ test("after a shutdown: the harness's exit on the log keeps GET's paused", async
     update: { sessionUpdate: "_client_harness_exited", pid: 1 },
   };
   const state = newRoomState();
-  applyStatus(state, reply({ [carol]: "paused" }));
+  applyStatus(state, reply({ [carol]: "paused" }, exited.seq));
   replay([...lines.slice(0, end + 1), exited], state);
   assert.equal(who(state, carol).status, "paused");
+});
+
+test("a second restart: GET's paused holds over a revive from the first, in either order", async (t) => {
+  const { lines, dora } = await recordRevive(t);
+  const revived = lines.findIndex(
+    (l) => l.update.sessionUpdate === "_client_participant_revived",
+  );
+  const end = lines.findIndex(
+    (l, i) => i > revived && l.update.sessionUpdate === "_client_turn_ended",
+  );
+  // The revived turn ended, then a second shutdown stopped her harness.
+  const ended = lines[end] as RoomEventLine;
+  const log = [
+    ...lines.slice(0, end + 1),
+    {
+      ...ended,
+      seq: ended.seq + 1,
+      update: { sessionUpdate: "_client_harness_exited", pid: 1 },
+    } satisfies RoomEventLine,
+  ];
+  const got = reply({ [dora]: "paused" }, ended.seq + 1);
+
+  const after = replay(log);
+  applyStatus(after, got);
+  const before = newRoomState();
+  applyStatus(before, got);
+  replay(log, before);
+
+  for (const state of [after, before]) {
+    assert.equal(who(state, dora).status, "paused");
+    assert.equal(who(state, dora).turns.at(-1)?.state, "ended");
+  }
 });

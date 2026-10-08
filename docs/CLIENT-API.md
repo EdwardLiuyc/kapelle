@@ -1032,6 +1032,7 @@ The reply comes when every harness is ready. This can take some seconds.
   "createdAt": "2026-09-22T10:15:00.000Z",
   "updatedAt": "2026-09-22T10:15:00.000Z",
   "status": "active",
+  "seq": 3,
   "participants": [
     {
       "id": "p-0k3x9a2b",
@@ -1061,6 +1062,9 @@ its files), `paused` (a shutdown stopped it cleanly) or `dismissed`. A message t
 `resumed` is missing until a participant is revived. Then it is `fresh`: the participant
 has a new session and does not remember the turns before. A revive also changes its
 `sessionId`.
+
+`seq` is the size of the room's log when the daemon answered. The reply counts every line
+up to that `seq`, and a line above it is newer than the reply.
 
 The participant `id` is opaque. `title`, `role`, `branch` and `baseSha` are missing when
 there is no value. `branch` and `baseSha` are missing when `cwd` cannot carry a git
@@ -1367,7 +1371,10 @@ reads every record back:
   `exited`.
 - The start adds no line to the log. A turn the crash cut has a `_client_user_message`
   and no `_client_turn_ended`, so read the status from `GET /rooms/:id`, not from the
-  stream. `client/room.ts` has `applyStatus` for this.
+  stream. The reply and the replay can arrive in either order: compare the reply's `seq`
+  with each line's. A `paused` or `killed` holds until a `_client_participant_revived`
+  above that `seq`. A revive at or below it is from before the stop. `client/room.ts`
+  has `applyStatus` for this.
 - The stream replays the whole history, and new lines follow with the next `seq`.
 - Queued messages are lost, as are open permission questions.
 - The next message to a `paused`, `killed` or `exited` participant revives it: a new

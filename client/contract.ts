@@ -332,6 +332,10 @@ export interface RoomDto {
   /** ISO 8601. `updatedAt` moves on a message, a dismiss, or a roster change. */
   updatedAt: string;
   status: RoomStatus;
+  /** The room log's size when the daemon answered: the reply counts every
+   *  line up to this `seq` (M6-7a). A line above it is newer than the reply.
+   *  `client/room.ts` `applyStatus` reads it. */
+  seq: number;
   participants: ParticipantDto[];
 }
 

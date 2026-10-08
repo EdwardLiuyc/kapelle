@@ -7560,3 +7560,64 @@ test("a dismissed room comes back dismissed after a restart, and a message is re
   assert.equal(twice.status, 409);
   assert.equal(twice.body.error.code, "room_dismissed");
 });
+
+test("a room opened while the daemon shuts down does not come back", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const cwd = await realpath(await added(first, await gitRepo(t)));
+  // A deaf turn holds the shutdown open for its 2 s grace, so the open below
+  // finishes while `stopping` is set.
+  const keeper = await api<RoomReply>(first, "POST", "/rooms", {
+    ...withAgent(cwd, `node ${MOCK_AGENT} --scenario deaf`),
+  });
+  assert.equal(keeper.status, 201, keeper.body.error?.message);
+  const sent = await api(first, "POST", `/rooms/${keeper.body.id}/messages`, {
+    text: "busy",
+  });
+  assert.equal(sent.status, 202, sent.body.error?.message);
+
+  // A harness that answers ACP after a delay, so the request is inside
+  // `openRoom` when the signal lands.
+  const slowInit = join(cwd, "slow-init.mjs");
+  await writeFile(
+    slowInit,
+    `await new Promise((ok) => setTimeout(ok, 500));\n` +
+      `await import(${JSON.stringify(MOCK_AGENT)});\n`,
+  );
+  const opening = fetch(`${first.url}/rooms`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${first.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(withAgent(cwd, `node ${slowInit}`)),
+  });
+  // Its log directory appears before the harness starts: past the
+  // `stopping` check, inside `openRoom`.
+  const roomsDir = join(stateDirFor(cwd), "rooms");
+  for (const until = Date.now() + 5_000; ; ) {
+    if (readdirSync(roomsDir).length >= 2) break;
+    if (Date.now() > until) {
+      throw new Error("the opening request never reached openRoom");
+    }
+    await new Promise((ok) => setTimeout(ok, 10));
+  }
+  process.kill(first.pid, "SIGTERM");
+
+  const refused = await opening;
+  assert.equal(refused.status, 503);
+  assert.equal(
+    ((await refused.json()) as RoomReply).error.code,
+    "shutting_down",
+  );
+  assert.equal((await first.done).code, 0);
+
+  const second = await boot(t, runtime, [], state);
+  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(
+    list.body.map((r) => r.id).sort(),
+    [keeper.body.id],
+    "the room the client never got must not come back",
+  );
+});

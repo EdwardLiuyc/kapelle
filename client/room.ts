@@ -24,10 +24,12 @@
  * **What a restart leaves is not on the stream** (M6-7a). The boot sweep adds
  * no line, so a participant a shutdown paused, or a crash killed, reads
  * `paused` or `killed` only in `GET /rooms/:id`. `applyStatus` takes that
- * reply. The reply and the replay can arrive in either order, so the status
- * it gives holds until a `_client_participant_revived` line, and a turn it
- * cuts is cut only until the log shows its end. The room's own status
- * (`dismissed`, `paused`) is read the same way (S11).
+ * reply. The reply and the replay can arrive in either order, so the reply's
+ * `seq` says which lines it already counts: its status holds until a
+ * `_client_participant_revived` line with a higher `seq`, and a revive at or
+ * below it is old history. A turn it cuts is cut only until the log shows
+ * its end. The room's own status (`dismissed`, `paused`) is read the same
+ * way (S11).
  */
 
 import type {
@@ -121,8 +123,11 @@ interface ParticipantState {
   /** `killed`: stopped during a turn (R46). `paused`: a shutdown stopped it
    *  cleanly. */
   status: "idle" | "busy" | "exited" | "paused" | "killed";
-  /** What `GET /rooms/:id` said the stream cannot: it holds until a revive. */
-  reported?: "paused" | "killed";
+  /** What `GET /rooms/:id` said the stream cannot, and the reply's `seq`:
+   *  it holds until a revive above that `seq`. */
+  reported?: Report;
+  /** The `seq` of its last revive: a reply below it is older. */
+  revivedAt?: number;
   /** Off the roster. Kept, so its old lines still have a name. */
   removed: boolean;
   turns: Turn[];
@@ -136,6 +141,13 @@ interface ParticipantState {
   stalled: boolean;
 }
 
+/** A `paused` or `killed` from `GET /rooms/:id`, and the log's size when
+ *  the daemon answered. */
+interface Report {
+  status: "paused" | "killed";
+  seq: number;
+}
+
 export interface RoomState {
   /** The last line applied; 0 before the first. */
   seq: number;
@@ -146,7 +158,7 @@ export interface RoomState {
   questions: Map<string, Question>;
   /** What `applyStatus` read for a participant the replay has not added
    *  yet: GET can answer first. */
-  reported: Map<string, "paused" | "killed">;
+  reported: Map<string, Report>;
 }
 
 export const newRoomState = (): RoomState => ({
@@ -198,7 +210,7 @@ export function applyLine(
         ...(u.role && { role: u.role }),
         harness: u.harness,
         mode: u.mode,
-        status: reported ?? "idle",
+        status: reported?.status ?? "idle",
         ...(reported && { reported }),
         removed: false,
         turns: [],
@@ -230,12 +242,12 @@ export function applyLine(
       const cut = liveTurn();
       if (cut) {
         cut.state = "cut";
-        delete cut.tentative;
+        cut.tentative = undefined;
       }
       if (p) {
         // A turn that starts while messages wait is the oldest of them.
         p.queue.shift();
-        p.status = p.reported ?? "busy";
+        p.status = p.reported?.status ?? "busy";
         p.stalled = false;
         p.turns.push({
           ...(u.turn !== undefined && { number: u.turn }),
@@ -276,7 +288,7 @@ export function applyLine(
       const turn = liveTurn();
       if (turn) {
         turn.state = "ended";
-        delete turn.tentative;
+        turn.tentative = undefined;
         if (u.stopReason !== undefined) turn.stopReason = u.stopReason;
         if (u.error !== undefined) turn.error = u.error;
       }
@@ -299,13 +311,15 @@ export function applyLine(
       if (p && !p.reported) p.status = openTurn() ? "killed" : "exited";
       return add({ ...at, type: "exited" });
     case "_client_participant_revived": {
-      if (p) {
-        delete p.reported;
+      if (p) p.revivedAt = seq;
+      // A revive the reply already counted came before the stop it reports.
+      if (p && !(p.reported && seq <= p.reported.seq)) {
+        p.reported = undefined;
         // It follows the message that revived it, whose turn is live.
         const turn = liveTurn();
         if (turn) {
           turn.state = "open";
-          delete turn.tentative;
+          turn.tentative = undefined;
         }
         p.status = turn ? "busy" : "idle";
       }
@@ -365,13 +379,16 @@ export function applyLine(
 export function applyStatus(state: RoomState, room: RoomDto) {
   for (const { id, status } of room.participants) {
     if (status !== "paused" && status !== "killed") continue;
+    const report = { status, seq: room.seq };
     const p = state.participants.get(id);
     if (!p) {
       // The replay has not added it yet; its added line takes this.
-      state.reported.set(id, status);
+      state.reported.set(id, report);
       continue;
     }
-    p.reported = status;
+    // A reply made before the last revive: the stream is newer.
+    if (p.revivedAt !== undefined && p.revivedAt > room.seq) continue;
+    p.reported = report;
     p.status = status;
     p.stalled = false;
     const last = p.turns.at(-1);

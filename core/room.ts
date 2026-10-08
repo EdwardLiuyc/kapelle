@@ -612,8 +612,13 @@ const PARTICIPANT_STATUSES: readonly ParticipantStatus[] = [
  *  is ours, so the check is for a crash or a hand edit, not an attack: it
  *  is in the operator's own state directory, next to what it names. */
 export function readRoomRecord(path: string): RoomRecord {
-  const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
   const bad = (why: string) => new Error(`${path}: ${why}`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    throw bad(err instanceof Error ? err.message : String(err));
+  }
   if (typeof raw !== "object" || raw === null) throw bad("not an object");
   const r = raw as Record<string, unknown>;
   for (const key of ["id", "cwd", "createdAt", "updatedAt"]) {
@@ -663,15 +668,18 @@ export function readRoomRecord(path: string): RoomRecord {
  */
 export function crashed(record: RoomRecord): RoomRecord {
   if (record.status !== "active") return record;
+  const crashedStatus = (p: ParticipantRecord): ParticipantStatus => {
+    if (p.status === "busy") return "killed";
+    if (p.status === "idle") return "paused";
+    return p.status;
+  };
   return {
     ...record,
     status: "paused",
     participants: record.participants.map((p) =>
-      p.status === "busy"
-        ? { ...p, status: "killed" }
-        : p.status === "idle"
-          ? { ...p, status: "paused" }
-          : p,
+      p.status === "busy" || p.status === "idle"
+        ? { ...p, status: crashedStatus(p) }
+        : p,
     ),
   };
 }
@@ -831,8 +839,11 @@ async function buildRoom(
       ...(p.resumed && { resumed: p.resumed }),
     };
   };
-  const status = (): RoomStatus =>
-    dismissing ? "dismissed" : paused ? "paused" : "active";
+  const status = (): RoomStatus => {
+    if (dismissing) return "dismissed";
+    if (paused) return "paused";
+    return "active";
+  };
   const save = () => {
     if (!saving) return;
     try {
@@ -1523,7 +1534,9 @@ function createParticipant({
       if (!agent) throw new Error("the agent's harness has exited");
       return agent.prompt(text);
     };
-    const ready = !agent ? revive() : unsent() ? syncMode() : undefined;
+    let ready: Promise<void> | undefined;
+    if (!agent) ready = revive();
+    else if (unsent()) ready = syncMode();
     // `ready` is undefined only when the harness is up, so `prompt` cannot
     // throw here.
     turn = (ready ? ready.then(prompt) : Promise.resolve(prompt()))

@@ -1003,11 +1003,13 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   } catch (err) {
     throw roomRefused(err) ?? refusal(500, "room_open_failed", messageOf(err));
   }
-  // A shutdown that began while the harness was starting has already
-  // paused every room it knew of. This one was never handed out, so it is
-  // dismissed: it must not outlive the daemon, nor come back after it.
+  // A shutdown that began while this room was starting has already paused
+  // every room it knew of; this one was never handed out. Dismiss it, then
+  // drop its record: a dismiss begun after a pause keeps the room on disk
+  // `paused`, and a room the client never got must not come back either way.
   if (stopping) {
     await room.dismiss();
+    rmSync(roomFile(setup.root, id), { force: true });
     throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
   rooms.set(id, { room, state: room.meta });

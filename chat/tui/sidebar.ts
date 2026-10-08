@@ -92,14 +92,10 @@ function sidebarParts({
         const star = p.role === "orchestrator" ? " ★" : "";
         // After a restart (M6-7a): `killed` stopped during a turn, so its
         // files and its memory may not match.
-        const busy =
-          p.status === "busy"
-            ? " …"
-            : p.status === "paused"
-              ? dim(" paused")
-              : p.status === "killed"
-                ? yellow(" killed")
-                : "";
+        let busy = "";
+        if (p.status === "busy") busy = " …";
+        else if (p.status === "paused") busy = dim(" paused");
+        else if (p.status === "killed") busy = yellow(" killed");
         const unread = p.unread ? ` ${p.unread}` : "";
         lines.push(
           fit(

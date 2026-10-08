@@ -301,6 +301,7 @@ test("the where bar names the open view's checkout and branch (4a)", () => {
     createdAt: "now",
     updatedAt: "now",
     status: "active",
+    seq: 0,
     participants: [
       participant("p-ann", "/repo/wt/ann", "kapelle/r1/p-ann"),
       participant("p-bob", "/repo/shared"),

@@ -47,6 +47,7 @@ import {
   roomAgent,
   roomAgents,
   roomFile,
+  writeRoomRecord,
 } from "../room.ts";
 import { stateDirFor } from "../runtime.ts";
 import { changedPaths, openWorktrees } from "../worktree.ts";
@@ -1744,4 +1745,28 @@ test("a revived harness gets a stderr log of its own", async (t) => {
     await readdir(join(stateDirFor(repo), "rooms", room.meta.id))
   ).filter((n) => n.startsWith(`${p.id}.`) && n.endsWith(".stderr.log"));
   assert.equal(logs.length, 2, logs.join(", "));
+});
+
+test("a revive whose harness cannot start ends the turn with the error, and stays paused", async (t) => {
+  const { repo, room, file } = await pausable(t, "remember");
+  await room.pause();
+  const record = readRoomRecord(file);
+  const saved = record.participants[0] as RoomRecord["participants"][number];
+  writeRoomRecord(file, {
+    ...record,
+    participants: [{ ...saved, cmd: "node -e process.exit(1)" }],
+  });
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  assert.equal(back.p.status(), "paused");
+  await back.p.send("hi");
+
+  assert.equal(back.p.status(), "paused", "a failed revive leaves it stopped");
+  assert.equal(back.p.resumed, undefined);
+  assert.equal(back.room.status(), "paused", "no revive means no active");
+  assert.equal(back.of("_client_participant_revived").length, 0);
+  const [ended] = back.of("_client_turn_ended");
+  const error = (ended?.update as { error?: unknown } | undefined)?.error;
+  assert.equal(typeof error, "string");
+  assert.ok(error, "the turn ends with the harness's error");
 });

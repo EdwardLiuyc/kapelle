@@ -231,6 +231,7 @@ export function toRoomDto(state: RoomState, room: Room): RoomDto {
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
     status: room.status(),
+    seq: room.eventLog?.size ?? 0,
     participants: room.participants.map(toParticipantDto),
   };
   if (state.title !== undefined) dto.title = state.title;

@@ -1534,6 +1534,26 @@ test("a room checkout with no record is still an orphan", async (t) => {
   assert.ok(notices.some((n) => n.includes("removed orphan worktree")));
 });
 
+test("a room record that cannot be read is named, and its checkouts are kept", async (t) => {
+  const root = await gitRepo(t);
+  const { file, worktrees } = await writeRoom(root, "active", ["idle"]);
+  await writeFile(file, "{ not json\n");
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.ok(
+    notices.some((n) => n.includes(file)),
+    `no notice names ${file}: ${notices.join("\n")}`,
+  );
+  for (const worktree of worktrees) {
+    assert.equal(
+      existsSync(worktree),
+      true,
+      "a room with a record is not orphaned",
+    );
+  }
+});
+
 test("a participant a shutdown killed gets the index.lock notice once", async (t) => {
   const root = await gitRepo(t);
   const { file, worktrees } = await writeRoom(root, "paused", ["killed"]);
