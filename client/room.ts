@@ -144,6 +144,9 @@ export interface RoomState {
   timeline: Entry[];
   /** The questions still open, by id. */
   questions: Map<string, Question>;
+  /** What `applyStatus` read for a participant the replay has not added
+   *  yet: GET can answer first. */
+  reported: Map<string, "paused" | "killed">;
 }
 
 export const newRoomState = (): RoomState => ({
@@ -151,6 +154,7 @@ export const newRoomState = (): RoomState => ({
   participants: new Map(),
   timeline: [],
   questions: new Map(),
+  reported: new Map(),
 });
 
 /**
@@ -185,14 +189,17 @@ export function applyLine(
   };
 
   switch (u.sessionUpdate) {
-    case "_client_participant_added":
+    case "_client_participant_added": {
+      const reported = state.reported.get(participantId);
+      state.reported.delete(participantId);
       state.participants.set(participantId, {
         id: participantId,
         name: u.name,
         ...(u.role && { role: u.role }),
         harness: u.harness,
         mode: u.mode,
-        status: "idle",
+        status: reported ?? "idle",
+        ...(reported && { reported }),
         removed: false,
         turns: [],
         queue: [],
@@ -200,6 +207,7 @@ export function applyLine(
         stalled: false,
       });
       return undefined;
+    }
     case "_client_participant_changed":
       if (!p) return undefined;
       if (u.name !== undefined) p.name = u.name;
@@ -356,8 +364,13 @@ export function applyLine(
  */
 export function applyStatus(state: RoomState, room: RoomDto) {
   for (const { id, status } of room.participants) {
+    if (status !== "paused" && status !== "killed") continue;
     const p = state.participants.get(id);
-    if (!p || (status !== "paused" && status !== "killed")) continue;
+    if (!p) {
+      // The replay has not added it yet; its added line takes this.
+      state.reported.set(id, status);
+      continue;
+    }
     p.reported = status;
     p.status = status;
     p.stalled = false;

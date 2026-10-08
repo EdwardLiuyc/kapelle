@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
@@ -1696,4 +1696,52 @@ test("a room that fails to open leaves no record", async (t) => {
     }),
   );
   assert.equal(existsSync(roomFile(repo, roomId)), false);
+});
+
+test("a restored participant goes on counting its turns (S12)", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await p.send("one");
+  await room.pause();
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  const [line] = back.of("_client_user_message");
+  assert.equal(
+    (line?.update as { turn?: number } | undefined)?.turn,
+    2,
+    "turn 1 is already on the log",
+  );
+});
+
+test("an add after a pause is refused and starts no harness", async (t) => {
+  const { room, of } = await pausable(t, "remember");
+  await room.pause();
+  await assert.rejects(
+    room.add(roomAgent({ cmd: `node ${MOCK_AGENT}`, name: "bob" })),
+    (err) => err instanceof RoomRefusal && err.code === "room_dismissed",
+  );
+  assert.equal(of("_client_harness_spawned").length, 1);
+});
+
+test("an add makes a restored paused room active", async (t) => {
+  const { repo, room, file } = await pausable(t, "remember");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  assert.equal(back.room.status(), "paused");
+  await back.room.add(roomAgent({ cmd: `node ${MOCK_AGENT}`, name: "bob" }));
+  assert.equal(back.room.status(), "active");
+  // The added line saves the room a moment later.
+  await new Promise((ok) => setImmediate(ok));
+  assert.equal(readRoomRecord(file).status, "active");
+});
+
+test("a revived harness gets a stderr log of its own", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  const logs = (
+    await readdir(join(stateDirFor(repo), "rooms", room.meta.id))
+  ).filter((n) => n.startsWith(`${p.id}.`) && n.endsWith(".stderr.log"));
+  assert.equal(logs.length, 2, logs.join(", "));
 });

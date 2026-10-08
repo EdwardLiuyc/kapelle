@@ -294,6 +294,8 @@ interface ParticipantRecord {
   branch?: string;
   baseSha?: string;
   sessionId: string;
+  /** Its turns so far, so a restored one goes on counting (S12's `turn`). */
+  turns?: number;
   status: ParticipantStatus;
   /** Its own notices: the worktree's and the sweep's, not the mode lines,
    *  which are worked out again. */
@@ -569,6 +571,7 @@ interface Member {
   stop: () => Promise<void>;
   pause: (graceMs: number) => Promise<void>;
   launch: () => Promise<void>;
+  turns: () => number;
   setMode: (mode: ClientMode) => void;
   hold: <T>(work: Promise<T>) => Promise<T>;
   onNotice: Notify;
@@ -645,6 +648,7 @@ export function readRoomRecord(path: string): RoomRecord {
         allowReadOutsideRoot: p.settings?.allowReadOutsideRoot === true,
       },
       notices: Array.isArray(p.notices) ? p.notices : [],
+      ...(Number.isInteger(p.turns) && { turns: p.turns }),
     })),
   };
 }
@@ -821,6 +825,7 @@ async function buildRoom(
       ...(p.branch && { branch: p.branch }),
       ...(p.baseSha && { baseSha: p.baseSha }),
       sessionId: p.sessionId,
+      turns: m.turns(),
       status: p.status(),
       notices: [...m.own],
       ...(p.resumed && { resumed: p.resumed }),
@@ -1345,7 +1350,7 @@ function createParticipant({
   // turn's cancel. A turn that ends for any reason aborts it, which denies
   // what it left open in the queue as `cancel`. Between turns it is already
   // aborted, so a request there is denied, not queued.
-  let turns = 0;
+  let turns = saved?.turns ?? 0;
   let turnAbort = new AbortController();
   turnAbort.abort();
   // Read live, so a mode change applies to the next request.
@@ -1682,5 +1687,13 @@ function createParticipant({
       return true;
     },
   };
-  return { participant, stop, pause, launch, setMode, hold };
+  return {
+    participant,
+    stop,
+    pause,
+    launch,
+    setMode,
+    hold,
+    turns: () => turns,
+  };
 }

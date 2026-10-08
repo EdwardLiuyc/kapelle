@@ -27,11 +27,11 @@
  * 4. **Rooms left live** (M6-7a, R46). A `room.json` that still reads
  *    `active` belongs to a daemon that died. It is rewritten as `crashed`
  *    has it: the room and each idle participant `paused`, each busy one
- *    `killed`. A killed participant's checkout gets a notice when git left
- *    its `index.lock` behind; the file is kept, since a git started by the
- *    harness's shell may still run. Nothing is added to the room's log, as
- *    for runs (M5-5). Every checkout under a room with a record is kept: it
- *    is not an orphan.
+ *    `killed`. Every killed participant's checkout, a crash's or a
+ *    shutdown's, gets one notice when git left its `index.lock` behind; the
+ *    file is kept, since a git started by the harness's shell may still
+ *    run. Nothing is added to the room's log, as for runs (M5-5). Every
+ *    checkout under a room with a record is kept: it is not an orphan.
  *
  * **Whole-run reaping is ordered worktree-first.** If a checkout cannot be
  * removed, the record is kept too and the run is retried on the next boot —
@@ -653,24 +653,26 @@ async function sweepRooms(pass: RepoPass): Promise<Set<string>> {
       continue;
     }
     const fixed = crashed(record);
-    if (fixed === record) continue;
-    for (const [i, p] of fixed.participants.entries()) {
-      if (p.status !== "killed" || record.participants[i]?.status !== "busy") {
-        continue;
-      }
+    let changed = fixed !== record;
+    // A crash or a shutdown's grace can kill a turn. Once per lock: the
+    // notice stays in the record, and the next boot finds the same file.
+    for (const p of fixed.participants) {
+      if (p.status !== "killed") continue;
       const lock = await indexLock(p.worktree);
-      if (lock) {
+      if (lock && !p.notices.some((n) => n.text.includes(lock))) {
+        changed = true;
         p.notices = [
           ...p.notices,
           {
             text:
-              `git left ${lock} when the daemon died during this turn; git ` +
+              `git left ${lock} when this participant's turn was cut; git ` +
               "refuses to commit in this checkout while it is there. Check " +
               "that no git process still runs in it, then delete the file.",
           },
         ];
       }
     }
+    if (!changed) continue;
     try {
       writeRoomRecord(file, fixed);
     } catch (err) {

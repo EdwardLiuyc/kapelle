@@ -1533,3 +1533,21 @@ test("a room checkout with no record is still an orphan", async (t) => {
   assert.equal(existsSync(path), false);
   assert.ok(notices.some((n) => n.includes("removed orphan worktree")));
 });
+
+test("a participant a shutdown killed gets the index.lock notice once", async (t) => {
+  const root = await gitRepo(t);
+  const { file, worktrees } = await writeRoom(root, "paused", ["killed"]);
+  const lock = join(
+    await git(worktrees[0] as string, "rev-parse", "--absolute-git-dir"),
+    "index.lock",
+  );
+  await writeFile(lock, "");
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  const [killed] = readRoomRecord(file).participants;
+  assert.equal(killed?.notices.length, 1, "one notice, after two boots");
+  assert.ok(killed?.notices[0]?.text.includes(lock));
+  assert.equal(existsSync(lock), true);
+});

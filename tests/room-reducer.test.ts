@@ -526,7 +526,6 @@ test("after a crash: GET's killed and paused hold, and the turn the crash cut re
   // The reply first: a screen can read the room before the replay is in.
   applyStatus(before, got);
   replay(log, before);
-  applyStatus(before, got);
 
   for (const state of [after, before]) {
     assert.equal(who(state, carol).status, "killed");
@@ -632,4 +631,24 @@ test("a revive is a timeline entry, clears GET's status and leaves the participa
   replay(lines.slice(revived + 1, end + 1), state);
   assert.equal(who(state, dora).status, "idle");
   assert.equal(who(state, dora).turns.at(-1)?.state, "ended");
+});
+
+test("after a shutdown: the harness's exit on the log keeps GET's paused", async (t) => {
+  const { lines, carol } = await recorded(t);
+  const end = lines.findIndex(
+    (l) =>
+      l.participantId === carol &&
+      l.update.sessionUpdate === "_client_turn_ended",
+  );
+  const ended = lines[end] as RoomEventLine;
+  // A pause stops the harness once its turn has ended: its exit comes next.
+  const exited: RoomEventLine = {
+    ...ended,
+    seq: ended.seq + 1,
+    update: { sessionUpdate: "_client_harness_exited", pid: 1 },
+  };
+  const state = newRoomState();
+  applyStatus(state, reply({ [carol]: "paused" }));
+  replay([...lines.slice(0, end + 1), exited], state);
+  assert.equal(who(state, carol).status, "paused");
 });

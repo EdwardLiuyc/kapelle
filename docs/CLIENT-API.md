@@ -1376,9 +1376,10 @@ reads every record back:
   `active` again. Adding a participant also makes it `active`.
 - A dismissed room comes back dismissed. Its stream ends once it has replayed. It never
   revives.
-- A `killed` participant whose checkout has a git `index.lock` left by the crash gets a
-  notice naming the file. Git refuses to commit there until it is removed. The daemon
-  does not remove it.
+- A `killed` participant whose checkout has a git `index.lock` left by the cut turn gets
+  one notice naming the file, at the next boot. A crash and a shutdown's grace both cut a
+  turn. Git refuses to commit there until the file is removed. The daemon does not remove
+  it.
 
 ### Room record (planned)
 
