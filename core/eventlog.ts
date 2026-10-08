@@ -41,10 +41,14 @@
  * `{seq, at, roomId, participantId, update}`, one log and one `seq` for the
  * whole room. No `agent`: a harness name is not unique in a room, and a
  * display name changes on a rename, while the id never does.
+ *
+ * **A room's log is reopened after a restart** (M6-7a, #151):
+ * `reopenEventLog` scans the old file, cuts a partial last line, and goes on
+ * appending, with `seq` carried on from the last line.
  */
 
-import { createWriteStream } from "node:fs";
-import { type FileHandle, open } from "node:fs/promises";
+import { createWriteStream, existsSync } from "node:fs";
+import { type FileHandle, open, truncate } from "node:fs/promises";
 import { finished } from "node:stream/promises";
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
 import type { AgentEvent } from "../protocol/types.ts";
@@ -79,17 +83,26 @@ export interface EventLog {
   close(): Promise<void>;
 }
 
+/** The lines already on disk: where each starts, and the bytes they take. */
+interface Index {
+  starts: number[];
+  bytes: number;
+}
+
+/** A new log at `path`, or with `from`, one that appends after the lines
+ *  `from` indexed. */
 export function createEventLog(
   path: string,
   onError: (err: Error) => void,
+  from?: Index,
 ): EventLog {
-  const out = createWriteStream(path, { flags: "w" });
+  const out = createWriteStream(path, { flags: from ? "a" : "w" });
   /** `starts[seq - 1]` is where that line begins. */
-  const starts: number[] = [];
-  let appended = 0;
-  let appendedBytes = 0;
-  let committed = 0;
-  let committedBytes = 0;
+  const starts: number[] = from ? [...from.starts] : [];
+  let appended = starts.length;
+  let appendedBytes = from?.bytes ?? 0;
+  let committed = appended;
+  let committedBytes = appendedBytes;
   let accepting = true;
   const bells = new Set<Bell>();
   /** One per reader: wakes it from its park, so it sees `over` and ends. */
@@ -215,8 +228,8 @@ export function createEventLog(
  *
  * The same `EventLog` a live run hands out, so `daemon.ts` serves
  * `GET /runs/:id/events` for a run from before a restart through the one code
- * path. Read-only on purpose: `createEventLog` opens with `flags: "w"`, which
- * would truncate the very file this replays.
+ * path. Read-only on purpose: a run that is over gets no more lines.
+ * `reopenEventLog` is the one that appends.
  *
  * The one scan at open is what M2-6's amendment calls rebuilding the index —
  * line offsets and the line count, never the events. A trailing partial line,
@@ -224,17 +237,7 @@ export function createEventLog(
  * same "committed, not appended" rule the writer follows.
  */
 export async function openEventLog(path: string): Promise<EventLog> {
-  const starts: number[] = [];
-  let bytes = 0;
-  const index = await open(path, "r");
-  try {
-    await readLines(index, 0, (await index.stat()).size, undefined, (line) => {
-      starts.push(bytes);
-      bytes += Buffer.byteLength(line) + 1;
-    });
-  } finally {
-    await index.close();
-  }
+  const { starts, bytes } = await indexOf(path);
 
   return {
     // Nothing writes to a run that is over. Present because the interface is
@@ -274,6 +277,39 @@ export async function openEventLog(path: string): Promise<EventLog> {
 
     async close() {},
   };
+}
+
+/** Where each whole line of `path` starts. A partial last line is not
+ *  counted. */
+async function indexOf(path: string): Promise<Index> {
+  const starts: number[] = [];
+  let bytes = 0;
+  const index = await open(path, "r");
+  try {
+    await readLines(index, 0, (await index.stat()).size, undefined, (line) => {
+      starts.push(bytes);
+      bytes += Buffer.byteLength(line) + 1;
+    });
+  } finally {
+    await index.close();
+  }
+  return { starts, bytes };
+}
+
+/**
+ * A room's log after a restart (M6-7a): the lines on disk stay, and new ones
+ * are appended with the next `seq`. A partial last line, which a `kill -9`
+ * mid-write leaves, is cut first: an append after it would join the two into
+ * one bad line. A log that is not there starts empty.
+ */
+export async function reopenEventLog(
+  path: string,
+  onError: (err: Error) => void,
+): Promise<EventLog> {
+  if (!existsSync(path)) return createEventLog(path, onError);
+  const index = await indexOf(path);
+  await truncate(path, index.bytes);
+  return createEventLog(path, onError, index);
 }
 
 /** Sends each whole line in `[from, to)`; `to` always sits on a line end.

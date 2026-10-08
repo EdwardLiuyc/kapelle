@@ -202,6 +202,12 @@ function transcriptParts({
       case "exited":
         warn(`! ${name}'s harness exited`);
         return;
+      case "revived":
+        note(
+          `↻ ${name} is back with a fresh session; it does not remember ` +
+            "the earlier turns",
+        );
+        return;
       case "forward":
         note(`↪ ${name} moved to ${nameOf(state, e.from)}'s commit`);
         return;

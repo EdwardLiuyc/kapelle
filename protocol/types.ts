@@ -634,6 +634,16 @@ export interface ClientParticipantFastForwardedEvent extends Meta {
   sha: string;
 }
 
+/** A stopped participant has a new harness, in the same checkout (M6-7a).
+ *  `paused`, `killed` and `exited` revive the same way, on the next message.
+ *  `fresh`: a new session, so it does not remember earlier turns. It comes
+ *  after the `_client_user_message` that revived it, and before its answer. */
+export interface ClientParticipantRevivedEvent extends Meta {
+  sessionUpdate: "_client_participant_revived";
+  resumed: "fresh";
+  sessionId: string;
+}
+
 /** Everything `render.ts`'s switch must tolerate. */
 export type AgentEvent =
   | SessionUpdate
@@ -658,7 +668,8 @@ export type AgentEvent =
   | ClientParticipantAddedEvent
   | ClientParticipantChangedEvent
   | ClientParticipantRemovedEvent
-  | ClientParticipantFastForwardedEvent;
+  | ClientParticipantFastForwardedEvent
+  | ClientParticipantRevivedEvent;
 
 /** The `session/update` notification as it arrives. */
 export interface SessionNotification extends Meta {
@@ -956,7 +967,8 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_participant_added"
         | "_client_participant_changed"
         | "_client_participant_removed"
-        | "_client_participant_fast_forwarded" = u.sessionUpdate;
+        | "_client_participant_fast_forwarded"
+        | "_client_participant_revived" = u.sessionUpdate;
       void fallthrough;
       return false;
     }

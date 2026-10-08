@@ -2757,32 +2757,58 @@ still shows `busy`, because the daemon crashed; the sweep also rewrites the room
 sets it when the harness dies during a turn (one that dies while idle reads `exited`). The
 shutdown sets it when a cancel outlives the grace and the harness is killed.
 `killed` revives on the next message by the same path as `paused` and `exited`. **Order:**
-pick it up after M6-4, which changes the log line this story saves. **Open at
-pickup:** whether the sweep also reports a stale `.git/index.lock` in a `killed`
-participant's checkout.
-**Added 2026-09-27 (#146): R18's delete lands here.** M6-2 freed `DELETE /rooms/:id` and
-left it unrouted. This story owns the room's record and its retention, so it also builds
-delete: remove the room's worktrees, branches, record and log at once, refused with `409`
-naming the files while any checkout has uncommitted work. It lands after M6-6a, so it
-removes one checkout per participant. **Amended 2026-09-27 (#187 review):** delete finds
-the checkouts on disk, under `stateDirFor(root)/wt/<roomId>/`, as `managedWorktrees` in
-`core/sweep.ts` does, and not from the roster. A failed add whose harness wrote into its
-checkout keeps that checkout and its branch. No participant owns them, and only a room
-notice names them. A delete that walked the roster would answer `200` and leave that work
-on disk.
+pick it up after M6-4, which changes the log line this story saves. **Answered at pickup
+(2026-10-08):** the sweep reports a stale `.git/index.lock` in a `killed` participant's
+checkout as a notice on that participant, and keeps the file: a git the harness's shell
+started may still run.
+**Split 2026-10-08 (#151 pickup).** R18's delete and the room's retention moved to M6-7c
+(#235). The chat screen across a restart moved to M6-7d (#236). Both need this story
+first. **Decided the same day:** the participant records live inside `room.json`, so one
+`rename` saves the whole roster. Rooms leave Experimental: every `/rooms` part is Stable
+at contract 1.8. The TUI marks `paused` and `killed` in its sidebar, and a revive draws
+one line, from a new `_client_participant_revived` event. The room reads `active` again
+at its first revive or add. A dismissed room is restored read-only. Idle eviction is not
+built (R18).
 *Done when* a restart lists the room `paused` and every participant `paused`, a shutdown
 during a turn ends that turn in the log and leaves the participant `paused`, a `kill -9`
 during a turn leaves that participant `killed` after the next boot, its history replays, a
-message to one revives it and is answered, the DTO reports `resumed: "fresh"`, a
-dismissed room is not revived by the same path, and `DELETE /rooms/:id` removes a clean
-room's checkouts, branches, record and log and refuses a dirty one with `409`.
+message to one revives it and is answered, the DTO reports `resumed: "fresh"`, and a
+dismissed room is not revived by the same path.
 **Added 2026-09-29 (#180):** after a restart, the room reducer (`client/room.ts`) shows the
 `paused` or `killed` state that `GET /rooms/:id` reports, and a turn the crash cut reads
 as cut, tested from a recorded stream. M6-10 moved this case here.
-**Added 2026-10-01 (#200 review):** the chat screen rides out a restart as `attach` does:
-it reads `daemon.json` again, reconnects its streams, and checks the version again. This
-replaces M4-5's exit with no room open (`chat.ts`, the 5 s poll).
-Decisions: R17, R18, R33, R42, R46, S3, S4.
+Decisions: R17, R33, R42, R46, S3, S4.
+
+**M6-7c · Room delete and retention · S · needs M6-7a**
+Split from M6-7a on 2026-10-08 (#151). **R18's delete** (added 2026-09-27, #146): M6-2
+freed `DELETE /rooms/:id` and left it unrouted. Delete removes the room's worktrees,
+branches, record and log at once, refused with `409` naming the files while any checkout
+has uncommitted work. It removes one checkout per participant (M6-6a). **Amended
+2026-09-27 (#187 review):** delete finds the checkouts on disk, under
+`stateDirFor(root)/wt/<roomId>/`, as `managedWorktrees` in `core/sweep.ts` does, and not
+from the roster. A failed add whose harness wrote into its checkout keeps that checkout
+and its branch. No participant owns them, and only a room notice names them. A delete
+that walked the roster would answer `200` and leave that work on disk. A paused room can
+be deleted without a revive first (R18). **Retention:** the boot sweep reaps a dismissed
+room older than `retentionMs` by the same path, and keeps a dirty one with a notice. A
+paused room is never reaped.
+*Done when* `DELETE /rooms/:id` removes a clean room's checkouts, branches, record and log,
+and refuses a dirty one with `409` naming the files; a dismissed room past `retentionMs`
+is gone after the next boot, and a paused one is not. The route is Stable from the start,
+so it takes a contract `minor` step.
+Decisions: R18.
+
+**M6-7d · The chat screen rides out a daemon restart · S · needs M6-7a, M4-11**
+Split from M6-7a on 2026-10-08 (#151). **Added 2026-10-01 (#200 review):** the chat
+screen rides out a restart as `attach` does: it reads `daemon.json` again, reconnects its
+streams, and checks the version again. This replaces M4-5's exit with no room open
+(`chat.ts`, the 5 s poll), and the "riding out a restart" note in `client/roomset.ts`.
+*Done when* a `kapelle chat` screen open during a daemon restart stays open, shows each
+room and participant `paused` after the restart, and a message from it is answered; a
+daemon that does not come back still ends the screen as today; a new daemon with a
+different `major` ends the screen with the version message. Both screens: the pi-tui
+screen and the piped lines.
+Decisions: R42, S8.
 
 **M6-7b · `session/load` for a paused participant · M · needs M6-7a, M0-9**
 **Half B.** A participant revives with `session/load` where the harness advertises

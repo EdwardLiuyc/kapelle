@@ -705,7 +705,9 @@ Decisions: **R6, R14, R31, R35, R37** (R35 settled as (c), kept for v1 on 2026-0
 
 **Split 2026-09-26:** into M6-7a (Half A, and the `killed` state of R46) and M6-7b
 (Half B, `session/load`, after the M0-9 probe). The open point below is answered by R46.
-See `docs/STORIES.md`.
+**Split again 2026-10-08 (#151):** delete and retention are M6-7c (#235), the chat
+screen across a restart is M6-7d (#236). The text below is the history; the *Done when*
+that counts is in `docs/STORIES.md`.
 
 Persist under `stateDirFor(root)/rooms/<roomId>/`: `room.json` plus one participant
 record per agent (harness, mode, sessionId, branch, worktree, status). Retention and idle

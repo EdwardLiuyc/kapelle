@@ -240,3 +240,47 @@ test("a fast-forward draws a line naming both participants", () => {
     parts.transcript.render(80).join("\n"),
   );
 });
+
+test("a revive draws a line that says the session is fresh (M6-7a)", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (update: RoomEventLine["update"]) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-08T00:00:00Z",
+      roomId: "r1",
+      participantId: "p-ana",
+      update,
+    });
+  line({
+    sessionUpdate: "_client_participant_added",
+    name: "ana",
+    harness: "mock",
+    mode: "auto",
+  });
+  line({ sessionUpdate: "_client_user_message", text: "hi", turn: 1 });
+  line({
+    sessionUpdate: "_client_participant_revived",
+    resumed: "fresh",
+    sessionId: "s2",
+  });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+  });
+  parts.redraw();
+  const text = parts.transcript
+    .render(120)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+    .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd())
+    .join("\n");
+  assert.match(
+    text,
+    /↻ ana is back with a fresh session; it does not remember/,
+  );
+});

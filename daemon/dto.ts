@@ -17,7 +17,7 @@ import type {
   RunStatus,
   TaskDto,
 } from "../client/contract.ts";
-import type { Participant, Room } from "../core/room.ts";
+import type { Participant, Room, RoomMeta } from "../core/room.ts";
 import type { RunReport, TaskRun } from "../core/run.ts";
 
 const USAGE_SEMANTICS = new Set(["per-turn", "cumulative", "unknown"]);
@@ -196,15 +196,9 @@ export function toRunListEntry(state: RunState): RunListEntry {
   return entry;
 }
 
-/** What the daemon keeps about a room beyond the live `Room` itself. In
- *  memory only until M6-7a writes `room.json`. */
-export interface RoomState {
-  id: string;
-  cwd: string;
-  title?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+/** What the daemon shows about a room beyond its roster: `Room.meta`, which
+ *  the room saves in `room.json` (M6-7a). */
+export type RoomState = RoomMeta;
 
 /** One participant in full. Built key by key, so a field `core/room.ts`
  *  adds does not reach the wire until the contract names it. */
@@ -223,6 +217,7 @@ export function toParticipantDto(p: Participant): ParticipantDto {
   if (p.role !== undefined) dto.role = p.role;
   if (p.branch !== undefined) dto.branch = p.branch;
   if (p.baseSha !== undefined) dto.baseSha = p.baseSha;
+  if (p.resumed !== undefined) dto.resumed = p.resumed;
   return dto;
 }
 
@@ -236,6 +231,7 @@ export function toRoomDto(state: RoomState, room: Room): RoomDto {
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
     status: room.status(),
+    seq: room.eventLog?.size ?? 0,
     participants: room.participants.map(toParticipantDto),
   };
   if (state.title !== undefined) dto.title = state.title;

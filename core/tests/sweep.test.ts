@@ -19,6 +19,13 @@ import {
   isolateStateHome,
   tempDir,
 } from "../../integration/helpers.ts";
+import { newRoomId } from "../ids.ts";
+import {
+  type RoomRecord,
+  readRoomRecord,
+  roomFile,
+  writeRoomRecord,
+} from "../room.ts";
 import { stateDirFor } from "../runtime.ts";
 import { DEFAULT_RETENTION_MS, processIdentity, sweepBoot } from "../sweep.ts";
 import { openWorktrees } from "../worktree.ts";
@@ -1407,4 +1414,176 @@ test("a repository gone with no workspace to strand says nothing", async (t) => 
   const notices = await sweep(root, join(await tempDir(t), "children.json"));
 
   assert.deepEqual(notices, []);
+});
+
+// --- rooms (M6-7a) ---------------------------------------------------------
+
+/** A room's record, as a daemon writes it, with one participant per
+ *  `status`, each in a checkout of its own. */
+async function writeRoom(
+  root: string,
+  roomStatus: RoomRecord["status"],
+  statuses: RoomRecord["participants"][number]["status"][],
+): Promise<{ id: string; file: string; worktrees: string[] }> {
+  const id = newRoomId();
+  const worktrees: string[] = [];
+  const participants: RoomRecord["participants"] = [];
+  for (const [i, status] of statuses.entries()) {
+    const pid = `p${i}`;
+    const worktree = await addWorktree(root, pid, id);
+    worktrees.push(worktree);
+    participants.push({
+      id: pid,
+      name: pid,
+      cmd: "node mock-agent.mjs",
+      harness: "mock-agent",
+      mode: "auto",
+      settings: { allowReadOutsideRoot: false },
+      worktree,
+      branch: `kapelle/${id}/${pid}`,
+      baseSha: await git(root, "rev-parse", "HEAD"),
+      sessionId: `sess_${i}`,
+      status,
+      notices: [],
+    });
+  }
+  const file = roomFile(root, id);
+  await mkdir(join(file, ".."), { recursive: true });
+  writeRoomRecord(file, {
+    id,
+    cwd: root,
+    createdAt: new Date(NOW).toISOString(),
+    updatedAt: new Date(NOW).toISOString(),
+    status: roomStatus,
+    notices: [],
+    participants,
+  });
+  return { id, file, worktrees };
+}
+
+test("a room left active is paused, its busy participant killed, and its log untouched", async (t) => {
+  const root = await gitRepo(t);
+  const { file, worktrees } = await writeRoom(root, "active", [
+    "busy",
+    "idle",
+    "exited",
+  ]);
+  const log = join(file, "..", "events.jsonl");
+  await writeFile(log, '{"seq":1}\n');
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  const record = readRoomRecord(file);
+  assert.equal(record.status, "paused");
+  assert.deepEqual(
+    record.participants.map((p) => p.status),
+    ["killed", "paused", "exited"],
+  );
+  assert.equal(await readFile(log, "utf8"), '{"seq":1}\n', "no line added");
+  for (const worktree of worktrees) {
+    assert.equal(existsSync(worktree), true, "a room's checkout is no orphan");
+  }
+});
+
+test("a killed participant's stale index.lock gets a notice, and the file stays", async (t) => {
+  const root = await gitRepo(t);
+  const { file, worktrees } = await writeRoom(root, "active", ["busy", "idle"]);
+  const lock = (wt: string) =>
+    git(wt, "rev-parse", "--absolute-git-dir").then((d) =>
+      join(d, "index.lock"),
+    );
+  const killedLock = await lock(worktrees[0] as string);
+  const idleLock = await lock(worktrees[1] as string);
+  await writeFile(killedLock, "");
+  await writeFile(idleLock, "");
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  const [killed, idle] = readRoomRecord(file).participants;
+  assert.equal(killed?.notices.length, 1);
+  assert.match(killed?.notices[0]?.text ?? "", /index\.lock/);
+  assert.ok(killed?.notices[0]?.text.includes(killedLock));
+  assert.equal(existsSync(killedLock), true, "the sweep deletes nothing");
+  assert.deepEqual(idle?.notices, [], "only a killed participant is checked");
+});
+
+test("a paused or dismissed room is left as it is, and so are its checkouts", async (t) => {
+  const root = await gitRepo(t);
+  const paused = await writeRoom(root, "paused", ["paused", "killed"]);
+  const dismissed = await writeRoom(root, "dismissed", ["dismissed"]);
+  const before = [paused, dismissed].map((r) => readRoomRecord(r.file));
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.deepEqual(
+    [paused, dismissed].map((r) => readRoomRecord(r.file)),
+    before,
+  );
+  for (const wt of [...paused.worktrees, ...dismissed.worktrees]) {
+    assert.equal(existsSync(wt), true);
+  }
+});
+
+test("a room checkout with no record is still an orphan", async (t) => {
+  const root = await gitRepo(t);
+  const path = await addWorktree(root, "p0", newRoomId());
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.equal(existsSync(path), false);
+  assert.ok(notices.some((n) => n.includes("removed orphan worktree")));
+});
+
+test("a room record that cannot be read is named, and its checkouts are kept", async (t) => {
+  const root = await gitRepo(t);
+  const { file, worktrees } = await writeRoom(root, "active", ["idle"]);
+  await writeFile(file, "{ not json\n");
+
+  const notices = await sweep(root, join(await tempDir(t), "children.json"));
+
+  assert.ok(
+    notices.some((n) => n.includes(file)),
+    `no notice names ${file}: ${notices.join("\n")}`,
+  );
+  for (const worktree of worktrees) {
+    assert.equal(
+      existsSync(worktree),
+      true,
+      "a room with a record is not orphaned",
+    );
+  }
+});
+
+test("a participant a shutdown killed gets the index.lock notice once", async (t) => {
+  const root = await gitRepo(t);
+  const { file, worktrees } = await writeRoom(root, "paused", ["killed"]);
+  const lock = join(
+    await git(worktrees[0] as string, "rev-parse", "--absolute-git-dir"),
+    "index.lock",
+  );
+  await writeFile(lock, "");
+
+  await sweep(root, join(await tempDir(t), "children.json"));
+  await sweep(root, join(await tempDir(t), "children.json"));
+
+  const [killed] = readRoomRecord(file).participants;
+  assert.equal(killed?.notices.length, 1, "one notice, after two boots");
+  assert.ok(killed?.notices[0]?.text.includes(lock));
+  assert.equal(existsSync(lock), true);
+});
+
+test("the index.lock notice goes at the boot after the lock is deleted", async (t) => {
+  const root = await gitRepo(t);
+  const { file, worktrees } = await writeRoom(root, "paused", ["killed"]);
+  const lock = join(
+    await git(worktrees[0] as string, "rev-parse", "--absolute-git-dir"),
+    "index.lock",
+  );
+  await writeFile(lock, "");
+  await sweep(root, join(await tempDir(t), "children.json"));
+  assert.equal(readRoomRecord(file).participants[0]?.notices.length, 1);
+
+  await rm(lock);
+  await sweep(root, join(await tempDir(t), "children.json"));
+  assert.deepEqual(readRoomRecord(file).participants[0]?.notices, []);
 });

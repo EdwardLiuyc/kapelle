@@ -62,7 +62,7 @@ node cli.ts workspace [--cwd dir]              # where this repo's worktrees and
 node cli.ts workspace move <old-repo> <new-repo>
 node cli.ts daemon start [--port n] [--permission-timeout s]   # same as: node daemon.ts
 node cli.ts daemon add <path>
-node cli.ts chat [new --agent <id> [--cwd dir]]   # experimental chat rooms: runs chat.ts
+node cli.ts chat [new --agent <id> [--cwd dir]]   # chat rooms: runs chat.ts
 node chat.ts attach <roomId> | list | dismiss <roomId>
 ```
 

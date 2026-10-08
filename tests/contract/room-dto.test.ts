@@ -33,6 +33,7 @@ const ROOM_KEYS = new Set(
     createdAt: 0,
     updatedAt: 0,
     status: 0,
+    seq: 0,
     participants: 0,
   } satisfies Record<keyof RoomDto, 0>),
 );
@@ -48,6 +49,7 @@ const PARTICIPANT_KEYS = new Set(
     branch: 0,
     baseSha: 0,
     sessionId: 0,
+    resumed: 0,
     status: 0,
     notices: 0,
   } satisfies Record<keyof ParticipantDto, 0>),
@@ -114,7 +116,14 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
   for (const posted of [empty.body, starter.body]) {
     const got = await api<RoomDto>(d, "GET", `/rooms/${posted.id}`);
     assert.equal(got.status, 200);
-    assert.deepEqual(got.body, posted, "GET returns what POST answered");
+    // `seq` can only grow: lines the open wrote may reach the disk after
+    // POST answered.
+    assert.ok(got.body.seq >= posted.seq, "the log only grows");
+    assert.deepEqual(
+      { ...got.body, seq: posted.seq },
+      posted,
+      "GET returns what POST answered",
+    );
     assertKeys(got.body, ROOM_KEYS, "room");
     for (const p of got.body.participants) {
       assertKeys(p, PARTICIPANT_KEYS, "participant");

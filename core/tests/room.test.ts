@@ -10,6 +10,8 @@
  * messages, and a cancel drops them (M6-4). Each participant has a mode: the
  * room sets the harness's own mode, and an `ask` participant's write waits in
  * the permission queue, named by room, participant and turn (M6-5).
+ * A pause keeps the room on disk, and `restoreRoom` brings it back; the next
+ * message revives a participant with a fresh session (M6-7a).
  * `mock-agent.mjs`'s default turn writes `ACP_TEST.md` through the client,
  * which is the file each test looks for.
  */
@@ -17,7 +19,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
@@ -33,13 +35,19 @@ import { createEventBus, type EventBus } from "../events.ts";
 import { newRoomId } from "../ids.ts";
 import { createPermissionQueue } from "../permissions.ts";
 import {
+  crashed,
   openRoom,
   type Participant,
   QUEUE_BOUND,
   type Room,
+  type RoomRecord,
   RoomRefusal,
+  readRoomRecord,
+  restoreRoom,
   roomAgent,
   roomAgents,
+  roomFile,
+  writeRoomRecord,
 } from "../room.ts";
 import { stateDirFor } from "../runtime.ts";
 import { changedPaths, openWorktrees } from "../worktree.ts";
@@ -701,7 +709,7 @@ test(`the queue holds ${QUEUE_BOUND}, and a cancel drops it and keeps the sessio
   assert.equal(of("_client_harness_spawned").length, 1);
 });
 
-test("a harness that dies takes its queue with it", async (t) => {
+test("a harness that dies during a turn takes its queue, reads killed, and revives fresh", async (t) => {
   const { p, of } = await roomOn(t, "stall");
   const turns = [p.send("live"), p.send("queued")];
   const [spawned] = of("_client_harness_spawned");
@@ -710,15 +718,58 @@ test("a harness that dies takes its queue with it", async (t) => {
   process.kill(pid, "SIGKILL");
   await Promise.all(turns);
 
-  assert.equal(p.status(), "exited");
+  assert.equal(p.status(), "killed", "it stopped during a turn (R46)");
   assert.deepEqual(
     of("_client_queue_cleared").map((e) => e.update),
     [{ sessionUpdate: "_client_queue_cleared", count: 1 }],
   );
-  assert.throws(
-    () => p.send("hi"),
-    (err) => err instanceof RoomRefusal && err.code === "agent_exited",
+  assert.equal(p.resumed, undefined);
+
+  // The next message starts a new harness with a fresh session.
+  const revived = p.send("again");
+  for (
+    const until = Date.now() + 5_000;
+    of("_client_participant_revived").length === 0 && Date.now() < until;
+  ) {
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  const [line] = of("_client_participant_revived");
+  assert.ok(line, "no revive within 5 s");
+  assert.deepEqual(line.update, {
+    sessionUpdate: "_client_participant_revived",
+    resumed: "fresh",
+    sessionId: p.sessionId,
+  });
+  assert.equal(p.resumed, "fresh");
+  assert.equal(p.status(), "busy");
+  assert.equal(of("_client_harness_spawned").length, 2);
+  p.cancel();
+  await revived;
+  assert.equal(p.status(), "idle");
+});
+
+test("a harness that dies while idle reads exited, and the next message revives it", async (t) => {
+  const { p, of } = await roomOn(t, "remember");
+  await p.send("one");
+  const [spawned] = of("_client_harness_spawned");
+  assert.ok(spawned);
+  process.kill((spawned.update as { pid: number }).pid, "SIGKILL");
+  for (
+    const until = Date.now() + 5_000;
+    p.status() !== "exited" && Date.now() < until;
+  ) {
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.equal(p.status(), "exited");
+
+  await p.send("two");
+  const answers = of("agent_message_chunk").map(
+    (e) => (e.update as { content: { text: string } }).content.text,
   );
+  // `remember` answers with the session's last prompt: a fresh one has none.
+  assert.deepEqual(answers, ["previous: (none)", "previous: (none)"]);
+  assert.equal(p.status(), "idle");
+  assert.equal(p.resumed, "fresh");
 });
 
 test("the watchdog warns about a silent turn and never cancels it (R38)", async (t) => {
@@ -1397,4 +1448,354 @@ test("a fast-forward refuses when the target branch ref is gone", async (t) => {
     room.fastForward(alice.id, bob.id),
     (err: unknown) => err instanceof RoomRefusal && err.code === "no_branch",
   );
+});
+
+// --- pause, restore and revive (M6-7a) -------------------------------------
+
+/** A room of one `scenario` participant, as `roomOn` makes it, with the
+ *  pieces a restore needs. */
+async function pausable(
+  t: TestContext,
+  scenario: string,
+  pauseGraceMs = 2_000,
+) {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  const events: AgentEventEnvelope[] = [];
+  bus.addListener((e) => events.push(e));
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    title: "kept",
+    agents: [
+      roomAgent({
+        cmd: `node ${MOCK_AGENT} --scenario ${scenario}`,
+        name: "alice",
+      }),
+    ],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+    permissions: queue,
+    pauseGraceMs,
+  });
+  t.after(() => room.dismiss());
+  const p = room.participants[0] as Participant;
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  const file = roomFile(repo, roomId);
+  return { repo, roomId, room, p, of, file };
+}
+
+/** The room `room.json` names, restored on a new bus. */
+async function restored(t: TestContext, repo: string, record: RoomRecord) {
+  const bus = createEventBus();
+  const events: AgentEventEnvelope[] = [];
+  bus.addListener((e) => events.push(e));
+  const room = await restoreRoom({
+    record,
+    setup: await openWorktrees(record.cwd, record.id),
+    bus,
+    permissions: queue,
+  });
+  t.after(() => room.dismiss());
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  return { room, p: room.participants[0] as Participant, of, repo };
+}
+
+/** Waits until `ok` holds, for at most 5 s. */
+async function until(ok: () => boolean, what: string) {
+  for (const end = Date.now() + 5_000; !ok(); ) {
+    if (Date.now() > end) throw new Error(`timed out: ${what}`);
+    await new Promise((done) => setTimeout(done, 20));
+  }
+}
+
+test("room.json holds the room and its participant from the start", async (t) => {
+  const { p, file, roomId, repo } = await pausable(t, "remember");
+  const record = readRoomRecord(file);
+  assert.equal(record.id, roomId);
+  assert.equal(record.cwd, repo);
+  assert.equal(record.title, "kept");
+  assert.equal(record.status, "active");
+  assert.equal(record.participants.length, 1);
+  const [saved] = record.participants;
+  assert.equal(saved?.id, p.id);
+  assert.equal(saved?.sessionId, p.sessionId);
+  assert.equal(saved?.branch, p.branch);
+  assert.match(saved?.cmd ?? "", /--scenario remember$/);
+  assert.equal(saved?.status, "idle");
+});
+
+test("room.json shows a participant busy during its turn", async (t) => {
+  const { p, file } = await pausable(t, "stall");
+  const turn = p.send("hi");
+  await until(
+    () => readRoomRecord(file).participants[0]?.status === "busy",
+    "room.json never read busy",
+  );
+  p.cancel();
+  await turn;
+  await until(
+    () => readRoomRecord(file).participants[0]?.status === "idle",
+    "room.json never read idle again",
+  );
+});
+
+test("a pause during a turn ends it in the log, and leaves the participant paused", async (t) => {
+  const { room, p, of, file } = await pausable(t, "slow");
+  void p.send("hi");
+  await until(() => p.status() === "busy", "the turn never started");
+  await room.pause();
+
+  assert.equal(of("_client_turn_ended").length, 1, "the turn ended first");
+  assert.equal(p.status(), "paused");
+  assert.equal(room.status(), "paused");
+  const record = readRoomRecord(file);
+  assert.equal(record.status, "paused");
+  assert.equal(record.participants[0]?.status, "paused");
+  assert.ok(existsSync(p.worktree), "a pause keeps the checkout");
+});
+
+test("a turn that outlives the pause's grace is killed", async (t) => {
+  const { room, p, of, file } = await pausable(t, "deaf", 200);
+  void p.send("hi");
+  await until(() => p.status() === "busy", "the turn never started");
+  const started = Date.now();
+  await room.pause();
+
+  assert.ok(Date.now() - started < 4_000, "one grace, then the stop");
+  assert.equal(p.status(), "killed");
+  assert.equal(readRoomRecord(file).participants[0]?.status, "killed");
+  assert.equal(of("_client_turn_ended").length, 1);
+});
+
+test("a restored room replays its log, revives on a message and goes on with seq", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await p.send("one");
+  await room.pause();
+  const before = room.eventLog?.size ?? 0;
+  assert.ok(before > 0);
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  assert.equal(back.room.status(), "paused");
+  assert.equal(back.p.id, p.id);
+  assert.equal(back.p.status(), "paused");
+  assert.equal(back.p.worktree, p.worktree, "the same checkout");
+  assert.equal(back.p.resumed, undefined);
+  assert.equal(back.room.eventLog?.size, before, "the history is there");
+
+  await back.p.send("two");
+  assert.equal(back.p.status(), "idle");
+  assert.equal(back.p.resumed, "fresh");
+  assert.equal(back.room.status(), "active");
+  const answers = back
+    .of("agent_message_chunk")
+    .map((e) => (e.update as { content: { text: string } }).content.text);
+  assert.deepEqual(answers, ["previous: (none)"], "a fresh session");
+  assert.equal(back.of("_client_participant_revived").length, 1);
+
+  const lines = (
+    await readFile(
+      join(stateDirFor(repo), "rooms", back.room.meta.id, "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trim()
+    .split("\n")
+    .map(
+      (l) =>
+        JSON.parse(l) as { seq: number; update: { sessionUpdate: string } },
+    );
+  assert.deepEqual(
+    lines.map((l) => l.seq),
+    lines.map((_, i) => i + 1),
+    "one seq, carried on",
+  );
+  // The message, the new harness, then the revive, before any answer.
+  assert.deepEqual(
+    lines.slice(before, before + 3).map((l) => l.update.sessionUpdate),
+    [
+      "_client_user_message",
+      "_client_harness_spawned",
+      "_client_participant_revived",
+    ],
+  );
+  const saved = readRoomRecord(file);
+  assert.equal(saved.status, "active");
+  assert.equal(saved.participants[0]?.resumed, "fresh");
+});
+
+test("a crash's record reads paused and killed, and the killed one revives", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await room.pause();
+  // What a `kill -9` during a turn leaves: the room live, alice busy.
+  const record = readRoomRecord(file);
+  const left: RoomRecord = {
+    ...record,
+    status: "active",
+    participants: record.participants.map((x) => ({ ...x, status: "busy" })),
+  };
+  const fixed = crashed(left);
+  assert.equal(fixed.status, "paused");
+  assert.equal(fixed.participants[0]?.status, "killed");
+  assert.equal(
+    crashed({
+      ...left,
+      participants: [
+        {
+          ...(left.participants[0] as RoomRecord["participants"][number]),
+          status: "idle",
+        },
+      ],
+    }).participants[0]?.status,
+    "paused",
+  );
+
+  const back = await restored(t, repo, left);
+  assert.equal(back.p.status(), "killed", "restore applies it too");
+  await back.p.send("hi");
+  assert.equal(back.p.status(), "idle");
+  assert.equal(back.p.id, p.id);
+});
+
+test("a dismissed room comes back dismissed and is never revived", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await p.send("one");
+  await room.dismiss();
+  const record = readRoomRecord(file);
+  assert.equal(record.status, "dismissed");
+
+  const back = await restored(t, repo, record);
+  assert.equal(back.room.status(), "dismissed");
+  assert.equal(back.p.status(), "dismissed");
+  assert.throws(
+    () => back.p.send("hi"),
+    (err) => err instanceof RoomRefusal && err.code === "room_dismissed",
+  );
+  assert.equal(back.of("_client_harness_spawned").length, 0);
+  assert.ok((back.room.eventLog?.size ?? 0) > 0, "its history replays");
+});
+
+test("a room that fails to open leaves no record", async (t) => {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  await assert.rejects(
+    openRoom({
+      roomId,
+      cwd: repo,
+      agents: [
+        roomAgent({
+          cmd: "node -e process.exit(1)",
+          name: "alice",
+        }),
+      ],
+      setup: await openWorktrees(repo, roomId),
+      bus: createEventBus(),
+      permissions: queue,
+    }),
+  );
+  assert.equal(existsSync(roomFile(repo, roomId)), false);
+});
+
+test("a restored participant goes on counting its turns (S12)", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await p.send("one");
+  await room.pause();
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  const [line] = back.of("_client_user_message");
+  assert.equal(
+    (line?.update as { turn?: number } | undefined)?.turn,
+    2,
+    "turn 1 is already on the log",
+  );
+});
+
+test("an add after a pause is refused and starts no harness", async (t) => {
+  const { room, of } = await pausable(t, "remember");
+  await room.pause();
+  await assert.rejects(
+    room.add(roomAgent({ cmd: `node ${MOCK_AGENT}`, name: "bob" })),
+    (err) => err instanceof RoomRefusal && err.code === "room_dismissed",
+  );
+  assert.equal(of("_client_harness_spawned").length, 1);
+});
+
+test("an add makes a restored paused room active", async (t) => {
+  const { repo, room, file } = await pausable(t, "remember");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  assert.equal(back.room.status(), "paused");
+  await back.room.add(roomAgent({ cmd: `node ${MOCK_AGENT}`, name: "bob" }));
+  assert.equal(back.room.status(), "active");
+  // The added line saves the room a moment later.
+  await new Promise((ok) => setImmediate(ok));
+  assert.equal(readRoomRecord(file).status, "active");
+});
+
+test("a revived harness gets a stderr log of its own", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  const logs = (
+    await readdir(join(stateDirFor(repo), "rooms", room.meta.id))
+  ).filter((n) => n.startsWith(`${p.id}.`) && n.endsWith(".stderr.log"));
+  assert.equal(logs.length, 2, logs.join(", "));
+});
+
+test("a revive whose harness cannot start ends the turn with the error, and stays paused", async (t) => {
+  const { repo, room, file } = await pausable(t, "remember");
+  await room.pause();
+  const record = readRoomRecord(file);
+  const saved = record.participants[0] as RoomRecord["participants"][number];
+  writeRoomRecord(file, {
+    ...record,
+    participants: [{ ...saved, cmd: "node -e process.exit(1)" }],
+  });
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  assert.equal(back.p.status(), "paused");
+  await back.p.send("hi");
+
+  assert.equal(back.p.status(), "paused", "a failed revive leaves it stopped");
+  assert.equal(back.p.resumed, undefined);
+  assert.equal(back.room.status(), "paused", "no revive means no active");
+  assert.equal(back.of("_client_participant_revived").length, 0);
+  const [ended] = back.of("_client_turn_ended");
+  const error = (ended?.update as { error?: unknown } | undefined)?.error;
+  assert.equal(typeof error, "string");
+  assert.ok(error, "the turn ends with the harness's error");
+});
+
+test("forget removes the room's folder, and a save queued before it writes nothing", async (t) => {
+  const { room, p, file } = await pausable(t, "remember");
+  // A rename queues a save for a moment later.
+  room.update(p.id, { name: "renamed" });
+  room.forget();
+  await new Promise((ok) => setImmediate(ok));
+  await new Promise((ok) => setImmediate(ok));
+  assert.equal(existsSync(join(file, "..")), false, "no folder comes back");
+  // A save that still ran would have failed on the missing folder, and said so.
+  assert.ok(
+    !p.notices.some((n) => n.text.includes("cannot save the room record")),
+    JSON.stringify(p.notices),
+  );
+});
+
+test("a record with a role outside the set, or a title that is not text, is refused", async (t) => {
+  const { room, file } = await pausable(t, "remember");
+  await room.pause();
+  const record = readRoomRecord(file);
+  const saved = record.participants[0] as RoomRecord["participants"][number];
+  writeRoomRecord(file, {
+    ...record,
+    participants: [{ ...saved, role: "boss" as "tester" }],
+  });
+  assert.throws(() => readRoomRecord(file), /has role "boss"/);
+  writeRoomRecord(file, { ...record, title: 7 as unknown as string });
+  assert.throws(() => readRoomRecord(file), /"title" is not a string/);
 });

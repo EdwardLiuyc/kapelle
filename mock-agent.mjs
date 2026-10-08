@@ -29,6 +29,7 @@ const SCENARIOS = {
   "files-unclaimed": "asks, writes two files, then lists only one of them",
   "eof-write": "writes a file when stdin ends, after the turn has ended",
   stall: "writes one file, then emits nothing and never returns",
+  deaf: "never ends a turn and ignores session/cancel; exits when stdin closes",
   stubborn:
     "like stall, but ignores SIGTERM and stays alive after its stdin closes",
   repeat: "the same tool title on a loop, then ends the turn itself",
@@ -256,7 +257,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   }
 
   if (msg.method === "session/cancel") {
-    if (stalledPromptId !== null) {
+    // `deaf` is the harness a shutdown's grace exists for (M6-7a): only its
+    // stdin closing ends it.
+    if (stalledPromptId !== null && scenario !== "deaf") {
       reply(stalledPromptId, { stopReason: "cancelled", usage: USAGE });
       stalledPromptId = null;
     }
@@ -319,7 +322,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // M1c-2's stall fixture never answers this prompt. The file was already
     // written at startup, so a TTL that fires before the prompt arrives still
     // leaves the branch/worktree intact to inspect.
-    if (scenario === "stall" || scenario === "stubborn") {
+    if (
+      scenario === "stall" ||
+      scenario === "stubborn" ||
+      scenario === "deaf"
+    ) {
       stalledPromptId = msg.id;
       return;
     }

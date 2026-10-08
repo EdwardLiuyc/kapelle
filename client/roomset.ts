@@ -17,7 +17,7 @@
  * address the screen started with. The streams and `reconcile` read it again
  * each time, through `address`, because `client/` may not import
  * `core/runtime.ts` (S8). A poll that read it again would follow a restarted
- * daemon instead of ending the screen; riding out a restart is M6-7a's.
+ * daemon instead of ending the screen; riding out a restart is M6-7d's (#236).
  *
  * It draws nothing. The screen gets each line after the reducer took it,
  * and keeps the view, the question box and the words.
@@ -30,7 +30,13 @@ import type {
   RoomStatus,
 } from "./contract.ts";
 import { call, type DaemonAddress, request } from "./daemon.ts";
-import { applyLine, type Entry, newRoomState, type RoomState } from "./room.ts";
+import {
+  applyLine,
+  applyStatus,
+  type Entry,
+  newRoomState,
+  type RoomState,
+} from "./room.ts";
 import { type Connect, followEvents } from "./stream.ts";
 
 /** The daemon's address, read again on each call. Throws when there is no
@@ -64,9 +70,10 @@ export async function readRoom(
   id: string,
   onEvent: (event: RoomEventLine) => void,
 ): Promise<void> {
-  // A room does not survive a daemon restart, so there is nothing to wait
-  // for: no daemon, or one that does not answer, ends the stream at once.
-  // That is also why there is no version check here.
+  // A room survives a daemon restart (M6-7a), but this reader does not wait
+  // for one yet; that is M6-7d's (#236). No daemon, or one that does not
+  // answer, ends the stream at once, which is also why there is no version
+  // check here.
   const connect: Connect = async (after, signal) => {
     let d: DaemonAddress;
     try {
@@ -171,12 +178,14 @@ export function roomSet(
     on.end(why);
   };
 
-  /** Reads the room again for each participant's checkout and notices. */
+  /** Reads the room again for each participant's checkout and notices, and
+   *  the `paused` or `killed` a restart left, which no line says (M6-7a). */
   const loadDto = (r: Followed) => {
     call<RoomDto>(d, `/rooms/${r.entry.id}`).then(
       (res) => {
         if (!res.ok) return;
         r.dto = res.body;
+        applyStatus(r.state, res.body);
         on.loaded(r.entry.id);
       },
       // The stream says what happened to the daemon; a header can wait.
@@ -227,7 +236,7 @@ export function roomSet(
   // poll changes nothing: a stream that ends says what happened. With none
   // open, no stream would: a daemon that is gone, or one that came back with
   // a new token (`401`), ends the set (M4-5).
-  // ponytail: ends rather than follows a restarted daemon; M6-7a makes the
+  // ponytail: ends rather than follows a restarted daemon; M6-7d (#236) makes the
   // screen ride out a restart, as `attach` does.
   const tick = () => {
     call<RoomListEntry[]>(d, "/rooms").then(
