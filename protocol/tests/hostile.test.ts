@@ -234,6 +234,12 @@ test("an unimplemented method is answered with an error, not a crash", async (t)
   assert.equal(run.stopReason, "end_turn");
 });
 
+test("an update with a null sessionId is not dropped as a failed load's (#238)", async (t) => {
+  const run = await attack(t, "null-session");
+  assert.match(run.text, /NULLSID/);
+  assert.equal(run.stopReason, "end_turn");
+});
+
 // --- the scenario picker -----------------------------------------------------
 
 test("hostile-agent refuses to run without a scenario", async () => {

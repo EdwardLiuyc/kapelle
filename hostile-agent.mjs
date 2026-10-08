@@ -30,6 +30,8 @@ const SCENARIOS = {
   "malformed-json": "puts a non-JSON line on stdout, then carries on",
   oversized: "puts a line past the client's length cap on stdout",
   "unknown-method": "calls a client method that does not exist",
+  "null-session":
+    "sends a session/update whose sessionId is null, with no load before it",
   "diff-escape":
     "asks to edit files outside the root, by diff block and by file_text",
 };
@@ -247,6 +249,22 @@ const ATTACKS = {
       },
     });
     say(sid, `\nATTACK=${scenario} OUTCOME=sent DETAIL=one-way\n`);
+  },
+
+  // A null id must not match the client's "no failed load" (#238). The
+  // marker reaches the client's stream only if the update is kept.
+  "null-session": async () => {
+    send({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: null,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "NULLSID" },
+        },
+      },
+    });
   },
 
   "unknown-method": async (sid) =>

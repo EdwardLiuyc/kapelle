@@ -810,7 +810,10 @@ export class AcpAgent {
       | undefined;
     const update = params?.update;
     if (!update || this.#replaying) return;
-    if (params?.sessionId === this.#failedLoad) return;
+    // A string only: an unchecked `null` on the wire would match "no
+    // failed load" and drop every update (#238).
+    const sid = params?.sessionId;
+    if (typeof sid === "string" && sid === this.#failedLoad) return;
 
     // Permission requests only carry a toolCallId, so remember the details
     // announced here — otherwise the policy has nothing to judge.
