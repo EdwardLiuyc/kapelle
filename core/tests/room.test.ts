@@ -1770,3 +1770,32 @@ test("a revive whose harness cannot start ends the turn with the error, and stay
   assert.equal(typeof error, "string");
   assert.ok(error, "the turn ends with the harness's error");
 });
+
+test("forget removes the room's folder, and a save queued before it writes nothing", async (t) => {
+  const { room, p, file } = await pausable(t, "remember");
+  // A rename queues a save for a moment later.
+  room.update(p.id, { name: "renamed" });
+  room.forget();
+  await new Promise((ok) => setImmediate(ok));
+  await new Promise((ok) => setImmediate(ok));
+  assert.equal(existsSync(join(file, "..")), false, "no folder comes back");
+  // A save that still ran would have failed on the missing folder, and said so.
+  assert.ok(
+    !p.notices.some((n) => n.text.includes("cannot save the room record")),
+    JSON.stringify(p.notices),
+  );
+});
+
+test("a record with a role outside the set, or a title that is not text, is refused", async (t) => {
+  const { room, file } = await pausable(t, "remember");
+  await room.pause();
+  const record = readRoomRecord(file);
+  const saved = record.participants[0] as RoomRecord["participants"][number];
+  writeRoomRecord(file, {
+    ...record,
+    participants: [{ ...saved, role: "boss" as "tester" }],
+  });
+  assert.throws(() => readRoomRecord(file), /has role "boss"/);
+  writeRoomRecord(file, { ...record, title: 7 as unknown as string });
+  assert.throws(() => readRoomRecord(file), /"title" is not a string/);
+});

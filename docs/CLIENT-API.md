@@ -1338,7 +1338,8 @@ A participant's mode says what happens when its harness asks to change something
 These words are fixed now, so every client uses the same ones. They describe the whole
 room, not one participant: removing a participant is
 [`DELETE /rooms/:id/agents/:agentId`](#delete-roomsidagentsagentid), which keeps its work.
-**dismiss**, **pause**, **resume** and **kill** are built. **delete** is a later story
+**dismiss** is a route. **pause**, **resume** and **kill** are built too, but they have
+no route: a shutdown, a message and a crash cause them. **delete** is a later story
 (#235).
 
 | Word | Who does it | Room after | Harness | Work on disk |
@@ -1386,7 +1387,7 @@ reads every record back:
 - A `killed` participant whose checkout has a git `index.lock` left by the cut turn gets
   one notice naming the file, at the next boot. A crash and a shutdown's grace both cut a
   turn. Git refuses to commit there until the file is removed. The daemon does not remove
-  it.
+  it. The notice goes at the first boot after the file is gone.
 
 ### Room record (planned)
 

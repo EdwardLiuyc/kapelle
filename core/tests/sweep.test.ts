@@ -1571,3 +1571,19 @@ test("a participant a shutdown killed gets the index.lock notice once", async (t
   assert.ok(killed?.notices[0]?.text.includes(lock));
   assert.equal(existsSync(lock), true);
 });
+
+test("the index.lock notice goes at the boot after the lock is deleted", async (t) => {
+  const root = await gitRepo(t);
+  const { file, worktrees } = await writeRoom(root, "paused", ["killed"]);
+  const lock = join(
+    await git(worktrees[0] as string, "rev-parse", "--absolute-git-dir"),
+    "index.lock",
+  );
+  await writeFile(lock, "");
+  await sweep(root, join(await tempDir(t), "children.json"));
+  assert.equal(readRoomRecord(file).participants[0]?.notices.length, 1);
+
+  await rm(lock);
+  await sweep(root, join(await tempDir(t), "children.json"));
+  assert.deepEqual(readRoomRecord(file).participants[0]?.notices, []);
+});

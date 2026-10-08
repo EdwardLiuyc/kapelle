@@ -655,21 +655,18 @@ async function sweepRooms(pass: RepoPass): Promise<Set<string>> {
     const fixed = crashed(record);
     let changed = fixed !== record;
     // A crash or a shutdown's grace can kill a turn. Once per lock: the
-    // notice stays in the record, and the next boot finds the same file.
+    // notice stays in the record while the file does, and goes at the boot
+    // after it is deleted, revived or not.
     for (const p of fixed.participants) {
-      if (p.status !== "killed") continue;
+      const noted = p.notices.filter(isLockNotice);
+      if (p.status !== "killed" && noted.length === 0) continue;
       const lock = await indexLock(p.worktree);
-      if (lock && !p.notices.some((n) => n.text.includes(lock))) {
+      if (!lock && noted.length > 0) {
         changed = true;
-        p.notices = [
-          ...p.notices,
-          {
-            text:
-              `git left ${lock} when this participant's turn was cut; git ` +
-              "refuses to commit in this checkout while it is there. Check " +
-              "that no git process still runs in it, then delete the file.",
-          },
-        ];
+        p.notices = p.notices.filter((n) => !isLockNotice(n));
+      } else if (lock && !noted.some((n) => n.text.includes(lock))) {
+        changed = true;
+        p.notices = [...p.notices, { text: lockNotice(lock) }];
       }
     }
     if (!changed) continue;
@@ -683,6 +680,19 @@ async function sweepRooms(pass: RepoPass): Promise<Set<string>> {
   }
   return kept;
 }
+
+const LOCK_NOTICE_START = "git left ";
+
+/** The notice for a lock a cut turn left. */
+const lockNotice = (lock: string) =>
+  `${LOCK_NOTICE_START}${lock} when this participant's turn was cut; git ` +
+  "refuses to commit in this checkout while it is there. Check that no git " +
+  "process still runs in it, then delete the file.";
+
+/** Whether `notice` is one `lockNotice` wrote. */
+const isLockNotice = (notice: { text: string }) =>
+  notice.text.startsWith(LOCK_NOTICE_START) &&
+  notice.text.includes("index.lock when this participant's turn was cut");
 
 /** The checkout's `index.lock`, when git left one, or `null`. */
 async function indexLock(worktree: string): Promise<string | null> {

@@ -7613,6 +7613,13 @@ test("a room opened while the daemon shuts down does not come back", async (t) =
   );
   assert.equal((await first.done).code, 0);
 
+  // Nothing of it is left on disk: no record, no log, no stderr log.
+  assert.deepEqual(
+    readdirSync(roomsDir),
+    [keeper.body.id],
+    "the refused room's folder is gone",
+  );
+
   const second = await boot(t, runtime, [], state);
   const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
   assert.deepEqual(
@@ -7620,4 +7627,86 @@ test("a room opened while the daemon shuts down does not come back", async (t) =
     [keeper.body.id],
     "the room the client never got must not come back",
   );
+});
+
+/** Starts a request now and sends its JSON body only after `later` ran, so
+ *  the route reads it after whatever `later` did. */
+async function bodyAfter(
+  d: Daemon,
+  method: string,
+  path: string,
+  body: unknown,
+  later: () => Promise<void>,
+): Promise<{ status: number; body: RoomReply }> {
+  const text = JSON.stringify(body);
+  const url = new URL(path, d.url);
+  const reply = new Promise<{ status: number; body: RoomReply }>((ok, fail) => {
+    const req = request(
+      url,
+      {
+        method,
+        headers: {
+          authorization: `Bearer ${d.token}`,
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(text),
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => {
+          data += c;
+        });
+        res.on("end", () =>
+          ok({ status: res.statusCode ?? 0, body: JSON.parse(data) }),
+        );
+      },
+    );
+    req.on("error", fail);
+    req.flushHeaders();
+    // The headers must be in before `later` runs: a shutdown refuses a new
+    // connection, never one it already took.
+    req.on("socket", (socket) =>
+      socket.once("connect", () =>
+        setTimeout(() => void later().then(() => req.end(text), fail), 50),
+      ),
+    );
+  });
+  return reply;
+}
+
+test("a shutdown answers PATCH and fast-forward with 503, not room_dismissed", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  // A deaf turn holds the shutdown open for its 2 s grace.
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario deaf`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const p = only(open.body).id;
+  await api(d, "POST", `/rooms/${id}/messages`, { text: "busy" });
+
+  const stop = async () => {
+    process.kill(d.pid, "SIGTERM");
+    await new Promise((ok) => setTimeout(ok, 300));
+  };
+  const [patched, forwarded] = await Promise.all([
+    bodyAfter(d, "PATCH", `/rooms/${id}/agents/${p}`, { name: "x" }, stop),
+    bodyAfter(
+      d,
+      "POST",
+      `/rooms/${id}/agents/${p}/fast-forward`,
+      { from: p },
+      () => new Promise((ok) => setTimeout(ok, 300)),
+    ),
+  ]);
+  for (const r of [patched, forwarded]) {
+    assert.equal(r.status, 503, JSON.stringify(r.body));
+    assert.equal(r.body.error.code, "shutting_down");
+  }
+  assert.equal((await d.done).code, 0);
 });

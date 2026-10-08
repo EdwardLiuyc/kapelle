@@ -103,6 +103,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -345,6 +346,9 @@ export interface Room {
   pause(): Promise<void>;
   /** Moves `meta.updatedAt` to now and saves the room. */
   touch(): void;
+  /** For a dismissed room nobody was handed: stops every save, a queued
+   *  one too, and removes the room's folder, its record and log included. */
+  forget(): void;
 }
 
 /** The harness `agent` or `cmd` names, or a throw naming what is wrong. */
@@ -627,6 +631,9 @@ export function readRoomRecord(path: string): RoomRecord {
   if (!ROOM_STATUSES.includes(r.status as RoomStatus)) {
     throw bad(`unknown status ${JSON.stringify(r.status)}`);
   }
+  if (r.title !== undefined && typeof r.title !== "string") {
+    throw bad('"title" is not a string');
+  }
   if (!Array.isArray(r.participants)) throw bad('"participants" is not a list');
   for (const p of r.participants as Record<string, unknown>[]) {
     for (const key of ["id", "name", "harness", "worktree", "sessionId"]) {
@@ -642,6 +649,10 @@ export function readRoomRecord(path: string): RoomRecord {
     }
     if (!PARTICIPANT_STATUSES.includes(p.status as ParticipantStatus)) {
       throw bad(`participant ${p.id} has status ${JSON.stringify(p.status)}`);
+    }
+    // The contract's set is closed (R44): a client may trust it.
+    if (p.role !== undefined && !ROLES.includes(p.role as Role)) {
+      throw bad(`participant ${p.id} has role ${JSON.stringify(p.role)}`);
     }
   }
   return {
@@ -860,7 +871,9 @@ async function buildRoom(
       onRoomNotice(
         `cannot save the room record in ${logDir}: ` +
           `${err instanceof Error ? err.message : String(err)}; ` +
-          "a daemon restart will not bring this room back",
+          "a daemon restart brings this room back as it was at its last " +
+          "save, or not at all when it has none, and then the boot removes " +
+          "its participants' clean checkouts (their branches stay)",
       );
     }
   };
@@ -994,11 +1007,15 @@ async function buildRoom(
 
   /** A stderr log per harness start, as `AcpAgent` opens them with `ax`: a
    *  revive must not write into the first harness's file. */
+  let starts = 0;
   const stderrFor = (id: string) => () => {
     if (!eventLog) return undefined;
     const first = join(logDir, `${id}.stderr.log`);
+    // The time tells two daemons apart; the count, two starts in one
+    // millisecond.
+    starts += 1;
     return existsSync(first)
-      ? join(logDir, `${id}.${Date.now()}.stderr.log`)
+      ? join(logDir, `${id}.${Date.now()}-${starts}.stderr.log`)
       : first;
   };
 
@@ -1294,6 +1311,11 @@ async function buildRoom(
       meta.updatedAt = new Date().toISOString();
       save();
     },
+    forget() {
+      // A queued save reads `saving` when it runs, so this stops it too.
+      saving = false;
+      rmSync(logDir, { recursive: true, force: true });
+    },
   };
   return {
     room,
@@ -1568,7 +1590,9 @@ function createParticipant({
 
   // A harness that is gone takes its queue with it. The harness reports its
   // exit before the prompt fails (`protocol/agent.ts`). The next message
-  // revives it.
+  // revives it; a queued one does not, on purpose: it was written for the
+  // session that died, and a fresh one would get it with none of its
+  // context. `_client_queue_cleared` tells the person to send it again.
   const next = () => {
     if (stopped || stopping || dismissed()) return drop();
     const queued = waiting.shift();

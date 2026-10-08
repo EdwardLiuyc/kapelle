@@ -1005,11 +1005,11 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   }
   // A shutdown that began while this room was starting has already paused
   // every room it knew of; this one was never handed out. Dismiss it, then
-  // drop its record: a dismiss begun after a pause keeps the room on disk
-  // `paused`, and a room the client never got must not come back either way.
+  // forget it: a room the client never got must not come back, and must
+  // leave no folder that no record names.
   if (stopping) {
     await room.dismiss();
-    rmSync(roomFile(setup.root, id), { force: true });
+    room.forget();
     throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
   rooms.set(id, { room, state: room.meta });
@@ -1057,6 +1057,16 @@ async function postAgent(
   send(res, 201, toParticipantDto(participant) satisfies ParticipantDto);
 }
 
+/** What a refused change to a room answers. A shutdown pauses the room,
+ *  which then refuses every change as dismissed; the daemon's own reason is
+ *  the true one, and the room comes back after the restart. */
+function changeRefused(err: unknown) {
+  if (stopping) {
+    return refusal(503, "shutting_down", "the daemon is shutting down");
+  }
+  return roomRefused(err) ?? err;
+}
+
 /** `PATCH /rooms/:id/agents/:agentId {name?, mode?, role?}` — the one route
  *  that changes a participant (R10, R44). `role: null` clears the role. */
 async function patchAgent(
@@ -1077,7 +1087,7 @@ async function patchAgent(
   try {
     participant = entry.room.update(agentId, changes);
   } catch (err) {
-    throw roomRefused(err) ?? err;
+    throw changeRefused(err);
   }
   entry.room.touch();
   send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
@@ -1091,7 +1101,7 @@ async function deleteAgent(id: string, agentId: string, res: ServerResponse) {
   try {
     await entry.room.remove(agentId);
   } catch (err) {
-    throw roomRefused(err) ?? err;
+    throw changeRefused(err);
   }
   entry.room.touch();
   send(res, 200, toRoomDto(entry.state, entry.room) satisfies RoomDto);
@@ -1275,7 +1285,7 @@ async function fastForwardAgent(
   try {
     participant = await entry.room.fastForward(agentId, body.from);
   } catch (err) {
-    throw roomRefused(err) ?? err;
+    throw changeRefused(err);
   }
   entry.room.touch();
   send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
@@ -1599,8 +1609,10 @@ process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
 
 // Before the port opens, as `restoreRuns`: no request meets a half-restored
-// list. ponytail: one record read and one log scan per room, on the boot
-// path; read them lazily if a repository keeps hundreds of rooms.
+// list. A signal during it pauses the rooms restored so far; the others are
+// already `paused` on disk, which is what the sweep left. ponytail: one
+// record read and one log scan per room, on the boot path; read them lazily
+// if a repository keeps hundreds of rooms.
 await restoreRooms();
 
 server.on("error", (err) => {
