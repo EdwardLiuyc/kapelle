@@ -295,6 +295,9 @@ export class AcpAgent {
   #closed = false;
   /** True while `session/load` is in flight: its updates are the replay. */
   #replaying = false;
+  /** A load that failed. A harness can still replay it after the deadline,
+   *  so its updates are dropped too. */
+  #failedLoad: SessionId | null = null;
   #promptInFlight = false;
   #stderr: string[] = [];
   #stderrFile: WriteStream | null = null;
@@ -522,6 +525,9 @@ export class AcpAgent {
         cwd: this.cwd,
         mcpServers,
       });
+    } catch (err) {
+      this.#failedLoad = sessionId;
+      throw err;
     } finally {
       this.#replaying = false;
     }
@@ -799,9 +805,12 @@ export class AcpAgent {
 
   #onNotification(msg: IncomingMessage): void {
     if (msg.method !== "session/update") return;
-    const params = msg.params as { update?: SessionUpdate } | undefined;
+    const params = msg.params as
+      | { sessionId?: SessionId; update?: SessionUpdate }
+      | undefined;
     const update = params?.update;
     if (!update || this.#replaying) return;
+    if (params?.sessionId === this.#failedLoad) return;
 
     // Permission requests only carry a toolCallId, so remember the details
     // announced here — otherwise the policy has nothing to judge.

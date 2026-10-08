@@ -511,6 +511,44 @@ test("a failed loadSession leaves no session and passes later updates on", async
   );
 });
 
+test("a load that missed its deadline still drops the replay that comes late", async (t) => {
+  const root = await tempDir(t, "acp-load-late-");
+  const store = await tempDir(t, "acp-load-late-store-");
+  const harness = (scenario: string, seen: CapturedEvent[]) => {
+    const agent = new AcpAgent({
+      name: "mock-load",
+      command: process.execPath,
+      args: [MOCK_AGENT, "--scenario", scenario, "--store", store],
+      cwd: root,
+      requestTimeoutMs: 200,
+      onEvent: (e) => seen.push(e),
+    });
+    t.after(() => agent.stop());
+    return agent;
+  };
+  const first = harness("remember", []);
+  await first.start();
+  const sid = await first.newSession();
+  await first.prompt("alpha");
+  await first.stop();
+
+  // `slow` loads after its deadline, then answers the prompt after that, so
+  // the prompt's end comes after the late replay.
+  const seen: CapturedEvent[] = [];
+  const second = harness("slow", seen);
+  await second.start();
+  await assert.rejects(second.loadSession(sid), /did not answer/);
+  await second.newSession();
+  await second.prompt("beta");
+  assert.deepEqual(
+    seen
+      .map((e) => e.update.sessionUpdate)
+      .filter((k) => !k.startsWith("_client_")),
+    ["agent_message_chunk"],
+    "only the new answer",
+  );
+});
+
 // --- #guardWrite · mutation without asking -----------------------------------
 
 test("an allowed permission is not re-decided when the same write crosses the wire", async (t) => {

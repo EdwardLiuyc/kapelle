@@ -683,8 +683,8 @@ export interface SessionNotification extends Meta {
 }
 
 // ---------------------------------------------------------------------------
-// Outbound — what we send (typed per issue #10; `session/load` and
-// `session/close` are typed only, the calls themselves are M1a-3+)
+// Outbound — what we send (typed per issue #10; `session/close` is typed
+// only, and a room revive sends `session/load`, M6-7b)
 // ---------------------------------------------------------------------------
 
 export interface FileSystemCapabilities extends Meta {
@@ -810,7 +810,7 @@ export interface CancelNotification extends Meta {
   params: { sessionId: SessionId } & Meta;
 }
 
-/** Typed only — not sent until M1a-3 lands `session/load` (issue #10). */
+/** Sent by `AcpAgent.loadSession`, for a room revive (M6-7b). */
 export interface LoadSessionRequest extends Meta {
   jsonrpc: "2.0";
   id: number | string;

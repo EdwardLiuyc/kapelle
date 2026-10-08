@@ -41,8 +41,10 @@ const SCENARIOS = {
     "like stall, but ignores SIGTERM and stays alive after its stdin closes",
   repeat: "the same tool title on a loop, then ends the turn itself",
   remember: "answers each turn with the previous turn's prompt, per session",
+  "no-load":
+    "like remember, but the handshake says loadSession: false, even with --store",
   split: "remember, with each answer sent in two chunks",
-  slow: "like remember, but answers after SLOW_MS; a cancel ends the turn at once",
+  slow: "like remember, but answers after SLOW_MS, and loads after it too; a cancel ends the turn at once",
   "mode-refused-once": "refuses the first session/set_mode, then accepts",
   "diff-first":
     "the default path, with the write's diff block sent before the ask",
@@ -240,7 +242,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     reply(msg.id, {
       protocolVersion: 1,
       agentCapabilities: {
-        loadSession: store !== null,
+        loadSession: store !== null && scenario !== "no-load",
         promptCapabilities: {},
       },
       agentInfo: { name: "mock-agent", version: "0.1.0" },
@@ -274,6 +276,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       fail(msg.id, `no stored session "${sid}"`);
       return;
     }
+    if (scenario === "slow") await sleep(SLOW_MS);
     // The old turns, as the `remember` fixture answered them.
     prompts.forEach((text, i) => {
       update(sid, {
@@ -347,6 +350,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // join the pieces of one answer.
     if (
       scenario === "remember" ||
+      scenario === "no-load" ||
       scenario === "slow" ||
       scenario === "split"
     ) {

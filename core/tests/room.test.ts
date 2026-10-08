@@ -1978,6 +1978,17 @@ test("a harness with no measured load revives fresh, though it advertises one", 
   assert.notEqual(back.p.sessionId, p.sessionId);
 });
 
+test("a harness that does not advertise loadSession revives fresh, though the registry says it loads", async (t) => {
+  const { repo, room, p, file } = await loading(t, "no-load");
+  await p.send("one");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  assert.deepEqual(answersOf(back.of), ["previous: (none)"]);
+  assert.equal(back.p.resumed, "fresh");
+  assert.notEqual(back.p.sessionId, p.sessionId);
+});
+
 test("a load that fails falls back to a fresh session", async (t) => {
   const { repo, room, p, file } = await loading(t, "remember");
   await p.send("one");
