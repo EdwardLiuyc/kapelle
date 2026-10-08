@@ -1806,7 +1806,8 @@ test("a record with a role outside the set, or a title that is not text, is refu
 
 /** A registry entry for the mock with a store and a measured load, named
  *  `id`, so a restored room resolves it again with `measured.loads`. Removed
- *  after the test. */
+ *  after the test. It changes the module's own `AGENTS`, which is safe only
+ *  because the tests in one file run in turn and each id is unique. */
 async function loadingMock(
   t: TestContext,
   scenario: string,
@@ -1936,6 +1937,22 @@ test("a pause that cancels a live turn reads paused, and the load warns", async 
     () => readRoomRecord(file).participants[0]?.turnCancelled === undefined,
     "the revive never cleared the flag",
   );
+});
+
+test("a person's cancel during a turn makes the next load warn, after an idle pause (#238)", async (t) => {
+  const { repo, room, p, file } = await loading(t, "slow");
+  const turn = p.send("hi");
+  await until(() => p.status() === "busy", "the turn never started");
+  assert.equal(p.cancel(), true);
+  await turn;
+  assert.equal(p.status(), "idle");
+  await room.pause();
+  assert.equal(readRoomRecord(file).participants[0]?.turnCancelled, true);
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("again");
+  assert.equal(revivedOf(back.of)?.resumed, "loaded");
+  assert.equal(revivedOf(back.of)?.memoryMayBeBehind, true);
 });
 
 test("an idle pause loads with no warning", async (t) => {

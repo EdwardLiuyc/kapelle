@@ -1062,7 +1062,10 @@ its files), `paused` (a shutdown stopped it cleanly) or `dismissed`. A message t
 `resumed` is missing until a participant is revived. Then it is `loaded` (since 1.9): the
 participant loaded its old session and remembers the turns before, with the same
 `sessionId`. Or it is `fresh`: it has a new session and a new `sessionId`, and does not
-remember the turns before. A client that does not know a value shows it as text.
+remember the turns before. A client that does not know a value shows it as text. The
+warning that a loaded participant's memory may be behind its files is on the stream only,
+as `memoryMayBeBehind` on `_client_participant_revived`. A client that only polls this
+reply never sees it.
 
 `seq` is the size of the room's log when the daemon answered. The reply counts every line
 up to that `seq`, and a line above it is newer than the reply.
@@ -1388,8 +1391,9 @@ reads every record back:
   line to the log. The mode is sent to the harness again before the message, because a
   load does not keep it.
 - A participant that stopped during a turn may remember less than its files show. That
-  is a `killed` one, or a `paused` one whose turn the shutdown cancelled. Its loaded
-  revive carries `memoryMayBeBehind: true`. Ask it to check its files before it goes on.
+  is a `killed` one, or one with a turn cancelled since its last revive, by a person or
+  by the shutdown. Its loaded revive carries `memoryMayBeBehind: true`. Ask it to check
+  its files before it goes on.
 - After a hard kill, claude has once reported a message nobody sent ("continue"). The
   replay does not carry it, so the daemon cannot filter it out.
 - A dismissed room comes back dismissed. Its stream ends once it has replayed. It never

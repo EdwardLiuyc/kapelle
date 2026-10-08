@@ -36,11 +36,14 @@
  * keep it (§Mode after load). A dismissed room never revives.
  *
  * **A load can remember less than the files show** (§M0-9). That happened
- * only to a harness stopped during a turn, cancelled or cut. So a load after
- * `killed`, or after a pause that cancelled a live turn, says so with
- * `memoryMayBeBehind`. The pause case still reads `paused`; `room.json`
- * keeps it as `turnCancelled`, which only the next revive reads (decided
- * 2026-10-08, #179).
+ * only to a harness stopped during a turn, cancelled or cut: the cut turn
+ * stays in the history it replays. So a load after `killed`, or after any
+ * cancel of a live turn since the last revive (a person's, or a pause's),
+ * says so with `memoryMayBeBehind`. Such a participant can read `idle` or
+ * `paused`; `room.json` keeps the cancel as `turnCancelled`, which only the
+ * next revive reads and clears (decided 2026-10-08, #179; the person's
+ * cancel added in #238). So the flag is about the last revive, not about
+ * the session's whole history.
  *
  * **One checkout per participant** (M6-6a, R14). Each one runs in
  * `stateDirFor(root)/wt/<roomId>/<participantId>`, on the branch
@@ -312,8 +315,9 @@ interface ParticipantRecord {
    *  which are worked out again. */
   notices: RoomNotice[];
   resumed?: "loaded" | "fresh";
-  /** A pause cancelled its live turn, so a load may remember less than the
-   *  files show. Never on the DTO; the next revive clears it. */
+  /** A live turn was cancelled since the last revive, so a load may
+   *  remember less than the files show. Never on the DTO; the next revive
+   *  clears it. */
   turnCancelled?: true;
 }
 
@@ -1503,7 +1507,7 @@ function createParticipant({
         bus.emit(event);
       },
     });
-    let session: string;
+    let session: string | undefined;
     let loaded = false;
     try {
       const init = await next.start();
@@ -1512,12 +1516,10 @@ function createParticipant({
       if (load && spec.measured?.loads && init.agentCapabilities?.loadSession) {
         // A load that fails falls back to fresh, which the revive reports.
         // A harness that died in it fails `newSession` too.
-        loaded = await next.loadSession(load).then(
-          () => true,
-          () => false,
-        );
+        session = await next.loadSession(load).catch(() => undefined);
+        loaded = session !== undefined;
       }
-      session = loaded ? (load ?? "") : await next.newSession();
+      session ??= await next.newSession();
     } catch (err) {
       await next.stop();
       throw err;
@@ -1621,9 +1623,10 @@ function createParticipant({
 
   // A harness that is gone takes its queue with it. The harness reports its
   // exit before the prompt fails (`protocol/agent.ts`). The next message
-  // revives it; a queued one does not, on purpose: it was written for the
-  // session that died, and a fresh one would get it with none of its
-  // context. `_client_queue_cleared` tells the person to send it again.
+  // revives it; a queued one does not, on purpose: it was written before
+  // the stop, and the revive may be fresh, with none of that context, or a
+  // load that remembers less than the files show (§M0-9). The person who
+  // sends it again knows which. `_client_queue_cleared` tells them to.
   const next = () => {
     if (stopped || stopping || dismissed()) return drop();
     const queued = waiting.shift();
@@ -1755,6 +1758,8 @@ function createParticipant({
       // is answered at once.
       turnAbort.abort();
       agent?.cancel();
+      // The history now holds a cut turn, as after a pause's cancel (§M0-9).
+      turnCancelled = true;
       return true;
     },
   };
