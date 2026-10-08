@@ -4104,7 +4104,7 @@ test("an explicit empty agents list, a 32-character name and every role open a r
   }
 });
 
-test("a harness that dies leaves its participant exited, the room active, and a message refused", async (t) => {
+test("a harness that dies leaves its participant exited, the room active, and a message revives it", async (t) => {
   const d = await boot(t);
   const root = await gitRepo(t);
   const cwd = await added(d, root);
@@ -4143,9 +4143,12 @@ test("a harness that dies leaves its participant exited, the room active, and a 
   assert.equal(room && only(room).status, "exited");
   assert.equal(room?.status, "active", "the room outlives its harness (R33)");
 
+  // M6-7a: the next message starts a new harness with a fresh session.
   const r = await api(d, "POST", `/rooms/${id}/messages`, { text: "hi" });
-  assert.equal(r.status, 409);
-  assert.equal(r.body.error.code, "agent_exited");
+  assert.equal(r.status, 202, r.body.error?.message);
+  const back = only(await roomIdle(d, id));
+  assert.equal(back.status, "idle");
+  assert.equal(back.resumed, "fresh");
   assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
 });
 
@@ -7362,4 +7365,198 @@ test("chat.ts on a real terminal gives a refused /diff its line back", {
   await screen.press("x", "@bob /diff x");
   screen.child.stdin.write("\x03");
   assert.equal(await screen.exited, 0, screen.out());
+});
+
+// --- a room across a restart (M6-7a, #151) ----------------------------------
+
+const SLOW = `node ${MOCK_AGENT} --scenario slow`;
+
+/** Every line of a room's log, read from disk. */
+async function roomLog(
+  root: string,
+  id: string,
+): Promise<
+  (Omit<RoomEventLine, "update"> & { update: Record<string, unknown> })[]
+> {
+  const text = await readFile(
+    join(stateDirFor(root), "rooms", id, "events.jsonl"),
+    "utf8",
+  );
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+/** The answers in `lines`, in order. */
+const answersIn = (lines: { update: Record<string, unknown> }[]) =>
+  lines
+    .filter((l) => l.update.sessionUpdate === "agent_message_chunk")
+    .map((l) => (l.update.content as { text: string }).text);
+
+/** A room with one `cmd` participant on a first daemon, and what a second
+ *  daemon on the same directories needs. */
+async function roomToRestart(t: TestContext, cmd: string) {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const cwd = await realpath(await added(first, await gitRepo(t)));
+  const open = await api<RoomReply>(first, "POST", "/rooms", {
+    ...withAgent(cwd, cmd),
+    title: "kept",
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const again = () => boot(t, runtime, [], state);
+  return { first, cwd, id: open.body.id, alice: only(open.body), again };
+}
+
+test("a restart lists the room paused, replays it, and a message revives the participant fresh", async (t) => {
+  const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
+  const sent = await api<RoomReply>(first, "POST", `/rooms/${id}/messages`, {
+    text: "alpha",
+  });
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  await roomIdle(first, id);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const second = await again();
+  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const entry = list.body.find((r) => r.id === id);
+  assert.equal(entry?.status, "paused");
+  assert.deepEqual(
+    entry?.participants.map((p) => p.status),
+    ["paused"],
+  );
+  const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  assert.equal(got.status, 200);
+  assert.equal(got.body.status, "paused");
+  assert.equal(got.body.title, "kept");
+  const back = only(got.body);
+  assert.equal(back.id, alice.id);
+  assert.equal(back.worktree, alice.worktree, "the same checkout");
+  assert.equal(back.branch, alice.branch);
+  assert.equal(back.status, "paused");
+  assert.equal(back.resumed, undefined);
+  const before = await roomLog(cwd, id);
+  assert.deepEqual(answersIn(before), ["previous: (none)"]);
+
+  // Its history replays on the stream of the new daemon.
+  const res = await fetch(`${second.url}/rooms/${id}/events`, {
+    headers: { authorization: `Bearer ${second.token}` },
+  });
+  assert.equal(res.status, 200);
+  const reader = (res.body as ReadableStream<Uint8Array>)
+    .pipeThrough(new TextDecoderStream())
+    .getReader();
+  let text = "";
+  while ((text.match(/^data: /gm) ?? []).length < before.length) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += value;
+  }
+  await reader.cancel();
+  assert.equal((text.match(/^data: /gm) ?? []).length, before.length);
+
+  const revive = await api<RoomReply>(second, "POST", `/rooms/${id}/messages`, {
+    text: "beta",
+  });
+  assert.equal(revive.status, 202, revive.body.error?.message);
+  const after = only(await roomIdle(second, id));
+  assert.equal(after.status, "idle");
+  assert.equal(after.resumed, "fresh");
+  const room = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  assert.equal(room.body.status, "active", "a revive makes the room active");
+
+  const lines = await roomLog(cwd, id);
+  assert.deepEqual(
+    lines.map((l) => l.seq),
+    lines.map((_, i) => i + 1),
+    "one log, with seq carried on",
+  );
+  assert.deepEqual(
+    answersIn(lines),
+    ["previous: (none)", "previous: (none)"],
+    "a fresh session does not remember alpha",
+  );
+  assert.ok(
+    lines
+      .slice(before.length)
+      .some((l) => l.update.sessionUpdate === "_client_participant_revived"),
+  );
+});
+
+test("a shutdown during a turn ends it in the log, and the participant is paused after the restart", async (t) => {
+  const { first, cwd, id, again } = await roomToRestart(t, SLOW);
+  await api(first, "POST", `/rooms/${id}/messages`, { text: "hi" });
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const kinds = (await roomLog(cwd, id)).map((l) => l.update.sessionUpdate);
+  const asked = kinds.indexOf("_client_user_message");
+  assert.ok(asked >= 0);
+  assert.ok(
+    kinds.indexOf("_client_turn_ended") > asked,
+    "the cancelled turn ended in the log",
+  );
+
+  const second = await again();
+  const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  assert.equal(only(got.body).status, "paused");
+});
+
+test("kill -9 during a turn leaves the participant killed after the next boot, and a message revives it", async (t) => {
+  const { first, cwd, id, again } = await roomToRestart(t, SLOW);
+  const record = join(stateDirFor(cwd), "rooms", id, "room.json");
+  await api(first, "POST", `/rooms/${id}/messages`, { text: "hi" });
+  await until(
+    "room.json shows the turn",
+    async () =>
+      JSON.parse(await readFile(record, "utf8")).participants[0]?.status ===
+      "busy",
+  );
+  process.kill(first.pid, "SIGKILL");
+  await first.done;
+  const left = (await roomLog(cwd, id)).length;
+
+  const second = await again();
+  const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  assert.equal(got.body.status, "paused");
+  assert.equal(only(got.body).status, "killed");
+  assert.equal(
+    (await roomLog(cwd, id)).length,
+    left,
+    "the boot adds no line to the log",
+  );
+
+  const revive = await api<RoomReply>(second, "POST", `/rooms/${id}/messages`, {
+    text: "again",
+  });
+  assert.equal(revive.status, 202, revive.body.error?.message);
+  const after = only(await roomIdle(second, id));
+  assert.equal(after.status, "idle");
+  assert.equal(after.resumed, "fresh");
+  assert.deepEqual(answersIn(await roomLog(cwd, id)), ["previous: (none)"]);
+});
+
+test("a dismissed room comes back dismissed after a restart, and a message is refused", async (t) => {
+  const { first, id, again } = await roomToRestart(t, REMEMBER);
+  const gone = await api<RoomReply>(first, "POST", `/rooms/${id}/dismiss`);
+  assert.equal(gone.status, 200);
+  process.kill(first.pid, "SIGTERM");
+  await first.done;
+
+  const second = await again();
+  const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  assert.equal(got.status, 200);
+  assert.equal(got.body.status, "dismissed");
+  assert.equal(only(got.body).status, "dismissed");
+  const late = await api<RoomReply>(second, "POST", `/rooms/${id}/messages`, {
+    text: "hi",
+  });
+  assert.equal(late.status, 409);
+  assert.equal(late.body.error.code, "room_dismissed");
+  const twice = await api<RoomReply>(second, "POST", `/rooms/${id}/dismiss`);
+  assert.equal(twice.status, 409);
+  assert.equal(twice.body.error.code, "room_dismissed");
 });

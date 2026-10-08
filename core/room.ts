@@ -3,11 +3,33 @@
  *
  * **The room owns each harness's lifetime.** A run spawns a harness, sends one
  * prompt and stops it (`core/run.ts`). A room spawns a participant's harness
- * once, sends a prompt per message, and stops it only when the room is
- * dismissed. Measured safe on all four harnesses: a prompt sent after
+ * once, sends a prompt per message, and stops it when the room is dismissed
+ * or paused. Measured safe on all four harnesses: a prompt sent after
  * `end_turn` completes on the same session with the first turn's context kept
  * (`docs/FINDINGS.md` §Multi-turn). A prompt *during* a live turn is still
  * refused, here as `busy` and below as `AcpAgent`'s in-flight guard (#62 R5).
+ *
+ * **A daemon shutdown is a pause, not a dismiss** (M6-7a, R42c). `pause`
+ * cancels each live turn, waits `pauseGraceMs` (2 s, §M0-4) for it to end,
+ * stops each harness and keeps every checkout as it is: nothing is released.
+ * A participant whose turn ended reads `paused`; one whose cancel outlived
+ * the grace reads `killed`, because its memory may not match its files
+ * (R46). A harness that dies by itself reads `killed` during a turn and
+ * `exited` when idle.
+ *
+ * **`room.json` is the room's record** (S4b, R17). It sits beside the event
+ * log, holds the room and every participant in one file, and is written with
+ * a temp file and `rename`, so a reader never sees half of it. It is saved a
+ * moment after each change of the roster or of a status, so a daemon killed
+ * with `kill -9` leaves the statuses it last had. The boot sweep turns those
+ * into `paused` and `killed` (`crashed`, below), and `restoreRoom` builds the
+ * room again from the file, without starting a harness.
+ *
+ * **A stopped participant revives on its next message** (Half A). `paused`,
+ * `killed` and `exited` all take the same path: a new harness in the same
+ * checkout, with a fresh session, so it does not remember earlier turns. The
+ * log gets `_client_participant_revived` and the participant reads
+ * `resumed: "fresh"`. A dismissed room never revives.
  *
  * **One checkout per participant** (M6-6a, R14). Each one runs in
  * `stateDirFor(root)/wt/<roomId>/<participantId>`, on the branch
@@ -17,11 +39,9 @@
  * branch (R35c). A branch holds only what its participant committed, so a
  * participant started from it never sees the other's uncommitted files (R37).
  *
- * **A kept checkout lasts until the next daemon boot.** A room writes no
- * record until M6-7a, so the boot sweep (`core/sweep.ts`) takes every room
- * checkout for an orphan: it removes a clean one and keeps its branch, and
- * keeps a dirty one or one on a detached HEAD. No work is lost; the
- * directory may be.
+ * **A kept checkout lasts while its room has a record.** The boot sweep
+ * (`core/sweep.ts`) keeps every checkout under a room that has a
+ * `room.json`, dismissed rooms too. Deleting a room is #235's.
  *
  * **A roster that changes** (M6-3). `add`, `update` and `remove` change it
  * after the room opens. A name is unique under ASCII case folding (R22), and
@@ -78,7 +98,13 @@
  * when a machine actually runs out of memory or file handles, not before.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 import { AcpAgent, type Policy } from "../protocol/agent.ts";
@@ -90,7 +116,12 @@ import {
   type Warning,
   warningsFor,
 } from "../protocol/registry.ts";
-import { createEventLog, type EventLog } from "./eventlog.ts";
+import {
+  createEventLog,
+  type EventLog,
+  openEventLog,
+  reopenEventLog,
+} from "./eventlog.ts";
 import type { EventBus } from "./events.ts";
 import { newParticipantId } from "./ids.ts";
 import type { PermissionQueue } from "./permissions.ts";
@@ -135,12 +166,13 @@ export class RoomRefusal extends Error {
   }
 }
 
-/** `paused` is M6-7a's; nothing sets it yet. A room whose participant has
- *  exited still reads `active` (R33). */
+/** `paused` from a daemon shutdown until the first revive or add. A room
+ *  whose participant has exited still reads `active` (R33). */
 type RoomStatus = "active" | "paused" | "dismissed";
 
-/** `exited` is a harness that died before the room was dismissed. `paused`
- *  and `killed` are M6-7a's; nothing sets them yet. */
+/** `exited`: the harness died while idle. `killed`: it stopped during a turn
+ *  without a clean end (R46). `paused`: a shutdown stopped it cleanly. All
+ *  three revive on the next message. */
 type ParticipantStatus =
   | "idle"
   | "busy"
@@ -175,6 +207,8 @@ interface RoomNotice {
 /** One agent the request asked for, checked and resolved. */
 export interface AgentRequest {
   spec: ResolvedAgent;
+  /** What the request named, kept so a restored room resolves it again. */
+  source: { agent: string } | { cmd: string };
   name: string;
   role?: Role;
   /** The ref to fork from, such as another participant's `branch`; the
@@ -208,8 +242,10 @@ export interface Participant {
   readonly branch?: string;
   readonly baseSha?: string;
   /** Recorded from the first version, though nothing loads it until
-   *  `session/load` lands (R17, the M2-6 precedent). */
+   *  `session/load` lands (R17, the M2-6 precedent). A revive changes it. */
   readonly sessionId: string;
+  /** `fresh` once a revive gave it a new session; absent before. */
+  readonly resumed?: "fresh";
   /** The room's notices, then this participant's containment and worktree
    *  notices. #13's lines are never dropped, and a room has no terminal of
    *  its own, so the caller publishes them. */
@@ -232,7 +268,48 @@ export interface Participant {
   cancel(): boolean;
 }
 
+/** What the daemon shows about a room beyond its roster. The room saves it
+ *  in `room.json`, and the daemon reads it from `Room.meta`. */
+export interface RoomMeta {
+  id: string;
+  cwd: string;
+  title?: string;
+  createdAt: string;
+  /** Moves on a message, a dismiss, or a roster change (`Room.touch`). */
+  updatedAt: string;
+}
+
+/** One participant in `room.json`. */
+interface ParticipantRecord {
+  id: string;
+  name: string;
+  role?: Role;
+  /** One of the two, as `AgentRequest.source`. */
+  agent?: string;
+  cmd?: string;
+  harness: string;
+  mode: ClientMode;
+  settings: Settings;
+  worktree: string;
+  branch?: string;
+  baseSha?: string;
+  sessionId: string;
+  status: ParticipantStatus;
+  /** Its own notices: the worktree's and the sweep's, not the mode lines,
+   *  which are worked out again. */
+  notices: RoomNotice[];
+  resumed?: "fresh";
+}
+
+/** `room.json`: the room, its own notices and every participant. */
+export interface RoomRecord extends RoomMeta {
+  status: RoomStatus;
+  notices: RoomNotice[];
+  participants: ParticipantRecord[];
+}
+
 export interface Room {
+  readonly meta: RoomMeta;
   readonly participants: readonly Participant[];
   /** The room's persisted events, or undefined when it could not be written. */
   readonly eventLog: EventLog | undefined;
@@ -260,6 +337,12 @@ export interface Room {
    *  where it is; `dismiss()` still resolves, because a dismissed room can
    *  never be retried. */
   dismiss(): Promise<void>;
+  /** A daemon shutdown (R42c): cancels each live turn, stops every harness,
+   *  keeps every checkout, saves the room `paused` and closes the log. No
+   *  call works on the room after it. A dismissed room stays dismissed. */
+  pause(): Promise<void>;
+  /** Moves `meta.updatedAt` to now and saves the room. */
+  touch(): void;
 }
 
 /** The harness `agent` or `cmd` names, or a throw naming what is wrong. */
@@ -394,6 +477,8 @@ export function roomAgent(entry: unknown): AgentRequest {
   const spec = roomHarness(agent, cmd);
   const request: AgentRequest = {
     spec,
+    // `cmd` wins when both are given, as `resolveAgent` has it.
+    source: cmd ? { cmd: cmd as string } : { agent: agent as string },
     name: checkName(name, spec.name),
     // R12: `auto` by default, so an unattended room never waits on a person.
     mode: mode === undefined ? "auto" : checkMode(mode),
@@ -444,13 +529,8 @@ export function participantChanges(
   return changes;
 }
 
-export interface RoomOptions {
-  roomId: string;
-  /** The folder the room was asked for; the harness runs here when there is
-   *  no worktree, and at the same subdirectory inside one when there is. */
-  cwd: string;
-  /** From `roomAgents`, added in this order. */
-  agents: AgentRequest[];
+/** What `openRoom` and `restoreRoom` both take. */
+interface RoomDeps {
   /** The preflight the caller already ran (`openWorktrees`). */
   setup: WorktreeSetup;
   bus: EventBus;
@@ -459,55 +539,236 @@ export interface RoomOptions {
   /** The watchdog's warn limits; `WATCHDOG_DEFAULTS` when absent. There is
    *  no TTL in a room (R38). */
   limits?: Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount">;
+  /** How long `pause` waits for a cancelled turn to end. */
+  pauseGraceMs?: number;
 }
+
+export interface RoomOptions extends RoomDeps {
+  roomId: string;
+  /** The folder the room was asked for; the harness runs here when there is
+   *  no worktree, and at the same subdirectory inside one when there is. */
+  cwd: string;
+  title?: string;
+  /** From `roomAgents`, added in this order. */
+  agents: AgentRequest[];
+}
+
+/** §M0-4: every measured harness ends a cancelled turn within 64 ms, so a
+ *  turn still live after 2 s is not going to end by itself. */
+const PAUSE_GRACE_MS = 2_000;
 
 type Notify = (text: string, kind?: Warning["kind"]) => void;
 
-/** One participant, and what the room needs to end it. */
+/** One participant, and what the room needs to end and save it. */
 interface Member {
   participant: Participant;
   spec: ResolvedAgent;
+  source: AgentRequest["source"];
+  /** Its own notices, which `room.json` keeps. */
+  own: RoomNotice[];
   stop: () => Promise<void>;
+  pause: (graceMs: number) => Promise<void>;
+  launch: () => Promise<void>;
   setMode: (mode: ClientMode) => void;
   hold: <T>(work: Promise<T>) => Promise<T>;
   onNotice: Notify;
 }
 
+/** Where a room's record and log live. */
+const roomDir = (root: string, roomId: string) =>
+  join(stateDirFor(root), "rooms", roomId);
+
+/** `room.json` for the room `roomId` of the repository at `root`. */
+export const roomFile = (root: string, roomId: string) =>
+  join(roomDir(root, roomId), "room.json");
+
+/**
+ * Writes `room.json` with a temp file and `rename`, as `run.json` is, so a
+ * reader sees the old record or the new one and never half of either. The
+ * temp name carries the pid, because the boot sweep writes the same file.
+ */
+export function writeRoomRecord(path: string, record: RoomRecord): void {
+  const tmp = `${path}.${process.pid}.tmp`;
+  // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
+  // pi-lens-ignore: no-raw-json-store-write
+  writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  renameSync(tmp, path);
+}
+
+const ROOM_STATUSES: readonly RoomStatus[] = ["active", "paused", "dismissed"];
+const PARTICIPANT_STATUSES: readonly ParticipantStatus[] = [
+  "idle",
+  "busy",
+  "exited",
+  "paused",
+  "killed",
+  "dismissed",
+];
+
+/** `room.json`, read and checked, or a throw naming what is wrong. The file
+ *  is ours, so the check is for a crash or a hand edit, not an attack: it
+ *  is in the operator's own state directory, next to what it names. */
+export function readRoomRecord(path: string): RoomRecord {
+  const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+  const bad = (why: string) => new Error(`${path}: ${why}`);
+  if (typeof raw !== "object" || raw === null) throw bad("not an object");
+  const r = raw as Record<string, unknown>;
+  for (const key of ["id", "cwd", "createdAt", "updatedAt"]) {
+    if (typeof r[key] !== "string") throw bad(`"${key}" is not a string`);
+  }
+  if (!ROOM_STATUSES.includes(r.status as RoomStatus)) {
+    throw bad(`unknown status ${JSON.stringify(r.status)}`);
+  }
+  if (!Array.isArray(r.participants)) throw bad('"participants" is not a list');
+  for (const p of r.participants as Record<string, unknown>[]) {
+    for (const key of ["id", "name", "harness", "worktree", "sessionId"]) {
+      if (typeof p?.[key] !== "string") {
+        throw bad(`a participant's "${key}" is not a string`);
+      }
+    }
+    if (typeof p.agent !== "string" && typeof p.cmd !== "string") {
+      throw bad(`participant ${p.id} names no "agent" or "cmd"`);
+    }
+    if (!MODES.includes(p.mode as ClientMode)) {
+      throw bad(`participant ${p.id} has mode ${JSON.stringify(p.mode)}`);
+    }
+    if (!PARTICIPANT_STATUSES.includes(p.status as ParticipantStatus)) {
+      throw bad(`participant ${p.id} has status ${JSON.stringify(p.status)}`);
+    }
+  }
+  return {
+    ...(raw as RoomRecord),
+    notices: Array.isArray(r.notices) ? (r.notices as RoomNotice[]) : [],
+    participants: (r.participants as ParticipantRecord[]).map((p) => ({
+      ...p,
+      settings: {
+        allowReadOutsideRoot: p.settings?.allowReadOutsideRoot === true,
+      },
+      notices: Array.isArray(p.notices) ? p.notices : [],
+    })),
+  };
+}
+
+/**
+ * What a record says once its daemon is gone (R46). A room still `active`
+ * is `paused`; a participant that was `busy` stopped during a turn without a
+ * clean end, so it is `killed`, and one that was `idle` is `paused`. The
+ * other statuses stay. A dismissed room is left as it is. The boot sweep
+ * writes this; `restoreRoom` applies it too, for a record the sweep could
+ * not write.
+ */
+export function crashed(record: RoomRecord): RoomRecord {
+  if (record.status !== "active") return record;
+  return {
+    ...record,
+    status: "paused",
+    participants: record.participants.map((p) =>
+      p.status === "busy"
+        ? { ...p, status: "killed" }
+        : p.status === "idle"
+          ? { ...p, status: "paused" }
+          : p,
+    ),
+  };
+}
+
 /** Opens a room and resolves once every participant's harness has a
  *  session. A harness that cannot start is a throw, never a dead
- *  participant (S13). */
+ *  participant (S13). Nothing is saved for a room that did not open. */
 export async function openRoom({
   roomId,
   cwd,
+  title,
   agents,
-  setup,
-  bus,
-  permissions,
-  limits = WATCHDOG_DEFAULTS,
+  ...deps
 }: RoomOptions): Promise<Room> {
+  const now = new Date().toISOString();
+  const meta: RoomMeta = { id: roomId, cwd, createdAt: now, updatedAt: now };
+  if (title !== undefined) meta.title = title;
+  const built = await buildRoom(deps, meta);
+  for (const request of agents) {
+    try {
+      await built.room.add(request);
+    } catch (err) {
+      await built.room.dismiss();
+      throw err;
+    }
+  }
+  built.keepSaved();
+  return built.room;
+}
+
+/**
+ * The room a `room.json` names, as an earlier daemon left it (M6-7a). No
+ * harness starts: each participant waits, `paused`, `killed` or `exited`,
+ * for its next message. Each checkout is held again, never created. The log
+ * is reopened for appending, with `seq` carried on, or read only for a
+ * dismissed room. Throws when a participant's harness no longer resolves.
+ */
+export async function restoreRoom({
+  record,
+  ...deps
+}: RoomDeps & { record: RoomRecord }): Promise<Room> {
+  const from = crashed(record);
+  const meta: RoomMeta = {
+    id: from.id,
+    cwd: from.cwd,
+    createdAt: from.createdAt,
+    updatedAt: from.updatedAt,
+  };
+  if (from.title !== undefined) meta.title = from.title;
+  const built = await buildRoom(deps, meta, from);
+  built.keepSaved();
+  return built.room;
+}
+
+/** The room both entries build: empty for `openRoom`, or the roster of
+ *  `from` for `restoreRoom`. Nothing is saved until `keepSaved`. */
+async function buildRoom(
+  {
+    setup,
+    bus,
+    permissions,
+    limits = WATCHDOG_DEFAULTS,
+    pauseGraceMs = PAUSE_GRACE_MS,
+  }: RoomDeps,
+  meta: RoomMeta,
+  from?: RoomRecord,
+): Promise<{ room: Room; keepSaved: () => void }> {
   const { worktrees, notice, root } = setup;
+  const roomId = meta.id;
+  const { cwd } = meta;
   // The room's own lines: only the event log's today. With no participant
   // nothing publishes them, and a log failure shows only as `no_event_log`
   // on `GET /rooms/:id/events`. A room has no notices on the wire, so every
   // participant shows them before its own.
-  const roomNotices: RoomNotice[] = [];
+  const roomNotices: RoomNotice[] = from ? [...from.notices] : [];
   const onRoomNotice: Notify = (text, kind) =>
     roomNotices.push(kind ? { text, kind } : { text });
 
   // #129: a room asks nothing of the operator's repository either — its log
   // and stderr live in the same workspace as a run's, outside the checkout.
-  const logDir = join(stateDirFor(root), "rooms", roomId);
+  const logDir = roomDir(root, roomId);
+  const logPath = join(logDir, "events.jsonl");
   let eventLog: EventLog | undefined;
   try {
     mkdirSync(logDir, { recursive: true });
-    const log = createEventLog(join(logDir, "events.jsonl"), (err) =>
-      onRoomNotice(`cannot write event log: ${err.message}`),
-    );
-    eventLog = log;
-    // The bus's `agent` is the participant id (S10).
-    bus.addListener(({ agent, update }) =>
-      log.append({ roomId, participantId: agent, update }),
-    );
+    const onError = (err: Error) =>
+      onRoomNotice(`cannot write event log: ${err.message}`);
+    if (from?.status === "dismissed") {
+      // Read only: nothing writes to a dismissed room, and its stream ends
+      // once it has replayed, as a live dismiss ends it.
+      eventLog = await openEventLog(logPath);
+    } else {
+      const log = from
+        ? await reopenEventLog(logPath, onError)
+        : createEventLog(logPath, onError);
+      eventLog = log;
+      // The bus's `agent` is the participant id (S10).
+      bus.addListener(({ agent, update }) =>
+        log.append({ roomId, participantId: agent, update }),
+      );
+    }
   } catch (err) {
     onRoomNotice(
       `cannot write room logs to ${logDir}: ${err instanceof Error ? err.message : String(err)}`,
@@ -535,9 +796,81 @@ export async function openRoom({
   // It watches harnesses that already keep the loop alive.
   sweep.unref();
 
-  let dismissing: Promise<void> | undefined;
+  let dismissing: Promise<void> | undefined =
+    from?.status === "dismissed" ? Promise.resolve() : undefined;
+  let pausing: Promise<void> | undefined;
+  /** `paused` until the first revive or add. */
+  let paused = from?.status === "paused";
   const members: Member[] = [];
   const participants: Participant[] = [];
+
+  // --- room.json ---------------------------------------------------------
+  let saving = false;
+  let saveFailed = false;
+  const recordOf = (m: Member): ParticipantRecord => {
+    const p = m.participant;
+    return {
+      id: p.id,
+      name: p.name,
+      ...(p.role && { role: p.role }),
+      ...m.source,
+      harness: p.harness,
+      mode: p.mode,
+      settings: { allowReadOutsideRoot: p.settings.allowReadOutsideRoot },
+      worktree: p.worktree,
+      ...(p.branch && { branch: p.branch }),
+      ...(p.baseSha && { baseSha: p.baseSha }),
+      sessionId: p.sessionId,
+      status: p.status(),
+      notices: [...m.own],
+      ...(p.resumed && { resumed: p.resumed }),
+    };
+  };
+  const status = (): RoomStatus =>
+    dismissing ? "dismissed" : paused ? "paused" : "active";
+  const save = () => {
+    if (!saving) return;
+    try {
+      writeRoomRecord(join(logDir, "room.json"), {
+        ...meta,
+        status: status(),
+        notices: [...roomNotices],
+        participants: members.map(recordOf),
+      });
+    } catch (err) {
+      // Once: a full disk would add the same line on every turn.
+      if (saveFailed) return;
+      saveFailed = true;
+      onRoomNotice(
+        `cannot save the room record in ${logDir}: ` +
+          `${err instanceof Error ? err.message : String(err)}; ` +
+          "a daemon restart will not bring this room back",
+      );
+    }
+  };
+  // A moment after the event, not at it: a turn's state is set just after
+  // its line goes out, and one save covers a burst of lines.
+  let saveQueued = false;
+  const saveSoon = () => {
+    if (saveQueued || !saving) return;
+    saveQueued = true;
+    setImmediate(() => {
+      saveQueued = false;
+      save();
+    });
+  };
+  const SAVED_ON = new Set([
+    "_client_participant_added",
+    "_client_participant_changed",
+    "_client_participant_removed",
+    "_client_participant_revived",
+    "_client_user_message",
+    "_client_turn_ended",
+    "_client_harness_exited",
+  ]);
+  bus.addListener(({ update }) => {
+    if (SAVED_ON.has(update.sessionUpdate)) saveSoon();
+  });
 
   // **Never `commit` (R37).** The supervisor stays out of the commit business:
   // a participant commits its own branch, and whatever is left uncommitted at
@@ -603,8 +936,13 @@ export async function openRoom({
   const pending = new Set<AgentRequest>();
   const dismissed = () =>
     new RoomRefusal("room_dismissed", "the room is dismissed");
+  /** Any call after a pause: the daemon is going down. */
+  const ended = () => dismissing !== undefined || pausing !== undefined;
 
   const teardown = () => {
+    // A paused room is the daemon's last act; a dismiss then has nothing
+    // left to stop, and the record must stay `paused`.
+    if (pausing) return pausing;
     dismissing ??= (async () => {
       try {
         await Promise.allSettled(inflight);
@@ -614,53 +952,120 @@ export async function openRoom({
         }
       } finally {
         clearInterval(sweep);
+        save();
         await eventLog?.close();
       }
     })();
     return dismissing;
   };
 
+  const pause = () => {
+    if (dismissing) return dismissing;
+    pausing ??= (async () => {
+      try {
+        await Promise.allSettled(inflight);
+        // In parallel, as a dismiss is (S6): the bound is one grace, not N.
+        await Promise.all(members.map((m) => m.pause(pauseGraceMs)));
+        paused = true;
+      } finally {
+        clearInterval(sweep);
+        save();
+        await eventLog?.close();
+      }
+    })();
+    return pausing;
+  };
+
+  /** A stderr log per harness start, as `AcpAgent` opens them with `ax`: a
+   *  revive must not write into the first harness's file. */
+  const stderrFor = (id: string) => () => {
+    if (!eventLog) return undefined;
+    const first = join(logDir, `${id}.stderr.log`);
+    return existsSync(first)
+      ? join(logDir, `${id}.${Date.now()}.stderr.log`)
+      : first;
+  };
+
+  const makeMember = (
+    request: AgentRequest,
+    id: string,
+    worktree: string,
+    info: { branch: string; baseSha: string } | undefined,
+    own: RoomNotice[],
+    saved?: ParticipantRecord,
+  ): Member => {
+    const onNotice: Notify = (text, kind) =>
+      own.push(kind ? { text, kind } : { text });
+    const made = createParticipant({
+      id,
+      roomId,
+      permissions,
+      request,
+      worktree,
+      info,
+      bus,
+      notices: () => [...roomNotices, ...own],
+      stderrLog: stderrFor(id),
+      dismissed: () => dismissing !== undefined,
+      watchdog,
+      limits: watchLimits,
+      ...(saved && { saved }),
+      onRevive: () => {
+        paused = false;
+      },
+    });
+    return {
+      ...made,
+      spec: request.spec,
+      source: request.source,
+      own,
+      onNotice,
+    };
+  };
+
   const spawn = async (request: AgentRequest, base: string | undefined) => {
     const id = newParticipantId();
     const own: RoomNotice[] = [];
-    const onNotice: Notify = (text, kind) =>
-      own.push(kind ? { text, kind } : { text });
-    if (notice) onNotice(notice);
+    if (notice) own.push({ text: notice });
 
-    // Taken here rather than in `startParticipant`, so a rollback knows
-    // which path to look at.
+    // Taken here rather than in the participant, so a rollback knows which
+    // path to look at.
     let worktree: string | undefined;
-    let started: Awaited<ReturnType<typeof startParticipant>>;
+    let made: Member;
     try {
       worktree = worktrees ? await worktrees.acquire(id, base) : cwd;
-      started = await startParticipant({
-        id,
-        roomId,
-        permissions,
-        request,
-        worktree,
-        info: worktrees?.info(id),
-        bus,
-        notices: () => [...roomNotices, ...own],
-        stderrLog: eventLog ? join(logDir, `${id}.stderr.log`) : undefined,
-        dismissed: () => dismissing !== undefined,
-        watchdog,
-        limits: watchLimits,
-      });
+      const info = worktrees?.info(id);
+      if (info) {
+        bus.emit({
+          agent: id,
+          update: {
+            sessionUpdate: "_client_worktree_created",
+            // Listed, not spread, as `core/run.ts` does: a wider `info` must
+            // not shadow `path` (#85).
+            path: worktree,
+            branch: info.branch,
+            baseSha: info.baseSha,
+          },
+        });
+      }
+      made = makeMember(request, id, worktree, info, own);
+      await made.launch();
     } catch (err) {
       await rollback(id, worktree);
       throw err instanceof BadBase
         ? new RoomRefusal("invalid_request", err.message)
         : err;
     }
-    // A dismiss that began while this harness was starting did not see it.
-    if (dismissing) {
-      await started.stop();
+    // A dismiss or pause that began while this harness was starting did not
+    // see it.
+    if (ended()) {
+      await made.stop();
       await rollback(id, worktree);
       throw dismissed();
     }
-    members.push({ ...started, spec: request.spec, onNotice });
-    participants.push(started.participant);
+    members.push(made);
+    participants.push(made.participant);
+    paused = false;
     const { role } = request;
     bus.emit({
       agent: id,
@@ -672,13 +1077,13 @@ export async function openRoom({
         mode: request.mode,
       },
     });
-    return started.participant;
+    return made.participant;
   };
 
   const start = async (request: AgentRequest) => {
     // Everything up to the first `await` runs at once, so the check and the
     // reservation cannot interleave with another add.
-    if (dismissing) throw dismissed();
+    if (ended()) throw dismissed();
     const refused = clash([...participants, ...pending], request);
     if (refused) throw refused;
     const { base } = request;
@@ -708,7 +1113,7 @@ export async function openRoom({
   };
 
   const update = (id: string, changes: ParticipantChanges) => {
-    if (dismissing) throw dismissed();
+    if (ended()) throw dismissed();
     const found = member(id);
     const p = found.participant;
     const others = participants.filter((o) => o !== p);
@@ -737,7 +1142,7 @@ export async function openRoom({
   };
 
   const remove = async (id: string) => {
-    if (dismissing) throw dismissed();
+    if (ended()) throw dismissed();
     const found = member(id);
     // Off the roster before the first `await`, so its name is free and a
     // second remove is told it is gone.
@@ -759,7 +1164,7 @@ export async function openRoom({
   };
 
   const forward = async (targetId: string, fromId: string) => {
-    if (dismissing) throw dismissed();
+    if (ended()) throw dismissed();
     if (targetId === fromId) {
       throw new RoomRefusal(
         "invalid_request",
@@ -826,31 +1231,70 @@ export async function openRoom({
     return target;
   };
 
-  for (const request of agents) {
-    try {
-      await track(start(request));
-    } catch (err) {
-      await teardown();
-      throw err;
-    }
+  // A restored roster: each participant as it was saved, its checkout held
+  // again so a dismiss can release it.
+  for (const saved of from?.participants ?? []) {
+    const spec = resolveAgent(saved.agent ?? "", saved.cmd);
+    const request: AgentRequest = {
+      spec,
+      source:
+        saved.cmd !== undefined
+          ? { cmd: saved.cmd }
+          : { agent: saved.agent as string },
+      name: saved.name,
+      mode: saved.mode,
+      settings: saved.settings,
+      ...(saved.role && { role: saved.role }),
+    };
+    const info =
+      saved.branch && saved.baseSha
+        ? { branch: saved.branch, baseSha: saved.baseSha }
+        : undefined;
+    if (info) worktrees?.adopt(saved.id, info);
+    const m = makeMember(
+      request,
+      saved.id,
+      saved.worktree,
+      info,
+      [...saved.notices],
+      saved,
+    );
+    members.push(m);
+    participants.push(m.participant);
   }
 
-  return {
+  const room: Room = {
+    meta,
     participants,
     eventLog,
-    status: () => (dismissing ? "dismissed" : "active"),
+    status,
     add: (request) => track(start(request)),
     update,
     remove: (id) => track(remove(id)),
     fastForward: (targetId, fromId) => track(forward(targetId, fromId)),
     dismiss: teardown,
+    pause,
+    touch() {
+      meta.updatedAt = new Date().toISOString();
+      save();
+    },
+  };
+  return {
+    room,
+    keepSaved() {
+      saving = true;
+      save();
+    },
   };
 }
 
-/** Starts one harness in the participant's checkout and opens its session.
- *  On a throw it has stopped whatever it started; the caller releases the
- *  checkout. */
-async function startParticipant({
+/**
+ * One participant. A new one has no harness until the room calls `launch`;
+ * a restored one has none until its next message revives it. On a throw,
+ * `launch` has stopped whatever it started; the caller releases the
+ * checkout.
+ */
+function createParticipant({
   id,
   roomId,
   permissions,
@@ -863,6 +1307,8 @@ async function startParticipant({
   dismissed,
   watchdog,
   limits,
+  saved,
+  onRevive,
 }: {
   id: string;
   roomId: string;
@@ -875,31 +1321,25 @@ async function startParticipant({
   /** The room's and the checkout's notices; the participant adds the lines
    *  that depend on its mode. */
   notices: () => readonly RoomNotice[];
-  stderrLog: string | undefined;
+  /** The stderr log for the next harness, or undefined for none. */
+  stderrLog: () => string | undefined;
   dismissed: () => boolean;
   watchdog: Watchdog;
   limits: WatchdogLimits;
-}): Promise<{
-  participant: Participant;
-  stop: () => Promise<void>;
-  setMode: (mode: ClientMode) => void;
-  hold: <T>(work: Promise<T>) => Promise<T>;
-}> {
-  if (info) {
-    bus.emit({
-      agent: id,
-      update: {
-        sessionUpdate: "_client_worktree_created",
-        // Listed, not spread, as `core/run.ts` does: a wider `info` must not
-        // shadow `path` (#85).
-        path: worktree,
-        branch: info.branch,
-        baseSha: info.baseSha,
-      },
-    });
-  }
-
-  let exited = false;
+  /** A restored participant's record; absent for a new one. */
+  saved?: ParticipantRecord;
+  /** A revive gave the harness a new session. */
+  onRevive: () => void;
+}): Omit<Member, "spec" | "source" | "own" | "onNotice"> {
+  /** The live harness; undefined before `launch` and once it has stopped. */
+  let agent: AcpAgent | undefined;
+  /** Why there is no harness, once there was one (R46). */
+  let stopped: "exited" | "killed" | "paused" | undefined =
+    saved?.status === "exited" || saved?.status === "killed"
+      ? saved.status
+      : saved && "paused";
+  let sessionId = saved?.sessionId ?? "";
+  let resumed = saved?.resumed;
   let mode = initialMode;
   // Counts this participant's turns from 1 (S12's `turn`), and the live
   // turn's cancel. A turn that ends for any reason aborts it, which denies
@@ -920,24 +1360,6 @@ async function startParticipant({
   // `safe` reads nothing outside the checkout, whatever the setting says,
   // as `resolvePolicy` has it for a run.
   const readsOutside = () => mode !== "safe" && settings.allowReadOutsideRoot;
-  const agent = new AcpAgent({
-    name: spec.name,
-    command: spec.launch.command,
-    args: spec.launch.args,
-    env: resolveEnv(spec.launch.env),
-    cwd: worktree,
-    policy,
-    allowReadOutsideRoot: readsOutside(),
-    stderrLog,
-    onEvent: ({ update }) => {
-      if (update.sessionUpdate === "_client_harness_exited") exited = true;
-      // Named by id, not by harness name (S10). Only the harness's own
-      // events feed the watchdog, so its warning never resets it.
-      const event = { agent: id, update };
-      watchdog.note(event);
-      bus.emit(event);
-    },
-  });
 
   // The lines that name the mode: `warningsFor`'s, and what the last mode
   // send said. A mode change replaces them, so `notices` shows the current
@@ -948,7 +1370,8 @@ async function startParticipant({
   // (`harnessModeId`). Sent at session start, then before the first turn
   // after a change that moves it, never during a turn. `sent` is the id the
   // harness was last told. A send that failed is tried again before the next
-  // turn; a mode with no id is never sent.
+  // turn; a mode with no id is never sent. A new harness starts with none
+  // sent: a harness keeps no mode across processes.
   let sent: string | undefined;
   let failure: { modeId: string; why: string } | undefined;
   const unsent = () => {
@@ -957,7 +1380,7 @@ async function startParticipant({
   };
   const syncMode = async () => {
     const modeId = harnessModeId(spec, mode);
-    if (!modeId) return;
+    if (!modeId || !agent) return;
     try {
       await agent.setMode(modeId);
       sent = modeId;
@@ -973,9 +1396,9 @@ async function startParticipant({
   // the not-negotiated line is never suppressible (#13).
   const modeSend = (): RoomNotice[] => {
     const modeId = harnessModeId(spec, mode);
-    if (!modeId) return [{ text: modeLine(agent.name, mode) }];
+    if (!modeId) return [{ text: modeLine(spec.name, mode) }];
     if (failure?.modeId === modeId) {
-      return [{ text: modeLine(agent.name, mode, failure) }];
+      return [{ text: modeLine(spec.name, mode, failure) }];
     }
     return [];
   };
@@ -984,8 +1407,68 @@ async function startParticipant({
   /** A fast-forward of this checkout (M6-11a). It counts as busy, so a
    *  message queues behind it rather than start a turn on moving files. */
   let held: Promise<unknown> | undefined;
+  /** Set by a remove, a dismiss or a pause: nothing starts after it. */
   let stopping = false;
   const waiting: { text: string; done: () => void }[] = [];
+
+  let version: string | undefined;
+  const warn = () => {
+    modeLines = warningsFor(spec.name, spec, mode, version).map(
+      ({ text, kind }) => (kind ? { text, kind } : { text }),
+    );
+  };
+  if (saved) warn();
+
+  /** Starts a harness in the checkout and opens a fresh session. */
+  const launch = async () => {
+    const next: AcpAgent = new AcpAgent({
+      name: spec.name,
+      command: spec.launch.command,
+      args: spec.launch.args,
+      env: resolveEnv(spec.launch.env),
+      cwd: worktree,
+      policy,
+      allowReadOutsideRoot: readsOutside(),
+      stderrLog: stderrLog(),
+      onEvent: ({ update }) => {
+        // Only the live harness's exit stops the participant. A pause or a
+        // remove sets the status itself. One that dies during a turn may
+        // have left its files and its memory apart (R46).
+        if (
+          update.sessionUpdate === "_client_harness_exited" &&
+          agent === next
+        ) {
+          agent = undefined;
+          if (!stopping) stopped = turn ? "killed" : "exited";
+        }
+        // Named by id, not by harness name (S10). Only the harness's own
+        // events feed the watchdog, so its warning never resets it.
+        const event = { agent: id, update };
+        watchdog.note(event);
+        bus.emit(event);
+      },
+    });
+    let session: string;
+    try {
+      const init = await next.start();
+      version = init.agentInfo?.version;
+      warn();
+      session = await next.newSession();
+    } catch (err) {
+      await next.stop();
+      throw err;
+    }
+    // A stop that came while this harness was starting did not see it.
+    if (stopping) {
+      await next.stop();
+      throw new Error("the participant is stopping");
+    }
+    agent = next;
+    sessionId = session;
+    sent = undefined;
+    failure = undefined;
+    await syncMode();
+  };
 
   // Never sent, so each waiting `send` resolves here.
   const drop = () => {
@@ -998,6 +1481,23 @@ async function startParticipant({
     for (const { done } of dropped) done();
   };
 
+  /** A new harness with a fresh session, for a participant that has none
+   *  (Half A). It does not remember earlier turns, and says so. */
+  const revive = async () => {
+    await launch();
+    stopped = undefined;
+    resumed = "fresh";
+    bus.emit({
+      agent: id,
+      update: {
+        sessionUpdate: "_client_participant_revived",
+        resumed: "fresh",
+        sessionId,
+      },
+    });
+    onRevive();
+  };
+
   const begin = (text: string): Promise<void> => {
     turns += 1;
     const controller = new AbortController();
@@ -1007,14 +1507,21 @@ async function startParticipant({
       update: { sessionUpdate: "_client_user_message", text, turn: turns },
     });
     const watch = watchdog.watch(id, limits);
-    // At once when the harness's mode is current, so a cancel that follows
-    // `send` reaches a turn the harness already has. A turn cancelled while
-    // its mode was being sent never sends its prompt.
-    const prompt = () =>
-      controller.signal.aborted
-        ? { stopReason: "cancelled" as const }
-        : agent.prompt(text);
-    turn = (unsent() ? syncMode().then(prompt) : Promise.resolve(prompt()))
+    // At once when the harness is up and its mode is current, so a cancel
+    // that follows `send` reaches a turn the harness already has. A turn
+    // cancelled while its harness started or its mode was sent never sends
+    // its prompt.
+    const prompt = () => {
+      if (controller.signal.aborted) {
+        return { stopReason: "cancelled" as const };
+      }
+      if (!agent) throw new Error("the agent's harness has exited");
+      return agent.prompt(text);
+    };
+    const ready = !agent ? revive() : unsent() ? syncMode() : undefined;
+    // `ready` is undefined only when the harness is up, so `prompt` cannot
+    // throw here.
+    turn = (ready ? ready.then(prompt) : Promise.resolve(prompt()))
       .then(
         ({ stopReason }) => {
           bus.emit({
@@ -1042,9 +1549,10 @@ async function startParticipant({
   };
 
   // A harness that is gone takes its queue with it. The harness reports its
-  // exit before the prompt fails (`protocol/agent.ts`).
+  // exit before the prompt fails (`protocol/agent.ts`). The next message
+  // revives it.
   const next = () => {
-    if (exited || stopping || dismissed()) return drop();
+    if (stopped || stopping || dismissed()) return drop();
     const queued = waiting.shift();
     if (queued) void begin(queued.text).then(queued.done);
   };
@@ -1068,31 +1576,40 @@ async function startParticipant({
     drop();
     if (turn) {
       turnAbort.abort();
-      agent.cancel();
+      agent?.cancel();
     }
-    await agent.stop();
+    await agent?.stop();
     await turn;
     await held;
   };
 
-  let version: string | undefined;
-  const warn = () => {
-    modeLines = warningsFor(spec.name, spec, mode, version).map(
-      ({ text, kind }) => (kind ? { text, kind } : { text }),
-    );
+  // A shutdown leaves a participant as a cancel does (R42): the live turn is
+  // cancelled and gets its `_client_turn_ended` before the harness stops. A
+  // turn still live after the grace is cut, so it reads `killed`.
+  const pause = async (graceMs: number) => {
+    stopping = true;
+    drop();
+    const before = stopped;
+    let cut = false;
+    if (turn) {
+      turnAbort.abort();
+      agent?.cancel();
+      const live = turn;
+      let timer: NodeJS.Timeout | undefined;
+      const ended = await Promise.race([
+        live.then(() => true),
+        new Promise<boolean>((ok) => {
+          timer = setTimeout(() => ok(false), graceMs);
+        }),
+      ]);
+      clearTimeout(timer);
+      cut = !ended;
+    }
+    await agent?.stop();
+    await turn;
+    await held;
+    stopped = cut ? "killed" : (before ?? "paused");
   };
-
-  let sessionId: string;
-  try {
-    const init = await agent.start();
-    version = init.agentInfo?.version;
-    warn();
-    sessionId = await agent.newSession();
-    await syncMode();
-  } catch (err) {
-    await agent.stop();
-    throw err;
-  }
 
   // The filter follows at once; the harness's own mode before the next turn.
   // A question that waits under `ask` gets the new mode's answer.
@@ -1100,7 +1617,7 @@ async function startParticipant({
     const leftAsk = mode === "ask" && next !== "ask";
     mode = next;
     if (leftAsk) permissions.answerParticipant(roomId, id, next === "auto");
-    agent.allowReadOutsideRoot = readsOutside();
+    if (agent) agent.allowReadOutsideRoot = readsOutside();
     warn();
   };
 
@@ -1113,18 +1630,23 @@ async function startParticipant({
       return mode;
     },
     get settings() {
-      return { allowReadOutsideRoot: agent.allowReadOutsideRoot };
+      return { allowReadOutsideRoot: readsOutside() };
     },
     worktree,
     ...(info && { branch: info.branch, baseSha: info.baseSha }),
-    sessionId,
+    get sessionId() {
+      return sessionId;
+    },
+    get resumed() {
+      return resumed;
+    },
     get notices() {
       return [...notices(), ...modeLines, ...modeSend()];
     },
     status: () => {
       if (dismissed()) return "dismissed";
-      if (exited) return "exited";
-      return turn || held ? "busy" : "idle";
+      if (turn || held) return "busy";
+      return stopped ?? "idle";
     },
     get queued() {
       return waiting.length;
@@ -1133,8 +1655,8 @@ async function startParticipant({
       if (dismissed()) {
         throw new RoomRefusal("room_dismissed", "the room is dismissed");
       }
-      if (exited || stopping) {
-        throw new RoomRefusal("agent_exited", "the agent's harness has exited");
+      if (stopping) {
+        throw new RoomRefusal("agent_exited", "the agent is stopping");
       }
       if (!turn && !held) return begin(text);
       if (waiting.length >= QUEUE_BOUND) {
@@ -1156,9 +1678,9 @@ async function startParticipant({
       // Before the harness hears of the cancel, so the request it waits on
       // is answered at once.
       turnAbort.abort();
-      agent.cancel();
+      agent?.cancel();
       return true;
     },
   };
-  return { participant, stop, setMode, hold };
+  return { participant, stop, pause, launch, setMode, hold };
 }

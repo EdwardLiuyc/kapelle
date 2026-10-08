@@ -2,9 +2,9 @@
 /**
  * `chat.ts` — a terminal chat over the daemon's rooms (chat MVP).
  *
- * **Experimental.** The room API is Experimental in `docs/CLIENT-API.md`,
- * and nothing here is a compatibility commitment. `kapelle chat` runs this
- * file (S7a).
+ * The room API is stable since contract 1.8 (M6-7a, `docs/CLIENT-API.md`).
+ * This screen is not an API: its keys and lines may change. `kapelle chat`
+ * runs this file (S7a).
  *
  * **The entry only** (M4-7): the arguments, the `new`, `attach`, `list` and
  * `dismiss` verbs, and which screen to open. The screens are in `chat/`:
@@ -46,7 +46,7 @@ import type { RoomDto, RoomListEntry } from "./client/contract.ts";
 import { call, checkVersion, type DaemonAddress } from "./client/daemon.ts";
 import { absoluteFolder, FOLDER_GONE } from "./client/folder.ts";
 
-const USAGE = `usage: (experimental — the room API may change without notice)
+const USAGE = `usage:
   node chat.ts                                              every room, on a terminal
   node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
   node chat.ts new --cmd "<command>" [--name n] [--cwd dir]

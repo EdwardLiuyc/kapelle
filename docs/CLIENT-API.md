@@ -7,8 +7,9 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.7** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
-M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, and M4-6, #204).
+Contract version: **1.8** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, and M6-7a, #151, which made
+rooms stable).
 
 ## Contents
 
@@ -77,7 +78,7 @@ Check for a capability before you use its feature. Ignore names that you do not 
 | `runs` | [Runs](#runs): start, list, read, cancel. |
 | `events` | [The event stream](#the-event-stream) for runs, with replay. |
 | `permissions` | [Permissions](#permissions): list and answer. |
-| `rooms` | [Rooms](#rooms). Experimental. |
+| `rooms` | [Rooms](#rooms). Stable since 1.8. |
 
 ### Stability
 
@@ -106,10 +107,11 @@ Not every part of this API is final yet. Each part has one of three labels:
 | SSE format, `seq`, `Last-Event-ID` | |
 | Heartbeat (`: ping`) and a paused slow reader | Since 1.3 (M5-6). |
 | Event `update` values from the harness (ACP) | Stable as a pass-through. See [Events](#events). |
-| `_client_*` events | Except the room events. See [Events](#events). |
+| `_client_*` events | See [Events](#events). |
 | `GET /permissions`, `GET /permissions/:id`, `POST /permissions/:id` | `GET /permissions/:id` added in 1.1 (M5-4). Questions from rooms since 1.5 (M6-5). `input` since 1.6 (M4-3). `diff` since 1.7 (M4-6). |
 | Error replies (`{error: {code, message}}`) and the error codes | Codes are only added (M5-3). |
 | Request limits: `Content-Type`, body size, unknown fields, read timeout | M5-3. |
+| Everything under `/rooms`, and the room events | Since 1.8 (M6-7a). Rooms survive a daemon restart. |
 
 **Provisional and experimental.** These will change. The last column names the story that
 changes each one.
@@ -117,7 +119,6 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| Everything under `/rooms` | Experimental | M6-7a and later |
 | `GET /harnesses` | Experimental | M4-5 added it for `chat.ts` |
 
 **Planned, not built yet:** cancel one task (M5-8).
@@ -260,7 +261,7 @@ request that is not valid HTTP gets `400`.
 | `dirty_worktree` | `409` | The target checkout has tracked changes, or files the move would overwrite. | Commit or stash them first. Untracked files alone do not refuse. |
 | `no_branch` | `409` | A participant has no branch: its checkout is the shared repository folder, or the branch ref is gone. | There is nothing to move; inspect the participant's worktree. |
 | `room_dismissed` | `409` | The room was dismissed. | Stop. Open a new room. |
-| `agent_exited` | `409` | The participant's harness exited by itself. | Remove the participant and add a new one. M6-7a brings the participant back on the next message. |
+| `agent_exited` | `409` | The participant is stopping: it is being removed, or the daemon is shutting down. A participant whose harness died is not refused: the next message revives it. | Stop. |
 | `no_orchestrator` | `409` | The room has no participant with the `orchestrator` role, so a message has no target. | Open a room with an orchestrator. |
 | `idempotency_conflict` | `409` | This `Idempotency-Key` already started a run with a different body. | Use a new key for new work. |
 | `idempotency_in_progress` | `409` | A request with this `Idempotency-Key` has not answered yet. | Wait, then send the same request again. |
@@ -318,23 +319,23 @@ the `GET` routes take none.
 | `GET /permissions` | Decisions that wait for an answer. |
 | `GET /permissions/:id` | One decision, open or closed. |
 | `POST /permissions/:id` | Answer one decision. |
-| `POST /rooms` | Open a room. Experimental. |
-| `GET /rooms` | List rooms. Experimental. |
-| `GET /rooms/:id` | One room. Experimental. |
-| `POST /rooms/:id/messages` | Send a message to the room's orchestrator. Experimental. |
-| `GET /rooms/:id/events` | A room's event stream. Experimental. |
-| `POST /rooms/:id/dismiss` | End a room. Experimental. |
-| `POST /rooms/:id/agents` | Add a participant. Experimental. |
-| `GET /rooms/:id/agents` | List a room's participants. Experimental. |
-| `GET /rooms/:id/agents/:agentId` | One participant. Experimental. |
-| `PATCH /rooms/:id/agents/:agentId` | Rename a participant, or change its mode or role. Experimental. |
-| `DELETE /rooms/:id/agents/:agentId` | Remove a participant. Experimental. |
-| `POST /rooms/:id/agents/:agentId/messages` | Send a message to one participant. Experimental. |
-| `GET /rooms/:id/agents/:agentId/events` | One participant's lines of the room's stream. Experimental. |
-| `POST /rooms/:id/agents/:agentId/turns/current/cancel` | Cancel a participant's turn and drop its queue. Experimental. |
-| `GET /rooms/:id/agents/:agentId/diff` | What a participant changed in its checkout. Experimental. |
-| `POST /rooms/:id/agents/:agentId/fast-forward` | Move a participant's branch and checkout to another participant's commit. Experimental. |
-| `GET /rooms/:id/agents/:agentId/fast-forward` | The diff a fast-forward would bring. Experimental. |
+| `POST /rooms` | Open a room. |
+| `GET /rooms` | List rooms. |
+| `GET /rooms/:id` | One room. |
+| `POST /rooms/:id/messages` | Send a message to the room's orchestrator. |
+| `GET /rooms/:id/events` | A room's event stream. |
+| `POST /rooms/:id/dismiss` | End a room. |
+| `POST /rooms/:id/agents` | Add a participant. |
+| `GET /rooms/:id/agents` | List a room's participants. |
+| `GET /rooms/:id/agents/:agentId` | One participant. |
+| `PATCH /rooms/:id/agents/:agentId` | Rename a participant, or change its mode or role. |
+| `DELETE /rooms/:id/agents/:agentId` | Remove a participant. |
+| `POST /rooms/:id/agents/:agentId/messages` | Send a message to one participant. |
+| `GET /rooms/:id/agents/:agentId/events` | One participant's lines of the room's stream. |
+| `POST /rooms/:id/agents/:agentId/turns/current/cancel` | Cancel a participant's turn and drop its queue. |
+| `GET /rooms/:id/agents/:agentId/diff` | What a participant changed in its checkout. |
+| `POST /rooms/:id/agents/:agentId/fast-forward` | Move a participant's branch and checkout to another participant's commit. |
+| `GET /rooms/:id/agents/:agentId/fast-forward` | The diff a fast-forward would bring. |
 
 ### `GET /version`
 
@@ -342,7 +343,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 7 },
+  "apiVersion": { "major": 1, "minor": 8 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -788,9 +789,9 @@ with ACP names.
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
 | `_client_harness_spawned` | `pid` | The harness process started. |
-| `_client_harness_exited` | `pid` | The harness process is gone. |
+| `_client_harness_exited` | `pid` | The harness process is gone. In a room, a participant whose harness exits during a turn is `killed`, and one that exits while idle is `exited`. |
 
-**Rooms** (experimental):
+**Rooms**:
 
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
@@ -802,6 +803,7 @@ with ACP names.
 | `_client_participant_changed` | `name?`, `role?`, `mode?` | A rename, or a new role or mode. Only the changed fields are present. `role: null` means the role was cleared. |
 | `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. A no-op move writes none. |
 | `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
+| `_client_participant_revived` | `resumed`, `sessionId` | A `paused`, `killed` or `exited` participant has a new harness in its own checkout. `resumed` is `fresh`: a new session, so it does not remember the turns before. It comes after the `_client_user_message` that revived it, and after the new `_client_harness_spawned`. |
 
 Build the roster from these three events. Then a replay shows the roster as it was at
 each `seq`, and a rename by another client shows too. `client/room.ts` does this for a
@@ -965,8 +967,7 @@ restart. `409` `already_decided` when the question is already closed, for any re
 
 ## Rooms
 
-**Everything in this section is experimental.** The room API will change in M6-7a and
-after. `chat.ts` uses it today.
+Rooms are stable since contract 1.8. `chat.ts` uses them.
 
 A room is a container on one repository. It holds a list of participants. Each
 participant is one harness with one session that stays alive between messages. Each
@@ -979,6 +980,7 @@ participant has its own git branch and checkout. Today:
   queue and answers them in order. The queue is in memory: a daemon restart loses it.
 - A turn is never cut by a clock. A quiet turn gets `_client_stall_warning`, and only a
   cancel ends it.
+- A room survives a daemon restart. See [After a restart](#after-a-restart).
 
 ### `POST /rooms`
 
@@ -1049,9 +1051,16 @@ The reply comes when every harness is ready. This can take some seconds.
 }
 ```
 
-A room's `status` is `active` or `dismissed`. `paused` comes with M6-7a. A participant's
-`status` is `idle` (waits for a message), `busy` (answers a message), `exited` (the
-harness died) or `dismissed`. `paused` and `killed` come with M6-7a.
+A room's `status` is `active`, `paused` (the daemon stopped, see
+[After a restart](#after-a-restart)) or `dismissed`. A participant's `status` is `idle`
+(waits for a message), `busy` (answers a message), `exited` (the harness died while
+idle), `killed` (it stopped during a turn without a clean end, so its memory may not match
+its files), `paused` (a shutdown stopped it cleanly) or `dismissed`. A message to an
+`exited`, `killed` or `paused` participant revives it.
+
+`resumed` is missing until a participant is revived. Then it is `fresh`: the participant
+has a new session and does not remember the turns before. A revive also changes its
+`sessionId`.
 
 The participant `id` is opaque. `title`, `role`, `branch` and `baseSha` are missing when
 there is no value. `branch` and `baseSha` are missing when `cwd` cannot carry a git
@@ -1125,10 +1134,9 @@ never commits the room's work. Each participant has its own checkout and branch.
 participant changed something, its checkout and branch stay, with uncommitted changes
 still in the checkout. When it changed nothing, both are removed.
 
-A kept checkout lasts only until the next daemon start. Until M6-7a, rooms are not
-saved, so the start-up cleanup removes a kept checkout that has no uncommitted changes.
-Its branch stays. A checkout with uncommitted changes is kept, and so is one whose HEAD
-is detached, that is, not on a branch.
+A kept checkout stays while the room's record does: a daemon restart keeps it. A dismissed
+room comes back after a restart, still dismissed, so its history can be read and its
+branches merged. Deleting a room is a later story (#235).
 
 **Reply `200`:** the room, with `status: "dismissed"`, and each participant
 `dismissed`. `404` `room_not_found` for an unknown room. `409` `room_dismissed` when the
@@ -1206,9 +1214,14 @@ One message to one participant. The daemon never reads the text. A client turns 
 A participant keeps at most 16 messages waiting behind its live turn. They are in memory
 only: a daemon restart loses them.
 
+A message to an `exited`, `killed` or `paused` participant revives it first: see
+[After a restart](#after-a-restart). The reply does not wait for the new harness. A
+harness that cannot start ends the turn with `_client_turn_ended` and `error`.
+
 **Refusals:** `404` `room_not_found` or `participant_not_found`. `400` `invalid_request`
-for empty text. `409` `room_dismissed` for a dismissed room. `409` `agent_exited` after
-the participant's harness exited. `429` `queue_full` when 16 messages already wait.
+for empty text. `409` `room_dismissed` for a dismissed room. `409` `agent_exited` while the
+participant is being removed or the daemon shuts down. `429` `queue_full` when 16 messages
+already wait.
 
 ### `GET /rooms/:id/agents/:agentId/events`
 
@@ -1321,7 +1334,8 @@ A participant's mode says what happens when its harness asks to change something
 These words are fixed now, so every client uses the same ones. They describe the whole
 room, not one participant: removing a participant is
 [`DELETE /rooms/:id/agents/:agentId`](#delete-roomsidagentsagentid), which keeps its work.
-**dismiss** is built. M6-7a builds the others.
+**dismiss**, **pause**, **resume** and **kill** are built. **delete** is a later story
+(#235).
 
 | Word | Who does it | Room after | Harness | Work on disk |
 | --- | --- | --- | --- | --- |
@@ -1335,13 +1349,41 @@ A paused room can be dismissed or deleted as it is. Neither word starts a harnes
 A room whose participants have all `exited`, or were `killed` while the daemon stayed up,
 still reads `active`, because the next message brings each one back.
 
-`DELETE /rooms/:id` is kept for **delete**, and answers `404` `no_route` until M6-7a
-builds it. Today a daemon shutdown dismisses every room; M6-7a makes it a pause.
+`DELETE /rooms/:id` is kept for **delete**, and answers `404` `no_route` until #235
+builds it.
+
+### After a restart
+
+A daemon shutdown is a **pause**, not a dismiss. The daemon cancels each live turn and
+waits up to 2 s for it to end, so the log gets its `_client_turn_ended`. Then it stops
+every harness. It keeps every branch and checkout as they are, and commits nothing.
+
+The daemon saves each room in its own record, beside the room's log. At the next start it
+reads every record back:
+
+- `GET /rooms` lists the room `paused`, and `GET /rooms/:id` shows each participant
+  `paused`. A turn still live after the 2 s, or a turn the daemon died during (a crash,
+  `kill -9`), leaves its participant `killed`. A participant that had `exited` stays
+  `exited`.
+- The start adds no line to the log. A turn the crash cut has a `_client_user_message`
+  and no `_client_turn_ended`, so read the status from `GET /rooms/:id`, not from the
+  stream. `client/room.ts` has `applyStatus` for this.
+- The stream replays the whole history, and new lines follow with the next `seq`.
+- Queued messages are lost, as are open permission questions.
+- The next message to a `paused`, `killed` or `exited` participant revives it: a new
+  harness in the same checkout, with a fresh session. The log gets
+  `_client_participant_revived`, the participant gets `resumed: "fresh"`, and the room is
+  `active` again. Adding a participant also makes it `active`.
+- A dismissed room comes back dismissed. Its stream ends once it has replayed. It never
+  revives.
+- A `killed` participant whose checkout has a git `index.lock` left by the crash gets a
+  notice naming the file. Git refuses to commit there until it is removed. The daemon
+  does not remove it.
 
 ### Room record (planned)
 
 This is the whole record. The replies above show the part that is built. The rest comes
-with the story that fills it: `resumed` (M6-7a) and the room's `base` (M6-6a).
+with the story that fills it: `resumed: "loaded"` (M6-7b) and the room's `base` (M6-6a).
 
 ```text
 room              id, cwd, title, base, createdAt, updatedAt, status
@@ -1355,8 +1397,8 @@ room list         [{id, cwd, title, status, updatedAt,
 room detail       the room fields above, plus every participant in full
 ```
 
-`resumed` is missing until a participant comes back. `loaded` means it kept its memory.
-`fresh` means it started a new session.
+`resumed` is missing until a participant comes back. `fresh` means it started a new
+session. `loaded` (M6-7b) will mean it kept its memory.
 
 `role` is one of `orchestrator`, `developer`, `tester` or `architect`, or missing. It is a
 label. It sends no text to the agent. A client changes `name`, `mode` or `role` with one

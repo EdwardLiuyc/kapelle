@@ -78,9 +78,10 @@ function sidebarParts({
           const { circle, paint } = roomMark(r.state);
           const label = r.entry.title ?? r.entry.id;
           const lost = r.lost ? yellow(" !") : "";
+          const paused = r.entry.status === "paused" ? dim(" paused") : "";
           lines.push(
             fit(
-              `${cursor} ${paint(`${circle} ${label}`)} ${dim(basename(r.entry.cwd))}${lost}`,
+              `${cursor} ${paint(`${circle} ${label}`)} ${dim(basename(r.entry.cwd))}${paused}${lost}`,
             ),
           );
           continue;
@@ -89,7 +90,16 @@ function sidebarParts({
         if (!p) continue;
         const { circle, paint } = mark(r.state, p.id);
         const star = p.role === "orchestrator" ? " ★" : "";
-        const busy = p.status === "busy" ? " …" : "";
+        // After a restart (M6-7a): `killed` stopped during a turn, so its
+        // files and its memory may not match.
+        const busy =
+          p.status === "busy"
+            ? " …"
+            : p.status === "paused"
+              ? dim(" paused")
+              : p.status === "killed"
+                ? yellow(" killed")
+                : "";
         const unread = p.unread ? ` ${p.unread}` : "";
         lines.push(
           fit(

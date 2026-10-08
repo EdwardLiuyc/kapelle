@@ -24,6 +24,14 @@
  *    readable record is an orphan: a clean one still on a branch loses its
  *    checkout but keeps that branch, and one that is dirty or on a detached
  *    HEAD — where the work is on no ref to keep — is kept and named.
+ * 4. **Rooms left live** (M6-7a, R46). A `room.json` that still reads
+ *    `active` belongs to a daemon that died. It is rewritten as `crashed`
+ *    has it: the room and each idle participant `paused`, each busy one
+ *    `killed`. A killed participant's checkout gets a notice when git left
+ *    its `index.lock` behind; the file is kept, since a git started by the
+ *    harness's shell may still run. Nothing is added to the room's log, as
+ *    for runs (M5-5). Every checkout under a room with a record is kept: it
+ *    is not an orphan.
  *
  * **Whole-run reaping is ordered worktree-first.** If a checkout cannot be
  * removed, the record is kept too and the run is retried on the next boot —
@@ -42,6 +50,12 @@ import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { resolveRetentionMs } from "./config.ts";
 import { branchName } from "./ids.ts";
+import {
+  crashed,
+  type RoomRecord,
+  readRoomRecord,
+  writeRoomRecord,
+} from "./room.ts";
 import { stateDirFor } from "./runtime.ts";
 import { changedPaths } from "./worktree.ts";
 
@@ -608,7 +622,75 @@ async function reapExpired(
   }
 }
 
-/** Steps 2 and 3 for one repository. */
+/**
+ * Step 4: rewrite each room a crash left `active`, and answer which rooms
+ * have a record, so their checkouts are not taken for orphans. A record
+ * that cannot be read is named and its room's checkouts are kept anyway:
+ * the directory is ours, so whatever is in it is not an orphan's.
+ */
+async function sweepRooms(pass: RepoPass): Promise<Set<string>> {
+  const { root, onNotice } = pass;
+  const dir = join(stateDirFor(root), "rooms");
+  const kept = new Set<string>();
+  let ids: string[];
+  try {
+    ids = readdirSync(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      onNotice(`skipping rooms under ${dir}: ${messageOf(err)}`);
+    }
+    return kept;
+  }
+  for (const id of ids) {
+    const file = join(dir, id, "room.json");
+    if (!existsSync(file)) continue;
+    kept.add(id);
+    let record: RoomRecord;
+    try {
+      record = readRoomRecord(file);
+    } catch (err) {
+      onNotice(`skipping ${file}: ${messageOf(err)}`);
+      continue;
+    }
+    const fixed = crashed(record);
+    if (fixed === record) continue;
+    for (const [i, p] of fixed.participants.entries()) {
+      if (p.status !== "killed" || record.participants[i]?.status !== "busy") {
+        continue;
+      }
+      const lock = await indexLock(p.worktree);
+      if (lock) {
+        p.notices = [
+          ...p.notices,
+          {
+            text:
+              `git left ${lock} when the daemon died during this turn; git ` +
+              "refuses to commit in this checkout while it is there. Check " +
+              "that no git process still runs in it, then delete the file.",
+          },
+        ];
+      }
+    }
+    try {
+      writeRoomRecord(file, fixed);
+    } catch (err) {
+      onNotice(
+        `cannot mark room ${id} in ${root} as paused: ${messageOf(err)}`,
+      );
+    }
+  }
+  return kept;
+}
+
+/** The checkout's `index.lock`, when git left one, or `null`. */
+async function indexLock(worktree: string): Promise<string | null> {
+  const gitDir = await tryGit(worktree, ["rev-parse", "--absolute-git-dir"]);
+  if (gitDir === null) return null;
+  const lock = join(gitDir, "index.lock");
+  return existsSync(lock) ? lock : null;
+}
+
+/** Steps 2 to 4 for one repository. */
 async function sweepRepo(
   root: string,
   retentionMs: number,
@@ -622,6 +704,9 @@ async function sweepRepo(
     now,
     onNotice,
   };
+  // Before the runs: a runs directory that cannot be read must not leave a
+  // crashed room reading `active`.
+  const rooms = await sweepRooms(pass);
   const records = readRecords(pass);
   if (records === null) {
     onNotice(`skipping reap and orphan cleanup in ${root} until the next boot`);
@@ -644,7 +729,7 @@ async function sweepRepo(
   // Orphans last: a run reaped just above may have failed to remove a
   // checkout, in which case its record is still there and it is not an orphan.
   for (const worktree of managed) {
-    if (records.get(worktree.runId)) continue;
+    if (records.get(worktree.runId) || rooms.has(worktree.runId)) continue;
     await reconcileOrphan(worktree.path, pass);
   }
 }

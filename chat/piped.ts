@@ -85,6 +85,12 @@ function makePrinter(state: RoomState) {
         case "exited":
           line("! the harness exited");
           break;
+        case "revived":
+          line(
+            `↻ ${nameOf(state, e.participantId)} is back with a fresh ` +
+              "session; it does not remember the earlier turns",
+          );
+          break;
         case "forward":
           line(
             `↪ ${nameOf(state, e.participantId)} moved to ` +

@@ -45,7 +45,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 7 } as const;
+export const API_VERSION = { major: 1, minor: 8 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -77,10 +77,10 @@ export interface VersionReply {
 /**
  * What went wrong, one code per situation a client acts on differently (C7,
  * M5-3) — not one per status: `queue_full` means send again later, while
- * `already_decided` and `run_ended` mean stop. Codes are only ever added,
- * except a room's while `/rooms` is Experimental: M6-2 split `room_closed`
- * into `room_dismissed` and `agent_exited`, and M6-4 replaced `room_busy`
- * with a queue and `queue_full`.
+ * `already_decided` and `run_ended` mean stop. Codes are only ever added.
+ * Before `/rooms` was stable (1.8, M6-7a), M6-2 split `room_closed` into
+ * `room_dismissed` and `agent_exited`, and M6-4 replaced `room_busy` with a
+ * queue and `queue_full`.
  */
 export type ErrorCode =
   | "host_not_allowed"
@@ -260,12 +260,15 @@ export interface PermissionAnswered {
   allow: boolean;
 }
 
-/** A room's status (M6-2). `paused` is set only once M6-7a lands. A room
- *  whose participant has exited still reads `active`. @public */
+/** A room's status (M6-2). `paused`: a daemon shutdown or crash stopped it,
+ *  until a participant revives or joins (M6-7a). A room whose participant
+ *  has exited still reads `active`. @public */
 export type RoomStatus = "active" | "paused" | "dismissed";
 
-/** A participant's status (M6-2). `paused` and `killed` are set only once
- *  M6-7a lands. @public */
+/** A participant's status (M6-2, M6-7a). `exited`: its harness died while
+ *  idle. `killed`: it stopped during a turn without a clean end, so its
+ *  memory may not match its files. `paused`: a shutdown stopped it cleanly.
+ *  All three revive on the next message. @public */
 export type ParticipantStatus =
   | "idle"
   | "busy"
@@ -284,13 +287,13 @@ export type ParticipantRole =
   | "architect";
 
 /** A participant's settings (R15, amended 2026-09-28): the run-file `Task`
- *  fields that act in a room today. Experimental. @public */
+ *  fields that act in a room today. @public */
 export interface ParticipantSettings {
   allowReadOutsideRoot: boolean;
 }
 
 /** One participant in full, from `GET /rooms/:id` and the
- *  `/rooms/:id/agents` routes. Experimental. */
+ *  `/rooms/:id/agents` routes. */
 export interface ParticipantDto {
   /** Opaque; a rename never moves it. */
   id: string;
@@ -308,14 +311,18 @@ export interface ParticipantDto {
   /** The checkout's branch and the SHA it forked from, when it has one. */
   branch?: string;
   baseSha?: string;
-  /** The harness session, kept for a future `session/load`. */
+  /** The harness session, kept for a future `session/load`. A revive
+   *  changes it. */
   sessionId: string;
+  /** `fresh` once the participant was revived with a new session, so it
+   *  does not remember the turns before (M6-7a). Absent before. */
+  resumed?: "fresh";
   status: ParticipantStatus;
   notices: Notice[];
 }
 
 /** A room, from `POST /rooms`, `GET /rooms/:id` and
- *  `POST /rooms/:id/dismiss`. Experimental. */
+ *  `POST /rooms/:id/dismiss`. */
 export interface RoomDto {
   id: string;
   cwd: string;
@@ -329,7 +336,7 @@ export interface RoomDto {
 }
 
 /** One entry of `GET /rooms`: the roster inline and short, so a list of
- *  rooms is one call (R9). Experimental. */
+ *  rooms is one call (R9). */
 export interface RoomListEntry {
   id: string;
   cwd: string;
@@ -348,8 +355,7 @@ export interface RoomListEntry {
  *  `seq` is the log's size before the message. `queued` is how many of the
  *  participant's turns come first, the live one included: 0 means it
  *  started at once. Its turn is over at the `queued + 1`th
- *  `_client_turn_ended` of that participant with a `seq` above `seq`.
- *  Experimental. */
+ *  `_client_turn_ended` of that participant with a `seq` above `seq`. */
 export interface MessageAccepted {
   seq: number;
   queued: number;
@@ -375,7 +381,7 @@ export interface EventLine {
 /**
  * The JSON in one SSE `data:` line of a room (S10). A room line has no
  * `agent`: `participantId` is the opaque id, and the name is the roster's,
- * which a rename changes. Experimental.
+ * which a rename changes.
  *
  * @public — read by clients, never built by the daemon.
  */

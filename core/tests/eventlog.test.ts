@@ -11,7 +11,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
-import { createEventLog, type EventLog, openEventLog } from "../eventlog.ts";
+import {
+  createEventLog,
+  type EventLog,
+  openEventLog,
+  reopenEventLog,
+} from "../eventlog.ts";
 
 async function logIn(t: TestContext): Promise<{ log: EventLog; path: string }> {
   const dir = await mkdtemp(join(tmpdir(), "kapelle-eventlog-"));
@@ -564,8 +569,8 @@ test("a log on disk replays without a writer, and the file survives it", async (
     ["second", "third"],
   );
 
-  // The whole point of the read-only open: `createEventLog` uses `flags: "w"`,
-  // which would have emptied the file this just replayed.
+  // The whole point of the read-only open: a new `createEventLog` uses
+  // `flags: "w"`, which would have emptied the file this just replayed.
   assert.equal(await readFile(path, "utf8"), onDisk);
 });
 
@@ -615,4 +620,48 @@ test("a replay pauses for a full reader and resumes where it stopped", async (t)
   r.open();
   await r.done;
   assert.deepEqual(r.seqs, [1, 2, 3]);
+});
+
+// --- a room's log after a restart (M6-7a) ---------------------------------
+
+test("a reopened log keeps its lines, cuts a half-written one, and goes on with seq", async (t) => {
+  const { log, path } = await logIn(t);
+  log.append(chunk("one"));
+  log.append(chunk("two"));
+  await log.close();
+  // What a `kill -9` mid-write leaves behind.
+  await writeFile(path, `${await readFile(path, "utf8")}{"seq":3,"agen`);
+
+  const again = await reopenEventLog(path, (err) => {
+    throw err;
+  });
+  assert.equal(again.size, 2, "the partial line is not counted");
+  again.append(chunk("three"));
+  const { seqs, lines, done } = collect(again, 0);
+  await waitFor(() => seqs.length === 3, "the new line");
+  await again.close();
+  await done;
+  assert.deepEqual(seqs, [1, 2, 3]);
+  assert.deepEqual(
+    lines.map((line) => JSON.parse(line).update.content.text),
+    ["one", "two", "three"],
+  );
+  const onDisk = (await readFile(path, "utf8")).trim().split("\n");
+  assert.deepEqual(
+    onDisk.map((line) => JSON.parse(line).seq),
+    [1, 2, 3],
+    "the partial line is gone from the file",
+  );
+});
+
+test("a reopened log that is not there starts empty", async (t) => {
+  const { path } = await logIn(t);
+  await rm(path, { force: true });
+  const fresh = await reopenEventLog(`${path}.missing`, (err) => {
+    throw err;
+  });
+  assert.equal(fresh.size, 0);
+  fresh.append(chunk("first"));
+  await fresh.close();
+  assert.equal(JSON.parse(await readFile(`${path}.missing`, "utf8")).seq, 1);
 });

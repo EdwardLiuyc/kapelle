@@ -48,6 +48,7 @@ const PARTICIPANT_KEYS = new Set(
     branch: 0,
     baseSha: 0,
     sessionId: 0,
+    resumed: 0,
     status: 0,
     notices: 0,
   } satisfies Record<keyof ParticipantDto, 0>),

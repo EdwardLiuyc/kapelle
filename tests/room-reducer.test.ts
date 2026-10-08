@@ -7,8 +7,9 @@
  * chunks. bob asks a permission question under `ask` that is answered. Then
  * he is renamed, his role is set then cleared, his mode changes, and he is
  * removed. carol stalls until her turn is cancelled. Live, replay, reconnect
- * and a cut turn all read that one recording. The restart case (`paused`,
- * `killed`) is M6-7a's (#151).
+ * and a cut turn all read that one recording. The restart case (M6-7a, #151)
+ * reads it too, cut where a crash would cut it, with the `paused` or
+ * `killed` that `GET /rooms/:id` gives; a second recording has a revive.
  *
  * Here and not in `client/tests/`: recording needs `core/`, and a suite in
  * `client/` imports only `client/`.
@@ -18,9 +19,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import type { RoomEventLine } from "../client/contract.ts";
+import type { RoomDto, RoomEventLine } from "../client/contract.ts";
 import {
   applyLine,
+  applyStatus,
   type Entry,
   needsAttention,
   newRoomState,
@@ -308,7 +310,7 @@ test("unread counts what the participants said, and seen clears it", async (t) =
   assert.equal(a.unread, 0);
 });
 
-test("a harness that exits mid-turn stays exited when the turn ends", async (t) => {
+test("a harness that exits mid-turn reads killed, and stays so when the turn ends", async (t) => {
   const { lines, carol } = await recorded(t);
   const of = (kind: string) =>
     lines.findIndex(
@@ -325,7 +327,7 @@ test("a harness that exits mid-turn stays exited when the turn ends", async (t) 
   const state = newRoomState();
   for (const line of crashed.slice(0, end + 2)) applyLine(state, line);
   assert.equal(who(state, carol).turns[0]?.state, "ended");
-  assert.equal(who(state, carol).status, "exited");
+  assert.equal(who(state, carol).status, "killed", "R46: stopped mid-turn");
 });
 
 test("a turn that ends with an error keeps the error on the turn and the entry", () => {
@@ -372,7 +374,7 @@ test("a turn that ends with an error keeps the error on the turn and the entry",
     "the harness died",
     "the timeline entry keeps the error",
   );
-  assert.equal(who(state, "alice").status, "exited");
+  assert.equal(who(state, "alice").status, "killed", "it died mid-turn");
 });
 
 test("a turn keeps its stall warning after seen, for the bell; the next turn starts without one", () => {
@@ -493,4 +495,141 @@ test("a fast-forward becomes a timeline entry for a second client", () => {
     sha: "abc123",
   });
   assert.deepEqual(state.timeline, [e]);
+});
+
+// --- after a restart (M6-7a, #151) ------------------------------------------
+
+/** What `GET /rooms/:id` answers after a restart, as far as `applyStatus`
+ *  reads it: each participant's status. */
+const reply = (statuses: Record<string, string>) =>
+  ({
+    participants: Object.entries(statuses).map(([id, status]) => ({
+      id,
+      status,
+    })),
+  }) as unknown as RoomDto;
+
+test("after a crash: GET's killed and paused hold, and the turn the crash cut reads cut, in either order", async (t) => {
+  const { lines, alice, carol } = await recorded(t);
+  // As a `kill -9` leaves the log: carol's turn started and never ended.
+  const end = lines.findIndex(
+    (l) =>
+      l.participantId === carol &&
+      l.update.sessionUpdate === "_client_turn_ended",
+  );
+  const log = lines.slice(0, end);
+  const got = reply({ [alice]: "paused", [carol]: "killed" });
+
+  const after = replay(log);
+  applyStatus(after, got);
+  const before = newRoomState();
+  // The reply first: a screen can read the room before the replay is in.
+  applyStatus(before, got);
+  replay(log, before);
+  applyStatus(before, got);
+
+  for (const state of [after, before]) {
+    assert.equal(who(state, carol).status, "killed");
+    assert.deepEqual(
+      who(state, carol).turns.map((turn) => turn.state),
+      ["cut"],
+    );
+    assert.equal(who(state, alice).status, "paused");
+    assert.deepEqual(
+      who(state, alice).turns.map((turn) => turn.state),
+      ["ended", "ended", "ended"],
+      "a turn that ended is not cut",
+    );
+  }
+});
+
+test("after a shutdown: a turn the log ended is ended, whatever GET came first", async (t) => {
+  const { lines, carol } = await recorded(t);
+  // The cancel's end is on the log, as a shutdown leaves it.
+  const end = lines.findIndex(
+    (l) =>
+      l.participantId === carol &&
+      l.update.sessionUpdate === "_client_turn_ended",
+  );
+  const log = lines.slice(0, end + 1);
+  const state = newRoomState();
+  replay(log.slice(0, end), state);
+  // GET answered while carol's turn was still open in the replay.
+  applyStatus(state, reply({ [carol]: "paused" }));
+  replay(log.slice(end), state);
+  const c = who(state, carol);
+  assert.equal(c.status, "paused");
+  assert.equal(c.turns[0]?.state, "ended");
+  assert.equal(c.turns[0]?.stopReason, "cancelled");
+});
+
+/** A room whose harness is killed during a turn, then revived by the next
+ *  message, as `core/room.ts` writes it. */
+async function recordRevive(t: TestContext) {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [
+      roomAgent({ cmd: `node ${MOCK_AGENT} --scenario slow`, name: "dora" }),
+    ],
+    setup: await openWorktrees(repo, roomId),
+    bus: createEventBus(),
+    permissions: createPermissionQueue(60_000),
+  });
+  t.after(() => room.dismiss());
+  const dora = room.participants[0] as Participant;
+  const log = join(stateDirFor(repo), "rooms", roomId, "events.jsonl");
+  const read = async () =>
+    (await readFile(log, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as RoomEventLine);
+  const first = dora.send("one");
+  for (const until = Date.now() + 5_000; ; ) {
+    const spawned = (await read()).find(
+      (l) => l.update.sessionUpdate === "_client_harness_spawned",
+    );
+    if (spawned) {
+      process.kill((spawned.update as { pid: number }).pid, "SIGKILL");
+      break;
+    }
+    if (Date.now() > until) throw new Error("no harness spawned");
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  await first;
+  await dora.send("two");
+  await room.dismiss();
+  return { lines: await read(), dora: dora.id };
+}
+
+test("a revive is a timeline entry, clears GET's status and leaves the participant idle", async (t) => {
+  const { lines, dora } = await recordRevive(t);
+  const revived = lines.findIndex(
+    (l) => l.update.sessionUpdate === "_client_participant_revived",
+  );
+  assert.ok(revived > 0, "the recording has a revive");
+
+  // Live: the harness died mid-turn, then the next message revived it.
+  const live = replay(lines.slice(0, revived + 1));
+  const entries = thread(live, dora);
+  assert.equal(entries.at(-1)?.type, "revived");
+  assert.equal(who(live, dora).status, "busy", "the reviving turn is live");
+
+  // After a restart, GET said killed before the revive's lines arrived.
+  const state = newRoomState();
+  replay(lines.slice(0, revived - 2), state);
+  applyStatus(state, reply({ [dora]: "killed" }));
+  assert.equal(who(state, dora).status, "killed");
+  replay(lines.slice(revived - 2, revived + 1), state);
+  assert.equal(who(state, dora).reported, undefined, "the revive clears it");
+  assert.equal(who(state, dora).status, "busy");
+  assert.equal(who(state, dora).turns.at(-1)?.state, "open");
+  const end = lines.findIndex(
+    (l, i) => i > revived && l.update.sessionUpdate === "_client_turn_ended",
+  );
+  replay(lines.slice(revived + 1, end + 1), state);
+  assert.equal(who(state, dora).status, "idle");
+  assert.equal(who(state, dora).turns.at(-1)?.state, "ended");
 });

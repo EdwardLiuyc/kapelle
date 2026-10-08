@@ -34,6 +34,7 @@
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
+  existsSync,
   linkSync,
   mkdirSync,
   openSync,
@@ -92,8 +93,11 @@ import {
   participantChanges,
   type Room,
   RoomRefusal,
+  readRoomRecord,
+  restoreRoom,
   roomAgent,
   roomAgents,
+  roomFile,
 } from "./core/room.ts";
 import { runRun } from "./core/run.ts";
 import { type Run, validateRun } from "./core/runfile.ts";
@@ -847,6 +851,82 @@ const rooms = new Map<
   { room: Room; state: RoomState; dismissed?: boolean }
 >();
 
+/** The watchdog's warn limits for a room, from the same layers as a run's
+ *  (R38). Throws for a config that does not load. */
+function roomLimits(
+  root: string,
+): Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount"> {
+  const defaults = resolveRunDefaults(root);
+  return {
+    stallIdleMs: defaults.stallIdleMs ?? WATCHDOG_DEFAULTS.stallIdleMs,
+    stallRepeatCount:
+      defaults.stallRepeatCount ?? WATCHDOG_DEFAULTS.stallRepeatCount,
+  };
+}
+
+/**
+ * Every added repository's rooms, back from `room.json` (M6-7a). The boot
+ * sweep ran first, so a room a crash left live already reads `paused`. No
+ * harness starts: a participant revives on its next message. A record that
+ * cannot be read, or a room that cannot be built, is skipped with a notice
+ * naming it, as for runs: a daemon that refused to boot over one could not
+ * be reached by the request that fixes it. Its checkouts stay on disk.
+ */
+async function restoreRooms(): Promise<void> {
+  for (const root of repos) {
+    const dir = join(stateDirFor(root), "rooms");
+    let ids: string[];
+    try {
+      ids = readdirSync(dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error(`skipping rooms under ${dir}: ${messageOf(err)}`);
+      }
+      continue;
+    }
+    for (const id of ids) {
+      const path = roomFile(root, id);
+      // A directory with no record is a room that never opened.
+      if (!existsSync(path)) continue;
+      try {
+        const record = readRoomRecord(path);
+        if (record.id !== id) throw new Error(`its id is not ${id}`);
+        const setup = await openWorktrees(
+          existsSync(record.cwd) ? record.cwd : root,
+          id,
+        );
+        if (setup.root !== root) {
+          throw new Error(`${record.cwd} is no longer inside ${root}`);
+        }
+        let limits: ReturnType<typeof roomLimits> | undefined;
+        try {
+          limits = roomLimits(root);
+        } catch (err) {
+          console.error(
+            `room ${id}: ${messageOf(err)}; using the default watchdog limits`,
+          );
+        }
+        const bus = createEventBus();
+        trackChildren(bus, "room", id);
+        const room = await restoreRoom({
+          record,
+          setup,
+          bus,
+          permissions,
+          ...(limits && { limits }),
+        });
+        rooms.set(id, {
+          room,
+          state: room.meta,
+          ...(room.status() === "dismissed" && { dismissed: true }),
+        });
+      } catch (err) {
+        console.error(`skipping room ${path}: ${messageOf(err)}`);
+      }
+    }
+  }
+}
+
 /** A room's own refusal as the daemon answers it, or undefined when `err`
  *  is a failure rather than a refusal. */
 function roomRefused(err: unknown) {
@@ -894,15 +974,9 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   // No 409 wrapper (#129): since the state directory moved out of the
   // repository, `openWorktrees` throws for nothing a repository can be in.
   const setup = await openWorktrees(cwd, id);
-  // The watchdog's warn limits, from the same layers as a run's (R38).
-  let limits: Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount">;
+  let limits: ReturnType<typeof roomLimits>;
   try {
-    const defaults = resolveRunDefaults(setup.root);
-    limits = {
-      stallIdleMs: defaults.stallIdleMs ?? WATCHDOG_DEFAULTS.stallIdleMs,
-      stallRepeatCount:
-        defaults.stallRepeatCount ?? WATCHDOG_DEFAULTS.stallRepeatCount,
-    };
+    limits = roomLimits(setup.root);
   } catch (err) {
     throw refusal(400, "invalid_config", messageOf(err));
   }
@@ -919,6 +993,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
     room = await openRoom({
       roomId: id,
       cwd,
+      ...(typeof body.title === "string" && { title: body.title.trim() }),
       agents,
       setup,
       bus,
@@ -929,16 +1004,14 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
     throw roomRefused(err) ?? refusal(500, "room_open_failed", messageOf(err));
   }
   // A shutdown that began while the harness was starting has already
-  // dismissed every room it knew of; this one must not outlive the daemon.
+  // paused every room it knew of. This one was never handed out, so it is
+  // dismissed: it must not outlive the daemon, nor come back after it.
   if (stopping) {
     await room.dismiss();
     throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
-  const now = new Date().toISOString();
-  const state: RoomState = { id, cwd, createdAt: now, updatedAt: now };
-  if (typeof body.title === "string") state.title = body.title.trim();
-  rooms.set(id, { room, state });
-  send(res, 201, toRoomDto(state, room) satisfies RoomDto);
+  rooms.set(id, { room, state: room.meta });
+  send(res, 201, toRoomDto(room.meta, room) satisfies RoomDto);
 }
 
 /** The room `id` names, or a 404. */
@@ -973,12 +1046,12 @@ async function postAgent(
   try {
     participant = await entry.room.add(request);
   } catch (err) {
-    // A shutdown dismisses the room under the add, which then reads as
+    // A shutdown pauses the room under the add, which then reads as
     // dismissed; the daemon's own reason is the true one.
     if (stopping) throw shuttingDown();
     throw roomRefused(err) ?? refusal(500, "room_open_failed", messageOf(err));
   }
-  entry.state.updatedAt = new Date().toISOString();
+  entry.room.touch();
   send(res, 201, toParticipantDto(participant) satisfies ParticipantDto);
 }
 
@@ -1004,7 +1077,7 @@ async function patchAgent(
   } catch (err) {
     throw roomRefused(err) ?? err;
   }
-  entry.state.updatedAt = new Date().toISOString();
+  entry.room.touch();
   send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
 }
 
@@ -1018,7 +1091,7 @@ async function deleteAgent(id: string, agentId: string, res: ServerResponse) {
   } catch (err) {
     throw roomRefused(err) ?? err;
   }
-  entry.state.updatedAt = new Date().toISOString();
+  entry.room.touch();
   send(res, 200, toRoomDto(entry.state, entry.room) satisfies RoomDto);
 }
 
@@ -1074,7 +1147,7 @@ async function postMessage(
   } catch (err) {
     throw roomRefused(err) ?? err;
   }
-  entry.state.updatedAt = new Date().toISOString();
+  entry.room.touch();
   // Settles with the turn; a failed turn is already on the log as an event.
   turn.catch(() => {});
   send(res, 202, { seq, queued } satisfies MessageAccepted);
@@ -1202,7 +1275,7 @@ async function fastForwardAgent(
   } catch (err) {
     throw roomRefused(err) ?? err;
   }
-  entry.state.updatedAt = new Date().toISOString();
+  entry.room.touch();
   send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
 }
 
@@ -1245,6 +1318,11 @@ async function roomEvents(
  */
 async function dismissRoom(id: string, res: ServerResponse) {
   const entry = roomEntry(id);
+  // A shutdown pauses every room; a dismiss now would be told it worked
+  // while the room stays paused.
+  if (stopping) {
+    throw refusal(503, "shutting_down", "the daemon is shutting down");
+  }
   if (entry.dismissed) {
     throw refusal(409, "room_dismissed", `room ${id} is already dismissed`);
   }
@@ -1259,7 +1337,7 @@ async function dismissRoom(id: string, res: ServerResponse) {
   await entry.room.dismiss();
   if (!entry.dismissed) {
     entry.dismissed = true;
-    entry.state.updatedAt = new Date().toISOString();
+    entry.room.touch();
   }
   send(res, 200, toRoomDto(entry.state, entry.room) satisfies RoomDto);
 }
@@ -1489,8 +1567,12 @@ const server = createServer(
 let stopping = false;
 
 /**
- * SIGTERM or SIGINT: cancel every run, wait for each to settle, then remove
- * `daemon.json` and exit 0 (M2-4, #34).
+ * SIGTERM or SIGINT: cancel every run, pause every room, wait for each to
+ * settle, then remove `daemon.json` and exit 0 (M2-4, #34).
+ *
+ * **A room is paused, not dismissed** (M6-7a, R42c): its live turns are
+ * cancelled, its harnesses stopped and its checkouts kept, and the next boot
+ * brings it back. A turn still live after the 2 s grace reads `killed`.
  *
  * No kill loop of its own. A cancelled task stops its harness through
  * `core/run.ts` (2 s after the abort), and `AcpAgent.stop()` closes stdin
@@ -1506,13 +1588,18 @@ async function shutdown(signal: string): Promise<void> {
   for (const canceller of cancels.values()) canceller.abort("cancel");
   await Promise.all([
     ...inFlight,
-    ...[...rooms.values()].map(({ room }) => room.dismiss()),
+    ...[...rooms.values()].map(({ room }) => room.pause()),
   ]);
   rmSync(file, { force: true });
   process.exit(0);
 }
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+// Before the port opens, as `restoreRuns`: no request meets a half-restored
+// list. ponytail: one record read and one log scan per room, on the boot
+// path; read them lazily if a repository keeps hundreds of rooms.
+await restoreRooms();
 
 server.on("error", (err) => {
   rmSync(file, { force: true });

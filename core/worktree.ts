@@ -309,6 +309,10 @@ export interface Worktrees {
   /** The branch and base SHA for an acquired task, or undefined when the task
    *  never acquired a worktree. Used to write the run record merge reads. */
   info(taskId: string): { branch: string; baseSha: string } | undefined;
+  /** Holds a checkout an earlier daemon acquired, as if this one had, so
+   *  `release` can act on it (M6-7a: a room restored after a restart). It
+   *  creates nothing. */
+  adopt(taskId: string, info: { branch: string; baseSha: string }): void;
 }
 
 export interface WorktreeSetup {
@@ -468,6 +472,11 @@ export async function openWorktrees(
         // workspace `acquire` returned when `--cwd` named a subdirectory.
         const task = held.get(taskId);
         return task && { branch: task.branch, baseSha: task.baseSha };
+      },
+
+      adopt(taskId, { branch, baseSha }) {
+        const path = join(stateDirFor(root), "wt", runId, taskId);
+        held.set(taskId, { path, branch, baseSha });
       },
 
       async release(taskId, action) {
