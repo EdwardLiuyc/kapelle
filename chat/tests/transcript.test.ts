@@ -291,6 +291,24 @@ test("a revive draws a line that says the session is fresh (M6-7a)", () => {
   );
 });
 
+test("a revive shows an unknown resumed as text, and warns only when loaded (#238)", () => {
+  const unknown = afterRevive({
+    sessionUpdate: "_client_participant_revived",
+    resumed: "forked",
+    sessionId: "s3",
+  } as unknown as RoomEventLine["update"]);
+  assert.match(unknown, /↻ ana is back \(forked\)/);
+  assert.doesNotMatch(unknown, /fresh session/);
+  const fresh = afterRevive({
+    sessionUpdate: "_client_participant_revived",
+    resumed: "fresh",
+    sessionId: "s2",
+    memoryMayBeBehind: true,
+  });
+  assert.match(fresh, /↻ ana is back with a fresh session/);
+  assert.doesNotMatch(fresh, /behind/);
+});
+
 test("a loaded revive says so, and warns when its memory may be behind (M6-7b)", () => {
   const loaded = afterRevive({
     sessionUpdate: "_client_participant_revived",

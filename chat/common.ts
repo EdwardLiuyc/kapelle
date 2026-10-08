@@ -87,6 +87,8 @@ function revivedLine(
       "earlier turns"
     );
   }
+  // A value from a newer daemon, as sent (docs/CLIENT-API.md).
+  if (e.resumed !== "loaded") return `↻ ${name} is back (${e.resumed})`;
   if (e.behind) {
     return (
       `! ${name} is back with its old session, but it stopped during a ` +

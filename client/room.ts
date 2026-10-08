@@ -54,8 +54,10 @@ export type Entry = { seq: number; participantId: string } & (
   | { type: "turn_ended"; stopReason?: string; error?: string }
   | { type: "exited" }
   /** A stopped participant has a new harness (M6-7a), with its old session
-   *  or a fresh one (M6-7b). `behind`: its memory may be behind its files. */
-  | { type: "revived"; resumed: "loaded" | "fresh"; behind?: true }
+   *  or a fresh one (M6-7b). `resumed` is kept as sent, so a value this
+   *  client does not know is shown as text. `behind`: a loaded one's memory
+   *  may be behind its files. */
+  | { type: "revived"; resumed: string; behind?: true }
   | { type: "forward"; from: string; branch: string; sha: string }
   | {
       type: "permission";
@@ -327,8 +329,10 @@ export function applyLine(
       return add({
         ...at,
         type: "revived",
-        resumed: u.resumed === "loaded" ? "loaded" : "fresh",
-        ...(u.memoryMayBeBehind === true && { behind: true as const }),
+        resumed: printable(String(u.resumed)),
+        // Only with `loaded`, as the contract has it.
+        ...(u.resumed === "loaded" &&
+          u.memoryMayBeBehind === true && { behind: true as const }),
       });
     }
     case "_client_stall_warning": {
