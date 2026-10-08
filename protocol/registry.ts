@@ -57,6 +57,9 @@ interface MeasuredLabels {
   usage: "per-turn" | "cumulative" | "absent";
   /** Vendor `_meta` flags the harness gates real behaviour on. */
   meta?: MetaFlags;
+  /** `session/load` into a new process brought the conversation back
+   *  (§M0-9). A room loads only with this and `loadSession: true`. */
+  loads?: true;
   /** The build these labels describe. Compared at handshake; warns only. */
   measuredOn: { version: string; date: string };
 }
@@ -111,6 +114,8 @@ export const AGENTS: Record<string, AgentEntry> = {
       // them. Mode discovery must read both fields or opencode looks modeless.
       modeMap: { safe: "plan", ask: "build", auto: "build" },
       usage: "per-turn",
+      // §M0-9, on 2.0.18, 2026-09-27.
+      loads: true,
       measuredOn: { version: "1.18.18", date: "2026-08-22" },
     },
   },
@@ -143,6 +148,8 @@ export const AGENTS: Record<string, AgentEntry> = {
       // `session/set_mode` under `safe` would only change thinking effort and
       // would not make `safe` any more binding.
       usage: "absent",
+      // §M0-9, on 0.0.34, 2026-09-27.
+      loads: true,
       // pi-acp 0.0.33 was measured against pi v0.85.1 on this machine.
       measuredOn: { version: "0.0.33", date: "2026-09-09" },
     },
@@ -175,6 +182,8 @@ export const AGENTS: Record<string, AgentEntry> = {
       // and a `{type:"terminal"}` content block — for a terminal never
       // created, with no command output and no exit code (§M0-3).
       meta: { terminal_output: true },
+      // §M0-9, on 0.81.1, 2026-09-27.
+      loads: true,
       // Re-measured on 0.75.1, 2026-09-09. `shell`, `argvChannel`,
       // `asksPermission`, `modeMap.safe` and `modeMap.auto` were all
       // re-verified against the real adapter — argv still arrives empty on the
@@ -216,6 +225,8 @@ export const AGENTS: Record<string, AgentEntry> = {
         auto: "https://agentclientprotocol.com/protocol/session-modes#autopilot",
       },
       usage: "cumulative",
+      // §M0-9, on 1.0.88, 2026-09-27.
+      loads: true,
       measuredOn: { version: "1.0.80", date: "2026-08-23" },
     },
   },

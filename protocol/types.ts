@@ -636,12 +636,16 @@ export interface ClientParticipantFastForwardedEvent extends Meta {
 
 /** A stopped participant has a new harness, in the same checkout (M6-7a).
  *  `paused`, `killed` and `exited` revive the same way, on the next message.
- *  `fresh`: a new session, so it does not remember earlier turns. It comes
- *  after the `_client_user_message` that revived it, and before its answer. */
+ *  `loaded`: the old session came back, so it remembers earlier turns
+ *  (M6-7b). `fresh`: a new session, so it does not. It comes after the
+ *  `_client_user_message` that revived it, and before its answer. */
 export interface ClientParticipantRevivedEvent extends Meta {
   sessionUpdate: "_client_participant_revived";
-  resumed: "fresh";
+  resumed: "loaded" | "fresh";
   sessionId: string;
+  /** Only with `loaded`: it stopped during a turn, so what it remembers may
+   *  be behind its files (§M0-9, R46). */
+  memoryMayBeBehind?: true;
 }
 
 /** Everything `render.ts`'s switch must tolerate. */

@@ -45,7 +45,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 8 } as const;
+export const API_VERSION = { major: 1, minor: 9 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -311,12 +311,13 @@ export interface ParticipantDto {
   /** The checkout's branch and the SHA it forked from, when it has one. */
   branch?: string;
   baseSha?: string;
-  /** The harness session, kept for a future `session/load`. A revive
-   *  changes it. */
+  /** The harness session, which a revive loads. A fresh revive changes
+   *  it. */
   sessionId: string;
-  /** `fresh` once the participant was revived with a new session, so it
-   *  does not remember the turns before (M6-7a). Absent before. */
-  resumed?: "fresh";
+  /** How the last revive came back. `loaded`: the old session, so it
+   *  remembers the turns before (M6-7b, since 1.9). `fresh`: a new session,
+   *  so it does not (M6-7a). Absent before the first revive. */
+  resumed?: "loaded" | "fresh";
   status: ParticipantStatus;
   notices: Notice[];
 }

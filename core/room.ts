@@ -25,11 +25,22 @@
  * into `paused` and `killed` (`crashed`, below), and `restoreRoom` builds the
  * room again from the file, without starting a harness.
  *
- * **A stopped participant revives on its next message** (Half A). `paused`,
- * `killed` and `exited` all take the same path: a new harness in the same
- * checkout, with a fresh session, so it does not remember earlier turns. The
- * log gets `_client_participant_revived` and the participant reads
- * `resumed: "fresh"`. A dismissed room never revives.
+ * **A stopped participant revives on its next message.** `paused`, `killed`
+ * and `exited` all take the same path: a new harness in the same checkout.
+ * It loads the old session when the harness advertises `loadSession` and
+ * the registry records a working load (`measured.loads`, M6-7b); the load's
+ * replay never reaches the bus. Otherwise, or when the load fails, it opens
+ * a fresh session and does not remember earlier turns (Half A). The log gets
+ * `_client_participant_revived` and the participant reads `resumed:
+ * "loaded"` or `"fresh"`. The mode is sent again either way: a load does not
+ * keep it (§Mode after load). A dismissed room never revives.
+ *
+ * **A load can remember less than the files show** (§M0-9). That happened
+ * only to a harness stopped during a turn, cancelled or cut. So a load after
+ * `killed`, or after a pause that cancelled a live turn, says so with
+ * `memoryMayBeBehind`. The pause case still reads `paused`; `room.json`
+ * keeps it as `turnCancelled`, which only the next revive reads (decided
+ * 2026-10-08, #179).
  *
  * **One checkout per participant** (M6-6a, R14). Each one runs in
  * `stateDirFor(root)/wt/<roomId>/<participantId>`, on the branch
@@ -242,11 +253,10 @@ export interface Participant {
   /** The checkout's branch and the SHA it forked from, when there is one. */
   readonly branch?: string;
   readonly baseSha?: string;
-  /** Recorded from the first version, though nothing loads it until
-   *  `session/load` lands (R17, the M2-6 precedent). A revive changes it. */
+  /** The session a revive loads (R17). A fresh revive changes it. */
   readonly sessionId: string;
-  /** `fresh` once a revive gave it a new session; absent before. */
-  readonly resumed?: "fresh";
+  /** How the last revive came back; absent before the first. */
+  readonly resumed?: "loaded" | "fresh";
   /** The room's notices, then this participant's containment and worktree
    *  notices. #13's lines are never dropped, and a room has no terminal of
    *  its own, so the caller publishes them. */
@@ -301,7 +311,10 @@ interface ParticipantRecord {
   /** Its own notices: the worktree's and the sweep's, not the mode lines,
    *  which are worked out again. */
   notices: RoomNotice[];
-  resumed?: "fresh";
+  resumed?: "loaded" | "fresh";
+  /** A pause cancelled its live turn, so a load may remember less than the
+   *  files show. Never on the DTO; the next revive clears it. */
+  turnCancelled?: true;
 }
 
 /** `room.json`: the room, its own notices and every participant. */
@@ -574,8 +587,9 @@ interface Member {
   own: RoomNotice[];
   stop: () => Promise<void>;
   pause: (graceMs: number) => Promise<void>;
-  launch: () => Promise<void>;
+  launch: () => Promise<unknown>;
   turns: () => number;
+  turnCancelled: () => boolean;
   setMode: (mode: ClientMode) => void;
   hold: <T>(work: Promise<T>) => Promise<T>;
   onNotice: Notify;
@@ -848,6 +862,7 @@ async function buildRoom(
       status: p.status(),
       notices: [...m.own],
       ...(p.resumed && { resumed: p.resumed }),
+      ...(m.turnCancelled() && { turnCancelled: true }),
     };
   };
   const status = (): RoomStatus => {
@@ -1366,7 +1381,7 @@ function createParticipant({
   limits: WatchdogLimits;
   /** A restored participant's record; absent for a new one. */
   saved?: ParticipantRecord;
-  /** A revive gave the harness a new session. */
+  /** A revive gave the harness a new process. */
   onRevive: () => void;
 }): Omit<Member, "spec" | "source" | "own" | "onNotice"> {
   /** The live harness; undefined before `launch` and once it has stopped. */
@@ -1378,6 +1393,7 @@ function createParticipant({
       : saved && "paused";
   let sessionId = saved?.sessionId ?? "";
   let resumed = saved?.resumed;
+  let turnCancelled = saved?.turnCancelled === true;
   let mode = initialMode;
   // Counts this participant's turns from 1 (S12's `turn`), and the live
   // turn's cancel. A turn that ends for any reason aborts it, which denies
@@ -1457,8 +1473,9 @@ function createParticipant({
   };
   if (saved) warn();
 
-  /** Starts a harness in the checkout and opens a fresh session. */
-  const launch = async () => {
+  /** Starts a harness in the checkout, loads session `load` when the
+   *  harness can, or else opens a fresh one. True when it loaded. */
+  const launch = async (load?: string): Promise<boolean> => {
     const next: AcpAgent = new AcpAgent({
       name: spec.name,
       command: spec.launch.command,
@@ -1487,11 +1504,20 @@ function createParticipant({
       },
     });
     let session: string;
+    let loaded = false;
     try {
       const init = await next.start();
       version = init.agentInfo?.version;
       warn();
-      session = await next.newSession();
+      if (load && spec.measured?.loads && init.agentCapabilities?.loadSession) {
+        // A load that fails falls back to fresh, which the revive reports.
+        // A harness that died in it fails `newSession` too.
+        loaded = await next.loadSession(load).then(
+          () => true,
+          () => false,
+        );
+      }
+      session = loaded ? (load ?? "") : await next.newSession();
     } catch (err) {
       await next.stop();
       throw err;
@@ -1503,9 +1529,11 @@ function createParticipant({
     }
     agent = next;
     sessionId = session;
+    // A loaded session does not keep its mode either (§Mode after load).
     sent = undefined;
     failure = undefined;
     await syncMode();
+    return loaded;
   };
 
   // Never sent, so each waiting `send` resolves here.
@@ -1519,18 +1547,21 @@ function createParticipant({
     for (const { done } of dropped) done();
   };
 
-  /** A new harness with a fresh session, for a participant that has none
-   *  (Half A). It does not remember earlier turns, and says so. */
+  /** A new harness for a participant that has none. It loads the old
+   *  session when it can, and says whether it did. */
   const revive = async () => {
-    await launch();
+    const behind = stopped === "killed" || turnCancelled;
+    const loaded = await launch(sessionId || undefined);
     stopped = undefined;
-    resumed = "fresh";
+    turnCancelled = false;
+    resumed = loaded ? "loaded" : "fresh";
     bus.emit({
       agent: id,
       update: {
         sessionUpdate: "_client_participant_revived",
-        resumed: "fresh",
+        resumed,
         sessionId,
+        ...(loaded && behind && { memoryMayBeBehind: true as const }),
       },
     });
     onRevive();
@@ -1632,14 +1663,15 @@ function createParticipant({
     stopping = true;
     drop();
     const before = stopped;
+    const live = turn !== undefined;
     let cut = false;
     if (turn) {
       turnAbort.abort();
       agent?.cancel();
-      const live = turn;
+      const current = turn;
       let timer: NodeJS.Timeout | undefined;
       const ended = await Promise.race([
-        live.then(() => true),
+        current.then(() => true),
         new Promise<boolean>((ok) => {
           timer = setTimeout(() => ok(false), graceMs);
         }),
@@ -1651,6 +1683,8 @@ function createParticipant({
     await turn;
     await held;
     stopped = cut ? "killed" : (before ?? "paused");
+    // Ended by the cancel: `paused`, though its memory may be behind.
+    turnCancelled ||= live && !cut;
   };
 
   // The filter follows at once; the harness's own mode before the next turn.
@@ -1732,5 +1766,6 @@ function createParticipant({
     setMode,
     hold,
     turns: () => turns,
+    turnCancelled: () => turnCancelled,
   };
 }

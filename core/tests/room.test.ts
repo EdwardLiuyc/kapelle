@@ -11,7 +11,8 @@
  * room sets the harness's own mode, and an `ask` participant's write waits in
  * the permission queue, named by room, participant and turn (M6-5).
  * A pause keeps the room on disk, and `restoreRoom` brings it back; the next
- * message revives a participant with a fresh session (M6-7a).
+ * message revives a participant with a fresh session (M6-7a), or loads its
+ * old one where the harness can (M6-7b).
  * `mock-agent.mjs`'s default turn writes `ACP_TEST.md` through the client,
  * which is the file each test looks for.
  */
@@ -31,6 +32,7 @@ import {
   tempDir,
 } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
+import { AGENTS } from "../../protocol/registry.ts";
 import { createEventBus, type EventBus } from "../events.ts";
 import { newRoomId } from "../ids.ts";
 import { createPermissionQueue } from "../permissions.ts";
@@ -1798,4 +1800,196 @@ test("a record with a role outside the set, or a title that is not text, is refu
   assert.throws(() => readRoomRecord(file), /has role "boss"/);
   writeRoomRecord(file, { ...record, title: 7 as unknown as string });
   assert.throws(() => readRoomRecord(file), /"title" is not a string/);
+});
+
+// --- session/load on revive (M6-7b) -----------------------------------------
+
+/** A registry entry for the mock with a store and a measured load, named
+ *  `id`, so a restored room resolves it again with `measured.loads`. Removed
+ *  after the test. */
+async function loadingMock(
+  t: TestContext,
+  scenario: string,
+  { loads = true }: { loads?: boolean } = {},
+) {
+  const store = await tempDir(t);
+  const id = `mock-load-${newRoomId()}`;
+  AGENTS[id] = {
+    launch: {
+      command: process.execPath,
+      args: [MOCK_AGENT, "--scenario", scenario, "--store", store],
+    },
+    maxMode: "auto",
+    measured: { ...MEASURED, ...(loads && { loads: true as const }) },
+  };
+  t.after(() => {
+    delete AGENTS[id];
+  });
+  return id;
+}
+
+/** `pausable`, on a `loadingMock`. */
+async function loading(
+  t: TestContext,
+  scenario: string,
+  { loads = true, pauseGraceMs = 2_000 } = {},
+) {
+  const agent = await loadingMock(t, scenario, { loads });
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [roomAgent({ agent, name: "alice" })],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+    permissions: queue,
+    pauseGraceMs,
+  });
+  t.after(() => room.dismiss());
+  const p = room.participants[0] as Participant;
+  return { repo, roomId, room, p, file: roomFile(repo, roomId) };
+}
+
+/** The revive event's fields, once there is one. */
+const revivedOf = (of: (kind: string) => AgentEventEnvelope[]) =>
+  of("_client_participant_revived")[0]?.update as
+    | { resumed: string; sessionId: string; memoryMayBeBehind?: true }
+    | undefined;
+
+const answersOf = (of: (kind: string) => AgentEventEnvelope[]) =>
+  of("agent_message_chunk").map(
+    (e) => (e.update as { content: { text: string } }).content.text,
+  );
+
+test("a revive loads the old session, keeps the replay off the log and sends the mode again", async (t) => {
+  const { repo, room, p, file } = await loading(t, "remember");
+  await p.send("one");
+  const sessionId = p.sessionId;
+  await room.pause();
+  const before = room.eventLog?.size ?? 0;
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  assert.deepEqual(answersOf(back.of), ["previous: one"], "it remembers");
+  assert.equal(back.p.resumed, "loaded");
+  assert.equal(back.p.sessionId, sessionId, "the same session");
+  assert.deepEqual(revivedOf(back.of), {
+    sessionUpdate: "_client_participant_revived",
+    resumed: "loaded",
+    sessionId,
+  });
+
+  const lines = (
+    await readFile(
+      join(stateDirFor(repo), "rooms", back.room.meta.id, "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trim()
+    .split("\n")
+    .map(
+      (l) => (JSON.parse(l) as { update: { sessionUpdate: string } }).update,
+    );
+  const after = lines.slice(before).map((u) => u.sessionUpdate);
+  assert.ok(!after.includes("user_message_chunk"), "no replayed message");
+  assert.equal(
+    after.filter((k) => k === "agent_message_chunk").length,
+    1,
+    "only the new answer",
+  );
+  // `auto` sends `ask`'s id; the load did not keep it.
+  assert.deepEqual(
+    back
+      .of("current_mode_update")
+      .map((e) => (e.update as { currentModeId: string }).currentModeId),
+    ["id-ask"],
+  );
+  assert.ok(
+    after.indexOf("current_mode_update") < after.indexOf("agent_message_chunk"),
+    "the mode goes before the prompt",
+  );
+  assert.equal(readRoomRecord(file).participants[0]?.resumed, "loaded");
+});
+
+test("a pause that cancels a live turn reads paused, and the load warns", async (t) => {
+  const { repo, room, p, file } = await loading(t, "slow");
+  void p.send("hi");
+  await until(() => p.status() === "busy", "the turn never started");
+  await room.pause();
+  assert.equal(p.status(), "paused");
+  const saved = readRoomRecord(file).participants[0];
+  assert.equal(saved?.status, "paused");
+  assert.equal(saved?.turnCancelled, true);
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  assert.equal(
+    (back.p as unknown as Record<string, unknown>).turnCancelled,
+    undefined,
+    "not on the participant a client reads",
+  );
+  await back.p.send("again");
+  assert.equal(revivedOf(back.of)?.resumed, "loaded");
+  assert.equal(revivedOf(back.of)?.memoryMayBeBehind, true);
+  await until(
+    () => readRoomRecord(file).participants[0]?.turnCancelled === undefined,
+    "the revive never cleared the flag",
+  );
+});
+
+test("an idle pause loads with no warning", async (t) => {
+  const { repo, room, p, file } = await loading(t, "remember");
+  await p.send("one");
+  await room.pause();
+  assert.equal(readRoomRecord(file).participants[0]?.turnCancelled, undefined);
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  assert.equal(revivedOf(back.of)?.memoryMayBeBehind, undefined);
+});
+
+test("a killed participant's load warns", async (t) => {
+  const { repo, room, p, file } = await loading(t, "remember");
+  await p.send("one");
+  await room.pause();
+  // What a `kill -9` during a turn leaves.
+  const record = readRoomRecord(file);
+  const back = await restored(t, repo, {
+    ...record,
+    status: "active",
+    participants: record.participants.map((x) => ({ ...x, status: "busy" })),
+  });
+  assert.equal(back.p.status(), "killed");
+  await back.p.send("two");
+  assert.deepEqual(answersOf(back.of), ["previous: one"]);
+  assert.equal(revivedOf(back.of)?.memoryMayBeBehind, true);
+});
+
+test("a harness with no measured load revives fresh, though it advertises one", async (t) => {
+  const { repo, room, p, file } = await loading(t, "remember", {
+    loads: false,
+  });
+  await p.send("one");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  assert.deepEqual(answersOf(back.of), ["previous: (none)"]);
+  assert.equal(back.p.resumed, "fresh");
+  assert.notEqual(back.p.sessionId, p.sessionId);
+});
+
+test("a load that fails falls back to a fresh session", async (t) => {
+  const { repo, room, p, file } = await loading(t, "remember");
+  await p.send("one");
+  await room.pause();
+  const record = readRoomRecord(file);
+  const saved = record.participants[0] as RoomRecord["participants"][number];
+  const back = await restored(t, repo, {
+    ...record,
+    participants: [{ ...saved, sessionId: "sess_mock_gone" }],
+  });
+  await back.p.send("two");
+  assert.deepEqual(answersOf(back.of), ["previous: (none)"]);
+  assert.equal(revivedOf(back.of)?.resumed, "fresh");
+  assert.notEqual(back.p.sessionId, "sess_mock_gone");
 });

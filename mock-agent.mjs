@@ -13,8 +13,15 @@
  * never a keyword in the prompt: `silent-session` fires during the handshake,
  * before any prompt exists, so no keyword could reach it. With no flag the
  * compliant default path runs, so `npm run selftest` is unchanged.
+ *
+ * `--store <dir>` keeps each session's prompts in `<dir>`, so a new process
+ * can `session/load` it (M6-7b). Only then does the handshake advertise
+ * `loadSession: true`. The load replays the old turns as `session/update`
+ * before it answers, as every real harness does (§M0-9).
  */
-import { writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 /** Every fixture, and what the client is meant to make of it. */
@@ -43,6 +50,9 @@ const SCENARIOS = {
   "diff-bad-old":
     "like diff-first, but the diff block's oldText is a number, not text",
 };
+
+const storeAt = process.argv.indexOf("--store");
+const store = storeAt === -1 ? null : process.argv[storeAt + 1];
 
 const at = process.argv.indexOf("--scenario");
 const scenario = at === -1 ? null : process.argv[at + 1];
@@ -186,6 +196,12 @@ const sessions = new Set();
  *  by the session, not the process, so a fresh session remembers nothing. */
 const lastPrompt = new Map();
 
+/** `--store`'s file for one session: every prompt it saw, in order. */
+const storeFile = (sid) => join(store, `${sid}.json`);
+const stored = (sid) => JSON.parse(readFileSync(storeFile(sid), "utf8"));
+const keep = (sid, prompts) =>
+  store && writeFileSync(storeFile(sid), JSON.stringify(prompts));
+
 const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
 const fail = (id, message) =>
@@ -223,7 +239,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (msg.method === "initialize") {
     reply(msg.id, {
       protocolVersion: 1,
-      agentCapabilities: { loadSession: false, promptCapabilities: {} },
+      agentCapabilities: {
+        loadSession: store !== null,
+        promptCapabilities: {},
+      },
       agentInfo: { name: "mock-agent", version: "0.1.0" },
       authMethods: [],
     });
@@ -234,9 +253,45 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // (`protocol/agent.ts:503`) is the thing under test, and any reply at all
     // would answer it.
     if (scenario === "silent-session") return;
-    const sid = `sess_mock_${++sessionCount}`;
+    // Unique with a store, so one process never loads another's session.
+    const sid = store
+      ? `sess_mock_${randomUUID()}`
+      : `sess_mock_${++sessionCount}`;
     sessions.add(sid);
+    keep(sid, []);
     reply(msg.id, { sessionId: sid });
+  }
+
+  if (msg.method === "session/load") {
+    const { sessionId: sid } = msg.params;
+    let prompts;
+    try {
+      prompts = store ? stored(sid) : null;
+    } catch {
+      prompts = null;
+    }
+    if (!prompts) {
+      fail(msg.id, `no stored session "${sid}"`);
+      return;
+    }
+    // The old turns, as the `remember` fixture answered them.
+    prompts.forEach((text, i) => {
+      update(sid, {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text },
+      });
+      update(sid, {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: `previous: ${prompts[i - 1] ?? "(none)"}`,
+        },
+      });
+    });
+    sessions.add(sid);
+    if (prompts.length > 0) lastPrompt.set(sid, prompts.at(-1));
+    reply(msg.id, {});
+    return;
   }
 
   // Any id is accepted, and echoed as `current_mode_update`, so a test reads
@@ -298,6 +353,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       const text = msg.params.prompt?.[0]?.text ?? "";
       const previous = lastPrompt.get(sid) ?? "(none)";
       lastPrompt.set(sid, text);
+      if (store) keep(sid, [...stored(sid), text]);
       if (scenario === "slow") {
         // Kept where `session/cancel` finds it, which answers `cancelled`.
         stalledPromptId = msg.id;

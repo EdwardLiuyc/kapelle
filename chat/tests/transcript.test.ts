@@ -241,7 +241,8 @@ test("a fast-forward draws a line naming both participants", () => {
   );
 });
 
-test("a revive draws a line that says the session is fresh (M6-7a)", () => {
+/** The transcript after ana's message and one revive line `revived`. */
+function afterRevive(revived: RoomEventLine["update"]): string {
   const state = newRoomState();
   let seq = 0;
   const line = (update: RoomEventLine["update"]) =>
@@ -259,11 +260,7 @@ test("a revive draws a line that says the session is fresh (M6-7a)", () => {
     mode: "auto",
   });
   line({ sessionUpdate: "_client_user_message", text: "hi", turn: 1 });
-  line({
-    sessionUpdate: "_client_participant_revived",
-    resumed: "fresh",
-    sessionId: "s2",
-  });
+  line(revived);
   const rooms = new Map([
     ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
   ]);
@@ -274,13 +271,41 @@ test("a revive draws a line that says the session is fresh (M6-7a)", () => {
     setStatus() {},
   });
   parts.redraw();
-  const text = parts.transcript
-    .render(120)
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
-    .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd())
-    .join("\n");
+  return (
+    parts.transcript
+      .render(160)
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+      .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd())
+      .join("\n")
+  );
+}
+
+test("a revive draws a line that says the session is fresh (M6-7a)", () => {
   assert.match(
-    text,
+    afterRevive({
+      sessionUpdate: "_client_participant_revived",
+      resumed: "fresh",
+      sessionId: "s2",
+    }),
     /↻ ana is back with a fresh session; it does not remember/,
+  );
+});
+
+test("a loaded revive says so, and warns when its memory may be behind (M6-7b)", () => {
+  const loaded = afterRevive({
+    sessionUpdate: "_client_participant_revived",
+    resumed: "loaded",
+    sessionId: "s1",
+  });
+  assert.match(loaded, /↻ ana is back with its old session/);
+  assert.doesNotMatch(loaded, /behind/);
+  assert.match(
+    afterRevive({
+      sessionUpdate: "_client_participant_revived",
+      resumed: "loaded",
+      sessionId: "s1",
+      memoryMayBeBehind: true,
+    }),
+    /! ana is back with its old session, but it stopped during a turn: what it remembers may be behind its files/,
   );
 });

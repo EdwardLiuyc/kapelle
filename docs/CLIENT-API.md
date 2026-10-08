@@ -7,9 +7,9 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.8** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
-M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, and M6-7a, #151, which made
-rooms stable).
+Contract version: **1.9** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
+rooms stable, and M6-7b, #179, which added `resumed: "loaded"`).
 
 ## Contents
 
@@ -803,7 +803,7 @@ with ACP names.
 | `_client_participant_changed` | `name?`, `role?`, `mode?` | A rename, or a new role or mode. Only the changed fields are present. `role: null` means the role was cleared. |
 | `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. A no-op move writes none. |
 | `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
-| `_client_participant_revived` | `resumed`, `sessionId` | A `paused`, `killed` or `exited` participant has a new harness in its own checkout. `resumed` is `fresh`: a new session, so it does not remember the turns before. It comes after the `_client_user_message` that revived it, and after the new `_client_harness_spawned`. |
+| `_client_participant_revived` | `resumed`, `sessionId`, `memoryMayBeBehind?` | A `paused`, `killed` or `exited` participant has a new harness in its own checkout. `resumed` is `loaded` (since 1.9): it loaded its old session and remembers the turns before. Or it is `fresh`: a new session, so it does not. `memoryMayBeBehind` is `true` only with `loaded`, when the participant stopped during a turn: what it remembers may be behind its files. It comes after the `_client_user_message` that revived it, and after the new `_client_harness_spawned`. |
 
 Build the roster from these three events. Then a replay shows the roster as it was at
 each `seq`, and a rename by another client shows too. `client/room.ts` does this for a
@@ -1059,9 +1059,10 @@ idle), `killed` (it stopped during a turn without a clean end, so its memory may
 its files), `paused` (a shutdown stopped it cleanly) or `dismissed`. A message to an
 `exited`, `killed` or `paused` participant revives it.
 
-`resumed` is missing until a participant is revived. Then it is `fresh`: the participant
-has a new session and does not remember the turns before. A revive also changes its
-`sessionId`.
+`resumed` is missing until a participant is revived. Then it is `loaded` (since 1.9): the
+participant loaded its old session and remembers the turns before, with the same
+`sessionId`. Or it is `fresh`: it has a new session and a new `sessionId`, and does not
+remember the turns before. A client that does not know a value shows it as text.
 
 `seq` is the size of the room's log when the daemon answered. The reply counts every line
 up to that `seq`, and a line above it is newer than the reply.
@@ -1379,9 +1380,18 @@ reads every record back:
 - The stream replays the whole history, and new lines follow with the next `seq`.
 - Queued messages are lost, as are open permission questions.
 - The next message to a `paused`, `killed` or `exited` participant revives it: a new
-  harness in the same checkout, with a fresh session. The log gets
-  `_client_participant_revived`, the participant gets `resumed: "fresh"`, and the room is
-  `active` again. Adding a participant also makes it `active`.
+  harness in the same checkout. It loads the old session where the harness can, and gets
+  `resumed: "loaded"`. Otherwise, or when the load fails, it gets a fresh session and
+  `resumed: "fresh"`. The log gets `_client_participant_revived`, and the room is `active`
+  again. Adding a participant also makes it `active`.
+- The load replays the old conversation to the daemon. The daemon drops it, so it adds no
+  line to the log. The mode is sent to the harness again before the message, because a
+  load does not keep it.
+- A participant that stopped during a turn may remember less than its files show. That
+  is a `killed` one, or a `paused` one whose turn the shutdown cancelled. Its loaded
+  revive carries `memoryMayBeBehind: true`. Ask it to check its files before it goes on.
+- After a hard kill, claude has once reported a message nobody sent ("continue"). The
+  replay does not carry it, so the daemon cannot filter it out.
 - A dismissed room comes back dismissed. Its stream ends once it has replayed. It never
   revives.
 - A `killed` participant whose checkout has a git `index.lock` left by the cut turn gets
@@ -1392,7 +1402,7 @@ reads every record back:
 ### Room record (planned)
 
 This is the whole record. The replies above show the part that is built. The rest comes
-with the story that fills it: `resumed: "loaded"` (M6-7b) and the room's `base` (M6-6a).
+with the story that fills it: the room's `base` (M6-6a).
 
 ```text
 room              id, cwd, title, base, createdAt, updatedAt, status
@@ -1407,7 +1417,7 @@ room detail       the room fields above, plus every participant in full
 ```
 
 `resumed` is missing until a participant comes back. `fresh` means it started a new
-session. `loaded` (M6-7b) will mean it kept its memory.
+session. `loaded` means it kept its memory.
 
 `role` is one of `orchestrator`, `developer`, `tester` or `architect`, or missing. It is a
 label. It sends no text to the agent. A client changes `name`, `mode` or `role` with one

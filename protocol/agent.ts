@@ -11,6 +11,7 @@ import type {
   Implementation,
   InitializeResponse,
   JsonRpcError,
+  LoadSessionResponse,
   McpServer,
   Meta,
   NewSessionResponse,
@@ -292,6 +293,8 @@ export class AcpAgent {
   // again without re-asking.
   #writeDecisions = new Map<string, "denied" | "once">();
   #closed = false;
+  /** True while `session/load` is in flight: its updates are the replay. */
+  #replaying = false;
   #promptInFlight = false;
   #stderr: string[] = [];
   #stderrFile: WriteStream | null = null;
@@ -499,6 +502,31 @@ export class AcpAgent {
     });
     this.sessionId = res.sessionId;
     return this.sessionId;
+  }
+
+  /**
+   * Load an earlier session into this process (M6-7b). The harness replays
+   * the old conversation as ordinary `session/update` before it answers
+   * (§M0-9). The caller already has that history, so the replay is dropped
+   * here and never reaches `onEvent`. Whether to load at all is the caller's
+   * call: `agentCapabilities.loadSession` is a claim, not a measurement.
+   */
+  async loadSession(
+    sessionId: SessionId,
+    { mcpServers = [] }: { mcpServers?: McpServer[] } = {},
+  ): Promise<SessionId> {
+    this.#replaying = true;
+    try {
+      await this.request<LoadSessionResponse>("session/load", {
+        sessionId,
+        cwd: this.cwd,
+        mcpServers,
+      });
+    } finally {
+      this.#replaying = false;
+    }
+    this.sessionId = sessionId;
+    return sessionId;
   }
 
   /**
@@ -773,7 +801,7 @@ export class AcpAgent {
     if (msg.method !== "session/update") return;
     const params = msg.params as { update?: SessionUpdate } | undefined;
     const update = params?.update;
-    if (!update) return;
+    if (!update || this.#replaying) return;
 
     // Permission requests only carry a toolCallId, so remember the details
     // announced here — otherwise the policy has nothing to judge.

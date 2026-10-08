@@ -23,7 +23,7 @@ import {
 } from "../client/room.ts";
 import { codeOf, readRoom, reconcile } from "../client/roomset.ts";
 import { parseLine } from "../client/submit.ts";
-import { address, endedLine, rosterOf } from "./common.ts";
+import { address, endedLine, revivedLine, rosterOf } from "./common.ts";
 
 /** Prints the reducer's entries as a conversation, for a piped stdin. An
  *  answer that grows prints only its new text. A participant's name comes
@@ -86,10 +86,7 @@ function makePrinter(state: RoomState) {
           line("! the harness exited");
           break;
         case "revived":
-          line(
-            `↻ ${nameOf(state, e.participantId)} is back with a fresh ` +
-              "session; it does not remember the earlier turns",
-          );
+          line(revivedLine(nameOf(state, e.participantId), e));
           break;
         case "forward":
           line(

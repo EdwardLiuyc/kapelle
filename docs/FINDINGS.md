@@ -17,6 +17,7 @@ client commit and spike branch — they differ, and by enough to matter:
 | M0-5 | 2026-08-22 | `97eeb1e` | `spike/m0-5-usage-probe` |
 | M0-1 copilot re-verification | 2026-08-23 | `c4307f3` | `spike/m0-7-reverify` |
 | M0-9 | 2026-09-27 | `04d6ac9` (run 1), `457bfb5` (run 2); same `protocol/` and `core/policy.ts` | `spike/m0-9-load-probe` (`load-probe.mjs`) |
+| M6-7b | 2026-10-08 | `635a124` + the M6-7b working tree | `integration/daemon.itest.ts` |
 
 Method throughout: each harness spawned behind a transparent stdio proxy that logged every
 JSON-RPC line in both directions, so "did not happen" below means *absent from the wire*,
@@ -1273,6 +1274,42 @@ inherited a mode.**
 
 **Coverage.** One machine, one run per case, idle stops only. A stop during a turn was not
 measured. Versions are the handshake's `agentInfo.version`.
+
+---
+
+## M6-7b · a room revive with `session/load` — checked 2026-10-08 (#179)
+
+**Question.** §M0-9 drove `AcpAgent` by hand. Does the room's own revive load the session
+after a real daemon restart, keep the replay off the log, and come back remembering?
+
+**Method.** `integration/daemon.itest.ts`, one run per harness. A daemon opened a room with
+one `safe` participant. Turn 1 asked it to remember the codeword `PLUM-42` and reply `OK`.
+The daemon then stopped with SIGTERM, idle, and a second daemon started on the same state.
+Turn 2 asked for the codeword. The test asserted on our record: `resumed: "loaded"`, the
+same `sessionId`, and no replayed kind on the log between the reviving message and the
+revive line. The answer was read by hand.
+
+| | opencode 2.0.18 | claude-agent-acp 0.81.1 | copilot 1.0.91 | pi-acp 0.0.34 |
+| --- | --- | --- | --- | --- |
+| `resumed` | `loaded` | `loaded` | `loaded` | `loaded` |
+| same `sessionId` | yes | yes | yes | yes |
+| replay on the log | none | none | none | none |
+| answer after the restart | `PLUM-42` | `PLUM-42` | `PLUM-42` | `PLUM-42` |
+
+**Answer: yes, on all four.**
+
+**Not every update after a load is replay.** The first run failed on claude and copilot:
+`available_commands_update` and `config_option_update` came between the message and the
+revive line. A probe with no prompt showed both on a new session too: the commands list
+when a session opens, and `config_option_update` as the answer to `session/set_mode`,
+which the room sends after every load. The replay is the old conversation only:
+`user_message_chunk`, `agent_message_chunk`, `agent_thought_chunk`, `tool_call`,
+`tool_call_update` and `usage_update` (§M0-9). `AcpAgent` drops what comes during the
+`session/load` request, and nothing else.
+
+**Coverage.** One run per harness, an idle stop only. A stop during a turn, and so the
+`memoryMayBeBehind` warning, is proved against `mock-agent.mjs` only
+(`core/tests/room.test.ts`). The real-harness memory loss behind that warning is §M0-9's.
 
 ---
 

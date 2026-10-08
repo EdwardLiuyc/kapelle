@@ -10,6 +10,11 @@
  *   room sends `modeMap.safe` for `safe` and `modeMap.ask` for `auto`, before
  *   the first turn after the change. Never `modeMap.auto`: claude's is
  *   `bypassPermissions`, where it stops asking us.
+ * - **A participant revived after a daemon restart** (M6-7b, #179). Each
+ *   harness §M0-9 measured loads its old session: the DTO says `loaded`, the
+ *   session id is the same, and the replay adds no line to the room log. What
+ *   it remembers is the model's prose, so the test prints the answer for a
+ *   person to read and asserts nothing on it.
  *
  * Every assertion is on our own record: the decisions on the event stream,
  * the run's status, the file on the task branch or in the participant's
@@ -35,9 +40,11 @@ import type { ClientPermissionEvent, ToolKind } from "../protocol/types.ts";
 import {
   addRepo,
   bootDaemon,
+  type Daemon,
   daemonApi,
   gitRepo,
   needs,
+  tempDir,
   WRITE_PROMPT,
 } from "./helpers.ts";
 
@@ -168,6 +175,42 @@ for (const [agent, bin] of [
 
 type RoomReply = RoomDto & { error?: { message: string } };
 
+/** A participant's whole stream. Read it after the dismissal: the stream
+ *  ends once the room's log closes. */
+async function participantLines(
+  d: Daemon,
+  roomId: string,
+  participantId: string,
+): Promise<RoomEventLine[]> {
+  const res = await fetch(
+    `${d.url}/rooms/${roomId}/agents/${participantId}/events`,
+    { headers: { authorization: `Bearer ${d.token}` } },
+  );
+  assert.equal(res.status, 200, "the participant's stream opened");
+  const lines: RoomEventLine[] = [];
+  for (const raw of (await res.text()).split("\n")) {
+    if (!raw.startsWith("data: ")) continue;
+    try {
+      lines.push(JSON.parse(raw.slice(6)) as RoomEventLine);
+    } catch {
+      assert.fail(`bad SSE line from the room: ${raw.slice(0, 120)}`);
+    }
+  }
+  return lines;
+}
+
+/** Sends `text` to the participant at `base` and waits for the turn's end.
+ *  `exited` is a dead harness, so it fails here. */
+async function turnOn(d: Daemon, base: string, text: string) {
+  const sent = await daemonApi(d, "POST", `${base}/messages`, { text });
+  assert.equal(sent.status, 202);
+  const status = await poll("turn ended", async () => {
+    const r = await daemonApi<ParticipantDto>(d, "GET", base);
+    return r.body.status === "busy" ? undefined : r.body.status;
+  });
+  assert.equal(status, "idle", "the turn ended with the harness alive");
+}
+
 test("claude: a room participant moved from safe to auto is told, and still asks", {
   skip: needs("claude-agent-acp"),
   ...SLOW,
@@ -186,18 +229,7 @@ test("claude: a room participant moved from safe to auto is told, and still asks
   assert.ok(p, "the room opened with its participant");
   const base = `/rooms/${roomId}/agents/${p.id}`;
 
-  const turn = async () => {
-    const sent = await daemonApi(d, "POST", `${base}/messages`, {
-      text: WRITE_PROMPT,
-    });
-    assert.equal(sent.status, 202);
-    const status = await poll("turn ended", async () => {
-      const r = await daemonApi<ParticipantDto>(d, "GET", base);
-      return r.body.status === "busy" ? undefined : r.body.status;
-    });
-    // `exited` is a dead harness, not a mode bug: say so here.
-    assert.equal(status, "idle", "the turn ended with the harness alive");
-  };
+  const turn = () => turnOn(d, base, WRITE_PROMPT);
 
   await turn();
   // Plan mode is advisory, so turn 1 may have written anyway
@@ -213,21 +245,7 @@ test("claude: a room participant moved from safe to auto is told, and still asks
 
   const dismissed = await daemonApi(d, "POST", `/rooms/${roomId}/dismiss`);
   assert.equal(dismissed.status, 200);
-  // The stream ends once the room's log closes, so read it after the dismissal.
-  const res = await fetch(`${d.url}/rooms/${roomId}/agents/${p.id}/events`, {
-    headers: { authorization: `Bearer ${d.token}` },
-  });
-  assert.equal(res.status, 200, "the participant's stream opened");
-  const text = await res.text();
-  const lines: RoomEventLine[] = [];
-  for (const raw of text.split("\n")) {
-    if (!raw.startsWith("data: ")) continue;
-    try {
-      lines.push(JSON.parse(raw.slice(6)) as RoomEventLine);
-    } catch {
-      assert.fail(`bad SSE line from the room: ${raw.slice(0, 120)}`);
-    }
-  }
+  const lines = await participantLines(d, roomId, p.id);
 
   // Split the decisions by turn, at each user message.
   const turns: ClientPermissionEvent[][] = [];
@@ -262,3 +280,114 @@ test("claude: a room participant moved from safe to auto is told, and still asks
   );
   assert.ok(wrote, "turn 2 wrote PROOF.md in the participant's checkout");
 });
+
+/** What a load replays: the old conversation (§M0-9). */
+const REPLAYED = new Set([
+  "user_message_chunk",
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+  "usage_update",
+]);
+
+// §M0-9's four harnesses, each with the binary that runs it.
+for (const [agent, bin] of [
+  ["opencode", "opencode"],
+  ["claude", "claude-agent-acp"],
+  ["copilot", "copilot"],
+  ["pi", "pi-acp"],
+] as const) {
+  test(`${agent}: a participant revived after a restart loads its session (M6-7b)`, {
+    skip: needs(bin),
+    ...SLOW,
+  }, async (t) => {
+    const dir = await tempDir(t);
+    const first = await bootDaemon(t, dir);
+    const cwd = await gitRepo(t);
+    await addRepo(first, cwd);
+    // `safe`, so neither turn has a reason to change a file.
+    const open = await daemonApi<RoomReply>(first, "POST", "/rooms", {
+      cwd,
+      agents: [{ agent, name: "m", mode: "safe" }],
+    });
+    assert.equal(open.status, 201, open.body.error?.message);
+    const roomId = open.body.id;
+    const [p] = open.body.participants;
+    assert.ok(p, "the room opened with its participant");
+    const base = `/rooms/${roomId}/agents/${p.id}`;
+    await turnOn(
+      first,
+      base,
+      "Remember the codeword PLUM-42. Reply with OK and nothing else.",
+    );
+
+    process.kill(first.pid, "SIGTERM");
+    assert.equal((await first.done).code, 0);
+    const second = await bootDaemon(t, dir);
+    const paused = await daemonApi<ParticipantDto>(second, "GET", base);
+    assert.equal(paused.body.status, "paused");
+
+    await turnOn(
+      second,
+      base,
+      "What was the codeword? Reply with the codeword only.",
+    );
+    const back = await daemonApi<ParticipantDto>(second, "GET", base);
+    assert.equal(back.body.resumed, "loaded");
+    assert.equal(back.body.sessionId, p.sessionId, "the same session");
+
+    const dismissed = await daemonApi(
+      second,
+      "POST",
+      `/rooms/${roomId}/dismiss`,
+    );
+    assert.equal(dismissed.status, 200);
+    const kinds = (await participantLines(second, roomId, p.id)).map(
+      (l) => l.update,
+    );
+    const revived = kinds.findIndex(
+      (u) => u.sessionUpdate === "_client_participant_revived",
+    );
+    assert.ok(revived > 0, "the log has the revive");
+    assert.deepEqual(
+      kinds[revived],
+      {
+        sessionUpdate: "_client_participant_revived",
+        resumed: "loaded",
+        sessionId: p.sessionId,
+      },
+      "loaded, with no warning after an idle stop",
+    );
+    // The load runs between the message that revived it and the revive
+    // line. A replay that leaked would land there, as the kinds §M0-9 saw
+    // replayed. Not every update: a new session's own state comes there
+    // too, such as claude's and copilot's `available_commands_update`, and
+    // the `config_option_update` that the mode send causes.
+    const message = kinds.findLastIndex(
+      (u, i) => i < revived && u.sessionUpdate === "_client_user_message",
+    );
+    assert.deepEqual(
+      kinds
+        .slice(message + 1, revived)
+        .map((u) => u.sessionUpdate)
+        .filter((k) => REPLAYED.has(k)),
+      [],
+      "the replay added no line",
+    );
+    assert.ok(
+      kinds.every((u) => u.sessionUpdate !== "user_message_chunk"),
+      "no replayed message anywhere",
+    );
+    // The memory check is a person's: the answer is the model's prose.
+    const answer = kinds
+      .slice(revived)
+      .map((u) =>
+        u.sessionUpdate === "agent_message_chunk" && u.content.type === "text"
+          ? u.content.text
+          : "",
+      )
+      .join("");
+    t.diagnostic(`${agent} after the restart: ${JSON.stringify(answer)}`);
+  });
+}
