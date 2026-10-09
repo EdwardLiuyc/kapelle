@@ -2,9 +2,9 @@
  * `chat/tui/banner.ts` — the full-screen chat's banner (M4-4).
  *
  * **The TUI's attention signal** (decided 2026-10-05, #50): no desktop
- * pop-up, and the daemon does not ring. A row on top of the timeline for each
- * participant that waits off screen: magenta for a question, yellow for a
- * stall, with who, which room and why. A click opens the thread, and the
+ * pop-up, and the daemon does not ring. A row under the timeline, full width
+ * (#242), for each participant that waits off screen: magenta for a
+ * question, yellow for a stall, with who, which room and why. A click opens the thread, and the
  * question's box. Which rows there are is `chat/view.ts`; with none, the
  * banner takes no rows.
  */

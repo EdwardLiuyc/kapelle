@@ -484,6 +484,9 @@ the timeline and the terminal bell are the attention signal, and a history list 
 person's messages, in the side view, replaces search. `docs/STORIES.md` M4-4 has the
 detail.
 
+**Amended 2026-10-09 (#242):** the banner sits under the timeline, full width, to keep
+the screen's layout flat.
+
 ## M6 stories — the room container
 
 M6 starts by **landing** the participant runtime the spike already proves, then builds the

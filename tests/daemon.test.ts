@@ -4913,14 +4913,27 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
     assert.ok(Date.now() < until, `no bell: ${screen.out()}`);
     await new Promise((ok) => setTimeout(ok, 50));
   }
+  // The banner sits under the timeline row, full width (#242). pi-tui
+  // writes a row as CSI row;1H, CSI 2K, so the last text written to each
+  // row is the screen now.
+  const bannerRow = () => {
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+    const parts = screen.out().split(/\x1b\[(\d+);1H\x1b\[2K/);
+    const rows = new Map<number, string>();
+    for (let i = 1; i < parts.length; i += 2) {
+      rows.set(Number(parts[i]), plainText(parts[i + 1] ?? ""));
+    }
+    for (const [at, text] of rows) if (/▌● asker/.test(text)) return at;
+    return 0;
+  };
+  assert.ok(bannerRow() > 1, `under the timeline: ${screen.out()}`);
   // Below 120 columns the side view takes the timeline's place; the banner
-  // stays on row 1, above it. pi-tui writes a row as CSI row;1H, CSI 2K.
+  // still shows under it.
   await screen.press("\x18", "side view");
-  const row1 = screen.out().split("\x1b[1;1H\x1b[2K").at(-1) ?? "";
-  assert.match(plainText(row1.split("\x1b[2;1H")[0] ?? ""), /▌● asker/);
+  assert.ok(bannerRow() > 1, `under the side view: ${screen.out()}`);
   await screen.press("\x18", "ctrl+x view");
-  // The banner is row 1 of the timeline, right of the 26-column sidebar.
-  await screen.press("\x1b[<0;40;1M\x1b[<0;40;1m", "question 1 of 1");
+  const row = bannerRow();
+  await screen.press(`\x1b[<0;40;${row}M\x1b[<0;40;${row}m`, "question 1 of 1");
   await screen.seen("→ asker");
   assert.equal(bells(), 1, "one bell for one participant that waits");
   screen.child.stdin.write("\x03");
