@@ -2939,21 +2939,23 @@ Decisions: R31, R47.
 opencode and Toad. In a room with many agents the timeline is hard to read: every name is
 the same green, a tool call is one grey line with no result, and a busy agent shows only
 `…` in the sidebar. A design page compared the screens and proposed seven ideas, each with
-a sketch of today and after (<https://claude.ai/artifact/3G7sFoF53r7HF2n83mswv8>). These
-stories take all seven, in its order: ideas 1, 2 and 5 as one story, then the tool rows,
-then the sidebar, the question box and the menu.
+a sketch of today and after (<https://claude.ai/artifact/3G7sFoF53r7HF2n83mswv8>). The
+page is private to its author, so the stories below stand alone. They take all seven
+ideas, in the page's order: agent colours, activity rows and the footer as one story, then
+the tool rows, then the sidebar, the question box and the menu.
 
 Three rules hold for every M7 story:
 
 - **Presentation only (M1c-7).** Each story changes what is drawn. None of them changes a
   permission, the path guard, the policy or a mode. No new runtime dependency: pi-tui
-  0.85.1 already has `fuzzyFilter`, `SelectList.setFilter`, `Loader` and a background
-  function on `Text`.
+  0.85.1 already exports `fuzzyFilter`, `SelectList` (with `setFilter`), `Loader` and
+  `Text` (with a background function) from its index. Checked in the installed package
+  on 2026-10-10.
 - **The layout stays flat (#242).** No `HStack` inside another, and no `auto` size inside
   an `HStack`: each of its parts has a numeric `basis`. The rows under it (the banner, the
   status line, the editor) may stay `auto` in the `VStack`, as they are today.
 - **Colour is never the only signal.** Each state also has a mark (`?`, `!`, `◐`, `⏸`,
-  `✕`), so the screen works without colour. M7-1 makes the TUI obey `NO_COLOR`, so a
+  `✕`, `◌`), so the screen works without colour. M7-1 makes the TUI obey `NO_COLOR`, so a
   test can prove it.
 
 All five are TUI only: the piped screen does not change. They can start beside M6.
@@ -2969,18 +2971,21 @@ that **claude and pi send `agent_thought_chunk`**, one pi agent about 82,000 in 
 **M7-1 · Agent colours, activity rows and the footer · M · needs nothing**
 Three of the design page's ideas, in one story, because they need almost no new data
 and change the feel the most.
-**Colours.** Each participant gets a colour by the order it joined the room, from about
-six. The palette leaves out magenta, yellow, red and green: they mean question, stall,
+**Colours.** Each participant gets a colour by the order it joined the room, from six. The palette leaves out magenta, yellow, red and green: they mean question, stall,
 failed and done. That leaves only cyan and blue of the 16 basic colours, and cyan already
-colours headings and links, so the palette uses 256-colour codes (`38;5;n`). An agent
+colours headings and links, so the palette is six fixed 256-colour codes (`38;5;n`), listed in `chat/view.ts`. The
+codes are picked by eye at build time, because a test cannot judge a colour; none of them
+is a basic red, green, yellow or magenta. An agent
 keeps its colour after another agent leaves; a seventh agent reuses the first colour.
 The rule is pure, in `chat/view.ts`. Each agent's lines in the transcript get a `▎` bar
 in its colour, and its heading shows the name, the harness, the role and the time (`at`,
 as `HH:MM`). The person's own messages get a grey bar and a light background.
 **No colour.** With `NO_COLOR` set, the colour codes go: the foreground colours,
 `38;5;n`, and the backgrounds. Bold, dim, italic, underline and inverse stay, because
-the history list's cursor is inverse (`chat/tui/pane.ts`). `render.ts` already reads
-`NO_COLOR`; the TUI does not yet.
+the history list's cursor is inverse (`chat/tui/pane.ts`). `render.ts` reads `NO_COLOR`
+for one thing only: it skips the Markdown repaint (`canRepaint`). Its own paint (`dim`,
+`green`, `red`, `cyan`) still colours. So after M7-1 the chat TUI obeys `NO_COLOR` and a
+`cli.ts` run does not; the backlog names that gap.
 **Activity rows.** The banner (`chat/tui/banner.ts`, under the row since #242) grows into
 the activity rows. A busy agent's row shows a spinner, then the last tool title or
 `thinking`, then a timer from the turn's start, and it names the M4-5 command that
@@ -3011,9 +3016,10 @@ limits on these numbers:
 - A cost of `0` (opencode) means "not billed"; the footer shows no cost then. claude's
   cost is a list price, not a bill, under a subscription; the footer shows it as `~$N`.
 
-*Done when* unit tests cover the colour order and a colour kept after a remove; no
-colour code with `NO_COLOR`, and inverse kept; the activity rules (busy for the open room only, waits from any
-room, four rows then `+n more`); a tick only while an agent is busy; the footer at 60,
+*Done when* unit tests cover six distinct colour codes, the join order, a seventh agent
+reusing the first colour, and a colour kept after a remove; no colour code with
+`NO_COLOR`, and inverse kept; the activity rules (busy for the open room only, waits from
+any room, four rows then `+n more`); a tick only while an agent is busy; the footer at 60,
 100 and 160 columns, with no `ctx` for `used: 0` and no cost for `0`; and the reducer's
 turn start, thinking flag (a `usage_update` does not clear it), usage and each entry's
 `at`. Thinking text is never drawn. The #242 layout test still passes. §M0-1 gets a
@@ -3030,8 +3036,9 @@ line. This story builds on it. Each tool row ends with a mark: `✓` completed, 
 failed, and a spinner while it is pending or running. An edit whose update carries a diff
 shows `+a −d`. ACP sends that diff as `oldText` and `newText`, not as counts, so the
 counts are cheap, not a real diff: drop the lines both texts share at the start and at
-the end, and count what is left of each. That is exact for one change in one place, and
-too high for an edit in several places. It needs no dependency.
+the end, and count what is left of each. With no `oldText` (a new file), every line of
+`newText` counts as added. That is exact for one change in one place, and too high for
+an edit in several places. It needs no dependency.
 **A run folds when the next note comes.** A turn often reads note → tools → note → tools
 → answer. A run is one agent's tool rows between two of its notes; another agent's rows
 in between do not end it. When the agent's next note arrives, the run before it folds into
@@ -3045,7 +3052,7 @@ question ends the run before it, so a deny is always on the screen.
 scroll keeps those rows where they are.
 *Done when* unit tests cover a fold when a note arrives, a fold at the turn's end, the
 live run staying open, the failed count, another agent's rows not ending a run, a
-question ending a run and never folding, and the `+a −d` count; and a pty test shows a
+question ending a run and never folding, and the `+a −d` count, a new file included; and a pty test shows a
 click opening and folding a run, and a fold above the view not moving it.
 **Decided 2026-10-09:** each run folds alone, so the agent's notes stay open and readable
 without a click. A failed call does not stay open under its fold: the fold line says so,
@@ -3053,20 +3060,30 @@ in red.
 
 **M7-3 · Sidebar: harness, state mark, timer, changed files · M · needs M7-1**
 An agent's row shows its colour, a state mark (`◐` busy, `?` asks, `!` stall, `⏸`
-paused, `✕` killed, `●` unread, `○` nothing new), the harness in dim text, and the
-timer of a busy agent on the right. `★` stays for the orchestrator.
+paused, `✕` killed, `◌` exited, `●` unread, `○` nothing new), the harness in dim text,
+and the timer of a busy agent on the right. `★` stays for the orchestrator. `exited` and
+`killed` stay apart (R46): a clean exit left its files and its memory together.
+**A room row and the strip say why, too.** Today `roomMark` says why a room waits with
+colour only: magenta for a question, yellow for a stall. A room row now shows its most
+urgent agent's mark, `?` before `!`. Below 70 columns the sidebar is hidden, so the `»`
+strip shows the same mark.
 **Changed files.** Under the rooms, a block lists the files that the open thread's agent
-changed. It reads `GET /rooms/:id/agents/:agentId/diff?against=base` (M4-6) with
-`client/diff.ts`, which already finds each file and its `+a −d`. `base`, not `head`:
+changed. It reads `GET /rooms/:id/agents/:agentId/diff?against=base` (M4-6). `filesOf` in
+`client/diff.ts` already finds each file, its path and a `new` or `deleted` tag; the tag
+maps to `A` or `D`, and no tag maps to `M`. The route's `added` and `removed` count the
+whole diff, so **the counts per file are new work** in `client/diff.ts`: the same rule as
+`capDiff`, a `+` or `-` line inside a hunk, kept per file. `base`, not `head`:
 `head` is only what is not committed, so the list would go empty when the agent commits.
 It loads when the thread opens and after each of that agent's turns ends, never on a
 chunk. Each line shows `M`, `A` or `D`, the path and `+a −d`, and the block ends with
 `+n more` when the rows run out. The route cuts its text at 512 KB, so a large diff can
 lose files at its end; `n` comes from the route's `files` count, which is counted before
-the cut, so the block never looks complete when it is not. A click opens that file in the
+the cut, so the block never looks complete when it is not. The file the cut goes through
+shows no counts, only its letter and path, because its counts would be too low. A click opens that file in the
 side view (M4-6). A `409 no_diff` (no branch to compare with) shows no block.
-*Done when* unit tests cover the row text at 26 columns, and `+n more` from `files` when
-the text was cut; a fake-daemon test shows one diff call per turn end, none per chunk,
+*Done when* unit tests cover the row text at 26 columns, `exited` apart from `killed`, a
+room row's mark and the strip's mark, the counts per file and the letter for each tag,
+and `+n more` from `files` and no counts for the cut file when the text was cut; a fake-daemon test shows one diff call per turn end, none per chunk,
 and `against=base`; and a pty test shows a click opening the file in the side view.
 **Decided 2026-10-09:** the list reuses the diff route, so the daemon and the contract do
 not change. A light route that returns only names and counts is the follow-up, if a large
@@ -3084,8 +3101,13 @@ Deny stays first, so a stray Enter still says no (M4-3).
 would allow a write with `y`. A stray `n` is no better: a denial is sticky. M4-3's
 "letters do nothing" stays true for answers. There is no "always allow": an approval
 covers one write.
+**The side view keeps `y` and `n`.** In the diff view that `3 view diff` opens, `y` and `n`
+answer at once today (`chat/tui/question.ts`, M4-6), and they stay. The race above needs
+a box that opens by itself. The side view never does: it opens only from a deliberate
+`view diff`, and it holds the keys until Esc or `ctrl+]`.
 *Done when* tests cover `1` and `n` moving to deny, `2` and `y` moving to allow, no
-answer sent by any key but Enter, the six-line cap, no preview without a diff, and
+answer sent by any key but Enter in the box, `y` and `n` still answering in the side
+view, the six-line cap, no preview without a diff, and
 control characters removed before drawing (`printable`).
 
 **M7-5 · Type to filter the `ctrl+o` menu · S · needs nothing**
@@ -3125,6 +3147,11 @@ the diff view. **M4-4** needs M4-2. **M6-9** needs M6-5 and M4-2. **M6-7a** need
 M6-2, but goes after M6-4, which changes the log line it saves. Its chat half and
 **M4-11** change the same poll, in either order.
 
+Off the path, because the TUI shows no run (R16): M5-7, M5-8, M5-9, M5-10b and M5-11.
+M5-11 adds an idempotency test *if* M5-7 has landed — a condition, not a dependency. No
+story freezes the contract while the project is private (M5-11). **M5-10a is the gate:**
+both M4-1 and M6-2 need it, and it is ready now.
+
 **M7 (added 2026-10-09)** runs beside M6. M7-2 also needs #240.
 
 ```text
@@ -3132,11 +3159,6 @@ M7-1 ─┬─ M7-2
       └─ M7-3
 M7-4, M7-5   (need nothing)
 ```
-
-Off the path, because the TUI shows no run (R16): M5-7, M5-8, M5-9, M5-10b and M5-11.
-M5-11 adds an idempotency test *if* M5-7 has landed — a condition, not a dependency. No
-story freezes the contract while the project is private (M5-11). **M5-10a is the gate:**
-both M4-1 and M6-2 need it, and it is ready now.
 
 Three things are worth pulling forward, because everything queues behind them:
 
@@ -3288,3 +3310,11 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   colours can move into one theme together.
 - **A welcome screen with recent rooms.** gemini-cli and Crush open on one. Named by M7
   (2026-10-09). *Trigger:* a request; the person sees it once per start.
+- **`NO_COLOR` for a `cli.ts` run.** Named by the #245 review (2026-10-10). `render.ts`
+  reads `NO_COLOR` only to skip its Markdown repaint; its `dim`, `green`, `red` and `cyan`
+  still colour. After M7-1 the chat TUI obeys it and a run does not. *Trigger:* someone
+  pipes a run into a tool that cannot read colour codes, or asks.
+- **Thinking text in a `cli.ts` run.** Named by the #245 review (2026-10-10). `render.ts`
+  prints every `agent_thought_chunk` as dim text, and pi sends tens of thousands in one
+  room. M7 only touches the TUI, which shows the word `thinking`. *Trigger:* a run whose
+  output is hard to read because of thinking text.
