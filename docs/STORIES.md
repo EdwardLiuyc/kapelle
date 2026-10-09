@@ -2814,9 +2814,11 @@ Decisions: R42, S8.
 instead. The poll reads `daemon.json` on every tick. A restart still writes no line (E5),
 so the screen reads each room again from a new daemon.
 **Built 2026-10-09 (#236).** `followDaemon` in `client/roomset.ts` checks a new token's
-version once and changes the screen's one address in place; `readRoom` waits, and after a
-clean end on a `paused` room it waits too. A request that fails in the TUI shows a line
-and no longer ends the screen.
+version once and changes the screen's one address in place. `readRoom` waits for a
+daemon. After a clean end it waits only when no daemon answers: `shutdown` closes the
+listener before it pauses the rooms, so that order is now a rule. A new reader drops a line
+at or below the last one seen (F4). The poll says once per outage that the daemon is away.
+A request that fails in the TUI shows a line and no longer ends the screen.
 
 **M6-7b · `session/load` for a paused participant · M · needs M6-7a, M0-9**
 **Half B.** A participant revives with `session/load` where the harness advertises

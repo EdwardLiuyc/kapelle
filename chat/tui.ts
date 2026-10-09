@@ -151,18 +151,29 @@ function chatTui(
 ): Promise<number> {
   /** The screen's end, set where the screen's own end lives. */
   let quit = (_why: End) => {};
+  /** The line `away` put on the status line, so the poll can take it back. */
+  let awayLine = "";
   const set = roomSet(d, address, {
     line: (roomId, line, e) => onLine(roomId, line, e),
     loaded: (roomId) => {
       if (view.roomId === roomId) redraw();
     },
-    polled: () => tui.requestRender(),
+    polled: () => {
+      // The same daemon came back: no `restarted` would clear the line.
+      if (awayLine && flash === awayLine) {
+        flash = "the daemon is back";
+        setStatus();
+      }
+      awayLine = "";
+      tui.requestRender();
+    },
     restarted: (warning) => {
       flash = warning ? `! ${warning}` : "the daemon restarted";
       setStatus();
     },
     away: (ms) => {
-      flash = `! the daemon is away; waiting up to ${ms / 1000} s for it to come back`;
+      awayLine = `! the daemon is away; waiting up to ${ms / 1000} s for it to come back`;
+      flash = awayLine;
       setStatus();
     },
     closed: (id, ended, r) => onClosed(id, ended, r),
@@ -586,12 +597,12 @@ function chatTui(
   /** A room's stream ended and the screen goes on. With no room left it
    *  stays, so the person can open one (M4-5). */
   const onClosed = (id: string, ended: Ended, r?: Followed) => {
-    const gone = ended.kind === "dismissed";
-    if (gone) syncBox();
+    const wasDismissed = ended.kind === "dismissed";
+    if (wasDismissed) syncBox();
     const label = r?.entry.title ?? id;
-    const next = gone ? dismissed(rooms, view, id) : undefined;
+    const next = wasDismissed ? dismissed(rooms, view, id) : undefined;
     if (next) open(next);
-    flash = gone ? `${label} was dismissed` : endedLine(ended, id);
+    flash = wasDismissed ? `${label} was dismissed` : endedLine(ended, id);
     setStatus();
   };
 
@@ -810,6 +821,7 @@ function chatTui(
       who: { id: string; name: string },
       against: "head" | "base",
     ) => {
+      await set.fresh();
       const res = await agentDiff(d, view.roomId, who.id, against);
       if (!res.ok) {
         flash = `! ${res.error.message}`;
@@ -926,6 +938,7 @@ function chatTui(
     /** Shows what a fast-forward would bring in the side pane, and confirms
      *  the move on Enter (M6-11a, 3b). Answers whether the pane was filled. */
     forward = async (target, from) => {
+      await set.fresh();
       const res = await agentForwardDiff(d, view.roomId, target.id, from.id);
       if (!res.ok) {
         flash = `! ${res.error.message}`;

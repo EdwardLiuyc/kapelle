@@ -30,8 +30,7 @@ async function address(): Promise<DaemonAddress> {
 }
 
 /** A send while the daemon is away: the screen waits for it (M6-7d). */
-const NO_DAEMON =
-  "the daemon did not answer; it may be restarting. Send again when it is back";
+const NO_DAEMON = "the daemon did not answer; it may be restarting";
 
 /** The line for a participant a restart left `paused` or `killed`. */
 const stoppedLine = (name: string, status: string) =>

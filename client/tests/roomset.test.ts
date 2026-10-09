@@ -223,6 +223,8 @@ test("a dismissed room leaves the set, and the set goes on", async (t) => {
   await until(() => said.closed.length === 1);
   assert.deepEqual(said.closed, [["r1", { kind: "dismissed" }]]);
   assert.equal(set.rooms.size, 0);
+  // One read when it joined, one for the end: `readRoom` hands its read on.
+  assert.deepEqual(daemon.reads, ["r1", "r1"]);
   assert.deepEqual(said.ends, []);
 });
 

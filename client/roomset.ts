@@ -106,18 +106,24 @@ export function followDaemon(
 }
 
 /**
- * Reads a room's events into `onEvent` until the room is dismissed. A cut
+ * Reads a room's events into `onEvent` until a daemon that answers ends
+ * the stream, and resolves with what `reconcile` found then. A cut
  * reconnects and resumes after the last event seen (`client/stream.ts`).
  * With no daemon, it waits `waitMs` for one; a clean end when no daemon
  * answers is a stop, and it waits too. Throws when no daemon came back, or
  * when one refuses the stream or its version.
+ *
+ * **This rests on the shutdown order** (`daemon.ts`, `shutdown`): the
+ * listener closes before the rooms pause, so the reconcile after a clean
+ * stop finds no daemon. A daemon that still answered would say `paused`, and
+ * the screen would end instead of waiting.
  */
 export async function readRoom(
   address: ReadAddress,
   id: string,
   onEvent: (event: RoomEventLine) => void,
   waitMs = WAIT_MS,
-): Promise<void> {
+): Promise<Ended> {
   let seen = 0;
   let away: number | undefined;
   /** No daemon answered: try again until `waitMs` after the first miss. */
@@ -156,8 +162,9 @@ export async function readRoom(
       onEvent(event);
     }
     // A daemon that answers ended the stream on purpose: a dismiss, or a
-    // room it cannot serve. `closed` says which.
-    if ((await reconcile(address, id)).kind !== "gone") return;
+    // room it cannot serve.
+    const ended = await reconcile(address, id);
+    if (ended.kind !== "gone") return ended;
     await new Promise((ok) => setTimeout(ok, 250));
   }
 }
@@ -288,8 +295,10 @@ export function roomSet(
   };
 
   /** A room's stream ended: ask the daemon why. */
-  const closed = async (id: string, err?: unknown) => {
-    const ended = await reconcile(current, id);
+  /** A room's stream ended. `known` is what `readRoom` found; after a
+   *  throw, ask the daemon. */
+  const closed = async (id: string, known?: Ended, err?: unknown) => {
+    const ended = known ?? (await reconcile(current, id));
     const r = rooms.get(id);
     if (ended.kind === "dismissed") rooms.delete(id);
     else if (r) r.lost = ended;
@@ -307,8 +316,8 @@ export function roomSet(
     rooms.set(entry.id, r);
     loadDto(r);
     readRoom(current, entry.id, (line) => onLine(r, line), waitMs).then(
-      () => closed(entry.id),
-      (err) => closed(entry.id, err),
+      (ended) => closed(entry.id, ended),
+      (err) => closed(entry.id, undefined, err),
     );
   };
 

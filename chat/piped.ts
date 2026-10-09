@@ -24,6 +24,7 @@ import {
 } from "../client/room.ts";
 import {
   codeOf,
+  type Ended,
   followDaemon,
   readRoom,
   reconcile,
@@ -183,10 +184,10 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       waiting = undefined;
     }
   }).then(
-    () => "ended" as const,
-    (err) => {
+    (e): { ended?: Ended } => ({ ended: e }),
+    (err): { ended?: Ended } => {
       console.error(`! ${(err as Error).message}`);
-      return "ended" as const;
+      return {};
     },
   );
 
@@ -215,8 +216,8 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
   let code = 0;
   for (;;) {
     const next = await Promise.race([nextLine(), ended]);
-    if (next === "ended") {
-      const r = await reconcile(current, room.id);
+    if (typeof next === "object" && next !== null) {
+      const r = next.ended ?? (await reconcile(current, room.id));
       code = codeOf(r);
       (code ? console.error : console.log)(endedLine(r, room.id));
       break;

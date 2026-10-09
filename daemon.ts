@@ -1596,6 +1596,8 @@ async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
   console.log(`${signal}: cancelling ${inFlight.size} run(s), then exiting`);
+  // Before the pause: a chat screen whose room stream ends must then find no
+  // daemon, and wait for the next one (`readRoom` in `client/roomset.ts`).
   server.close();
   for (const canceller of cancels.values()) canceller.abort("cancel");
   await Promise.all([
