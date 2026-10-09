@@ -319,8 +319,8 @@ export async function daemonApi<T>(
   });
   const text = await res.text();
   if (text === "") {
-    // SAFETY: every route in this suite answers JSON, so an empty body only
-    // reaches this branch if the daemon broke; the old helper returned
+    // SAFETY: every route answers JSON but `DELETE /rooms/:id`'s `204`, so
+    // an empty body is that, or a broken daemon; the old helper returned
     // `undefined` here and the caller fails on the missing fields anyway.
     return { status: res.status, body: undefined as unknown as T };
   }

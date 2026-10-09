@@ -72,7 +72,7 @@ skipped. The daemon keeps booting and serving the rest.
 | ✅ | repeat threshold | `{"stallRepeatCount": 3}` | repeat warning at 3 in a row; `0` disables |
 | ✅ | TTL | `{"ttlMs": 60000}` | cancel at 60 s; `0` disables |
 | ✅ | concurrency | `{"maxConcurrency": 2}` | run-file default parallelism 2 (minimum 1) |
-| ✅ | retention | `{"retentionMs": 86400000}` | this repo's terminal runs reaped after 1 day; `0` = reap on next sweep |
+| ✅ | retention | `{"retentionMs": 86400000}` | this repo's terminal runs and dismissed rooms reaped after 1 day; `0` = reap on next sweep |
 | ✅ | all five | — | all applied (a run-file value still wins per knob) |
 | ❌ | unknown key | `{"stallIdle": 1}` | `<path>: unknown key "stallIdle". Known: stallIdleMs, stallRepeatCount, ttlMs, maxConcurrency, retentionMs.` |
 | ❌ | wrong-layer key | `{"port": 5000}` | `<path>: "port" is daemon-wide; put it in <user-config-path>.` |
@@ -126,7 +126,7 @@ Notes:
   start for the daemon-wide knobs, then re-read for every run-default
   resolution and per repository by the boot sweep.
 - `0` is a meaningful watchdog value (signal disabled) and a meaningful
-  `retentionMs` (reap every terminal run on the next sweep); `port: 0` means
+  `retentionMs` (reap every terminal run and dismissed room on the next sweep); `port: 0` means
   an OS-chosen port.
 
 ## Where this lives

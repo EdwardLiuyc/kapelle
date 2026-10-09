@@ -1587,3 +1587,133 @@ test("the index.lock notice goes at the boot after the lock is deleted", async (
   await sweep(root, join(await tempDir(t), "children.json"));
   assert.deepEqual(readRoomRecord(file).participants[0]?.notices, []);
 });
+
+const PAST_RETENTION = NOW + DEFAULT_RETENTION_MS + 1;
+
+test("a dismissed room past retention is reaped whole, a failed add's checkout too", async (t) => {
+  const root = await gitRepo(t);
+  const { id, file, worktrees } = await writeRoom(root, "dismissed", [
+    "dismissed",
+  ]);
+  // No participant owns these: a failed add's checkout, and a branch whose
+  // checkout a dismiss removed.
+  const stray = await addWorktree(root, "p-stray", id);
+  await git(root, "branch", `kapelle/${id}/p-gone`);
+  // Committed and merged nowhere: a delete throws it away all the same (R18).
+  await writeFile(join(stray, "kept.txt"), "work\n");
+  await git(stray, "add", "kept.txt");
+  await git(stray, "commit", "-qm", "unmerged");
+  const other = await writeRoom(root, "dismissed", ["dismissed"]);
+  writeRoomRecord(other.file, {
+    ...readRoomRecord(other.file),
+    updatedAt: new Date(PAST_RETENTION).toISOString(),
+  });
+
+  const notices = await sweep(
+    root,
+    join(await tempDir(t), "children.json"),
+    PAST_RETENTION,
+  );
+
+  assert.ok(notices.includes(`reaped room ${id}`), notices.join("\n"));
+  for (const path of [...worktrees, stray]) {
+    assert.equal(existsSync(path), false, `${path} is removed`);
+  }
+  assert.equal(existsSync(join(stateDirFor(root), "wt", id)), false);
+  assert.equal(existsSync(join(file, "..")), false, "record and log go");
+  assert.equal(
+    await git(root, "for-each-ref", `refs/heads/kapelle/${id}`),
+    "",
+    "every branch of the room goes",
+  );
+  assert.equal(existsSync(other.file), true, "a room inside its window stays");
+  assert.equal(await hasBranch(root, `kapelle/${other.id}/p0`), true);
+});
+
+test("a dismissed room past retention with uncommitted work is kept and named", async (t) => {
+  const root = await gitRepo(t);
+  const { id, file, worktrees } = await writeRoom(root, "dismissed", [
+    "dismissed",
+  ]);
+  await writeFile(join(worktrees[0] as string, "new.txt"), "work\n");
+
+  const notices = await sweep(
+    root,
+    join(await tempDir(t), "children.json"),
+    PAST_RETENTION,
+  );
+
+  assert.ok(
+    notices.some((n) => n.includes(id) && n.includes("new.txt")),
+    notices.join("\n"),
+  );
+  assert.equal(existsSync(file), true);
+  assert.equal(existsSync(worktrees[0] as string), true);
+  assert.equal(await hasBranch(root, `kapelle/${id}/p0`), true);
+});
+
+test("a paused room is never reaped, however old", async (t) => {
+  const root = await gitRepo(t);
+  const { id, file, worktrees } = await writeRoom(root, "paused", ["paused"]);
+
+  await sweep(root, join(await tempDir(t), "children.json"), PAST_RETENTION);
+
+  assert.equal(existsSync(file), true);
+  assert.equal(existsSync(worktrees[0] as string), true);
+  assert.equal(await hasBranch(root, `kapelle/${id}/p0`), true);
+});
+
+test("a branch that cannot be deleted is named, and the rest of the room still goes", async (t) => {
+  const root = await gitRepo(t);
+  const { id, file, worktrees } = await writeRoom(root, "dismissed", [
+    "dismissed",
+  ]);
+  // Checked out outside the room's folder, so git refuses to delete it.
+  const held = `kapelle/${id}/p-held`;
+  await git(root, "branch", held);
+  await git(root, "worktree", "add", join(await tempDir(t), "held"), held);
+
+  const notices = await sweep(
+    root,
+    join(await tempDir(t), "children.json"),
+    PAST_RETENTION,
+  );
+
+  assert.ok(
+    notices.some((n) => n.includes(held)),
+    `no notice names ${held}: ${notices.join("\n")}`,
+  );
+  assert.equal(existsSync(file), false, "the record goes anyway");
+  assert.equal(existsSync(worktrees[0] as string), false);
+  assert.equal(await hasBranch(root, `kapelle/${id}/p0`), false);
+  assert.equal(await hasBranch(root, held), true);
+});
+
+test("a room checkout removed by hand does not keep its branch", async (t) => {
+  const root = await gitRepo(t);
+  const { id, file } = await writeRoom(root, "dismissed", ["dismissed"]);
+  await rm(join(stateDirFor(root), "wt", id), { recursive: true });
+
+  await sweep(root, join(await tempDir(t), "children.json"), PAST_RETENTION);
+
+  assert.equal(existsSync(file), false);
+  assert.equal(await hasBranch(root, `kapelle/${id}/p0`), false);
+});
+
+test("a dismissed room whose updatedAt cannot be read is kept and named", async (t) => {
+  const root = await gitRepo(t);
+  const { id, file } = await writeRoom(root, "dismissed", ["dismissed"]);
+  writeRoomRecord(file, { ...readRoomRecord(file), updatedAt: "soon" });
+
+  const notices = await sweep(
+    root,
+    join(await tempDir(t), "children.json"),
+    PAST_RETENTION,
+  );
+
+  assert.ok(
+    notices.some((n) => n.includes(id) && n.includes("updatedAt")),
+    notices.join("\n"),
+  );
+  assert.equal(existsSync(file), true);
+});

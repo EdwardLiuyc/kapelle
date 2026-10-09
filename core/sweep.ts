@@ -32,6 +32,10 @@
  *    file is kept, since a git started by the harness's shell may still
  *    run. Nothing is added to the room's log, as for runs (M5-5). Every
  *    checkout under a room with a record is kept: it is not an orphan.
+ *    A **dismissed** room past the retention window is reaped whole, by the
+ *    path `DELETE /rooms/:id` takes (#235): checkouts, branches, record and
+ *    log. One with uncommitted work is kept and named. A paused room is
+ *    never reaped.
  *
  * **Whole-run reaping is ordered worktree-first.** If a checkout cannot be
  * removed, the record is kept too and the run is retried on the next boot —
@@ -49,7 +53,7 @@ import { rename, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { resolveRetentionMs } from "./config.ts";
-import { branchName } from "./ids.ts";
+import { branchName, branchPrefix } from "./ids.ts";
 import {
   crashed,
   type RoomRecord,
@@ -363,27 +367,132 @@ async function managedWorktrees(
 ): Promise<ManagedWorktree[] | null> {
   const { root, onNotice } = pass;
   try {
-    // An admin entry whose working tree is gone is what plain `git worktree
-    // prune` exists for; clearing it first keeps the list below honest.
-    await git(root, ["worktree", "prune"]);
-    const out = await git(root, ["worktree", "list", "--porcelain"]);
-    const wtRoot = join(stateDirFor(root), "wt");
-    const managed: ManagedWorktree[] = [];
-    for (const line of out.split("\n")) {
-      if (!line.startsWith("worktree ")) continue;
-      const path = line.slice("worktree ".length);
-      const rel = relative(wtRoot, path);
-      // The repository's own checkout is a `..` away and is never ours.
-      if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`)) continue;
-      const runId = rel.split(sep)[0];
-      if (!runId) continue;
-      managed.push({ path, runId });
-    }
-    return managed;
+    return await listWorktrees(root);
   } catch (err) {
     onNotice(`cannot reconcile worktrees in ${root}: ${messageOf(err)}`);
     return null;
   }
+}
+
+/** `managedWorktrees`, but a throw when git cannot answer. */
+async function listWorktrees(root: string): Promise<ManagedWorktree[]> {
+  // An admin entry whose working tree is gone is what plain `git worktree
+  // prune` exists for; clearing it first keeps the list below honest.
+  await git(root, ["worktree", "prune"]);
+  const out = await git(root, ["worktree", "list", "--porcelain"]);
+  const wtRoot = join(stateDirFor(root), "wt");
+  const managed: ManagedWorktree[] = [];
+  for (const line of out.split("\n")) {
+    if (!line.startsWith("worktree ")) continue;
+    const path = line.slice("worktree ".length);
+    const rel = relative(wtRoot, path);
+    // The repository's own checkout is a `..` away and is never ours.
+    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`)) continue;
+    const runId = rel.split(sep)[0];
+    if (!runId) continue;
+    managed.push({ path, runId });
+  }
+  return managed;
+}
+
+/**
+ * A room's checkouts, found on disk under `wt/<roomId>/` and not from its
+ * roster (#235, #187 review): a failed add whose harness wrote into its
+ * checkout keeps it, and no participant owns it. Throws when git cannot
+ * answer.
+ */
+async function roomCheckouts(root: string, roomId: string): Promise<string[]> {
+  if (!existsSync(join(stateDirFor(root), "wt", roomId))) return [];
+  const all = await listWorktrees(root);
+  return all.filter((w) => w.runId === roomId).map((w) => w.path);
+}
+
+/**
+ * What a room delete would lose (#235): each checkout's uncommitted files,
+ * untracked ones too, as full paths. Empty means the room can go.
+ */
+export async function roomWork(
+  root: string,
+  roomId: string,
+): Promise<string[]> {
+  const files: string[] = [];
+  for (const path of await roomCheckouts(root, roomId)) {
+    for (const file of await changedPaths(path)) files.push(join(path, file));
+  }
+  return files;
+}
+
+/**
+ * Removes a room's checkouts, then its branches, then its folder (record and
+ * log), as `reapRun` orders a run: a checkout that cannot be removed throws
+ * and leaves the record, so a later delete or boot can try again. The
+ * caller checks `roomWork` first. Branches go even when nothing merged them
+ * (R18): a delete throws the room away.
+ *
+ * A branch git will not delete, such as one checked out elsewhere, is left,
+ * as `dropBranches` leaves a run's: the checkouts are gone by then, and a
+ * retry would fail the same way forever. Answers one line per branch left.
+ */
+export async function removeRoom(
+  root: string,
+  roomId: string,
+): Promise<string[]> {
+  // Before anything is removed: it checks the id.
+  const prefix = branchPrefix(roomId);
+  for (const path of await roomCheckouts(root, roomId)) {
+    await git(root, ["worktree", "remove", "--force", path]);
+  }
+  const state = stateDirFor(root);
+  rmSync(join(state, "wt", roomId), { recursive: true, force: true });
+  const left: string[] = [];
+  // A room whose cwd is no repository has no branches.
+  if ((await tryGit(root, ["rev-parse", "--git-dir"])) !== null) {
+    // A checkout removed by hand leaves an admin entry that still holds its
+    // branch; `roomCheckouts` skipped the prune when the folder was gone.
+    await git(root, ["worktree", "prune"]);
+    const refs = await git(root, [
+      "for-each-ref",
+      "--format=%(refname:lstrip=2)",
+      `refs/heads/${prefix.slice(0, -1)}`,
+    ]);
+    for (const branch of refs.split("\n").filter(Boolean)) {
+      try {
+        await git(root, ["branch", "-D", branch]);
+      } catch (err) {
+        left.push(`cannot delete branch ${branch}: ${messageOf(err)}`);
+      }
+    }
+  }
+  rmSync(join(state, "rooms", roomId), { recursive: true, force: true });
+  return left;
+}
+
+/**
+ * Reaps a dismissed room past retention (#235), unless a checkout holds
+ * work nobody committed: that room is kept and named, at every boot until
+ * someone looks. Answers whether the room is gone.
+ */
+async function reapRoom(id: string, pass: RepoPass): Promise<boolean> {
+  const { root, onNotice } = pass;
+  try {
+    const work = await roomWork(root, id);
+    if (work.length > 0) {
+      onNotice(
+        `keeping dismissed room ${id} in ${root} past retention: ` +
+          `${work.length} uncommitted ${work.length === 1 ? "file" : "files"}, ` +
+          `such as ${work[0]}`,
+      );
+      return false;
+    }
+    for (const line of await removeRoom(root, id)) {
+      onNotice(`room ${id} in ${root}: ${line}`);
+    }
+  } catch (err) {
+    onNotice(`cannot reap room ${id} in ${root}: ${messageOf(err)}`);
+    return false;
+  }
+  onNotice(`reaped room ${id}`);
+  return true;
 }
 
 /**
@@ -650,6 +759,21 @@ async function sweepRooms(pass: RepoPass): Promise<Set<string>> {
       record = readRoomRecord(file);
     } catch (err) {
       onNotice(`skipping ${file}: ${messageOf(err)}`);
+      continue;
+    }
+    // A dismissed room is dated from its dismiss, which moves `updatedAt`.
+    // A paused one is never reaped: it can still revive.
+    const since = Date.parse(record.updatedAt);
+    if (record.status === "dismissed" && Number.isNaN(since)) {
+      onNotice(
+        `keeping room ${id} in ${root}: its record carries no readable ` +
+          "updatedAt, so it cannot be dated against retention",
+      );
+    } else if (
+      record.status === "dismissed" &&
+      pass.now - since > pass.retentionMs
+    ) {
+      if (await reapRoom(id, pass)) kept.delete(id);
       continue;
     }
     const fixed = crashed(record);

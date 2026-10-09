@@ -107,7 +107,12 @@ import {
   stateDirFor,
   writeRepos,
 } from "./core/runtime.ts";
-import { processIdentity, sweepBoot } from "./core/sweep.ts";
+import {
+  processIdentity,
+  removeRoom,
+  roomWork,
+  sweepBoot,
+} from "./core/sweep.ts";
 import { WATCHDOG_DEFAULTS, type WatchdogLimits } from "./core/watchdog.ts";
 import { openWorktrees, stateDirRoot } from "./core/worktree.ts";
 import {
@@ -847,8 +852,9 @@ async function getEvents(
 const rooms = new Map<
   string,
   /** `dismissed` is set only once a dismiss has *finished* tearing the room
-   *  down, so it tells a settled dismiss from one still in flight. */
-  { room: Room; state: RoomState; dismissed?: boolean }
+   *  down, so it tells a settled dismiss from one still in flight. `root`
+   *  keys the room's state directory, for a delete. */
+  { room: Room; state: RoomState; root: string; dismissed?: boolean }
 >();
 
 /** The watchdog's warn limits for a room, from the same layers as a run's
@@ -918,6 +924,7 @@ async function restoreRooms(): Promise<void> {
         rooms.set(id, {
           room,
           state: room.meta,
+          root,
           ...(room.status() === "dismissed" && { dismissed: true }),
         });
       } catch (err) {
@@ -1012,7 +1019,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
     room.forget();
     throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
-  rooms.set(id, { room, state: room.meta });
+  rooms.set(id, { room, state: room.meta, root: setup.root });
   send(res, 201, toRoomDto(room.meta, room) satisfies RoomDto);
 }
 
@@ -1354,6 +1361,75 @@ async function dismissRoom(id: string, res: ServerResponse) {
   send(res, 200, toRoomDto(entry.state, entry.room) satisfies RoomDto);
 }
 
+/**
+ * `DELETE /rooms/:id` — a person throws the room away (R18, #235): its
+ * checkouts, branches, record and log go at once, and the answer is `204`.
+ * Only a stopped room can go: a dismissed one, or a paused one nothing has
+ * revived. An active room is refused, so no harness writes while the
+ * checkouts are read. Uncommitted work refuses it too, with the files
+ * named, and nothing changes on either refusal, but for the race below.
+ */
+async function deleteRoom(id: string, res: ServerResponse) {
+  const entry = roomEntry(id);
+  if (stopping) {
+    throw refusal(503, "shutting_down", "the daemon is shutting down");
+  }
+  const { room, root } = entry;
+  // A revive in flight leaves the room `paused` until its harness is up,
+  // but its participant already reads `busy`.
+  const stopped =
+    entry.dismissed ||
+    (room.status() === "paused" &&
+      room.participants.every((p) => !["idle", "busy"].includes(p.status())));
+  if (!stopped) {
+    throw refusal(
+      409,
+      "room_active",
+      `room ${id} is active; dismiss it first (POST /rooms/${id}/dismiss)`,
+    );
+  }
+  // Out of the list before the first await, so no new request reaches the
+  // room while its checkouts are read and removed.
+  rooms.delete(id);
+  const refuseWork = async () => {
+    const work = await roomWork(root, id);
+    if (work.length > 0) {
+      throw refusal(
+        409,
+        "uncommitted_work",
+        `room ${id} has work nobody committed: ${work.join(", ")}`,
+      );
+    }
+  };
+  try {
+    await refuseWork();
+    // Ends a paused room's open streams and its timer; a no-op once
+    // dismissed. A message or an add that took the room before it left the
+    // list can revive a participant until here, so the work is read again
+    // once every harness has stopped. That rare refusal leaves the room
+    // dismissed.
+    if (!entry.dismissed) {
+      try {
+        await room.dismiss();
+      } finally {
+        // A dismiss that threw has still begun: the room reads dismissed.
+        entry.dismissed = true;
+      }
+      await refuseWork();
+    }
+    // The record stays when a checkout does (`removeRoom`), so the room
+    // stays listed and can be deleted again.
+    for (const line of await removeRoom(root, id)) {
+      console.error(`room ${id}: ${line}`);
+    }
+  } catch (err) {
+    rooms.set(id, entry);
+    throw err;
+  }
+  room.forget();
+  res.writeHead(204).end();
+}
+
 /** `POST /permissions/:id {"allow": boolean}` — the first answer wins. */
 async function postPermission(
   id: string,
@@ -1447,6 +1523,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
         toRoomListEntry(state, room),
       ) satisfies RoomListEntry[],
     );
+  } else if (req.method === "DELETE" && room) {
+    await deleteRoom(room[1] as string, res);
   } else if (req.method === "GET" && room) {
     const { state, room: live } = roomEntry(room[1] as string);
     send(res, 200, toRoomDto(state, live) satisfies RoomDto);

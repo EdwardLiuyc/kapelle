@@ -3829,16 +3829,13 @@ test("every room route answers room_not_found for an unknown id", async (t) => {
     ["GET", "/rooms/nope/agents/p-x", undefined],
     ["PATCH", "/rooms/nope/agents/p-x", { name: "a" }],
     ["DELETE", "/rooms/nope/agents/p-x", undefined],
+    ["DELETE", "/rooms/nope", undefined],
   ];
   for (const [method, path, body] of routes) {
     const r = await api(d, method, path, body);
     assert.equal(r.status, 404, `${method} ${path}`);
     assert.equal(r.body.error.code, "room_not_found", `${method} ${path}`);
   }
-  // Dismiss moved off `DELETE`, which waits for R18's delete (M6-7a).
-  const del = await api(d, "DELETE", "/rooms/nope");
-  assert.equal(del.status, 404);
-  assert.equal(del.body.error.code, "no_route");
 });
 
 /** `POST /rooms/:id/agents` with `fields`, asserted 201. */
@@ -7641,6 +7638,77 @@ test("a dismissed room comes back dismissed after a restart, and a message is re
   const twice = await api<RoomReply>(second, "POST", `/rooms/${id}/dismiss`);
   assert.equal(twice.status, 409);
   assert.equal(twice.body.error.code, "room_dismissed");
+});
+
+test("DELETE refuses an active room and uncommitted work, then removes a dismissed room whole (#235)", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const { worktree, branch } = only(open.body);
+  const live = await api(d, "DELETE", `/rooms/${id}`);
+  assert.equal(live.status, 409);
+  assert.equal(live.body.error.code, "room_active");
+
+  // A dismiss keeps a checkout with work in it, and so does a refused delete.
+  await writeFile(join(worktree, "draft.txt"), "half a thought\n");
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const dirty = await api(d, "DELETE", `/rooms/${id}`);
+  assert.equal(dirty.status, 409);
+  assert.equal(dirty.body.error.code, "uncommitted_work");
+  assert.match(dirty.body.error.message, /draft\.txt/);
+  assert.equal((await api(d, "GET", `/rooms/${id}`)).status, 200);
+  assert.ok(existsSync(join(worktree, "draft.txt")), "nothing was removed");
+
+  await rm(join(worktree, "draft.txt"));
+  const deleted = await fetch(`${d.url}/rooms/${id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${d.token}` },
+  });
+  assert.equal(deleted.status, 204);
+  assert.equal(await deleted.text(), "");
+  assert.equal(existsSync(worktree), false, "the checkout is gone");
+  assert.equal(existsSync(join(stateDirFor(root), "rooms", id)), false);
+  const ref = spawnSync(
+    "git",
+    ["rev-parse", "--verify", `refs/heads/${branch}`],
+    {
+      cwd: root,
+    },
+  );
+  assert.notEqual(ref.status, 0, "the branch is gone");
+  assert.equal((await api(d, "GET", `/rooms/${id}`)).status, 404);
+  const list = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  assert.equal(
+    list.body.some((r) => r.id === id),
+    false,
+  );
+});
+
+test("a paused room is deleted without a revive, and its open stream ends (#235)", async (t) => {
+  const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const second = await again();
+  const res = await fetch(`${second.url}/rooms/${id}/events`, {
+    headers: { authorization: `Bearer ${second.token}` },
+  });
+  assert.equal(res.status, 200);
+  const drained = res.text();
+  const deleted = await api(second, "DELETE", `/rooms/${id}`);
+  assert.equal(deleted.status, 204, deleted.body?.error?.message);
+  await drained;
+  assert.equal(existsSync(alice.worktree), false);
+  assert.equal(existsSync(join(stateDirFor(cwd), "rooms", id)), false);
+  assert.equal((await api(second, "GET", `/rooms/${id}`)).status, 404);
 });
 
 test("a room opened while the daemon shuts down does not come back", async (t) => {

@@ -55,7 +55,8 @@
  *
  * **A kept checkout lasts while its room has a record.** The boot sweep
  * (`core/sweep.ts`) keeps every checkout under a room that has a
- * `room.json`, dismissed rooms too. Deleting a room is #235's.
+ * `room.json`, dismissed rooms too, until `DELETE /rooms/:id` or the
+ * sweep's retention reap removes the room (`removeRoom`, #235).
  *
  * **A roster that changes** (M6-3). `add`, `update` and `remove` change it
  * after the room opens. A name is unique under ASCII case folding (R22), and
