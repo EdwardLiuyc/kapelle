@@ -26,11 +26,14 @@ source of truth.
 ## Question or work?
 
 A question gets an answer, not a change. Investigate as far as needed; use a temporary
-folder or worktree for experiments and clean it up. Leave the original checkout as you
-found it: no commits, pushes, config changes, issues or PRs. If a change would help,
-propose it and wait.
+folder or detached worktree, then clean it up (`git worktree remove` for a worktree).
+Leave the original checkout as you found it: config, issues and PRs stay untouched;
+Git discipline still governs commits and pushes. If a change would help, propose it and
+wait.
 
-Work happens when the person asks for a change. If that is unclear, ask first.
+Work happens when the person asks for a change, including invoking a skill that edits.
+If that is unclear, ask first; if you cannot ask, treat it as a question and change
+nothing.
 
 ## What this is
 
