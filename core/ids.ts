@@ -109,10 +109,15 @@ export function assertTaskId(id: string): string {
  *  and a run whose directory and branches disagree reads as two tools. */
 const BRANCH_PREFIX = "kapelle";
 
+/** The folder of refs every branch of one run or room hangs under, with
+ *  its trailing `/`. A room delete lists its branches by it (#235). */
+export function branchPrefix(ownerId: string): string {
+  return `${BRANCH_PREFIX}/${assertOwnerId(ownerId)}/`;
+}
+
 /** The branch a task's or a participant's work lands on. Validates **both**
  *  halves, so no caller can build a ref that `git check-ref-format` would
  *  reject. */
 export function branchName(ownerId: string, taskId: string): string {
-  assertOwnerId(ownerId);
-  return `${BRANCH_PREFIX}/${ownerId}/${assertTaskId(taskId)}`;
+  return `${branchPrefix(ownerId)}${assertTaskId(taskId)}`;
 }

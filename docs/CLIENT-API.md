@@ -7,9 +7,10 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.9** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.10** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
-rooms stable, and M6-7b, #179, which added `resumed: "loaded"`).
+rooms stable, M6-7b, #179, which added `resumed: "loaded"`, and M6-7c, #235, which added
+`DELETE /rooms/:id`).
 
 ## Contents
 
@@ -261,6 +262,8 @@ request that is not valid HTTP gets `400`.
 | `dirty_worktree` | `409` | The target checkout has tracked changes, or files the move would overwrite. | Commit or stash them first. Untracked files alone do not refuse. |
 | `no_branch` | `409` | A participant has no branch: its checkout is the shared repository folder, or the branch ref is gone. | There is nothing to move; inspect the participant's worktree. |
 | `room_dismissed` | `409` | The room was dismissed. | Stop. Open a new room. |
+| `room_active` | `409` | You deleted a room that is still active. | Dismiss it first, then delete it. |
+| `uncommitted_work` | `409` | You deleted a room, and a checkout has changes nobody committed. New files count. The message names each file. | Nothing changed. Commit or remove the files, then delete again. |
 | `agent_exited` | `409` | The participant is stopping: it is being removed, or the daemon is shutting down. A participant whose harness died is not refused: the next message revives it. | Stop. |
 | `no_orchestrator` | `409` | The room has no participant with the `orchestrator` role, so a message has no target. | Open a room with an orchestrator. |
 | `idempotency_conflict` | `409` | This `Idempotency-Key` already started a run with a different body. | Use a new key for new work. |
@@ -325,6 +328,7 @@ the `GET` routes take none.
 | `POST /rooms/:id/messages` | Send a message to the room's orchestrator. |
 | `GET /rooms/:id/events` | A room's event stream. |
 | `POST /rooms/:id/dismiss` | End a room. |
+| `DELETE /rooms/:id` | Throw a stopped room away, with its work on disk. |
 | `POST /rooms/:id/agents` | Add a participant. |
 | `GET /rooms/:id/agents` | List a room's participants. |
 | `GET /rooms/:id/agents/:agentId` | One participant. |
@@ -1144,11 +1148,32 @@ still in the checkout. When it changed nothing, both are removed.
 
 A kept checkout stays while the room's record does: a daemon restart keeps it. A dismissed
 room comes back after a restart, still dismissed, so its history can be read and its
-branches merged. Deleting a room is a later story (#235).
+branches merged. It stays until you [delete](#delete-roomsid) it, or until a daemon boot
+finds it older than `retentionMs` (30 days unless configured, from the dismiss). That boot
+removes it as a delete does. A room with uncommitted work is kept, and the daemon's log
+names it.
 
 **Reply `200`:** the room, with `status: "dismissed"`, and each participant
 `dismissed`. `404` `room_not_found` for an unknown room. `409` `room_dismissed` when the
 room was already dismissed.
+
+### `DELETE /rooms/:id`
+
+Throws a room away. Its checkouts, its branches, its record and its event log are removed
+at once. Branches go even when nothing merged them. Open streams of the room end.
+
+Only a stopped room can be deleted: a dismissed one, or a paused one that no message has
+revived. A paused room is deleted as it is; no harness starts first. Dismiss an active room
+first.
+
+The daemon reads each checkout under the room's folder before it removes anything,
+including a checkout no participant owns, such as one a failed add kept. A file that
+nobody committed, new files included, refuses the delete.
+
+**Reply `204`**, with no body. The room is gone: `GET /rooms/:id` answers `404`.
+
+**Refusals:** `404` `room_not_found`; `409` `room_active`; `409` `uncommitted_work`,
+naming the files; `503` `shutting_down`. Nothing changes on a refusal.
 
 ### `POST /rooms/:id/agents`
 
@@ -1342,14 +1367,13 @@ A participant's mode says what happens when its harness asks to change something
 These words are fixed now, so every client uses the same ones. They describe the whole
 room, not one participant: removing a participant is
 [`DELETE /rooms/:id/agents/:agentId`](#delete-roomsidagentsagentid), which keeps its work.
-**dismiss** is a route. **pause**, **resume** and **kill** are built too, but they have
-no route: a shutdown, a message and a crash cause them. **delete** is a later story
-(#235).
+**dismiss** and **delete** are routes. **pause**, **resume** and **kill** are built too,
+but they have no route: a shutdown, a message and a crash cause them.
 
 | Word | Who does it | Room after | Harness | Work on disk |
 | --- | --- | --- | --- | --- |
 | dismiss | a person | `dismissed`, final | stopped | branch and checkout kept for a participant that changed something; both removed for one that did not |
-| delete | a person | gone | stopped | removed; refused with `409` while a checkout has work that nobody committed |
+| delete | a person, on a dismissed or paused room | gone | stopped | removed; refused with `409` while a checkout has work that nobody committed |
 | pause | the machine (shutdown, reboot) | `paused` | stopped | branch and checkout kept |
 | resume | the next message to a paused, killed or exited participant | `active` | started again in its own checkout | untouched |
 | kill | the machine, during a turn (crash, harness death, a cancel that does not end) | participant `killed`; the room reads `paused` after a crash or a shutdown, and stays `active` when only the harness died | stopped by force | kept; may not match the harness's memory |
@@ -1358,8 +1382,8 @@ A paused room can be dismissed or deleted as it is. Neither word starts a harnes
 A room whose participants have all `exited`, or were `killed` while the daemon stayed up,
 still reads `active`, because the next message brings each one back.
 
-`DELETE /rooms/:id` is kept for **delete**, and answers `404` `no_route` until #235
-builds it.
+`DELETE /rooms/:id` is **delete**. A daemon boot also deletes a dismissed room past
+`retentionMs`, unless it has uncommitted work. It never deletes a paused room.
 
 ### After a restart
 

@@ -2796,6 +2796,10 @@ paused room is never reaped.
 and refuses a dirty one with `409` naming the files; a dismissed room past `retentionMs`
 is gone after the next boot, and a paused one is not. The route is Stable from the start,
 so it takes a contract `minor` step.
+**Decided at pickup (2026-10-09):** an active room is refused with `409 room_active`, so
+no harness writes while the checkouts are read; dismiss it first. Retention dates a
+dismissed room from `updatedAt`, which the dismiss moves. Uncommitted work refuses with a
+new code, `uncommitted_work`: `dirty_worktree` leaves untracked files out.
 Decisions: R18.
 
 **M6-7d · The chat screen rides out a daemon restart · S · needs M6-7a, M4-11**
