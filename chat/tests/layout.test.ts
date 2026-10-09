@@ -24,9 +24,14 @@ type Part = { component: Component; basis?: number | "auto" };
 /** A stack's parts. pi-tui keeps them `protected`. */
 const partsOf = (c: Component) =>
   (c as unknown as { entries?: Part[] }).entries ?? [];
+/** What `c` holds: a stack's parts, or a scroll view's one child. */
+const inside = (c: Component): Component[] => {
+  const child = (c as unknown as { child?: Component }).child;
+  return child ? [child] : partsOf(c).map((e) => e.component);
+};
 /** Every part below `c`, at any depth. */
 const below = (c: Component): Component[] =>
-  partsOf(c).flatMap((e) => [e.component, ...below(e.component)]);
+  inside(c).flatMap((k) => [k, ...below(k)]);
 
 test("no HStack in the chat screen holds another, and each of its parts has a set width", () => {
   const tui = { requestRender() {}, setFocus() {} } as unknown as TuiAltScreen;
