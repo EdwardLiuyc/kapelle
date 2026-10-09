@@ -1599,6 +1599,10 @@ test("a dismissed room past retention is reaped whole, a failed add's checkout t
   // checkout a dismiss removed.
   const stray = await addWorktree(root, "p-stray", id);
   await git(root, "branch", `kapelle/${id}/p-gone`);
+  // Committed and merged nowhere: a delete throws it away all the same (R18).
+  await writeFile(join(stray, "kept.txt"), "work\n");
+  await git(stray, "add", "kept.txt");
+  await git(stray, "commit", "-qm", "unmerged");
   const other = await writeRoom(root, "dismissed", ["dismissed"]);
   writeRoomRecord(other.file, {
     ...readRoomRecord(other.file),
