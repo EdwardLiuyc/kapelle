@@ -124,7 +124,7 @@ const NO_AGENTS = "no agents: ctrl+o → add agent";
  * the part's own `render()`, and a stack's `render()` draws all of it. An
  * `HStack` drawn that way joins each line of the whole transcript to the
  * line beside it, one character at a time, on every frame: 145 ms at 1,160
- * rows, against 5 ms flat (§M4 · Chat layout). An `auto` size in an `HStack`
+ * rows, against 6 ms flat (§M4 · Chat layout). An `auto` size in an `HStack`
  * makes pi-tui measure the width of every line: half a second for a
  * 10,000-line diff (M4-6). `chat/tests/layout.test.ts` checks both.
  */

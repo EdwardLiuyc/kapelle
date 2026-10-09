@@ -152,7 +152,7 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 - **No `HStack` below another in the chat screen, and no `auto` size in one.** pi-tui
   sizes an `HStack`'s parts by drawing each in full. A stack there that holds another
   `HStack` joins every line of the whole transcript on every frame, so the screen lags
-  more as a room grows: 145 ms a frame at 1,160 rows, against 5 ms flat (#242). Keep
+  more as a room grows: 145 ms a frame at 1,160 rows, against 6 ms flat (#242). Keep
   the timeline and the side view as direct parts of `row` in `screenLayout`
   (`chat/tui.ts`). `chat/tests/layout.test.ts` checks it.
 - **A new synthetic event starts with `_client_`.** The `render.ts` switch has no

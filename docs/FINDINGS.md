@@ -1357,12 +1357,12 @@ worked. Where did the time go: the daemon, the stream, or the screen?
 **Method.** A 90 s CPU profile (`node --cpu-prof`) of a second chat screen on the live
 daemon, with three rooms open. Then a scratch script with pi-tui 0.85.1 at 200×50 columns
 and rows. It replayed real room logs through the reducer and `transcriptParts`, and timed
-`renderNow()` with the real nesting of stacks and with a flat one.
+`renderNow()` with the old nesting of stacks and with `screenLayout`.
 
 | layout | 430 rows | 1,160 rows |
 | --- | --- | --- |
 | nested: `HStack` › `VStack` › `HStack` › timeline | 28 ms | 145 ms |
-| flat: the timeline a direct part of the one `HStack` | 5 ms | 5 ms |
+| flat: `screenLayout`, the timeline a direct part of the one `HStack` | 4 ms | 6 ms |
 
 The profile showed stalls of 100 to 220 ms, almost all in `doRender` → `measureHeight` →
 `HStack.render` → `compositeTuiLine`. The daemon used about 0.1% CPU. Each streamed line

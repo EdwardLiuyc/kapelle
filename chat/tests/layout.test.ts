@@ -24,10 +24,12 @@ type Part = { component: Component; basis?: number | "auto" };
 /** A stack's parts. pi-tui keeps them `protected`. */
 const partsOf = (c: Component) =>
   (c as unknown as { entries?: Part[] }).entries ?? [];
-/** What `c` holds: a stack's parts, or a scroll view's one child. */
+/** What `c` holds: a stack's parts, or a container's children. A scroll
+ *  view is a container with its one child. */
 const inside = (c: Component): Component[] => {
-  const child = (c as unknown as { child?: Component }).child;
-  return child ? [child] : partsOf(c).map((e) => e.component);
+  const parts = partsOf(c);
+  if (parts.length) return parts.map((e) => e.component);
+  return (c as unknown as { children?: Component[] }).children ?? [];
 };
 /** Every part below `c`, at any depth. */
 const below = (c: Component): Component[] =>
@@ -44,11 +46,17 @@ test("no HStack in the chat screen holds another, and each of its parts has a se
     toggle() {},
     open() {},
   });
+  const { scroll, transcript } = transcriptParts({
+    tui,
+    rooms,
+    view,
+    setStatus() {},
+  });
   // The real parts, so a stack added inside one is walked too.
   const { root } = screenLayout({
     sidebar,
     strip,
-    timeline: transcriptParts({ tui, rooms, view, setStatus() {} }).scroll,
+    timeline: scroll,
     pane: paneParts({ tui, editor, setStatus() {}, gutter: () => 26 }).pane,
     banner: bannerPart({ rooms, view, open() {}, question() {} }),
     status: new Text(""),
@@ -59,9 +67,12 @@ test("no HStack in the chat screen holds another, and each of its parts has a se
     paneShown: () => true,
     paneColumns: () => 40,
   });
-  const rows = [root, ...below(root)].filter((c) => c instanceof HStack);
-  // Not found means pi-tui renamed `entries`, and this test checks nothing.
+  const all = [root, ...below(root)];
+  // Not found means pi-tui renamed `entries` or `children`, and this test
+  // checks nothing.
+  const rows = all.filter((c) => c instanceof HStack);
   assert.ok(rows.length > 0, "the walk finds the row");
+  assert.ok(all.includes(transcript), "the walk goes into a scroll view");
   for (const row of rows) {
     for (const p of partsOf(row)) {
       assert.equal(typeof p.basis, "number", "each part has a set width");
