@@ -674,12 +674,14 @@ piped screen does not change. M7 runs beside M6.
 - **M7-1 — agent colours, activity rows and the footer**: a colour and a `▎` bar for each
   agent; rows above the status line for each busy or waiting agent, with what it does and
   for how long; a footer with the target's mode, context and cost, and key hints that get
-  shorter on a narrow screen.
+  shorter on a narrow screen. With `NO_COLOR`, the TUI drops its colours and keeps its
+  other styles.
 - **M7-2 — tool runs fold between notes**: each tool row shows its result, and each run of
   tool calls folds into one line when the agent's next note arrives. Needs #240.
 - **M7-3 — a sidebar that says what each agent is**: harness, state mark and timer, and the
-  files the open agent changed.
-- **M7-4 — the question box**: a short diff and number keys.
+  files the open agent changed on its branch.
+- **M7-4 — the question box**: a short diff, and number keys that move the cursor. Only
+  Enter answers.
 - **M7-5 — the `ctrl+o` menu**: type to filter it.
 
 ---
@@ -757,8 +759,9 @@ branches and confirm a real conflict is refused by name with nothing half-landed
 **M7** — open a room with three agents on two harnesses and give each a task. Confirm that
 each agent's lines have their own colour, that each finished run of tool calls is one line
 with its result, that each busy agent has an activity row with a timer, and that the
-footer shows the target agent's context. Confirm that each state (busy, asks, stalled,
-paused, killed) also has its own mark, so the screen does not depend on colour alone.
+footer shows the target agent's context. Set `NO_COLOR` and confirm that each state
+(busy, asks, stalled, paused, killed) also has its own mark, so the screen does not
+depend on colour alone.
 
 ---
 

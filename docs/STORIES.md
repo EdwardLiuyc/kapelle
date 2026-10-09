@@ -2949,10 +2949,12 @@ Three rules hold for every M7 story:
   permission, the path guard, the policy or a mode. No new runtime dependency: pi-tui
   0.85.1 already has `fuzzyFilter`, `SelectList.setFilter`, `Loader` and a background
   function on `Text`.
-- **The layout stays flat (#242).** No `HStack` inside another, and every part has a
-  numeric `basis`. A new row has a set height.
+- **The layout stays flat (#242).** No `HStack` inside another, and no `auto` size inside
+  an `HStack`: each of its parts has a numeric `basis`. The rows under it (the banner, the
+  status line, the editor) may stay `auto` in the `VStack`, as they are today.
 - **Colour is never the only signal.** Each state also has a mark (`?`, `!`, `◐`, `⏸`,
-  `✕`), so the screen works without colour.
+  `✕`), so the screen works without colour. M7-1 makes the TUI obey `NO_COLOR`, so a
+  test can prove it.
 
 All five are TUI only: the piped screen does not change. They can start beside M6.
 
@@ -2969,29 +2971,53 @@ Three of the design page's ideas, in one story, because they need almost no new 
 and change the feel the most.
 **Colours.** Each participant gets a colour by the order it joined the room, from about
 six. The palette leaves out magenta, yellow, red and green: they mean question, stall,
-failed and done. An agent keeps its colour after another agent leaves; a seventh agent
-reuses the first colour. The rule is pure, in `chat/view.ts`. Each agent's lines in the
-transcript get a `▎` bar in its colour, and its heading shows the name, the harness, the
-role and the time (`at`, as `HH:MM`). The person's own messages get a grey bar and a
-light background.
+failed and done. That leaves only cyan and blue of the 16 basic colours, and cyan already
+colours headings and links, so the palette uses 256-colour codes (`38;5;n`). An agent
+keeps its colour after another agent leaves; a seventh agent reuses the first colour.
+The rule is pure, in `chat/view.ts`. Each agent's lines in the transcript get a `▎` bar
+in its colour, and its heading shows the name, the harness, the role and the time (`at`,
+as `HH:MM`). The person's own messages get a grey bar and a light background.
+**No colour.** With `NO_COLOR` set, the colour codes go: the foreground colours,
+`38;5;n`, and the backgrounds. Bold, dim, italic, underline and inverse stay, because
+the history list's cursor is inverse (`chat/tui/pane.ts`). `render.ts` already reads
+`NO_COLOR`; the TUI does not yet.
 **Activity rows.** The banner (`chat/tui/banner.ts`, under the row since #242) grows into
 the activity rows. A busy agent's row shows a spinner, then the last tool title or
 `thinking`, then a timer from the turn's start, and it names the M4-5 command that
-cancels the turn. A busy agent gets a row only when it is in the open room. A question or
-a stall gets a row from any room, and a click opens it, as the banner does today. At most
-four rows, then `+n more`.
+cancels the turn. Until #240 lands, the last tool title is often a plain label such as
+`Terminal` or `Read File`; that is expected. A busy agent gets a row only when it is in
+the open room. A question or a stall gets a row from any room, and a click opens it, as
+the banner does today. At most four rows, then `+n more`.
+**The tick.** Nothing redraws on a timer today. The spinner and the timer redraw once a
+second, and only while an activity row shows a busy agent. With no busy agent, no tick.
 **Reducer.** `client/room.ts` also keeps, per participant: the turn's start (the `at` of
-its `_client_user_message`), a `thinking` flag (set by `agent_thought_chunk`, cleared by
-the next other event, with no text kept), and its last `usage_update`.
+its `_client_user_message`), a `thinking` flag (set by `agent_thought_chunk`, with no
+text kept), and its last `usage_update`. The flag clears on an `agent_message_chunk`, a
+`tool_call` or the turn's end, not on any other event: claude sends about 23
+`usage_update`s in a long turn (§M0-5), and each would make the row flicker. Each entry
+also keeps its line's `at`, for the heading's time.
 **Footer.** On the left, `→ name` and its mode. The key hints drop from the right as the
 screen gets narrower. On the right, the target agent's `ctx N%` (`used / size`) and its
-cost, each only when the harness sends it. One agent's numbers, never a total: copilot
-counts cumulatively and the others per turn. The fit rule is pure, in `chat/view.ts`.
-*Done when* unit tests cover the colour order and a colour kept after a remove; the
-activity rules (busy for the open room only, waits from any room, four rows then
-`+n more`); the footer at 60, 100 and 160 columns; and the reducer's turn start, thinking
-flag and usage. Thinking text is never drawn. The #242 layout test still passes.
-§M0-1 says that claude and pi send `agent_thought_chunk`.
+cost, each only when the harness sends it. One agent's numbers, never a total: the cost
+in `usage_update` is a running total for the session (§M0-5), so two agents' costs do
+not add up to anything true. The fit rule is pure, in `chat/view.ts`. §M0-5 sets four
+limits on these numbers:
+
+- On claude, `used: 0` means "unknown". The footer then shows no `ctx`, never `ctx 0%`.
+- On claude, `size` is 200,000 during the first turn and the model's real size after it,
+  so the percent can drop at the first turn's end.
+- copilot's `size` is not the size its own `/context` shows. The footer shows `ctx ~N%`
+  for every harness: it is a guide, not a measure.
+- A cost of `0` (opencode) means "not billed"; the footer shows no cost then. claude's
+  cost is a list price, not a bill, under a subscription; the footer shows it as `~$N`.
+
+*Done when* unit tests cover the colour order and a colour kept after a remove; no
+colour code with `NO_COLOR`, and inverse kept; the activity rules (busy for the open room only, waits from any
+room, four rows then `+n more`); a tick only while an agent is busy; the footer at 60,
+100 and 160 columns, with no `ctx` for `used: 0` and no cost for `0`; and the reducer's
+turn start, thinking flag (a `usage_update` does not clear it), usage and each entry's
+`at`. Thinking text is never drawn. The #242 layout test still passes. §M0-1 gets a
+dated note that claude and pi send `agent_thought_chunk`; its old measurement stays.
 **Decided 2026-10-09:** colour by join order, not by a hash (two agents in a small room
 could share one) and not by harness (two claude agents would look the same). A busy row
 only for the open room, so many busy rooms do not fill the screen; a wait from anywhere,
@@ -3002,7 +3028,10 @@ as the banner does today. Thinking shows only as the word `thinking`: the text i
 Issue #240 makes one tool call one row that changes in place, with its status and a detail
 line. This story builds on it. Each tool row ends with a mark: `✓` completed, `✗`
 failed, and a spinner while it is pending or running. An edit whose update carries a diff
-shows `+a −d`.
+shows `+a −d`. ACP sends that diff as `oldText` and `newText`, not as counts, so the
+counts are cheap, not a real diff: drop the lines both texts share at the start and at
+the end, and count what is left of each. That is exact for one change in one place, and
+too high for an edit in several places. It needs no dependency.
 **A run folds when the next note comes.** A turn often reads note → tools → note → tools
 → answer. A run is one agent's tool rows between two of its notes; another agent's rows
 in between do not end it. When the agent's next note arrives, the run before it folds into
@@ -3010,9 +3039,14 @@ one line, at the run's first place: `▸ 6 tool calls · 4 read · 2 edit`, and 
 red when one failed. The end of the turn folds a run that is still open. The live run
 stays open. A click on the line opens it, and a second click folds it again. The counts
 come from the tool's `kind`; a call with no kind counts as `other`.
+**A question never folds.** A permission question, and its answer, stay their own row. A
+question ends the run before it, so a deny is always on the screen.
+**The view does not jump.** When a run folds above the rows the person is reading, the
+scroll keeps those rows where they are.
 *Done when* unit tests cover a fold when a note arrives, a fold at the turn's end, the
-live run staying open, the failed count, and another agent's rows not ending a run; and a
-pty test shows a click opening and folding a run.
+live run staying open, the failed count, another agent's rows not ending a run, a
+question ending a run and never folding, and the `+a −d` count; and a pty test shows a
+click opening and folding a run, and a fold above the view not moving it.
 **Decided 2026-10-09:** each run folds alone, so the agent's notes stay open and readable
 without a click. A failed call does not stay open under its fold: the fold line says so,
 in red.
@@ -3022,14 +3056,18 @@ An agent's row shows its colour, a state mark (`◐` busy, `?` asks, `!` stall, 
 paused, `✕` killed, `●` unread, `○` nothing new), the harness in dim text, and the
 timer of a busy agent on the right. `★` stays for the orchestrator.
 **Changed files.** Under the rooms, a block lists the files that the open thread's agent
-changed. It reads `GET /rooms/:id/agents/:agentId/diff?against=head` (M4-6) with
-`client/diff.ts`, which already finds each file and its `+a −d`. It loads when the thread
-opens and after each of that agent's turns ends, never on a chunk. Each line shows `M`,
-`A` or `D`, the path and `+a −d`, and the block ends with `+n more` when the rows run
-out. A click opens that file in the side view (M4-6).
-*Done when* unit tests cover the row text at 26 columns; a fake-daemon test shows one diff
-call per turn end and none per chunk; and a pty test shows a click opening the file in the
-side view.
+changed. It reads `GET /rooms/:id/agents/:agentId/diff?against=base` (M4-6) with
+`client/diff.ts`, which already finds each file and its `+a −d`. `base`, not `head`:
+`head` is only what is not committed, so the list would go empty when the agent commits.
+It loads when the thread opens and after each of that agent's turns ends, never on a
+chunk. Each line shows `M`, `A` or `D`, the path and `+a −d`, and the block ends with
+`+n more` when the rows run out. The route cuts its text at 512 KB, so a large diff can
+lose files at its end; `n` comes from the route's `files` count, which is counted before
+the cut, so the block never looks complete when it is not. A click opens that file in the
+side view (M4-6). A `409 no_diff` (no branch to compare with) shows no block.
+*Done when* unit tests cover the row text at 26 columns, and `+n more` from `files` when
+the text was cut; a fake-daemon test shows one diff call per turn end, none per chunk,
+and `against=base`; and a pty test shows a click opening the file in the side view.
 **Decided 2026-10-09:** the list reuses the diff route, so the daemon and the contract do
 not change. A light route that returns only names and counts is the follow-up, if a large
 diff makes the list slow.
@@ -3037,12 +3075,18 @@ diff makes the list slow.
 **M7-4 · Question box: short diff and number keys · S · needs nothing**
 The title says who wants to do what, with `n of m` on the right (`client/questions.ts`).
 The box shows up to six lines of the question's diff (M4-6), in colour, then
-`… n more lines · d full diff`; a question with no diff shows no preview. Each row gets a
-number: `1` deny (also `n`), `2` allow (also `y`), then `view diff`. Deny stays first, so
-a stray Enter still says no (M4-3). There is no "always allow": an approval covers one
-write.
-*Done when* tests cover `1` and `n` denying, `2` and `y` allowing, the six-line cap, no
-preview without a diff, and control characters removed before drawing (`printable`).
+`… n more lines`; the `view diff` row opens the rest. A question with no diff shows no
+preview. Each row gets a number: `1` deny, `2` allow, then `3` view diff. **A key only
+moves the cursor; Enter answers.** `1` and `n` move to deny, `2` and `y` move to allow.
+Deny stays first, so a stray Enter still says no (M4-3).
+**Why no key answers alone.** The box opens by itself when the composer is empty
+(`chat/tui/question.ts`). A person who starts to type "yes, and…" just as it opens
+would allow a write with `y`. A stray `n` is no better: a denial is sticky. M4-3's
+"letters do nothing" stays true for answers. There is no "always allow": an approval
+covers one write.
+*Done when* tests cover `1` and `n` moving to deny, `2` and `y` moving to allow, no
+answer sent by any key but Enter, the six-line cap, no preview without a diff, and
+control characters removed before drawing (`printable`).
 
 **M7-5 · Type to filter the `ctrl+o` menu · S · needs nothing**
 The menu grows with each story. Typed letters filter it, with pi-tui's `fuzzyFilter` or
