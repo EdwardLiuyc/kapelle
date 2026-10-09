@@ -852,7 +852,7 @@ story, and the story moves into `STORIES.md`.
 | --- | --- | --- | --- |
 | F1 | Heartbeat | (a) comment `: ping` every 15s (b) 30s (c) none | **Decided 2026-09-24 (#138):** (a), fixed, no config key; the reference client treats 45 s of silence as a cut |
 | F2 | `retry:` | (a) send 3s initially (b) client default (c) omit | **Decided 2026-09-24 (#138):** (c) — only a browser `EventSource` reads it, and the browser path is retired |
-| F3 | Reference-client reconnect | (a) auto with backoff + dedupe (b) remain fatal | **Decided 2026-09-24 (#138):** (a), in `client/stream.ts`, used by `attach` only; `daemon.json` read on each try; stop when it is gone (a clean stop); backoff 250 ms to 5 s |
+| F3 | Reference-client reconnect | (a) auto with backoff + dedupe (b) remain fatal | **Decided 2026-09-24 (#138):** (a), in `client/stream.ts`, used by `attach` only; `daemon.json` read on each try; stop when it is gone (a clean stop); backoff 250 ms to 5 s. **Amended 2026-10-09 (#236):** the chat screens use it too, and wait 30 s for a daemon even after a clean stop (M6-7d) |
 | F4 | Delivery guarantee | (a) at-least-once + client dedupe (b) exactly-once effort | **Decided 2026-09-24 (#138):** (a) — the `seq` cursor already gives no repeat; the client drops `seq` at or below its last as a guard |
 | F5 | Backpressure seam | (a) `follow` pauses on false (b) per-client ring (c) leave unbounded | **Decided 2026-09-24 (#138):** (a) |
 | F6 | Slow-client policy | (a) disconnect after high-water (b) block the run (c) unbounded | **Decided 2026-09-24 (#138):** none past F5 — a paused reader holds one socket buffer, and the file keeps the rest |

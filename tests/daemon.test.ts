@@ -3459,7 +3459,10 @@ test("a release that fails is reported and the room is still dismissed, not a 50
   assert.equal(existsSync(d.file), false, "daemon.json is removed on shutdown");
 });
 
-test("chat.ts reports a daemon that went away instead of a dismissal, and exits non-zero", async (t) => {
+test("chat.ts reports a daemon that went away instead of a dismissal, and exits non-zero", {
+  // The screen waits 30 s for the daemon to come back (M6-7d).
+  timeout: 60_000,
+}, async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
@@ -6833,6 +6836,8 @@ test("the status line swaps its key hint while a pop-up is open", {
 
 test("with no room open, the screen exits when the daemon is gone, and says how to start again", {
   skip: noPty,
+  // The screen waits 30 s for the daemon to come back (M6-7d).
+  timeout: 60_000,
 }, async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
@@ -6843,9 +6848,10 @@ test("with no room open, the screen exits when the daemon is gone, and says how 
     "ctrl+o → new room",
   );
   process.kill(d.pid, "SIGKILL");
-  // The room list is read every 5 s; the first one that fails ends it.
-  await screen.seen("the daemon stopped");
+  // The room list is read every 5 s; one that fails 30 s after the first
+  // failure ends it (M6-7d). `seen` gives up after 20 s, so wait for the exit.
   assert.equal(await screen.exited, 1, screen.out());
+  assert.match(plainText(screen.out()), /the daemon stopped/);
   assert.match(plainText(screen.out()), /kapelle daemon start/);
 });
 
@@ -7407,7 +7413,14 @@ async function roomToRestart(t: TestContext, cmd: string) {
   });
   assert.equal(open.status, 201, open.body.error?.message);
   const again = () => boot(t, runtime, [], state);
-  return { first, cwd, id: open.body.id, alice: only(open.body), again };
+  return {
+    first,
+    cwd,
+    id: open.body.id,
+    alice: only(open.body),
+    again,
+    runtime,
+  };
 }
 
 test("a restart lists the room paused, replays it, and a message revives the participant fresh", async (t) => {
@@ -7537,6 +7550,62 @@ test("kill -9 during a turn leaves the participant killed after the next boot, a
   assert.equal(after.status, "idle");
   assert.equal(after.resumed, "fresh");
   assert.deepEqual(answersIn(await roomLog(cwd, id)), ["previous: (none)"]);
+});
+
+test("chat.ts on a pipe rides out a restart: the participant reads paused, and a message is answered", async (t) => {
+  const { first, cwd, id, again, runtime } = await roomToRestart(t, REMEMBER);
+  const c = spawnCli(t, ["attach", id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await c.waitFor("type a message");
+  c.child.stdin.write("alpha\n");
+  await c.waitFor("previous: (none)");
+
+  // A clean stop pauses the room, ends its stream and removes `daemon.json`
+  // (M6-7d): the screen waits for the next daemon instead of ending.
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const second = await again();
+  await c.waitFor("is paused; a message revives it");
+
+  c.child.stdin.write("beta\n");
+  await c.waitFor("is back with a fresh session");
+  await roomIdle(second, id);
+  c.child.stdin.end();
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /the daemon restarted/);
+  assert.equal(r.stdout.match(/previous: \(none\)/g)?.length, 2, r.stdout);
+  assert.deepEqual(answersIn(await roomLog(cwd, id)), [
+    "previous: (none)",
+    "previous: (none)",
+  ]);
+});
+
+test("the TUI rides out a restart: it says so, marks the participant paused, and a message is answered", {
+  skip: noPty,
+}, async (t) => {
+  const { first, id, again, runtime, alice } = await roomToRestart(t, REMEMBER);
+  // The sidebar is narrow: a short name leaves room for its `paused`.
+  const renamed = await api(first, "PATCH", `/rooms/${id}/agents/${alice.id}`, {
+    name: "al",
+  });
+  assert.equal(renamed.status, 200);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${id}`,
+    { XDG_RUNTIME_DIR: runtime },
+    "○ al",
+  );
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const second = await again();
+  await screen.seen("the daemon restarted");
+  await screen.seen("paused");
+  await screen.press("hi\r", "previous: (none)");
+  await roomIdle(second, id);
+  await screen.press("\x03", "rejoin with");
+  assert.equal(await screen.exited, 0, plainText(screen.out()));
 });
 
 test("a dismissed room comes back dismissed after a restart, and a message is refused", async (t) => {
@@ -7709,4 +7778,95 @@ test("a shutdown answers PATCH and fast-forward with 503, not room_dismissed", a
     assert.equal(r.body.error.code, "shutting_down");
   }
   assert.equal((await d.done).code, 0);
+});
+
+test("chat.ts on a pipe: a diff while the daemon is away says so, and the screen stays", async (t) => {
+  const { first, id, again, runtime, alice } = await roomToRestart(t, REMEMBER);
+  const c = spawnCli(t, ["attach", id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await c.waitFor("type a message");
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  // A screen that ends fails here at once, not on the test's timeout.
+  const ended = c.done.then((r) => {
+    throw new Error(`the screen ended with ${r.code}: ${r.stderr}`);
+  });
+  ended.catch(() => {});
+  c.child.stdin.write(`@${alice.name} /diff\n`);
+  await again();
+  await Promise.race([c.waitFor("is paused; a message revives it"), ended]);
+  c.child.stdin.end();
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stderr, /the daemon did not answer/);
+});
+
+test("adding a folder's repository while the daemon is away says so, and the screen stays", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const repo = await gitRepo(t); // never added
+  const screen = await ptyScreen(
+    t,
+    "stty cols 130 rows 30; node chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  // The add fails before any harness starts, so the command is never run.
+  await screen.press(
+    `/new --cmd mock --cwd ${repo}\r`,
+    "is not added to the daemon",
+  );
+  process.kill(d.pid, "SIGKILL");
+  await d.done;
+  // Enter picks "add and open", the first row (M6-7d: the screen waits).
+  await screen.press("\r", "the daemon did not answer");
+  const r = await Promise.race([
+    screen.exited,
+    new Promise((ok) => setTimeout(() => ok("open"), 500)),
+  ]);
+  assert.equal(r, "open", plainText(screen.out()));
+});
+
+test("an answer while the daemon is away says so, and the screen stays", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT} --scenario diff-first`,
+        name: "asker",
+        role: "orchestrator",
+        mode: "ask",
+      },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`,
+    { text: "go" },
+  );
+  await screen.seen("view diff");
+  await pendingOne(d);
+  process.kill(d.pid, "SIGKILL");
+  // Enter answers deny, the first row (M6-7d: the screen waits).
+  await screen.press("\r", "the daemon did not answer");
+  const r = await Promise.race([
+    screen.exited,
+    new Promise((ok) => setTimeout(() => ok("open"), 500)),
+  ]);
+  assert.equal(r, "open", plainText(screen.out()));
 });

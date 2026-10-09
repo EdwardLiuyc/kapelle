@@ -4,14 +4,21 @@
  *
  * The daemon is faked with a bare HTTP server. Each room's stream stays open
  * until the test lets it end, and `GET /rooms/:id` then says what happened.
- * The poll runs every 20 ms, so no test waits 5 s.
+ * The poll runs every 20 ms and a daemon that went away gets 150 ms, so no
+ * test waits 5 s or 30 s. A restart is a second fake with a new token
+ * (M6-7d).
  */
 
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
-import type { RoomEventLine, RoomListEntry, RoomStatus } from "../contract.ts";
+import {
+  API_VERSION,
+  type RoomEventLine,
+  type RoomListEntry,
+  type RoomStatus,
+} from "../contract.ts";
 import type { DaemonAddress } from "../daemon.ts";
 import {
   type End,
@@ -22,6 +29,7 @@ import {
 } from "../roomset.ts";
 
 const POLL_MS = 20;
+const WAIT_MS = 150;
 
 const entry = (id: string): RoomListEntry => ({
   id,
@@ -34,9 +42,13 @@ const entry = (id: string): RoomListEntry => ({
 
 /** A daemon whose answers the test sets. A room missing from `status`
  *  answers `404`; a number there is the HTTP status. */
-async function fake(t: TestContext) {
+async function fake(t: TestContext, token = "tok") {
   const daemon = {
-    d: { port: 0, token: "tok" } as DaemonAddress,
+    d: { port: 0, token } as DaemonAddress,
+    /** What `GET /version` answers. */
+    version: { ...API_VERSION } as { major: number; minor: number },
+    /** The `Last-Event-ID` of each stream asked for. */
+    after: [] as string[],
     /** What `GET /rooms` answers, and with which status. */
     list: [] as RoomListEntry[],
     /** `0` drops the connection instead. */
@@ -47,13 +59,19 @@ async function fake(t: TestContext) {
     /** The lines each room's stream sends before it waits. */
     lines: new Map<string, RoomEventLine[]>(),
     streams: new Map<string, ServerResponse>(),
+    /** The participants `GET /rooms/:id` names, with their status. */
+    participants: [] as { id: string; status: string }[],
     /** Every `GET /rooms/:id`, by room. */
     reads: [] as string[],
+    /** Sends every line, whatever `Last-Event-ID` asks for. */
+    replayAll: false,
     /** Ends a room's stream. */
     release: (id: string) => daemon.streams.get(id)?.end(),
+    /** Takes no new connection; an open stream stays, as in a clean stop. */
+    refuse: () => server.close(),
     stop: () => {
       server.closeAllConnections();
-      server.close();
+      if (server.listening) server.close();
     },
   };
   const json = (res: ServerResponse, status: number, body: unknown) =>
@@ -61,6 +79,9 @@ async function fake(t: TestContext) {
       .writeHead(status, { "content-type": "application/json" })
       .end(JSON.stringify(body));
   const server = createServer((req, res) => {
+    if (req.url === "/version") {
+      return json(res, 200, { apiVersion: daemon.version, capabilities: [] });
+    }
     const [, , id, events] = (req.url ?? "/").split("/");
     if (!id) {
       daemon.polls++;
@@ -68,8 +89,11 @@ async function fake(t: TestContext) {
       return json(res, daemon.listStatus, daemon.list);
     }
     if (events) {
+      const after = String(req.headers["last-event-id"] ?? 0);
+      daemon.after.push(after);
       res.writeHead(200, { "content-type": "text/event-stream" });
       for (const line of daemon.lines.get(id) ?? []) {
+        if (!daemon.replayAll && line.seq <= Number(after)) continue;
         res.write(`id: ${line.seq}\ndata: ${JSON.stringify(line)}\n\n`);
       }
       daemon.streams.set(id, res);
@@ -79,7 +103,13 @@ async function fake(t: TestContext) {
     const s = daemon.status.get(id);
     if (s === undefined) return json(res, 404, { error: "no such room" });
     if (typeof s === "number") return json(res, s, { error: "refused" });
-    json(res, 200, { ...entry(id), createdAt: "", status: s });
+    json(res, 200, {
+      ...entry(id),
+      createdAt: "",
+      status: s,
+      participants: daemon.participants,
+      seq: 0,
+    });
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
   daemon.d.port = (server.address() as AddressInfo).port;
@@ -87,26 +117,36 @@ async function fake(t: TestContext) {
   return daemon;
 }
 
-/** A set over `daemon`, with what it said kept in order. */
-function follow(t: TestContext, d: DaemonAddress) {
+/** A set over `daemon`, with what it said kept in order. `address` is
+ *  `daemon.json`: by default it always names `d`. */
+function follow(
+  t: TestContext,
+  d: DaemonAddress,
+  address: ReadAddress = async () => d,
+) {
   const said = {
     lines: [] as string[],
     closed: [] as [string, Ended][],
     ends: [] as End[],
+    restarts: [] as (string | undefined)[],
+    aways: 0,
     polls: 0,
   };
-  const address: ReadAddress = async () => d;
   const set = roomSet(
     d,
     address,
     {
-      line: (id, l) => said.lines.push(`${id} ${l.update.sessionUpdate}`),
+      line: (id, l) =>
+        said.lines.push(`${id} ${l.seq} ${l.update.sessionUpdate}`),
       loaded: () => {},
       polled: () => said.polls++,
+      restarted: (warning) => said.restarts.push(warning),
+      away: () => said.aways++,
       closed: (id, ended) => said.closed.push([id, ended]),
       end: (why) => said.ends.push(why),
     },
     POLL_MS,
+    WAIT_MS,
   );
   t.after(() => set.stop());
   return { set, said };
@@ -139,7 +179,7 @@ test("each room's stream runs into its own reducer, and a new participant reads 
   const { set, said } = follow(t, daemon.d);
   set.start([entry("r1"), entry("r2")]);
   await until(() => said.lines.length === 1);
-  assert.deepEqual(said.lines, ["r1 _client_participant_added"]);
+  assert.deepEqual(said.lines, ["r1 1 _client_participant_added"]);
   assert.equal(set.rooms.get("r1")?.state.participants.get("p1")?.name, "ann");
   assert.equal(set.rooms.get("r2")?.state.participants.size, 0);
   // Once when it joined, once more for the participant the header lacks.
@@ -183,6 +223,8 @@ test("a dismissed room leaves the set, and the set goes on", async (t) => {
   await until(() => said.closed.length === 1);
   assert.deepEqual(said.closed, [["r1", { kind: "dismissed" }]]);
   assert.equal(set.rooms.size, 0);
+  // One read when it joined, one for the end: `readRoom` hands its read on.
+  assert.deepEqual(daemon.reads, ["r1", "r1"]);
   assert.deepEqual(said.ends, []);
 });
 
@@ -275,4 +317,175 @@ test("reconcile says what happened, not a line", async (t) => {
     kind: "gone",
     message: "no daemon is listening",
   });
+});
+
+// --- across a daemon restart (M6-7d, #236) ---------------------------------
+
+const added = (seq: number, id: string, name: string): RoomEventLine => ({
+  seq,
+  at: "",
+  roomId: "r1",
+  participantId: id,
+  update: {
+    sessionUpdate: "_client_participant_added",
+    name,
+    harness: "mock",
+    mode: "safe",
+  },
+});
+
+/** `daemon.json` as the test sets it: `undefined` is no file. */
+function daemonFile(first: DaemonAddress) {
+  const file = { now: first as DaemonAddress | undefined };
+  const address: ReadAddress = async () => {
+    if (!file.now) throw new Error("no daemon is listening");
+    return { ...file.now };
+  };
+  return { file, address };
+}
+
+for (const how of ["a crash", "a clean stop"]) {
+  test(`after ${how} the set waits, checks the new daemon, reads the room again and resumes after the last line`, async (t) => {
+    const old = await fake(t);
+    old.status.set("r1", "active");
+    old.lines.set("r1", [added(1, "p1", "ann")]);
+    const { file, address } = daemonFile(old.d);
+    const d = { ...old.d };
+    const { set, said } = follow(t, d, address);
+    set.start([entry("r1")]);
+    await until(() => said.lines.length === 1);
+
+    // A clean stop takes no new connection, then pauses the room, which
+    // ends its stream normally, then removes `daemon.json` (`daemon.ts`,
+    // `shutdown`). A crash only cuts the stream.
+    if (how === "a clean stop") {
+      old.refuse();
+      old.release("r1");
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    old.stop();
+    file.now = undefined;
+    await new Promise((r) => setTimeout(r, WAIT_MS / 3));
+
+    const next = await fake(t, "tok2");
+    next.status.set("r1", "paused");
+    next.participants = [{ id: "p1", status: "paused" }];
+    next.lines.set("r1", [added(1, "p1", "ann"), added(2, "p2", "bob")]);
+    // A line at or below the last one seen is dropped even when a daemon
+    // sends it again (F4).
+    next.replayAll = true;
+    file.now = next.d;
+
+    await until(() => said.lines.length === 2);
+    assert.deepEqual(said.lines, [
+      "r1 1 _client_participant_added",
+      "r1 2 _client_participant_added",
+    ]);
+    assert.deepEqual(next.after, ["1"], "it resumed after the last line");
+    assert.deepEqual(said.restarts, [undefined]);
+    assert.deepEqual(d, next.d, "the screen's address took the new token");
+    await until(() => next.reads.includes("r1"));
+    await until(
+      () =>
+        set.rooms.get("r1")?.state.participants.get("p1")?.status === "paused",
+    );
+    assert.deepEqual(said.ends, []);
+    assert.deepEqual(said.closed, []);
+  });
+}
+
+test("a daemon that does not come back ends the set after the wait", async (t) => {
+  const old = await fake(t);
+  old.status.set("r1", "active");
+  const { file, address } = daemonFile(old.d);
+  const { set, said } = follow(t, { ...old.d }, address);
+  set.start([entry("r1")]);
+  await until(() => old.streams.has("r1"));
+  const stopped = Date.now();
+  old.stop();
+  file.now = undefined;
+  await until(() => said.ends.length === 1);
+  assert.ok(Date.now() - stopped >= WAIT_MS, "it waited first");
+  const [end] = said.ends;
+  assert.equal(end?.kind, "lost");
+  assert.equal(end?.kind === "lost" && end.ended.kind, "gone");
+});
+
+test("a new daemon with a different major ends the set with the version message", async (t) => {
+  for (const rooms of [[entry("r1")], []]) {
+    const old = await fake(t);
+    old.status.set("r1", "active");
+    const { file, address } = daemonFile(old.d);
+    const { set, said } = follow(t, { ...old.d }, address);
+    set.start(rooms);
+    if (rooms.length) await until(() => old.streams.has("r1"));
+    old.stop();
+    const next = await fake(t, "tok2");
+    next.version = { major: API_VERSION.major + 1, minor: 0 };
+    file.now = next.d;
+    await until(() => said.ends.length === 1);
+    const [end] = said.ends;
+    const message =
+      end?.kind === "lost"
+        ? (end.err as Error | undefined)?.message
+        : end?.message;
+    assert.match(message ?? "", /update the client or the daemon/);
+    assert.deepEqual(said.restarts, [], `${rooms.length} room(s)`);
+  }
+});
+
+test("with no room open the set waits for a daemon that comes back, and polls it", async (t) => {
+  const old = await fake(t);
+  const { file, address } = daemonFile(old.d);
+  const { set, said } = follow(t, { ...old.d }, address);
+  set.start([]);
+  await until(() => said.polls >= 1);
+  old.stop();
+  file.now = undefined;
+  await new Promise((r) => setTimeout(r, WAIT_MS / 3));
+  const next = await fake(t, "tok2");
+  file.now = next.d;
+  await until(() => next.polls >= 2);
+  assert.deepEqual(said.ends, []);
+  assert.deepEqual(said.restarts, [undefined]);
+  assert.equal(said.aways, 1, "the poll said once that the daemon is away");
+});
+
+test("a clean end on a paused room while the daemon answers ends the reader, not a loop", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "paused");
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => daemon.streams.has("r1"));
+  daemon.release("r1");
+  // Its one room lost its stream, so the set ends.
+  await until(() => said.ends.length === 1);
+  assert.deepEqual(said.ends, [
+    {
+      kind: "lost",
+      roomId: "r1",
+      ended: { kind: "alive", status: "paused" },
+      err: undefined,
+    },
+  ]);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(daemon.after.length, 1, "the stream was not opened again");
+});
+
+test("a new token whose version check fails is checked again", async (t) => {
+  const old = await fake(t);
+  old.status.set("r1", "active");
+  const { file, address } = daemonFile(old.d);
+  const { set, said } = follow(t, { ...old.d }, address);
+  set.start([entry("r1")]);
+  await until(() => old.streams.has("r1"));
+  old.stop();
+  // `daemon.json` names the new token before its daemon answers.
+  file.now = { port: old.d.port, token: "tok2" };
+  await new Promise((r) => setTimeout(r, WAIT_MS / 3));
+  const next = await fake(t, "tok2");
+  next.status.set("r1", "paused");
+  file.now = next.d;
+  await until(() => said.restarts.length === 1);
+  assert.deepEqual(said.ends, []);
 });

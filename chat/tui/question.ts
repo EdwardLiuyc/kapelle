@@ -22,7 +22,7 @@ import { diffLine } from "../../client/diff.ts";
 import type { QuestionQueue } from "../../client/questions.ts";
 import { type Entry, nameOf } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { dim } from "../common.ts";
+import { dim, NO_DAEMON } from "../common.ts";
 import { touched } from "../view.ts";
 import type { paneParts } from "./pane.ts";
 import { EDITOR_THEME, type panelParts } from "./panel.ts";
@@ -37,24 +37,26 @@ type Queue = QuestionQueue<{ r: Followed; q: Question }>;
  *  read when a question may open. */
 function questionParts({
   d,
+  fresh,
   queue,
   editor,
   box,
   side,
   setStatus,
   say,
-  end,
   done,
   prefill,
 }: {
   d: DaemonAddress;
+  /** `daemon.json` read again, so an answer after a restart has the new
+   *  token (M6-7d). */
+  fresh: () => Promise<void>;
   queue: Queue;
   editor: { getText(): string };
   box: ReturnType<typeof panelParts>;
   side: ReturnType<typeof paneParts>;
   setStatus: () => void;
   say: (text: string) => void;
-  end: (code: number, ...last: string[]) => void;
   done: () => boolean;
   prefill: () => string;
 }) {
@@ -168,6 +170,7 @@ function questionParts({
     hidePanel();
     offer();
     const path = `/permissions/${encodeURIComponent(id)}`;
+    await fresh();
     try {
       const res = await call<PermissionAnswered>(d, path, {
         method: "POST",
@@ -183,9 +186,10 @@ function questionParts({
       }
       say(`! ${why}`);
       setStatus();
-    } catch (err) {
-      // The daemon went away mid-request.
-      end(1, `! ${(err as Error).message}`);
+    } catch {
+      // A restart: the screen waits for the daemon (M6-7d).
+      say(`! ${NO_DAEMON}`);
+      setStatus();
     }
   };
   // Decided 2026-10-01 (#49): a question opens by itself, but never over

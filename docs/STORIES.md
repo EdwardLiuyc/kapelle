@@ -2210,8 +2210,8 @@ there from the sidebar the same day); in a thread it lists that agent's commands
 A typed command
 names its agent with a leading `@name`, as a message does, and is refused without one;
 `/new` or `/add` alone opens its form in the same box. A refusal stays in the form; a success is one
-status line. With no room, the screen stays open; it exits when the daemon is gone, until
-M6-7a lets it follow a restart. While a pop-up is open, the row keys do nothing: Esc first.
+status line. With no room, the screen stays open; it exits when the daemon is gone for
+30 s (M6-7d). While a pop-up is open, the row keys do nothing: Esc first.
 The menu has a `help` row.
 **Built 2026-09-30 (#181).** `client/command.ts` parses the typed commands and calls
 the routes; both screens and the pop-up forms go through it. `--base @name` sends that
@@ -2809,6 +2809,16 @@ daemon that does not come back still ends the screen as today; a new daemon with
 different `major` ends the screen with the version message. Both screens: the pi-tui
 screen and the piped lines.
 Decisions: R42, S8.
+**Decided at pickup 2026-10-09 (#236):** a clean stop removes `daemon.json`, so "as
+`attach` does" would still end the screen. Both a clean stop and a crash get a 30 s wait
+instead. The poll reads `daemon.json` on every tick. A restart still writes no line (E5),
+so the screen reads each room again from a new daemon.
+**Built 2026-10-09 (#236).** `followDaemon` in `client/roomset.ts` checks a new token's
+version once and changes the screen's one address in place. `readRoom` waits for a
+daemon. After a clean end it waits only when no daemon answers: `shutdown` closes the
+listener before it pauses the rooms, so that order is now a rule. A new reader drops a line
+at or below the last one seen (F4). The poll says once per outage that the daemon is away.
+A request that fails in the TUI shows a line and no longer ends the screen.
 
 **M6-7b · `session/load` for a paused participant · M · needs M6-7a, M0-9**
 **Half B.** A participant revives with `session/load` where the harness advertises

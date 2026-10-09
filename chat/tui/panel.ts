@@ -32,7 +32,7 @@ import {
 } from "../../client/folder.ts";
 import { nameOf, roster } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { bold, cyan, dim, yellow } from "../common.ts";
+import { bold, cyan, dim, NO_DAEMON, yellow } from "../common.ts";
 import type { View } from "../view.ts";
 import type { Queue } from "./question.ts";
 import { SIDEBAR_WIDTH } from "./sidebar.ts";
@@ -82,6 +82,7 @@ const SETTINGS_THEME = {
  *  rest are the screen's. */
 function panelParts({
   d,
+  fresh,
   tui,
   editor,
   queue,
@@ -99,6 +100,9 @@ function panelParts({
   left,
 }: {
   d: DaemonAddress;
+  /** `daemon.json` read again, so a request after a restart has the new
+   *  token (M6-7d). */
+  fresh: () => Promise<void>;
   tui: TuiAltScreen;
   editor: Component;
   queue: Queue;
@@ -530,13 +534,17 @@ function panelParts({
       async (v) => {
         if (v !== "add") return toForm();
         let added: Awaited<ReturnType<typeof call<RepoAdded>>>;
+        await fresh();
         try {
           added = await call<RepoAdded>(d, "/repos", {
             method: "POST",
             body: { path: c.body.cwd },
           });
-        } catch (err) {
-          end(1, `! ${(err as Error).message}`);
+        } catch {
+          // A restart: the screen waits for the daemon (M6-7d).
+          if (panel) panel.error = NO_DAEMON;
+          else say(`! ${NO_DAEMON}`);
+          tui.requestRender();
           return;
         }
         if (!added.ok) {

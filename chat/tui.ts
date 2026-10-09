@@ -50,7 +50,7 @@ import type {
   RoomEventLine,
   RoomListEntry,
 } from "../client/contract.ts";
-import { call, type DaemonAddress } from "../client/daemon.ts";
+import { call, type DaemonAddress, VersionRefused } from "../client/daemon.ts";
 import { agentDiff, agentForwardDiff } from "../client/diff.ts";
 import { mentionsFor, targetOf } from "../client/mention.ts";
 import { questionQueue } from "../client/questions.ts";
@@ -76,6 +76,7 @@ import {
   dim,
   endedLine,
   magenta,
+  NO_DAEMON,
   rosterOf,
   unpad,
   yellow,
@@ -150,12 +151,31 @@ function chatTui(
 ): Promise<number> {
   /** The screen's end, set where the screen's own end lives. */
   let quit = (_why: End) => {};
+  /** The line `away` put on the status line, so the poll can take it back. */
+  let awayLine = "";
   const set = roomSet(d, address, {
     line: (roomId, line, e) => onLine(roomId, line, e),
     loaded: (roomId) => {
       if (view.roomId === roomId) redraw();
     },
-    polled: () => tui.requestRender(),
+    polled: () => {
+      // The same daemon came back: no `restarted` would clear the line.
+      if (awayLine && flash === awayLine) {
+        flash = "the daemon is back";
+        setStatus();
+      }
+      awayLine = "";
+      tui.requestRender();
+    },
+    restarted: (warning) => {
+      flash = warning ? `! ${warning}` : "the daemon restarted";
+      setStatus();
+    },
+    away: (ms) => {
+      awayLine = `! the daemon is away; waiting up to ${ms / 1000} s for it to come back`;
+      flash = awayLine;
+      setStatus();
+    },
     closed: (id, ended, r) => onClosed(id, ended, r),
     end: (why) => quit(why),
   });
@@ -212,8 +232,14 @@ function chatTui(
     _target: { id: string; name: string },
     _from: { id: string; name: string },
   ) => Promise.resolve(false);
-  /** The daemon went away mid-request. */
-  const gone = (err: unknown) => end(1, `! ${(err as Error).message}`);
+  /** The daemon went away mid-request: say so, and wait for it, as the
+   *  streams do (M6-7d). The set ends the screen if it does not come back.
+   *  Answers false, so a typed line goes back to the composer. */
+  const gone = (err: unknown) => {
+    flash = `! ${NO_DAEMON} (${(err as Error).message})`;
+    setStatus();
+    return false;
+  };
   const left = () =>
     view.roomId
       ? `left room ${view.roomId}; rejoin with: kapelle chat attach ${view.roomId}`
@@ -255,6 +281,7 @@ function chatTui(
   });
   const box = panelParts({
     d,
+    fresh: set.fresh,
     tui,
     editor,
     queue,
@@ -274,13 +301,13 @@ function chatTui(
   const { hidePanel, menu, showHelp, newForm, addForm, askToAdd } = box;
   const { question, offer, syncBox } = questionParts({
     d,
+    fresh: set.fresh,
     queue,
     editor,
     box,
     side,
     setStatus: () => setStatus(),
     say,
-    end: (code, ...last) => end(code, ...last),
     done: () => done,
     prefill: () => prefill,
   });
@@ -570,12 +597,12 @@ function chatTui(
   /** A room's stream ended and the screen goes on. With no room left it
    *  stays, so the person can open one (M4-5). */
   const onClosed = (id: string, ended: Ended, r?: Followed) => {
-    const gone = ended.kind === "dismissed";
-    if (gone) syncBox();
+    const wasDismissed = ended.kind === "dismissed";
+    if (wasDismissed) syncBox();
     const label = r?.entry.title ?? id;
-    const next = gone ? dismissed(rooms, view, id) : undefined;
+    const next = wasDismissed ? dismissed(rooms, view, id) : undefined;
     if (next) open(next);
-    flash = gone ? `${label} was dismissed` : endedLine(ended, id);
+    flash = wasDismissed ? `${label} was dismissed` : endedLine(ended, id);
     setStatus();
   };
 
@@ -612,11 +639,19 @@ function chatTui(
       if (why.kind === "gone") {
         end(
           1,
-          "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat",
+          why.message
+            ? `! ${why.message}`
+            : "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat",
         );
         return;
       }
       const { roomId, ended, err } = why;
+      // A refused version is the whole story; the reconcile after it only
+      // says the same words again.
+      if (err instanceof VersionRefused) {
+        end(codeOf(ended), `! ${err.message}`);
+        return;
+      }
       const msg = err ? [`! ${(err as Error).message}`] : [];
       end(codeOf(ended), ...msg, endedLine(ended, roomId));
     };
@@ -703,9 +738,9 @@ function chatTui(
       offer();
     };
     // pi-tui calls this and drops the promise, so a throw (the daemon gone
-    // mid-request) must end the chat here, or it crashes on the alt screen.
+    // mid-request) must be caught here, or it crashes on the alt screen.
     editor.onSubmit = (text) => {
-      submit(text).catch((err) => end(1, `! ${(err as Error).message}`));
+      submit(text).catch(gone);
     };
     const submit = async (text: string) => {
       if (!text.trim()) return;
@@ -732,12 +767,12 @@ function chatTui(
       if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
       if (c.verb === "ff") {
         editor.addToHistory(text);
-        if (!(await forward(c, c.from))) giveBack();
+        if (!(await forward(c, c.from).catch(gone))) giveBack();
         return;
       }
       if (c.verb === "diff") {
         editor.addToHistory(text);
-        if (!(await changes(c, c.against))) giveBack();
+        if (!(await changes(c, c.against).catch(gone))) giveBack();
         return;
       }
       if (c.verb !== "message") {
@@ -760,11 +795,19 @@ function chatTui(
         return giveBack();
       }
       editor.addToHistory(text);
-      const res = await call<MessageAccepted>(
-        d,
-        `/rooms/${r.entry.id}/agents/${t.id}/messages`,
-        { method: "POST", body: { text: t.text } },
-      );
+      await set.fresh();
+      let res: Awaited<ReturnType<typeof call<MessageAccepted>>>;
+      try {
+        res = await call<MessageAccepted>(
+          d,
+          `/rooms/${r.entry.id}/agents/${t.id}/messages`,
+          { method: "POST", body: { text: t.text } },
+        );
+      } catch {
+        // A restart: the screen waits for the daemon (M6-7d).
+        warn(`! ${NO_DAEMON}`);
+        return giveBack();
+      }
       if (!res.ok) warn(`! ${res.error.message}`);
     };
 
@@ -778,6 +821,7 @@ function chatTui(
       who: { id: string; name: string },
       against: "head" | "base",
     ) => {
+      await set.fresh();
       const res = await agentDiff(d, view.roomId, who.id, against);
       if (!res.ok) {
         flash = `! ${res.error.message}`;
@@ -844,11 +888,13 @@ function chatTui(
         setStatus();
       }
       let out: Awaited<ReturnType<typeof runCommand>>;
+      await set.fresh();
       try {
         out = await runCommand(d, view.roomId || undefined, c);
-      } catch (err) {
-        // The daemon went away mid-request.
-        end(1, `! ${(err as Error).message}`);
+      } catch {
+        // A restart: the screen waits for the daemon (M6-7d).
+        flash = `! ${NO_DAEMON}`;
+        setStatus();
         return false;
       }
       if (!out.ok) {
@@ -892,6 +938,7 @@ function chatTui(
     /** Shows what a fast-forward would bring in the side pane, and confirms
      *  the move on Enter (M6-11a, 3b). Answers whether the pane was filled. */
     forward = async (target, from) => {
+      await set.fresh();
       const res = await agentForwardDiff(d, view.roomId, target.id, from.id);
       if (!res.ok) {
         flash = `! ${res.error.message}`;
