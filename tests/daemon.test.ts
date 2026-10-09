@@ -7762,13 +7762,46 @@ test("chat.ts on a pipe: a diff while the daemon is away says so, and the screen
   await c.waitFor("type a message");
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
+  // A screen that ends fails here at once, not on the test's timeout.
+  const ended = c.done.then((r) => {
+    throw new Error(`the screen ended with ${r.code}: ${r.stderr}`);
+  });
+  ended.catch(() => {});
   c.child.stdin.write(`@${alice.name} /diff\n`);
   await again();
-  await c.waitFor("is paused; a message revives it");
+  await Promise.race([c.waitFor("is paused; a message revives it"), ended]);
   c.child.stdin.end();
   const r = await c.done;
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stderr, /the daemon did not answer/);
+});
+
+test("adding a folder's repository while the daemon is away says so, and the screen stays", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const repo = await gitRepo(t); // never added
+  const screen = await ptyScreen(
+    t,
+    "stty cols 130 rows 30; node chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  // The add fails before any harness starts, so the command is never run.
+  await screen.press(
+    `/new --cmd mock --cwd ${repo}\r`,
+    "is not added to the daemon",
+  );
+  process.kill(d.pid, "SIGKILL");
+  await d.done;
+  // Enter picks "add and open", the first row (M6-7d: the screen waits).
+  await screen.press("\r", "the daemon did not answer");
+  const r = await Promise.race([
+    screen.exited,
+    new Promise((ok) => setTimeout(() => ok("open"), 500)),
+  ]);
+  assert.equal(r, "open", plainText(screen.out()));
 });
 
 test("an answer while the daemon is away says so, and the screen stays", {
