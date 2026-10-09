@@ -23,6 +23,18 @@ history and the measurements live in `docs/`:
 They are snapshots, and they go out of date. The code and the files above are the
 source of truth.
 
+## Question or work?
+
+A question gets an answer, not a change. Investigate as far as needed; use a temporary
+folder or detached worktree, then clean it up (`git worktree remove` for a worktree).
+Leave the original checkout as you found it: config, issues and PRs stay untouched;
+Git discipline still governs commits and pushes. If a change would help, propose it and
+wait.
+
+Work happens when the person asks for a change, including invoking a skill that edits.
+If that is unclear, ask first; if you cannot ask, treat it as a question and change
+nothing.
+
 ## What this is
 
 `kapelle` is a minimal [Agent Client Protocol](https://agentclientprotocol.com)
