@@ -29,6 +29,14 @@ async function address(): Promise<DaemonAddress> {
   return d;
 }
 
+/** A send while the daemon is away: the screen waits for it (M6-7d). */
+const NO_DAEMON =
+  "the daemon did not answer; it may be restarting. Send again when it is back";
+
+/** The line for a participant a restart left `paused` or `killed`. */
+const stoppedLine = (name: string, status: string) =>
+  `${status === "killed" ? "!" : "·"} ${name} is ${status}; a message revives it`;
+
 /** The line for a room whose stream ended, from what `reconcile` found.
  *  It starts with `!` unless the room was dismissed. */
 function endedLine(e: Ended, id: string): string {
@@ -114,11 +122,13 @@ export {
   inverse,
   italic,
   magenta,
+  NO_DAEMON,
   plain,
   red,
   revivedLine,
   rosterOf,
   sgr,
+  stoppedLine,
   underline,
   unpad,
   yellow,

@@ -15,15 +15,28 @@ import { call, type DaemonAddress } from "../client/daemon.ts";
 import { agentDiff } from "../client/diff.ts";
 import {
   applyLine,
+  applyStatus,
   cleanDiff,
   type Entry,
   nameOf,
   newRoomState,
   type RoomState,
 } from "../client/room.ts";
-import { codeOf, readRoom, reconcile } from "../client/roomset.ts";
+import {
+  codeOf,
+  followDaemon,
+  readRoom,
+  reconcile,
+} from "../client/roomset.ts";
 import { parseLine } from "../client/submit.ts";
-import { address, endedLine, revivedLine, rosterOf } from "./common.ts";
+import {
+  address,
+  endedLine,
+  NO_DAEMON,
+  revivedLine,
+  rosterOf,
+  stoppedLine,
+} from "./common.ts";
 
 /** Prints the reducer's entries as a conversation, for a piped stdin. An
  *  answer that grows prints only its new text. A participant's name comes
@@ -130,13 +143,32 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
 
   const state = newRoomState();
   const printer = makePrinter(state);
+  // `d` follows a restart in place (M6-7d). A restart writes no line, so the
+  // room is read again for who it left `paused` or `killed`.
+  const current = followDaemon(d, address, (warning) => {
+    if (warning) console.error(`! ${warning}`);
+    console.log("· the daemon restarted");
+    call<RoomDto>(d, `/rooms/${room.id}`).then(
+      (r) => {
+        if (!r.ok) return;
+        applyStatus(state, r.body);
+        for (const p of r.body.participants) {
+          if (p.status === "paused" || p.status === "killed") {
+            console.log(stoppedLine(p.name, p.status));
+          }
+        }
+      },
+      // The stream says what happened to the daemon.
+      () => {},
+    );
+  });
 
   // The one answer being waited on: `left` more turn ends of `id` above `after`.
   let waiting:
     | { id: string; after: number; left: number; done: () => void }
     | undefined;
 
-  const ended = readRoom(address, room.id, (line) => {
+  const ended = readRoom(current, room.id, (line) => {
     const e = applyLine(state, line);
     if (!e) return;
     printer.show(e);
@@ -184,7 +216,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
   for (;;) {
     const next = await Promise.race([nextLine(), ended]);
     if (next === "ended") {
-      const r = await reconcile(address, room.id);
+      const r = await reconcile(current, room.id);
       code = codeOf(r);
       (code ? console.error : console.log)(endedLine(r, room.id));
       break;
@@ -192,6 +224,8 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     if (next === null) break;
     const text = next.trim();
     if (!text) continue;
+    // A send right after a restart must carry the new token.
+    await current().catch(() => d);
     const c = parseLine(text, rosterOf(state, room.participants));
     if ("error" in c) {
       console.error(`! ${c.error}`);
@@ -220,7 +254,11 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       continue;
     }
     if (c.verb !== "message") {
-      const r = await runCommand(d, room.id, c);
+      const r = await runCommand(d, room.id, c).catch(() => undefined);
+      if (!r) {
+        console.error(`! ${NO_DAEMON}`);
+        continue;
+      }
       if (!r.ok) {
         console.error(`! ${r.message}`);
         // A pipe cannot ask, as the screen does: say how to add it.
@@ -256,7 +294,11 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       d,
       `/rooms/${room.id}/agents/${t.id}/messages`,
       { method: "POST", body: { text: t.text } },
-    );
+    ).catch(() => undefined);
+    if (!r) {
+      console.error(`! ${NO_DAEMON}`);
+      continue;
+    }
     if (!r.ok) {
       console.error(`! ${r.error.message}`);
       continue;

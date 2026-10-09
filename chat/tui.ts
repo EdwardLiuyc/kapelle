@@ -76,6 +76,7 @@ import {
   dim,
   endedLine,
   magenta,
+  NO_DAEMON,
   rosterOf,
   unpad,
   yellow,
@@ -156,6 +157,10 @@ function chatTui(
       if (view.roomId === roomId) redraw();
     },
     polled: () => tui.requestRender(),
+    restarted: (warning) => {
+      flash = warning ? `! ${warning}` : "the daemon restarted";
+      setStatus();
+    },
     closed: (id, ended, r) => onClosed(id, ended, r),
     end: (why) => quit(why),
   });
@@ -212,8 +217,12 @@ function chatTui(
     _target: { id: string; name: string },
     _from: { id: string; name: string },
   ) => Promise.resolve(false);
-  /** The daemon went away mid-request. */
-  const gone = (err: unknown) => end(1, `! ${(err as Error).message}`);
+  /** The daemon went away mid-request: say so, and wait for it, as the
+   *  streams do (M6-7d). The set ends the screen if it does not come back. */
+  const gone = (err: unknown) => {
+    flash = `! ${(err as Error).message}`;
+    setStatus();
+  };
   const left = () =>
     view.roomId
       ? `left room ${view.roomId}; rejoin with: kapelle chat attach ${view.roomId}`
@@ -612,7 +621,9 @@ function chatTui(
       if (why.kind === "gone") {
         end(
           1,
-          "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat",
+          why.message
+            ? `! ${why.message}`
+            : "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat",
         );
         return;
       }
@@ -703,9 +714,9 @@ function chatTui(
       offer();
     };
     // pi-tui calls this and drops the promise, so a throw (the daemon gone
-    // mid-request) must end the chat here, or it crashes on the alt screen.
+    // mid-request) must be caught here, or it crashes on the alt screen.
     editor.onSubmit = (text) => {
-      submit(text).catch((err) => end(1, `! ${(err as Error).message}`));
+      submit(text).catch(gone);
     };
     const submit = async (text: string) => {
       if (!text.trim()) return;
@@ -760,11 +771,19 @@ function chatTui(
         return giveBack();
       }
       editor.addToHistory(text);
-      const res = await call<MessageAccepted>(
-        d,
-        `/rooms/${r.entry.id}/agents/${t.id}/messages`,
-        { method: "POST", body: { text: t.text } },
-      );
+      await set.fresh();
+      let res: Awaited<ReturnType<typeof call<MessageAccepted>>>;
+      try {
+        res = await call<MessageAccepted>(
+          d,
+          `/rooms/${r.entry.id}/agents/${t.id}/messages`,
+          { method: "POST", body: { text: t.text } },
+        );
+      } catch {
+        // A restart: the screen waits for the daemon (M6-7d).
+        warn(`! ${NO_DAEMON}`);
+        return giveBack();
+      }
       if (!res.ok) warn(`! ${res.error.message}`);
     };
 
@@ -844,11 +863,13 @@ function chatTui(
         setStatus();
       }
       let out: Awaited<ReturnType<typeof runCommand>>;
+      await set.fresh();
       try {
         out = await runCommand(d, view.roomId || undefined, c);
-      } catch (err) {
-        // The daemon went away mid-request.
-        end(1, `! ${(err as Error).message}`);
+      } catch {
+        // A restart: the screen waits for the daemon (M6-7d).
+        flash = `! ${NO_DAEMON}`;
+        setStatus();
         return false;
       }
       if (!out.ok) {
