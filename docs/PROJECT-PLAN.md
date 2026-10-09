@@ -662,6 +662,28 @@ covers the room API exactly as it covers `POST /runs`.
 
 ---
 
+## M7 — TUI look and feel
+
+**Added 2026-10-09.** M4 made the TUI work. M7 makes it easy to read. Next to Claude Code,
+Codex CLI, opencode and Toad, the screen is plain, and in a room with many agents the
+timeline is hard to follow: every name has the same colour, a tool call shows no result,
+and a busy agent shows only `…`. Each story is presentation only (M1c-7), adds no
+dependency, keeps the flat layout of #242, and never uses colour as the only signal. The
+piped screen does not change. M7 runs beside M6.
+
+- **M7-1 — agent colours, activity rows and the footer**: a colour and a `▎` bar for each
+  agent; rows above the status line for each busy or waiting agent, with what it does and
+  for how long; a footer with the target's mode, context and cost, and key hints that get
+  shorter on a narrow screen.
+- **M7-2 — tool runs fold between notes**: each tool row shows its result, and each run of
+  tool calls folds into one line when the agent's next note arrives. Needs #240.
+- **M7-3 — a sidebar that says what each agent is**: harness, state mark and timer, and the
+  files the open agent changed.
+- **M7-4 — the question box**: a short diff and number keys.
+- **M7-5 — the `ctrl+o` menu**: type to filter it.
+
+---
+
 ## Verification
 
 **Offline, every milestone** — `mock-agent` and `hostile-agent` own end-to-end and
@@ -731,6 +753,12 @@ survives. Restart the daemon and confirm the room comes back `paused`, with ever
 participant `paused`, its history replayable and its branch intact, and that messaging one
 revives it and is answered. Merge the room's
 branches and confirm a real conflict is refused by name with nothing half-landed.
+
+**M7** — open a room with three agents on two harnesses and give each a task. Confirm that
+each agent's lines have their own colour, that each finished run of tool calls is one line
+with its result, that each busy agent has an activity row with a timer, and that the
+footer shows the target agent's context. Confirm that each state (busy, asks, stalled,
+paused, killed) also has its own mark, so the screen does not depend on colour alone.
 
 ---
 

@@ -2933,6 +2933,128 @@ Decisions: R31, R47.
 
 ---
 
+## M7 — TUI look and feel (proposed)
+
+**Added 2026-10-09.** The chat TUI works, but it is plain next to Claude Code, Codex CLI,
+opencode and Toad. In a room with many agents the timeline is hard to read: every name is
+the same green, a tool call is one grey line with no result, and a busy agent shows only
+`…` in the sidebar. A design page compared the screens and proposed seven ideas, each with
+a sketch of today and after (<https://claude.ai/artifact/3G7sFoF53r7HF2n83mswv8>). These
+stories take all seven, in its order: ideas 1, 2 and 5 as one story, then the tool rows,
+then the sidebar, the question box and the menu.
+
+Three rules hold for every M7 story:
+
+- **Presentation only (M1c-7).** Each story changes what is drawn. None of them changes a
+  permission, the path guard, the policy or a mode. No new runtime dependency: pi-tui
+  0.85.1 already has `fuzzyFilter`, `SelectList.setFilter`, `Loader` and a background
+  function on `Text`.
+- **The layout stays flat (#242).** No `HStack` inside another, and every part has a
+  numeric `basis`. A new row has a set height.
+- **Colour is never the only signal.** Each state also has a mark (`?`, `!`, `◐`, `⏸`,
+  `✕`), so the screen works without colour.
+
+All five are TUI only: the piped screen does not change. They can start beside M6.
+
+**Found while planning (2026-10-09).** The room log already carries every
+`session/update` (`core/room.ts`), so `tool_call_update`, `usage_update` and
+`agent_thought_chunk` reach the client; `client/room.ts` drops all three. The reducer
+already starts a new `answer` entry after any other entry, so the notes Claude writes
+between its tool calls are separate rows, in order. Room logs from October 2026 show
+that **claude and pi send `agent_thought_chunk`**, one pi agent about 82,000 in one room;
+§M0-1 says only opencode does, and M7-1 corrects it.
+
+**M7-1 · Agent colours, activity rows and the footer · M · needs nothing**
+Three of the design page's ideas, in one story, because they need almost no new data
+and change the feel the most.
+**Colours.** Each participant gets a colour by the order it joined the room, from about
+six. The palette leaves out magenta, yellow, red and green: they mean question, stall,
+failed and done. An agent keeps its colour after another agent leaves; a seventh agent
+reuses the first colour. The rule is pure, in `chat/view.ts`. Each agent's lines in the
+transcript get a `▎` bar in its colour, and its heading shows the name, the harness, the
+role and the time (`at`, as `HH:MM`). The person's own messages get a grey bar and a
+light background.
+**Activity rows.** The banner (`chat/tui/banner.ts`, under the row since #242) grows into
+the activity rows. A busy agent's row shows a spinner, then the last tool title or
+`thinking`, then a timer from the turn's start, and it names the M4-5 command that
+cancels the turn. A busy agent gets a row only when it is in the open room. A question or
+a stall gets a row from any room, and a click opens it, as the banner does today. At most
+four rows, then `+n more`.
+**Reducer.** `client/room.ts` also keeps, per participant: the turn's start (the `at` of
+its `_client_user_message`), a `thinking` flag (set by `agent_thought_chunk`, cleared by
+the next other event, with no text kept), and its last `usage_update`.
+**Footer.** On the left, `→ name` and its mode. The key hints drop from the right as the
+screen gets narrower. On the right, the target agent's `ctx N%` (`used / size`) and its
+cost, each only when the harness sends it. One agent's numbers, never a total: copilot
+counts cumulatively and the others per turn. The fit rule is pure, in `chat/view.ts`.
+*Done when* unit tests cover the colour order and a colour kept after a remove; the
+activity rules (busy for the open room only, waits from any room, four rows then
+`+n more`); the footer at 60, 100 and 160 columns; and the reducer's turn start, thinking
+flag and usage. Thinking text is never drawn. The #242 layout test still passes.
+§M0-1 says that claude and pi send `agent_thought_chunk`.
+**Decided 2026-10-09:** colour by join order, not by a hash (two agents in a small room
+could share one) and not by harness (two claude agents would look the same). A busy row
+only for the open room, so many busy rooms do not fill the screen; a wait from anywhere,
+as the banner does today. Thinking shows only as the word `thinking`: the text is large
+(pi), and drawing it costs frames. No new `esc` key to cancel; the row names the command.
+
+**M7-2 · Tool runs fold between notes · S · needs #240, M7-1**
+Issue #240 makes one tool call one row that changes in place, with its status and a detail
+line. This story builds on it. Each tool row ends with a mark: `✓` completed, `✗`
+failed, and a spinner while it is pending or running. An edit whose update carries a diff
+shows `+a −d`.
+**A run folds when the next note comes.** A turn often reads note → tools → note → tools
+→ answer. A run is one agent's tool rows between two of its notes; another agent's rows
+in between do not end it. When the agent's next note arrives, the run before it folds into
+one line, at the run's first place: `▸ 6 tool calls · 4 read · 2 edit`, and `1 failed` in
+red when one failed. The end of the turn folds a run that is still open. The live run
+stays open. A click on the line opens it, and a second click folds it again. The counts
+come from the tool's `kind`; a call with no kind counts as `other`.
+*Done when* unit tests cover a fold when a note arrives, a fold at the turn's end, the
+live run staying open, the failed count, and another agent's rows not ending a run; and a
+pty test shows a click opening and folding a run.
+**Decided 2026-10-09:** each run folds alone, so the agent's notes stay open and readable
+without a click. A failed call does not stay open under its fold: the fold line says so,
+in red.
+
+**M7-3 · Sidebar: harness, state mark, timer, changed files · M · needs M7-1**
+An agent's row shows its colour, a state mark (`◐` busy, `?` asks, `!` stall, `⏸`
+paused, `✕` killed, `●` unread, `○` nothing new), the harness in dim text, and the
+timer of a busy agent on the right. `★` stays for the orchestrator.
+**Changed files.** Under the rooms, a block lists the files that the open thread's agent
+changed. It reads `GET /rooms/:id/agents/:agentId/diff?against=head` (M4-6) with
+`client/diff.ts`, which already finds each file and its `+a −d`. It loads when the thread
+opens and after each of that agent's turns ends, never on a chunk. Each line shows `M`,
+`A` or `D`, the path and `+a −d`, and the block ends with `+n more` when the rows run
+out. A click opens that file in the side view (M4-6).
+*Done when* unit tests cover the row text at 26 columns; a fake-daemon test shows one diff
+call per turn end and none per chunk; and a pty test shows a click opening the file in the
+side view.
+**Decided 2026-10-09:** the list reuses the diff route, so the daemon and the contract do
+not change. A light route that returns only names and counts is the follow-up, if a large
+diff makes the list slow.
+
+**M7-4 · Question box: short diff and number keys · S · needs nothing**
+The title says who wants to do what, with `n of m` on the right (`client/questions.ts`).
+The box shows up to six lines of the question's diff (M4-6), in colour, then
+`… n more lines · d full diff`; a question with no diff shows no preview. Each row gets a
+number: `1` deny (also `n`), `2` allow (also `y`), then `view diff`. Deny stays first, so
+a stray Enter still says no (M4-3). There is no "always allow": an approval covers one
+write.
+*Done when* tests cover `1` and `n` denying, `2` and `y` allowing, the six-line cap, no
+preview without a diff, and control characters removed before drawing (`printable`).
+
+**M7-5 · Type to filter the `ctrl+o` menu · S · needs nothing**
+The menu grows with each story. Typed letters filter it, with pi-tui's `fuzzyFilter` or
+`SelectList.setFilter`. Each row shows its slash command on the right, so the person
+learns it. The menu also lists an `open @name` row for each agent and an `open` row for
+each room, because the sidebar can be hidden. Esc first clears the filter, then goes back.
+`ctrl+o` stays the key: `ctrl+p` moves the row cursor (M4-2).
+*Done when* tests cover the filter narrowing the rows, Enter running the top row, the Esc
+order, and the slash command on each row.
+
+---
+
 ## Critical path
 
 ```text
@@ -2958,6 +3080,14 @@ too. **M4-5** also needs M6-5. **M4-3** also needs M4-2 and M5-4. **M6-7b** also
 the diff view. **M4-4** needs M4-2. **M6-9** needs M6-5 and M4-2. **M6-7a** needs only
 M6-2, but goes after M6-4, which changes the log line it saves. Its chat half and
 **M4-11** change the same poll, in either order.
+
+**M7 (added 2026-10-09)** runs beside M6. M7-2 also needs #240.
+
+```text
+M7-1 ─┬─ M7-2
+      └─ M7-3
+M7-4, M7-5   (need nothing)
+```
 
 Off the path, because the TUI shows no run (R16): M5-7, M5-8, M5-9, M5-10b and M5-11.
 M5-11 adds an idempotency test *if* M5-7 has landed — a condition, not a dependency. No
@@ -3106,3 +3236,11 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   milestone whose exit bar depends on a machine other than the developer's — likely M2's
   daemon, or the first harness build that changes measured labels (M0-7's lesson: a safety
   claim is a claim about a build, and builds change underneath you).
+- **A pinned plan list per agent.** Claude Code and Codex pin the agent's plan as a
+  checklist above the composer. Named by M7 (2026-10-09). `render.ts` draws `plan`, but no
+  harness M0-1 measured sends it. *Trigger:* a harness that sends `plan`.
+- **Themes, and a light terminal.** Named by M7 (2026-10-09). The TUI's colours are spread
+  over `chat/common.ts` and the `chat/tui/` parts. *Trigger:* M7 landed, so all its new
+  colours can move into one theme together.
+- **A welcome screen with recent rooms.** gemini-cli and Crush open on one. Named by M7
+  (2026-10-09). *Trigger:* a request; the person sees it once per start.
