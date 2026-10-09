@@ -316,7 +316,10 @@ export interface ParticipantDto {
   sessionId: string;
   /** How the last revive came back. `loaded`: the old session, so it
    *  remembers the turns before (M6-7b, since 1.9). `fresh`: a new session,
-   *  so it does not (M6-7a). Absent before the first revive. */
+   *  so it does not (M6-7a). Absent before the first revive. More values
+   *  may be added; a client shows one it does not know as plain text, never
+   *  as `fresh`. The same holds for `resumed` on
+   *  `_client_participant_revived`. */
   resumed?: "loaded" | "fresh";
   status: ParticipantStatus;
   notices: Notice[];
