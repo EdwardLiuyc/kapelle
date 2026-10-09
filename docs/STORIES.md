@@ -2191,6 +2191,9 @@ after each chunk of lines, so a replay rings only for what is still open at its 
 start of the composer, or Tab after it, lists the room's names (`mentionsFor`,
 `client/mention.ts`). The re-parse cost was 13 to 23 ms at 53k chars (§M4-4), past the
 threshold, so an answer's finished blocks go into their own `Markdown` (`settled`).
+**Amended 2026-10-09 (#242):** the banner sits under the timeline row, full width. On top
+of the timeline it nested an `HStack` below another, and each frame then joined every
+transcript line (§M4 · Chat layout).
 
 **M4-5 · Room and roster commands in the TUI · M · needs M4-2, M6-3, M6-4, M6-5**
 **Added 2026-09-26.** M6-2..M6-5 build the routes, and M4-2 only lists

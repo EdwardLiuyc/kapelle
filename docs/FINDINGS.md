@@ -1349,6 +1349,38 @@ drew while its text and width stay.
 **Coverage.** One machine, one run per size, synthetic text. A long code block is never
 cut, so its whole text is parsed again on each chunk.
 
+## M4 · Chat layout — measured 2026-10-09 (#242)
+
+**Question.** The chat screen lagged more the longer a room was used, worst while an agent
+worked. Where did the time go: the daemon, the stream, or the screen?
+
+**Method.** A 90 s CPU profile (`node --cpu-prof`) of a second chat screen on the live
+daemon, with three rooms open. Then a scratch script with pi-tui 0.85.1 at 200×50 columns
+and rows. It replayed real room logs through the reducer and `transcriptParts`, and timed
+`renderNow()` with the old nesting of stacks and with `screenLayout`.
+
+| layout | 430 rows | 1,160 rows |
+| --- | --- | --- |
+| nested: `HStack` › `VStack` › `HStack` › timeline | 28 ms | 145 ms |
+| flat: `screenLayout`, the timeline a direct part of the one `HStack` | 4 ms | 6 ms |
+
+The profile showed stalls of 100 to 220 ms, almost all in `doRender` → `measureHeight` →
+`HStack.render` → `compositeTuiLine`. The daemon used about 0.1% CPU. Each streamed line
+asks for a frame, a thought chunk too, and one room's log was 95% thought chunks.
+
+**Consequences.**
+
+- **pi-tui sizes an `HStack`'s parts with their own `render()`**, which draws all of a
+  part. Its layout gives a scroll view only the rows it shows, but this measure does not.
+  For a stack, `render()` goes all the way down, and an `HStack` there joins each line of
+  the whole transcript to the line beside it, one character at a time. pi-tui 1.1.0 does
+  the same, so an upgrade does not fix it.
+- **The layout is flat** (`screenLayout`, `chat/tui.ts`): no `HStack` below another, and
+  the banner moved under the row. `chat/tests/layout.test.ts` checks the rule.
+
+**Coverage.** One machine, real logs from three rooms. The frame time grows with the rows
+of the open view only; rooms off screen cost nothing to draw.
+
 ---
 
 ## What this note does not cover

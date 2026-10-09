@@ -129,7 +129,7 @@ arrow that points back.
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
 | `chat/` | The chat screens (M4-7): `tui.ts`, a pi-tui screen over every room on a TTY; `piped.ts`, one room as plain lines; `common.ts`, what both use. With `chat.ts`, they talk HTTP only, and import only `client/`, pi-tui, `core/runtime.ts` and each other. Their one subprocess is the clipboard tool (`chat/tui/clipboard.ts`). |
 | `chat/view.ts` | What the TUI shows (M4-10): the rows and the row keys, the `@name` pre-fill, where a thread goes when its participant left or its room was dismissed, and what is seen. Pure. |
-| `chat/tui/` | The TUI's parts (M4-12): `panel.ts`, the pop-up, its menu and forms; `question.ts`, the question box and its answer; `sidebar.ts`, the sidebar, the strip and the marks; `transcript.ts`, drawing the transcript; `pane.ts`, the side view beside the timeline, with a diff (M4-6) or the history list (M4-4); `banner.ts`, the rows on top of the timeline for a participant that waits (M4-4); `clipboard.ts`, a selection copied with the system's own tool, OSC 52 last. `chat/tui.ts` puts them on the screen and keeps the keys, the bell, the send flow and the end. |
+| `chat/tui/` | The TUI's parts (M4-12): `panel.ts`, the pop-up, its menu and forms; `question.ts`, the question box and its answer; `sidebar.ts`, the sidebar, the strip and the marks; `transcript.ts`, drawing the transcript; `pane.ts`, the side view beside the timeline, with a diff (M4-6) or the history list (M4-4); `banner.ts`, the rows under the timeline for a participant that waits (M4-4); `clipboard.ts`, a selection copied with the system's own tool, OSC 52 last. `chat/tui.ts` puts them on the screen and keeps the keys, the bell, the send flow and the end. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 
 Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`
@@ -161,6 +161,12 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 - **Never add up `usage` across tasks or harnesses.** copilot counts cumulatively;
   the others count per turn.
 - **No second prompt during a turn, and no re-ask after it** (§M0-4).
+- **No `HStack` below another in the chat screen, and no `auto` size in one.** pi-tui
+  sizes an `HStack`'s parts by drawing each in full. A stack there that holds another
+  `HStack` joins every line of the whole transcript on every frame, so the screen lags
+  more as a room grows: 145 ms a frame at 1,160 rows, against 6 ms flat (#242). Keep
+  the timeline and the side view as direct parts of `row` in `screenLayout`
+  (`chat/tui.ts`). `chat/tests/layout.test.ts` checks it.
 - **A new synthetic event starts with `_client_`.** The `render.ts` switch has no
   `default`, so an unknown event is dropped rather than drawn wrong.
 - **A missing `measured` half means "not verified".** Do not add a second flag for it.

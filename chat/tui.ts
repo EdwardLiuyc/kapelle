@@ -14,10 +14,13 @@
  * `client/questions.ts` (M4-9); the box is `chat/tui/question.ts` (M4-12),
  * and this file keeps the timer.
  *
- * **A wait off screen shows on top of the timeline** (M4-4): a banner row
+ * **A wait off screen shows under the timeline** (M4-4, #242): a banner row
  * per participant with a question or a stall (`chat/tui/banner.ts`), and
  * the terminal's bell when one starts to wait. No desktop pop-up: too noisy
  * (decided 2026-10-05, #50).
+ *
+ * **The layout is flat** (#242): no `HStack` below another. Read
+ * `screenLayout` before you move a part.
  *
  * **pi-tui is ratified under M1c-7's rule (M4-1).** It is presentation only,
  * so its worst failure is a broken screen, never a changed decision; it is
@@ -111,6 +114,89 @@ import {
 
 /** What the screen says in a room with no participant (M4-5). */
 const NO_AGENTS = "no agents: ctrl+o → add agent";
+
+/**
+ * Where the screen's parts go (#242). One `HStack`, `row`: the sidebar or
+ * its strip, the timeline and the side view. Under it, full width: the
+ * banner, a gap, the status line, the composer and the bar under it.
+ *
+ * **No `HStack` below another, and no `auto` size in one.** pi-tui gives a
+ * scroll view only the rows it shows. But an `HStack` sizes each part with
+ * the part's own `render()`, and a stack's `render()` draws all of it. An
+ * `HStack` drawn that way joins each line of the whole transcript to the
+ * line beside it, one character at a time, on every frame: 145 ms at 1,160
+ * rows, against 6 ms flat (§M4 · Chat layout). An `auto` size in an `HStack`
+ * makes pi-tui measure the width of every line: half a second for a
+ * 10,000-line diff (M4-6). `chat/tests/layout.test.ts` checks both.
+ */
+export function screenLayout(p: {
+  sidebar: Component;
+  strip: Component;
+  timeline: Component;
+  pane: Component;
+  banner: Component;
+  status: Component;
+  editor: Component;
+  whereBar: Component;
+  sidebarShown: () => boolean;
+  timelineShown: () => boolean;
+  paneShown: () => boolean;
+  paneColumns: () => number;
+}) {
+  const row = new HStack([
+    {
+      component: p.sidebar,
+      basis: SIDEBAR_WIDTH,
+      shrink: 0,
+      visible: p.sidebarShown,
+    },
+    {
+      component: p.strip,
+      basis: 2,
+      shrink: 0,
+      visible: () => !p.sidebarShown(),
+    },
+    {
+      component: p.timeline,
+      basis: 0,
+      grow: 1,
+      shrink: 1,
+      minSize: 1,
+      visible: p.timelineShown,
+    },
+  ]);
+  /** Sets the side view's width: half of what the sidebar leaves, and on a
+   *  narrow screen all of it, in the timeline's place (M4-6). A stack takes
+   *  a size when an entry is added, so the entry is added again, last. */
+  // ponytail: one grow entry and a set width, because pi-tui 0.85.1 gives
+  // the first of two `grow` entries about two thirds of the space. Two
+  // `grow: 1` entries will do once pi-tui shares evenly.
+  const placeSide = () => {
+    row.removeChild(p.pane);
+    row.addChild(p.pane, {
+      basis: p.paneColumns(),
+      shrink: 0,
+      visible: p.paneShown,
+    });
+  };
+  placeSide();
+  const root = new VStack([
+    { component: row, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+    // Three rows at most. Under the row, so it shows when the side view
+    // takes the timeline's place.
+    { component: p.banner, basis: "auto", shrink: 0 },
+    // A gap between the conversation and the status line.
+    { component: new Spacer(1), basis: 1, shrink: 0 },
+    { component: p.status, basis: "auto", shrink: 0 },
+    // Never shrinks: pi-tui's shrink takes at least one row from every
+    // entry that may, so a full-height sidebar or a long conversation cut
+    // the box's bottom border. The editor caps itself at 30% of the rows.
+    { component: p.editor, basis: "auto", shrink: 0 },
+    // The bar under the composer: the open view's checkout and branch.
+    { component: p.whereBar, basis: "auto", shrink: 0 },
+  ]);
+  return { root, placeSide };
+}
 
 /**
  * The full-screen chat over every room the daemon holds. Resolves with the
@@ -324,80 +410,26 @@ function chatTui(
     question: (id) => question(id),
   });
 
-  /**
-   * The sidebar, the timeline and the side view. Every size is set, never
-   * `auto`: an `auto` size makes pi-tui measure each line on every frame,
-   * half a second for a 10,000-line diff (M4-6, measured). The banner is
-   * `auto`: three rows at most. It sits over the timeline and the side
-   * view both, so it shows when the side view takes the timeline's place.
-   */
-  const views = new HStack([
-    {
-      component: scroll,
-      basis: 0,
-      grow: 1,
-      shrink: 1,
-      minSize: 1,
-      visible: () => !side.shown || side.wide(),
-    },
-  ]);
-  const row = new HStack([
-    {
-      component: sidebar,
-      basis: SIDEBAR_WIDTH,
-      shrink: 0,
-      visible: () => shown,
-    },
-    { component: strip, basis: 2, shrink: 0, visible: () => !shown },
-    {
-      component: new VStack([
-        { component: attention, basis: "auto", shrink: 0 },
-        { component: views, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-      ]),
-      basis: 0,
-      grow: 1,
-      shrink: 1,
-      minSize: 1,
-    },
-  ]);
-  /** Sets the side view's width: half of what the sidebar leaves, and on a
-   *  narrow screen all of it, in the timeline's place (M4-6). A stack takes
-   *  a size when an entry is added, so the entry is added again. */
-  // ponytail: one grow entry and a set width, because pi-tui 0.85.1 gives
-  // the first of two `grow` entries about two thirds of the space. Two
-  // `grow: 1` entries will do once pi-tui shares evenly.
+  const layout = screenLayout({
+    sidebar,
+    strip,
+    timeline: scroll,
+    pane: side.pane,
+    banner: attention,
+    status,
+    editor,
+    whereBar,
+    sidebarShown: () => shown,
+    timelineShown: () => !side.shown || side.wide(),
+    paneShown: () => side.shown,
+    paneColumns: () => side.columns(),
+  });
   const placeSide = () => {
-    views.removeChild(side.pane);
-    views.addChild(side.pane, {
-      basis: side.columns(),
-      shrink: 0,
-      visible: () => side.shown,
-    });
+    layout.placeSide();
     tui.requestRender();
   };
-  placeSide();
   process.stdout.on("resize", placeSide);
-
-  tui.setLayoutRoot(
-    new VStack([
-      {
-        component: row,
-        basis: 0,
-        grow: 1,
-        shrink: 1,
-        minSize: 1,
-      },
-      // A gap between the conversation and the status line.
-      { component: new Spacer(1), basis: 1, shrink: 0 },
-      { component: status, basis: "auto", shrink: 0 },
-      // Never shrinks: pi-tui's shrink takes at least one row from every
-      // entry that may, so a full-height sidebar or a long conversation cut
-      // the box's bottom border. The editor caps itself at 30% of the rows.
-      { component: editor, basis: "auto", shrink: 0 },
-      // The bar under the composer: the open view's checkout and branch.
-      { component: whereBar, basis: "auto", shrink: 0 },
-    ]),
-  );
+  tui.setLayoutRoot(layout.root);
   tui.setFocus(editor);
 
   // `@name` completion (M4-4): typing a leading `@`, or Tab after it, lists
