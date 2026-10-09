@@ -63,11 +63,15 @@ async function fake(t: TestContext, token = "tok") {
     participants: [] as { id: string; status: string }[],
     /** Every `GET /rooms/:id`, by room. */
     reads: [] as string[],
+    /** Sends every line, whatever `Last-Event-ID` asks for. */
+    replayAll: false,
     /** Ends a room's stream. */
     release: (id: string) => daemon.streams.get(id)?.end(),
+    /** Takes no new connection; an open stream stays, as in a clean stop. */
+    refuse: () => server.close(),
     stop: () => {
       server.closeAllConnections();
-      server.close();
+      if (server.listening) server.close();
     },
   };
   const json = (res: ServerResponse, status: number, body: unknown) =>
@@ -89,7 +93,7 @@ async function fake(t: TestContext, token = "tok") {
       daemon.after.push(after);
       res.writeHead(200, { "content-type": "text/event-stream" });
       for (const line of daemon.lines.get(id) ?? []) {
-        if (line.seq <= Number(after)) continue;
+        if (!daemon.replayAll && line.seq <= Number(after)) continue;
         res.write(`id: ${line.seq}\ndata: ${JSON.stringify(line)}\n\n`);
       }
       daemon.streams.set(id, res);
@@ -125,6 +129,7 @@ function follow(
     closed: [] as [string, Ended][],
     ends: [] as End[],
     restarts: [] as (string | undefined)[],
+    aways: 0,
     polls: 0,
   };
   const set = roomSet(
@@ -136,6 +141,7 @@ function follow(
       loaded: () => {},
       polled: () => said.polls++,
       restarted: (warning) => said.restarts.push(warning),
+      away: () => said.aways++,
       closed: (id, ended) => said.closed.push([id, ended]),
       end: (why) => said.ends.push(why),
     },
@@ -347,11 +353,13 @@ for (const how of ["a crash", "a clean stop"]) {
     set.start([entry("r1")]);
     await until(() => said.lines.length === 1);
 
-    // A clean stop pauses the room and ends its stream normally, then
-    // removes `daemon.json`; a crash only cuts the stream.
+    // A clean stop takes no new connection, then pauses the room, which
+    // ends its stream normally, then removes `daemon.json` (`daemon.ts`,
+    // `shutdown`). A crash only cuts the stream.
     if (how === "a clean stop") {
-      old.status.set("r1", "paused");
+      old.refuse();
       old.release("r1");
+      await new Promise((r) => setTimeout(r, 50));
     }
     old.stop();
     file.now = undefined;
@@ -361,6 +369,9 @@ for (const how of ["a crash", "a clean stop"]) {
     next.status.set("r1", "paused");
     next.participants = [{ id: "p1", status: "paused" }];
     next.lines.set("r1", [added(1, "p1", "ann"), added(2, "p2", "bob")]);
+    // A line at or below the last one seen is dropped even when a daemon
+    // sends it again (F4).
+    next.replayAll = true;
     file.now = next.d;
 
     await until(() => said.lines.length === 2);
@@ -435,6 +446,28 @@ test("with no room open the set waits for a daemon that comes back, and polls it
   await until(() => next.polls >= 2);
   assert.deepEqual(said.ends, []);
   assert.deepEqual(said.restarts, [undefined]);
+  assert.equal(said.aways, 1, "the poll said once that the daemon is away");
+});
+
+test("a clean end on a paused room while the daemon answers ends the reader, not a loop", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "paused");
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => daemon.streams.has("r1"));
+  daemon.release("r1");
+  // Its one room lost its stream, so the set ends.
+  await until(() => said.ends.length === 1);
+  assert.deepEqual(said.ends, [
+    {
+      kind: "lost",
+      roomId: "r1",
+      ended: { kind: "alive", status: "paused" },
+      err: undefined,
+    },
+  ]);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(daemon.after.length, 1, "the stream was not opened again");
 });
 
 test("a new token whose version check fails is checked again", async (t) => {

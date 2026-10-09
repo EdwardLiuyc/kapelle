@@ -7582,6 +7582,32 @@ test("chat.ts on a pipe rides out a restart: the participant reads paused, and a
   ]);
 });
 
+test("the TUI rides out a restart: it says so, marks the participant paused, and a message is answered", {
+  skip: noPty,
+}, async (t) => {
+  const { first, id, again, runtime, alice } = await roomToRestart(t, REMEMBER);
+  // The sidebar is narrow: a short name leaves room for its `paused`.
+  const renamed = await api(first, "PATCH", `/rooms/${id}/agents/${alice.id}`, {
+    name: "al",
+  });
+  assert.equal(renamed.status, 200);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${id}`,
+    { XDG_RUNTIME_DIR: runtime },
+    "○ al",
+  );
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const second = await again();
+  await screen.seen("the daemon restarted");
+  await screen.seen("paused");
+  await screen.press("hi\r", "previous: (none)");
+  await roomIdle(second, id);
+  await screen.press("\x03", "rejoin with");
+  assert.equal(await screen.exited, 0, plainText(screen.out()));
+});
+
 test("a dismissed room comes back dismissed after a restart, and a message is refused", async (t) => {
   const { first, id, again } = await roomToRestart(t, REMEMBER);
   const gone = await api<RoomReply>(first, "POST", `/rooms/${id}/dismiss`);

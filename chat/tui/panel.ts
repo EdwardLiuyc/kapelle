@@ -82,6 +82,7 @@ const SETTINGS_THEME = {
  *  rest are the screen's. */
 function panelParts({
   d,
+  fresh,
   tui,
   editor,
   queue,
@@ -99,6 +100,9 @@ function panelParts({
   left,
 }: {
   d: DaemonAddress;
+  /** `daemon.json` read again, so a request after a restart has the new
+   *  token (M6-7d). */
+  fresh: () => Promise<void>;
   tui: TuiAltScreen;
   editor: Component;
   queue: Queue;
@@ -530,6 +534,7 @@ function panelParts({
       async (v) => {
         if (v !== "add") return toForm();
         let added: Awaited<ReturnType<typeof call<RepoAdded>>>;
+        await fresh();
         try {
           added = await call<RepoAdded>(d, "/repos", {
             method: "POST",
@@ -538,6 +543,7 @@ function panelParts({
         } catch {
           // A restart: the screen waits for the daemon (M6-7d).
           if (panel) panel.error = NO_DAEMON;
+          else say(`! ${NO_DAEMON}`);
           tui.requestRender();
           return;
         }

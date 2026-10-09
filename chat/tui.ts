@@ -50,7 +50,7 @@ import type {
   RoomEventLine,
   RoomListEntry,
 } from "../client/contract.ts";
-import { call, type DaemonAddress } from "../client/daemon.ts";
+import { call, type DaemonAddress, VersionRefused } from "../client/daemon.ts";
 import { agentDiff, agentForwardDiff } from "../client/diff.ts";
 import { mentionsFor, targetOf } from "../client/mention.ts";
 import { questionQueue } from "../client/questions.ts";
@@ -161,6 +161,10 @@ function chatTui(
       flash = warning ? `! ${warning}` : "the daemon restarted";
       setStatus();
     },
+    away: (ms) => {
+      flash = `! the daemon is away; waiting up to ${ms / 1000} s for it to come back`;
+      setStatus();
+    },
     closed: (id, ended, r) => onClosed(id, ended, r),
     end: (why) => quit(why),
   });
@@ -218,10 +222,12 @@ function chatTui(
     _from: { id: string; name: string },
   ) => Promise.resolve(false);
   /** The daemon went away mid-request: say so, and wait for it, as the
-   *  streams do (M6-7d). The set ends the screen if it does not come back. */
+   *  streams do (M6-7d). The set ends the screen if it does not come back.
+   *  Answers false, so a typed line goes back to the composer. */
   const gone = (err: unknown) => {
-    flash = `! ${(err as Error).message}`;
+    flash = `! ${NO_DAEMON} (${(err as Error).message})`;
     setStatus();
+    return false;
   };
   const left = () =>
     view.roomId
@@ -264,6 +270,7 @@ function chatTui(
   });
   const box = panelParts({
     d,
+    fresh: set.fresh,
     tui,
     editor,
     queue,
@@ -283,6 +290,7 @@ function chatTui(
   const { hidePanel, menu, showHelp, newForm, addForm, askToAdd } = box;
   const { question, offer, syncBox } = questionParts({
     d,
+    fresh: set.fresh,
     queue,
     editor,
     box,
@@ -627,6 +635,12 @@ function chatTui(
         return;
       }
       const { roomId, ended, err } = why;
+      // A refused version is the whole story; the reconcile after it only
+      // says the same words again.
+      if (err instanceof VersionRefused) {
+        end(codeOf(ended), `! ${err.message}`);
+        return;
+      }
       const msg = err ? [`! ${(err as Error).message}`] : [];
       end(codeOf(ended), ...msg, endedLine(ended, roomId));
     };
@@ -742,12 +756,12 @@ function chatTui(
       if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
       if (c.verb === "ff") {
         editor.addToHistory(text);
-        if (!(await forward(c, c.from))) giveBack();
+        if (!(await forward(c, c.from).catch(gone))) giveBack();
         return;
       }
       if (c.verb === "diff") {
         editor.addToHistory(text);
-        if (!(await changes(c, c.against))) giveBack();
+        if (!(await changes(c, c.against).catch(gone))) giveBack();
         return;
       }
       if (c.verb !== "message") {

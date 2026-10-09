@@ -37,6 +37,7 @@ type Queue = QuestionQueue<{ r: Followed; q: Question }>;
  *  read when a question may open. */
 function questionParts({
   d,
+  fresh,
   queue,
   editor,
   box,
@@ -47,6 +48,9 @@ function questionParts({
   prefill,
 }: {
   d: DaemonAddress;
+  /** `daemon.json` read again, so an answer after a restart has the new
+   *  token (M6-7d). */
+  fresh: () => Promise<void>;
   queue: Queue;
   editor: { getText(): string };
   box: ReturnType<typeof panelParts>;
@@ -166,6 +170,7 @@ function questionParts({
     hidePanel();
     offer();
     const path = `/permissions/${encodeURIComponent(id)}`;
+    await fresh();
     try {
       const res = await call<PermissionAnswered>(d, path, {
         method: "POST",

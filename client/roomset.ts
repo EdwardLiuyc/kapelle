@@ -10,8 +10,9 @@
  *
  * **A restart is waited out** (M6-7d, #236). A daemon that stops, cleanly or
  * not, gets `waitMs` (30 s) to come back; then the set ends as before. A
- * clean stop pauses each room and ends its stream normally, so a stream that
- * ends on a room that is `paused`, or with no daemon, waits too.
+ * clean stop closes the listener first, then pauses each room, which ends
+ * its stream normally (`daemon.ts`, `shutdown`). So a stream that ends when
+ * no daemon answers is a stop, and it waits too.
  * `followDaemon` reads `daemon.json` on every call, through `address`,
  * because `client/` may not import `core/runtime.ts` (S8). A new token gets
  * `GET /version` once, then the screen's one address object takes it in
@@ -107,9 +108,9 @@ export function followDaemon(
 /**
  * Reads a room's events into `onEvent` until the room is dismissed. A cut
  * reconnects and resumes after the last event seen (`client/stream.ts`).
- * With no daemon, it waits `waitMs` for one; a clean end on a room that is
- * `paused`, or with no daemon, is a stop, and it waits too. Throws when no
- * daemon came back, or when one refuses the stream or its version.
+ * With no daemon, it waits `waitMs` for one; a clean end when no daemon
+ * answers is a stop, and it waits too. Throws when no daemon came back, or
+ * when one refuses the stream or its version.
  */
 export async function readRoom(
   address: ReadAddress,
@@ -149,15 +150,14 @@ export async function readRoom(
   };
   for (;;) {
     for await (const event of followEvents<RoomEventLine>(connect)) {
+      // Each turn is a new reader, which drops only what it saw itself (F4).
+      if (event.seq <= seen) continue;
       seen = event.seq;
       onEvent(event);
     }
-    const ended = await reconcile(address, id);
-    const stopped =
-      ended.kind === "gone" ||
-      (ended.kind === "alive" && ended.status === "paused");
-    if (!stopped) return;
-    // A stopping daemon can still answer for a moment: do not spin on it.
+    // A daemon that answers ended the stream on purpose: a dismiss, or a
+    // room it cannot serve. `closed` says which.
+    if ((await reconcile(address, id)).kind !== "gone") return;
     await new Promise((ok) => setTimeout(ok, 250));
   }
 }
@@ -208,6 +208,8 @@ export interface RoomSetEvents {
   polled(): void;
   /** A new daemon answered after a restart, with its `minor` warning. */
   restarted(warning?: string): void;
+  /** The poll found no daemon, once per outage: the set waits `waitMs`. */
+  away(waitMs: number): void;
   /** A room's stream ended and the set goes on. `r` is the room, already
    *  out of the set when it was dismissed. */
   closed(roomId: string, ended: Ended, r: Followed | undefined): void;
@@ -335,13 +337,16 @@ export function roomSet(
           on.polled();
         },
         (err) => {
-          if (rooms.size > 0) return;
           if (err instanceof VersionRefused) {
-            finish({ kind: "gone", message: err.message });
+            if (rooms.size === 0)
+              finish({ kind: "gone", message: err.message });
             return;
           }
+          if (away === undefined) on.away(waitMs);
           away ??= Date.now();
-          if (Date.now() - away >= waitMs) finish({ kind: "gone" });
+          if (rooms.size === 0 && Date.now() - away >= waitMs) {
+            finish({ kind: "gone" });
+          }
         },
       );
   };

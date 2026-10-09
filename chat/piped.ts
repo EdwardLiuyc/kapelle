@@ -225,7 +225,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     const text = next.trim();
     if (!text) continue;
     // A send right after a restart must carry the new token.
-    await current().catch(() => d);
+    await current().catch(() => {});
     const c = parseLine(text, rosterOf(state, room.participants));
     if ("error" in c) {
       console.error(`! ${c.error}`);
