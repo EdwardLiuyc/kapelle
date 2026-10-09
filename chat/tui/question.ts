@@ -22,7 +22,7 @@ import { diffLine } from "../../client/diff.ts";
 import type { QuestionQueue } from "../../client/questions.ts";
 import { type Entry, nameOf } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { dim } from "../common.ts";
+import { dim, NO_DAEMON } from "../common.ts";
 import { touched } from "../view.ts";
 import type { paneParts } from "./pane.ts";
 import { EDITOR_THEME, type panelParts } from "./panel.ts";
@@ -43,7 +43,6 @@ function questionParts({
   side,
   setStatus,
   say,
-  end,
   done,
   prefill,
 }: {
@@ -54,7 +53,6 @@ function questionParts({
   side: ReturnType<typeof paneParts>;
   setStatus: () => void;
   say: (text: string) => void;
-  end: (code: number, ...last: string[]) => void;
   done: () => boolean;
   prefill: () => string;
 }) {
@@ -183,9 +181,10 @@ function questionParts({
       }
       say(`! ${why}`);
       setStatus();
-    } catch (err) {
-      // The daemon went away mid-request.
-      end(1, `! ${(err as Error).message}`);
+    } catch {
+      // A restart: the screen waits for the daemon (M6-7d).
+      say(`! ${NO_DAEMON}`);
+      setStatus();
     }
   };
   // Decided 2026-10-01 (#49): a question opens by itself, but never over

@@ -248,8 +248,11 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     }
     // A pipe has no pane: the diff is printed as it is (M4-6).
     if (c.verb === "diff") {
-      const r = await agentDiff(d, room.id, c.id, c.against);
-      if (!r.ok) console.error(`! ${r.error.message}`);
+      const r = await agentDiff(d, room.id, c.id, c.against).catch(
+        () => undefined,
+      );
+      if (!r) console.error(`! ${NO_DAEMON}`);
+      else if (!r.ok) console.error(`! ${r.error.message}`);
       else console.log(cleanDiff(r.body.text) || `${c.name}: no changes`);
       continue;
     }

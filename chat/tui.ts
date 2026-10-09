@@ -289,7 +289,6 @@ function chatTui(
     side,
     setStatus: () => setStatus(),
     say,
-    end: (code, ...last) => end(code, ...last),
     done: () => done,
     prefill: () => prefill,
   });

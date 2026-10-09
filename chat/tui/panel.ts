@@ -32,7 +32,7 @@ import {
 } from "../../client/folder.ts";
 import { nameOf, roster } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { bold, cyan, dim, yellow } from "../common.ts";
+import { bold, cyan, dim, NO_DAEMON, yellow } from "../common.ts";
 import type { View } from "../view.ts";
 import type { Queue } from "./question.ts";
 import { SIDEBAR_WIDTH } from "./sidebar.ts";
@@ -535,8 +535,10 @@ function panelParts({
             method: "POST",
             body: { path: c.body.cwd },
           });
-        } catch (err) {
-          end(1, `! ${(err as Error).message}`);
+        } catch {
+          // A restart: the screen waits for the daemon (M6-7d).
+          if (panel) panel.error = NO_DAEMON;
+          tui.requestRender();
           return;
         }
         if (!added.ok) {

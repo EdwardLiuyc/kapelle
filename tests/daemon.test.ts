@@ -7753,3 +7753,61 @@ test("a shutdown answers PATCH and fast-forward with 503, not room_dismissed", a
   }
   assert.equal((await d.done).code, 0);
 });
+
+test("chat.ts on a pipe: a diff while the daemon is away says so, and the screen stays", async (t) => {
+  const { first, id, again, runtime, alice } = await roomToRestart(t, REMEMBER);
+  const c = spawnCli(t, ["attach", id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await c.waitFor("type a message");
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  c.child.stdin.write(`@${alice.name} /diff\n`);
+  await again();
+  await c.waitFor("is paused; a message revives it");
+  c.child.stdin.end();
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stderr, /the daemon did not answer/);
+});
+
+test("an answer while the daemon is away says so, and the screen stays", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT} --scenario diff-first`,
+        name: "asker",
+        role: "orchestrator",
+        mode: "ask",
+      },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${only(open.body).id}/messages`,
+    { text: "go" },
+  );
+  await screen.seen("view diff");
+  await pendingOne(d);
+  process.kill(d.pid, "SIGKILL");
+  // Enter answers deny, the first row (M6-7d: the screen waits).
+  await screen.press("\r", "the daemon did not answer");
+  const r = await Promise.race([
+    screen.exited,
+    new Promise((ok) => setTimeout(() => ok("open"), 500)),
+  ]);
+  assert.equal(r, "open", plainText(screen.out()));
+});

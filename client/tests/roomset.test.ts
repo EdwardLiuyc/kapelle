@@ -420,3 +420,37 @@ test("a new daemon with a different major ends the set with the version message"
     assert.deepEqual(said.restarts, [], `${rooms.length} room(s)`);
   }
 });
+
+test("with no room open the set waits for a daemon that comes back, and polls it", async (t) => {
+  const old = await fake(t);
+  const { file, address } = daemonFile(old.d);
+  const { set, said } = follow(t, { ...old.d }, address);
+  set.start([]);
+  await until(() => said.polls >= 1);
+  old.stop();
+  file.now = undefined;
+  await new Promise((r) => setTimeout(r, WAIT_MS / 3));
+  const next = await fake(t, "tok2");
+  file.now = next.d;
+  await until(() => next.polls >= 2);
+  assert.deepEqual(said.ends, []);
+  assert.deepEqual(said.restarts, [undefined]);
+});
+
+test("a new token whose version check fails is checked again", async (t) => {
+  const old = await fake(t);
+  old.status.set("r1", "active");
+  const { file, address } = daemonFile(old.d);
+  const { set, said } = follow(t, { ...old.d }, address);
+  set.start([entry("r1")]);
+  await until(() => old.streams.has("r1"));
+  old.stop();
+  // `daemon.json` names the new token before its daemon answers.
+  file.now = { port: old.d.port, token: "tok2" };
+  await new Promise((r) => setTimeout(r, WAIT_MS / 3));
+  const next = await fake(t, "tok2");
+  next.status.set("r1", "paused");
+  file.now = next.d;
+  await until(() => said.restarts.length === 1);
+  assert.deepEqual(said.ends, []);
+});
