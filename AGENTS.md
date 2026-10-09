@@ -23,6 +23,15 @@ history and the measurements live in `docs/`:
 They are snapshots, and they go out of date. The code and the files above are the
 source of truth.
 
+## Question or work?
+
+A question gets an answer, not a change. Investigate as far as needed; use a temporary
+folder or worktree for experiments and clean it up. Leave the original checkout as you
+found it: no commits, pushes, config changes, issues or PRs. If a change would help,
+propose it and wait.
+
+Work happens when the person asks for a change. If that is unclear, ask first.
+
 ## What this is
 
 `kapelle` is a minimal [Agent Client Protocol](https://agentclientprotocol.com)
