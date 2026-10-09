@@ -709,3 +709,36 @@ test("a second restart: GET's paused holds over a revive from the first, in eith
     assert.equal(who(state, dora).turns.at(-1)?.state, "ended");
   }
 });
+
+test("a revive entry is behind only when loaded, and keeps an unknown resumed (#238)", () => {
+  const entryFor = (update: Record<string, unknown>) => {
+    const state = newRoomState();
+    applyLine(state, {
+      seq: 1,
+      at: "2026-10-09T00:00:00Z",
+      roomId: "r1",
+      participantId: "p-ana",
+      update: {
+        sessionUpdate: "_client_participant_revived",
+        sessionId: "s1",
+        ...update,
+      } as unknown as RoomEventLine["update"],
+    });
+    return thread(state, "p-ana").at(-1);
+  };
+  assert.deepEqual(entryFor({ resumed: "loaded", memoryMayBeBehind: true }), {
+    seq: 1,
+    participantId: "p-ana",
+    type: "revived",
+    resumed: "loaded",
+    behind: true,
+  });
+  const fresh = entryFor({ resumed: "fresh", memoryMayBeBehind: true });
+  assert.equal(fresh?.type, "revived");
+  assert.equal("behind" in (fresh ?? {}), false, "fresh is never behind");
+  const unknown = entryFor({ resumed: "forked" });
+  assert.equal(
+    unknown?.type === "revived" ? unknown.resumed : undefined,
+    "forked",
+  );
+});

@@ -636,12 +636,16 @@ export interface ClientParticipantFastForwardedEvent extends Meta {
 
 /** A stopped participant has a new harness, in the same checkout (M6-7a).
  *  `paused`, `killed` and `exited` revive the same way, on the next message.
- *  `fresh`: a new session, so it does not remember earlier turns. It comes
- *  after the `_client_user_message` that revived it, and before its answer. */
+ *  `loaded`: the old session came back, so it remembers earlier turns
+ *  (M6-7b). `fresh`: a new session, so it does not. It comes after the
+ *  `_client_user_message` that revived it, and before its answer. */
 export interface ClientParticipantRevivedEvent extends Meta {
   sessionUpdate: "_client_participant_revived";
-  resumed: "fresh";
+  resumed: "loaded" | "fresh";
   sessionId: string;
+  /** Only with `loaded`: it stopped during a turn, so what it remembers may
+   *  be behind its files (§M0-9, R46). */
+  memoryMayBeBehind?: true;
 }
 
 /** Everything `render.ts`'s switch must tolerate. */
@@ -679,8 +683,8 @@ export interface SessionNotification extends Meta {
 }
 
 // ---------------------------------------------------------------------------
-// Outbound — what we send (typed per issue #10; `session/load` and
-// `session/close` are typed only, the calls themselves are M1a-3+)
+// Outbound — what we send (typed per issue #10; `session/close` is typed
+// only, and a room revive sends `session/load`, M6-7b)
 // ---------------------------------------------------------------------------
 
 export interface FileSystemCapabilities extends Meta {
@@ -806,7 +810,7 @@ export interface CancelNotification extends Meta {
   params: { sessionId: SessionId } & Meta;
 }
 
-/** Typed only — not sent until M1a-3 lands `session/load` (issue #10). */
+/** Sent by `AcpAgent.loadSession`, for a room revive (M6-7b). */
 export interface LoadSessionRequest extends Meta {
   jsonrpc: "2.0";
   id: number | string;

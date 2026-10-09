@@ -443,6 +443,112 @@ test("a second prompt after end_turn runs on the same live session", async (t) =
   assert.equal(spawned.length, 1, "one harness served both turns");
 });
 
+test("loadSession brings a session into a new process and drops its replay (M6-7b)", async (t) => {
+  const root = await tempDir(t, "acp-load-");
+  const store = await tempDir(t, "acp-load-store-");
+  const harness = (seen: CapturedEvent[]) => {
+    const agent = new AcpAgent({
+      name: "mock-load",
+      command: process.execPath,
+      args: [MOCK_AGENT, "--scenario", "remember", "--store", store],
+      cwd: root,
+      requestTimeoutMs: 10_000,
+      onEvent: (e) => seen.push(e),
+    });
+    t.after(() => agent.stop());
+    return agent;
+  };
+
+  const first = harness([]);
+  await first.start();
+  const sid = await first.newSession();
+  await first.prompt("alpha");
+  await first.stop();
+
+  const seen: CapturedEvent[] = [];
+  const second = harness(seen);
+  const init = await second.start();
+  assert.equal(init.agentCapabilities?.loadSession, true);
+  assert.equal(await second.loadSession(sid), sid);
+  assert.equal(second.sessionId, sid);
+  const kinds = () =>
+    seen
+      .map((e) => e.update.sessionUpdate)
+      .filter((k) => !k.startsWith("_client_"));
+  assert.deepEqual(kinds(), [], "the replay never reaches onEvent");
+
+  await second.prompt("beta");
+  const text = seen
+    .map(
+      (e) => e.update as { sessionUpdate: string; content?: { text?: string } },
+    )
+    .filter((u) => u.sessionUpdate === "agent_message_chunk")
+    .map((u) => u.content?.text);
+  assert.deepEqual(text, ["previous: alpha"], "it remembers turn 1");
+});
+
+test("a failed loadSession leaves no session and passes later updates on", async (t) => {
+  const root = await tempDir(t, "acp-load-miss-");
+  const store = await tempDir(t, "acp-load-miss-store-");
+  const seen: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "mock-load",
+    command: process.execPath,
+    args: [MOCK_AGENT, "--scenario", "remember", "--store", store],
+    cwd: root,
+    requestTimeoutMs: 10_000,
+    onEvent: (e) => seen.push(e),
+  });
+  t.after(() => agent.stop());
+  await agent.start();
+  await assert.rejects(agent.loadSession("sess_mock_unknown"));
+  assert.equal(agent.sessionId, null);
+  await agent.newSession();
+  await agent.prompt("alpha");
+  assert.ok(
+    seen.some((e) => e.update.sessionUpdate === "agent_message_chunk"),
+    "updates flow again after the failed load",
+  );
+});
+
+test("a load that missed its deadline still drops the replay that comes late", async (t) => {
+  const root = await tempDir(t, "acp-load-late-");
+  const store = await tempDir(t, "acp-load-late-store-");
+  const harness = (scenario: string, seen: CapturedEvent[]) => {
+    const agent = new AcpAgent({
+      name: "mock-load",
+      command: process.execPath,
+      args: [MOCK_AGENT, "--scenario", scenario, "--store", store],
+      cwd: root,
+      requestTimeoutMs: 200,
+      onEvent: (e) => seen.push(e),
+    });
+    t.after(() => agent.stop());
+    return agent;
+  };
+  const first = harness("remember", []);
+  await first.start();
+  const sid = await first.newSession();
+  await first.prompt("alpha");
+  await first.stop();
+
+  // `slow` loads after its deadline, then answers the prompt after that, so
+  // the prompt's end comes after the late replay.
+  const seen: CapturedEvent[] = [];
+  const second = harness("slow", seen);
+  await second.start();
+  await assert.rejects(second.loadSession(sid), /did not answer/);
+  await second.newSession();
+  await second.prompt("beta");
+  assert.deepEqual(
+    seen
+      .map((e) => e.update.sessionUpdate)
+      .filter((k) => !k.startsWith("_client_")),
+    ["agent_message_chunk"],
+    "only the new answer",
+  );
+});
+
 // --- #guardWrite · mutation without asking -----------------------------------
 
 test("an allowed permission is not re-decided when the same write crosses the wire", async (t) => {

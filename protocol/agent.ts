@@ -11,6 +11,7 @@ import type {
   Implementation,
   InitializeResponse,
   JsonRpcError,
+  LoadSessionResponse,
   McpServer,
   Meta,
   NewSessionResponse,
@@ -292,6 +293,11 @@ export class AcpAgent {
   // again without re-asking.
   #writeDecisions = new Map<string, "denied" | "once">();
   #closed = false;
+  /** True while `session/load` is in flight: its updates are the replay. */
+  #replaying = false;
+  /** A load that failed. A harness can still replay it after the deadline,
+   *  so its updates are dropped too. */
+  #failedLoad: SessionId | null = null;
   #promptInFlight = false;
   #stderr: string[] = [];
   #stderrFile: WriteStream | null = null;
@@ -499,6 +505,34 @@ export class AcpAgent {
     });
     this.sessionId = res.sessionId;
     return this.sessionId;
+  }
+
+  /**
+   * Load an earlier session into this process (M6-7b). The harness replays
+   * the old conversation as ordinary `session/update` before it answers
+   * (§M0-9). The caller already has that history, so the replay is dropped
+   * here and never reaches `onEvent`. Whether to load at all is the caller's
+   * call: `agentCapabilities.loadSession` is a claim, not a measurement.
+   */
+  async loadSession(
+    sessionId: SessionId,
+    { mcpServers = [] }: { mcpServers?: McpServer[] } = {},
+  ): Promise<SessionId> {
+    this.#replaying = true;
+    try {
+      await this.request<LoadSessionResponse>("session/load", {
+        sessionId,
+        cwd: this.cwd,
+        mcpServers,
+      });
+    } catch (err) {
+      this.#failedLoad = sessionId;
+      throw err;
+    } finally {
+      this.#replaying = false;
+    }
+    this.sessionId = sessionId;
+    return sessionId;
   }
 
   /**
@@ -771,9 +805,21 @@ export class AcpAgent {
 
   #onNotification(msg: IncomingMessage): void {
     if (msg.method !== "session/update") return;
-    const params = msg.params as { update?: SessionUpdate } | undefined;
+    const params = msg.params as
+      | { sessionId?: SessionId; update?: SessionUpdate }
+      | undefined;
     const update = params?.update;
-    if (!update) return;
+    if (!update || this.#replaying) return;
+    // A string only: an unchecked `null` on the wire would match "no
+    // failed load" and drop every update. Never the live session's, even
+    // when a harness gives the failed id out again (#238).
+    const sid = params?.sessionId;
+    if (
+      typeof sid === "string" &&
+      sid === this.#failedLoad &&
+      sid !== this.sessionId
+    )
+      return;
 
     // Permission requests only carry a toolCallId, so remember the details
     // announced here — otherwise the policy has nothing to judge.

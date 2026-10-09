@@ -187,7 +187,7 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 Do not add these unless asked:
 
 - `terminal/*`: we send `terminal: false`, and turning it on changes nothing (§M0-3).
-- `session/load` and resume.
+- `session/resume`. A room revive uses `session/load` (M6-7b); a run never loads.
 - Elicitation, slash commands and session modes.
 
 Cancellation is best-effort.

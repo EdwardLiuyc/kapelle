@@ -32,6 +32,7 @@ import {
   green,
   italic,
   magenta,
+  revivedLine,
   sgr,
   underline,
   yellow,
@@ -203,10 +204,7 @@ function transcriptParts({
         warn(`! ${name}'s harness exited`);
         return;
       case "revived":
-        note(
-          `↻ ${name} is back with a fresh session; it does not remember ` +
-            "the earlier turns",
-        );
+        (e.behind ? warn : note)(revivedLine(name, e));
         return;
       case "forward":
         note(`↪ ${name} moved to ${nameOf(state, e.from)}'s commit`);

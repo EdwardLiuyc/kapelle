@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { type DaemonAddress, readDaemonFile } from "../client/daemon.ts";
 import type { Named } from "../client/mention.ts";
-import { type RoomState, roster } from "../client/room.ts";
+import { type Entry, type RoomState, roster } from "../client/room.ts";
 import type { Ended } from "../client/roomset.ts";
 import { runtimeDir } from "../core/runtime.ts";
 
@@ -75,6 +75,29 @@ const unpad = (line: string) => {
   return text.includes("\x1b") ? `${text}\x1b[0m` : text;
 };
 
+/** The line for a revive, named `name`. It starts with `!` when the
+ *  participant's memory may be behind its files (M6-7b). */
+function revivedLine(
+  name: string,
+  e: Extract<Entry, { type: "revived" }>,
+): string {
+  if (e.resumed === "fresh") {
+    return (
+      `↻ ${name} is back with a fresh session; it does not remember the ` +
+      "earlier turns"
+    );
+  }
+  // A value from a newer daemon, as sent (docs/CLIENT-API.md).
+  if (e.resumed !== "loaded") return `↻ ${name} is back (${e.resumed})`;
+  if (e.behind) {
+    return (
+      `! ${name} is back with its old session, but it stopped during a ` +
+      "turn: what it remembers may be behind its files"
+    );
+  }
+  return `↻ ${name} is back with its old session`;
+}
+
 /** The roster the resolver reads. Before the stream replays the roster
  *  lines, the one the daemon sent with the room stands in. Only before:
  *  once the last participant is removed, the stand-in would name it. */
@@ -93,6 +116,7 @@ export {
   magenta,
   plain,
   red,
+  revivedLine,
   rosterOf,
   sgr,
   underline,
