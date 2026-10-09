@@ -1662,3 +1662,58 @@ test("a paused room is never reaped, however old", async (t) => {
   assert.equal(existsSync(worktrees[0] as string), true);
   assert.equal(await hasBranch(root, `kapelle/${id}/p0`), true);
 });
+
+test("a branch that cannot be deleted is named, and the rest of the room still goes", async (t) => {
+  const root = await gitRepo(t);
+  const { id, file, worktrees } = await writeRoom(root, "dismissed", [
+    "dismissed",
+  ]);
+  // Checked out outside the room's folder, so git refuses to delete it.
+  const held = `kapelle/${id}/p-held`;
+  await git(root, "branch", held);
+  await git(root, "worktree", "add", join(await tempDir(t), "held"), held);
+
+  const notices = await sweep(
+    root,
+    join(await tempDir(t), "children.json"),
+    PAST_RETENTION,
+  );
+
+  assert.ok(
+    notices.some((n) => n.includes(held)),
+    `no notice names ${held}: ${notices.join("\n")}`,
+  );
+  assert.equal(existsSync(file), false, "the record goes anyway");
+  assert.equal(existsSync(worktrees[0] as string), false);
+  assert.equal(await hasBranch(root, `kapelle/${id}/p0`), false);
+  assert.equal(await hasBranch(root, held), true);
+});
+
+test("a room checkout removed by hand does not keep its branch", async (t) => {
+  const root = await gitRepo(t);
+  const { id, file } = await writeRoom(root, "dismissed", ["dismissed"]);
+  await rm(join(stateDirFor(root), "wt", id), { recursive: true });
+
+  await sweep(root, join(await tempDir(t), "children.json"), PAST_RETENTION);
+
+  assert.equal(existsSync(file), false);
+  assert.equal(await hasBranch(root, `kapelle/${id}/p0`), false);
+});
+
+test("a dismissed room whose updatedAt cannot be read is kept and named", async (t) => {
+  const root = await gitRepo(t);
+  const { id, file } = await writeRoom(root, "dismissed", ["dismissed"]);
+  writeRoomRecord(file, { ...readRoomRecord(file), updatedAt: "soon" });
+
+  const notices = await sweep(
+    root,
+    join(await tempDir(t), "children.json"),
+    PAST_RETENTION,
+  );
+
+  assert.ok(
+    notices.some((n) => n.includes(id) && n.includes("updatedAt")),
+    notices.join("\n"),
+  );
+  assert.equal(existsSync(file), true);
+});

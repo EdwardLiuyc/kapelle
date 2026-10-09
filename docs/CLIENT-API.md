@@ -1173,7 +1173,13 @@ nobody committed, new files included, refuses the delete.
 **Reply `204`**, with no body. The room is gone: `GET /rooms/:id` answers `404`.
 
 **Refusals:** `404` `room_not_found`; `409` `room_active`; `409` `uncommitted_work`,
-naming the files; `503` `shutting_down`. Nothing changes on a refusal.
+naming the files; `503` `shutting_down`. Nothing changes on a refusal, with one
+exception: a message sent to a paused room during its delete can revive a participant. If
+that participant then leaves uncommitted work, the delete is refused, and the room is left
+dismissed.
+
+A branch that git will not delete, such as one checked out in another folder, is left. The
+daemon's log names it, and the rest of the room is still removed.
 
 ### `POST /rooms/:id/agents`
 

@@ -1367,7 +1367,7 @@ async function dismissRoom(id: string, res: ServerResponse) {
  * Only a stopped room can go: a dismissed one, or a paused one nothing has
  * revived. An active room is refused, so no harness writes while the
  * checkouts are read. Uncommitted work refuses it too, with the files
- * named, and nothing changes on either refusal.
+ * named, and nothing changes on either refusal, but for the race below.
  */
 async function deleteRoom(id: string, res: ServerResponse) {
   const entry = roomEntry(id);
@@ -1388,13 +1388,10 @@ async function deleteRoom(id: string, res: ServerResponse) {
       `room ${id} is active; dismiss it first (POST /rooms/${id}/dismiss)`,
     );
   }
-  // Out of the list before the first await, so no message, add or second
-  // delete reaches the room while its checkouts are read and removed.
-  // ponytail: an add already in flight on a paused room is not waited for;
-  // `dismiss()` below rolls it back, but a file it wrote in between is not
-  // in `roomWork`'s list. Hold adds off first if that race is ever seen.
+  // Out of the list before the first await, so no new request reaches the
+  // room while its checkouts are read and removed.
   rooms.delete(id);
-  try {
+  const refuseWork = async () => {
     const work = await roomWork(root, id);
     if (work.length > 0) {
       throw refusal(
@@ -1403,18 +1400,29 @@ async function deleteRoom(id: string, res: ServerResponse) {
         `room ${id} has work nobody committed: ${work.join(", ")}`,
       );
     }
-  } catch (err) {
-    rooms.set(id, entry);
-    throw err;
-  }
-  // Ends a paused room's open streams and its timer; a no-op once dismissed.
-  await room.dismiss();
+  };
   try {
-    await removeRoom(root, id);
-  } catch (err) {
+    await refuseWork();
+    // Ends a paused room's open streams and its timer; a no-op once
+    // dismissed. A message or an add that took the room before it left the
+    // list can revive a participant until here, so the work is read again
+    // once every harness has stopped. That rare refusal leaves the room
+    // dismissed.
+    if (!entry.dismissed) {
+      try {
+        await room.dismiss();
+      } finally {
+        // A dismiss that threw has still begun: the room reads dismissed.
+        entry.dismissed = true;
+      }
+      await refuseWork();
+    }
     // The record stays when a checkout does (`removeRoom`), so the room
     // stays listed and can be deleted again.
-    entry.dismissed = true;
+    for (const line of await removeRoom(root, id)) {
+      console.error(`room ${id}: ${line}`);
+    }
+  } catch (err) {
     rooms.set(id, entry);
     throw err;
   }

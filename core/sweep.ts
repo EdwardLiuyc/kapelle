@@ -428,24 +428,43 @@ export async function roomWork(
  * and leaves the record, so a later delete or boot can try again. The
  * caller checks `roomWork` first. Branches go even when nothing merged them
  * (R18): a delete throws the room away.
+ *
+ * A branch git will not delete, such as one checked out elsewhere, is left,
+ * as `dropBranches` leaves a run's: the checkouts are gone by then, and a
+ * retry would fail the same way forever. Answers one line per branch left.
  */
-export async function removeRoom(root: string, roomId: string): Promise<void> {
+export async function removeRoom(
+  root: string,
+  roomId: string,
+): Promise<string[]> {
+  // Before anything is removed: it checks the id.
+  const prefix = branchPrefix(roomId);
   for (const path of await roomCheckouts(root, roomId)) {
     await git(root, ["worktree", "remove", "--force", path]);
   }
   const state = stateDirFor(root);
   rmSync(join(state, "wt", roomId), { recursive: true, force: true });
-  // `null` when the room's cwd is no repository: it has no branches.
-  const prefix = branchPrefix(roomId);
-  const refs = await tryGit(root, [
-    "for-each-ref",
-    "--format=%(refname:lstrip=2)",
-    `refs/heads/${prefix.slice(0, -1)}`,
-  ]);
-  for (const branch of refs ? refs.split("\n") : []) {
-    await git(root, ["branch", "-D", branch]);
+  const left: string[] = [];
+  // A room whose cwd is no repository has no branches.
+  if ((await tryGit(root, ["rev-parse", "--git-dir"])) !== null) {
+    // A checkout removed by hand leaves an admin entry that still holds its
+    // branch; `roomCheckouts` skipped the prune when the folder was gone.
+    await git(root, ["worktree", "prune"]);
+    const refs = await git(root, [
+      "for-each-ref",
+      "--format=%(refname:lstrip=2)",
+      `refs/heads/${prefix.slice(0, -1)}`,
+    ]);
+    for (const branch of refs.split("\n").filter(Boolean)) {
+      try {
+        await git(root, ["branch", "-D", branch]);
+      } catch (err) {
+        left.push(`cannot delete branch ${branch}: ${messageOf(err)}`);
+      }
+    }
   }
   rmSync(join(state, "rooms", roomId), { recursive: true, force: true });
+  return left;
 }
 
 /**
@@ -465,7 +484,9 @@ async function reapRoom(id: string, pass: RepoPass): Promise<boolean> {
       );
       return false;
     }
-    await removeRoom(root, id);
+    for (const line of await removeRoom(root, id)) {
+      onNotice(`room ${id} in ${root}: ${line}`);
+    }
   } catch (err) {
     onNotice(`cannot reap room ${id} in ${root}: ${messageOf(err)}`);
     return false;
@@ -742,9 +763,15 @@ async function sweepRooms(pass: RepoPass): Promise<Set<string>> {
     }
     // A dismissed room is dated from its dismiss, which moves `updatedAt`.
     // A paused one is never reaped: it can still revive.
-    if (
+    const since = Date.parse(record.updatedAt);
+    if (record.status === "dismissed" && Number.isNaN(since)) {
+      onNotice(
+        `keeping room ${id} in ${root}: its record carries no readable ` +
+          "updatedAt, so it cannot be dated against retention",
+      );
+    } else if (
       record.status === "dismissed" &&
-      pass.now - Date.parse(record.updatedAt) > pass.retentionMs
+      pass.now - since > pass.retentionMs
     ) {
       if (await reapRoom(id, pass)) kept.delete(id);
       continue;
