@@ -32,6 +32,8 @@ const SCENARIOS = {
   "unknown-method": "calls a client method that does not exist",
   "null-session":
     "sends a session/update whose sessionId is null, with no load before it",
+  "reused-id":
+    "fails every session/load, then gives the failed id to session/new",
   "diff-escape":
     "asks to edit files outside the root, by diff block and by file_text",
 };
@@ -267,6 +269,10 @@ const ATTACKS = {
     });
   },
 
+  // The prompt's own text is the marker: the client must not drop a live
+  // session's updates because a load of the same id failed (#238).
+  "reused-id": async () => {},
+
   "unknown-method": async (sid) =>
     outcome(
       sid,
@@ -295,6 +301,15 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     reply(msg.id, {
       protocolVersion: 1,
       agentCapabilities: { promptCapabilities: { image: false, audio: false } },
+    });
+    return;
+  }
+
+  if (msg.method === "session/load" && scenario === "reused-id") {
+    send({
+      jsonrpc: "2.0",
+      id: msg.id,
+      error: { code: -32002, message: "Resource not found" },
     });
     return;
   }

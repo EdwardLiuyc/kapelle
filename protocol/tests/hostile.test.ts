@@ -240,6 +240,30 @@ test("an update with a null sessionId is not dropped as a failed load's (#238)",
   assert.equal(run.stopReason, "end_turn");
 });
 
+test("a failed load's id does not hide a live session that reuses it (#238)", async (t) => {
+  const chunks: string[] = [];
+  const agent = new AcpAgent({
+    name: "hostile-reused-id",
+    command: process.execPath,
+    args: [HOSTILE_AGENT, "--scenario", "reused-id"],
+    cwd: await tempDir(t),
+    requestTimeoutMs: 10_000,
+    onEvent: ({ update }) => {
+      if (
+        update.sessionUpdate === "agent_message_chunk" &&
+        update.content.type === "text"
+      )
+        chunks.push(update.content.text);
+    },
+  });
+  t.after(() => agent.stop());
+  await agent.start();
+  await assert.rejects(agent.loadSession("hostile-1"));
+  assert.equal(await agent.newSession(), "hostile-1");
+  await agent.prompt("go");
+  assert.match(chunks.join(""), /Running the reused-id attack/);
+});
+
 // --- the scenario picker -----------------------------------------------------
 
 test("hostile-agent refuses to run without a scenario", async () => {

@@ -811,9 +811,15 @@ export class AcpAgent {
     const update = params?.update;
     if (!update || this.#replaying) return;
     // A string only: an unchecked `null` on the wire would match "no
-    // failed load" and drop every update (#238).
+    // failed load" and drop every update. Never the live session's, even
+    // when a harness gives the failed id out again (#238).
     const sid = params?.sessionId;
-    if (typeof sid === "string" && sid === this.#failedLoad) return;
+    if (
+      typeof sid === "string" &&
+      sid === this.#failedLoad &&
+      sid !== this.sessionId
+    )
+      return;
 
     // Permission requests only carry a toolCallId, so remember the details
     // announced here — otherwise the policy has nothing to judge.
