@@ -59,18 +59,30 @@ function endedLine(e: Ended, id: string): string {
   }
 }
 
-const sgr = (open: number, close: number) => (s: string) =>
+const sgr = (open: number | string, close: number) => (s: string) =>
   `\x1b[${open}m${s}\x1b[${close}m`;
+/**
+ * With `NO_COLOR` set, the colours go (M7-1): the foreground and the
+ * background. Bold, dim, italic, underline and inverse stay, so the history
+ * list's cursor still shows. Read at each call, so a test can set it.
+ */
+const colour =
+  (open: number | string, close: number) =>
+  (s: string): string =>
+    process.env.NO_COLOR ? s : sgr(open, close)(s);
 const bold = sgr(1, 22);
 const dim = sgr(2, 22);
 const italic = sgr(3, 23);
 const underline = sgr(4, 24);
 const inverse = sgr(7, 27);
-const cyan = sgr(36, 39);
-const green = sgr(32, 39);
-const red = sgr(31, 39);
-const yellow = sgr(33, 39);
-const magenta = sgr(35, 39);
+const cyan = colour(36, 39);
+const green = colour(32, 39);
+const red = colour(31, 39);
+const yellow = colour(33, 39);
+const magenta = colour(35, 39);
+/** One of the 256 colours, as text and as background. */
+const fg = (n: number) => colour(`38;5;${n}`, 39);
+const bg = (n: number) => colour(`48;5;${n}`, 49);
 const plain = (s: string) => s;
 
 /** A rendered line without its padding: the trailing spaces and the style
@@ -113,10 +125,12 @@ const rosterOf = (state: RoomState, fallback: readonly Named[]) =>
 
 export {
   address,
+  bg,
   bold,
   cyan,
   dim,
   endedLine,
+  fg,
   green,
   inverse,
   italic,

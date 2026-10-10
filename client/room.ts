@@ -4,7 +4,9 @@
  * **No I/O.** It reads the `{seq, roomId, participantId, update}` lines a
  * client already has and keeps what a screen draws: the roster and each
  * participant's status, the room timeline, each turn, the queue, the open
- * permission questions, and unread and attention marks. A TUI and a bridge
+ * permission questions, unread and attention marks, and what an activity
+ * row and the footer show (M7-1): thinking, the last tool, the last usage.
+ * It keeps no thinking text. A TUI and a bridge
  * share it, so neither parses events itself.
  *
  * **It mutates the state it is given.** An answer arrives one chunk at a
@@ -32,6 +34,7 @@
  * way (S11).
  */
 
+import type { UsageUpdate } from "../protocol/types.ts";
 import type {
   Diff,
   PermissionReason,
@@ -46,7 +49,12 @@ type Mode = "ask" | "safe" | "auto";
 /** One thing the timeline shows, in the order it first appeared. An answer
  *  grows in place while its chunks arrive, and a permission question gets
  *  its answer in place. */
-export type Entry = { seq: number; participantId: string } & (
+export type Entry = {
+  seq: number;
+  participantId: string;
+  /** When the line was written (M7-1): the heading shows it. */
+  at: string;
+} & (
   | { type: "user"; text: string; turn?: number }
   | { type: "queued"; text: string }
   | { type: "queue_cleared"; count: number }
@@ -200,6 +208,9 @@ interface Turn {
   /** From `_client_user_message`; absent on lines written before M6-5. */
   number?: number;
   text: string;
+  /** The `at` of its `_client_user_message`: the activity row's timer
+   *  counts from it (M7-1). */
+  start?: string;
   state: "open" | "ended" | "cut";
   /** Cut because the daemon says the participant stopped, not because the
    *  log says so: its `_client_turn_ended` may still be on the way. */
@@ -236,6 +247,18 @@ interface ParticipantState {
   unread: number;
   /** A stall warning in the live turn, until it ends or is `seen`. */
   stalled: boolean;
+  /** The `seq` of the thought chunk that set the flag (M7-1). Only the
+   *  flag: the text is large (pi), and never drawn. An answer chunk, a tool
+   *  call or the turn's end clears it, and nothing else: a `usage_update`
+   *  would make the row flicker. The `seq` says which chunk changed it, so a
+   *  screen draws a frame for that one only. */
+  thinking?: number;
+  /** The live turn's last tool call (M7-1). The entry, not its title:
+   *  its updates set the title in place (#240). */
+  tool?: Tool;
+  /** The last `usage_update`. The cost in it is a running total for the
+   *  session (§M0-5): never add two of them up. */
+  usage?: UsageUpdate;
 }
 
 /** A `paused` or `killed` from `GET /rooms/:id`, and the log's size when
@@ -277,7 +300,7 @@ export const newRoomState = (): RoomState => ({
  */
 export function applyLine(
   state: RoomState,
-  { seq, participantId, update: u }: RoomEventLine,
+  { seq, at: time, participantId, update: u }: RoomEventLine,
 ): Entry | undefined {
   if (seq <= state.seq) return undefined;
   state.seq = seq;
@@ -290,7 +313,7 @@ export function applyLine(
     }
     return entry;
   };
-  const at = { seq, participantId };
+  const at = { seq, participantId, at: time };
   const openTurn = () => {
     const last = p?.turns.at(-1);
     return last?.state === "open" ? last : undefined;
@@ -350,9 +373,13 @@ export function applyLine(
         p.queue.shift();
         p.status = p.reported?.status ?? "busy";
         p.stalled = false;
+        // A cut turn ends here.
+        p.thinking = undefined;
+        p.tool = undefined;
         p.turns.push({
           ...(u.turn !== undefined && { number: u.turn }),
           text: u.text,
+          start: time,
           // A participant the daemon says is stopped: cut, unless its end or
           // its revive follows.
           ...(p.reported
@@ -374,6 +401,7 @@ export function applyLine(
       if (p) p.queue = [];
       return add({ ...at, type: "queue_cleared", count: u.count });
     case "agent_message_chunk": {
+      if (p) p.thinking = undefined;
       if (u.content?.type !== "text") return undefined;
       if (p?.answer) {
         p.answer.text += u.content.text;
@@ -383,6 +411,18 @@ export function applyLine(
       if (p) p.answer = answer as Answer;
       return answer;
     }
+    case "agent_thought_chunk":
+      if (p && p.thinking === undefined) p.thinking = seq;
+      return undefined;
+    case "usage_update":
+      if (p) {
+        p.usage = {
+          used: u.used,
+          size: u.size,
+          ...(u.cost && { cost: u.cost }),
+        };
+      }
+      return undefined;
     case "tool_call": {
       const status = statusOf(u.status);
       const slot: ToolSlot = {
@@ -399,6 +439,10 @@ export function applyLine(
       if (location) slot.location = location;
       showTool(slot);
       state.tools.set(`${participantId} ${u.toolCallId}`, slot);
+      if (p) {
+        p.thinking = undefined;
+        p.tool = slot.entry;
+      }
       return slot.entry;
     }
     case "tool_call_update": {
@@ -438,6 +482,8 @@ export function applyLine(
           p.status = "idle";
         }
         p.stalled = false;
+        p.thinking = undefined;
+        p.tool = undefined;
       }
       return add({
         ...at,
@@ -569,8 +615,12 @@ export function seen(state: RoomState, id: string) {
   p.stalled = false;
 }
 
+/** This participant's oldest open question, if one waits. */
+export const questionOf = (state: RoomState, id: string) =>
+  [...state.questions.values()].find((q) => q.participantId === id);
+
 /** Whether this participant needs the person: a question waits, or its
  *  live turn looks stuck. */
 export const needsAttention = (state: RoomState, id: string) =>
   Boolean(state.participants.get(id)?.stalled) ||
-  [...state.questions.values()].some((q) => q.participantId === id);
+  questionOf(state, id) !== undefined;

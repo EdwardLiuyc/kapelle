@@ -8,18 +8,26 @@ import test from "node:test";
 import type { ParticipantDto, RoomDto } from "../../client/contract.ts";
 import { newRoomState, type RoomState } from "../../client/room.ts";
 import {
+  activity,
   banner,
   bell,
+  clock,
+  colourOf,
   dismissed,
   edited,
+  footer,
   opened,
+  PALETTE,
   participantLeft,
+  quiet,
   renamed,
   rows,
   seenIn,
   shows,
   step,
+  ticks,
   touched,
+  usageText,
   type View,
   waiting,
   where,
@@ -166,6 +174,7 @@ const waits = () => {
   s.questions.set("q1", {
     seq: 1,
     participantId: "p-ann",
+    at: "2026-10-10T00:00:00Z",
     type: "permission",
     id: "q1",
     title: "Write x.ts",
@@ -262,6 +271,7 @@ test("a question after a stall the person saw rings; the stall left when it clos
   s.questions.set("q1", {
     seq: 2,
     participantId: "p-bob",
+    at: "2026-10-10T00:00:00Z",
     type: "permission",
     id: "q1",
     title: "Write x.ts",
@@ -323,4 +333,190 @@ test("the where bar names the open view's checkout and branch (4a)", () => {
     where({ roomId: "r1", participantId: "p-ann" }, { cwd: "/repo" }),
     "/repo",
   );
+});
+
+test("six distinct colours, none a basic red, green, yellow or magenta (M7-1)", () => {
+  assert.equal(new Set(PALETTE).size, 6);
+  for (const n of PALETTE)
+    assert.ok(![1, 2, 3, 5, 9, 10, 11, 13].includes(n), `${n}`);
+});
+
+test("a colour by join order: a seventh reuses the first, and a remove changes none", () => {
+  const names = ["a", "b", "c", "d", "e", "f", "g"];
+  const s = room(names);
+  assert.deepEqual(
+    names.map((n) => colourOf(s, `p-${n}`)),
+    [...PALETTE, PALETTE[0]],
+  );
+  const before = colourOf(s, "p-c");
+  const b = s.participants.get("p-b");
+  assert.ok(b);
+  b.removed = true;
+  assert.equal(colourOf(s, "p-c"), before, "c keeps its colour after b left");
+  assert.equal(colourOf(s, "p-zed"), undefined, "never added: no colour");
+});
+
+/** Makes these participants busy, from a turn that started at 09:00. */
+const busy = (s: RoomState, ...names: string[]) => {
+  for (const n of names) {
+    const p = s.participants.get(`p-${n}`);
+    assert.ok(p);
+    p.status = "busy";
+    p.turns.push({ text: "go", state: "open", start: "2026-10-10T09:00:00Z" });
+  }
+};
+
+test("activity: a busy row for the open room only, a wait from any room, one row per agent", () => {
+  const r1 = room(["ann", "bob"]);
+  const r2 = room(["cy", "dee"]);
+  busy(r1, "ann", "bob");
+  busy(r2, "cy", "dee");
+  r1.questions.set("q1", {
+    seq: 1,
+    at: "2026-10-10T09:00:00Z",
+    participantId: "p-bob",
+    type: "permission",
+    id: "q1",
+    title: "write",
+    kind: "edit",
+  });
+  r2.questions.set("q2", {
+    seq: 1,
+    at: "2026-10-10T09:00:00Z",
+    participantId: "p-dee",
+    type: "permission",
+    id: "q2",
+    title: "write",
+    kind: "edit",
+  });
+  const all = rooms(["r1", r1], ["r2", r2]);
+  const ids = (v: View) =>
+    activity(all, v).rows.map((a) => `${a.participantId} ${a.why}`);
+  // In r1's timeline, bob's question is on screen: his busy row shows.
+  assert.deepEqual(ids({ roomId: "r1" }), [
+    "p-dee question",
+    "p-ann busy",
+    "p-bob busy",
+  ]);
+  // In ann's thread, bob's question is off screen: one row, the wait.
+  assert.deepEqual(ids({ roomId: "r1", participantId: "p-ann" }), [
+    "p-bob question",
+    "p-dee question",
+    "p-ann busy",
+  ]);
+});
+
+test("activity: four rows, then three and +n more; a tick only while a busy row shows", () => {
+  const r1 = room(["a", "b", "c", "d", "e"]);
+  const all = rooms(["r1", r1]);
+  assert.deepEqual(activity(all, { roomId: "r1" }), { rows: [], more: 0 });
+  assert.equal(
+    ticks(activity(all, { roomId: "r1" }).rows),
+    false,
+    "no busy agent, no tick",
+  );
+  busy(r1, "a", "b", "c", "d");
+  assert.equal(activity(all, { roomId: "r1" }).rows.length, 4);
+  assert.equal(ticks(activity(all, { roomId: "r1" }).rows), true);
+  busy(r1, "e");
+  const five = activity(all, { roomId: "r1" });
+  assert.equal(five.rows.length, 3);
+  assert.equal(five.more, 2);
+  assert.equal(
+    ticks(activity(all, { roomId: "r2" }).rows),
+    false,
+    "busy in another room: no tick",
+  );
+});
+
+test("a timer's text", () => {
+  assert.equal(clock(42_000), "42s");
+  assert.equal(clock(187_000), "3m 07s");
+  assert.equal(clock(3_720_000), "1h 02m");
+  assert.equal(clock(-5), "0s");
+});
+
+test("the footer's numbers: no ctx for used 0, no cost for 0, and ~ on both", () => {
+  assert.deepEqual(usageText(undefined), []);
+  assert.deepEqual(
+    usageText({ used: 300_000, size: 200_000 }),
+    [],
+    "claude's first-turn size, under a larger window: no ctx ~150%",
+  );
+  assert.deepEqual(
+    usageText({ used: 0, size: 200_000 }),
+    [],
+    "claude's unknown",
+  );
+  assert.deepEqual(
+    usageText({
+      used: 50_000,
+      size: 200_000,
+      cost: { amount: 0, currency: "USD" },
+    }),
+    ["ctx ~25%"],
+    "opencode's not billed",
+  );
+  assert.deepEqual(
+    usageText({ used: 1, size: 0, cost: { amount: 1.234, currency: "USD" } }),
+    ["~$1.23"],
+  );
+  assert.deepEqual(
+    usageText({ used: 10, size: 100, cost: { amount: 2, currency: "EUR" } }),
+    ["ctx ~10%", "~2.00 EUR"],
+  );
+});
+
+test("the footer at 160, 100 and 60 columns: the hints drop from the right, the sides stay", () => {
+  const hints = [
+    "enter to send",
+    "ctrl+o menu",
+    "alt+↑↓ rows",
+    "ctrl+t rooms",
+    "ctrl+x view",
+  ];
+  const at = (w: number) =>
+    footer(w, "→ ann ask", hints, "ctx ~25% · ~$1.20", (x) => x.length);
+  const wide = at(160);
+  assert.equal(wide.length, 160);
+  assert.ok(wide.startsWith(`→ ann ask · ${hints.join(" · ")}`));
+  assert.ok(wide.endsWith("ctx ~25% · ~$1.20"));
+  const mid = at(100);
+  assert.ok(mid.length <= 100);
+  assert.ok(mid.endsWith("ctx ~25% · ~$1.20"));
+  const narrow = at(60);
+  assert.ok(narrow.length <= 60);
+  assert.ok(narrow.startsWith("→ ann ask · enter to send"));
+  assert.ok(!narrow.includes("ctrl+x view"), "the last hint went first");
+  assert.ok(narrow.endsWith("ctx ~25% · ~$1.20"));
+  // Too narrow for both sides: joined, for the line to wrap.
+  assert.equal(at(20), "→ ann ask · ctx ~25% · ~$1.20");
+  assert.equal(
+    footer(40, "→ ann", hints, "", (x) => x.length),
+    "→ ann · enter to send · ctrl+o menu",
+  );
+  assert.equal(
+    footer(40, "", hints, "", (x) => x.length),
+    "enter to send · ctrl+o menu",
+    "no room: no leading ·",
+  );
+});
+
+test("a thought chunk asks for a frame only when it set the flag", () => {
+  const s = room(["ann"]);
+  const line = (seq: number) => ({
+    seq,
+    at: "2026-10-10T09:00:00Z",
+    roomId: "r1",
+    participantId: "p-ann",
+    update: {
+      sessionUpdate: "agent_thought_chunk" as const,
+      content: { type: "text" as const, text: "x" },
+    },
+  });
+  const ann = s.participants.get("p-ann");
+  assert.ok(ann);
+  ann.thinking = 3;
+  assert.equal(quiet(s, line(3)), false, "the chunk that set it");
+  assert.equal(quiet(s, line(4)), true, "a later one");
 });

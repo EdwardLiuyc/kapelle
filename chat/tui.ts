@@ -14,10 +14,15 @@
  * `client/questions.ts` (M4-9); the box is `chat/tui/question.ts` (M4-12),
  * and this file keeps the timer.
  *
- * **A wait off screen shows under the timeline** (M4-4, #242): a banner row
- * per participant with a question or a stall (`chat/tui/banner.ts`), and
- * the terminal's bell when one starts to wait. No desktop pop-up: too noisy
- * (decided 2026-10-05, #50).
+ * **A wait off screen shows under the timeline** (M4-4, #242): an activity
+ * row per participant with a question or a stall (`chat/tui/banner.ts`),
+ * and the terminal's bell when one starts to wait. No desktop pop-up: too
+ * noisy (decided 2026-10-05, #50). A busy agent of the open room gets a row
+ * too, and while one shows, the screen redraws once a second (M7-1).
+ *
+ * **The status line** (M7-1): the target and its mode on the left, its
+ * `ctx` and cost on the right, and the key hints between, which drop from
+ * the right as the screen narrows.
  *
  * **The layout is flat** (#242): no `HStack` below another. Read
  * `screenLayout` before you move a part.
@@ -46,6 +51,7 @@ import {
   TuiAltScreen,
   truncateToWidth,
   VStack,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { type RouteCommand, runCommand } from "../client/command.ts";
 import type {
@@ -97,16 +103,21 @@ import {
 } from "./tui/sidebar.ts";
 import { transcriptParts } from "./tui/transcript.ts";
 import {
+  activity,
   bell,
   type Composer,
   dismissed,
   edited,
+  footer,
   opened,
   participantLeft,
+  quiet,
   renamed,
   seenIn,
   shows,
   step,
+  ticks,
+  usageText,
   type View,
   waiting,
   where,
@@ -182,8 +193,8 @@ export function screenLayout(p: {
   placeSide();
   const root = new VStack([
     { component: row, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-    // Three rows at most. Under the row, so it shows when the side view
-    // takes the timeline's place.
+    // The activity rows, four at most. Under the row, so they show when the
+    // side view takes the timeline's place.
     { component: p.banner, basis: "auto", shrink: 0 },
     // A gap between the conversation and the status line.
     { component: new Spacer(1), basis: 1, shrink: 0 },
@@ -281,7 +292,38 @@ function chatTui(
     "tui.altScreen.pageUp": [],
     "tui.altScreen.pageDown": [],
   });
-  const status = new Text("", 1, 0);
+  /** The status line's parts; `footer` fits them to the width at each
+   *  draw. */
+  let statusParts = { left: "", hints: [] as string[], right: "" };
+  const statusText = new Text("", 1, 0);
+  const status: Component = {
+    render: (width) => {
+      statusText.setText(
+        footer(
+          width - 2,
+          statusParts.left,
+          statusParts.hints,
+          statusParts.right,
+          visibleWidth,
+          dim,
+        ),
+      );
+      return statusText.render(width);
+    },
+    invalidate: () => statusText.invalidate(),
+  };
+  /** The once-a-second redraw, while an activity row shows a busy agent. */
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const tick = () => {
+    if (timer || !ticks(activity(rooms, view).rows)) return;
+    timer = setInterval(() => {
+      if (!ticks(activity(rooms, view).rows)) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+      tui.requestRender();
+    }, 1000);
+  };
   /** The one-line bar under the composer (M6-11a, 4a). Empty until the
    *  room set has something to show; `setWhere` fills it. */
   let whereText = "";
@@ -472,15 +514,19 @@ function chatTui(
     setWhere();
     const r = rooms.get(view.roomId);
     const parts: string[] = [];
+    let right: string[] = [];
     if (r) {
       const roster = rosterOf(r.state, r.entry.participants);
       const t =
         roster.length > 0
           ? targetOf(editor.getText(), roster)
           : { error: NO_AGENTS };
-      parts.push(
-        "id" in t ? bold(`→ ${nameOf(r.state, t.id)}`) : yellow(`! ${t.error}`),
-      );
+      if ("id" in t) {
+        const p = r.state.participants.get(t.id);
+        const mode = p ? ` ${dim(p.mode)}` : "";
+        parts.push(`${bold(`→ ${nameOf(r.state, t.id)}`)}${mode}`);
+        right = usageText(p?.usage);
+      } else parts.push(yellow(`! ${t.error}`));
     }
     const asked = queue.open().length;
     // The question in the box or in the pane is not one that waits.
@@ -498,18 +544,25 @@ function chatTui(
     }
     // A pop-up takes the row keys and turns ctrl+o into close: name the
     // keys that work there instead.
-    parts.push(
-      dim(
-        box.panel
-          ? "esc back · ctrl+o close"
-          : side.focused
-            ? "esc keys back · ctrl+] type · ctrl+x hide"
-            : side.shown
-              ? "enter to send · ctrl+] view · ctrl+x hide · ctrl+o menu"
-              : "enter to send · ctrl+o menu · alt+↑↓ rows · ctrl+t rooms · ctrl+x view",
-      ),
-    );
-    status.setText(parts.join(dim(" · ")));
+    const hints = box.panel
+      ? ["esc back", "ctrl+o close"]
+      : side.focused
+        ? ["esc keys back", "ctrl+] type", "ctrl+x hide"]
+        : side.shown
+          ? ["enter to send", "ctrl+] view", "ctrl+x hide", "ctrl+o menu"]
+          : [
+              "enter to send",
+              "ctrl+o menu",
+              "alt+↑↓ rows",
+              "ctrl+t rooms",
+              "ctrl+x view",
+            ];
+    statusParts = {
+      left: parts.join(dim(" · ")),
+      hints,
+      right: right.map(dim).join(dim(" · ")),
+    };
+    tick();
     tui.requestRender();
   };
   const toggle = () => {
@@ -573,7 +626,7 @@ function chatTui(
 
   const onLine = (roomId: string, line: RoomEventLine, e?: Entry) => {
     const r = rooms.get(roomId);
-    if (!r) return;
+    if (!r || quiet(r.state, line)) return;
     ring();
     const u = line.update;
     const kind = u.sessionUpdate;
@@ -649,6 +702,7 @@ function chatTui(
       if (done) return;
       done = true;
       set.stop();
+      clearInterval(timer);
       // The screen is going: a later throw gets Node's default again, a
       // stack and a non-zero exit, instead of being swallowed here.
       process.off("uncaughtException", crash);

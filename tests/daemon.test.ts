@@ -4511,7 +4511,7 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   const text = raw.replace(/[ \t]+$/gm, "");
   assert.match(
     text,
-    /you → mock-agent\n\s*alpha\n[\s\S]*mock-agent\n\s*previous: \(none\)\n[\s\S]*left room \S+; rejoin with/,
+    /▎ you → mock-agent\n▎ alpha\n[\s\S]*▎ mock-agent · mock-agent · orchestrator · \d\d:\d\d\n▎ previous: \(none\)\n[\s\S]*left room \S+; rejoin with/,
     "the typed message, the answer, then the exit line",
   );
   // A line as wide as the terminal gets an empty line after it where the
@@ -4661,15 +4661,14 @@ test("chat.ts on a real terminal draws an agent's tool calls under its name, and
   const lines = scrollback(out())
     .split("\n")
     .map((l) => l.trim());
-  const you = lines.indexOf("you → mock-agent");
-  const heading = lines.indexOf("mock-agent");
-  const tool = lines.indexOf("· Read package.json");
+  // Each of an agent's lines has its bar, and its heading its harness,
+  // role and time (M7-1).
+  const isHeading = (l: string) => l.startsWith("▎ mock-agent · ");
+  const you = lines.indexOf("▎ you → mock-agent");
+  const heading = lines.findIndex(isHeading);
+  const tool = lines.indexOf("▎ · Read package.json");
   assert.ok(you !== -1 && you < heading && heading < tool, lines.join("\n"));
-  assert.equal(
-    lines.filter((l) => l === "mock-agent").length,
-    1,
-    lines.join("\n"),
-  );
+  assert.equal(lines.filter(isHeading).length, 1, lines.join("\n"));
 });
 
 test("chat.ts on a real terminal follows a second room off screen, switches to its thread, and @name pre-filled reaches it", {
@@ -4902,10 +4901,10 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
     { text: "go" },
   );
   assert.equal(sent.status, 202, sent.body.error?.message);
-  await screen.seen("\x1b[35m▌● asker (");
+  await screen.seen("\x1b[35m▌? asker (");
   assert.match(
     plainText(screen.out()),
-    /▌● asker \(\S+\) asks: Write ACP_TEST\.md/,
+    /▌\? asker \(\S+\) asks: Write ACP_TEST\.md/,
   );
   // pi-tui ends its links with a BEL too; `plainText` takes those away.
   const bells = () => plainText(screen.out()).split("\x07").length - 1;
@@ -4923,7 +4922,7 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
     for (let i = 1; i < parts.length; i += 2) {
       rows.set(Number(parts[i]), plainText(parts[i + 1] ?? ""));
     }
-    for (const [at, text] of rows) if (/▌● asker/.test(text)) return at;
+    for (const [at, text] of rows) if (/▌\? asker/.test(text)) return at;
     return 0;
   };
   assert.ok(bannerRow() > 1, `under the timeline: ${screen.out()}`);
@@ -4931,7 +4930,10 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
   // still shows under it.
   await screen.press("\x18", "side view");
   assert.ok(bannerRow() > 1, `under the side view: ${screen.out()}`);
-  await screen.press("\x18", "ctrl+x view");
+  // At 100 columns the question count leaves room for three hints only:
+  // `ctrl+t rooms` and `ctrl+x view` drop (M7-1). `ctrl+o menu` shows only
+  // with the side view hidden.
+  await screen.press("\x18", "enter to send · ctrl+o menu");
   const row = bannerRow();
   await screen.press(`\x1b[<0;40;${row}M\x1b[<0;40;${row}m`, "question 1 of 1");
   await screen.seen("→ asker");
@@ -5203,6 +5205,8 @@ test("chat.ts on a real terminal keeps a question waiting while the person types
     t,
     `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
+    // The warning is long: the key hints drop (M7-1).
+    "no orchestrator",
   );
   // Text in the composer: the box must not take the next keys.
   await screen.press("@asker hel", "→ asker");
@@ -5547,6 +5551,8 @@ test("chat.ts on a short terminal keeps the question's action in its box", {
     t,
     `stty cols 100 rows 12; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
+    // The warning is long: the key hints drop (M7-1).
+    "no orchestrator",
   );
   const sent = await api(
     d,
@@ -5726,8 +5732,11 @@ test("chat.ts on a real terminal opens a question that came behind the menu once
     t,
     `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
+    // The warning is long: the key hints drop (M7-1).
+    "no orchestrator",
   );
-  await screen.press("\x0f", "esc back · ctrl+o close");
+  // The menu; its key hints dropped beside the long warning.
+  await screen.press("\x0f", "new room …");
   const sent = await api(
     d,
     "POST",

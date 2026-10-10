@@ -197,6 +197,11 @@ streams thinking only when extended thinking is switched on, and nothing here sw
 A harness that starts emitting it needs no client change — `render.ts` has had the branch
 since M1a-7.
 
+**Note, 2026-10-10 (M7-1):** room logs from October 2026 show that **claude and pi send
+`agent_thought_chunk`** too, one pi agent about 82,000 in one room. The rows above stay as
+measured; they were true for those builds and those prompts. The chat TUI shows only the word
+`thinking`, never the text (`client/room.ts` keeps no thinking text).
+
 **`messageId` is populated by two of three** — the M1c-7 measurement, which no M0 finding
 covered. It is not needed: block detection uses blank lines, and copilot omits it entirely,
 so a `messageId`-keyed design would have had no fallback on one third of the fleet. Recorded

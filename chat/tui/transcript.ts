@@ -3,7 +3,10 @@
  *
  * Draws the current view from its room's reducer: a heading per speaker,
  * each answer as markdown while it streams, a tool call, a question and how
- * it closed, and the notices. It owns the components drawn for the view, so
+ * it closed, and the notices. An agent's heading, answers and tool calls
+ * get a `▎` bar in its colour, and its heading shows its harness, its role
+ * and the time (M7-1). The person's own messages get a grey bar and a light
+ * background. It owns the components drawn for the view, so
  * an answer's next chunk re-sets the same one, and the history list can
  * scroll to a message of the person's (M4-4).
  */
@@ -14,6 +17,7 @@ import {
   Markdown,
   type MarkdownTheme,
   ScrollView,
+  Spacer,
   Text,
   type TuiAltScreen,
 } from "@earendil-works/pi-tui";
@@ -25,11 +29,12 @@ import {
 } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import {
+  bg,
   bold,
   cyan,
   dim,
   endedLine,
-  green,
+  fg,
   italic,
   magenta,
   red,
@@ -38,7 +43,7 @@ import {
   underline,
   yellow,
 } from "../common.ts";
-import type { View } from "../view.ts";
+import { colourOf, type View } from "../view.ts";
 
 const MARKDOWN_THEME: MarkdownTheme = {
   heading: (s) => bold(cyan(s)),
@@ -95,6 +100,36 @@ export function settled(text: string, from: number): number {
   return cut;
 }
 
+/** A part with a `▎` bar in `paint` before each of its rows (M7-1). */
+class Barred extends Container {
+  paint: (s: string) => string;
+  constructor(c: Component, paint: (s: string) => string) {
+    super();
+    this.paint = paint;
+    this.addChild(c);
+  }
+  override render(width: number) {
+    const bar = this.paint("▎");
+    return super.render(Math.max(1, width - 1)).map((l) => bar + l);
+  }
+}
+const barred = (c: Component, paint: (s: string) => string) =>
+  new Barred(c, paint);
+
+/** A line's time, as `HH:MM` here; "" for a time that does not parse. */
+const hhmm = (at: string) => {
+  const d = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return Number.isNaN(d.getTime())
+    ? ""
+    : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+/** The person's bar and background: grey, and one step lighter than a
+ *  dark terminal. */
+const YOU_BAR = fg(244);
+const YOU_BG = bg(236);
+
 /** The transcript: it keeps the width it was drawn at, to find a row. */
 class Transcript extends Container {
   width = 80;
@@ -105,11 +140,11 @@ class Transcript extends Container {
 }
 
 /** A tool call's rows: its title, `failed` in red when it failed, and its
- *  detail under it. */
+ *  detail under it. The bar before them is the agent's (M7-1). */
 function toolLines(e: Extract<Entry, { type: "tool" }>) {
   const failed = e.status === "failed" ? red(" failed") : "";
-  const rows = [`${dim(`  · ${e.title}`)}${failed}`];
-  if (e.detail) rows.push(dim(`    ${e.detail}`));
+  const rows = [`${dim(`· ${e.title}`)}${failed}`];
+  if (e.detail) rows.push(dim(`  ${e.detail}`));
   return rows;
 }
 
@@ -128,9 +163,11 @@ function transcriptParts({
 }) {
   const transcript = new Transcript();
   const scroll = new ScrollView(transcript, { follow: "end", primary: true });
-  /** The component drawn for each entry of the current view that changes
-   *  in place or can be jumped to. */
-  let drawn = new WeakMap<Entry, Text>();
+  /** The part drawn for each of the person's messages, to jump to. */
+  let drawn = new WeakMap<Entry, Component>();
+  /** The line drawn for each question or tool call, which its answer or
+   *  its update sets again. */
+  let lines = new WeakMap<Entry, Text>();
   /** Each answer's blocks: the finished ones, drawn once, then the rest,
    *  which each chunk sets again. `done` is where the rest starts. */
   let answers = new WeakMap<
@@ -148,24 +185,36 @@ function transcriptParts({
   const note = (s: string) => add(new Text(dim(s), 1, 0));
   const warn = (s: string) => add(new Text(yellow(s), 1, 0));
 
+  /** The colour of the participant whose line `e` is. */
+  const paint = (state: RoomState, e: Entry) => {
+    const colour = colourOf(state, e.participantId);
+    return colour === undefined ? dim : fg(colour);
+  };
   /** A participant's name, before the first of its lines, tool calls
-   *  included, since someone else's. */
-  const heading = (id: string, name: string) => {
-    if (speaker === id) return;
-    speaker = id;
-    add(new Text(`\n${bold(green(name))}`, 1, 0));
+   *  included, since someone else's: with its harness, its role and the
+   *  time of that first line. */
+  const heading = (state: RoomState, e: Entry, name: string) => {
+    if (speaker === e.participantId) return;
+    speaker = e.participantId;
+    const p = state.participants.get(e.participantId);
+    const about = [p?.harness, p?.role, hhmm(e.at)].filter(Boolean);
+    const rest = about.length ? dim(` · ${about.join(" · ")}`) : "";
+    const colour = paint(state, e);
+    add(new Spacer(1));
+    add(barred(new Text(`${bold(colour(name))}${rest}`, 1, 0), colour));
   };
   const draw = (state: RoomState, e: Entry) => {
     const name = nameOf(state, e.participantId);
     switch (e.type) {
       case "user": {
         speaker = undefined;
-        const line = new Text(
-          `\n${bold(cyan(`you → ${name}`))}\n${e.text}`,
-          1,
-          0,
+        // The gap above stays out of the bar and the background.
+        const line = barred(
+          new Text(`${bold(cyan(`you → ${name}`))}\n${e.text}`, 1, 0, YOU_BG),
+          YOU_BAR,
         );
         drawn.set(e, line);
+        add(new Spacer(1));
         add(line);
         return;
       }
@@ -180,13 +229,13 @@ function transcriptParts({
         // block's start, so the finished blocks are cut off (`settled`).
         let a = answers.get(e);
         if (!a) {
-          heading(e.participantId, name);
+          heading(state, e, name);
           const rest = new Markdown("", 1, 0, MARKDOWN_THEME);
           const box = new Container();
           box.addChild(rest);
           a = { box, rest, done: 0 };
           answers.set(e, a);
-          add(box);
+          add(barred(box, paint(state, e)));
         }
         const cut = settled(e.text, a.done);
         if (cut > a.done) {
@@ -203,12 +252,12 @@ function transcriptParts({
       case "tool": {
         // Its updates come back as the same entry: one row, set again
         // (#240).
-        let line = drawn.get(e);
+        let line = lines.get(e);
         if (!line) {
-          heading(e.participantId, name);
+          heading(state, e, name);
           line = new Text("", 1, 0);
-          drawn.set(e, line);
-          add(line);
+          lines.set(e, line);
+          add(barred(line, paint(state, e)));
         }
         line.setText(toolLines(e).join("\n"));
         tui.requestRender();
@@ -235,10 +284,10 @@ function transcriptParts({
       case "permission": {
         // The TUI answers in its pop-up (M4-3); this line shows the question
         // and, once it closes, how.
-        let line = drawn.get(e);
+        let line = lines.get(e);
         if (!line) {
           line = new Text("", 1, 0);
-          drawn.set(e, line);
+          lines.set(e, line);
           add(line);
         }
         let answer = "";
@@ -258,6 +307,7 @@ function transcriptParts({
   const redraw = () => {
     transcript.clear();
     drawn = new WeakMap();
+    lines = new WeakMap();
     answers = new WeakMap();
     speaker = undefined;
     const r = rooms.get(view().roomId);
@@ -301,8 +351,8 @@ function transcriptParts({
       if (c === line) break;
       row += c.render(transcript.width).length;
     }
-    // The message's first row is the gap above its name.
-    scroll.scrollTo(row + 1, { disableFollow: true });
+    // The message's first row is its name; the gap above is its own part.
+    scroll.scrollTo(row, { disableFollow: true });
     tui.requestRender();
   };
   return { transcript, scroll, warn, draw, redraw, jump };
