@@ -353,6 +353,7 @@ test("a colour by join order: a seventh reuses the first, and a remove changes n
   assert.ok(b);
   b.removed = true;
   assert.equal(colourOf(s, "p-c"), before, "c keeps its colour after b left");
+  assert.equal(colourOf(s, "p-zed"), undefined, "never added: no colour");
 });
 
 /** Makes these participants busy, from a turn that started at 09:00. */
@@ -437,6 +438,11 @@ test("a timer's text", () => {
 
 test("the footer's numbers: no ctx for used 0, no cost for 0, and ~ on both", () => {
   assert.deepEqual(usageText(undefined), []);
+  assert.deepEqual(
+    usageText({ used: 300_000, size: 200_000 }),
+    [],
+    "claude's first-turn size, under a larger window: no ctx ~150%",
+  );
   assert.deepEqual(
     usageText({ used: 0, size: 200_000 }),
     [],

@@ -3,13 +3,16 @@
  *
  * **The TUI's attention signal** (decided 2026-10-05, #50): no desktop
  * pop-up, and the daemon does not ring. A row under the timeline, full width
- * (#242), for each participant that waits off screen: magenta for a
- * question, yellow for a stall, with who, which room and why. A click
- * opens the thread, and the question's box.
+ * (#242), for each participant that waits off screen: `?` and magenta for
+ * a question, `!` and yellow for a stall, with who, which room and why, so
+ * the two differ without colour too. A click opens the thread, and the
+ * question's box.
  *
  * **A busy agent of the open room gets a row too** (M7-1): a spinner, then
  * `thinking`, its last tool title or `working`, then a timer from the turn's
- * start, and the command that cancels the turn. The screen redraws once a
+ * start, and the command that cancels the turn. A busy agent whose question
+ * is on screen waits for the person, not for its work: its row says what it
+ * asks, with `?`, and names no cancel. The screen redraws once a
  * second while such a row shows (`ticks`), and never else. Which rows there
  * are, at most four, is `chat/view.ts`; with none, the part takes no rows.
  */
@@ -50,18 +53,30 @@ function bannerPart({
     if (a.why !== "busy") {
       const room = r?.entry.title ?? a.roomId;
       const why = a.why === "question" ? `asks: ${a.text}` : a.text;
-      return (a.why === "question" ? magenta : yellow)(
-        `▌● ${name} (${room}) ${why}`,
-      );
+      return a.why === "question"
+        ? magenta(`▌? ${name} (${room}) ${why}`)
+        : yellow(`▌! ${name} (${room}) ${why}`);
     }
     const p = r?.state.participants.get(a.participantId);
-    const doing =
-      p?.thinking !== undefined ? "thinking" : (p?.tool ?? "working");
+    const asked = r
+      ? [...r.state.questions.values()].find(
+          (q) => q.participantId === a.participantId,
+        )
+      : undefined;
+    const doing = asked
+      ? `asks: ${asked.title}`
+      : p?.thinking !== undefined
+        ? "thinking"
+        : (p?.tool ?? "working");
     const start = Date.parse(p?.turns.at(-1)?.start ?? "");
     const timer = Number.isNaN(start) ? "" : ` · ${clock(now() - start)}`;
-    const spin = SPINNER[Math.floor(now() / 1000) % SPINNER.length];
-    const paint = r ? fg(colourOf(r.state, a.participantId)) : dim;
-    return `${paint(`▌${spin}`)} ${bold(name)} ${doing}${dim(`${timer} · @${name} /cancel`)}`;
+    const cancel = asked ? "" : ` · @${name} /cancel`;
+    const mark = asked
+      ? "?"
+      : SPINNER[Math.floor(now() / 1000) % SPINNER.length];
+    const colour = r ? colourOf(r.state, a.participantId) : undefined;
+    const paint = colour === undefined ? dim : fg(colour);
+    return `${paint(`▌${mark}`)} ${bold(name)} ${doing}${dim(`${timer}${cancel}`)}`;
   };
   return {
     render(width) {

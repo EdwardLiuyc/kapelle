@@ -61,6 +61,7 @@ test("the rows: 4, and past 4, 3 rows and +N more (M7-1)", () => {
   const rows = setup(["ann", "bob", "cy", "dee", "eve"]).part.render(80);
   assert.equal(rows.length, 4);
   assert.match(rows[3] ?? "", /\+2 more/);
+  assert.match(rows[0] ?? "", /▌\? ann/, "a question's mark, not only magenta");
 });
 
 test("a click on a banner row opens that thread and its question", () => {
@@ -86,6 +87,7 @@ test("a stall row holds no control character from the harness", () => {
   });
   const rows = part.render(80);
   assert.equal(rows.length, 1);
+  assert.match(rows[0] ?? "", /▌! ann/, "a stall's mark, not only yellow");
   assert.ok(!rows[0]?.includes("\n"), "one row stays one row");
   assert.ok(!rows[0]?.includes("\x1b[2J"), "no escape from the harness");
 });
@@ -151,6 +153,21 @@ test("a busy row: thinking, then the last tool, then working, with its timer and
   assert.deepEqual(text(), ["▌◓ ann Read File · 1m 05s · @ann /cancel"]);
   part.handleMouse?.({ type: "click", button: "left", x: 0, y: 0 } as never);
   assert.deepEqual(opened, [{ roomId: "r1", participantId: "p-ann" }]);
+  // Its question is on screen: it waits for the person, so no cancel.
+  line({
+    sessionUpdate: "_client_permission_queued",
+    id: "q1",
+    title: "Write a.md",
+    kind: "edit",
+  });
+  assert.deepEqual(text(), ["▌? ann asks: Write a.md · 1m 05s"]);
+  line({
+    sessionUpdate: "_client_permission_answered",
+    id: "q1",
+    allow: true,
+    reason: "user",
+  });
+  assert.deepEqual(text(), ["▌◓ ann Read File · 1m 05s · @ann /cancel"]);
   line({ sessionUpdate: "_client_turn_ended", stopReason: "end_turn" });
   assert.deepEqual(text(), [], "idle: no row");
 });

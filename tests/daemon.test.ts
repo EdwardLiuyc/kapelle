@@ -4901,10 +4901,10 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
     { text: "go" },
   );
   assert.equal(sent.status, 202, sent.body.error?.message);
-  await screen.seen("\x1b[35m▌● asker (");
+  await screen.seen("\x1b[35m▌? asker (");
   assert.match(
     plainText(screen.out()),
-    /▌● asker \(\S+\) asks: Write ACP_TEST\.md/,
+    /▌\? asker \(\S+\) asks: Write ACP_TEST\.md/,
   );
   // pi-tui ends its links with a BEL too; `plainText` takes those away.
   const bells = () => plainText(screen.out()).split("\x07").length - 1;
@@ -4922,7 +4922,7 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
     for (let i = 1; i < parts.length; i += 2) {
       rows.set(Number(parts[i]), plainText(parts[i + 1] ?? ""));
     }
-    for (const [at, text] of rows) if (/▌● asker/.test(text)) return at;
+    for (const [at, text] of rows) if (/▌\? asker/.test(text)) return at;
     return 0;
   };
   assert.ok(bannerRow() > 1, `under the timeline: ${screen.out()}`);
@@ -4930,6 +4930,8 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
   // still shows under it.
   await screen.press("\x18", "side view");
   assert.ok(bannerRow() > 1, `under the side view: ${screen.out()}`);
+  // At 100 columns the question count leaves no room for the last hint,
+  // `ctrl+x view` (M7-1); `ctrl+o menu` shows only with the side view hidden.
   await screen.press("\x18", "enter to send · ctrl+o menu");
   const row = bannerRow();
   await screen.press(`\x1b[<0;40;${row}M\x1b[<0;40;${row}m`, "question 1 of 1");
@@ -7118,7 +7120,7 @@ test("chat.ts on a real terminal shows a question's diff beside the timeline, go
   await screen.seen("delete · Delete something");
   await screen.press("\x1b", "? 1 question");
   await screen.press("\x1d", "ctrl+] type");
-  await screen.press("\x18", "enter to send · ctrl+o menu");
+  await screen.press("\x18", "ctrl+x view");
   const shownAgain = screen.out().length;
   await screen.press("\x18", "question 1 of 1 · allowed (client)");
   const answerFrame = screen.out().slice(shownAgain);
@@ -7336,7 +7338,7 @@ test("chat.ts on a real terminal shows what an auto agent changed, from /diff an
   // ctrl+x wakes the side view; before anything is in it, it says how to
   // fill it. ctrl+x again hides it.
   await screen.press("\x18", "nothing here yet");
-  await screen.press("\x18", "enter to send · ctrl+o menu");
+  await screen.press("\x18", "ctrl+x view");
   await screen.press("@bob /diff\r", "bob · uncommitted · README.md (1 of 2)");
   await screen.press("]", "new.txt (new) (2 of 2)");
   await screen.press("[", "README.md (1 of 2)");
@@ -7359,7 +7361,7 @@ test("chat.ts on a real terminal shows what an auto agent changed, from /diff an
   // Below cancel, mode, role and rename; above remove.
   await screen.press(`${"\x1b[B".repeat(4)}\r`, "bob · uncommitted");
   // ctrl+x hides the view and keeps what it shows.
-  await screen.press("\x18", "enter to send · ctrl+o menu");
+  await screen.press("\x18", "ctrl+x view");
   await screen.press("\x18", "bob · uncommitted · README.md (1 of 3)");
   screen.child.stdin.write("\x03");
   assert.equal(await screen.exited, 0, screen.out());

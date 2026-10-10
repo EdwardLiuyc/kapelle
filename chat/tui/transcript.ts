@@ -153,9 +153,10 @@ function transcriptParts({
 }) {
   const transcript = new Transcript();
   const scroll = new ScrollView(transcript, { follow: "end", primary: true });
-  /** The component drawn for each entry of the current view that changes
-   *  in place or can be jumped to. */
+  /** The part drawn for each of the person's messages, to jump to. */
   let drawn = new WeakMap<Entry, Component>();
+  /** The line drawn for each question, which its answer sets again. */
+  let asked = new WeakMap<Entry, Text>();
   /** Each answer's blocks: the finished ones, drawn once, then the rest,
    *  which each chunk sets again. `done` is where the rest starts. */
   let answers = new WeakMap<
@@ -174,8 +175,10 @@ function transcriptParts({
   const warn = (s: string) => add(new Text(yellow(s), 1, 0));
 
   /** The colour of the participant whose line `e` is. */
-  const paint = (state: RoomState, e: Entry) =>
-    fg(colourOf(state, e.participantId));
+  const paint = (state: RoomState, e: Entry) => {
+    const colour = colourOf(state, e.participantId);
+    return colour === undefined ? dim : fg(colour);
+  };
   /** A participant's name, before the first of its lines, tool calls
    *  included, since someone else's: with its harness, its role and the
    *  time of that first line. */
@@ -260,10 +263,10 @@ function transcriptParts({
       case "permission": {
         // The TUI answers in its pop-up (M4-3); this line shows the question
         // and, once it closes, how.
-        let line = drawn.get(e) as Text | undefined;
+        let line = asked.get(e);
         if (!line) {
           line = new Text("", 1, 0);
-          drawn.set(e, line);
+          asked.set(e, line);
           add(line);
         }
         let answer = "";
@@ -283,6 +286,7 @@ function transcriptParts({
   const redraw = () => {
     transcript.clear();
     drawn = new WeakMap();
+    asked = new WeakMap();
     answers = new WeakMap();
     speaker = undefined;
     const r = rooms.get(view().roomId);

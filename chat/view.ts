@@ -223,11 +223,12 @@ export const PALETTE = [75, 141, 208, 37, 180, 174] as const;
 
 /** An agent's colour, by the order it joined the room. The removed ones
  *  count, so an agent keeps its colour after another leaves; a seventh
- *  reuses the first. */
-export const colourOf = (state: RoomState, id: string) =>
-  PALETTE[
-    Math.max(0, [...state.participants.keys()].indexOf(id)) % PALETTE.length
-  ] as number;
+ *  reuses the first. `undefined` for an id the room never added: no
+ *  agent's colour, so its line cannot pass for the first agent's. */
+export function colourOf(state: RoomState, id: string) {
+  const at = [...state.participants.keys()].indexOf(id);
+  return at < 0 ? undefined : PALETTE[at % PALETTE.length];
+}
 
 /** An activity row (M7-1): a wait, or an agent busy in the open room. */
 export type Activity =
@@ -274,7 +275,9 @@ export function clock(ms: number) {
  * `used: 0` is "unknown" on claude, so no `ctx`. A cost of `0` is "not
  * billed" (opencode), so no cost. `~`, because neither is a measure:
  * copilot's `size` is not its real window, and claude's cost is a list
- * price under a subscription.
+ * price under a subscription. `used` above `size` means the `size` is
+ * wrong: claude sends 200,000 for all of the first turn, whatever the
+ * model's window, so no `ctx` then either, never `ctx ~150%`.
  */
 export function usageText(u?: {
   used: number;
@@ -283,7 +286,7 @@ export function usageText(u?: {
 }): string[] {
   if (!u) return [];
   const out: string[] = [];
-  if (u.used > 0 && u.size > 0) {
+  if (u.used > 0 && u.size > 0 && u.used <= u.size) {
     out.push(`ctx ~${Math.round((u.used / u.size) * 100)}%`);
   }
   if (u.cost && u.cost.amount > 0) {
