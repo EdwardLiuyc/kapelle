@@ -774,23 +774,18 @@ function toolRoom() {
       ...first,
     });
     const id = `t${seq - 1}`;
-    const seen = [e];
+    const now = () => (e?.type === "tool" ? [e.title, e.detail, e.status] : []);
+    const seen = [now()];
     for (const u of updates) {
-      seen.push(
-        send("ann", {
-          sessionUpdate: "tool_call_update",
-          toolCallId: id,
-          ...u,
-        }),
-      );
+      const changed = send("ann", {
+        sessionUpdate: "tool_call_update",
+        toolCallId: id,
+        ...u,
+      });
+      assert.equal(changed, e, "each update changes the same entry");
+      seen.push(now());
     }
-    assert.ok(
-      seen.every((s) => s === e),
-      "each update changes the same entry",
-    );
-    return seen.map(() =>
-      e?.type === "tool" ? [e.title, e.detail, e.status] : [],
-    );
+    return seen;
   };
   return { state, send, rows };
 }
@@ -814,14 +809,28 @@ test("a tool call's updates change its one entry: the title, the detail and the 
     ),
     ["echo hi", undefined, "completed"],
   );
+  // Its title gives a path from its folder, and quotes a pattern: both
+  // are said already.
   assert.deepEqual(
     last(
       rows(
         { title: "Read File", kind: "read", rawInput: {} },
-        { title: "Read /w/a.ts", rawInput: { file_path: "/w/a.ts" } },
+        { title: "Read src/a.ts", rawInput: { file_path: "/w/src/a.ts" } },
       ),
     ),
-    ["Read /w/a.ts", undefined, undefined],
+    ["Read src/a.ts", undefined, undefined],
+  );
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "grep", kind: "search", rawInput: {} },
+        {
+          title: 'grep -n "foo" src',
+          rawInput: { pattern: "foo", path: "src" },
+        },
+      ),
+    ),
+    ['grep -n "foo" src', undefined, undefined],
   );
   // opencode: the shell title becomes the command; `edit` keeps its title,
   // so the path is the detail. `cwd` is not shown.
@@ -833,6 +842,20 @@ test("a tool call's updates change its one entry: the title, the detail and the 
       ),
     ),
     ["ls -la", undefined, undefined],
+  );
+  // The command can come before the title that says it: the detail goes
+  // once the title says it.
+  assert.deepEqual(
+    rows(
+      { title: "shell", rawInput: { cwd: "/w" } },
+      { rawInput: { command: "ls" } },
+      { title: "ls" },
+    ),
+    [
+      ["shell", undefined, undefined],
+      ["shell", "ls", undefined],
+      ["ls", undefined, undefined],
+    ],
   );
   assert.deepEqual(
     last(
@@ -877,9 +900,13 @@ test("a tool call's updates change its one entry: the title, the detail and the 
   assert.deepEqual(rows({ title: "look", locations: [{ path: "/w/b" }] }), [
     ["look", "/w/b", undefined],
   ]);
+  assert.deepEqual(rows({ title: "look" }, { locations: [{ path: "/w/c" }] }), [
+    ["look", undefined, undefined],
+    ["look", "/w/c", undefined],
+  ]);
   assert.equal(
     state.timeline.filter((e) => e.type === "tool").length,
-    9,
+    12,
     "one entry per call",
   );
 });

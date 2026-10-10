@@ -36,7 +36,12 @@ test("a tool call prints again only when its title, detail or failure changed", 
     mode: "auto",
   });
   send({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Terminal" });
-  send({ sessionUpdate: "tool_call_update", toolCallId: "t1", title: "ls" });
+  send({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    title: "ls",
+    rawInput: { path: "/w" },
+  });
   // A status that draws nothing new prints nothing.
   send({
     sessionUpdate: "tool_call_update",
@@ -49,5 +54,8 @@ test("a tool call prints again only when its title, detail or failure changed", 
     status: "failed",
   });
   t.mock.restoreAll();
-  assert.equal(out, "ann:\n  · Terminal\n  · ls\n  · ls — failed\n");
+  assert.equal(
+    out,
+    "ann:\n  · Terminal\n  · ls\n    /w\n  · ls — failed\n    /w\n",
+  );
 });

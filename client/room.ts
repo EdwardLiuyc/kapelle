@@ -154,16 +154,22 @@ function detailInput(raw: unknown): Record<string, string> {
 }
 
 /** The detail line: the command, path, pattern, query or url; else the
- *  description; else the first location. A part the title already says,
- *  between spaces or at an end, is left out: `str_replace` still shows
- *  under `str_replace_editor`. */
+ *  description; else the first location. A part the title already says is
+ *  left out: between spaces or at an end, also in quotes or backticks, or
+ *  as the end of a path, since claude's title gives a path from its
+ *  folder. `str_replace` still shows under `str_replace_editor`. */
 function detailOf({ title, input, location }: ToolSlot) {
   let parts = DETAIL_KEYS.flatMap((k) => input[k] ?? []);
   if (parts.length === 0) {
     parts = [input.description ?? location ?? ""].filter(Boolean);
   }
-  const words = ` ${title} `;
-  const shown = parts.filter((v) => !words.includes(` ${v} `));
+  const bare = title.replace(/[`"']/g, "");
+  const words = bare.split(" ").filter(Boolean);
+  const said = (v: string) =>
+    ` ${title} `.includes(` ${v} `) ||
+    ` ${bare} `.includes(` ${v} `) ||
+    words.some((w) => v.endsWith(`/${w}`));
+  const shown = parts.filter((v) => !said(v));
   return shown.length > 0 ? toolText(shown.join(" ")) : undefined;
 }
 
