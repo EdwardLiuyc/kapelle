@@ -1506,7 +1506,9 @@ daemon.** The bridge holds the chat app's library and its login.
 **Where it runs.** On the same machine and as the same user as the daemon. It finds the
 daemon and its token as in [Find the daemon](#find-the-daemon). There is one token, the
 operator's, so a bridge can do everything a person at the terminal can do. Keep the token
-out of the chat app.
+out of the chat app. Anyone who can write where the bridge listens can answer a question
+in the operator's name, `execute` included. So the bridge decides who may answer, and the
+chat channel stays closed to everyone else. A token per bridge is not built (#255).
 
 **What it does:**
 
@@ -1520,18 +1522,27 @@ out of the chat app.
    [`POST /rooms/:id/agents/:agentId/messages`](#post-roomsidagentsagentidmessages).
    Read a leading `@name` as in [Addressing](#addressing).
 4. Answer questions as in [Permissions](#permissions): show `_client_permission_queued`
-   in the chat app, then send the person's yes or no with `POST /permissions/:id`.
+   in the chat app, then send the person's yes or no with
+   [`POST /permissions/:id`](#post-permissionsid). A bridge reconnects often, and each
+   replay shows old questions again, so check `GET /permissions` before you ask.
 
 **Rules:**
 
 - A question can close without the bridge, at the terminal or by a time limit. Tell the
-  chat app when it does: `_client_permission_answered` has the `reason`.
-- A message route has no retry key. If a reply is lost, look in the stream after the last
-  `seq` you had before you sent it. Look for the message's `_client_user_message` or
-  `_client_message_queued`, with the same text and the same `participantId`. Send it
-  again only if neither is there. Otherwise the agent
-  can get it twice. Do not search the whole stream: a short text such as "yes" is often
-  sent more than once.
+  chat app when it does: `_client_permission_answered` has the `reason`, see
+  [Why a question closed](#why-a-question-closed).
+- A message route has no retry key. If a reply is lost, do not send the message again at
+  once, or the agent can get it twice. Check first:
+  1. Call [`GET /rooms/:id`](#get-roomsid). Its `seq` is the log's size now. Its
+     participants name the orchestrator, which is the target of `POST /rooms/:id/messages`.
+  2. Read your stream until you have that `seq`. A lost reply often means a cut stream, so
+     reconnect first.
+  3. Look only at lines above the last `seq` you had before you sent. A short text such as
+     "yes" is often sent more than once, so an older line proves nothing. Look for
+     `_client_user_message` or `_client_message_queued` with the target's `participantId`
+     and the text you sent, after the mention was removed (see [Addressing](#addressing)).
+  4. Send it again only if neither is there. A `_client_message_queued` is not yet a turn:
+     a cancel or a daemon restart can still drop it (see [Events](#events)).
 - Text from the agent is not trusted. Remove control characters before you post it.
 
 ## A first client, step by step
