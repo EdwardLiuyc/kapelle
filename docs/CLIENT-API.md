@@ -1524,12 +1524,14 @@ out of the chat app.
 
 **Rules:**
 
-- The terminal and the bridge can see the same question. The first answer wins. Tell the
-  chat app when the answer came from somewhere else: `_client_permission_answered` has the
-  `reason`.
-- A message route has no retry key. If a reply is lost, read the stream for the message's
-  `_client_user_message` or `_client_message_queued` before you send it again. Otherwise
-  the agent can get it twice.
+- A question can close without the bridge, at the terminal or by a time limit. Tell the
+  chat app when it does: `_client_permission_answered` has the `reason`.
+- A message route has no retry key. If a reply is lost, look in the stream after the last
+  `seq` you had before you sent it. Look for the message's `_client_user_message` or
+  `_client_message_queued`, with the same text and the same `participantId`. Send it
+  again only if neither is there. Otherwise the agent
+  can get it twice. Do not search the whole stream: a short text such as "yes" is often
+  sent more than once.
 - Text from the agent is not trusted. Remove control characters before you post it.
 
 ## A first client, step by step
