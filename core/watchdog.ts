@@ -10,7 +10,8 @@
  *
  * Two signals, both chosen because they port across vendors:
  *
- * - **idle** — nothing on this task's bus for `stallIdleMs`.
+ * - **idle** — nothing on this task's bus for `stallIdleMs`, and no question
+ *   waiting for a person.
  * - **repeat** — the same `tool_call` title `stallRepeatCount` times running,
  *   which is the busy-loop case idle time structurally cannot see.
  *
@@ -101,6 +102,8 @@ interface WatchState {
   lastEventAt: number;
   lastTitle?: string;
   repeatCount: number;
+  /** Questions asked and not yet answered. Idle does not count while one waits. */
+  asking: number;
   idleWarned: boolean;
   repeatWarned: boolean;
   timedOut: boolean;
@@ -117,6 +120,14 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
     state.lastEventAt = now();
     // Any traffic ends the idle spell, so the next one warns on its own merits.
     state.idleWarned = false;
+
+    // A question waits for a person, not for the harness, so it pauses the
+    // idle clock (#195). `AcpAgent` emits the pair around every policy call.
+    if (event.update.sessionUpdate === "_client_permission_pending") {
+      state.asking += 1;
+    } else if (event.update.sessionUpdate === "_client_permission") {
+      state.asking = Math.max(0, state.asking - 1);
+    }
 
     // Only a *new* call counts. `tool_call_update` is progress on one already
     // counted, and counting it would make a single slow tool look like a loop.
@@ -139,6 +150,7 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
         startedAt: started,
         lastEventAt: started,
         repeatCount: 0,
+        asking: 0,
         idleWarned: false,
         repeatWarned: false,
         timedOut: false,
@@ -179,6 +191,7 @@ function check(
 
   if (
     stallIdleMs > 0 &&
+    state.asking === 0 &&
     !state.idleWarned &&
     at - state.lastEventAt > stallIdleMs
   ) {
