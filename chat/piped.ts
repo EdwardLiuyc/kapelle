@@ -50,6 +50,8 @@ function makePrinter(state: RoomState) {
    *  person's own message. */
   let speaker: string | undefined;
   const printed = new WeakMap<Entry, number>();
+  /** What each tool call printed last. */
+  const shown = new WeakMap<Entry, string>();
   const write = (s: string) => {
     if (!s) return;
     process.stdout.write(s);
@@ -83,13 +85,23 @@ function makePrinter(state: RoomState) {
           write(e.text.slice(printed.get(e) ?? 0));
           printed.set(e, e.text.length);
           break;
-        case "tool":
+        case "tool": {
+          // A pipe cannot change a line: the call prints again only when
+          // what it shows changed (#240).
+          const failed = e.status === "failed" ? " — failed" : "";
+          const text = [
+            `  · ${e.title}${failed}`,
+            ...(e.detail ? [`    ${e.detail}`] : []),
+          ].join("\n");
+          if (shown.get(e) === text) return;
+          shown.set(e, text);
           if (speaker !== e.participantId) {
             line(`${nameOf(state, e.participantId)}:`);
           }
           speaker = e.participantId;
-          line(`  · ${e.title}`);
+          line(text);
           break;
+        }
         case "turn_ended":
           if (e.error) line(`! the turn failed: ${e.error}`);
           else if (e.stopReason !== "end_turn") {
@@ -329,4 +341,4 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
   return code;
 }
 
-export { chatPiped };
+export { chatPiped, makePrinter };

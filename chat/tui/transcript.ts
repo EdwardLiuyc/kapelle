@@ -32,6 +32,7 @@ import {
   green,
   italic,
   magenta,
+  red,
   revivedLine,
   sgr,
   underline,
@@ -101,6 +102,15 @@ class Transcript extends Container {
     this.width = width;
     return super.render(width);
   }
+}
+
+/** A tool call's rows: its title, `failed` in red when it failed, and its
+ *  detail under it. */
+function toolLines(e: Extract<Entry, { type: "tool" }>) {
+  const failed = e.status === "failed" ? red(" failed") : "";
+  const rows = [`${dim(`  · ${e.title}`)}${failed}`];
+  if (e.detail) rows.push(dim(`    ${e.detail}`));
+  return rows;
 }
 
 /** The transcript, its scroll view, and how to draw into them. The view is
@@ -190,10 +200,20 @@ function transcriptParts({
         tui.requestRender();
         return;
       }
-      case "tool":
-        heading(e.participantId, name);
-        note(`  · ${e.title}`);
+      case "tool": {
+        // Its updates come back as the same entry: one row, set again
+        // (#240).
+        let line = drawn.get(e);
+        if (!line) {
+          heading(e.participantId, name);
+          line = new Text("", 1, 0);
+          drawn.set(e, line);
+          add(line);
+        }
+        line.setText(toolLines(e).join("\n"));
+        tui.requestRender();
         return;
+      }
       case "turn_ended":
         if (e.error) warn(`! ${name}'s turn failed: ${e.error}`);
         else if (e.stopReason !== "end_turn") {

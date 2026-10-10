@@ -25,14 +25,15 @@ import type {
   AgentEvent,
   Diff,
   PermissionReason,
+  ToolCallStatus,
   ToolKind,
   Usage,
 } from "../protocol/types.ts";
 
-/** The event types a stream carries, the tool kinds a permission names, and
- *  why a permission closed. Re-exported, not copied, so there is one
- *  definition. @public */
-export type { AgentEvent, Diff, PermissionReason, ToolKind };
+/** The event types a stream carries, the tool kinds a permission names, a
+ *  tool call's status, and why a permission closed. Re-exported, not copied,
+ *  so there is one definition. @public */
+export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
 
 /**
  * The contract version (B2, amended 2026-09-22). `major` goes up for a change
