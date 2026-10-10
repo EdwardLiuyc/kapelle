@@ -230,6 +230,38 @@ test("two tasks branch off the same commit and do not collide", async (t) => {
   );
 });
 
+test("worktree mutations on one repository never overlap (#203)", async (t) => {
+  // The real race -- one lost `git worktree add` in about 4,200 under
+  // concurrency -- is far too rare to trigger on demand, so the seam holds
+  // every mutation for a beat. Without the per-repository queue the seven
+  // acquires, and then the seven removes, would all be inside the hold at
+  // once and `peak` would be greater than one.
+  const root = await repo(t);
+  let live = 0;
+  let peak = 0;
+  const hold = async () => {
+    live += 1;
+    peak = Math.max(peak, live);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    live -= 1;
+  };
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    onWorktreeMutation: hold,
+  });
+  assert.ok(worktrees);
+  const ids = ["a", "b", "c", "d", "e", "f", "g"];
+
+  await Promise.all(ids.map((id) => worktrees.acquire(id)));
+  assert.equal(peak, 1, "two worktree adds ran at once");
+
+  // The removes are the other half of the race: an `add` can read a
+  // `commondir` a concurrent `remove` is deleting.
+  live = 0;
+  peak = 0;
+  await Promise.all(ids.map((id) => worktrees.release(id, "keep")));
+  assert.equal(peak, 1, "two worktree removals ran at once");
+});
+
 // --- release: the full status union ------------------------------------------
 
 test("every TaskStatus releases or keeps the worktree", async (t) => {
