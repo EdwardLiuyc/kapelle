@@ -99,6 +99,27 @@ test("a line event closes an open stream instead of landing on it", () => {
   assert.equal(out, "mid-sentence\n[h] → Read [read]\n");
 });
 
+test("a harness's text reaches stdout with no escape sequence, and keeps its lines (#229)", () => {
+  const bad = "a\x1b[2J\nb\x1b]52;c;aGFja2Vk\x07";
+  const out = draw([
+    says(bad),
+    thought(bad),
+    { sessionUpdate: "tool_call", toolCallId: "t", title: bad, kind: "read" },
+    {
+      sessionUpdate: "plan",
+      entries: [{ content: bad, priority: "low", status: "pending" }],
+    },
+  ]);
+
+  // `draw` strips only colour, so an `ESC` left is one the harness sent.
+  assert.equal(out.includes("\x1b"), false);
+  assert.equal(out.includes("\x07"), false);
+  assert.ok(
+    out.startsWith("a [2J\nb ]52;c;aGFja2Vk \n"),
+    "the answer's lines stay",
+  );
+});
+
 /**
  * The markdown repaint — M1c-7. `draw` above leaves `process.stdout.isTTY`
  * as the test runner set it (a pipe), which is the path this story must not

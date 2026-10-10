@@ -100,20 +100,24 @@ export type Entry = {
  * separators go too: they change what a person reads in the question box,
  * not what runs, so a right-to-left override could flip a command. The
  * question's text and a stall warning's go through it (M4-4: a repeat warning
- * quotes a tool title); an answer is markdown, which draws its own.
+ * quotes a tool title). Text with lines uses `cleanLines`.
  */
 export const printable = (s: string) =>
   s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
 
 /**
- * Diff text with each line drawable (M4-6): a tab is four spaces, and the
- * rest goes through `printable`. The lines stay lines.
+ * Text with each line drawable: a tab is four spaces, and the rest is as
+ * `printable` makes it. The lines stay lines, and the zero-width joiner stays,
+ * so a family emoji is one emoji. For a diff (M4-6), and for a person's
+ * message and an agent's answer (#229): pi-tui's `Markdown` passes an escape
+ * sequence through, so an answer that holds `ESC]52` could write the
+ * clipboard. `render.ts` has a copy of this rule, as it cannot import
+ * `client/`.
  */
-export const cleanDiff = (text: string) =>
+export const cleanLines = (text: string) =>
   text
-    .split("\n")
-    .map((l) => printable(l.replaceAll("\t", "    ")))
-    .join("\n");
+    .replaceAll("\t", "    ")
+    .replace(/(?![\n‍])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
 
 type Answer = Extract<Entry, { type: "answer" }>;
 type Question = Extract<Entry, { type: "permission" }>;
@@ -363,6 +367,7 @@ export function applyLine(
         sha: u.sha,
       });
     case "_client_user_message": {
+      const text = cleanLines(u.text);
       const cut = liveTurn();
       if (cut) {
         cut.state = "cut";
@@ -378,7 +383,7 @@ export function applyLine(
         p.tool = undefined;
         p.turns.push({
           ...(u.turn !== undefined && { number: u.turn }),
-          text: u.text,
+          text,
           start: time,
           // A participant the daemon says is stopped: cut, unless its end or
           // its revive follows.
@@ -390,24 +395,28 @@ export function applyLine(
       return add({
         ...at,
         type: "user",
-        text: u.text,
+        text,
         ...(u.turn !== undefined && { turn: u.turn }),
       });
     }
-    case "_client_message_queued":
-      p?.queue.push(u.text);
-      return add({ ...at, type: "queued", text: u.text });
+    case "_client_message_queued": {
+      const text = cleanLines(u.text);
+      p?.queue.push(text);
+      return add({ ...at, type: "queued", text });
+    }
     case "_client_queue_cleared":
       if (p) p.queue = [];
       return add({ ...at, type: "queue_cleared", count: u.count });
     case "agent_message_chunk": {
       if (p) p.thinking = undefined;
       if (u.content?.type !== "text") return undefined;
+      // Per chunk: a sequence split over two chunks loses its `ESC` here.
+      const text = cleanLines(u.content.text);
       if (p?.answer) {
-        p.answer.text += u.content.text;
+        p.answer.text += text;
         return p.answer;
       }
-      const answer = add({ ...at, type: "answer", text: u.content.text });
+      const answer = add({ ...at, type: "answer", text });
       if (p) p.answer = answer as Answer;
       return answer;
     }
@@ -543,7 +552,7 @@ export function applyLine(
             ]),
           ),
         }),
-        ...(u.diff && { diff: { ...u.diff, text: cleanDiff(u.diff.text) } }),
+        ...(u.diff && { diff: { ...u.diff, text: cleanLines(u.diff.text) } }),
       }) as Question;
       state.questions.set(u.id, question);
       return question;

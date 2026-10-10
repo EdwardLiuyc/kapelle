@@ -24,6 +24,19 @@ const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
 
 /**
+ * The harness's text with no escape sequence in it (#229): a control or
+ * format character is a space, a tab four spaces, and `\n` and the
+ * zero-width joiner (a family emoji) stay. An answer that holds `ESC]52`
+ * would otherwise write the clipboard, and `marked` keeps it. A copy of
+ * `cleanLines` in `client/room.ts`, which this file cannot import; change
+ * both.
+ */
+const clean = (s: string) =>
+  s
+    .replaceAll("\t", "    ")
+    .replace(/(?![\n‍])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
+
+/**
  * Which stream is open on the current line, so the next write knows whether to
  * continue it or close it first. Prose and thinking both arrive a few tokens at
  * a time; the only difference is that thinking is dim and announces itself once.
@@ -133,7 +146,7 @@ export function flushStream(): void {
 
 /** Text is the only block this client draws; anything else renders as nothing. */
 const textOf = (c: ContentBlock | undefined): string | undefined =>
-  c?.type === "text" ? c.text : undefined;
+  c?.type === "text" ? clean(c.text) : undefined;
 
 function line(s: string) {
   endStream();
@@ -191,16 +204,16 @@ export function render({ agent, update }: AgentEventEnvelope): void {
 
     case "tool_call":
       line(
-        `${tag} ${cyan("→")} ${update.title ?? "(tool)"} ${dim(`[${update.kind ?? "other"}]`)}`,
+        `${tag} ${cyan("→")} ${clean(update.title ?? "(tool)")} ${dim(`[${clean(update.kind ?? "other")}]`)}`,
       );
       break;
 
     case "tool_call_update":
       if (update.status === "failed") {
-        line(`${tag} ${red("✗")} tool ${update.toolCallId} failed`);
+        line(`${tag} ${red("✗")} tool ${clean(update.toolCallId)} failed`);
       } else if (update.status === "completed") {
         for (const c of update.content ?? []) {
-          if (c.type === "diff") line(`${tag} ${green("±")} ${c.path}`);
+          if (c.type === "diff") line(`${tag} ${green("±")} ${clean(c.path)}`);
         }
       }
       break;
@@ -208,7 +221,7 @@ export function render({ agent, update }: AgentEventEnvelope): void {
     case "plan":
       line(`${tag} plan:`);
       for (const e of update.entries ?? []) {
-        line(dim(`     • ${e.content}`));
+        line(dim(`     • ${clean(e.content)}`));
       }
       break;
 
@@ -220,13 +233,13 @@ export function render({ agent, update }: AgentEventEnvelope): void {
     case "_client_permission":
       line(
         update.allow
-          ? `${tag} ${green("✓ allowed")} ${update.title}`
-          : `${tag} ${red("✗ refused")} ${update.title} ${dim(`[${update.kind}]`)}`,
+          ? `${tag} ${green("✓ allowed")} ${clean(update.title)}`
+          : `${tag} ${red("✗ refused")} ${clean(update.title)} ${dim(`[${clean(update.kind)}]`)}`,
       );
       break;
 
     case "_client_wrote_file":
-      line(`${tag} ${green("wrote")} ${update.path}`);
+      line(`${tag} ${green("wrote")} ${clean(update.path)}`);
       break;
 
     // `_client_permission_pending` is deliberately not drawn (M1c-4). Under

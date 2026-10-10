@@ -23,6 +23,7 @@ import type { RoomDto, RoomEventLine } from "../client/contract.ts";
 import {
   applyLine,
   applyStatus,
+  cleanLines,
   type Entry,
   needsAttention,
   newRoomState,
@@ -470,6 +471,46 @@ test("a question's diff keeps its lines and its counts, and loses its control ch
     added: 1,
     removed: 1,
   });
+});
+
+test("a message and an answer keep their lines and lose their escape sequences (#229)", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-10T09:00:00Z",
+      roomId: "r",
+      participantId: "p",
+      update: update as unknown as RoomEventLine["update"],
+    });
+  const bad = "a\x1b[2J\nb\x1b]52;c;aGFja2Vk\x07";
+  const clean = "a [2J\nb ]52;c;aGFja2Vk ";
+  line({
+    sessionUpdate: "_client_participant_added",
+    name: "ana",
+    harness: "claude",
+    mode: "ask",
+  });
+  const queued = line({ sessionUpdate: "_client_message_queued", text: bad });
+  assert.equal(queued?.type === "queued" && queued.text, clean);
+  assert.deepEqual(who(state, "p").queue, [clean]);
+  const user = line({ sessionUpdate: "_client_user_message", text: bad });
+  assert.equal(user?.type === "user" && user.text, clean);
+  assert.equal(who(state, "p").turns[0]?.text, clean);
+  // Split over two chunks: the second half is plain text once `ESC` is gone.
+  line({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "a\x1b" },
+  });
+  const answer = line({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "[2J\nb\x1b]52;c;aGFja2Vk\x07" },
+  });
+  assert.equal(answer?.type === "answer" && answer.text, clean);
+  // The joiner stays, so a family emoji is one emoji.
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+  assert.equal(cleanLines(family), family);
 });
 
 test("a fast-forward becomes a timeline entry for a second client", () => {

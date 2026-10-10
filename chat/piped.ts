@@ -16,7 +16,7 @@ import { agentDiff } from "../client/diff.ts";
 import {
   applyLine,
   applyStatus,
-  cleanDiff,
+  cleanLines,
   type Entry,
   nameOf,
   newRoomState,
@@ -266,7 +266,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       );
       if (!r) console.error(`! ${NO_DAEMON}`);
       else if (!r.ok) console.error(`! ${r.error.message}`);
-      else console.log(cleanDiff(r.body.text) || `${c.name}: no changes`);
+      else console.log(cleanLines(r.body.text) || `${c.name}: no changes`);
       continue;
     }
     if (c.verb !== "message") {
