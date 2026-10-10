@@ -44,7 +44,7 @@ column as a claim about that build, not about that harness.
 | `session/request_permission` | **never, ever** — the policy has no jurisdiction, and it wrote a file under `safe` | on writes; reads pass unasked | on shelled commands and writes; **file reads pass unasked** | §M0-1 |
 | calls `terminal/create` | never, even when offered `true` | never, even when offered `true` | never, even when offered `true` | §M0-3 |
 | where commands run | internal (`bash`) | internal (its tool is *named* `Terminal` — a vendor name, not the ACP method) | internal (`shell`) | §M0-3 |
-| do we ever see argv | **no** — title is the bare string `bash`, `rawInput` carries only `cwd` | yes, but **late**: on `tool_call_update` ~0.5 s after the `tool_call`, which announces `{}` | yes, on the `tool_call` and again on the permission request | §M0-3 |
+| do we ever see argv | **no** — title is the bare string `bash`, `rawInput` carries only `cwd`; 2.0.18 sends it late, on the update (§M0-3, 2026-10-09) | yes, but **late**: on `tool_call_update` ~0.5 s after the `tool_call`, which announces `{}` | yes, on the `tool_call` and again on the permission request | §M0-3 |
 | `usage_update` cadence | **1, at end of turn** — no in-turn signal for a watchdog at all | ~23 per long turn | ~5 per long turn | §M0-5 |
 | `used` | trustworthy occupancy, agrees with the harness's own count | trustworthy, but **`0` means *unknown*, not *empty*** (compaction fallback) | trustworthy | §M0-5 |
 | `size` as a denominator | the only real per-model limit — and the one harness with no second opinion to check it against | **wrong for all of turn 1**: 200k for any window, a warm-up rather than a glitch | **wrong always**: 200000 matches neither its own 264k window nor the ~175k it leaves usable | §M0-5 |
@@ -62,7 +62,7 @@ M1a-4's call, not this note's.
 | field | opencode | claude-agent-acp | copilot |
 | --- | --- | --- | --- |
 | `shell` | `internal` | `internal` | `internal` |
-| `argvChannel` | `none` | `notification` (late) | `notification` + `permission` |
+| `argvChannel` | `none`; `notification` (late) on 2.0.18 (§M0-3, 2026-10-09) | `notification` (late) | `notification` + `permission` |
 | mode discovery | `configOptions` with `category: "mode"` **only** — `modes` is absent, so a client that reads `SessionModeState` alone concludes it has none and is wrong | `SessionModeState`, 6 vendor ids | `SessionModeState`, 3 canonical spec URLs |
 | mode ids | `build`, `plan` | `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` | `https://agentclientprotocol.com/protocol/session-modes#agent`, `…#plan`, `…#autopilot` — **the full URL is the id; the bare `#plan` fragment returns `-32602`** |
 | `session/set_mode` | accepted — and really so: `-32602` on a bogus id | accepted | accepted, with the full URL id |
@@ -492,6 +492,13 @@ for, and it is where two of three harnesses actually put the command. Timing mat
 claude-agent-acp's argv is late, so a policy that reads `rawInput` at `tool_call` time
 sees `{}` and judges blind — the same bookkeeping trap `#toolCalls` already exists to
 avoid.
+
+**opencode 2.0.18 sends the command now (measured 2026-10-09, #240).** Its first
+`tool_call` is still `shell` with `rawInput` `{cwd}` or `{}`. The first
+`tool_call_update` then carries the command as the title and as `rawInput.command`, as
+claude-agent-acp's does. So opencode's `argvChannel` is `notification` (late), not
+`none`. It still never asks permission, so the policy still cannot gate it. The 1.18.18
+measurement above stays as it was.
 
 ### Why nothing called it — checked, not assumed
 

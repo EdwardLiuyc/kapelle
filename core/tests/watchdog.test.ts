@@ -131,6 +131,40 @@ test("an event clears the idle warning, so a second spell warns again", () => {
   ]);
 });
 
+test("a question that waits for a person pauses the idle clock (#195)", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallIdleMs: 10_000, ttlMs: 0 }));
+
+  h.wd.note({
+    agent: "a",
+    update: {
+      sessionUpdate: "_client_permission_pending",
+      title: "edit x",
+      kind: "edit",
+    },
+  });
+  h.advance(60_000);
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "the harness waits for the answer");
+
+  h.wd.note({
+    agent: "a",
+    update: {
+      sessionUpdate: "_client_permission",
+      allow: true,
+      title: "edit x",
+      kind: "edit",
+    },
+  });
+  h.advance(9_000);
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "the clock counts from the answer");
+
+  h.advance(2_000);
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "idle"]]);
+});
+
 test("stallIdleMs 0 disables the idle signal", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallIdleMs: 0 }));

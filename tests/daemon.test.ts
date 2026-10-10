@@ -6659,8 +6659,10 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
   // command, then open: the folder is not added, so the form asks.
-  // Only the rows that change are drawn again, so wait for the value.
-  await press(`${DOWN}\r${REMEMBER}\r`, "mock-agent.mjs");
+  // Only the rows that change are drawn again, so wait for the value. The
+  // row cuts a long one, so wait for its start: a checkout with a long path
+  // never shows `mock-agent.mjs`.
+  await press(`${DOWN}\r${REMEMBER}\r`, REMEMBER.slice(0, 40));
   await press(
     `${DOWN}${DOWN}\r`,
     "is not added to the daemon. Add its repository?",

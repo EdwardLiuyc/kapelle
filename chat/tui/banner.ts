@@ -67,7 +67,7 @@ function bannerPart({
       ? `asks: ${asked.title}`
       : p?.thinking !== undefined
         ? "thinking"
-        : (p?.tool ?? "working");
+        : (p?.tool?.title ?? "working");
     const start = Date.parse(p?.turns.at(-1)?.start ?? "");
     const timer = Number.isNaN(start) ? "" : ` · ${clock(now() - start)}`;
     const cancel = asked ? "" : ` · @${name} /cancel`;

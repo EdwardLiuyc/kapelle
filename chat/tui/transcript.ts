@@ -37,6 +37,7 @@ import {
   fg,
   italic,
   magenta,
+  red,
   revivedLine,
   sgr,
   underline,
@@ -138,6 +139,15 @@ class Transcript extends Container {
   }
 }
 
+/** A tool call's rows: its title, `failed` in red when it failed, and its
+ *  detail under it. The bar before them is the agent's (M7-1). */
+function toolLines(e: Extract<Entry, { type: "tool" }>) {
+  const failed = e.status === "failed" ? red(" failed") : "";
+  const rows = [`${dim(`· ${e.title}`)}${failed}`];
+  if (e.detail) rows.push(dim(`  ${e.detail}`));
+  return rows;
+}
+
 /** The transcript, its scroll view, and how to draw into them. The view is
  *  read at each redraw. */
 function transcriptParts({
@@ -155,8 +165,9 @@ function transcriptParts({
   const scroll = new ScrollView(transcript, { follow: "end", primary: true });
   /** The part drawn for each of the person's messages, to jump to. */
   let drawn = new WeakMap<Entry, Component>();
-  /** The line drawn for each question, which its answer sets again. */
-  let asked = new WeakMap<Entry, Text>();
+  /** The line drawn for each question or tool call, which its answer or
+   *  its update sets again. */
+  let lines = new WeakMap<Entry, Text>();
   /** Each answer's blocks: the finished ones, drawn once, then the rest,
    *  which each chunk sets again. `done` is where the rest starts. */
   let answers = new WeakMap<
@@ -238,10 +249,20 @@ function transcriptParts({
         tui.requestRender();
         return;
       }
-      case "tool":
-        heading(state, e, name);
-        add(barred(new Text(dim(`· ${e.title}`), 1, 0), paint(state, e)));
+      case "tool": {
+        // Its updates come back as the same entry: one row, set again
+        // (#240).
+        let line = lines.get(e);
+        if (!line) {
+          heading(state, e, name);
+          line = new Text("", 1, 0);
+          lines.set(e, line);
+          add(barred(line, paint(state, e)));
+        }
+        line.setText(toolLines(e).join("\n"));
+        tui.requestRender();
         return;
+      }
       case "turn_ended":
         if (e.error) warn(`! ${name}'s turn failed: ${e.error}`);
         else if (e.stopReason !== "end_turn") {
@@ -263,10 +284,10 @@ function transcriptParts({
       case "permission": {
         // The TUI answers in its pop-up (M4-3); this line shows the question
         // and, once it closes, how.
-        let line = asked.get(e);
+        let line = lines.get(e);
         if (!line) {
           line = new Text("", 1, 0);
-          asked.set(e, line);
+          lines.set(e, line);
           add(line);
         }
         let answer = "";
@@ -286,7 +307,7 @@ function transcriptParts({
   const redraw = () => {
     transcript.clear();
     drawn = new WeakMap();
-    asked = new WeakMap();
+    lines = new WeakMap();
     answers = new WeakMap();
     speaker = undefined;
     const r = rooms.get(view().roomId);

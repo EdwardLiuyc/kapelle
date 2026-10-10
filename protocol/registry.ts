@@ -106,7 +106,9 @@ export const AGENTS: Record<string, AgentEntry> = {
     maxMode: "auto",
     measured: {
       shell: "internal",
-      argvChannel: "none",
+      // `none` on 1.18.18. On 2.0.18 the command comes on the first
+      // `tool_call_update` (§M0-3, 2026-10-09, #240).
+      argvChannel: "notification",
       // Zero permission requests in any mode — it wrote a file under `safe`.
       asksPermission: false,
       // Advertises no `modes` at all; the ids appear only in `configOptions`

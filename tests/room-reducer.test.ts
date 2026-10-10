@@ -799,7 +799,7 @@ test("each participant keeps its turn's start, a thinking flag, its last tool an
     title: "Read\u001b[2J File",
   });
   assert.equal(ana().thinking, undefined, "a tool call clears it");
-  assert.equal(ana().tool, "Read [2J File", "the last tool, printable");
+  assert.equal(ana().tool?.title, "Read [2J File", "the last tool, printable");
   line(thought);
   line({
     sessionUpdate: "agent_message_chunk",
@@ -815,4 +815,324 @@ test("each participant keeps its turn's start, a thinking flag, its last tool an
   line({ sessionUpdate: "tool_call", toolCallId: "t2", title: "Edit" });
   line({ sessionUpdate: "_client_user_message", text: "next", turn: 3 });
   assert.equal(ana().tool, undefined, "a new turn clears the last tool");
+});
+
+/** A room with `ann` and `bob`, and a line maker for it. The tool calls
+ *  are the shapes measured on 2026-10-09 (#240). */
+function toolRoom() {
+  const state = newRoomState();
+  let seq = 0;
+  const send = (participantId: string, update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-10T00:00:00Z",
+      roomId: "r1",
+      participantId,
+      update: update as unknown as RoomEventLine["update"],
+    });
+  for (const name of ["ann", "bob"]) {
+    send(name, {
+      sessionUpdate: "_client_participant_added",
+      name,
+      harness: "mock",
+      mode: "auto",
+    });
+  }
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  /** The tool call's entry after its first event, then after each update:
+   *  `[title, detail, status]`. */
+  const rows = (first: Record<string, unknown>, ...updates: object[]) => {
+    const e = send("ann", {
+      sessionUpdate: "tool_call",
+      toolCallId: `t${seq}`,
+      ...first,
+    });
+    const id = `t${seq - 1}`;
+    const now = () => (e?.type === "tool" ? [e.title, e.detail, e.status] : []);
+    const seen = [now()];
+    for (const u of updates) {
+      const changed = send("ann", {
+        sessionUpdate: "tool_call_update",
+        toolCallId: id,
+        ...u,
+      });
+      assert.equal(changed, e, "each update changes the same entry");
+      seen.push(now());
+    }
+    return seen;
+  };
+  return { state, send, rows };
+}
+
+test("a tool call's updates change its one entry: the title, the detail and the status (#240)", () => {
+  const { state, rows } = toolRoom();
+  const last = (r: unknown[][]) => r.at(-1);
+  // claude: a plain label, then the real title on the update. Its command
+  // is the title, so there is no detail.
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "Terminal", kind: "execute", rawInput: {} },
+        {
+          title: "echo hi",
+          rawInput: { command: "echo hi", description: "Print hi" },
+          status: "in_progress",
+        },
+        { status: "completed" },
+      ),
+    ),
+    ["echo hi", undefined, "completed"],
+  );
+  // Its title gives a path from its folder, and quotes a pattern: both
+  // are said already.
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "Read File", kind: "read", rawInput: {} },
+        { title: "Read src/a.ts", rawInput: { file_path: "/w/src/a.ts" } },
+      ),
+    ),
+    ["Read src/a.ts", undefined, undefined],
+  );
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "grep", kind: "search", rawInput: {} },
+        {
+          title: 'grep -n "foo" src',
+          rawInput: { pattern: "foo", path: "src" },
+        },
+      ),
+    ),
+    ['grep -n "foo" src', undefined, undefined],
+  );
+  // opencode: the shell title becomes the command; `edit` keeps its title,
+  // so the path is the detail. `cwd` is not shown.
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "shell", rawInput: { cwd: "/w" } },
+        { title: "ls -la", rawInput: { command: "ls -la" } },
+      ),
+    ),
+    ["ls -la", undefined, undefined],
+  );
+  // The command can come before the title that says it: the detail goes
+  // once the title says it.
+  assert.deepEqual(
+    rows(
+      { title: "shell", rawInput: { cwd: "/w" } },
+      { rawInput: { command: "ls" } },
+      { title: "ls" },
+    ),
+    [
+      ["shell", undefined, undefined],
+      ["shell", "ls", undefined],
+      ["ls", undefined, undefined],
+    ],
+  );
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "edit", rawInput: {} },
+        {
+          rawInput: { filePath: "/w/a.ts", oldString: "A", newString: "B" },
+          status: "failed",
+        },
+      ),
+    ),
+    ["edit", "/w/a.ts", "failed"],
+  );
+  // copilot: the command is in the first event's rawInput.
+  assert.deepEqual(
+    rows({
+      title: "Echo probe string",
+      rawInput: { command: "echo probe", description: "Echo probe string" },
+      status: "pending",
+    }),
+    [["Echo probe string", "echo probe", "pending"]],
+  );
+  // pi: its file tool shows the operation and the path; a shell title is
+  // the command already.
+  assert.deepEqual(
+    rows({
+      title: "str_replace_editor",
+      rawInput: { command: "str_replace", path: "/w/a.ts", old_str: "x" },
+      locations: [{ path: "/w/a.ts" }],
+    }),
+    [["str_replace_editor", "str_replace /w/a.ts", undefined]],
+  );
+  assert.deepEqual(
+    rows({ title: "echo hi", rawInput: { command: "echo hi" } }),
+    [["echo hi", undefined, undefined]],
+  );
+  // No input at all: the description, else the first location.
+  assert.deepEqual(
+    rows({ title: "think", rawInput: { description: "plan it" } }),
+    [["think", "plan it", undefined]],
+  );
+  assert.deepEqual(rows({ title: "look", locations: [{ path: "/w/b" }] }), [
+    ["look", "/w/b", undefined],
+  ]);
+  assert.deepEqual(rows({ title: "look" }, { locations: [{ path: "/w/c" }] }), [
+    ["look", undefined, undefined],
+    ["look", "/w/c", undefined],
+  ]);
+  assert.equal(
+    state.timeline.filter((e) => e.type === "tool").length,
+    12,
+    "one entry per call",
+  );
+});
+
+test("a tool call's update neither splits a streaming answer nor counts as unread", () => {
+  const { state, send } = toolRoom();
+  const chunk = (text: string) =>
+    send("ann", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text },
+    });
+  send("ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "Terminal",
+  });
+  const answer = chunk("one ");
+  const unread = state.participants.get("ann")?.unread;
+  send("ann", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    title: "ls",
+  });
+  chunk("two");
+  assert.equal(answer?.type === "answer" && answer.text, "one two");
+  assert.equal(state.participants.get("ann")?.unread, unread);
+});
+
+test("a tool call's update for an unknown id, or another participant's, changes nothing", () => {
+  const { state, send } = toolRoom();
+  const ann = send("ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "Terminal",
+  });
+  const before = state.timeline.length;
+  assert.equal(
+    send("ann", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "nope",
+      title: "x",
+    }),
+    undefined,
+  );
+  // bob's harness uses the same id for its own call.
+  assert.equal(
+    send("bob", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      title: "rm -rf /",
+    }),
+    undefined,
+  );
+  assert.equal(state.timeline.length, before);
+  assert.equal(ann?.type === "tool" && ann.title, "Terminal");
+});
+
+test("a tool call's title and detail lose their control characters, are capped, and never hold a whole file", () => {
+  const { send } = toolRoom();
+  const e = send("ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "rm\x1b[2J -rf\n/",
+    rawInput: {
+      path: `/w/${"a".repeat(400)}\x07`,
+      old_string: "SECRET",
+      new_string: "SECRET",
+      file_text: "SECRET",
+      content: "SECRET",
+    },
+    rawOutput: "SECRET",
+    content: [{ type: "content", content: { type: "text", text: "SECRET" } }],
+  });
+  assert.equal(e?.type, "tool");
+  if (e?.type !== "tool") return;
+  assert.equal(e.title, "rm [2J -rf /");
+  assert.equal(e.detail?.length, 200);
+  assert.ok(e.detail?.endsWith("…"));
+  assert.ok(!e.detail?.includes("\x07"));
+  assert.doesNotMatch(JSON.stringify(e), /SECRET/);
+  const updated = send("ann", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    title: "‮evil",
+    rawInput: { file_text: "SECRET" },
+  });
+  assert.equal(updated?.type === "tool" && updated.title, " evil");
+  assert.doesNotMatch(JSON.stringify(updated), /SECRET/);
+});
+
+test("a tool detail: a prose title word hides no path, a said description gives way to the location, and a long command still matches its title (#253)", () => {
+  const { rows } = toolRoom();
+  // copilot's title is prose: `config` is not the end of the path.
+  assert.deepEqual(
+    rows({ title: "Update the config", rawInput: { path: "/w/etc/config" } }),
+    [["Update the config", "/w/etc/config", undefined]],
+  );
+  // claude's relative path still hides the full one, `a.ts` alone too.
+  assert.deepEqual(
+    rows({ title: "Read a.ts", rawInput: { file_path: "/w/a.ts" } }),
+    [["Read a.ts", undefined, undefined]],
+  );
+  // The description says what the title says: the location shows.
+  assert.deepEqual(
+    rows({
+      title: "plan it",
+      rawInput: { description: "plan it" },
+      locations: [{ path: "/w/b" }],
+    }),
+    [["plan it", "/w/b", undefined]],
+  );
+  // The slot keeps 800 characters of each; both are cut alike, so a
+  // command that is its title still matches.
+  const long = `python - <<'EOF'\n${"x".repeat(5000)}`;
+  assert.deepEqual(
+    rows({ title: long, rawInput: { command: long } }).map(([, d]) => d),
+    [undefined],
+  );
+});
+
+test("a tool call's status is one ACP defines, and an update that changes nothing drawn returns nothing (#253)", () => {
+  const { send } = toolRoom();
+  const e = send("ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "x",
+    status: "\x1b[2Jbogus",
+  });
+  assert.equal(e?.type === "tool" && "status" in e, false);
+  assert.equal(
+    send("ann", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      _meta: { terminal_output: { data: "hi" } },
+    }),
+    undefined,
+    "output alone draws nothing",
+  );
+  assert.equal(
+    send("ann", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "nope",
+    }),
+    undefined,
+  );
+  assert.equal(
+    send("ann", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "in_progress",
+    }),
+    e,
+  );
 });

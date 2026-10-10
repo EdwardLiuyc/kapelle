@@ -151,6 +151,15 @@ test("a busy row: thinking, then the last tool, then working, with its timer and
   assert.ok(!part.render(120).join("").includes("SECRET"), "never the text");
   line({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read File" });
   assert.deepEqual(text(), ["▌◓ ann Read File · 1m 05s · @ann /cancel"]);
+  // An update sets the title in place (#240): the row follows it.
+  line({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    title: "Read package.json",
+  });
+  assert.deepEqual(text(), [
+    "▌◓ ann Read package.json · 1m 05s · @ann /cancel",
+  ]);
   part.handleMouse?.({ type: "click", button: "left", x: 0, y: 0 } as never);
   assert.deepEqual(opened, [{ roomId: "r1", participantId: "p-ann" }]);
   // Its question is on screen: it waits for the person, so no cancel.
@@ -167,7 +176,9 @@ test("a busy row: thinking, then the last tool, then working, with its timer and
     allow: true,
     reason: "user",
   });
-  assert.deepEqual(text(), ["▌◓ ann Read File · 1m 05s · @ann /cancel"]);
+  assert.deepEqual(text(), [
+    "▌◓ ann Read package.json · 1m 05s · @ann /cancel",
+  ]);
   line({ sessionUpdate: "_client_turn_ended", stopReason: "end_turn" });
   assert.deepEqual(text(), [], "idle: no row");
 });
