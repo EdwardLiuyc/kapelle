@@ -742,3 +742,230 @@ test("a revive entry is behind only when loaded, and keeps an unknown resumed (#
     "forked",
   );
 });
+
+/** A room with `ann` and `bob`, and a line maker for it. The tool calls
+ *  are the shapes measured on 2026-10-09 (#240). */
+function toolRoom() {
+  const state = newRoomState();
+  let seq = 0;
+  const send = (participantId: string, update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-10T00:00:00Z",
+      roomId: "r1",
+      participantId,
+      update: update as unknown as RoomEventLine["update"],
+    });
+  for (const name of ["ann", "bob"]) {
+    send(name, {
+      sessionUpdate: "_client_participant_added",
+      name,
+      harness: "mock",
+      mode: "auto",
+    });
+  }
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  /** The tool call's entry after its first event, then after each update:
+   *  `[title, detail, status]`. */
+  const rows = (first: Record<string, unknown>, ...updates: object[]) => {
+    const e = send("ann", {
+      sessionUpdate: "tool_call",
+      toolCallId: `t${seq}`,
+      ...first,
+    });
+    const id = `t${seq - 1}`;
+    const seen = [e];
+    for (const u of updates) {
+      seen.push(
+        send("ann", {
+          sessionUpdate: "tool_call_update",
+          toolCallId: id,
+          ...u,
+        }),
+      );
+    }
+    assert.ok(
+      seen.every((s) => s === e),
+      "each update changes the same entry",
+    );
+    return seen.map(() =>
+      e?.type === "tool" ? [e.title, e.detail, e.status] : [],
+    );
+  };
+  return { state, send, rows };
+}
+
+test("a tool call's updates change its one entry: the title, the detail and the status (#240)", () => {
+  const { state, rows } = toolRoom();
+  const last = (r: unknown[][]) => r.at(-1);
+  // claude: a plain label, then the real title on the update. Its command
+  // is the title, so there is no detail.
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "Terminal", kind: "execute", rawInput: {} },
+        {
+          title: "echo hi",
+          rawInput: { command: "echo hi", description: "Print hi" },
+          status: "in_progress",
+        },
+        { status: "completed" },
+      ),
+    ),
+    ["echo hi", undefined, "completed"],
+  );
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "Read File", kind: "read", rawInput: {} },
+        { title: "Read /w/a.ts", rawInput: { file_path: "/w/a.ts" } },
+      ),
+    ),
+    ["Read /w/a.ts", undefined, undefined],
+  );
+  // opencode: the shell title becomes the command; `edit` keeps its title,
+  // so the path is the detail. `cwd` is not shown.
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "shell", rawInput: { cwd: "/w" } },
+        { title: "ls -la", rawInput: { command: "ls -la" } },
+      ),
+    ),
+    ["ls -la", undefined, undefined],
+  );
+  assert.deepEqual(
+    last(
+      rows(
+        { title: "edit", rawInput: {} },
+        {
+          rawInput: { filePath: "/w/a.ts", oldString: "A", newString: "B" },
+          status: "failed",
+        },
+      ),
+    ),
+    ["edit", "/w/a.ts", "failed"],
+  );
+  // copilot: the command is in the first event's rawInput.
+  assert.deepEqual(
+    rows({
+      title: "Echo probe string",
+      rawInput: { command: "echo probe", description: "Echo probe string" },
+      status: "pending",
+    }),
+    [["Echo probe string", "echo probe", "pending"]],
+  );
+  // pi: its file tool shows the operation and the path; a shell title is
+  // the command already.
+  assert.deepEqual(
+    rows({
+      title: "str_replace_editor",
+      rawInput: { command: "str_replace", path: "/w/a.ts", old_str: "x" },
+      locations: [{ path: "/w/a.ts" }],
+    }),
+    [["str_replace_editor", "str_replace /w/a.ts", undefined]],
+  );
+  assert.deepEqual(
+    rows({ title: "echo hi", rawInput: { command: "echo hi" } }),
+    [["echo hi", undefined, undefined]],
+  );
+  // No input at all: the description, else the first location.
+  assert.deepEqual(
+    rows({ title: "think", rawInput: { description: "plan it" } }),
+    [["think", "plan it", undefined]],
+  );
+  assert.deepEqual(rows({ title: "look", locations: [{ path: "/w/b" }] }), [
+    ["look", "/w/b", undefined],
+  ]);
+  assert.equal(
+    state.timeline.filter((e) => e.type === "tool").length,
+    9,
+    "one entry per call",
+  );
+});
+
+test("a tool call's update neither splits a streaming answer nor counts as unread", () => {
+  const { state, send } = toolRoom();
+  const chunk = (text: string) =>
+    send("ann", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text },
+    });
+  send("ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "Terminal",
+  });
+  const answer = chunk("one ");
+  const unread = state.participants.get("ann")?.unread;
+  send("ann", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    title: "ls",
+  });
+  chunk("two");
+  assert.equal(answer?.type === "answer" && answer.text, "one two");
+  assert.equal(state.participants.get("ann")?.unread, unread);
+});
+
+test("a tool call's update for an unknown id, or another participant's, changes nothing", () => {
+  const { state, send } = toolRoom();
+  const ann = send("ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "Terminal",
+  });
+  const before = state.timeline.length;
+  assert.equal(
+    send("ann", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "nope",
+      title: "x",
+    }),
+    undefined,
+  );
+  // bob's harness uses the same id for its own call.
+  assert.equal(
+    send("bob", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      title: "rm -rf /",
+    }),
+    undefined,
+  );
+  assert.equal(state.timeline.length, before);
+  assert.equal(ann?.type === "tool" && ann.title, "Terminal");
+});
+
+test("a tool call's title and detail lose their control characters, are capped, and never hold a whole file", () => {
+  const { send } = toolRoom();
+  const e = send("ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "rm\x1b[2J -rf\n/",
+    rawInput: {
+      path: `/w/${"a".repeat(400)}\x07`,
+      old_string: "SECRET",
+      new_string: "SECRET",
+      file_text: "SECRET",
+      content: "SECRET",
+    },
+    rawOutput: "SECRET",
+    content: [{ type: "content", content: { type: "text", text: "SECRET" } }],
+  });
+  assert.equal(e?.type, "tool");
+  if (e?.type !== "tool") return;
+  assert.equal(e.title, "rm [2J -rf /");
+  assert.equal(e.detail?.length, 200);
+  assert.ok(e.detail?.endsWith("…"));
+  assert.ok(!e.detail?.includes("\x07"));
+  assert.doesNotMatch(JSON.stringify(e), /SECRET/);
+  const updated = send("ann", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    title: "‮evil",
+    rawInput: { file_text: "SECRET" },
+  });
+  assert.equal(updated?.type === "tool" && updated.title, " evil");
+  assert.doesNotMatch(JSON.stringify(updated), /SECRET/);
+});

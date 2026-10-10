@@ -37,6 +37,7 @@ import type {
   PermissionReason,
   RoomDto,
   RoomEventLine,
+  ToolCallStatus,
   ToolKind,
 } from "./contract.ts";
 
@@ -50,7 +51,14 @@ export type Entry = { seq: number; participantId: string } & (
   | { type: "queued"; text: string }
   | { type: "queue_cleared"; count: number }
   | { type: "answer"; text: string }
-  | { type: "tool"; title: string }
+  /** One tool call. Its `tool_call_update`s change it in place (#240).
+   *  `detail`: what the title does not say, such as the command or path. */
+  | {
+      type: "tool";
+      title: string;
+      detail?: string;
+      status?: ToolCallStatus;
+    }
   | { type: "turn_ended"; stopReason?: string; error?: string }
   | { type: "exited" }
   /** A stopped participant has a new harness (M6-7a), with its old session
@@ -101,6 +109,71 @@ export const cleanDiff = (text: string) =>
 
 type Answer = Extract<Entry, { type: "answer" }>;
 type Question = Extract<Entry, { type: "permission" }>;
+type Tool = Extract<Entry, { type: "tool" }>;
+
+/** The `rawInput` keys a tool row may show, in this order (#240). Never a
+ *  whole file (`old_string`, `file_text`, `content`) or `rawOutput`. */
+const DETAIL_KEYS = [
+  "command",
+  "path",
+  "file_path",
+  "filePath",
+  "pattern",
+  "query",
+  "url",
+];
+/** The most a tool row's title or detail keeps, in characters. */
+const TOOL_TEXT = 200;
+
+/** A tool call's entry, and what its detail is worked out from. Only the
+ *  keys the detail can use are kept, so a whole file is not held. */
+interface ToolSlot {
+  entry: Tool;
+  /** As sent, so a long command still matches the title it is in. */
+  title: string;
+  input: Record<string, string>;
+  location?: string;
+}
+
+const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+
+const toolText = (s: string) => {
+  const t = printable(s);
+  return t.length > TOOL_TEXT ? `${t.slice(0, TOOL_TEXT - 1)}…` : t;
+};
+
+/** The keys of `raw` a detail can use. `raw` is the harness's JSON. */
+function detailInput(raw: unknown): Record<string, string> {
+  if (typeof raw !== "object" || raw === null) return {};
+  const input: Record<string, string> = {};
+  for (const k of [...DETAIL_KEYS, "description"]) {
+    const v = str((raw as Record<string, unknown>)[k]);
+    if (v) input[k] = v;
+  }
+  return input;
+}
+
+/** The detail line: the command, path, pattern, query or url; else the
+ *  description; else the first location. A part the title already says,
+ *  between spaces or at an end, is left out: `str_replace` still shows
+ *  under `str_replace_editor`. */
+function detailOf({ title, input, location }: ToolSlot) {
+  let parts = DETAIL_KEYS.flatMap((k) => input[k] ?? []);
+  if (parts.length === 0) {
+    parts = [input.description ?? location ?? ""].filter(Boolean);
+  }
+  const words = ` ${title} `;
+  const shown = parts.filter((v) => !words.includes(` ${v} `));
+  return shown.length > 0 ? toolText(shown.join(" ")) : undefined;
+}
+
+/** Sets the entry's title and detail from its slot. */
+function showTool(slot: ToolSlot) {
+  slot.entry.title = toolText(slot.title);
+  const detail = detailOf(slot);
+  if (detail) slot.entry.detail = detail;
+  else delete slot.entry.detail;
+}
 
 interface Turn {
   /** From `_client_user_message`; absent on lines written before M6-5. */
@@ -162,6 +235,9 @@ export interface RoomState {
   /** What `applyStatus` read for a participant the replay has not added
    *  yet: GET can answer first. */
   reported: Map<string, Report>;
+  /** Each tool call, by participant and `toolCallId`: two harnesses can
+   *  use the same id. */
+  tools: Map<string, ToolSlot>;
 }
 
 export const newRoomState = (): RoomState => ({
@@ -170,6 +246,7 @@ export const newRoomState = (): RoomState => ({
   timeline: [],
   questions: new Map(),
   reported: new Map(),
+  tools: new Map(),
 });
 
 /**
@@ -285,8 +362,39 @@ export function applyLine(
       if (p) p.answer = answer as Answer;
       return answer;
     }
-    case "tool_call":
-      return add({ ...at, type: "tool", title: u.title });
+    case "tool_call": {
+      const status = str(u.status) as ToolCallStatus | undefined;
+      const slot: ToolSlot = {
+        entry: add({
+          ...at,
+          type: "tool",
+          title: "",
+          ...(status && { status }),
+        }) as Tool,
+        title: str(u.title) ?? "",
+        input: detailInput(u.rawInput),
+      };
+      const location = str(u.locations?.[0]?.path);
+      if (location) slot.location = location;
+      showTool(slot);
+      state.tools.set(`${participantId} ${u.toolCallId}`, slot);
+      return slot.entry;
+    }
+    case "tool_call_update": {
+      // In place: not a new line, so the answer streaming goes on and
+      // nothing more is unread.
+      const slot = state.tools.get(`${participantId} ${u.toolCallId}`);
+      if (!slot) return undefined;
+      const title = str(u.title);
+      if (title !== undefined) slot.title = title;
+      Object.assign(slot.input, detailInput(u.rawInput));
+      const location = str(u.locations?.[0]?.path);
+      if (location) slot.location = location;
+      const status = str(u.status) as ToolCallStatus | undefined;
+      if (status) slot.entry.status = status;
+      showTool(slot);
+      return slot.entry;
+    }
     case "_client_turn_ended": {
       const turn = liveTurn();
       if (turn) {

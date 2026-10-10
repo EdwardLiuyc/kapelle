@@ -327,3 +327,48 @@ test("a loaded revive says so, and warns when its memory may be behind (M6-7b)",
     /! ana is back with its old session, but it stopped during a turn: what it remembers may be behind its files/,
   );
 });
+
+test("a tool call is one row that its updates change in place, with failed in red (#240)", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-10T00:00:00Z",
+      roomId: "r1",
+      participantId: "p-ann",
+      update: update as unknown as RoomEventLine["update"],
+    });
+  line({
+    sessionUpdate: "_client_participant_added",
+    name: "ann",
+    harness: "mock",
+    mode: "auto",
+  });
+  line({ sessionUpdate: "tool_call", toolCallId: "t1", title: "edit" });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+  });
+  parts.redraw();
+  const children = parts.transcript.children.length;
+  const e = line({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    rawInput: { filePath: "/w/a.ts" },
+    status: "failed",
+  });
+  assert.ok(e);
+  parts.draw(state, e);
+  assert.equal(parts.transcript.children.length, children, "no new row");
+  const rows = parts.transcript.render(40).map((l) => l.trimEnd());
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const plain = rows.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trim());
+  assert.deepEqual(plain.slice(-2), ["· edit failed", "/w/a.ts"]);
+  assert.ok(rows.at(-2)?.includes("\x1b[31m failed"), "failed is red");
+});
