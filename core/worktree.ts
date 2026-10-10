@@ -160,27 +160,43 @@ async function tryGit(cwd: string, args: string[]): Promise<string | null> {
  * Worktrees are one per task and the pool runs tasks in parallel, so the
  * overlap is the normal case, not an accident.
  *
- * The key is the repository root, so separate runs in this process share one
- * queue. It is **in-process only**: two CLI processes on one repository can
- * still overlap, and a cross-process lock or retry is the upgrade if that is
- * ever measured.
+ * The key is the common git dir (`mutationKey`), so every checkout of one
+ * repository — the main one and its linked worktrees — shares one queue. It
+ * is **in-process only**: two CLI processes on one repository can still
+ * overlap, and a cross-process lock or retry is the upgrade if that is ever
+ * measured.
  */
 const worktreeMutations = new Map<string, Promise<unknown>>();
 
-function serializeWorktreeMutation<T>(
-  root: string,
+export function serializeWorktreeMutation<T>(
+  key: string,
   work: () => Promise<T>,
 ): Promise<T> {
-  const previous = worktreeMutations.get(root) ?? Promise.resolve();
+  const previous = worktreeMutations.get(key) ?? Promise.resolve();
   // Both handlers are the work: a failed mutation must not wedge every later
   // one for the same repository.
   const next = previous.then(work, work);
-  worktreeMutations.set(root, next);
+  worktreeMutations.set(key, next);
   const settled = () => {
-    if (worktreeMutations.get(root) === next) worktreeMutations.delete(root);
+    if (worktreeMutations.get(key) === next) worktreeMutations.delete(key);
   };
   void next.then(settled, settled);
   return next;
+}
+
+/**
+ * The key the mutation queue is shared under: the git directory every
+ * checkout of one repository writes — `.git` for the main checkout, the
+ * common dir git reports inside a linked worktree.
+ *
+ * `stateDirRoot` returns the *checkout* root, so using that directly gave a
+ * linked worktree its own queue while `git worktree add` from it still wrote
+ * the shared `.git/worktrees/`; two runs in one process, one per checkout,
+ * could then race as before (#203).
+ */
+async function mutationKey(root: string): Promise<string> {
+  const common = await tryGit(root, ["rev-parse", "--git-common-dir"]);
+  return common === null ? root : resolve(root, common);
 }
 
 /**
@@ -457,11 +473,12 @@ export async function openWorktrees(
   const prefix = relative(realpathSync(root), realpathSync(cwd));
 
   const held = new Map<string, Held>();
+  const queueKey = await mutationKey(root);
 
   // Every mutation below runs through the repository's queue; the optional
   // hook is the test seam for `core/tests/worktree.test.ts`, not behaviour.
   const mutateWorktrees = <T>(work: () => Promise<T>): Promise<T> =>
-    serializeWorktreeMutation(root, async () => {
+    serializeWorktreeMutation(queueKey, async () => {
       await options.onWorktreeMutation?.();
       return work();
     });
