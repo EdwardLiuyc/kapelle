@@ -23,7 +23,8 @@ rooms stable, M6-7b, #179, which added `resumed: "loaded"`, and M6-7c, #235, whi
 7. [Events](#events)
 8. [Permissions](#permissions)
 9. [Rooms](#rooms)
-10. [A first client, step by step](#a-first-client-step-by-step)
+10. [Bridges](#bridges)
+11. [A first client, step by step](#a-first-client-step-by-step)
 
 ## How the daemon works, in short
 
@@ -1495,6 +1496,41 @@ the same rules, so the TUI and piped `chat.ts` behave the same:
   daemon would refuse the empty text with `400` `invalid_request`. While the person
   types, the composer only shows the resolved target, so a thread that opens with its
   `@name` pre-filled is not in an error state.
+
+## Bridges
+
+A bridge connects a chat app, such as Slack or Matrix, to a room. It is a client like
+`chat.ts`, and it uses only the routes in this document. **No chat SDK goes into the
+daemon.** The bridge holds the chat app's library and its login.
+
+**Where it runs.** On the same machine and as the same user as the daemon. It finds the
+daemon and its token as in [Find the daemon](#find-the-daemon). There is one token, the
+operator's, so a bridge can do everything a person at the terminal can do. Keep the token
+out of the chat app.
+
+**What it does:**
+
+1. Follow a room with [`GET /rooms/:id/events`](#get-roomsidevents), or one participant
+   with [`GET /rooms/:id/agents/:agentId/events`](#get-roomsidagentsagentidevents).
+   Keep the last `seq` and reconnect as in [Resume after a break](#resume-after-a-break).
+2. Post the agent's text to the chat app. Join the chunks of a message yourself: see
+   [Chunks are not joined](#chunks-are-not-joined).
+3. Send a chat message with
+   [`POST /rooms/:id/messages`](#post-roomsidmessages), or to one participant with
+   [`POST /rooms/:id/agents/:agentId/messages`](#post-roomsidagentsagentidmessages).
+   Read a leading `@name` as in [Addressing](#addressing).
+4. Answer questions as in [Permissions](#permissions): show `_client_permission_queued`
+   in the chat app, then send the person's yes or no with `POST /permissions/:id`.
+
+**Rules:**
+
+- The terminal and the bridge can see the same question. The first answer wins. Tell the
+  chat app when the answer came from somewhere else: `_client_permission_answered` has the
+  `reason`.
+- A message route has no retry key. If a reply is lost, read the stream for the message's
+  `_client_user_message` or `_client_message_queued` before you send it again. Otherwise
+  the agent can get it twice.
+- Text from the agent is not trusted. Remove control characters before you post it.
 
 ## A first client, step by step
 

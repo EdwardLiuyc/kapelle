@@ -767,11 +767,12 @@ Decisions: **R2, R23, R34, R43**.
 
 S7 is decided: keep `chat.ts` standalone and add `kapelle chat` that runs the same
 HTTP-only binary; no second implementation in `cli.ts`. Room ids are not run ids (R22),
-so `kapelle merge` needs a room entry point (R31). Document the bridge pattern in
+so `kapelle merge` needs a room entry point (R31); that surface moved to M6-6b
+(`kapelle room merge`). Document the bridge pattern in
 `CLIENT-API.md`: a local process subscribes to a room or participant stream and answers
 permissions; no chat SDK enters the daemon.
 
-Decisions: **S7 (a), K5, R19, R31**.
+Decisions: **S7 (a), K5, R19**.
 
 ## Decision register
 
@@ -894,7 +895,7 @@ story, and the story moves into `STORIES.md`.
 | K2 | Token in URL | retired with K1 | **Settled by spike** |
 | K3 | Origin check | the M2-8 Host guard stays; no CORS because no browser UI | **Settled by spike** |
 | K4 | Static UI | the daemon stays API-only; `chat.ts` and the TUI own presentation | **Settled by spike** |
-| K5 | Bridge tokens | one operator token; bridge local | confirm |
+| K5 | Bridge tokens | (a) one operator token; bridge local (b) a token per bridge | **Decided 2026-10-10 (#153):** (a). A bridge uses the token in `daemon.json` and runs on the daemon's machine. (b) is deferred to #255 |
 | K6 | Per-client id | (a) none (single operator) (b) optional `clientId` on writes | **Decided 2026-09-26 (#142):** (a); (b) if an audit needs it |
 
 ### Participant runtime — settled by the spike
