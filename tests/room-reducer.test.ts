@@ -996,3 +996,69 @@ test("a tool call's title and detail lose their control characters, are capped, 
   assert.equal(updated?.type === "tool" && updated.title, " evil");
   assert.doesNotMatch(JSON.stringify(updated), /SECRET/);
 });
+
+test("a tool detail: a prose title word hides no path, a said description gives way to the location, and a long command still matches its title (#253)", () => {
+  const { rows } = toolRoom();
+  // copilot's title is prose: `config` is not the end of the path.
+  assert.deepEqual(
+    rows({ title: "Update the config", rawInput: { path: "/w/etc/config" } }),
+    [["Update the config", "/w/etc/config", undefined]],
+  );
+  // claude's relative path still hides the full one, `a.ts` alone too.
+  assert.deepEqual(
+    rows({ title: "Read a.ts", rawInput: { file_path: "/w/a.ts" } }),
+    [["Read a.ts", undefined, undefined]],
+  );
+  // The description says what the title says: the location shows.
+  assert.deepEqual(
+    rows({
+      title: "plan it",
+      rawInput: { description: "plan it" },
+      locations: [{ path: "/w/b" }],
+    }),
+    [["plan it", "/w/b", undefined]],
+  );
+  // The slot keeps 800 characters of each; both are cut alike, so a
+  // command that is its title still matches.
+  const long = `python - <<'EOF'\n${"x".repeat(5000)}`;
+  assert.deepEqual(
+    rows({ title: long, rawInput: { command: long } }).map(([, d]) => d),
+    [undefined],
+  );
+});
+
+test("a tool call's status is one ACP defines, and an update that changes nothing drawn returns nothing (#253)", () => {
+  const { send } = toolRoom();
+  const e = send("ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "x",
+    status: "\x1b[2Jbogus",
+  });
+  assert.equal(e?.type === "tool" && "status" in e, false);
+  assert.equal(
+    send("ann", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      _meta: { terminal_output: { data: "hi" } },
+    }),
+    undefined,
+    "output alone draws nothing",
+  );
+  assert.equal(
+    send("ann", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "nope",
+    }),
+    undefined,
+  );
+  assert.equal(
+    send("ann", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "in_progress",
+    }),
+    e,
+  );
+});

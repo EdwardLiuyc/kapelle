@@ -62,7 +62,7 @@ M1a-4's call, not this note's.
 | field | opencode | claude-agent-acp | copilot |
 | --- | --- | --- | --- |
 | `shell` | `internal` | `internal` | `internal` |
-| `argvChannel` | `none` | `notification` (late) | `notification` + `permission` |
+| `argvChannel` | `none`; `notification` (late) on 2.0.18 (§M0-3, 2026-10-09) | `notification` (late) | `notification` + `permission` |
 | mode discovery | `configOptions` with `category: "mode"` **only** — `modes` is absent, so a client that reads `SessionModeState` alone concludes it has none and is wrong | `SessionModeState`, 6 vendor ids | `SessionModeState`, 3 canonical spec URLs |
 | mode ids | `build`, `plan` | `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` | `https://agentclientprotocol.com/protocol/session-modes#agent`, `…#plan`, `…#autopilot` — **the full URL is the id; the bare `#plan` fragment returns `-32602`** |
 | `session/set_mode` | accepted — and really so: `-32602` on a bogus id | accepted | accepted, with the full URL id |

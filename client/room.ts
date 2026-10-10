@@ -124,18 +124,28 @@ const DETAIL_KEYS = [
 ];
 /** The most a tool row's title or detail keeps, in characters. */
 const TOOL_TEXT = 200;
+/** The most a slot keeps of each text: enough to compare, with no whole
+ *  file in a command such as `python - <<'EOF'`. */
+const SLOT_TEXT = 4 * TOOL_TEXT;
 
 /** A tool call's entry, and what its detail is worked out from. Only the
- *  keys the detail can use are kept, so a whole file is not held. */
+ *  keys the detail can use are kept, each cut at `SLOT_TEXT`. */
 interface ToolSlot {
   entry: Tool;
-  /** As sent, so a long command still matches the title it is in. */
+  /** Before `toolText`, so a long command still matches the title it is
+   *  in: both are cut at the same length. */
   title: string;
   input: Record<string, string>;
   location?: string;
 }
 
-const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+const str = (v: unknown) =>
+  typeof v === "string" ? v.slice(0, SLOT_TEXT) : undefined;
+
+const STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
+/** The status if it is one ACP defines; the log is the harness's JSON. */
+const statusOf = (v: unknown) =>
+  STATUSES.has(v as string) ? (v as ToolCallStatus) : undefined;
 
 const toolText = (s: string) => {
   const t = printable(s);
@@ -154,22 +164,27 @@ function detailInput(raw: unknown): Record<string, string> {
 }
 
 /** The detail line: the command, path, pattern, query or url; else the
- *  description; else the first location. A part the title already says is
- *  left out: between spaces or at an end, also in quotes or backticks, or
- *  as the end of a path, since claude's title gives a path from its
- *  folder. `str_replace` still shows under `str_replace_editor`. */
+ *  description or the first location, the first the title does not say.
+ *  A part the title already says is left out: between spaces or at an
+ *  end, also in quotes or backticks, or as the end of a path, since
+ *  claude's title gives a path from its folder. Only a title word with a
+ *  `/` or a `.` can be that end: copilot's title is prose, and `config` in
+ *  "Update the config" must not hide `/w/etc/config`. `str_replace` still
+ *  shows under `str_replace_editor`. */
 function detailOf({ title, input, location }: ToolSlot) {
-  let parts = DETAIL_KEYS.flatMap((k) => input[k] ?? []);
-  if (parts.length === 0) {
-    parts = [input.description ?? location ?? ""].filter(Boolean);
-  }
   const bare = title.replace(/[`"']/g, "");
-  const words = bare.split(" ").filter(Boolean);
+  const paths = bare.split(" ").filter((w) => /[/.]/.test(w));
   const said = (v: string) =>
     ` ${title} `.includes(` ${v} `) ||
     ` ${bare} `.includes(` ${v} `) ||
-    words.some((w) => v.endsWith(`/${w}`));
-  const shown = parts.filter((v) => !said(v));
+    paths.some((w) => v.endsWith(`/${w}`));
+  const parts = DETAIL_KEYS.flatMap((k) => input[k] ?? []);
+  const shown =
+    parts.length > 0
+      ? parts.filter((v) => !said(v))
+      : [input.description, location]
+          .filter((v): v is string => Boolean(v) && !said(v as string))
+          .slice(0, 1);
   return shown.length > 0 ? toolText(shown.join(" ")) : undefined;
 }
 
@@ -369,7 +384,7 @@ export function applyLine(
       return answer;
     }
     case "tool_call": {
-      const status = str(u.status) as ToolCallStatus | undefined;
+      const status = statusOf(u.status);
       const slot: ToolSlot = {
         entry: add({
           ...at,
@@ -391,15 +406,23 @@ export function applyLine(
       // nothing more is unread.
       const slot = state.tools.get(`${participantId} ${u.toolCallId}`);
       if (!slot) return undefined;
+      const { entry } = slot;
+      const was = [entry.title, entry.detail, entry.status].join("\0");
       const title = str(u.title);
       if (title !== undefined) slot.title = title;
+      // Merged, not replaced: claude's first `rawInput` is `{}` and its
+      // update has the input, and an update sends only what changed. A key
+      // an update leaves out stays; no measured harness drops one.
       Object.assign(slot.input, detailInput(u.rawInput));
       const location = str(u.locations?.[0]?.path);
       if (location) slot.location = location;
-      const status = str(u.status) as ToolCallStatus | undefined;
-      if (status) slot.entry.status = status;
+      const status = statusOf(u.status);
+      if (status) entry.status = status;
       showTool(slot);
-      return slot.entry;
+      // Output alone (`_meta.terminal_output`) changes nothing drawn.
+      return [entry.title, entry.detail, entry.status].join("\0") === was
+        ? undefined
+        : entry;
     }
     case "_client_turn_ended": {
       const turn = liveTurn();
