@@ -127,21 +127,22 @@ const busySetup = () => {
     ["r1", { entry: { id: "r1", title: "one" }, state } as unknown as Followed],
   ]);
   const opened: View[] = [];
+  const asked: string[] = [];
   const part = bannerPart({
     rooms,
     view: () => ({ roomId: "r1" }),
     open: (v) => opened.push(v),
-    question() {},
+    question: (id) => asked.push(id),
     now: () => Date.parse("2026-10-10T09:01:05Z"),
   });
   const text = () =>
     // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
     part.render(120).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
-  return { part, line, text, opened };
+  return { part, line, text, opened, asked };
 };
 
 test("a busy row: thinking, then the last tool, then working, with its timer and the cancel command (M7-1)", () => {
-  const { part, line, text, opened } = busySetup();
+  const { part, line, text, opened, asked } = busySetup();
   assert.deepEqual(text(), ["▌◓ ann working · 1m 05s · @ann /cancel"]);
   line({
     sessionUpdate: "agent_thought_chunk",
@@ -170,6 +171,9 @@ test("a busy row: thinking, then the last tool, then working, with its timer and
     kind: "edit",
   });
   assert.deepEqual(text(), ["▌? ann asks: Write a.md · 1m 05s"]);
+  assert.ok(part.render(120)[0]?.includes("\x1b[35m?"), "a magenta ?");
+  part.handleMouse?.({ type: "click", button: "left", x: 0, y: 0 } as never);
+  assert.deepEqual(asked, ["q1"], "a click opens its question");
   line({
     sessionUpdate: "_client_permission_answered",
     id: "q1",

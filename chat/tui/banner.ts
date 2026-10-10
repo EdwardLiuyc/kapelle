@@ -12,13 +12,14 @@
  * `thinking`, its last tool title or `working`, then a timer from the turn's
  * start, and the command that cancels the turn. A busy agent whose question
  * is on screen waits for the person, not for its work: its row says what it
- * asks, with `?`, and names no cancel. The screen redraws once a
+ * asks, with a magenta `?` after the bar in its own colour, and names no
+ * cancel. A click on it opens the question, as on a wait row. The screen redraws once a
  * second while such a row shows (`ticks`), and never else. Which rows there
  * are, at most four, is `chat/view.ts`; with none, the part takes no rows.
  */
 
 import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
-import { nameOf } from "../../client/room.ts";
+import { nameOf, questionOf } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { bold, dim, fg, magenta, yellow } from "../common.ts";
 import {
@@ -58,11 +59,7 @@ function bannerPart({
         : yellow(`▌! ${name} (${room}) ${why}`);
     }
     const p = r?.state.participants.get(a.participantId);
-    const asked = r
-      ? [...r.state.questions.values()].find(
-          (q) => q.participantId === a.participantId,
-        )
-      : undefined;
+    const asked = r && questionOf(r.state, a.participantId);
     const doing = asked
       ? `asks: ${asked.title}`
       : p?.thinking !== undefined
@@ -71,12 +68,13 @@ function bannerPart({
     const start = Date.parse(p?.turns.at(-1)?.start ?? "");
     const timer = Number.isNaN(start) ? "" : ` · ${clock(now() - start)}`;
     const cancel = asked ? "" : ` · @${name} /cancel`;
-    const mark = asked
-      ? "?"
-      : SPINNER[Math.floor(now() / 1000) % SPINNER.length];
+    // The bar is the agent's colour; a question's `?` is magenta, as on
+    // a wait row.
     const colour = r ? colourOf(r.state, a.participantId) : undefined;
     const paint = colour === undefined ? dim : fg(colour);
-    return `${paint(`▌${mark}`)} ${bold(name)} ${doing}${dim(`${timer}${cancel}`)}`;
+    const spin = SPINNER[Math.floor(now() / 1000) % SPINNER.length] ?? "";
+    const mark = asked ? magenta("?") : paint(spin);
+    return `${paint("▌")}${mark} ${bold(name)} ${doing}${dim(`${timer}${cancel}`)}`;
   };
   return {
     render(width) {
@@ -90,7 +88,13 @@ function bannerPart({
       const a = activity(rooms, view()).rows[e.y];
       if (a) {
         open({ roomId: a.roomId, participantId: a.participantId });
-        if (a.why === "question" && a.question) question(a.question);
+        // A busy row that asks opens its question too, as a wait row does.
+        const r = rooms.get(a.roomId);
+        const id =
+          a.why === "busy"
+            ? r && questionOf(r.state, a.participantId)?.id
+            : a.question;
+        if (id) question(id);
       }
       return { handled: true };
     },

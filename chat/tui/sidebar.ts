@@ -10,14 +10,19 @@
 import { basename } from "node:path";
 
 import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
-import { needsAttention, type RoomState, roster } from "../../client/room.ts";
+import {
+  needsAttention,
+  questionOf,
+  type RoomState,
+  roster,
+} from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { dim, magenta, plain, yellow } from "../common.ts";
 import { rows, same, type View } from "../view.ts";
 
 /** Whether a question from this participant waits. */
 const asks = (state: RoomState, id: string) =>
-  [...state.questions.values()].some((q) => q.participantId === id);
+  questionOf(state, id) !== undefined;
 
 /** The sidebar's width, in columns. */
 const SIDEBAR_WIDTH = 26;

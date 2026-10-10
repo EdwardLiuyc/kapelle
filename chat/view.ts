@@ -27,7 +27,7 @@
  */
 
 import type { RoomDto, RoomEventLine } from "../client/contract.ts";
-import { nameOf, type RoomState, roster } from "../client/room.ts";
+import { nameOf, questionOf, type RoomState, roster } from "../client/room.ts";
 
 /** What the transcript shows: a room's timeline, or one participant's
  *  thread when `participantId` is set. It is also a sidebar row. */
@@ -184,9 +184,7 @@ export function waiting(rooms: Rooms): Wait[] {
   for (const [roomId, { state }] of rooms) {
     for (const p of roster(state)) {
       const at = { roomId, participantId: p.id };
-      const q = [...state.questions.values()].find(
-        (x) => x.participantId === p.id,
-      );
+      const q = questionOf(state, p.id);
       const turn = p.turns.at(-1);
       if (q) {
         out.push({ ...at, why: "question", text: q.title, question: q.id });

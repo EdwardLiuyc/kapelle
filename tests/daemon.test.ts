@@ -4930,8 +4930,9 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
   // still shows under it.
   await screen.press("\x18", "side view");
   assert.ok(bannerRow() > 1, `under the side view: ${screen.out()}`);
-  // At 100 columns the question count leaves no room for the last hint,
-  // `ctrl+x view` (M7-1); `ctrl+o menu` shows only with the side view hidden.
+  // At 100 columns the question count leaves room for three hints only:
+  // `ctrl+t rooms` and `ctrl+x view` drop (M7-1). `ctrl+o menu` shows only
+  // with the side view hidden.
   await screen.press("\x18", "enter to send · ctrl+o menu");
   const row = bannerRow();
   await screen.press(`\x1b[<0;40;${row}M\x1b[<0;40;${row}m`, "question 1 of 1");

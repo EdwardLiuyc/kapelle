@@ -615,8 +615,12 @@ export function seen(state: RoomState, id: string) {
   p.stalled = false;
 }
 
+/** This participant's oldest open question, if one waits. */
+export const questionOf = (state: RoomState, id: string) =>
+  [...state.questions.values()].find((q) => q.participantId === id);
+
 /** Whether this participant needs the person: a question waits, or its
  *  live turn looks stuck. */
 export const needsAttention = (state: RoomState, id: string) =>
   Boolean(state.participants.get(id)?.stalled) ||
-  [...state.questions.values()].some((q) => q.participantId === id);
+  questionOf(state, id) !== undefined;
