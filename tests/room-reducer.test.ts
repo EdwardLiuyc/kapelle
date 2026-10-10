@@ -508,6 +508,23 @@ test("a message and an answer keep their lines and lose their escape sequences (
     content: { type: "text", text: "[2J\nb\x1b]52;c;aGFja2Vk\x07" },
   });
   assert.equal(answer?.type === "answer" && answer.text, clean);
+  // A turn's error is the harness's own message; both screens draw it.
+  const end = line({
+    sessionUpdate: "_client_turn_ended",
+    stopReason: bad,
+    error: bad,
+  });
+  assert.equal(end?.type === "turn_ended" && end.error, printable(bad));
+  assert.equal(end?.type === "turn_ended" && end.stopReason, printable(bad));
+  assert.equal(who(state, "p").turns[0]?.error, printable(bad));
+  // The footer draws the currency.
+  line({
+    sessionUpdate: "usage_update",
+    used: 1,
+    size: 2,
+    cost: { amount: 1, currency: bad },
+  });
+  assert.equal(who(state, "p").usage?.cost?.currency, printable(bad));
   // The joiner stays, so a family emoji is one emoji.
   const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
   assert.equal(cleanLines(family), family);

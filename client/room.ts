@@ -117,7 +117,7 @@ export const printable = (s: string) =>
 export const cleanLines = (text: string) =>
   text
     .replaceAll("\t", "    ")
-    .replace(/(?![\n‍])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
+    .replace(/(?![\n\u200D])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
 
 type Answer = Extract<Entry, { type: "answer" }>;
 type Question = Extract<Entry, { type: "permission" }>;
@@ -428,7 +428,12 @@ export function applyLine(
         p.usage = {
           used: u.used,
           size: u.size,
-          ...(u.cost && { cost: u.cost }),
+          ...(u.cost && {
+            cost: {
+              amount: Number(u.cost.amount),
+              currency: printable(String(u.cost.currency)),
+            },
+          }),
         };
       }
       return undefined;
@@ -478,12 +483,18 @@ export function applyLine(
         : entry;
     }
     case "_client_turn_ended": {
+      // Both come from the harness: its reply, or its error's message.
+      const stopReason =
+        u.stopReason === undefined
+          ? undefined
+          : printable(String(u.stopReason));
+      const error = u.error === undefined ? undefined : printable(u.error);
       const turn = liveTurn();
       if (turn) {
         turn.state = "ended";
         turn.tentative = undefined;
-        if (u.stopReason !== undefined) turn.stopReason = u.stopReason;
-        if (u.error !== undefined) turn.error = u.error;
+        if (stopReason !== undefined) turn.stopReason = stopReason;
+        if (error !== undefined) turn.error = error;
       }
       if (p) {
         // The harness reports its exit before the turn it broke ends.
@@ -497,8 +508,8 @@ export function applyLine(
       return add({
         ...at,
         type: "turn_ended",
-        ...(u.stopReason !== undefined && { stopReason: u.stopReason }),
-        ...(u.error !== undefined && { error: u.error }),
+        ...(stopReason !== undefined && { stopReason }),
+        ...(error !== undefined && { error }),
       });
     }
     case "_client_harness_exited":

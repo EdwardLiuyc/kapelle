@@ -34,7 +34,7 @@ const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
 const clean = (s: string) =>
   s
     .replaceAll("\t", "    ")
-    .replace(/(?![\n‍])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
+    .replace(/(?![\n\u200D])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
 
 /**
  * Which stream is open on the current line, so the next write knows whether to
@@ -226,7 +226,12 @@ export function render({ agent, update }: AgentEventEnvelope): void {
       break;
 
     case "usage_update":
-      line(dim(`${tag} context ${update.used}/${update.size} tokens`));
+      // `Number`: the wire is not checked, and a string could hold `ESC`.
+      line(
+        dim(
+          `${tag} context ${Number(update.used)}/${Number(update.size)} tokens`,
+        ),
+      );
       break;
 
     // Synthetic events emitted by our client, not the protocol.
