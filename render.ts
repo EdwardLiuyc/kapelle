@@ -29,9 +29,9 @@ const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
  * zero-width joiner (a family emoji) stay. An answer that holds `ESC]52`
  * would otherwise write the clipboard, and `marked` keeps it. A copy of
  * `cleanLines` in `client/room.ts`, which this file cannot import; change
- * both.
+ * both. `cli.ts` uses it for the turn's stop reason and error.
  */
-const clean = (s: string) =>
+export const clean = (s: string) =>
   s
     .replaceAll("\t", "    ")
     .replace(/(?![\n\u200D])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");

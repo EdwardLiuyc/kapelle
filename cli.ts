@@ -70,7 +70,7 @@ import {
   warningsFor,
 } from "./protocol/registry.ts";
 import type { ClientPermissionQueuedEvent } from "./protocol/types.ts";
-import { flushStream, render } from "./render.ts";
+import { clean, flushStream, render } from "./render.ts";
 
 const argv = process.argv.slice(2);
 
@@ -403,10 +403,11 @@ if (chatVerb) {
     // The end of a turn flushes the block `render` still has open (M1c-7):
     // this line prints past the renderer, so nothing else would close it.
     flushStream();
-    if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
+    // Both are the harness's text (#229).
+    if (!quiet) console.log(`\n\n— turn ended: ${clean(String(stopReason))}`);
   } catch (err) {
     flushStream();
-    console.error(`\nerror: ${messageOf(err)}`);
+    console.error(`\nerror: ${clean(messageOf(err))}`);
     process.exitCode = 1;
   } finally {
     closeAsk();

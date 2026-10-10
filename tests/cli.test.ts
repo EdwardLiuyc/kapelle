@@ -1137,6 +1137,24 @@ test("hostile path escapes are refused and the turn continues via the CLI", asyn
   }
 });
 
+test("hostile escape sequences never reach the CLI's stdout (#229)", async (t) => {
+  const r = await runCli(t, [
+    "do your worst",
+    "--cmd",
+    `node ${HOSTILE_AGENT} --scenario escape-text`,
+    "--mode",
+    "auto",
+    "--cwd",
+    await tempDir(t),
+  ]);
+
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /line one \[2J \]52;c;aGFja2Vk \nline two/);
+  assert.match(r.stdout, /turn ended: end_turn \[2J \]52;c;aGFja2Vk /);
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+  assert.doesNotMatch(r.stdout, /\x1b\[2J|\x1b\]52|\x07/);
+});
+
 test("hostile write-no-ask is refused under safe and allowed under auto", async (t) => {
   const cwd = await tempDir(t);
   const args = (mode: string) => [

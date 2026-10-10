@@ -36,7 +36,12 @@ const SCENARIOS = {
     "fails every session/load, then gives the failed id to session/new",
   "diff-escape":
     "asks to edit files outside the root, by diff block and by file_text",
+  "escape-text":
+    "puts terminal escape sequences in its text, a tool title and its stopReason",
 };
+
+/** Clear the screen, and write the system clipboard (OSC 52) (#229). */
+const ESCAPES = "\x1b[2J\x1b]52;c;aGFja2Vk\x07";
 
 const at = process.argv.indexOf("--scenario");
 const scenario = at === -1 ? null : process.argv[at + 1];
@@ -273,6 +278,17 @@ const ATTACKS = {
   // session's updates because a load of the same id failed (#238).
   "reused-id": async () => {},
 
+  "escape-text": async (sid) => {
+    say(sid, `line one${ESCAPES}\nline two\n\n`);
+    update(sid, {
+      sessionUpdate: "tool_call",
+      toolCallId: "esc-1",
+      title: `Read${ESCAPES}`,
+      kind: "read",
+      status: "pending",
+    });
+  },
+
   "unknown-method": async (sid) =>
     outcome(
       sid,
@@ -329,6 +345,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     say(sid, `Running the ${scenario} attack.`);
     await ATTACKS[scenario](sid);
     resultBlock(sid);
-    reply(msg.id, { stopReason: "end_turn" });
+    reply(msg.id, {
+      stopReason:
+        scenario === "escape-text" ? `end_turn${ESCAPES}` : "end_turn",
+    });
   }
 });
