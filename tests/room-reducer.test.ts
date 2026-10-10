@@ -489,6 +489,7 @@ test("a fast-forward becomes a timeline entry for a second client", () => {
   assert.deepEqual(e, {
     seq: 1,
     participantId: "p-dev",
+    at: "2026-10-07T00:00:00.000Z",
     type: "forward",
     from: "p-rev",
     branch: "kapelle/r/p-dev",
@@ -729,6 +730,7 @@ test("a revive entry is behind only when loaded, and keeps an unknown resumed (#
   assert.deepEqual(entryFor({ resumed: "loaded", memoryMayBeBehind: true }), {
     seq: 1,
     participantId: "p-ana",
+    at: "2026-10-09T00:00:00Z",
     type: "revived",
     resumed: "loaded",
     behind: true,
@@ -741,4 +743,72 @@ test("a revive entry is behind only when loaded, and keeps an unknown resumed (#
     unknown?.type === "revived" ? unknown.resumed : undefined,
     "forked",
   );
+});
+
+test("each participant keeps its turn's start, a thinking flag, its last tool and usage; each entry its at (M7-1)", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (update: Record<string, unknown>, at = "2026-10-10T09:00:00Z") =>
+    applyLine(state, {
+      seq: ++seq,
+      at,
+      roomId: "r1",
+      participantId: "p-ana",
+      update: update as unknown as RoomEventLine["update"],
+    });
+  const ana = () => who(state, "p-ana");
+  line({
+    sessionUpdate: "_client_participant_added",
+    name: "ana",
+    harness: "claude",
+    mode: "ask",
+  });
+  const sent = line(
+    { sessionUpdate: "_client_user_message", text: "go", turn: 1 },
+    "2026-10-10T09:01:00Z",
+  );
+  assert.equal(sent?.at, "2026-10-10T09:01:00Z", "an entry keeps its at");
+  assert.equal(ana().turns[0]?.start, "2026-10-10T09:01:00Z");
+
+  const thought = {
+    sessionUpdate: "agent_thought_chunk",
+    content: { type: "text", text: "SECRET" },
+  };
+  assert.equal(line(thought), undefined, "a thought adds no entry");
+  const first = seq;
+  assert.equal(ana().thinking, first);
+  line(thought);
+  assert.equal(ana().thinking, first, "a second chunk does not change it");
+  line({
+    sessionUpdate: "usage_update",
+    used: 50_000,
+    size: 200_000,
+    cost: { amount: 0.4, currency: "USD" },
+  });
+  assert.equal(ana().thinking, first, "a usage_update does not clear it");
+  assert.deepEqual(ana().usage, {
+    used: 50_000,
+    size: 200_000,
+    cost: { amount: 0.4, currency: "USD" },
+  });
+  assert.ok(!JSON.stringify(state).includes("SECRET"), "no thinking text kept");
+
+  line({
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "Read\u001b[2J File",
+  });
+  assert.equal(ana().thinking, undefined, "a tool call clears it");
+  assert.equal(ana().tool, "Read [2J File", "the last tool, printable");
+  line(thought);
+  line({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "hi" },
+  });
+  assert.equal(ana().thinking, undefined, "an answer chunk clears it");
+  line(thought);
+  line({ sessionUpdate: "_client_turn_ended", stopReason: "end_turn" });
+  assert.equal(ana().thinking, undefined, "the turn's end clears it");
+  assert.equal(ana().tool, undefined, "and the last tool");
+  assert.equal(ana().usage?.used, 50_000, "the usage stays");
 });

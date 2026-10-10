@@ -1,6 +1,7 @@
 /**
- * The banner — `chat/tui/banner.ts`, story M4-4 (#50): how many rows it
- * draws, what a click opens, and that a row stays one row.
+ * The activity rows — `chat/tui/banner.ts`, stories M4-4 (#50) and M7-1:
+ * how many rows it draws, what a click opens, that a row stays one row,
+ * and what a busy row says.
  */
 
 import assert from "node:assert/strict";
@@ -54,12 +55,12 @@ const setup = (names: string[]) => {
   return { part, line, opened, asked };
 };
 
-test("the banner shows 3 rows, and past 3 shows 2 rows and +N more", () => {
+test("the rows: 4, and past 4, 3 rows and +N more (M7-1)", () => {
   assert.deepEqual(setup([]).part.render(80), [], "nothing waits: no row");
-  assert.equal(setup(["ann", "bob", "cy"]).part.render(80).length, 3);
-  const rows = setup(["ann", "bob", "cy", "dee"]).part.render(80);
-  assert.equal(rows.length, 3);
-  assert.match(rows[2] ?? "", /\+2 more/);
+  assert.equal(setup(["ann", "bob", "cy", "dee"]).part.render(80).length, 4);
+  const rows = setup(["ann", "bob", "cy", "dee", "eve"]).part.render(80);
+  assert.equal(rows.length, 4);
+  assert.match(rows[3] ?? "", /\+2 more/);
 });
 
 test("a click on a banner row opens that thread and its question", () => {
@@ -98,4 +99,74 @@ test("the stall line in the timeline holds no control character either", () => {
   });
   assert.equal(e?.type, "stall");
   assert.equal(e?.type === "stall" && e.text, '3× "a b [2J" in a row');
+});
+
+/** Room `r1` with ann busy since 09:00, seen from `r1`'s timeline at
+ *  09:01:05. */
+const busySetup = () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-10T09:00:00Z",
+      roomId: "r1",
+      participantId: "p-ann",
+      update: update as unknown as RoomEventLine["update"],
+    });
+  line({
+    sessionUpdate: "_client_participant_added",
+    name: "ann",
+    harness: "claude",
+    mode: "ask",
+  });
+  line({ sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", title: "one" }, state } as unknown as Followed],
+  ]);
+  const opened: View[] = [];
+  const part = bannerPart({
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    open: (v) => opened.push(v),
+    question() {},
+    now: () => Date.parse("2026-10-10T09:01:05Z"),
+  });
+  const text = () =>
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+    part.render(120).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  return { part, line, text, opened };
+};
+
+test("a busy row: thinking, then the last tool, then working, with its timer and the cancel command (M7-1)", () => {
+  const { part, line, text, opened } = busySetup();
+  assert.deepEqual(text(), ["▌◓ ann working · 1m 05s · @ann /cancel"]);
+  line({
+    sessionUpdate: "agent_thought_chunk",
+    content: { type: "text", text: "SECRET" },
+  });
+  assert.deepEqual(text(), ["▌◓ ann thinking · 1m 05s · @ann /cancel"]);
+  assert.ok(!part.render(120).join("").includes("SECRET"), "never the text");
+  line({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read File" });
+  assert.deepEqual(text(), ["▌◓ ann Read File · 1m 05s · @ann /cancel"]);
+  part.handleMouse?.({ type: "click", button: "left", x: 0, y: 0 } as never);
+  assert.deepEqual(opened, [{ roomId: "r1", participantId: "p-ann" }]);
+  line({ sessionUpdate: "_client_turn_ended", stopReason: "end_turn" });
+  assert.deepEqual(text(), [], "idle: no row");
+});
+
+test("NO_COLOR: the activity rows lose their colours (M7-1)", (t) => {
+  const was = process.env.NO_COLOR;
+  t.after(() => {
+    if (was === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = was;
+  });
+  const { part } = busySetup();
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const COLOUR = /\x1b\[(3[0-9]|4[0-9]|9[0-7]|10[0-7])[;m]/;
+  delete process.env.NO_COLOR;
+  assert.match(part.render(120).join(""), COLOUR, "a colour without it");
+  process.env.NO_COLOR = "1";
+  assert.doesNotMatch(part.render(120).join(""), COLOUR);
+  assert.ok(part.render(120).join("").includes("\x1b[1m"), "bold stays");
 });

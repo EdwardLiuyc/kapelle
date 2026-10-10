@@ -13,6 +13,9 @@
  *   thread marks its participant.
  * - Who waits on the person (M4-4): the banner shows the waits off screen,
  *   and the bell rings once when a participant starts to wait.
+ * - The look (M7-1): each agent's colour, the activity rows under the
+ *   timeline (the banner's waits and the open room's busy agents), when
+ *   the screen ticks, and how the status line fits its width.
  *
  * **In `chat/`, not `client/`** (decided 2026-10-02): rows, the `@name`
  * pre-fill and seen marks are this screen's own rules.
@@ -23,7 +26,7 @@
  * `onChange` at once.
  */
 
-import type { RoomDto } from "../client/contract.ts";
+import type { RoomDto, RoomEventLine } from "../client/contract.ts";
 import { nameOf, type RoomState, roster } from "../client/room.ts";
 
 /** What the transcript shows: a room's timeline, or one participant's
@@ -209,6 +212,119 @@ export function banner(rooms: Rooms, view: View) {
   }
   return [...rows.values()];
 }
+
+/**
+ * The agents' colours (M7-1): six 256-colour codes, picked by eye, because a
+ * test cannot judge a colour. Not a basic red, green, yellow or magenta:
+ * those mean failed, done, stall and question. Not cyan: it colours
+ * headings and links.
+ */
+export const PALETTE = [75, 141, 208, 37, 180, 174] as const;
+
+/** An agent's colour, by the order it joined the room. The removed ones
+ *  count, so an agent keeps its colour after another leaves; a seventh
+ *  reuses the first. */
+export const colourOf = (state: RoomState, id: string) =>
+  PALETTE[
+    Math.max(0, [...state.participants.keys()].indexOf(id)) % PALETTE.length
+  ] as number;
+
+/** An activity row (M7-1): a wait, or an agent busy in the open room. */
+export type Activity =
+  | Wait
+  | { roomId: string; participantId: string; why: "busy" };
+
+/** At most this many activity rows; past it, one fewer and `+n more`. */
+const MOST = 4;
+
+/**
+ * The activity rows: the banner's waits, from any room, then each busy
+ * agent of the open room. One row per agent: a wait comes first. `more`
+ * counts the rows cut.
+ */
+export function activity(rooms: Rooms, view: View) {
+  const all: Activity[] = banner(rooms, view);
+  const state = rooms.get(view.roomId)?.state;
+  for (const p of state ? roster(state) : []) {
+    if (p.status !== "busy") continue;
+    if (all.some((w) => w.participantId === p.id)) continue;
+    all.push({ roomId: view.roomId, participantId: p.id, why: "busy" });
+  }
+  if (all.length <= MOST) return { rows: all, more: 0 };
+  return { rows: all.slice(0, MOST - 1), more: all.length - MOST + 1 };
+}
+
+/** Whether the screen redraws once a second: only while an activity row
+ *  shows a busy agent, for its spinner and its timer. */
+export const ticks = (rows: readonly Activity[]) =>
+  rows.some((a) => a.why === "busy");
+
+/** A timer's text: `42s`, `3m 07s`, `1h 02m`. */
+export function clock(ms: number) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${pad(s % 60)}s`;
+  return `${Math.floor(s / 3600)}h ${pad(Math.floor(s / 60) % 60)}m`;
+}
+
+/**
+ * One agent's numbers for the footer (M7-1), each only when the harness
+ * sends it. Never a total: the cost is a running total per session (§M0-5).
+ * `used: 0` is "unknown" on claude, so no `ctx`. A cost of `0` is "not
+ * billed" (opencode), so no cost. `~`, because neither is a measure:
+ * copilot's `size` is not its real window, and claude's cost is a list
+ * price under a subscription.
+ */
+export function usageText(u?: {
+  used: number;
+  size: number;
+  cost?: { amount: number; currency: string };
+}): string[] {
+  if (!u) return [];
+  const out: string[] = [];
+  if (u.used > 0 && u.size > 0) {
+    out.push(`ctx ~${Math.round((u.used / u.size) * 100)}%`);
+  }
+  if (u.cost && u.cost.amount > 0) {
+    const n = u.cost.amount.toFixed(2);
+    out.push(u.cost.currency === "USD" ? `~$${n}` : `~${n} ${u.cost.currency}`);
+  }
+  return out;
+}
+
+/**
+ * The status line at `width` columns (M7-1): `left`, then the key hints,
+ * then `right` at the right edge. The hints drop from the right until it
+ * fits; `paint` paints the ones kept, as one piece. When `left` and `right`
+ * alone do not fit, they are joined and the line wraps: a flash is never
+ * cut. `measure` is the drawn width.
+ */
+export function footer(
+  width: number,
+  left: string,
+  hints: readonly string[],
+  right: string,
+  measure: (s: string) => number,
+  paint = (s: string) => s,
+) {
+  const sep = " · ";
+  for (let n = hints.length; n >= 0; n--) {
+    const kept = hints.slice(0, n).join(sep);
+    const line = left + (n ? paint(`${left ? sep : ""}${kept}`) : "");
+    const gap = width - measure(line) - measure(right);
+    if (!right && gap >= 0) return line;
+    if (right && gap >= 2) return line + " ".repeat(gap) + right;
+  }
+  return right && left ? `${left}${sep}${right}` : left || right;
+}
+
+/** Whether a line changes nothing on screen, so it asks for no frame: a
+ *  thought chunk that did not set the thinking flag. One room's log was 95%
+ *  thought chunks (§M4 · Chat layout). */
+export const quiet = (state: RoomState, line: RoomEventLine) =>
+  line.update.sessionUpdate === "agent_thought_chunk" &&
+  state.participants.get(line.participantId)?.thinking !== line.seq;
 
 /** The waits now, and whether one of them is new: the bell rings once for
  *  a question and once for a stall, on screen or not. A question after a

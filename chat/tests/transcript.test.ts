@@ -13,6 +13,7 @@ import {
 import type { RoomEventLine } from "../../client/contract.ts";
 import { applyLine, newRoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
+import { inverse } from "../common.ts";
 import { settled, transcriptParts } from "../tui/transcript.ts";
 
 const id = (s: string) => s;
@@ -137,11 +138,10 @@ test("a jump puts the person's message at the top of the transcript", () => {
   // At the end, as a long transcript is: the jump goes back up.
   scroll.scrollToEnd();
   jump(alpha);
-  assert.equal(
-    lines[scroll.scrollTop],
-    "\x1b[1m\x1b[36myou → ann\x1b[39m\x1b[22m",
-  );
-  assert.equal(lines[scroll.scrollTop + 1], "alpha");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const plain = (l?: string) => l?.replace(/\x1b\[[0-9;]*m/g, "").trim();
+  assert.equal(plain(lines[scroll.scrollTop]), "▎ you → ann");
+  assert.equal(plain(lines[scroll.scrollTop + 1]), "▎ alpha");
 });
 
 test("an answer streamed through draw, chunk by chunk, draws as its whole text", () => {
@@ -184,10 +184,14 @@ test("an answer streamed through draw, chunk by chunk, draws as its whole text",
   const plain = (rows: string[]) =>
     // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
     rows.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
-  const whole = plain(draw(ANSWER));
+  // The answer draws one column narrower, after its bar (M7-1).
+  const whole = plain(
+    new Markdown(ANSWER, 1, 0, THEME).render(39).map((l) => `▎${l}`),
+  );
   const drawn = plain(parts.transcript.render(40));
   assert.deepEqual(drawn.slice(-whole.length), whole);
-  const box = parts.transcript.children.at(-1) as Container;
+  const bar = parts.transcript.children.at(-1) as Container;
+  const box = bar.children[0] as Container;
   assert.ok(box.children.length > 5, "the finished blocks were cut off");
 });
 
@@ -326,4 +330,89 @@ test("a loaded revive says so, and warns when its memory may be behind (M6-7b)",
     }),
     /! ana is back with its old session, but it stopped during a turn: what it remembers may be behind its files/,
   );
+});
+
+/** ana's turn: a thought, an answer and a tool call, drawn in r1's
+ *  timeline. */
+function look() {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-10T09:05:00Z",
+      roomId: "r1",
+      participantId: "p-ana",
+      update: update as unknown as RoomEventLine["update"],
+    });
+  line({
+    sessionUpdate: "_client_participant_added",
+    name: "ana",
+    role: "reviewer",
+    harness: "claude",
+    mode: "ask",
+  });
+  line({ sessionUpdate: "_client_user_message", text: "hi", turn: 1 });
+  line({
+    sessionUpdate: "agent_thought_chunk",
+    content: { type: "text", text: "SECRET" },
+  });
+  line({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "**hello**" },
+  });
+  line({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read File" });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+  });
+  parts.redraw();
+  return parts.transcript.render(80);
+}
+
+test("an agent's heading shows its harness, role and time; its lines get its bar; no thinking text (M7-1)", () => {
+  const rows = look();
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const plain = rows.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  const d = new Date("2026-10-10T09:05:00Z");
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  assert.ok(
+    plain.includes(`▎ ana · claude · reviewer · ${time}`),
+    plain.join("\n"),
+  );
+  assert.ok(plain.includes("▎ hello"), "the answer has the bar");
+  assert.ok(plain.includes("▎ · Read File"), "the tool call too");
+  assert.ok(plain.includes("▎ you → ana"), "the person's message: a bar");
+  const you = plain.indexOf("▎ you → ana");
+  assert.equal(plain[you - 1], "", "the gap above has no bar");
+  assert.ok(!rows[you - 1]?.includes("\x1b[48;5;"), "and no background");
+  assert.ok(
+    rows.join("").includes("\x1b[38;5;75m▎"),
+    "ana's colour, the first",
+  );
+  assert.ok(
+    rows.join("").includes("\x1b[48;5;236m"),
+    "the person's background",
+  );
+  assert.ok(!rows.join("").includes("SECRET"), "thinking text is never drawn");
+});
+
+test("NO_COLOR: the transcript has no colour code, and inverse stays (M7-1)", (t) => {
+  const was = process.env.NO_COLOR;
+  t.after(() => {
+    if (was === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = was;
+  });
+  process.env.NO_COLOR = "1";
+  const rows = look().join("");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  assert.doesNotMatch(rows, /\x1b\[(3[0-9]|4[0-9]|9[0-7]|10[0-7])[;m]/);
+  assert.ok(rows.includes("\x1b[1m"), "bold stays");
+  assert.equal(inverse("x"), "\x1b[7mx\x1b[27m", "the history cursor stays");
 });

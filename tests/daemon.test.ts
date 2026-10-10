@@ -4511,7 +4511,7 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   const text = raw.replace(/[ \t]+$/gm, "");
   assert.match(
     text,
-    /you → mock-agent\n\s*alpha\n[\s\S]*mock-agent\n\s*previous: \(none\)\n[\s\S]*left room \S+; rejoin with/,
+    /▎ you → mock-agent\n▎ alpha\n[\s\S]*▎ mock-agent · mock-agent · orchestrator · \d\d:\d\d\n▎ previous: \(none\)\n[\s\S]*left room \S+; rejoin with/,
     "the typed message, the answer, then the exit line",
   );
   // A line as wide as the terminal gets an empty line after it where the
@@ -4661,15 +4661,14 @@ test("chat.ts on a real terminal draws an agent's tool calls under its name, and
   const lines = scrollback(out())
     .split("\n")
     .map((l) => l.trim());
-  const you = lines.indexOf("you → mock-agent");
-  const heading = lines.indexOf("mock-agent");
-  const tool = lines.indexOf("· Read package.json");
+  // Each of an agent's lines has its bar, and its heading its harness,
+  // role and time (M7-1).
+  const isHeading = (l: string) => l.startsWith("▎ mock-agent · ");
+  const you = lines.indexOf("▎ you → mock-agent");
+  const heading = lines.findIndex(isHeading);
+  const tool = lines.indexOf("▎ · Read package.json");
   assert.ok(you !== -1 && you < heading && heading < tool, lines.join("\n"));
-  assert.equal(
-    lines.filter((l) => l === "mock-agent").length,
-    1,
-    lines.join("\n"),
-  );
+  assert.equal(lines.filter(isHeading).length, 1, lines.join("\n"));
 });
 
 test("chat.ts on a real terminal follows a second room off screen, switches to its thread, and @name pre-filled reaches it", {
@@ -4931,7 +4930,7 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
   // still shows under it.
   await screen.press("\x18", "side view");
   assert.ok(bannerRow() > 1, `under the side view: ${screen.out()}`);
-  await screen.press("\x18", "ctrl+x view");
+  await screen.press("\x18", "enter to send · ctrl+o menu");
   const row = bannerRow();
   await screen.press(`\x1b[<0;40;${row}M\x1b[<0;40;${row}m`, "question 1 of 1");
   await screen.seen("→ asker");
@@ -5203,6 +5202,8 @@ test("chat.ts on a real terminal keeps a question waiting while the person types
     t,
     `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
+    // The warning is long: the key hints drop (M7-1).
+    "no orchestrator",
   );
   // Text in the composer: the box must not take the next keys.
   await screen.press("@asker hel", "→ asker");
@@ -5547,6 +5548,8 @@ test("chat.ts on a short terminal keeps the question's action in its box", {
     t,
     `stty cols 100 rows 12; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
+    // The warning is long: the key hints drop (M7-1).
+    "no orchestrator",
   );
   const sent = await api(
     d,
@@ -5726,8 +5729,11 @@ test("chat.ts on a real terminal opens a question that came behind the menu once
     t,
     `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
+    // The warning is long: the key hints drop (M7-1).
+    "no orchestrator",
   );
-  await screen.press("\x0f", "esc back · ctrl+o close");
+  // The menu; its key hints dropped beside the long warning.
+  await screen.press("\x0f", "new room …");
   const sent = await api(
     d,
     "POST",
@@ -7112,7 +7118,7 @@ test("chat.ts on a real terminal shows a question's diff beside the timeline, go
   await screen.seen("delete · Delete something");
   await screen.press("\x1b", "? 1 question");
   await screen.press("\x1d", "ctrl+] type");
-  await screen.press("\x18", "ctrl+x view");
+  await screen.press("\x18", "enter to send · ctrl+o menu");
   const shownAgain = screen.out().length;
   await screen.press("\x18", "question 1 of 1 · allowed (client)");
   const answerFrame = screen.out().slice(shownAgain);
@@ -7330,7 +7336,7 @@ test("chat.ts on a real terminal shows what an auto agent changed, from /diff an
   // ctrl+x wakes the side view; before anything is in it, it says how to
   // fill it. ctrl+x again hides it.
   await screen.press("\x18", "nothing here yet");
-  await screen.press("\x18", "ctrl+x view");
+  await screen.press("\x18", "enter to send · ctrl+o menu");
   await screen.press("@bob /diff\r", "bob · uncommitted · README.md (1 of 2)");
   await screen.press("]", "new.txt (new) (2 of 2)");
   await screen.press("[", "README.md (1 of 2)");
@@ -7353,7 +7359,7 @@ test("chat.ts on a real terminal shows what an auto agent changed, from /diff an
   // Below cancel, mode, role and rename; above remove.
   await screen.press(`${"\x1b[B".repeat(4)}\r`, "bob · uncommitted");
   // ctrl+x hides the view and keeps what it shows.
-  await screen.press("\x18", "ctrl+x view");
+  await screen.press("\x18", "enter to send · ctrl+o menu");
   await screen.press("\x18", "bob · uncommitted · README.md (1 of 3)");
   screen.child.stdin.write("\x03");
   assert.equal(await screen.exited, 0, screen.out());
