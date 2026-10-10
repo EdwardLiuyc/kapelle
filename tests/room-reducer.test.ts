@@ -811,4 +811,8 @@ test("each participant keeps its turn's start, a thinking flag, its last tool an
   assert.equal(ana().thinking, undefined, "the turn's end clears it");
   assert.equal(ana().tool, undefined, "and the last tool");
   assert.equal(ana().usage?.used, 50_000, "the usage stays");
+  line({ sessionUpdate: "_client_user_message", text: "again", turn: 2 });
+  line({ sessionUpdate: "tool_call", toolCallId: "t2", title: "Edit" });
+  line({ sessionUpdate: "_client_user_message", text: "next", turn: 3 });
+  assert.equal(ana().tool, undefined, "a new turn clears the last tool");
 });

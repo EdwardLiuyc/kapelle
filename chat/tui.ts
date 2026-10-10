@@ -193,7 +193,7 @@ export function screenLayout(p: {
   placeSide();
   const root = new VStack([
     { component: row, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-    // The activity rows, five at most. Under the row, so they show when the
+    // The activity rows, four at most. Under the row, so they show when the
     // side view takes the timeline's place.
     { component: p.banner, basis: "auto", shrink: 0 },
     // A gap between the conversation and the status line.
