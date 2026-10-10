@@ -61,7 +61,11 @@ import {
   writeRoomRecord,
 } from "./room.ts";
 import { stateDirFor } from "./runtime.ts";
-import { changedPaths } from "./worktree.ts";
+import {
+  changedPaths,
+  mutationKey,
+  serializeWorktreeMutation,
+} from "./worktree.ts";
 
 const run = promisify(execFile);
 
@@ -378,8 +382,8 @@ async function managedWorktrees(
 async function listWorktrees(root: string): Promise<ManagedWorktree[]> {
   // An admin entry whose working tree is gone is what plain `git worktree
   // prune` exists for; clearing it first keeps the list below honest.
-  await git(root, ["worktree", "prune"]);
-  const out = await git(root, ["worktree", "list", "--porcelain"]);
+  await worktreeGit(root, ["worktree", "prune"]);
+  const out = await worktreeGit(root, ["worktree", "list", "--porcelain"]);
   const wtRoot = join(stateDirFor(root), "wt");
   const managed: ManagedWorktree[] = [];
   for (const line of out.split("\n")) {
@@ -440,7 +444,7 @@ export async function removeRoom(
   // Before anything is removed: it checks the id.
   const prefix = branchPrefix(roomId);
   for (const path of await roomCheckouts(root, roomId)) {
-    await git(root, ["worktree", "remove", "--force", path]);
+    await worktreeGit(root, ["worktree", "remove", "--force", path]);
   }
   const state = stateDirFor(root);
   rmSync(join(state, "wt", roomId), { recursive: true, force: true });
@@ -449,7 +453,7 @@ export async function removeRoom(
   if ((await tryGit(root, ["rev-parse", "--git-dir"])) !== null) {
     // A checkout removed by hand leaves an admin entry that still holds its
     // branch; `roomCheckouts` skipped the prune when the folder was gone.
-    await git(root, ["worktree", "prune"]);
+    await worktreeGit(root, ["worktree", "prune"]);
     const refs = await git(root, [
       "for-each-ref",
       "--format=%(refname:lstrip=2)",
@@ -457,7 +461,7 @@ export async function removeRoom(
     ]);
     for (const branch of refs.split("\n").filter(Boolean)) {
       try {
-        await git(root, ["branch", "-D", branch]);
+        await worktreeGit(root, ["branch", "-D", branch]);
       } catch (err) {
         left.push(`cannot delete branch ${branch}: ${messageOf(err)}`);
       }
@@ -528,7 +532,7 @@ async function reconcileOrphan(path: string, pass: RepoPass): Promise<void> {
     return;
   }
   try {
-    await git(root, ["worktree", "remove", "--force", path]);
+    await worktreeGit(root, ["worktree", "remove", "--force", path]);
   } catch (err) {
     onNotice(`cannot remove orphan worktree ${path}: ${messageOf(err)}`);
     return;
@@ -587,7 +591,7 @@ async function dropBranches(
     }
     try {
       if (!(await hasBranch(root, branch))) continue;
-      await git(root, ["branch", "-D", branch]);
+      await worktreeGit(root, ["branch", "-D", branch]);
     } catch (err) {
       // A branch checked out somewhere else cannot be deleted, and the run is
       // still past retention; the record goes and the ref is left behind
@@ -610,7 +614,7 @@ async function reapRun(
   for (const worktree of managed) {
     if (worktree.runId !== id) continue;
     try {
-      await git(root, ["worktree", "remove", "--force", worktree.path]);
+      await worktreeGit(root, ["worktree", "remove", "--force", worktree.path]);
     } catch (err) {
       onNotice(
         `cannot remove worktree ${worktree.path} for run ${id}; the run is ` +
@@ -631,6 +635,17 @@ async function reapRun(
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await run("git", args, { cwd });
   return stdout;
+}
+
+/**
+ * `git` for a command that reads or writes `.git/worktrees/`: the same
+ * per-repository queue `core/worktree.ts` uses, because a concurrent
+ * `worktree add` can leave an entry these commands read half-written (#203).
+ */
+async function worktreeGit(cwd: string, args: string[]): Promise<string> {
+  return serializeWorktreeMutation(await mutationKey(cwd), () =>
+    git(cwd, args),
+  );
 }
 
 /** Every run record under one repository, or `null` when the directory cannot be read. */

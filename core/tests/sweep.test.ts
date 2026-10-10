@@ -27,8 +27,17 @@ import {
   writeRoomRecord,
 } from "../room.ts";
 import { stateDirFor } from "../runtime.ts";
-import { DEFAULT_RETENTION_MS, processIdentity, sweepBoot } from "../sweep.ts";
-import { openWorktrees } from "../worktree.ts";
+import {
+  DEFAULT_RETENTION_MS,
+  processIdentity,
+  roomWork,
+  sweepBoot,
+} from "../sweep.ts";
+import {
+  mutationKey,
+  openWorktrees,
+  serializeWorktreeMutation,
+} from "../worktree.ts";
 
 isolateStateHome();
 
@@ -1716,4 +1725,29 @@ test("a dismissed room whose updatedAt cannot be read is kept and named", async 
     notices.join("\n"),
   );
   assert.equal(existsSync(file), true);
+});
+
+test("a runtime room sweep waits for the worktree queue (#203)", async (t) => {
+  // `roomWork` runs `worktree prune` and `worktree list` from the live
+  // `DELETE /rooms/:id` path. If those bypass the queue, a room delete can
+  // race another room's `worktree add`; hold the queue and prove it waits.
+  const root = await gitRepo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+  await worktrees.acquire("a");
+
+  const gate = Promise.withResolvers<void>();
+  const held = serializeWorktreeMutation(await mutationKey(root), async () => {
+    await gate.promise;
+  });
+  let done = false;
+  const work = roomWork(root, RUN_ID).then((files) => {
+    done = true;
+    return files;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(done, false, "roomWork bypassed the worktree queue");
+  gate.resolve();
+  await held;
+  assert.deepEqual(await work, []);
 });

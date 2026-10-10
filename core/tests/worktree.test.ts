@@ -313,7 +313,7 @@ test("an add and a remove on one repository never overlap (#203)", async (t) => 
   gate.resolve();
   await Promise.all([releasing, acquiring]);
 
-  assert.equal(calls, 3, "release did not go through the mutation queue");
+  assert.equal(calls, 4, "release did not go through the mutation queue");
   assert.equal(peak, 1, "an add and a remove ran at once");
 });
 
@@ -341,6 +341,37 @@ test("two checkouts of one repository share the mutation queue (#203)", async (t
     b.worktrees.acquire("linked"),
   ]);
   assert.equal(peak, 1, "two checkouts of one repository raced");
+});
+
+test("symlinked spellings of one repository share the mutation queue (#203)", async (t) => {
+  // A `.git` symlink makes the main checkout report `root/.git` while a
+  // linked worktree reports the symlink's target. Without `realpath` those
+  // are two queue keys for one admin directory, the split #85 measured
+  // elsewhere.
+  const root = await repo(t);
+  const real = join(await tempDir(t), "gitdir");
+  await run("mv", [join(root, ".git"), real]);
+  await symlink(real, join(root, ".git"));
+  const linked = join(await tempDir(t), "linked");
+  await git(root, "worktree", "add", "--detach", linked, "HEAD");
+
+  let live = 0;
+  let peak = 0;
+  const hold = async () => {
+    live += 1;
+    peak = Math.max(peak, live);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    live -= 1;
+  };
+  const a = await openWorktrees(root, RUN_ID, { onWorktreeMutation: hold });
+  const b = await openWorktrees(linked, RUN_ID, { onWorktreeMutation: hold });
+  assert.ok(a.worktrees);
+  assert.ok(b.worktrees);
+  await Promise.all([
+    a.worktrees.acquire("main"),
+    b.worktrees.acquire("linked"),
+  ]);
+  assert.equal(peak, 1, "two spellings of one repository raced");
 });
 
 test("a failed mutation does not wedge later ones for the same repository", async () => {

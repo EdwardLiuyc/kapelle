@@ -149,16 +149,21 @@ async function tryGit(cwd: string, args: string[]): Promise<string | null> {
 }
 
 /**
- * A promise chain per repository, so the `git worktree add` and `remove`
- * calls below never overlap in this process (#203).
+ * A promise chain per repository, so commands that read or write the shared
+ * `.git/worktrees/` admin directory never overlap in this process (#203).
  *
- * `git worktree add` and `git worktree remove` both scan and write the same
- * admin directory, and run concurrently they can read a sibling's
- * half-written entry. Measured 2026-10-10 on Git 2.43.0: one add in about
- * 4,200 lost that race with `fatal: failed to read .../commondir`, which
- * `core/run.ts` then recorded as a task failed for no fault of the harness.
- * Worktrees are one per task and the pool runs tasks in parallel, so the
- * overlap is the normal case, not an accident.
+ * `git worktree add` and `git worktree remove` both scan and write that
+ * directory, and run concurrently they can read a sibling's half-written
+ * entry. Measured 2026-10-10 on Git 2.43.0: one add in about 4,200 lost that
+ * race with `fatal: failed to read .../commondir`, which `core/run.ts` then
+ * recorded as a task failed for no fault of the harness. Worktrees are one
+ * per task and the pool runs tasks in parallel, so the overlap is the normal
+ * case, not an accident.
+ *
+ * Every other command that touches that directory uses this queue too:
+ * `core/sweep.ts`'s `prune`, `list`, `remove --force` and `branch -D` (git
+ * reads every checkout to refuse a branch that is in use; measured 2026-10-11,
+ * it lost the same race), and `moveWorkspace`'s `repair`.
  *
  * The key is the common git dir (`mutationKey`), so every checkout of one
  * repository — the main one and its linked worktrees — shares one queue. It
@@ -194,9 +199,16 @@ export function serializeWorktreeMutation<T>(
  * the shared `.git/worktrees/`; two runs in one process, one per checkout,
  * could then race as before (#203).
  */
-async function mutationKey(root: string): Promise<string> {
+export async function mutationKey(root: string): Promise<string> {
   const common = await tryGit(root, ["rev-parse", "--git-common-dir"]);
-  return common === null ? root : resolve(root, common);
+  const key = common === null ? root : resolve(root, common);
+  // `realpath`, because two spellings of one directory — a symlinked `.git`,
+  // or macOS's `/var` and `/private/var` — must share one queue (#85).
+  try {
+    return realpathSync(key);
+  } catch {
+    return key;
+  }
 }
 
 /**
@@ -408,10 +420,11 @@ export interface WorktreeSetup {
  * is a notice rather than a refusal. `core/merge.ts` still refuses a dirty
  * path a task branch touched, which is the one moment dirtiness costs work.
  *
- * Every write to one repository's `.git/worktrees/` goes through the
- * per-repository queue below, so concurrent tasks cannot race `git worktree
- * add` against `git worktree remove` (#203). `options` carries only the test
- * seam for that queue.
+ * Every read or write of one repository's `.git/worktrees/` in the client
+ * goes through the per-repository queue below — this file's `add` and
+ * `remove`, `core/sweep.ts`'s admin commands, and `moveWorkspace`'s `repair`
+ * — so tasks, rooms and the sweep cannot race each other (#203). `options`
+ * carries only the test seam for that queue.
  */
 export async function openWorktrees(
   cwd: string,
@@ -599,7 +612,11 @@ export async function openWorktrees(
         if (untouched) {
           await mutateWorktrees(() => removeWorktree(root, task.path));
           if (action === "keep") {
-            await git(root, ["branch", "-D", task.branch]);
+            // `branch -D` reads every checkout to refuse a branch in use, so
+            // a concurrent `worktree add` can hand it a half-written entry.
+            await mutateWorktrees(() =>
+              git(root, ["branch", "-D", task.branch]),
+            );
           }
           return null;
         }
@@ -704,7 +721,9 @@ export async function moveWorkspace(
     }
   }
   if (checkouts.length > 0) {
-    await git(to, ["worktree", "repair", ...checkouts]);
+    await serializeWorktreeMutation(await mutationKey(to), () =>
+      git(to, ["worktree", "repair", ...checkouts]),
+    );
   }
 
   return target;
