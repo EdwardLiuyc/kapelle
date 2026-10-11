@@ -316,15 +316,18 @@ function paneParts({
     tui.requestRender();
   };
 
-  /** Puts `c` in the view, from its first line, and shows it. */
-  const fill = (c: PaneContent) => {
+  /** Puts `c` in the view, from its first line, and shows it. `at` is a
+   *  file's header line to jump to (M7-3). */
+  const fill = (c: PaneContent, at?: number) => {
     content = c;
     const text = "diff" in c ? c.diff.text : "";
     lines = text ? text.split("\n") : [];
     files = filesOf(lines);
     picked = undefined;
     cursor = 0;
-    scroll.scrollToStart();
+    const to = at === undefined ? -1 : files.findIndex((f) => f.line === at);
+    if (to >= 0) jump(to);
+    else scroll.scrollToStart();
     toggle(true);
   };
   /** The question it shows closed: its diff stays, with how it closed in
