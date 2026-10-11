@@ -32,6 +32,7 @@ import {
   changedPaths,
   moveWorkspace,
   openWorktrees,
+  serializeWorktreeMutation,
   type Worktrees,
 } from "../worktree.ts";
 
@@ -228,6 +229,169 @@ test("two tasks branch off the same commit and do not collide", async (t) => {
     await git(a, "rev-parse", "HEAD"),
     await git(b, "rev-parse", "HEAD"),
   );
+});
+
+test("worktree mutations on one repository never overlap (#203)", async (t) => {
+  // The real race -- one lost `git worktree add` in about 4,200 under
+  // concurrency -- is far too rare to trigger on demand, so the seam holds
+  // every mutation for a beat. Without the per-repository queue the seven
+  // acquires, and then the seven removes, would all be inside the hold at
+  // once and `peak` would be greater than one.
+  const root = await repo(t);
+  let live = 0;
+  let peak = 0;
+  const hold = async () => {
+    live += 1;
+    peak = Math.max(peak, live);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    live -= 1;
+  };
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    onWorktreeMutation: hold,
+  });
+  assert.ok(worktrees);
+  const ids = ["a", "b", "c", "d", "e", "f", "g"];
+
+  await Promise.all(ids.map((id) => worktrees.acquire(id)));
+  assert.equal(peak, 1, "two worktree adds ran at once");
+
+  // The removes are the other half of the race: an `add` can read a
+  // `commondir` a concurrent `remove` is deleting.
+  live = 0;
+  peak = 0;
+  await Promise.all(ids.map((id) => worktrees.release(id, "keep")));
+  assert.equal(peak, 1, "two worktree removals ran at once");
+});
+
+test("an add and a remove on one repository never overlap (#203)", async (t) => {
+  const root = await repo(t);
+  let live = 0;
+  let peak = 0;
+  let calls = 0;
+  let armed = false;
+  const entered = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const hold = async () => {
+    calls += 1;
+    live += 1;
+    peak = Math.max(peak, live);
+    // Only the release's remove is held open, so the acquire behind it has a
+    // real window to overlap if the two do not share the queue.
+    if (armed) {
+      armed = false;
+      entered.resolve();
+      await gate.promise;
+    }
+    live -= 1;
+  };
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    onWorktreeMutation: hold,
+  });
+  assert.ok(worktrees);
+  await worktrees.acquire("kept");
+  live = 0;
+  peak = 0;
+  armed = true;
+
+  const releasing = worktrees.release("kept", "keep");
+  // A release that bypasses the mutation seam never calls `hold`; fail with
+  // a reason instead of hanging on a gate that will never be opened.
+  await Promise.race([
+    entered.promise,
+    new Promise<never>((_, reject) => {
+      const fail = setTimeout(
+        () => reject(new Error("release never entered the mutation queue")),
+        2_000,
+      );
+      fail.unref();
+    }),
+  ]);
+
+  const acquiring = worktrees.acquire("next");
+  // Give a split queue time to enter while the release still holds.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  gate.resolve();
+  await Promise.all([releasing, acquiring]);
+
+  assert.equal(calls, 4, "release did not go through the mutation queue");
+  assert.equal(peak, 1, "an add and a remove ran at once");
+});
+
+test("two checkouts of one repository share the mutation queue (#203)", async (t) => {
+  // A run started inside a linked worktree writes the same `.git/worktrees/`
+  // as one started in the main checkout, so the queue key is the common git
+  // dir, not the checkout root.
+  const root = await repo(t);
+  const linked = join(await tempDir(t), "linked");
+  await git(root, "worktree", "add", "--detach", linked, "HEAD");
+  let live = 0;
+  let peak = 0;
+  const hold = async () => {
+    live += 1;
+    peak = Math.max(peak, live);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    live -= 1;
+  };
+  const a = await openWorktrees(root, RUN_ID, { onWorktreeMutation: hold });
+  const b = await openWorktrees(linked, RUN_ID, { onWorktreeMutation: hold });
+  assert.ok(a.worktrees);
+  assert.ok(b.worktrees);
+  await Promise.all([
+    a.worktrees.acquire("main"),
+    b.worktrees.acquire("linked"),
+  ]);
+  assert.equal(peak, 1, "two checkouts of one repository raced");
+});
+
+test("symlinked spellings of one repository share the mutation queue (#203)", async (t) => {
+  // A `.git` symlink makes the main checkout report `root/.git` while a
+  // linked worktree reports the symlink's target. Without `realpath` those
+  // are two queue keys for one admin directory, the split #85 measured
+  // elsewhere.
+  const root = await repo(t);
+  const real = join(await tempDir(t), "gitdir");
+  await run("mv", [join(root, ".git"), real]);
+  await symlink(real, join(root, ".git"));
+  const linked = join(await tempDir(t), "linked");
+  await git(root, "worktree", "add", "--detach", linked, "HEAD");
+
+  let live = 0;
+  let peak = 0;
+  const hold = async () => {
+    live += 1;
+    peak = Math.max(peak, live);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    live -= 1;
+  };
+  const a = await openWorktrees(root, RUN_ID, { onWorktreeMutation: hold });
+  const b = await openWorktrees(linked, RUN_ID, { onWorktreeMutation: hold });
+  assert.ok(a.worktrees);
+  assert.ok(b.worktrees);
+  await Promise.all([
+    a.worktrees.acquire("main"),
+    b.worktrees.acquire("linked"),
+  ]);
+  assert.equal(peak, 1, "two spellings of one repository raced");
+});
+
+test("a failed mutation does not wedge later ones for the same repository", async () => {
+  const key = `${RUN_ID}:recovery`;
+  // Both are queued before either settles: `failed` first, then `after`
+  // behind it. A regression that drops the rejection handler leaves `after`
+  // rejected without ever running its work.
+  const [failed, after] = await Promise.allSettled([
+    serializeWorktreeMutation(key, async () => {
+      throw new Error("git failed");
+    }),
+    serializeWorktreeMutation(key, async () => "ran"),
+  ]);
+  assert.equal(failed.status, "rejected");
+  assert.equal(
+    after.status,
+    "fulfilled",
+    "the failed mutation wedged the next one",
+  );
+  if (after.status === "fulfilled") assert.equal(after.value, "ran");
 });
 
 // --- release: the full status union ------------------------------------------

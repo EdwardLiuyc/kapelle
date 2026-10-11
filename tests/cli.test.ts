@@ -917,7 +917,12 @@ test("each cross-check fixture trips its own warning, and only its own", async (
   const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   // A disagreement is something to read, never a failure: `warned` exits 0.
-  assert.equal(r.code, 0);
+  assert.equal(
+    r.code,
+    0,
+    `expected every fixture to warn; stdout:\n${r.stdout}\n` +
+      `stderr:\n${r.stderr}`,
+  );
   const card = (id: string) =>
     r.stdout.split(`▸ ${id} (mock-agent) warned`)[1]?.split("\n▸ ")[0] ?? "";
   for (const id of [

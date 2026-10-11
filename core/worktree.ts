@@ -149,6 +149,69 @@ async function tryGit(cwd: string, args: string[]): Promise<string | null> {
 }
 
 /**
+ * A promise chain per repository, so commands that read or write the shared
+ * `.git/worktrees/` admin directory never overlap in this process (#203).
+ *
+ * `git worktree add` and `git worktree remove` both scan and write that
+ * directory, and run concurrently they can read a sibling's half-written
+ * entry. Measured 2026-10-10 on Git 2.43.0: one add in about 4,200 lost that
+ * race with `fatal: failed to read .../commondir`, which `core/run.ts` then
+ * recorded as a task failed for no fault of the harness. Worktrees are one
+ * per task and the pool runs tasks in parallel, so the overlap is the normal
+ * case, not an accident.
+ *
+ * Every other command that touches that directory uses this queue too:
+ * `core/sweep.ts`'s `prune`, `list`, `remove --force` and `branch -D` (git
+ * reads every checkout to refuse a branch that is in use; measured 2026-10-11,
+ * it lost the same race), and `moveWorkspace`'s `repair`.
+ *
+ * The key is the common git dir (`mutationKey`), so every checkout of one
+ * repository — the main one and its linked worktrees — shares one queue. It
+ * is **in-process only**: two CLI processes on one repository can still
+ * overlap, and a cross-process lock or retry is the upgrade if that is ever
+ * measured.
+ */
+const worktreeMutations = new Map<string, Promise<unknown>>();
+
+export function serializeWorktreeMutation<T>(
+  key: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const previous = worktreeMutations.get(key) ?? Promise.resolve();
+  // Both handlers are the work: a failed mutation must not wedge every later
+  // one for the same repository.
+  const next = previous.then(work, work);
+  worktreeMutations.set(key, next);
+  const settled = () => {
+    if (worktreeMutations.get(key) === next) worktreeMutations.delete(key);
+  };
+  void next.then(settled, settled);
+  return next;
+}
+
+/**
+ * The key the mutation queue is shared under: the git directory every
+ * checkout of one repository writes — `.git` for the main checkout, the
+ * common dir git reports inside a linked worktree.
+ *
+ * `stateDirRoot` returns the *checkout* root, so using that directly gave a
+ * linked worktree its own queue while `git worktree add` from it still wrote
+ * the shared `.git/worktrees/`; two runs in one process, one per checkout,
+ * could then race as before (#203).
+ */
+export async function mutationKey(root: string): Promise<string> {
+  const common = await tryGit(root, ["rev-parse", "--git-common-dir"]);
+  const key = common === null ? root : resolve(root, common);
+  // `realpath`, because two spellings of one directory — a symlinked `.git`,
+  // or macOS's `/var` and `/private/var` — must share one queue (#85).
+  try {
+    return realpathSync(key);
+  } catch {
+    return key;
+  }
+}
+
+/**
  * The root supervisor state hangs off, resolved but not checked.
  *
  * `git rev-parse --show-toplevel`, or `cwd` itself when it is not a
@@ -315,6 +378,17 @@ export interface Worktrees {
   adopt(taskId: string, info: { branch: string; baseSha: string }): void;
 }
 
+export interface WorktreeSetupOptions {
+  /**
+   * Test seam: awaited once per worktree-admin git command, inside the
+   * per-repository queue. The real race is one lost add in about 4,200
+   * (measured 2026-10-10, #203), far too rare to trigger on demand, so
+   * `core/tests/worktree.test.ts` holds here and asserts two commands never
+   * overlap.
+   */
+  onWorktreeMutation?: () => void | Promise<void>;
+}
+
 export interface WorktreeSetup {
   /** `null` when the cwd cannot carry worktrees; `notice` says why. */
   worktrees: Worktrees | null;
@@ -345,10 +419,17 @@ export interface WorktreeSetup {
  * lands in the working tree, so there is nothing to ignore, and a dirty tree
  * is a notice rather than a refusal. `core/merge.ts` still refuses a dirty
  * path a task branch touched, which is the one moment dirtiness costs work.
+ *
+ * Every read or write of one repository's `.git/worktrees/` in the client
+ * goes through the per-repository queue below — this file's `add` and
+ * `remove`, `core/sweep.ts`'s admin commands, and `moveWorkspace`'s `repair`
+ * — so tasks, rooms and the sweep cannot race each other (#203). `options`
+ * carries only the test seam for that queue.
  */
 export async function openWorktrees(
   cwd: string,
   runId: string,
+  options: WorktreeSetupOptions = {},
 ): Promise<WorktreeSetup> {
   const { root, isRepo } = await stateDirRoot(cwd);
   if (!isRepo) {
@@ -405,6 +486,15 @@ export async function openWorktrees(
   const prefix = relative(realpathSync(root), realpathSync(cwd));
 
   const held = new Map<string, Held>();
+  const queueKey = await mutationKey(root);
+
+  // Every mutation below runs through the repository's queue; the optional
+  // hook is the test seam for `core/tests/worktree.test.ts`, not behaviour.
+  const mutateWorktrees = <T>(work: () => Promise<T>): Promise<T> =>
+    serializeWorktreeMutation(queueKey, async () => {
+      await options.onWorktreeMutation?.();
+      return work();
+    });
 
   return {
     root,
@@ -428,7 +518,9 @@ export async function openWorktrees(
         }
 
         const path = join(stateDirFor(root), "wt", runId, taskId);
-        await git(root, ["worktree", "add", "-b", branch, path, baseSha]);
+        await mutateWorktrees(() =>
+          git(root, ["worktree", "add", "-b", branch, path, baseSha]),
+        );
         held.set(taskId, { path, branch, baseSha });
 
         // **The workspace root keeps its shape.** `--cwd packages/app` in a
@@ -518,9 +610,13 @@ export async function openWorktrees(
         // failed before it wrote anything is the rollback half of the
         // transactional spawn — no worktree and no branch.
         if (untouched) {
-          await removeWorktree(root, task.path);
+          await mutateWorktrees(() => removeWorktree(root, task.path));
           if (action === "keep") {
-            await git(root, ["branch", "-D", task.branch]);
+            // `branch -D` reads every checkout to refuse a branch in use, so
+            // a concurrent `worktree add` can hand it a half-written entry.
+            await mutateWorktrees(() =>
+              git(root, ["branch", "-D", task.branch]),
+            );
           }
           return null;
         }
@@ -540,7 +636,7 @@ export async function openWorktrees(
             `kapelle: ${taskId} (${runId})`,
           ]);
         }
-        await removeWorktree(root, task.path);
+        await mutateWorktrees(() => removeWorktree(root, task.path));
         return null;
       },
     },
@@ -550,7 +646,11 @@ export async function openWorktrees(
 /** `--force` because `git worktree remove` refuses while *ignored* files are
  *  present — a `node_modules/` the task installed would block every removal.
  *  Tracked work is committed before this runs; what --force discards is by
- *  definition what the repository was told not to keep. */
+ *  definition what the repository was told not to keep.
+ *
+ *  Callers must hold the repository's mutation queue — `mutateWorktrees` in
+ *  `openWorktrees` — because `remove` races a concurrent `add` on the shared
+ *  `.git/worktrees/` directory (#203). */
 function removeWorktree(root: string, path: string): Promise<string> {
   return git(root, ["worktree", "remove", "--force", path]);
 }
@@ -621,7 +721,9 @@ export async function moveWorkspace(
     }
   }
   if (checkouts.length > 0) {
-    await git(to, ["worktree", "repair", ...checkouts]);
+    await serializeWorktreeMutation(await mutationKey(to), () =>
+      git(to, ["worktree", "repair", ...checkouts]),
+    );
   }
 
   return target;
