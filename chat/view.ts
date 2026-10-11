@@ -6,7 +6,8 @@
  *   keys step one row down or up.
  * - The pre-fill: in a thread, the composer holds `@name ` until the person
  *   types (R43, decided 2026-09-30). A pre-fill the person did not touch
- *   follows the view and a rename. Typed text stays.
+ *   follows the view and a rename, and clears when no room is left. Typed
+ *   text stays.
  * - A thread whose participant left goes back to its room's timeline. A
  *   view in a dismissed room goes to the first row.
  * - What is on screen is seen: the timeline marks its whole room, and a
@@ -96,17 +97,16 @@ export const seenIn = (state: RoomState, view: View) =>
   view.participantId ? [view.participantId] : [...state.participants.keys()];
 
 /** The composer when `next` opens in a room with this state: an untouched
- *  pre-fill follows the view, and typed text stays. */
-// With no room (`state` unset) an old `@name ` stays. Found at M4-10's
-// pickup (#210); a move does not fix it.
+ *  pre-fill follows the view, and typed text stays. With no room (`state`
+ *  unset), an untouched pre-fill clears, as in a timeline. */
 export function opened(
   state: RoomState | undefined,
   next: View,
   text: string,
   prefill: string,
 ): Composer {
-  if (!state || touched(text, prefill)) return { prefill };
-  const p = mention(state, next);
+  if (touched(text, prefill)) return { prefill };
+  const p = state ? mention(state, next) : "";
   return { prefill: p, text: p };
 }
 

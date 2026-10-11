@@ -106,6 +106,17 @@ test("typed text stays when the view changes", () => {
   assert.deepEqual(opened(s, bob, "hi", ""), { prefill: "" });
 });
 
+test("with no room, an untouched pre-fill clears and typed text stays", () => {
+  const none = { roomId: "" };
+  assert.deepEqual(opened(undefined, none, "@bob ", "@bob "), {
+    prefill: "",
+    text: "",
+  });
+  assert.deepEqual(opened(undefined, none, "@bob hi", "@bob "), {
+    prefill: "@bob ",
+  });
+});
+
 test("typing drops the pre-fill; an empty thread composer holds @name again", () => {
   const s = room(["ann"]);
   const ann = { roomId: "r1", participantId: "p-ann" };
