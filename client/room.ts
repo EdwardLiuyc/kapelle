@@ -6,7 +6,8 @@
  * participant's status, the room timeline, each turn, the queue, the open
  * permission questions, unread and attention marks, and what an activity
  * row and the footer show (M7-1): thinking, the last tool, the last usage.
- * It keeps no thinking text. A TUI and a bridge
+ * It keeps no thinking text, and of a tool's diff only its counts (M7-2).
+ * A TUI and a bridge
  * share it, so neither parses events itself.
  *
  * **It mutates the state it is given.** An answer arrives one chunk at a
@@ -60,12 +61,17 @@ export type Entry = {
   | { type: "queue_cleared"; count: number }
   | { type: "answer"; text: string }
   /** One tool call. Its `tool_call_update`s change it in place (#240).
-   *  `detail`: what the title does not say, such as the command or path. */
+   *  `detail`: what the title does not say, such as the command or path.
+   *  `kind`: one ACP defines. `added` and `removed`: the lines its diff
+   *  changes, when an update carries one (M7-2). */
   | {
       type: "tool";
       title: string;
       detail?: string;
       status?: ToolCallStatus;
+      kind?: ToolKind;
+      added?: number;
+      removed?: number;
     }
   | { type: "turn_ended"; stopReason?: string; error?: string }
   | { type: "exited" }
@@ -158,6 +164,72 @@ const STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
 /** The status if it is one ACP defines; the log is the harness's JSON. */
 const statusOf = (v: unknown) =>
   STATUSES.has(v as string) ? (v as ToolCallStatus) : undefined;
+
+const KINDS = new Set([
+  "read",
+  "edit",
+  "delete",
+  "move",
+  "search",
+  "execute",
+  "think",
+  "fetch",
+  "switch_mode",
+  "other",
+]);
+/** The kind if it is one ACP defines; a fold line counts by it (M7-2). */
+const kindOf = (v: unknown) =>
+  KINDS.has(v as string) ? (v as ToolKind) : undefined;
+
+/** A text's lines; a last newline ends a line, and starts none. */
+const linesOf = (s: string) =>
+  s === "" ? [] : s.replace(/\n$/, "").split("\n");
+
+/**
+ * The lines a tool's `diff` blocks add and remove (M7-2). Not a real diff:
+ * the lines both texts share at the start and at the end are dropped, and
+ * what is left of each is counted. Exact for one change in one place, too
+ * high for an edit in several. An `oldText` that is not text is a new
+ * file. `undefined` when the content has no diff.
+ */
+// ponytail: counts too high for an edit in several places; a line diff
+// (Myers) if the numbers mislead.
+function diffCount(content: unknown) {
+  if (!Array.isArray(content)) return undefined;
+  let added = 0;
+  let removed = 0;
+  let any = false;
+  for (const c of content) {
+    if (c?.type !== "diff" || typeof c.newText !== "string") continue;
+    any = true;
+    const a = linesOf(typeof c.oldText === "string" ? c.oldText : "");
+    const b = linesOf(c.newText);
+    let start = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) {
+      start++;
+    }
+    let end = 0;
+    while (
+      end < a.length - start &&
+      end < b.length - start &&
+      a[a.length - 1 - end] === b[b.length - 1 - end]
+    ) {
+      end++;
+    }
+    added += b.length - start - end;
+    removed += a.length - start - end;
+  }
+  return any ? { added, removed } : undefined;
+}
+
+/** Sets a tool entry's kind and counts from a `tool_call` or its update,
+ *  where they say them. */
+function toolFacts(entry: Tool, u: { kind?: unknown; content?: unknown }) {
+  const kind = kindOf(u.kind);
+  if (kind) entry.kind = kind;
+  const n = diffCount(u.content);
+  if (n) Object.assign(entry, n);
+}
 
 const toolText = (s: string) => {
   const t = printable(s);
@@ -452,6 +524,7 @@ export function applyLine(
       const location = str(u.locations?.[0]?.path);
       if (location) slot.location = location;
       showTool(slot);
+      toolFacts(slot.entry, u);
       state.tools.set(`${participantId} ${u.toolCallId}`, slot);
       if (p) {
         p.thinking = undefined;
@@ -465,7 +538,16 @@ export function applyLine(
       const slot = state.tools.get(`${participantId} ${u.toolCallId}`);
       if (!slot) return undefined;
       const { entry } = slot;
-      const was = [entry.title, entry.detail, entry.status].join("\0");
+      const drawn = () =>
+        [
+          entry.title,
+          entry.detail,
+          entry.status,
+          entry.kind,
+          entry.added,
+          entry.removed,
+        ].join("\0");
+      const was = drawn();
       const title = str(u.title);
       if (title !== undefined) slot.title = title;
       // Merged, not replaced: claude's first `rawInput` is `{}` and its
@@ -477,10 +559,9 @@ export function applyLine(
       const status = statusOf(u.status);
       if (status) entry.status = status;
       showTool(slot);
+      toolFacts(entry, u);
       // Output alone (`_meta.terminal_output`) changes nothing drawn.
-      return [entry.title, entry.detail, entry.status].join("\0") === was
-        ? undefined
-        : entry;
+      return drawn() === was ? undefined : entry;
     }
     case "_client_turn_ended": {
       // Both come from the harness: its reply, or its error's message.

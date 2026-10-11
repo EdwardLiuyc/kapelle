@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   type Container,
   Markdown,
+  Text,
   type TuiAltScreen,
 } from "@earendil-works/pi-tui";
 import type { RoomEventLine } from "../../client/contract.ts";
@@ -387,7 +388,11 @@ test("an agent's heading shows its harness, role and time; its lines get its bar
     plain.join("\n"),
   );
   assert.ok(plain.includes("▎ hello"), "the answer has the bar");
-  assert.ok(plain.includes("▎ · Read File"), "the tool call too");
+  // A live call ends with the spinner (M7-2).
+  assert.ok(
+    plain.some((l) => /^▎ · Read File [◐◓◑◒]$/.test(l)),
+    "the tool call too",
+  );
   assert.ok(plain.includes("▎ you → ana"), "the person's message: a bar");
   const you = plain.indexOf("▎ you → ana");
   assert.equal(plain[you - 1], "", "the gap above has no bar");
@@ -417,7 +422,7 @@ test("NO_COLOR: the transcript has no colour code, and inverse stays (M7-1)", (t
   assert.equal(inverse("x"), "\x1b[7mx\x1b[27m", "the history cursor stays");
 });
 
-test("a tool call is one row that its updates change in place, with failed in red (#240)", () => {
+test("a tool call is one row that its updates change in place, with ✗ in red (#240, M7-2)", () => {
   const state = newRoomState();
   let seq = 0;
   const line = (update: Record<string, unknown>) =>
@@ -459,6 +464,320 @@ test("a tool call is one row that its updates change in place, with failed in re
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   const plain = rows.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trim());
   // After the agent's bar (M7-1).
-  assert.deepEqual(plain.slice(-2), ["▎ · edit failed", "▎   /w/a.ts"]);
-  assert.ok(rows.at(-2)?.includes("\x1b[31m failed"), "failed is red");
+  assert.deepEqual(plain.slice(-2), ["▎ · edit ✗", "▎   /w/a.ts"]);
+  assert.ok(rows.at(-2)?.includes("\x1b[31m ✗"), "failed is red");
+});
+
+/** ann's room drawn in a transcript, and a line maker that draws each
+ *  line it changes, as the screen does. `plain()` is the rows without
+ *  colour. */
+function runRoom() {
+  const state = newRoomState();
+  let seq = 0;
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+  });
+  const send = (who: string, update: Record<string, unknown>) => {
+    const e = applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-11T00:00:00Z",
+      roomId: "r1",
+      participantId: who,
+      update: update as unknown as RoomEventLine["update"],
+    });
+    if (e) parts.draw(state, e);
+    return e;
+  };
+  for (const name of ["ann", "bob"]) {
+    send(name, {
+      sessionUpdate: "_client_participant_added",
+      name,
+      harness: "mock",
+      mode: "auto",
+    });
+  }
+  parts.redraw();
+  const note = (who: string, text: string) =>
+    send(who, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text },
+    });
+  const tool = (who: string, id: string, more: Record<string, unknown>) =>
+    send(who, { sessionUpdate: "tool_call", toolCallId: id, ...more });
+  const plain = (width = 60) =>
+    parts.transcript
+      .render(width)
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+      .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  /** A left click on the first row that has `text`. */
+  const click = (text: string, width = 60) => {
+    const y = plain(width).findIndex((l) => l.includes(text));
+    assert.ok(y >= 0, `no row with ${text}`);
+    return parts.transcript.handleMouse({
+      type: "click",
+      button: "left",
+      x: 4,
+      y,
+      width,
+      height: plain(width).length,
+    } as never);
+  };
+  return { state, parts, send, note, tool, plain, click };
+}
+
+test("a run folds into one line when the agent's next note comes, with its failed count in red; a click opens it and a second folds it (M7-2)", () => {
+  const { send, note, tool, plain, click, parts } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  note("ann", "Looking.");
+  tool("ann", "t1", { title: "Read a.ts", kind: "read", status: "completed" });
+  tool("ann", "t2", { title: "Read b.ts", kind: "read", status: "completed" });
+  tool("ann", "t3", {
+    title: "Edit a.ts",
+    kind: "edit",
+    status: "failed",
+    content: [
+      { type: "diff", path: "a.ts", oldText: "a\n", newText: "b\nc\n" },
+    ],
+  });
+  // The live run is open, each row with its mark and the edit's counts.
+  assert.ok(plain().includes("▎ · Read a.ts ✓"), plain().join("\n"));
+  assert.ok(plain().includes("▎ · Edit a.ts +2 −1 ✗"));
+  note("ann", "Done.");
+  const folded = plain();
+  assert.ok(
+    folded.includes("▎ ▸ 3 tool calls · 2 read · 1 edit · 1 failed"),
+    folded.join("\n"),
+  );
+  assert.ok(!folded.some((l) => l.includes("Read a.ts")), "the rows fold");
+  assert.ok(
+    folded.indexOf("▎ Looking.") <
+      folded.indexOf("▎ ▸ 3 tool calls · 2 read · 1 edit · 1 failed") &&
+      folded.indexOf("▎ ▸ 3 tool calls · 2 read · 1 edit · 1 failed") <
+        folded.indexOf("▎ Done."),
+    "at the run's first place, between the notes",
+  );
+  assert.ok(
+    parts.transcript.render(60).some((l) => l.includes("\x1b[31m · 1 failed")),
+    "failed is red",
+  );
+  // A click opens it; the rows come back under the line.
+  assert.equal(click("▸ 3 tool calls")?.handled, true);
+  const open = plain();
+  const at = open.indexOf("▎ ▾ 3 tool calls · 2 read · 1 edit · 1 failed");
+  assert.ok(at >= 0, open.join("\n"));
+  assert.deepEqual(open.slice(at + 1, at + 4), [
+    "▎ · Read a.ts ✓",
+    "▎ · Read b.ts ✓",
+    "▎ · Edit a.ts +2 −1 ✗",
+  ]);
+  // It stays open after a redraw, as after a switch.
+  parts.redraw();
+  assert.ok(plain().includes("▎ · Read a.ts ✓"), "open after a redraw");
+  // A second click folds it.
+  click("▾ 3 tool calls");
+  assert.ok(!plain().some((l) => l.includes("Read a.ts")));
+  assert.equal(click("Done."), undefined, "a click on a note does nothing");
+});
+
+test("a question never folds: it ends the run before it, and the deny stays on screen (M7-2)", () => {
+  const { send, note, tool, plain } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  tool("ann", "t1", { title: "Read a.ts", kind: "read", status: "completed" });
+  tool("ann", "t2", { title: "Write b.ts", kind: "edit", status: "pending" });
+  send("ann", {
+    sessionUpdate: "_client_permission_queued",
+    id: "q1",
+    title: "Write b.ts",
+    kind: "edit",
+  });
+  send("ann", {
+    sessionUpdate: "_client_permission_answered",
+    id: "q1",
+    allow: false,
+    reason: "user",
+  });
+  send("ann", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t2",
+    status: "failed",
+  });
+  tool("ann", "t3", { title: "Read c.ts", kind: "read", status: "completed" });
+  note("ann", "It was denied.");
+  const rows = plain();
+  assert.ok(
+    rows.includes("▎ ▸ 2 tool calls · 1 read · 1 edit · 1 failed"),
+    rows.join("\n"),
+  );
+  assert.ok(rows.some((l) => l.includes("? ann asks: Write b.ts — denied")));
+  assert.ok(rows.some((l) => l.includes("▸ 1 tool call · 1 read")));
+  const q = rows.findIndex((l) => l.includes("? ann asks"));
+  assert.ok(
+    rows.findIndex((l) => l.includes("▸ 2 tool calls")) < q &&
+      q < rows.findIndex((l) => l.includes("▸ 1 tool call")),
+    "the question sits between the two runs",
+  );
+});
+
+test("a call still open when its turn ends shows no spinner; another agent's lines leave a run open (M7-2)", () => {
+  const { send, note, tool, plain, click } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  tool("ann", "t1", { title: "Run tests", kind: "execute", status: "pending" });
+  // bob speaks in between: ann's run stays open.
+  send("bob", { sessionUpdate: "_client_user_message", text: "hi", turn: 1 });
+  note("bob", "Hello.");
+  send("bob", { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" });
+  assert.ok(
+    plain().some((l) => /^▎ · Run tests [◐◓◑◒]$/.test(l)),
+    plain().join("\n"),
+  );
+  send("ann", { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" });
+  assert.ok(
+    plain().includes("▎ ▸ 1 tool call · 1 execute"),
+    "the end folds it",
+  );
+  click("▸ 1 tool call");
+  assert.ok(plain().includes("▎ · Run tests"), "no mark once the turn ended");
+});
+
+test("a fold above the view keeps the rows the person reads where they are (M7-2)", () => {
+  const { send, note, tool, plain, parts } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  for (let i = 0; i < 5; i++) {
+    tool("ann", `t${i}`, { title: `Read f${i}.ts`, kind: "read" });
+  }
+  send("bob", { sessionUpdate: "_client_user_message", text: "hi", turn: 1 });
+  note("bob", Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n\n"));
+  // The person reads bob's answer, with ann's run above the view.
+  const { scroll } = parts;
+  const layout = () => scroll.updateLayout(plain(60).length, 10, () => {});
+  layout();
+  const top = plain(60).indexOf("▎ line 20");
+  scroll.scrollTo(top, { disableFollow: true });
+  assert.equal(scroll.isFollowingEnd, false);
+  note("ann", "Read them all.");
+  layout();
+  assert.equal(
+    plain(60)[scroll.scrollTop],
+    "▎ line 20",
+    "the same row at the top of the view",
+  );
+  assert.ok(plain(60).includes("▎ ▸ 5 tool calls · 5 read"));
+});
+
+test("a fold at the turn's end keeps the rows the person reads when the spinner wraps the running row (M7-2)", () => {
+  const { send, note, tool, plain, parts } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  // At this width the pending row's spinner wraps it to a second row.
+  tool("ann", "t1", {
+    title: "Read abcdefghijklmn",
+    kind: "read",
+    status: "in_progress",
+  });
+  send("bob", { sessionUpdate: "_client_user_message", text: "hi", turn: 1 });
+  note("bob", Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n\n"));
+  const width = 24;
+  const layout = () => {
+    const rows = plain(width);
+    parts.scroll.updateLayout(rows.length, 8, () => {});
+    return rows;
+  };
+  const before = layout();
+  const title = before.findIndex((l) => l.includes("Read abcdefghijklmn"));
+  assert.ok(
+    /[◐◓◑◒]/.test(before[title + 1] ?? ""),
+    "the spinner wraps the running row",
+  );
+  const top = before.findIndex((l) => l.includes("line 20"));
+  assert.ok(top > 0, before.join("\n"));
+  parts.scroll.scrollTo(top, { disableFollow: true });
+  assert.equal(parts.scroll.isFollowingEnd, false);
+  send("ann", { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" });
+  const after = layout();
+  assert.equal(
+    after[parts.scroll.scrollTop],
+    before[top],
+    "the same row at the top of the view",
+  );
+});
+
+test("a cut turn's run folds when the agent's next turn starts (M7-2)", () => {
+  const { send, tool, plain } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  tool("ann", "t1", { title: "Read a.ts", kind: "read", status: "completed" });
+  assert.ok(plain().includes("▎ · Read a.ts ✓"), plain().join("\n"));
+  // No turn end: the turn was cut. The next message starts the next turn.
+  send("ann", {
+    sessionUpdate: "_client_user_message",
+    text: "again",
+    turn: 2,
+  });
+  const rows = plain();
+  const folded = rows.findIndex((l) => l.includes("▸ 1 tool call · 1 read"));
+  const next = rows.findIndex((l) => l.includes("again"));
+  assert.ok(folded >= 0 && folded < next, rows.join("\n"));
+  assert.ok(!rows.some((l) => l.includes("Read a.ts")), "the run folded");
+});
+
+test("a redraw scrolled up draws no part: a replayed fold does no anchor work (M7-2)", () => {
+  const { send, note, tool, plain, parts } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  for (let i = 0; i < 4; i++) {
+    note("ann", `Step ${i}.`);
+    tool("ann", `t${i}`, { title: `Read f${i}.ts`, kind: "read" });
+  }
+  note("ann", Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n\n"));
+  parts.scroll.updateLayout(plain().length, 8, () => {});
+  parts.scroll.scrollTo(3, { disableFollow: true });
+  assert.equal(parts.scroll.isFollowingEnd, false);
+  // Each replayed note folds a run. A frame draws the parts; the replay
+  // must not, once per run.
+  let drawn = 0;
+  const render = Text.prototype.render;
+  Text.prototype.render = function (this: Text, width: number) {
+    drawn++;
+    return render.call(this, width);
+  };
+  try {
+    parts.redraw();
+  } finally {
+    Text.prototype.render = render;
+  }
+  assert.equal(drawn, 0);
+  assert.ok(plain().includes("▎ ▸ 1 tool call · 1 read"));
+});
+
+test("a click on any row of a wrapped fold line opens the run (M7-2)", () => {
+  const { send, note, tool, parts } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  const kinds = ["read", "edit", "execute", "search", "fetch", "move"];
+  for (const [i, kind] of kinds.entries()) {
+    tool("ann", `t${i}`, { title: `T${i}`, kind });
+  }
+  note("ann", "Done.");
+  const width = 30;
+  const rows = parts.transcript
+    .render(width)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+    .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  const at = rows.findIndex((l) => l.includes("▸ 6 tool calls"));
+  assert.ok(at >= 0 && !rows[at + 1]?.includes("Done."), "the line wraps");
+  const hit = parts.transcript.handleMouse({
+    type: "click",
+    button: "left",
+    x: 4,
+    y: at + 1,
+    width,
+    height: rows.length,
+  } as never);
+  assert.equal(hit?.handled, true);
+  assert.ok(
+    parts.transcript.render(width).some((l) => l.includes("T0")),
+    "the run opened",
+  );
 });

@@ -27,11 +27,9 @@ import {
   activity,
   clock,
   colourOf,
+  spin,
   type View,
 } from "../view.ts";
-
-/** One frame a second: the tick is the only thing that moves it. */
-const SPINNER = ["◐", "◓", "◑", "◒"];
 
 /** The activity rows. The view is read at each draw; `open` and `question`
  *  are the screen's. `now` is the clock, for a test. */
@@ -72,8 +70,7 @@ function bannerPart({
     // a wait row.
     const colour = r ? colourOf(r.state, a.participantId) : undefined;
     const paint = colour === undefined ? dim : fg(colour);
-    const spin = SPINNER[Math.floor(now() / 1000) % SPINNER.length] ?? "";
-    const mark = asked ? magenta("?") : paint(spin);
+    const mark = asked ? magenta("?") : paint(spin(now()));
     return `${paint("▌")}${mark} ${bold(name)} ${doing}${dim(`${timer}${cancel}`)}`;
   };
   return {
