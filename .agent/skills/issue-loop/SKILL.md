@@ -15,6 +15,10 @@ work, read reports, judge them and decide the next step. **You do not do the wor
   `git log`, `git show`, and `room.sh info`, `room.sh diff`.
 - Every change happens through a worker. You talk to workers only with `room.sh`.
 
+**You work in short turns.** Each turn does one step: you send one message to a worker,
+write one status line, and end your turn. You never wait for a worker inside your turn.
+So the person can talk to you between steps.
+
 ## Your hands: `room.sh`
 
 `room.sh` is beside this file. Set `ROOM` to your room id on every call:
@@ -23,16 +27,25 @@ work, read reports, judge them and decide the next step. **You do not do the wor
 R=/home/edward/src/kapelle-spike/.agent/skills/issue-loop/room.sh
 ROOM=<room id> $R info
 ROOM=<room id> $R hire dev claude developer origin/master
-ROOM=<room id> $R ask dev <<'EOF'
+ROOM=<room id> $R send dev <<'EOF'
 the message
 EOF
 ```
 
-- `ask` sends a message and waits up to 9 minutes for the answer. When it prints
-  `still working: call 'room.sh wait …' again`, run that exact command. Repeat until
-  you get the answer. A long turn is normal: a full test run takes 5 minutes.
-- Send one message to a worker at a time. Wait for its answer before the next.
-- The answer is the worker's last text. The first line says how the turn ended.
+- `send` sends the message and returns at once. Then end your turn.
+- Send one message to a worker at a time. Send the next one only after its answer.
+
+## The messages you get
+
+- **A message that starts with `[relay]`** is a worker's answer. A relay script follows
+  the room and sends it to you when the worker's turn ends. Its second line says how the
+  turn ended. The rest is the worker's last text. This message starts your next step.
+- **Any other message is from the person.** Answer it first. It can change the plan:
+  an answer to a gate, an order to stop, or a new rule. Then go on with the loop, or wait
+  for the person.
+- **No relay message, but the worker looks done?** `room.sh info` shows its status. If it
+  is `idle` and you got no `[relay]` message for its last turn, read the answer with
+  `room.sh wait <name> <seq from your send> 0 60` and say so in your spike notes.
 
 ## The team
 
@@ -60,6 +73,9 @@ Rules for this room:
 - Git: when the orchestrator asks, you may commit on your branch, push it, open a PR and
   comment on the PR. This overrides the AGENTS.md rule for this room only. Never merge.
   Never push to master.
+- Run the full test suite once for each code change. After a change to comments or docs
+  only, run npm run check and npm run fmt:check (and markdownlint for .md files), not
+  the full suite.
 - End every turn with a short report: what you did, the checks and their results, and
   any choice the person must make, with options and your recommendation.
 ```
@@ -69,7 +85,10 @@ Skills by harness: claude runs a skill as `/pickup-issue 220`. pi runs it as
 
 ## The loop
 
-Follow these steps in order. Each step names the message to send.
+Follow these steps in order. Each step names the message to send. A step that waits
+for a worker ends your turn; the `[relay]` message with its answer starts the next one.
+End every turn with one status line, for example: `Step 4: rev reviews. I wait for its
+answer.`
 
 1. **Pick up.** Hire `dev`. Send the rules block, then `/pickup-issue <n>`.
 2. **Gate 1, if needed.** If dev's report has a choice the person must make, **stop**
@@ -91,29 +110,47 @@ Follow these steps in order. Each step names the message to send.
    disagree: stop.
 7. **PR.** Send dev: `push the branch and create the PR (Closes #<n>). Then comment
    "@claude review" on the PR.` Note the PR number.
-8. **Bot review, at most 2 rounds.** Wait for the bot (below). Then send dev:
-   `/address-comment <pr> the latest comment`. After round 1, if dev pushed fixes, send:
-   `comment "@claude review the update" on the PR.` and do round 2. Do not start a third
-   round.
+8. **Bot review, at most 3 rounds.** Each round:
+   1. Wait for the bot (below), then read its comment yourself.
+   2. **Only nits: end the review loop.** When every finding is a nit (style, wording,
+      an optional idea, or "no change needed") and none is a bug, a missing test or a
+      wrong doc, do not send `/address-comment`. Go to step 9. If you are not sure that
+      a finding is a nit, treat it as a real finding.
+   3. Otherwise send dev: `/address-comment <pr> the latest comment`.
+   4. If dev pushed fixes and this was round 1 or 2, send: `comment "@claude review the
+      update" on the PR.` and start the next round. If dev pushed nothing, go to step 9.
+
+   After round 3, go to step 9, even when dev pushed fixes. Never start a fourth round.
+   Say in the final report that the last fixes had no bot review.
 9. **Gate 2: hand over.** Stop with the final report. Never merge.
 
-**Waiting for the bot.** It posts a comment by `claude` and edits it when done. Done
-means the body starts with `**Claude finished`. Check every 60 seconds, for at most 9
-minutes per command, for example:
+**Waiting for the bot.** The bot is not a room worker, so no relay message comes for
+it. You wait for it inside your turn; it takes about 4 minutes. It posts one comment by
+`claude` per round and edits it when done: done means the body starts with
+`**Claude finished`.
+
+Before you ask for a round, note how many `claude` comments the PR has (`N`). Then wait
+for comment `N + 1` to be finished. The command must not start with `sleep`; Claude Code
+blocks that.
 
 ```bash
+n=<N>
 for i in $(seq 9); do
-  gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | last | .body[0:40]'
+  c=$(gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")]')
+  if [ "$(jq length <<<"$c")" -gt "$n" ] && jq -e 'last | .body | startswith("**Claude finished")' <<<"$c" >/dev/null; then
+    echo done; break
+  fi
   sleep 60
 done
 ```
 
-Count only comments that came after the trigger. If no new finished comment comes in 20
-minutes: stop.
+Run it again if it ends without `done`. If no finished comment comes in 20 minutes:
+stop.
 
 ## How to stop and ask the person
 
-End your turn. Your answer is the question. The person replies to you in the room.
+End your turn. Your answer is the question. The person replies to you in the room. Do
+not send anything to a worker while you wait for the person.
 
 Stop when:
 
