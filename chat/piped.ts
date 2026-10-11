@@ -16,10 +16,11 @@ import { agentDiff } from "../client/diff.ts";
 import {
   applyLine,
   applyStatus,
-  cleanDiff,
+  cleanLines,
   type Entry,
   nameOf,
   newRoomState,
+  printable,
   type RoomState,
 } from "../client/room.ts";
 import {
@@ -148,7 +149,8 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     console.log(`room ${room.id} · no agents`);
   for (const p of room.participants) {
     console.log(`room ${room.id} · ${p.name} (${p.harness}) · ${p.worktree}`);
-    for (const { text } of p.notices) console.log(`! ${text}`);
+    // A notice can quote the harness: its version, or its own error (#229).
+    for (const { text } of p.notices) console.log(`! ${printable(text)}`);
   }
   console.log(
     "type a message; @name picks the agent; /help lists the commands; /leave to exit",
@@ -266,7 +268,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       );
       if (!r) console.error(`! ${NO_DAEMON}`);
       else if (!r.ok) console.error(`! ${r.error.message}`);
-      else console.log(cleanDiff(r.body.text) || `${c.name}: no changes`);
+      else console.log(cleanLines(r.body.text) || `${c.name}: no changes`);
       continue;
     }
     if (c.verb !== "message") {

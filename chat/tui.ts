@@ -64,7 +64,7 @@ import { agentDiff, agentForwardDiff } from "../client/diff.ts";
 import { mentionsFor, targetOf } from "../client/mention.ts";
 import { questionQueue } from "../client/questions.ts";
 import {
-  cleanDiff,
+  cleanLines,
   type Entry,
   nameOf,
   printable,
@@ -917,7 +917,7 @@ function chatTui(
       const other = against === "head" ? "base" : "head";
       side.fill({
         title: `${who.name} · ${against === "head" ? "uncommitted" : "whole branch"}`,
-        diff: { ...res.body, text: cleanDiff(res.body.text) },
+        diff: { ...res.body, text: cleanLines(res.body.text) },
         keys: [
           {
             key: "b",
@@ -1033,7 +1033,7 @@ function chatTui(
       }
       side.fill({
         title: `${target.name} ← ${from.name} · fast-forward`,
-        diff: { ...res.body, text: cleanDiff(res.body.text) },
+        diff: { ...res.body, text: cleanLines(res.body.text) },
         keys: [
           {
             key: "enter",

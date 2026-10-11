@@ -32,6 +32,7 @@ import { spawn } from "node:child_process";
 
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
 import { READ_ONLY_KINDS } from "./policy.ts";
+import { oneLine } from "./text.ts";
 
 /** ASCII BEL. The terminal's own attention signal; no escape sequence, no
  *  colour, nothing `NO_COLOR` or a pipe has an opinion about. */
@@ -42,7 +43,7 @@ function desktop(title: string, body: string): void {
   // ponytail: AppleScript string literals accept JSON's escaping for the
   // characters a tool title can contain. A body with a newline in it would
   // arrive literal rather than wrapped — swap in a real escaper if a producer
-  // ever sends one; today every text on both events is a single line.
+  // ever sends one; `oneLine` keeps every text on both events a single line.
   const [command, args] =
     process.platform === "darwin"
       ? ([
@@ -105,15 +106,19 @@ export function makeNotifier({
       // to ignore the alert. The same constant both sides, so a change to what
       // `ask` auto-approves cannot leave the two out of step.
       if (READ_ONLY_KINDS.has(update.kind)) return;
-      const text = `permission needed: [${update.kind}] ${update.title}`;
+      // The kind and title are the harness's (#229). `BELL` is ours, so it
+      // stays outside.
+      const text = `permission needed: [${oneLine(update.kind)}] ${oneLine(update.title)}`;
       write(`${BELL}! [${agent}] ${text}\n`);
       notify(`kapelle: ${agent}`, text);
       return;
     }
 
     if (update.sessionUpdate === "_client_stall_warning") {
-      write(`${BELL}! [${agent}] ${update.text}\n`);
-      notify(`kapelle: ${agent}`, update.text);
+      // A repeat warning quotes the harness's tool title (core/watchdog.ts).
+      const text = oneLine(update.text);
+      write(`${BELL}! [${agent}] ${text}\n`);
+      notify(`kapelle: ${agent}`, text);
     }
   };
 }

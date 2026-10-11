@@ -1,6 +1,6 @@
 /**
  * `git diff` text, read for a screen (M4-6): where each file starts, the
- * one line a question box shows. `cleanDiff` (`client/room.ts`) makes it
+ * one line a question box shows. `cleanLines` (`client/room.ts`) makes it
  * safe to draw.
  *
  * **Any `git diff` text**, not only the daemon's: a question's edit, an

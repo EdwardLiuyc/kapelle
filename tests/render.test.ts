@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SessionUpdate } from "../protocol/types.ts";
+import type { AgentEvent, SessionUpdate } from "../protocol/types.ts";
 import { render } from "../render.ts";
 
 /**
@@ -25,7 +25,7 @@ const RESET: SessionUpdate = {
 };
 
 /** Runs `render` over a script of updates and returns what reached stdout. */
-function draw(updates: SessionUpdate[]): string {
+function draw(updates: AgentEvent[]): string {
   let written: string[] = [];
   const real = process.stdout.write;
   // biome-ignore lint/suspicious/noExplicitAny: stdout.write has three overloads.
@@ -97,6 +97,42 @@ test("a line event closes an open stream instead of landing on it", () => {
   ]);
 
   assert.equal(out, "mid-sentence\n[h] → Read [read]\n");
+});
+
+test("a harness's text reaches stdout with no escape sequence, and keeps its lines (#229)", () => {
+  const bad = "a\x1b[2J\nb\x1b]52;c;aGFja2Vk\x07";
+  const out = draw([
+    says(bad),
+    thought(bad),
+    { sessionUpdate: "tool_call", toolCallId: "t", title: bad, kind: "read" },
+    {
+      sessionUpdate: "plan",
+      entries: [{ content: bad, priority: "low", status: "pending" }],
+    },
+    {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t",
+      status: "completed",
+      content: [{ type: "diff", path: bad, newText: "" }],
+    },
+    {
+      sessionUpdate: "_client_permission",
+      allow: false,
+      title: bad,
+      kind: "edit",
+    },
+    { sessionUpdate: "_client_wrote_file", path: bad },
+    // The wire is not checked, so a "number" can be a string.
+    { sessionUpdate: "usage_update", used: bad as unknown as number, size: 1 },
+  ]);
+
+  // `draw` strips only colour, so an `ESC` left is one the harness sent.
+  assert.equal(out.includes("\x1b"), false);
+  assert.equal(out.includes("\x07"), false);
+  assert.ok(
+    out.startsWith("a [2J\nb ]52;c;aGFja2Vk \n"),
+    "the answer's lines stay",
+  );
 });
 
 /**

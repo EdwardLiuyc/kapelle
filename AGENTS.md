@@ -111,6 +111,7 @@ arrow that points back.
 | `core/runtime.ts` | The user-level directories and `stateDirFor(root)`. |
 | `core/room.ts` | A chat room: a roster of participants, each one harness kept alive across turns. |
 | `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
+| `core/text.ts` | A harness's text made safe for a terminal (#229): `render.ts`, `cli.ts` and the `ask` prompt use it. `client/room.ts` has a copy, and `tests/text.test.ts` checks that they agree. |
 | `render.ts` | Terminal drawing of `session/update` events. |
 | `cli.ts` | The CLI and the `kapelle` bin. |
 | `daemon.ts` | The HTTP daemon: one for all of the operator's repositories. |

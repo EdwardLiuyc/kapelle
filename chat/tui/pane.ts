@@ -19,7 +19,7 @@
  * agent's changes). Esc and `ctrl+]` give the keys to the composer, and
  * `ctrl+]` takes them back, so a message goes out while the view stays; its
  * single-letter keys would otherwise type into both. The text it is given is
- * already drawable (`cleanDiff`).
+ * already drawable (`cleanLines`).
  */
 
 import {

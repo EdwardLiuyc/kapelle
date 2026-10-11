@@ -15,6 +15,7 @@
  */
 
 import { blockEnd, displayWidth, toAnsi } from "./core/markdown.ts";
+import { clean, oneLine } from "./core/text.ts";
 import type { AgentEventEnvelope } from "./protocol/agent.ts";
 import type { ContentBlock } from "./protocol/types.ts";
 
@@ -133,7 +134,7 @@ export function flushStream(): void {
 
 /** Text is the only block this client draws; anything else renders as nothing. */
 const textOf = (c: ContentBlock | undefined): string | undefined =>
-  c?.type === "text" ? c.text : undefined;
+  c?.type === "text" ? clean(c.text) : undefined;
 
 function line(s: string) {
   endStream();
@@ -191,16 +192,17 @@ export function render({ agent, update }: AgentEventEnvelope): void {
 
     case "tool_call":
       line(
-        `${tag} ${cyan("→")} ${update.title ?? "(tool)"} ${dim(`[${update.kind ?? "other"}]`)}`,
+        `${tag} ${cyan("→")} ${oneLine(update.title ?? "(tool)")} ${dim(`[${oneLine(update.kind ?? "other")}]`)}`,
       );
       break;
 
     case "tool_call_update":
       if (update.status === "failed") {
-        line(`${tag} ${red("✗")} tool ${update.toolCallId} failed`);
+        line(`${tag} ${red("✗")} tool ${oneLine(update.toolCallId)} failed`);
       } else if (update.status === "completed") {
         for (const c of update.content ?? []) {
-          if (c.type === "diff") line(`${tag} ${green("±")} ${c.path}`);
+          if (c.type === "diff")
+            line(`${tag} ${green("±")} ${oneLine(c.path)}`);
         }
       }
       break;
@@ -208,25 +210,31 @@ export function render({ agent, update }: AgentEventEnvelope): void {
     case "plan":
       line(`${tag} plan:`);
       for (const e of update.entries ?? []) {
-        line(dim(`     • ${e.content}`));
+        // One line: a continuation would lose the `•` and its indent.
+        line(dim(`     • ${oneLine(e.content)}`));
       }
       break;
 
     case "usage_update":
-      line(dim(`${tag} context ${update.used}/${update.size} tokens`));
+      // `Number`: the wire is not checked, and a string could hold `ESC`.
+      line(
+        dim(
+          `${tag} context ${Number(update.used)}/${Number(update.size)} tokens`,
+        ),
+      );
       break;
 
     // Synthetic events emitted by our client, not the protocol.
     case "_client_permission":
       line(
         update.allow
-          ? `${tag} ${green("✓ allowed")} ${update.title}`
-          : `${tag} ${red("✗ refused")} ${update.title} ${dim(`[${update.kind}]`)}`,
+          ? `${tag} ${green("✓ allowed")} ${oneLine(update.title)}`
+          : `${tag} ${red("✗ refused")} ${oneLine(update.title)} ${dim(`[${oneLine(update.kind)}]`)}`,
       );
       break;
 
     case "_client_wrote_file":
-      line(`${tag} ${green("wrote")} ${update.path}`);
+      line(`${tag} ${green("wrote")} ${oneLine(update.path)}`);
       break;
 
     // `_client_permission_pending` is deliberately not drawn (M1c-4). Under

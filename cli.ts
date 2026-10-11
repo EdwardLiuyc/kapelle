@@ -58,6 +58,7 @@ import {
 } from "./core/run.ts";
 import { type Task, validateRun } from "./core/runfile.ts";
 import { runtimeDir, stateDirFor } from "./core/runtime.ts";
+import { clean, oneLine } from "./core/text.ts";
 import { moveWorkspace, stateDirRoot } from "./core/worktree.ts";
 import { AcpAgent } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
@@ -372,7 +373,10 @@ if (chatVerb) {
       const who = init.agentInfo
         ? `${init.agentInfo.name} ${init.agentInfo.version ?? ""}`.trim()
         : spec.name;
-      console.log(`connected to ${who} (ACP v${init.protocolVersion})`);
+      // The name, version and protocol version are the harness's (#229).
+      console.log(
+        `connected to ${oneLine(who)} (ACP v${oneLine(String(init.protocolVersion))})`,
+      );
     }
 
     // M1a-4 decides these lines; this story decides which survive `--quiet`.
@@ -382,7 +386,8 @@ if (chatVerb) {
       warningsFor(spec.name, spec, resolved.mode, init.agentInfo?.version),
       quiet,
     );
-    for (const w of warnings) console.error(`! ${w.text}`);
+    // The version warning quotes the harness's own version (#229).
+    for (const w of warnings) console.error(`! ${oneLine(w.text)}`);
 
     await agent.newSession();
 
@@ -403,10 +408,11 @@ if (chatVerb) {
     // The end of a turn flushes the block `render` still has open (M1c-7):
     // this line prints past the renderer, so nothing else would close it.
     flushStream();
-    if (!quiet) console.log(`\n\n— turn ended: ${stopReason}`);
+    // Both are the harness's text (#229).
+    if (!quiet) console.log(`\n\n— turn ended: ${oneLine(String(stopReason))}`);
   } catch (err) {
     flushStream();
-    console.error(`\nerror: ${messageOf(err)}`);
+    console.error(`\nerror: ${clean(messageOf(err))}`);
     process.exitCode = 1;
   } finally {
     closeAsk();
@@ -511,7 +517,7 @@ async function runFromFile(path: string): Promise<number> {
   if (quiet) {
     bus.addListener(({ agent: taskId, update }) => {
       if (update.sessionUpdate === "_client_result_warning") {
-        console.error(`! [${taskId}] ${update.text}`);
+        console.error(`! [${taskId}] ${oneLine(update.text)}`);
       }
     });
   }
@@ -519,7 +525,7 @@ async function runFromFile(path: string): Promise<number> {
     bus.addListener(({ agent: taskId, update }) => {
       // Milestones only. `render` would braid N streams into one line.
       if (update.sessionUpdate === "tool_call") {
-        console.log(`[${taskId}] → ${update.title}`);
+        console.log(`[${taskId}] → ${oneLine(update.title)}`);
       }
     });
   }
@@ -565,7 +571,7 @@ async function runFromFile(path: string): Promise<number> {
           if (kind && printableWarnings([{ kind, text }], quiet).length === 0) {
             return;
           }
-          console.error(`! [${taskId}] ${text}`);
+          console.error(`! [${taskId}] ${oneLine(text)}`);
         },
       },
     );
@@ -594,7 +600,7 @@ async function runFromFile(path: string): Promise<number> {
       // The id always leads: a thrown message names the task only because
       // `AcpAgent` happens to be named after it, and a status line has no
       // other way to say which of six tasks this is.
-      console.error(`error: [${task.id}] ${task.error ?? task.status}`);
+      console.error(`error: [${task.id}] ${clean(task.error ?? task.status)}`);
     }
   } else {
     console.log(`\n${"═".repeat(60)}`);
@@ -767,21 +773,22 @@ interface AttachState {
 function printTask(task: Card): void {
   const secs = (task.durationMs / 1000).toFixed(1);
   console.log(`\n▸ ${task.id} (${task.agent}) ${task.status} in ${secs}s`);
-  if (task.error) console.log(`  error: ${task.error}`);
+  if (task.error) console.log(`  error: ${clean(task.error)}`);
   // Verbatim, tagged by the task above, and never added to another task's:
   // copilot counts cumulatively where opencode counts per turn (M0-5).
   if (task.usage) {
     console.log(
-      `  tokens: ${task.usage.totalTokens} total ` +
-        `(${task.usage.inputTokens} in, ${task.usage.outputTokens} out; ` +
+      // `Number`: the wire is not checked, and a string could hold `ESC`.
+      `  tokens: ${Number(task.usage.totalTokens)} total ` +
+        `(${Number(task.usage.inputTokens)} in, ${Number(task.usage.outputTokens)} out; ` +
         `${task.usageSemantics ?? "unknown"})`,
     );
   }
   // Before the prose, not after: the warnings are the reason to read the
   // prose at all, and a reader who stops at the first screen must still see
   // that the agent and the working tree disagreed.
-  for (const w of task.warnings ?? []) console.log(`  ! ${w.text}`);
-  const prose = task.transcript.trim();
+  for (const w of task.warnings ?? []) console.log(`  ! ${oneLine(w.text)}`);
+  const prose = clean(task.transcript).trim();
   if (prose) console.log(prose);
 }
 
@@ -960,7 +967,7 @@ async function attachRun(): Promise<number> {
       if (kind && printableWarnings([{ kind, text }], quiet).length === 0) {
         continue;
       }
-      console.error(`! [${taskId}] ${text}`);
+      console.error(`! [${taskId}] ${oneLine(text)}`);
     }
     printed = notices.length;
     return state;
@@ -981,7 +988,7 @@ async function attachRun(): Promise<number> {
         if (!open.body.some((p) => p.id === decision.id)) return;
         if (!asker) {
           console.error(
-            `! [${agent}] waiting on [${decision.kind}] ${decision.title} — ` +
+            `! [${agent}] waiting on [${oneLine(decision.kind)}] ${oneLine(decision.title)} — ` +
               "attach from a terminal to answer, or it is denied at the timeout",
           );
           return;
@@ -1058,14 +1065,15 @@ async function attachRun(): Promise<number> {
             c.transcript += update.content.text;
           break;
         case "tool_call":
-          if (!quiet && !only) console.log(`[${agent}] → ${update.title}`);
+          if (!quiet && !only)
+            console.log(`[${agent}] → ${oneLine(update.title)}`);
           break;
         case "_client_stall_warning":
-          console.error(`! [${agent}] ${update.text}`);
+          console.error(`! [${agent}] ${oneLine(update.text)}`);
           break;
         case "_client_result_warning":
           c.warnings?.push({ kind: update.kind, text: update.text });
-          if (quiet) console.error(`! [${agent}] ${update.text}`);
+          if (quiet) console.error(`! [${agent}] ${oneLine(update.text)}`);
           break;
         case "_client_permission_queued":
           answer(agent, update);
@@ -1137,7 +1145,7 @@ async function attachRun(): Promise<number> {
     c.usageSemantics ??= r.usageSemantics;
     if (!c.warnings?.length) c.warnings = r.warnings;
   }
-  if (state.error) console.error(`error: ${state.error}`);
+  if (state.error) console.error(`error: ${clean(state.error)}`);
   if (only && !cards.has(only)) {
     console.error(`error: run ${id} has no task ${only}`);
     return 1;
