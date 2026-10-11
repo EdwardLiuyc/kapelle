@@ -13,7 +13,6 @@ import type {
   JsonRpcError,
   LoadSessionResponse,
   McpServer,
-  Meta,
   NewSessionResponse,
   PermissionOption,
   PermissionOptionId,
@@ -26,7 +25,6 @@ import type {
   SetSessionModeResponse,
   ToolCallContent,
   ToolCallId,
-  ToolCallLocation,
   ToolCallStatus,
   ToolCallUpdate,
   ToolKind,
@@ -177,21 +175,31 @@ interface PendingRequest {
 }
 
 /**
- * What we retain per `toolCallId`. Wider than the three fields the policy
- * reads because `tool_call_update` is merged in whole (see `#onNotification`).
+ * What we retain per `toolCallId`: only what `#requestPermission` reads, and
+ * the status that says when the heavy part can go (#163). The entries are
+ * never removed, and a title is kept whole, so a room still holds one small
+ * entry per call for its life. That is the end state #163 chose.
  */
-interface RememberedToolCall extends Meta {
-  sessionUpdate?: "tool_call" | "tool_call_update";
-  toolCallId?: ToolCallId;
+interface RememberedToolCall {
   title?: string;
   kind?: ToolKind;
   status?: ToolCallStatus;
   content?: ToolCallContent[];
-  locations?: ToolCallLocation[];
   // As in PolicyToolCall above — the protocol's own shape for raw tool input.
   // pi-lens-ignore: no-unsafe-dictionary-unknown
   rawInput?: Record<string, unknown>;
-  rawOutput?: unknown;
+}
+
+/**
+ * A call without its input and content (#163). A room keeps one session for
+ * its whole life, so a full entry per call would hold every edit's text until
+ * the room ends. A late ask for the call is still judged on its title and kind,
+ * but it shows no diff, and its write asks again through `#guardWrite`.
+ * A field added to `RememberedToolCall` is dropped here unless it is listed:
+ * list it if a late ask needs it and it is small.
+ */
+function settled({ title, kind, status }: RememberedToolCall) {
+  return { title, kind, status };
 }
 
 type OutgoingMessage =
@@ -594,6 +602,12 @@ export class AcpAgent {
       // Cleared on every exit, so a failed or cancelled turn does not wedge
       // the agent into refusing all later prompts.
       this.#promptInFlight = false;
+      // A cancelled turn leaves its calls `pending` for ever, so a turn's end
+      // settles every call too (#163). Only the live ones: the rest already are.
+      for (const [id, call] of this.#toolCalls) {
+        if (call.rawInput === undefined && call.content === undefined) continue;
+        this.#toolCalls.set(id, settled(call));
+      }
     }
   }
 
@@ -822,18 +836,31 @@ export class AcpAgent {
       return;
 
     // Permission requests only carry a toolCallId, so remember the details
-    // announced here — otherwise the policy has nothing to judge.
-    if (update.sessionUpdate === "tool_call") {
-      this.#toolCalls.set(update.toolCallId, {
-        title: update.title,
-        kind: update.kind ?? "other",
-        rawInput: update.rawInput,
-        content: update.content,
-      });
-    }
-    if (update.sessionUpdate === "tool_call_update") {
-      const prev = this.#toolCalls.get(update.toolCallId) ?? {};
-      this.#toolCalls.set(update.toolCallId, { ...prev, ...update });
+    // announced here — otherwise the policy has nothing to judge. An update
+    // changes only the fields it carries. A finished call keeps no input: a
+    // call can announce itself already `completed`, so both kinds check.
+    if (
+      update.sessionUpdate === "tool_call" ||
+      update.sessionUpdate === "tool_call_update"
+    ) {
+      const prev: RememberedToolCall =
+        update.sessionUpdate === "tool_call"
+          ? { kind: "other" }
+          : (this.#toolCalls.get(update.toolCallId) ?? {});
+      const call: RememberedToolCall = {
+        title: update.title ?? prev.title,
+        kind: update.kind ?? prev.kind,
+        status: update.status ?? prev.status,
+        rawInput: update.rawInput ?? prev.rawInput,
+        content: update.content ?? prev.content,
+      };
+      // A call cannot be live outside a turn, so a late update keeps no input
+      // either (§Question 3 measured none on three harnesses; this holds on all).
+      const done =
+        !this.#promptInFlight ||
+        call.status === "completed" ||
+        call.status === "failed";
+      this.#toolCalls.set(update.toolCallId, done ? settled(call) : call);
     }
 
     this.onEvent({ agent: this.name, update });

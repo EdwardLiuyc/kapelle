@@ -155,6 +155,8 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   applies in every mode, `auto` included.
 - **Keep the `toolCallId → {title, kind, rawInput}` map in `AcpAgent`.** A permission
   request can carry only a `toolCallId`. Without the map, every decision goes blind.
+  A finished call, or one outside a turn, keeps only its title, kind and status (#163).
+  Do not bring back the whole-object merge: a room would keep every call's input.
 - **An approval covers one write.** A denial is sticky. `pickOption` returns `null`
   rather than guess; never fall back to `options[0]` (#13).
 - **We send a harness two mode ids at most.** `harnessModeId` picks

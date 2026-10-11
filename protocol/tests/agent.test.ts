@@ -8,8 +8,9 @@
  * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
  * (#62 R5), the whole `PromptResponse` (#62 B3), the cancel-intent event
  * (#62 R4), stderr capture on death, `#guardPath` containment, `#guardWrite`'s
- * no-ask refusal and its reuse of an approved edit decision, and the
- * toolCall-id lookup's parity with the pre-port client.
+ * no-ask refusal and its reuse of an approved edit decision, the
+ * toolCall-id lookup's parity with the pre-port client, and a finished call
+ * that keeps its title and kind but not its input (#163).
  */
 
 import assert from "node:assert/strict";
@@ -312,6 +313,289 @@ test("a tool_call that omits its id is still found when permission is asked", as
   // not see. That is the divergence this pins.
   assert.equal(seen[0].title, "Read foo");
   assert.equal(seen[0].kind, "read");
+});
+
+// --- a finished call keeps no input (#163) -----------------------------------
+
+/**
+ * Sends `debug/update`'s params as a `session/update`, and turns `debug/ask`
+ * into a permission request that carries only a `toolCallId`. The update line
+ * goes out before the reply, so it is handled before the call returns. A
+ * `session/prompt` is answered only on `debug/end`, so a test decides when
+ * its turn ends.
+ */
+const TOOL_CALL_PROBE = [
+  'let buf = "";',
+  "let nextId = 3000;",
+  "let turn;",
+  "const pending = new Map();",
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "session/new")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
+  '    else if (msg.method === "session/prompt") turn = msg.id;',
+  '    else if (msg.method === "debug/end") {',
+  '      process.env.PROBE_FAIL_PROMPT === "1"',
+  "        ? write({",
+  '            jsonrpc: "2.0",',
+  "            id: turn,",
+  '            error: { code: -32000, message: "turn failed" },',
+  "          })",
+  '        : write({ jsonrpc: "2.0", id: turn, result: { stopReason: "end_turn" } });',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: {} });',
+  '    } else if (msg.method === "debug/update") {',
+  "      write({",
+  '        jsonrpc: "2.0",',
+  '        method: "session/update",',
+  '        params: { sessionId: "s1", update: msg.params },',
+  "      });",
+  '      write({ jsonrpc: "2.0", id: msg.id, result: {} });',
+  '    } else if (msg.method === "debug/ask") {',
+  "      const rid = nextId++;",
+  "      pending.set(rid, msg.id);",
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: rid,",
+  '        method: "session/request_permission",',
+  "        params: {",
+  '          sessionId: "s1",',
+  "          toolCall: { toolCallId: msg.params.id },",
+  '          options: [{ optionId: "ok", name: "Allow", kind: "allow_once" }],',
+  "        },",
+  "      });",
+  "    } else if (msg.id !== undefined && pending.has(msg.id)) {",
+  "      const probeId = pending.get(msg.id);",
+  "      pending.delete(msg.id);",
+  '      write({ jsonrpc: "2.0", id: probeId, result: {} });',
+  "    }",
+  "  }",
+  "});",
+].join("\n");
+
+type JudgedToolCall = CapturedToolCall & {
+  rawInput?: unknown;
+  edits?: unknown[];
+};
+
+/** A started probe with a turn open, a function that asks about one call and
+ *  returns what the policy was handed, and one that ends the turn. */
+async function toolCallProbe(
+  t: TestContext,
+  { failPrompt = false }: { failPrompt?: boolean } = {},
+) {
+  const seen: JudgedToolCall[] = [];
+  const agent = new AcpAgent({
+    name: "tool-calls",
+    command: process.execPath,
+    args: ["-e", TOOL_CALL_PROBE],
+    cwd: await tempDir(t, "acp-calls-"),
+    env: failPrompt ? { ...process.env, PROBE_FAIL_PROMPT: "1" } : process.env,
+    requestTimeoutMs: 5_000,
+    policy: (req) => {
+      seen.push(req.toolCall);
+      return true;
+    },
+  });
+  t.after(() => agent.stop());
+  await agent.start();
+  await agent.newSession();
+  // Tool calls are live only inside a turn. A failed turn is checked by
+  // `end`'s caller; this keeps it from reading as unhandled before then.
+  const turn = agent.prompt("go");
+  turn.catch(() => {});
+  const send = (update: object) => agent.request("debug/update", update);
+  const ask = async (id: string) => {
+    await agent.request("debug/ask", { id });
+    return seen[seen.length - 1];
+  };
+  const end = async () => {
+    await agent.request("debug/end");
+    return turn;
+  };
+  return { agent, send, ask, end };
+}
+
+const INPUT = { path: "a.txt", file_text: "new text\n" };
+
+for (const status of ["completed", "failed"]) {
+  test(`a ${status} call is judged on its title and kind, without its input`, async (t) => {
+    const { send, ask } = await toolCallProbe(t);
+    const announce = { toolCallId: "c1", title: "Write a.txt", kind: "edit" };
+    // claude's way: an empty input first, the whole one on an update.
+    await send({ sessionUpdate: "tool_call", ...announce, rawInput: {} });
+    await send({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "c1",
+      status: "in_progress",
+      rawInput: INPUT,
+    });
+
+    const live = await ask("c1");
+    assert.deepEqual(live.rawInput, INPUT, "a live call keeps its input");
+    assert.equal(live.edits?.length, 1, "and its diff");
+
+    await send({ sessionUpdate: "tool_call_update", toolCallId: "c1", status });
+    // A late update brings no input back to a finished call.
+    await send({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "c1",
+      rawInput: INPUT,
+    });
+
+    const done = await ask("c1");
+    assert.equal(done.title, "Write a.txt");
+    assert.equal(done.kind, "edit");
+    assert.equal(done.rawInput, undefined);
+    assert.equal(done.edits, undefined);
+  });
+}
+
+test("a call announced as completed keeps no input", async (t) => {
+  const { send, ask } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Read a.txt",
+    kind: "read",
+    status: "completed",
+    rawInput: INPUT,
+  });
+
+  const done = await ask("c1");
+  assert.equal(done.title, "Read a.txt");
+  assert.equal(done.kind, "read");
+  assert.equal(done.rawInput, undefined);
+});
+
+test("a turn's end settles a call it left pending", async (t) => {
+  const { send, ask, end } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    status: "pending",
+    rawInput: INPUT,
+  });
+  await end();
+
+  const done = await ask("c1");
+  assert.equal(done.title, "Write a.txt");
+  assert.equal(done.kind, "edit");
+  assert.equal(done.rawInput, undefined);
+  assert.equal(done.edits, undefined);
+});
+
+test("a turn that fails settles a call it left open", async (t) => {
+  const { send, ask, end } = await toolCallProbe(t, { failPrompt: true });
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    status: "in_progress",
+    rawInput: INPUT,
+  });
+  await assert.rejects(end(), /turn failed/);
+
+  const done = await ask("c1");
+  assert.equal(done.title, "Write a.txt");
+  assert.equal(done.kind, "edit");
+  assert.equal(done.rawInput, undefined);
+  assert.equal(done.edits, undefined);
+});
+
+test("a refused second prompt leaves the live turn's calls whole", async (t) => {
+  const { agent, send, ask } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    status: "pending",
+    rawInput: INPUT,
+  });
+  // The guard throws before `try`, so the `finally` that settles a turn's
+  // calls does not run for a prompt that never started.
+  await assert.rejects(agent.prompt("again"), /already running a turn/);
+
+  const live = await ask("c1");
+  assert.deepEqual(live.rawInput, INPUT);
+  assert.equal(live.edits?.length, 1);
+});
+
+test("a call announced after its turn ended keeps no input", async (t) => {
+  const { send, ask, end } = await toolCallProbe(t);
+  await end();
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    status: "pending",
+    rawInput: INPUT,
+  });
+
+  const late = await ask("c1");
+  assert.equal(late.title, "Write a.txt");
+  assert.equal(late.kind, "edit");
+  assert.equal(late.rawInput, undefined);
+  assert.equal(late.edits, undefined);
+});
+
+test("an update changes only the fields it carries", async (t) => {
+  const { send, ask } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    rawInput: {},
+  });
+  await send({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "c1",
+    status: "in_progress",
+    rawInput: INPUT,
+  });
+  // A status-only update must not drop what the earlier one carried.
+  await send({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "c1",
+    status: "in_progress",
+  });
+
+  const live = await ask("c1");
+  assert.deepEqual(live.rawInput, INPUT, "the earlier rawInput survives");
+  assert.equal(live.edits?.length, 1, "and still names its diff");
+
+  // The same for a diff block: claude sends it first, then a status-only update.
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c2",
+    title: "Write b.txt",
+    kind: "edit",
+    rawInput: {},
+    content: [{ type: "diff", path: "b.txt", newText: "b\n" }],
+  });
+  await send({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "c2",
+    status: "in_progress",
+  });
+
+  const withDiff = await ask("c2");
+  assert.deepEqual(withDiff.rawInput, {}, "the empty input names no file");
+  assert.equal(withDiff.edits?.length, 1, "the diff block survives");
 });
 
 // --- #guardPath containment --------------------------------------------------
