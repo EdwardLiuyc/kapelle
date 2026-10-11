@@ -1153,6 +1153,27 @@ test("hostile escape sequences never reach the CLI's stdout (#229)", async (t) =
   assert.match(r.stdout, /turn ended: end_turn \[2J \]52;c;aGFja2Vk /);
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
   assert.doesNotMatch(r.stdout, /\x1b\[2J|\x1b\]52|\x07/);
+
+  // `run --file` prints its own way: a milestone per tool call, then each
+  // task's prose at the end.
+  const file = await runFile(
+    t,
+    mockRun([{ id: "one", prompt: "do your worst" }], {
+      cmd: `node ${HOSTILE_AGENT} --scenario escape-text`,
+    }),
+  );
+  const run = await runCli(t, [
+    "run",
+    "--file",
+    file,
+    "--cwd",
+    await gitRepo(t),
+  ]);
+  const out = run.stdout + run.stderr;
+  assert.match(out, /\[one\] → Read \[2J \]52;c;aGFja2Vk /);
+  assert.match(out, /line one \[2J \]52;c;aGFja2Vk \nline two/);
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+  assert.doesNotMatch(out, /\x1b\[2J|\x1b\]52|\x07/);
 });
 
 test("hostile write-no-ask is refused under safe and allowed under auto", async (t) => {

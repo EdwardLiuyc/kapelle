@@ -15,6 +15,7 @@
  */
 
 import { blockEnd, displayWidth, toAnsi } from "./core/markdown.ts";
+import { clean } from "./core/text.ts";
 import type { AgentEventEnvelope } from "./protocol/agent.ts";
 import type { ContentBlock } from "./protocol/types.ts";
 
@@ -22,19 +23,6 @@ const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
-
-/**
- * The harness's text with no escape sequence in it (#229): a control or
- * format character is a space, a tab four spaces, and `\n` and the
- * zero-width joiner (a family emoji) stay. An answer that holds `ESC]52`
- * would otherwise write the clipboard, and `marked` keeps it. A copy of
- * `cleanLines` in `client/room.ts`, which this file cannot import; change
- * both. `cli.ts` uses it for the turn's stop reason and error.
- */
-export const clean = (s: string) =>
-  s
-    .replaceAll("\t", "    ")
-    .replace(/(?![\n\u200D])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
 
 /**
  * Which stream is open on the current line, so the next write knows whether to

@@ -38,6 +38,7 @@ import { createInterface } from "node:readline";
 import type { AcpAgent, Policy, PolicyRequest } from "../protocol/agent.ts";
 import type { AgentEntry, ClientMode } from "../protocol/registry.ts";
 import type { ToolKind } from "../protocol/types.ts";
+import { oneLine } from "./text.ts";
 
 /** Tool kinds treated as non-destructive. Used by `safe`, and by `ask`. */
 export const READ_ONLY_KINDS = new Set<ToolKind>([
@@ -69,9 +70,15 @@ async function autoPolicy(): Promise<boolean> {
   return true;
 }
 
-/** Read-only auto-approved; mutations prompt on the terminal. */
-export function makeAskPolicy(): { close: () => void; policy: Policy } {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+/** Read-only auto-approved; mutations prompt on the terminal. `io` is for a
+ *  test: `--mode ask` needs a TTY, so a test cannot reach the real one. */
+export function makeAskPolicy(
+  io: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream } = {
+    input: process.stdin,
+    output: process.stdout,
+  },
+): { close: () => void; policy: Policy } {
+  const rl = createInterface(io);
   // On a TTY readline reads ^C as a key, not a signal, and with no listener it
   // closes itself: the open question never answers and the process's own
   // SIGINT handler never runs, so a ^C at the prompt hung the run. Re-raising
@@ -83,7 +90,9 @@ export function makeAskPolicy(): { close: () => void; policy: Policy } {
     policy: async ({ agent, toolCall }: PolicyRequest) => {
       if (READ_ONLY_KINDS.has(toolCall.kind)) return true;
       const answer = await ask(
-        `\n  ${agent} wants to run [${toolCall.kind}] ${toolCall.title}\n  allow? [y/N] `,
+        // Both are the harness's: an escape sequence could redraw this
+        // line, so a person approves something other than what they read.
+        `\n  ${agent} wants to run [${oneLine(toolCall.kind)}] ${oneLine(toolCall.title)}\n  allow? [y/N] `,
       );
       return /^y(es)?$/i.test(answer.trim());
     },

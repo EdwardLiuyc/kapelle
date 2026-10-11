@@ -9,11 +9,13 @@
  */
 
 import assert from "node:assert/strict";
+import { PassThrough } from "node:stream";
 import { test } from "node:test";
 
 import type { AcpAgent } from "../../protocol/agent.ts";
 import type { AgentEntry } from "../../protocol/registry.ts";
 import {
+  makeAskPolicy,
   negotiateMode,
   negotiateSafeMode,
   policyFor,
@@ -266,4 +268,34 @@ test("a failed set_mode warns rather than killing the run", async () => {
   const warning = await negotiateSafeMode(agent, MEASURED, "safe");
   assert.match(String(warning), /-32602/, "the harness's own reason survives");
   assert.match(String(warning), /filtering only/);
+});
+
+// --- the ask prompt ------------------------------------------------------------
+
+test("the ask prompt draws the harness's title and kind with no escape sequence and on one line (#229)", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let shown = "";
+  output.on("data", (b) => {
+    shown += String(b);
+  });
+  const asker = makeAskPolicy({ input, output });
+  const bad = "safe.txt\x1b[2K\r\x1b]52;c;aGFja2Vk\x07\n  allow? [y/N] ";
+  const answered = asker.policy({
+    agent: "h",
+    toolCall: { title: bad, kind: "edit\x1b[2J" as "edit" },
+    options: [],
+  });
+  input.write("n\n");
+  assert.equal(await answered, false);
+  asker.close();
+
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+  assert.doesNotMatch(shown, /[\x1b\x07\r]/);
+  assert.equal(
+    shown.match(/allow\? \[y\/N\]/g)?.length,
+    2,
+    "one real, one inline",
+  );
+  assert.equal(shown.split("\n").length, 3, "the title added no line");
 });

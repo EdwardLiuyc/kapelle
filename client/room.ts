@@ -111,13 +111,13 @@ export const printable = (s: string) =>
  * so a family emoji is one emoji. For a diff (M4-6), and for a person's
  * message and an agent's answer (#229): pi-tui's `Markdown` passes an escape
  * sequence through, so an answer that holds `ESC]52` could write the
- * clipboard. `render.ts` has a copy of this rule, as it cannot import
- * `client/`.
+ * clipboard. `core/text.ts` has the same rule as `clean`, as `client/`
+ * cannot import `core/`; `tests/text.test.ts` checks that they agree.
  */
 export const cleanLines = (text: string) =>
   text
     .replaceAll("\t", "    ")
-    .replace(/(?![\n\u200D])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
+    .replace(/[[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]--[\n\u200D]]/gv, " ");
 
 type Answer = Extract<Entry, { type: "answer" }>;
 type Question = Extract<Entry, { type: "permission" }>;
@@ -488,7 +488,8 @@ export function applyLine(
         u.stopReason === undefined
           ? undefined
           : printable(String(u.stopReason));
-      const error = u.error === undefined ? undefined : printable(u.error);
+      const error =
+        u.error === undefined ? undefined : printable(String(u.error));
       const turn = liveTurn();
       if (turn) {
         turn.state = "ended";
