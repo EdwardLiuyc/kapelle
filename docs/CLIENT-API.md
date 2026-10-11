@@ -1117,7 +1117,7 @@ is one call.
 ### `GET /rooms/:id`
 
 **Reply `200`:** the room, in the same shape as `POST /rooms` answers: every participant
-in full, with its `role`, and the log's size as `seq`. `404` `room_not_found` for an
+in full, with its `role` when it has one, and the log's size as `seq`. `404` `room_not_found` for an
 unknown id.
 
 ### `POST /rooms/:id/messages`
@@ -1538,16 +1538,24 @@ chat channel stays closed to everyone else. A token per bridge is not built (#25
      message's line will be above it. Keep the target's id too. For
      `POST /rooms/:id/messages`, that is the participant whose `role` is `orchestrator`.
      Read it now, because the role can move to another participant later.
-  2. If the reply is lost, call `GET /rooms/:id` again. Its `seq` is the log's size now.
+  2. If the reply is lost, call [`GET /rooms/:id`](#get-roomsid) again. Its `seq` is the
+     log's size now. It counts only lines already written to disk, so the message's line
+     can be a moment late.
   3. Read [`GET /rooms/:id/events`](#get-roomsidevents) with `Last-Event-ID` set to the
-     first `seq`, until you have the second one. Use the room's stream even if you follow
-     one participant: a participant's stream has gaps, so it can never show that `seq`.
+     first `seq`, and take every line up to the second `seq`. There may be none: two
+     equal numbers mean nothing was written, so do not wait for a line. Use the room's
+     stream even if you follow one participant: a participant's stream has gaps, so it
+     can miss the second `seq`.
   4. Look for `_client_user_message` or `_client_message_queued` with the target's
      `participantId` and the text you sent, after the mention was removed (see
      [Addressing](#addressing)). Do not look below the first `seq`: a short text such as
      "yes" is often sent more than once, so an older line proves nothing.
-  5. Send it again only if neither is there. A `_client_message_queued` is not yet a turn:
-     a cancel or a daemon restart can still drop it (see [Events](#events)).
+  5. If neither is there, do steps 2 to 4 once more, for the line that was late. If it is
+     still not there, send the message again. A `_client_message_queued` is not yet a
+     turn: a cancel or a daemon restart can still drop it (see [Events](#events)).
+
+  A room with no event log has no stream (`404` `no_event_log`), so the check cannot
+  run. Do not send again there.
 - Text from the agent is not trusted. Remove control characters before you post it.
 
 ## A first client, step by step
