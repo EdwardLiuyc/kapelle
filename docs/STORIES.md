@@ -2865,6 +2865,9 @@ Decisions: R2, R23, R34, R43.
 Keep `chat.ts` standalone and add `kapelle chat` that runs it (S7a; built by M4-2, #48); document the bridge
 pattern in `CLIENT-API.md` — a local process subscribes to a room or participant stream
 and answers permissions; no chat SDK enters the daemon.
+**Decided 2026-10-10 (#153):** K5 (a), one operator token and a bridge on the same
+machine. A token per bridge is deferred to #255. The bridge pattern is the "Bridges"
+section of `CLIENT-API.md`.
 Decisions: S7, K5, R19.
 
 **M6-10 · Room reducer · M · needs M6-4, M5-10a**

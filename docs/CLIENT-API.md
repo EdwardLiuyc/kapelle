@@ -23,7 +23,8 @@ rooms stable, M6-7b, #179, which added `resumed: "loaded"`, and M6-7c, #235, whi
 7. [Events](#events)
 8. [Permissions](#permissions)
 9. [Rooms](#rooms)
-10. [A first client, step by step](#a-first-client-step-by-step)
+10. [Bridges](#bridges)
+11. [A first client, step by step](#a-first-client-step-by-step)
 
 ## How the daemon works, in short
 
@@ -1115,8 +1116,9 @@ is one call.
 
 ### `GET /rooms/:id`
 
-**Reply `200`:** the room, in the same shape as `POST /rooms` answers. `404`
-`room_not_found` for an unknown id.
+**Reply `200`:** the room, in the same shape as `POST /rooms` answers: every participant
+in full, with its `role` when it has one, and the log's size as `seq`. `404` `room_not_found` for an
+unknown id.
 
 ### `POST /rooms/:id/messages`
 
@@ -1495,6 +1497,66 @@ the same rules, so the TUI and piped `chat.ts` behave the same:
   daemon would refuse the empty text with `400` `invalid_request`. While the person
   types, the composer only shows the resolved target, so a thread that opens with its
   `@name` pre-filled is not in an error state.
+
+## Bridges
+
+A bridge connects a chat app, such as Slack or Matrix, to a room. It is a client like
+`chat.ts`, and it uses only the routes in this document. **No chat SDK goes into the
+daemon.** The bridge holds the chat app's library and its login.
+
+**Where it runs.** On the same machine and as the same user as the daemon. It finds the
+daemon and its token as in [Find the daemon](#find-the-daemon). There is one token, the
+operator's, so a bridge can do everything a person at the terminal can do. Keep the token
+out of the chat app. Anyone who can write where the bridge listens can answer a question
+in the operator's name, `execute` included. So the bridge decides who may answer, and the
+chat channel stays closed to everyone else. A token per bridge is not built (#255).
+
+**What it does:**
+
+1. Follow a room with [`GET /rooms/:id/events`](#get-roomsidevents), or one participant
+   with [`GET /rooms/:id/agents/:agentId/events`](#get-roomsidagentsagentidevents).
+   Keep the last `seq` and reconnect as in [Resume after a break](#resume-after-a-break).
+2. Post the agent's text to the chat app. Join the chunks of a message yourself: see
+   [Chunks are not joined](#chunks-are-not-joined).
+3. Send a chat message with
+   [`POST /rooms/:id/messages`](#post-roomsidmessages), or to one participant with
+   [`POST /rooms/:id/agents/:agentId/messages`](#post-roomsidagentsagentidmessages).
+   Read a leading `@name` as in [Addressing](#addressing).
+4. Answer questions as in [Permissions](#permissions): show `_client_permission_queued`
+   in the chat app, then send the person's yes or no with
+   [`POST /permissions/:id`](#post-permissionsid). A bridge reconnects often, and each
+   replay shows old questions again, so check `GET /permissions` before you ask.
+
+**Rules:**
+
+- A question can close without the bridge, at the terminal or by a time limit. Tell the
+  chat app when it does: `_client_permission_answered` has the `reason`, see
+  [Why a question closed](#why-a-question-closed).
+- A message route has no retry key. If a reply is lost, do not send the message again at
+  once, or the agent can get it twice. To make a check possible:
+  1. Before each send, call [`GET /rooms/:id`](#get-roomsid). Keep its `seq`: the
+     message's line will be above it. Keep the target's id too. For
+     `POST /rooms/:id/messages`, that is the participant whose `role` is `orchestrator`.
+     Read it now, because the role can move to another participant later.
+  2. If the reply is lost, call [`GET /rooms/:id`](#get-roomsid) again. Its `seq` is the
+     log's size now. It counts only lines already written to disk, so the message's line
+     can be a moment late.
+  3. Read [`GET /rooms/:id/events`](#get-roomsidevents) with `Last-Event-ID` set to the
+     first `seq`, and take every line up to the second `seq`. There may be none: two
+     equal numbers mean nothing was written, so do not wait for a line. Use the room's
+     stream even if you follow one participant: a participant's stream has gaps, so it
+     can miss the second `seq`.
+  4. Look for `_client_user_message` or `_client_message_queued` with the target's
+     `participantId` and the text you sent, after the mention was removed (see
+     [Addressing](#addressing)). Do not look below the first `seq`: a short text such as
+     "yes" is often sent more than once, so an older line proves nothing.
+  5. If neither is there, do steps 2 to 4 once more, for the line that was late. If it is
+     still not there, send the message again. A `_client_message_queued` is not yet a
+     turn: a cancel or a daemon restart can still drop it (see [Events](#events)).
+
+  A room with no event log has no stream (`404` `no_event_log`), so the check cannot
+  run. Do not send again there.
+- Text from the agent is not trusted. Remove control characters before you post it.
 
 ## A first client, step by step
 
