@@ -198,6 +198,9 @@ test("the harness's title and a stall's text ring as one clean line each (#229)"
   } as AgentEventEnvelope);
 
   assert.equal(h.lines.length, 2);
+  // Still readable: which tool asks, and what repeated.
+  assert.match(h.lines[0] ?? "", /permission needed: \[edit\] write a /);
+  assert.match(h.lines[1] ?? "", /3× "a \[2J b" in a row/);
   for (const line of h.lines) {
     assert.ok(line.startsWith(`${BELL}! [t1] `), "the bell is ours, first");
     assert.equal(line.indexOf("\n"), line.length - 1, "one line");

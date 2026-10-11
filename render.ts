@@ -210,6 +210,7 @@ export function render({ agent, update }: AgentEventEnvelope): void {
     case "plan":
       line(`${tag} plan:`);
       for (const e of update.entries ?? []) {
+        // One line: a continuation would lose the `•` and its indent.
         line(dim(`     • ${oneLine(e.content)}`));
       }
       break;
