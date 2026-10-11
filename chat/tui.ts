@@ -316,8 +316,10 @@ function chatTui(
     invalidate: () => statusText.invalidate(),
   };
   /** The once-a-second redraw (M7-1): an activity row with a busy agent,
-   *  or a busy agent's sidebar timer in any room (M7-3). */
-  const moving = () => ticks(activity(rooms, view).rows) || anyBusy(rooms);
+   *  or a busy agent's sidebar timer in any room while the sidebar is
+   *  shown (M7-3). */
+  const moving = () =>
+    ticks(activity(rooms, view).rows) || (shown && anyBusy(rooms));
   let timer: ReturnType<typeof setInterval> | undefined;
   const tick = () => {
     if (timer || !moving()) return;
@@ -446,7 +448,8 @@ function chatTui(
     gutter: () => (shown ? SIDEBAR_WIDTH : 2),
   });
   /** Puts a diff in the side pane (M4-6), with the keys that switch
-   *  `against` and reload it. `at` jumps to a file's header line (M7-3). */
+   *  `against` and reload it. `at` jumps to a file's header line (M7-3).
+   *  `body.text` must already be `cleanLines`d (#229). */
   const showDiff = (
     who: { id: string; name: string },
     against: "head" | "base",
@@ -506,14 +509,22 @@ function chatTui(
     done: () => done,
     prefill: () => prefill,
   });
-  /** The rows the sidebar really has (M7-3): the terminal, less the
-   *  activity rows, the spacer, the status line, the editor and the where
-   *  bar under the row. */
+  const attention = bannerPart({
+    rooms,
+    view: () => view,
+    open: (next) => open(next),
+    question: (id) => question(id),
+  });
+  /** The rows the sidebar really has (M7-3): the terminal, less the parts
+   *  under the row — the banner, asked for its drawn height; the Spacer(1)
+   *  and the one-line status (the `2`); the editor; and the where bar. The
+   *  two `render` calls must stay side-effect-free: this runs inside the
+   *  sidebar's own render. */
   const sidebarRows = () => {
+    const width = process.stdout.columns || 80;
     const rows = process.stdout.rows || 24;
-    const { rows: shown, more } = activity(rooms, view);
-    const banner = shown.length + (more > 0 ? 1 : 0);
-    const editorRows = editor.render(process.stdout.columns || 80).length;
+    const banner = attention.render(width).length;
+    const editorRows = editor.render(width).length;
     return Math.max(1, rows - banner - 2 - editorRows - (whereText ? 1 : 0));
   };
   const { sidebar, strip } = sidebarParts({
@@ -531,12 +542,6 @@ function chatTui(
       if (!id || !r || !entry || entry.key !== openChangeKey()) return;
       showDiff({ id, name: nameOf(r.state, id) }, "base", entry.diff, f.line);
     },
-  });
-  const attention = bannerPart({
-    rooms,
-    view: () => view,
-    open: (next) => open(next),
-    question: (id) => question(id),
   });
 
   const layout = screenLayout({

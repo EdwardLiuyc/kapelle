@@ -231,6 +231,8 @@ function sidebarParts({
     let heading = -1;
     let last = -1;
     const d = changes();
+    // Keep no diff text alive once there is no block to draw.
+    if (!d?.text || d.files === 0) parsed = undefined;
     if (d?.text && d.files > 0) {
       // Parse once per diff: `draw` runs on every frame and click.
       if (parsed?.diff !== d) {

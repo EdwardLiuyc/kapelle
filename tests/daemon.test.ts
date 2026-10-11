@@ -5769,9 +5769,14 @@ test("chat.ts keeps the newest changed files when a crash's two loads land out o
   await screen.press("\x1b[1;3B", "@ann");
   await screen.seen("changed files");
   assert.equal(diffs.length, 1, diffs.join("\n"));
-  // A crash reports its exit before the turn it broke ends: two loads. The
-  // exited one is held; the turn end's newer reply has two files.
+  // A crash reports its exit before the turn it broke ends. Send the exit,
+  // wait for its held request, then send the turn end: the older request
+  // arrives before the newer one, so the guard sees a known order.
   write(event(2, { sessionUpdate: "_client_harness_exited", pid: 1 }));
+  for (const until = Date.now() + 20_000; diffs.length < 2; ) {
+    assert.ok(Date.now() < until, `no held diff call: ${diffs.join("\n")}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
   write(event(3, { sessionUpdate: "_client_turn_ended", stopReason: "error" }));
   for (const until = Date.now() + 20_000; diffs.length < 3; ) {
     assert.ok(Date.now() < until, `no third diff call: ${diffs.join("\n")}`);
