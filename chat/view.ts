@@ -6,7 +6,8 @@
  *   keys step one row down or up.
  * - The pre-fill: in a thread, the composer holds `@name ` until the person
  *   types (R43, decided 2026-09-30). A pre-fill the person did not touch
- *   follows the view and a rename. Typed text stays.
+ *   follows the view and a rename, and clears when no room is left. Typed
+ *   text stays.
  * - A thread whose participant left goes back to its room's timeline. A
  *   view in a dismissed room goes to the first row.
  * - What is on screen is seen: the timeline marks its whole room, and a
