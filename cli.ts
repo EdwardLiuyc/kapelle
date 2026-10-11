@@ -58,7 +58,7 @@ import {
 } from "./core/run.ts";
 import { type Task, validateRun } from "./core/runfile.ts";
 import { runtimeDir, stateDirFor } from "./core/runtime.ts";
-import { clean } from "./core/text.ts";
+import { clean, oneLine } from "./core/text.ts";
 import { moveWorkspace, stateDirRoot } from "./core/worktree.ts";
 import { AcpAgent } from "./protocol/agent.ts";
 import type { ClientMode } from "./protocol/registry.ts";
@@ -375,7 +375,7 @@ if (chatVerb) {
         : spec.name;
       // The name, version and protocol version are the harness's (#229).
       console.log(
-        `connected to ${clean(who)} (ACP v${clean(String(init.protocolVersion))})`,
+        `connected to ${oneLine(who)} (ACP v${oneLine(String(init.protocolVersion))})`,
       );
     }
 
@@ -387,7 +387,7 @@ if (chatVerb) {
       quiet,
     );
     // The version warning quotes the harness's own version (#229).
-    for (const w of warnings) console.error(`! ${clean(w.text)}`);
+    for (const w of warnings) console.error(`! ${oneLine(w.text)}`);
 
     await agent.newSession();
 
@@ -409,7 +409,7 @@ if (chatVerb) {
     // this line prints past the renderer, so nothing else would close it.
     flushStream();
     // Both are the harness's text (#229).
-    if (!quiet) console.log(`\n\n— turn ended: ${clean(String(stopReason))}`);
+    if (!quiet) console.log(`\n\n— turn ended: ${oneLine(String(stopReason))}`);
   } catch (err) {
     flushStream();
     console.error(`\nerror: ${clean(messageOf(err))}`);
@@ -517,7 +517,7 @@ async function runFromFile(path: string): Promise<number> {
   if (quiet) {
     bus.addListener(({ agent: taskId, update }) => {
       if (update.sessionUpdate === "_client_result_warning") {
-        console.error(`! [${taskId}] ${clean(update.text)}`);
+        console.error(`! [${taskId}] ${oneLine(update.text)}`);
       }
     });
   }
@@ -525,7 +525,7 @@ async function runFromFile(path: string): Promise<number> {
     bus.addListener(({ agent: taskId, update }) => {
       // Milestones only. `render` would braid N streams into one line.
       if (update.sessionUpdate === "tool_call") {
-        console.log(`[${taskId}] → ${clean(update.title)}`);
+        console.log(`[${taskId}] → ${oneLine(update.title)}`);
       }
     });
   }
@@ -571,7 +571,7 @@ async function runFromFile(path: string): Promise<number> {
           if (kind && printableWarnings([{ kind, text }], quiet).length === 0) {
             return;
           }
-          console.error(`! [${taskId}] ${clean(text)}`);
+          console.error(`! [${taskId}] ${oneLine(text)}`);
         },
       },
     );
@@ -787,7 +787,7 @@ function printTask(task: Card): void {
   // Before the prose, not after: the warnings are the reason to read the
   // prose at all, and a reader who stops at the first screen must still see
   // that the agent and the working tree disagreed.
-  for (const w of task.warnings ?? []) console.log(`  ! ${clean(w.text)}`);
+  for (const w of task.warnings ?? []) console.log(`  ! ${oneLine(w.text)}`);
   const prose = clean(task.transcript).trim();
   if (prose) console.log(prose);
 }
@@ -967,7 +967,7 @@ async function attachRun(): Promise<number> {
       if (kind && printableWarnings([{ kind, text }], quiet).length === 0) {
         continue;
       }
-      console.error(`! [${taskId}] ${clean(text)}`);
+      console.error(`! [${taskId}] ${oneLine(text)}`);
     }
     printed = notices.length;
     return state;
@@ -988,7 +988,7 @@ async function attachRun(): Promise<number> {
         if (!open.body.some((p) => p.id === decision.id)) return;
         if (!asker) {
           console.error(
-            `! [${agent}] waiting on [${clean(decision.kind)}] ${clean(decision.title)} — ` +
+            `! [${agent}] waiting on [${oneLine(decision.kind)}] ${oneLine(decision.title)} — ` +
               "attach from a terminal to answer, or it is denied at the timeout",
           );
           return;
@@ -1066,14 +1066,14 @@ async function attachRun(): Promise<number> {
           break;
         case "tool_call":
           if (!quiet && !only)
-            console.log(`[${agent}] → ${clean(update.title)}`);
+            console.log(`[${agent}] → ${oneLine(update.title)}`);
           break;
         case "_client_stall_warning":
-          console.error(`! [${agent}] ${clean(update.text)}`);
+          console.error(`! [${agent}] ${oneLine(update.text)}`);
           break;
         case "_client_result_warning":
           c.warnings?.push({ kind: update.kind, text: update.text });
-          if (quiet) console.error(`! [${agent}] ${clean(update.text)}`);
+          if (quiet) console.error(`! [${agent}] ${oneLine(update.text)}`);
           break;
         case "_client_permission_queued":
           answer(agent, update);

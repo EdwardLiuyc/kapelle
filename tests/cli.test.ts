@@ -1153,6 +1153,7 @@ test("hostile escape sequences never reach the CLI's stdout (#229)", async (t) =
   assert.match(r.stdout, /turn ended: end_turn \[2J \]52;c;aGFja2Vk /);
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
   assert.doesNotMatch(r.stdout, /\x1b\[2J|\x1b\]52|\x07/);
+  assert.doesNotMatch(r.stdout, /^! \[one\] fake/m, "the title stays one line");
 
   // `run --file` prints its own way: a milestone per tool call, then each
   // task's prose at the end.
@@ -1174,6 +1175,7 @@ test("hostile escape sequences never reach the CLI's stdout (#229)", async (t) =
   assert.match(out, /line one \[2J \]52;c;aGFja2Vk \nline two/);
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
   assert.doesNotMatch(out, /\x1b\[2J|\x1b\]52|\x07/);
+  assert.doesNotMatch(out, /^! \[one\] fake/m, "the title stays one line");
 });
 
 test("hostile write-no-ask is refused under safe and allowed under auto", async (t) => {

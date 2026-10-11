@@ -8,6 +8,11 @@
  *
  * `client/room.ts` has the same rule as `cleanLines`, because `client/` may
  * not import `core/`. `tests/text.test.ts` checks that the two agree.
+ *
+ * Use `oneLine` for a title, a path or a notice, and `clean` where lines are
+ * wanted: an answer, its prose, an error. `--verbose` is the one deliberate
+ * exception: it echoes the harness's stderr as sent, because that is what it
+ * is for.
  */
 
 /**

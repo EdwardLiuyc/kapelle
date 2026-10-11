@@ -182,3 +182,30 @@ test("the real desktop half never throws when no notifier is installed", async (
     process.env.PATH = path;
   }
 });
+
+test("the harness's title and a stall's text ring as one clean line each (#229)", () => {
+  const h = harness(true);
+  h.notify({
+    agent: "t1",
+    update: {
+      ...pending.update,
+      title: "write a\x1b]52;c;aGFja2Vk\x07\n! [t1] fake",
+    },
+  } as AgentEventEnvelope);
+  h.notify({
+    agent: "t1",
+    update: { ...stall.update, text: '3× "a\x1b[2J\nb" in a row' },
+  } as AgentEventEnvelope);
+
+  assert.equal(h.lines.length, 2);
+  for (const line of h.lines) {
+    assert.ok(line.startsWith(`${BELL}! [t1] `), "the bell is ours, first");
+    assert.equal(line.indexOf("\n"), line.length - 1, "one line");
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+    assert.doesNotMatch(line.slice(1), /[\x1b\x07]/);
+  }
+  for (const [, body] of h.desktop) {
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+    assert.doesNotMatch(body, /[\x1b\x07\n]/);
+  }
+});

@@ -15,7 +15,7 @@
  */
 
 import { blockEnd, displayWidth, toAnsi } from "./core/markdown.ts";
-import { clean } from "./core/text.ts";
+import { clean, oneLine } from "./core/text.ts";
 import type { AgentEventEnvelope } from "./protocol/agent.ts";
 import type { ContentBlock } from "./protocol/types.ts";
 
@@ -192,16 +192,17 @@ export function render({ agent, update }: AgentEventEnvelope): void {
 
     case "tool_call":
       line(
-        `${tag} ${cyan("→")} ${clean(update.title ?? "(tool)")} ${dim(`[${clean(update.kind ?? "other")}]`)}`,
+        `${tag} ${cyan("→")} ${oneLine(update.title ?? "(tool)")} ${dim(`[${oneLine(update.kind ?? "other")}]`)}`,
       );
       break;
 
     case "tool_call_update":
       if (update.status === "failed") {
-        line(`${tag} ${red("✗")} tool ${clean(update.toolCallId)} failed`);
+        line(`${tag} ${red("✗")} tool ${oneLine(update.toolCallId)} failed`);
       } else if (update.status === "completed") {
         for (const c of update.content ?? []) {
-          if (c.type === "diff") line(`${tag} ${green("±")} ${clean(c.path)}`);
+          if (c.type === "diff")
+            line(`${tag} ${green("±")} ${oneLine(c.path)}`);
         }
       }
       break;
@@ -209,7 +210,7 @@ export function render({ agent, update }: AgentEventEnvelope): void {
     case "plan":
       line(`${tag} plan:`);
       for (const e of update.entries ?? []) {
-        line(dim(`     • ${clean(e.content)}`));
+        line(dim(`     • ${oneLine(e.content)}`));
       }
       break;
 
@@ -226,13 +227,13 @@ export function render({ agent, update }: AgentEventEnvelope): void {
     case "_client_permission":
       line(
         update.allow
-          ? `${tag} ${green("✓ allowed")} ${clean(update.title)}`
-          : `${tag} ${red("✗ refused")} ${clean(update.title)} ${dim(`[${clean(update.kind)}]`)}`,
+          ? `${tag} ${green("✓ allowed")} ${oneLine(update.title)}`
+          : `${tag} ${red("✗ refused")} ${oneLine(update.title)} ${dim(`[${oneLine(update.kind)}]`)}`,
       );
       break;
 
     case "_client_wrote_file":
-      line(`${tag} ${green("wrote")} ${clean(update.path)}`);
+      line(`${tag} ${green("wrote")} ${oneLine(update.path)}`);
       break;
 
     // `_client_permission_pending` is deliberately not drawn (M1c-4). Under

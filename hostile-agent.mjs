@@ -37,7 +37,7 @@ const SCENARIOS = {
   "diff-escape":
     "asks to edit files outside the root, by diff block and by file_text",
   "escape-text":
-    "puts terminal escape sequences in its text, a tool title and its stopReason",
+    "puts terminal escape sequences in its text, a tool title and its stopReason, and a fake notice line in the title",
 };
 
 /** Clear the screen, and write the system clipboard (OSC 52) (#229). */
@@ -283,7 +283,8 @@ const ATTACKS = {
     update(sid, {
       sessionUpdate: "tool_call",
       toolCallId: "esc-1",
-      title: `Read${ESCAPES}`,
+      // A new line, then a line dressed as one of our notices.
+      title: `Read${ESCAPES}\n! [one] fake notice`,
       kind: "read",
       status: "pending",
     });
