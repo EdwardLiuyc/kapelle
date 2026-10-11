@@ -195,6 +195,8 @@ interface RememberedToolCall {
  * its whole life, so a full entry per call would hold every edit's text until
  * the room ends. A late ask for the call is still judged on its title and kind,
  * but it shows no diff, and its write asks again through `#guardWrite`.
+ * A field added to `RememberedToolCall` is dropped here unless it is listed:
+ * list it if a late ask needs it and it is small.
  */
 function settled({ title, kind, status }: RememberedToolCall) {
   return { title, kind, status };

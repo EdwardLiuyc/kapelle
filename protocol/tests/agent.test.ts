@@ -421,7 +421,7 @@ async function toolCallProbe(
     await agent.request("debug/end");
     return turn;
   };
-  return { send, ask, end };
+  return { agent, send, ask, end };
 }
 
 const INPUT = { path: "a.txt", file_text: "new text\n" };
@@ -512,6 +512,25 @@ test("a turn that fails settles a call it left open", async (t) => {
   assert.equal(done.kind, "edit");
   assert.equal(done.rawInput, undefined);
   assert.equal(done.edits, undefined);
+});
+
+test("a refused second prompt leaves the live turn's calls whole", async (t) => {
+  const { agent, send, ask } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    status: "pending",
+    rawInput: INPUT,
+  });
+  // The guard throws before `try`, so the `finally` that settles a turn's
+  // calls does not run for a prompt that never started.
+  await assert.rejects(agent.prompt("again"), /already running a turn/);
+
+  const live = await ask("c1");
+  assert.deepEqual(live.rawInput, INPUT);
+  assert.equal(live.edits?.length, 1);
 });
 
 test("a call announced after its turn ended keeps no input", async (t) => {
