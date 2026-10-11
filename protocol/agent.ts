@@ -176,7 +176,9 @@ interface PendingRequest {
 
 /**
  * What we retain per `toolCallId`: only what `#requestPermission` reads, and
- * the status that says when the heavy part can go (#163).
+ * the status that says when the heavy part can go (#163). The entries are
+ * never removed, and a title is kept whole, so a room still holds one small
+ * entry per call for its life. That is the end state #163 chose.
  */
 interface RememberedToolCall {
   title?: string;
@@ -191,7 +193,8 @@ interface RememberedToolCall {
 /**
  * A call without its input and content (#163). A room keeps one session for
  * its whole life, so a full entry per call would hold every edit's text until
- * the room ends. A late ask for the call is still judged on its title and kind.
+ * the room ends. A late ask for the call is still judged on its title and kind,
+ * but it shows no diff, and its write asks again through `#guardWrite`.
  */
 function settled({ title, kind, status }: RememberedToolCall) {
   return { title, kind, status };
@@ -598,9 +601,11 @@ export class AcpAgent {
       // the agent into refusing all later prompts.
       this.#promptInFlight = false;
       // A cancelled turn leaves its calls `pending` for ever, so a turn's end
-      // settles every call too (#163).
-      for (const [id, call] of this.#toolCalls)
+      // settles every call too (#163). Only the live ones: the rest already are.
+      for (const [id, call] of this.#toolCalls) {
+        if (call.rawInput === undefined && call.content === undefined) continue;
         this.#toolCalls.set(id, settled(call));
+      }
     }
   }
 
@@ -847,7 +852,12 @@ export class AcpAgent {
         rawInput: update.rawInput ?? prev.rawInput,
         content: update.content ?? prev.content,
       };
-      const done = call.status === "completed" || call.status === "failed";
+      // A call cannot be live outside a turn, so a late update keeps no input
+      // either (§Question 3 measured none on three harnesses; this holds on all).
+      const done =
+        !this.#promptInFlight ||
+        call.status === "completed" ||
+        call.status === "failed";
       this.#toolCalls.set(update.toolCallId, done ? settled(call) : call);
     }
 

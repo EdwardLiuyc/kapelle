@@ -320,11 +320,14 @@ test("a tool_call that omits its id is still found when permission is asked", as
 /**
  * Sends `debug/update`'s params as a `session/update`, and turns `debug/ask`
  * into a permission request that carries only a `toolCallId`. The update line
- * goes out before the reply, so it is handled before the call returns.
+ * goes out before the reply, so it is handled before the call returns. A
+ * `session/prompt` is answered only on `debug/end`, so a test decides when
+ * its turn ends.
  */
 const TOOL_CALL_PROBE = [
   'let buf = "";',
   "let nextId = 3000;",
+  "let turn;",
   "const pending = new Map();",
   'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
   'process.stdin.on("data", (chunk) => {',
@@ -339,15 +342,17 @@ const TOOL_CALL_PROBE = [
   '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
   '    else if (msg.method === "session/new")',
   '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
-  '    else if (msg.method === "session/prompt")',
+  '    else if (msg.method === "session/prompt") turn = msg.id;',
+  '    else if (msg.method === "debug/end") {',
   '      process.env.PROBE_FAIL_PROMPT === "1"',
   "        ? write({",
   '            jsonrpc: "2.0",',
-  "            id: msg.id,",
+  "            id: turn,",
   '            error: { code: -32000, message: "turn failed" },',
   "          })",
-  '        : write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });',
-  '    else if (msg.method === "debug/update") {',
+  '        : write({ jsonrpc: "2.0", id: turn, result: { stopReason: "end_turn" } });',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: {} });',
+  '    } else if (msg.method === "debug/update") {',
   "      write({",
   '        jsonrpc: "2.0",',
   '        method: "session/update",',
@@ -381,8 +386,8 @@ type JudgedToolCall = CapturedToolCall & {
   edits?: unknown[];
 };
 
-/** A started probe, and a function that asks about one call and returns
- *  what the policy was handed. */
+/** A started probe with a turn open, a function that asks about one call and
+ *  returns what the policy was handed, and one that ends the turn. */
 async function toolCallProbe(
   t: TestContext,
   { failPrompt = false }: { failPrompt?: boolean } = {},
@@ -403,12 +408,20 @@ async function toolCallProbe(
   t.after(() => agent.stop());
   await agent.start();
   await agent.newSession();
+  // Tool calls are live only inside a turn. A failed turn is checked by
+  // `end`'s caller; this keeps it from reading as unhandled before then.
+  const turn = agent.prompt("go");
+  turn.catch(() => {});
   const send = (update: object) => agent.request("debug/update", update);
   const ask = async (id: string) => {
     await agent.request("debug/ask", { id });
     return seen[seen.length - 1];
   };
-  return { agent, send, ask };
+  const end = async () => {
+    await agent.request("debug/end");
+    return turn;
+  };
+  return { send, ask, end };
 }
 
 const INPUT = { path: "a.txt", file_text: "new text\n" };
@@ -464,7 +477,7 @@ test("a call announced as completed keeps no input", async (t) => {
 });
 
 test("a turn's end settles a call it left pending", async (t) => {
-  const { agent, send, ask } = await toolCallProbe(t);
+  const { send, ask, end } = await toolCallProbe(t);
   await send({
     sessionUpdate: "tool_call",
     toolCallId: "c1",
@@ -473,7 +486,7 @@ test("a turn's end settles a call it left pending", async (t) => {
     status: "pending",
     rawInput: INPUT,
   });
-  await agent.prompt("go");
+  await end();
 
   const done = await ask("c1");
   assert.equal(done.title, "Write a.txt");
@@ -483,7 +496,7 @@ test("a turn's end settles a call it left pending", async (t) => {
 });
 
 test("a turn that fails settles a call it left open", async (t) => {
-  const { agent, send, ask } = await toolCallProbe(t, { failPrompt: true });
+  const { send, ask, end } = await toolCallProbe(t, { failPrompt: true });
   await send({
     sessionUpdate: "tool_call",
     toolCallId: "c1",
@@ -492,13 +505,32 @@ test("a turn that fails settles a call it left open", async (t) => {
     status: "in_progress",
     rawInput: INPUT,
   });
-  await assert.rejects(agent.prompt("go"), /turn failed/);
+  await assert.rejects(end(), /turn failed/);
 
   const done = await ask("c1");
   assert.equal(done.title, "Write a.txt");
   assert.equal(done.kind, "edit");
   assert.equal(done.rawInput, undefined);
   assert.equal(done.edits, undefined);
+});
+
+test("a call announced after its turn ended keeps no input", async (t) => {
+  const { send, ask, end } = await toolCallProbe(t);
+  await end();
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    status: "pending",
+    rawInput: INPUT,
+  });
+
+  const late = await ask("c1");
+  assert.equal(late.title, "Write a.txt");
+  assert.equal(late.kind, "edit");
+  assert.equal(late.rawInput, undefined);
+  assert.equal(late.edits, undefined);
 });
 
 test("an update changes only the fields it carries", async (t) => {
