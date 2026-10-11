@@ -1116,8 +1116,9 @@ is one call.
 
 ### `GET /rooms/:id`
 
-**Reply `200`:** the room, in the same shape as `POST /rooms` answers. `404`
-`room_not_found` for an unknown id.
+**Reply `200`:** the room, in the same shape as `POST /rooms` answers: every participant
+in full, with its `role`, and the log's size as `seq`. `404` `room_not_found` for an
+unknown id.
 
 ### `POST /rooms/:id/messages`
 
@@ -1532,16 +1533,20 @@ chat channel stays closed to everyone else. A token per bridge is not built (#25
   chat app when it does: `_client_permission_answered` has the `reason`, see
   [Why a question closed](#why-a-question-closed).
 - A message route has no retry key. If a reply is lost, do not send the message again at
-  once, or the agent can get it twice. Check first:
-  1. Call [`GET /rooms/:id`](#get-roomsid). Its `seq` is the log's size now. Its
-     participants name the orchestrator, which is the target of `POST /rooms/:id/messages`.
-  2. Read your stream until you have that `seq`. A lost reply often means a cut stream, so
-     reconnect first.
-  3. Look only at lines above the last `seq` you had before you sent. A short text such as
-     "yes" is often sent more than once, so an older line proves nothing. Look for
-     `_client_user_message` or `_client_message_queued` with the target's `participantId`
-     and the text you sent, after the mention was removed (see [Addressing](#addressing)).
-  4. Send it again only if neither is there. A `_client_message_queued` is not yet a turn:
+  once, or the agent can get it twice. To make a check possible:
+  1. Before each send, call [`GET /rooms/:id`](#get-roomsid). Keep its `seq`: the
+     message's line will be above it. Keep the target's id too. For
+     `POST /rooms/:id/messages`, that is the participant whose `role` is `orchestrator`.
+     Read it now, because the role can move to another participant later.
+  2. If the reply is lost, call `GET /rooms/:id` again. Its `seq` is the log's size now.
+  3. Read [`GET /rooms/:id/events`](#get-roomsidevents) with `Last-Event-ID` set to the
+     first `seq`, until you have the second one. Use the room's stream even if you follow
+     one participant: a participant's stream has gaps, so it can never show that `seq`.
+  4. Look for `_client_user_message` or `_client_message_queued` with the target's
+     `participantId` and the text you sent, after the mention was removed (see
+     [Addressing](#addressing)). Do not look below the first `seq`: a short text such as
+     "yes" is often sent more than once, so an older line proves nothing.
+  5. Send it again only if neither is there. A `_client_message_queued` is not yet a turn:
      a cancel or a daemon restart can still drop it (see [Events](#events)).
 - Text from the agent is not trusted. Remove control characters before you post it.
 
