@@ -340,7 +340,13 @@ const TOOL_CALL_PROBE = [
   '    else if (msg.method === "session/new")',
   '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
   '    else if (msg.method === "session/prompt")',
-  '      write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });',
+  '      process.env.PROBE_FAIL_PROMPT === "1"',
+  "        ? write({",
+  '            jsonrpc: "2.0",',
+  "            id: msg.id,",
+  '            error: { code: -32000, message: "turn failed" },',
+  "          })",
+  '        : write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });',
   '    else if (msg.method === "debug/update") {',
   "      write({",
   '        jsonrpc: "2.0",',
@@ -377,13 +383,17 @@ type JudgedToolCall = CapturedToolCall & {
 
 /** A started probe, and a function that asks about one call and returns
  *  what the policy was handed. */
-async function toolCallProbe(t: TestContext) {
+async function toolCallProbe(
+  t: TestContext,
+  { failPrompt = false }: { failPrompt?: boolean } = {},
+) {
   const seen: JudgedToolCall[] = [];
   const agent = new AcpAgent({
     name: "tool-calls",
     command: process.execPath,
     args: ["-e", TOOL_CALL_PROBE],
     cwd: await tempDir(t, "acp-calls-"),
+    env: failPrompt ? { ...process.env, PROBE_FAIL_PROMPT: "1" } : process.env,
     requestTimeoutMs: 5_000,
     policy: (req) => {
       seen.push(req.toolCall);
@@ -470,6 +480,71 @@ test("a turn's end settles a call it left pending", async (t) => {
   assert.equal(done.kind, "edit");
   assert.equal(done.rawInput, undefined);
   assert.equal(done.edits, undefined);
+});
+
+test("a turn that fails settles a call it left open", async (t) => {
+  const { agent, send, ask } = await toolCallProbe(t, { failPrompt: true });
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    status: "in_progress",
+    rawInput: INPUT,
+  });
+  await assert.rejects(agent.prompt("go"), /turn failed/);
+
+  const done = await ask("c1");
+  assert.equal(done.title, "Write a.txt");
+  assert.equal(done.kind, "edit");
+  assert.equal(done.rawInput, undefined);
+  assert.equal(done.edits, undefined);
+});
+
+test("an update changes only the fields it carries", async (t) => {
+  const { send, ask } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    rawInput: {},
+  });
+  await send({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "c1",
+    status: "in_progress",
+    rawInput: INPUT,
+  });
+  // A status-only update must not drop what the earlier one carried.
+  await send({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "c1",
+    status: "in_progress",
+  });
+
+  const live = await ask("c1");
+  assert.deepEqual(live.rawInput, INPUT, "the earlier rawInput survives");
+  assert.equal(live.edits?.length, 1, "and still names its diff");
+
+  // The same for a diff block: claude sends it first, then a status-only update.
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c2",
+    title: "Write b.txt",
+    kind: "edit",
+    rawInput: {},
+    content: [{ type: "diff", path: "b.txt", newText: "b\n" }],
+  });
+  await send({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "c2",
+    status: "in_progress",
+  });
+
+  const withDiff = await ask("c2");
+  assert.deepEqual(withDiff.rawInput, {}, "the empty input names no file");
+  assert.equal(withDiff.edits?.length, 1, "the diff block survives");
 });
 
 // --- #guardPath containment --------------------------------------------------
