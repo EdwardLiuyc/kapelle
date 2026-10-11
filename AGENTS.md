@@ -25,15 +25,22 @@ source of truth.
 
 ## Question or work?
 
-A question gets an answer, not a change. Investigate as far as needed; use a temporary
-folder or detached worktree, then clean it up (`git worktree remove` for a worktree).
-Leave the original checkout as you found it: config, issues and PRs stay untouched;
-Git discipline still governs commits and pushes. If a change would help, propose it and
-wait.
+A question gets an answer, not an action. It asks for information; work asks for
+action. Decide what would complete the exchange: a reply completes a question; only
+the action completes a request. If both readings are plausible, ask first. A question
+about whether you can do something is completed by the answer; naming the action does
+not ask for it. Being able, useful, or the obvious next step is not a request.
 
-Work happens when the person asks for a change, including invoking a skill that edits.
-If that is unclear, ask first; if you cannot ask, treat it as a question and change
-nothing.
+Before an action that starts a harness, spends tokens, or changes state outside a
+temporary folder, the person must have unambiguously asked for it — in this message
+or a later reply. Otherwise propose it and wait. Investigate as far as needed; use a
+temporary folder or detached worktree, then clean it up (`git worktree remove` for a
+worktree). Leave the original checkout as you found it: config, issues and PRs stay
+untouched; Git discipline still governs commits and pushes. If a change would help,
+propose it and wait.
+
+If you cannot tell whether a message is a question or a request, ask first; if you
+cannot ask, treat it as a question and change nothing.
 
 ## What this is
 
