@@ -6,7 +6,8 @@
  * **Any `git diff` text**, not only the daemon's: a question's edit, an
  * agent's checkout (`GET /rooms/:id/agents/:agentId/diff`), or a
  * fast-forward's preview (M6-11a). The counts come from the daemon's `Diff`,
- * taken before it cut the text.
+ * taken before it cut the text; `changesOf` counts one file at a time for the
+ * sidebar, and the file the cut goes through gets none (M7-3).
  *
  * `agentDiff` is the one call; the rest does no I/O.
  */

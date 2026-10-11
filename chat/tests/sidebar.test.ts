@@ -17,6 +17,7 @@ import {
 } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { roomMark, sidebarParts } from "../tui/sidebar.ts";
+import { PALETTE } from "../view.ts";
 
 /** A room `r1` builder: `add` a participant, then send lines as them. */
 const mk = () => {
@@ -133,6 +134,24 @@ test("an agent's row at 26 columns: mark, harness, timer and unread count", () =
   );
 });
 
+test("an agent's row paints its mark and name in its palette colour", () => {
+  const { state, line, add } = mk();
+  add("p-ann", "ann");
+  line("p-ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  const { sidebar } = sidebarParts({
+    rooms: roomsOf(state),
+    view: () => ({ roomId: "r1", participantId: "p-ann" }),
+    toggle() {},
+    open() {},
+    now: () => Date.parse("2026-10-11T09:00:05Z"),
+  });
+  const raw = sidebar.render(26).join("\n");
+  assert.ok(
+    raw.includes(`\x1b[38;5;${PALETTE[0]}m◐ ann\x1b[39m`),
+    "the mark and name carry the first palette colour",
+  );
+});
+
 test("the room mark takes its most urgent agent's mark", () => {
   const { state, line, add } = mk();
   assert.equal(roomMark(state).glyph, "○", "no agents");
@@ -149,6 +168,11 @@ test("the room mark takes its most urgent agent's mark", () => {
   line("p-bob", { sessionUpdate: "_client_harness_exited", pid: 1 });
   seen(state, "p-bob");
   assert.equal(roomMark(state).glyph, "◌", "exited before unread");
+  add("p-pat", "pat");
+  applyStatus(state, {
+    participants: [{ id: "p-pat", status: "paused" }],
+  } as unknown as RoomDto);
+  assert.equal(roomMark(state).glyph, "⏸", "paused before exited");
   add("p-dan", "dan");
   line("p-dan", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
   line("p-dan", { sessionUpdate: "_client_harness_exited", pid: 1 });

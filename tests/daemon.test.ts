@@ -5549,12 +5549,26 @@ const CHANGES_TEXT = [
   "+more",
 ].join("\n");
 
+/** Two changed files, so a click on the second proves the jump (M7-3). */
+const TWO_CHANGES_TEXT = [
+  ...CHANGES_TEXT.split("\n"),
+  "diff --git a/other.ts b/other.ts",
+  "new file mode 100644",
+  "@@ -0,0 +1 @@",
+  "+x",
+].join("\n");
+
 /**
  * A fake daemon with one room `room-changes` and one participant `p1`
  * (M7-3): the diff route counts its calls, and the test can write more
- * event lines into the one stream.
+ * event lines into the one stream. `files` is the route's count, `failAt`
+ * refuses that call instead of answering it.
  */
-async function fakeChangesRoom(t: TestContext, text: string) {
+async function fakeChangesRoom(
+  t: TestContext,
+  text: string,
+  { files = 1, failAt }: { files?: number; failAt?: number } = {},
+) {
   const runtime = await tempDir(t);
   await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
   const roomId = "room-changes";
@@ -5621,8 +5635,17 @@ async function fakeChangesRoom(t: TestContext, text: string) {
     }
     if (path.startsWith(`/rooms/${roomId}/agents/p1/diff`)) {
       diffs.push(path);
+      if (diffs.length === failAt) {
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: { code: "no_diff", message: "no branch to compare with" },
+          }),
+        );
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ text, files: 1, added: 2, removed: 1 }));
+      res.end(JSON.stringify({ text, files, added: 2, removed: 1 }));
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });
@@ -5651,7 +5674,7 @@ async function fakeChangesRoom(t: TestContext, text: string) {
   };
 }
 
-test("chat.ts on a real terminal loads the changed files once per turn end, never per chunk", {
+test("chat.ts on a real terminal loads the changed files once per turn end or exit, never per chunk", {
   skip: noPty,
 }, async (t) => {
   const { screen, diffs, event, write } = await fakeChangesRoom(
@@ -5694,6 +5717,16 @@ test("chat.ts on a real terminal loads the changed files once per turn end, neve
     await new Promise((ok) => setTimeout(ok, 50));
   }
   assert.match(diffs[1] ?? "", /against=base/);
+  // An exit ends the work too: one more call, not a second per turn end.
+  write(event(6, { sessionUpdate: "_client_harness_exited", pid: 1 }));
+  for (const until = Date.now() + 20_000; diffs.length < 3; ) {
+    assert.ok(
+      Date.now() < until,
+      `no diff call on the exit: ${diffs.join("\n")}`,
+    );
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.match(diffs[2] ?? "", /against=base/);
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
@@ -5702,17 +5735,49 @@ test("chat.ts on a real terminal loads the changed files once per turn end, neve
 test("chat.ts on a real terminal opens a clicked changed file in the side view", {
   skip: noPty,
 }, async (t) => {
-  const { screen } = await fakeChangesRoom(t, CHANGES_TEXT);
+  const { screen } = await fakeChangesRoom(t, TWO_CHANGES_TEXT, { files: 2 });
   await screen.seen("○ ann");
   await screen.press("\x1b[1;3B", "@ann");
   await screen.seen("changed files");
-  const row = rowOf(screen.out(), /M cli\.ts/);
+  const row = rowOf(screen.out(), /A other\.ts/);
   assert.ok(row > 0, screen.out());
-  // A click on the sidebar's file row opens the side pane at that file.
+  // A click on the second file's row opens the side pane there, not the top.
   await screen.press(
     `\x1b[<0;6;${row}M\x1b[<0;6;${row}m`,
-    "whole branch · cli.ts",
+    "whole branch · other.ts (new) (2 of 2)",
   );
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal drops the changed-files block when the diff route refuses", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write } = await fakeChangesRoom(
+    t,
+    CHANGES_TEXT,
+    { failAt: 2 },
+  );
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  await screen.seen("changed files");
+  assert.equal(diffs.length, 1, diffs.join("\n"));
+  // The reload after the turn ends gets a 409 no_diff: no block, no stale one.
+  write(
+    event(2, { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" }),
+  );
+  for (const until = Date.now() + 20_000; diffs.length < 2; ) {
+    assert.ok(Date.now() < until, `no diff call: ${diffs.join("\n")}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  // The current screen, not the frames the block was drawn in.
+  const shown = () => [...screenRows(screen.out()).values()].join("\n");
+  for (const until = Date.now() + 20_000; shown().includes("M cli.ts"); ) {
+    assert.ok(Date.now() < until, `the block survived a refusal: ${shown()}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.doesNotMatch(shown(), /changed files/);
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

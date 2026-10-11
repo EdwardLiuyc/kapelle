@@ -18,7 +18,8 @@
  * row per participant with a question or a stall (`chat/tui/banner.ts`),
  * and the terminal's bell when one starts to wait. No desktop pop-up: too
  * noisy (decided 2026-10-05, #50). A busy agent of the open room gets a row
- * too, and while one shows, the screen redraws once a second (M7-1).
+ * too, and while one shows, the screen redraws once a second (M7-1); the
+ * sidebar's busy timer needs the same tick even when no row shows (M7-3).
  *
  * **The status line** (M7-1): the target and its mode on the left, its
  * `ctx` and cost on the right, and the key hints between, which drop from
@@ -333,25 +334,33 @@ function chatTui(
     }, 1000);
   };
 
-  /** The open thread's changed files (M7-3), by room and participant: the
-   *  last `GET .../diff?against=base` reply. */
-  const changeCache = new Map<string, Diff>();
+  /** The open thread's changed files (M7-3): the last
+   *  `GET .../diff?against=base` reply. Only the open thread's block is
+   *  read, so only it is kept; the entry goes when the view leaves it. */
+  let changeEntry: { key: string; diff: Diff } | undefined;
   const changeKey = (roomId: string, participantId: string) =>
     `${roomId} ${participantId}`;
+  /** The open thread's key, or "" in a room timeline. */
+  const openChangeKey = () => {
+    const id = view.participantId;
+    return id ? changeKey(view.roomId, id) : "";
+  };
 
   /** Loads a thread's changed-files block (M7-3): one request, on the
    *  thread's open and on each of its turns' end. A failure, `409 no_diff`
-   *  included, leaves no block. */
+   *  included, leaves no block; a reply for a thread the person left is
+   *  dropped. */
   const loadChanges = async (roomId: string, participantId: string) => {
     const key = changeKey(roomId, participantId);
     try {
       const res = await agentDiff(d, roomId, participantId, "base");
-      if (!res.ok) changeCache.delete(key);
-      else
-        changeCache.set(key, { ...res.body, text: cleanLines(res.body.text) });
+      if (key !== openChangeKey()) return;
+      changeEntry = res.ok
+        ? { key, diff: { ...res.body, text: cleanLines(res.body.text) } }
+        : undefined;
     } catch {
       // The daemon went away mid-request: no block, as for a refusal.
-      changeCache.delete(key);
+      if (key === openChangeKey()) changeEntry = undefined;
     }
     tui.requestRender();
   };
@@ -504,18 +513,14 @@ function chatTui(
     view: () => view,
     toggle: () => toggle(),
     open: (next) => open(next),
-    changes: () => {
-      const id = view.participantId;
-      return id ? changeCache.get(changeKey(view.roomId, id)) : undefined;
-    },
+    changes: () =>
+      changeEntry?.key === openChangeKey() ? changeEntry.diff : undefined,
     openFile: (f) => {
       const id = view.participantId;
       const r = id ? rooms.get(view.roomId) : undefined;
-      const entry = id
-        ? changeCache.get(changeKey(view.roomId, id))
-        : undefined;
-      if (!id || !r || !entry) return;
-      showDiff({ id, name: nameOf(r.state, id) }, "base", entry, f.line);
+      const entry = changeEntry;
+      if (!id || !r || !entry || entry.key !== openChangeKey()) return;
+      showDiff({ id, name: nameOf(r.state, id) }, "base", entry.diff, f.line);
     },
   });
   const attention = bannerPart({

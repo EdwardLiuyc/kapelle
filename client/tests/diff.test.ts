@@ -1,6 +1,6 @@
 /**
  * Reading a `git diff` text for a screen — `client/diff.ts`, story M4-6
- * (#204). No daemon.
+ * (#204), and the sidebar's per-file letters and counts (M7-3). No daemon.
  */
 
 import assert from "node:assert/strict";
