@@ -386,7 +386,8 @@ if (chatVerb) {
       warningsFor(spec.name, spec, resolved.mode, init.agentInfo?.version),
       quiet,
     );
-    for (const w of warnings) console.error(`! ${w.text}`);
+    // The version warning quotes the harness's own version (#229).
+    for (const w of warnings) console.error(`! ${clean(w.text)}`);
 
     await agent.newSession();
 
@@ -777,8 +778,9 @@ function printTask(task: Card): void {
   // copilot counts cumulatively where opencode counts per turn (M0-5).
   if (task.usage) {
     console.log(
-      `  tokens: ${task.usage.totalTokens} total ` +
-        `(${task.usage.inputTokens} in, ${task.usage.outputTokens} out; ` +
+      // `Number`: the wire is not checked, and a string could hold `ESC`.
+      `  tokens: ${Number(task.usage.totalTokens)} total ` +
+        `(${Number(task.usage.inputTokens)} in, ${Number(task.usage.outputTokens)} out; ` +
         `${task.usageSemantics ?? "unknown"})`,
     );
   }
@@ -986,7 +988,7 @@ async function attachRun(): Promise<number> {
         if (!open.body.some((p) => p.id === decision.id)) return;
         if (!asker) {
           console.error(
-            `! [${agent}] waiting on [${decision.kind}] ${decision.title} — ` +
+            `! [${agent}] waiting on [${clean(decision.kind)}] ${clean(decision.title)} — ` +
               "attach from a terminal to answer, or it is denied at the timeout",
           );
           return;

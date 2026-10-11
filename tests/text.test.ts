@@ -1,7 +1,9 @@
 /**
  * The terminal-cleaning rule has two copies (#229): `clean` in
  * `core/text.ts` and `cleanLines` in `client/room.ts`, since `client/` may
- * not import `core/`. This suite fails when they drift. Here and not in
+ * not import `core/`. This suite fails when they drift. The sample is a
+ * tripwire, not a proof: it holds every `Cc`, `Zl` and `Zp` character and
+ * some `Cf` ones, and one is enough to catch a drift. Here and not in
  * `client/tests/`, because it imports both sides.
  */
 

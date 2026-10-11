@@ -24,6 +24,7 @@ import {
 import {
   type Entry,
   nameOf,
+  printable,
   type RoomState,
   thread,
 } from "../../client/room.ts";
@@ -327,7 +328,9 @@ function transcriptParts({
       } else {
         note(`room ${r.entry.id} · ${r.entry.cwd}`);
       }
-      for (const p of dto) for (const { text } of p.notices) warn(`! ${text}`);
+      // A notice can quote the harness: its version, or its own error (#229).
+      for (const p of dto)
+        for (const { text } of p.notices) warn(`! ${printable(text)}`);
       if (r.lost) warn(endedLine(r.lost, r.entry.id));
       const entries = id ? thread(r.state, id) : r.state.timeline;
       for (const e of entries) draw(r.state, e);

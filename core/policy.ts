@@ -239,7 +239,8 @@ export function modeLine(
   failure?: { modeId: string; why: string },
 ): string {
   return failure
-    ? `${name}: session/set_mode "${failure.modeId}" failed (${failure.why}) — ${mode} mode is filtering only.`
+    ? // `why` is the harness's own error message (#229).
+      `${name}: session/set_mode "${failure.modeId}" failed (${oneLine(failure.why)}) — ${mode} mode is filtering only.`
     : `${name}: no measured mode ids, so ${mode} mode was not negotiated — it filters only what this harness asks.`;
 }
 

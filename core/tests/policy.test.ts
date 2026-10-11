@@ -262,12 +262,15 @@ test("a measured harness with no modeMap is skipped too", async () => {
 
 test("a failed set_mode warns rather than killing the run", async () => {
   const { agent } = stubAgent(async () => {
-    throw new Error("-32602 invalid modeId");
+    throw new Error("-32602 invalid modeId\x1b]52;c;aGFja2Vk\x07\nfake line");
   });
 
   const warning = await negotiateSafeMode(agent, MEASURED, "safe");
   assert.match(String(warning), /-32602/, "the harness's own reason survives");
   assert.match(String(warning), /filtering only/);
+  // ...but cleaned, and on one line (#229).
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+  assert.doesNotMatch(String(warning), /[\x1b\x07\n]/);
 });
 
 // --- the ask prompt ------------------------------------------------------------
