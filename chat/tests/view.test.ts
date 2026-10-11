@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ParticipantDto, RoomDto } from "../../client/contract.ts";
-import { newRoomState, type RoomState } from "../../client/room.ts";
+import { type Entry, newRoomState, type RoomState } from "../../client/room.ts";
 import {
   activity,
   banner,
@@ -22,6 +22,8 @@ import {
   quiet,
   renamed,
   rows,
+  runs,
+  runText,
   seenIn,
   shows,
   step,
@@ -519,4 +521,122 @@ test("a thought chunk asks for a frame only when it set the flag", () => {
   ann.thinking = 3;
   assert.equal(quiet(s, line(3)), false, "the chunk that set it");
   assert.equal(quiet(s, line(4)), true, "a later one");
+});
+
+/** Entries in order, each `seq` one above the last. */
+function entries() {
+  let seq = 0;
+  const at = (participantId: string) => ({
+    seq: ++seq,
+    participantId,
+    at: "2026-10-11T00:00:00Z",
+  });
+  return {
+    tool: (who: string, kind?: string, status?: string): Entry =>
+      ({
+        ...at(who),
+        type: "tool",
+        title: "t",
+        ...(kind && { kind }),
+        ...(status && { status }),
+      }) as Entry,
+    note: (who: string): Entry => ({ ...at(who), type: "answer", text: "n" }),
+    ask: (who: string): Entry =>
+      ({
+        ...at(who),
+        type: "permission",
+        id: "q",
+        title: "w",
+        kind: "edit",
+      }) as Entry,
+    end: (who: string): Entry => ({ ...at(who), type: "turn_ended" }),
+    user: (who: string): Entry => ({ ...at(who), type: "user", text: "go" }),
+  };
+}
+
+test("a run folds when the agent's next note comes; the live run stays open (M7-2)", () => {
+  const e = entries();
+  const see = runs();
+  assert.deepEqual(see(e.note("ann")).fold, [], "nothing to fold yet");
+  const a = see(e.tool("ann", "read")).run;
+  assert.equal(see(e.tool("ann", "edit")).run, a, "the same run");
+  const fold = see(e.note("ann")).fold;
+  assert.equal(fold.length, 1);
+  assert.equal(fold[0], a);
+  assert.equal(a?.tools.length, 2);
+  assert.equal(a?.over, false, "the turn goes on");
+  // The next run is live: nothing folds it until a note or the end.
+  const b = see(e.tool("ann")).run;
+  assert.notEqual(b, a, "a new run after a note");
+  see(e.tool("ann"));
+  assert.equal(b?.tools.length, 2);
+  assert.equal(b?.folded, false, "the live run stays open");
+});
+
+test("the turn's end folds the open run and ends every run of it; a cut turn's ends at the next message (M7-2)", () => {
+  const e = entries();
+  const see = runs();
+  const a = see(e.tool("ann")).run;
+  see(e.note("ann"));
+  const b = see(e.tool("ann")).run;
+  const fold = see(e.end("ann")).fold;
+  assert.deepEqual(fold, [b], "only the run not folded yet");
+  assert.equal(a?.over, true, "the note's run is over too");
+  assert.equal(b?.over, true);
+  // A cut turn: no end, and the next message starts a turn.
+  const c = see(e.tool("ann")).run;
+  assert.deepEqual(see(e.user("ann")).fold, [c]);
+  assert.equal(c?.over, true);
+});
+
+test("another agent's rows do not end a run (M7-2)", () => {
+  const e = entries();
+  const see = runs();
+  const a = see(e.tool("ann")).run;
+  see(e.note("bob"));
+  const b = see(e.tool("bob")).run;
+  see(e.ask("bob"));
+  see(e.end("bob"));
+  assert.notEqual(b, a, "each agent has its own run");
+  assert.equal(
+    see(e.tool("ann")).run,
+    a,
+    "bob's note, question and end leave ann's run open",
+  );
+  assert.deepEqual(see(e.note("ann")).fold, [a]);
+});
+
+test("a question ends the run before it, never folds, and the run folds at the next note (M7-2)", () => {
+  const e = entries();
+  const see = runs();
+  const a = see(e.tool("ann", "edit")).run;
+  assert.deepEqual(see(e.ask("ann")), { fold: [] }, "a question is no run's");
+  const b = see(e.tool("ann")).run;
+  assert.notEqual(b, a, "a new run after the question");
+  assert.deepEqual(see(e.note("ann")).fold, [a, b], "both fold at the note");
+  assert.equal(
+    [a, b].flatMap((r) => r?.tools ?? []).some((t) => t.type !== "tool"),
+    false,
+    "no question in a run",
+  );
+});
+
+test("a run's line counts the calls by kind, most first, with no kind as other, and the failed ones (M7-2)", () => {
+  const e = entries();
+  const tools = [
+    e.tool("ann", "edit"),
+    e.tool("ann", "read"),
+    e.tool("ann", "read", "failed"),
+    e.tool("ann"),
+    e.tool("ann", "read", "completed"),
+    e.tool("ann", "edit", "failed"),
+  ] as Extract<Entry, { type: "tool" }>[];
+  assert.deepEqual(runText(tools), {
+    text: "6 tool calls · 3 read · 2 edit · 1 other",
+    failed: 2,
+  });
+  assert.deepEqual(runText(tools.slice(3, 4)), {
+    text: "1 tool call · 1 other",
+    failed: 0,
+  });
 });

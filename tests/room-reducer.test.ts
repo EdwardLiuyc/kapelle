@@ -1194,3 +1194,53 @@ test("a tool call's status is one ACP defines, and an update that changes nothin
     e,
   );
 });
+
+test("a tool call keeps its kind and its diff's +a −d: a new file counts every line as added (M7-2)", () => {
+  const { send } = toolRoom();
+  const tool = (update: Record<string, unknown>) => {
+    const e = send("ann", { sessionUpdate: "tool_call", ...update });
+    assert.equal(e?.type, "tool");
+    return e as Extract<Entry, { type: "tool" }>;
+  };
+  const diff = (oldText: unknown, newText: unknown) => ({
+    content: [{ type: "diff", path: "/w/a.ts", oldText, newText }],
+  });
+  // One change in one place: the shared start and end are dropped.
+  const one = tool({
+    toolCallId: "e1",
+    title: "Edit",
+    kind: "edit",
+    ...diff("a\nb\nc\nd\n", "a\nB\nB2\nd\n"),
+  });
+  assert.equal(one.kind, "edit");
+  assert.deepEqual([one.added, one.removed], [2, 2]);
+  // No oldText: a new file. A last newline starts no line.
+  const fresh = tool({ toolCallId: "e2", ...diff(undefined, "x\ny\nz\n") });
+  assert.deepEqual([fresh.added, fresh.removed], [3, 0]);
+  // An oldText that is not text is a new file too.
+  const odd = tool({ toolCallId: "e3", ...diff(42, "x\n") });
+  assert.deepEqual([odd.added, odd.removed], [1, 0]);
+  // Two changes far apart count too high: all between them.
+  const two = tool({ toolCallId: "e4", ...diff("a\nb\nc\n", "A\nb\nC\n") });
+  assert.deepEqual([two.added, two.removed], [3, 3]);
+  // No diff, an unknown kind: no counts, no kind.
+  const plain = tool({ toolCallId: "e5", kind: "\x1b[2J", content: [] });
+  assert.equal("kind" in plain || "added" in plain, false);
+  // An update carries the diff and the kind: the same entry changes.
+  assert.equal(
+    send("ann", {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "e5",
+      kind: "edit",
+      ...diff("a\n", "a\nb\n"),
+    }),
+    plain,
+  );
+  assert.deepEqual([plain.kind, plain.added, plain.removed], ["edit", 1, 0]);
+  // Several diff blocks add up.
+  const many = tool({
+    toolCallId: "e6",
+    content: [...diff("a\n", "b\n").content, ...diff(undefined, "c\n").content],
+  });
+  assert.deepEqual([many.added, many.removed], [2, 1]);
+});

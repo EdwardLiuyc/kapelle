@@ -4491,6 +4491,22 @@ const ESCAPES =
 /** Terminal output as text: no escapes, no carriage returns. */
 const plainText = (out: string) => out.replace(ESCAPES, "").replace(/\r/g, "");
 
+/** The screen now, by row. pi-tui writes a row as CSI row;1H, CSI 2K, so
+ *  the last text written to each row is what it shows. */
+function screenRows(out: string) {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+  const parts = out.split(/\x1b\[(\d+);1H\x1b\[2K/);
+  const rows = new Map<number, string>();
+  for (let i = 1; i < parts.length; i += 2) {
+    rows.set(Number(parts[i]), plainText(parts[i + 1] ?? ""));
+  }
+  return rows;
+}
+
+/** The first row on screen whose text matches. 0 for none. */
+const rowOf = (out: string, re: RegExp) =>
+  [...screenRows(out)].find(([, text]) => re.test(text))?.[0] ?? 0;
+
 /** What stays on the normal screen once the alternate one is left. */
 const scrollback = (out: string) =>
   plainText(out.slice(out.lastIndexOf("\x1b[?1049l")));
@@ -4666,7 +4682,8 @@ test("chat.ts on a real terminal draws an agent's tool calls under its name, and
   const isHeading = (l: string) => l.startsWith("▎ mock-agent · ");
   const you = lines.indexOf("▎ you → mock-agent");
   const heading = lines.findIndex(isHeading);
-  const tool = lines.indexOf("▎ · Read package.json");
+  // The next text folds the call into its run's line (M7-2).
+  const tool = lines.indexOf("▎ ▸ 1 tool call · 1 read");
   assert.ok(you !== -1 && you < heading && heading < tool, lines.join("\n"));
   assert.equal(lines.filter(isHeading).length, 1, lines.join("\n"));
 });
@@ -4912,19 +4929,8 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
     assert.ok(Date.now() < until, `no bell: ${screen.out()}`);
     await new Promise((ok) => setTimeout(ok, 50));
   }
-  // The banner sits under the timeline row, full width (#242). pi-tui
-  // writes a row as CSI row;1H, CSI 2K, so the last text written to each
-  // row is the screen now.
-  const bannerRow = () => {
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
-    const parts = screen.out().split(/\x1b\[(\d+);1H\x1b\[2K/);
-    const rows = new Map<number, string>();
-    for (let i = 1; i < parts.length; i += 2) {
-      rows.set(Number(parts[i]), plainText(parts[i + 1] ?? ""));
-    }
-    for (const [at, text] of rows) if (/▌\? asker/.test(text)) return at;
-    return 0;
-  };
+  // The banner sits under the timeline row, full width (#242).
+  const bannerRow = () => rowOf(screen.out(), /▌\? asker/);
   assert.ok(bannerRow() > 1, `under the timeline: ${screen.out()}`);
   // Below 120 columns the side view takes the timeline's place; the banner
   // still shows under it.
@@ -7961,4 +7967,71 @@ test("an answer while the daemon is away says so, and the screen stays", {
     new Promise((ok) => setTimeout(() => ok("open"), 500)),
   ]);
   assert.equal(r, "open", plainText(screen.out()));
+});
+
+test("chat.ts on a real terminal folds a tool run at the next note without moving the rows in view, and a click opens and folds it (M7-2)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario runs`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const ann = only(open.body);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  const wait = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
+  // The note, then the live run: open, and waiting for runs.go.
+  await screen.press("go\r", "Edit f5.ts");
+  // A long message waits behind the turn: rows below the run.
+  const lines = Array.from({ length: 40 }, (_, i) => `q${i + 10}`);
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${ann.id}/messages`,
+    { text: lines.join("\n") },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  await screen.seen("q49");
+  // The person scrolls up a little, to read the message. The run is above.
+  await screen.press("\x1b[<64;50;10M", "q3");
+  await wait(300);
+  const before = rowOf(screen.out(), /│ q30\s*$/);
+  assert.ok(before > 0, `q30 in view: ${screen.out()}`);
+  assert.equal(rowOf(screen.out(), /Read f0\.ts/), 0, "the run is above");
+  // The next note folds the run, above the view.
+  await writeFile(join(ann.worktree, "runs.go"), "");
+  await roomIdle(d, open.body.id);
+  await wait(300);
+  assert.equal(
+    rowOf(screen.out(), /│ q30\s*$/),
+    before,
+    "the row in view did not move",
+  );
+  // Up to the top: the run is one line. A click opens it, a second folds it.
+  for (let i = 0; i < 20; i++) screen.child.stdin.write("\x1b[<64;50;10M");
+  for (const until = Date.now() + 10_000; ; ) {
+    if (rowOf(screen.out(), /▸ 6 tool calls · 5 read · 1 edit/)) break;
+    assert.ok(Date.now() < until, `no folded run: ${screen.out()}`);
+    await wait(50);
+  }
+  const row = rowOf(screen.out(), /▸ 6 tool calls/);
+  await screen.press(`\x1b[<0;50;${row}M\x1b[<0;50;${row}m`, "Read f0.ts");
+  assert.equal(rowOf(screen.out(), /▾ 6 tool calls/), row);
+  // Past pi-tui's 500 ms: a second click sooner is a double click, which
+  // selects a word.
+  await wait(600);
+  await screen.press(`\x1b[<0;50;${row}M\x1b[<0;50;${row}m`, "▸ 6 tool calls");
+  assert.equal(rowOf(screen.out(), /Read f0\.ts/), 0, "folded again");
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
 });

@@ -16,6 +16,7 @@
  * - The look (M7-1): each agent's colour, the activity rows under the
  *   timeline (the banner's waits and the open room's busy agents), when
  *   the screen ticks, and how the status line fits its width.
+ * - Tool runs (M7-2): which tool calls fold into one line, and when.
  *
  * **In `chat/`, not `client/`** (decided 2026-10-02): rows, the `@name`
  * pre-fill and seen marks are this screen's own rules.
@@ -27,7 +28,13 @@
  */
 
 import type { RoomDto, RoomEventLine } from "../client/contract.ts";
-import { nameOf, questionOf, type RoomState, roster } from "../client/room.ts";
+import {
+  type Entry,
+  nameOf,
+  questionOf,
+  type RoomState,
+  roster,
+} from "../client/room.ts";
 
 /** What the transcript shows: a room's timeline, or one participant's
  *  thread when `participantId` is set. It is also a sidebar row. */
@@ -254,9 +261,110 @@ export function activity(rooms: Rooms, view: View) {
 }
 
 /** Whether the screen redraws once a second: only while an activity row
- *  shows a busy agent, for its spinner and its timer. */
+ *  shows a busy agent, for its spinner and its timer, and a running tool's
+ *  spinner in the transcript (M7-2). */
 export const ticks = (rows: readonly Activity[]) =>
   rows.some((a) => a.why === "busy");
+
+/** One frame a second: the tick is the only thing that moves it. */
+const SPINNER = ["◐", "◓", "◑", "◒"];
+
+/** The spinner's frame at `ms`, for an activity row and a running tool. */
+export const spin = (ms: number) =>
+  SPINNER[Math.floor(ms / 1000) % SPINNER.length] ?? "";
+
+type Tool = Extract<Entry, { type: "tool" }>;
+
+/** One agent's tool calls between two of its notes (M7-2). */
+export interface Run {
+  tools: Tool[];
+  /** One line now, until a click opens it. */
+  folded: boolean;
+  /** Its turn ended: a call with no final status is not running. */
+  over: boolean;
+}
+
+/**
+ * Sorts a view's entries into runs (M7-2). Give each entry once, in order,
+ * when it is first drawn. It answers the run a tool call joined, and the
+ * runs that fold with this entry. The screen sets `folded`, so it can
+ * measure the rows before and after.
+ *
+ * - A tool call joins its agent's open run, or starts one.
+ * - A question ends the open run, and does not fold it, so a deny is
+ *   always on screen.
+ * - The agent's next note, its turn's end, or the message that starts its
+ *   next turn (the last one was cut) folds each of its runs not folded yet.
+ *   The last two also end the turn's runs.
+ *
+ * Another agent's lines change nothing. The live run stays open.
+ */
+export function runs() {
+  /** Each agent's open run. */
+  const open = new Map<string, Run>();
+  /** Each agent's runs not folded yet. */
+  const waiting = new Map<string, Run[]>();
+  /** Each agent's runs in its live turn. */
+  const turn = new Map<string, Run[]>();
+  const push = (m: Map<string, Run[]>, id: string, run: Run) => {
+    const list = m.get(id);
+    if (list) list.push(run);
+    else m.set(id, [run]);
+  };
+  return (e: Entry): { run?: Run; fold: Run[] } => {
+    const id = e.participantId;
+    switch (e.type) {
+      case "tool": {
+        let run = open.get(id);
+        if (!run) {
+          run = { tools: [], folded: false, over: false };
+          open.set(id, run);
+          push(waiting, id, run);
+          push(turn, id, run);
+        }
+        run.tools.push(e);
+        return { run, fold: [] };
+      }
+      case "permission":
+        open.delete(id);
+        return { fold: [] };
+      case "answer":
+      case "turn_ended":
+      case "user": {
+        open.delete(id);
+        const fold = waiting.get(id) ?? [];
+        waiting.delete(id);
+        if (e.type !== "answer") {
+          for (const r of turn.get(id) ?? []) r.over = true;
+          turn.delete(id);
+        }
+        return { fold };
+      }
+      default:
+        return { fold: [] };
+    }
+  };
+}
+
+/** A folded run's line, without its mark: `6 tool calls · 4 read · 2
+ *  edit`, the kinds most first. A call with no kind is `other`. `failed`
+ *  is the count the screen adds in red. */
+export function runText(tools: readonly Tool[]) {
+  const kinds = new Map<string, number>();
+  for (const t of tools) {
+    const k = t.kind ?? "other";
+    kinds.set(k, (kinds.get(k) ?? 0) + 1);
+  }
+  const by = [...kinds].sort((a, b) => b[1] - a[1]);
+  const n = tools.length;
+  return {
+    text: [
+      `${n} tool call${n === 1 ? "" : "s"}`,
+      ...by.map(([k, c]) => `${c} ${k}`),
+    ].join(" · "),
+    failed: tools.filter((t) => t.status === "failed").length,
+  };
+}
 
 /** A timer's text: `42s`, `3m 07s`, `1h 02m`. */
 export function clock(ms: number) {

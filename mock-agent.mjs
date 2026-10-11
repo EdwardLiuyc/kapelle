@@ -20,7 +20,7 @@
  * before it answers, as every real harness does (§M0-9).
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -51,6 +51,7 @@ const SCENARIOS = {
   "file-text": "the default path, asking with copilot's rawInput.file_text",
   "diff-bad-old":
     "like diff-first, but the diff block's oldText is a number, not text",
+  runs: "a note and six tool calls, then a wait for runs.go in its folder, then a note; later turns only the note",
 };
 
 const storeAt = process.argv.indexOf("--store");
@@ -188,6 +189,9 @@ let stalledPromptId = null;
 
 /** Whether `mode-refused-once` has refused its one `session/set_mode`. */
 let modeRefused = false;
+
+/** Whether `runs` has sent its tool run: only the first turn has one. */
+let ranRuns = false;
 
 let nextId = 1000;
 let sessionCount = 0;
@@ -375,6 +379,33 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
           content: { type: "text", text: chunk },
         });
       }
+      reply(msg.id, { stopReason: "end_turn", usage: USAGE });
+      return;
+    }
+
+    // M7-2's tool run: the wait lets a test scroll before the next note
+    // folds the run.
+    if (scenario === "runs") {
+      const say = (text) =>
+        update(sid, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        });
+      if (!ranRuns) {
+        ranRuns = true;
+        say("Looking.");
+        for (let i = 0; i < 6; i++) {
+          update(sid, {
+            sessionUpdate: "tool_call",
+            toolCallId: `run${i}`,
+            title: i < 5 ? `Read f${i}.ts` : `Edit f${i}.ts`,
+            kind: i < 5 ? "read" : "edit",
+            status: "completed",
+          });
+        }
+        while (!existsSync("runs.go")) await sleep(50);
+      }
+      say("Done.");
       reply(msg.id, { stopReason: "end_turn", usage: USAGE });
       return;
     }
