@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   type Container,
   Markdown,
+  Text,
   type TuiAltScreen,
 } from "@earendil-works/pi-tui";
 import type { RoomEventLine } from "../../client/contract.ts";
@@ -721,4 +722,62 @@ test("a cut turn's run folds when the agent's next turn starts (M7-2)", () => {
   const next = rows.findIndex((l) => l.includes("again"));
   assert.ok(folded >= 0 && folded < next, rows.join("\n"));
   assert.ok(!rows.some((l) => l.includes("Read a.ts")), "the run folded");
+});
+
+test("a redraw scrolled up draws no part: a replayed fold does no anchor work (M7-2)", () => {
+  const { send, note, tool, plain, parts } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  for (let i = 0; i < 4; i++) {
+    note("ann", `Step ${i}.`);
+    tool("ann", `t${i}`, { title: `Read f${i}.ts`, kind: "read" });
+  }
+  note("ann", Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n\n"));
+  parts.scroll.updateLayout(plain().length, 8, () => {});
+  parts.scroll.scrollTo(3, { disableFollow: true });
+  assert.equal(parts.scroll.isFollowingEnd, false);
+  // Each replayed note folds a run. A frame draws the parts; the replay
+  // must not, once per run.
+  let drawn = 0;
+  const render = Text.prototype.render;
+  Text.prototype.render = function (this: Text, width: number) {
+    drawn++;
+    return render.call(this, width);
+  };
+  try {
+    parts.redraw();
+  } finally {
+    Text.prototype.render = render;
+  }
+  assert.equal(drawn, 0);
+  assert.ok(plain().includes("▎ ▸ 1 tool call · 1 read"));
+});
+
+test("a click on any row of a wrapped fold line opens the run (M7-2)", () => {
+  const { send, note, tool, parts } = runRoom();
+  send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  const kinds = ["read", "edit", "execute", "search", "fetch", "move"];
+  for (const [i, kind] of kinds.entries()) {
+    tool("ann", `t${i}`, { title: `T${i}`, kind });
+  }
+  note("ann", "Done.");
+  const width = 30;
+  const rows = parts.transcript
+    .render(width)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+    .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  const at = rows.findIndex((l) => l.includes("▸ 6 tool calls"));
+  assert.ok(at >= 0 && !rows[at + 1]?.includes("Done."), "the line wraps");
+  const hit = parts.transcript.handleMouse({
+    type: "click",
+    button: "left",
+    x: 4,
+    y: at + 1,
+    width,
+    height: rows.length,
+  } as never);
+  assert.equal(hit?.handled, true);
+  assert.ok(
+    parts.transcript.render(width).some((l) => l.includes("T0")),
+    "the run opened",
+  );
 });

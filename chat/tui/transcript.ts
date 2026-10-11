@@ -160,8 +160,9 @@ class Transcript extends Container {
     this.width = width;
     const out = super.render(width);
     // pi-tui's container keeps each child's height in its private mouse
-    // layout. Read it rather than render every child a second time; the
-    // fallback covers a rename or a change of shape. (M7-2)
+    // layout. Read it rather than render every child a second time. If a
+    // rename or a change of shape loses it, a fold measures each child
+    // then: never a second render per frame. (M7-2)
     const layout = this as unknown as {
       mouseLayout?: { children: { height: number }[] };
     };
@@ -170,7 +171,7 @@ class Transcript extends Container {
       heights?.length === this.children.length &&
       heights.every((h) => typeof h === "number")
         ? heights
-        : this.children.map((c) => c.render(width).length);
+        : [];
     this.rowsWidth = width;
     return out;
   }
@@ -277,12 +278,15 @@ function transcriptParts({
     const own = line();
     const first = () => run.tools[0] === e;
     const shut = () => run.folded && !opened.has(run.tools[0] as Entry);
+    /** The rows the run's line took when drawn last: it can wrap. */
+    let headRows = 0;
     return {
       render(width) {
         const out =
           first() && run.folded
             ? head.render(width, runLine(run, !shut()))
             : [];
+        headRows = out.length;
         if (shut()) return out;
         const live =
           !run.over &&
@@ -294,7 +298,7 @@ function transcriptParts({
       },
       handleMouse(m: TuiMouseEvent) {
         if (m.type !== "click" || m.button !== "left") return undefined;
-        if (!first() || !run.folded || m.y !== 0) return undefined;
+        if (!first() || !run.folded || m.y >= headRows) return undefined;
         const key = run.tools[0] as Entry;
         if (opened.has(key)) opened.delete(key);
         else opened.add(key);
@@ -332,6 +336,8 @@ function transcriptParts({
     let y = 0;
     let moved = 0;
     for (const [i, h] of before.entries()) {
+      // A part the view's top cuts through is not counted: its rows in
+      // view move.
       if (y + h > top) break;
       moved += (after[i] ?? 0) - h;
       y += h;
@@ -466,6 +472,9 @@ function transcriptParts({
   // transcript per view if a long history makes switching slow.
   const redraw = () => {
     transcript.clear();
+    // At the end before the replay: a replayed fold then skips its anchor,
+    // which would measure every part once per run (M7-2).
+    scroll.scrollToEnd();
     drawn = new WeakMap();
     lines = new WeakMap();
     tools = new WeakSet();
@@ -499,7 +508,6 @@ function transcriptParts({
       note("no rooms. ctrl+o → new room, or type /new <harness>.");
       note("ctrl+c leaves.");
     }
-    scroll.scrollToEnd();
     setStatus();
   };
 

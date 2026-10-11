@@ -262,7 +262,8 @@ export function activity(rooms: Rooms, view: View) {
 
 /** Whether the screen redraws once a second: only while an activity row
  *  shows a busy agent, for its spinner and its timer, and a running tool's
- *  spinner in the transcript (M7-2). */
+ *  spinner in the transcript (M7-2). When waits fill the rows and cut the
+ *  busy one, both spinners stand still: cosmetic. */
 export const ticks = (rows: readonly Activity[]) =>
   rows.some((a) => a.why === "busy");
 
