@@ -141,6 +141,7 @@ function sidebarParts({
   open,
   changes = () => undefined,
   openFile = () => {},
+  // The tests' value; the screen passes the sidebar's real visible height.
   height = () => process.stdout.rows || 24,
   now = Date.now,
 }: {

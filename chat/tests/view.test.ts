@@ -12,6 +12,7 @@ import {
   anyBusy,
   banner,
   bell,
+  busyIn,
   clock,
   colourOf,
   dismissed,
@@ -454,6 +455,17 @@ test("anyBusy sees a busy agent in any room, for the sidebar timers", () => {
     true,
     "another room's sidebar timer needs the tick",
   );
+});
+
+test("busyIn names a busy room, for the open room's transcript spinner", () => {
+  const r1 = room(["a"]);
+  const r2 = room(["b"]);
+  const all = rooms(["r1", r1], ["r2", r2]);
+  assert.equal(busyIn(all, "r1"), false, "quiet room");
+  assert.equal(busyIn(all, "gone"), false, "unknown room");
+  busy(r2, "b");
+  assert.equal(busyIn(all, "r2"), true, "the busy room");
+  assert.equal(busyIn(all, "r1"), false, "the other room");
 });
 
 test("a timer's text", () => {

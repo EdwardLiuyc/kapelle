@@ -108,6 +108,7 @@ import {
   activity,
   anyBusy,
   bell,
+  busyIn,
   type Composer,
   dismissed,
   edited,
@@ -319,7 +320,9 @@ function chatTui(
    *  or a busy agent's sidebar timer in any room while the sidebar is
    *  shown (M7-3). */
   const moving = () =>
-    ticks(activity(rooms, view).rows) || (shown && anyBusy(rooms));
+    ticks(activity(rooms, view).rows) ||
+    busyIn(rooms, view.roomId) ||
+    (shown && anyBusy(rooms));
   let timer: ReturnType<typeof setInterval> | undefined;
   const tick = () => {
     if (timer || !moving()) return;
