@@ -8,8 +8,9 @@
  * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
  * (#62 R5), the whole `PromptResponse` (#62 B3), the cancel-intent event
  * (#62 R4), stderr capture on death, `#guardPath` containment, `#guardWrite`'s
- * no-ask refusal and its reuse of an approved edit decision, and the
- * toolCall-id lookup's parity with the pre-port client.
+ * no-ask refusal and its reuse of an approved edit decision, the
+ * toolCall-id lookup's parity with the pre-port client, and a finished call
+ * that keeps its title and kind but not its input (#163).
  */
 
 import assert from "node:assert/strict";
@@ -312,6 +313,163 @@ test("a tool_call that omits its id is still found when permission is asked", as
   // not see. That is the divergence this pins.
   assert.equal(seen[0].title, "Read foo");
   assert.equal(seen[0].kind, "read");
+});
+
+// --- a finished call keeps no input (#163) -----------------------------------
+
+/**
+ * Sends `debug/update`'s params as a `session/update`, and turns `debug/ask`
+ * into a permission request that carries only a `toolCallId`. The update line
+ * goes out before the reply, so it is handled before the call returns.
+ */
+const TOOL_CALL_PROBE = [
+  'let buf = "";',
+  "let nextId = 3000;",
+  "const pending = new Map();",
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "session/new")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
+  '    else if (msg.method === "session/prompt")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });',
+  '    else if (msg.method === "debug/update") {',
+  "      write({",
+  '        jsonrpc: "2.0",',
+  '        method: "session/update",',
+  '        params: { sessionId: "s1", update: msg.params },',
+  "      });",
+  '      write({ jsonrpc: "2.0", id: msg.id, result: {} });',
+  '    } else if (msg.method === "debug/ask") {',
+  "      const rid = nextId++;",
+  "      pending.set(rid, msg.id);",
+  "      write({",
+  '        jsonrpc: "2.0",',
+  "        id: rid,",
+  '        method: "session/request_permission",',
+  "        params: {",
+  '          sessionId: "s1",',
+  "          toolCall: { toolCallId: msg.params.id },",
+  '          options: [{ optionId: "ok", name: "Allow", kind: "allow_once" }],',
+  "        },",
+  "      });",
+  "    } else if (msg.id !== undefined && pending.has(msg.id)) {",
+  "      const probeId = pending.get(msg.id);",
+  "      pending.delete(msg.id);",
+  '      write({ jsonrpc: "2.0", id: probeId, result: {} });',
+  "    }",
+  "  }",
+  "});",
+].join("\n");
+
+type JudgedToolCall = CapturedToolCall & {
+  rawInput?: unknown;
+  edits?: unknown[];
+};
+
+/** A started probe, and a function that asks about one call and returns
+ *  what the policy was handed. */
+async function toolCallProbe(t: TestContext) {
+  const seen: JudgedToolCall[] = [];
+  const agent = new AcpAgent({
+    name: "tool-calls",
+    command: process.execPath,
+    args: ["-e", TOOL_CALL_PROBE],
+    cwd: await tempDir(t, "acp-calls-"),
+    requestTimeoutMs: 5_000,
+    policy: (req) => {
+      seen.push(req.toolCall);
+      return true;
+    },
+  });
+  t.after(() => agent.stop());
+  await agent.start();
+  await agent.newSession();
+  const send = (update: object) => agent.request("debug/update", update);
+  const ask = async (id: string) => {
+    await agent.request("debug/ask", { id });
+    return seen[seen.length - 1];
+  };
+  return { agent, send, ask };
+}
+
+const INPUT = { path: "a.txt", file_text: "new text\n" };
+
+for (const status of ["completed", "failed"]) {
+  test(`a ${status} call is judged on its title and kind, without its input`, async (t) => {
+    const { send, ask } = await toolCallProbe(t);
+    const announce = { toolCallId: "c1", title: "Write a.txt", kind: "edit" };
+    // claude's way: an empty input first, the whole one on an update.
+    await send({ sessionUpdate: "tool_call", ...announce, rawInput: {} });
+    await send({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "c1",
+      status: "in_progress",
+      rawInput: INPUT,
+    });
+
+    const live = await ask("c1");
+    assert.deepEqual(live.rawInput, INPUT, "a live call keeps its input");
+    assert.equal(live.edits?.length, 1, "and its diff");
+
+    await send({ sessionUpdate: "tool_call_update", toolCallId: "c1", status });
+    // A late update brings no input back to a finished call.
+    await send({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "c1",
+      rawInput: INPUT,
+    });
+
+    const done = await ask("c1");
+    assert.equal(done.title, "Write a.txt");
+    assert.equal(done.kind, "edit");
+    assert.equal(done.rawInput, undefined);
+    assert.equal(done.edits, undefined);
+  });
+}
+
+test("a call announced as completed keeps no input", async (t) => {
+  const { send, ask } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Read a.txt",
+    kind: "read",
+    status: "completed",
+    rawInput: INPUT,
+  });
+
+  const done = await ask("c1");
+  assert.equal(done.title, "Read a.txt");
+  assert.equal(done.kind, "read");
+  assert.equal(done.rawInput, undefined);
+});
+
+test("a turn's end settles a call it left pending", async (t) => {
+  const { agent, send, ask } = await toolCallProbe(t);
+  await send({
+    sessionUpdate: "tool_call",
+    toolCallId: "c1",
+    title: "Write a.txt",
+    kind: "edit",
+    status: "pending",
+    rawInput: INPUT,
+  });
+  await agent.prompt("go");
+
+  const done = await ask("c1");
+  assert.equal(done.title, "Write a.txt");
+  assert.equal(done.kind, "edit");
+  assert.equal(done.rawInput, undefined);
+  assert.equal(done.edits, undefined);
 });
 
 // --- #guardPath containment --------------------------------------------------
