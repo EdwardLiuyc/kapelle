@@ -6,6 +6,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Diff, RoomDto, RoomEventLine } from "../../client/contract.ts";
 import type { FileChange } from "../../client/diff.ts";
 import {
@@ -129,7 +130,7 @@ test("an agent's row at 26 columns: mark, harness, timer and unread count", () =
   assert.match(row(/cy/), /^ {4}✕ cy pi +│$/);
   assert.match(row(/dee/), /^ {4}◌ dee pi +│$/);
   assert.ok(
-    rows.every((l) => l.length === 26),
+    rows.every((l) => visibleWidth(l) === 26),
     "every row fits the 26 columns",
   );
 });
@@ -239,7 +240,7 @@ const CUT_LINES = [
 ];
 const CUT_TEXT = CUT_LINES.join("\n");
 
-const blockRows = (diff: Diff) => {
+const blockRows = (diff: Diff, height = 24) => {
   const { state, add } = mk();
   add("p-ann", "ann");
   const { sidebar } = sidebarParts({
@@ -248,6 +249,7 @@ const blockRows = (diff: Diff) => {
     toggle() {},
     open() {},
     changes: () => diff,
+    height: () => height,
   });
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   return sidebar.render(26).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
@@ -266,27 +268,54 @@ test("the changed-files block letters each file, and the cut file has no counts"
 });
 
 test("the block shows +n more from the route's files when the rows run out", () => {
-  const rows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-  Object.defineProperty(process.stdout, "rows", {
-    value: 8,
-    configurable: true,
+  const text = blockRows(
+    { text: CUT_TEXT, files: 5, added: 12, removed: 9 },
+    8,
+  ).join("\n");
+  assert.match(text, / {2}M cli\.ts +\+2 −1 │/);
+  assert.match(text, / {2}A new\.ts +\+1 −0 │/);
+  assert.match(text, / {2}D old\.ts +\+0 −1 │/);
+  assert.match(text, /\+2 more/, "5 route files against 3 rows");
+  assert.doesNotMatch(text, /cut\.ts/, "the cut file did not fit");
+});
+
+test("the heading and the +n more row count against the sidebar's height", () => {
+  const { state, add, line } = mk();
+  add("p-ann", "ann");
+  for (const name of ["bob", "cy"]) add(`p-${name}`, name);
+  line("p-ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  const diff: Diff = { text: CUT_TEXT, files: 4, added: 12, removed: 9 };
+  const { sidebar } = sidebarParts({
+    rooms: roomsOf(state),
+    view: () => ({ roomId: "r1", participantId: "p-ann" }),
+    toggle() {},
+    open() {},
+    changes: () => diff,
+    height: () => 9,
   });
-  try {
-    const text = blockRows({
-      text: CUT_TEXT,
-      files: 5,
-      added: 12,
-      removed: 9,
-    }).join("\n");
-    assert.match(text, / {2}M cli\.ts +\+2 −1 │/);
-    assert.match(text, / {2}A new\.ts +\+1 −0 │/);
-    assert.match(text, / {2}D old\.ts +\+0 −1 │/);
-    assert.match(text, /\+2 more/, "5 route files against 3 rows");
-    assert.doesNotMatch(text, /cut\.ts/, "the cut file did not fit");
-  } finally {
-    if (rows) Object.defineProperty(process.stdout, "rows", rows);
-    else delete (process.stdout as unknown as { rows?: number }).rows;
-  }
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const rows = sidebar.render(26).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  // Header, room, 3 agents, heading, 2 files, +2 more = 9 rows exactly.
+  assert.match(rows[8] ?? "", /\+2 more/);
+  assert.doesNotMatch(rows[9] ?? "", /M |A |D |changed files/);
+});
+
+test("a long changed path keeps its basename, and a no-hunk file has no counts", () => {
+  const lines = [
+    "diff --git a/core/very/long/path/notes.md b/core/very/long/path/notes.md",
+    "--- a/core/very/long/path/notes.md",
+    "+++ b/core/very/long/path/notes.md",
+    "diff --git a/core/very/long/path/new.ts b/core/very/long/path/new.ts",
+    "new file mode 100644",
+    "@@ -0,0 +1 @@",
+    "+x",
+  ].join("\n");
+  const text = blockRows({ text: lines, files: 2, added: 1, removed: 0 }).join(
+    "\n",
+  );
+  assert.match(text, /M …[^\s]*notes\.md +│/);
+  assert.doesNotMatch(text, /notes\.md \+0 −0/);
+  assert.match(text, /A …[^\s]*new\.ts +\+1 −0 │/);
 });
 
 test("a click on a changed-file row opens that file", () => {

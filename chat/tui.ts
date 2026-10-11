@@ -19,7 +19,7 @@
  * and the terminal's bell when one starts to wait. No desktop pop-up: too
  * noisy (decided 2026-10-05, #50). A busy agent of the open room gets a row
  * too, and while one shows, the screen redraws once a second (M7-1); the
- * sidebar's busy timer needs the same tick even when no row shows (M7-3).
+ * sidebar's busy timers need the same tick, in any room (M7-3).
  *
  * **The status line** (M7-1): the target and its mode on the left, its
  * `ctx` and cost on the right, and the key hints between, which drop from
@@ -70,7 +70,6 @@ import {
   type Entry,
   nameOf,
   printable,
-  roster,
   seen,
   thread,
 } from "../client/room.ts";
@@ -107,6 +106,7 @@ import {
 import { transcriptParts } from "./tui/transcript.ts";
 import {
   activity,
+  anyBusy,
   bell,
   type Composer,
   dismissed,
@@ -316,12 +316,8 @@ function chatTui(
     invalidate: () => statusText.invalidate(),
   };
   /** The once-a-second redraw (M7-1): an activity row with a busy agent,
-   *  or a busy agent's sidebar timer in the open room (M7-3). */
-  const moving = () => {
-    if (ticks(activity(rooms, view).rows)) return true;
-    const state = rooms.get(view.roomId)?.state;
-    return state ? roster(state).some((p) => p.status === "busy") : false;
-  };
+   *  or a busy agent's sidebar timer in any room (M7-3). */
+  const moving = () => ticks(activity(rooms, view).rows) || anyBusy(rooms);
   let timer: ReturnType<typeof setInterval> | undefined;
   const tick = () => {
     if (timer || !moving()) return;
@@ -348,19 +344,21 @@ function chatTui(
 
   /** Loads a thread's changed-files block (M7-3): one request, on the
    *  thread's open and on each of its turns' end. A failure, `409 no_diff`
-   *  included, leaves no block; a reply for a thread the person left is
-   *  dropped. */
+   *  included, leaves no block; only the newest reply for the open thread
+   *  wins, so two loads cannot land out of order. */
+  let changeSeq = 0;
   const loadChanges = async (roomId: string, participantId: string) => {
     const key = changeKey(roomId, participantId);
+    const seq = ++changeSeq;
     try {
       const res = await agentDiff(d, roomId, participantId, "base");
-      if (key !== openChangeKey()) return;
+      if (seq !== changeSeq || key !== openChangeKey()) return;
       changeEntry = res.ok
         ? { key, diff: { ...res.body, text: cleanLines(res.body.text) } }
         : undefined;
     } catch {
       // The daemon went away mid-request: no block, as for a refusal.
-      if (key === openChangeKey()) changeEntry = undefined;
+      if (seq === changeSeq && key === openChangeKey()) changeEntry = undefined;
     }
     tui.requestRender();
   };
@@ -459,7 +457,7 @@ function chatTui(
     side.fill(
       {
         title: `${who.name} · ${against === "head" ? "uncommitted" : "whole branch"}`,
-        diff: { ...body, text: cleanLines(body.text) },
+        diff: body,
         keys: [
           {
             key: "b",
@@ -508,11 +506,22 @@ function chatTui(
     done: () => done,
     prefill: () => prefill,
   });
+  /** The rows the sidebar really has (M7-3): the terminal, less the
+   *  activity rows, the spacer, the status line, the editor and the where
+   *  bar under the row. */
+  const sidebarRows = () => {
+    const rows = process.stdout.rows || 24;
+    const { rows: shown, more } = activity(rooms, view);
+    const banner = shown.length + (more > 0 ? 1 : 0);
+    const editorRows = editor.render(process.stdout.columns || 80).length;
+    return Math.max(1, rows - banner - 2 - editorRows - (whereText ? 1 : 0));
+  };
   const { sidebar, strip } = sidebarParts({
     rooms,
     view: () => view,
     toggle: () => toggle(),
     open: (next) => open(next),
+    height: sidebarRows,
     changes: () =>
       changeEntry?.key === openChangeKey() ? changeEntry.diff : undefined,
     openFile: (f) => {
@@ -1004,7 +1013,10 @@ function chatTui(
         setStatus();
         return false;
       }
-      showDiff(who, against, res.body);
+      showDiff(who, against, {
+        ...res.body,
+        text: cleanLines(res.body.text),
+      });
       // A menu close can open a waiting question: that box keeps the keys,
       // and the view lets go of them, so the composer gets them after it.
       if (box.panel) {

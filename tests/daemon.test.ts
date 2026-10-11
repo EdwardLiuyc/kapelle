@@ -5562,12 +5562,23 @@ const TWO_CHANGES_TEXT = [
  * A fake daemon with one room `room-changes` and one participant `p1`
  * (M7-3): the diff route counts its calls, and the test can write more
  * event lines into the one stream. `files` is the route's count, `failAt`
- * refuses that call instead of answering it.
+ * refuses that call, `holdAt` holds that call's reply until `release()`,
+ * and `later` is what calls after the first answer with.
  */
 async function fakeChangesRoom(
   t: TestContext,
   text: string,
-  { files = 1, failAt }: { files?: number; failAt?: number } = {},
+  {
+    files = 1,
+    failAt,
+    holdAt,
+    later,
+  }: {
+    files?: number;
+    failAt?: number;
+    holdAt?: number;
+    later?: { text: string; files: number };
+  } = {},
 ) {
   const runtime = await tempDir(t);
   await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
@@ -5592,6 +5603,7 @@ async function fakeChangesRoom(
   };
   let stream: ServerResponse | undefined;
   const diffs: string[] = [];
+  const held: (() => void)[] = [];
   const event = (seq: number, update: object) =>
     `id: ${seq}\ndata: ${JSON.stringify({ seq, roomId, participantId: "p1", update })}\n\n`;
   const fake = createServer((req, res) => {
@@ -5635,7 +5647,8 @@ async function fakeChangesRoom(
     }
     if (path.startsWith(`/rooms/${roomId}/agents/p1/diff`)) {
       diffs.push(path);
-      if (diffs.length === failAt) {
+      const call = diffs.length;
+      if (call === failAt) {
         res.writeHead(409, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
@@ -5644,8 +5657,17 @@ async function fakeChangesRoom(
         );
         return;
       }
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ text, files, added: 2, removed: 1 }));
+      const body =
+        call > 1 && call !== holdAt && later ? later : { text, files };
+      const answer = () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ...body, added: 2, removed: 1 }));
+      };
+      if (call === holdAt) {
+        held.push(answer);
+        return;
+      }
+      answer();
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });
@@ -5671,6 +5693,9 @@ async function fakeChangesRoom(
     diffs,
     event,
     write: (line: string) => stream?.write(line),
+    release: () => {
+      for (const answer of held.splice(0)) answer();
+    },
   };
 }
 
@@ -5727,6 +5752,41 @@ test("chat.ts on a real terminal loads the changed files once per turn end or ex
     await new Promise((ok) => setTimeout(ok, 50));
   }
   assert.match(diffs[2] ?? "", /against=base/);
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts keeps the newest changed files when a crash's two loads land out of order", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write, release } = await fakeChangesRoom(
+    t,
+    CHANGES_TEXT,
+    { holdAt: 2, later: { text: TWO_CHANGES_TEXT, files: 2 } },
+  );
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  await screen.seen("changed files");
+  assert.equal(diffs.length, 1, diffs.join("\n"));
+  // A crash reports its exit before the turn it broke ends: two loads. The
+  // exited one is held; the turn end's newer reply has two files.
+  write(event(2, { sessionUpdate: "_client_harness_exited", pid: 1 }));
+  write(event(3, { sessionUpdate: "_client_turn_ended", stopReason: "error" }));
+  for (const until = Date.now() + 20_000; diffs.length < 3; ) {
+    assert.ok(Date.now() < until, `no third diff call: ${diffs.join("\n")}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  await screen.seen("A other.ts");
+  // The held, older reply lands last and must not replace the newer block.
+  release();
+  await new Promise((ok) => setTimeout(ok, 500));
+  const shown = () => [...screenRows(screen.out()).values()].join("\n");
+  assert.match(
+    shown(),
+    /A other\.ts/,
+    "the older reply replaced the newer one",
+  );
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

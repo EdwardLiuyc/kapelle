@@ -5,7 +5,8 @@
  * stands in for it while it is hidden, and the state marks (M7-3): `?` asks,
  * `!` stalls, `◐` busy, `⏸` paused, `✕` killed, `◌` exited, `●` unread, `○`
  * nothing new. An agent's row paints its mark and name in its colour, shows
- * the harness dim and a busy timer on the right. The changed-files block
+ * the harness dim, and puts its busy timer on the right; an idle unread
+ * agent's right side is its unread count instead. The changed-files block
  * sits under the rooms for the open thread.
  *
  * A room row takes its most urgent participant's mark, `?` > `!` > `✕` >
@@ -98,20 +99,33 @@ const roomMark = (state: RoomState): Mark => {
   };
 };
 
+/** The end of `path` that fits `room`, with a leading `…` when it was cut:
+ *  a long path keeps its basename. */
+const tailPath = (path: string, room: number) => {
+  if (room <= 0) return "";
+  if (visibleWidth(path) <= room) return path;
+  let out = "";
+  for (const ch of [...path].reverse()) {
+    if (visibleWidth(`…${ch}${out}`) > room) break;
+    out = `${ch}${out}`;
+  }
+  return `…${out}`;
+};
+
 /** A changed-file row: `M path +a −d`, the counts kept and the path cut at
- *  its front. The file the 512 KB cut goes through has no counts (M7-3). */
+ *  its front. The file the 512 KB cut goes through, and one with no hunk
+ *  (binary, mode-only), has no counts (M7-3). */
 const changeLine = (f: FileChange, inner: number) => {
   const counts =
-    f.added === undefined || f.removed === undefined
+    f.added === undefined ||
+    f.removed === undefined ||
+    (f.added === 0 && f.removed === 0)
       ? ""
       : ` +${f.added} −${f.removed}`;
-  const path = truncateToWidth(
-    f.path,
-    Math.max(0, inner - 4 - visibleWidth(counts)),
-    "…",
-    true,
-  );
-  return `  ${f.letter} ${path}${counts}`;
+  const room = Math.max(0, inner - 4 - visibleWidth(counts));
+  const path = tailPath(f.path, room);
+  const pad = " ".repeat(Math.max(0, room - visibleWidth(path)));
+  return `  ${f.letter} ${path}${pad}${counts}`;
 };
 
 /**
@@ -127,6 +141,7 @@ function sidebarParts({
   open,
   changes = () => undefined,
   openFile = () => {},
+  height = () => process.stdout.rows || 24,
   now = Date.now,
 }: {
   rooms: ReadonlyMap<string, Followed>;
@@ -135,6 +150,7 @@ function sidebarParts({
   open: (next: View) => void;
   changes?: () => Diff | undefined;
   openFile?: (f: FileChange) => void;
+  height?: () => number;
   now?: () => number;
 }) {
   /** A participant's one row. The mark and name are one painted piece, so
@@ -177,6 +193,10 @@ function sidebarParts({
     );
   };
 
+  /** The parsed changed files, by diff identity: a frame must not
+   *  re-parse a 512 KB text. */
+  let parsed: { diff: Diff; all: FileChange[] } | undefined;
+
   /** Every sidebar row, the changed-files block included. Told with the
    *  file rows a click can open, and where the block starts. */
   const draw = (inner: number) => {
@@ -192,7 +212,7 @@ function sidebarParts({
       if (!row.participantId) {
         const m = roomMark(r.state);
         const label = r.entry.title ?? r.entry.id;
-        const lost = r.lost ? yellow(" !") : "";
+        const lost = r.lost ? yellow(" lost") : "";
         const paused = r.entry.status === "paused" ? dim(" paused") : "";
         lines.push(
           fit(
@@ -212,14 +232,19 @@ function sidebarParts({
     let last = -1;
     const d = changes();
     if (d?.text && d.files > 0) {
-      const all = changesOf(d.text.split("\n"));
-      const height = process.stdout.rows || 24;
-      const room = height - lines.length - 1;
-      if (all.length && room > 0) {
+      // Parse once per diff: `draw` runs on every frame and click.
+      if (parsed?.diff !== d) {
+        parsed = { diff: d, all: changesOf(d.text.split("\n")) };
+      }
+      const all = parsed.all;
+      // The heading and a `+n more` row are rows too: both come out of the
+      // sidebar's visible height.
+      const free = height() - lines.length;
+      if (all.length && free >= 2) {
         heading = lines.length;
         lines.push(fit(dim("changed files")));
-        const show =
-          d.files > room ? Math.max(0, room - 1) : Math.min(all.length, room);
+        const whole = d.files <= all.length && all.length <= free - 1;
+        const show = whole ? all.length : Math.max(0, free - 2);
         files.push(...all.slice(0, show));
         for (const f of files) lines.push(fit(changeLine(f, inner)));
         const more = d.files - files.length;

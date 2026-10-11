@@ -260,12 +260,19 @@ export function activity(rooms: Rooms, view: View) {
   return { rows: all.slice(0, MOST - 1), more: all.length - MOST + 1 };
 }
 
-/** Whether the screen redraws once a second: only while an activity row
- *  shows a busy agent, for its spinner and its timer, and a running tool's
- *  spinner in the transcript (M7-2). When waits fill the rows and cut the
- *  busy one, both spinners stand still: cosmetic. */
+/** Whether an activity row shows a busy agent: its spinner and timer, and a
+ *  running tool's spinner in the transcript (M7-2). The screen's tick also
+ *  counts a busy sidebar row in any room (M7-3), so a busy activity row cut
+ *  by waits no longer stands still. */
 export const ticks = (rows: readonly Activity[]) =>
   rows.some((a) => a.why === "busy");
+
+/** Whether any room has a busy participant (M7-3): its sidebar row shows a
+ *  timer, wherever the room is. */
+export const anyBusy = (rooms: Rooms) =>
+  [...rooms.values()].some(({ state }) =>
+    roster(state).some((p) => p.status === "busy"),
+  );
 
 /** One frame a second: the tick is the only thing that moves it. */
 const SPINNER = ["◐", "◓", "◑", "◒"];
