@@ -96,17 +96,16 @@ export const seenIn = (state: RoomState, view: View) =>
   view.participantId ? [view.participantId] : [...state.participants.keys()];
 
 /** The composer when `next` opens in a room with this state: an untouched
- *  pre-fill follows the view, and typed text stays. */
-// With no room (`state` unset) an old `@name ` stays. Found at M4-10's
-// pickup (#210); a move does not fix it.
+ *  pre-fill follows the view, and typed text stays. With no room (`state`
+ *  unset), an untouched pre-fill clears, as in a timeline. */
 export function opened(
   state: RoomState | undefined,
   next: View,
   text: string,
   prefill: string,
 ): Composer {
-  if (!state || touched(text, prefill)) return { prefill };
-  const p = mention(state, next);
+  if (touched(text, prefill)) return { prefill };
+  const p = state ? mention(state, next) : "";
   return { prefill: p, text: p };
 }
 
