@@ -26,7 +26,7 @@ So the person can talk to you between steps.
 ```bash
 R=/home/edward/src/kapelle-spike/.agent/skills/issue-loop/room.sh
 ROOM=<room id> $R info
-ROOM=<room id> $R hire dev claude developer origin/master
+ROOM=<room id> $R hire dev pi developer origin/master
 ROOM=<room id> $R send dev <<'EOF'
 the message
 EOF
@@ -51,7 +51,7 @@ EOF
 
 | Name | Harness | Role | Base | When |
 | --- | --- | --- | --- | --- |
-| `dev` | `claude` | `developer` | `origin/master` | at the start |
+| `dev` | `pi` | `developer` | `origin/master` | at the start |
 | `rev` | `pi` | `tester` | dev's branch (from `room.sh info`) | after dev commits |
 
 At most two workers at once. Remove `rev` when its review is landed (step 6).
@@ -80,8 +80,8 @@ Rules for this room:
   any choice the person must make, with options and your recommendation.
 ```
 
-Skills by harness: claude runs a skill as `/pickup-issue 220`. pi runs it as
-`/skill:review-local 220`.
+Both workers are pi. pi runs a skill as `/skill:<name>`, for example
+`/skill:pickup-issue 251`. (claude would run it as `/pickup-issue 251`.)
 
 ## The loop
 
@@ -90,9 +90,10 @@ for a worker ends your turn; the `[relay]` message with its answer starts the ne
 End every turn with one status line, for example: `Step 4: rev reviews. I wait for its
 answer.`
 
-1. **Pick up.** Hire `dev`. Send the rules block, then `/pickup-issue <n>`.
+1. **Pick up.** Hire `dev`. Send the rules block, then `/skill:pickup-issue <n>`.
 2. **Gate 1, if needed.** If dev's report has a choice the person must make, **stop**
-   (see "How to stop"). When the person answers, pass the answer to dev. If there is no
+   (see "How to stop"). Also stop if the plan touches a safety file (see "Safety
+   files"). When the person answers, pass the answer to dev. If there is no
    such choice, send: `go. Build it and run the full gate. Commit on your branch when
    the gate passes. Do not push.`
 3. **Check the build.** Dev's report must show a commit and a passing gate (`npm run
@@ -109,43 +110,48 @@ answer.`
    commit.` If dev says a fix is wrong, ask for its evidence once. If they still
    disagree: stop.
 7. **PR.** Send dev: `push the branch and create the PR (Closes #<n>). Then comment
-   "@claude review" on the PR.` Note the PR number.
+   "@claude review" on the PR, wait for the bot to finish (below), and report.` Note
+   the PR number. Dev waits for the bot inside its own turn, so you stay free for the
+   person.
 8. **Bot review, at most 3 rounds.** Each round:
-   1. Wait for the bot (below), then read its comment yourself.
+   1. Dev's `[relay]` report says the bot finished. Read the bot's comment yourself:
+      `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login ==
+      "claude")] | last | .body'`.
    2. **Only nits: end the review loop.** When every finding is a nit (style, wording,
       an optional idea, or "no change needed") and none is a bug, a missing test or a
       wrong doc, do not send `/address-comment`. Go to step 9. If you are not sure that
       a finding is a nit, treat it as a real finding.
-   3. Otherwise send dev: `/address-comment <pr> the latest comment`.
+   3. Otherwise send dev: `/skill:address-comment <pr> the latest comment`.
    4. If dev pushed fixes and this was round 1 or 2, send: `comment "@claude review the
-      update" on the PR.` and start the next round. If dev pushed nothing, go to step 9.
+      update" on the PR, wait for the bot to finish (below), and report.` and start the
+      next round. If dev pushed nothing, go to step 9.
 
    After round 3, go to step 9, even when dev pushed fixes. Never start a fourth round.
    Say in the final report that the last fixes had no bot review.
 9. **Gate 2: hand over.** Stop with the final report. Never merge.
 
-**Waiting for the bot.** The bot is not a room worker, so no relay message comes for
-it. You wait for it inside your turn; it takes about 4 minutes. It posts one comment by
-`claude` per round and edits it when done: done means the body starts with
-`**Claude finished`.
+**Waiting for the bot** is dev's job. When you ask dev to comment `@claude review`, add
+this to the message, with `<pr>` filled in:
 
-Before you ask for a round, note how many `claude` comments the PR has (`N`). Then wait
-for comment `N + 1` to be finished. The command must not start with `sleep`; Claude Code
-blocks that.
-
-```bash
-n=<N>
-for i in $(seq 9); do
-  c=$(gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")]')
-  if [ "$(jq length <<<"$c")" -gt "$n" ] && jq -e 'last | .body | startswith("**Claude finished")' <<<"$c" >/dev/null; then
-    echo done; break
-  fi
-  sleep 60
-done
+```text
+How to wait for the bot: before you comment, count the bot's comments:
+  gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | length'
+Call that N. After you comment, check every 60 seconds until comment N + 1 exists and
+its body starts with "**Claude finished". Give up after 20 minutes and say so.
 ```
 
-Run it again if it ends without `done`. If no finished comment comes in 20 minutes:
-stop.
+If dev says the bot did not finish in 20 minutes: stop.
+
+## Safety files
+
+These files hold the client's safety rules: `protocol/agent.ts` (the path guard and
+the `toolCallId` map), `core/policy.ts`, `core/permissions.ts`, and the rules in
+`AGENTS.md`. **A change to any of them needs the person's yes.**
+
+- At gate 1: when dev's plan names one of them, stop and ask.
+- After each `[relay]` answer from a worker that changed code, check the branch:
+  `git -C <dev's worktree> diff --name-only origin/master...HEAD`. When a safety file
+  shows up that the person has not approved yet, stop and ask before the next step.
 
 ## How to stop and ask the person
 
@@ -155,6 +161,7 @@ not send anything to a worker while you wait for the person.
 Stop when:
 
 - a worker says the person must choose (gate 1);
+- a safety file changes, and the person has not said yes to it;
 - a worker wants work outside the issue's title or its scope comment;
 - the same step fails twice, or dev and rev still disagree;
 - `room.sh` refuses something twice, or a worker is `exited` or `killed`;
@@ -168,7 +175,8 @@ the worker's recommendation, and the exact reply that lets you go on.
 
 - The PR link, its CI result and the number of bot rounds.
 - One line for each step: who did it and the result.
-- What the person does now: `@dev merge close`, or read the PR first.
+- What the person does now: read the PR, then `@dev merge close`. Say how many commits
+  it has; with more than one, recommend a squash merge.
 - **Spike notes.** Every problem you had: with `room.sh`, the API, a worker, waiting, or
   this file. Write the command and what went wrong. This is the main output of the
   spike.
