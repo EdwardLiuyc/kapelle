@@ -3216,9 +3216,18 @@ Four rules hold for every M8 story:
   token file. The docs keep saying so.
 - **No new runtime dependency.**
 
+**The contract.** Everything under `/rooms` is stable since 1.8 (`docs/CLIENT-API.md`), so
+each story that adds to it takes the next minor version, as M5 and M6 did: M8-1 (`from`),
+M8-2 (`kind`, the reply and the copy), M8-3 (the `reviewer` role, R44), M8-6
+(`POST /rooms/:id/stop`), M8-7 (`PATCH /rooms/:id`, `turn_cap`), M8-8
+(`_client_orchestrator_waiting`) and M8-9 (`POST /rooms/:id/decisions`). Each one updates
+`API_VERSION` and `docs/CLIENT-API.md` together.
+
 **M8-1 · Who sent a message · S · needs nothing**
-`POST /rooms/:id/agents/:agentId/messages` and `POST /rooms/:id/messages` take an optional
-`from`: the id of the room's orchestrator (R44). No `from` means the person. There is
+`POST /rooms/:id/agents/:agentId/messages` takes an optional `from`: the id of the room's
+orchestrator (R44). `POST /rooms/:id/messages` takes none: it goes to the orchestrator,
+and the orchestrator never sends to itself, so it keeps refusing `from` as an unknown
+field (M5-3). No `from` means the person. There is
 one operator and one token (K6), so the daemon trusts `from` as it trusts the rest of the
 body. It refuses, with `400`, a `from` that is not the room's orchestrator, and a message
 from the orchestrator to itself. Only the daemon sends a message from a worker: its
@@ -3228,9 +3237,9 @@ the message. The harness gets one extra first line, `[from <name>]`, only when a
 participant sent it, so a message with no such line is the person's. The log keeps the
 text without that line. Both screens draw `po → dev` for a participant's message, and
 `you → dev` as today. The contract gets a minor version.
-*Done when* tests cover `from` on both routes, both refusals, the log fields, the first
-line the harness gets (a `mock-agent.mjs` path that echoes its prompt), and both
-screens' labels.
+*Done when* tests cover `from` on the nested route, both refusals, `from` refused as an
+unknown field on the room-wide route, the log fields, the first line the harness gets (a
+`mock-agent.mjs` path that echoes its prompt), and both screens' labels.
 
 **M8-2 · A reply to the sender, a copy to the orchestrator · M · needs M8-1**
 When a turn ends and its message came `from` a participant, the daemon sends the turn's
@@ -3239,20 +3248,20 @@ with how the turn ended and its number of tool calls. The rest is the turn's ans
 text after its last tool call, or the last text before it when that is empty. This is
 the daemon's first text kept per turn for a room, so it is small on purpose: the text
 since the last tool call and the last block before it, each cut at 64 KiB, and dropped
-when the turn ends, is cancelled, or its harness exits or is killed. (`core/result.ts`
-reads a run task's text the same way, from its events.) When the person
-messaged a worker, and the room has an orchestrator that is not that worker, the
-orchestrator gets one copy when the turn ends: `[copy] you → <name>`, the person's
+when the turn ends, is cancelled, or its harness exits or is killed. A run task already
+keeps its text from the same events (`transcript` and `prose` in `core/run.ts`). When
+the person messaged a worker, and the room has an orchestrator that is not that worker,
+the orchestrator gets one copy when the turn ends: `[copy] you → <name>`, the person's
 message, then the answer. **A reply or a copy never causes another one:**
 `_client_user_message` marks it with `kind: "reply"` or `kind: "copy"`, and a turn that
-starts from one sends nothing when it ends. A reply and a copy carry `from` (the worker),
-and their own first line takes the place of M8-1's. A turn that ends with an error still
-sends its reply, with the error. A reply to a participant that was removed is dropped,
-and the daemon's log says so. A cut answer says it was cut. Each queued message gets its
-own reply, in order. **A reply or a copy is never refused for a full queue:** it does not
-count toward R41's 16, because a dropped reply would stall the loop with nobody waiting
-on anything. It cannot pile up: each one comes from one finished turn. This replaces the
-spikes' `relay.sh`.
+starts from one sends nothing when it ends. A reply and a copy carry `from` (the
+worker), and their own first line takes the place of M8-1's. A turn that ends with an
+error still sends its reply, with the error. A reply to a participant that was removed
+is dropped, and the daemon's log says so. A cut answer says it was cut. Each queued
+message gets its own reply, in order. **A reply or a copy is never refused for a full
+queue:** it does not count toward R41's 16, because a dropped reply would stall the loop
+with nobody waiting on anything. It cannot pile up: each one comes from one finished
+turn. This replaces the spikes' `relay.sh`.
 *Done when* tests with `mock-agent.mjs` cover a reply to the sender, a copy for a person's
 message and nothing else, no reply from a reply's or a copy's turn, an error turn, a
 removed sender, the cut, the buffer dropped on a cancel and an exit, a reply delivered
@@ -3262,12 +3271,17 @@ order.
 **M8-3 · `kapelle room` for an orchestrator · S · needs M8-1**
 `kapelle room info | add | send | ff | diff | remove`, from the spikes' `room.sh`; `add` and
 `remove` match the screens' `/add` and `/remove`. **Each verb finds its room and its
-sender from the folder it runs in:** a participant's checkout is
-`<state>/wt/<roomId>/<participantId>`, and the daemon knows whose it is. So `send` sets
-`from` by itself, and no new environment variable is needed: the daemon strips every
+sender from the folder it runs in.** The CLI does it, with no new route: git's common
+directory of the checkout gives the main repository, `stateDirFor` gives its state
+folder, and a checkout under `<state>/wt/<roomId>/<participantId>` names both ids. `GET
+/rooms/:id` then confirms that the participant exists and owns that checkout. So `send`
+sets `from` by itself, and no new environment variable is needed: the daemon strips every
 `KAPELLE_*` variable from a harness (M2-8), because one could hold the token, and that
 rule stays whole. `--room` and `--as` override. `send` takes the text from stdin or an
 argument and returns at once.
+`send`, `add`, `ff` and `remove` are the orchestrator's: from a worker's checkout, `send`
+gets the daemon's `400` (D2), and the others give orders the loop never asks a worker
+for. `info` and `diff` only read, so any participant may run them.
 There is no `wait`, and no verb reads the stream: M8-2's reply is the answer. `info` shows,
 for each busy worker, who sent the message it works on. The verbs use `client/daemon.ts`,
 like every other daemon verb. R44's role list gains `reviewer`, a label like the others.
@@ -3307,12 +3321,13 @@ the person, and one with a choice stops and goes on after the person answers `de
 directly.
 
 **M8-5 · `kapelle loop`: recipes and the start · S · needs M8-4**
-`kapelle loop <recipe> <task> ["<note>"] [--agent <harness>] [--cwd dir]`, and `/loop` in
-both screens. It finds the recipe (D10), opens a room titled `<recipe>-<task>`, adds the
-orchestrator in `auto` (`--agent`, claude by default; the recipe is not read by kapelle,
-so its harness is a flag), and sends the first message: the skill, the recipe, the task and the
-note (D12). `kapelle loop list` shows each recipe, where it lives, and which one wins a
-name. A missing recipe is refused by name, with the folders it looked in.
+`kapelle loop <recipe> <task> ["<note>"] [--agent <harness>] [--cwd dir]`, and `/loop`
+in both screens. It finds the recipe (D10), opens a room titled `<recipe>-<task>`, adds
+the orchestrator in `auto` (`--agent`, claude by default; the recipe is not read by
+kapelle, so its harness is a flag), and sends the first message: the skill, the recipe,
+the task and the note (D12). `kapelle loop list` shows each recipe, where it lives, and
+which one wins a name. A missing recipe is refused by name, with the folders it looked
+in.
 *Done when* tests cover the lookup order, the list, a missing recipe, the room's title, the
 first message's four parts in order, `--agent`, and `/loop` in both screens.
 
@@ -3372,9 +3387,9 @@ orchestrator, so each is its own issue:
   suite fails from a room worktree.
 - **This repository's own loop.** Its recipe, `.kapelle/loops/fix-issue.md`, with a
   worker rule to run the full suite once per code change (it ran three times on
-  unchanged code in spike 1), and two changes to its skills: `review-local` asks the person nothing the loop decides, and
-  names the branch's commit, not its snapshot's; `pickup-issue` posts its scope comment
-  before the build starts.
+  unchanged code in spike 1), and two changes to its skills: `review-local` asks the
+  person nothing the loop decides, and names the branch's commit, not its snapshot's;
+  `pickup-issue` posts its scope comment before the build starts.
 
 ---
 
