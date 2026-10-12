@@ -15,9 +15,9 @@ only decides?
 
 ## The setup
 
-Nothing in kapelle changed. The spikes used three files on a local branch,
-`spike/issue-loop`, in the worktree `/home/edward/src/kapelle-spike`. The branch is not
-pushed, and it will not be merged.
+Nothing in kapelle changed. The spikes used three files in
+`.agent/skills/issue-loop/` on the branch `spike/issue-loop`. The branch is on GitHub for
+reference, one commit per spike, and it will not be merged.
 
 - `SKILL.md`: the loop for the orchestrator, `po`. It never edits, builds, tests, commits,
   pushes or comments; workers do all of that.
@@ -45,6 +45,9 @@ GitHub's bot reviewed each PR when a worker commented `@claude review`.
 | Bot rounds | 2 | 3 | 3 |
 | Person messages before the hand-over | 0 | 0 | 2 (one to `po`, one to `dev`) |
 | Relayed answers | none | 10 of 10 | 12 of 12 |
+
+The three rooms were deleted after the runs. Their event logs, which hold every number
+above, are not in the repository; the person keeps a copy outside it.
 
 All three PRs merged after the person read them. In all three runs, `po` ran only reads,
 `room.sh` and `gh` reads; every write was a worker's. No worker left its own checkout, and
