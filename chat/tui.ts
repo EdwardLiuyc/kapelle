@@ -18,7 +18,8 @@
  * row per participant with a question or a stall (`chat/tui/banner.ts`),
  * and the terminal's bell when one starts to wait. No desktop pop-up: too
  * noisy (decided 2026-10-05, #50). A busy agent of the open room gets a row
- * too, and while one shows, the screen redraws once a second (M7-1).
+ * too, and while one shows, the screen redraws once a second (M7-1); the
+ * sidebar's busy timers need the same tick, in any room (M7-3).
  *
  * **The status line** (M7-1): the target and its mode on the left, its
  * `ctx` and cost on the right, and the key hints between, which drop from
@@ -55,6 +56,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { type RouteCommand, runCommand } from "../client/command.ts";
 import type {
+  Diff,
   MessageAccepted,
   RoomEventLine,
   RoomListEntry,
@@ -104,7 +106,9 @@ import {
 import { transcriptParts } from "./tui/transcript.ts";
 import {
   activity,
+  anyBusy,
   bell,
+  busyIn,
   type Composer,
   dismissed,
   edited,
@@ -312,17 +316,56 @@ function chatTui(
     },
     invalidate: () => statusText.invalidate(),
   };
-  /** The once-a-second redraw, while an activity row shows a busy agent. */
+  /** The once-a-second redraw (M7-1): an activity row with a busy agent,
+   *  or a busy agent's sidebar timer in any room while the sidebar is
+   *  shown (M7-3). */
+  const moving = () =>
+    ticks(activity(rooms, view).rows) ||
+    busyIn(rooms, view.roomId) ||
+    (shown && anyBusy(rooms));
   let timer: ReturnType<typeof setInterval> | undefined;
   const tick = () => {
-    if (timer || !ticks(activity(rooms, view).rows)) return;
+    if (timer || !moving()) return;
     timer = setInterval(() => {
-      if (!ticks(activity(rooms, view).rows)) {
+      if (!moving()) {
         clearInterval(timer);
         timer = undefined;
       }
       tui.requestRender();
     }, 1000);
+  };
+
+  /** The open thread's changed files (M7-3): the last
+   *  `GET .../diff?against=base` reply. Only the open thread's block is
+   *  read, so only it is kept; the entry goes when the view leaves it. */
+  let changeEntry: { key: string; diff: Diff } | undefined;
+  const changeKey = (roomId: string, participantId: string) =>
+    `${roomId} ${participantId}`;
+  /** The open thread's key, or "" in a room timeline. */
+  const openChangeKey = () => {
+    const id = view.participantId;
+    return id ? changeKey(view.roomId, id) : "";
+  };
+
+  /** Loads a thread's changed-files block (M7-3): one request, on the
+   *  thread's open and on each of its turns' end. A failure, `409 no_diff`
+   *  included, leaves no block; only the newest reply for the open thread
+   *  wins, so two loads cannot land out of order. */
+  let changeSeq = 0;
+  const loadChanges = async (roomId: string, participantId: string) => {
+    const key = changeKey(roomId, participantId);
+    const seq = ++changeSeq;
+    try {
+      const res = await agentDiff(d, roomId, participantId, "base");
+      if (seq !== changeSeq || key !== openChangeKey()) return;
+      changeEntry = res.ok
+        ? { key, diff: { ...res.body, text: cleanLines(res.body.text) } }
+        : undefined;
+    } catch {
+      // The daemon went away mid-request: no block, as for a refusal.
+      if (seq === changeSeq && key === openChangeKey()) changeEntry = undefined;
+    }
+    tui.requestRender();
   };
   /** The one-line bar under the composer (M6-11a, 4a). Empty until the
    *  room set has something to show; `setWhere` fills it. */
@@ -407,6 +450,36 @@ function chatTui(
     setStatus: () => setStatus(),
     gutter: () => (shown ? SIDEBAR_WIDTH : 2),
   });
+  /** Puts a diff in the side pane (M4-6), with the keys that switch
+   *  `against` and reload it. `at` jumps to a file's header line (M7-3).
+   *  `body.text` must already be `cleanLines`d (#229). */
+  const showDiff = (
+    who: { id: string; name: string },
+    against: "head" | "base",
+    body: Diff,
+    at?: number,
+  ) => {
+    const other = against === "head" ? "base" : "head";
+    side.fill(
+      {
+        title: `${who.name} · ${against === "head" ? "uncommitted" : "whole branch"}`,
+        diff: body,
+        keys: [
+          {
+            key: "b",
+            hint: `b ${other === "head" ? "uncommitted" : "whole branch"}`,
+            run: () => void changes(who, other).catch(gone),
+          },
+          {
+            key: "r",
+            hint: "r reload",
+            run: () => void changes(who, against).catch(gone),
+          },
+        ],
+      },
+      at,
+    );
+  };
   const box = panelParts({
     d,
     fresh: set.fresh,
@@ -439,17 +512,39 @@ function chatTui(
     done: () => done,
     prefill: () => prefill,
   });
-  const { sidebar, strip } = sidebarParts({
-    rooms,
-    view: () => view,
-    toggle: () => toggle(),
-    open: (next) => open(next),
-  });
   const attention = bannerPart({
     rooms,
     view: () => view,
     open: (next) => open(next),
     question: (id) => question(id),
+  });
+  /** The rows the sidebar really has (M7-3): the terminal, less the parts
+   *  under the row — the banner, asked for its drawn height; the Spacer(1)
+   *  and the one-line status (the `2`); the editor; and the where bar. The
+   *  two `render` calls must stay side-effect-free: this runs inside the
+   *  sidebar's own render. */
+  const sidebarRows = () => {
+    const width = process.stdout.columns || 80;
+    const rows = process.stdout.rows || 24;
+    const banner = attention.render(width).length;
+    const editorRows = editor.render(width).length;
+    return Math.max(1, rows - banner - 2 - editorRows - (whereText ? 1 : 0));
+  };
+  const { sidebar, strip } = sidebarParts({
+    rooms,
+    view: () => view,
+    toggle: () => toggle(),
+    open: (next) => open(next),
+    height: sidebarRows,
+    changes: () =>
+      changeEntry?.key === openChangeKey() ? changeEntry.diff : undefined,
+    openFile: (f) => {
+      const id = view.participantId;
+      const r = id ? rooms.get(view.roomId) : undefined;
+      const entry = changeEntry;
+      if (!id || !r || !entry || entry.key !== openChangeKey()) return;
+      showDiff({ id, name: nameOf(r.state, id) }, "base", entry.diff, f.line);
+    },
   });
 
   const layout = screenLayout({
@@ -538,7 +633,7 @@ function chatTui(
     if (flash) parts.push(flash.startsWith("!") ? yellow(flash) : flash);
     if (!shown) {
       const marked = [...rooms.values()].filter(
-        ({ state }) => roomMark(state).circle === "●",
+        ({ state }) => roomMark(state).waits,
       ).length;
       if (marked) parts.push(`● ${marked} room${marked > 1 ? "s" : ""}`);
     }
@@ -617,6 +712,8 @@ function chatTui(
     if (box.panel) hidePanel();
     view = next;
     flash = "";
+    // A thread shows the files its agent changed (M7-3).
+    if (next.participantId) void loadChanges(next.roomId, next.participantId);
     const r = rooms.get(next.roomId);
     compose(opened(r?.state, next, editor.getText(), prefill));
     // The person looks at the view: its lines are seen.
@@ -670,6 +767,16 @@ function chatTui(
     if (shows(view, roomId, line.participantId)) {
       seen(r.state, line.participantId);
       if (e) draw(r.state, e);
+    }
+    // The open thread's files reload when its turn ends (M7-3). An exit
+    // ends the work too, and R46 is why its files matter.
+    if (
+      e &&
+      e.participantId === view.participantId &&
+      roomId === view.roomId &&
+      (e.type === "turn_ended" || e.type === "exited")
+    ) {
+      void loadChanges(roomId, e.participantId);
     }
     // A rename moves an untouched thread pre-fill to the new name.
     const c = renamed(r.state, roomId, view, editor.getText(), prefill);
@@ -914,22 +1021,9 @@ function chatTui(
         setStatus();
         return false;
       }
-      const other = against === "head" ? "base" : "head";
-      side.fill({
-        title: `${who.name} · ${against === "head" ? "uncommitted" : "whole branch"}`,
-        diff: { ...res.body, text: cleanLines(res.body.text) },
-        keys: [
-          {
-            key: "b",
-            hint: `b ${other === "head" ? "uncommitted" : "whole branch"}`,
-            run: () => void changes(who, other).catch(gone),
-          },
-          {
-            key: "r",
-            hint: "r reload",
-            run: () => void changes(who, against).catch(gone),
-          },
-        ],
+      showDiff(who, against, {
+        ...res.body,
+        text: cleanLines(res.body.text),
       });
       // A menu close can open a waiting question: that box keeps the keys,
       // and the view lets go of them, so the composer gets them after it.

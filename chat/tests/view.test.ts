@@ -9,8 +9,10 @@ import type { ParticipantDto, RoomDto } from "../../client/contract.ts";
 import { type Entry, newRoomState, type RoomState } from "../../client/room.ts";
 import {
   activity,
+  anyBusy,
   banner,
   bell,
+  busyIn,
   clock,
   colourOf,
   dismissed,
@@ -419,7 +421,7 @@ test("activity: a busy row for the open room only, a wait from any room, one row
   ]);
 });
 
-test("activity: four rows, then three and +n more; a tick only while a busy row shows", () => {
+test("activity: four rows, then three and +n more; ticks follows a busy row", () => {
   const r1 = room(["a", "b", "c", "d", "e"]);
   const all = rooms(["r1", r1]);
   assert.deepEqual(activity(all, { roomId: "r1" }), { rows: [], more: 0 });
@@ -438,8 +440,32 @@ test("activity: four rows, then three and +n more; a tick only while a busy row 
   assert.equal(
     ticks(activity(all, { roomId: "r2" }).rows),
     false,
-    "busy in another room: no tick",
+    "no busy activity row there",
   );
+});
+
+test("anyBusy sees a busy agent in any room, for the sidebar timers", () => {
+  const r1 = room(["a"]);
+  const r2 = room(["b"]);
+  const all = rooms(["r1", r1], ["r2", r2]);
+  assert.equal(anyBusy(all), false, "no busy agent");
+  busy(r2, "b");
+  assert.equal(
+    anyBusy(all),
+    true,
+    "another room's sidebar timer needs the tick",
+  );
+});
+
+test("busyIn names a busy room, for the open room's transcript spinner", () => {
+  const r1 = room(["a"]);
+  const r2 = room(["b"]);
+  const all = rooms(["r1", r1], ["r2", r2]);
+  assert.equal(busyIn(all, "r1"), false, "quiet room");
+  assert.equal(busyIn(all, "gone"), false, "unknown room");
+  busy(r2, "b");
+  assert.equal(busyIn(all, "r2"), true, "the busy room");
+  assert.equal(busyIn(all, "r1"), false, "the other room");
 });
 
 test("a timer's text", () => {

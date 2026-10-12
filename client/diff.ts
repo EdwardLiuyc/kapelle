@@ -6,7 +6,8 @@
  * **Any `git diff` text**, not only the daemon's: a question's edit, an
  * agent's checkout (`GET /rooms/:id/agents/:agentId/diff`), or a
  * fast-forward's preview (M6-11a). The counts come from the daemon's `Diff`,
- * taken before it cut the text.
+ * taken before it cut the text; `changesOf` counts one file at a time for the
+ * sidebar, and the file the cut goes through gets none (M7-3).
  *
  * `agentDiff` is the one call; the rest does no I/O.
  */
@@ -57,6 +58,43 @@ export function filesOf(lines: readonly string[]): DiffFile[] {
 
 /** A file's path with its tag: `notes.md (new)`. */
 export const named = (f: DiffFile) => (f.tag ? `${f.path} (${f.tag})` : f.path);
+
+/** One change for the sidebar's changed-files block (M7-3). */
+export interface FileChange extends DiffFile {
+  /** Git's tag as one letter: `A` new, `D` deleted, else `M`. */
+  letter: "A" | "M" | "D";
+  /** The `+` and `-` lines inside a hunk. Absent for the file the 512 KB
+   *  cut goes through: its counts would be too low. */
+  added?: number;
+  removed?: number;
+}
+
+/** Every file of `lines`, in order, with its letter and its counts (M7-3).
+ *  The counts follow `capDiff`: only a `+` or `-` line inside a hunk. The
+ *  last file is count-less when the text ends with `capDiff`'s cut line. */
+export function changesOf(lines: readonly string[]): FileChange[] {
+  const files = filesOf(lines);
+  const cut = /^… \d+ more lines$/.test(lines.at(-1) ?? "");
+  return files.map((f, i) => {
+    const end = files[i + 1]?.line ?? lines.length;
+    let hunk = false;
+    let added = 0;
+    let removed = 0;
+    for (const line of lines.slice(f.line, end)) {
+      if (line.startsWith("@@")) hunk = true;
+      else if (hunk && line.startsWith("+")) added += 1;
+      else if (hunk && line.startsWith("-")) removed += 1;
+    }
+    const letter = f.tag === "new" ? "A" : f.tag === "deleted" ? "D" : "M";
+    const change: FileChange = { path: f.path, line: f.line, letter };
+    if (f.tag) change.tag = f.tag;
+    if (!(cut && i === files.length - 1)) {
+      change.added = added;
+      change.removed = removed;
+    }
+    return change;
+  });
+}
 
 /**
  * The question box's one line (decided 2026-10-05, #204):

@@ -4711,7 +4711,14 @@ test("chat.ts on a real terminal follows a second room off screen, switches to i
   assert.equal(sent.status, 202);
   // Answered while the first room is on screen: its row marks it, and the
   // count is the answer and the turn end nobody has seen.
-  await seen("● bob 2");
+  for (const until = Date.now() + 20_000; ; ) {
+    const row = plainText(out())
+      .split("\n")
+      .find((l) => /● bob .*\s2 │/.test(l));
+    if (row) break;
+    assert.ok(Date.now() < until, `bob's unread row never came: ${out()}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
   // Rows: room A, its agent, room B, bob. `alt+down` and two `ctrl+n`s open
   // bob's thread.
   await press("\x1b[1;3B\x0e\x0e", "→ bob");
@@ -4844,18 +4851,12 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
     );
     assert.equal(sent.status, 202, sent.body.error?.message);
   }
-  // Yellow is a stall, magenta a question: the row's own name is painted,
-  // and each off-screen participant shows its busy mark and unread count.
-  await screen.seen("\x1b[33m● stuck");
-  await screen.seen("\x1b[35m● asker");
-  assert.ok(
-    screen.out().includes("\x1b[33m● stuck\x1b[39m … 1"),
-    "the stall row is yellow, busy and has an unread count",
-  );
-  assert.ok(
-    screen.out().includes("\x1b[35m● asker\x1b[39m … 5"),
-    "the question row is magenta, busy and has an unread count",
-  );
+  // Yellow is a stall, magenta a question: the mark and the name are one
+  // painted piece (M7-3), and a busy row shows its timer at the right.
+  await screen.seen("\x1b[33m! stuck");
+  await screen.seen("\x1b[35m? asker");
+  assert.match(plainText(screen.out()), /! stuck \S+ +\d+[sm]/);
+  assert.match(plainText(screen.out()), /\? asker \S+ +\d+[sm]/);
   // Hidden, the sidebar leaves a count of the rooms that need the person.
   await screen.press("\x14", "● 2 rooms");
   screen.child.stdin.write("\x03");
@@ -5534,6 +5535,314 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
   screen.child.stdin.write("\r");
   await new Promise((ok) => setTimeout(ok, 500));
   assert.ok(!posted.includes("/permissions/q3"), posted.join(" "));
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+/** One changed file, for the M7-3 fake-daemon tests. */
+const CHANGES_TEXT = [
+  "diff --git a/cli.ts b/cli.ts",
+  "@@ -1 +1,2 @@",
+  "-old",
+  "+new",
+  "+more",
+].join("\n");
+
+/** Two changed files, so a click on the second proves the jump (M7-3). */
+const TWO_CHANGES_TEXT = [
+  ...CHANGES_TEXT.split("\n"),
+  "diff --git a/other.ts b/other.ts",
+  "new file mode 100644",
+  "@@ -0,0 +1 @@",
+  "+x",
+].join("\n");
+
+/**
+ * A fake daemon with one room `room-changes` and one participant `p1`
+ * (M7-3): the diff route counts its calls, and the test can write more
+ * event lines into the one stream. `files` is the route's count, `failAt`
+ * refuses that call, `holdAt` holds that call's reply until `release()`,
+ * and `later` is what calls after the first answer with.
+ */
+async function fakeChangesRoom(
+  t: TestContext,
+  text: string,
+  {
+    files = 1,
+    failAt,
+    holdAt,
+    later,
+  }: {
+    files?: number;
+    failAt?: number;
+    holdAt?: number;
+    later?: { text: string; files: number };
+  } = {},
+) {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const roomId = "room-changes";
+  const room = {
+    id: roomId,
+    cwd: process.cwd(),
+    status: "active",
+    title: "change room",
+    updatedAt: new Date().toISOString(),
+    participants: [
+      {
+        id: "p1",
+        name: "ann",
+        harness: "mock-agent",
+        role: "orchestrator",
+        mode: "ask",
+        status: "busy",
+        notices: [],
+      },
+    ],
+  };
+  let stream: ServerResponse | undefined;
+  const diffs: string[] = [];
+  const held: (() => void)[] = [];
+  const event = (seq: number, update: object) =>
+    `id: ${seq}\ndata: ${JSON.stringify({ seq, roomId, participantId: "p1", update })}\n\n`;
+  const fake = createServer((req, res) => {
+    const path = req.url ?? "";
+    if (path === "/version") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ apiVersion: API_VERSION }));
+      return;
+    }
+    if (path === "/harnesses") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("[]");
+      return;
+    }
+    if (path === "/rooms") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify([room]));
+      return;
+    }
+    if (path === `/rooms/${roomId}`) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(room));
+      return;
+    }
+    if (path === `/rooms/${roomId}/events`) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      stream = res;
+      res.write(
+        event(1, {
+          sessionUpdate: "_client_participant_added",
+          name: "ann",
+          harness: "mock-agent",
+          role: "orchestrator",
+          mode: "ask",
+        }),
+      );
+      return;
+    }
+    if (path.startsWith(`/rooms/${roomId}/agents/p1/diff`)) {
+      diffs.push(path);
+      const call = diffs.length;
+      if (call === failAt) {
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: { code: "no_diff", message: "no branch to compare with" },
+          }),
+        );
+        return;
+      }
+      const body =
+        call > 1 && call !== holdAt && later ? later : { text, files };
+      const answer = () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ...body, added: 2, removed: 1 }));
+      };
+      if (call === holdAt) {
+        held.push(answer);
+        return;
+      }
+      answer();
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({ error: { code: "no_route", message: `no ${path}` } }),
+    );
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${roomId}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  return {
+    screen,
+    diffs,
+    event,
+    write: (line: string) => stream?.write(line),
+    release: () => {
+      for (const answer of held.splice(0)) answer();
+    },
+  };
+}
+
+test("chat.ts on a real terminal loads the changed files once per turn end or exit, never per chunk", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write } = await fakeChangesRoom(
+    t,
+    CHANGES_TEXT,
+  );
+  // The room's timeline opens first; alt+down opens ann's thread, which
+  // loads the files once.
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  await screen.seen("changed files");
+  assert.equal(diffs.length, 1, diffs.join("\n"));
+  assert.match(diffs[0] ?? "", /against=base/);
+  // A chunk is not a turn end: two of them load nothing.
+  write(
+    event(2, { sessionUpdate: "_client_user_message", text: "go", turn: 1 }),
+  );
+  write(
+    event(3, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "one" },
+    }),
+  );
+  write(
+    event(4, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: " two" },
+    }),
+  );
+  await screen.seen("one two");
+  assert.equal(diffs.length, 1, "a chunk loaded the files");
+  write(
+    event(5, { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" }),
+  );
+  for (const until = Date.now() + 20_000; diffs.length < 2; ) {
+    assert.ok(
+      Date.now() < until,
+      `no diff call on the turn end: ${diffs.join("\n")}`,
+    );
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.match(diffs[1] ?? "", /against=base/);
+  // An exit ends the work too: one more call, not a second per turn end.
+  write(event(6, { sessionUpdate: "_client_harness_exited", pid: 1 }));
+  for (const until = Date.now() + 20_000; diffs.length < 3; ) {
+    assert.ok(
+      Date.now() < until,
+      `no diff call on the exit: ${diffs.join("\n")}`,
+    );
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.match(diffs[2] ?? "", /against=base/);
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts keeps the newest changed files when a crash's two loads land out of order", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write, release } = await fakeChangesRoom(
+    t,
+    CHANGES_TEXT,
+    { holdAt: 2, later: { text: TWO_CHANGES_TEXT, files: 2 } },
+  );
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  await screen.seen("changed files");
+  assert.equal(diffs.length, 1, diffs.join("\n"));
+  // A crash reports its exit before the turn it broke ends. Send the exit,
+  // wait for its held request, then send the turn end: the older request
+  // arrives before the newer one, so the guard sees a known order.
+  write(event(2, { sessionUpdate: "_client_harness_exited", pid: 1 }));
+  for (const until = Date.now() + 20_000; diffs.length < 2; ) {
+    assert.ok(Date.now() < until, `no held diff call: ${diffs.join("\n")}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  write(event(3, { sessionUpdate: "_client_turn_ended", stopReason: "error" }));
+  for (const until = Date.now() + 20_000; diffs.length < 3; ) {
+    assert.ok(Date.now() < until, `no third diff call: ${diffs.join("\n")}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  await screen.seen("A other.ts");
+  // The held, older reply lands last and must not replace the newer block.
+  release();
+  await new Promise((ok) => setTimeout(ok, 500));
+  const shown = () => [...screenRows(screen.out()).values()].join("\n");
+  assert.match(
+    shown(),
+    /A other\.ts/,
+    "the older reply replaced the newer one",
+  );
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal opens a clicked changed file in the side view", {
+  skip: noPty,
+}, async (t) => {
+  const { screen } = await fakeChangesRoom(t, TWO_CHANGES_TEXT, { files: 2 });
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  await screen.seen("changed files");
+  const row = rowOf(screen.out(), /A other\.ts/);
+  assert.ok(row > 0, screen.out());
+  // A click on the second file's row opens the side pane there, not the top.
+  await screen.press(
+    `\x1b[<0;6;${row}M\x1b[<0;6;${row}m`,
+    "whole branch · other.ts (new) (2 of 2)",
+  );
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal drops the changed-files block when the diff route refuses", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write } = await fakeChangesRoom(
+    t,
+    CHANGES_TEXT,
+    { failAt: 2 },
+  );
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  await screen.seen("changed files");
+  assert.equal(diffs.length, 1, diffs.join("\n"));
+  // The reload after the turn ends gets a 409 no_diff: no block, no stale one.
+  write(
+    event(2, { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" }),
+  );
+  for (const until = Date.now() + 20_000; diffs.length < 2; ) {
+    assert.ok(Date.now() < until, `no diff call: ${diffs.join("\n")}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  // The current screen, not the frames the block was drawn in.
+  const shown = () => [...screenRows(screen.out()).values()].join("\n");
+  for (const until = Date.now() + 20_000; shown().includes("M cli.ts"); ) {
+    assert.ok(Date.now() < until, `the block survived a refusal: ${shown()}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.doesNotMatch(shown(), /changed files/);
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
@@ -7450,6 +7759,8 @@ async function roomToRestart(t: TestContext, cmd: string) {
   };
 }
 
+// The test drives the whole restart flow end to end: its call count is the test.
+// pi-lens-ignore: high-fan-out
 test("a restart lists the room paused, replays it, and a message revives the participant fresh", async (t) => {
   const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
   const sent = await api<RoomReply>(first, "POST", `/rooms/${id}/messages`, {
@@ -7628,7 +7939,7 @@ test("the TUI rides out a restart: it says so, marks the participant paused, and
   assert.equal((await first.done).code, 0);
   const second = await again();
   await screen.seen("the daemon restarted");
-  await screen.seen("paused");
+  await screen.seen("⏸ al");
   await screen.press("hi\r", "previous: (none)");
   await roomIdle(second, id);
   await screen.press("\x03", "rejoin with");
@@ -7657,6 +7968,8 @@ test("a dismissed room comes back dismissed after a restart, and a message is re
   assert.equal(twice.body.error.code, "room_dismissed");
 });
 
+// The test drives the whole room-lifecycle flow: its call count is the test.
+// pi-lens-ignore: high-fan-out
 test("DELETE refuses an active room and uncommitted work, then removes a dismissed room whole (#235)", async (t) => {
   const d = await boot(t);
   const root = await gitRepo(t);
@@ -7728,6 +8041,8 @@ test("a paused room is deleted without a revive, and its open stream ends (#235)
   assert.equal((await api(second, "GET", `/rooms/${id}`)).status, 404);
 });
 
+// The test drives the shutdown flow: its call count is the test.
+// pi-lens-ignore: high-fan-out
 test("a room opened while the daemon shuts down does not come back", async (t) => {
   const runtime = await tempDir(t);
   const state = await tempDir(t);
@@ -7969,6 +8284,8 @@ test("an answer while the daemon is away says so, and the screen stays", {
   assert.equal(r, "open", plainText(screen.out()));
 });
 
+// The test drives a whole pty session: its call count is the test.
+// pi-lens-ignore: high-fan-out
 test("chat.ts on a real terminal folds a tool run at the next note without moving the rows in view, and a click opens and folds it (M7-2)", {
   skip: noPty,
 }, async (t) => {
