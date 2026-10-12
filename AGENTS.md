@@ -13,6 +13,8 @@ history and the measurements live in `docs/`:
 - `docs/FINDINGS.md` — what each harness was measured to do. When this file or a source
   comment names a section such as `§M0-4` or `§Multi-turn`, it is a section of
   `docs/FINDINGS.md`.
+- `docs/ORCHESTRATOR-SPIKES.md` — what three runs of an orchestrator agent showed, the
+  evidence for M8.
 - `docs/STORIES.md` — the work breakdown, with the reason for each decision.
 - `docs/CLIENT-API.md` — the daemon's API, for client authors. `docs/CONFIG.md` — the
   config keys.

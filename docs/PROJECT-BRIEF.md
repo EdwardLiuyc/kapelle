@@ -53,7 +53,10 @@ and the shape they should take will be clearer after P0 runs for a while.
 - Not a replacement for a harness. We don't run model loops or edit files
   ourselves.
 - Not an editor or IDE.
-- Not agent-to-agent messaging (that's A2A's layer, and it's P1 anyway).
+- Not free agent-to-agent messaging (that's A2A's layer). **Amended 2026-10-12 (M8):** in
+  a room, an orchestrator agent may give work to other agents, but only through the
+  daemon, in the room's timeline the person sees. Agents never talk to each other
+  directly, and the person decides every choice.
 - Not a hosted/multi-user product. Local-first, single operator.
 
 ## Prior art to check before building each piece

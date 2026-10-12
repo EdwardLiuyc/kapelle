@@ -686,6 +686,36 @@ piped screen does not change. M7 runs beside M6.
 
 ---
 
+## M8 — Orchestrator
+
+**Added 2026-10-12.** People who run a room for each task drive the same loop by hand
+each time: here, pick up, build, review, PR, bot reviews, merge. M8 lets an orchestrator
+agent drive it. The orchestrator is a team lead: it gives the work to other agents in the
+room, reads their reports and decides the next step, and it does none of the work
+itself. The person decides every choice. **The loop is the person's, not kapelle's:** they
+describe it in a loop recipe, a Markdown file only the orchestrator reads, so the same
+orchestrator serves any repository. Three spikes proved the loop before any code
+(`docs/ORCHESTRATOR-SPIKES.md`). M8 changes the brief's agent-to-agent non-goal: an agent
+may give work to another, but only through the daemon, in the timeline the person sees.
+
+- **M8-1 — who sent a message**: an optional `from` on a message, kept in the log, shown
+  in the timeline, and given to the harness as a first line.
+- **M8-2 — a reply to the sender, a copy to the orchestrator**: when a turn ends, its
+  answer goes back to the participant that sent the message; the orchestrator gets a copy
+  of what the person tells a worker.
+- **M8-3 — `kapelle room`**: the verbs an orchestrator uses to add, send, fast-forward
+  and remove workers.
+- **M8-4 — the orchestrator skill**: generic, shipped with kapelle: the plan and the
+  person's "go", short turns, the step board, the stops, the review rounds.
+- **M8-5 — `kapelle loop`**: find a recipe in the repository or the person's config, open
+  a room, and send the skill, the recipe, the task and a note for this run.
+- **M8-6 to M8-8 — the fence**: a stop button, a cap on the orchestrator's worker turns,
+  and a bell when it waits for the person.
+- **M8-9 — the decision log**: every choice and the person's answer, for the day the
+  orchestrator may decide more by itself.
+
+---
+
 ## Verification
 
 **Offline, every milestone** — `mock-agent` and `hostile-agent` own end-to-end and
@@ -766,17 +796,24 @@ shows the first lines of the diff, that `y` only moves the cursor, and that Ente
 answers. Type a few letters in the `ctrl+o` menu and confirm it narrows to the matching
 rows.
 
+**M8** — write a recipe and start it with `kapelle loop` on an issue with no choice.
+Confirm the orchestrator shows its plan and waits for "go", then reaches the hand-over
+with no other message from the person, runs no write itself, and its messages show as
+`po → dev`. Run it on an issue with a choice, answer `dev` directly, and
+confirm the orchestrator gets the copy, logs the answer, and goes on. Send `/stop` in the
+middle of a turn and confirm no reply wakes the orchestrator. Set a low turn cap and
+confirm the refusal and the bell.
+
 ---
 
 ## Open, deliberately unresolved
 
 The actionable form of these — with triggers and decisions — is `docs/STORIES.md`'s backlog; this section keeps the narrative of *why* each is still open.
 
-- **Scanning the orchestrator's responses for mentions (experimental agent-to-agent).**
-  Named by R43 as the deferred path, carried by M6-8 and the backlog. It is not v1: it
-  reopens `PROJECT-BRIEF.md`'s non-goal and R2/R34c, and it needs its own decision before
-  code. Recorded here so the v1 boundary — the composer parses `@name`, nothing else does
-  — is not mistaken for an oversight.
+- ~~**Scanning the orchestrator's responses for mentions (experimental agent-to-agent).**~~
+  **Closed 2026-10-12 by M8**, which took up the delegation choice with another shape: a
+  message carries its sender, and the daemon sends replies and copies. The composer still
+  parses `@name`, and nothing else parses text. It was named by R43 as the deferred path.
 - ~~A per-harness price table converting tokens to estimated spend.~~ **Unblocked and
   reshaped by M0-5.** All three harnesses name the model they selected (`configOptions`,
   `category: "model"`, on the `session/new` response), so the blocker is gone — but the

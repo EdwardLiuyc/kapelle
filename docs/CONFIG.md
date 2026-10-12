@@ -32,7 +32,7 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | Config | Read by | Not read by |
 | --- | --- | --- |
 | User file | `kapelle daemon start` only | in-process CLI, merge, sweep |
-| Project file | `POST /repos`, `POST /runs` (each request), `kapelle run --file`, `sweepBoot` per repository | plain `kapelle "prompt"`, `merge` |
+| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits), `kapelle run --file`, `sweepBoot` per repository | plain `kapelle "prompt"`, `merge` |
 | `KAPELLE_*` env | daemon start, every run-default resolution, `kapelle run --file` | plain prompt, merge |
 
 ## User file — `$XDG_CONFIG_HOME/kapelle/config.json`
