@@ -3143,12 +3143,16 @@ throwaway skill and two scripts over the room API, and changed nothing in kapell
 
 - **D1. The roles.** The person is the decision maker. The orchestrator is the team lead:
   it plans, gives work, reads reports and decides the next step. It never edits, builds,
-  tests, commits, pushes or comments on a forge. `dev` is the main engineer. There are
+  tests, commits, pushes or comments on a forge. It runs in `auto`, so this is the
+  skill's promise, not a wall: accepted, like every rule in an agent's prompt. `dev` is
+  the main engineer. There are
   one or more reviewers; the recipe says how many. In M8 they review one after the other,
   each from the last one's commits, because a fast-forward only moves in a straight line
   (M6-11a). Reviewers side by side need a merge (M6-6b, the backlog).
 - **D2. Two drivers.** A worker follows an order from the person or from the
-  orchestrator. The person may talk to any agent at any time. **A decision alone is not a
+  orchestrator. The person may talk to any agent at any time. **No other agent sends
+  orders:** a worker never messages another worker, and the daemon refuses a `from` that
+  is not the orchestrator (M8-1). **A decision alone is not a
   "go":** a worker that hears "pick A" records it and waits for an order.
 - **D3. The step board.** The orchestrator gives `dev` the plan of steps in its first
   message. `dev` ends every report with the board, each step marked done, running or not
@@ -3161,12 +3165,16 @@ throwaway skill and two scripts over the room API, and changed nothing in kapell
 - **D5. The sender is information, not a control.** Each message records who sent it,
   and the timeline shows it. A turn the person starts runs in the worker's normal mode:
   a forced `safe` mode was rejected, because a worker could still obey the person, and
-  `safe` holds neither pi nor opencode.
+  `safe` holds neither pi nor opencode. The labels in the text (`[from …]`, `[reply …]`,
+  `[copy]`) are information only: an agent could write a false one, and no fence depends
+  on them.
 - **D6. The orchestrator asks the person every choice.** It decides none alone, not even
   one inside the scope. Later it may learn the person's answers and decide more, one
   kind of choice at a time, with proof (M8-9 and the backlog).
 - **D7. A light fence.** A stop button, a cap on the worker turns the orchestrator
-  starts, and a bell when it waits for the person. A room-scoped token, cost caps and a
+  starts, and a bell when it waits for the person. The daemon writes an event and the
+  chat screen rings its bell, as for a question; no desktop pop-up, as #50 decided for
+  every room wait (`chat/tui.ts`). A room-scoped token, cost caps and a
   separate forge account for agents wait in the backlog, each with a trigger.
 - **D8. An outside review, if the recipe has one.** A recipe may add a review by a
   service, such as a bot that answers a PR comment. The recipe names its trigger, the
@@ -3185,7 +3193,8 @@ throwaway skill and two scripts over the room API, and changed nothing in kapell
   outside review (D8), the protected paths (D9), and rules for every worker. **Only the
   orchestrator reads it**, so kapelle has no recipe format and no validator. Recipes live
   in `<repo>/.kapelle/loops/<name>.md`, shared with the repository's team, and in
-  `~/.config/kapelle/loops/<name>.md`, the person's own for every repository. With the
+  `$XDG_CONFIG_HOME/kapelle/loops/<name>.md` (`~/.config` when it is unset, as for
+  `docs/CONFIG.md`), the person's own for every repository. With the
   same name in both, the repository's wins. A **note** in the start command changes one
   run, and the note wins over the recipe; the file does not change.
 - **D11. The plan, then "go".** The orchestrator's first turn joins the recipe and the
@@ -3209,25 +3218,29 @@ Four rules hold for every M8 story:
 
 **M8-1 · Who sent a message · S · needs nothing**
 `POST /rooms/:id/agents/:agentId/messages` and `POST /rooms/:id/messages` take an optional
-`from`: a participant id in the same room. No `from` means the person. There is one
-operator and one token (K6), so the daemon trusts `from` as it trusts the rest of the
-body. It refuses an unknown id, a removed participant and the target itself with `400`.
+`from`: the id of the room's orchestrator (R44). No `from` means the person. There is
+one operator and one token (K6), so the daemon trusts `from` as it trusts the rest of the
+body. It refuses, with `400`, a `from` that is not the room's orchestrator, and a message
+from the orchestrator to itself. Only the daemon sends a message from a worker: its
+reply (M8-2).
 `_client_user_message` and `_client_message_queued` carry `from` when a participant sent
 the message. The harness gets one extra first line, `[from <name>]`, only when a
 participant sent it, so a message with no such line is the person's. The log keeps the
 text without that line. Both screens draw `po → dev` for a participant's message, and
-`you → dev` as today. The daemon also sets `KAPELLE_ROOM` and `KAPELLE_PARTICIPANT` in each
-participant's environment, so a command the agent runs can name its room and itself.
-The contract gets a minor version.
-*Done when* tests cover `from` on both routes, the three refusals, the log fields, the
-first line the harness gets (a `mock-agent.mjs` path that echoes its prompt), both
-screens' labels, and the two variables in the harness's environment.
+`you → dev` as today. The contract gets a minor version.
+*Done when* tests cover `from` on both routes, both refusals, the log fields, the first
+line the harness gets (a `mock-agent.mjs` path that echoes its prompt), and both
+screens' labels.
 
 **M8-2 · A reply to the sender, a copy to the orchestrator · M · needs M8-1**
 When a turn ends and its message came `from` a participant, the daemon sends the turn's
 answer to that participant as a new message. Its first line is `[reply from <name>]`,
 with how the turn ended and its number of tool calls. The rest is the turn's answer: the
-text after its last tool call, or all its text when that is empty. When the person
+text after its last tool call, or the last text before it when that is empty. This is
+the daemon's first text kept per turn for a room, so it is small on purpose: the text
+since the last tool call and the last block before it, each cut at 64 KiB, and dropped
+when the turn ends, is cancelled, or its harness exits or is killed. (`core/result.ts`
+reads a run task's text the same way, from its events.) When the person
 messaged a worker, and the room has an orchestrator that is not that worker, the
 orchestrator gets one copy when the turn ends: `[copy] you → <name>`, the person's
 message, then the answer. **A reply or a copy never causes another one:**
@@ -3235,22 +3248,32 @@ message, then the answer. **A reply or a copy never causes another one:**
 starts from one sends nothing when it ends. A reply and a copy carry `from` (the worker),
 and their own first line takes the place of M8-1's. A turn that ends with an error still
 sends its reply, with the error. A reply to a participant that was removed is dropped,
-and the daemon's log says so. An answer longer than 64 KiB is cut, with a line that says
-so. Each queued message gets its own reply, in order. This replaces the spikes'
-`relay.sh`.
+and the daemon's log says so. A cut answer says it was cut. Each queued message gets its
+own reply, in order. **A reply or a copy is never refused for a full queue:** it does not
+count toward R41's 16, because a dropped reply would stall the loop with nobody waiting
+on anything. It cannot pile up: each one comes from one finished turn. This replaces the
+spikes' `relay.sh`.
 *Done when* tests with `mock-agent.mjs` cover a reply to the sender, a copy for a person's
 message and nothing else, no reply from a reply's or a copy's turn, an error turn, a
-removed sender, the cut, and the replies to three queued messages in order.
+removed sender, the cut, the buffer dropped on a cancel and an exit, a reply delivered
+to a participant with 16 messages waiting, and the replies to three queued messages in
+order.
 
 **M8-3 · `kapelle room` for an orchestrator · S · needs M8-1**
-`kapelle room info | hire | send | ff | diff | fire`, from the spikes' `room.sh`. Each verb
-reads `KAPELLE_ROOM` and `KAPELLE_PARTICIPANT`, so `send` sets `from` by itself; `--room`
-overrides the room. `send` takes the text from stdin or an argument and returns at once.
+`kapelle room info | add | send | ff | diff | remove`, from the spikes' `room.sh`; `add` and
+`remove` match the screens' `/add` and `/remove`. **Each verb finds its room and its
+sender from the folder it runs in:** a participant's checkout is
+`<state>/wt/<roomId>/<participantId>`, and the daemon knows whose it is. So `send` sets
+`from` by itself, and no new environment variable is needed: the daemon strips every
+`KAPELLE_*` variable from a harness (M2-8), because one could hold the token, and that
+rule stays whole. `--room` and `--as` override. `send` takes the text from stdin or an
+argument and returns at once.
 There is no `wait`, and no verb reads the stream: M8-2's reply is the answer. `info` shows,
 for each busy worker, who sent the message it works on. The verbs use `client/daemon.ts`,
-like every other daemon verb.
-*Done when* CLI tests against a daemon with mock agents cover each verb, `from` taken from
-the environment, `--room`, and each refusal by its code.
+like every other daemon verb. R44's role list gains `reviewer`, a label like the others.
+*Done when* CLI tests against a daemon with mock agents cover each verb, the room and the
+sender found from a participant's checkout, a folder that is no checkout, `--room` and
+`--as`, the `reviewer` role, and each refusal by its code.
 
 **M8-4 · The orchestrator skill · M · needs M8-2, M8-3**
 One Markdown file in the package, generic, from the spikes' skill and D1–D12. It says how
@@ -3259,13 +3282,17 @@ to drive any recipe:
 - the plan from the recipe and the note, shown before any work, and the wait for "go"
   (D11);
 - short turns: one order, one status line, then the turn ends; a worker waits for an
-  outside reviewer inside its own turn;
+  outside reviewer inside its own turn, with a loop that checks first and sleeps inside
+  (Claude Code refuses a command that starts with `sleep`);
 - the step board (D3), and what to do with a reply, a copy and a message from the person;
 - the stops: every choice (D6), a protected path (D9), a step that fails twice, a
   disagreement between `dev` and a reviewer, a worker that is `exited` or `killed`, an
-  outside review that does not finish in its time, and the hand-over;
+  outside review that does not finish in its time, a refusal it cannot fix itself (a
+  fast-forward's `agent_busy`, `not_fast_forward`, `dirty_worktree` or `no_branch`, and
+  M8-7's `turn_cap`), and the hand-over;
 - landing each reviewer's commits with `kapelle room ff`, one reviewer after the other
-  (D1);
+  (D1), then telling `dev` which commits moved in: its memory predates the move, and the
+  daemon tells it nothing (M6-11a);
 - the outside review rounds and the nit rule (D8);
 - the final report: what each step did, the open findings, the number of commits;
 - what every worker hears first: stay in your checkout, end each report with the board,
@@ -3282,8 +3309,8 @@ directly.
 **M8-5 · `kapelle loop`: recipes and the start · S · needs M8-4**
 `kapelle loop <recipe> <task> ["<note>"] [--agent <harness>] [--cwd dir]`, and `/loop` in
 both screens. It finds the recipe (D10), opens a room titled `<recipe>-<task>`, adds the
-orchestrator (`--agent`, claude by default; the recipe is not read by kapelle, so its
-harness is a flag), and sends the first message: the skill, the recipe, the task and the
+orchestrator in `auto` (`--agent`, claude by default; the recipe is not read by kapelle,
+so its harness is a flag), and sends the first message: the skill, the recipe, the task and the
 note (D12). `kapelle loop list` shows each recipe, where it lives, and which one wins a
 name. A missing recipe is refused by name, with the folders it looked in.
 *Done when* tests cover the lookup order, the list, a missing recipe, the room's title, the
@@ -3298,34 +3325,39 @@ or the orchestrator would wake up and go on. The room stays `active`. Both scree
 cut turn, the room still `active`, and the command in both screens.
 
 **M8-7 · A cap on the orchestrator's worker turns · S · needs M8-2**
-A project config key, `orchestratorTurnCap`, 40 by default; spike 3 used 12. The daemon
-counts each message `from` the orchestrator to another participant. At the cap it refuses
-the next one with `429` `turn_cap`, writes `_client_turn_cap_reached` and rings the bell,
-with a desktop notification (`core/notify.ts`). The person raises the cap for one room
-with `PATCH /rooms/:id {"turnCap": n}`, or `/cap <n>` in a screen. The count is saved with
-the room, so a restart keeps it. A message from the person never counts.
-*Done when* tests cover the count, the refusal, the event, the bell, a raised cap, the
-count after a restart, and a person's message not counted.
+A project config key, `orchestratorTurnCap`, 40 by default; spike 3 used 12. `POST
+/rooms` already reads the project config for the room's watchdog limits (`roomLimits`),
+so the key joins that read. Like every project key, it gets a `KAPELLE_*` twin and a row
+in `docs/CONFIG.md`, and the unknown-key message lists it. The daemon counts each message
+`from` the orchestrator. At the cap it refuses the next one with `429` `turn_cap` and
+writes `_client_turn_cap_reached`, and the chat screen rings its bell (D7). The person
+raises the cap for one room with a new route, `PATCH /rooms/:id {"turnCap": n}`, or `/cap
+<n>` in a screen. The count is saved with the room, so a restart keeps it. A message from
+the person never counts.
+*Done when* tests cover the key and its twin, the count, the refusal, the event, the
+screen's bell, the new route, a raised cap, the count after a restart, and a person's
+message not counted.
 
 **M8-8 · A bell when the orchestrator waits for the person · S · needs M8-2**
 The orchestrator waits for the person when its turn has ended, no worker is busy with a
 message from it, and no reply or copy is queued for it. Then the daemon writes
-`_client_orchestrator_waiting`, `core/notify.ts` rings the bell with a desktop
-notification, and the sidebar marks the room as waiting for the person, like a question
-(M7-3).
-*Done when* tests cover each of the three conditions, no bell while a worker works on the
-orchestrator's order, and the room's mark.
+`_client_orchestrator_waiting`. The chat screen rings its bell, as for a question (M4-4),
+with no desktop pop-up (D7), and the sidebar marks the room as waiting for the person
+(M7-3). The daemon rings nothing itself: it has no terminal.
+*Done when* tests cover each of the three conditions, the event, no event while a worker
+works on the orchestrator's order, the screen's bell, and the room's mark.
 
-**M8-9 · The decision log · S · needs M8-4**
+**M8-9 · The decision log · S · needs M8-3, M8-4**
 At each stop for a choice, the orchestrator records the question, the options, the
 person's answer and who it came from, also when the answer came in a copy. It writes
-nothing itself: `kapelle room decide` sends the entry, and the daemon appends one line to
+nothing itself: `kapelle room decide`, a verb this story adds to M8-3's, sends the entry
+to a new route, `POST /rooms/:id/decisions`, and the daemon appends one line to
 `decisions.jsonl` in the repository's state folder (`stateDirFor`). Each entry has a
 `kind` from a short list in the skill: scope, behaviour, protected path, review, other.
 In M8 the log is only written, never acted on: the backlog holds the step where the
 orchestrator learns from it (D6).
-*Done when* a test covers the verb and the file's format, and the skill records each
-stop.
+*Done when* tests cover the verb, the route and the file's format, and the skill records
+each stop.
 
 **Found by the spikes, outside M8.** Three changes the spikes asked for are not about the
 orchestrator, so each is its own issue:
@@ -3338,8 +3370,9 @@ orchestrator, so each is its own issue:
 - **This repository's full suite from a long path.** A pty test in
   `tests/daemon.test.ts` clips the mock agent's command at 100 or 120 columns, so the
   suite fails from a room worktree.
-- **This repository's own loop.** Its recipe, `.kapelle/loops/fix-issue.md`, and two
-  changes to its skills: `review-local` asks the person nothing the loop decides, and
+- **This repository's own loop.** Its recipe, `.kapelle/loops/fix-issue.md`, with a
+  worker rule to run the full suite once per code change (it ran three times on
+  unchanged code in spike 1), and two changes to its skills: `review-local` asks the person nothing the loop decides, and
   names the branch's commit, not its snapshot's; `pickup-issue` posts its scope comment
   before the build starts.
 
@@ -3384,7 +3417,9 @@ M7-1 ─┬─ M7-2
 M7-4, M7-5   (need nothing)
 ```
 
-**M8 (added 2026-10-12)** needs nothing outside itself. M8-4 also needs M8-3.
+**M8 (added 2026-10-12)** stands on work that is done: M6-6a's worktree for each
+participant, M6-11a's fast-forward and R44's roles. It needs nothing that is open. M8-4
+also needs M8-3, and M8-9 needs M8-3 too.
 
 ```text
 M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5

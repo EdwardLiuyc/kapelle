@@ -703,7 +703,7 @@ may give work to another, but only through the daemon, in the timeline the perso
 - **M8-2 — a reply to the sender, a copy to the orchestrator**: when a turn ends, its
   answer goes back to the participant that sent the message; the orchestrator gets a copy
   of what the person tells a worker.
-- **M8-3 — `kapelle room`**: the verbs an orchestrator uses to hire, send, fast-forward
+- **M8-3 — `kapelle room`**: the verbs an orchestrator uses to add, send, fast-forward
   and remove workers.
 - **M8-4 — the orchestrator skill**: generic, shipped with kapelle: the plan and the
   person's "go", short turns, the step board, the stops, the review rounds.
