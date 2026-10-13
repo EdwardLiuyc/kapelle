@@ -11,11 +11,13 @@
  */
 
 import {
-  decodeKittyPrintable,
   SelectList,
   truncateToWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+// Not in pi-tui's main exports. Its editor uses it, so a shifted key reads
+// the same under Kitty and under modifyOtherKeys (xterm, tmux).
+import { decodePrintableKey } from "@earendil-works/pi-tui/dist/keys.js";
 import type {
   PermissionAnswered,
   PermissionDecision,
@@ -138,7 +140,7 @@ function questionParts({
         ];
       },
       handleInput: (key) => {
-        const row = pickRow(decodeKittyPrintable(key) ?? key, rows.length);
+        const row = pickRow(decodePrintableKey(key) ?? key, rows.length);
         if (row === undefined) list.handleInput(key);
         else list.setSelectedIndex(row);
       },

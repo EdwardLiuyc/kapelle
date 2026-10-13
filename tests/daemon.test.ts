@@ -4330,7 +4330,13 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
     for (const { spec } of await importsOf(file)) {
       if (spec.startsWith("node:")) continue;
       if (!spec.startsWith(".")) {
-        assert.ok(spec === "@earendil-works/pi-tui", `${file} imports ${spec}`);
+        // A file of pi-tui is pi-tui: `decodePrintableKey` is not in its
+        // main exports (M7-4).
+        assert.ok(
+          spec === "@earendil-works/pi-tui" ||
+            spec.startsWith("@earendil-works/pi-tui/"),
+          `${file} imports ${spec}`,
+        );
         continue;
       }
       const target = join(dirname(file), spec);
@@ -5175,6 +5181,10 @@ test("chat.ts on a real terminal answers a question in its pop-up, and a piped o
   // from allow, and a stray Enter says no.
   await screen.press("2", "→ 2 allow");
   await screen.press("try it", "→ 1 deny");
+  // Shift+1 as xterm and tmux send it under modifyOtherKeys is typed text
+  // too, so `okay!⏎` ends on deny.
+  await screen.press("2", "→ 2 allow");
+  await screen.press("\x1b[27;2;33~", "→ 1 deny");
   screen.child.stdin.write("\r");
   for (const until = Date.now() + 20_000; ; ) {
     if (watched.includes("asker: denied (client)")) break;
