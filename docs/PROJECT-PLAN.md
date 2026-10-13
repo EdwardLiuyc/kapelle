@@ -499,6 +499,8 @@ driven from a run file, fully verifiable offline.
 
 **Runs only.** The scheduler, inheritance and handoff below are run-file semantics;
 rooms have no graph and no scheduler (M6, `docs/CONTRACT-PLAN.md`).
+**Amended 2026-10-13 (#278): parked.** No M3 story is started, and rooms need none of
+them.
 
 - **`core/scheduler.ts`** — topological execution: parallel where no `needs`, sequential
   where there is.
@@ -775,8 +777,10 @@ demonstrably contains stage A's summary and stage C flags anything B got wrong.
 
 **M4** — open a room in the TUI with an `ask` participant, answer its permission in the
 terminal, and confirm the turn proceeds and a CLI observer on the same room sees the same
-decision. **Amended 2026-10-13 (#278):** this line first attached the TUI to a run. R16
-keeps runs out of the TUI, so M4-3 tests the room, and so does this exit.
+decision. **Amended 2026-10-13 (#278):** this line first read: "attach the TUI to a run
+in `ask` mode, answer a permission in the terminal, and confirm the run proceeds and a CLI
+observer on the same run sees the same decision. The room participant flow uses the same
+screen." R16 keeps runs out of the TUI, so M4-3 tests the room, and so does this exit.
 
 **M5** — write a client from `docs/CLIENT-API.md` alone, with `daemon.ts` never opened, and
 have it pass the conformance suite: a live run and a boot-restored run produce the same DTO

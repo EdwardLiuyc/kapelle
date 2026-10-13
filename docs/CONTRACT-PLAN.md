@@ -194,7 +194,7 @@ Needs are hard ordering only.
 | M6-7a | M | M6-2, M2-6 | Persistence, restart, fresh revive, `killed` (split 2026-09-26) |
 | M6-7b | M | M6-7a, M0-9 | `session/load` for a paused participant (split 2026-09-26) |
 | M0-9 | S | M0-1 | Probe: `session/load` into a new process, after a clean stop and after a kill |
-| M6-8 | M | M6-4 | Orchestrator delegation — deferred by R2 |
+| M6-8 | M | M6-4 | Orchestrator delegation — deferred by R2, superseded by M8 (2026-10-12) |
 | M6-9 | S | M6-5, M4-2 | Room CLI and bridge readiness |
 | M6-10 | M | M6-4, M5-10a | Room reducer in `client/` |
 | M6-11a | S | M6-6a, M4-5 | Fast-forward one participant to another, from the TUI |
@@ -743,7 +743,7 @@ dismissed room is **not** revived by the same path.
 
 Decisions: **R17, S3, S4, R42** (S4 decided as (b)).
 
-### M6-8 · Orchestrator and supervisor-mediated delegation · M · needs M6-4 · deferred by R2
+### M6-8 · Orchestrator and supervisor-mediated delegation · M · needs M6-4 · deferred by R2 · superseded by M8 (2026-10-12)
 
 R2 is decided for v1: the orchestrator is a normal participant and the default
 recipient, with no special delegation powers. Rooms have no dependency graph and no
