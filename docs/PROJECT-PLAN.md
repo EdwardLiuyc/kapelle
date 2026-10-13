@@ -543,6 +543,13 @@ the paint now lives in the TUI.
   remove and rename a participant, with its role, mode and base branch; cancel a turn;
   change a mode. Each command calls one documented route. M6-11a and M6-11b add the merge
   commands on top of it.
+- **M4-6 — the diff view** (added 2026-10-01): a question about an edit shows its diff in
+  a side view, answered with `y` or `n`. M6-11a and M6-11b show their diff in it too.
+- **M4-7 to M4-12 — the logic out of the screen** (added 2026-10-02): the send flow, the
+  question queue, the view and the room set move to `client/`, with unit tests, and the
+  screen's parts move to `chat/tui/`. No visible change.
+- **M4-13 — a terminal in the side pane** (added 2026-10-05): a shell in the agent's
+  checkout, beside the timeline. It needs a pty, so it first amends M1c-7's rule.
 - **Deferred to M5+** — composing and dispatching runs from the TUI. Named here because
   it is the stated trajectory and it is why M2's API has to be complete rather than
   observability-only. Not built at M4.
@@ -766,8 +773,10 @@ worktree still within retention, and leaves no harness subprocess alive.
 `auto` → copilot reviews `safe`) in one inherited worktree, where stage B's prompt
 demonstrably contains stage A's summary and stage C flags anything B got wrong.
 
-**M4** — attach the TUI to a run in `ask` mode, answer a permission in the terminal,
-and confirm the run proceeds and a CLI observer on the same run sees the same decision. The room participant flow uses the same screen.
+**M4** — open a room in the TUI with an `ask` participant, answer its permission in the
+terminal, and confirm the turn proceeds and a CLI observer on the same room sees the same
+decision. **Amended 2026-10-13 (#278):** this line first attached the TUI to a run. R16
+keeps runs out of the TUI, so M4-3 tests the room, and so does this exit.
 
 **M5** — write a client from `docs/CLIENT-API.md` alone, with `daemon.ts` never opened, and
 have it pass the conformance suite: a live run and a boot-restored run produce the same DTO
