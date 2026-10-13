@@ -23,7 +23,7 @@ import type {
 import { call, type DaemonAddress } from "../../client/daemon.ts";
 import { diffLine } from "../../client/diff.ts";
 import type { QuestionQueue } from "../../client/questions.ts";
-import { type Entry, nameOf, printable } from "../../client/room.ts";
+import { type Entry, nameOf } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { dim, NO_DAEMON } from "../common.ts";
 import { pickRow, touched } from "../view.ts";
@@ -100,7 +100,7 @@ function questionParts({
     const turn = q.turn === undefined ? "" : ` · turn ${q.turn}`;
     const who = [`room   ${r.entry.title ?? r.entry.id}${turn}`];
     const name = nameOf(r.state, q.participantId);
-    const kind = printable(q.kind ?? "other");
+    const { kind } = q;
     const title =
       kind === "other" ? `${name} asks` : `${name} wants to ${kind}`;
     showPanel(title, {

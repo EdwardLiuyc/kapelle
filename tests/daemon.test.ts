@@ -5156,7 +5156,9 @@ test("chat.ts on a real terminal answers a question in its pop-up, and a piped o
   );
   assert.equal(sent.status, 202, sent.body.error?.message);
 
-  // The box opens by itself, with the tool's input, and deny comes first.
+  // The box opens by itself, with who wants what in its title (M7-4) and
+  // the tool's input, and deny comes first.
+  await screen.seen("┌ asker wants to edit ─");
   await screen.seen("edit · Write ACP_TEST.md");
   await screen.seen("path: ACP_TEST.md");
   const write = await pendingOne(d);

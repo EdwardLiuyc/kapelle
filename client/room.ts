@@ -635,7 +635,7 @@ export function applyLine(
         type: "permission",
         id: u.id,
         title: printable(u.title),
-        kind: u.kind,
+        kind: kindOf(u.kind) ?? "other",
         ...(number !== undefined && { turn: number }),
         ...(u.input && {
           input: Object.fromEntries(

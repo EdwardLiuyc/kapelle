@@ -18,6 +18,7 @@
  *   timeline (the banner's waits and the open room's busy agents), when
  *   the screen ticks, and how the status line fits its width.
  * - Tool runs (M7-2): which tool calls fold into one line, and when.
+ * - The question box's keys (M7-4): where a typed key moves its cursor.
  *
  * **In `chat/`, not `client/`** (decided 2026-10-02): rows, the `@name`
  * pre-fill and seen marks are this screen's own rules.
