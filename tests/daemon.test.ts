@@ -3678,6 +3678,115 @@ test("messages to a busy participant are answered in order, and a cancel keeps i
   );
 });
 
+test("a message from the orchestrator names it: on the log, and as the harness's first line", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "po", role: "orchestrator" },
+      { cmd: `node ${MOCK_AGENT} --scenario slow`, name: "dev" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const [po, dev] = open.body.participants.map((p) => p.id) as [string, string];
+  const say = (to: string, text: string, from?: string) =>
+    api<MessageReply>(d, "POST", `/rooms/${id}/agents/${to}/messages`, {
+      text,
+      ...(from && { from }),
+    });
+
+  for (const [to, from] of [
+    [po, dev],
+    [dev, dev],
+    [dev, "p-nobody"],
+    [po, po],
+  ] as const) {
+    const r = await say(to, "no", from);
+    assert.equal(r.status, 400, `${from} → ${to}`);
+    assert.equal(r.body.error.code, "invalid_sender");
+  }
+  const wide = await api<RoomReply>(d, "POST", `/rooms/${id}/messages`, {
+    text: "no",
+    from: po,
+  });
+  assert.equal(wide.status, 400);
+  assert.equal(wide.body.error.code, "invalid_request");
+  assert.match(wide.body.error.message, /unknown field "from"/);
+  const typed = await api<MessageReply>(
+    d,
+    "POST",
+    `/rooms/${id}/agents/${dev}/messages`,
+    { text: "no", from: 5 },
+  );
+  assert.equal(typed.status, 400);
+  assert.equal(typed.body.error.code, "invalid_request");
+
+  // Each `slow` turn lasts a second, so b and c queue behind a.
+  const queued = [];
+  for (const [text, from] of [
+    ["a", po],
+    ["b", undefined],
+    ["c", po],
+  ] as const) {
+    const r = await say(dev, text, from);
+    assert.equal(r.status, 202, r.body.error?.message);
+    queued.push(r.body.queued);
+  }
+  assert.deepEqual(queued, [0, 1, 2]);
+  // c waits; a rename now does not change the name its harness reads.
+  const renamed = await api(d, "PATCH", `/rooms/${id}/agents/${po}`, {
+    name: "lead",
+  });
+  assert.equal(renamed.status, 200);
+  const idle = async () => {
+    for (const until = Date.now() + 20_000; ; ) {
+      const r = await api<RoomReply>(d, "GET", `/rooms/${id}`);
+      if (r.body.participants.every((p) => p.status !== "busy")) return;
+      assert.ok(Date.now() < until, "dev never went idle");
+      await new Promise((ok) => setTimeout(ok, 25));
+    }
+  };
+  await idle();
+  assert.equal((await say(dev, "d")).status, 202);
+  await idle();
+
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const events = await roomEvents(d, id, dev);
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  assert.deepEqual(
+    of("_client_user_message").map((e) => [e.update.text, e.update.from]),
+    [
+      ["a", po],
+      ["b", undefined],
+      ["c", po],
+      ["d", undefined],
+    ],
+    "the log keeps the text without the line, and the sender's id",
+  );
+  assert.deepEqual(
+    of("_client_message_queued").map((e) => [e.update.text, e.update.from]),
+    [
+      ["b", undefined],
+      ["c", po],
+    ],
+  );
+  assert.deepEqual(
+    of("agent_message_chunk").map(
+      (e) => (e.update.content as { text: string }).text,
+    ),
+    [
+      "previous: (none)",
+      "previous: [from po]\na",
+      "previous: b",
+      "previous: [from po]\nc",
+    ],
+    "the harness read the line only on the orchestrator's messages",
+  );
+});
+
 test("one room log names each line's room and participant, and a participant's stream is its own lines", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));

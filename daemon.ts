@@ -1132,6 +1132,13 @@ function participantEntry(id: string, agentId: string) {
  * (R32a); a full queue is `429` (R41). `seq` is the log's size before the
  * message, and `queued` is how many turns come first, so a client knows
  * which `_client_turn_ended` is its answer.
+ *
+ * The nested route also takes `from`: the id of the room's orchestrator,
+ * which sent the message (M8-1). No `from` means the person. One operator
+ * and one token (K6), so `from` is trusted as the rest of the body is; only
+ * a sender that is not the orchestrator, or the orchestrator to itself, is
+ * `invalid_sender`. The room-wide route goes to the orchestrator, which
+ * never sends to itself, so `from` stays an unknown field there.
  */
 async function postMessage(
   id: string,
@@ -1140,9 +1147,15 @@ async function postMessage(
   res: ServerResponse,
 ) {
   const entry = roomEntry(id);
-  const { text } = await readBody(req, ["text"]);
+  const { text, from } = await readBody(
+    req,
+    agentId === undefined ? ["text"] : ["text", "from"],
+  );
   if (typeof text !== "string" || !text.trim()) {
     throw refusal(400, "invalid_request", '"text" must be a non-empty string');
+  }
+  if (from !== undefined && typeof from !== "string") {
+    throw refusal(400, "invalid_request", '"from" must be a string');
   }
   if (entry.room.status() === "dismissed") {
     throw refusal(409, "room_dismissed", `room ${id} is dismissed`);
@@ -1158,11 +1171,29 @@ async function postMessage(
       `room ${id} has no participant with the orchestrator role`,
     );
   }
+  const sender =
+    from === undefined
+      ? undefined
+      : entry.room.participants.find((p) => p.id === from);
+  if (from !== undefined && sender?.role !== "orchestrator") {
+    throw refusal(
+      400,
+      "invalid_sender",
+      `"from" must be the room's orchestrator; ${from} is not`,
+    );
+  }
+  if (sender === target) {
+    throw refusal(
+      400,
+      "invalid_sender",
+      "the orchestrator cannot send a message to itself",
+    );
+  }
   const seq = entry.room.eventLog?.size ?? 0;
   const queued = target.status() === "busy" ? target.queued + 1 : 0;
   let turn: Promise<void>;
   try {
-    turn = target.send(text);
+    turn = target.send(text, sender);
   } catch (err) {
     throw roomRefused(err) ?? err;
   }

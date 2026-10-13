@@ -560,20 +560,25 @@ export interface ClientHarnessExitedEvent extends Meta {
  *  queued message is logged twice: `_client_message_queued` on arrival, and
  *  this when the harness gets it (M6-4). `turn` counts the participant's
  *  turns from 1; a queued decision names the same number (M6-5, S12). A room
- *  logs it on every new line, but a line written before M6-5 has none. */
+ *  logs it on every new line, but a line written before M6-5 has none.
+ *  `from` is the id of the participant that sent it; none means the person
+ *  (M8-1). `text` never has the `[from <name>]` line the harness gets. */
 export interface ClientUserMessageEvent extends Meta {
   sessionUpdate: "_client_user_message";
   text: string;
   turn?: number;
+  from?: string;
 }
 
 /** A message reached a busy participant and waits in its queue (M6-4, R32).
  *  `_client_user_message` follows when its turn starts. A queued message with
  *  no `_client_user_message` after it was dropped: by `_client_queue_cleared`,
- *  or by a daemon restart, which loses the queue (R41). */
+ *  or by a daemon restart, which loses the queue (R41). `from` as on
+ *  `_client_user_message`. */
 export interface ClientMessageQueuedEvent extends Meta {
   sessionUpdate: "_client_message_queued";
   text: string;
+  from?: string;
 }
 
 /** A participant's queued messages were dropped, unsent: a cancel of its

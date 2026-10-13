@@ -674,7 +674,10 @@ function chatTui(
     if (!r) return [];
     const id = view.participantId;
     const all = id ? thread(r.state, id) : r.state.timeline;
-    return all.flatMap((e) => (e.type === "user" ? [{ r, e }] : []));
+    // A message the orchestrator sent is not the person's (M8-1).
+    return all.flatMap((e) =>
+      e.type === "user" && e.from === undefined ? [{ r, e }] : [],
+    );
   };
   /** The history list (M4-4, `ctrl+r`): the person's messages in the view,
    *  one row each, in the side view. A pick scrolls the transcript to it;

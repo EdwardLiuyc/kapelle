@@ -35,6 +35,7 @@ import {
   nameOf,
   printable,
   type RoomState,
+  senderOf,
   thread,
 } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
@@ -373,7 +374,12 @@ function transcriptParts({
         speaker = undefined;
         // The gap above stays out of the bar and the background.
         const line = barred(
-          new Text(`${bold(cyan(`you → ${name}`))}\n${e.text}`, 1, 0, YOU_BG),
+          new Text(
+            `${bold(cyan(`${senderOf(state, e.from)} → ${name}`))}\n${e.text}`,
+            1,
+            0,
+            YOU_BG,
+          ),
           YOU_BAR,
         );
         drawn.set(e, line);
@@ -382,7 +388,10 @@ function transcriptParts({
         return;
       }
       case "queued":
-        note(`queued for ${name}: ${e.text}`);
+        note(
+          `queued for ${name}` +
+            `${e.from ? ` from ${senderOf(state, e.from)}` : ""}: ${e.text}`,
+        );
         return;
       case "queue_cleared":
         warn(`! ${e.count} queued message(s) for ${name} dropped, unsent`);

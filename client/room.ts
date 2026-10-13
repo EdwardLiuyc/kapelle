@@ -49,15 +49,16 @@ type Mode = "ask" | "safe" | "auto";
 
 /** One thing the timeline shows, in the order it first appeared. An answer
  *  grows in place while its chunks arrive, and a permission question gets
- *  its answer in place. */
+ *  its answer in place. A message's `from` is the id of the participant
+ *  that sent it; none is the person (M8-1). */
 export type Entry = {
   seq: number;
   participantId: string;
   /** When the line was written (M7-1): the heading shows it. */
   at: string;
 } & (
-  | { type: "user"; text: string; turn?: number }
-  | { type: "queued"; text: string }
+  | { type: "user"; text: string; turn?: number; from?: string }
+  | { type: "queued"; text: string; from?: string }
   | { type: "queue_cleared"; count: number }
   | { type: "answer"; text: string }
   /** One tool call. Its `tool_call_update`s change it in place (#240).
@@ -469,12 +470,18 @@ export function applyLine(
         type: "user",
         text,
         ...(u.turn !== undefined && { turn: u.turn }),
+        ...(u.from !== undefined && { from: u.from }),
       });
     }
     case "_client_message_queued": {
       const text = cleanLines(u.text);
       p?.queue.push(text);
-      return add({ ...at, type: "queued", text });
+      return add({
+        ...at,
+        type: "queued",
+        text,
+        ...(u.from !== undefined && { from: u.from }),
+      });
     }
     case "_client_queue_cleared":
       if (p) p.queue = [];
@@ -707,6 +714,10 @@ export const roster = (state: RoomState) =>
 /** The roster's name for an id, or the id for one it never named. */
 export const nameOf = (state: RoomState, id: string) =>
   state.participants.get(id)?.name ?? id;
+
+/** Who sent a message: `you`, or the participant that did (M8-1). */
+export const senderOf = (state: RoomState, from: string | undefined) =>
+  from === undefined ? "you" : nameOf(state, from);
 
 /** The person looked at this participant's thread. An open question still
  *  needs attention after this; only its answer clears it. */
