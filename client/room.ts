@@ -386,7 +386,7 @@ export function applyLine(
     state.timeline.push(entry);
     if (p) {
       p.answer = undefined;
-      if (entry.type !== "user" && entry.type !== "queued") p.unread += 1;
+      if (!fromPerson(entry)) p.unread += 1;
     }
     return entry;
   };
@@ -714,6 +714,11 @@ export const roster = (state: RoomState) =>
 /** The roster's name for an id, or the id for one it never named. */
 export const nameOf = (state: RoomState, id: string) =>
   state.participants.get(id)?.name ?? id;
+
+/** The person wrote this entry: a message with no `from` (M8-1). A message
+ *  the orchestrator sent counts as unread, since nobody watched it go. */
+export const fromPerson = (e: Entry) =>
+  (e.type === "user" || e.type === "queued") && e.from === undefined;
 
 /** Who sent a message: `you`, or the participant that did (M8-1). */
 export const senderOf = (state: RoomState, from: string | undefined) =>

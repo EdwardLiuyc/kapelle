@@ -1753,7 +1753,9 @@ function createParticipant({
       if (stopping) {
         throw new RoomRefusal("agent_exited", "the agent is stopping");
       }
-      // A copy: a rename while it waits does not change its label.
+      // A copy, so a rename while it waits does not change the line its
+      // harness reads. A screen names `from` by the roster, so it shows the
+      // new name: the id is what lasts.
       const from = sender && { id: sender.id, name: sender.name };
       if (!turn && !held) return begin(text, from);
       if (waiting.length >= QUEUE_BOUND) {

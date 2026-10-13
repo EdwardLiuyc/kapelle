@@ -1179,7 +1179,7 @@ async function postMessage(
     throw refusal(
       400,
       "invalid_sender",
-      `"from" must be the room's orchestrator; ${from} is not`,
+      `"from" must be the room's orchestrator; ${JSON.stringify(from)} is not`,
     );
   }
   if (sender === target) {

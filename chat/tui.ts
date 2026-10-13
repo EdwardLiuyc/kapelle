@@ -68,6 +68,7 @@ import { questionQueue } from "../client/questions.ts";
 import {
   cleanLines,
   type Entry,
+  fromPerson,
   nameOf,
   printable,
   seen,
@@ -674,9 +675,8 @@ function chatTui(
     if (!r) return [];
     const id = view.participantId;
     const all = id ? thread(r.state, id) : r.state.timeline;
-    // A message the orchestrator sent is not the person's (M8-1).
     return all.flatMap((e) =>
-      e.type === "user" && e.from === undefined ? [{ r, e }] : [],
+      e.type === "user" && fromPerson(e) ? [{ r, e }] : [],
     );
   };
   /** The history list (M4-4, `ctrl+r`): the person's messages in the view,

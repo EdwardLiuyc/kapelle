@@ -243,7 +243,7 @@ function transcriptParts({
 }) {
   const transcript = new Transcript();
   const scroll = new ScrollView(transcript, { follow: "end", primary: true });
-  /** The part drawn for each of the person's messages, to jump to. */
+  /** The part drawn for each message to an agent, to jump to. */
   let drawn = new WeakMap<Entry, Component>();
   /** The line drawn for each question, which its answer sets again. */
   let lines = new WeakMap<Entry, Text>();
