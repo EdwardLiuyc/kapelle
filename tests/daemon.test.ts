@@ -4851,6 +4851,10 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
     );
     assert.equal(sent.status, 202, sent.body.error?.message);
   }
+  // The question opens its box, and the screen behind it loses its
+  // colours; Esc puts it aside.
+  await screen.seen("question 1 of 1");
+  await screen.press("\x1b", "? 1 question · ctrl+o");
   // Yellow is a stall, magenta a question: the mark and the name are one
   // painted piece (M7-3), and a busy row shows its timer at the right.
   await screen.seen("\x1b[33m! stuck");

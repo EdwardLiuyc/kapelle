@@ -6,6 +6,9 @@
  * room and add agent. It owns the open pop-up. Esc goes back one level,
  * and a first-level menu closes it. A command it sends goes through the
  * screen's `run`; the question box is `chat/tui/question.ts`.
+ *
+ * The box has a thick border, yellow for a question and cyan for the rest,
+ * with the title as a chip. `Screen` in `chat/tui.ts` dims what is behind.
  */
 
 import {
@@ -20,6 +23,7 @@ import {
   SettingsList,
   type TuiAltScreen,
   truncateToWidth,
+  visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { HELP, type RouteCommand } from "../../client/command.ts";
@@ -32,7 +36,7 @@ import {
 } from "../../client/folder.ts";
 import { nameOf, roster } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { bold, cyan, dim, NO_DAEMON, yellow } from "../common.ts";
+import { bold, cyan, dim, inverse, NO_DAEMON, yellow } from "../common.ts";
 import type { View } from "../view.ts";
 import type { Queue } from "./question.ts";
 import { SIDEBAR_WIDTH } from "./sidebar.ts";
@@ -69,6 +73,14 @@ interface Panel {
   body: Component;
   error?: string;
 }
+
+/** The pop-up's top border, `width` wide: the title as a chip in reverse
+ *  video, so it shows with `NO_COLOR` too. */
+const topEdge = (title: string, width: number, edge: (s: string) => string) => {
+  const chip = ` ${truncateToWidth(title, Math.max(1, width - 6), "…")} `;
+  const rest = "━".repeat(Math.max(0, width - 3 - visibleWidth(chip)));
+  return `${edge("┏━")}${inverse(edge(chip))}${edge(`${rest}┓`)}`;
+};
 
 const SETTINGS_THEME = {
   label: (s: string, on: boolean) => (on ? bold(s) : s),
@@ -131,18 +143,16 @@ function panelParts({
   const panelRoom = () =>
     Math.max(3, Math.min(12, (process.stdout.rows || 24) - 12));
   /** The pop-up's box: the title in its top border, then the body, a key
-   *  hint for a list, and the refusal. */
+   *  hint for a list, and the refusal. The border is yellow for a question
+   *  and cyan for the rest. */
   const frame: Component = {
     render(width) {
       if (!panel) return [];
+      const edge = queue.asking ? yellow : cyan;
       const inner = Math.max(1, width - 4);
       const side = (l: string) =>
-        `${dim("│")} ${truncateToWidth(l, inner, "…", true)} ${dim("│")}`;
-      const lines = [
-        dim(
-          `${truncateToWidth(`┌ ${panel.title} ${"─".repeat(width)}`, width - 1, "")}┐`,
-        ),
-      ];
+        `${edge("┃")} ${truncateToWidth(l, inner, "…", true)} ${edge("┃")}`;
+      const lines = [topEdge(panel.title, width, edge)];
       for (const l of panel.body.render(inner)) lines.push(side(l));
       if (panel.body instanceof SelectList) {
         lines.push(side(dim("↑↓ Enter · Esc back")));
@@ -152,7 +162,7 @@ function panelParts({
           lines.push(side(l));
         }
       }
-      lines.push(dim(`└${"─".repeat(Math.max(0, width - 2))}┘`));
+      lines.push(edge(`┗${"━".repeat(Math.max(0, width - 2))}┛`));
       return lines;
     },
     handleInput: (key) => panel?.body.handleInput?.(key),
@@ -662,4 +672,4 @@ function panelParts({
   };
 }
 
-export { EDITOR_THEME, panelParts };
+export { EDITOR_THEME, panelParts, topEdge };

@@ -28,6 +28,10 @@
  * **The layout is flat** (#242): no `HStack` below another. Read
  * `screenLayout` before you move a part.
  *
+ * **An open pop-up is in a spotlight**: the screen behind it loses its
+ * colours and is drawn dim (`Screen`), and the box has a thick border in an
+ * accent colour (`chat/tui/panel.ts`). A terminal cannot blur.
+ *
  * **pi-tui is ratified under M1c-7's rule (M4-1).** It is presentation only,
  * so its worst failure is a broken screen, never a changed decision; it is
  * pinned exactly; its nested `marked` is overridden to ours, so one copy is
@@ -48,6 +52,7 @@ import {
   matchesKey,
   ProcessTerminal,
   Spacer,
+  stripTerminalSequences,
   Text,
   TuiAltScreen,
   truncateToWidth,
@@ -126,6 +131,25 @@ import {
   waiting,
   where,
 } from "./view.ts";
+
+/**
+ * pi-tui's screen, with the lines behind an open pop-up dim and without
+ * colour, so the box stands out. pi-tui draws the screen from its layout
+ * tree, not from `root.render`, so the hook is the step that lays the
+ * pop-up over the lines.
+ */
+class Screen extends TuiAltScreen {
+  protected override compositeOverlays(
+    lines: string[],
+    width: number,
+    height: number,
+  ) {
+    const behind = this.hasOverlay()
+      ? lines.map((l) => dim(stripTerminalSequences(l)))
+      : lines;
+    return super.compositeOverlays(behind, width, height);
+  }
+}
 
 /** What the screen says in a room with no participant (M4-5). */
 const NO_AGENTS = "no agents: ctrl+o → add agent";
@@ -284,7 +308,7 @@ function chatTui(
   // A selection goes through the system's clipboard tool, not only OSC 52,
   // so "Copied!" is true under WSL (`chat/tui/clipboard.ts`).
   const terminal = new ProcessTerminal();
-  const tui = new TuiAltScreen(terminal, undefined, undefined, {
+  const tui = new Screen(terminal, undefined, undefined, {
     copySelection: copySelection((data) => terminal.write(data)),
   });
   // pi-tui's screen reads keys before ours, and would take the page keys
