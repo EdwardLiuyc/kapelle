@@ -282,24 +282,25 @@ export function roomSet(
       return;
     }
     r.reading = true;
+    /** The read is over. A trigger during it gets one more read, also when
+     *  this one failed: the reply, if any, may predate the trigger. */
+    const done = () => {
+      r.reading = false;
+      if (!r.again) return;
+      r.again = false;
+      loadDto(r);
+    };
     call<RoomDto>(d, `/rooms/${r.entry.id}`).then(
       (res) => {
-        r.reading = false;
-        // A trigger during the read: the reply may be the older snapshot.
-        const again = r.again;
-        r.again = false;
-        if (!res.ok) return;
-        r.dto = res.body;
-        applyStatus(r.state, res.body);
-        on.loaded(r.entry.id);
-        if (again) loadDto(r);
+        if (res.ok) {
+          r.dto = res.body;
+          applyStatus(r.state, res.body);
+          on.loaded(r.entry.id);
+        }
+        done();
       },
-      // The stream says what happened to the daemon; a header can wait. The
-      // failed read answers no trigger: a later one starts the next read.
-      () => {
-        r.reading = false;
-        r.again = false;
-      },
+      // The stream says what happened to the daemon; a header can wait.
+      done,
     );
   };
 

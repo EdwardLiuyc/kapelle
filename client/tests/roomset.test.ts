@@ -124,10 +124,11 @@ async function fake(t: TestContext, token = "tok") {
       daemon.readsInFlight--;
       json(res, status, body);
     };
-    const s = daemon.status.get(id);
-    if (s === undefined) return answer(404, { error: "no such room" });
-    if (typeof s === "number") return answer(s, { error: "refused" });
-    const dto = () =>
+    // The status is read when the answer goes, so a test can fail a held read.
+    const dto = () => {
+      const s = daemon.status.get(id);
+      if (s === undefined) return answer(404, { error: "no such room" });
+      if (typeof s === "number") return answer(s, { error: "refused" });
       answer(200, {
         ...entry(id),
         createdAt: "",
@@ -135,6 +136,7 @@ async function fake(t: TestContext, token = "tok") {
         participants: daemon.participants,
         seq: 0,
       });
+    };
     // A delayed or held answer lets the room's stream beat the first read
     // (#232).
     if (daemon.holdReads) held.push(dto);
@@ -222,19 +224,11 @@ test("a burst of joins during the first read asks for one more read, not one eac
   const daemon = await fake(t);
   daemon.holdReads = true;
   daemon.status.set("r1", "active");
-  const added = (seq: number, id: string): RoomEventLine => ({
-    seq,
-    at: "",
-    roomId: "r1",
-    participantId: id,
-    update: {
-      sessionUpdate: "_client_participant_added",
-      name: id,
-      harness: "mock",
-      mode: "safe",
-    },
-  });
-  daemon.lines.set("r1", [added(1, "p1"), added(2, "p2"), added(3, "p3")]);
+  daemon.lines.set("r1", [
+    added(1, "p1", "p1"),
+    added(2, "p2", "p2"),
+    added(3, "p3", "p3"),
+  ]);
   const { set, said } = follow(t, daemon.d);
   set.start([entry("r1")]);
   // All three joins land while the first read is held: it is the only read.
@@ -247,6 +241,20 @@ test("a burst of joins during the first read asks for one more read, not one eac
   await new Promise((r) => setTimeout(r, 50));
   assert.deepEqual(daemon.reads, ["r1", "r1"]);
   assert.equal(daemon.maxReadsInFlight, 1, "one read at a time");
+});
+
+test("a join during a read that fails still reads the room again", async (t) => {
+  const daemon = await fake(t);
+  daemon.holdReads = true;
+  daemon.status.set("r1", "active");
+  daemon.lines.set("r1", [added(1, "p1", "p1")]);
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => said.lines.length === 1);
+  // The read the join waited on fails: the join still needs its own read.
+  daemon.status.set("r1", 500);
+  daemon.releaseRead();
+  await until(() => daemon.reads.length === 2);
 });
 
 test("a room made elsewhere joins on the next poll", async (t) => {
