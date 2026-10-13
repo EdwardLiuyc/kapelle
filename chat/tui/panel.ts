@@ -6,6 +6,9 @@
  * room and add agent. It owns the open pop-up. Esc goes back one level,
  * and a first-level menu closes it. A command it sends goes through the
  * screen's `run`; the question box is `chat/tui/question.ts`.
+ *
+ * The box has a thick border, yellow for a question and cyan for the rest,
+ * with the title as a chip. `Screen` in `chat/tui.ts` dims what is behind.
  */
 
 import {
@@ -33,7 +36,7 @@ import {
 } from "../../client/folder.ts";
 import { nameOf, roster } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { bold, cyan, dim, NO_DAEMON, yellow } from "../common.ts";
+import { bold, cyan, dim, inverse, NO_DAEMON, yellow } from "../common.ts";
 import type { View } from "../view.ts";
 import type { Queue } from "./question.ts";
 import { SIDEBAR_WIDTH } from "./sidebar.ts";
@@ -74,20 +77,27 @@ interface Panel {
 }
 
 /**
- * The pop-up's top border, `width` wide: the corner, the title, and `right`
- * at the end (M7-4). The title is cut with `…`, never the corner. When the
- * box is too narrow for both, `right` goes first: the title says who wants
- * what, and the status line still counts the questions.
+ * The pop-up's top border, `width` wide, in `edge`'s colour: the corner,
+ * the title, and `right` at the end (M7-4). The title is a chip in reverse
+ * video, so it shows with `NO_COLOR` too. The title is cut with `…`, never
+ * the corner. When the box is too narrow for both, `right` goes first: the
+ * title says who wants what, and the status line still counts the
+ * questions.
  */
-function border(title: string, right: string | undefined, width: number) {
-  // `┌ `, a space after the title, at least one `─`, and `┐` take 5.
-  const end = right ? ` ${right} ─` : "";
+function border(
+  title: string,
+  right: string | undefined,
+  width: number,
+  edge: (s: string) => string,
+) {
+  // `┏`, the chip's two spaces, at least one `━`, and `┓` take 5.
+  const end = right ? ` ${right} ━` : "";
   const keep = width - 5 - visibleWidth(end) >= 4 ? end : "";
-  const head = `┌ ${truncateToWidth(title, Math.max(1, width - 5 - visibleWidth(keep)), "…")} `;
-  const fill = "─".repeat(
-    Math.max(0, width - 1 - visibleWidth(head) - visibleWidth(keep)),
+  const chip = ` ${truncateToWidth(title, Math.max(1, width - 5 - visibleWidth(keep)), "…")} `;
+  const fill = "━".repeat(
+    Math.max(0, width - 2 - visibleWidth(chip) - visibleWidth(keep)),
   );
-  return `${head}${fill}${keep}┐`;
+  return `${edge("┏")}${inverse(edge(chip))}${edge(`${fill}${keep}┓`)}`;
 }
 
 const SETTINGS_THEME = {
@@ -151,14 +161,16 @@ function panelParts({
   const panelRoom = () =>
     Math.max(3, Math.min(12, (process.stdout.rows || 24) - 12));
   /** The pop-up's box: the title in its top border, then the body, a key
-   *  hint for a list, and the refusal. */
+   *  hint for a list, and the refusal. The border is yellow for a question
+   *  and cyan for the rest. */
   const frame: Component = {
     render(width) {
       if (!panel) return [];
+      const edge = queue.asking ? yellow : cyan;
       const inner = Math.max(1, width - 4);
       const side = (l: string) =>
-        `${dim("│")} ${truncateToWidth(l, inner, "…", true)} ${dim("│")}`;
-      const lines = [dim(border(panel.title, panel.right, width))];
+        `${edge("┃")} ${truncateToWidth(l, inner, "…", true)} ${edge("┃")}`;
+      const lines = [border(panel.title, panel.right, width, edge)];
       for (const l of panel.body.render(inner)) lines.push(side(l));
       if (panel.body instanceof SelectList) {
         lines.push(side(dim("↑↓ Enter · Esc back")));
@@ -168,7 +180,7 @@ function panelParts({
           lines.push(side(l));
         }
       }
-      lines.push(dim(`└${"─".repeat(Math.max(0, width - 2))}┘`));
+      lines.push(edge(`┗${"━".repeat(Math.max(0, width - 2))}┛`));
       return lines;
     },
     handleInput: (key) => panel?.body.handleInput?.(key),

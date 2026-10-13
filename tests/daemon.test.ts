@@ -4966,6 +4966,14 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
     );
     assert.equal(sent.status, 202, sent.body.error?.message);
   }
+  // The question opens its box, and the screen behind it loses its
+  // colours: the sidebar row is dim, with no other code up to its border.
+  // The row is drawn before the box's title, in the same frame. Esc puts
+  // the question aside.
+  await screen.seen(" 1 of 1 ━┓");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  assert.match(screen.out(), /\x1b\[2m {4}\? asker [^\x1b]*│/);
+  await screen.press("\x1b", "? 1 question · ctrl+o");
   // Yellow is a stall, magenta a question: the mark and the name are one
   // painted piece (M7-3), and a busy row shows its timer at the right.
   await screen.seen("\x1b[33m! stuck");
@@ -5057,7 +5065,7 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
   // with the side view hidden.
   await screen.press("\x18", "enter to send · ctrl+o menu");
   const row = bannerRow();
-  await screen.press(`\x1b[<0;40;${row}M\x1b[<0;40;${row}m`, " 1 of 1 ─┐");
+  await screen.press(`\x1b[<0;40;${row}M\x1b[<0;40;${row}m`, " 1 of 1 ━┓");
   await screen.seen("→ asker");
   assert.equal(bells(), 1, "one bell for one participant that waits");
   screen.child.stdin.write("\x03");
@@ -5273,7 +5281,7 @@ test("chat.ts on a real terminal answers a question in its pop-up, and a piped o
 
   // The box opens by itself, with who wants what in its title (M7-4) and
   // the tool's input, and deny comes first.
-  await screen.seen("┌ asker wants to edit ─");
+  await screen.seen("\x1b[7m\x1b[33m asker wants to edit ");
   await screen.seen("edit · Write ACP_TEST.md");
   await screen.seen("path: ACP_TEST.md");
   const write = await pendingOne(d);
@@ -5352,10 +5360,10 @@ test("chat.ts on a real terminal keeps a question waiting while the person types
   );
   assert.equal(sent.status, 202, sent.body.error?.message);
   await screen.seen("? 1 question · ctrl+o");
-  assert.doesNotMatch(plainText(screen.out()), / 1 of 1 ─┐/);
+  assert.doesNotMatch(plainText(screen.out()), / 1 of 1 ━┓/);
   // The menu lists it first; Enter opens its box.
   await screen.press("\x0f", "? asker asks: Write ACP_TEST.md");
-  await screen.press("\r", " 1 of 1 ─┐");
+  await screen.press("\r", " 1 of 1 ━┓");
   const write = await pendingOne(d);
   const other = await api(d, "POST", `/permissions/${write.id}`, {
     allow: true,
@@ -5599,16 +5607,16 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
       },
     }),
   );
-  await screen.seen(" 1 of 2 ─┐");
+  await screen.seen(" 1 of 2 ━┓");
   // Esc means away: the next question waits too, and both are counted.
   await screen.press("\x1b", "? 2 questions · ctrl+o");
   await screen.press("\x0f", "? asker asks: Delete something");
-  await screen.press("\r", " 1 of 2 ─┐");
+  await screen.press("\r", " 1 of 2 ━┓");
   await screen.press("\r", "already closed: timeout");
   assert.ok(answered, "the TUI posted the answer");
   // q1 never closed on this stream, so q2 opens as the second of two. Its
   // close comes now: q2 is the only one left.
-  await screen.seen(" 2 of 2 ─┐");
+  await screen.seen(" 2 of 2 ━┓");
   await screen.seen("END-OF-COMMAND");
   await screen.seen("Z".repeat(20));
   stream?.write(
@@ -5619,7 +5627,7 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
       reason: "timeout",
     }),
   );
-  await screen.press("", " 1 of 1 ─┐");
+  await screen.press("", " 1 of 1 ━┓");
   // Put q2 aside, list it, then it closes while the menu is open: picking
   // it says so and closes the menu.
   await screen.press("\x1b", "? 1 question · ctrl+o");
@@ -6189,8 +6197,8 @@ test("chat.ts on a real terminal opens a question that came behind the menu once
   // It never opens over another pop-up: it waits on the status line, which
   // wraps here, so the "? " can sit on the row above.
   await screen.seen("1 question · ctrl+o");
-  assert.doesNotMatch(plainText(screen.out()), / 1 of 1 ─┐/);
-  await screen.press("\x1b", " 1 of 1 ─┐");
+  assert.doesNotMatch(plainText(screen.out()), / 1 of 1 ━┓/);
+  await screen.press("\x1b", " 1 of 1 ━┓");
   screen.child.stdin.write("\x03");
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
@@ -7670,7 +7678,7 @@ test("chat.ts on a real terminal keeps a waiting question's keys when view chang
   await api(d, "POST", `/rooms/${open.body.id}/agents/${bob.id}/messages`, {
     text: "go",
   });
-  await screen.seen(" 1 of 2 ─┐");
+  await screen.seen(" 1 of 2 ━┓");
   await new Promise((ok) => setTimeout(ok, 1_000));
 
   // ctrl+o closes Alice's box (puts her question aside); ctrl+o opens the
