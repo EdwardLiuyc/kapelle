@@ -7,8 +7,8 @@
  * timeline's place. It shows any diff text: a question's edit, an agent's
  * checkout, and the preview a fast-forward hands in before it moves
  * (M6-11a). It also shows a list to pick from: the person's messages,
- * `ctrl+r` (M4-4). Before anything is put in it, it says how to fill it.
- * M4-13 puts a terminal in the same place.
+ * `ctrl+r` (M4-4). And it shows the person's shell, `/term` (M4-13,
+ * `chat/tui/term.ts`). Before anything is put in it, it says how to fill it.
  *
  * **Many files are one scroll.** The title names the file at the top of the
  * pane, `2 of 20`, and `]` and `[` jump between files. Each diff line is one
@@ -20,6 +20,10 @@
  * `ctrl+]` takes them back, so a message goes out while the view stays; its
  * single-letter keys would otherwise type into both. The text it is given is
  * already drawable (`cleanLines`).
+ *
+ * **A shell takes every key but `ctrl+]`** (decided 2026-10-13, #249): vim
+ * needs Esc and `ctrl+o`, and bash `ctrl+r` and `ctrl+x`. `chat/tui.ts`
+ * sends them before its own keys. The wheel scrolls the shell's history.
  */
 
 import {
@@ -34,6 +38,7 @@ import {
 import type { Diff } from "../../client/contract.ts";
 import { type DiffFile, filesOf, named } from "../../client/diff.ts";
 import { bold, cyan, dim, green, inverse, red } from "../common.ts";
+import type { Shell } from "./term.ts";
 
 /** At this many columns the pane sits beside the timeline; below, it takes
  *  the timeline's place. */
@@ -58,7 +63,7 @@ type PaneContent = {
   back?: () => void;
   /** The question it shows, while that question is open. */
   question?: string;
-} & ({ diff: Diff } | { list: PaneList });
+} & ({ diff: Diff } | { list: PaneList } | { shell: Shell });
 
 /** What the view says before anything is put in it. */
 const EMPTY = [
@@ -66,6 +71,7 @@ const EMPTY = [
   "/diff @name   what an agent changed",
   "view diff     in a question",
   "ctrl+r        your messages",
+  "/term         a shell",
 ];
 
 /** A diff line in git's colours. */
@@ -81,17 +87,20 @@ const paint = (line: string) => {
 
 /** The side view, and how to fill, show and hide it. `editor` gets the
  *  keys back when it hides; `setStatus` is the screen's; `gutter` is how
- *  many columns the sidebar takes. */
+ *  many columns the sidebar takes; `height` is how many rows the view has,
+ *  its title and its hints included. */
 function paneParts({
   tui,
   editor,
   setStatus,
   gutter,
+  height,
 }: {
   tui: TuiAltScreen;
   editor: Component;
   setStatus: () => void;
   gutter: () => number;
+  height: () => number;
 }) {
   const wide = () => (process.stdout.columns || 80) >= WIDE;
   /** The view's width in columns: half of what the sidebar leaves, or all
@@ -136,6 +145,8 @@ function paneParts({
   let cursor = 0;
   const listOf = () =>
     content && "list" in content ? content.list : undefined;
+  const shellOf = () =>
+    content && "shell" in content ? content.shell : undefined;
   /** Moves the list's cursor, and scrolls to keep it in view. */
   const move = (to: number) => {
     const n = listOf()?.rows().length ?? 0;
@@ -151,6 +162,13 @@ function paneParts({
   const body: Component = {
     render: (w) => {
       const inner = Math.max(1, w - 2);
+      // The shell's screen fills the view, so it is sized from it.
+      const shell = shellOf();
+      if (shell) {
+        return shell
+          .rows(inner, Math.max(1, height() - 2), focused)
+          .map((l) => `${dim("│")} ${l}`);
+      }
       const list = listOf();
       if (list) {
         // Short, and it grows as messages come: drawn every time.
@@ -174,6 +192,8 @@ function paneParts({
       return out;
     },
     handleInput(key) {
+      const shell = shellOf();
+      if (shell) return shell.key(key);
       const page = Math.max(1, scroll.viewportHeight - 1);
       if (matchesKey(key, Key.escape)) {
         focus(false);
@@ -238,7 +258,9 @@ function paneParts({
    *  pi-tui skips it, and drags a scrollbar itself. */
   scroll.handleMouse = (e) => {
     if (e.type !== "wheel" || !e.wheelDelta) return undefined;
-    scroll.scrollBy(e.wheelDelta);
+    const shell = shellOf();
+    if (shell) shell.scroll(e.wheelDelta);
+    else scroll.scrollBy(e.wheelDelta);
     const top = scroll.scrollTop;
     cursor = Math.max(top, Math.min(top + scroll.viewportHeight - 1, cursor));
     // A container answers with its target, as pi-tui's `dispatchMouseEvent`.
@@ -253,6 +275,11 @@ function paneParts({
     render: (w) => {
       if (!content) {
         return [dim(truncateToWidth(`┌ side view ${"─".repeat(w)}`, w, ""))];
+      }
+      if ("shell" in content) {
+        const how = content.shell.ended;
+        const title = `┌ ${content.title}${how ? ` · ${how}` : ""} ${"─".repeat(w)}`;
+        return [dim(truncateToWidth(title, w, ""))];
       }
       if ("list" in content) {
         const n = content.list.rows().length;
@@ -283,7 +310,9 @@ function paneParts({
           : ["↑↓ scroll"];
       if (files.length > 1) hints.push("] [ file");
       for (const k of content?.keys ?? []) hints.push(k.hint);
-      hints.push("ctrl+] type", "ctrl+x hide");
+      // A shell keeps ctrl+x, as every key but ctrl+].
+      if (shellOf()) hints.splice(0, Infinity, "ctrl+] keys back");
+      else hints.push("ctrl+] type", "ctrl+x hide");
       // The composer has the keys: only the way back is named.
       if (!focused)
         hints.splice(0, Infinity, "ctrl+] keys here", "ctrl+x hide");
