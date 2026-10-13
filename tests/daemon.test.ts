@@ -4852,8 +4852,12 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
     assert.equal(sent.status, 202, sent.body.error?.message);
   }
   // The question opens its box, and the screen behind it loses its
-  // colours; Esc puts it aside.
+  // colours: the sidebar row is dim, with no other code up to its border.
+  // The row is drawn before the box's title, in the same frame. Esc puts
+  // the question aside.
   await screen.seen("question 1 of 1");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  assert.match(screen.out(), /\x1b\[2m {4}\? asker [^\x1b]*│/);
   await screen.press("\x1b", "? 1 question · ctrl+o");
   // Yellow is a stall, magenta a question: the mark and the name are one
   // painted piece (M7-3), and a busy row shows its timer at the right.
