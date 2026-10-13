@@ -195,6 +195,11 @@ export interface Followed {
   state: RoomState;
   /** From `GET /rooms/:id`: each participant's checkout and notices. */
   dto?: RoomDto;
+  /** One `GET /rooms/:id` at a time: two replies cannot land out of order. */
+  reading?: boolean;
+  /** A participant line arrived while that read was in flight: read once
+   *  more after it, because the answer may predate the join (#232). */
+  again?: boolean;
   /** Set when its stream ended and the room did not: what happened. */
   lost?: Ended;
 }
@@ -266,17 +271,39 @@ export function roomSet(
   };
 
   /** Reads the room again for each participant's checkout and notices, and
-   *  the `paused` or `killed` a restart left, which no line says (M6-7a). */
+   *  the `paused` or `killed` a restart left, which no line says (M6-7a).
+   *
+   *  One read at a time per room. A trigger that lands during a read marks
+   *  `again`, and that read answers it with one more: the reply may predate
+   *  the trigger, and serialized replies cannot land out of order (#232). */
   const loadDto = (r: Followed) => {
+    if (r.reading) {
+      r.again = true;
+      return;
+    }
+    r.reading = true;
+    /** The read is over. A trigger during it gets one more read, also when
+     *  this one failed: the reply, if any, may predate the trigger. */
+    const done = () => {
+      r.reading = false;
+      if (!r.again) return;
+      r.again = false;
+      // The room may have left the set (dismissed) or the set may have
+      // ended while the read ran: a chained read would answer nobody.
+      if (over || rooms.get(r.entry.id) !== r) return;
+      loadDto(r);
+    };
     call<RoomDto>(d, `/rooms/${r.entry.id}`).then(
       (res) => {
-        if (!res.ok) return;
-        r.dto = res.body;
-        applyStatus(r.state, res.body);
-        on.loaded(r.entry.id);
+        if (res.ok) {
+          r.dto = res.body;
+          applyStatus(r.state, res.body);
+          on.loaded(r.entry.id);
+        }
+        done();
       },
       // The stream says what happened to the daemon; a header can wait.
-      () => {},
+      done,
     );
   };
 
@@ -284,11 +311,12 @@ export function roomSet(
     const e = applyLine(r.state, line);
     on.line(r.entry.id, line, e);
     // A participant who joined after the room was read has no checkout or
-    // notices in the header until the room is read again.
+    // notices in the header until the room is read again. An unset dto counts
+    // as missing too, so a join that beats the first answer reads again
+    // (#232); `loadDto` keeps it to one read at a time.
     if (
       line.update.sessionUpdate === "_client_participant_added" &&
-      r.dto &&
-      !r.dto.participants.some((p) => p.id === line.participantId)
+      !r.dto?.participants.some((p) => p.id === line.participantId)
     ) {
       loadDto(r);
     }
