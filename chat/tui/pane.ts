@@ -278,7 +278,8 @@ function paneParts({
       }
       if ("shell" in content) {
         const how = content.shell.ended;
-        const title = `┌ ${content.title}${how ? ` · ${how}` : ""} ${"─".repeat(w)}`;
+        const after = how ? ` · ${how} · /term starts a new one` : "";
+        const title = `┌ ${content.title}${after} ${"─".repeat(w)}`;
         return [dim(truncateToWidth(title, w, ""))];
       }
       if ("list" in content) {

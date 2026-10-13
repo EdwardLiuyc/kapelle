@@ -18,6 +18,10 @@
  * here: it is pure JS with no dependency, it only turns the shell's bytes
  * into cells, and its replies (a cursor report, say) go to this shell and
  * nowhere else. `rowOf` draws a row of cells as text with SGR colours.
+ * A throw while drawing ends the shell, not the chat: the pane says
+ * `screen failed`. A throw while xterm parses comes from its own timer,
+ * where no `try` of ours can reach it, so it ends the screen through
+ * `chat/tui.ts`'s crash handler; the room lives on in the daemon (PR #286).
  *
  * **Keys.** pi-tui asks the outer terminal for the kitty keyboard protocol or
  * modifyOtherKeys, so ctrl+c can come as `\x1b[99;5u`. A shell knows only
@@ -98,7 +102,9 @@ function legacy(id: string): string | undefined {
 /**
  * The bytes a shell gets for a key from pi-tui. A kitty key (`\x1b[…u`), a
  * modifyOtherKeys key (`\x1b[27;…~`) or a key with an event type (`:2`) is
- * turned into xterm's legacy bytes; anything else passes as it came. With
+ * turned into xterm's legacy bytes, or dropped when it has none: its raw
+ * bytes would read as Esc and text (in vim, leave insert mode and run
+ * them). Anything else passes as it came. With
  * `appCursor` set (DECCKM, as vim sets it), an arrow is `\x1bOA`.
  */
 export function keyBytes(data: string, appCursor: boolean): string {
@@ -109,7 +115,11 @@ export function keyBytes(data: string, appCursor: boolean): string {
     (csi.endsWith("u") || csi.startsWith("27;") || csi.includes(":"));
   if (encoded) {
     const id = parseKey(data);
-    out = decodeKittyPrintable(data) ?? (id && legacy(id)) ?? data;
+    // Kitty names a key with no character, such as the menu key, by a
+    // private-use code point; pi-tui reads it as printable.
+    const text = decodeKittyPrintable(data);
+    const printable = text && !/[\uE000-\uF8FF]/u.test(text) ? text : undefined;
+    out = printable ?? (id && legacy(id)) ?? "";
   }
   const arrow = out.length === 3 && out.startsWith("\x1b[") ? out[2] : "";
   return appCursor && arrow && "ABCDHF".includes(arrow) ? `\x1bO${arrow}` : out;
@@ -199,11 +209,16 @@ export function startShell(
   ended: (how: string) => void,
 ): Shell {
   const shell = process.env.SHELL || "/bin/sh";
-  let { cols, rows } = size;
+  // A tiny screen can ask for less than one; `stty` refuses that.
+  let cols = Math.max(1, size.cols);
+  let rows = Math.max(1, size.rows);
   // util-linux `script -c` runs the command with `$SHELL -c`, so SHELL is sh
   // for `script` and the user's own again for the shell. `script` outlives
   // a chat killed by a signal, so a watcher holds fd 3: when the chat's end
-  // closes, however the chat died, it hangs up the shell.
+  // closes, however the chat died, it hangs up the shell. The watcher reads
+  // fd 3, which the shell wrote its path to: that works because libuv makes
+  // an extra stdio pipe a socketpair, which goes both ways. Were it a
+  // one-way pipe, `cat` would fail at once and hang up a fresh shell.
   const inner = [
     "tty >&3",
     `stty rows ${rows} cols ${cols}`,
@@ -227,17 +242,25 @@ export function startShell(
   const cell = term.buffer.active.getNullCell();
   const child = spawn("script", args, {
     cwd,
-    stdio: ["pipe", "pipe", "ignore", "pipe"],
+    stdio: ["pipe", "pipe", "pipe", "pipe"],
     env: { ...process.env, SHELL: "/bin/sh", TERM: "xterm-256color" },
   });
-  // All three are pipes, as `stdio` asks: Node types them as maybe null.
-  const [stdin, stdout, , told] = child.stdio as unknown as [
+  // All four are pipes, as `stdio` asks: Node types them as maybe null.
+  const [stdin, stdout, stderr, told] = child.stdio as unknown as [
     Writable,
     Readable,
-    null,
+    Readable,
     Readable,
   ];
   let how: string | undefined;
+  /** Why the screen failed to draw, once it did. */
+  let broken: string | undefined;
+  /** `script`'s own complaint, such as flags it does not take: the shell's
+   *  errors go to the pty, so this is `script`'s alone. */
+  let complaint = "";
+  stderr.on("data", (b: Buffer) => {
+    if (complaint.length < 200) complaint += b.toString();
+  });
   const end = (why: string) => {
     if (how !== undefined) return;
     how = why;
@@ -255,7 +278,13 @@ export function startShell(
   child.on("exit", (code, signal) => {
     // The watcher's turn to end, before its shell's pid can be reused.
     told.destroy();
-    end(signal ? `killed by ${signal}` : `exited (code ${code})`);
+    const first = complaint.trim().split("\n")[0];
+    end(
+      broken ??
+        (signal
+          ? `killed by ${signal}`
+          : `exited (code ${code})${code && first ? `: ${first}` : ""}`),
+    );
   });
   stdout.on("data", (b: Buffer) => term.write(b, changed));
   // The answers the screen sends, such as where the cursor is.
@@ -292,20 +321,32 @@ export function startShell(
       return how;
     },
     rows(c, r, cursor) {
-      if (c !== cols || r !== rows) {
-        cols = Math.max(1, c);
-        rows = Math.max(1, r);
-        term.resize(cols, rows);
-        sync();
+      // Cut to the view: a line wider than it is no line to draw.
+      if (broken) return [broken.slice(0, Math.max(1, c))];
+      try {
+        c = Math.max(1, c);
+        r = Math.max(1, r);
+        if (c !== cols || r !== rows) {
+          cols = c;
+          rows = r;
+          term.resize(cols, rows);
+          sync();
+        }
+        const b = term.buffer.active;
+        const at = cursor && b.viewportY === b.baseY ? b.cursorY : -1;
+        const out: string[] = [];
+        for (let y = 0; y < rows; y++) {
+          const line = b.getLine(b.viewportY + y);
+          out.push(rowOf(line, cols, cell, y === at ? b.cursorX : -1));
+        }
+        return out;
+      } catch (err) {
+        // M1c-7: a bad release of the screen costs this pane, not the chat.
+        // The exit says why; until then the pane does.
+        broken = `screen failed: ${(err as Error).message}`;
+        child.kill();
+        return [broken.slice(0, Math.max(1, c))];
       }
-      const b = term.buffer.active;
-      const at = cursor && b.viewportY === b.baseY ? b.cursorY : -1;
-      const out: string[] = [];
-      for (let y = 0; y < rows; y++) {
-        const line = b.getLine(b.viewportY + y);
-        out.push(rowOf(line, cols, cell, y === at ? b.cursorX : -1));
-      }
-      return out;
     },
     key(data) {
       if (how !== undefined) return;

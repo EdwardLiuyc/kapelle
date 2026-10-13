@@ -2296,7 +2296,9 @@ no native code but cannot resize. Not ACP `terminal/*`: that stays off (§M0-3).
 screen, and its exit leaves the chat running.
 Decisions: M1c-7 (amended here).
 **Decided at pickup 2026-10-13 (#249).** The shell is the person's, not an agent's:
-one per chat, which `/term` starts in the open room's `cwd` and shows again later. It
+one per chat, which `/term` starts in the open room's `cwd` and shows again later. So
+*done when* reads "in the room's `cwd`", not "in the agent's checkout", and a leading
+`@name` changes nothing, as for the other room commands. It
 lives until it exits or the chat ends, in the chat process, never in the daemon. **The
 pty is `script(1)`.** `node-pty` 1.1.0 ships prebuilds for darwin and win32 only, so
 Linux needs a compiler; its forks are beta-only (`@lydell/node-pty`) or download at

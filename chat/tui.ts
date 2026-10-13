@@ -1044,7 +1044,11 @@ function chatTui(
       }
       if (c.verb === "leave") return end(0, left());
       if (c.verb === "help") return showHelp();
-      if (c.verb === "term") return term();
+      // Typed again to show the shell: ctrl+p brings it back.
+      if (c.verb === "term") {
+        editor.addToHistory(text);
+        return term();
+      }
       if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
       if (c.verb === "ff") {
         editor.addToHistory(text);

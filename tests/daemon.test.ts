@@ -4778,8 +4778,14 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   await run('[ $$ = "$(cat shell.pid)" ] && echo "same=$((1))"', /same=1/);
 
   // Its exit leaves the chat; the next /term starts a new shell.
-  await press("exit 3\r", "exited (code 3)");
-  await press("/term\r", "ctrl+] keys back");
+  await press("exit 3\r", "exited (code 3) · /term starts a new one");
+  // /term is in the composer's history: ↑ brings it back (PR #286).
+  {
+    const from = out().length;
+    child.stdin.write("\x1b[A");
+    await drawn(from, /^ \/term\s*$/m);
+  }
+  await press("\r", "ctrl+] keys back");
   await run('echo "again=$((2+2))"', /again=4/);
   const pid = Number((await readFile(join(cwd, "shell.pid"), "utf8")).trim());
   await run('echo $$ > shell.pid; echo "saved=$((2))"', /saved=2/);

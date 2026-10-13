@@ -5,9 +5,13 @@
  */
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import xterm from "@xterm/headless";
-import { keyBytes, rowOf } from "../tui/term.ts";
+import { keyBytes, rowOf, type Shell, startShell } from "../tui/term.ts";
 
 test("a kitty or modifyOtherKeys key reaches the shell as its legacy bytes", () => {
   const cases: [string, string, string][] = [
@@ -24,6 +28,12 @@ test("a kitty or modifyOtherKeys key reaches the shell as its legacy bytes", () 
   for (const [key, bytes, what] of cases) {
     assert.equal(keyBytes(key, false), bytes, what);
   }
+});
+
+test("an encoded key with no legacy form is dropped, not sent raw (PR #286)", () => {
+  // Raw, `\x1b[46;5u` is Esc then text: in vim, leave insert mode and run it.
+  assert.equal(keyBytes("\x1b[46;5u", false), "", "ctrl+.");
+  assert.equal(keyBytes("\x1b[57428u", false), "", "the menu key");
 });
 
 test("a legacy key passes as it came, and an arrow follows DECCKM", () => {
@@ -57,4 +67,96 @@ test("a row keeps its colours and is exactly as wide as the view", async () => {
   // A wide character takes two columns and is written once.
   assert.equal(await drawn("界a"), "界a     ");
   assert.equal(await drawn("ab", 1), "a\x1b[0;7mb\x1b[0m      ", "the cursor");
+});
+
+const noScript =
+  process.platform !== "linux" || spawnSync("script", ["--version"]).status
+    ? "needs util-linux script(1)"
+    : false;
+
+/** A shell in a temp folder, and the reason it ended once it did. */
+async function shellIn(
+  t: test.TestContext,
+  size = { cols: 40, rows: 5 },
+  env: Record<string, string> = {},
+) {
+  const dir = await mkdtemp(join(tmpdir(), "term-"));
+  const saved = { ...process.env };
+  Object.assign(process.env, { SHELL: "/bin/sh", ...env });
+  let how: string | undefined;
+  const shell: Shell = startShell(
+    dir,
+    size,
+    () => {},
+    (h) => {
+      how = h;
+    },
+  );
+  process.env = saved;
+  t.after(async () => {
+    shell.kill();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const ended = async () => {
+    for (const until = Date.now() + 5000; how === undefined; ) {
+      assert.ok(Date.now() < until, "the shell never ended");
+      await new Promise((ok) => setTimeout(ok, 20));
+    }
+    return how;
+  };
+  return { dir, shell, ended };
+}
+
+/** The shell's screen as plain text, once it shows `text`. */
+async function shows(shell: Shell, text: string) {
+  for (const until = Date.now() + 5000; ; ) {
+    const plain = shell
+      .rows(40, 5, false)
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: SGR is the subject.
+      .map((l) => l.replace(/\x1b\[[\d;]*m/g, "").trimEnd())
+      .join("\n");
+    if (plain.includes(text)) return plain;
+    assert.ok(Date.now() < until, `never showed ${text}: ${plain}`);
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+}
+
+test("a start size under one is one, so stty takes it (PR #286)", {
+  skip: noScript,
+}, async (t) => {
+  const { shell } = await shellIn(t, { cols: -1, rows: -1 });
+  shell.key("echo ok=$((1))\r");
+  const screen = await shows(shell, "ok=1");
+  assert.doesNotMatch(screen, /invalid/);
+});
+
+test("a throw while drawing ends the shell, not the chat (PR #286)", {
+  skip: noScript,
+}, async (t) => {
+  const { shell, ended } = await shellIn(t);
+  await shows(shell, "$");
+  const resize = xterm.Terminal.prototype.resize;
+  xterm.Terminal.prototype.resize = () => {
+    throw new Error("a bad release");
+  };
+  t.after(() => {
+    xterm.Terminal.prototype.resize = resize;
+  });
+  assert.deepEqual(shell.rows(60, 5, false), ["screen failed: a bad release"]);
+  assert.equal(await ended(), "screen failed: a bad release");
+});
+
+test("a script that refuses to start says why (PR #286)", async (t) => {
+  // A script(1) that takes none of our flags, as busybox's might not.
+  const bin = await mkdtemp(join(tmpdir(), "bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(
+    join(bin, "script"),
+    "#!/bin/sh\necho 'script: invalid option -- q' >&2\nexit 1\n",
+  );
+  await chmod(join(bin, "script"), 0o755);
+  const { ended } = await shellIn(t, undefined, {
+    PATH: `${bin}:${process.env.PATH}`,
+  });
+  assert.equal(await ended(), "exited (code 1): script: invalid option -- q");
 });
