@@ -83,7 +83,9 @@
  * one (R32a); 16 wait at most, and the next is refused `queue_full` (R41).
  * The queue is in memory only, so a daemon restart loses it. `cancel` drops
  * the queue, then cancels the live turn; the session stays (S5a). A dropped
- * message is never sent, and `_client_queue_cleared` says how many.
+ * message is never sent, and `_client_queue_cleared` says how many. A
+ * message may name the participant that sent it (M8-1); the harness then
+ * reads `[from <name>]` first, and the log records the sender's id.
  *
  * **One log for the room** (S10). The bus names each event's participant by
  * its id in `agent`, and the log writes it as `participantId` beside the
@@ -241,6 +243,9 @@ export interface ParticipantChanges {
   mode?: ClientMode;
 }
 
+/** Who sent a message, when a participant did (M8-1). */
+type Sender = Pick<Participant, "id" | "name">;
+
 export interface Participant {
   /** Opaque (`newParticipantId`); a rename never moves it. */
   readonly id: string;
@@ -276,8 +281,13 @@ export interface Participant {
    * messages already wait. A turn that fails is not a rejection: it ends with
    * `_client_turn_ended` carrying `error`, which is how every client learns
    * of it.
+   *
+   * `from` is the participant that sent it; none means the person (M8-1).
+   * Its harness then gets `[from <name>]` as an extra first line, with the
+   * name as it is now; the log keeps `text` without it. The caller checks
+   * who may send.
    */
-  send(text: string): Promise<void>;
+  send(text: string, from?: Sender): Promise<void>;
   /** Drops the queue, then asks the harness to end the live turn. The
    *  session stays (S5a). False when no turn is live. */
   cancel(): boolean;
@@ -1468,7 +1478,7 @@ function createParticipant({
   let held: Promise<unknown> | undefined;
   /** Set by a remove, a dismiss or a pause: nothing starts after it. */
   let stopping = false;
-  const waiting: { text: string; done: () => void }[] = [];
+  const waiting: { text: string; from?: Sender; done: () => void }[] = [];
 
   let version: string | undefined;
   const warn = () => {
@@ -1570,13 +1580,18 @@ function createParticipant({
     onRevive();
   };
 
-  const begin = (text: string): Promise<void> => {
+  const begin = (text: string, from?: Sender): Promise<void> => {
     turns += 1;
     const controller = new AbortController();
     turnAbort = controller;
     bus.emit({
       agent: id,
-      update: { sessionUpdate: "_client_user_message", text, turn: turns },
+      update: {
+        sessionUpdate: "_client_user_message",
+        text,
+        turn: turns,
+        ...(from && { from: from.id }),
+      },
     });
     const watch = watchdog.watch(id, limits);
     // At once when the harness is up and its mode is current, so a cancel
@@ -1588,7 +1603,7 @@ function createParticipant({
         return { stopReason: "cancelled" as const };
       }
       if (!agent) throw new Error("the agent's harness has exited");
-      return agent.prompt(text);
+      return agent.prompt(from ? `[from ${from.name}]\n${text}` : text);
     };
     let ready: Promise<void> | undefined;
     if (!agent) ready = revive();
@@ -1631,7 +1646,7 @@ function createParticipant({
   const next = () => {
     if (stopped || stopping || dismissed()) return drop();
     const queued = waiting.shift();
-    if (queued) void begin(queued.text).then(queued.done);
+    if (queued) void begin(queued.text, queued.from).then(queued.done);
   };
 
   // The caller has checked the participant is idle, with no await since.
@@ -1731,14 +1746,18 @@ function createParticipant({
     get queued() {
       return waiting.length;
     },
-    send(text) {
+    send(text, sender) {
       if (dismissed()) {
         throw new RoomRefusal("room_dismissed", "the room is dismissed");
       }
       if (stopping) {
         throw new RoomRefusal("agent_exited", "the agent is stopping");
       }
-      if (!turn && !held) return begin(text);
+      // A copy, so a rename while it waits does not change the line its
+      // harness reads. A screen names `from` by the roster, so it shows the
+      // new name: the id is what lasts.
+      const from = sender && { id: sender.id, name: sender.name };
+      if (!turn && !held) return begin(text, from);
       if (waiting.length >= QUEUE_BOUND) {
         throw new RoomRefusal(
           "queue_full",
@@ -1748,9 +1767,13 @@ function createParticipant({
       }
       bus.emit({
         agent: id,
-        update: { sessionUpdate: "_client_message_queued", text },
+        update: {
+          sessionUpdate: "_client_message_queued",
+          text,
+          ...(from && { from: from.id }),
+        },
       });
-      return new Promise<void>((done) => waiting.push({ text, done }));
+      return new Promise<void>((done) => waiting.push({ text, from, done }));
     },
     cancel() {
       if (!turn) return false;

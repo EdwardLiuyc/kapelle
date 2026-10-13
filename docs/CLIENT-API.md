@@ -7,10 +7,10 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.10** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.11** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
-rooms stable, M6-7b, #179, which added `resumed: "loaded"`, and M6-7c, #235, which added
-`DELETE /rooms/:id`).
+rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
+`DELETE /rooms/:id`, and M8-1, #265, which added a message's `from`).
 
 ## Contents
 
@@ -252,6 +252,7 @@ request that is not valid HTTP gets `400`.
 | `run_not_found` | `404` | No run has this id. | |
 | `room_not_found` | `404` | No room has this id. | |
 | `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
+| `invalid_sender` | `400` | A message's `from` is not the room's orchestrator, or the orchestrator sent a message to itself. Since 1.11. | Only the orchestrator sends with `from`. Send without it for the person. |
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
@@ -800,8 +801,8 @@ with ACP names.
 
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
-| `_client_message_queued` | `text` | A message reached a busy participant and waits. `_client_user_message` follows when its turn starts. |
-| `_client_user_message` | `text`, `turn` | The participant's turn starts with this message. The line's `participantId` names who got it. `turn` counts that participant's turns from 1. It is absent on lines written before 1.5. |
+| `_client_message_queued` | `text`, `from?` | A message reached a busy participant and waits. `_client_user_message` follows when its turn starts. `from` as below. |
+| `_client_user_message` | `text`, `turn`, `from?` | The participant's turn starts with this message. The line's `participantId` names who got it. `turn` counts that participant's turns from 1. It is absent on lines written before 1.5. `from` is the id of the participant that sent the message (since 1.11). No `from` means the person sent it. |
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
@@ -1125,7 +1126,8 @@ unknown id.
 The message goes to the participant with the `orchestrator` role. Everything else is as
 for [`POST /rooms/:id/agents/:agentId/messages`](#post-roomsidagentsagentidmessages).
 
-**Request:** `{ "text": "What does this repo do?" }`
+**Request:** `{ "text": "What does this repo do?" }`. It takes no `from`: the
+orchestrator never sends to itself, so `from` is an unknown field here.
 
 **Reply `202`:** `{ "seq": 41, "queued": 0 }`, as below.
 
@@ -1240,7 +1242,16 @@ is free again.
 One message to one participant. The daemon never reads the text. A client turns a leading
 `@name` into the participant id itself: see [Addressing](#addressing).
 
-**Request:** `{ "text": "Review the login change." }`
+**Request:** `{ "text": "Review the login change." }`, or with
+`"from": "<the orchestrator's id>"` when the orchestrator sends it (since 1.11).
+
+- No `from` means the person sent it.
+- `from` must be the id of the participant whose `role` is `orchestrator`, and not the
+  target. There is one operator and one token, so the daemon trusts `from` as it trusts
+  the rest of the body. It is information, not a control.
+- With `from`, the harness gets one extra first line, `[from <name>]`, with the sender's
+  name at that time. The log's `text` does not have that line, and `from` is on its
+  `_client_message_queued` and `_client_user_message`.
 
 **Reply `202`:** `{ "seq": 41, "queued": 1 }`. The message is on the room's log.
 
@@ -1260,7 +1271,8 @@ A message to an `exited`, `killed` or `paused` participant revives it first: see
 harness that cannot start ends the turn with `_client_turn_ended` and `error`.
 
 **Refusals:** `404` `room_not_found` or `participant_not_found`. `400` `invalid_request`
-for empty text. `409` `room_dismissed` for a dismissed room. `409` `agent_exited` while the
+for empty text. `400` `invalid_sender` for a `from` that is not the orchestrator, or that
+is the target. `409` `room_dismissed` for a dismissed room. `409` `agent_exited` while the
 participant is being removed or the daemon shuts down. `429` `queue_full` when 16 messages
 already wait.
 

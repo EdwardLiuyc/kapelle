@@ -25,6 +25,7 @@ import {
   applyStatus,
   cleanLines,
   type Entry,
+  fromPerson,
   needsAttention,
   newRoomState,
   printable,
@@ -433,6 +434,23 @@ test("a question's title and input lose their control characters", () => {
     "rm [2J -rf /",
     { "cmd ": "a ]0;owned b c" },
   ]);
+  // The kind is one ACP defines, or `other`: the question box's title
+  // shows it (M7-4), and a harness can send any JSON there.
+  for (const kind of [7, "\x1b]52;c;aGk=\x07edit"]) {
+    const q = applyLine(state, {
+      seq: state.seq + 1,
+      roomId: "r",
+      participantId: "p",
+      at: "2026-10-01T00:00:00.000Z",
+      update: {
+        sessionUpdate: "_client_permission_queued",
+        id: `q${state.seq}`,
+        kind: kind as never,
+        title: "t",
+      },
+    });
+    assert.equal(q?.type === "permission" && q.kind, "other");
+  }
   assert.equal(printable("tab\there"), "tab here");
   // Bidi, zero-width and line-separator characters change what a person
   // reads, not what runs: a right-to-left override can flip a command.
@@ -1065,6 +1083,33 @@ test("a tool call's update neither splits a streaming answer nor counts as unrea
   chunk("two");
   assert.equal(answer?.type === "answer" && answer.text, "one two");
   assert.equal(state.participants.get("ann")?.unread, unread);
+});
+
+test("a message the orchestrator sent counts as unread; the person's does not (M8-1)", () => {
+  const { state, send } = toolRoom();
+  const unread = () => state.participants.get("ann")?.unread;
+  assert.equal(unread(), 0, "the person's go");
+  const mine = send("ann", {
+    sessionUpdate: "_client_message_queued",
+    text: "a",
+  });
+  assert.equal(unread(), 0);
+  const queued = send("ann", {
+    sessionUpdate: "_client_message_queued",
+    text: "b",
+    from: "bob",
+  });
+  const started = send("ann", {
+    sessionUpdate: "_client_user_message",
+    text: "b",
+    turn: 2,
+    from: "bob",
+  });
+  assert.equal(unread(), 2);
+  assert.deepEqual(
+    [mine, queued, started].map((e) => e && fromPerson(e)),
+    [true, false, false],
+  );
 });
 
 test("a tool call's update for an unknown id, or another participant's, changes nothing", () => {

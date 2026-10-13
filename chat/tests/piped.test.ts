@@ -59,3 +59,51 @@ test("a tool call prints again only when its title, detail or failure changed", 
     "ann:\n  · Terminal\n  · ls\n    /w\n  · ls — failed\n    /w\n",
   );
 });
+
+test("a message from the orchestrator prints po → ann, live and queued (M8-1)", (t) => {
+  const state = newRoomState();
+  const printer = makePrinter(state);
+  let out = "";
+  t.mock.method(process.stdout, "write", (s: string) => {
+    out += s;
+    return true;
+  });
+  let seq = 0;
+  const send = (update: Record<string, unknown>, participantId = "p-ann") => {
+    const e = applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-10T00:00:00Z",
+      roomId: "r1",
+      participantId,
+      update: update as unknown as RoomEventLine["update"],
+    });
+    if (e) printer.show(e);
+  };
+  for (const [id, name] of [
+    ["p-ann", "ann"],
+    ["p-po", "po"],
+  ]) {
+    send(
+      {
+        sessionUpdate: "_client_participant_added",
+        name,
+        harness: "mock",
+        mode: "auto",
+      },
+      id,
+    );
+  }
+  send({ sessionUpdate: "_client_user_message", text: "a", turn: 1 });
+  send({ sessionUpdate: "_client_message_queued", text: "b", from: "p-po" });
+  send({
+    sessionUpdate: "_client_user_message",
+    text: "b",
+    turn: 2,
+    from: "p-po",
+  });
+  t.mock.restoreAll();
+  assert.equal(
+    out,
+    "you → ann: a\n  (queued for ann, from po) b\npo → ann: b\n",
+  );
+});

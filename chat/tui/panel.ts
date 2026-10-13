@@ -70,17 +70,35 @@ const TYPE_IT = new Set([OTHER_REF, OTHER_HARNESS]);
  */
 interface Panel {
   title: string;
+  /** Text at the right of the top border: a question's `n of m` (M7-4). */
+  right?: string;
   body: Component;
   error?: string;
 }
 
-/** The pop-up's top border, `width` wide: the title as a chip in reverse
- *  video, so it shows with `NO_COLOR` too. */
-const topEdge = (title: string, width: number, edge: (s: string) => string) => {
-  const chip = ` ${truncateToWidth(title, Math.max(1, width - 6), "…")} `;
-  const rest = "━".repeat(Math.max(0, width - 3 - visibleWidth(chip)));
-  return `${edge("┏━")}${inverse(edge(chip))}${edge(`${rest}┓`)}`;
-};
+/**
+ * The pop-up's top border, `width` wide, in `edge`'s colour: the corner,
+ * the title, and `right` at the end (M7-4). The title is a chip in reverse
+ * video, so it shows with `NO_COLOR` too. The title is cut with `…`, never
+ * the corner. When the box is too narrow for both, `right` goes first: the
+ * title says who wants what, and the status line still counts the
+ * questions.
+ */
+function border(
+  title: string,
+  right: string | undefined,
+  width: number,
+  edge: (s: string) => string,
+) {
+  // `┏`, the chip's two spaces, at least one `━`, and `┓` take 5.
+  const end = right ? ` ${right} ━` : "";
+  const keep = width - 5 - visibleWidth(end) >= 4 ? end : "";
+  const chip = ` ${truncateToWidth(title, Math.max(1, width - 5 - visibleWidth(keep)), "…")} `;
+  const fill = "━".repeat(
+    Math.max(0, width - 2 - visibleWidth(chip) - visibleWidth(keep)),
+  );
+  return `${edge("┏")}${inverse(edge(chip))}${edge(`${fill}${keep}┓`)}`;
+}
 
 const SETTINGS_THEME = {
   label: (s: string, on: boolean) => (on ? bold(s) : s),
@@ -152,7 +170,7 @@ function panelParts({
       const inner = Math.max(1, width - 4);
       const side = (l: string) =>
         `${edge("┃")} ${truncateToWidth(l, inner, "…", true)} ${edge("┃")}`;
-      const lines = [topEdge(panel.title, width, edge)];
+      const lines = [border(panel.title, panel.right, width, edge)];
       for (const l of panel.body.render(inner)) lines.push(side(l));
       if (panel.body instanceof SelectList) {
         lines.push(side(dim("↑↓ Enter · Esc back")));
@@ -672,4 +690,4 @@ function panelParts({
   };
 }
 
-export { EDITOR_THEME, panelParts, topEdge };
+export { border, EDITOR_THEME, panelParts };

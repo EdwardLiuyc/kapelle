@@ -46,7 +46,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 10 } as const;
+export const API_VERSION = { major: 1, minor: 11 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -113,6 +113,7 @@ export type ErrorCode =
   | "orchestrator_exists"
   | "name_taken"
   | "participant_not_found"
+  | "invalid_sender"
   | "idempotency_conflict"
   | "idempotency_in_progress"
   | "shutting_down"
