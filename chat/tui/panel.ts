@@ -73,6 +73,23 @@ interface Panel {
   error?: string;
 }
 
+/**
+ * The pop-up's top border, `width` wide: the corner, the title, and `right`
+ * at the end (M7-4). The title is cut with `…`, never the corner. When the
+ * box is too narrow for both, `right` goes first: the title says who wants
+ * what, and the status line still counts the questions.
+ */
+function border(title: string, right: string | undefined, width: number) {
+  // `┌ `, a space after the title, at least one `─`, and `┐` take 5.
+  const end = right ? ` ${right} ─` : "";
+  const keep = width - 5 - visibleWidth(end) >= 4 ? end : "";
+  const head = `┌ ${truncateToWidth(title, Math.max(1, width - 5 - visibleWidth(keep)), "…")} `;
+  const fill = "─".repeat(
+    Math.max(0, width - 1 - visibleWidth(head) - visibleWidth(keep)),
+  );
+  return `${head}${fill}${keep}┐`;
+}
+
 const SETTINGS_THEME = {
   label: (s: string, on: boolean) => (on ? bold(s) : s),
   value: (s: string, on: boolean) => (on ? cyan(s) : dim(s)),
@@ -141,11 +158,7 @@ function panelParts({
       const inner = Math.max(1, width - 4);
       const side = (l: string) =>
         `${dim("│")} ${truncateToWidth(l, inner, "…", true)} ${dim("│")}`;
-      const end = panel.right ? ` ${panel.right} ─┐` : "┐";
-      const top = `┌ ${panel.title} ${"─".repeat(width)}`;
-      const lines = [
-        dim(`${truncateToWidth(top, width - visibleWidth(end), "")}${end}`),
-      ];
+      const lines = [dim(border(panel.title, panel.right, width))];
       for (const l of panel.body.render(inner)) lines.push(side(l));
       if (panel.body instanceof SelectList) {
         lines.push(side(dim("↑↓ Enter · Esc back")));
@@ -665,4 +678,4 @@ function panelParts({
   };
 }
 
-export { EDITOR_THEME, panelParts };
+export { border, EDITOR_THEME, panelParts };

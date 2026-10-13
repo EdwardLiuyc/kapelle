@@ -4330,11 +4330,11 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
     for (const { spec } of await importsOf(file)) {
       if (spec.startsWith("node:")) continue;
       if (!spec.startsWith(".")) {
-        // A file of pi-tui is pi-tui: `decodePrintableKey` is not in its
-        // main exports (M7-4).
+        // One file of pi-tui by name: `decodePrintableKey` is not in its
+        // main exports (M7-4). Another deep import is a new decision.
         assert.ok(
           spec === "@earendil-works/pi-tui" ||
-            spec.startsWith("@earendil-works/pi-tui/"),
+            spec === "@earendil-works/pi-tui/dist/keys.js",
           `${file} imports ${spec}`,
         );
         continue;

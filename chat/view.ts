@@ -463,7 +463,9 @@ const PICK: Record<string, number> = { "1": 0, n: 0, "2": 1, y: 1, "3": 2 };
  * (decided 2026-10-13): the box opens by itself, so a sentence typed into
  * it by mistake, as `try it⏎`, still ends on deny. A chunk counts its last
  * character. `undefined` for a key that types nothing, such as an arrow or
- * Enter: the list has it. `rows` is 2 when there is no `view diff`.
+ * Enter: the list has it. So is a chunk that holds a control character, as
+ * `2\r` from a paste: the list matches none of it, so nothing moves and
+ * nothing is answered. `rows` is 2 when there is no `view diff`.
  */
 export function pickRow(typed: string, rows: number): number | undefined {
   if (!typed || /\p{Cc}/u.test(typed)) return undefined;

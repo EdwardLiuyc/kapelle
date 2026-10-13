@@ -697,7 +697,8 @@ test("a key in the question box only moves its cursor, and any other typed chara
   assert.equal(pickRow("try it", 3), 0);
   assert.equal(pickRow("ok y", 3), 1);
   // Keys that type nothing stay with the list: arrows, Enter, Esc.
-  for (const key of ["\x1b[A", "\x1b[B", "\r", "\x1b"]) {
+  // A chunk with a control character too: `2\r` answers nothing.
+  for (const key of ["\x1b[A", "\x1b[B", "\r", "\x1b", "2\r"]) {
     assert.equal(pickRow(key, 3), undefined);
   }
 });

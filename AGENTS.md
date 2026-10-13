@@ -57,7 +57,9 @@ presentation, after the event bus, where its worst failure is cosmetic. It must 
 change a permission decision, the path guard, the policy, mode negotiation, or anything
 that reaches a subprocess. Pin it exactly, and give it a fallback so a bad release costs
 the screen, never the run: `core/markdown.ts` returns the raw text if `marked` throws,
-and `chat/tui.ts` leaves pi-tui's screen before it exits on a throw.
+and `chat/tui.ts` leaves pi-tui's screen before it exits on a throw. One import has no
+fallback: `chat/tui/question.ts` reads pi-tui's `dist/keys.js`, a file outside its main
+exports. If a new pi-tui moves it, `chat.ts` fails at start, so check it at each bump.
 
 **This code is the client. The coding harness is the agent.** We spawn the harness as a
 subprocess, own the workspace, serve its filesystem requests and decide its permissions.

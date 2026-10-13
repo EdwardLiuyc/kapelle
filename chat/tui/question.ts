@@ -104,7 +104,9 @@ function questionParts({
     const name = nameOf(r.state, q.participantId);
     const { kind } = q;
     const title =
-      kind === "other" ? `${name} asks` : `${name} wants to ${kind}`;
+      kind === "other"
+        ? `${name} asks`
+        : `${name} wants to ${kind.replaceAll("_", " ")}`;
     showPanel(title, {
       render: (w) => {
         // Wrapped, not cut: the end of a command or a path is what the
