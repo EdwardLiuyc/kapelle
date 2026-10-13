@@ -747,7 +747,7 @@ type Card = Pick<TaskRun, "id" | "agent" | "durationMs" | "transcript"> &
 /**
  * A task as `GET /runs/:id` reports it: since M5-2 one shape for a live and a
  * restored run — `TaskDto` in `client/contract.ts`. This bridge type stays
- * until M5-10 refactors `attach`; a restored record's status is a plain string
+ * until M5-10b refactors `attach`; a restored record's status is a plain string
  * — it may say `queued` for a task the crash left unstarted, which is not a
  * `TaskStatus` and must still keep the verdict away from `done`.
  */
@@ -759,7 +759,7 @@ type RecordedTask = Omit<Partial<TaskRun>, "status"> & {
 /**
  * `GET /runs/:id` as `attach` reads it. Since M5-2 `tasks` is the one shape
  * for a live and a restored run; `report` is the pre-M5-2 field, kept until
- * M5-10 removes the branch (daemon.ts, M2-6).
+ * M5-10b removes the branch (daemon.ts, M2-6).
  */
 interface AttachState {
   error?: string;
@@ -1050,7 +1050,7 @@ async function attachRun(): Promise<number> {
       const { agent, update } = event;
       if (only && agent !== only) continue;
       // The run's own events carry `agent: ""` (M5-5) and belong to no card.
-      // The record below already settles the run; M5-10's reducer reads them.
+      // The record below already settles the run; M5-10b's reducer reads them.
       if (agent === "") continue;
       const c = card(agent);
       // One task owns the cursor, so it can be drawn in full; the milestone

@@ -1972,7 +1972,7 @@ task card is built from the stream, because a run restored after a restart has n
 swallowed ^C at a y/N prompt on a TTY and hung every `ask` path, so `makeAskPolicy`
 re-raises it as a real SIGINT.
 
-**Amended (room model):** `attach` is later refactored onto the shared `client/` module (M5-10); the room SSE shape is `{seq, roomId, participantId, update}`.
+**Amended (room model):** `attach` is later refactored onto the shared `client/` module: M5-10a moved its HTTP calls there (#142), and M5-10b moves its parsing onto a run reducer; the room SSE shape is `{seq, roomId, participantId, update}`.
 
 **M2-10 · List detached runs and their tasks · S · needs M2-9**
 Added 2026-09-18 at M2-9's pickup (#39). A person who detached runs has no command that says
@@ -1999,6 +1999,8 @@ rules, and no event exists for `queued`).
 
 **Runs only.** The dependency graph, worktree inheritance and handoff below are
 run-file semantics. Rooms have no graph and no scheduler (M6); they never reuse these stories.
+**Amended 2026-10-13 (#278): parked.** No story here is started, and each one is Deferred
+on the board. Rooms need none of them.
 
 **M3-1 · `core/scheduler.ts` · M · needs M1b-2**
 Topological execution: parallel where no `needs`, sequential where there is. Lifts M1b-1's
@@ -2415,12 +2417,14 @@ Decisions: M1c-7.
 
 ---
 
-## M5 — Client contract (proposed)
+## M5 — Client contract
 
 The contract work that makes `attach`, the TUI and a future bridge speak one documented
 API. Decisions live in `docs/CONTRACT-PLAN.md` (A, B, C, D, E, F, G, H, I, J, K, M);
-this section is the work breakdown once they are settled. Every story below is
-**Proposed**.
+this section is the work breakdown once they are settled. Every story below was
+**Proposed** when it was written. **Amended 2026-10-13 (#278):** the decisions are
+settled, so the title no longer says "proposed". The `M5_done` milestone shows which
+stories landed.
 
 **M5-1 · Contract artifact and version handshake · M · needs M2-10**
 `docs/CLIENT-API.md`, `client/contract.ts`, a `GET /version` and a capability list; the
@@ -2522,16 +2526,18 @@ Decisions: B8, M1–M6.
 
 ---
 
-## M6 — Rooms (proposed)
+## M6 — Rooms
 
 A room is a long-lived container of independent agents on one repository: empty, or with a
 starter agent acting as the orchestrator. Each named agent has its own harness, mode,
 settings and long-lived multi-turn session; there is no dependency graph and no scheduler
 (R24–R30 retired). Decisions R1–R44 and S1–S14 live in `docs/CONTRACT-PLAN.md`. Every
-story below is **Proposed**. **Amended 2026-09-20 (plan review):** the spike port moves
-from last to **first, as M6-0** — it needs nothing, and it is the only story that gets
-more expensive the longer it waits. R37–R42 close six decisions the stories below were
-reading without an answer.
+story below was **Proposed** when it was written. **Amended 2026-09-20 (plan review):**
+the spike port moves from last to **first, as M6-0** — it needs nothing, and it is the
+only story that gets more expensive the longer it waits. R37–R42 close six decisions the
+stories below were reading without an answer. **Amended 2026-10-13 (#278):** the
+decisions are settled, so the title no longer says "proposed". The `M6_done` milestone
+shows which stories landed.
 
 **M6-0 · Land the spike on master · M · needs nothing · landed 2026-09-21 (#144)**
 Rebase `chat-mvp` onto current master (S1a) and reconcile with what
@@ -2848,7 +2854,7 @@ room log and draws nothing on either `chat.ts` surface (the pi-tui screen and th
 lines).
 Decisions: R42, S3.
 
-**M6-8 · Orchestrator and delegation · M · needs M6-4 · deferred by R2**
+**M6-8 · Orchestrator and delegation · M · needs M6-4 · deferred by R2 · superseded by M8 (2026-10-12)**
 R2 is decided for v1: the orchestrator is a normal participant and the default recipient,
 with no delegation powers. Kept for the later coordinator choice (R34c); the charter's
 agent-to-agent non-goal still applies. **Named deferred option (R43):** scanning the
@@ -2941,7 +2947,10 @@ Decisions: R31, R47.
 
 ---
 
-## M7 — TUI look and feel (proposed)
+## M7 — TUI look and feel
+
+**Amended 2026-10-13 (#278):** the title no longer says "proposed". The stories are
+decided, and the `M7_done` milestone shows which ones landed.
 
 **Added 2026-10-09.** The chat TUI works, but it is plain next to Claude Code, Codex CLI,
 opencode and Toad. In a room with many agents the timeline is hard to read: every name is
@@ -3127,7 +3136,10 @@ each room, because the sidebar can be hidden. Esc first clears the filter, then 
 *Done when* tests cover the filter narrowing the rows, Enter running the top row, the Esc
 order, and the slash command on each row.
 
-## M8 — Orchestrator (proposed)
+## M8 — Orchestrator
+
+**Amended 2026-10-13 (#278):** the title no longer says "proposed". The stories were
+decided on 2026-10-12, and the `M8_done` milestone tracks them.
 
 **Added 2026-10-12.** People who run a room for each task tend to drive the same loop by
 hand each time. This repository's own loop is: pick up an issue, build, commit, review
@@ -3408,9 +3420,13 @@ M0 ─ M1a ─ M1b ─ M1c ─ M2
 M5-10a ─ M6-2 ─ M6-6a ─ M6-3 ─ M6-4 ─┬─ M6-10 ─ M4-2 ─ M4-5 ─ M6-11a
                                       ├─ M6-5 ─ M4-3 ─ M4-7..M4-12 ─ M4-6 ─ M4-13
                                       ├─ M6-7a ─ M6-7b
-                                      └─ M6-8 (deferred by R2)
+                                      └─ M6-8 (superseded by M8)
 M6-6a ─ M6-6b ─ M6-11b
 ```
+
+**Amended 2026-10-13 (#278):** the spine has landed except M4-13 and M6-6b → M6-11b.
+M6-8 was superseded by M8 on 2026-10-12. M3 is parked: each of its stories is Deferred
+on the board.
 
 The edges the drawing leaves out: **M4-1** needs M6-0 and M5-10a, and **M4-2** needs M4-1
 too. **M4-5** also needs M6-5. **M4-3** also needs M4-2 and M5-4. **M6-7b** also needs the
@@ -3422,7 +3438,8 @@ M6-2, but goes after M6-4, which changes the log line it saves. Its chat half an
 Off the path, because the TUI shows no run (R16): M5-7, M5-8, M5-9, M5-10b and M5-11.
 M5-11 adds an idempotency test *if* M5-7 has landed — a condition, not a dependency. No
 story freezes the contract while the project is private (M5-11). **M5-10a is the gate:**
-both M4-1 and M6-2 need it, and it is ready now.
+both M4-1 and M6-2 need it, and it is ready now. **Amended 2026-10-13 (#278):** M5-10a
+landed on 2026-09-26 (#142).
 
 **M7 (added 2026-10-09)** runs beside M6. M7-2 also needs #240.
 
