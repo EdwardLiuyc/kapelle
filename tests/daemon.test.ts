@@ -4684,7 +4684,9 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
-  const cmd = `stty cols 100 rows 30; node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`;
+  // The chat's own pty path, so the test can resize its screen.
+  const outer = join(runtime, "chat.tty");
+  const cmd = `tty > '${outer}'; stty cols 100 rows 30; node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`;
   const { child, press, seen, exited, out } = await ptyScreen(t, cmd, {
     XDG_RUNTIME_DIR: runtime,
     SHELL: "/bin/sh",
@@ -4724,6 +4726,26 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
     before.cols + 24,
     "the sidebar's 26 less the strip's 2",
   );
+  // A shorter screen gives the shell fewer rows. The resize reaches the
+  // shell after a redraw, so ask until it shows.
+  const tty = (await readFile(outer, "utf8")).trim();
+  spawnSync("stty", ["-F", tty, "rows", "24", "cols", "100"]);
+  for (const until = Date.now() + 20_000; ; ) {
+    const s = await size();
+    if (s.rows < after.rows) break;
+    assert.ok(Date.now() < until, `the shell kept ${s.rows} rows`);
+  }
+
+  // ctrl+o, ctrl+r and ctrl+x are the shell's too: read raw, they arrive.
+  {
+    const from = out().length;
+    await run(
+      'stty raw -echo; echo "raw=$((1))"; k=$(dd bs=1 count=3 2>/dev/null | od -An -tx1); stty sane; echo "k=$k."',
+      /raw=1/,
+    );
+    child.stdin.write("\x0f\x12\x18");
+    await drawn(from, /k= 0f 12 18\./);
+  }
 
   // ^C stops the command, not the chat.
   child.stdin.write("sleep 30\r");
@@ -4743,6 +4765,17 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
     await run(":wq", /\$ vim -u NONE -N note\.txt/);
     await run("tr a-z A-Z < note.txt", /HELLO FROM VIM/);
   }
+
+  // Hidden and shown again, it is the same shell, with its screen.
+  await run('echo "kept=$((5))"', /kept=5/);
+  await press("\x1d", "ctrl+] keys here");
+  await press("\x18", "ctrl+x view");
+  {
+    const from = out().length;
+    await press("/term\r", "ctrl+] keys back");
+    await drawn(from, /kept=5/);
+  }
+  await run('[ $$ = "$(cat shell.pid)" ] && echo "same=$((1))"', /same=1/);
 
   // Its exit leaves the chat; the next /term starts a new shell.
   await press("exit 3\r", "exited (code 3)");
@@ -7286,18 +7319,19 @@ test("piped chat.ts says how to add a folder that /new is refused for", async (t
   );
 });
 
-test("piped chat.ts refuses a bare /new or /add: a form needs a terminal", async (t) => {
+test("piped chat.ts refuses a bare /new or /add, and /term: each needs a terminal", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
   const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
   });
-  c.child.stdin.end("/new\n/add\n/leave\n");
+  c.child.stdin.end("/new\n/add\n/term\n/leave\n");
   const r = await c.done;
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stderr, /! a form needs a terminal: \/new/);
   assert.match(r.stderr, /! a form needs a terminal: \/add </);
+  assert.match(r.stderr, /! a shell needs the full-screen chat/);
 });
 
 test("piped chat.ts takes the room commands, and names the room /new opened", async (t) => {
