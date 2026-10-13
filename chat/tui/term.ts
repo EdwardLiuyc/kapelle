@@ -3,7 +3,9 @@
  *
  * **One shell per chat, for the person, not for an agent** (decided
  * 2026-10-13, #249). `/term` starts it in the open room's `cwd`, and it
- * lives until it exits or the chat ends. It is not ACP `terminal/*` (§M0-3).
+ * lives until it exits or the chat ends. A `/term` in another room shows
+ * the same shell, in the folder it started in; `exit`, then `/term`, starts
+ * one in the open room's. It is not ACP `terminal/*` (§M0-3).
  *
  * **The pty is `script(1)`, not `node-pty`.** `node-pty` 1.1.0 has no Linux
  * prebuild, and any native pty loads code into the chat that a crash takes
@@ -33,6 +35,7 @@ import type { Readable, Writable } from "node:stream";
 import { decodeKittyPrintable, parseKey } from "@earendil-works/pi-tui";
 import type { IBufferCell, IBufferLine } from "@xterm/headless";
 import xterm from "@xterm/headless";
+import { printable } from "../../client/room.ts";
 
 const MAC = process.platform === "darwin";
 
@@ -54,6 +57,18 @@ const SPECIAL: Record<string, string> = {
   pageUp: "\x1b[5~",
   pageDown: "\x1b[6~",
 };
+
+/** A legacy key with kitty's event type (`:2`, a repeat) as xterm sends it
+ *  without one: `\x1b[15;1:2~` is F5. pi-tui names no F-key in this form.
+ *  `undefined` when `csi` is not that shape. */
+function withoutEvent(csi: string): string | undefined {
+  const m = /^(\d+);(\d+):\d+([~A-Z])$/.exec(csi);
+  if (!m) return undefined;
+  const [, n, mods, final] = m;
+  if (final === "~") return mods === "1" ? `\x1b[${n}~` : `\x1b[${n};${mods}~`;
+  if (mods !== "1") return `\x1b[1;${mods}${final}`;
+  return "PQRS".includes(final as string) ? `\x1bO${final}` : `\x1b[${final}`;
+}
 
 /** A ctrl+symbol in the legacy encoding. */
 const CTRL_SYMBOL: Record<string, string> = {
@@ -119,7 +134,7 @@ export function keyBytes(data: string, appCursor: boolean): string {
     // private-use code point; pi-tui reads it as printable.
     const text = decodeKittyPrintable(data);
     const printable = text && !/[\uE000-\uF8FF]/u.test(text) ? text : undefined;
-    out = printable ?? (id && legacy(id)) ?? "";
+    out = printable ?? (id && legacy(id)) ?? withoutEvent(csi) ?? "";
   }
   const arrow = out.length === 3 && out.startsWith("\x1b[") ? out[2] : "";
   return appCursor && arrow && "ABCDHF".includes(arrow) ? `\x1bO${arrow}` : out;
@@ -218,7 +233,9 @@ export function startShell(
   // closes, however the chat died, it hangs up the shell. The watcher reads
   // fd 3, which the shell wrote its path to: that works because libuv makes
   // an extra stdio pipe a socketpair, which goes both ways. Were it a
-  // one-way pipe, `cat` would fail at once and hang up a fresh shell.
+  // one-way pipe, `cat` would fail at once and hang up a fresh shell. It
+  // fires on every end, as the exit closes fd 3 too: then the HUP finds the
+  // shell's pid already gone, a moment after it died.
   const inner = [
     "tty >&3",
     `stty rows ${rows} cols ${cols}`,
@@ -278,7 +295,9 @@ export function startShell(
   child.on("exit", (code, signal) => {
     // The watcher's turn to end, before its shell's pid can be reused.
     told.destroy();
-    const first = complaint.trim().split("\n")[0];
+    // A system binary's bytes, drawn in the pane's title: drawable first
+    // (#229).
+    const first = printable(complaint.trim().split("\n")[0] ?? "").trim();
     end(
       broken ??
         (signal
@@ -294,17 +313,21 @@ export function startShell(
    *  last given. */
   let pts = "";
   let applied = `${rows} ${cols}`;
+  /** One `stty` at a time: two run as two processes, and the older could
+   *  land last and leave the pty at its size. The size is read again when
+   *  one ends. */
+  let resizing = false;
   const sync = () => {
     const want = `${rows} ${cols}`;
-    if (!pts || want === applied) return;
+    if (!pts || resizing || want === applied) return;
     applied = want;
+    resizing = true;
     const flag = MAC ? "-f" : "-F";
     // A failed resize leaves the old size: cosmetic.
-    execFile(
-      "stty",
-      [flag, pts, "rows", `${rows}`, "cols", `${cols}`],
-      () => {},
-    );
+    execFile("stty", [flag, pts, "rows", `${rows}`, "cols", `${cols}`], () => {
+      resizing = false;
+      sync();
+    });
   };
   let path = "";
   told.on("data", (b: Buffer) => {

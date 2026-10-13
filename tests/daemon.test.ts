@@ -4779,6 +4779,10 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
 
   // Its exit leaves the chat; the next /term starts a new shell.
   await press("exit 3\r", "exited (code 3) · /term starts a new one");
+  // An exited shell takes no keys: ctrl+] gives the view its own, and Esc
+  // gives them back (PR #286).
+  await press("\x1d", "esc keys back");
+  await press("\x1b", "ctrl+] view");
   // /term is in the composer's history: ↑ brings it back (PR #286).
   {
     const from = out().length;
@@ -4811,6 +4815,43 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   }
 });
 
+test("chat.ts on a real terminal: a question that came while the shell had the keys opens when they come back", {
+  skip: noPty,
+}, async (t) => {
+  // PR #286. A question box never opens over a view that has the keys, so
+  // giving the keys back must offer it.
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const asking = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "asker", mode: "ask" }],
+  });
+  assert.equal(asking.status, 201, asking.body.error?.message);
+  // A room with no orchestrator names none on the status line, so the
+  // screen is up once the agent's row is.
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime, SHELL: "/bin/sh" },
+    "asker",
+  );
+  await screen.press("/term\r", "ctrl+] keys back");
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${asking.body.id}/agents/${only(asking.body).id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  // The shell has the keys: the question waits in the sidebar.
+  await screen.seen("? asker");
+  assert.doesNotMatch(screen.out(), / 1 of 1 ━┓/);
+  await screen.press("\x1d", " 1 of 1 ━┓");
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
 test("chat.ts on a real terminal keeps the typing box's bottom border, then the where bar on the last row", {
   skip: noPty,
 }, async (t) => {

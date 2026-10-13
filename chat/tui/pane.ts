@@ -88,19 +88,22 @@ const paint = (line: string) => {
 /** The side view, and how to fill, show and hide it. `editor` gets the
  *  keys back when it hides; `setStatus` is the screen's; `gutter` is how
  *  many columns the sidebar takes; `height` is how many rows the view has,
- *  its title and its hints included. */
+ *  its title and its hints included. `released` runs after the view gives
+ *  the keys back, so a question that waited for them can open (PR #286). */
 function paneParts({
   tui,
   editor,
   setStatus,
   gutter,
   height,
+  released,
 }: {
   tui: TuiAltScreen;
   editor: Component;
   setStatus: () => void;
   gutter: () => number;
   height: () => number;
+  released: () => void;
 }) {
   const wide = () => (process.stdout.columns || 80) >= WIDE;
   /** The view's width in columns: half of what the sidebar leaves, or all
@@ -147,6 +150,12 @@ function paneParts({
     content && "list" in content ? content.list : undefined;
   const shellOf = () =>
     content && "shell" in content ? content.shell : undefined;
+  /** The shell, while it runs. An exited one keeps its screen to read, and
+   *  the view's own keys scroll it. */
+  const liveShell = () => {
+    const s = shellOf();
+    return s && s.ended === undefined ? s : undefined;
+  };
   /** Moves the list's cursor, and scrolls to keep it in view. */
   const move = (to: number) => {
     const n = listOf()?.rows().length ?? 0;
@@ -192,12 +201,21 @@ function paneParts({
       return out;
     },
     handleInput(key) {
-      const shell = shellOf();
-      if (shell) return shell.key(key);
+      const live = liveShell();
+      if (live) return live.key(key);
       const page = Math.max(1, scroll.viewportHeight - 1);
       if (matchesKey(key, Key.escape)) {
         focus(false);
         return content?.back?.();
+      }
+      const exited = shellOf();
+      if (exited) {
+        const rows = Math.max(1, height() - 3);
+        if (matchesKey(key, Key.up)) exited.scroll(-1);
+        else if (matchesKey(key, Key.down)) exited.scroll(1);
+        else if (matchesKey(key, Key.pageUp)) exited.scroll(-rows);
+        else if (matchesKey(key, Key.pageDown)) exited.scroll(rows);
+        return;
       }
       const list = listOf();
       if (list) {
@@ -312,7 +330,7 @@ function paneParts({
       if (files.length > 1) hints.push("] [ file");
       for (const k of content?.keys ?? []) hints.push(k.hint);
       // A shell keeps ctrl+x, as every key but ctrl+].
-      if (shellOf()) hints.splice(0, Infinity, "ctrl+] keys back");
+      if (liveShell()) hints.splice(0, Infinity, "ctrl+] keys back");
       else hints.push("ctrl+] type", "ctrl+x hide");
       // The composer has the keys: only the way back is named.
       if (!focused)
@@ -331,16 +349,21 @@ function paneParts({
   /** Gives the keys to the view, or to the composer (`ctrl+]`, Esc). */
   const focus = (here: boolean) => {
     if (!shown) return;
+    const had = focused;
     focused = here;
     tui.setFocus(here ? body : editor);
     setStatus();
     tui.requestRender();
+    // After the caller's own next step, such as a menu that takes the keys.
+    if (had && !here) setImmediate(released);
   };
   /** Shows the view and gives it the keys, or hides it and gives them to
    *  the composer (`ctrl+x`). What it shows stays. */
   const toggle = (show = !shown) => {
+    const had = shown && focused;
     shown = show;
     focused = show;
+    if (had && !show) setImmediate(released);
     tui.setFocus(show ? body : editor);
     setStatus();
     tui.requestRender();

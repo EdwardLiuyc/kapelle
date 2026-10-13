@@ -34,6 +34,11 @@ test("an encoded key with no legacy form is dropped, not sent raw (PR #286)", ()
   // Raw, `\x1b[46;5u` is Esc then text: in vim, leave insert mode and run it.
   assert.equal(keyBytes("\x1b[46;5u", false), "", "ctrl+.");
   assert.equal(keyBytes("\x1b[57428u", false), "", "the menu key");
+  // An F-key with an event type has a legacy form, so it is not dropped,
+  // though pi-tui names none of these three.
+  assert.equal(keyBytes("\x1b[1;1:2P", false), "\x1bOP", "a repeated F1");
+  assert.equal(keyBytes("\x1b[15;1:2~", false), "\x1b[15~", "a repeated F5");
+  assert.equal(keyBytes("\x1b[15;5:2~", false), "\x1b[15;5~", "ctrl+F5");
 });
 
 test("a legacy key passes as it came, and an arrow follows DECCKM", () => {
@@ -152,11 +157,32 @@ test("a script that refuses to start says why (PR #286)", async (t) => {
   t.after(() => rm(bin, { recursive: true, force: true }));
   await writeFile(
     join(bin, "script"),
-    "#!/bin/sh\necho 'script: invalid option -- q' >&2\nexit 1\n",
+    // An escape on its stderr is drawn in the pane's title: made printable.
+    "#!/bin/sh\nprintf 'script: \\033[2Jinvalid option -- q\\n' >&2\nexit 1\n",
   );
   await chmod(join(bin, "script"), 0o755);
   const { ended } = await shellIn(t, undefined, {
     PATH: `${bin}:${process.env.PATH}`,
   });
-  assert.equal(await ended(), "exited (code 1): script: invalid option -- q");
+  assert.equal(
+    await ended(),
+    "exited (code 1): script:  [2Jinvalid option -- q",
+  );
+});
+
+test("after a burst of resizes the pty has the last size (PR #286)", {
+  skip: noScript,
+}, async (t) => {
+  const { shell } = await shellIn(t);
+  await shows(shell, "$");
+  // One stty runs at a time; the sizes asked meanwhile end in the last one.
+  for (const cols of [30, 31, 32, 33, 34, 35]) shell.rows(cols, 5, false);
+  await new Promise((ok) => setTimeout(ok, 500));
+  shell.key('echo "size=$(stty size)"\r');
+  for (const until = Date.now() + 5000; ; ) {
+    const screen = shell.rows(35, 5, false).join("\n");
+    if (screen.includes("size=5 35")) break;
+    assert.ok(Date.now() < until, screen);
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
 });

@@ -63,6 +63,7 @@ test("no HStack in the chat screen holds another, and each of its parts has a se
       setStatus() {},
       gutter: () => 26,
       height: () => 20,
+      released() {},
     }).pane,
     banner: bannerPart({ rooms, view, open() {}, question() {} }),
     status: new Text(""),

@@ -481,6 +481,7 @@ function chatTui(
     setStatus: () => setStatus(),
     gutter: () => (shown ? SIDEBAR_WIDTH : 2),
     height: () => sidebarRows(),
+    released: () => offer(),
   });
   /** Puts a diff in the side pane (M4-6), with the keys that switch
    *  `against` and reload it. `at` jumps to a file's header line (M7-3).
@@ -702,8 +703,11 @@ function chatTui(
 
   /** The person's shell (M4-13): one per chat, until it exits. */
   let shell: Shell | undefined;
-  const shellShown = () =>
-    side.focused && !!side.content && "shell" in side.content;
+  /** The shell has the keys: shown, focused and still running. */
+  const shellShown = () => {
+    const c = side.content;
+    return side.focused && !!c && "shell" in c && c.shell.ended === undefined;
+  };
   /** Shows the shell in the side pane, and starts it in the open room's
    *  `cwd` first when there is none, or the last one exited. */
   const term = () => {
@@ -1044,7 +1048,7 @@ function chatTui(
       }
       if (c.verb === "leave") return end(0, left());
       if (c.verb === "help") return showHelp();
-      // Typed again to show the shell: ctrl+p brings it back.
+      // Typed again to show the shell: ↑ brings it back (ctrl+p steps rows).
       if (c.verb === "term") {
         editor.addToHistory(text);
         return term();
