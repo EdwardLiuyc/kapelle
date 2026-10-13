@@ -434,6 +434,23 @@ test("a question's title and input lose their control characters", () => {
     "rm [2J -rf /",
     { "cmd ": "a ]0;owned b c" },
   ]);
+  // The kind is one ACP defines, or `other`: the question box's title
+  // shows it (M7-4), and a harness can send any JSON there.
+  for (const kind of [7, "\x1b]52;c;aGk=\x07edit"]) {
+    const q = applyLine(state, {
+      seq: state.seq + 1,
+      roomId: "r",
+      participantId: "p",
+      at: "2026-10-01T00:00:00.000Z",
+      update: {
+        sessionUpdate: "_client_permission_queued",
+        id: `q${state.seq}`,
+        kind: kind as never,
+        title: "t",
+      },
+    });
+    assert.equal(q?.type === "permission" && q.kind, "other");
+  }
   assert.equal(printable("tab\there"), "tab here");
   // Bidi, zero-width and line-separator characters change what a person
   // reads, not what runs: a right-to-left override can flip a command.

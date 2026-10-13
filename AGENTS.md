@@ -57,7 +57,9 @@ presentation, after the event bus, where its worst failure is cosmetic. It must 
 change a permission decision, the path guard, the policy, mode negotiation, or anything
 that reaches a subprocess. Pin it exactly, and give it a fallback so a bad release costs
 the screen, never the run: `core/markdown.ts` returns the raw text if `marked` throws,
-and `chat/tui.ts` leaves pi-tui's screen before it exits on a throw.
+and `chat/tui.ts` leaves pi-tui's screen before it exits on a throw. One import has no
+fallback: `chat/tui/question.ts` reads pi-tui's `dist/keys.js`, a file outside its main
+exports. If a new pi-tui moves it, `chat.ts` fails at start, so check it at each bump.
 
 **This code is the client. The coding harness is the agent.** We spawn the harness as a
 subprocess, own the workspace, serve its filesystem requests and decide its permissions.
@@ -138,7 +140,7 @@ arrow that points back.
 | `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. Both `chat/` screens read a line through it. |
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
 | `chat/` | The chat screens (M4-7): `tui.ts`, a pi-tui screen over every room on a TTY; `piped.ts`, one room as plain lines; `common.ts`, what both use. With `chat.ts`, they talk HTTP only, and import only `client/`, pi-tui, `core/runtime.ts` and each other. Their one subprocess is the clipboard tool (`chat/tui/clipboard.ts`). |
-| `chat/view.ts` | What the TUI shows (M4-10): the rows and the row keys, the `@name` pre-fill, where a thread goes when its participant left or its room was dismissed, and what is seen; each agent's colour, the activity rows and the status line's fit (M7-1); which tool calls fold into one line, and when (M7-2). Pure. |
+| `chat/view.ts` | What the TUI shows (M4-10): the rows and the row keys, the `@name` pre-fill, where a thread goes when its participant left or its room was dismissed, and what is seen; each agent's colour, the activity rows and the status line's fit (M7-1); which tool calls fold into one line, and when (M7-2); where a key moves the question box's cursor (M7-4). Pure. |
 | `chat/tui/` | The TUI's parts (M4-12): `panel.ts`, the pop-up, its menu and forms; `question.ts`, the question box and its answer; `sidebar.ts`, the sidebar, the strip, the marks and the changed-files block (M7-3); `transcript.ts`, drawing the transcript; `pane.ts`, the side view beside the timeline, with a diff (M4-6) or the history list (M4-4); `banner.ts`, the activity rows under the timeline: a participant that waits (M4-4), or a busy one in the open room (M7-1); `clipboard.ts`, a selection copied with the system's own tool, OSC 52 last. `chat/tui.ts` puts them on the screen and keeps the keys, the bell, the send flow and the end. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 

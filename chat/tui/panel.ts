@@ -20,6 +20,7 @@ import {
   SettingsList,
   type TuiAltScreen,
   truncateToWidth,
+  visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { HELP, type RouteCommand } from "../../client/command.ts";
@@ -66,8 +67,27 @@ const TYPE_IT = new Set([OTHER_REF, OTHER_HARNESS]);
  */
 interface Panel {
   title: string;
+  /** Text at the right of the top border: a question's `n of m` (M7-4). */
+  right?: string;
   body: Component;
   error?: string;
+}
+
+/**
+ * The pop-up's top border, `width` wide: the corner, the title, and `right`
+ * at the end (M7-4). The title is cut with `…`, never the corner. When the
+ * box is too narrow for both, `right` goes first: the title says who wants
+ * what, and the status line still counts the questions.
+ */
+function border(title: string, right: string | undefined, width: number) {
+  // `┌ `, a space after the title, at least one `─`, and `┐` take 5.
+  const end = right ? ` ${right} ─` : "";
+  const keep = width - 5 - visibleWidth(end) >= 4 ? end : "";
+  const head = `┌ ${truncateToWidth(title, Math.max(1, width - 5 - visibleWidth(keep)), "…")} `;
+  const fill = "─".repeat(
+    Math.max(0, width - 1 - visibleWidth(head) - visibleWidth(keep)),
+  );
+  return `${head}${fill}${keep}┐`;
 }
 
 const SETTINGS_THEME = {
@@ -138,11 +158,7 @@ function panelParts({
       const inner = Math.max(1, width - 4);
       const side = (l: string) =>
         `${dim("│")} ${truncateToWidth(l, inner, "…", true)} ${dim("│")}`;
-      const lines = [
-        dim(
-          `${truncateToWidth(`┌ ${panel.title} ${"─".repeat(width)}`, width - 1, "")}┐`,
-        ),
-      ];
+      const lines = [dim(border(panel.title, panel.right, width))];
       for (const l of panel.body.render(inner)) lines.push(side(l));
       if (panel.body instanceof SelectList) {
         lines.push(side(dim("↑↓ Enter · Esc back")));
@@ -662,4 +678,4 @@ function panelParts({
   };
 }
 
-export { EDITOR_THEME, panelParts };
+export { border, EDITOR_THEME, panelParts };

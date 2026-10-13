@@ -1,11 +1,13 @@
 /**
  * `chat/tui/question.ts` — the full-screen chat's question box (M4-3, M4-12).
  *
- * When an `ask` participant waits on a permission, the box shows the room,
- * the agent, the turn and the tool's input, with `deny` first, so a stray
- * Enter says no, as the timeout would. It sends the answer, and names who
- * won a lost race. Which question opens, and when, is `client/questions.ts`;
- * this file opens the box in the pop-up of `chat/tui/panel.ts`.
+ * When an `ask` participant waits on a permission, the box shows who wants
+ * to do what, the room, the turn and the tool's input, with `deny` first,
+ * so a stray Enter says no, as the timeout would. Its rows have numbers
+ * (M7-4): a key only moves the cursor, and Enter answers. It sends the
+ * answer, and names who won a lost race. Which question opens, and when,
+ * is `client/questions.ts`; this file opens the box in the pop-up of
+ * `chat/tui/panel.ts`.
  */
 
 import {
@@ -13,6 +15,9 @@ import {
   truncateToWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+// Not in pi-tui's main exports. Its editor uses it, so a shifted key reads
+// the same under Kitty and under modifyOtherKeys (xterm, tmux).
+import { decodePrintableKey } from "@earendil-works/pi-tui/dist/keys.js";
 import type {
   PermissionAnswered,
   PermissionDecision,
@@ -23,7 +28,7 @@ import type { QuestionQueue } from "../../client/questions.ts";
 import { type Entry, nameOf } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { dim, NO_DAEMON } from "../common.ts";
-import { touched } from "../view.ts";
+import { pickRow, touched } from "../view.ts";
 import type { paneParts } from "./pane.ts";
 import { EDITOR_THEME, type panelParts } from "./panel.ts";
 
@@ -60,7 +65,7 @@ function questionParts({
   done: () => boolean;
   prefill: () => string;
 }) {
-  const { showPanel, hidePanel, words } = box;
+  const { showPanel, hidePanel } = box;
   /** Keeps an open question box true: its count follows the open
    *  questions, and the box goes when its question left without a close
    *  line, as when its room was dismissed elsewhere. */
@@ -68,13 +73,14 @@ function questionParts({
     if (!queue.asking || !box.panel) return;
     const at = queue.place();
     if (!at) hidePanel();
-    else box.panel.title = `question ${at.at} of ${at.of}`;
+    else box.panel.right = `${at.at} of ${at.of}`;
   };
   /**
-   * One question in the pop-up (M4-3): the room, the agent, the turn, what
-   * it wants to do, and the tool's input. `deny` comes first, so a stray
-   * Enter says no, as the timeout would; letters do nothing. Esc puts it
-   * aside, open.
+   * One question in the pop-up (M4-3): who wants to do what in the title,
+   * the room, the turn, the action, and the tool's input. `deny` comes
+   * first, so a stray Enter says no, as the timeout would. A key only moves
+   * the cursor (`pickRow`, M7-4): a box that opens by itself must not take
+   * an answer from a person who was typing. Esc puts it aside, open.
    */
   const question = (id: string) => {
     const found = queue.open().find(({ q }) => q.id === id);
@@ -86,18 +92,22 @@ function questionParts({
     const { r, q } = found;
     // `view diff` last: deny stays first (M4-6).
     const rows = q.diff ? ["deny", "allow", "view diff"] : ["deny", "allow"];
-    const list = new SelectList(words(rows), 3, EDITOR_THEME.selectList);
+    const items = rows.map((v, i) => ({ value: v, label: `${i + 1} ${v}` }));
+    const list = new SelectList(items, 3, EDITOR_THEME.selectList);
     list.onSelect = ({ value }) => {
       if (value === "view diff") return showDiff(q);
       void answer(q.id, value === "allow");
     };
     list.onCancel = hidePanel;
     const turn = q.turn === undefined ? "" : ` · turn ${q.turn}`;
-    const who = [
-      `room   ${r.entry.title ?? r.entry.id}`,
-      `agent  ${nameOf(r.state, q.participantId)}${turn}`,
-    ];
-    showPanel("question", {
+    const who = [`room   ${r.entry.title ?? r.entry.id}${turn}`];
+    const name = nameOf(r.state, q.participantId);
+    const { kind } = q;
+    const title =
+      kind === "other"
+        ? `${name} asks`
+        : `${name} wants to ${kind.replaceAll("_", " ")}`;
+    showPanel(title, {
       render: (w) => {
         // Wrapped, not cut: the end of a command or a path is what the
         // person judges. Both share what the screen holds, so the answer
@@ -128,10 +138,14 @@ function questionParts({
           ...diff,
           "",
           ...list.render(w),
-          dim("↑↓ pick · enter answer · esc later"),
+          dim(`1-${rows.length} ↑↓ pick · enter answer · esc later`),
         ];
       },
-      handleInput: (key) => list.handleInput(key),
+      handleInput: (key) => {
+        const row = pickRow(decodePrintableKey(key) ?? key, rows.length);
+        if (row === undefined) list.handleInput(key);
+        else list.setSelectedIndex(row);
+      },
       invalidate: () => list.invalidate(),
     });
     queue.show(q.id);
