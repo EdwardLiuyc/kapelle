@@ -43,6 +43,8 @@ const entry = (id: string): RoomListEntry => ({
 /** A daemon whose answers the test sets. A room missing from `status`
  *  answers `404`; a number there is the HTTP status. */
 async function fake(t: TestContext, token = "tok") {
+  /** Reads whose answer waits for `releaseRead`. */
+  const held: (() => void)[] = [];
   const daemon = {
     d: { port: 0, token } as DaemonAddress,
     /** What `GET /version` answers. */
@@ -63,6 +65,18 @@ async function fake(t: TestContext, token = "tok") {
     participants: [] as { id: string; status: string }[],
     /** Every `GET /rooms/:id`, by room. */
     reads: [] as string[],
+    /** How long `GET /rooms/:id` waits before answering; `0` is immediate. */
+    readDelayMs: 0,
+    /** When set, a `GET /rooms/:id` answer waits for `releaseRead`. */
+    holdReads: false,
+    /** Answers every held read. */
+    releaseRead: () => {
+      for (const answer of held.splice(0)) answer();
+    },
+    /** `GET /rooms/:id` answers still open; the set keeps this at 1. */
+    readsInFlight: 0,
+    /** The most of those open at once, for the serialization assertion. */
+    maxReadsInFlight: 0,
     /** Sends every line, whatever `Last-Event-ID` asks for. */
     replayAll: false,
     /** Ends a room's stream. */
@@ -100,16 +114,32 @@ async function fake(t: TestContext, token = "tok") {
       return;
     }
     daemon.reads.push(id);
+    daemon.readsInFlight++;
+    daemon.maxReadsInFlight = Math.max(
+      daemon.maxReadsInFlight,
+      daemon.readsInFlight,
+    );
+    /** Answers one read, whatever the answer is. */
+    const answer = (status: number, body: unknown) => {
+      daemon.readsInFlight--;
+      json(res, status, body);
+    };
     const s = daemon.status.get(id);
-    if (s === undefined) return json(res, 404, { error: "no such room" });
-    if (typeof s === "number") return json(res, s, { error: "refused" });
-    json(res, 200, {
-      ...entry(id),
-      createdAt: "",
-      status: s,
-      participants: daemon.participants,
-      seq: 0,
-    });
+    if (s === undefined) return answer(404, { error: "no such room" });
+    if (typeof s === "number") return answer(s, { error: "refused" });
+    const dto = () =>
+      answer(200, {
+        ...entry(id),
+        createdAt: "",
+        status: s,
+        participants: daemon.participants,
+        seq: 0,
+      });
+    // A delayed or held answer lets the room's stream beat the first read
+    // (#232).
+    if (daemon.holdReads) held.push(dto);
+    else if (daemon.readDelayMs > 0) setTimeout(dto, daemon.readDelayMs);
+    else dto();
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
   daemon.d.port = (server.address() as AddressInfo).port;
@@ -161,6 +191,8 @@ async function until(ok: () => boolean) {
 
 test("each room's stream runs into its own reducer, and a new participant reads the room again", async (t) => {
   const daemon = await fake(t);
+  // The line must beat the first answer, or the test is flaky (#232).
+  daemon.readDelayMs = 100;
   daemon.status.set("r1", "active");
   daemon.lines.set("r1", [
     {
@@ -184,6 +216,37 @@ test("each room's stream runs into its own reducer, and a new participant reads 
   assert.equal(set.rooms.get("r2")?.state.participants.size, 0);
   // Once when it joined, once more for the participant the header lacks.
   await until(() => daemon.reads.filter((id) => id === "r1").length === 2);
+});
+
+test("a burst of joins during the first read asks for one more read, not one each", async (t) => {
+  const daemon = await fake(t);
+  daemon.holdReads = true;
+  daemon.status.set("r1", "active");
+  const added = (seq: number, id: string): RoomEventLine => ({
+    seq,
+    at: "",
+    roomId: "r1",
+    participantId: id,
+    update: {
+      sessionUpdate: "_client_participant_added",
+      name: id,
+      harness: "mock",
+      mode: "safe",
+    },
+  });
+  daemon.lines.set("r1", [added(1, "p1"), added(2, "p2"), added(3, "p3")]);
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  // All three joins land while the first read is held: it is the only read.
+  await until(() => said.lines.length === 3);
+  assert.equal(daemon.reads.length, 1);
+  daemon.releaseRead();
+  // Its answer asks for exactly one follow-up for all three joins.
+  await until(() => daemon.reads.length === 2);
+  daemon.releaseRead();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(daemon.reads, ["r1", "r1"]);
+  assert.equal(daemon.maxReadsInFlight, 1, "one read at a time");
 });
 
 test("a room made elsewhere joins on the next poll", async (t) => {
