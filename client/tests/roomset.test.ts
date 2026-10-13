@@ -65,8 +65,6 @@ async function fake(t: TestContext, token = "tok") {
     participants: [] as { id: string; status: string }[],
     /** Every `GET /rooms/:id`, by room. */
     reads: [] as string[],
-    /** How long `GET /rooms/:id` waits before answering; `0` is immediate. */
-    readDelayMs: 0,
     /** When set, a `GET /rooms/:id` answer waits for `releaseRead`. */
     holdReads: false,
     /** Answers every held read. */
@@ -137,10 +135,8 @@ async function fake(t: TestContext, token = "tok") {
         seq: 0,
       });
     };
-    // A delayed or held answer lets the room's stream beat the first read
-    // (#232).
+    // A held answer lets the room's stream beat the first read (#232).
     if (daemon.holdReads) held.push(dto);
-    else if (daemon.readDelayMs > 0) setTimeout(dto, daemon.readDelayMs);
     else dto();
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
@@ -158,6 +154,7 @@ function follow(
 ) {
   const said = {
     lines: [] as string[],
+    loaded: [] as string[],
     closed: [] as [string, Ended][],
     ends: [] as End[],
     restarts: [] as (string | undefined)[],
@@ -170,7 +167,7 @@ function follow(
     {
       line: (id, l) =>
         said.lines.push(`${id} ${l.seq} ${l.update.sessionUpdate}`),
-      loaded: () => {},
+      loaded: (id) => said.loaded.push(id),
       polled: () => said.polls++,
       restarted: (warning) => said.restarts.push(warning),
       away: () => said.aways++,
@@ -193,8 +190,8 @@ async function until(ok: () => boolean) {
 
 test("each room's stream runs into its own reducer, and a new participant reads the room again", async (t) => {
   const daemon = await fake(t);
-  // The line must beat the first answer, or the test is flaky (#232).
-  daemon.readDelayMs = 100;
+  // Held, so the join line beats the first answer: no sleep, no flake (#232).
+  daemon.holdReads = true;
   daemon.status.set("r1", "active");
   daemon.lines.set("r1", [
     {
@@ -216,8 +213,11 @@ test("each room's stream runs into its own reducer, and a new participant reads 
   assert.deepEqual(said.lines, ["r1 1 _client_participant_added"]);
   assert.equal(set.rooms.get("r1")?.state.participants.get("p1")?.name, "ann");
   assert.equal(set.rooms.get("r2")?.state.participants.size, 0);
-  // Once when it joined, once more for the participant the header lacks.
+  // The join landed while the first read was held. Its answer asks for the
+  // read that has the participant the header lacks.
+  daemon.releaseRead();
   await until(() => daemon.reads.filter((id) => id === "r1").length === 2);
+  daemon.releaseRead();
 });
 
 test("a burst of joins during the first read asks for one more read, not one each", async (t) => {
@@ -255,6 +255,28 @@ test("a join during a read that fails still reads the room again", async (t) => 
   daemon.status.set("r1", 500);
   daemon.releaseRead();
   await until(() => daemon.reads.length === 2);
+});
+
+test("a read that ends after a dismiss does not read the room again", async (t) => {
+  const daemon = await fake(t);
+  daemon.holdReads = true;
+  daemon.status.set("r1", "active");
+  daemon.lines.set("r1", [added(1, "p1", "ann")]);
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  // The join lands while the read is held: `again` is set.
+  await until(() => said.lines.length === 1);
+  // The room is dismissed while that read is held. Its reconcile answers at
+  // once; the held loadDto stays open.
+  daemon.holdReads = false;
+  daemon.status.set("r1", "dismissed");
+  daemon.release("r1");
+  await until(() => said.closed.length === 1);
+  assert.equal(set.rooms.has("r1"), false);
+  // The held answer ends: a gone room gets no chained read.
+  daemon.releaseRead();
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(daemon.reads, ["r1", "r1"], "loadDto and reconcile only");
 });
 
 test("a room made elsewhere joins on the next poll", async (t) => {
@@ -464,6 +486,43 @@ for (const how of ["a crash", "a clean stop"]) {
     assert.deepEqual(said.closed, []);
   });
 }
+
+test("a restart during a held read waits its turn and reads the new daemon once", async (t) => {
+  const old = await fake(t);
+  old.holdReads = true;
+  old.status.set("r1", "active");
+  const { file, address } = daemonFile(old.d);
+  const d = { ...old.d };
+  const { set, said } = follow(t, d, address);
+  set.start([entry("r1")]);
+  await until(() => old.reads.length === 1);
+
+  // The daemon restarts while that read is held: the ask waits for it.
+  const next = await fake(t, "tok2");
+  next.status.set("r1", "active");
+  next.participants = [{ id: "p1", status: "active" }];
+  file.now = next.d;
+  await set.fresh();
+  const r = set.rooms.get("r1");
+  assert.equal(r?.reading, true, "the held read is still open");
+  assert.equal(r?.again, true, "the restart's ask is deferred, not parallel");
+  assert.deepEqual(next.reads, [], "the new daemon is not read yet");
+
+  // The held answer ends: the deferred ask goes to the new daemon, once,
+  // and its answer is the one kept.
+  old.releaseRead();
+  await until(() => next.reads.length === 1);
+  await until(() => said.loaded.length === 2);
+  assert.equal(
+    set.rooms.get("r1")?.dto?.participants.length,
+    1,
+    "the newer answer is the one kept",
+  );
+  assert.deepEqual(old.reads, ["r1"]);
+  assert.deepEqual(next.reads, ["r1"]);
+  assert.equal(old.maxReadsInFlight, 1);
+  assert.equal(next.maxReadsInFlight, 1);
+});
 
 test("a daemon that does not come back ends the set after the wait", async (t) => {
   const old = await fake(t);

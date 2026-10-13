@@ -288,6 +288,9 @@ export function roomSet(
       r.reading = false;
       if (!r.again) return;
       r.again = false;
+      // The room may have left the set (dismissed) or the set may have
+      // ended while the read ran: a chained read would answer nobody.
+      if (over || rooms.get(r.entry.id) !== r) return;
       loadDto(r);
     };
     call<RoomDto>(d, `/rooms/${r.entry.id}`).then(
