@@ -3122,10 +3122,15 @@ covers one write.
 answer at once today (`chat/tui/question.ts`, M4-6), and they stay. The race above needs
 a box that opens by itself. The side view never does: it opens only from a deliberate
 `view diff`, and it holds the keys until Esc or `ctrl+]`.
-*Done when* tests cover `1` and `n` moving to deny, `2` and `y` moving to allow, no
-answer sent by any key but Enter in the box, `y` and `n` still answering in the side
-view, the six-line cap, no preview without a diff, and
-control characters removed before drawing (`printable`).
+*Done when* tests cover `1` and `n` moving to deny, `2` and `y` moving to allow, any
+other typed character moving to deny, no answer sent by any key but Enter in the box,
+and `y` and `n` still answering in the side view.
+**Decided at pickup 2026-10-13 (#247):** **no diff preview.** Six lines of a large change
+can make it look safe. The `± <path> +a −d` line already gives the size, and `3 view diff`
+opens the whole change in the side view. **Any other typed character moves the cursor
+back to deny.** The race above has a second half: the person's Enter at the end of the
+sentence answers, so `try it⏎` would allow, as `y` moved the cursor. Now the sentence
+ends on deny, as it did before this story.
 
 **M7-5 · Type to filter the `ctrl+o` menu · S · needs nothing**
 The menu grows with each story. Typed letters filter it, with pi-tui's `fuzzyFilter` or

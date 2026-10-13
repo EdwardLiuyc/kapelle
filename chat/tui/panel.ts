@@ -20,6 +20,7 @@ import {
   SettingsList,
   type TuiAltScreen,
   truncateToWidth,
+  visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { HELP, type RouteCommand } from "../../client/command.ts";
@@ -66,6 +67,8 @@ const TYPE_IT = new Set([OTHER_REF, OTHER_HARNESS]);
  */
 interface Panel {
   title: string;
+  /** Text at the right of the top border: a question's `n of m` (M7-4). */
+  right?: string;
   body: Component;
   error?: string;
 }
@@ -138,10 +141,10 @@ function panelParts({
       const inner = Math.max(1, width - 4);
       const side = (l: string) =>
         `${dim("│")} ${truncateToWidth(l, inner, "…", true)} ${dim("│")}`;
+      const end = panel.right ? ` ${panel.right} ─┐` : "┐";
+      const top = `┌ ${panel.title} ${"─".repeat(width)}`;
       const lines = [
-        dim(
-          `${truncateToWidth(`┌ ${panel.title} ${"─".repeat(width)}`, width - 1, "")}┐`,
-        ),
+        dim(`${truncateToWidth(top, width - visibleWidth(end), "")}${end}`),
       ];
       for (const l of panel.body.render(inner)) lines.push(side(l));
       if (panel.body instanceof SelectList) {

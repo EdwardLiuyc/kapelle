@@ -21,6 +21,7 @@ import {
   opened,
   PALETTE,
   participantLeft,
+  pickRow,
   quiet,
   renamed,
   rows,
@@ -676,4 +677,27 @@ test("a run's line counts the calls by kind, most first, with no kind as other, 
     text: "1 tool call · 1 other",
     failed: 0,
   });
+});
+
+test("a key in the question box only moves its cursor, and any other typed character moves it back to deny (M7-4)", () => {
+  // Rows: 0 deny, 1 allow, 2 view diff.
+  assert.equal(pickRow("1", 3), 0);
+  assert.equal(pickRow("n", 3), 0);
+  assert.equal(pickRow("2", 3), 1);
+  assert.equal(pickRow("y", 3), 1);
+  assert.equal(pickRow("Y", 3), 1);
+  assert.equal(pickRow("3", 3), 2);
+  // No `view diff` row: `3` is any other key.
+  assert.equal(pickRow("3", 2), 0);
+  // A sentence typed into a box that just opened ends on deny...
+  let row = 0;
+  for (const ch of "try it") row = pickRow(ch, 3) ?? row;
+  assert.equal(row, 0);
+  // ...and a chunk counts its last character, as one key at a time would.
+  assert.equal(pickRow("try it", 3), 0);
+  assert.equal(pickRow("ok y", 3), 1);
+  // Keys that type nothing stay with the list: arrows, Enter, Esc.
+  for (const key of ["\x1b[A", "\x1b[B", "\r", "\x1b"]) {
+    assert.equal(pickRow(key, 3), undefined);
+  }
 });
