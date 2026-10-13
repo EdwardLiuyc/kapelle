@@ -129,6 +129,7 @@ function follow(
     closed: [] as [string, Ended][],
     ends: [] as End[],
     restarts: [] as (string | undefined)[],
+    reloads: [] as string[],
     aways: 0,
     polls: 0,
   };
@@ -139,6 +140,7 @@ function follow(
       line: (id, l) =>
         said.lines.push(`${id} ${l.seq} ${l.update.sessionUpdate}`),
       loaded: () => {},
+      reloaded: (id) => said.reloads.push(id),
       polled: () => said.polls++,
       restarted: (warning) => said.restarts.push(warning),
       away: () => said.aways++,
@@ -184,6 +186,24 @@ test("each room's stream runs into its own reducer, and a new participant reads 
   assert.equal(set.rooms.get("r2")?.state.participants.size, 0);
   // Once when it joined, once more for the participant the header lacks.
   await until(() => daemon.reads.filter((id) => id === "r1").length === 2);
+});
+
+test("a turn ending reads the room again, for a branch or base that moved in it", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.lines.set("r1", [
+    {
+      seq: 1,
+      at: "",
+      roomId: "r1",
+      participantId: "p1",
+      update: { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" },
+    },
+  ]);
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => said.reloads.includes("r1"));
+  assert.equal(daemon.reads.filter((id) => id === "r1").length, 2);
 });
 
 test("a room made elsewhere joins on the next poll", async (t) => {

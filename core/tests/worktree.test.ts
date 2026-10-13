@@ -676,6 +676,24 @@ test("a checkout left on another branch is kept, with a warning", async (t) => {
   );
 });
 
+test("a checkout switched to an existing branch is kept even after update follows the name", async (t) => {
+  const root = await repo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+
+  const path = await worktrees.acquire("plan");
+  await git(path, "checkout", "-q", "-b", "the-agents-own-branch");
+  worktrees.update("plan", { branch: "the-agents-own-branch" });
+
+  const warning = await worktrees.release("plan", "keep");
+
+  assert.match(String(warning), /the-agents-own-branch/);
+  assert.equal(existsSync(path), true, "the foreign branch is not deleted");
+  // Both refs stay: the switched-to name was not the run's to remove.
+  await git(root, "rev-parse", "--verify", "refs/heads/the-agents-own-branch");
+  await git(root, "rev-parse", "--verify", branchOf("plan"));
+});
+
 test("a detached HEAD is kept too, and says so", async (t) => {
   const root = await repo(t);
   const { worktrees } = await openWorktrees(root, RUN_ID);

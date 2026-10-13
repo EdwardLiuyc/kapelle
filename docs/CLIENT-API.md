@@ -1013,7 +1013,9 @@ An agent takes:
 - `mode`: optional. `ask`, `safe` or `auto`. The default is `auto`. See [Modes](#modes).
 - `base`: optional. The git ref the participant's branch starts from. It can be another
   participant's `branch`, so a reviewer starts from the developer's commits. The default
-  is the repository's `HEAD`. Only committed work is on a branch.
+  is the repository's `HEAD`. Only committed work is on a branch. The participant's
+  `baseSha` records the resolved commit; if the harness later rebases the branch, the
+  daemon moves `baseSha` to the commit the rebase moved it onto.
 - `settings`: optional. `{ "allowReadOutsideRoot": false }` is the only setting today, and
   that is its default. `true` lets the harness read files outside its checkout through
   the daemon. The daemon never writes there for it. This is not isolation: it covers only
@@ -1079,6 +1081,13 @@ up to that `seq`, and a line above it is newer than the reply.
 The participant `id` is opaque. `title`, `role`, `branch` and `baseSha` are missing when
 there is no value. `branch` and `baseSha` are missing when `cwd` cannot carry a git
 checkout; then `worktree` is `cwd` itself.
+
+`branch` and `baseSha` are read again at the end of every turn: a harness may run
+`git branch -m` or rebase its branch, so both can change while the room is open. The
+daemon updates its record before it sends `_client_turn_ended`, and writes `room.json` a
+moment later. A client that shows the branch should read `GET /rooms/:id` again when a
+turn ends. A client that shows the whole-branch diff needs no extra step:
+`GET /rooms/:id/agents/:agentId/diff` reads the new `baseSha` from the daemon.
 
 **Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
@@ -1148,7 +1157,9 @@ with no event log; `400` `invalid_request` for a bad `Last-Event-ID`.
 Stops every harness and ends the room. The reply waits until that is done. The daemon
 never commits the room's work. Each participant has its own checkout and branch. When a
 participant changed something, its checkout and branch stay, with uncommitted changes
-still in the checkout. When it changed nothing, both are removed.
+still in the checkout. When it changed nothing, both are removed. A branch the harness
+switched to that already existed is never deleted; the checkout is kept and the daemon's
+log names it.
 
 A kept checkout stays while the room's record does: a daemon restart keeps it. A dismissed
 room comes back after a restart, still dismissed, so its history can be read and its
@@ -1212,7 +1223,9 @@ start.
 
 Changes one participant. Send one or more of:
 
-- `name`: a new name. The `id` and the `branch` do not change.
+- `name`: a new name. The `id` and the `branch` do not change. This route never renames
+  the checkout's branch; a harness that renames its own branch is picked up when its turn
+  ends, as [`GET /rooms/:id`](#get-roomsid) says.
 - `mode`: `ask`, `safe` or `auto`. The next question uses the new mode at once, and a
   question that waits under `ask` gets the new mode's answer. The harness hears of it
   before its next turn, never during one. See [Modes](#modes).
@@ -1307,8 +1320,9 @@ What the participant changed in its checkout, in any mode. In `auto` it asks not
 this is how a person sees its work before they ask it to commit.
 
 - `?against=head` (the default): what is not committed yet.
-- `?against=base`: the whole branch, from the commit it started at. Its commits are in it
-  too.
+- `?against=base`: the whole branch, from the commit its work starts at. That is the fork
+  point, or the commit a later rebase moved it onto. The branch's own commits are in it
+  too, but the base's are not.
 
 New files that git does not track are in both, as new files. Ignored files are not. The
 daemon reads the checkout and changes nothing in it, not even git's index. Each request is

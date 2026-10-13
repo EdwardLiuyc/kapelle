@@ -211,6 +211,10 @@ export interface RoomSetEvents {
   line(roomId: string, line: RoomEventLine, entry: Entry | undefined): void;
   /** `GET /rooms/:id` answered: the room's `dto` changed. */
   loaded(roomId: string): void;
+  /** A turn ended and the room was read again, so its header (the branch,
+   *  the checkout) may have changed; the timeline did not. A screen updates
+   *  the header without rebuilding the transcript. */
+  reloaded(roomId: string): void;
   /** The poll answered. */
   polled(): void;
   /** A new daemon answered after a restart, with its `minor` warning. */
@@ -250,6 +254,9 @@ export function roomSet(
   waitMs = WAIT_MS,
 ): RoomSet {
   const rooms = new Map<string, Followed>();
+  /** The newest read of each room, so an older reply cannot land on top of
+   *  one a later turn end asked for. */
+  const reads = new Map<string, number>();
   // A restart writes no line: read each room again for what it left.
   const current = followDaemon(d, address, (warning) => {
     on.restarted(warning);
@@ -266,14 +273,19 @@ export function roomSet(
   };
 
   /** Reads the room again for each participant's checkout and notices, and
-   *  the `paused` or `killed` a restart left, which no line says (M6-7a). */
-  const loadDto = (r: Followed) => {
+   *  the `paused` or `killed` a restart left, which no line says (M6-7a).
+   *  `why` is `reloaded` for the read a turn end asks for: the timeline is
+   *  unchanged, so the screen need not rebuild the transcript. */
+  const loadDto = (r: Followed, why: "loaded" | "reloaded" = "loaded") => {
+    const seq = (reads.get(r.entry.id) ?? 0) + 1;
+    reads.set(r.entry.id, seq);
     call<RoomDto>(d, `/rooms/${r.entry.id}`).then(
       (res) => {
-        if (!res.ok) return;
+        if (!res.ok || reads.get(r.entry.id) !== seq) return;
         r.dto = res.body;
         applyStatus(r.state, res.body);
-        on.loaded(r.entry.id);
+        if (why === "loaded") on.loaded(r.entry.id);
+        else on.reloaded(r.entry.id);
       },
       // The stream says what happened to the daemon; a header can wait.
       () => {},
@@ -283,10 +295,16 @@ export function roomSet(
   const onLine = (r: Followed, line: RoomEventLine) => {
     const e = applyLine(r.state, line);
     on.line(r.entry.id, line, e);
-    // A participant who joined after the room was read has no checkout or
-    // notices in the header until the room is read again.
-    if (
-      line.update.sessionUpdate === "_client_participant_added" &&
+    const update = line.update.sessionUpdate;
+    // The header's branch and base are in `GET /rooms/:id`, not the reducer.
+    // A turn can rename the branch or rebase it, so read the room again when
+    // the turn ends.
+    if (update === "_client_turn_ended") {
+      loadDto(r, "reloaded");
+    } else if (
+      // A participant who joined after the room was read has no checkout or
+      // notices in the header until the room is read again.
+      update === "_client_participant_added" &&
       r.dto &&
       !r.dto.participants.some((p) => p.id === line.participantId)
     ) {

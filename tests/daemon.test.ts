@@ -7459,6 +7459,79 @@ test("GET /rooms/:id/agents/:agentId/diff shows what an agent did not commit, ne
   await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
 });
 
+test("a branch renamed and rebased in a turn reaches the room reply, room.json and the base diff", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario read-only`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const p = only(open.body);
+  const renamed = "renamed-topic";
+  const branch = spawnSync("git", ["branch", "-m", renamed], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(branch.status, 0, branch.stderr);
+
+  // The agent commits, the base moves, and the agent rebases onto it.
+  await commitAt(p.worktree, "agent.txt");
+  await commitAt(cwd, "base.txt");
+  const newer = headAt(cwd);
+  const rebase = spawnSync("git", ["rebase", "main"], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(rebase.status, 0, rebase.stderr);
+
+  const sent = await api<RoomReply>(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/messages`,
+    {
+      text: "go",
+    },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  const roomNow = await roomIdle(d, open.body.id);
+  assert.equal(only(roomNow).branch, renamed);
+  assert.equal(only(roomNow).baseSha, newer);
+
+  type DiffReply = Diff & { error: { code: string } };
+  const diff = await api<DiffReply>(
+    d,
+    "GET",
+    `/rooms/${open.body.id}/agents/${p.id}/diff?against=base`,
+  );
+  assert.equal(diff.status, 200);
+  assert.match(diff.body.text, /diff --git a\/agent\.txt b\/agent\.txt/);
+  assert.doesNotMatch(
+    diff.body.text,
+    /base\.txt/,
+    "the new base's own file is not the agent's work",
+  );
+
+  // `room.json` is written after the turn's sync; poll for the save.
+  const file = join(stateDirFor(cwd), "rooms", open.body.id, "room.json");
+  for (const end = Date.now() + 5_000; ; ) {
+    const record = JSON.parse(await readFile(file, "utf8")) as {
+      participants: { branch?: string; baseSha?: string }[];
+    };
+    if (
+      record.participants[0]?.branch === renamed &&
+      record.participants[0]?.baseSha === newer
+    ) {
+      break;
+    }
+    if (Date.now() > end) assert.fail("room.json never showed the rename");
+    await new Promise((ok) => setTimeout(ok, 25));
+  }
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+});
+
 for (const scenario of ["diff-first", "file-text"]) {
   test(`an ask question about an edit carries its diff in GET /permissions: ${scenario}`, async (t) => {
     const d = await boot(t);
