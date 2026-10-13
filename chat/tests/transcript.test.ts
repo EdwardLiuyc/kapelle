@@ -333,17 +333,19 @@ test("a loaded revive says so, and warns when its memory may be behind (M6-7b)",
   );
 });
 
+type Line = (update: Record<string, unknown>, participantId?: string) => void;
+
 /** ana's turn: a thought, an answer and a tool call, drawn in r1's
- *  timeline. */
-function look() {
+ *  timeline. `more` adds lines after it. */
+function look(more?: (line: Line) => void) {
   const state = newRoomState();
   let seq = 0;
-  const line = (update: Record<string, unknown>) =>
+  const line = (update: Record<string, unknown>, participantId = "p-ana") =>
     applyLine(state, {
       seq: ++seq,
       at: "2026-10-10T09:05:00Z",
       roomId: "r1",
-      participantId: "p-ana",
+      participantId,
       update: update as unknown as RoomEventLine["update"],
     });
   line({
@@ -363,6 +365,7 @@ function look() {
     content: { type: "text", text: "**hello**" },
   });
   line({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read File" });
+  more?.(line);
   const rooms = new Map([
     ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
   ]);
@@ -406,6 +409,36 @@ test("an agent's heading shows its harness, role and time; its lines get its bar
     "the person's background",
   );
   assert.ok(!rows.join("").includes("SECRET"), "thinking text is never drawn");
+});
+
+test("a message from the orchestrator reads po → ana, live and queued (M8-1)", () => {
+  const rows = look((line) => {
+    line(
+      {
+        sessionUpdate: "_client_participant_added",
+        name: "po",
+        role: "orchestrator",
+        harness: "claude",
+        mode: "auto",
+      },
+      "p-po",
+    );
+    line({ sessionUpdate: "_client_message_queued", text: "go", from: "p-po" });
+    line({
+      sessionUpdate: "_client_user_message",
+      text: "go",
+      turn: 2,
+      from: "p-po",
+    });
+  });
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const plain = rows.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  assert.ok(plain.includes("▎ you → ana"), plain.join("\n"));
+  assert.ok(plain.includes("▎ po → ana"), plain.join("\n"));
+  assert.ok(
+    plain.some((l) => l.includes("queued for ana from po: go")),
+    plain.join("\n"),
+  );
 });
 
 test("NO_COLOR: the transcript has no colour code, and inverse stays (M7-1)", (t) => {

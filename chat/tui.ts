@@ -68,6 +68,7 @@ import { questionQueue } from "../client/questions.ts";
 import {
   cleanLines,
   type Entry,
+  fromPerson,
   nameOf,
   printable,
   seen,
@@ -674,7 +675,9 @@ function chatTui(
     if (!r) return [];
     const id = view.participantId;
     const all = id ? thread(r.state, id) : r.state.timeline;
-    return all.flatMap((e) => (e.type === "user" ? [{ r, e }] : []));
+    return all.flatMap((e) =>
+      e.type === "user" && fromPerson(e) ? [{ r, e }] : [],
+    );
   };
   /** The history list (M4-4, `ctrl+r`): the person's messages in the view,
    *  one row each, in the side view. A pick scrolls the transcript to it;

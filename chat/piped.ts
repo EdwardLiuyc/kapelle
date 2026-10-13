@@ -22,6 +22,7 @@ import {
   newRoomState,
   printable,
   type RoomState,
+  senderOf,
 } from "../client/room.ts";
 import {
   codeOf,
@@ -67,10 +68,15 @@ function makePrinter(state: RoomState) {
       switch (e.type) {
         case "user":
           speaker = undefined;
-          line(`you → ${nameOf(state, e.participantId)}: ${e.text}`);
+          line(
+            `${senderOf(state, e.from)} → ${nameOf(state, e.participantId)}: ${e.text}`,
+          );
           break;
         case "queued":
-          line(`  (queued for ${nameOf(state, e.participantId)}) ${e.text}`);
+          line(
+            `  (queued for ${nameOf(state, e.participantId)}` +
+              `${e.from ? `, from ${senderOf(state, e.from)}` : ""}) ${e.text}`,
+          );
           break;
         case "queue_cleared":
           line(`! ${e.count} queued message(s) dropped, unsent`);

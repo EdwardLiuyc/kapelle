@@ -3252,6 +3252,11 @@ text without that line. Both screens draw `po → dev` for a participant's messa
 *Done when* tests cover `from` on the nested route, both refusals, `from` refused as an
 unknown field on the room-wide route, the log fields, the first line the harness gets (a
 `mock-agent.mjs` path that echoes its prompt), and both screens' labels.
+**Decided 2026-10-13 (#265):** a bad `from` is the new code `invalid_sender`, not
+`invalid_request`, so a client can tell "a worker cannot give orders" from a bad body.
+The `[from <name>]` line stays: the daemon does not need it, but the agent does (D2), and
+M8-2's `[reply …]` and `[copy]` lines reuse it. The `remember` scenario is the path that
+echoes a prompt.
 
 **M8-2 · A reply to the sender, a copy to the orchestrator · M · needs M8-1**
 When a turn ends and its message came `from` a participant, the daemon sends the turn's
