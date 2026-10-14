@@ -109,6 +109,7 @@ import {
   SIDEBAR_WIDTH,
   sidebarParts,
 } from "./tui/sidebar.ts";
+import { type Shell, startShell } from "./tui/term.ts";
 import { transcriptParts } from "./tui/transcript.ts";
 import {
   activity,
@@ -258,6 +259,11 @@ export function screenLayout(p: {
  * and hides it, and it keeps what it shows. It has the keys when shown;
  * `ctrl+]` gives them to the composer and back, so a message can go out
  * while the diff stays in view.
+ *
+ * **The person's shell** (M4-13): `/term` puts one shell, started in the
+ * open room's `cwd`, in the side pane. It lives until it exits or the chat
+ * ends, and a later `/term` shows the same one. While it has the keys it
+ * gets every key but `ctrl+]`, before the screen's own (`chat/tui/term.ts`).
  *
  * **A fast-forward previews before it moves** (M6-11a). `@target /ff --from
  * @source`, or the target's `ctrl+o` menu, puts the commits the move would
@@ -474,6 +480,8 @@ function chatTui(
     editor,
     setStatus: () => setStatus(),
     gutter: () => (shown ? SIDEBAR_WIDTH : 2),
+    height: () => sidebarRows(),
+    released: () => offer(),
   });
   /** Puts a diff in the side pane (M4-6), with the keys that switch
    *  `against` and reload it. `at` jumps to a file's header line (M7-3).
@@ -666,17 +674,19 @@ function chatTui(
     // keys that work there instead.
     const hints = box.panel
       ? ["esc back", "ctrl+o close"]
-      : side.focused
-        ? ["esc keys back", "ctrl+] type", "ctrl+x hide"]
-        : side.shown
-          ? ["enter to send", "ctrl+] view", "ctrl+x hide", "ctrl+o menu"]
-          : [
-              "enter to send",
-              "ctrl+o menu",
-              "alt+↑↓ rows",
-              "ctrl+t rooms",
-              "ctrl+x view",
-            ];
+      : shellShown()
+        ? ["ctrl+] keys back"]
+        : side.focused
+          ? ["esc keys back", "ctrl+] type", "ctrl+x hide"]
+          : side.shown
+            ? ["enter to send", "ctrl+] view", "ctrl+x hide", "ctrl+o menu"]
+            : [
+                "enter to send",
+                "ctrl+o menu",
+                "alt+↑↓ rows",
+                "ctrl+t rooms",
+                "ctrl+x view",
+              ];
     statusParts = {
       left: parts.join(dim(" · ")),
       hints,
@@ -689,6 +699,48 @@ function chatTui(
     shown = !shown;
     placeSide();
     setStatus();
+  };
+
+  /** The person's shell (M4-13): one per chat, until it exits. */
+  let shell: Shell | undefined;
+  /** The shell has the keys: shown, focused and still running. */
+  const shellShown = () => {
+    const c = side.content;
+    return side.focused && !!c && "shell" in c && c.shell.ended === undefined;
+  };
+  /** Shows the shell in the side pane, and starts it in the open room's
+   *  `cwd` first when there is none, or the last one exited. */
+  const term = () => {
+    if (!shell || shell.ended !== undefined) {
+      const r = rooms.get(view.roomId);
+      if (!r) {
+        flash = "! no room: ctrl+o → new room";
+        setStatus();
+        return;
+      }
+      const started = startShell(
+        r.entry.cwd,
+        { cols: side.columns() - 2, rows: sidebarRows() - 2 },
+        () => {
+          // Output off screen asks for no frame: each one redraws the whole
+          // screen, 28-42% of a core for 100 lines a second (measured
+          // 2026-10-13). The pane reads the screen when it is shown again.
+          const c = side.content;
+          if (side.shown && c && "shell" in c && c.shell === started) {
+            tui.requestRender();
+          }
+        },
+        () => {
+          // The keys go back to the composer; the screen stays to read.
+          if (side.content && "shell" in side.content) {
+            if (side.content.shell === started) side.focus(false);
+          }
+          setStatus();
+        },
+      );
+      shell = started;
+    }
+    side.fill({ title: `shell · ${shell.cwd}`, shell, keys: [] });
   };
 
   /** The person's messages in the view, oldest first. */
@@ -836,6 +888,7 @@ function chatTui(
       if (done) return;
       done = true;
       set.stop();
+      shell?.kill();
       clearInterval(timer);
       // The screen is going: a later throw gets Node's default again, a
       // stack and a non-zero exit, instead of being swallowed here.
@@ -881,6 +934,12 @@ function chatTui(
       // release, and `matchesKey` matches it. pi-tui drops it before the
       // focused component; drop it here too, or a key acts twice.
       if (isKeyRelease(data)) return undefined;
+      // The shell gets every key but ctrl+], ctrl+c and Esc included.
+      if (shellShown() && !box.panel) {
+        if (matchesKey(data, Key.ctrl("]"))) side.focus(false);
+        else side.key(data);
+        return { consume: true };
+      }
       if (matchesKey(data, Key.ctrl("c"))) {
         end(0, left());
         return { consume: true };
@@ -930,7 +989,12 @@ function chatTui(
           ? 1
           : 0;
       if (page) {
-        if (side.shown && !side.wide()) side.key(data);
+        // A shell that does not have the keys scrolls its history: the key
+        // is not for the program in it.
+        const c = side.content;
+        if (side.shown && !side.wide() && c && "shell" in c) {
+          c.shell.scroll(page * Math.max(1, sidebarRows() - 3));
+        } else if (side.shown && !side.wide()) side.key(data);
         else scroll.scrollBy(page * Math.max(1, scroll.viewportHeight - 4));
         tui.requestRender();
         return { consume: true };
@@ -984,6 +1048,11 @@ function chatTui(
       }
       if (c.verb === "leave") return end(0, left());
       if (c.verb === "help") return showHelp();
+      // Typed again to show the shell: ↑ brings it back (ctrl+p steps rows).
+      if (c.verb === "term") {
+        editor.addToHistory(text);
+        return term();
+      }
       if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
       if (c.verb === "ff") {
         editor.addToHistory(text);

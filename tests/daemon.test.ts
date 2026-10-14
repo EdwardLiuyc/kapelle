@@ -4402,6 +4402,7 @@ test("chat.ts prints an answer that comes in two chunks once", async (t) => {
 test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and core/runtime.ts", async () => {
   // S8, widened by M4-1: chat.ts imports `client/`, pi-tui and
   // `core/runtime.ts` (the `daemon.json` path), type imports included.
+  // M4-13 adds `@xterm/headless`, in `chat/tui/term.ts` alone.
   // Since M4-7 every file in chat/ holds the same rule, and the walk goes
   // into every subfolder, such as chat/tui/ (M4-12). They may import each
   // other, but never chat.ts: the arrow is chat.ts → chat/, and chat.ts
@@ -4441,9 +4442,13 @@ test("chat.ts and chat/ reach the daemon over HTTP only: client/, pi-tui and cor
       if (!spec.startsWith(".")) {
         // One file of pi-tui by name: `decodePrintableKey` is not in its
         // main exports (M7-4). Another deep import is a new decision.
+        // M4-13: the shell's screen, in the shell's file only.
+        const term =
+          spec === "@xterm/headless" && file === join("chat", "tui", "term.ts");
         assert.ok(
           spec === "@earendil-works/pi-tui" ||
-            spec === "@earendil-works/pi-tui/dist/keys.js",
+            spec === "@earendil-works/pi-tui/dist/keys.js" ||
+            term,
           `${file} imports ${spec}`,
         );
         continue;
@@ -4671,6 +4676,182 @@ for (const [how, keys] of [
   });
 }
 
+test("chat.ts on a real terminal: /term runs a shell in the room's folder that resizes, takes vim, Esc and ^C, and ends with the chat", {
+  skip: noPty,
+}, async (t) => {
+  // M4-13. The pty is 100 columns: the pane takes the timeline's place,
+  // beside the 26-column sidebar. sh, so no rc file draws the prompt.
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  // The chat's own pty path, so the test can resize its screen.
+  const outer = join(runtime, "chat.tty");
+  const cmd = `tty > '${outer}'; stty cols 100 rows 30; node chat.ts new --cmd '${REMEMBER}' --cwd '${cwd}'`;
+  const { child, press, seen, exited, out } = await ptyScreen(t, cmd, {
+    XDG_RUNTIME_DIR: runtime,
+    SHELL: "/bin/sh",
+  });
+  /** The first match of `re` in what is drawn after `from`. */
+  const drawn = async (from: number, re: RegExp) => {
+    for (const until = Date.now() + 20_000; ; ) {
+      const m = plainText(out().slice(from)).match(re);
+      if (m) return m;
+      assert.ok(Date.now() < until, `never saw ${re}: ${out()}`);
+      await new Promise((ok) => setTimeout(ok, 50));
+    }
+  };
+  /** Types `line` into the shell, and reads `re` from what it draws. */
+  const run = (line: string, re: RegExp) => {
+    const from = out().length;
+    child.stdin.write(`${line}\r`);
+    return drawn(from, re);
+  };
+  const size = async () => {
+    const m = await run('echo "size=$(stty size)"', /size=(\d+) (\d+)/);
+    return { rows: Number(m[1]), cols: Number(m[2]) };
+  };
+
+  await press("/term\r", "ctrl+] keys back");
+  await run(`[ "$(pwd)" = '${cwd}' ] && echo "here=$((1))"`, /here=1/);
+  await run('echo $$ > shell.pid; echo "saved=$((1))"', /saved=1/);
+  const before = await size();
+  // ctrl+] gives the keys back; ctrl+t hides the sidebar, so the pane widens.
+  await press("\x1d", "ctrl+] keys here");
+  child.stdin.write("\x14");
+  await press("\x1d", "ctrl+] keys back");
+  const after = await size();
+  assert.equal(after.rows, before.rows);
+  assert.equal(
+    after.cols,
+    before.cols + 24,
+    "the sidebar's 26 less the strip's 2",
+  );
+  // A shorter screen gives the shell fewer rows. The resize reaches the
+  // shell after a redraw, so ask until it shows.
+  const tty = (await readFile(outer, "utf8")).trim();
+  spawnSync("stty", ["-F", tty, "rows", "24", "cols", "100"]);
+  for (const until = Date.now() + 20_000; ; ) {
+    const s = await size();
+    if (s.rows < after.rows) break;
+    assert.ok(Date.now() < until, `the shell kept ${s.rows} rows`);
+  }
+
+  // ctrl+o, ctrl+r and ctrl+x are the shell's too: read raw, they arrive.
+  {
+    const from = out().length;
+    await run(
+      'stty raw -echo; echo "raw=$((1))"; k=$(dd bs=1 count=3 2>/dev/null | od -An -tx1); stty sane; echo "k=$k."',
+      /raw=1/,
+    );
+    child.stdin.write("\x0f\x12\x18");
+    await drawn(from, /k= 0f 12 18\./);
+  }
+
+  // ^C stops the command, not the chat.
+  child.stdin.write("sleep 30\r");
+  await new Promise((ok) => setTimeout(ok, 300));
+  child.stdin.write("\x03");
+  await run('echo "after=$((1+1))"', /after=2/);
+
+  // Esc reaches vim: insert mode ends, and :wq writes the file.
+  if (spawnSync("vim", ["--version"]).status === 0) {
+    await run("vim -u NONE -N note.txt", /note\.txt/);
+    child.stdin.write("ihello from vim");
+    await new Promise((ok) => setTimeout(ok, 200));
+    child.stdin.write("\x1b");
+    await new Promise((ok) => setTimeout(ok, 200));
+    // The main screen comes back with the line that started vim: keys
+    // typed before that would go to vim.
+    await run(":wq", /\$ vim -u NONE -N note\.txt/);
+    await run("tr a-z A-Z < note.txt", /HELLO FROM VIM/);
+  }
+
+  // Hidden and shown again, it is the same shell, with its screen.
+  await run('echo "kept=$((5))"', /kept=5/);
+  await press("\x1d", "ctrl+] keys here");
+  await press("\x18", "ctrl+x view");
+  {
+    const from = out().length;
+    await press("/term\r", "ctrl+] keys back");
+    await drawn(from, /kept=5/);
+  }
+  await run('[ $$ = "$(cat shell.pid)" ] && echo "same=$((1))"', /same=1/);
+
+  // Its exit leaves the chat; the next /term starts a new shell.
+  await press("exit 3\r", "exited (code 3) · /term starts a new one");
+  // An exited shell takes no keys: ctrl+] gives the view its own, and Esc
+  // gives them back (PR #286).
+  await press("\x1d", "esc keys back");
+  await press("\x1b", "ctrl+] view");
+  // /term is in the composer's history: ↑ brings it back (PR #286).
+  {
+    const from = out().length;
+    child.stdin.write("\x1b[A");
+    await drawn(from, /^ \/term\s*$/m);
+  }
+  await press("\r", "ctrl+] keys back");
+  await run('echo "again=$((2+2))"', /again=4/);
+  const pid = Number((await readFile(join(cwd, "shell.pid"), "utf8")).trim());
+  await run('echo $$ > shell.pid; echo "saved=$((2))"', /saved=2/);
+  const second = Number(
+    (await readFile(join(cwd, "shell.pid"), "utf8")).trim(),
+  );
+  assert.notEqual(second, pid);
+  assert.throws(() => process.kill(pid, 0), "the first shell is gone");
+
+  await press("\x1d", "ctrl+] keys here");
+  child.stdin.write("/leave\r");
+  await seen("rejoin with");
+  assert.equal(await exited, 0, out());
+  // The shell ends with the chat.
+  for (const until = Date.now() + 5_000; ; ) {
+    try {
+      process.kill(second, 0);
+    } catch {
+      break;
+    }
+    assert.ok(Date.now() < until, "the shell outlived the chat");
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+});
+
+test("chat.ts on a real terminal: a question that came while the shell had the keys opens when they come back", {
+  skip: noPty,
+}, async (t) => {
+  // PR #286. A question box never opens over a view that has the keys, so
+  // giving the keys back must offer it.
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const asking = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "asker", mode: "ask" }],
+  });
+  assert.equal(asking.status, 201, asking.body.error?.message);
+  // A room with no orchestrator names none on the status line, so the
+  // screen is up once the agent's row is.
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime, SHELL: "/bin/sh" },
+    "asker",
+  );
+  await screen.press("/term\r", "ctrl+] keys back");
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${asking.body.id}/agents/${only(asking.body).id}/messages`,
+    { text: "go" },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  // The shell has the keys: the question waits in the sidebar.
+  await screen.seen("? asker");
+  assert.doesNotMatch(screen.out(), / 1 of 1 ━┓/);
+  await screen.press("\x1d", " 1 of 1 ━┓");
+  screen.child.stdin.write("\x03");
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
 test("chat.ts on a real terminal keeps the typing box's bottom border, then the where bar on the last row", {
   skip: noPty,
 }, async (t) => {
@@ -7185,18 +7366,19 @@ test("piped chat.ts says how to add a folder that /new is refused for", async (t
   );
 });
 
-test("piped chat.ts refuses a bare /new or /add: a form needs a terminal", async (t) => {
+test("piped chat.ts refuses a bare /new or /add, and /term: each needs a terminal", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
   const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
   });
-  c.child.stdin.end("/new\n/add\n/leave\n");
+  c.child.stdin.end("/new\n/add\n/term\n/leave\n");
   const r = await c.done;
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stderr, /! a form needs a terminal: \/new/);
   assert.match(r.stderr, /! a form needs a terminal: \/add </);
+  assert.match(r.stderr, /! a shell needs the full-screen chat/);
 });
 
 test("piped chat.ts takes the room commands, and names the room /new opened", async (t) => {

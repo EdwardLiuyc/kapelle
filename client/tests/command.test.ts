@@ -26,6 +26,7 @@ test("a line that is not a known command is a message", () => {
     "/usr/bin is slow",
     "/dismiss the old plan",
     "@bob /leave now",
+    "/term now",
   ]) {
     assert.equal(parse(s), undefined, s);
   }
@@ -35,6 +36,7 @@ test("room commands ignore a leading mention", () => {
   assert.deepEqual(parse("@bob /leave"), { verb: "leave" });
   assert.deepEqual(parse("/dismiss"), { verb: "dismiss" });
   assert.deepEqual(parse("@bob /help"), { verb: "help" });
+  assert.deepEqual(parse("@bob /term"), { verb: "term" });
   assert.deepEqual(parse("@bob /add"), { verb: "form", form: "add" });
   assert.deepEqual(parse("/new"), { verb: "form", form: "new" });
 });

@@ -9,8 +9,8 @@
  * **A participant command starts with `@name`**, as a message does (R43):
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
  * the orchestrator, so a bare `/remove` cannot drop it. Room commands
- * (`/new`, `/add`, `/dismiss`, `/leave`, `/help`) ignore a mention, so they
- * work after a thread's pre-filled `@name`.
+ * (`/new`, `/add`, `/dismiss`, `/leave`, `/help`, `/term`) ignore a mention,
+ * so they work after a thread's pre-filled `@name`.
  *
  * **The screen never guesses** (M4-5). A value the daemon checks (a role, a
  * mode, a harness) is sent as typed, and a refusal is the daemon's own
@@ -69,12 +69,13 @@ export type RouteCommand =
     };
 
 /** What a typed line is: a command, a form to open (a bare `/new` or
- *  `/add`), what an agent changed (`/diff`, M4-6), or a line that is
- *  refused before any request. */
+ *  `/add`), what an agent changed (`/diff`, M4-6), the person's shell
+ *  (`/term`, M4-13), or a line that is refused before any request. */
 export type Command =
   | RouteCommand
   | { verb: "leave" }
   | { verb: "help" }
+  | { verb: "term" }
   | { verb: "form"; form: "new" | "add" }
   | { verb: "diff"; id: string; name: string; against: "head" | "base" }
   | {
@@ -94,7 +95,7 @@ export const HELP = [
   "@name /remove",
   "@name /diff [base]",
   "@name /ff --from @name",
-  "/dismiss   /leave   /help",
+  "/term   /dismiss   /leave   /help",
   "/new and /add alone open a form; ctrl+o opens the menu",
 ];
 
@@ -110,7 +111,7 @@ export const USAGE: Record<string, string> = {
   ff: "usage: @name /ff --from @name",
 };
 
-const ROOM_VERBS = new Set(["new", "add", "dismiss", "leave", "help"]);
+const ROOM_VERBS = new Set(["new", "add", "dismiss", "leave", "help", "term"]);
 const AGENT_VERBS = new Set([
   "rename",
   "role",
@@ -171,7 +172,12 @@ export function parseCommand(
   const verb = head.slice(1);
   if (!ROOM_VERBS.has(verb) && !AGENT_VERBS.has(verb)) return undefined;
 
-  if (verb === "leave" || verb === "dismiss" || verb === "help") {
+  if (
+    verb === "leave" ||
+    verb === "dismiss" ||
+    verb === "help" ||
+    verb === "term"
+  ) {
     // Exact, as before M4-5: `/dismiss the old plan` is a message.
     return args.length ? undefined : { verb };
   }
