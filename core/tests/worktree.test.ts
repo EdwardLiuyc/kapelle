@@ -13,12 +13,21 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import { isolateStateHome } from "../../integration/helpers.ts";
+import { readProjectLinkPaths } from "../config.ts";
 import { createEventBus } from "../events.ts";
 import {
   RELEASES,
@@ -1082,4 +1091,112 @@ test("checkoutIdentity reads a branch named like a path", async (t) => {
     branch: "docs",
     rebaseBase: newer,
   });
+});
+
+// --- worktree links (#274) ---------------------------------------------------
+
+/** A repo with a real `node_modules/` and an ignore rule that matches only a
+ *  directory. The rule is committed, so every checkout sees it. */
+async function repoWithLinks(t: TestContext): Promise<string> {
+  const root = await repo(t);
+  await writeFile(join(root, ".gitignore"), "node_modules/\nvendor.txt\n");
+  await mkdir(join(root, "node_modules", "pkg"), { recursive: true });
+  await writeFile(join(root, "node_modules", "pkg", "index.js"), "module\n");
+  await writeFile(join(root, "vendor.txt"), "vendor\n");
+  await git(root, "add", ".gitignore");
+  await git(root, "commit", "-m", "ignore links");
+  return root;
+}
+
+test("a listed directory is mirrored and a listed file is symlinked (#274)", async (t) => {
+  const root = await repoWithLinks(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["node_modules", "vendor.txt"],
+  });
+  assert.ok(worktrees);
+
+  const wt = await worktrees.acquire("plan");
+  assert.equal((await lstat(join(wt, "node_modules"))).isDirectory(), true);
+  assert.equal(
+    (await lstat(join(wt, "node_modules", "pkg"))).isSymbolicLink(),
+    true,
+  );
+  assert.equal((await lstat(join(wt, "vendor.txt"))).isSymbolicLink(), true);
+  // The point of the directory-only ignore rule: the links are invisible.
+  assert.deepEqual(await changedPaths(wt), []);
+
+  // Removing the checkout takes the links, never the main folders.
+  await worktrees.release("plan", "commit");
+  assert.ok(existsSync(join(root, "node_modules", "pkg", "index.js")));
+  assert.ok(existsSync(join(root, "vendor.txt")));
+});
+
+test("a missing link path is skipped (#274)", async (t) => {
+  const root = await repo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["not-installed"],
+  });
+  assert.ok(worktrees);
+
+  const wt = await worktrees.acquire("plan");
+  assert.equal(existsSync(join(wt, "not-installed")), false);
+  await worktrees.release("plan", "keep");
+});
+
+test("tracked, escaping, and .git link paths are refused (#274)", async (t) => {
+  const root = await repoWithLinks(t);
+
+  await assert.rejects(
+    openWorktrees(root, RUN_ID, { linkPaths: ["README.md"] }),
+    /tracked by git/,
+  );
+  await assert.rejects(
+    openWorktrees(root, RUN_ID, { linkPaths: ["../outside"] }),
+    /relative path inside the checkout/,
+  );
+  await assert.rejects(
+    openWorktrees(root, RUN_ID, { linkPaths: [".git"] }),
+    /must not name \.git/,
+  );
+
+  const outside = await tempDir(t);
+  await symlink(outside, join(root, "escape"));
+  await assert.rejects(
+    openWorktrees(root, RUN_ID, { linkPaths: ["escape"] }),
+    /resolves outside/,
+  );
+});
+
+test("a run gets the project's configured links (#274)", async (t) => {
+  const root = await repoWithLinks(t);
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(root, ".kapelle", "config.json"),
+    `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`,
+    { mode: 0o644 },
+  );
+
+  const exec: TaskExecutor = async (_task, ctx) => {
+    assert.equal(
+      (await lstat(join(ctx.cwd, "node_modules"))).isDirectory(),
+      true,
+    );
+    assert.equal(
+      (await lstat(join(ctx.cwd, "node_modules", "pkg"))).isSymbolicLink(),
+      true,
+    );
+    return { stopReason: "end_turn" };
+  };
+
+  const report = await runRun(
+    runOf(["plan"]),
+    {
+      cwd: root,
+      runId: RUN_ID,
+      bus: createEventBus(),
+      linkPaths: readProjectLinkPaths(root),
+    },
+    exec,
+  );
+  assert.equal(report.status, "done");
 });

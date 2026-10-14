@@ -5,9 +5,9 @@
  *   that are properties of the daemon rather than of one repository: `port`
  *   and `permissionTimeoutMs`. One daemon serves every added repository
  *   (M2-1), so these cannot come from any one repository's file.
- * - **Project level** — `<root>/.kapelle/config.json`, for the run defaults:
- *   `stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency` and
- *   `retentionMs`.
+ * - **Project level** — `<root>/.kapelle/config.json`, for the run defaults
+ *   (`stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency`), the
+ *   retention window and the paths a new worktree links.
  * - **`KAPELLE_*` environment** — above both files, below an explicit CLI flag
  *   or run-file value.
  *
@@ -42,7 +42,11 @@ interface ConfigValues {
   ttlMs?: number;
   maxConcurrency?: number;
   retentionMs?: number;
+  linkPaths?: string[];
 }
+
+/** A knob that is a number. `linkPaths` is the one project value that is not. */
+type NumericConfigKey = Exclude<keyof ConfigValues, "linkPaths">;
 
 /** The per-run defaults. `retentionMs` is the other repository-level knob;
  *  `PROJECT_KEYS` adds it just below. */
@@ -54,7 +58,7 @@ const RUN_DEFAULT_KEYS = [
 ] as const satisfies readonly (keyof RunDefaults)[];
 
 const USER_KEYS = ["port", "permissionTimeoutMs"] as const;
-const PROJECT_KEYS = [...RUN_DEFAULT_KEYS, "retentionMs"] as const;
+const PROJECT_KEYS = [...RUN_DEFAULT_KEYS, "retentionMs", "linkPaths"] as const;
 
 /** The one place a `KAPELLE_*` name is given a meaning. Anything else under
  *  the prefix warns and stays out — it may be a secret. */
@@ -124,7 +128,7 @@ function permissionTimeoutMs(value: unknown, where: string): number {
   return value;
 }
 
-function checkKnob(key: keyof ConfigValues, value: unknown, where: string) {
+function checkKnob(key: NumericConfigKey, value: unknown, where: string) {
   switch (key) {
     case "port":
       return port(value, where);
@@ -135,6 +139,83 @@ function checkKnob(key: keyof ConfigValues, value: unknown, where: string) {
     default:
       return integerAtLeast(value, where, 0);
   }
+}
+
+/** The comparison key for `linkPaths`: separators and harmless `.` parts
+ *  removed, so `folder_a/` and `folder_a` are one entry. */
+function canonicalLinkPath(path: string): string {
+  return path
+    .split(/[\\/]+/)
+    .filter((part) => part !== "" && part !== ".")
+    .join("/");
+}
+
+/**
+ * `linkPaths`: relative paths inside the checkout the worktree linker may
+ * mirror. The shape rules are here so every config reader refuses the same
+ * list; whether a path is tracked or reaches outside the checkout needs git
+ * and the filesystem, so `core/worktree.ts` checks those when it links.
+ */
+function linkPathList(value: unknown, where: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(
+      `${where} "linkPaths" must be an array of relative paths; got ` +
+        `${JSON.stringify(value)}.`,
+    );
+  }
+  const seen: { original: string; key: string }[] = [];
+  return value.map((entry, index) =>
+    linkPathEntry(entry, `${where} "linkPaths[${index}]"`, seen),
+  );
+}
+
+/** One `linkPaths` entry: shape, containment, and overlap with earlier ones. */
+function linkPathEntry(
+  entry: unknown,
+  at: string,
+  seen: { original: string; key: string }[],
+): string {
+  if (typeof entry !== "string" || entry.length === 0) {
+    throw new Error(
+      `${at} must be a non-empty string; got ${JSON.stringify(entry)}.`,
+    );
+  }
+  if (entry.includes("\0")) {
+    throw new Error(`${at} must not contain a NUL byte.`);
+  }
+  if (isAbsolute(entry)) {
+    throw new Error(`${at} must be relative; got ${JSON.stringify(entry)}.`);
+  }
+  if (entry.split(/[\\/]+/).includes("..")) {
+    throw new Error(
+      `${at} must stay inside the checkout; got ${JSON.stringify(entry)}.`,
+    );
+  }
+  const key = canonicalLinkPath(entry);
+  if (
+    key === "" ||
+    key.toLowerCase() === ".git" ||
+    key.toLowerCase().startsWith(".git/")
+  ) {
+    throw new Error(
+      `${at} must not name .git or anything inside it; ` +
+        `got ${JSON.stringify(entry)}.`,
+    );
+  }
+  for (const other of seen) {
+    if (
+      key === other.key ||
+      key.startsWith(`${other.key}/`) ||
+      other.key.startsWith(`${key}/`)
+    ) {
+      throw new Error(
+        `${at} overlaps ${JSON.stringify(other.original)}; ` +
+          "each path must stand alone.",
+      );
+    }
+  }
+  seen.push({ original: entry, key });
+  return entry;
 }
 
 // --- file readers ------------------------------------------------------------
@@ -232,11 +313,19 @@ export function readProjectConfig(root: string): ConfigValues {
   const config: ConfigValues = {};
   for (const key of PROJECT_KEYS) {
     const value = raw[key];
-    if (value !== undefined) {
-      config[key] = checkKnob(key, value, `${path}: "${key}"`);
+    if (value === undefined) continue;
+    if (key === "linkPaths") {
+      config.linkPaths = linkPathList(value, `${path}:`);
+      continue;
     }
+    config[key] = checkKnob(key, value, `${path}: "${key}"`);
   }
   return config;
+}
+
+/** The project's worktree links; a missing key is no links, not an error. */
+export function readProjectLinkPaths(root: string): string[] {
+  return readProjectConfig(root).linkPaths ?? [];
 }
 
 // --- environment -------------------------------------------------------------

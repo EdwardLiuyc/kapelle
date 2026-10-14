@@ -9,7 +9,8 @@ Three sources set the knobs that do not belong in a run file (M2-7, #37):
   repository's file.
 - **Project level** — `<repo>/.kapelle/config.json`. Holds the run defaults:
   `stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency` and
-  `retentionMs`. **Commit it if you want to** (#129). It used to be
+  `retentionMs`, plus `linkPaths` for new worktrees. **Commit it if you want
+  to** (#129). It used to be
   uncommittable, because `.kapelle/` also held worktrees and run records and
   `checkStateDir` refused a repository that tracked it; that state now lives
   in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`, so this file is the only
@@ -60,7 +61,8 @@ refuses the daemon start (one line, exit 1), before the instance claim.
 
 ## Project file — `<repo>/.kapelle/config.json`
 
-Per-run defaults plus retention. A bad file surfaces per read site:
+Per-run defaults, retention, and the paths a new worktree links from the main
+checkout. A bad file surfaces per read site:
 `POST /repos` → 400; `POST /runs` → 400; `kapelle run --file` → exit 1; the
 boot sweep → `cannot sweep <root>: …` notice and only that repository is
 skipped. The daemon keeps booting and serving the rest.
@@ -73,15 +75,23 @@ skipped. The daemon keeps booting and serving the rest.
 | ✅ | TTL | `{"ttlMs": 60000}` | cancel at 60 s; `0` disables |
 | ✅ | concurrency | `{"maxConcurrency": 2}` | run-file default parallelism 2 (minimum 1) |
 | ✅ | retention | `{"retentionMs": 86400000}` | this repo's terminal runs and dismissed rooms reaped after 1 day; `0` = reap on next sweep |
-| ✅ | all five | — | all applied (a run-file value still wins per knob) |
-| ❌ | unknown key | `{"stallIdle": 1}` | `<path>: unknown key "stallIdle". Known: stallIdleMs, stallRepeatCount, ttlMs, maxConcurrency, retentionMs.` |
+| ✅ | linked paths | `{"linkPaths": ["node_modules"]}` | each new run-task and room-participant checkout mirrors the path from the main checkout; a missing path is skipped |
+| ✅ | all six | — | all applied (a run-file value still wins for the run knobs) |
+| ❌ | unknown key | `{"stallIdle": 1}` | `<path>: unknown key "stallIdle". Known: stallIdleMs, stallRepeatCount, ttlMs, maxConcurrency, retentionMs, linkPaths.` |
 | ❌ | wrong-layer key | `{"port": 5000}` | `<path>: "port" is daemon-wide; put it in <user-config-path>.` |
-| ❌ | wrong type | `{"ttlMs": "soon"}`, `{"maxConcurrency": 1.5}` | whole-number rule naming the key |
+| ❌ | wrong type | `{"ttlMs": "soon"}`, `{"maxConcurrency": 1.5}`, `{"linkPaths": "node_modules"}` | whole-number rule naming the key, or the `linkPaths` array rule |
+| ❌ | bad link path | `{"linkPaths": ["/x"]}`, `["../x"]`, `["a", "a/b"]`, `[".git"]`, `42` | entry-specific rule naming the file and `linkPaths[i]` |
+| ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path whose real target leaves the checkout | refused when the repository is added, a run starts, or a room opens, as `invalid_config` |
 | ❌ | out of range | negatives; `{"maxConcurrency": 0}` | `0 or greater` (watchdog/retention) or `1 or greater` (concurrency) |
 | ❌ | invalid JSON / non-object / unreadable | — | the same three structural refusals as the user file |
 | ⚠ | — | — | files never warn |
 
 ## Environment — `KAPELLE_*`
+
+`linkPaths` has no `KAPELLE_*` twin: it is a list of paths relative to one
+checkout, and a daemon-wide value would be read against every added
+repository. Keep it in the repository's own config. `KAPELLE_LINK_PATHS` is
+an unknown name: it warns and is ignored.
 
 Known names are validated and override both files; unknown names are the only
 warning path. An offending known value blocks the daemon start and a
@@ -117,6 +127,7 @@ Known name → knob → accepted values:
 | `stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency` | task value → run-file run-level → `KAPELLE_*` → project config → default | 300 000 ms / 8 / 3 600 000 ms / 4 |
 | `port`, `permissionTimeoutMs` | CLI flag → `KAPELLE_*` → user config → default | 4719 / 120 000 ms |
 | `retentionMs` | `sweepBoot` option (tests) → `KAPELLE_RETENTION_MS` → project config → default | 30 days |
+| `linkPaths` | project config only (no env, no run-file field) | no links |
 
 Notes:
 
@@ -132,7 +143,10 @@ Notes:
 ## Where this lives
 
 - `core/config.ts` — key sets, value rules, both file readers, the `KAPELLE_*`
-  reader, `warnUnknownConfigEnv`, `resolveRunDefaults`, `resolveRetentionMs`.
+  reader, `warnUnknownConfigEnv`, `resolveRunDefaults`, `resolveRetentionMs`,
+  `readProjectLinkPaths`.
+- `core/worktree.ts` — `openWorktrees` plans and makes the `linkPaths` mirrors,
+  and refuses a tracked, escaping, or still-visible link.
 - `daemon.ts` — `DEFAULT_PORT` / `DEFAULT_PERMISSION_TIMEOUT_S` and flag
   resolution, `postRepo`, `postRun`.
 - `cli.ts` — `runFromFile`, the project-config defaults for `--file`.

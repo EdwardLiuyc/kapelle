@@ -20,7 +20,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
@@ -33,6 +33,7 @@ import {
 } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { AGENTS } from "../../protocol/registry.ts";
+import { readProjectLinkPaths } from "../config.ts";
 import { checkoutDiff } from "../diff.ts";
 import { createEventBus, type EventBus } from "../events.ts";
 import { newRoomId } from "../ids.ts";
@@ -2083,4 +2084,47 @@ test("a load that fails falls back to a fresh session", async (t) => {
   assert.deepEqual(answersOf(back.of), ["previous: (none)"]);
   assert.equal(revivedOf(back.of)?.resumed, "fresh");
   assert.notEqual(back.p.sessionId, "sess_mock_gone");
+});
+
+test("a participant's checkout gets the project's configured links (#274)", async (t) => {
+  const repo = await gitRepo(t, { ignore: "node_modules/\n" });
+  await mkdir(join(repo, "node_modules", "pkg"), { recursive: true });
+  await writeFile(join(repo, "node_modules", "pkg", "index.js"), "module\n");
+  await mkdir(join(repo, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(repo, ".kapelle", "config.json"),
+    `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`,
+    { mode: 0o644 },
+  );
+
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [mock("alice")],
+    setup: await openWorktrees(repo, roomId, {
+      linkPaths: readProjectLinkPaths(repo),
+    }),
+    bus,
+    permissions: queue,
+  });
+  t.after(() => room.dismiss());
+
+  const alice = room.participants[0] as Participant;
+  assert.equal(
+    (await lstat(join(alice.worktree, "node_modules"))).isDirectory(),
+    true,
+  );
+  assert.equal(
+    (await lstat(join(alice.worktree, "node_modules", "pkg"))).isSymbolicLink(),
+    true,
+  );
+  assert.deepEqual(await changedPaths(alice.worktree), []);
+
+  await room.dismiss();
+  assert.ok(
+    existsSync(join(repo, "node_modules", "pkg", "index.js")),
+    "dismiss keeps the main folder",
+  );
 });

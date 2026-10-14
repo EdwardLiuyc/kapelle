@@ -37,7 +37,11 @@ import {
   VersionRefused,
 } from "./client/daemon.ts";
 import { type Connect, followEvents } from "./client/stream.ts";
-import { resolveRunDefaults, warnUnknownConfigEnv } from "./core/config.ts";
+import {
+  readProjectLinkPaths,
+  resolveRunDefaults,
+  warnUnknownConfigEnv,
+} from "./core/config.ts";
 import { createEventBus } from "./core/events.ts";
 import { newRunId } from "./core/ids.ts";
 import { mergeRun } from "./core/merge.ts";
@@ -443,6 +447,7 @@ async function runFromFile(path: string): Promise<number> {
   if (!quiet) warnUnknownConfigEnv();
   const { root } = await stateDirRoot(cwd);
   const defaults = orExit(() => resolveRunDefaults(root));
+  const linkPaths = orExit(() => readProjectLinkPaths(root));
 
   const validated = orExit(() => validateRun(parsed, AGENTS, defaults));
 
@@ -553,6 +558,7 @@ async function runFromFile(path: string): Promise<number> {
       { ...validated, tasks },
       {
         cwd,
+        linkPaths,
         // Minted here rather than left to `runRun`'s default because it is
         // printed: it names every branch the run leaves behind, and
         // `kapelle merge <runId>` is how they are found again.

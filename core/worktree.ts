@@ -48,8 +48,17 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync, realpathSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { existsSync, readdirSync, realpathSync, type Stats } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  symlink,
+} from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { branchName } from "./ids.ts";
 import { stateDirFor } from "./runtime.ts";
@@ -247,6 +256,11 @@ export class DirtyCheckout extends Error {}
  *  source, or the checkout is not on the branch it would move. Nothing has
  *  changed. */
 export class NotFastForward extends Error {}
+
+/** A configured worktree link that cannot be made safely: a tracked path,
+ *  one whose real target leaves the checkout, an overlap, or a link git
+ *  still sees as untracked. The caller answers it as invalid config. */
+export class LinkPathError extends Error {}
 
 /**
  * `git merge --ff-only <sourceRef>` inside `cwd` (M6-11a).
@@ -541,6 +555,9 @@ export interface WorktreeSetupOptions {
    * overlap.
    */
   onWorktreeMutation?: () => void | Promise<void>;
+  /** Project `linkPaths`, already through `core/config.ts`'s shape rules.
+   *  Absent means no links. */
+  linkPaths?: readonly string[];
 }
 
 export interface WorktreeSetup {
@@ -565,6 +582,285 @@ export interface WorktreeSetup {
   root: string;
 }
 
+/** One configured path the worktree linker will make. */
+interface LinkSource {
+  /** The relative path as configured. */
+  path: string;
+  /** The absolute path in the main checkout. */
+  source: string;
+  /** A directory is mirrored entry by entry; a file is one symlink. */
+  kind: "dir" | "file";
+  /** `<repo>/.kapelle/config.json: "linkPaths[i]"`, for error messages. */
+  where: string;
+}
+
+const messageOf = (err: unknown) =>
+  err instanceof Error ? err.message : String(err);
+
+/** Separators and harmless `.` parts removed, so `folder_a/` and `folder_a`
+ *  are one entry for overlap checks. */
+function canonicalLinkPath(path: string): string {
+  return path
+    .split(/[\\/]+/)
+    .filter((part) => part !== "" && part !== ".")
+    .join("/");
+}
+
+/**
+ * Plan the configured links against the main checkout. `core/config.ts`
+ * checks the list's shape; the answers that need git or the filesystem are
+ * here: tracked, real-target containment, and overlap. A path that does not
+ * exist is skipped.
+ */
+async function planLinkSources(
+  root: string,
+  paths: readonly string[],
+): Promise<LinkSource[]> {
+  if (paths.length === 0) return [];
+  const realRoot = await realpath(root);
+  const configFile = join(root, STATE_DIR, "config.json");
+  const plans: LinkSource[] = [];
+  const seen = new Map<string, string>();
+
+  for (const [index, path] of paths.entries()) {
+    const where = `${configFile}: "linkPaths[${index}]"`;
+    checkLinkPath(path, where, seen);
+    const plan = await planLinkSource(root, realRoot, path, where);
+    if (plan) plans.push(plan);
+  }
+  return plans;
+}
+
+/** The shape rules `core/config.ts` already applies, repeated for this
+ *  function's test seam: relative, inside the checkout, not `.git`, and no
+ *  overlap with an earlier entry. */
+function checkLinkPath(
+  path: string,
+  where: string,
+  seen: Map<string, string>,
+): void {
+  const key = canonicalLinkPath(path);
+  if (path === "" || isAbsolute(path) || path.split(/[\\/]+/).includes("..")) {
+    throw new LinkPathError(
+      `${where} must be a relative path inside the checkout; ` +
+        `got ${JSON.stringify(path)}.`,
+    );
+  }
+  if (
+    key === "" ||
+    key.toLowerCase() === ".git" ||
+    key.toLowerCase().startsWith(".git/")
+  ) {
+    throw new LinkPathError(
+      `${where} must not name .git or anything inside it; got ` +
+        `${JSON.stringify(path)}.`,
+    );
+  }
+  for (const [seenKey, seenPath] of seen) {
+    if (
+      key === seenKey ||
+      key.startsWith(`${seenKey}/`) ||
+      seenKey.startsWith(`${key}/`)
+    ) {
+      throw new LinkPathError(
+        `${where} overlaps ${JSON.stringify(seenPath)}; ` +
+          "each path must stand alone.",
+      );
+    }
+  }
+  seen.set(key, path);
+}
+
+/** One path's git and filesystem checks, or `undefined` when it is missing. */
+async function planLinkSource(
+  root: string,
+  realRoot: string,
+  path: string,
+  where: string,
+): Promise<LinkSource | undefined> {
+  // Tracked is a refusal even when the working copy is missing: the new
+  // checkout would check the path out and collide with the link.
+  const listed = await git(root, [
+    "--literal-pathspecs",
+    "ls-files",
+    "-z",
+    "--",
+    path,
+  ]);
+  if (listed !== "") {
+    throw new LinkPathError(
+      `${where} is tracked by git; a new checkout would collide with it.`,
+    );
+  }
+
+  const source = resolve(root, path);
+  const sourceStat = await statOrMissing(source);
+  if (sourceStat === undefined) return undefined;
+
+  // `realpath` follows a symlink, so a listed path that points outside the
+  // checkout is refused no matter how it is spelled.
+  const realSource = await realpath(source);
+  if (realSource !== realRoot && !realSource.startsWith(`${realRoot}${sep}`)) {
+    throw new LinkPathError(
+      `${where} resolves outside ${root}, to ${realSource}.`,
+    );
+  }
+
+  return {
+    path,
+    source,
+    kind: sourceStat.isDirectory() ? "dir" : "file",
+    where,
+  };
+}
+
+/** `stat`, with a missing path as the `undefined` the caller skips. */
+async function statOrMissing(source: string): Promise<Stats | undefined> {
+  try {
+    return await stat(source);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+
+/** Check the configured links without creating anything. Request paths use
+ *  it to answer `invalid_config` before a run or a room starts. */
+export async function validateWorktreeLinks(
+  root: string,
+  paths: readonly string[],
+): Promise<void> {
+  await planLinkSources(root, paths);
+}
+
+/** The link type Windows needs; ignored on POSIX, where symlinks need none. */
+async function linkType(
+  source: string,
+): Promise<"file" | "junction" | undefined> {
+  if (process.platform !== "win32") return undefined;
+  try {
+    return (await stat(source)).isDirectory() ? "junction" : "file";
+  } catch {
+    return "file";
+  }
+}
+
+async function makeLink(
+  source: string,
+  target: string,
+  where: string,
+): Promise<void> {
+  try {
+    await symlink(source, target, await linkType(source));
+  } catch (err) {
+    throw new LinkPathError(
+      `${where} cannot be linked at ${target}: ${messageOf(err)}.`,
+    );
+  }
+}
+
+/**
+ * Make the planned links inside one fresh checkout. The last step of each
+ * path is the point of the whole design: `git status` must show nothing for
+ * it, or the link would later read as a task's work and could be committed.
+ * Any link made before a refusal is removed again, so the caller's normal
+ * rollback sees an untouched checkout.
+ */
+async function applyLinkSources(
+  checkout: string,
+  plans: readonly LinkSource[],
+): Promise<void> {
+  const created: string[] = [];
+  try {
+    for (const plan of plans) {
+      const target = join(checkout, plan.path);
+      if (
+        resolve(target) !== checkout &&
+        !resolve(target).startsWith(`${checkout}${sep}`)
+      ) {
+        throw new LinkPathError(
+          `${plan.where} must stay inside the checkout; ` +
+            `got ${JSON.stringify(plan.path)}.`,
+        );
+      }
+
+      const parent = dirname(target);
+      const parentStat = await linkParent(parent, plan.where);
+      if (!parentStat.isDirectory()) {
+        throw new LinkPathError(
+          `${plan.where} would be linked inside ${parent}, which is not a ` +
+            "folder in the checkout.",
+        );
+      }
+
+      if (plan.kind === "file") {
+        await makeLink(plan.source, target, plan.where);
+        created.push(target);
+      } else {
+        try {
+          await mkdir(target);
+        } catch (err) {
+          throw new LinkPathError(
+            `${plan.where} cannot be made at ${target}: ${messageOf(err)}.`,
+          );
+        }
+        created.push(target);
+        for (const name of await readdir(plan.source)) {
+          await makeLink(
+            join(plan.source, name),
+            join(target, name),
+            plan.where,
+          );
+        }
+      }
+
+      const dirty = await git(checkout, [
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--",
+        plan.path,
+      ]);
+      if (dirty !== "") {
+        throw new LinkPathError(
+          `${plan.where} is not ignored in a new checkout: git status ` +
+            `reports ${JSON.stringify(dirty.split("\n")[0])}. Add an ignore ` +
+            "rule that matches the link, or remove it from linkPaths.",
+        );
+      }
+    }
+  } catch (err) {
+    for (const target of created.toReversed()) {
+      await discardLink(target);
+    }
+    throw err;
+  }
+}
+
+/** The target's parent must exist and be a real directory; a symlink parent
+ *  could send the link outside the checkout. */
+async function linkParent(parent: string, where: string): Promise<Stats> {
+  try {
+    return await lstat(parent);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new LinkPathError(
+        `${where} has no parent folder in the checkout: ${parent}.`,
+      );
+    }
+    throw err;
+  }
+}
+
+/** Rollback is best effort: the refusal that led here is the error to report. */
+async function discardLink(target: string): Promise<void> {
+  try {
+    await rm(target, { recursive: true, force: true });
+  } catch {
+    // The original LinkPathError still says what was refused.
+  }
+}
+
 /**
  * Preflight, then a handle for the run.
  *
@@ -578,8 +874,10 @@ export interface WorktreeSetup {
  * goes through the per-repository queue below — this file's `add` and
  * `remove`, `core/sweep.ts`'s admin commands, and `moveWorkspace`'s `repair`
  * — so tasks, rooms and the sweep cannot race each other (#203). `options`
- * carries only the test seam for that queue.
+ * carries the test seam for that queue and the project's `linkPaths`.
  */
+// One preflight: the ordered refusals are its contract, and the tests pin them.
+// pi-lens-ignore: high-complexity, high-fan-out
 export async function openWorktrees(
   cwd: string,
   runId: string,
@@ -608,6 +906,11 @@ export async function openWorktrees(
         `runs in it directly and tasks that touch the same files will collide.`,
     };
   }
+
+  // The project's links are planned once, before any task runs: a tracked
+  // path or one that leaves the checkout refuses the whole setup, not the
+  // first task that happens to acquire a worktree.
+  const linkPlans = await planLinkSources(root, options.linkPaths ?? []);
 
   // A notice, never a refusal (#129). A supervisor whose whole point is to
   // work while the operator works cannot demand a clean tree first: that
@@ -709,6 +1012,7 @@ export async function openWorktrees(
               "start from a commit that has it.",
           );
         }
+        await applyLinkSources(path, linkPlans);
         return inside;
       },
 

@@ -16,6 +16,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readlinkSync } from "node:fs";
 import {
   chmod,
+  lstat,
   mkdir,
   readdir,
   readFile,
@@ -2764,6 +2765,93 @@ test("a project config is re-read per run, and its error is the run's 400", asyn
   // The config's code, not the run file's: the fix is in the repository.
   assert.equal(refused.body.error.code, "invalid_config");
   assert.match(refused.body.error.message, /"ttlMs" must be a whole number/);
+});
+
+test("a tracked linkPaths entry is refused at add, naming the entry", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t, {
+    files: {
+      ".kapelle/config.json": `${JSON.stringify({ linkPaths: ["README.md"] })}\n`,
+    },
+  });
+
+  const refused = await api(d, "POST", "/repos", { path: root });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.error.code, "invalid_config");
+  assert.match(
+    refused.body.error.message,
+    /"linkPaths\[0\]" is tracked by git/,
+  );
+  assert.match(
+    refused.body.error.message,
+    new RegExp(join(root, ".kapelle", "config.json")),
+  );
+});
+
+test("a linkPaths entry tracked after add refuses the run's 400", async (t) => {
+  const d = await boot(t);
+  const root = await added(d, await gitRepo(t));
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(root, ".kapelle", "config.json"),
+    JSON.stringify({ linkPaths: ["README.md"] }),
+    { mode: 0o644 },
+  );
+
+  const refused = await api(d, "POST", "/runs", {
+    cwd: root,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.error.code, "invalid_config");
+  assert.match(refused.body.error.message, /tracked by git/);
+});
+
+test("a linkPaths entry tracked after add refuses a room's open", async (t) => {
+  const d = await boot(t);
+  const root = await added(d, await gitRepo(t));
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(root, ".kapelle", "config.json"),
+    JSON.stringify({ linkPaths: ["README.md"] }),
+    { mode: 0o644 },
+  );
+
+  const refused = await api(d, "POST", "/rooms", { cwd: root });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.error.code, "invalid_config");
+  assert.match(refused.body.error.message, /tracked by git/);
+});
+
+test("a room opened over HTTP gets the configured links", async (t) => {
+  const d = await boot(t);
+  const root = await added(
+    d,
+    await gitRepo(t, {
+      ignore: "node_modules/\n",
+      files: {
+        ".kapelle/config.json": `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`,
+      },
+    }),
+  );
+  await mkdir(join(root, "node_modules", "pkg"), { recursive: true });
+  await writeFile(join(root, "node_modules", "pkg", "index.js"), "module\n");
+
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd: root,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "alice" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const alice = open.body.participants[0];
+  assert.ok(alice);
+  assert.equal(
+    (await lstat(join(alice.worktree, "node_modules"))).isDirectory(),
+    true,
+  );
+  assert.equal(
+    (await lstat(join(alice.worktree, "node_modules", "pkg"))).isSymbolicLink(),
+    true,
+  );
 });
 
 // --- kapelle run --detach and kapelle attach, M2-9 ------------------------------

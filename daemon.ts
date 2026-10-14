@@ -78,6 +78,7 @@ import {
 import {
   readEnvConfig,
   readProjectConfig,
+  readProjectLinkPaths,
   readUserConfig,
   resolveRunDefaults,
   warnUnknownConfigEnv,
@@ -114,7 +115,12 @@ import {
   sweepBoot,
 } from "./core/sweep.ts";
 import { WATCHDOG_DEFAULTS, type WatchdogLimits } from "./core/watchdog.ts";
-import { openWorktrees, stateDirRoot } from "./core/worktree.ts";
+import {
+  LinkPathError,
+  openWorktrees,
+  stateDirRoot,
+  validateWorktreeLinks,
+} from "./core/worktree.ts";
 import {
   type RoomState,
   type RunState,
@@ -603,7 +609,8 @@ async function postRepo(req: IncomingMessage, res: ServerResponse) {
   // M2-7: a config that does not load is refused at add time, naming the file
   // and key, rather than at the repository's first run.
   try {
-    readProjectConfig(root);
+    const config = readProjectConfig(root);
+    await validateWorktreeLinks(root, config.linkPaths ?? []);
   } catch (err) {
     throw refusal(400, "invalid_config", messageOf(err));
   }
@@ -730,6 +737,20 @@ async function startRun(body: Record<string, unknown>): Promise<string> {
   } catch (err) {
     throw refusal(400, "invalid_config", messageOf(err));
   }
+  let linkPaths: string[];
+  try {
+    linkPaths = readProjectLinkPaths(root);
+  } catch (err) {
+    throw refusal(400, "invalid_config", messageOf(err));
+  }
+  try {
+    await validateWorktreeLinks(root, linkPaths);
+  } catch (err) {
+    if (err instanceof LinkPathError) {
+      throw refusal(400, "invalid_config", messageOf(err));
+    }
+    throw err;
+  }
   let run: Run;
   try {
     run = validateRun(body.run, AGENTS, defaults);
@@ -783,6 +804,7 @@ async function startRun(body: Record<string, unknown>): Promise<string> {
   );
   const done = runRun(run, {
     cwd,
+    linkPaths,
     runId: id,
     bus,
     signal: canceller.signal,
@@ -897,9 +919,23 @@ async function restoreRooms(): Promise<void> {
       try {
         const record = readRoomRecord(path);
         if (record.id !== id) throw new Error(`its id is not ${id}`);
+        // A bad link list is treated like the other config errors a restore
+        // tolerates: the room still opens, without links, and says so.
+        let linkPaths: string[] = [];
+        try {
+          linkPaths = readProjectLinkPaths(root);
+          await validateWorktreeLinks(root, linkPaths);
+          // The room still opens without links; this is the restore fallback.
+          // pi-lens-ignore: missing-error-propagation
+        } catch (err) {
+          console.error(
+            `room ${id}: ${messageOf(err)}; opening without linked paths`,
+          );
+        }
         const setup = await openWorktrees(
           existsSync(record.cwd) ? record.cwd : root,
           id,
+          { linkPaths },
         );
         if (setup.root !== root) {
           throw new Error(`${record.cwd} is no longer inside ${root}`);
@@ -961,7 +997,7 @@ function roomRefused(err: unknown) {
 async function postRoom(req: IncomingMessage, res: ServerResponse) {
   const body = await readBody(req, ["cwd", "title", "agents"]);
   const cwd = existingDir(body.cwd, "cwd");
-  await refuseUnadded(cwd);
+  const root = await refuseUnadded(cwd);
 
   // No length cap beyond the 4 MiB body limit, the same as a message.
   if (
@@ -977,10 +1013,33 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
     throw roomRefused(err) ?? refusal(400, "invalid_request", messageOf(err));
   }
 
+  let linkPaths: string[];
+  try {
+    linkPaths = readProjectLinkPaths(root);
+  } catch (err) {
+    throw refusal(400, "invalid_config", messageOf(err));
+  }
+  try {
+    await validateWorktreeLinks(root, linkPaths);
+  } catch (err) {
+    if (err instanceof LinkPathError) {
+      throw refusal(400, "invalid_config", messageOf(err));
+    }
+    throw err;
+  }
+
   const id = newRoomId();
   // No 409 wrapper (#129): since the state directory moved out of the
   // repository, `openWorktrees` throws for nothing a repository can be in.
-  const setup = await openWorktrees(cwd, id);
+  let setup: Awaited<ReturnType<typeof openWorktrees>>;
+  try {
+    setup = await openWorktrees(cwd, id, { linkPaths });
+  } catch (err) {
+    if (err instanceof LinkPathError) {
+      throw refusal(400, "invalid_config", messageOf(err));
+    }
+    throw err;
+  }
   let limits: ReturnType<typeof roomLimits>;
   try {
     limits = roomLimits(setup.root);
