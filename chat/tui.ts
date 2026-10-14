@@ -290,6 +290,12 @@ function chatTui(
     loaded: (roomId) => {
       if (view.roomId === roomId) redraw();
     },
+    // A turn read the room again for a branch or base that moved. Only the
+    // header and status change; rebuilding the transcript would lose the
+    // reader's place in it.
+    reloaded: (roomId) => {
+      if (view.roomId === roomId) setStatus();
+    },
     polled: () => {
       // The same daemon came back: no `restarted` would clear the line.
       if (awayLine && flash === awayLine) {

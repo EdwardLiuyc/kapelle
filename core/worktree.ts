@@ -40,6 +40,11 @@
  * **A room's fast-forward runs here** (M6-11a): `fastForwardCheckout` moves
  * the target's checked-out branch with `git merge --ff-only`, and only
  * tracked changes in that checkout refuse (2c).
+ *
+ * **A room's checkout is read here too** (M6-6a): `checkoutIdentity` answers
+ * which branch `HEAD` is really on, and the base a rebase moved its work
+ * onto, so a harness rename or rebase does not leave the room's record and
+ * whole-branch diff pointing at the old ref.
  */
 
 import { execFile } from "node:child_process";
@@ -348,6 +353,140 @@ async function isAncestor(
   }
 }
 
+/** What a checkout's branch says about itself (M6-6a, M7-3). */
+export interface CheckoutIdentity {
+  /** The branch `HEAD` names. A harness that renamed its branch reads here. */
+  branch: string;
+  /** The branch this one was renamed from, when the branch's own reflog has
+   *  the `Branch: renamed refs/heads/<old> to refs/heads/<new>` entry for
+   *  the name the caller held, and that old ref is gone. That is the positive
+   *  proof a room owns the new name; a switch to someone else's branch has no
+   *  such entry. Set only on the read that first sees the new name, so it is
+   *  not a standing fact once `branch` equals the caller's current name. */
+  renamedFrom?: string;
+  /** The commit the branch's newest rebase or `pull --rebase` finished onto,
+   *  when that commit is still an ancestor of the branch. A harness that
+   *  rebases onto a newer master moves the point its diff should start at. */
+  rebaseBase?: string;
+}
+
+/** A branch's own actions that do not move where its work starts: its own
+ *  non-merge commits, its creation and a rename. The scan passes them. A
+ *  `commit (merge):` is deliberately not here: a hand-resolved merge stops
+ *  the scan, as a clean one does. */
+const NEUTRAL_REFLOG =
+  /^(commit(?! \(merge\))( \(|:)|branch: Created|Branch: renamed)/;
+
+/** The rename entry `git branch -m` writes into the new branch's reflog. */
+const RENAME_REFLOG =
+  /^Branch: renamed refs\/heads\/(.+) to refs\/heads\/(.+)$/;
+
+/** The commit named at the end of a rebase or `pull --rebase` finish. */
+const REBASE_ONTO = /\(finish\).*\bonto ([0-9a-f]{40,64})$/;
+
+/**
+ * What the checkout at `cwd` is now: the branch `HEAD` names and, when its
+ * own reflog says a rebase moved it, the commit its work starts from.
+ *
+ * **The branch is read live, not from the worktree's creation record.** A
+ * harness may run `git branch -m` or `git switch -c`; `symbolic-ref` is the
+ * one answer already true. `null` for a detached HEAD; a git failure may
+ * throw, and `syncCheckout` treats that as no answer and keeps its record.
+ * `expected` is the branch name the caller held: when the current name was
+ * renamed into from it, the reflog's own `Branch: renamed …` entry and the
+ * disappearance of the old ref prove it, and `renamedFrom` is set. A rename
+ * is the positive fact a room needs; a stale entry copied onto a branch that
+ * still has the old ref is not.
+ *
+ * **The rebase base comes from the branch ref's reflog.** A `rebase
+ * (finish)` subject names the commit the branch was replayed onto, whether
+ * the rebase was explicit or a `pull --rebase`; the newest one that is still
+ * an ancestor of the branch is the base its diff should use. The scan walks
+ * past the branch's own commits, a rename, and a rebase onto its own history
+ * (a squash), and stops at any other action:
+ * a merge or reset may have moved the branch somewhere this function cannot
+ * describe, and a wrong base is worse than the recorded one.
+ */
+export async function checkoutIdentity(
+  cwd: string,
+  expected?: string,
+): Promise<CheckoutIdentity | null> {
+  const branch = await tryGit(cwd, [
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "HEAD",
+  ]);
+  if (branch === null) return null;
+  // 500 entries is far more than one turn can write, and enough to reach the
+  // last rebase after a long run of commits. A missing or unreadable reflog
+  // is not an error: the branch alone is still the answer.
+  const reflog = await tryGit(cwd, [
+    "reflog",
+    "show",
+    "--format=%H%x00%gs",
+    "-n",
+    "500",
+    branch,
+    // After the ref, so a branch named like a path (`docs`, `src`) is not
+    // ambiguous. Before the ref, `--` makes the name a pathspec, which reads
+    // the wrong reflog (or nothing).
+    "--",
+  ]);
+  if (reflog === null || reflog === "") return { branch };
+  const lines = reflog.split("\n");
+  // Ownership is a positive fact: find the rename entry that says this name
+  // came from the name the caller held. A switch to a branch that already
+  // existed has no such entry.
+  let renamedFrom: string | undefined;
+  if (expected !== undefined) {
+    for (const line of lines) {
+      const nul = line.indexOf("\0");
+      if (nul < 0) continue;
+      const match = RENAME_REFLOG.exec(line.slice(nul + 1));
+      if (match?.[1] === expected && match[2] === branch) {
+        // A pre-existing branch can carry a rename entry from the same old
+        // name; only a rename that removed that old ref is this checkout's.
+        const previous = await tryGit(cwd, [
+          "rev-parse",
+          "--verify",
+          "--quiet",
+          `refs/heads/${expected}`,
+        ]);
+        if (previous === null) renamedFrom = expected;
+        break;
+      }
+    }
+  }
+  const identity: CheckoutIdentity = {
+    branch,
+    ...(renamedFrom !== undefined && { renamedFrom }),
+  };
+  for (const [i, line] of lines.entries()) {
+    const nul = line.indexOf("\0");
+    if (nul < 0) continue;
+    const tip = line.slice(0, nul);
+    const subject = line.slice(nul + 1);
+    if (NEUTRAL_REFLOG.test(subject)) continue;
+    const onto = REBASE_ONTO.exec(subject)?.[1];
+    if (onto === undefined) break;
+    const base = await tryGit(cwd, [
+      "rev-parse",
+      "--verify",
+      `${onto}^{commit}`,
+    ]);
+    if (base === null || !(await isAncestor(cwd, base, tip))) break;
+    // A rebase onto the branch's own history, such as a squash, brings in no
+    // new base: pass it, as a commit is passed. The line below is the tip
+    // before the rebase; without it, nothing can tell the two apart.
+    const before = lines[i + 1]?.split("\0")[0];
+    if (!before) break;
+    if (await isAncestor(cwd, base, before)) continue;
+    return { ...identity, rebaseBase: base };
+  }
+  return identity;
+}
+
 /** One task's checkout, held from `acquire` to `release`. */
 interface Held {
   /** The checkout root — what `git worktree remove` is given. Not what the
@@ -357,6 +496,10 @@ interface Held {
   /** The commit the branch started at. `release` compares against it to tell
    *  a task that did nothing from one that failed with work worth keeping. */
   baseSha: string;
+  /** True when the branch is a name the harness renamed into, proven by the
+   *  branch's own reflog. Absent for a switch to a branch this run did not
+   *  create, and for an ordinary acquired task. */
+  renamed?: true;
 }
 
 export interface Worktrees {
@@ -372,10 +515,21 @@ export interface Worktrees {
   /** The branch and base SHA for an acquired task, or undefined when the task
    *  never acquired a worktree. Used to write the run record merge reads. */
   info(taskId: string): { branch: string; baseSha: string } | undefined;
+  /** Follows a checkout the harness changed in place: a renamed branch, or a
+   *  rebase that moved the commit its work starts from (`checkoutIdentity`).
+   *  `release` and `info` read this record, so a room releases the branch the
+   *  harness is really on. Runs do not call it; their old caution stands. */
+  update(
+    taskId: string,
+    changes: { branch?: string; baseSha?: string; renamed?: boolean },
+  ): void;
   /** Holds a checkout an earlier daemon acquired, as if this one had, so
    *  `release` can act on it (M6-7a: a room restored after a restart). It
    *  creates nothing. */
-  adopt(taskId: string, info: { branch: string; baseSha: string }): void;
+  adopt(
+    taskId: string,
+    info: { branch: string; baseSha: string; renamed?: boolean },
+  ): void;
 }
 
 export interface WorktreeSetupOptions {
@@ -566,9 +720,28 @@ export async function openWorktrees(
         return task && { branch: task.branch, baseSha: task.baseSha };
       },
 
-      adopt(taskId, { branch, baseSha }) {
+      update(taskId, changes) {
+        const task = held.get(taskId);
+        // No checkout, no record: `info` must stay `undefined` for a task that
+        // never acquired one.
+        if (!task) return;
+        if (changes.branch !== undefined) {
+          task.branch = changes.branch;
+          // A rename is proven by the reflog; anything else means the
+          // checkout switched to a branch this run did not create.
+          task.renamed = changes.renamed === true ? true : undefined;
+        }
+        if (changes.baseSha !== undefined) task.baseSha = changes.baseSha;
+      },
+
+      adopt(taskId, { branch, baseSha, renamed }) {
         const path = join(stateDirFor(root), "wt", runId, taskId);
-        held.set(taskId, { path, branch, baseSha });
+        held.set(taskId, {
+          path,
+          branch,
+          baseSha,
+          ...(renamed === true && { renamed: true }),
+        });
       },
 
       async release(taskId, action) {
@@ -585,18 +758,26 @@ export async function openWorktrees(
         // ref — so M1c-3 would merge nothing and call it a success (measured
         // 2026-09-07, #85). Keeping the checkout is the only safe answer: the
         // work is on disk, and a person can see where it went.
+        //
+        // `update` may track a name the harness renamed into (a room does).
+        // That name is ours only when the branch's own reflog proved the
+        // rename from the name we held; a switch to a branch this run did
+        // not create clears the flag, so that name is never deleted.
+        const original = branchName(runId, taskId);
+        const ours = task.branch === original || task.renamed === true;
         const on = await tryGit(task.path, [
           "symbolic-ref",
           "--quiet",
           "--short",
           "HEAD",
         ]);
-        if (on !== task.branch) {
+        if (on !== task.branch || !ours) {
           return (
             `left its worktree at ${task.path}: it is on ` +
             `${on === null ? "a detached HEAD" : `branch ${on}`}, not ` +
-            `${task.branch}, so committing there would put the work on a ref ` +
-            `this run does not track. Nothing was committed or removed.`
+            `${ours ? task.branch : original}, so committing there would put ` +
+            `the work on a ref this run does not track. Nothing was committed ` +
+            `or removed.`
           );
         }
 

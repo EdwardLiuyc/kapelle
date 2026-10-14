@@ -312,7 +312,9 @@ export interface ParticipantDto {
   /** Where the harness runs: its own checkout, or the cwd itself when
    *  the cwd cannot carry worktrees. */
   worktree: string;
-  /** The checkout's branch and the SHA it forked from, when it has one. */
+  /** The checkout's branch and the commit its work starts from, when it has
+   *  one. The daemon re-reads both after each turn: a harness that renamed
+   *  its branch moves `branch`, and one that rebased moves `baseSha`. */
   branch?: string;
   baseSha?: string;
   /** The harness session, which a revive loads. A fresh revive changes

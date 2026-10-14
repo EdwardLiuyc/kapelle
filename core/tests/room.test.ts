@@ -33,6 +33,7 @@ import {
 } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { AGENTS } from "../../protocol/registry.ts";
+import { checkoutDiff } from "../diff.ts";
 import { createEventBus, type EventBus } from "../events.ts";
 import { newRoomId } from "../ids.ts";
 import { createPermissionQueue } from "../permissions.ts";
@@ -1452,6 +1453,58 @@ test("a fast-forward refuses when the target branch ref is gone", async (t) => {
   );
 });
 
+test("a harness that renames its branch moves the record and the release to it", async (t) => {
+  const { room, p } = await roomOn(t, "read-only");
+  const repo = room.meta.cwd;
+  const renamed = "renamed-topic";
+  assert.equal(p.branch, `kapelle/${room.meta.id}/${p.id}`);
+
+  await git(p.worktree, "branch", "-m", renamed);
+  await p.send("go");
+
+  assert.equal(p.branch, renamed);
+  assert.ok(await branchExists(repo, renamed));
+  await until(
+    () =>
+      readRoomRecord(roomFile(repo, room.meta.id)).participants[0]?.branch ===
+      renamed,
+    "room.json shows the renamed branch",
+  );
+
+  await room.dismiss();
+  assert.ok(
+    !(await branchExists(repo, renamed)),
+    "an untouched renamed branch is rolled back",
+  );
+});
+
+test("a harness that rebases moves the base its whole-branch diff starts at", async (t) => {
+  const { room, p } = await roomOn(t, "read-only");
+  const repo = room.meta.cwd;
+  await commitIn(p, "agent.txt");
+  const before = p.baseSha;
+
+  await writeFile(join(repo, "base.txt"), "new base\n");
+  await git(repo, "add", "base.txt");
+  await git(repo, "commit", "-m", "base moves");
+  const newer = await git(repo, "rev-parse", "HEAD");
+  assert.notEqual(newer, before);
+
+  await git(p.worktree, "rebase", "main");
+  await p.send("go");
+
+  assert.equal(p.baseSha, newer);
+  await until(
+    () =>
+      readRoomRecord(roomFile(repo, room.meta.id)).participants[0]?.baseSha ===
+      newer,
+    "room.json shows the rebased base",
+  );
+  const diff = await checkoutDiff(p.worktree, p.baseSha as string);
+  assert.match(diff.text, /agent\.txt/);
+  assert.doesNotMatch(diff.text, /base\.txt/);
+});
+
 // --- pause, restore and revive (M6-7a) -------------------------------------
 
 /** A room of one `scenario` participant, as `roomOn` makes it, with the
@@ -1660,6 +1713,16 @@ test("a crash's record reads paused and killed, and the killed one revives", asy
   await back.p.send("hi");
   assert.equal(back.p.status(), "idle");
   assert.equal(back.p.id, p.id);
+});
+
+test("a restore reads a branch renamed while the room was paused", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await p.send("one");
+  await room.pause();
+  await git(p.worktree, "branch", "-m", "renamed-topic");
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  assert.equal(back.p.branch, "renamed-topic");
 });
 
 test("a dismissed room comes back dismissed and is never revived", async (t) => {

@@ -676,9 +676,12 @@ export function applyLine(
  * Takes what `GET /rooms/:id` says of each participant that the stream
  * cannot: `paused` or `killed` after a restart. A live turn is cut, until
  * the log shows its end. Call it whenever the room is read; a status the
- * stream already shows is left to the stream.
+ * stream already shows is left to the stream. Returns whether it changed
+ * what a screen draws, so a header-only reader can skip a transcript
+ * rebuild when the reply carried no such status.
  */
-export function applyStatus(state: RoomState, room: RoomDto) {
+export function applyStatus(state: RoomState, room: RoomDto): boolean {
+  let changed = false;
   for (const { id, status } of room.participants) {
     if (status !== "paused" && status !== "killed") continue;
     const report = { status, seq: room.seq };
@@ -690,15 +693,20 @@ export function applyStatus(state: RoomState, room: RoomDto) {
     }
     // A reply made before the last revive: the stream is newer.
     if (p.revivedAt !== undefined && p.revivedAt > room.seq) continue;
+    // Only what a screen draws counts: a participant already paused stays
+    // paused, and its every turn end must not rebuild the transcript.
+    const last = p.turns.at(-1);
+    const moved = p.status !== status || p.stalled || last?.state === "open";
     p.reported = report;
     p.status = status;
     p.stalled = false;
-    const last = p.turns.at(-1);
     if (last?.state === "open") {
       last.state = "cut";
       last.tentative = true;
     }
+    if (moved) changed = true;
   }
+  return changed;
 }
 
 /** One participant's thread: the timeline filtered by id (R8c). It walks

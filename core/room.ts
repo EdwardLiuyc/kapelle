@@ -78,6 +78,16 @@
  * a commit. A move to the commit the target already has is a silent no-op.
  * The move counts as busy, so a message sent during it queues behind it.
  *
+ * **A harness may rename its branch or rebase it (M6-6a).** After every turn
+ * the room reads the checkout again (`checkoutIdentity`): the branch `HEAD`
+ * names, and the commit the branch's own reflog says its latest rebase moved
+ * it onto. A rename updates the participant, the held checkout and
+ * `room.json`; a client that shows the branch reads the room again when the
+ * turn ends. A rebase moves the participant's `baseSha`, so the diff that
+ * shows the whole branch starts at the new base and does not list the base's
+ * own commits as the harness's work. A restore reads the checkout once too,
+ * because a crash can leave `room.json` older than the branch.
+ *
  * **A message names its participant, and a busy one queues it** (M6-4).
  * `send` starts a turn, or puts the message in a FIFO queue behind the live
  * one (R32a); 16 wait at most, and the next is refused `queue_full` (R41).
@@ -154,6 +164,7 @@ import {
 } from "./watchdog.ts";
 import {
   BadBase,
+  checkoutIdentity,
   DirtyCheckout,
   fastForwardCheckout,
   NotFastForward,
@@ -259,8 +270,11 @@ export interface Participant {
   readonly settings: Settings;
   /** Where the harness runs: its own checkout, or the cwd itself. */
   readonly worktree: string;
-  /** The checkout's branch and the SHA it forked from, when there is one. */
+  /** The checkout's branch, as the last turn read it; a harness rename
+   *  moves it by the time the turn's end is out. */
   readonly branch?: string;
+  /** The commit the branch's work starts from. A rebase moves it: the room
+   *  reads the branch's own reflog after a turn. */
   readonly baseSha?: string;
   /** The session a revive loads (R17). A fresh revive changes it. */
   readonly sessionId: string;
@@ -316,8 +330,15 @@ interface ParticipantRecord {
   mode: ClientMode;
   settings: Settings;
   worktree: string;
+  /** The branch and base the checkout had at the last save. A restore
+   *  reconciles both with the checkout again, in case a crash caught a
+   *  rename or a rebase mid-turn. */
   branch?: string;
   baseSha?: string;
+  /** True when `branch` is a name the harness renamed into, proven by the
+   *  branch's own reflog. Absent means a switch to a name this room did not
+   *  create, so a delete leaves it alone. */
+  branchRenamed?: true;
   sessionId: string;
   /** Its turns so far, so a restored one goes on counting (S12's `turn`). */
   turns?: number;
@@ -608,6 +629,13 @@ interface Member {
   setMode: (mode: ClientMode) => void;
   hold: <T>(work: Promise<T>) => Promise<T>;
   onNotice: Notify;
+  /** True when `branch` is a name the harness renamed into, proven by the
+   *  branch's own reflog. */
+  renamed: () => boolean;
+  /** Re-reads the checkout after a turn, or once when a record is restored.
+   *  Updates this member and the held checkout; true when the branch or the
+   *  rebase base changed. */
+  syncCheckout: () => Promise<boolean>;
 }
 
 /** Where a room's record and log live. */
@@ -872,6 +900,7 @@ async function buildRoom(
       worktree: p.worktree,
       ...(p.branch && { branch: p.branch }),
       ...(p.baseSha && { baseSha: p.baseSha }),
+      ...(m.renamed() && { branchRenamed: true }),
       sessionId: p.sessionId,
       turns: m.turns(),
       status: p.status(),
@@ -1075,6 +1104,11 @@ async function buildRoom(
       ...(saved && { saved }),
       onRevive: () => {
         paused = false;
+      },
+      onCheckout: (next) => {
+        worktrees?.update(id, next);
+        // No stream line carries this: the room record and the next reply do.
+        saveSoon();
       },
     });
     return {
@@ -1313,7 +1347,12 @@ async function buildRoom(
       saved.branch && saved.baseSha
         ? { branch: saved.branch, baseSha: saved.baseSha }
         : undefined;
-    if (info) worktrees?.adopt(saved.id, info);
+    if (info) {
+      worktrees?.adopt(saved.id, {
+        ...info,
+        ...(saved.branchRenamed === true && { renamed: true }),
+      });
+    }
     const m = makeMember(
       request,
       saved.id,
@@ -1322,6 +1361,10 @@ async function buildRoom(
       [...saved.notices],
       saved,
     );
+    // A crash can leave `room.json` older than the checkout: a rename or a
+    // rebase in a turn that never ended. Read the truth before the record is
+    // kept.
+    await m.syncCheckout();
     members.push(m);
     participants.push(m.participant);
   }
@@ -1377,6 +1420,7 @@ function createParticipant({
   limits,
   saved,
   onRevive,
+  onCheckout,
 }: {
   id: string;
   roomId: string;
@@ -1398,6 +1442,13 @@ function createParticipant({
   saved?: ParticipantRecord;
   /** A revive gave the harness a new process. */
   onRevive: () => void;
+  /** The checkout's branch or rebase base changed; the room follows it in
+   *  the held checkout record. Absent when there is no worktree. */
+  onCheckout?: (next: {
+    branch: string;
+    baseSha?: string;
+    renamed?: boolean;
+  }) => void;
 }): Omit<Member, "spec" | "source" | "own" | "onNotice"> {
   /** The live harness; undefined before `launch` and once it has stopped. */
   let agent: AcpAgent | undefined;
@@ -1410,6 +1461,11 @@ function createParticipant({
   let resumed = saved?.resumed;
   let turnCancelled = saved?.turnCancelled === true;
   let mode = initialMode;
+  // Read from the checkout after each turn; restored from `info` first.
+  let branch = info?.branch;
+  let baseSha = info?.baseSha;
+  // True only when this name was renamed into from the one we held.
+  let branchRenamed = saved?.branchRenamed === true;
   // Counts this participant's turns from 1 (S12's `turn`), and the live
   // turn's cancel. A turn that ends for any reason aborts it, which denies
   // what it left open in the queue as `cancel`. Between turns it is already
@@ -1608,17 +1664,30 @@ function createParticipant({
     let ready: Promise<void> | undefined;
     if (!agent) ready = revive();
     else if (unsent()) ready = syncMode();
+    // **Before the turn's own end line**, so a client that reloads the diff
+    // on `_client_turn_ended` already has the rebased `baseSha`, and one that
+    // re-reads the room then sees the new branch.
+    const after = async () => {
+      try {
+        await syncCheckout();
+      } catch {
+        // The identity already on the record stands; a git read must never
+        // fail a turn that ended.
+      }
+    };
     // `ready` is undefined only when the harness is up, so `prompt` cannot
     // throw here.
     turn = (ready ? ready.then(prompt) : Promise.resolve(prompt()))
       .then(
-        ({ stopReason }) => {
+        async ({ stopReason }) => {
+          await after();
           bus.emit({
             agent: id,
             update: { sessionUpdate: "_client_turn_ended", stopReason },
           });
         },
-        (err) => {
+        async (err) => {
+          await after();
           bus.emit({
             agent: id,
             update: {
@@ -1716,6 +1785,41 @@ function createParticipant({
     warn();
   };
 
+  /** What the harness did to its own checkout: renamed the branch, or moved
+   *  the commit its work starts from with a rebase. A git read that fails
+   *  leaves the identity already recorded; a bad base would be worse than a
+   *  stale one. The room follows the change into its held checkout and the
+   *  saved record; the stream gets no line for it. */
+  const syncCheckout = async (): Promise<boolean> => {
+    if (!info) return false;
+    let found: Awaited<ReturnType<typeof checkoutIdentity>>;
+    try {
+      found = await checkoutIdentity(worktree, branch);
+    } catch {
+      return false;
+    }
+    if (!found) return false;
+    let changed = false;
+    if (found.branch !== branch) {
+      // A positive rename makes the new name the room's; any other switch
+      // clears the claim, so release and delete leave that branch alone.
+      branchRenamed = found.renamedFrom === branch;
+      branch = found.branch;
+      changed = true;
+    }
+    if (found.rebaseBase !== undefined && found.rebaseBase !== baseSha) {
+      baseSha = found.rebaseBase;
+      changed = true;
+    }
+    if (!changed) return false;
+    onCheckout?.({
+      branch,
+      ...(baseSha && { baseSha }),
+      ...(branchRenamed && { renamed: true }),
+    });
+    return true;
+  };
+
   const participant: Participant = {
     id,
     name,
@@ -1728,7 +1832,12 @@ function createParticipant({
       return { allowReadOutsideRoot: readsOutside() };
     },
     worktree,
-    ...(info && { branch: info.branch, baseSha: info.baseSha }),
+    get branch() {
+      return branch;
+    },
+    get baseSha() {
+      return baseSha;
+    },
     get sessionId() {
       return sessionId;
     },
@@ -1794,6 +1903,8 @@ function createParticipant({
     launch,
     setMode,
     hold,
+    renamed: () => branchRenamed,
+    syncCheckout,
     turns: () => turns,
     turnCancelled: () => turnCancelled,
   };

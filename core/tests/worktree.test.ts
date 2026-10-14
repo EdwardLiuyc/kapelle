@@ -30,6 +30,7 @@ import { validateRun } from "../runfile.ts";
 import { stateDirFor } from "../runtime.ts";
 import {
   changedPaths,
+  checkoutIdentity,
   moveWorkspace,
   openWorktrees,
   serializeWorktreeMutation,
@@ -676,6 +677,75 @@ test("a checkout left on another branch is kept, with a warning", async (t) => {
   );
 });
 
+test("a checkout switched to an existing branch is kept even after update follows the name", async (t) => {
+  const root = await repo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+
+  const path = await worktrees.acquire("plan");
+  await git(path, "checkout", "-q", "-b", "the-agents-own-branch");
+  worktrees.update("plan", { branch: "the-agents-own-branch" });
+
+  const warning = await worktrees.release("plan", "keep");
+
+  assert.match(String(warning), /the-agents-own-branch/);
+  assert.equal(existsSync(path), true, "the foreign branch is not deleted");
+  // Both refs stay: the switched-to name was not the run's to remove.
+  await git(root, "rev-parse", "--verify", "refs/heads/the-agents-own-branch");
+  await git(root, "rev-parse", "--verify", branchOf("plan"));
+});
+
+test("a checkout switched to a branch after the original ref is gone is kept", async (t) => {
+  const root = await repo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+
+  const path = await worktrees.acquire("plan");
+  // Rename the run's branch away, then switch to a pre-existing branch: the
+  // original ref is gone, but neither name is ours to delete.
+  await git(path, "branch", "-m", "wip-away");
+  await git(root, "branch", "user-topic");
+  await git(path, "switch", "-q", "user-topic");
+  worktrees.update("plan", { branch: "user-topic", renamed: false });
+
+  const warning = await worktrees.release("plan", "keep");
+
+  assert.match(String(warning), /user-topic/);
+  assert.ok(existsSync(path), "the checkout is kept");
+  await git(root, "rev-parse", "--verify", "refs/heads/user-topic");
+  await git(root, "rev-parse", "--verify", "refs/heads/wip-away");
+});
+
+test("checkoutIdentity proves a rename from the branch's own reflog", async (t) => {
+  const root = await repo(t);
+  await git(root, "branch", "old-name");
+  await git(root, "switch", "-q", "old-name");
+  await git(root, "branch", "-m", "new-name");
+
+  assert.deepEqual(await checkoutIdentity(root, "old-name"), {
+    branch: "new-name",
+    renamedFrom: "old-name",
+  });
+  // A branch with no such entry is not proven to have come from the name.
+  await git(root, "switch", "-q", "main");
+  assert.deepEqual(await checkoutIdentity(root, "old-name"), {
+    branch: "main",
+  });
+});
+
+test("a stale rename entry on a pre-existing branch does not claim it", async (t) => {
+  const root = await repo(t);
+  await git(root, "branch", "held-name");
+  await git(root, "switch", "-q", "held-name");
+  await git(root, "branch", "-m", "pre-existing");
+  // The old name exists again as its own branch: the entry is stale.
+  await git(root, "branch", "held-name");
+
+  assert.deepEqual(await checkoutIdentity(root, "held-name"), {
+    branch: "pre-existing",
+  });
+});
+
 test("a detached HEAD is kept too, and says so", async (t) => {
   const root = await repo(t);
   const { worktrees } = await openWorktrees(root, RUN_ID);
@@ -909,5 +979,107 @@ test("moveWorkspace refuses rather than overwrite an existing workspace", async 
     assert.match(err.message, new RegExp(stateDirFor(to)));
     assert.match(err.message, /already has/);
     return true;
+  });
+});
+
+/** `repo`, with a `topic` branch of two commits and `main` one commit on. */
+async function forked(t: TestContext) {
+  const root = await repo(t);
+  const fork = await git(root, "rev-parse", "HEAD");
+  await git(root, "switch", "-q", "-c", "topic");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "A");
+  const a = await git(root, "rev-parse", "HEAD");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "B");
+  await git(root, "switch", "-q", "main");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "base moves");
+  const newer = await git(root, "rev-parse", "HEAD");
+  await git(root, "switch", "-q", "topic");
+  return { root, fork, a, newer };
+}
+
+/** Squashes the branch's top two commits with `rebase -i`, as an agent might. */
+const squash = (root: string) =>
+  git(
+    root,
+    "-c",
+    "sequence.editor=sed -i 2s/^pick/fixup/",
+    "rebase",
+    "-q",
+    "-i",
+    "HEAD~2",
+  );
+
+test("a rebase onto a newer base moves the base; a squash after it keeps it", async (t) => {
+  const { root, newer } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "C");
+  assert.deepEqual(await checkoutIdentity(root), {
+    branch: "topic",
+    rebaseBase: newer,
+  });
+  await squash(root);
+  assert.deepEqual(await checkoutIdentity(root), {
+    branch: "topic",
+    rebaseBase: newer,
+  });
+});
+
+test("a squash onto the branch's own commit is no new base", async (t) => {
+  const { root } = await forked(t);
+  await git(root, "commit", "-q", "--allow-empty", "-m", "C");
+  await squash(root);
+  assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
+});
+
+test("a reset after a rebase leaves the base to the record", async (t) => {
+  const { root, a } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  await git(root, "reset", "-q", "--hard", a);
+  assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
+});
+
+test("a merge after a rebase leaves the base to the record", async (t) => {
+  const { root } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  // A branch from the same base, so the merge makes a commit.
+  await git(root, "switch", "-q", "-c", "feature", "main");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "F");
+  await git(root, "switch", "-q", "topic");
+  await git(root, "merge", "-q", "--no-edit", "feature");
+  assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
+});
+
+test("a merge resolved by hand leaves the base to the record", async (t) => {
+  const { root } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  await writeFile(join(root, "README.md"), "topic\n");
+  await git(root, "commit", "-qam", "topic edit");
+  await git(root, "switch", "-q", "-c", "feature", "main");
+  await writeFile(join(root, "README.md"), "feature\n");
+  await git(root, "commit", "-qam", "feature edit");
+  await git(root, "switch", "-q", "topic");
+  // The conflict is resolved by hand, so the reflog says `commit (merge)`
+  // rather than `merge …`; both forms must stop the scan.
+  try {
+    await run("git", ["merge", "feature"], { cwd: root });
+  } catch {
+    // The expected conflict; the commit below completes the merge.
+  }
+  await writeFile(join(root, "README.md"), "resolved\n");
+  await git(root, "add", "README.md");
+  await git(root, "commit", "-q", "--no-edit");
+  assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
+});
+
+test("checkoutIdentity reads a branch named like a path", async (t) => {
+  const { root, newer } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  await git(root, "branch", "-m", "topic", "docs");
+  // A file with the branch's name makes `reflog show docs` ambiguous; the
+  // `--` after the ref is what keeps the reflog readable.
+  await writeFile(join(root, "docs"), "x\n");
+  assert.deepEqual(await checkoutIdentity(root, "docs"), {
+    branch: "docs",
+    rebaseBase: newer,
   });
 });

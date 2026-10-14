@@ -158,6 +158,7 @@ function follow(
     closed: [] as [string, Ended][],
     ends: [] as End[],
     restarts: [] as (string | undefined)[],
+    reloads: [] as string[],
     aways: 0,
     polls: 0,
   };
@@ -168,6 +169,7 @@ function follow(
       line: (id, l) =>
         said.lines.push(`${id} ${l.seq} ${l.update.sessionUpdate}`),
       loaded: (id) => said.loaded.push(id),
+      reloaded: (id) => said.reloads.push(id),
       polled: () => said.polls++,
       restarted: (warning) => said.restarts.push(warning),
       away: () => said.aways++,
@@ -277,6 +279,90 @@ test("a read that ends after a dismiss does not read the room again", async (t) 
   daemon.releaseRead();
   await new Promise((r) => setTimeout(r, 50));
   assert.deepEqual(daemon.reads, ["r1", "r1"], "loadDto and reconcile only");
+});
+
+test("a turn ending reads the room again, for a branch or base that moved in it", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.lines.set("r1", [
+    {
+      seq: 1,
+      at: "",
+      roomId: "r1",
+      participantId: "p1",
+      update: { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" },
+    },
+  ]);
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => said.reloads.includes("r1"));
+  assert.equal(daemon.reads.filter((id) => id === "r1").length, 2);
+});
+
+test("a turn-end read that finds a paused participant redraws the room", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.participants = [{ id: "p1", status: "idle" }];
+  daemon.lines.set("r1", [added(1, "p1", "ann")]);
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  // The first read lands before the turn end, so the reload below is the
+  // only trigger waiting: no participant-added line queues a `loaded` first.
+  await until(() => set.rooms.get("r1")?.dto !== undefined);
+  await until(() => said.loaded.length === 1);
+  daemon.holdReads = true;
+  daemon.streams.get("r1")?.write(
+    `id: 2\ndata: ${JSON.stringify({
+      seq: 2,
+      at: "",
+      roomId: "r1",
+      participantId: "p1",
+      update: { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" },
+    })}\n\n`,
+  );
+  await until(() => daemon.reads.length === 2);
+  daemon.participants = [{ id: "p1", status: "paused" }];
+  daemon.releaseRead();
+  await until(() => said.loaded.length === 2);
+  assert.equal(
+    said.reloads.includes("r1"),
+    false,
+    "a status move needs the full redraw, not a header refresh",
+  );
+});
+
+test("an already-paused room refreshes its header on a turn end, not the transcript", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.participants = [
+    { id: "p1", status: "paused" },
+    { id: "p2", status: "idle" },
+  ];
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  // The first read lands with p1 already paused; the added lines below come
+  // after the dto, so they queue no extra read of their own.
+  await until(() => set.rooms.get("r1")?.dto !== undefined);
+  await until(() => said.loaded.length === 1);
+  const stream = daemon.streams.get("r1");
+  for (const line of [added(1, "p1", "ann"), added(2, "p2", "bob")]) {
+    stream?.write(`id: ${line.seq}\ndata: ${JSON.stringify(line)}\n\n`);
+  }
+  await until(() => set.rooms.get("r1")?.state.participants.size === 2);
+  daemon.holdReads = true;
+  stream?.write(
+    `id: 3\ndata: ${JSON.stringify({
+      seq: 3,
+      at: "",
+      roomId: "r1",
+      participantId: "p2",
+      update: { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" },
+    })}\n\n`,
+  );
+  await until(() => daemon.reads.length === 2);
+  daemon.releaseRead();
+  await until(() => said.reloads.includes("r1"));
+  assert.equal(said.loaded.length, 1, "nothing drawn moved");
 });
 
 test("a room made elsewhere joins on the next poll", async (t) => {
@@ -505,7 +591,11 @@ test("a restart during a held read waits its turn and reads the new daemon once"
   await set.fresh();
   const r = set.rooms.get("r1");
   assert.equal(r?.reading, true, "the held read is still open");
-  assert.equal(r?.again, true, "the restart's ask is deferred, not parallel");
+  assert.equal(
+    r?.again,
+    "loaded",
+    "the restart's ask is deferred, not parallel",
+  );
   assert.deepEqual(next.reads, [], "the new daemon is not read yet");
 
   // The held answer ends: the deferred ask goes to the new daemon, once,
@@ -618,4 +708,27 @@ test("a new token whose version check fails is checked again", async (t) => {
   file.now = next.d;
   await until(() => said.restarts.length === 1);
   assert.deepEqual(said.ends, []);
+});
+
+test("the replay's old turn ends read the room once more, not once each", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.lines.set(
+    "r1",
+    Array.from({ length: 50 }, (_, i) => ({
+      seq: i + 1,
+      at: "",
+      roomId: "r1",
+      participantId: "p1",
+      update: {
+        sessionUpdate: "_client_turn_ended" as const,
+        stopReason: "end_turn",
+      },
+    })),
+  );
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => said.reloads.includes("r1"));
+  // At most: the first read, one a turn end sent, and one that waited for it.
+  assert.ok(daemon.reads.filter((id) => id === "r1").length <= 3);
 });

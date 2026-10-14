@@ -7641,6 +7641,79 @@ test("GET /rooms/:id/agents/:agentId/diff shows what an agent did not commit, ne
   await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
 });
 
+test("a branch renamed and rebased in a turn reaches the room reply, room.json and the base diff", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario read-only`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const p = only(open.body);
+  const renamed = "renamed-topic";
+  const branch = spawnSync("git", ["branch", "-m", renamed], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(branch.status, 0, branch.stderr);
+
+  // The agent commits, the base moves, and the agent rebases onto it.
+  await commitAt(p.worktree, "agent.txt");
+  await commitAt(cwd, "base.txt");
+  const newer = headAt(cwd);
+  const rebase = spawnSync("git", ["rebase", "main"], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(rebase.status, 0, rebase.stderr);
+
+  const sent = await api<RoomReply>(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/messages`,
+    {
+      text: "go",
+    },
+  );
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  const roomNow = await roomIdle(d, open.body.id);
+  assert.equal(only(roomNow).branch, renamed);
+  assert.equal(only(roomNow).baseSha, newer);
+
+  type DiffReply = Diff & { error: { code: string } };
+  const diff = await api<DiffReply>(
+    d,
+    "GET",
+    `/rooms/${open.body.id}/agents/${p.id}/diff?against=base`,
+  );
+  assert.equal(diff.status, 200);
+  assert.match(diff.body.text, /diff --git a\/agent\.txt b\/agent\.txt/);
+  assert.doesNotMatch(
+    diff.body.text,
+    /base\.txt/,
+    "the new base's own file is not the agent's work",
+  );
+
+  // `room.json` is written after the turn's sync; poll for the save.
+  const file = join(stateDirFor(cwd), "rooms", open.body.id, "room.json");
+  for (const end = Date.now() + 5_000; ; ) {
+    const record = JSON.parse(await readFile(file, "utf8")) as {
+      participants: { branch?: string; baseSha?: string }[];
+    };
+    if (
+      record.participants[0]?.branch === renamed &&
+      record.participants[0]?.baseSha === newer
+    ) {
+      break;
+    }
+    if (Date.now() > end) assert.fail("room.json never showed the rename");
+    await new Promise((ok) => setTimeout(ok, 25));
+  }
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+});
+
 for (const scenario of ["diff-first", "file-text"]) {
   test(`an ask question about an edit carries its diff in GET /permissions: ${scenario}`, async (t) => {
     const d = await boot(t);
@@ -8336,6 +8409,156 @@ test("DELETE refuses an active room and uncommitted work, then removes a dismiss
   assert.equal(
     list.body.some((r) => r.id === id),
     false,
+  );
+});
+
+test("DELETE removes a branch the harness renamed into", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario read-only`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const p = only(open.body);
+  const renamed = "renamed-topic";
+  const rename = spawnSync("git", ["branch", "-m", renamed], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(rename.status, 0, rename.stderr);
+  await commitAt(p.worktree, "agent.txt");
+  const sent = await api(d, "POST", `/rooms/${id}/messages`, { text: "go" });
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  await roomIdle(d, id);
+  assert.equal(
+    only((await api<RoomReply>(d, "GET", `/rooms/${id}`)).body).branch,
+    renamed,
+  );
+
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  assert.equal(hasBranch(root, renamed), true, "the committed branch stays");
+  const deleted = await fetch(`${d.url}/rooms/${id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${d.token}` },
+  });
+  assert.equal(deleted.status, 204);
+  assert.equal(
+    hasBranch(root, renamed),
+    false,
+    "the renamed branch goes with the room",
+  );
+});
+
+test("DELETE leaves a branch the harness switched to, not one it created", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario read-only`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const p = only(open.body);
+  const original = p.branch as string;
+  const foreign = "user-topic";
+  const made = spawnSync("git", ["branch", foreign, "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(made.status, 0, made.stderr);
+  const switched = spawnSync("git", ["switch", "-q", foreign], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(switched.status, 0, switched.stderr);
+  assert.equal(
+    (await api(d, "POST", `/rooms/${id}/messages`, { text: "go" })).status,
+    202,
+  );
+  await roomIdle(d, id);
+  assert.equal(
+    only((await api<RoomReply>(d, "GET", `/rooms/${id}`)).body).branch,
+    foreign,
+  );
+
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const deleted = await fetch(`${d.url}/rooms/${id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${d.token}` },
+  });
+  assert.equal(deleted.status, 204);
+  assert.equal(hasBranch(root, foreign), true, "the foreign branch is left");
+  assert.equal(hasBranch(root, original), false, "the room's own branch goes");
+});
+
+test("DELETE keeps a foreign branch after the room's own ref is gone", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario read-only`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const p = only(open.body);
+  const original = p.branch as string;
+  // The harness renames the room's branch away, then switches to a branch
+  // that already existed. The original ref is now gone; the foreign one is
+  // still not the room's to delete.
+  const away = "wip-away";
+  const renamed = spawnSync("git", ["branch", "-m", away], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(renamed.status, 0, renamed.stderr);
+  const foreign = "user-topic";
+  const made = spawnSync("git", ["branch", foreign, "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(made.status, 0, made.stderr);
+  const switched = spawnSync("git", ["switch", "-q", foreign], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(switched.status, 0, switched.stderr);
+  assert.equal(
+    (await api(d, "POST", `/rooms/${id}/messages`, { text: "go" })).status,
+    202,
+  );
+  await roomIdle(d, id);
+  assert.equal(
+    only((await api<RoomReply>(d, "GET", `/rooms/${id}`)).body).branch,
+    foreign,
+  );
+
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const deleted = await fetch(`${d.url}/rooms/${id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${d.token}` },
+  });
+  assert.equal(deleted.status, 204);
+  assert.equal(
+    hasBranch(root, foreign),
+    true,
+    "the pre-existing branch survives the room's gone ref",
+  );
+  assert.equal(hasBranch(root, original), false);
+  assert.equal(
+    hasBranch(root, away),
+    true,
+    "the name the room renamed through is left too",
   );
 });
 
