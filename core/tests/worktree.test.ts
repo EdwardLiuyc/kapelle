@@ -1047,7 +1047,11 @@ test("a merge resolved by hand leaves the base to the record", async (t) => {
   await git(root, "switch", "-q", "topic");
   // The conflict is resolved by hand, so the reflog says `commit (merge)`
   // rather than `merge …`; both forms must stop the scan.
-  await run("git", ["merge", "feature"], { cwd: root }).catch(() => {});
+  try {
+    await run("git", ["merge", "feature"], { cwd: root });
+  } catch {
+    // The expected conflict; the commit below completes the merge.
+  }
   await writeFile(join(root, "README.md"), "resolved\n");
   await git(root, "add", "README.md");
   await git(root, "commit", "-q", "--no-edit");
