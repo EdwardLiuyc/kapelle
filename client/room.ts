@@ -693,15 +693,18 @@ export function applyStatus(state: RoomState, room: RoomDto): boolean {
     }
     // A reply made before the last revive: the stream is newer.
     if (p.revivedAt !== undefined && p.revivedAt > room.seq) continue;
+    // Only what a screen draws counts: a participant already paused stays
+    // paused, and its every turn end must not rebuild the transcript.
+    const last = p.turns.at(-1);
+    const moved = p.status !== status || p.stalled || last?.state === "open";
     p.reported = report;
     p.status = status;
     p.stalled = false;
-    const last = p.turns.at(-1);
     if (last?.state === "open") {
       last.state = "cut";
       last.tentative = true;
     }
-    changed = true;
+    if (moved) changed = true;
   }
   return changed;
 }

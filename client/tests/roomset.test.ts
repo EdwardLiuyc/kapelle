@@ -331,6 +331,40 @@ test("a turn-end read that finds a paused participant redraws the room", async (
   );
 });
 
+test("an already-paused room refreshes its header on a turn end, not the transcript", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.participants = [
+    { id: "p1", status: "paused" },
+    { id: "p2", status: "idle" },
+  ];
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  // The first read lands with p1 already paused; the added lines below come
+  // after the dto, so they queue no extra read of their own.
+  await until(() => set.rooms.get("r1")?.dto !== undefined);
+  await until(() => said.loaded.length === 1);
+  const stream = daemon.streams.get("r1");
+  for (const line of [added(1, "p1", "ann"), added(2, "p2", "bob")]) {
+    stream?.write(`id: ${line.seq}\ndata: ${JSON.stringify(line)}\n\n`);
+  }
+  await until(() => set.rooms.get("r1")?.state.participants.size === 2);
+  daemon.holdReads = true;
+  stream?.write(
+    `id: 3\ndata: ${JSON.stringify({
+      seq: 3,
+      at: "",
+      roomId: "r1",
+      participantId: "p2",
+      update: { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" },
+    })}\n\n`,
+  );
+  await until(() => daemon.reads.length === 2);
+  daemon.releaseRead();
+  await until(() => said.reloads.includes("r1"));
+  assert.equal(said.loaded.length, 1, "nothing drawn moved");
+});
+
 test("a room made elsewhere joins on the next poll", async (t) => {
   const daemon = await fake(t);
   const { set, said } = follow(t, daemon.d);
