@@ -58,6 +58,7 @@ import {
   crashed,
   type RoomRecord,
   readRoomRecord,
+  roomFile,
   writeRoomRecord,
 } from "./room.ts";
 import { stateDirFor } from "./runtime.ts";
@@ -427,11 +428,56 @@ export async function roomWork(
 }
 
 /**
+ * The branches a room owns: its own namespace, plus the names its record
+ * says a harness renamed into. A branch that still existed under its
+ * original ref is not the room's; it is named in `left` and left alone.
+ */
+async function roomBranches(
+  root: string,
+  roomId: string,
+  record: RoomRecord | undefined,
+  left: string[],
+): Promise<Set<string>> {
+  const prefix = branchPrefix(roomId);
+  const refs = await git(root, [
+    "for-each-ref",
+    "--format=%(refname:lstrip=2)",
+    `refs/heads/${prefix.slice(0, -1)}`,
+  ]);
+  const branches = new Set(refs.split("\n").filter(Boolean));
+  for (const p of record?.participants ?? []) {
+    const branch = p.branch;
+    if (!branch || branches.has(branch)) continue;
+    let original: string;
+    try {
+      original = branchName(roomId, p.id);
+    } catch {
+      left.push(
+        `cannot check branch ${branch}: participant ${p.id} has no valid id`,
+      );
+      continue;
+    }
+    // The original ref still existing says the branch is not one the room
+    // renamed into; it belongs to whoever had it first.
+    if (branch !== original && (await hasBranch(root, original))) {
+      left.push(
+        `branch ${branch} was not created by room ${roomId}; left in place`,
+      );
+      continue;
+    }
+    if (await hasBranch(root, branch)) branches.add(branch);
+  }
+  return branches;
+}
+
+/**
  * Removes a room's checkouts, then its branches, then its folder (record and
  * log), as `reapRun` orders a run: a checkout that cannot be removed throws
  * and leaves the record, so a later delete or boot can try again. The
  * caller checks `roomWork` first. Branches go even when nothing merged them
- * (R18): a delete throws the room away.
+ * (R18): a delete throws the room away. A branch the harness renamed into is
+ * still the room's, read from `room.json`; a branch it switched to that
+ * already existed is left for its owner.
  *
  * A branch git will not delete, such as one checked out elsewhere, is left,
  * as `dropBranches` leaves a run's: the checkouts are gone by then, and a
@@ -443,23 +489,33 @@ export async function removeRoom(
 ): Promise<string[]> {
   // Before anything is removed: it checks the id.
   const prefix = branchPrefix(roomId);
+  const left: string[] = [];
+  // A harness can rename its branch out of the prefix. The record still
+  // names it, and it is the room's to delete; read the record before its
+  // folder goes.
+  let record: RoomRecord | undefined;
+  const file = roomFile(root, roomId);
+  if (existsSync(file)) {
+    try {
+      record = readRoomRecord(file);
+    } catch (err) {
+      left.push(
+        `cannot read the room record: ${messageOf(err)}; only branches ` +
+          `under ${prefix} are removed`,
+      );
+    }
+  }
   for (const path of await roomCheckouts(root, roomId)) {
     await worktreeGit(root, ["worktree", "remove", "--force", path]);
   }
   const state = stateDirFor(root);
   rmSync(join(state, "wt", roomId), { recursive: true, force: true });
-  const left: string[] = [];
   // A room whose cwd is no repository has no branches.
   if ((await tryGit(root, ["rev-parse", "--git-dir"])) !== null) {
     // A checkout removed by hand leaves an admin entry that still holds its
     // branch; `roomCheckouts` skipped the prune when the folder was gone.
     await worktreeGit(root, ["worktree", "prune"]);
-    const refs = await git(root, [
-      "for-each-ref",
-      "--format=%(refname:lstrip=2)",
-      `refs/heads/${prefix.slice(0, -1)}`,
-    ]);
-    for (const branch of refs.split("\n").filter(Boolean)) {
+    for (const branch of await roomBranches(root, roomId, record, left)) {
       try {
         await worktreeGit(root, ["branch", "-D", branch]);
       } catch (err) {

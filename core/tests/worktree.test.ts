@@ -961,6 +961,7 @@ const squash = (root: string) =>
 test("a rebase onto a newer base moves the base; a squash after it keeps it", async (t) => {
   const { root, newer } = await forked(t);
   await git(root, "rebase", "-q", "main");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "C");
   assert.deepEqual(await checkoutIdentity(root), {
     branch: "topic",
     rebaseBase: newer,
@@ -983,5 +984,16 @@ test("a reset after a rebase leaves the base to the record", async (t) => {
   const { root, a } = await forked(t);
   await git(root, "rebase", "-q", "main");
   await git(root, "reset", "-q", "--hard", a);
+  assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
+});
+
+test("a merge after a rebase leaves the base to the record", async (t) => {
+  const { root } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  // A branch from the same base, so the merge makes a commit.
+  await git(root, "switch", "-q", "-c", "feature", "main");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "F");
+  await git(root, "switch", "-q", "topic");
+  await git(root, "merge", "-q", "--no-edit", "feature");
   assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
 });

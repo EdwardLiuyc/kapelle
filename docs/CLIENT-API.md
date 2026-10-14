@@ -1174,8 +1174,10 @@ room was already dismissed.
 
 ### `DELETE /rooms/:id`
 
-Throws a room away. Its checkouts, its branches, its record and its event log are removed
-at once. Branches go even when nothing merged them. Open streams of the room end.
+Throws a room away. Its checkouts, the branches it owns, its record and its event log are
+removed at once. Branches go even when nothing merged them. A branch the harness renamed
+into is the room's own and goes too; a branch it switched to that already existed belongs
+to its owner and is left, and the daemon's log names it. Open streams of the room end.
 
 Only a stopped room can be deleted: a dismissed one, or a paused one that no message has
 revived. A paused room is deleted as it is; no harness starts first. Dismiss an active room
