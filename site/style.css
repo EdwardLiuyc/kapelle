@@ -1,21 +1,21 @@
 /*
  * kapelle.dev — one stylesheet for every page.
  *
- * Two fonts, both self-hosted under the SIL Open Font License (see fonts/):
- * Fraunces for text and headings, Martian Mono for menus, buttons and code.
- * The TUI figures use the system's own monospace font, as a terminal would.
+ * The look is a terminal: a tmux bar on top, a vim status line at the bottom,
+ * shell blocks for commands. It stays quiet so the words read first.
  *
- * Light is the default. Dark follows the system, unless the person picks a
- * theme in the footer: site.js then sets data-theme on <html>.
+ * Fonts, self-hosted under the SIL Open Font License (see fonts/): Martian Mono
+ * for headings, menus and code; Fraunces italic only for the one accent word in
+ * a heading. Body text uses the system's sans-serif. The TUI figures use the
+ * system's own monospace font, as a terminal would.
+ *
+ * Auto follows the system. The person can pick a theme in the footer, or press
+ * `t`: site.js then sets data-theme on <html>.
+ *
+ * Motion is small and optional: the hero prompt types, Fig. 01 replays, a few
+ * spinners turn. Under prefers-reduced-motion none of it runs.
  */
 
-@font-face {
-  font-family: "Fraunces";
-  src: url("/fonts/fraunces-normal.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
 @font-face {
   font-family: "Fraunces";
   src: url("/fonts/fraunces-italic.woff2") format("woff2");
@@ -32,55 +32,65 @@
 }
 
 :root {
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --serif: "Fraunces", Georgia, serif;
   --mono: "Martian Mono", ui-monospace, Menlo, Consolas, monospace;
   --term: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
-  --bg: #eeeae4;
-  --band: #e7e2db;
-  --surface: #f6f3ef;
-  --code-bg: #e4ded6;
-  --text: #1e2631;
+  --bg: #efebe5;
+  --band: #e8e3dc;
+  --surface: #f7f4f0;
+  --code-bg: #e6e0d8;
+  --text: #1b222c;
   --muted: #59616b;
+  --faint: #8a8f96;
   --line: #d3cbc1;
+  --grid: rgba(27, 34, 44, 0.06);
   --blue: #1d6e9c;
   --purple: #7a4aa3;
   --amber: #985814;
   --green: #3e7a4e;
   --pink: #a3326f;
+  --red: #b23a3a;
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #12161c;
-    --band: #0f1318;
-    --surface: #181d24;
-    --code-bg: #0e1116;
+    --bg: #0d1015;
+    --band: #0a0d11;
+    --surface: #141920;
+    --code-bg: #0a0c10;
     --text: #e3e6e9;
-    --muted: #9aa3ae;
-    --line: #2a313b;
+    --muted: #98a1ac;
+    --faint: #5d6672;
+    --line: #232a33;
+    --grid: rgba(92, 200, 255, 0.045);
     --blue: #5cc8ff;
     --purple: #c792ea;
     --amber: #ffb454;
     --green: #7fd99a;
     --pink: #ff6ac1;
+    --red: #ff7a7a;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #12161c;
-  --band: #0f1318;
-  --surface: #181d24;
-  --code-bg: #0e1116;
+  --bg: #0d1015;
+  --band: #0a0d11;
+  --surface: #141920;
+  --code-bg: #0a0c10;
   --text: #e3e6e9;
-  --muted: #9aa3ae;
-  --line: #2a313b;
+  --muted: #98a1ac;
+  --faint: #5d6672;
+  --line: #232a33;
+  --grid: rgba(92, 200, 255, 0.045);
   --blue: #5cc8ff;
   --purple: #c792ea;
   --amber: #ffb454;
   --green: #7fd99a;
   --pink: #ff6ac1;
+  --red: #ff7a7a;
   color-scheme: dark;
 }
 
@@ -93,18 +103,21 @@
 }
 html {
   -webkit-text-size-adjust: 100%;
-  scroll-padding-top: 24px;
+  scroll-padding-top: 72px;
 }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: var(--serif);
-  font-size: 20px;
-  line-height: 1.6;
-  font-optical-sizing: auto;
+  font-family: var(--sans);
+  font-size: 18px;
+  line-height: 1.65;
   text-wrap: pretty;
   overflow-x: clip;
+}
+::selection {
+  background: var(--blue);
+  color: var(--bg);
 }
 a {
   color: var(--blue);
@@ -121,26 +134,40 @@ a:hover {
 h1,
 h2,
 h3 {
-  font-weight: 500;
-  line-height: 1.12;
-  letter-spacing: -0.01em;
+  font-family: var(--mono);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
   text-wrap: balance;
 }
-em {
+/*
+ * The highlight in a title: a serif italic in blue, the score beside the code.
+ * It can be a word, the second line (after a <br>) or the whole title.
+ */
+h1 em,
+h2 em {
+  font-family: var(--serif);
   font-style: italic;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--blue);
 }
 code,
 pre,
 kbd {
   font-family: var(--mono);
-  font-size: 0.72em;
+  font-size: 0.78em;
 }
 p code,
 li code,
 td code,
 dd code {
-  font-size: 0.74em;
+  font-size: 0.8em;
   overflow-wrap: anywhere;
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
 }
 pre {
   margin: 0;
@@ -153,7 +180,11 @@ pre {
   font-size: 13px;
 }
 pre .c {
-  color: var(--muted);
+  color: var(--faint);
+}
+pre .p {
+  color: var(--green);
+  user-select: none;
 }
 .mono {
   font-family: var(--mono);
@@ -167,7 +198,7 @@ pre .c {
   padding: 0 24px;
 }
 .narrow {
-  max-width: 760px;
+  max-width: 800px;
   margin: 0 auto;
   padding: 0 24px;
 }
@@ -180,7 +211,7 @@ pre .c {
   white-space: nowrap;
 }
 
-/* ---- the strip, the header and the footer ---- */
+/* ---- the strip, the tmux header and the footer ---- */
 
 .strip {
   background: var(--band);
@@ -188,17 +219,30 @@ pre .c {
   font-family: var(--mono);
   font-size: 11px;
   text-align: center;
-  padding: 9px 16px;
+  padding: 8px 16px;
   color: var(--muted);
+}
+.strip .lvl {
+  color: var(--amber);
+  margin-right: 8px;
 }
 .soon {
   color: var(--amber);
 }
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
 .site-header .wrap {
   display: flex;
   align-items: center;
-  gap: 28px;
-  min-height: 68px;
+  gap: 24px;
+  min-height: 52px;
   flex-wrap: wrap;
 }
 .brand {
@@ -208,7 +252,10 @@ pre .c {
   color: var(--text);
   font-family: var(--mono);
   font-weight: 600;
-  font-size: 15px;
+  font-size: 14px;
+}
+.brand svg {
+  shape-rendering: crispEdges;
 }
 .brand:hover {
   text-decoration: none;
@@ -217,18 +264,40 @@ pre .c {
   color: var(--muted);
   font-weight: 400;
 }
+/* The nav reads like tmux's window list: "1:guide 2:orchestrator". */
 .nav {
   display: flex;
-  gap: 24px;
+  gap: 4px;
   flex-wrap: wrap;
   font-family: var(--mono);
   font-size: 12px;
 }
 .nav a {
   color: var(--muted);
+  padding: 4px 8px;
+  border-radius: 3px;
+}
+.nav a i {
+  font-style: normal;
+  color: var(--faint);
+}
+.nav a i::after {
+  content: ":";
+}
+.nav a:hover {
+  color: var(--text);
+  background: var(--surface);
+  text-decoration: none;
 }
 .nav a[aria-current="page"] {
-  color: var(--text);
+  color: var(--bg);
+  background: var(--blue);
+}
+.nav a[aria-current="page"] i {
+  color: inherit;
+}
+.nav a[aria-current="page"]::after {
+  content: "*";
 }
 .nav-end {
   margin-left: auto;
@@ -236,6 +305,21 @@ pre .c {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+}
+
+/* Empty lines past the end of a vim buffer, just above the footer. */
+.tildes {
+  margin: 0;
+  padding: 24px 24px 8px;
+  max-width: 1120px;
+  margin-inline: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--blue);
+  opacity: 0.55;
+  white-space: pre;
+  user-select: none;
 }
 .site-footer {
   border-top: 1px solid var(--line);
@@ -246,7 +330,7 @@ pre .c {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-top: 24px;
+  padding-top: 20px;
   padding-bottom: 40px;
   font-family: var(--mono);
   font-size: 11px;
@@ -254,25 +338,97 @@ pre .c {
 }
 .theme-picker {
   display: none;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  overflow: hidden;
+  align-items: center;
+  gap: 2px;
 }
 .js .theme-picker {
   display: flex;
 }
+.theme-picker .lbl {
+  margin-right: 8px;
+  color: var(--faint);
+}
 .theme-picker button {
   background: transparent;
   color: var(--muted);
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
   font: inherit;
-  padding: 8px 14px;
-  min-height: 36px;
+  padding: 6px 10px;
+  min-height: 32px;
   cursor: pointer;
+}
+.theme-picker button:hover {
+  color: var(--text);
+  border-color: var(--line);
 }
 .theme-picker button[aria-pressed="true"] {
   background: var(--text);
   color: var(--bg);
+}
+.theme-picker kbd {
+  margin-left: 8px;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+/* ---- the vim status line (site.js draws it; desktop only) ---- */
+
+.statusline {
+  display: none;
+}
+@media (min-width: 901px) {
+  .has-statusline {
+    padding-bottom: 26px;
+  }
+  .statusline {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    display: flex;
+    height: 26px;
+    align-items: stretch;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 26px;
+    background: var(--band);
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .statusline > span {
+    padding: 0 12px;
+  }
+  .statusline .mode {
+    background: var(--blue);
+    color: var(--bg);
+    font-weight: 700;
+  }
+  .statusline .file {
+    background: var(--surface);
+    color: var(--text);
+  }
+  .statusline .sec {
+    color: var(--purple);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .statusline .hint {
+    margin-left: auto;
+    color: var(--faint);
+  }
+  .statusline .cmd {
+    min-width: 4ch;
+    color: var(--amber);
+  }
+  .statusline .pct {
+    background: var(--surface);
+    color: var(--text);
+    min-width: 7ch;
+    text-align: right;
+  }
 }
 
 /* ---- buttons, tabs and the install box ---- */
@@ -281,18 +437,25 @@ pre .c {
   display: inline-block;
   font-family: var(--mono);
   font-size: 13px;
-  color: var(--text);
+  color: var(--bg);
+  background: var(--text);
   border: 1px solid var(--text);
   border-radius: 4px;
   padding: 12px 18px;
 }
 .btn:hover {
   text-decoration: none;
-  background: var(--surface);
+  background: var(--blue);
+  border-color: var(--blue);
 }
 .btn.quiet {
-  color: var(--muted);
+  color: var(--text);
+  background: transparent;
   border-color: var(--line);
+}
+.btn.quiet:hover {
+  border-color: var(--text);
+  background: var(--surface);
 }
 .install {
   border: 1px solid var(--line);
@@ -318,12 +481,15 @@ pre .c {
   color: var(--muted);
   font: inherit;
   padding: 10px 14px;
-  min-height: 44px;
+  min-height: 42px;
   cursor: pointer;
+}
+.install .tabs button:hover {
+  color: var(--text);
 }
 .install .tabs button[aria-selected="true"] {
   color: var(--text);
-  border-bottom-color: var(--text);
+  border-bottom-color: var(--blue);
 }
 .install .tabs .soon {
   margin-left: auto;
@@ -375,8 +541,38 @@ pre .c {
   cursor: pointer;
   white-space: nowrap;
 }
+.copy:hover {
+  color: var(--text);
+  border-color: var(--text);
+}
 .js .copy {
   display: inline-block;
+}
+
+/* ---- a shell block: a pre with a title bar ---- */
+
+.shell {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--code-bg);
+  overflow: hidden;
+}
+.shell .shell-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  background: var(--surface);
+}
+.shell pre {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 /* ---- figures ---- */
@@ -384,66 +580,184 @@ pre .c {
 figure {
   margin: 0;
 }
-figcaption {
-  margin-top: 14px;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.figure-center figcaption {
-  text-align: center;
-}
 .scroll-x {
   overflow-x: auto;
   max-width: 100%;
 }
 
+/* ---- section heads: "── 01 why ──────────" ---- */
+
+.kicker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 18px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.kicker::before {
+  content: "";
+  width: 20px;
+  border-top: 1px solid var(--line);
+}
+.kicker::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+.kicker b {
+  color: var(--blue);
+  font-weight: 600;
+}
+.kicker .soon {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 /* ---- home ---- */
 
 .hero {
-  padding-top: 88px;
-  padding-bottom: 40px;
-  text-align: center;
+  padding-top: 72px;
+  padding-bottom: 48px;
 }
-.hero h1 {
-  margin: 0 auto;
-  max-width: 920px;
-  font-size: clamp(44px, 7vw, 76px);
-  line-height: 1.04;
+/* A faint grid behind the hero, like graph paper, fading out downwards. */
+.hero-bg {
+  position: relative;
+  isolation: isolate;
 }
-.hero h1 em {
+.hero-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: center top;
+  mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  pointer-events: none;
+}
+.prompt {
+  margin: 0 0 20px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--muted);
+}
+.prompt .ps1 {
   color: var(--blue);
 }
+.prompt .dollar {
+  color: var(--green);
+}
+.prompt .typed {
+  color: var(--text);
+}
+.caret {
+  display: inline-block;
+  width: 0.6em;
+  height: 1.15em;
+  margin-left: 2px;
+  vertical-align: -0.2em;
+  background: var(--blue);
+}
+.hero h1 {
+  margin: 0;
+  max-width: 1000px;
+  font-size: clamp(30px, 5.2vw, 58px);
+  line-height: 1.08;
+}
+.hero h1 em {
+  font-size: 1.12em;
+}
+.hero-grid {
+  margin-top: 36px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 40px;
+  align-items: start;
+}
 .hero .lede {
-  margin: 26px auto 0;
-  max-width: 640px;
-  font-size: 22px;
+  margin: 0 0 24px;
+  font-size: 21px;
   line-height: 1.5;
   color: var(--muted);
 }
-.hero .install {
-  margin: 40px auto 0;
-  max-width: 640px;
+.hero .lede strong {
+  color: var(--text);
+  font-weight: 600;
 }
 .actions {
-  margin-top: 22px;
+  margin-top: 20px;
   display: flex;
-  justify-content: center;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 12px;
 }
-.scroll-hint {
-  margin: 40px 0 0;
-  text-align: center;
+
+/* The hero's fact sheet, laid out like neofetch: the logo, then key: value. */
+.fetch {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
   font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.85;
 }
+.fetch svg {
+  flex: none;
+  shape-rendering: crispEdges;
+  margin-top: 6px;
+}
+.fetch dl {
+  margin: 0;
+  min-width: 0;
+}
+.fetch .host {
+  color: var(--text);
+  font-weight: 600;
+}
+.fetch .host span {
+  color: var(--blue);
+}
+.fetch .rule {
+  color: var(--faint);
+  letter-spacing: -0.05em;
+}
+.fetch dl > div {
+  display: flex;
+  gap: 0.6ch;
+}
+.fetch dt {
+  color: var(--blue);
+  flex: none;
+}
+.fetch dt::after {
+  content: ":";
+  color: var(--faint);
+}
+.fetch dd {
+  margin: 0;
+  color: var(--text);
+}
+.fetch .swatches {
+  display: flex;
+  margin-top: 12px;
+}
+.fetch .swatches i {
+  width: 22px;
+  height: 12px;
+}
+
 .section {
-  padding-top: 96px;
-  padding-bottom: 96px;
+  padding-top: 104px;
+  padding-bottom: 104px;
 }
 .section-band {
   background: var(--band);
@@ -453,19 +767,20 @@ figcaption {
 .section-top {
   border-top: 1px solid var(--line);
 }
-.section h2 {
+.section h2,
+.h2 {
   margin: 0;
-  font-size: clamp(32px, 4.4vw, 44px);
+  font-size: clamp(26px, 3.6vw, 40px);
 }
 .section h2 + p,
 .section .tag + h2 + p {
   margin-top: 22px;
 }
-.section p {
+.section p:not(.kicker) {
   margin: 18px 0 0;
 }
 .big {
-  font-size: 21px;
+  font-size: 20px;
 }
 .tag {
   margin: 0 0 12px;
@@ -473,36 +788,54 @@ figcaption {
   font-size: 11px;
   color: var(--amber);
 }
+
+/* Three panes with their name in the top border, like tmux pane titles. */
 .roles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 28px;
-  padding-top: 24px;
-  padding-bottom: 96px;
+  gap: 20px;
+  padding-top: 8px;
+  padding-bottom: 104px;
 }
-.roles h3 {
+.pane {
+  position: relative;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--c, var(--line));
+  border-radius: 4px;
+  padding: 26px 20px 20px;
+  background: var(--surface);
+}
+.pane .title {
+  position: absolute;
+  top: -11px;
+  left: 14px;
+  padding: 0 8px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 20px;
+  color: var(--c);
+}
+.pane h3 {
   margin: 0 0 8px;
-  font-size: 24px;
+  font-size: 17px;
 }
-.roles p {
+.pane p {
   margin: 0;
-  font-size: 18px;
-  line-height: 1.55;
+  font-size: 16px;
+  line-height: 1.6;
   color: var(--muted);
 }
-.roles > div {
-  border-top: 2px solid var(--line);
-  padding-top: 18px;
-}
 .roles .you {
-  border-top-color: var(--blue);
+  --c: var(--blue);
 }
 .roles .play {
-  border-top-color: var(--purple);
+  --c: var(--purple);
 }
 .roles .part {
-  border-top-color: var(--amber);
+  --c: var(--amber);
 }
+
 .split {
   display: flex;
   gap: 56px;
@@ -512,32 +845,37 @@ figcaption {
   flex: 1;
   min-width: 0;
 }
-.split p {
-  font-size: 20px;
+/* A bit more room for the words, so each title line fits on one line. */
+.split > :first-child {
+  flex: 1.1;
+}
+.split p:not(.kicker) {
+  font-size: 19px;
   color: var(--muted);
 }
 .points {
   margin: 48px 0 0;
   display: grid;
-  gap: 18px;
-  font-size: 19px;
+  gap: 20px;
+  font-size: 18px;
   line-height: 1.55;
 }
 .points dt {
   font-family: var(--mono);
   font-size: 13px;
+  font-weight: 600;
+}
+.points dt::before {
+  content: "▸ ";
+  color: var(--purple);
 }
 .points dd {
-  margin: 4px 0 0;
+  margin: 4px 0 0 1.4em;
   color: var(--muted);
 }
-.aside-note {
-  margin-top: 36px;
-  border-left: 2px solid var(--line);
-  padding-left: 18px;
-  font-size: 19px;
-  color: var(--muted);
-}
+
+
+/* The agents table, drawn like a CLI's own list. */
 .agents {
   margin-top: 28px;
   width: 100%;
@@ -548,50 +886,89 @@ figcaption {
 .agents th {
   text-align: left;
   font-weight: 500;
-  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
 }
 .agents th,
 .agents td {
-  padding: 10px 12px 10px 0;
-  border-bottom: 1px solid var(--line);
+  padding: 11px 16px 11px 0;
+  border-bottom: 1px dashed var(--line);
   vertical-align: top;
+}
+.agents td:first-child {
+  color: var(--blue);
 }
 .agents td:nth-child(2) {
   color: var(--muted);
 }
+.agents tbody tr:hover td {
+  background: var(--surface);
+}
 .agents .yes {
   color: var(--green);
 }
+.agents .yes::before {
+  content: "● ";
+}
+.agents .no {
+  color: var(--faint);
+}
+.agents .no::before {
+  content: "○ ";
+}
+
+/* What kapelle does not do: each edge is a crossed-out line item. */
 .limits {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 32px 28px;
-  padding-top: 40px;
-  padding-bottom: 96px;
+  gap: 0;
+  margin-top: 40px;
+  margin-bottom: 104px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.limits > div {
+  padding: 22px 22px 24px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.limits > div:nth-child(3n) {
+  border-right: 0;
+}
+.limits > div:nth-last-child(-n + 3) {
+  border-bottom: 0;
 }
 .limits h3 {
   margin: 0;
-  font-family: var(--mono);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0;
 }
+.limits h3::before {
+  content: "✕ ";
+  color: var(--red);
+}
 .limits p {
   margin: 8px 0 0;
-  font-size: 18px;
-  line-height: 1.55;
+  font-size: 16px;
+  line-height: 1.6;
   color: var(--muted);
 }
+
 .cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
+  gap: 16px;
 }
 .card {
   display: block;
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 22px;
+  padding: 20px 22px;
   color: var(--text);
 }
 a.card {
@@ -599,23 +976,34 @@ a.card {
 }
 a.card:hover {
   text-decoration: none;
-  border-color: var(--text);
+  border-color: var(--blue);
+}
+a.card:hover .title::after {
+  transform: translateX(4px);
 }
 .card .title {
   display: block;
   font-family: var(--mono);
   font-size: 13px;
+  font-weight: 600;
+}
+a.card .title::after {
+  content: " →";
+  display: inline-block;
+  color: var(--blue);
+  transition: transform 0.15s;
 }
 .card .text {
   display: block;
   margin-top: 6px;
-  font-size: 18px;
+  font-size: 16px;
   color: var(--muted);
 }
 
 /* ---- the TUI figure: a still of the chat screen ---- */
 
 .tui {
+  position: relative;
   width: 1040px;
   max-width: none;
   margin: 0 auto;
@@ -629,8 +1017,21 @@ a.card:hover {
   overflow: hidden;
   text-align: left;
   color-scheme: dark;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 30px 80px -30px rgba(0, 0, 0, 0.55),
+    0 0 0 6px color-mix(in srgb, var(--line) 35%, transparent);
+}
+/* Faint scan lines: you notice them only if you look. */
+.tui::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 3px);
 }
 .tui .bar {
+  position: relative;
   height: 30px;
   display: flex;
   align-items: center;
@@ -638,6 +1039,28 @@ a.card:hover {
   border-bottom: 1px solid #1e232a;
   color: #6b7480;
   font-size: 12px;
+}
+.tui .replay {
+  display: none;
+  position: absolute;
+  right: 8px;
+  top: 4px;
+  z-index: 1;
+  background: transparent;
+  border: 1px solid #262b33;
+  border-radius: 4px;
+  color: #7d8692;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.tui .replay:hover {
+  color: #d5d9de;
+  border-color: #5cc8ff;
+}
+.js .tui .replay {
+  display: block;
 }
 .tui .body {
   display: flex;
@@ -728,12 +1151,17 @@ a.card:hover {
 }
 .tui .text {
   white-space: pre-line;
+  color: #d5d9de;
 }
 .tui .q {
   margin: 0 12px 8px;
   border: 1px solid #ff6ac1;
   border-radius: 6px;
   padding: 8px 12px;
+}
+.tui .q .pick {
+  background: #2a1530;
+  padding: 0 6px;
 }
 .tui .act {
   padding: 1px 14px;
@@ -794,6 +1222,37 @@ a.card:hover {
 .tui .idle {
   color: #6b7480;
 }
+/* Fig. 01's replay: site.js hides each step, then shows it in turn. */
+.tui .later {
+  display: none;
+}
+.tui .shown {
+  animation: rise 0.28s ease-out;
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- blinking ---- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .caret,
+  .tui .cursor {
+    animation: blink 1.1s steps(1) infinite;
+  }
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
 
 /* ---- guide ---- */
 
@@ -805,20 +1264,26 @@ a.card:hover {
   gap: 56px;
   align-items: flex-start;
 }
+/* The contents, drawn as a file tree. */
 .toc {
   flex: 0 0 236px;
   position: sticky;
-  top: 0;
-  max-height: 100vh;
+  top: 53px;
+  max-height: calc(100vh - 53px);
   overflow-y: auto;
   padding: 32px 0 48px;
   font-family: var(--mono);
   font-size: 11px;
 }
 .toc p {
-  margin: 18px 0 6px 10px;
-  color: var(--muted);
-  letter-spacing: 0.08em;
+  margin: 18px 0 4px;
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.toc p::before {
+  content: "▾ ";
+  color: var(--blue);
 }
 .toc p:first-child {
   margin-top: 0;
@@ -826,9 +1291,17 @@ a.card:hover {
 .toc a {
   display: block;
   color: var(--muted);
-  padding: 4px 10px;
-  border-radius: 4px;
+  padding: 3px 8px 3px 0;
+  border-radius: 3px;
   line-height: 1.5;
+}
+.toc a::before {
+  content: "├─ ";
+  color: var(--faint);
+}
+.toc a:has(+ p)::before,
+.toc a:last-child::before {
+  content: "└─ ";
 }
 .toc a:hover {
   color: var(--text);
@@ -836,33 +1309,36 @@ a.card:hover {
   text-decoration: none;
 }
 .toc a[aria-current="true"] {
-  color: var(--text);
+  color: var(--blue);
   background: var(--surface);
-  box-shadow: inset 2px 0 0 var(--blue);
+}
+.toc a[aria-current="true"]::after {
+  content: " ◂";
 }
 .doc {
   flex: 1;
   min-width: 0;
-  max-width: 760px;
-  padding: 44px 0 96px;
+  max-width: 780px;
+  padding: 44px 0 64px;
 }
 .doc h1 {
   margin: 0;
-  font-size: clamp(38px, 5vw, 52px);
+  font-size: clamp(32px, 4.4vw, 46px);
 }
 .doc .lede {
   margin: 16px 0 0;
-  font-size: 22px;
+  font-size: 20px;
   color: var(--muted);
 }
 .doc h2 {
-  margin: 72px 0 0;
-  padding-top: 8px;
-  font-size: 34px;
+  margin: 80px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 26px;
 }
 .doc h3 {
-  margin: 40px 0 0;
-  font-size: 24px;
+  margin: 36px 0 0;
+  font-size: 17px;
 }
 .doc p,
 .doc ul,
@@ -882,28 +1358,46 @@ a.card:hover {
   margin-top: 0;
 }
 .step {
-  font-family: var(--mono);
   font-size: 15px;
-  color: var(--muted);
-  margin-right: 10px;
+  font-weight: 500;
+  color: var(--blue);
+  margin-right: 12px;
+}
+.step::before {
+  content: "[";
+  color: var(--faint);
+}
+.step::after {
+  content: "]";
+  color: var(--faint);
 }
 .note {
   margin-top: 20px;
   border: 1px solid var(--line);
   border-left: 3px solid var(--amber);
+  border-radius: 0 4px 4px 0;
   background: var(--surface);
   padding: 14px 18px;
-  font-size: 18px;
+  font-size: 17px;
 }
 .note.warn {
   border-left-color: var(--pink);
 }
 .note .kicker {
   display: block;
+  margin: 0;
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.06em;
   color: var(--amber);
+}
+.note .kicker::before {
+  content: "!! ";
+  width: auto;
+  border: 0;
+}
+.note .kicker::after {
+  content: none;
 }
 .note.warn .kicker {
   color: var(--pink);
@@ -918,7 +1412,7 @@ a.card:hover {
 .doc table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 17px;
+  font-size: 16px;
   line-height: 1.5;
 }
 .doc th,
@@ -926,13 +1420,18 @@ a.card:hover {
   text-align: left;
   vertical-align: top;
   padding: 10px 14px 10px 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px dashed var(--line);
 }
 .doc th {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
-  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.doc td:first-child code {
+  white-space: nowrap;
 }
 .pager {
   margin-top: 64px;
@@ -945,12 +1444,20 @@ a.card:hover {
 /* ---- 404 ---- */
 
 .lost {
-  padding: 120px 0;
-  text-align: center;
+  padding: 120px 24px;
+}
+.lost .err {
+  margin: 0 0 24px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--red);
 }
 .lost h1 {
   margin: 0;
-  font-size: clamp(40px, 6vw, 64px);
+  font-size: clamp(30px, 5vw, 52px);
+}
+.lost .actions {
+  margin-top: 28px;
 }
 
 /* ---- narrow screens ---- */
@@ -984,10 +1491,29 @@ a.card:hover {
 }
 
 @media (max-width: 900px) {
+  html {
+    scroll-padding-top: 16px;
+  }
+  .site-header {
+    position: static;
+  }
+  .hero-grid,
   .roles,
   .limits,
   .cards {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .roles {
+    gap: 28px;
+  }
+  .limits > div {
+    border-right: 0;
+  }
+  .limits > div:nth-last-child(-n + 3) {
+    border-bottom: 1px solid var(--line);
+  }
+  .limits > div:last-child {
+    border-bottom: 0;
   }
   .split {
     flex-direction: column;
@@ -997,7 +1523,8 @@ a.card:hover {
   .nav {
     order: 3;
     width: 100%;
-    padding-bottom: 12px;
+    padding-bottom: 10px;
+    margin-left: -8px;
   }
   .guide {
     flex-direction: column;
@@ -1021,12 +1548,23 @@ a.card:hover {
 }
 @media (max-width: 520px) {
   body {
-    font-size: 18px;
+    font-size: 17px;
   }
   .nav-end {
     display: none;
   }
   .hero {
-    padding-top: 56px;
+    padding-top: 44px;
+  }
+  .fetch {
+    flex-direction: column;
+    gap: 14px;
+  }
+  .section {
+    padding-top: 72px;
+    padding-bottom: 72px;
+  }
+  .toc {
+    columns: 1;
   }
 }
