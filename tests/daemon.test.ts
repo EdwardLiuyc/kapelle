@@ -2807,6 +2807,21 @@ test("a linkPaths entry tracked after add refuses the run's 400", async (t) => {
   assert.match(refused.body.error.message, /tracked by git/);
 });
 
+test("a bad run body is invalid_run before a bad linkPaths is invalid_config", async (t) => {
+  const d = await boot(t);
+  const root = await added(d, await gitRepo(t));
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(root, ".kapelle", "config.json"),
+    JSON.stringify({ linkPaths: ["README.md"] }),
+    { mode: 0o644 },
+  );
+
+  const refused = await api(d, "POST", "/runs", { cwd: root, run: {} });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.error.code, "invalid_run");
+});
+
 test("a linkPaths entry tracked after add refuses a room's open", async (t) => {
   const d = await boot(t);
   const root = await added(d, await gitRepo(t));
@@ -8996,6 +9011,11 @@ test("a restart opens a room without links when its linkPaths went bad (#274)", 
   const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
   assert.equal(got.status, 200, got.body.error?.message);
   assert.equal(got.body.status, "paused");
+  const notices = got.body.participants
+    .flatMap((p) => p.notices)
+    .map((n) => n.text)
+    .join("\n");
+  assert.match(notices, /the room opened without its links/);
 });
 
 test("a linkPaths entry git would see refuses a room's open as a 400", async (t) => {
@@ -9016,5 +9036,6 @@ test("a linkPaths entry git would see refuses a room's open as a 400", async (t)
     agents: [{ cmd: `node ${MOCK_AGENT}`, name: "alice" }],
   });
   assert.equal(refused.status, 400, refused.body.error?.message);
+  assert.equal(refused.body.error.code, "invalid_config");
   assert.match(refused.body.error.message, /is not ignored in a new checkout/);
 });

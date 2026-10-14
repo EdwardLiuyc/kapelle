@@ -180,6 +180,7 @@ export const QUEUE_BOUND = 16;
 export class RoomRefusal extends Error {
   readonly code:
     | "invalid_request"
+    | "invalid_config"
     | "name_taken"
     | "orchestrator_exists"
     | "participant_not_found"
@@ -597,6 +598,9 @@ interface RoomDeps {
   limits?: Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount">;
   /** How long `pause` waits for a cancelled turn to end. */
   pauseGraceMs?: number;
+  /** A line to put in the room's own notices, such as the restore fallback
+   *  when the project's `linkPaths` cannot be used. */
+  roomNotice?: string;
 }
 
 export interface RoomOptions extends RoomDeps {
@@ -812,6 +816,7 @@ async function buildRoom(
     permissions,
     limits = WATCHDOG_DEFAULTS,
     pauseGraceMs = PAUSE_GRACE_MS,
+    roomNotice,
   }: RoomDeps,
   meta: RoomMeta,
   from?: RoomRecord,
@@ -824,6 +829,12 @@ async function buildRoom(
   // on `GET /rooms/:id/events`. A room has no notices on the wire, so every
   // participant shows them before its own.
   const roomNotices: RoomNotice[] = from ? [...from.notices] : [];
+  if (
+    roomNotice !== undefined &&
+    !roomNotices.some((n) => n.text === roomNotice)
+  ) {
+    roomNotices.push({ text: roomNotice });
+  }
   const onRoomNotice: Notify = (text, kind) =>
     roomNotices.push(kind ? { text, kind } : { text });
 
@@ -1150,8 +1161,11 @@ async function buildRoom(
       await made.launch();
     } catch (err) {
       await rollback(id, worktree);
-      throw err instanceof BadBase || err instanceof LinkPathError
-        ? new RoomRefusal("invalid_request", err.message)
+      if (err instanceof BadBase) {
+        throw new RoomRefusal("invalid_request", err.message);
+      }
+      throw err instanceof LinkPathError
+        ? new RoomRefusal("invalid_config", err.message)
         : err;
     }
     // A dismiss or pause that began while this harness was starting did not

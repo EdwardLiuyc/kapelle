@@ -737,6 +737,12 @@ async function startRun(body: Record<string, unknown>): Promise<string> {
   } catch (err) {
     throw refusal(400, "invalid_config", messageOf(err));
   }
+  let run: Run;
+  try {
+    run = validateRun(body.run, AGENTS, defaults);
+  } catch (err) {
+    throw refusal(400, "invalid_run", messageOf(err));
+  }
   let linkPaths: string[];
   try {
     linkPaths = readProjectLinkPaths(root);
@@ -750,12 +756,6 @@ async function startRun(body: Record<string, unknown>): Promise<string> {
       throw refusal(400, "invalid_config", messageOf(err));
     }
     throw err;
-  }
-  let run: Run;
-  try {
-    run = validateRun(body.run, AGENTS, defaults);
-  } catch (err) {
-    throw refusal(400, "invalid_run", messageOf(err));
   }
 
   // No preflight before the 202 any more (#129). It existed to answer the two
@@ -922,6 +922,7 @@ async function restoreRooms(): Promise<void> {
         // A bad link list is treated like the other config errors a restore
         // tolerates: the room still opens, without links, and says so.
         let linkPaths: string[] = [];
+        let roomNotice: string | undefined;
         try {
           const listed = readProjectLinkPaths(root);
           await validateWorktreeLinks(root, listed);
@@ -929,6 +930,7 @@ async function restoreRooms(): Promise<void> {
           // The room still opens without links; this is the restore fallback.
           // pi-lens-ignore: missing-error-propagation
         } catch (err) {
+          roomNotice = `${messageOf(err)}; the room opened without its links`;
           console.error(
             `room ${id}: ${messageOf(err)}; opening without linked paths`,
           );
@@ -957,6 +959,7 @@ async function restoreRooms(): Promise<void> {
           bus,
           permissions,
           ...(limits && { limits }),
+          ...(roomNotice && { roomNotice }),
         });
         rooms.set(id, {
           room,
@@ -976,7 +979,7 @@ async function restoreRooms(): Promise<void> {
 function roomRefused(err: unknown) {
   if (!(err instanceof RoomRefusal)) return undefined;
   const status =
-    err.code === "invalid_request"
+    err.code === "invalid_request" || err.code === "invalid_config"
       ? 400
       : err.code === "participant_not_found"
         ? 404
