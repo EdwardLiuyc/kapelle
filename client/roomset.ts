@@ -195,6 +195,12 @@ export interface Followed {
   state: RoomState;
   /** From `GET /rooms/:id`: each participant's checkout and notices. */
   dto?: RoomDto;
+  /** One `GET /rooms/:id` at a time: two replies cannot land out of order. */
+  reading?: boolean;
+  /** A trigger arrived while that read was in flight: read once more after
+   *  it, because the answer may predate the trigger (#232). `loaded` redraws
+   *  more than `reloaded`, so it wins when both wait. */
+  again?: "loaded" | "reloaded";
   /** Set when its stream ended and the room did not: what happened. */
   lost?: Ended;
 }
@@ -254,10 +260,6 @@ export function roomSet(
   waitMs = WAIT_MS,
 ): RoomSet {
   const rooms = new Map<string, Followed>();
-  /** Each room's read in flight, and the one to send when it answers. The
-   *  replay at attach ends every old turn again, and one read covers them
-   *  all; one at a time also means an older reply never lands last. */
-  const reading = new Map<string, { again?: "loaded" | "reloaded" }>();
   // A restart writes no line: read each room again for what it left.
   const current = followDaemon(d, address, (warning) => {
     on.restarted(warning);
@@ -276,33 +278,43 @@ export function roomSet(
   /** Reads the room again for each participant's checkout and notices, and
    *  the `paused` or `killed` a restart left, which no line says (M6-7a).
    *  `why` is `reloaded` for the read a turn end asks for: the timeline is
-   *  unchanged, so the screen need not rebuild the transcript. */
+   *  unchanged, so the screen need not rebuild the transcript.
+   *
+   *  One read at a time per room. A trigger that lands during a read marks
+   *  `again`, and that read answers it with one more: the reply may predate
+   *  the trigger, and serialized replies cannot land out of order (#232). */
   const loadDto = (r: Followed, why: "loaded" | "reloaded" = "loaded") => {
-    const id = r.entry.id;
-    const busy = reading.get(id);
-    if (busy) {
+    if (r.reading) {
       // `loaded` redraws more than `reloaded`, so it wins.
-      if (busy.again !== "loaded") busy.again = why;
+      if (r.again !== "loaded") r.again = why;
       return;
     }
-    reading.set(id, {});
-    call<RoomDto>(d, `/rooms/${id}`)
-      .then(
-        (res) => {
-          if (!res.ok) return;
+    r.reading = true;
+    /** The read is over. A trigger during it gets one more read, also when
+     *  this one failed: the reply, if any, may predate the trigger. */
+    const done = () => {
+      r.reading = false;
+      const again = r.again;
+      r.again = undefined;
+      if (!again) return;
+      // The room may have left the set (dismissed) or the set may have
+      // ended while the read ran: a chained read would answer nobody.
+      if (over || rooms.get(r.entry.id) !== r) return;
+      loadDto(r, again);
+    };
+    call<RoomDto>(d, `/rooms/${r.entry.id}`).then(
+      (res) => {
+        if (res.ok) {
           r.dto = res.body;
           applyStatus(r.state, res.body);
-          if (why === "loaded") on.loaded(id);
-          else on.reloaded(id);
-        },
-        // The stream says what happened to the daemon; a header can wait.
-        () => {},
-      )
-      .finally(() => {
-        const again = reading.get(id)?.again;
-        reading.delete(id);
-        if (again) loadDto(r, again);
-      });
+          if (why === "loaded") on.loaded(r.entry.id);
+          else on.reloaded(r.entry.id);
+        }
+        done();
+      },
+      // The stream says what happened to the daemon; a header can wait.
+      done,
+    );
   };
 
   const onLine = (r: Followed, line: RoomEventLine) => {
@@ -316,10 +328,11 @@ export function roomSet(
       loadDto(r, "reloaded");
     } else if (
       // A participant who joined after the room was read has no checkout or
-      // notices in the header until the room is read again.
+      // notices in the header until the room is read again. An unset dto
+      // counts as missing too, so a join that beats the first answer reads
+      // again (#232); `loadDto` keeps it to one read at a time.
       update === "_client_participant_added" &&
-      r.dto &&
-      !r.dto.participants.some((p) => p.id === line.participantId)
+      !r.dto?.participants.some((p) => p.id === line.participantId)
     ) {
       loadDto(r);
     }

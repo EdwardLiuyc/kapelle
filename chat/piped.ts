@@ -263,6 +263,12 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       );
       continue;
     }
+    if (c.verb === "term") {
+      console.error(
+        "! a shell needs the full-screen chat: run kapelle chat on a terminal",
+      );
+      continue;
+    }
     if (c.verb === "form") {
       console.error(`! a form needs a terminal: ${COMMAND_USAGE[c.form]}`);
       continue;

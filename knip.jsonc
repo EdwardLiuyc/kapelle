@@ -22,8 +22,9 @@
   "ignore": ["protocol/types.ts", "integration/**"],
   // script(1) is util-linux's, spawned by tests/daemon.test.ts to give `attach`
   // (M2-9) and chat.ts a real pseudo-terminal. A system binary, not an npm one,
-  // so nothing lists it.
-  "ignoreBinaries": ["script"],
+  // so nothing lists it. vim is the same: the /term test (M4-13) runs it in
+  // the person's shell when the system has it.
+  "ignoreBinaries": ["script", "vim"],
   // Entry points. The `!` suffix marks a *production* entry: without it, knip's
   // --production mode (which pi-lens runs) has no roots at all and reports every
   // reachable file — protocol/agent.ts, protocol/registry.ts, render.ts — as unused.

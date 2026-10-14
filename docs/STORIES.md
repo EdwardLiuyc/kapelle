@@ -2295,6 +2295,27 @@ no native code but cannot resize. Not ACP `terminal/*`: that stays off (§M0-3).
 *Done when* a shell in the pane runs `vim` in the agent's checkout, resizes with the
 screen, and its exit leaves the chat running.
 Decisions: M1c-7 (amended here).
+**Decided at pickup 2026-10-13 (#249).** The shell is the person's, not an agent's:
+one per chat, which `/term` starts in the open room's `cwd` and shows again later. So
+*done when* reads "in the room's `cwd`", not "in the agent's checkout", and a leading
+`@name` changes nothing, as for the other room commands. It
+lives until it exits or the chat ends, in the chat process, never in the daemon. **The
+pty is `script(1)`.** `node-pty` 1.1.0 ships prebuilds for darwin and win32 only, so
+Linux needs a compiler; its forks are beta-only (`@lydell/node-pty`) or download at
+install (`@homebridge/…`); and each loads native code into the chat, where a crash
+cannot be caught. `script` *can* resize, unlike what this story first said: measured
+2026-10-13 on Linux, `stty -F /dev/pts/N rows 40 cols 100` from outside changes the
+size and sends SIGWINCH. **The screen is `@xterm/headless` 6.0.0**, pure JS with no
+dependency. **Keys:** the shell takes every key but `ctrl+]`, not "the same keys" as the
+diff: vim needs Esc and `ctrl+o`, and bash `ctrl+r` and `ctrl+x`. M1c-7 is amended in
+`AGENTS.md`.
+**Built 2026-10-13 (#249).** `chat/tui/term.ts` starts the shell and draws its screen;
+the side pane takes it as a third content. Three things the build found. The inner
+command writes the pty's path to fd 3, so the chat can resize it. `script` outlives a
+chat killed by a signal, so a watcher on fd 3 hangs up the shell when the chat's end of
+it closes, however the chat died. pi-tui asks for the kitty keyboard protocol, so a key
+such as `ctrl+c` comes as `\x1b[99;5u`; `keyBytes` turns it back into the bytes a shell
+knows. macOS (`script -q /dev/null cmd`, `stty -f`) is written but not measured.
 
 **M4-7..M4-12: take the logic out of the screen.** **Added 2026-10-02.** `chat.ts` is
 2000 lines, and `chatTui` is one function of about 1280 of them. It draws and reads keys,
