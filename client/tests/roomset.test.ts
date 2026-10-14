@@ -299,6 +299,38 @@ test("a turn ending reads the room again, for a branch or base that moved in it"
   assert.equal(daemon.reads.filter((id) => id === "r1").length, 2);
 });
 
+test("a turn-end read that finds a paused participant redraws the room", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.participants = [{ id: "p1", status: "idle" }];
+  daemon.lines.set("r1", [added(1, "p1", "ann")]);
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  // The first read lands before the turn end, so the reload below is the
+  // only trigger waiting: no participant-added line queues a `loaded` first.
+  await until(() => set.rooms.get("r1")?.dto !== undefined);
+  await until(() => said.loaded.length === 1);
+  daemon.holdReads = true;
+  daemon.streams.get("r1")?.write(
+    `id: 2\ndata: ${JSON.stringify({
+      seq: 2,
+      at: "",
+      roomId: "r1",
+      participantId: "p1",
+      update: { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" },
+    })}\n\n`,
+  );
+  await until(() => daemon.reads.length === 2);
+  daemon.participants = [{ id: "p1", status: "paused" }];
+  daemon.releaseRead();
+  await until(() => said.loaded.length === 2);
+  assert.equal(
+    said.reloads.includes("r1"),
+    false,
+    "a status move needs the full redraw, not a header refresh",
+  );
+});
+
 test("a room made elsewhere joins on the next poll", async (t) => {
   const daemon = await fake(t);
   const { set, said } = follow(t, daemon.d);

@@ -306,8 +306,10 @@ export function roomSet(
       (res) => {
         if (res.ok) {
           r.dto = res.body;
-          applyStatus(r.state, res.body);
-          if (why === "loaded") on.loaded(r.entry.id);
+          // A reply can carry a status no line did; that changes the
+          // timeline too, so it needs the full redraw `loaded` asks for.
+          const moved = applyStatus(r.state, res.body);
+          if (why === "loaded" || moved) on.loaded(r.entry.id);
           else on.reloaded(r.entry.id);
         }
         done();
