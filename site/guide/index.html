@@ -5,10 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Guide — kapelle</title>
 <meta name="description" content="Install kapelle, open your first room, and learn every command: rooms, runs, agents, modes and configuration.">
-<meta name="theme-color" content="#eeeae4" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#12161c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#efebe5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d1015" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="preload" href="/fonts/fraunces-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/martian-mono.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css">
 <script>
@@ -19,18 +18,19 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 </head>
 <body>
 
-<div class="strip">kapelle is in private preview. The npm release is <span class="soon">coming soon</span>.</div>
+<div class="strip"><span class="lvl">[info]</span>kapelle is in private preview. The npm release is <span class="soon">coming soon</span>.</div>
 
-<header class="site-header" style="border-bottom: 1px solid var(--line);">
+<header class="site-header">
 <div class="wrap" style="max-width: 1240px;">
 <a class="brand" href="/" aria-label="kapelle home">
-<svg width="24" height="24" viewBox="0 0 800 800" aria-hidden="true"><path fill="#5CC8FF" d="M165.29 165.29H282.65V634.72H165.29Z"/><path fill="#C792EA" d="M400 165.29H634.72V282.65H517.36V400H282.65V282.65H400Z"/><path fill="#FFB454" d="M282.65 400H517.36V517.36H634.72V634.72H400V517.36H282.65Z"/></svg>
+<svg width="22" height="22" viewBox="0 0 800 800" aria-hidden="true"><path fill="#5CC8FF" d="M165.29 165.29H282.65V634.72H165.29Z"/><path fill="#C792EA" d="M400 165.29H634.72V282.65H517.36V400H282.65V282.65H400Z"/><path fill="#FFB454" d="M282.65 400H517.36V517.36H634.72V634.72H400V517.36H282.65Z"/></svg>
 <span>kapelle</span><span class="crumb">/ guide</span>
 </a>
 <nav class="nav" aria-label="Main">
-<a href="/guide/" aria-current="page">Guide</a>
-<a href="/#orchestrator">Orchestrator</a>
-<a href="/#agents">Agents</a>
+<a href="/guide/" aria-current="page"><i>1</i>guide</a>
+<a href="/#orchestrator"><i>2</i>orchestrator</a>
+<a href="/#agents"><i>3</i>agents</a>
+<a href="#safety"><i>4</i>safety</a>
 </nav>
 <span class="nav-end">GitHub · npm <span class="soon">soon</span></span>
 </div>
@@ -86,43 +86,43 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <button role="tab" id="g-tab-src" aria-controls="g-panel-src" aria-selected="false" tabindex="-1">from source</button>
 </div>
 <div class="panel" role="tabpanel" id="g-panel-npm" aria-labelledby="g-tab-npm">
-<pre><span class="label">npm · coming soon</span>$ npm install -g kapelle
-$ kapelle --help</pre>
+<pre><span class="label">npm · coming soon</span><span class="p">$ </span>npm install -g kapelle
+<span class="p">$ </span>kapelle --help</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 <div class="panel" role="tabpanel" id="g-panel-pnpm" aria-labelledby="g-tab-pnpm">
-<pre><span class="label">pnpm · coming soon</span>$ pnpm add -g kapelle
-$ kapelle --help</pre>
+<pre><span class="label">pnpm · coming soon</span><span class="p">$ </span>pnpm add -g kapelle
+<span class="p">$ </span>kapelle --help</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 <div class="panel" role="tabpanel" id="g-panel-bun" aria-labelledby="g-tab-bun">
-<pre><span class="label">bun · coming soon</span>$ bun add -g kapelle
-$ kapelle --help</pre>
+<pre><span class="label">bun · coming soon</span><span class="p">$ </span>bun add -g kapelle
+<span class="p">$ </span>kapelle --help</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 <div class="panel" role="tabpanel" id="g-panel-src" aria-labelledby="g-tab-src">
-<pre><span class="label">from source · needs repository access</span>$ git clone https://github.com/EdwardLiuyc/kapelle.git
-$ cd kapelle
-$ npm install
-$ npm link           # puts kapelle on your PATH
-$ kapelle --help</pre>
+<pre><span class="label">from source · needs repository access</span><span class="p">$ </span>git clone https://github.com/EdwardLiuyc/kapelle.git
+<span class="p">$ </span>cd kapelle
+<span class="p">$ </span>npm install
+<span class="p">$ </span>npm link           # puts kapelle on your PATH
+<span class="p">$ </span>kapelle --help</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 </div>
 <p>From source, <code>npm unlink -g kapelle</code> undoes the link. If <code>npm link</code> fails with <code>EACCES</code>, npm's global folder belongs to root. Use a folder you own instead of <code>sudo</code>:</p>
-<pre>$ npm config set prefix ~/.local    # then add ~/.local/bin to PATH</pre>
+<pre><span class="p">$ </span>npm config set prefix ~/.local    # then add ~/.local/bin to PATH</pre>
 <p>From source, you can check kapelle with no agent and no account. A fake agent ships with the repository:</p>
-<pre>$ npm run selftest</pre>
+<pre><span class="p">$ </span>npm run selftest</pre>
 <p>You should see <code>✓ allowed Write ACP_TEST.md</code>. Delete <code>ACP_TEST.md</code> when you are done.</p>
 </section>
 
 <section id="quick-start">
 <h2><span class="step">2</span>Quick start</h2>
 <p>kapelle is the client. The agent is a separate program, and it logs in by itself. pi is the default. Install pi and its ACP adapter, then log in to pi once:</p>
-<pre>$ npm i -g @earendil-works/pi-coding-agent pi-acp
-$ pi                   # type /login, then quit</pre>
+<pre><span class="p">$ </span>npm i -g @earendil-works/pi-coding-agent pi-acp
+<span class="p">$ </span>pi                   # type /login, then quit</pre>
 <p>Now send one prompt, inside any repository:</p>
-<pre>$ kapelle "summarise this repo in three sentences"</pre>
+<pre><span class="p">$ </span>kapelle "summarise this repo in three sentences"</pre>
 <div class="note warn">
 <span class="kicker">READ THIS FIRST</span>
 <p>pi works in your own checkout here, and it never asks for permission, so no mode can stop its changes. Read <a href="#limits">What a mode cannot stop</a> before you give it real work.</p>
@@ -152,14 +152,14 @@ $ pi                   # type /login, then quit</pre>
 <section id="rooms">
 <h2>Open a room</h2>
 <p>Rooms live in the daemon. Start it once, and add each repository once:</p>
-<pre>$ kapelle daemon start     # terminal 1: runs until Ctrl-C
-$ kapelle daemon add .     # terminal 2: in your repository</pre>
+<pre><span class="p">$ </span>kapelle daemon start     # terminal 1: runs until Ctrl-C
+<span class="p">$ </span>kapelle daemon add .     # terminal 2: in your repository</pre>
 <p>Then open a room:</p>
-<pre>$ kapelle chat new --agent pi     # open a room and chat in it
-$ kapelle chat                    # every room, on a terminal
-$ kapelle chat list               # every room, as text
-$ kapelle chat attach &lt;roomId&gt;     # rejoin a room; its history replays
-$ kapelle chat dismiss &lt;roomId&gt;    # stop the room's agents</pre>
+<pre><span class="p">$ </span>kapelle chat new --agent pi     # open a room and chat in it
+<span class="p">$ </span>kapelle chat                    # every room, on a terminal
+<span class="p">$ </span>kapelle chat list               # every room, as text
+<span class="p">$ </span>kapelle chat attach &lt;roomId&gt;     # rejoin a room; its history replays
+<span class="p">$ </span>kapelle chat dismiss &lt;roomId&gt;    # stop the room's agents</pre>
 <p>Each agent in a room works on its own branch, <code>kapelle/&lt;roomId&gt;/&lt;agentId&gt;</code>.</p>
 <p>The room API is new, and it can still change.</p>
 </section>
@@ -239,8 +239,8 @@ $ kapelle chat dismiss &lt;roomId&gt;    # stop the room's agents</pre>
 <li>Give one agent another's work: <code>ctrl+o</code>, then <strong>fast-forward from …</strong>. The pane shows what it would bring, and Enter confirms.</li>
 <li>Take the work into your own checkout with git, when you are ready.</li>
 </ul>
-<pre>$ git log -p kapelle/&lt;roomId&gt;/&lt;agentId&gt;
-$ git merge kapelle/&lt;roomId&gt;/&lt;agentId&gt;</pre>
+<pre><span class="p">$ </span>git log -p kapelle/&lt;roomId&gt;/&lt;agentId&gt;
+<span class="p">$ </span>git merge kapelle/&lt;roomId&gt;/&lt;agentId&gt;</pre>
 </section>
 
 <section id="runs">
@@ -254,7 +254,7 @@ $ git merge kapelle/&lt;roomId&gt;/&lt;agentId&gt;</pre>
     { "id": "look-for-bugs", "prompt": "List any obvious bugs or missing error handling you can see." }
   ]
 }</pre>
-<pre>$ kapelle run --file tasks.json</pre>
+<pre><span class="p">$ </span>kapelle run --file tasks.json</pre>
 <p>In a git repository, each task gets its own worktree, on a branch named <code>kapelle/&lt;runId&gt;/&lt;taskId&gt;</code>. Keep working in your own checkout while the agents work in theirs. Your uncommitted changes do not reach the tasks, and kapelle tells you so. Outside a git repository, the tasks share the folder.</p>
 <p>When a task ends <code>done</code> or <code>warned</code>, kapelle commits its work on the task's branch. Task ids name git branches, so kapelle checks them and never changes them.</p>
 </section>
@@ -262,16 +262,16 @@ $ git merge kapelle/&lt;roomId&gt;/&lt;agentId&gt;</pre>
 <section id="background">
 <h2>In the background</h2>
 <p>With the daemon running, hand the run over and follow it from any terminal:</p>
-<pre>$ kapelle run --file tasks.json --detach   # prints the run id
-$ kapelle ps                               # every run and each task's status
-$ kapelle attach &lt;runId&gt;                    # watch it, and answer its ask prompts
-$ kapelle attach &lt;runId&gt; --task &lt;taskId&gt;    # watch one task in full</pre>
+<pre><span class="p">$ </span>kapelle run --file tasks.json --detach   # prints the run id
+<span class="p">$ </span>kapelle ps                               # every run and each task's status
+<span class="p">$ </span>kapelle attach &lt;runId&gt;                    # watch it, and answer its ask prompts
+<span class="p">$ </span>kapelle attach &lt;runId&gt; --task &lt;taskId&gt;    # watch one task in full</pre>
 <p>kapelle rings the bell and sends a desktop notification when a run needs you.</p>
 </section>
 
 <section id="merge">
 <h2>Merge the results</h2>
-<pre>$ kapelle merge &lt;runId&gt; --squash</pre>
+<pre><span class="p">$ </span>kapelle merge &lt;runId&gt; --squash</pre>
 <p>This puts the changes of all tasks into your working tree, unstaged. It makes no commit. It refuses when two tasks change the same file, or when your own changes touch a file a task changed.</p>
 <p>Look at one task's work first with <code>git log -p kapelle/&lt;runId&gt;/&lt;taskId&gt;</code>.</p>
 </section>
@@ -279,8 +279,8 @@ $ kapelle attach &lt;runId&gt; --task &lt;taskId&gt;    # watch one task in full
 <section id="workspace">
 <h2>Where the work lives</h2>
 <p>Worktrees and records live in <code>~/.local/state/kapelle/</code>. Nothing goes into your repository.</p>
-<pre>$ kapelle workspace                    # where this repository's work lives
-$ kapelle workspace move &lt;old&gt; &lt;new&gt;   # after you move or rename the repository</pre>
+<pre><span class="p">$ </span>kapelle workspace                    # where this repository's work lives
+<span class="p">$ </span>kapelle workspace move &lt;old&gt; &lt;new&gt;   # after you move or rename the repository</pre>
 <p>Use <code>workspace move</code>, not a plain <code>mv</code>. A plain <code>mv</code> breaks git's link to each worktree.</p>
 </section>
 
@@ -392,17 +392,21 @@ kapelle chat [new | attach | list | dismiss]</pre>
 <p>The repository was moved with a plain <code>mv</code>. Run <code>kapelle workspace move &lt;old&gt; &lt;new&gt;</code> to repair the links.</p>
 </section>
 
-<div class="pager"><a href="/">[ ← Home ]</a></div>
+<div class="pager"><a href="/">[ ← cd .. ]</a></div>
 </main>
 </div>
 
+<pre class="tildes" aria-hidden="true">~
+~
+~</pre>
 <footer class="site-footer">
 <div class="wrap">
 <span>kapelle · MIT License · © Yongchuan Liu</span>
 <div class="theme-picker" role="group" aria-label="Theme">
-<button type="button" data-theme="auto" aria-pressed="true">Auto</button>
-<button type="button" data-theme="light" aria-pressed="false">Light</button>
-<button type="button" data-theme="dark" aria-pressed="false">Dark</button>
+<span class="lbl">:set theme=</span>
+<button type="button" data-theme="auto" aria-pressed="true">auto</button>
+<button type="button" data-theme="light" aria-pressed="false">light</button>
+<button type="button" data-theme="dark" aria-pressed="false">dark</button>
 </div>
 </div>
 </footer>
