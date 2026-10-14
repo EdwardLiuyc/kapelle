@@ -82,6 +82,7 @@ skipped. The daemon keeps booting and serving the rest.
 | ❌ | wrong type | `{"ttlMs": "soon"}`, `{"maxConcurrency": 1.5}`, `{"linkPaths": "node_modules"}` | whole-number rule naming the key, or the `linkPaths` array rule |
 | ❌ | bad link path | `{"linkPaths": ["/x"]}`, `["../x"]`, `["a", "a/b"]`, `[".git"]`, `42` | entry-specific rule naming the file and `linkPaths[i]` |
 | ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path whose real target leaves the checkout | refused when the repository is added, a run starts, or a room opens, as `invalid_config` |
+| ❌ | link git would see | an untracked path no ignore rule matches | refused when a checkout is made: the task fails, or the room's add is a 400 `invalid_request`; the links are removed again |
 | ❌ | out of range | negatives; `{"maxConcurrency": 0}` | `0 or greater` (watchdog/retention) or `1 or greater` (concurrency) |
 | ❌ | invalid JSON / non-object / unreadable | — | the same three structural refusals as the user file |
 | ⚠ | — | — | files never warn |

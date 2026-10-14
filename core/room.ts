@@ -167,6 +167,7 @@ import {
   checkoutIdentity,
   DirtyCheckout,
   fastForwardCheckout,
+  LinkPathError,
   NotFastForward,
   type WorktreeSetup,
 } from "./worktree.ts";
@@ -1149,7 +1150,7 @@ async function buildRoom(
       await made.launch();
     } catch (err) {
       await rollback(id, worktree);
-      throw err instanceof BadBase
+      throw err instanceof BadBase || err instanceof LinkPathError
         ? new RoomRefusal("invalid_request", err.message)
         : err;
     }

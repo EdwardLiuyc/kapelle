@@ -8980,3 +8980,41 @@ test("chat.ts on a real terminal folds a tool run at the next note without movin
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
+
+test("a restart opens a room without links when its linkPaths went bad (#274)", async (t) => {
+  const { first, cwd, id, again } = await roomToRestart(t, REMEMBER);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  await mkdir(join(cwd, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(cwd, ".kapelle", "config.json"),
+    JSON.stringify({ linkPaths: ["README.md"] }),
+    { mode: 0o644 },
+  );
+
+  const second = await again();
+  const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  assert.equal(got.status, 200, got.body.error?.message);
+  assert.equal(got.body.status, "paused");
+});
+
+test("a linkPaths entry git would see refuses a room's open as a 400", async (t) => {
+  const d = await boot(t);
+  const root = await added(
+    d,
+    await gitRepo(t, {
+      files: {
+        ".kapelle/config.json": `${JSON.stringify({ linkPaths: ["vendor.txt"] })}\n`,
+      },
+    }),
+  );
+  // Untracked and not ignored, so the link would dirty the checkout.
+  await writeFile(join(root, "vendor.txt"), "vendor\n");
+
+  const refused = await api(d, "POST", "/rooms", {
+    cwd: root,
+    agents: [{ cmd: `node ${MOCK_AGENT}`, name: "alice" }],
+  });
+  assert.equal(refused.status, 400, refused.body.error?.message);
+  assert.match(refused.body.error.message, /is not ignored in a new checkout/);
+});

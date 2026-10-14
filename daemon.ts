@@ -923,8 +923,9 @@ async function restoreRooms(): Promise<void> {
         // tolerates: the room still opens, without links, and says so.
         let linkPaths: string[] = [];
         try {
-          linkPaths = readProjectLinkPaths(root);
-          await validateWorktreeLinks(root, linkPaths);
+          const listed = readProjectLinkPaths(root);
+          await validateWorktreeLinks(root, listed);
+          linkPaths = listed;
           // The room still opens without links; this is the restore fallback.
           // pi-lens-ignore: missing-error-propagation
         } catch (err) {

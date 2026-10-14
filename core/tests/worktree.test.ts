@@ -1200,3 +1200,41 @@ test("a run gets the project's configured links (#274)", async (t) => {
   );
   assert.equal(report.status, "done");
 });
+
+test("a link git would see is refused, and the checkout is left clean (#274)", async (t) => {
+  const root = await repo(t);
+  // Untracked and not ignored: a link to it would show in `git status`.
+  await writeFile(join(root, "vendor.txt"), "vendor\n");
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["vendor.txt"],
+  });
+  assert.ok(worktrees);
+
+  await assert.rejects(
+    worktrees.acquire("plan"),
+    /"linkPaths\[0\]" is not ignored in a new checkout/,
+  );
+  assert.equal(existsSync(wtOf(root, "plan", "vendor.txt")), false);
+  assert.deepEqual(await changedPaths(wtOf(root, "plan")), []);
+  await worktrees.release("plan", "keep");
+});
+
+test("a path installed after setup is linked into the next checkout (#274)", async (t) => {
+  const root = await repo(t);
+  await writeFile(join(root, ".gitignore"), "node_modules/\n");
+  await git(root, "add", ".gitignore");
+  await git(root, "commit", "-m", "ignore node_modules");
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["node_modules"],
+  });
+  assert.ok(worktrees);
+
+  // A room lives for days: `npm ci` can run after it opened.
+  await mkdir(join(root, "node_modules", "pkg"), { recursive: true });
+  const wt = await worktrees.acquire("plan");
+  assert.equal(
+    (await lstat(join(wt, "node_modules", "pkg"))).isSymbolicLink(),
+    true,
+  );
+  await worktrees.release("plan", "keep");
+});

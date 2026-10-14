@@ -907,10 +907,13 @@ export async function openWorktrees(
     };
   }
 
-  // The project's links are planned once, before any task runs: a tracked
+  // The project's links are checked once, before any task runs: a tracked
   // path or one that leaves the checkout refuses the whole setup, not the
-  // first task that happens to acquire a worktree.
-  const linkPlans = await planLinkSources(root, options.linkPaths ?? []);
+  // first task that happens to acquire a worktree. `acquire` plans them again,
+  // because a room lives for days and a path installed later must reach the
+  // next participant.
+  const linkPaths = options.linkPaths ?? [];
+  await planLinkSources(root, linkPaths);
 
   // A notice, never a refusal (#129). A supervisor whose whole point is to
   // work while the operator works cannot demand a clean tree first: that
@@ -1012,7 +1015,7 @@ export async function openWorktrees(
               "start from a commit that has it.",
           );
         }
-        await applyLinkSources(path, linkPlans);
+        await applyLinkSources(path, await planLinkSources(root, linkPaths));
         return inside;
       },
 
