@@ -80,12 +80,20 @@ skipped. The daemon keeps booting and serving the rest.
 | ❌ | unknown key | `{"stallIdle": 1}` | `<path>: unknown key "stallIdle". Known: stallIdleMs, stallRepeatCount, ttlMs, maxConcurrency, retentionMs, linkPaths.` |
 | ❌ | wrong-layer key | `{"port": 5000}` | `<path>: "port" is daemon-wide; put it in <user-config-path>.` |
 | ❌ | wrong type | `{"ttlMs": "soon"}`, `{"maxConcurrency": 1.5}`, `{"linkPaths": "node_modules"}` | whole-number rule naming the key, or the `linkPaths` array rule |
-| ❌ | bad link path | `{"linkPaths": ["/x"]}`, `["../x"]`, `["a", "a/b"]`, `[".git"]`, `42` | entry-specific rule naming the file and `linkPaths[i]` |
+| ❌ | bad link path | `{"linkPaths": ["/x"]}`, `["../x"]`, `["a", "a/b"]`, `[".git"]`, `["sub/.git"]`, `42` | entry-specific rule naming the file and `linkPaths[i]` |
 | ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path whose real target leaves the checkout | refused when the repository is added, a run starts, or a room opens, as `invalid_config` |
-| ❌ | link git would see | an untracked path no ignore rule matches | refused when a checkout is made: the task fails, or the room's add is a 400 `invalid_request`; the links are removed again |
+| ❌ | link git would see | an untracked path no ignore rule matches | refused when a checkout is made: the task fails, or the room's add is a 400 `invalid_config`; the links are removed again |
 | ❌ | out of range | negatives; `{"maxConcurrency": 0}` | `0 or greater` (watchdog/retention) or `1 or greater` (concurrency) |
 | ❌ | invalid JSON / non-object / unreadable | — | the same three structural refusals as the user file |
 | ⚠ | — | — | files never warn |
+
+A linked path is **shared state, not a copy**: the symlink points at the main
+checkout, so a task that writes through it writes the operator's file, and an
+install in one checkout can mutate the directory every task shares. List
+paths workers only read. A nested entry needs its parent folders in the
+checkout already; the linker does not create them. The links are absolute, so
+moving the repository (`kapelle workspace move`) leaves them pointing at the
+old path.
 
 ## Environment — `KAPELLE_*`
 

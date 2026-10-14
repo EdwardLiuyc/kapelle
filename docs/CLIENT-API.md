@@ -1094,7 +1094,8 @@ turn ends. A client that shows the whole-branch diff needs no extra step:
 bad `title`, a bad or missing harness, a bad `name`, `role`, `mode` or `settings`, or an
 unknown agent field; `409` `name_taken` or `orchestrator_exists` when two agents in the
 list clash; `400` `invalid_config` when the repository's `.kapelle/config.json` is not
-valid, because the room reads its watchdog limits from it; `400` `invalid_request` for a
+valid, because the room reads its watchdog limits and `linkPaths` from it; `400`
+`invalid_request` for a
 bad `base`; `503` `shutting_down` when the
 daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example its
 binary is not installed).
@@ -1212,7 +1213,8 @@ The reply comes when the harness is ready.
 **Reply `201`:** the participant, in the shape `GET /rooms/:id` gives it.
 
 **Refusals:** `404` `room_not_found`; `400` `invalid_request` for a bad field, or a bad
-`base` (see [`POST /rooms`](#post-rooms)); `409` `name_taken`; `409` `orchestrator_exists`; `409`
+`base` (see [`POST /rooms`](#post-rooms)); `400` `invalid_config` when the repository's
+`linkPaths` cannot be used; `409` `name_taken`; `409` `orchestrator_exists`; `409`
 `room_dismissed`; `503` `shutting_down`; `500` `room_open_failed` when the harness cannot
 start.
 
