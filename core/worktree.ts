@@ -359,8 +359,10 @@ export interface CheckoutIdentity {
   branch: string;
   /** The branch this one was renamed from, when the branch's own reflog has
    *  the `Branch: renamed refs/heads/<old> to refs/heads/<new>` entry for
-   *  the name the caller held. That is the positive proof a room owns the
-   *  new name; a switch to someone else's branch has no such entry. */
+   *  the name the caller held, and that old ref is gone. That is the positive
+   *  proof a room owns the new name; a switch to someone else's branch has no
+   *  such entry. Set only on the read that first sees the new name, so it is
+   *  not a standing fact once `branch` equals the caller's current name. */
   renamedFrom?: string;
   /** The commit the branch's newest rebase or `pull --rebase` finished onto,
    *  when that commit is still an ancestor of the branch. A harness that
@@ -391,9 +393,10 @@ const REBASE_ONTO = /\(finish\).*\bonto ([0-9a-f]{40,64})$/;
  * one answer already true. `null` for a detached HEAD; a git failure may
  * throw, and `syncCheckout` treats that as no answer and keeps its record.
  * `expected` is the branch name the caller held: when the current name was
- * renamed into from it, the reflog's own `Branch: renamed …` entry proves
- * it and `renamedFrom` is set, so ownership is a positive fact and not an
- * inference from the old ref being gone.
+ * renamed into from it, the reflog's own `Branch: renamed …` entry and the
+ * disappearance of the old ref prove it, and `renamedFrom` is set. A rename
+ * is the positive fact a room needs; a stale entry copied onto a branch that
+ * still has the old ref is not.
  *
  * **The rebase base comes from the branch ref's reflog.** A `rebase
  * (finish)` subject names the commit the branch was replayed onto, whether
@@ -426,7 +429,8 @@ export async function checkoutIdentity(
     "500",
     branch,
     // After the ref, so a branch named like a path (`docs`, `src`) is not
-    // ambiguous; before it, `--` would make `reflog show` read nothing.
+    // ambiguous. Before the ref, `--` makes the name a pathspec, which reads
+    // the wrong reflog (or nothing).
     "--",
   ]);
   if (reflog === null || reflog === "") return { branch };
@@ -441,7 +445,15 @@ export async function checkoutIdentity(
       if (nul < 0) continue;
       const match = RENAME_REFLOG.exec(line.slice(nul + 1));
       if (match?.[1] === expected && match[2] === branch) {
-        renamedFrom = expected;
+        // A pre-existing branch can carry a rename entry from the same old
+        // name; only a rename that removed that old ref is this checkout's.
+        const previous = await tryGit(cwd, [
+          "rev-parse",
+          "--verify",
+          "--quiet",
+          `refs/heads/${expected}`,
+        ]);
+        if (previous === null) renamedFrom = expected;
         break;
       }
     }
@@ -717,8 +729,7 @@ export async function openWorktrees(
           task.branch = changes.branch;
           // A rename is proven by the reflog; anything else means the
           // checkout switched to a branch this run did not create.
-          if (changes.renamed === true) task.renamed = true;
-          else delete task.renamed;
+          task.renamed = changes.renamed === true ? true : undefined;
         }
         if (changes.baseSha !== undefined) task.baseSha = changes.baseSha;
       },

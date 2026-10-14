@@ -733,6 +733,19 @@ test("checkoutIdentity proves a rename from the branch's own reflog", async (t) 
   });
 });
 
+test("a stale rename entry on a pre-existing branch does not claim it", async (t) => {
+  const root = await repo(t);
+  await git(root, "branch", "held-name");
+  await git(root, "switch", "-q", "held-name");
+  await git(root, "branch", "-m", "pre-existing");
+  // The old name exists again as its own branch: the entry is stale.
+  await git(root, "branch", "held-name");
+
+  assert.deepEqual(await checkoutIdentity(root, "held-name"), {
+    branch: "pre-existing",
+  });
+});
+
 test("a detached HEAD is kept too, and says so", async (t) => {
   const root = await repo(t);
   const { worktrees } = await openWorktrees(root, RUN_ID);

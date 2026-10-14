@@ -8555,6 +8555,11 @@ test("DELETE keeps a foreign branch after the room's own ref is gone", async (t)
     "the pre-existing branch survives the room's gone ref",
   );
   assert.equal(hasBranch(root, original), false);
+  assert.equal(
+    hasBranch(root, away),
+    true,
+    "the name the room renamed through is left too",
+  );
 });
 
 test("a paused room is deleted without a revive, and its open stream ends (#235)", async (t) => {
