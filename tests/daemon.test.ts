@@ -8499,6 +8499,64 @@ test("DELETE leaves a branch the harness switched to, not one it created", async
   assert.equal(hasBranch(root, original), false, "the room's own branch goes");
 });
 
+test("DELETE keeps a foreign branch after the room's own ref is gone", async (t) => {
+  const d = await boot(t);
+  const root = await gitRepo(t);
+  const cwd = await added(d, root);
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario read-only`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const p = only(open.body);
+  const original = p.branch as string;
+  // The harness renames the room's branch away, then switches to a branch
+  // that already existed. The original ref is now gone; the foreign one is
+  // still not the room's to delete.
+  const away = "wip-away";
+  const renamed = spawnSync("git", ["branch", "-m", away], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(renamed.status, 0, renamed.stderr);
+  const foreign = "user-topic";
+  const made = spawnSync("git", ["branch", foreign, "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(made.status, 0, made.stderr);
+  const switched = spawnSync("git", ["switch", "-q", foreign], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(switched.status, 0, switched.stderr);
+  assert.equal(
+    (await api(d, "POST", `/rooms/${id}/messages`, { text: "go" })).status,
+    202,
+  );
+  await roomIdle(d, id);
+  assert.equal(
+    only((await api<RoomReply>(d, "GET", `/rooms/${id}`)).body).branch,
+    foreign,
+  );
+
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const deleted = await fetch(`${d.url}/rooms/${id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${d.token}` },
+  });
+  assert.equal(deleted.status, 204);
+  assert.equal(
+    hasBranch(root, foreign),
+    true,
+    "the pre-existing branch survives the room's gone ref",
+  );
+  assert.equal(hasBranch(root, original), false);
+});
+
 test("a paused room is deleted without a revive, and its open stream ends (#235)", async (t) => {
   const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
   process.kill(first.pid, "SIGTERM");

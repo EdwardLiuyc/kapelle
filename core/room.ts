@@ -335,6 +335,10 @@ interface ParticipantRecord {
    *  rename or a rebase mid-turn. */
   branch?: string;
   baseSha?: string;
+  /** True when `branch` is a name the harness renamed into, proven by the
+   *  branch's own reflog. Absent means a switch to a name this room did not
+   *  create, so a delete leaves it alone. */
+  branchRenamed?: true;
   sessionId: string;
   /** Its turns so far, so a restored one goes on counting (S12's `turn`). */
   turns?: number;
@@ -625,6 +629,9 @@ interface Member {
   setMode: (mode: ClientMode) => void;
   hold: <T>(work: Promise<T>) => Promise<T>;
   onNotice: Notify;
+  /** True when `branch` is a name the harness renamed into, proven by the
+   *  branch's own reflog. */
+  renamed: () => boolean;
   /** Re-reads the checkout after a turn, or once when a record is restored.
    *  Updates this member and the held checkout; true when the branch or the
    *  rebase base changed. */
@@ -893,6 +900,7 @@ async function buildRoom(
       worktree: p.worktree,
       ...(p.branch && { branch: p.branch }),
       ...(p.baseSha && { baseSha: p.baseSha }),
+      ...(m.renamed() && { branchRenamed: true }),
       sessionId: p.sessionId,
       turns: m.turns(),
       status: p.status(),
@@ -1339,7 +1347,12 @@ async function buildRoom(
       saved.branch && saved.baseSha
         ? { branch: saved.branch, baseSha: saved.baseSha }
         : undefined;
-    if (info) worktrees?.adopt(saved.id, info);
+    if (info) {
+      worktrees?.adopt(saved.id, {
+        ...info,
+        ...(saved.branchRenamed === true && { renamed: true }),
+      });
+    }
     const m = makeMember(
       request,
       saved.id,
@@ -1431,7 +1444,11 @@ function createParticipant({
   onRevive: () => void;
   /** The checkout's branch or rebase base changed; the room follows it in
    *  the held checkout record. Absent when there is no worktree. */
-  onCheckout?: (next: { branch: string; baseSha?: string }) => void;
+  onCheckout?: (next: {
+    branch: string;
+    baseSha?: string;
+    renamed?: boolean;
+  }) => void;
 }): Omit<Member, "spec" | "source" | "own" | "onNotice"> {
   /** The live harness; undefined before `launch` and once it has stopped. */
   let agent: AcpAgent | undefined;
@@ -1447,6 +1464,8 @@ function createParticipant({
   // Read from the checkout after each turn; restored from `info` first.
   let branch = info?.branch;
   let baseSha = info?.baseSha;
+  // True only when this name was renamed into from the one we held.
+  let branchRenamed = saved?.branchRenamed === true;
   // Counts this participant's turns from 1 (S12's `turn`), and the live
   // turn's cancel. A turn that ends for any reason aborts it, which denies
   // what it left open in the queue as `cancel`. Between turns it is already
@@ -1775,13 +1794,16 @@ function createParticipant({
     if (!info) return false;
     let found: Awaited<ReturnType<typeof checkoutIdentity>>;
     try {
-      found = await checkoutIdentity(worktree);
+      found = await checkoutIdentity(worktree, branch);
     } catch {
       return false;
     }
     if (!found) return false;
     let changed = false;
     if (found.branch !== branch) {
+      // A positive rename makes the new name the room's; any other switch
+      // clears the claim, so release and delete leave that branch alone.
+      branchRenamed = found.renamedFrom === branch;
       branch = found.branch;
       changed = true;
     }
@@ -1790,7 +1812,11 @@ function createParticipant({
       changed = true;
     }
     if (!changed) return false;
-    onCheckout?.({ branch, ...(baseSha && { baseSha }) });
+    onCheckout?.({
+      branch,
+      ...(baseSha && { baseSha }),
+      ...(branchRenamed && { renamed: true }),
+    });
     return true;
   };
 
@@ -1877,6 +1903,7 @@ function createParticipant({
     launch,
     setMode,
     hold,
+    renamed: () => branchRenamed,
     syncCheckout,
     turns: () => turns,
     turnCancelled: () => turnCancelled,

@@ -429,8 +429,8 @@ export async function roomWork(
 
 /**
  * The branches a room owns: its own namespace, plus the names its record
- * says a harness renamed into. A branch that still existed under its
- * original ref is not the room's; it is named in `left` and left alone.
+ * marks as a rename from the room's own. A branch the record only shows as
+ * a switch to is named in `left` and left alone.
  */
 async function roomBranches(
   root: string,
@@ -457,9 +457,9 @@ async function roomBranches(
       );
       continue;
     }
-    // The original ref still existing says the branch is not one the room
-    // renamed into; it belongs to whoever had it first.
-    if (branch !== original && (await hasBranch(root, original))) {
+    // The record's rename flag is the positive fact. Without it, a name
+    // that is not the room's own belongs to whoever had it first.
+    if (branch !== original && p.branchRenamed !== true) {
       left.push(
         `branch ${branch} was not created by room ${roomId}; left in place`,
       );

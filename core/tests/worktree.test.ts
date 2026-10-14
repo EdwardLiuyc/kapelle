@@ -695,6 +695,44 @@ test("a checkout switched to an existing branch is kept even after update follow
   await git(root, "rev-parse", "--verify", branchOf("plan"));
 });
 
+test("a checkout switched to a branch after the original ref is gone is kept", async (t) => {
+  const root = await repo(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+
+  const path = await worktrees.acquire("plan");
+  // Rename the run's branch away, then switch to a pre-existing branch: the
+  // original ref is gone, but neither name is ours to delete.
+  await git(path, "branch", "-m", "wip-away");
+  await git(root, "branch", "user-topic");
+  await git(path, "switch", "-q", "user-topic");
+  worktrees.update("plan", { branch: "user-topic", renamed: false });
+
+  const warning = await worktrees.release("plan", "keep");
+
+  assert.match(String(warning), /user-topic/);
+  assert.ok(existsSync(path), "the checkout is kept");
+  await git(root, "rev-parse", "--verify", "refs/heads/user-topic");
+  await git(root, "rev-parse", "--verify", "refs/heads/wip-away");
+});
+
+test("checkoutIdentity proves a rename from the branch's own reflog", async (t) => {
+  const root = await repo(t);
+  await git(root, "branch", "old-name");
+  await git(root, "switch", "-q", "old-name");
+  await git(root, "branch", "-m", "new-name");
+
+  assert.deepEqual(await checkoutIdentity(root, "old-name"), {
+    branch: "new-name",
+    renamedFrom: "old-name",
+  });
+  // A branch with no such entry is not proven to have come from the name.
+  await git(root, "switch", "-q", "main");
+  assert.deepEqual(await checkoutIdentity(root, "old-name"), {
+    branch: "main",
+  });
+});
+
 test("a detached HEAD is kept too, and says so", async (t) => {
   const root = await repo(t);
   const { worktrees } = await openWorktrees(root, RUN_ID);
@@ -996,4 +1034,35 @@ test("a merge after a rebase leaves the base to the record", async (t) => {
   await git(root, "switch", "-q", "topic");
   await git(root, "merge", "-q", "--no-edit", "feature");
   assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
+});
+
+test("a merge resolved by hand leaves the base to the record", async (t) => {
+  const { root } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  await writeFile(join(root, "README.md"), "topic\n");
+  await git(root, "commit", "-qam", "topic edit");
+  await git(root, "switch", "-q", "-c", "feature", "main");
+  await writeFile(join(root, "README.md"), "feature\n");
+  await git(root, "commit", "-qam", "feature edit");
+  await git(root, "switch", "-q", "topic");
+  // The conflict is resolved by hand, so the reflog says `commit (merge)`
+  // rather than `merge …`; both forms must stop the scan.
+  await run("git", ["merge", "feature"], { cwd: root }).catch(() => {});
+  await writeFile(join(root, "README.md"), "resolved\n");
+  await git(root, "add", "README.md");
+  await git(root, "commit", "-q", "--no-edit");
+  assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
+});
+
+test("checkoutIdentity reads a branch named like a path", async (t) => {
+  const { root, newer } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  await git(root, "branch", "-m", "topic", "docs");
+  // A file with the branch's name makes `reflog show docs` ambiguous; the
+  // `--` after the ref is what keeps the reflog readable.
+  await writeFile(join(root, "docs"), "x\n");
+  assert.deepEqual(await checkoutIdentity(root, "docs"), {
+    branch: "docs",
+    rebaseBase: newer,
+  });
 });
