@@ -1715,6 +1715,16 @@ test("a crash's record reads paused and killed, and the killed one revives", asy
   assert.equal(back.p.id, p.id);
 });
 
+test("a restore reads a branch renamed while the room was paused", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await p.send("one");
+  await room.pause();
+  await git(p.worktree, "branch", "-m", "renamed-topic");
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  assert.equal(back.p.branch, "renamed-topic");
+});
+
 test("a dismissed room comes back dismissed and is never revived", async (t) => {
   const { repo, room, p, file } = await pausable(t, "remember");
   await p.send("one");

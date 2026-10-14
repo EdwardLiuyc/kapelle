@@ -383,7 +383,8 @@ const REBASE_ONTO = /\(finish\).*\bonto ([0-9a-f]{40,64})$/;
  * (finish)` subject names the commit the branch was replayed onto, whether
  * the rebase was explicit or a `pull --rebase`; the newest one that is still
  * an ancestor of the branch is the base its diff should use. The scan walks
- * past the branch's own commits and a rename, and stops at any other action:
+ * past the branch's own commits, a rename, and a rebase onto its own history
+ * (a squash), and stops at any other action:
  * a merge or reset may have moved the branch somewhere this function cannot
  * describe, and a wrong base is worse than the recorded one.
  */
@@ -409,7 +410,8 @@ export async function checkoutIdentity(
     branch,
   ]);
   if (reflog === null || reflog === "") return { branch };
-  for (const line of reflog.split("\n")) {
+  const lines = reflog.split("\n");
+  for (const [i, line] of lines.entries()) {
     const nul = line.indexOf("\0");
     if (nul < 0) continue;
     const tip = line.slice(0, nul);
@@ -423,6 +425,12 @@ export async function checkoutIdentity(
       `${onto}^{commit}`,
     ]);
     if (base === null || !(await isAncestor(cwd, base, tip))) break;
+    // A rebase onto the branch's own history, such as a squash, brings in no
+    // new base: pass it, as a commit is passed. The line below is the tip
+    // before the rebase; without it, nothing can tell the two apart.
+    const before = lines[i + 1]?.split("\0")[0];
+    if (!before) break;
+    if (await isAncestor(cwd, base, before)) continue;
     return { branch, rebaseBase: base };
   }
   return { branch };

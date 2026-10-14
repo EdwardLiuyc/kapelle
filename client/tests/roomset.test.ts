@@ -509,3 +509,26 @@ test("a new token whose version check fails is checked again", async (t) => {
   await until(() => said.restarts.length === 1);
   assert.deepEqual(said.ends, []);
 });
+
+test("the replay's old turn ends read the room once more, not once each", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.lines.set(
+    "r1",
+    Array.from({ length: 50 }, (_, i) => ({
+      seq: i + 1,
+      at: "",
+      roomId: "r1",
+      participantId: "p1",
+      update: {
+        sessionUpdate: "_client_turn_ended" as const,
+        stopReason: "end_turn",
+      },
+    })),
+  );
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => said.reloads.includes("r1"));
+  // At most: the first read, one a turn end sent, and one that waited for it.
+  assert.ok(daemon.reads.filter((id) => id === "r1").length <= 3);
+});

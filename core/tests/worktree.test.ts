@@ -30,6 +30,7 @@ import { validateRun } from "../runfile.ts";
 import { stateDirFor } from "../runtime.ts";
 import {
   changedPaths,
+  checkoutIdentity,
   moveWorkspace,
   openWorktrees,
   serializeWorktreeMutation,
@@ -928,4 +929,59 @@ test("moveWorkspace refuses rather than overwrite an existing workspace", async 
     assert.match(err.message, /already has/);
     return true;
   });
+});
+
+/** `repo`, with a `topic` branch of two commits and `main` one commit on. */
+async function forked(t: TestContext) {
+  const root = await repo(t);
+  const fork = await git(root, "rev-parse", "HEAD");
+  await git(root, "switch", "-q", "-c", "topic");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "A");
+  const a = await git(root, "rev-parse", "HEAD");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "B");
+  await git(root, "switch", "-q", "main");
+  await git(root, "commit", "-q", "--allow-empty", "-m", "base moves");
+  const newer = await git(root, "rev-parse", "HEAD");
+  await git(root, "switch", "-q", "topic");
+  return { root, fork, a, newer };
+}
+
+/** Squashes the branch's top two commits with `rebase -i`, as an agent might. */
+const squash = (root: string) =>
+  git(
+    root,
+    "-c",
+    "sequence.editor=sed -i 2s/^pick/fixup/",
+    "rebase",
+    "-q",
+    "-i",
+    "HEAD~2",
+  );
+
+test("a rebase onto a newer base moves the base; a squash after it keeps it", async (t) => {
+  const { root, newer } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  assert.deepEqual(await checkoutIdentity(root), {
+    branch: "topic",
+    rebaseBase: newer,
+  });
+  await squash(root);
+  assert.deepEqual(await checkoutIdentity(root), {
+    branch: "topic",
+    rebaseBase: newer,
+  });
+});
+
+test("a squash onto the branch's own commit is no new base", async (t) => {
+  const { root } = await forked(t);
+  await git(root, "commit", "-q", "--allow-empty", "-m", "C");
+  await squash(root);
+  assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
+});
+
+test("a reset after a rebase leaves the base to the record", async (t) => {
+  const { root, a } = await forked(t);
+  await git(root, "rebase", "-q", "main");
+  await git(root, "reset", "-q", "--hard", a);
+  assert.deepEqual(await checkoutIdentity(root), { branch: "topic" });
 });

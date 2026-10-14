@@ -254,9 +254,10 @@ export function roomSet(
   waitMs = WAIT_MS,
 ): RoomSet {
   const rooms = new Map<string, Followed>();
-  /** The newest read of each room, so an older reply cannot land on top of
-   *  one a later turn end asked for. */
-  const reads = new Map<string, number>();
+  /** Each room's read in flight, and the one to send when it answers. The
+   *  replay at attach ends every old turn again, and one read covers them
+   *  all; one at a time also means an older reply never lands last. */
+  const reading = new Map<string, { again?: "loaded" | "reloaded" }>();
   // A restart writes no line: read each room again for what it left.
   const current = followDaemon(d, address, (warning) => {
     on.restarted(warning);
@@ -277,19 +278,31 @@ export function roomSet(
    *  `why` is `reloaded` for the read a turn end asks for: the timeline is
    *  unchanged, so the screen need not rebuild the transcript. */
   const loadDto = (r: Followed, why: "loaded" | "reloaded" = "loaded") => {
-    const seq = (reads.get(r.entry.id) ?? 0) + 1;
-    reads.set(r.entry.id, seq);
-    call<RoomDto>(d, `/rooms/${r.entry.id}`).then(
-      (res) => {
-        if (!res.ok || reads.get(r.entry.id) !== seq) return;
-        r.dto = res.body;
-        applyStatus(r.state, res.body);
-        if (why === "loaded") on.loaded(r.entry.id);
-        else on.reloaded(r.entry.id);
-      },
-      // The stream says what happened to the daemon; a header can wait.
-      () => {},
-    );
+    const id = r.entry.id;
+    const busy = reading.get(id);
+    if (busy) {
+      // `loaded` redraws more than `reloaded`, so it wins.
+      if (busy.again !== "loaded") busy.again = why;
+      return;
+    }
+    reading.set(id, {});
+    call<RoomDto>(d, `/rooms/${id}`)
+      .then(
+        (res) => {
+          if (!res.ok) return;
+          r.dto = res.body;
+          applyStatus(r.state, res.body);
+          if (why === "loaded") on.loaded(id);
+          else on.reloaded(id);
+        },
+        // The stream says what happened to the daemon; a header can wait.
+        () => {},
+      )
+      .finally(() => {
+        const again = reading.get(id)?.again;
+        reading.delete(id);
+        if (again) loadDto(r, again);
+      });
   };
 
   const onLine = (r: Followed, line: RoomEventLine) => {
