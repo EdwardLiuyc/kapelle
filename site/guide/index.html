@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guide — kapelle</title>
+<meta name="description" content="Install kapelle, open your first room, and learn every command: rooms, runs, agents, modes and configuration.">
+<meta name="theme-color" content="#eeeae4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#12161c" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/fonts/fraunces-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/martian-mono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css">
+<script>
+document.documentElement.classList.add("js");
+try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<script src="/site.js" defer></script>
+</head>
+<body>
+
+<div class="strip">kapelle is in private preview. The npm release is <span class="soon">coming soon</span>.</div>
+
+<header class="site-header" style="border-bottom: 1px solid var(--line);">
+<div class="wrap" style="max-width: 1240px;">
+<a class="brand" href="/" aria-label="kapelle home">
+<svg width="24" height="24" viewBox="0 0 800 800" aria-hidden="true"><path fill="#5CC8FF" d="M165.29 165.29H282.65V634.72H165.29Z"/><path fill="#C792EA" d="M400 165.29H634.72V282.65H517.36V400H282.65V282.65H400Z"/><path fill="#FFB454" d="M282.65 400H517.36V517.36H634.72V634.72H400V517.36H282.65Z"/></svg>
+<span>kapelle</span><span class="crumb">/ guide</span>
+</a>
+<nav class="nav" aria-label="Main">
+<a href="/guide/" aria-current="page">Guide</a>
+<a href="/#orchestrator">Orchestrator</a>
+<a href="/#agents">Agents</a>
+</nav>
+<span class="nav-end">GitHub · npm <span class="soon">soon</span></span>
+</div>
+</header>
+
+<div class="guide">
+
+<nav class="toc" aria-label="Guide contents">
+<p>GETTING STARTED</p>
+<a href="#install">Install</a>
+<a href="#quick-start">Quick start</a>
+<a href="#concepts">Rooms, runs, agents</a>
+<p>ROOMS</p>
+<a href="#rooms">Open a room</a>
+<a href="#talk">Talk to agents</a>
+<a href="#commands">Room commands</a>
+<a href="#keys">Keys and marks</a>
+<a href="#take-work">Take the work</a>
+<p>RUNS</p>
+<a href="#runs">Run files</a>
+<a href="#background">In the background</a>
+<a href="#merge">Merge the results</a>
+<a href="#workspace">Where the work lives</a>
+<p>ORCHESTRATOR <span class="soon">soon</span></p>
+<a href="#orchestrator">The lead and the loop</a>
+<p>AGENTS AND SAFETY</p>
+<a href="#agents">Supported agents</a>
+<a href="#safety">Modes: safe, ask, auto</a>
+<a href="#limits">What a mode cannot stop</a>
+<p>REFERENCE</p>
+<a href="#cli">Commands</a>
+<a href="#config">Configuration</a>
+<a href="#troubleshooting">Troubleshooting</a>
+</nav>
+
+<main class="doc">
+<h1>Guide</h1>
+<p class="lede">Everything a new kapellmeister needs: install, your first room, and every command. Read it top to bottom once, then come back to the part you need.</p>
+
+<div class="note">
+<span class="kicker">PRIVATE PREVIEW</span>
+<p>The npm package is not out yet. It is coming soon. Until then, people with access to the repository install from source.</p>
+</div>
+
+<section id="install">
+<h2><span class="step">1</span>Install</h2>
+<p>You need Node 24 or newer, git, and macOS or Linux. WSL counts as Linux. Windows is not supported.</p>
+<div class="install">
+<div class="tabs" role="tablist" aria-label="Install with">
+<button role="tab" id="g-tab-npm" aria-controls="g-panel-npm" aria-selected="true">npm · soon</button>
+<button role="tab" id="g-tab-pnpm" aria-controls="g-panel-pnpm" aria-selected="false" tabindex="-1">pnpm · soon</button>
+<button role="tab" id="g-tab-bun" aria-controls="g-panel-bun" aria-selected="false" tabindex="-1">bun · soon</button>
+<button role="tab" id="g-tab-src" aria-controls="g-panel-src" aria-selected="false" tabindex="-1">from source</button>
+</div>
+<div class="panel" role="tabpanel" id="g-panel-npm" aria-labelledby="g-tab-npm">
+<pre><span class="label">npm · coming soon</span>$ npm install -g kapelle
+$ kapelle --help</pre>
+<button class="copy" type="button">[ Copy ]</button>
+</div>
+<div class="panel" role="tabpanel" id="g-panel-pnpm" aria-labelledby="g-tab-pnpm">
+<pre><span class="label">pnpm · coming soon</span>$ pnpm add -g kapelle
+$ kapelle --help</pre>
+<button class="copy" type="button">[ Copy ]</button>
+</div>
+<div class="panel" role="tabpanel" id="g-panel-bun" aria-labelledby="g-tab-bun">
+<pre><span class="label">bun · coming soon</span>$ bun add -g kapelle
+$ kapelle --help</pre>
+<button class="copy" type="button">[ Copy ]</button>
+</div>
+<div class="panel" role="tabpanel" id="g-panel-src" aria-labelledby="g-tab-src">
+<pre><span class="label">from source · needs repository access</span>$ git clone https://github.com/EdwardLiuyc/kapelle.git
+$ cd kapelle
+$ npm install
+$ npm link           # puts kapelle on your PATH
+$ kapelle --help</pre>
+<button class="copy" type="button">[ Copy ]</button>
+</div>
+</div>
+<p>From source, <code>npm unlink -g kapelle</code> undoes the link. If <code>npm link</code> fails with <code>EACCES</code>, npm's global folder belongs to root. Use a folder you own instead of <code>sudo</code>:</p>
+<pre>$ npm config set prefix ~/.local    # then add ~/.local/bin to PATH</pre>
+<p>From source, you can check kapelle with no agent and no account. A fake agent ships with the repository:</p>
+<pre>$ npm run selftest</pre>
+<p>You should see <code>✓ allowed Write ACP_TEST.md</code>. Delete <code>ACP_TEST.md</code> when you are done.</p>
+</section>
+
+<section id="quick-start">
+<h2><span class="step">2</span>Quick start</h2>
+<p>kapelle is the client. The agent is a separate program, and it logs in by itself. pi is the default. Install pi and its ACP adapter, then log in to pi once:</p>
+<pre>$ npm i -g @earendil-works/pi-coding-agent pi-acp
+$ pi                   # type /login, then quit</pre>
+<p>Now send one prompt, inside any repository:</p>
+<pre>$ kapelle "summarise this repo in three sentences"</pre>
+<div class="note warn">
+<span class="kicker">READ THIS FIRST</span>
+<p>pi works in your own checkout here, and it never asks for permission, so no mode can stop its changes. Read <a href="#limits">What a mode cannot stop</a> before you give it real work.</p>
+</div>
+<p>Useful options:</p>
+<ul>
+<li><code>--agent &lt;id&gt;</code> picks another agent. See <a href="#agents">Supported agents</a>.</li>
+<li><code>--cwd &lt;dir&gt;</code> works in another folder.</li>
+<li><code>--mode safe|ask|auto</code> sets what the agent may do. See <a href="#safety">Modes</a>.</li>
+<li><code>--verbose</code> shows the agent's own error output.</li>
+<li><code>--quiet</code> hides normal output, but never the safety notices.</li>
+</ul>
+</section>
+
+<section id="concepts">
+<h2><span class="step">3</span>Rooms, runs, agents</h2>
+<p>Five words cover all of kapelle:</p>
+<dl class="points" style="margin-top: 18px;">
+<div><dt>agent</dt><dd>A coding agent such as pi, Claude Code or Copilot. It runs as a separate program. kapelle talks to it with ACP, the Agent Client Protocol.</dd></div>
+<div><dt>daemon</dt><dd>One background program that holds all your work, for all your repositories. Close the terminal, and the work stays.</dd></div>
+<div><dt>room</dt><dd>A long chat with a team of agents. Each agent keeps its memory across messages. You decide who does what by choosing who to message.</dd></div>
+<div><dt>run</dt><dd>Many tasks at once, from one file. Each task has its own prompt, agent and mode, and ends with a result.</dd></div>
+<div><dt>worktree</dt><dd>A separate checkout of your repository. Each agent in a room, and each task in a run, gets its own, on its own branch. Your own checkout stays yours.</dd></div>
+</dl>
+</section>
+
+<section id="rooms">
+<h2>Open a room</h2>
+<p>Rooms live in the daemon. Start it once, and add each repository once:</p>
+<pre>$ kapelle daemon start     # terminal 1: runs until Ctrl-C
+$ kapelle daemon add .     # terminal 2: in your repository</pre>
+<p>Then open a room:</p>
+<pre>$ kapelle chat new --agent pi     # open a room and chat in it
+$ kapelle chat                    # every room, on a terminal
+$ kapelle chat list               # every room, as text
+$ kapelle chat attach &lt;roomId&gt;     # rejoin a room; its history replays
+$ kapelle chat dismiss &lt;roomId&gt;    # stop the room's agents</pre>
+<p>Each agent in a room works on its own branch, <code>kapelle/&lt;roomId&gt;/&lt;agentId&gt;</code>.</p>
+<p>The room API is new, and it can still change.</p>
+</section>
+
+<section id="talk">
+<h2>Talk to agents</h2>
+<p>Type a message and press Enter. It goes to the room's orchestrator: the agent whose role is <code>orchestrator</code>. Start a message with <code>@name</code> to send it to that agent instead. In an agent's thread, the box always starts with its <code>@name</code>.</p>
+<p>An agent works on one message at a time. A message to a busy agent waits in a queue.</p>
+<p>Add a second agent with <code>/add</code>. For example, a reviewer on pi that may only read:</p>
+<pre>/add pi --name rev --mode safe</pre>
+<p>Then talk to it by name:</p>
+<pre>@rev review the last commit on dev's branch</pre>
+</section>
+
+<section id="commands">
+<h2>Room commands</h2>
+<p>A command never reaches an agent. Room commands work in any view. An agent's command needs its <code>@name</code> first.</p>
+<div class="table-box">
+<table>
+<thead><tr><th scope="col">Command</th><th scope="col">What it does</th></tr></thead>
+<tbody>
+<tr><td><code>/leave</code></td><td>Exit. The rooms and their agents stay alive.</td></tr>
+<tr><td><code>/dismiss</code></td><td>Stop the room's agents. Uncommitted work stays in each agent's checkout.</td></tr>
+<tr><td><code>/help</code></td><td>Show the commands on the screen.</td></tr>
+<tr><td><code>/new [agent]</code></td><td>Open a new room. Options: <code>--cmd</code>, <code>--name</code>, <code>--title</code>, <code>--cwd</code>.</td></tr>
+<tr><td><code>/add &lt;agent&gt;</code></td><td>Add an agent to the room. Options: <code>--cmd</code>, <code>--name</code>, <code>--role</code>, <code>--mode</code>, <code>--base @name|ref</code>.</td></tr>
+<tr><td><code>@name /mode &lt;m&gt;</code></td><td>Set the agent's mode: <code>ask</code>, <code>safe</code> or <code>auto</code>.</td></tr>
+<tr><td><code>@name /role &lt;r&gt;</code></td><td>Set the agent's role, or <code>none</code>.</td></tr>
+<tr><td><code>@name /rename &lt;new&gt;</code></td><td>Rename the agent.</td></tr>
+<tr><td><code>@name /cancel</code></td><td>Cancel the agent's turn.</td></tr>
+<tr><td><code>@name /remove</code></td><td>Remove the agent from the room.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>/new</code> or <code>/add</code> alone opens a form.</p>
+</section>
+
+<section id="keys">
+<h2>Keys and marks</h2>
+<p>On a terminal, a sidebar lists every room and its agents.</p>
+<div class="table-box">
+<table>
+<thead><tr><th scope="col">Key</th><th scope="col">What it does</th></tr></thead>
+<tbody>
+<tr><td><code>alt+↑</code> <code>alt+↓</code>, or <code>ctrl+p</code> <code>ctrl+n</code></td><td>Pick a room's timeline or one agent's thread. A click works too.</td></tr>
+<tr><td><code>ctrl+t</code></td><td>Hide or show the sidebar.</td></tr>
+<tr><td><code>ctrl+o</code></td><td>Open the menu: cancel a turn, change a mode, view changes, fast-forward, add an agent, and more.</td></tr>
+<tr><td><code>ctrl+x</code></td><td>Show or hide the side pane: a diff, your message history, or a shell.</td></tr>
+<tr><td><code>ctrl+]</code></td><td>Move the keys between the side pane and the message box.</td></tr>
+<tr><td><code>ctrl+r</code></td><td>Your earlier messages, to pick one again.</td></tr>
+</tbody>
+</table>
+</div>
+<p>A mark next to each agent says what it is doing. A room takes the mark of its most urgent agent.</p>
+<div class="table-box">
+<table>
+<thead><tr><th scope="col">Mark</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>?</code></td><td>Asks you something. The bell rings once.</td></tr>
+<tr><td><code>!</code></td><td>Looks stuck: no progress for a while, or the same step again and again.</td></tr>
+<tr><td><code>◐</code></td><td>Busy. A timer shows how long.</td></tr>
+<tr><td><code>⏸</code></td><td>Paused. It comes back on its next message.</td></tr>
+<tr><td><code>✕</code></td><td>Killed during a turn.</td></tr>
+<tr><td><code>◌</code></td><td>Exited.</td></tr>
+<tr><td><code>●</code></td><td>Something new you have not seen.</td></tr>
+<tr><td><code>○</code></td><td>Nothing new.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="take-work">
+<h2>Take the work</h2>
+<p>In a room, kapelle never commits for an agent. An agent commits its own branch. Uncommitted work stays in the agent's checkout.</p>
+<ul>
+<li>See an agent's changes: <code>ctrl+o</code>, then <strong>view changes</strong>. The side pane shows the diff. <code>b</code> switches between uncommitted changes and the whole branch.</li>
+<li>Give one agent another's work: <code>ctrl+o</code>, then <strong>fast-forward from …</strong>. The pane shows what it would bring, and Enter confirms.</li>
+<li>Take the work into your own checkout with git, when you are ready.</li>
+</ul>
+<pre>$ git log -p kapelle/&lt;roomId&gt;/&lt;agentId&gt;
+$ git merge kapelle/&lt;roomId&gt;/&lt;agentId&gt;</pre>
+</section>
+
+<section id="runs">
+<h2>Run files</h2>
+<p>A run hands out many tasks at once. Each task has its own prompt, agent and mode, and each ends with a result.</p>
+<pre>{
+  "agent": "pi",
+  "mode": "safe",
+  "tasks": [
+    { "id": "summarise", "prompt": "Summarise what this project does in three sentences." },
+    { "id": "look-for-bugs", "prompt": "List any obvious bugs or missing error handling you can see." }
+  ]
+}</pre>
+<pre>$ kapelle run --file tasks.json</pre>
+<p>In a git repository, each task gets its own worktree, on a branch named <code>kapelle/&lt;runId&gt;/&lt;taskId&gt;</code>. Keep working in your own checkout while the agents work in theirs. Your uncommitted changes do not reach the tasks, and kapelle tells you so. Outside a git repository, the tasks share the folder.</p>
+<p>When a task ends <code>done</code> or <code>warned</code>, kapelle commits its work on the task's branch. Task ids name git branches, so kapelle checks them and never changes them.</p>
+</section>
+
+<section id="background">
+<h2>In the background</h2>
+<p>With the daemon running, hand the run over and follow it from any terminal:</p>
+<pre>$ kapelle run --file tasks.json --detach   # prints the run id
+$ kapelle ps                               # every run and each task's status
+$ kapelle attach &lt;runId&gt;                    # watch it, and answer its ask prompts
+$ kapelle attach &lt;runId&gt; --task &lt;taskId&gt;    # watch one task in full</pre>
+<p>kapelle rings the bell and sends a desktop notification when a run needs you.</p>
+</section>
+
+<section id="merge">
+<h2>Merge the results</h2>
+<pre>$ kapelle merge &lt;runId&gt; --squash</pre>
+<p>This puts the changes of all tasks into your working tree, unstaged. It makes no commit. It refuses when two tasks change the same file, or when your own changes touch a file a task changed.</p>
+<p>Look at one task's work first with <code>git log -p kapelle/&lt;runId&gt;/&lt;taskId&gt;</code>.</p>
+</section>
+
+<section id="workspace">
+<h2>Where the work lives</h2>
+<p>Worktrees and records live in <code>~/.local/state/kapelle/</code>. Nothing goes into your repository.</p>
+<pre>$ kapelle workspace                    # where this repository's work lives
+$ kapelle workspace move &lt;old&gt; &lt;new&gt;   # after you move or rename the repository</pre>
+<p>Use <code>workspace move</code>, not a plain <code>mv</code>. A plain <code>mv</code> breaks git's link to each worktree.</p>
+</section>
+
+<section id="orchestrator">
+<h2>The lead and the loop <span class="soon" style="font-family: var(--mono); font-size: 13px;">coming soon</span></h2>
+<p>Most issues run the same loop: plan, build, review, open the PR, answer the bot reviews, hand over. The orchestrator lets one agent lead that loop. It gives the work to the other agents in the room, reads their reports, and decides the next step. It does none of the work itself, and you decide every choice.</p>
+<ul>
+<li><strong>A recipe.</strong> You describe your loop in a Markdown file. Only the orchestrator reads it, so the same orchestrator serves any repository.</li>
+<li><strong>Plain sight.</strong> The orchestrator talks to the others only through kapelle, in your timeline. Agents never talk to each other directly.</li>
+<li><strong>A fence.</strong> A stop button, a cap on the turns it gives out, and a bell when it waits for you.</li>
+<li><strong>A decision log.</strong> Every choice it put to you, and your answer.</li>
+</ul>
+<p>This part of the guide grows when the orchestrator ships.</p>
+</section>
+
+<section id="agents">
+<h2>Supported agents</h2>
+<p>Pick one with <code>--agent &lt;id&gt;</code>. Each agent logs in by itself.</p>
+<div class="table-box">
+<table>
+<thead><tr><th scope="col">--agent</th><th scope="col">Install</th><th scope="col">Tested</th></tr></thead>
+<tbody>
+<tr><td><code>pi</code> (default)</td><td><code>npm i -g @earendil-works/pi-coding-agent pi-acp</code></td><td>yes</td></tr>
+<tr><td><code>claude</code></td><td><code>npm i -g @agentclientprotocol/claude-agent-acp</code>, then <code>claude auth login</code></td><td>yes</td></tr>
+<tr><td><code>copilot</code></td><td>The Copilot CLI (<code>copilot --acp</code>)</td><td>yes</td></tr>
+<tr><td><code>opencode</code></td><td><code>npm i -g opencode-ai</code>, then <code>opencode auth login</code></td><td>yes</td></tr>
+<tr><td><code>gemini</code></td><td>The Gemini CLI (<code>gemini --acp</code>)</td><td>not yet</td></tr>
+<tr><td><code>omp</code></td><td>oh-my-pi (<code>omp acp</code>)</td><td>not yet</td></tr>
+</tbody>
+</table>
+</div>
+<p>Any other ACP agent works too: <code>--cmd "some-agent --acp"</code>.</p>
+<p><strong>Claude Code</strong> has no ACP mode of its own, so it needs the adapter above. If you see <code>spawn claude-agent-acp ENOENT</code>, the adapter is not on your <code>PATH</code>. Check with <code>command -v claude-agent-acp</code>. You can run kapelle from inside a Claude Code session.</p>
+</section>
+
+<section id="safety">
+<h2>Modes: safe, ask, auto</h2>
+<div class="table-box">
+<table>
+<thead><tr><th scope="col">Mode</th><th scope="col">What it does</th></tr></thead>
+<tbody>
+<tr><td><code>safe</code></td><td>Allows reads. Refuses every change the agent asks about.</td></tr>
+<tr><td><code>ask</code></td><td>Allows reads. Asks you about each change. A run in your terminal needs the terminal: without one, kapelle uses <code>safe</code> and prints a notice. A room, or a run started with <code>--detach</code>, asks through the daemon: the question waits for your answer, and is refused at the time limit.</td></tr>
+<tr><td><code>auto</code></td><td>Allows everything. File paths outside the workspace are still refused.</td></tr>
+</tbody>
+</table>
+</div>
+<p>In a room, each agent has its own mode. The default is <code>auto</code>, because a room is often left alone, and an <code>ask</code> default would leave it waiting.</p>
+<p>In the question box, each answer has a number. Deny comes first, so a stray Enter says no. A key only moves the cursor, and only Enter answers.</p>
+</section>
+
+<section id="limits">
+<h2>What a mode cannot stop</h2>
+<div class="note warn">
+<span class="kicker">A MODE IS A FILTER, NOT A SANDBOX</span>
+<p>A mode decides the answer when an agent asks for permission. An agent that changes files through its own shell does not ask. pi and opencode never ask, so <code>safe</code> does not stop them.</p>
+</div>
+<p>kapelle always refuses a file path outside the workspace, in every mode. But this only covers file requests that go through kapelle.</p>
+<p>kapelle prints a notice about this, and <code>--quiet</code> never hides it. If you need a wall, run the agent in a container.</p>
+</section>
+
+<section id="cli">
+<h2>Commands</h2>
+<pre>kapelle "&lt;prompt&gt;" [--agent id] [--cmd "cmd"] [--cwd dir] [--mode m] [--verbose] [--quiet]
+kapelle run --file &lt;run.json&gt; [--detach] [--cwd dir]
+kapelle attach &lt;runId&gt; [--task &lt;taskId&gt;]
+kapelle ps
+kapelle merge &lt;runId&gt; [--squash] [--cwd dir]
+kapelle workspace [--cwd dir]
+kapelle workspace move &lt;old-repo&gt; &lt;new-repo&gt;
+kapelle daemon start [--port n] [--permission-timeout s]
+kapelle daemon add &lt;path&gt;
+kapelle chat [new | attach | list | dismiss]</pre>
+<p><code>kapelle --help</code> and <code>kapelle chat --help</code> print the full list.</p>
+</section>
+
+<section id="config">
+<h2>Configuration</h2>
+<p>Two optional JSON files, and <code>KAPELLE_*</code> environment variables. Nothing creates the files for you. Both are strict: an unknown key or a wrong type is refused, and the error names the file and the key.</p>
+<h3>Your user file</h3>
+<p><code>~/.config/kapelle/config.json</code> holds the daemon's settings:</p>
+<pre>{ "port": 4719, "permissionTimeoutMs": 120000 }</pre>
+<h3>Your repository's file</h3>
+<p><code>.kapelle/config.json</code> in your repository holds the run defaults. It is the only file kapelle reads from your repository. You may commit it.</p>
+<div class="table-box">
+<table>
+<thead><tr><th scope="col">Key</th><th scope="col">What it sets</th></tr></thead>
+<tbody>
+<tr><td><code>stallIdleMs</code></td><td>Warn when an agent shows no progress for this long. <code>0</code> turns it off.</td></tr>
+<tr><td><code>stallRepeatCount</code></td><td>Warn when an agent repeats the same step this many times. <code>0</code> turns it off.</td></tr>
+<tr><td><code>ttlMs</code></td><td>Cancel a run's task after this long. <code>0</code> turns it off.</td></tr>
+<tr><td><code>maxConcurrency</code></td><td>How many tasks of a run work at once.</td></tr>
+<tr><td><code>retentionMs</code></td><td>How long finished runs and dismissed rooms are kept.</td></tr>
+</tbody>
+</table>
+</div>
+<p>A <code>KAPELLE_*</code> variable overrides both files. A value in a run file still wins over all of them.</p>
+</section>
+
+<section id="troubleshooting">
+<h2>Troubleshooting</h2>
+<h3>An agent fails to start</h3>
+<p>It often shows as <code>Internal error (code -32603)</code>. Run again with <code>--verbose</code> to see the agent's own error output. In a run, read the task's <code>.stderr.log</code> file in the run's record folder. <code>kapelle workspace</code> tells you where that is.</p>
+<h3><code>spawn claude-agent-acp ENOENT</code></h3>
+<p>The Claude Code adapter is not on your <code>PATH</code>. Install it, then check with <code>command -v claude-agent-acp</code>.</p>
+<h3><code>--mode ask</code> became <code>safe</code></h3>
+<p><code>ask</code> in a plain run needs a terminal to ask you in. Without one, kapelle uses <code>safe</code> and says so. Use <code>--detach</code> to answer through the daemon instead.</p>
+<h3>Worktrees show as <code>prunable</code></h3>
+<p>The repository was moved with a plain <code>mv</code>. Run <code>kapelle workspace move &lt;old&gt; &lt;new&gt;</code> to repair the links.</p>
+</section>
+
+<div class="pager"><a href="/">[ ← Home ]</a></div>
+</main>
+</div>
+
+<footer class="site-footer">
+<div class="wrap">
+<span>kapelle · MIT License · © Yongchuan Liu</span>
+<div class="theme-picker" role="group" aria-label="Theme">
+<button type="button" data-theme="auto" aria-pressed="true">Auto</button>
+<button type="button" data-theme="light" aria-pressed="false">Light</button>
+<button type="button" data-theme="dark" aria-pressed="false">Dark</button>
+</div>
+</div>
+</footer>
+
+</body>
+</html>
