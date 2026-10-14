@@ -45,6 +45,15 @@
  * which branch `HEAD` is really on, and the base a rebase moved its work
  * onto, so a harness rename or rebase does not leave the room's record and
  * whole-branch diff pointing at the old ref.
+ *
+ * **A project's `linkPaths` are mirrored into each new checkout** (#274). A
+ * listed directory becomes a real directory with one symlink per top-level
+ * entry, so a directory-only ignore rule such as `folder_a/` matches without
+ * editing `.gitignore`; a listed file becomes one symlink. The last step of
+ * each path is the proof that Git does not see the link: a visible link is
+ * removed and refused. The paths are planned again for every checkout,
+ * because a room can live for days and a folder installed later must reach
+ * the next participant.
  */
 
 import { execFile } from "node:child_process";
@@ -646,11 +655,7 @@ function checkLinkPath(
         `got ${JSON.stringify(path)}.`,
     );
   }
-  if (
-    key === "" ||
-    key.toLowerCase() === ".git" ||
-    key.toLowerCase().startsWith(".git/")
-  ) {
+  if (key === "" || key.toLowerCase().split("/").includes(".git")) {
     throw new LinkPathError(
       `${where} must not name .git or anything inside it; got ` +
         `${JSON.stringify(path)}.`,
@@ -694,12 +699,17 @@ async function planLinkSource(
   }
 
   const source = resolve(root, path);
-  const sourceStat = await statOrMissing(source);
+  const sourceStat = await statOrMissing(source, where);
   if (sourceStat === undefined) return undefined;
 
   // `realpath` follows a symlink, so a listed path that points outside the
   // checkout is refused no matter how it is spelled.
-  const realSource = await realpath(source);
+  let realSource: string;
+  try {
+    realSource = await realpath(source);
+  } catch (err) {
+    throw new LinkPathError(`${where} cannot be resolved: ${messageOf(err)}.`);
+  }
   if (realSource !== realRoot && !realSource.startsWith(`${realRoot}${sep}`)) {
     throw new LinkPathError(
       `${where} resolves outside ${root}, to ${realSource}.`,
@@ -715,12 +725,15 @@ async function planLinkSource(
 }
 
 /** `stat`, with a missing path as the `undefined` the caller skips. */
-async function statOrMissing(source: string): Promise<Stats | undefined> {
+async function statOrMissing(
+  source: string,
+  where: string,
+): Promise<Stats | undefined> {
   try {
     return await stat(source);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw err;
+    throw new LinkPathError(`${where} cannot be read: ${messageOf(err)}.`);
   }
 }
 
@@ -772,20 +785,19 @@ async function applyLinkSources(
 ): Promise<void> {
   const created: string[] = [];
   try {
+    const realCheckout = await realpath(checkout);
     for (const plan of plans) {
-      const target = join(checkout, plan.path);
-      if (
-        resolve(target) !== checkout &&
-        !resolve(target).startsWith(`${checkout}${sep}`)
-      ) {
+      const target = resolve(checkout, plan.path);
+      if (target === checkout || !target.startsWith(`${checkout}${sep}`)) {
         throw new LinkPathError(
           `${plan.where} must stay inside the checkout; ` +
             `got ${JSON.stringify(plan.path)}.`,
         );
       }
+      const targetPath = relative(checkout, target);
 
       const parent = dirname(target);
-      const parentStat = await linkParent(parent, plan.where);
+      const parentStat = await linkParent(parent, plan.where, realCheckout);
       if (!parentStat.isDirectory()) {
         throw new LinkPathError(
           `${plan.where} would be linked inside ${parent}, which is not a ` +
@@ -805,7 +817,15 @@ async function applyLinkSources(
           );
         }
         created.push(target);
-        for (const name of await readdir(plan.source)) {
+        let names: string[];
+        try {
+          names = await readdir(plan.source);
+        } catch (err) {
+          throw new LinkPathError(
+            `${plan.where} cannot be read: ${messageOf(err)}.`,
+          );
+        }
+        for (const name of names) {
           await makeLink(
             join(plan.source, name),
             join(target, name),
@@ -815,11 +835,12 @@ async function applyLinkSources(
       }
 
       const dirty = await git(checkout, [
+        "--literal-pathspecs",
         "status",
         "--porcelain",
         "--untracked-files=all",
         "--",
-        plan.path,
+        targetPath,
       ]);
       if (dirty !== "") {
         throw new LinkPathError(
@@ -837,19 +858,44 @@ async function applyLinkSources(
   }
 }
 
-/** The target's parent must exist and be a real directory; a symlink parent
- *  could send the link outside the checkout. */
-async function linkParent(parent: string, where: string): Promise<Stats> {
+/** The target's parent must exist, be a real directory, and resolve inside
+ *  the checkout; otherwise a nested link can follow a symlink out. */
+async function linkParent(
+  parent: string,
+  where: string,
+  realCheckout: string,
+): Promise<Stats> {
+  let parentStat: Stats;
   try {
-    return await lstat(parent);
+    parentStat = await lstat(parent);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw new LinkPathError(
         `${where} has no parent folder in the checkout: ${parent}.`,
       );
     }
-    throw err;
+    throw new LinkPathError(
+      `${where} cannot read its parent ${parent}: ${messageOf(err)}.`,
+    );
   }
+  let realParent: string;
+  try {
+    realParent = await realpath(parent);
+  } catch (err) {
+    throw new LinkPathError(
+      `${where} cannot resolve its parent ${parent}: ${messageOf(err)}.`,
+    );
+  }
+  if (
+    realParent !== realCheckout &&
+    !realParent.startsWith(`${realCheckout}${sep}`)
+  ) {
+    throw new LinkPathError(
+      `${where} would be linked through a parent outside the checkout: ` +
+        `${parent}.`,
+    );
+  }
+  return parentStat;
 }
 
 /** Rollback is best effort: the refusal that led here is the error to report. */

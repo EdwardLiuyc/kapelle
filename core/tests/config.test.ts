@@ -171,6 +171,9 @@ test("linkPaths shape refusals name the file and entry", async (t) => {
   await writeProject(root, { linkPaths: [".git"] });
   refused(/must not name \.git/);
 
+  await writeProject(root, { linkPaths: ["sub/.git"] });
+  refused(/must not name \.git/);
+
   const xdg = await tempDir(t);
   await writeUser(xdg, { linkPaths: ["node_modules"] });
   assert.throws(

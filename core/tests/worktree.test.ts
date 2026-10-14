@@ -27,7 +27,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import { isolateStateHome } from "../../integration/helpers.ts";
-import { readProjectLinkPaths } from "../config.ts";
+import { readProjectConfig, readProjectLinkPaths } from "../config.ts";
 import { createEventBus } from "../events.ts";
 import {
   RELEASES,
@@ -1158,6 +1158,10 @@ test("tracked, escaping, and .git link paths are refused (#274)", async (t) => {
     openWorktrees(root, RUN_ID, { linkPaths: [".git"] }),
     /must not name \.git/,
   );
+  await assert.rejects(
+    openWorktrees(root, RUN_ID, { linkPaths: ["sub/.git"] }),
+    /must not name \.git/,
+  );
 
   const outside = await tempDir(t);
   await symlink(outside, join(root, "escape"));
@@ -1237,4 +1241,97 @@ test("a path installed after setup is linked into the next checkout (#274)", asy
     true,
   );
   await worktrees.release("plan", "keep");
+});
+
+test("a visible link with glob characters is still refused (#274)", async (t) => {
+  const root = await repo(t);
+  await mkdir(join(root, "foo[1]"));
+  await writeFile(join(root, "foo[1]", "file.txt"), "x\n");
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["foo[1]"],
+  });
+  assert.ok(worktrees);
+
+  await assert.rejects(
+    worktrees.acquire("plan"),
+    /is not ignored in a new checkout/,
+  );
+  assert.equal(existsSync(join(wtOf(root, "plan", "foo[1]"))), false);
+  await worktrees.release("plan", "keep");
+});
+
+test("a nested link cannot follow a symlinked parent out of the checkout (#274)", async (t) => {
+  const root = await repo(t);
+  const outside = await tempDir(t);
+  await mkdir(join(outside, "b"), { recursive: true });
+  await symlink(outside, join(root, "a"));
+  await git(root, "add", "a");
+  await git(root, "commit", "-m", "symlink a");
+  await rm(join(root, "a"), { recursive: true, force: true });
+  await mkdir(join(root, "a", "b", "c"), { recursive: true });
+
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["a/b/c"],
+  });
+  assert.ok(worktrees);
+  await assert.rejects(
+    worktrees.acquire("plan"),
+    /parent outside the checkout/,
+  );
+  assert.equal(existsSync(join(outside, "b", "c")), false);
+  await worktrees.release("plan", "keep");
+});
+
+test("a link path that cannot be resolved is refused as a link error (#274)", async (t) => {
+  const root = await repo(t);
+  await symlink("loop", join(root, "loop"));
+  await assert.rejects(
+    openWorktrees(root, RUN_ID, { linkPaths: ["loop"] }),
+    /cannot be read/,
+  );
+});
+
+test("a trailing slash on a file link is normalized (#274)", async (t) => {
+  const root = await repoWithLinks(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["vendor.txt/"],
+  });
+  assert.ok(worktrees);
+
+  const wt = await worktrees.acquire("plan");
+  assert.equal((await lstat(join(wt, "vendor.txt"))).isSymbolicLink(), true);
+  assert.deepEqual(await changedPaths(wt), []);
+  await worktrees.release("plan", "keep");
+});
+
+test("the config and worktree shape checks refuse the same link paths (#274)", async (t) => {
+  const root = await repo(t);
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  const refused: string[][] = [
+    [""],
+    ["/abs"],
+    ["../up"],
+    ["a/../b"],
+    [".git"],
+    ["sub/.git"],
+    ["a", "a/sub"],
+  ];
+
+  for (const linkPaths of refused) {
+    await writeFile(
+      join(root, ".kapelle", "config.json"),
+      `${JSON.stringify({ linkPaths })}\n`,
+      { mode: 0o644 },
+    );
+    assert.throws(
+      () => readProjectConfig(root),
+      Error,
+      `config accepted ${JSON.stringify(linkPaths)}`,
+    );
+    await assert.rejects(
+      openWorktrees(root, RUN_ID, { linkPaths }),
+      Error,
+      `worktree accepted ${JSON.stringify(linkPaths)}`,
+    );
+  }
 });

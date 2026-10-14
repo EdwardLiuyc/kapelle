@@ -192,11 +192,7 @@ function linkPathEntry(
     );
   }
   const key = canonicalLinkPath(entry);
-  if (
-    key === "" ||
-    key.toLowerCase() === ".git" ||
-    key.toLowerCase().startsWith(".git/")
-  ) {
+  if (key === "" || key.toLowerCase().split("/").includes(".git")) {
     throw new Error(
       `${at} must not name .git or anything inside it; ` +
         `got ${JSON.stringify(entry)}.`,
