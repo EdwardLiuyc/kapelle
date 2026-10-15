@@ -18,7 +18,7 @@ client commit and spike branch — they differ, and by enough to matter:
 | M0-1 copilot re-verification | 2026-08-23 | `c4307f3` | `spike/m0-7-reverify` |
 | M0-9 | 2026-09-27 | `04d6ac9` (run 1), `457bfb5` (run 2); same `protocol/` and `core/policy.ts` | `spike/m0-9-load-probe` (`load-probe.mjs`) |
 | M6-7b | 2026-10-08 | `635a124` + the M6-7b working tree | `integration/daemon.itest.ts` |
-| Models and login | 2026-10-15 | `b41e6f7`; no client code ran | one probe script, not kept |
+| Models and login | 2026-10-15 | none: no client code ran | `spike/m9-models-probe` (`models-probe.mjs`) |
 
 Method throughout: each harness spawned behind a transparent stdio proxy that logged every
 JSON-RPC line in both directions, so "did not happen" below means *absent from the wire*,
@@ -1404,14 +1404,16 @@ of the open view only; rooms off screen cost nothing to draw.
 whether the person is logged in, without a prompt? §M0-5 answered the model half for
 three harnesses on older versions. What does a harness say when nobody ever logged in?
 
-**Method.** One probe script, no `session/prompt`, so no tokens. For each harness:
+**Method.** One probe script, `models-probe.mjs` on `spike/m9-models-probe`, with no
+`session/prompt`, so no tokens. For each harness:
 `initialize`, `session/new` in a new temporary folder, `session/set_config_option` on the
 option with `category: "model"` (once to another listed model, once to a bogus id), the
 older `session/set_model` when the harness sent a `models` object, and `providers/list`.
 Each harness ran twice: as installed here, and **logged out**. Logged out means an empty
 `HOME` and `XDG_*` folders and an environment of `PATH`, `LANG` and `TERM` only, so no key,
 no token and no login file could reach it. All four started at the same time each run.
-The spec side was read from the schema in `@agentclientprotocol/sdk` 1.8.0.
+The spec side was read from the schema in `@agentclientprotocol/sdk` 1.8.0, the copy
+installed with claude-agent-acp; this repository does not depend on the SDK.
 
 | | opencode 2.0.18 | pi-acp 0.0.34 | claude-agent-acp 0.89.1 | copilot 1.0.91 |
 | --- | --- | --- | --- | --- |
