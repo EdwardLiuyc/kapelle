@@ -194,8 +194,11 @@ export function parseCommand(
     return args.length ? undefined : { verb };
   }
   if (verb === "title") {
-    // The rest of the line, so a title needs no quotes.
-    const title = args.join(" ").trim();
+    // The rest of the line: spaces inside a title stay. One pair of quotes
+    // around the whole title is quoting, not part of it.
+    const raw = rest.trimStart().slice(head.length).trim();
+    const quoted = /^(["'])([\s\S]*)\1$/.exec(raw);
+    const title = (quoted?.[2] ?? raw).trim();
     return title ? { verb, title } : { error: USAGE.title as string };
   }
   if (verb === "new" || verb === "add") {

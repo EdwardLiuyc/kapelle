@@ -45,6 +45,7 @@ import {
   applyStatus,
   type Entry,
   newRoomState,
+  printable,
   type RoomState,
 } from "./room.ts";
 import { type Connect, followEvents } from "./stream.ts";
@@ -356,9 +357,16 @@ export function roomSet(
     on.closed(id, ended, r);
   };
 
+  /** An entry as a screen draws it: a title is free text, and every screen
+   *  draws it on one line. */
+  const shownEntry = (entry: RoomListEntry): RoomListEntry =>
+    entry.title === undefined
+      ? entry
+      : { ...entry, title: printable(entry.title) };
+
   const add = (entry: RoomListEntry) => {
     if (rooms.has(entry.id)) return;
-    const r: Followed = { entry, state: newRoomState() };
+    const r: Followed = { entry: shownEntry(entry), state: newRoomState() };
     rooms.set(entry.id, r);
     loadDto(r);
     readRoom(current, entry.id, (line) => onLine(r, line), waitMs).then(
@@ -386,7 +394,7 @@ export function roomSet(
           }
           for (const entry of res.body) {
             const r = rooms.get(entry.id);
-            if (r) r.entry = entry;
+            if (r) r.entry = shownEntry(entry);
             else if (entry.status !== "dismissed") add(entry);
           }
           on.polled();

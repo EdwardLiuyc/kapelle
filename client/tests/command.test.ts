@@ -136,6 +136,8 @@ test("/title takes the rest of the line, and ignores a mention", () => {
   const title = (t: string) => ({ verb: "title", title: t });
   assert.deepEqual(parse("/title login bug"), title("login bug"));
   assert.deepEqual(parse('@bob /title "login bug"'), title("login bug"));
+  assert.deepEqual(parse('/title Review "v2"'), title('Review "v2"'));
+  assert.deepEqual(parse("/title a  b"), title("a  b"));
   const r = parse("/title");
   assert.ok(r && "error" in r && /^usage:/.test(r.error));
 });

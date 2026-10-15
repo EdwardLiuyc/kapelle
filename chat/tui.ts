@@ -1198,7 +1198,8 @@ function chatTui(
       // next poll.
       const shown = rooms.get(view.roomId);
       if (c.verb === "title" && out.room && shown) {
-        shown.entry.title = out.room.title;
+        shown.entry.title =
+          out.room.title === undefined ? undefined : printable(out.room.title);
       }
       if (c.verb === "new" && out.room) {
         const { id, cwd, title, status, updatedAt, participants } = out.room;

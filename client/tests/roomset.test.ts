@@ -391,6 +391,17 @@ test("a room followed already is not followed again, and the poll renews its ent
   assert.deepEqual(daemon.reads, ["r1"], "the room was read once");
 });
 
+test("a title is stored as a screen may draw it", async (t) => {
+  const daemon = await fake(t);
+  daemon.list = [{ ...entry("r1"), title: "a\nb\u001b[2Jc" }];
+  const { set } = follow(t, daemon.d);
+  set.start([]);
+  await until(() => set.rooms.has("r1"));
+  const title = set.rooms.get("r1")?.entry.title ?? "";
+  assert.doesNotMatch(title, /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+  assert.match(title, /^a b \[2Jc$/);
+});
+
 test("a dismissed room leaves the set, and the set goes on", async (t) => {
   const daemon = await fake(t);
   daemon.status.set("r1", "active");
