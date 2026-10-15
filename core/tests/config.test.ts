@@ -20,6 +20,7 @@ import { type TestContext, test } from "node:test";
 import {
   readEnvConfig,
   readProjectConfig,
+  readProjectLinkPaths,
   readUserConfig,
   resolveRetentionMs,
   resolveRunDefaults,
@@ -124,6 +125,63 @@ test("a valid project config loads every per-run knob", async (t) => {
   });
 });
 
+test("a valid linkPaths list loads, and readProjectLinkPaths returns it", async (t) => {
+  const root = await tempDir(t);
+  await writeProject(root, {
+    linkPaths: ["node_modules", "vendor/cache"],
+  });
+
+  assert.deepEqual(readProjectConfig(root), {
+    linkPaths: ["node_modules", "vendor/cache"],
+  });
+  assert.deepEqual(readProjectLinkPaths(root), [
+    "node_modules",
+    "vendor/cache",
+  ]);
+});
+
+test("linkPaths shape refusals name the file and entry", async (t) => {
+  const root = await tempDir(t);
+  const path = join(root, ".kapelle", "config.json");
+  const refused = (expected: RegExp) => {
+    assert.throws(
+      () => readProjectConfig(root),
+      (err: unknown) =>
+        err instanceof Error &&
+        err.message.includes(path) &&
+        expected.test(err.message),
+    );
+  };
+
+  await writeProject(root, { linkPaths: "node_modules" });
+  refused(/must be an array/);
+
+  await writeProject(root, { linkPaths: [42] });
+  refused(/linkPaths\[0\]" must be a non-empty string/);
+
+  await writeProject(root, { linkPaths: ["/etc/passwd"] });
+  refused(/must be relative/);
+
+  await writeProject(root, { linkPaths: ["../outside"] });
+  refused(/must stay inside the checkout/);
+
+  await writeProject(root, { linkPaths: ["folder_a", "folder_a/sub"] });
+  refused(/overlaps "folder_a"/);
+
+  await writeProject(root, { linkPaths: [".git"] });
+  refused(/must not name \.git/);
+
+  await writeProject(root, { linkPaths: ["sub/.git"] });
+  refused(/must not name \.git/);
+
+  const xdg = await tempDir(t);
+  await writeUser(xdg, { linkPaths: ["node_modules"] });
+  assert.throws(
+    () => readUserConfig({ XDG_CONFIG_HOME: xdg }),
+    /"linkPaths" is a per-repository knob/,
+  );
+});
+
 test("a daemon-wide key in the project config points at the user file", async (t) => {
   const root = await tempDir(t);
   await writeProject(root, { port: 5000 });
@@ -220,13 +278,18 @@ test("env config parses known names and refuses bad values", () => {
 test("unknown KAPELLE_* names warn and are ignored, known ones do not", () => {
   const notices: string[] = [];
   warnUnknownConfigEnv(
-    { KAPELLE_PORT: "1", KAPELLE_FOO: "2", KAPELLE_TOKEN: "secret" },
+    {
+      KAPELLE_PORT: "1",
+      KAPELLE_LINK_PATHS: '["node_modules"]',
+      KAPELLE_FOO: "2",
+      KAPELLE_TOKEN: "secret",
+    },
     (text) => notices.push(text),
   );
   assert.equal(notices.length, 1);
   assert.match(
     notices[0] ?? "",
-    /ignored as config: KAPELLE_FOO, KAPELLE_TOKEN\./,
+    /ignored as config: KAPELLE_FOO, KAPELLE_LINK_PATHS, KAPELLE_TOKEN\./,
   );
 
   notices.length = 0;

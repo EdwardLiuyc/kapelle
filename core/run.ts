@@ -311,6 +311,9 @@ export type TaskExecutor = (
 export interface RunOptions {
   /** The run's working directory. Each task's worktree hangs off it. */
   cwd: string;
+  /** The project's `linkPaths`; `daemon.ts` and `cli.ts` read them from the
+   *  repository config, and a direct caller without one gets no links. */
+  linkPaths?: readonly string[];
   /** Names the run's worktrees and branches. Minted here when absent, but a
    *  caller that has to print the id — `cli.ts` does — mints it itself: a run
    *  file may never supply one, or a re-run would rebuild branch names that
@@ -381,6 +384,7 @@ export async function runRun(
   const { worktrees, notice, advisory, root } = await openWorktrees(
     options.cwd,
     runId,
+    { linkPaths: options.linkPaths ?? [] },
   );
   // Two kinds, one route. The fallback notice says isolation is absent, which
   // #13 makes unsuppressible; the dirty-tree line (#129) is a courtesy the

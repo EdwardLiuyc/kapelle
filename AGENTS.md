@@ -114,7 +114,7 @@ arrow that points back.
 | `core/events.ts` | The event bus. |
 | `core/runfile.ts` | Run-file validation (`validateRun`). |
 | `core/run.ts` | The task pool, and how a status is worked out. |
-| `core/worktree.ts` | One git worktree per task. |
+| `core/worktree.ts` | One git worktree per task, and the `linkPaths` mirror into each new checkout. |
 | `core/result.ts` | The `<task-result>` contract and its cross-check. |
 | `core/merge.ts` | `kapelle merge`. |
 | `core/watchdog.ts` | Stall detection: idle, repeat, TTL. |
