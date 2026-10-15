@@ -3585,22 +3585,21 @@ sent (§Models and login). The contract gets a minor version.
 is busy (sent before its next turn), a refused model, and a reply with fewer options that
 leaves the saved options as they were.
 
-**M9-7 · Publish to npm · M · needs nothing; the first publish waits for the other M9
-stories**
+**M9-7 · kapelle runs after an npm install · M · needs nothing**
 A person installs kapelle with `npm install -g kapelle` and types `kapelle`. The name is
-free on npm today (`npm view kapelle` answers 404, 2026-10-15).
+free on npm today (`npm view kapelle` answers 404, 2026-10-15). This story makes the
+package; M9-8 publishes it.
 **The blocker: Node does not run a `.ts` file inside `node_modules`.** Measured
 2026-10-15 on Node v24.18.0: a `.ts` file under a `node_modules` folder stops with
 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`. A global install puts every kapelle file
 under `node_modules`, so `kapelle` fails at start, even though it works in a checkout.
-**Decided 2026-10-15: build `.js` files only when the package is made.** A `prepack` script
-runs `tsc` with a `tsconfig.build.json`. npm runs `prepack` before each `npm pack` and
-`npm publish`. That config emits `.js` and turns on `rewriteRelativeImportExtensions`, so
-`./x.ts` imports become `./x.js`. It turns off `allowImportingTsExtensions` and `noEmit`.
+**Decided 2026-10-15: build `.js` files only when the package is made.** A `prepack`
+script runs `tsc -p tsconfig.build.json`. npm runs `prepack` before each `npm pack`
+(`--dry-run` too) and `npm publish`. Work in a checkout does not change: it still runs
+the `.ts` files with no build step.
 Measured 2026-10-15 with `tsc` 7.0.2: the build passes; `cli.js` keeps its `#!` line;
 the dynamic `import("./chat.ts")` and `import("./daemon.ts")` become `.js`; and
-`node node_modules/kapelle/cli.js --help` runs. Work in a checkout does not change: it
-still runs the `.ts` files with no build step.
+`node node_modules/kapelle/cli.js --help` runs.
 **How other TypeScript CLIs ship** (their npm packages, read 2026-10-15). None ships
 `.ts`. Three ways:
 
@@ -3619,30 +3618,59 @@ system, and kapelle's users run Node already (claude-agent-acp, pi and gemini ar
 packages). "Run from a git clone" is not a release.
 **Change to a bundle if `kapelle` starts too slowly after an npm install**, as pi did.
 The bundler then replaces `tsc` in `prepack`.
-**The steps:**
+**Decided 2026-10-15: the build goes to `dist/`, not beside the sources.** One named line
+in `.gitignore` (`dist/`), as that file's comment asks, and no glob that could hide a
+real `.js` file. `bin` becomes `./dist/cli.js`.
+**What changes:**
 
-1. The person makes an npm account and turns on 2FA.
-2. `package.json`: remove `"private": true`; `bin` points to `./cli.js`; add a `files`
-   list, so the package holds the built `.js`, `README.md` and `LICENSE` only, not
-   `tests/`, `integration/`, `docs/` or the mock agents; add `repository`; add the
-   `prepack` script.
-3. Check the package: `npm pack --dry-run` shows the file list and the size. `npm pack`
-   makes the `.tgz`. Install it with `npm install -g ./kapelle-<version>.tgz`, then run
-   `kapelle`.
-4. Set the version with `npm version <patch|minor>`. It makes the commit and the tag.
-5. Publish from a GitHub Actions job when a tag is pushed, with npm trusted publishing:
-   no npm token is stored, and npm adds provenance. The job needs `id-token: write`. If
-   npm needs the package to exist before a trusted publisher can be added, the first
-   publish is `npm publish` by hand.
-6. Write the release notes on GitHub for the tag.
+1. `tsconfig.build.json` extends `tsconfig.json`. It sets `outDir: "dist"`,
+   `rewriteRelativeImportExtensions: true`, and `noEmit` and `allowImportingTsExtensions`
+   to `false`. It excludes `**/tests/`, `integration/` and `dist/`. `tsconfig.json`'s
+   `include` takes every `.ts`, and `node --test` runs any `*.test.js` it finds, so a
+   test built into `dist/` would run twice.
+2. `package.json`: remove `"private": true`; `bin` is `./dist/cli.js`; `files` is
+   `["dist"]` (npm adds `README.md`, `LICENSE` and `package.json` by itself); add
+   `repository` and the `prepack` script.
+   **`files` wins over `.gitignore` when npm packs.** That is why the ignored `dist/` is
+   in the package. It is also why a wrong `files` list ships the wrong files with no
+   warning, so the test below checks the list.
+3. `.gitignore` gets `dist/`. `biome.json`'s `files.includes` gets `!dist`: biome does
+   not read `.gitignore` here (no `vcs` block), so without it `npx biome check --write .`
+   formats and lints the build. `tsc` (it reads `.ts` only) and knip (it reads
+   `.gitignore`) need no change.
+4. `kapelle --version` prints the version from `package.json`, for bug reports. Today
+   nothing reads `package.json` at run time. The path differs: `./package.json` from
+   `cli.ts` in a checkout, `../package.json` from `dist/cli.js`.
+5. Docs. `AGENTS.md`: the "no build step" lines get "except when the package is made";
+   the "do not rename to `agent-team`" rule loses its `private: true stays` half. The
+   same "no build step" line in `docs/PROJECT-PLAN.md`. `README.md` gets the install
+   command, and says it is for Linux and macOS only: `package.json` has `"os"`, so npm
+   refuses the install on Windows (`EBADPLATFORM`).
 
-The built `.js` files are not committed: `.gitignore` gets them, so `tsc` and biome do
-not read them. The "no build step" lines in `AGENTS.md` and `docs/PROJECT-PLAN.md` get
-"except when the package is made". `README.md` gets the install command.
-*Done when* a test runs `npm pack`, installs the `.tgz` in a temporary folder, and runs
-`kapelle --help` from there (it fails today with the error above); the same test checks
-that the file list holds no test, doc or mock file; the publish job exists; and
-`kapelle` is on npm.
+*Done when* a test, with no network and no global install: runs `npm pack
+--pack-destination <tmp>`; unpacks the `.tgz` into `<tmp>/node_modules/kapelle`; links
+the checkout's `node_modules` for the three runtime dependencies; runs `node
+<tmp>/node_modules/kapelle/dist/cli.js --help` and `--version` (it fails today with the
+error above); and checks from `npm pack --dry-run --json` that the file list holds only
+`dist/`, `README.md`, `LICENSE` and `package.json`, with no test file. The person also
+runs `npm install -g ./kapelle-<version>.tgz` once by hand and types `kapelle`.
+
+**M9-8 · Publish to npm · S · needs the other M9 stories**
+The first release. The person does steps 1 and 2 by hand.
+
+1. Make an npm account and turn on 2FA.
+2. **Make the repository public, or publish without provenance.** npm adds provenance (a
+   proof of which repository and job built the package) only for a public repository.
+   This one is private today (2026-10-15).
+3. Set the version with `npm version <patch|minor>`. It makes the commit and the tag.
+4. A GitHub Actions job publishes when a tag is pushed, with npm trusted publishing: no
+   npm token is stored. The job runs `npm ci` first, because `prepack` needs `tsc`, then
+   `npm publish`. It needs `id-token: write`. If npm needs the package to exist before a
+   trusted publisher can be added, the first publish is `npm publish` by hand.
+5. Write the release notes on GitHub for the tag. They say Linux and macOS only.
+
+*Done when* the publish job exists, `kapelle` is on npm, and `npm install -g kapelle`
+then `kapelle --version` works on a clean machine.
 
 ---
 
@@ -3709,7 +3737,8 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 ```text
 M9-1 ─┬─ M9-3 ─ M9-4 ─ M9-5 ─ M9-6
 M9-2 ─┘
-M9-7   (the build needs nothing; the first publish waits for the rest of M9)
+M9-7   (needs nothing)
+M9-1..M9-7 ─ M9-8   (the first publish)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
