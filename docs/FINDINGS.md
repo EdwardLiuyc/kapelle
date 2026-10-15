@@ -18,6 +18,7 @@ client commit and spike branch — they differ, and by enough to matter:
 | M0-1 copilot re-verification | 2026-08-23 | `c4307f3` | `spike/m0-7-reverify` |
 | M0-9 | 2026-09-27 | `04d6ac9` (run 1), `457bfb5` (run 2); same `protocol/` and `core/policy.ts` | `spike/m0-9-load-probe` (`load-probe.mjs`) |
 | M6-7b | 2026-10-08 | `635a124` + the M6-7b working tree | `integration/daemon.itest.ts` |
+| Models and login | 2026-10-15 | none: no client code ran | `spike/m9-models-probe` (`models-probe.mjs`) |
 
 Method throughout: each harness spawned behind a transparent stdio proxy that logged every
 JSON-RPC line in both directions, so "did not happen" below means *absent from the wire*,
@@ -957,6 +958,8 @@ changed the model mid-session. The reliable pattern is to read `configOptions` f
 the full option set) as the update channel. Switching works on all three and takes effect
 immediately — `size` moves with it.
 
+**Re-measured 2026-10-15 with pi as a fourth harness, and logged out:** §Models and login.
+
 Also worth keeping: **copilot ships a price table of its own**, as `_meta` on each model
 option — `copilotUsage: "1x"` for `claude-sonnet-5`, `"15x"` for `claude-opus-5`, `"0.33x"`
 for `claude-haiku-4.5`, `"0x"` for `gpt-5-mini`, plus `copilotPriceCategory`. That is a
@@ -1392,6 +1395,73 @@ asks for a frame, a thought chunk too, and one room's log was 95% thought chunks
 
 **Coverage.** One machine, real logs from three rooms. The frame time grows with the rows
 of the open view only; rooms off screen cost nothing to draw.
+
+---
+
+## Models and login — measured 2026-10-15 (M9)
+
+**Question.** Can kapelle learn each harness's model list, change the model, and tell
+whether the person is logged in, without a prompt? §M0-5 answered the model half for
+three harnesses on older versions. What does a harness say when nobody ever logged in?
+
+**Method.** One probe script, `models-probe.mjs` on `spike/m9-models-probe`, with no
+`session/prompt`, so no tokens. For each harness:
+`initialize`, `session/new` in a new temporary folder, `session/set_config_option` on the
+option with `category: "model"` (once to another listed model, once to a bogus id), the
+older `session/set_model` when the harness sent a `models` object, and `providers/list`.
+Each harness ran twice: as installed here, and **logged out**. Logged out means an empty
+`HOME` and `XDG_*` folders and an environment of `PATH`, `LANG` and `TERM` only, so no key,
+no token and no login file could reach it. All four started at the same time each run.
+The spec side was read from the schema in `@agentclientprotocol/sdk` 1.8.0, the copy
+installed with claude-agent-acp; this repository does not depend on the SDK.
+
+| | opencode 2.0.18 | pi-acp 0.0.34 | claude-agent-acp 0.89.1 | copilot 1.0.91 |
+| --- | --- | --- | --- | --- |
+| models, logged in | 2: the person's `deepseek/…` | 19: the person's own setup | 13: aliases (`default`, `opus`, `sonnet`, …) and some full ids | 39 |
+| models, logged out | 10 free `opencode/…` models | none: `session/new` fails | 5 aliases | 19 |
+| `session/set_config_option` to a listed model | works | works | works | works |
+| a bogus model id | `-32602`, names the model | `-32603` `Internal error` | `-32603` `Internal error` | `-32602`, names the model |
+| older `models` object, `session/set_model` | neither | `models` sent; `set_model` is `-32601` | neither | both work |
+| `providers/list` | `-32601` | `-32601` | **works**: one provider, `main`, `anthropic` / `bedrock` / `vertex` | `-32601` |
+| provider in the model id | yes | yes | no | no |
+| logged-out signal | none; the free models work with no login | `session/new` fails with `-32000` `Authentication required`, and `data.authMethods` | `_auth/status_update` with `authStatus.kind: "none"`, label `Not logged in` | **none** |
+| `authMethods` on `initialize` | `opencode-login` | `pi_terminal_login` (`type: "terminal"`) | empty; `agentCapabilities.auth.logout` | `copilot-login` |
+| `sessionCapabilities.delete` | yes | yes | yes | no |
+| `initialize` + `session/new`, logged in | 1.5 s | 2.4 s | 1.5 s | 3.5 s |
+
+**Answers.**
+
+- **Every harness lists its models and changes the model the same way:** the
+  `configOptions` entry with `category: "model"`, and `session/set_config_option`. No list
+  needs to be built into kapelle. pi's list is the person's own pi setup.
+- **An empty model list does not mean "logged out".** Only pi gives no models then.
+  opencode works with no login at all, through its free models. claude and copilot open a
+  session and list models with no login.
+- **Each harness signals "logged out" its own way, and copilot not at all.** Its log
+  said `no authenticated GitHub host available`, yet `session/new` worked and nothing on
+  the wire said so. `copilot --help` has `login` but no status command. Only a prompt
+  would tell, and a prompt spends tokens when the person is logged in.
+- **`providers/*` is new and `UNSTABLE` in the schema**, and only claude answers it.
+  `providers/set` takes a `baseUrl` and a `headers` map that may hold a key, so a client
+  that calls it touches a key. A list is safe to read.
+- **A check of all four, side by side, takes about 4 s**: the slowest one, copilot.
+
+**Other things seen.**
+
+- copilot lists `auto` twice in its model list, logged in.
+- copilot's `set_config_option` reply had 3 options; its `session/new` had 4. `allow_all`
+  was missing from the reply.
+- pi sent `agent_message_chunk` and `usage_update` after `session/new` with no prompt.
+- claude sent `_auth/status_update` twice when logged in, with the plan, the e-mail and
+  the organisation. A client that keeps it must not log those.
+- Each logged-in run left an empty session in the harness's own history, under a `/tmp`
+  folder. copilot has no `session/delete` to remove it.
+
+**Coverage.** One machine, one run each way, four harnesses. Logged out was simulated with
+an empty home. A keyring the harness reaches on its own D-Bus path was not blocked; copilot's
+log shows it found no login. Not measured: whether the model stays after `session/load`
+(the mode does not, §Mode after load), and what each harness does on the first prompt when
+logged out.
 
 ---
 

@@ -3447,6 +3447,146 @@ orchestrator, so each is its own issue:
 
 ---
 
+## M9 — First release
+
+**Added 2026-10-15.** M9 holds the work that prepares the first release. Its end point is
+that release. It is a placeholder: only the stories below are planned now, and more join
+it later. The `M9_done` milestone tracks them.
+
+The first stories make the first start easy. A person installs kapelle and types
+`kapelle`. Kapelle starts its daemon, finds the agents that are installed, says what is
+missing, and learns each agent's models. After that first start, the person is not asked
+again.
+
+**Decided 2026-10-15** (with the person, after the measurement in `FINDINGS.md` §Models
+and login):
+
+- **D1. One command.** `kapelle` alone opens the chat, and starts the daemon first when
+  none runs. Leaving the chat leaves the daemon running.
+- **D2. Only tested agents.** The registry keeps only harnesses with a `measured` half.
+  Any other ACP agent still starts with `--cmd`, with today's "not verified" notice.
+- **D3. No model list in the code.** Each harness sends its own list in `session/new`.
+  pi's list is the person's own pi setup.
+- **D4. A full check once, a saved result after.** The first start runs a check session
+  for each agent found, and saves the result. Later starts read the saved result, and
+  each real session keeps it fresh at no cost.
+- **D5. The person picks the model when an agent joins, and can change it during a
+  chat.**
+- **D6. Kapelle never installs and never logs in.** It shows the command; the person runs
+  it. This is the rule that kapelle never touches a key. For the same reason, no story
+  calls `providers/set` (`FINDINGS.md` §Models and login).
+
+**The user state folder.** M9-2, M9-3 and M9-4 each keep a file in
+`$XDG_STATE_HOME/kapelle`. `stateDir()` in `core/runtime.ts` is private today. The first
+of them to land exports it, so no story copies its XDG rules.
+
+**M9-1 · More tested agents · M · needs nothing**
+Add more ACP agents and measure each one. Candidates are on the ACP site's list of
+agents, such as Codex (through an adapter), Qwen Code, goose and Kimi CLI. The pickup
+picks the list with the person. For each new agent, fill the fields `MeasuredLabels`
+names (`protocol/registry.ts`) as §pi-acp did, with a `modeMap` only where the harness
+has real safety modes: pi has none, and its entry has no `modeMap`. Add its row to
+§Models and login, and record its main program, its ACP program and its install command.
+**Measure the four entries again too** (opencode, pi, claude, copilot) on the versions
+installed now, and update their `measuredOn`. All four are older than the versions
+§Models and login ran on, so without this, M9-3 warns about every agent at the first
+start. Remove each entry that is still not measured at the end, `omp` today. `gemini`
+goes too, unless this story measures Gemini CLI as one of its new agents. Update the docs
+and tests that name a removed entry.
+The person installs and logs in to each agent: a measurement needs a real login.
+*Done when* every registry entry has a `measured` half on the version installed here,
+`FINDINGS.md` has a section for each new agent, and `npm run test` passes.
+
+**M9-2 · `kapelle` alone starts everything · M · needs nothing**
+`kapelle` with no arguments opens the chat, as `kapelle chat` does. Today it prints the
+help and exits 1 (`cli.ts`); after this story, `kapelle --help` is the way to the help.
+When no daemon answers, `kapelle` first starts one in the background and waits until
+`daemon.json` is ready. The daemon runs in its own session, cut off from the terminal, so
+closing the terminal does not stop it. Its output goes to a log file in the user state
+folder, and the last log is kept beside it. A second `kapelle` that starts at the same
+time waits for the first one's daemon; it does not fail on the daemon's lock
+(`daemon.ts`). `/leave` and ctrl+c end the chat only, as today. A new verb, `kapelle
+daemon stop`, sends SIGTERM to the pid in `daemon.json` and waits until the daemon is
+gone; the daemon already pauses its rooms on SIGTERM. When the daemon's API version does
+not match, the message names `kapelle daemon stop`. `kapelle "<prompt>"` does not change.
+The help in `cli.ts` and the commands in `AGENTS.md` get the bare `kapelle` and `daemon
+stop`.
+*Done when* tests cover: no daemon, so one starts and the chat opens; a running daemon, so
+no second one; two `kapelle` at the same time, so one daemon; the daemon in its own
+session; the log file, and the last one kept; `/leave` with the daemon still running;
+`daemon stop`; and the version message.
+
+**M9-3 · Find the installed agents · S · needs M9-1, M9-2**
+For each registry entry, look for its ACP program and its main program on `PATH`, and
+read the ACP program's version without starting a session. Each agent gets one state:
+ready; main program only, with the install command for the ACP program (for example
+`npm i -g @agentclientprotocol/claude-agent-acp`); or not installed. An ACP program whose
+version is not `measuredOn.version` gets a warning line. `measuredOn` describes the ACP
+program, so the main program's version is not compared. The registry entry gains the main
+program's name and the install command. The result is saved in the user state folder.
+A new verb, `kapelle setup`, runs it again, and M9-4's check after it. It also runs at the
+first start, and when the saved result is missing. The chat screen shows it at the first
+start, with each command to run. The help in `cli.ts` and the commands in `AGENTS.md` get
+`kapelle setup`.
+**Decided 2026-10-15:** the daemon finds the agents, not the CLI. The daemon's `PATH` is
+the one that counts, because the daemon starts the agents. The result goes on the
+existing experimental route `GET /harnesses` (M4-5), so it needs no version step;
+`docs/CLIENT-API.md` names this story in that route's row.
+*Done when* tests with a fake `PATH` cover each state, the version warning, the saved
+result, `kapelle setup`, and the route's new fields in `docs/CLIENT-API.md`.
+
+**M9-4 · Check the login and save the models · M · needs M9-3**
+For each agent M9-3 found ready, and only those, start a check session: `initialize` and
+`session/new` in a new temporary folder, with no prompt, so no tokens. All agents start at
+the same time, each with a time limit. Save, for each agent: its model list and current
+model (the `configOptions` entry with `category: "model"`), its login state and its
+version. Then delete the session when the agent can (`sessionCapabilities.delete`).
+The login state comes from each agent's own signal (§Models and login): pi's `-32000` on
+`session/new`; claude's `_auth/status_update` with `kind: "none"`; none needed for
+opencode. A logged-out agent gets the agent's own login hint. Never keep claude's account
+fields (e-mail, organisation).
+**claude's signal needs a new path in `protocol/agent.ts`.** `#onNotification` drops every
+notification that is not `session/update`, and `#handleRequest` refuses every other
+request. `AcpAgent` gains a path for this one vendor notification, and hands the auth
+status to its caller directly. It is not a `_client_*` event and never reaches the room
+log or `render.ts`.
+The check runs at the first start, when an agent's version changed, when a ready agent has
+no saved list, and on `kapelle setup`. Each real `session/new` in a room also updates that
+agent's saved list. The check runs in a temporary folder, so a project's own settings (pi
+and opencode read them) show only when a real session starts there.
+**Decided 2026-10-15:** copilot gives no login signal, so its state is `unknown`, with the
+hint `copilot login`.
+*Done when* tests with `mock-agent.mjs` scenarios cover a model list, a `-32000`, an auth
+status of `none` through the new `AcpAgent` path, a time-out, the delete, the saved file,
+each trigger, and the update from a real session.
+
+**M9-5 · Pick the model when an agent joins · M · needs M9-4**
+`POST /rooms` and `POST /rooms/:id/agents` take an optional `model`. `/new` and `/add`
+take `--model <id>`, and the form shows the saved list for the chosen agent, or a text
+field when there is none. `protocol/types.ts` gains the request and reply types of
+`session/set_config_option`, and `AcpAgent` a method that sends it; nothing sends it
+today. After `session/new`, the room (`core/room.ts`) sends it for the model option,
+before the first turn, in the same place it sends the mode. The participant keeps its
+model. A model the agent refuses gets kapelle's own message, because pi and claude answer
+only `Internal error`. First measure whether the model stays after `session/load`; if it
+does not, send it again after a load, as for the mode. The contract gets a minor version.
+*Done when* tests cover the field on both routes, the form's list and its text field, the
+set before the first turn, a refused model, the model after a revive, and the new field
+in `docs/CLIENT-API.md`.
+
+**M9-6 · Change the model during a chat · S · needs M9-5**
+`PATCH /rooms/:id/agents/:agentId` takes `model`, as it takes `mode` today. `@name /model`
+shows the running agent's live list and `@name /model <id>` picks one, in both screens.
+The room sends the change before the participant's next turn, never during a turn. The
+reply to `session/set_config_option` updates the saved current model only. It must not
+replace the saved options: copilot's reply left out one of the options its `session/new`
+sent (§Models and login). The contract gets a minor version.
+*Done when* tests cover the route, the command in both screens, a change while the agent
+is busy (sent before its next turn), a refused model, and a reply with fewer options that
+leaves the saved options as they were.
+
+---
+
 ## Critical path
 
 ```text
@@ -3503,6 +3643,13 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
       │        ├─ M8-7
       │        └─ M8-8
       └─ M8-3
+```
+
+**M9 (added 2026-10-15)** needs nothing that is open. More stories will join it.
+
+```text
+M9-1 ─┬─ M9-3 ─ M9-4 ─ M9-5 ─ M9-6
+M9-2 ─┘
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
