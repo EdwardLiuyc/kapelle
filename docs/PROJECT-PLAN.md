@@ -560,6 +560,8 @@ the paint now lives in the TUI.
 (M6-0) and the shared client transport (M5-10a); the numbering is historical, from when M4 was
 the browser dashboard.
 
+**Closed 2026-10-15 (#278).** M4-1 to M4-13 are built. M4-13 was the last (#249).
+
 ---
 
 ## M5 — Client contract
