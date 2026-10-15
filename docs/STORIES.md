@@ -3585,6 +3585,65 @@ sent (§Models and login). The contract gets a minor version.
 is busy (sent before its next turn), a refused model, and a reply with fewer options that
 leaves the saved options as they were.
 
+**M9-7 · Publish to npm · M · needs nothing; the first publish waits for the other M9
+stories**
+A person installs kapelle with `npm install -g kapelle` and types `kapelle`. The name is
+free on npm today (`npm view kapelle` answers 404, 2026-10-15).
+**The blocker: Node does not run a `.ts` file inside `node_modules`.** Measured
+2026-10-15 on Node v24.18.0: a `.ts` file under a `node_modules` folder stops with
+`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`. A global install puts every kapelle file
+under `node_modules`, so `kapelle` fails at start, even though it works in a checkout.
+**Decided 2026-10-15: build `.js` files only when the package is made.** A `prepack` script
+runs `tsc` with a `tsconfig.build.json`. npm runs `prepack` before each `npm pack` and
+`npm publish`. That config emits `.js` and turns on `rewriteRelativeImportExtensions`, so
+`./x.ts` imports become `./x.js`. It turns off `allowImportingTsExtensions` and `noEmit`.
+Measured 2026-10-15 with `tsc` 7.0.2: the build passes; `cli.js` keeps its `#!` line;
+the dynamic `import("./chat.ts")` and `import("./daemon.ts")` become `.js`; and
+`node node_modules/kapelle/cli.js --help` runs. Work in a checkout does not change: it
+still runs the `.ts` files with no build step.
+**How other TypeScript CLIs ship** (their npm packages, read 2026-10-15). None ships
+`.ts`. Three ways:
+
+- A program file per system type, picked by `optionalDependencies`, with no Node needed:
+  opencode, claude-code, codex, copilot, TypeScript 7. Their `curl | sh` installs fetch
+  that file.
+- A bundle: gemini-cli and qwen-code, with no runtime dependencies; the new pi
+  (`@earendil-works/pi-coding-agent`), whose `bin` is `dist/bundle/cli.js`.
+- Plain `tsc` output, one `.js` per `.ts`: the old pi (`@mariozechner/pi-coding-agent`,
+  `bin` `dist/cli.js`) and claude-agent-acp.
+
+**Why `tsc`:** it is already a dev dependency, so no new tool; a stack trace names the
+same file and line as the source; and kapelle has three runtime dependencies, so a bundle
+gains little. A program file per system type is about 100 MB each and needs a build per
+system, and kapelle's users run Node already (claude-agent-acp, pi and gemini are npm
+packages). "Run from a git clone" is not a release.
+**Change to a bundle if `kapelle` starts too slowly after an npm install**, as pi did.
+The bundler then replaces `tsc` in `prepack`.
+**The steps:**
+
+1. The person makes an npm account and turns on 2FA.
+2. `package.json`: remove `"private": true`; `bin` points to `./cli.js`; add a `files`
+   list, so the package holds the built `.js`, `README.md` and `LICENSE` only, not
+   `tests/`, `integration/`, `docs/` or the mock agents; add `repository`; add the
+   `prepack` script.
+3. Check the package: `npm pack --dry-run` shows the file list and the size. `npm pack`
+   makes the `.tgz`. Install it with `npm install -g ./kapelle-<version>.tgz`, then run
+   `kapelle`.
+4. Set the version with `npm version <patch|minor>`. It makes the commit and the tag.
+5. Publish from a GitHub Actions job when a tag is pushed, with npm trusted publishing:
+   no npm token is stored, and npm adds provenance. The job needs `id-token: write`. If
+   npm needs the package to exist before a trusted publisher can be added, the first
+   publish is `npm publish` by hand.
+6. Write the release notes on GitHub for the tag.
+
+The built `.js` files are not committed: `.gitignore` gets them, so `tsc` and biome do
+not read them. The "no build step" lines in `AGENTS.md` and `docs/PROJECT-PLAN.md` get
+"except when the package is made". `README.md` gets the install command.
+*Done when* a test runs `npm pack`, installs the `.tgz` in a temporary folder, and runs
+`kapelle --help` from there (it fails today with the error above); the same test checks
+that the file list holds no test, doc or mock file; the publish job exists; and
+`kapelle` is on npm.
+
 ---
 
 ## Critical path
@@ -3650,6 +3709,7 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 ```text
 M9-1 ─┬─ M9-3 ─ M9-4 ─ M9-5 ─ M9-6
 M9-2 ─┘
+M9-7   (the build needs nothing; the first publish waits for the rest of M9)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
