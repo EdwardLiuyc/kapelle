@@ -1315,7 +1315,10 @@ The log's `text` is all the harness reads, first line included. There is no `[fr
 line. A reply or a copy is never refused for a full queue: it does not count toward the
 16. A turn that starts from a reply or a copy sends nothing when it ends. A remove, a
 dismiss or a shutdown sends nothing either. A reply to a participant that has left the
-room is dropped, and the daemon's stderr says so.
+room is dropped, and the daemon's stderr says so. A reply or a copy to an `exited` or
+`killed` participant revives it, as any message does: see
+[After a restart](#after-a-restart). A harness that cannot load its old session starts
+fresh, with no memory of the work, and `_client_participant_revived` says `fresh`.
 
 ### `GET /rooms/:id/agents/:agentId/events`
 

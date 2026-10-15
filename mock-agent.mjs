@@ -53,9 +53,10 @@ const SCENARIOS = {
     "like diff-first, but the diff block's oldText is a number, not text",
   runs: "a note and six tool calls, then a wait for runs.go in its folder, then a note; later turns only the note",
   answer:
-    "a note, a tool call, a second note, a tool call, then ends with no text",
+    "a note, a tool call, a second note, two tool calls, then ends with no text",
   long: "one answer longer than 64 KiB",
-  half: "a note and a tool call, then waits for a cancel, like stall",
+  "long-call": "like long, then a tool call",
+  half: "a note and a tool call, then waits for a cancel, like stall, and answers it end_turn, as copilot does (§M0-4)",
   "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
 };
 
@@ -327,7 +328,8 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // `deaf` is the harness a shutdown's grace exists for (M6-7a): only its
     // stdin closing ends it.
     if (stalledPromptId !== null && scenario !== "deaf") {
-      reply(stalledPromptId, { stopReason: "cancelled", usage: USAGE });
+      const stopReason = scenario === "half" ? "end_turn" : "cancelled";
+      reply(stalledPromptId, { stopReason, usage: USAGE });
       stalledPromptId = null;
     }
     return;
@@ -420,6 +422,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     if (
       scenario === "answer" ||
       scenario === "long" ||
+      scenario === "long-call" ||
       scenario === "half" ||
       scenario === "prompt-error"
     ) {
@@ -436,8 +439,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
           kind: "read",
           status: "completed",
         });
-      if (scenario === "long") {
+      if (scenario === "long" || scenario === "long-call") {
         say("x".repeat(70_000));
+        if (scenario === "long-call") call(1);
       } else {
         say("Plan.");
         call(1);
@@ -445,6 +449,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       if (scenario === "answer") {
         say("Middle.");
         call(2);
+        call(3);
       }
       if (scenario === "half") {
         stalledPromptId = msg.id;

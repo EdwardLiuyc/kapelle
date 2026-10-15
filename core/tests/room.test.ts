@@ -2204,12 +2204,12 @@ test("a turn from the orchestrator's message replies to it, and the reply's turn
   );
 });
 
-test("a reply carries the last text before the last tool call when none follows it", async (t) => {
+test("a reply carries the last text before the last tool calls when none follows them", async (t) => {
   const { po, dev, told, settled } = await loopRoom(t, "answer");
   await dev.send("go", po);
   await settled();
   assert.deepEqual(told(po), [
-    ["[reply from dev] end_turn, 2 tool calls\nMiddle.", dev.id, "reply"],
+    ["[reply from dev] end_turn, 3 tool calls\nMiddle.", dev.id, "reply"],
   ]);
 });
 
@@ -2248,6 +2248,8 @@ test("an error turn replies with its error, and none of its text", async (t) => 
   assert.deepEqual([from, kind], [dev.id, "reply"]);
 });
 
+// `half` answers the cancel `end_turn`, as copilot does: the reply still
+// says `cancelled`, from our own record (§M0-4).
 test("a cancel drops the kept text: the reply is its first line only", async (t) => {
   const { po, dev, of, told, settled } = await loopRoom(t, "half");
   const turn = dev.send("go", po);
@@ -2288,15 +2290,20 @@ test("a reply to a sender that left the room is dropped, and the log says so", a
   );
 });
 
-test("an answer over 64 KiB is cut, and the reply says so", async (t) => {
-  const { po, dev, told, settled } = await loopRoom(t, "long");
-  await dev.send("go", po);
-  await settled();
-  const [[text] = []] = told(po);
-  const [head, body] = (text as string).split("\n");
-  assert.equal(head, "[reply from dev] end_turn, 0 tool calls, cut at 64 KiB");
-  assert.equal(body, "x".repeat(64 * 1024));
-});
+for (const [scenario, calls] of [
+  ["long", "0 tool calls"],
+  ["long-call", "1 tool call"],
+]) {
+  test(`an answer over 64 KiB is cut, and the reply says so (${scenario})`, async (t) => {
+    const { po, dev, told, settled } = await loopRoom(t, scenario as string);
+    await dev.send("go", po);
+    await settled();
+    const [[text] = []] = told(po);
+    const [head, body] = (text as string).split("\n");
+    assert.equal(head, `[reply from dev] end_turn, ${calls}, cut at 64 KiB`);
+    assert.equal(body, "x".repeat(64 * 1024));
+  });
+}
 
 test(`a reply reaches an orchestrator with ${QUEUE_BOUND} messages waiting`, async (t) => {
   const { po, dev, of } = await loopRoom(t, "remember", "stall");
