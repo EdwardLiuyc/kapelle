@@ -1163,6 +1163,26 @@ async function patchAgent(
   send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
 }
 
+/** `PATCH /rooms/:id {title}` — a new title for the room. Answers the room. */
+async function patchRoom(
+  id: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const entry = roomEntry(id);
+  const body = await readBody(req, ["title"]);
+  if (typeof body.title !== "string" || !body.title.trim()) {
+    throw refusal(400, "invalid_request", '"title" must be a non-empty string');
+  }
+  try {
+    entry.room.retitle(body.title.trim());
+  } catch (err) {
+    throw changeRefused(err);
+  }
+  entry.room.touch();
+  send(res, 200, toRoomDto(entry.state, entry.room) satisfies RoomDto);
+}
+
 /** `DELETE /rooms/:id/agents/:agentId` — cancels the participant's turn,
  *  stops its harness and keeps its work, as a dismiss does (R37). Answers
  *  the room, without it. */
@@ -1622,6 +1642,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   } else if (req.method === "GET" && room) {
     const { state, room: live } = roomEntry(room[1] as string);
     send(res, 200, toRoomDto(state, live) satisfies RoomDto);
+  } else if (req.method === "PATCH" && room) {
+    await patchRoom(room[1] as string, req, res);
   } else if (req.method === "POST" && roomSub?.[2] === "messages") {
     await postMessage(roomSub[1] as string, undefined, req, res);
   } else if (req.method === "POST" && agentSub?.[3] === "messages") {

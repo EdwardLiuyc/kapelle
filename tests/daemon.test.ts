@@ -4206,6 +4206,42 @@ test("participants are added, listed, changed and removed through the routes", a
   }
 });
 
+test("PATCH /rooms/:id renames the room, saves it, and refuses a bad title", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", { cwd, title: "a" });
+  const { id } = open.body;
+
+  const renamed = await api<RoomReply>(d, "PATCH", `/rooms/${id}`, {
+    title: "  login bug ",
+  });
+  assert.equal(renamed.status, 200, renamed.body.error?.message);
+  assert.equal(renamed.body.id, id, "a rename never moves the id");
+  assert.equal(renamed.body.title, "login bug");
+  const listed = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  assert.equal(listed.body[0]?.title, "login bug");
+  const record = join(stateDirFor(cwd), "rooms", id, "room.json");
+  assert.equal(JSON.parse(await readFile(record, "utf8")).title, "login bug");
+
+  for (const [path, body, status, code] of [
+    [`/rooms/${id}`, {}, 400, "invalid_request"],
+    [`/rooms/${id}`, { title: " " }, 400, "invalid_request"],
+    [`/rooms/${id}`, { title: 7 }, 400, "invalid_request"],
+    [`/rooms/${id}`, { title: "x", cwd }, 400, "invalid_request"],
+    ["/rooms/nope", { title: "x" }, 404, "room_not_found"],
+  ] as const) {
+    const r = await api(d, "PATCH", path, body);
+    const label = `${path} ${JSON.stringify(body)}`;
+    assert.equal(r.status, status, label);
+    assert.equal(r.body.error.code, code, label);
+  }
+
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const late = await api(d, "PATCH", `/rooms/${id}`, { title: "x" });
+  assert.equal(late.status, 409);
+  assert.equal(late.body.error.code, "room_dismissed");
+});
+
 test("two participants work in parallel in their own checkouts, and a third starts from one's branch", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));

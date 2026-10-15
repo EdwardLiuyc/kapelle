@@ -7,11 +7,11 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.12** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.13** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
-`DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, and M8-2, #266, which
-added replies and copies).
+`DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
+added replies and copies, and `PATCH /rooms/:id`, which renames a room).
 
 ## Contents
 
@@ -303,7 +303,7 @@ already started a run, the daemon reads the body, but does not check the run aga
 before it compares the digest: see
 [Sending a run again safely](#sending-a-run-again-safely). Some routes resolve a resource
 first: `POST /rooms/:id/messages`, `POST /rooms/:id/agents/:agentId/messages`,
-`POST /rooms/:id/agents` and `PATCH /rooms/:id/agents/:agentId` look the room up, so an
+`POST /rooms/:id/agents`, `PATCH /rooms/:id` and `PATCH /rooms/:id/agents/:agentId` look the room up, so an
 unknown room is
 `404 room_not_found` even when the body would be refused. They look the participant up
 only after the body, so a bad body to an unknown participant is `400`, not `404`. `DELETE` carries no body, and
@@ -328,6 +328,7 @@ the `GET` routes take none.
 | `POST /rooms` | Open a room. |
 | `GET /rooms` | List rooms. |
 | `GET /rooms/:id` | One room. |
+| `PATCH /rooms/:id` | Rename a room. |
 | `POST /rooms/:id/messages` | Send a message to the room's orchestrator. |
 | `GET /rooms/:id/events` | A room's event stream. |
 | `POST /rooms/:id/dismiss` | End a room. |
@@ -1131,6 +1132,21 @@ is one call.
 **Reply `200`:** the room, in the same shape as `POST /rooms` answers: every participant
 in full, with its `role` when it has one, and the log's size as `seq`. `404` `room_not_found` for an
 unknown id.
+
+### `PATCH /rooms/:id`
+
+Since 1.13. Gives the room a new title:
+
+```json
+{ "title": "login bug" }
+```
+
+The `id` does not change. The room's stream gets no line for it, so a client that wants
+the new title reads it from `GET /rooms` or `GET /rooms/:id`.
+
+**Reply `200`:** the room, as `GET /rooms/:id` gives it. **Refusals:** `404`
+`room_not_found`; `400` `invalid_request` when `title` is missing, empty or not a
+string; `409` `room_dismissed`; `503` `shutting_down`.
 
 ### `POST /rooms/:id/messages`
 

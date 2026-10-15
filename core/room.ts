@@ -422,6 +422,9 @@ export interface Room {
   /** Renames a participant, or changes its role or mode. Checks every
    *  change before it applies any. */
   update(id: string, changes: ParticipantChanges): Participant;
+  /** Gives the room a new title. `touch` saves it. The stream gets no
+   *  line: a client reads the title from `GET /rooms`. */
+  retitle(title: string): void;
   /** Cancels the participant's turn, stops its harness and releases its
    *  checkout without committing (R37). It leaves the roster at once. */
   remove(id: string): Promise<void>;
@@ -1486,6 +1489,10 @@ async function buildRoom(
     status,
     add: (request) => track(start(request)),
     update,
+    retitle(title) {
+      if (ended()) throw dismissed();
+      meta.title = title;
+    },
     remove: (id) => track(remove(id)),
     fastForward: (targetId, fromId) => track(forward(targetId, fromId)),
     dismiss: teardown,
