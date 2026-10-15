@@ -1194,12 +1194,8 @@ function chatTui(
         return false;
       }
       if (box.panel) hidePanel();
-      // The stream has no line for a new title, so show it now, not at the
-      // next poll.
-      const shown = rooms.get(view.roomId);
-      if (c.verb === "title" && out.room && shown) {
-        shown.entry.title =
-          out.room.title === undefined ? undefined : printable(out.room.title);
+      if (c.verb === "title" && out.room?.title) {
+        set.retitle(out.room.id, out.room.title);
       }
       if (c.verb === "new" && out.room) {
         const { id, cwd, title, status, updatedAt, participants } = out.room;
