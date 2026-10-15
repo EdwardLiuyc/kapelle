@@ -7,10 +7,11 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.11** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.12** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
-`DELETE /rooms/:id`, and M8-1, #265, which added a message's `from`).
+`DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, and M8-2, #266, which
+added replies and copies).
 
 ## Contents
 
@@ -801,8 +802,8 @@ with ACP names.
 
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
-| `_client_message_queued` | `text`, `from?` | A message reached a busy participant and waits. `_client_user_message` follows when its turn starts. `from` as below. |
-| `_client_user_message` | `text`, `turn`, `from?` | The participant's turn starts with this message. The line's `participantId` names who got it. `turn` counts that participant's turns from 1. It is absent on lines written before 1.5. `from` is the id of the participant that sent the message (since 1.11). No `from` means the person sent it. |
+| `_client_message_queued` | `text`, `from?`, `kind?` | A message reached a busy participant and waits. `_client_user_message` follows when its turn starts. `from` and `kind` as below. |
+| `_client_user_message` | `text`, `turn`, `from?`, `kind?` | The participant's turn starts with this message. The line's `participantId` names who got it. `turn` counts that participant's turns from 1. It is absent on lines written before 1.5. `from` is the id of the participant that sent the message (since 1.11). No `from` means the person sent it. `kind` is `reply` or `copy` for a message the daemon sent (since 1.12): see [Replies and copies](#replies-and-copies). |
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
@@ -1292,6 +1293,29 @@ for empty text. `400` `invalid_sender` for a `from` that is not the orchestrator
 is the target. `409` `room_dismissed` for a dismissed room. `409` `agent_exited` while the
 participant is being removed or the daemon shuts down. `429` `queue_full` when 16 messages
 already wait.
+
+#### Replies and copies
+
+Since 1.12. When a turn ends, the daemon may send its answer on as a new message, with
+`kind` on its `_client_message_queued` and `_client_user_message`:
+
+- **A reply** (`kind: "reply"`) goes to the participant that sent the turn's message
+  with `from`. Its first line is `[reply from <name>] <end>, <n> tool calls`.
+- **A copy** (`kind: "copy"`) goes to the orchestrator when the person sent the message
+  to another participant. Its first line is `[copy] you → <name> · <end>, <n> tool
+  calls`, then the person's message, then `[answer]` and the answer.
+
+`from` is the participant whose turn ended. `<end>` is the turn's stop reason,
+`cancelled`, or `error`. The answer is the text after the turn's last tool call, or the
+last text before it when that is empty. Each is cut at 64 KiB, and the first line then
+ends with `, cut at 64 KiB`. A turn that was cancelled or whose harness exited sends its
+first line only. A turn that ended with an error sends the error as its answer.
+
+The log's `text` is all the harness reads, first line included. There is no `[from …]`
+line. A reply or a copy is never refused for a full queue: it does not count toward the
+16. A turn that starts from a reply or a copy sends nothing when it ends. A remove, a
+dismiss or a shutdown sends nothing either. A reply to a participant that has left the
+room is dropped, and the daemon's stderr says so.
 
 ### `GET /rooms/:id/agents/:agentId/events`
 
