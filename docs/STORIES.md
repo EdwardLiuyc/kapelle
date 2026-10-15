@@ -2071,6 +2071,11 @@ move it onto the shared `client/` module and add the roster, permissions and the
 multi-room surface. The browser dashboard stories are retired (A3, A7); `chat.ts` and
 pi-tui are the direction.
 
+**Closed 2026-10-15 (#278).** #278 chose to finish M4, not to move its tail, so it
+closed when its last story landed: M4-13 (#249). Every story below is built, and the
+`M4_done` milestone lists them. The exit in `docs/PROJECT-PLAN.md` *Verification* was
+checked by hand on a room in #278. #198 moved to M7.
+
 **M4-1 · pi-tui screen as the first shared-client consumer · M · needs M6-0, M5-10a**
 `spike/chat-tui` is still one unlanded commit — M6-0 deliberately left it there (#144), so
 this story rebases it onto master as its first step. The spike screen becomes a consumer
@@ -3457,7 +3462,8 @@ M6-6a ─ M6-6b ─ M6-11b
 
 **Amended 2026-10-13 (#278):** the spine has landed except M4-13 and M6-6b → M6-11b.
 M6-8 was superseded by M8 on 2026-10-12. M3 is parked: each of its stories is Deferred
-on the board.
+on the board. **Amended 2026-10-15:** M4-13 landed too (#249), so only M6-6b → M6-11b
+is left.
 
 The edges the drawing leaves out: **M4-1** needs M6-0 and M5-10a, and **M4-2** needs M4-1
 too. **M4-5** also needs M6-5. **M4-3** also needs M4-2 and M5-4. **M6-7b** also needs the
