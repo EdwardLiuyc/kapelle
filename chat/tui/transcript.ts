@@ -136,6 +136,12 @@ class Barred extends Container {
 const barred = (c: Component, paint: (s: string) => string) =>
   new Barred(c, paint);
 
+/** A copied selection without the bar each `Barred` row starts with, and
+ *  the one cell of padding after it. Only once a line: a `▎` the person
+ *  typed stays. A selection that starts after the bar, on text that starts
+ *  with `▎`, loses that one `▎`. */
+export const unbar = (text: string) => text.replace(/^▎ ?/gm, "");
+
 /** A line's time, as `HH:MM` here; "" for a time that does not parse. */
 const hhmm = (at: string) => {
   const d = new Date(at);

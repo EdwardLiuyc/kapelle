@@ -15,7 +15,12 @@ import type { RoomEventLine } from "../../client/contract.ts";
 import { applyLine, newRoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { inverse } from "../common.ts";
-import { settled, transcriptParts } from "../tui/transcript.ts";
+import { settled, transcriptParts, unbar } from "../tui/transcript.ts";
+
+test("a copy loses each row's bar, and keeps a typed one", () => {
+  assert.equal(unbar("▎ hello\n▎ ▎ kept\n  note"), "hello\n▎ kept\n  note");
+  assert.equal(unbar("▎"), "");
+});
 
 const id = (s: string) => s;
 const THEME = {

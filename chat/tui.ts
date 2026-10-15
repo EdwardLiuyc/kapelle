@@ -110,7 +110,7 @@ import {
   sidebarParts,
 } from "./tui/sidebar.ts";
 import { type Shell, startShell } from "./tui/term.ts";
-import { transcriptParts } from "./tui/transcript.ts";
+import { transcriptParts, unbar } from "./tui/transcript.ts";
 import {
   activity,
   anyBusy,
@@ -319,10 +319,12 @@ function chatTui(
   });
   const { rooms } = set;
   // A selection goes through the system's clipboard tool, not only OSC 52,
-  // so "Copied!" is true under WSL (`chat/tui/clipboard.ts`).
+  // so "Copied!" is true under WSL (`chat/tui/clipboard.ts`). The timeline's
+  // `▎` bars stay on the screen (`unbar`).
   const terminal = new ProcessTerminal();
+  const copy = copySelection((data) => terminal.write(data));
   const tui = new Screen(terminal, undefined, undefined, {
-    copySelection: copySelection((data) => terminal.write(data)),
+    copySelection: (text) => copy(unbar(text)),
   });
   // pi-tui's screen reads keys before ours, and would take the page keys
   // for the timeline while the side view has the keys. Ours route them
