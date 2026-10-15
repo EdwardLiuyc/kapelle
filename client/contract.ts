@@ -339,7 +339,8 @@ export interface RoomDto {
   title?: string;
   /** ISO 8601. */
   createdAt: string;
-  /** ISO 8601. `updatedAt` moves on a message, a dismiss, or a roster change. */
+  /** ISO 8601. `updatedAt` moves on a message, a dismiss, a roster change,
+   *  or a rename. */
   updatedAt: string;
   status: RoomStatus;
   /** The room log's size when the daemon answered: the reply counts every

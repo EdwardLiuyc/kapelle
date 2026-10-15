@@ -361,7 +361,8 @@ export interface RoomMeta {
   cwd: string;
   title?: string;
   createdAt: string;
-  /** Moves on a message, a dismiss, or a roster change (`Room.touch`). */
+  /** Moves on a message, a dismiss, a roster change, or a rename
+   *  (`Room.touch`). */
   updatedAt: string;
 }
 

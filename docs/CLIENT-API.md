@@ -303,9 +303,9 @@ already started a run, the daemon reads the body, but does not check the run aga
 before it compares the digest: see
 [Sending a run again safely](#sending-a-run-again-safely). Some routes resolve a resource
 first: `POST /rooms/:id/messages`, `POST /rooms/:id/agents/:agentId/messages`,
-`POST /rooms/:id/agents`, `PATCH /rooms/:id` and `PATCH /rooms/:id/agents/:agentId` look the room up, so an
-unknown room is
-`404 room_not_found` even when the body would be refused. They look the participant up
+`POST /rooms/:id/agents`, `PATCH /rooms/:id` and `PATCH /rooms/:id/agents/:agentId`
+look the room up, so an unknown room is `404 room_not_found` even when the body would be
+refused. They look the participant up
 only after the body, so a bad body to an unknown participant is `400`, not `404`. `DELETE` carries no body, and
 the `GET` routes take none.
 
@@ -1141,7 +1141,8 @@ Since 1.13. Gives the room a new title:
 { "title": "login bug" }
 ```
 
-The `id` does not change. The room's stream gets no line for it, so a client that wants
+The `id` does not change, and `updatedAt` moves. The room's stream gets no line for it,
+because the stream is the conversation and a title is not part of it. A client that wants
 the new title reads it from `GET /rooms` or `GET /rooms/:id`.
 
 **Reply `200`:** the room, as `GET /rooms/:id` gives it. **Refusals:** `404`

@@ -10,8 +10,7 @@
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
  * the orchestrator, so a bare `/remove` cannot drop it. Room commands
  * (`/new`, `/add`, `/title`, `/dismiss`, `/leave`, `/help`, `/term`) ignore a
- * mention,
- * so they work after a thread's pre-filled `@name`.
+ * mention, so they work after a thread's pre-filled `@name`.
  *
  * **The screen never guesses** (M4-5). A value the daemon checks (a role, a
  * mode, a harness) is sent as typed, and a refusal is the daemon's own
@@ -30,6 +29,7 @@ import type { ParticipantDto, RoomDto } from "./contract.ts";
 import { call, type DaemonAddress } from "./daemon.ts";
 import { absoluteFolder, FOLDER_GONE } from "./folder.ts";
 import { fold, MENTION, type Named, targetOf } from "./mention.ts";
+import { printable } from "./room.ts";
 
 /** One agent, as `POST /rooms` and `POST /rooms/:id/agents` take it. A
  *  `base` of `@name` is that participant's branch, looked up at send. */
@@ -195,9 +195,9 @@ export function parseCommand(
   }
   if (verb === "title") {
     // The rest of the line: spaces inside a title stay. One pair of quotes
-    // around the whole title is quoting, not part of it.
+    // around the whole title, with no such quote inside, is quoting.
     const raw = rest.trimStart().slice(head.length).trim();
-    const quoted = /^(["'])([\s\S]*)\1$/.exec(raw);
+    const quoted = /^(["'])((?:(?!\1)[\s\S])*)\1$/.exec(raw);
     const title = (quoted?.[2] ?? raw).trim();
     return title ? { verb, title } : { error: USAGE.title as string };
   }
@@ -338,7 +338,7 @@ export async function runCommand(
     if (!r.ok) return refused(r.error.message, r.error.code);
     return {
       ok: true,
-      line: `opened room ${r.body.title ?? r.body.id}`,
+      line: `opened room ${printable(r.body.title ?? r.body.id)}`,
       room: r.body,
     };
   }
@@ -356,7 +356,11 @@ export async function runCommand(
         body: { title: c.title },
       });
       if (!r.ok) return refused(r.error.message, r.error.code);
-      return { ok: true, line: `renamed the room to ${c.title}`, room: r.body };
+      return {
+        ok: true,
+        line: `renamed the room to ${printable(r.body.title ?? c.title)}`,
+        room: r.body,
+      };
     }
     case "add": {
       const spec = await agentBody(d, roomId, c.agent);
