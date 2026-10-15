@@ -33,6 +33,10 @@ import {
 } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { AGENTS } from "../../protocol/registry.ts";
+import type {
+  ClientMessageQueuedEvent,
+  ClientUserMessageEvent,
+} from "../../protocol/types.ts";
 import { readProjectLinkPaths } from "../config.ts";
 import { checkoutDiff } from "../diff.ts";
 import { createEventBus, type EventBus } from "../events.ts";
@@ -2128,3 +2132,280 @@ test("a participant's checkout gets the project's configured links (#274)", asyn
     "dismiss keeps the main folder",
   );
 });
+
+// --- M8-2: a reply to the sender, a copy to the orchestrator --------------
+
+/** A room with `po`, the orchestrator, on `poScenario`, and `dev` on
+ *  `scenario`. `told(p)` is each message `p` got, as text, sender and kind. */
+async function loopRoom(
+  t: TestContext,
+  scenario: string,
+  poScenario = "remember",
+) {
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  const events: AgentEventEnvelope[] = [];
+  bus.addListener((e) => events.push(e));
+  const logged: string[] = [];
+  const agent = (name: string, s: string, role?: string) =>
+    roomAgent({
+      cmd: `node ${MOCK_AGENT} --scenario ${s}`,
+      name,
+      ...(role && { role }),
+    });
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [agent("po", poScenario, "orchestrator"), agent("dev", scenario)],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+    permissions: queue,
+    log: (line) => logged.push(line),
+  });
+  t.after(() => room.dismiss());
+  const [po, dev] = room.participants as [Participant, Participant];
+  const of = (p: Participant, kind: string) =>
+    events.filter((e) => e.agent === p.id && e.update.sessionUpdate === kind);
+  const told = (p: Participant) =>
+    of(p, "_client_user_message").map((e) => {
+      const u = e.update as ClientUserMessageEvent;
+      return [u.text, u.from, u.kind];
+    });
+  const settled = () =>
+    until(
+      () => room.participants.every((p) => p.status() !== "busy"),
+      "every participant idle",
+    );
+  return { room, po, dev, of, told, settled, logged };
+}
+
+const said = (events: AgentEventEnvelope[]) =>
+  events.map((e) => (e.update as { content: { text: string } }).content.text);
+
+test("a turn from the orchestrator's message replies to it, and the reply's turn sends nothing", async (t) => {
+  const { po, dev, of, told, settled } = await loopRoom(t, "remember");
+  await dev.send("a", po);
+  await settled();
+
+  assert.deepEqual(told(po), [
+    [
+      "[reply from dev] end_turn, 0 tool calls\nprevious: (none)",
+      dev.id,
+      "reply",
+    ],
+  ]);
+  assert.deepEqual(told(dev), [["a", po.id, undefined]], "no reply back");
+  // The reply's own first line takes the place of `[from dev]`.
+  await po.send("next");
+  assert.equal(
+    said(of(po, "agent_message_chunk")).at(-1),
+    "previous: [reply from dev] end_turn, 0 tool calls\nprevious: (none)",
+  );
+});
+
+test("a reply carries the last text before the last tool calls when none follows them", async (t) => {
+  const { po, dev, told, settled } = await loopRoom(t, "answer");
+  await dev.send("go", po);
+  await settled();
+  assert.deepEqual(told(po), [
+    ["[reply from dev] end_turn, 3 tool calls\nMiddle.", dev.id, "reply"],
+  ]);
+});
+
+test("a person's message to a worker sends the orchestrator one copy, and nothing else", async (t) => {
+  const { room, po, dev, told, settled } = await loopRoom(t, "remember");
+  await dev.send("hi");
+  await settled();
+  assert.deepEqual(told(po), [
+    [
+      "[copy] you → dev · end_turn, 0 tool calls\nhi\n\n[answer]\nprevious: (none)",
+      dev.id,
+      "copy",
+    ],
+  ]);
+  assert.deepEqual(told(dev), [["hi", undefined, undefined]]);
+
+  // To the orchestrator itself, or in a room with none: nothing.
+  await po.send("plan");
+  room.update(po.id, { role: null });
+  await dev.send("again");
+  await settled();
+  assert.equal(told(po).length, 2);
+  assert.equal(told(dev).length, 2);
+});
+
+test("an error turn replies with its error, and none of its text", async (t) => {
+  const { po, dev, told, settled } = await loopRoom(t, "prompt-error");
+  await dev.send("go", po);
+  await settled();
+  const [[text, from, kind] = []] = told(po);
+  assert.match(
+    text as string,
+    /^\[reply from dev\] error, 1 tool call\n.*the model failed/,
+  );
+  assert.doesNotMatch(text as string, /Plan\./);
+  assert.deepEqual([from, kind], [dev.id, "reply"]);
+});
+
+// `half` answers the cancel `end_turn`, as copilot does: the reply still
+// says `cancelled`, from our own record (§M0-4).
+test("a cancel drops the kept text: the reply is its first line only", async (t) => {
+  const { po, dev, of, told, settled } = await loopRoom(t, "half");
+  const turn = dev.send("go", po);
+  await until(() => of(dev, "tool_call").length > 0, "dev's tool call");
+  dev.cancel();
+  await turn;
+  await settled();
+  assert.deepEqual(told(po), [
+    ["[reply from dev] cancelled, 1 tool call", dev.id, "reply"],
+  ]);
+});
+
+test("a harness exit drops the kept text: the reply is the error only", async (t) => {
+  const { po, dev, of, told, settled } = await loopRoom(t, "half");
+  const turn = dev.send("go", po);
+  await until(() => of(dev, "tool_call").length > 0, "dev's tool call");
+  const [spawned] = of(dev, "_client_harness_spawned");
+  assert.ok(spawned);
+  process.kill((spawned.update as { pid: number }).pid, "SIGKILL");
+  await turn;
+  await settled();
+  const [[text] = []] = told(po);
+  assert.match(text as string, /^\[reply from dev\] error, 1 tool call\n/);
+  assert.doesNotMatch(text as string, /Plan\./);
+});
+
+test("a reply to a sender that left the room is dropped, and the log says so", async (t) => {
+  const { room, po, dev, told, logged } = await loopRoom(t, "half");
+  const turn = dev.send("go", po);
+  await room.remove(po.id);
+  dev.cancel();
+  await turn;
+  assert.equal(told(dev).length, 1);
+  assert.equal(logged.length, 1);
+  assert.match(
+    logged[0] as string,
+    /^room .+: the reply from dev to po was dropped: po has left the room$/,
+  );
+});
+
+// 64 KiB is 21,845 whole `€`, three bytes each: the cut drops the one it
+// would split.
+for (const [scenario, calls, kept] of [
+  ["long", "0 tool calls", "x".repeat(64 * 1024)],
+  ["long-call", "1 tool call", "€".repeat(21_845)],
+]) {
+  test(`an answer over 64 KiB is cut, and the reply says so (${scenario})`, async (t) => {
+    const { po, dev, told, settled } = await loopRoom(t, scenario as string);
+    await dev.send("go", po);
+    await settled();
+    const [[text] = []] = told(po);
+    const [head, body] = (text as string).split("\n");
+    assert.equal(head, `[reply from dev] end_turn, ${calls}, cut at 64 KiB`);
+    assert.equal(body, kept);
+  });
+}
+
+test(`a reply reaches an orchestrator with ${QUEUE_BOUND} messages waiting`, async (t) => {
+  const { po, dev, of } = await loopRoom(t, "remember", "stall");
+  const waiting = [po.send("live")];
+  for (let i = 0; i < QUEUE_BOUND; i++) waiting.push(po.send(`wait ${i}`));
+  await dev.send("go", po);
+  assert.equal(po.queued, QUEUE_BOUND + 1);
+  const last = of(po, "_client_message_queued").at(-1)?.update as
+    | ClientMessageQueuedEvent
+    | undefined;
+  assert.equal(last?.kind, "reply");
+  assert.equal(last?.from, dev.id);
+  po.cancel();
+  await Promise.all(waiting);
+});
+
+test("three queued messages from the orchestrator get three replies, in order", async (t) => {
+  const { po, dev, told, settled } = await loopRoom(t, "slow");
+  await Promise.all(["a", "b", "c"].map((text) => dev.send(text, po)));
+  await settled();
+  assert.deepEqual(
+    told(po).map(([text]) => text),
+    [
+      "[reply from dev] end_turn, 0 tool calls\nprevious: (none)",
+      "[reply from dev] end_turn, 0 tool calls\nprevious: [from po]\na",
+      "[reply from dev] end_turn, 0 tool calls\nprevious: [from po]\nb",
+    ],
+  );
+});
+
+test("a cancel after the harness answered, while the checkout is read, still replies with the answer", async (t) => {
+  const { po, dev, of, told, settled } = await loopRoom(t, "remember");
+  // A `git` that waits while `slow` exists holds the turn in its end step,
+  // after the harness answered and before the turn's end line.
+  const dir = await tempDir(t);
+  const slow = join(dir, "slow");
+  const real = (await run("sh", ["-c", "command -v git"])).stdout.trim();
+  await writeFile(
+    join(dir, "git"),
+    `#!/bin/sh\n[ -e "${slow}" ] && sleep 0.5\nexec "${real}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  const path = process.env.PATH;
+  process.env.PATH = `${dir}:${path}`;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+  await writeFile(slow, "");
+  const turn = dev.send("go", po);
+  await until(() => of(dev, "agent_message_chunk").length > 0, "the answer");
+  await new Promise((ok) => setTimeout(ok, 100));
+  assert.equal(dev.cancel(), true, "the turn is still live");
+  await turn;
+  await settled();
+  assert.deepEqual(told(po), [
+    [
+      "[reply from dev] end_turn, 0 tool calls\nprevious: (none)",
+      dev.id,
+      "reply",
+    ],
+  ]);
+});
+
+test("a turn that ends while the room pauses sends nothing", async (t) => {
+  const { room, po, dev, told } = await loopRoom(t, "slow");
+  // A harness that ignores SIGTERM keeps its remove in flight for the stop's
+  // grace, and the pause waits for it before it stops anyone.
+  const stuck = await room.add(
+    roomAgent({ cmd: `node ${MOCK_AGENT} --scenario stubborn`, name: "stuck" }),
+  );
+  const turn = dev.send("go", po);
+  const removing = room.remove(stuck.id);
+  const pausing = room.pause();
+  await turn;
+  await new Promise((ok) => setTimeout(ok, 100));
+  assert.deepEqual(told(po), []);
+  await removing;
+  await pausing;
+});
+
+test("a stopped orchestrator revives for a reply, as for any message", async (t) => {
+  const { po, dev, of, told, settled } = await loopRoom(t, "remember");
+  await po.send("one");
+  const [spawned] = of(po, "_client_harness_spawned");
+  assert.ok(spawned);
+  process.kill((spawned.update as { pid: number }).pid, "SIGKILL");
+  await until(() => po.status() === "exited", "po exited");
+  await dev.send("go", po);
+  await settled();
+  assert.equal(of(po, "_client_participant_revived").length, 1);
+  assert.equal(told(po).at(-1)?.[2], "reply");
+});
+
+for (const how of ["remove", "dismiss"] as const) {
+  test(`a worker's ${how} during its turn sends nothing`, async (t) => {
+    const { room, po, dev, of, told } = await loopRoom(t, "half");
+    const turn = dev.send("go", po);
+    await until(() => of(dev, "tool_call").length > 0, "dev's tool call");
+    await (how === "remove" ? room.remove(dev.id) : room.dismiss());
+    await turn;
+    assert.deepEqual(told(po), []);
+  });
+}

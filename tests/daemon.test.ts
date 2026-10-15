@@ -3911,8 +3911,9 @@ test("one room log names each line's room and participant, and a participant's s
     text: "to bob",
   });
   assert.equal(toBob.status, 202);
-  await agentIdle(d, id, alice.id);
+  // Bob's turn sends alice a copy (M8-2), so she is idle only after him.
   await agentIdle(d, id, bob.id);
+  await agentIdle(d, id, alice.id);
   const nobody = `/rooms/${id}/agents/p-nobody`;
   for (const [method, path, body] of [
     ["POST", `${nobody}/messages`, { text: "hi" }],
@@ -3942,7 +3943,10 @@ test("one room log names each line's room and participant, and a participant's s
       .filter((e) => e.update.sessionUpdate === "_client_user_message")
       .map((e) => e.update.text);
   assert.deepEqual(said(bobs), ["to bob"]);
-  assert.deepEqual(said(await roomEvents(d, id, alice.id)), ["to alice"]);
+  assert.deepEqual(said(await roomEvents(d, id, alice.id)), [
+    "to alice",
+    "[copy] you → bob · end_turn, 0 tool calls\nto bob\n\n[answer]\nprevious: (none)",
+  ]);
 });
 
 test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a bad message", async (t) => {
@@ -5207,7 +5211,12 @@ test("piped chat.ts sends a message with no mention to the orchestrator, and @na
   // Each answers with its own previous prompt: two memories, one room.
   assert.match(r.stdout, /you → alice: one\nalice: previous: \(none\)/);
   assert.match(r.stdout, /you → bob: two\nbob: previous: \(none\)/);
-  assert.match(r.stdout, /you → alice: three\nalice: previous: one/);
+  // Bob's answer reached alice as a copy (M8-2) before "three" was sent.
+  assert.match(r.stdout, /bob → alice: \[copy\] you → bob · end_turn/);
+  assert.match(
+    r.stdout,
+    /you → alice: three\nalice: previous: \[copy\] you → bob/,
+  );
   assert.match(r.stderr, /name one participant/);
   assert.match(r.stderr, /nothing to send/);
 });

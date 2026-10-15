@@ -52,6 +52,13 @@ const SCENARIOS = {
   "diff-bad-old":
     "like diff-first, but the diff block's oldText is a number, not text",
   runs: "a note and six tool calls, then a wait for runs.go in its folder, then a note; later turns only the note",
+  answer:
+    "a note, a tool call, a second note, two tool calls, then ends with no text",
+  long: "one answer longer than 64 KiB",
+  "long-call":
+    "like long, in a 3-byte character, so 64 KiB splits one, then a tool call",
+  half: "a note and a tool call, then waits for a cancel, like stall, and answers it end_turn, as copilot does (§M0-4)",
+  "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
 };
 
 const storeAt = process.argv.indexOf("--store");
@@ -322,7 +329,8 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // `deaf` is the harness a shutdown's grace exists for (M6-7a): only its
     // stdin closing ends it.
     if (stalledPromptId !== null && scenario !== "deaf") {
-      reply(stalledPromptId, { stopReason: "cancelled", usage: USAGE });
+      const stopReason = scenario === "half" ? "end_turn" : "cancelled";
+      reply(stalledPromptId, { stopReason, usage: USAGE });
       stalledPromptId = null;
     }
     return;
@@ -406,6 +414,53 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         while (!existsSync("runs.go")) await sleep(50);
       }
       say("Done.");
+      reply(msg.id, { stopReason: "end_turn", usage: USAGE });
+      return;
+    }
+
+    // M8-2's answer fixtures: which text a reply carries, its cut, and what
+    // a cancel, an exit or an error leaves of it.
+    if (
+      scenario === "answer" ||
+      scenario === "long" ||
+      scenario === "long-call" ||
+      scenario === "half" ||
+      scenario === "prompt-error"
+    ) {
+      const say = (text) =>
+        update(sid, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        });
+      const call = (n) =>
+        update(sid, {
+          sessionUpdate: "tool_call",
+          toolCallId: `call${n}`,
+          title: `Read f${n}.ts`,
+          kind: "read",
+          status: "completed",
+        });
+      if (scenario === "long") say("x".repeat(70_000));
+      else if (scenario === "long-call") {
+        say("€".repeat(30_000));
+        call(1);
+      } else {
+        say("Plan.");
+        call(1);
+      }
+      if (scenario === "answer") {
+        say("Middle.");
+        call(2);
+        call(3);
+      }
+      if (scenario === "half") {
+        stalledPromptId = msg.id;
+        return;
+      }
+      if (scenario === "prompt-error") {
+        fail(msg.id, "the model failed");
+        return;
+      }
       reply(msg.id, { stopReason: "end_turn", usage: USAGE });
       return;
     }

@@ -3315,6 +3315,12 @@ message and nothing else, no reply from a reply's or a copy's turn, an error tur
 removed sender, the cut, the buffer dropped on a cancel and an exit, a reply delivered
 to a participant with 16 messages waiting, and the replies to three queued messages in
 order.
+**Decided 2026-10-15 (#266):** a cancelled turn still replies, with its first line only:
+the orchestrator learns that its order was cut. A harness that exits during a turn
+replies with its error, also with no text. M8-6's stop stays the one cut that sends
+nothing. The log keeps a reply's and a copy's whole text, first line included: that line
+holds the end, the tool calls and the cut, which no field carries, and the screens need
+no change.
 
 **M8-3 · `kapelle room` for an orchestrator · S · needs M8-1**
 `kapelle room info | add | send | ff | diff | remove`, from the spikes' `room.sh`; `add` and

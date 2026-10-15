@@ -97,6 +97,23 @@
  * message may name the participant that sent it (M8-1); the harness then
  * reads `[from <name>]` first, and the log records the sender's id.
  *
+ * **A turn's answer goes back to its sender** (M8-2). When a turn from a
+ * participant's message ends, its sender gets a reply: `[reply from <name>]`,
+ * how the turn ended and its tool calls, then the answer. When the person
+ * messaged a worker, the orchestrator gets a copy instead: `[copy] you →
+ * <name>`, the same status, the message, then the answer. The answer is the
+ * text after the last tool call, or the last text before it when that is
+ * empty, each cut at `ANSWER_CAP` bytes; the person's message is sent whole.
+ * It is kept from the prompt's send to the turn's end, and dropped at a
+ * cancel or the harness's exit. A cancelled turn replies with its first line
+ * only; an error turn, an exit included, with the error in place of the
+ * answer. The answer is taken before the checkout read that ends a turn, so a
+ * cancel during that read does not cut it. A
+ * reply and a copy carry `kind`, skip `QUEUE_BOUND`, and their own turns
+ * send nothing, so a loop cannot start. A stop (remove, dismiss or pause)
+ * sends nothing either; a reply to a sender no longer on the roster is
+ * dropped, and the daemon's stderr says so.
+ *
  * **One log for the room** (S10). The bus names each event's participant by
  * its id in `agent`, and the log writes it as `participantId` beside the
  * `roomId`. A thread is that log filtered by `participantId` (R8c over R13a).
@@ -144,6 +161,7 @@ import {
   type Warning,
   warningsFor,
 } from "../protocol/registry.ts";
+import type { AgentEvent, MessageKind } from "../protocol/types.ts";
 import {
   createEventLog,
   type EventLog,
@@ -259,6 +277,30 @@ export interface ParticipantChanges {
 /** Who sent a message, when a participant did (M8-1). */
 type Sender = Pick<Participant, "id" | "name">;
 
+/** How much of each answer block a turn keeps for its reply (M8-2), in
+ *  UTF-8 bytes. A cut never splits a character. */
+const ANSWER_CAP = 64 * 1024;
+
+/** The longest start of `text` that fits in `bytes` of UTF-8. A streaming
+ *  decode holds back a character the cut would split. */
+const fitBytes = (text: string, bytes: number) =>
+  new TextDecoder().decode(Buffer.from(text).subarray(0, bytes), {
+    stream: true,
+  });
+
+/** A turn that ended, as its reply or copy needs it (M8-2). */
+interface Answer {
+  /** The message the turn started from, and its sender. */
+  text: string;
+  from?: Sender;
+  /** The stop reason, `cancelled`, or `error`. */
+  end: string;
+  calls: number;
+  /** The answer, the error, or empty after a cancel or an exit. */
+  body: string;
+  cut: boolean;
+}
+
 export interface Participant {
   /** Opaque (`newParticipantId`); a rename never moves it. */
   readonly id: string;
@@ -302,8 +344,11 @@ export interface Participant {
    * Its harness then gets `[from <name>]` as an extra first line, with the
    * name as it is now; the log keeps `text` without it. The caller checks
    * who may send.
+   *
+   * `kind` is only the room's own: a reply or a copy (M8-2). It replaces
+   * the `[from <name>]` line, and `QUEUE_BOUND` does not apply to it.
    */
-  send(text: string, from?: Sender): Promise<void>;
+  send(text: string, from?: Sender, kind?: MessageKind): Promise<void>;
   /** Drops the queue, then asks the harness to end the live turn. The
    *  session stays (S5a). False when no turn is live. */
   cancel(): boolean;
@@ -601,6 +646,8 @@ interface RoomDeps {
   /** A line to put in the room's own notices, such as the restore fallback
    *  when the project's `linkPaths` cannot be used. */
   roomNotice?: string;
+  /** The daemon's own log, for what no client is told: a dropped reply. */
+  log?: (line: string) => void;
 }
 
 export interface RoomOptions extends RoomDeps {
@@ -817,6 +864,7 @@ async function buildRoom(
     limits = WATCHDOG_DEFAULTS,
     pauseGraceMs = PAUSE_GRACE_MS,
     roomNotice,
+    log = (line) => console.error(line),
   }: RoomDeps,
   meta: RoomMeta,
   from?: RoomRecord,
@@ -1090,6 +1138,52 @@ async function buildRoom(
       : first;
   };
 
+  // M8-2: a turn that ended sends its answer on. A message from a
+  // participant gets a reply to it; a person's message to a worker, a copy
+  // to the orchestrator. Looked up now, so a rename or a role change during
+  // the turn counts.
+  const answer = (worker: Participant, a: Answer) => {
+    // A pause stops its members only after the adds and removes in flight;
+    // a turn that ends in between must not send either (#295).
+    if (ended()) return;
+    const s = a.calls === 1 ? "" : "s";
+    const status =
+      `${a.end}, ${a.calls} tool call${s}` +
+      (a.cut ? `, cut at ${ANSWER_CAP / 1024} KiB` : "");
+    const as = { id: worker.id, name: worker.name };
+    let target: Participant | undefined;
+    let text: string;
+    let kind: MessageKind;
+    if (a.from) {
+      const sender = a.from;
+      target = participants.find((p) => p.id === sender.id);
+      if (!target) {
+        log(
+          `room ${roomId}: the reply from ${worker.name} to ${sender.name} ` +
+            `was dropped: ${sender.name} has left the room`,
+        );
+        return;
+      }
+      kind = "reply";
+      text = `[reply from ${worker.name}] ${status}`;
+      if (a.body) text += `\n${a.body}`;
+    } else {
+      target = participants.find((p) => p.role === "orchestrator");
+      if (!target || target === worker) return;
+      kind = "copy";
+      text = `[copy] you → ${worker.name} · ${status}\n${a.text}`;
+      if (a.body) text += `\n\n[answer]\n${a.body}`;
+    }
+    try {
+      void target.send(text, as, kind);
+    } catch (err) {
+      log(
+        `room ${roomId}: the ${kind} from ${worker.name} to ${target.name} ` +
+          `was dropped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
   const makeMember = (
     request: AgentRequest,
     id: string,
@@ -1117,6 +1211,7 @@ async function buildRoom(
       onRevive: () => {
         paused = false;
       },
+      onAnswer: answer,
       onCheckout: (next) => {
         worktrees?.update(id, next);
         // No stream line carries this: the room record and the next reply do.
@@ -1435,6 +1530,7 @@ function createParticipant({
   limits,
   saved,
   onRevive,
+  onAnswer,
   onCheckout,
 }: {
   id: string;
@@ -1457,6 +1553,9 @@ function createParticipant({
   saved?: ParticipantRecord;
   /** A revive gave the harness a new process. */
   onRevive: () => void;
+  /** A turn ended that was not a reply's or a copy's, and not cut by a
+   *  stop: the room sends its answer on (M8-2). */
+  onAnswer: (worker: Participant, answer: Answer) => void;
   /** The checkout's branch or rebase base changed; the room follows it in
    *  the held checkout record. Absent when there is no worktree. */
   onCheckout?: (next: {
@@ -1549,7 +1648,50 @@ function createParticipant({
   let held: Promise<unknown> | undefined;
   /** Set by a remove, a dismiss or a pause: nothing starts after it. */
   let stopping = false;
-  const waiting: { text: string; from?: Sender; done: () => void }[] = [];
+  const waiting: {
+    text: string;
+    from?: Sender;
+    kind?: MessageKind;
+    done: () => void;
+  }[] = [];
+
+  // M8-2: the live turn's answer, from its prompt's send. A cancel and an
+  // exit drop it, so a cut turn's half-written text is never sent on.
+  // `calls` stays: the reply's first line counts them.
+  let kept:
+    | {
+        since: string;
+        sinceBytes: number;
+        sinceCut: boolean;
+        last: string;
+        lastCut: boolean;
+      }
+    | undefined;
+  let calls = 0;
+  const keep = (update: AgentEvent) => {
+    if (!kept) return;
+    if (update.sessionUpdate === "tool_call") {
+      calls += 1;
+      if (kept.since.trim()) {
+        kept.last = kept.since;
+        kept.lastCut = kept.sinceCut;
+      }
+      kept.since = "";
+      kept.sinceBytes = 0;
+      kept.sinceCut = false;
+    } else if (
+      update.sessionUpdate === "agent_message_chunk" &&
+      update.content?.type === "text"
+    ) {
+      const chunk = update.content.text;
+      const left = ANSWER_CAP - kept.sinceBytes;
+      const bytes = Buffer.byteLength(chunk);
+      const fit = bytes <= left ? chunk : fitBytes(chunk, left);
+      if (fit !== chunk) kept.sinceCut = true;
+      kept.since += fit;
+      kept.sinceBytes += fit === chunk ? bytes : Buffer.byteLength(fit);
+    }
+  };
 
   let version: string | undefined;
   const warn = () => {
@@ -1580,8 +1722,10 @@ function createParticipant({
           agent === next
         ) {
           agent = undefined;
+          kept = undefined;
           if (!stopping) stopped = turn ? "killed" : "exited";
         }
+        if (agent === next) keep(update);
         // Named by id, not by harness name (S10). Only the harness's own
         // events feed the watchdog, so its warning never resets it.
         const event = { agent: id, update };
@@ -1651,10 +1795,16 @@ function createParticipant({
     onRevive();
   };
 
-  const begin = (text: string, from?: Sender): Promise<void> => {
+  const begin = (
+    text: string,
+    from?: Sender,
+    kind?: MessageKind,
+  ): Promise<void> => {
     turns += 1;
     const controller = new AbortController();
     turnAbort = controller;
+    kept = undefined;
+    calls = 0;
     bus.emit({
       agent: id,
       update: {
@@ -1662,6 +1812,7 @@ function createParticipant({
         text,
         turn: turns,
         ...(from && { from: from.id }),
+        ...(kind && { kind }),
       },
     });
     const watch = watchdog.watch(id, limits);
@@ -1674,7 +1825,44 @@ function createParticipant({
         return { stopReason: "cancelled" as const };
       }
       if (!agent) throw new Error("the agent's harness has exited");
-      return agent.prompt(from ? `[from ${from.name}]\n${text}` : text);
+      // From here, not before: a load replays old turns as text.
+      if (!kind)
+        kept = {
+          since: "",
+          sinceBytes: 0,
+          sinceCut: false,
+          last: "",
+          lastCut: false,
+        };
+      return agent.prompt(
+        from && !kind ? `[from ${from.name}]\n${text}` : text,
+      );
+    };
+    // The answer as the harness left it, taken before the checkout read:
+    // a cancel during that read comes after the turn ended (#295).
+    const take = (end: string, error?: string): Answer | undefined => {
+      const answer = kept;
+      kept = undefined;
+      // A reply's or a copy's turn sends nothing.
+      if (kind) return undefined;
+      // None after a cancel or an exit: both dropped it.
+      const [body, cut] = !answer
+        ? ["", false]
+        : answer.since.trim()
+          ? [answer.since, answer.sinceCut]
+          : [answer.last, answer.lastCut];
+      return {
+        text,
+        ...(from && { from }),
+        end,
+        calls,
+        body: error ?? body,
+        cut: error === undefined && cut,
+      };
+    };
+    // A stop sends nothing, also one that came during the checkout read.
+    const finish = (answer: Answer | undefined) => {
+      if (answer && !stopping && !dismissed()) onAnswer(participant, answer);
     };
     let ready: Promise<void> | undefined;
     if (!agent) ready = revive();
@@ -1695,21 +1883,27 @@ function createParticipant({
     turn = (ready ? ready.then(prompt) : Promise.resolve(prompt()))
       .then(
         async ({ stopReason }) => {
+          // Our own record, not `stopReason`: copilot answers `end_turn` for
+          // a turn it cancelled (§M0-4).
+          const answer = take(
+            controller.signal.aborted ? "cancelled" : stopReason,
+          );
           await after();
           bus.emit({
             agent: id,
             update: { sessionUpdate: "_client_turn_ended", stopReason },
           });
+          finish(answer);
         },
         async (err) => {
+          const error = err instanceof Error ? err.message : String(err);
+          const answer = take("error", error);
           await after();
           bus.emit({
             agent: id,
-            update: {
-              sessionUpdate: "_client_turn_ended",
-              error: err instanceof Error ? err.message : String(err),
-            },
+            update: { sessionUpdate: "_client_turn_ended", error },
           });
+          finish(answer);
         },
       )
       .finally(() => {
@@ -1730,7 +1924,9 @@ function createParticipant({
   const next = () => {
     if (stopped || stopping || dismissed()) return drop();
     const queued = waiting.shift();
-    if (queued) void begin(queued.text, queued.from).then(queued.done);
+    if (queued) {
+      void begin(queued.text, queued.from, queued.kind).then(queued.done);
+    }
   };
 
   // The caller has checked the participant is idle, with no await since.
@@ -1870,7 +2066,7 @@ function createParticipant({
     get queued() {
       return waiting.length;
     },
-    send(text, sender) {
+    send(text, sender, kind) {
       if (dismissed()) {
         throw new RoomRefusal("room_dismissed", "the room is dismissed");
       }
@@ -1881,8 +2077,10 @@ function createParticipant({
       // harness reads. A screen names `from` by the roster, so it shows the
       // new name: the id is what lasts.
       const from = sender && { id: sender.id, name: sender.name };
-      if (!turn && !held) return begin(text, from);
-      if (waiting.length >= QUEUE_BOUND) {
+      if (!turn && !held) return begin(text, from, kind);
+      // A reply or a copy is never refused (M8-2): a dropped one would leave
+      // the loop waiting on nothing. Each comes from one finished turn.
+      if (!kind && waiting.length >= QUEUE_BOUND) {
         throw new RoomRefusal(
           "queue_full",
           `${QUEUE_BOUND} messages already wait for this agent; ` +
@@ -1895,13 +2093,17 @@ function createParticipant({
           sessionUpdate: "_client_message_queued",
           text,
           ...(from && { from: from.id }),
+          ...(kind && { kind }),
         },
       });
-      return new Promise<void>((done) => waiting.push({ text, from, done }));
+      return new Promise<void>((done) =>
+        waiting.push({ text, from, kind, done }),
+      );
     },
     cancel() {
       if (!turn) return false;
       drop();
+      kept = undefined;
       // Before the harness hears of the cancel, so the request it waits on
       // is answered at once.
       turnAbort.abort();
