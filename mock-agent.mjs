@@ -55,7 +55,8 @@ const SCENARIOS = {
   answer:
     "a note, a tool call, a second note, two tool calls, then ends with no text",
   long: "one answer longer than 64 KiB",
-  "long-call": "like long, then a tool call",
+  "long-call":
+    "like long, in a 3-byte character, so 64 KiB splits one, then a tool call",
   half: "a note and a tool call, then waits for a cancel, like stall, and answers it end_turn, as copilot does (§M0-4)",
   "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
 };
@@ -439,9 +440,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
           kind: "read",
           status: "completed",
         });
-      if (scenario === "long" || scenario === "long-call") {
-        say("x".repeat(70_000));
-        if (scenario === "long-call") call(1);
+      if (scenario === "long") say("x".repeat(70_000));
+      else if (scenario === "long-call") {
+        say("€".repeat(30_000));
+        call(1);
       } else {
         say("Plan.");
         call(1);

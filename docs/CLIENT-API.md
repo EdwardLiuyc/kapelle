@@ -1307,9 +1307,11 @@ Since 1.12. When a turn ends, the daemon may send its answer on as a new message
 
 `from` is the participant whose turn ended. `<end>` is the turn's stop reason,
 `cancelled`, or `error`. The answer is the text after the turn's last tool call, or the
-last text before it when that is empty. Each is cut at 64 KiB, and the first line then
-ends with `, cut at 64 KiB`. A turn that was cancelled or whose harness exited sends its
-first line only. A turn that ended with an error sends the error as its answer.
+last text before it when that is empty. Each is cut at 64 KiB of UTF-8, never inside a
+character, and the first line then ends with `, cut at 64 KiB`. Only the answer is cut:
+a copy carries the person's message whole, as the worker got it. A cancelled turn sends
+its first line only. A turn that ended with an error, a harness that exited during it
+included, sends the error in place of its answer.
 
 The log's `text` is all the harness reads, first line included. There is no `[from …]`
 line. A reply or a copy is never refused for a full queue: it does not count toward the

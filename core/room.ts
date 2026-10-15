@@ -103,9 +103,12 @@
  * messaged a worker, the orchestrator gets a copy instead: `[copy] you →
  * <name>`, the same status, the message, then the answer. The answer is the
  * text after the last tool call, or the last text before it when that is
- * empty, each cut at `ANSWER_CAP`. It is kept from the prompt's send to the
- * turn's end, and dropped at a cancel or the harness's exit: such a turn
- * replies with its first line only, and an error turn with its error. A
+ * empty, each cut at `ANSWER_CAP` bytes; the person's message is sent whole.
+ * It is kept from the prompt's send to the turn's end, and dropped at a
+ * cancel or the harness's exit. A cancelled turn replies with its first line
+ * only; an error turn, an exit included, with the error in place of the
+ * answer. The answer is taken before the checkout read that ends a turn, so a
+ * cancel during that read does not cut it. A
  * reply and a copy carry `kind`, skip `QUEUE_BOUND`, and their own turns
  * send nothing, so a loop cannot start. A stop (remove, dismiss or pause)
  * sends nothing either; a reply to a sender no longer on the roster is
@@ -275,8 +278,15 @@ export interface ParticipantChanges {
 type Sender = Pick<Participant, "id" | "name">;
 
 /** How much of each answer block a turn keeps for its reply (M8-2), in
- *  UTF-16 code units. */
+ *  UTF-8 bytes. A cut never splits a character. */
 const ANSWER_CAP = 64 * 1024;
+
+/** The longest start of `text` that fits in `bytes` of UTF-8. A streaming
+ *  decode holds back a character the cut would split. */
+const fitBytes = (text: string, bytes: number) =>
+  new TextDecoder().decode(Buffer.from(text).subarray(0, bytes), {
+    stream: true,
+  });
 
 /** A turn that ended, as its reply or copy needs it (M8-2). */
 interface Answer {
@@ -1133,6 +1143,9 @@ async function buildRoom(
   // to the orchestrator. Looked up now, so a rename or a role change during
   // the turn counts.
   const answer = (worker: Participant, a: Answer) => {
+    // A pause stops its members only after the adds and removes in flight;
+    // a turn that ends in between must not send either (#295).
+    if (ended()) return;
     const s = a.calls === 1 ? "" : "s";
     const status =
       `${a.end}, ${a.calls} tool call${s}` +
@@ -1646,7 +1659,13 @@ function createParticipant({
   // exit drop it, so a cut turn's half-written text is never sent on.
   // `calls` stays: the reply's first line counts them.
   let kept:
-    | { since: string; sinceCut: boolean; last: string; lastCut: boolean }
+    | {
+        since: string;
+        sinceBytes: number;
+        sinceCut: boolean;
+        last: string;
+        lastCut: boolean;
+      }
     | undefined;
   let calls = 0;
   const keep = (update: AgentEvent) => {
@@ -1658,14 +1677,19 @@ function createParticipant({
         kept.lastCut = kept.sinceCut;
       }
       kept.since = "";
+      kept.sinceBytes = 0;
       kept.sinceCut = false;
     } else if (
       update.sessionUpdate === "agent_message_chunk" &&
       update.content?.type === "text"
     ) {
-      const left = ANSWER_CAP - kept.since.length;
-      if (update.content.text.length > left) kept.sinceCut = true;
-      kept.since += update.content.text.slice(0, Math.max(0, left));
+      const chunk = update.content.text;
+      const left = ANSWER_CAP - kept.sinceBytes;
+      const bytes = Buffer.byteLength(chunk);
+      const fit = bytes <= left ? chunk : fitBytes(chunk, left);
+      if (fit !== chunk) kept.sinceCut = true;
+      kept.since += fit;
+      kept.sinceBytes += fit === chunk ? bytes : Buffer.byteLength(fit);
     }
   };
 
@@ -1803,30 +1827,42 @@ function createParticipant({
       if (!agent) throw new Error("the agent's harness has exited");
       // From here, not before: a load replays old turns as text.
       if (!kind)
-        kept = { since: "", sinceCut: false, last: "", lastCut: false };
+        kept = {
+          since: "",
+          sinceBytes: 0,
+          sinceCut: false,
+          last: "",
+          lastCut: false,
+        };
       return agent.prompt(
         from && !kind ? `[from ${from.name}]\n${text}` : text,
       );
     };
-    // A reply's or a copy's turn sends nothing, and neither does a stop's.
-    const finish = (end: string, error?: string) => {
+    // The answer as the harness left it, taken before the checkout read:
+    // a cancel during that read comes after the turn ended (#295).
+    const take = (end: string, error?: string): Answer | undefined => {
       const answer = kept;
       kept = undefined;
-      if (kind || stopping || dismissed()) return;
+      // A reply's or a copy's turn sends nothing.
+      if (kind) return undefined;
       // None after a cancel or an exit: both dropped it.
       const [body, cut] = !answer
         ? ["", false]
         : answer.since.trim()
           ? [answer.since, answer.sinceCut]
           : [answer.last, answer.lastCut];
-      onAnswer(participant, {
+      return {
         text,
         ...(from && { from }),
         end,
         calls,
         body: error ?? body,
         cut: error === undefined && cut,
-      });
+      };
+    };
+    // A stop sends nothing, also one that came during the checkout read.
+    const finish = (answer: Answer | undefined) => {
+      if (answer && !stopping && !dismissed()) onAnswer(participant, answer);
     };
     let ready: Promise<void> | undefined;
     if (!agent) ready = revive();
@@ -1847,23 +1883,27 @@ function createParticipant({
     turn = (ready ? ready.then(prompt) : Promise.resolve(prompt()))
       .then(
         async ({ stopReason }) => {
+          // Our own record, not `stopReason`: copilot answers `end_turn` for
+          // a turn it cancelled (§M0-4).
+          const answer = take(
+            controller.signal.aborted ? "cancelled" : stopReason,
+          );
           await after();
           bus.emit({
             agent: id,
             update: { sessionUpdate: "_client_turn_ended", stopReason },
           });
-          // Our own record, not `stopReason`: copilot answers `end_turn` for
-          // a turn it cancelled (§M0-4).
-          finish(controller.signal.aborted ? "cancelled" : stopReason);
+          finish(answer);
         },
         async (err) => {
           const error = err instanceof Error ? err.message : String(err);
+          const answer = take("error", error);
           await after();
           bus.emit({
             agent: id,
             update: { sessionUpdate: "_client_turn_ended", error },
           });
-          finish("error", error);
+          finish(answer);
         },
       )
       .finally(() => {

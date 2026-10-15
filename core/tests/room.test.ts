@@ -2290,9 +2290,11 @@ test("a reply to a sender that left the room is dropped, and the log says so", a
   );
 });
 
-for (const [scenario, calls] of [
-  ["long", "0 tool calls"],
-  ["long-call", "1 tool call"],
+// 64 KiB is 21,845 whole `€`, three bytes each: the cut drops the one it
+// would split.
+for (const [scenario, calls, kept] of [
+  ["long", "0 tool calls", "x".repeat(64 * 1024)],
+  ["long-call", "1 tool call", "€".repeat(21_845)],
 ]) {
   test(`an answer over 64 KiB is cut, and the reply says so (${scenario})`, async (t) => {
     const { po, dev, told, settled } = await loopRoom(t, scenario as string);
@@ -2301,7 +2303,7 @@ for (const [scenario, calls] of [
     const [[text] = []] = told(po);
     const [head, body] = (text as string).split("\n");
     assert.equal(head, `[reply from dev] end_turn, ${calls}, cut at 64 KiB`);
-    assert.equal(body, "x".repeat(64 * 1024));
+    assert.equal(body, kept);
   });
 }
 
@@ -2333,3 +2335,77 @@ test("three queued messages from the orchestrator get three replies, in order", 
     ],
   );
 });
+
+test("a cancel after the harness answered, while the checkout is read, still replies with the answer", async (t) => {
+  const { po, dev, of, told, settled } = await loopRoom(t, "remember");
+  // A `git` that waits while `slow` exists holds the turn in its end step,
+  // after the harness answered and before the turn's end line.
+  const dir = await tempDir(t);
+  const slow = join(dir, "slow");
+  const real = (await run("sh", ["-c", "command -v git"])).stdout.trim();
+  await writeFile(
+    join(dir, "git"),
+    `#!/bin/sh\n[ -e "${slow}" ] && sleep 0.5\nexec "${real}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  const path = process.env.PATH;
+  process.env.PATH = `${dir}:${path}`;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+  await writeFile(slow, "");
+  const turn = dev.send("go", po);
+  await until(() => of(dev, "agent_message_chunk").length > 0, "the answer");
+  await new Promise((ok) => setTimeout(ok, 100));
+  assert.equal(dev.cancel(), true, "the turn is still live");
+  await turn;
+  await settled();
+  assert.deepEqual(told(po), [
+    [
+      "[reply from dev] end_turn, 0 tool calls\nprevious: (none)",
+      dev.id,
+      "reply",
+    ],
+  ]);
+});
+
+test("a turn that ends while the room pauses sends nothing", async (t) => {
+  const { room, po, dev, told } = await loopRoom(t, "slow");
+  // A harness that ignores SIGTERM keeps its remove in flight for the stop's
+  // grace, and the pause waits for it before it stops anyone.
+  const stuck = await room.add(
+    roomAgent({ cmd: `node ${MOCK_AGENT} --scenario stubborn`, name: "stuck" }),
+  );
+  const turn = dev.send("go", po);
+  const removing = room.remove(stuck.id);
+  const pausing = room.pause();
+  await turn;
+  await new Promise((ok) => setTimeout(ok, 100));
+  assert.deepEqual(told(po), []);
+  await removing;
+  await pausing;
+});
+
+test("a stopped orchestrator revives for a reply, as for any message", async (t) => {
+  const { po, dev, of, told, settled } = await loopRoom(t, "remember");
+  await po.send("one");
+  const [spawned] = of(po, "_client_harness_spawned");
+  assert.ok(spawned);
+  process.kill((spawned.update as { pid: number }).pid, "SIGKILL");
+  await until(() => po.status() === "exited", "po exited");
+  await dev.send("go", po);
+  await settled();
+  assert.equal(of(po, "_client_participant_revived").length, 1);
+  assert.equal(told(po).at(-1)?.[2], "reply");
+});
+
+for (const how of ["remove", "dismiss"] as const) {
+  test(`a worker's ${how} during its turn sends nothing`, async (t) => {
+    const { room, po, dev, of, told } = await loopRoom(t, "half");
+    const turn = dev.send("go", po);
+    await until(() => of(dev, "tool_call").length > 0, "dev's tool call");
+    await (how === "remove" ? room.remove(dev.id) : room.dismiss());
+    await turn;
+    assert.deepEqual(told(po), []);
+  });
+}
