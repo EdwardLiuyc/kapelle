@@ -415,10 +415,10 @@ test("a title is stored as a screen may draw it", async (t) => {
   assert.match(title, /^a b \[2Jc$/);
 });
 
-test("a poll asked before a rename cannot bring the old title back", async (t) => {
+test("a poll asked before a rename cannot bring the old title back, and the rest of it lands", async (t) => {
   const daemon = await fake(t);
   daemon.status.set("r1", "active");
-  daemon.list = [{ ...entry("r1"), title: "old" }];
+  daemon.list = [{ ...entry("r1"), title: "old", status: "paused" }];
   daemon.holdLists = true;
   const { set, said } = follow(t, daemon.d);
   set.start([{ ...entry("r1"), title: "old" }]);
@@ -429,6 +429,7 @@ test("a poll asked before a rename cannot bring the old title back", async (t) =
   daemon.releaseLists();
   await until(() => said.polls >= 1);
   assert.equal(set.rooms.get("r1")?.entry.title, "new ");
+  assert.equal(set.rooms.get("r1")?.entry.status, "paused");
   // A poll asked after the rename renews the entry again.
   daemon.holdLists = false;
   daemon.list = [{ ...entry("r1"), title: "later" }];

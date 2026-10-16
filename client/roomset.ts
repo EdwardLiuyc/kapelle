@@ -205,7 +205,7 @@ export interface Followed {
   /** Set when its stream ended and the room did not: what happened. */
   lost?: Ended;
   /** The last poll asked before this screen renamed the room. Its reply,
-   *  and every older one, may hold the old title, so they leave `entry`. */
+   *  and every older one, may hold the old title, so they keep this one. */
   renamedAfter?: number;
 }
 
@@ -403,8 +403,12 @@ export function roomSet(
           }
           for (const entry of res.body) {
             const r = rooms.get(entry.id);
-            if (r && ask > (r.renamedAfter ?? 0)) r.entry = shownEntry(entry);
-            else if (entry.status !== "dismissed") add(entry);
+            if (r) {
+              const stale = ask <= (r.renamedAfter ?? 0);
+              r.entry = shownEntry(
+                stale ? { ...entry, title: r.entry.title } : entry,
+              );
+            } else if (entry.status !== "dismissed") add(entry);
           }
           on.polled();
         },

@@ -358,7 +358,7 @@ export async function runCommand(
       if (!r.ok) return refused(r.error.message, r.error.code);
       return {
         ok: true,
-        line: `renamed the room to ${printable(r.body.title ?? c.title)}`,
+        line: `renamed the room to ${printable(c.title)}`,
         room: r.body,
       };
     }
