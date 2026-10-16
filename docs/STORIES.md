@@ -3621,13 +3621,28 @@ The bundler then replaces `tsc` in `prepack`.
 **Decided 2026-10-15: the build goes to `dist/`, not beside the sources.** One named line
 in `.gitignore` (`dist/`), as that file's comment asks, and no glob that could hide a
 real `.js` file. `bin` becomes `./dist/cli.js`.
+**Open, for the pickup: the checkout's own install.** `README.md` says `npm install`,
+then `npm link`. npm runs `prepack` on `npm pack` and `npm publish` only, not on `npm
+install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts a
+`kapelle` on `PATH` that points at a file that does not exist. Three answers:
+
+- A. `README.md` drops `npm link` for `node cli.ts`, with a shell alias for the short
+  name. No build step, and the live code runs. Recommended 2026-10-16.
+- B. A `build` script, and `README.md` says `npm install && npm run build && npm link`.
+  The linked `kapelle` then runs `dist/`, which is out of date after each edit until the
+  next build. `AGENTS.md`'s commands get `npm run build`.
+- C. `prepare` in place of `prepack`. It builds on every `npm install`, which breaks
+  `AGENTS.md`'s "no build step" for a checkout.
+
 **What changes:**
 
 1. `tsconfig.build.json` extends `tsconfig.json`. It sets `outDir: "dist"`,
-   `rewriteRelativeImportExtensions: true`, and `noEmit` and `allowImportingTsExtensions`
-   to `false`. It excludes `**/tests/`, `integration/` and `dist/`. `tsconfig.json`'s
-   `include` takes every `.ts`, and `node --test` runs any `*.test.js` it finds, so a
-   test built into `dist/` would run twice.
+   `rewriteRelativeImportExtensions: true` and `noEmit: false`, and keeps the inherited
+   `allowImportingTsExtensions`. It excludes `**/tests/**`, `integration/**`, `dist/**`
+   and `node_modules`. `tsconfig.json`'s `include` takes every `.ts`, and `node --test`
+   runs any `*.test.js` it finds, so a test built into `dist/` would run twice.
+   Measured 2026-10-16 with this file: the build exits 0, and `dist/` holds no
+   `*.test.js`.
 2. `package.json`: remove `"private": true`; `bin` is `./dist/cli.js`; `files` is
    `["dist"]` (npm adds `README.md`, `LICENSE` and `package.json` by itself); add
    `repository` and the `prepack` script.
@@ -3636,24 +3651,36 @@ real `.js` file. `bin` becomes `./dist/cli.js`.
    warning, so the test below checks the list.
 3. `.gitignore` gets `dist/`. `biome.json`'s `files.includes` gets `!dist`: biome does
    not read `.gitignore` here (no `vcs` block), so without it `npx biome check --write .`
-   formats and lints the build. `tsc` (it reads `.ts` only) and knip (it reads
-   `.gitignore`) need no change.
+   formats and lints the build. Measured 2026-10-16: with `!dist`, a badly formatted
+   `dist/bad.js` gives no finding, and biome names `!dist` as its own form for a folder
+   (it warns on `!dist/**`). `tsc` reads `.ts` only. knip needs no change: measured
+   2026-10-16 with `bin` at `./dist/cli.js` and no `dist/`, `npm run knip` exits 0,
+   because `cli.ts!` stays its entry.
 4. `kapelle --version` prints the version from `package.json`, for bug reports. Today
    nothing reads `package.json` at run time. The path differs: `./package.json` from
-   `cli.ts` in a checkout, `../package.json` from `dist/cli.js`.
+   `cli.ts` in a checkout, `../package.json` from `dist/cli.js`. **Decided 2026-10-16:**
+   read `package.json` beside the running file, and if it is not there, one folder up.
+   npm always packs `package.json`, so the second path is there in the package.
 5. Docs. `AGENTS.md`: the "no build step" lines get "except when the package is made";
-   the "do not rename to `agent-team`" rule loses its `private: true stays` half. The
-   same "no build step" line in `docs/PROJECT-PLAN.md`. `README.md` gets the install
-   command, and says it is for Linux and macOS only: `package.json` has `"os"`, so npm
-   refuses the install on Windows (`EBADPLATFORM`).
+   the "do not rename to `agent-team`" rule loses its `private: true stays` half.
+   `docs/PROJECT-PLAN.md`: the same "no build step" line. M1c-5 in this file: its
+   "`private: true` is kept" gets "superseded by M9-7". `README.md` already says
+   Windows is not supported; it gets the `npm install -g kapelle` block, and the note
+   that npm refuses the install on Windows (`EBADPLATFORM`), because `package.json`
+   has `"os"`.
 
 *Done when* a test, with no network and no global install: runs `npm pack
 --pack-destination <tmp>`; unpacks the `.tgz` into `<tmp>/node_modules/kapelle`; links
 the checkout's `node_modules` for the three runtime dependencies; runs `node
-<tmp>/node_modules/kapelle/dist/cli.js --help` and `--version` (it fails today with the
-error above); and checks from `npm pack --dry-run --json` that the file list holds only
-`dist/`, `README.md`, `LICENSE` and `package.json`, with no test file. The person also
-runs `npm install -g ./kapelle-<version>.tgz` once by hand and types `kapelle`.
+<tmp>/node_modules/kapelle/dist/cli.js --help` and checks the help text (today `--help`
+alone exits 1, `cli.ts:204`, so the test does not check the exit code); runs
+`--version`; imports `dist/chat/tui.js` and `dist/chat/tui/term.js`, so pi-tui and
+`@xterm/headless` load too (`--help` loads only `marked`); and checks from `npm pack
+--dry-run --json` that the file list holds only `dist/`, `README.md`, `LICENSE` and
+`package.json`, with no test file. `npm pack` runs `prepack`, which writes `dist/` into
+the checkout; the test removes `dist/` at the end. Measured 2026-10-16: the packed
+`--help` prints the help, and both chat modules load. The person also runs `npm install
+-g ./kapelle-<version>.tgz` once by hand and types `kapelle`.
 
 **M9-8 · Publish to npm · S · needs the other M9 stories**
 The first release. The person does steps 1 and 2 by hand.
@@ -3668,6 +3695,10 @@ The first release. The person does steps 1 and 2 by hand.
    `npm publish`. It needs `id-token: write`. If npm needs the package to exist before a
    trusted publisher can be added, the first publish is `npm publish` by hand.
 5. Write the release notes on GitHub for the tag. They say Linux and macOS only.
+
+The npm page shows `README.md`. Its logo (`src="assets/icon.svg"`) is a relative link,
+and npm points relative links at the repository. So the logo shows only once the
+repository is public (step 2), or if the link becomes a full URL.
 
 *Done when* the publish job exists, `kapelle` is on npm, and `npm install -g kapelle`
 then `kapelle --version` works on a clean machine.
