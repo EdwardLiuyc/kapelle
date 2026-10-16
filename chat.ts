@@ -65,7 +65,7 @@ start it with @name to send it to that agent instead.
   /dismiss   stop the room's harnesses; uncommitted work stays in each
              checkout, because the supervisor never commits for it (R37)
   /help      the commands below, on the screen
-  ${HELP.slice(0, 7).join("\n  ")}
+  ${HELP.slice(0, 8).join("\n  ")}
 a command never reaches an agent. Room commands work after a thread's
 @name too; an agent's command needs its @name.
 

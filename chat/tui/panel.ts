@@ -313,6 +313,7 @@ function panelParts({
       items.push({ value: "agent", label: "agent …" });
     }
     if (r) items.push({ value: "add", label: "add agent …" });
+    if (r) items.push({ value: "title", label: "rename room …" });
     items.push({ value: "new", label: "new room …" });
     if (r) items.push({ value: "dismiss", label: "dismiss room" });
     items.push({ value: "help", label: "help" });
@@ -340,6 +341,14 @@ function panelParts({
     if (value === "new") return newForm(self);
     if (value === "add") return addForm(self);
     if (value === "dismiss") return void run({ verb: "dismiss" });
+    if (value === "title" && r) {
+      const input = textBox(r.entry.title ?? "");
+      // An empty title is the daemon's refusal, shown in the pop-up.
+      input.onSubmit = (title) =>
+        void run({ verb: "title", title: title.trim() });
+      input.onEscape = self;
+      return showPanel(`rename ${r.entry.title ?? r.entry.id}`, input);
+    }
     if (value === "agent" && r) {
       const ps = roster(r.state);
       const items = ps.map((q) => ({

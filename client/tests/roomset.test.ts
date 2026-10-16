@@ -45,6 +45,8 @@ const entry = (id: string): RoomListEntry => ({
 async function fake(t: TestContext, token = "tok") {
   /** Reads whose answer waits for `releaseRead`. */
   const held: (() => void)[] = [];
+  /** Polls whose answer waits for `releaseLists`. */
+  const heldLists: (() => void)[] = [];
   const daemon = {
     d: { port: 0, token } as DaemonAddress,
     /** What `GET /version` answers. */
@@ -57,6 +59,12 @@ async function fake(t: TestContext, token = "tok") {
     listStatus: 200,
     /** How many times `GET /rooms` was asked. */
     polls: 0,
+    /** When set, a `GET /rooms` answer waits for `releaseLists`, with the
+     *  list as it was when the poll came. */
+    holdLists: false,
+    releaseLists: () => {
+      for (const answer of heldLists.splice(0)) answer();
+    },
     status: new Map<string, RoomStatus | number>(),
     /** The lines each room's stream sends before it waits. */
     lines: new Map<string, RoomEventLine[]>(),
@@ -98,7 +106,12 @@ async function fake(t: TestContext, token = "tok") {
     if (!id) {
       daemon.polls++;
       if (daemon.listStatus === 0) return req.socket.destroy();
-      return json(res, daemon.listStatus, daemon.list);
+      const list = daemon.list;
+      if (daemon.holdLists) {
+        heldLists.push(() => json(res, daemon.listStatus, list));
+        return;
+      }
+      return json(res, daemon.listStatus, list);
     }
     if (events) {
       const after = String(req.headers["last-event-id"] ?? 0);
@@ -389,6 +402,38 @@ test("a room followed already is not followed again, and the poll renews its ent
   set.add(entry("r1"));
   assert.equal(set.rooms.get("r1"), r1);
   assert.deepEqual(daemon.reads, ["r1"], "the room was read once");
+});
+
+test("a title is stored as a screen may draw it", async (t) => {
+  const daemon = await fake(t);
+  daemon.list = [{ ...entry("r1"), title: "a\nb\u001b[2Jc" }];
+  const { set } = follow(t, daemon.d);
+  set.start([]);
+  await until(() => set.rooms.has("r1"));
+  const title = set.rooms.get("r1")?.entry.title ?? "";
+  assert.doesNotMatch(title, /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+  assert.match(title, /^a b \[2Jc$/);
+});
+
+test("a poll asked before a rename cannot bring the old title back, and the rest of it lands", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.list = [{ ...entry("r1"), title: "old", status: "paused" }];
+  daemon.holdLists = true;
+  const { set, said } = follow(t, daemon.d);
+  set.start([{ ...entry("r1"), title: "old" }]);
+  await until(() => daemon.polls >= 1);
+  // The rename lands while that poll waits, with the old title in it.
+  set.retitle("r1", "new\u001b");
+  daemon.list = [{ ...entry("r1"), title: "new" }];
+  daemon.releaseLists();
+  await until(() => said.polls >= 1);
+  assert.equal(set.rooms.get("r1")?.entry.title, "new ");
+  assert.equal(set.rooms.get("r1")?.entry.status, "paused");
+  // A poll asked after the rename renews the entry again.
+  daemon.holdLists = false;
+  daemon.list = [{ ...entry("r1"), title: "later" }];
+  await until(() => set.rooms.get("r1")?.entry.title === "later");
 });
 
 test("a dismissed room leaves the set, and the set goes on", async (t) => {

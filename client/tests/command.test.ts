@@ -132,6 +132,18 @@ test("rename, role and mode are one PATCH each; role none clears it", () => {
   }
 });
 
+test("/title takes the rest of the line, and ignores a mention", () => {
+  const title = (t: string) => ({ verb: "title", title: t });
+  assert.deepEqual(parse("/title login bug"), title("login bug"));
+  assert.deepEqual(parse('@bob /title "login bug"'), title("login bug"));
+  assert.deepEqual(parse('/title Review "v2"'), title('Review "v2"'));
+  assert.deepEqual(parse("/title a  b"), title("a  b"));
+  // Two quoted words are not one quoted title.
+  assert.deepEqual(parse('/title "a" and "b"'), title('"a" and "b"'));
+  const r = parse("/title");
+  assert.ok(r && "error" in r && /^usage:/.test(r.error));
+});
+
 test("/new in a removed folder is refused, unless --cwd is a full path", async (t) => {
   const gone = await mkdtemp(join(tmpdir(), "command-gone-"));
   const back = process.cwd();

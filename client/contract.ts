@@ -46,7 +46,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 12 } as const;
+export const API_VERSION = { major: 1, minor: 13 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -339,7 +339,8 @@ export interface RoomDto {
   title?: string;
   /** ISO 8601. */
   createdAt: string;
-  /** ISO 8601. `updatedAt` moves on a message, a dismiss, or a roster change. */
+  /** ISO 8601. `updatedAt` moves on a message, a dismiss, a roster change,
+   *  or a rename. */
   updatedAt: string;
   status: RoomStatus;
   /** The room log's size when the daemon answered: the reply counts every

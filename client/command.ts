@@ -9,8 +9,8 @@
  * **A participant command starts with `@name`**, as a message does (R43):
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
  * the orchestrator, so a bare `/remove` cannot drop it. Room commands
- * (`/new`, `/add`, `/dismiss`, `/leave`, `/help`, `/term`) ignore a mention,
- * so they work after a thread's pre-filled `@name`.
+ * (`/new`, `/add`, `/title`, `/dismiss`, `/leave`, `/help`, `/term`) ignore a
+ * mention, so they work after a thread's pre-filled `@name`.
  *
  * **The screen never guesses** (M4-5). A value the daemon checks (a role, a
  * mode, a harness) is sent as typed, and a refusal is the daemon's own
@@ -29,6 +29,7 @@ import type { ParticipantDto, RoomDto } from "./contract.ts";
 import { call, type DaemonAddress } from "./daemon.ts";
 import { absoluteFolder, FOLDER_GONE } from "./folder.ts";
 import { fold, MENTION, type Named, targetOf } from "./mention.ts";
+import { printable } from "./room.ts";
 
 /** One agent, as `POST /rooms` and `POST /rooms/:id/agents` take it. A
  *  `base` of `@name` is that participant's branch, looked up at send. */
@@ -53,6 +54,7 @@ export type RouteCommand =
   | { verb: "new"; body: NewRoom }
   | { verb: "add"; agent: AgentSpec }
   | { verb: "dismiss" }
+  | { verb: "title"; title: string }
   | { verb: "remove" | "cancel"; id: string; name: string }
   | {
       verb: "forward";
@@ -88,6 +90,7 @@ export type Command =
 export const HELP = [
   "/new [harness] [--cmd c] [--name n] [--title t] [--cwd dir]",
   "/add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--base @name|ref]",
+  "/title <new title>",
   "@name /rename <new name>",
   "@name /role <role|none>",
   "@name /mode <ask|safe|auto>",
@@ -102,6 +105,7 @@ export const HELP = [
 export const USAGE: Record<string, string> = {
   new: HELP[0] as string,
   add: HELP[1] as string,
+  title: "usage: /title <new title>",
   rename: "usage: @name /rename <new name>",
   role: "usage: @name /role <role|none>",
   mode: "usage: @name /mode <ask|safe|auto>",
@@ -111,7 +115,15 @@ export const USAGE: Record<string, string> = {
   ff: "usage: @name /ff --from @name",
 };
 
-const ROOM_VERBS = new Set(["new", "add", "dismiss", "leave", "help", "term"]);
+const ROOM_VERBS = new Set([
+  "new",
+  "add",
+  "title",
+  "dismiss",
+  "leave",
+  "help",
+  "term",
+]);
 const AGENT_VERBS = new Set([
   "rename",
   "role",
@@ -180,6 +192,14 @@ export function parseCommand(
   ) {
     // Exact, as before M4-5: `/dismiss the old plan` is a message.
     return args.length ? undefined : { verb };
+  }
+  if (verb === "title") {
+    // The rest of the line: spaces inside a title stay. One pair of quotes
+    // around the whole title, with no such quote inside, is quoting.
+    const raw = rest.trimStart().slice(head.length).trim();
+    const quoted = /^(["'])((?:(?!\1)[\s\S])*)\1$/.exec(raw);
+    const title = (quoted?.[2] ?? raw).trim();
+    return title ? { verb, title } : { error: USAGE.title as string };
   }
   if (verb === "new" || verb === "add") {
     if (!args.length) return { verb: "form", form: verb };
@@ -318,7 +338,7 @@ export async function runCommand(
     if (!r.ok) return refused(r.error.message, r.error.code);
     return {
       ok: true,
-      line: `opened room ${r.body.title ?? r.body.id}`,
+      line: `opened room ${printable(r.body.title ?? r.body.id)}`,
       room: r.body,
     };
   }
@@ -329,6 +349,18 @@ export async function runCommand(
       const r = await call<RoomDto>(d, `${room}/dismiss`, { method: "POST" });
       if (!r.ok) return refused(r.error.message, r.error.code);
       return { ok: true, line: `dismissed ${roomId}`, room: r.body };
+    }
+    case "title": {
+      const r = await call<RoomDto>(d, room, {
+        method: "PATCH",
+        body: { title: c.title },
+      });
+      if (!r.ok) return refused(r.error.message, r.error.code);
+      return {
+        ok: true,
+        line: `renamed the room to ${printable(c.title)}`,
+        room: r.body,
+      };
     }
     case "add": {
       const spec = await agentBody(d, roomId, c.agent);

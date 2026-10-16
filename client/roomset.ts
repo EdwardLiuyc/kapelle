@@ -45,6 +45,7 @@ import {
   applyStatus,
   type Entry,
   newRoomState,
+  printable,
   type RoomState,
 } from "./room.ts";
 import { type Connect, followEvents } from "./stream.ts";
@@ -203,6 +204,9 @@ export interface Followed {
   again?: "loaded" | "reloaded";
   /** Set when its stream ended and the room did not: what happened. */
   lost?: Ended;
+  /** The last poll asked before this screen renamed the room. Its reply,
+   *  and every older one, may hold the old title, so they keep this one. */
+  renamedAfter?: number;
 }
 
 /** Why the set ends: every room lost its stream (the last one to go is
@@ -243,6 +247,9 @@ export interface RoomSet {
   add(entry: RoomListEntry): void;
   /** Follows `list` and starts the poll. */
   start(list: readonly RoomListEntry[]): void;
+  /** Shows the title this screen gave room `id` at once. The stream has no
+   *  line for it, and a poll asked before it cannot bring the old one back. */
+  retitle(id: string, title: string): void;
   /** Stops the poll. */
   stop(): void;
   /** Reads `daemon.json` now, as the next poll would, so a send right after
@@ -266,6 +273,8 @@ export function roomSet(
     for (const r of rooms.values()) loadDto(r);
   });
   let poll: NodeJS.Timeout | undefined;
+  /** How many polls were asked. */
+  let asked = 0;
   let over = false;
   /** Ends the set once: a poll that fails again must not end it again. */
   const finish = (why: End) => {
@@ -356,9 +365,16 @@ export function roomSet(
     on.closed(id, ended, r);
   };
 
+  /** An entry as a screen draws it: a title is free text, and every screen
+   *  draws it on one line. */
+  const shownEntry = (entry: RoomListEntry): RoomListEntry =>
+    entry.title === undefined
+      ? entry
+      : { ...entry, title: printable(entry.title) };
+
   const add = (entry: RoomListEntry) => {
     if (rooms.has(entry.id)) return;
-    const r: Followed = { entry, state: newRoomState() };
+    const r: Followed = { entry: shownEntry(entry), state: newRoomState() };
     rooms.set(entry.id, r);
     loadDto(r);
     readRoom(current, entry.id, (line) => onLine(r, line), waitMs).then(
@@ -373,6 +389,7 @@ export function roomSet(
   // daemon that refuses our version ends the set (M4-5, M6-7d).
   let away: number | undefined;
   const tick = () => {
+    const ask = ++asked;
     current()
       .then((a) => call<RoomListEntry[]>(a, "/rooms"))
       .then(
@@ -386,8 +403,12 @@ export function roomSet(
           }
           for (const entry of res.body) {
             const r = rooms.get(entry.id);
-            if (r) r.entry = entry;
-            else if (entry.status !== "dismissed") add(entry);
+            if (r) {
+              const stale = ask <= (r.renamedAfter ?? 0);
+              r.entry = shownEntry(
+                stale ? { ...entry, title: r.entry.title } : entry,
+              );
+            } else if (entry.status !== "dismissed") add(entry);
           }
           on.polled();
         },
@@ -416,6 +437,12 @@ export function roomSet(
     },
     stop() {
       clearInterval(poll);
+    },
+    retitle(id, title) {
+      const r = rooms.get(id);
+      if (!r) return;
+      r.entry = shownEntry({ ...r.entry, title });
+      r.renamedAfter = asked;
     },
     fresh: () =>
       current().then(

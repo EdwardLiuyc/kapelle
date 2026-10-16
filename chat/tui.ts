@@ -1196,6 +1196,9 @@ function chatTui(
         return false;
       }
       if (box.panel) hidePanel();
+      if (c.verb === "title" && out.room?.title) {
+        set.retitle(out.room.id, out.room.title);
+      }
       if (c.verb === "new" && out.room) {
         const { id, cwd, title, status, updatedAt, participants } = out.room;
         set.add({
