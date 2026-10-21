@@ -19,6 +19,7 @@ client commit and spike branch — they differ, and by enough to matter:
 | M0-9 | 2026-09-27 | `04d6ac9` (run 1), `457bfb5` (run 2); same `protocol/` and `core/policy.ts` | `spike/m0-9-load-probe` (`load-probe.mjs`) |
 | M6-7b | 2026-10-08 | `635a124` + the M6-7b working tree | `integration/daemon.itest.ts` |
 | Models and login | 2026-10-15 | none: no client code ran | `spike/m9-models-probe` (`models-probe.mjs`) |
+| M9-1: Codex, Kimi Code, and the four again | 2026-10-21 | `80cac13` + launch-only `codex` and `kimi` entries | `spike/m9-1-measure` (`turn-probe.mjs`, with `load-probe-simple.mjs` and `models-probe.mjs` from the branches above) |
 
 Method throughout: each harness spawned behind a transparent stdio proxy that logged every
 JSON-RPC line in both directions, so "did not happen" below means *absent from the wire*,
@@ -72,7 +73,8 @@ M1a-4's call, not this note's.
 
 At the time of the M0 runs below, `omp`, `pi` and `gemini` were uninstalled here:
 **`unknown` by absence, not by test.** pi was measured later (2026-09-09, below);
-`omp` and `gemini` remain unverified by absence. `unknown` should read as
+`omp` and `gemini` were never measured, and M9-1 removed both from the registry
+(M9 D2). `unknown` should read as
 `internal` / `none` for warning purposes.
 
 ### Containment vocabulary
@@ -1415,19 +1417,19 @@ no token and no login file could reach it. All four started at the same time eac
 The spec side was read from the schema in `@agentclientprotocol/sdk` 1.8.0, the copy
 installed with claude-agent-acp; this repository does not depend on the SDK.
 
-| | opencode 2.0.18 | pi-acp 0.0.34 | claude-agent-acp 0.89.1 | copilot 1.0.91 |
-| --- | --- | --- | --- | --- |
-| models, logged in | 2: the person's `deepseek/…` | 19: the person's own setup | 13: aliases (`default`, `opus`, `sonnet`, …) and some full ids | 39 |
-| models, logged out | 10 free `opencode/…` models | none: `session/new` fails | 5 aliases | 19 |
-| `session/set_config_option` to a listed model | works | works | works | works |
-| a bogus model id | `-32602`, names the model | `-32603` `Internal error` | `-32603` `Internal error` | `-32602`, names the model |
-| older `models` object, `session/set_model` | neither | `models` sent; `set_model` is `-32601` | neither | both work |
-| `providers/list` | `-32601` | `-32601` | **works**: one provider, `main`, `anthropic` / `bedrock` / `vertex` | `-32601` |
-| provider in the model id | yes | yes | no | no |
-| logged-out signal | none; the free models work with no login | `session/new` fails with `-32000` `Authentication required`, and `data.authMethods` | `_auth/status_update` with `authStatus.kind: "none"`, label `Not logged in` | **none** |
-| `authMethods` on `initialize` | `opencode-login` | `pi_terminal_login` (`type: "terminal"`) | empty; `agentCapabilities.auth.logout` | `copilot-login` |
-| `sessionCapabilities.delete` | yes | yes | yes | no |
-| `initialize` + `session/new`, logged in | 1.5 s | 2.4 s | 1.5 s | 3.5 s |
+| | opencode 2.0.18 | pi-acp 0.0.34 | claude-agent-acp 0.89.1 | copilot 1.0.91 | codex-acp 2.2.2 | kimi 2.3.0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| models, logged in | 2: the person's `deepseek/…` | 19: the person's own setup | 13: aliases (`default`, `opus`, `sonnet`, …) and some full ids | 39 | 2 in `configOptions`: the person's `deepseek-…` | 2: the person's `deepseek/…` |
+| models, logged out | 10 free `opencode/…` models | none: `session/new` fails | 5 aliases | 19 | none: `session/new` fails | none: `session/new` fails |
+| `session/set_config_option` to a listed model | works | works | works | works | not measured: one model set up | not measured: one model set up |
+| a bogus model id | `-32602`, names the model | `-32603` `Internal error` | `-32603` `Internal error` | `-32602`, names the model | not measured | not measured |
+| older `models` object, `session/set_model` | neither | `models` sent; `set_model` is `-32601` | neither | both work | `models` sent, 6: each model with an effort; `set_model` not measured | neither |
+| `providers/list` | `-32601` | `-32601` | **works**: one provider, `main`, `anthropic` / `bedrock` / `vertex` | `-32601` | **works**: one provider, `openai` | `-32601` |
+| provider in the model id | yes | yes | no | no | no | yes |
+| logged-out signal | none; the free models work with no login | `session/new` fails with `-32000` `Authentication required`, and `data.authMethods` | `_auth/status_update` with `authStatus.kind: "none"`, label `Not logged in` | **none** | `session/new` fails with `-32000` `Authentication required` | `session/new` fails with `-32000` `Authentication required` |
+| `authMethods` on `initialize` | `opencode-login` | `pi_terminal_login` (`type: "terminal"`) | empty; `agentCapabilities.auth.logout` | `copilot-login` | `api-key`, `chat-gpt` | `login` (`type: "terminal"`) |
+| `sessionCapabilities.delete` | yes | yes | yes | no | yes | yes |
+| `initialize` + `session/new`, logged in | 1.5 s | 2.4 s | 1.5 s | 3.5 s | 0.5 s | 1.4 s |
 
 **Answers.**
 
@@ -1463,6 +1465,143 @@ log shows it found no login. Not measured: whether the model stays after `sessio
 (the mode does not, §Mode after load), and what each harness does on the first prompt when
 logged out.
 
+**Added 2026-10-21 (M9-1, #296):** the codex-acp and kimi columns. Same probe and the same
+logged-out method, but with the model switch and the bogus id taken out: the person had one
+model set up on each, so the switch was not measured. The four old columns were not run
+again; their versions are still the ones installed here. codex also sent
+`_auth/status_update` when logged in, with `authStatus.kind: "gateway"` and the label
+`Custom model gateway`, and nothing when logged out.
+
+**Programs.** For M9-3: the main program, the ACP program and the install command.
+
+| | main program | ACP program | install |
+| --- | --- | --- | --- |
+| Codex | `codex` (codex-cli 0.163.0) | `codex-acp` | `npm i -g @openai/codex @agentclientprotocol/codex-acp`, or `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` for `codex` |
+| Kimi Code | `kimi` | `kimi acp` | `npm i -g @moonshot-ai/kimi-code`, or `curl -fsSL https://code.kimi.com/kimi-code/install.sh \| bash` |
+
+The install commands come from web search, not from the vendors' own pages. Here, `codex`
+came from the install script and `kimi` from Kimi's own installer, so the npm names were
+not tried. `codex-acp` came from `npm i -g @agentclientprotocol/codex-acp` (`npm ls -g`
+shows 2.2.2). The README names only the parts tried here.
+
+---
+
+## Codex measured 2026-10-21 (M9-1)
+
+codex-acp 2.2.2 spawning codex-cli 0.163.0, one machine, a new temporary folder for each
+run, wire-tap captures. Each run set one mode, then sent one prompt: run
+`echo hi > shell.txt`, then write `edit.txt` with the file tool. The `safe` policy refused
+every change it was asked about; the approving runs used `auto`. `2.2.2` is the
+handshake's `agentInfo.version`, which `measuredOn` is compared with. kapelle never sees
+codex-cli's version.
+
+| field | codex-acp 2.2.2 |
+| --- | --- |
+| `shell` | `internal`: no `terminal/*` and no `fs/*` request. A shell call carries `_meta.terminal_info` and a `{type:"terminal"}` block for a terminal it never asks us to create |
+| `argvChannel` | `notification`: the command is in `rawInput.command` on the `tool_call`, and again in `rawInput` on the permission request |
+| `asksPermission` | **true, in two modes only**: see the table below |
+| `modeMap` | `{ safe: "read-only", ask: "read-only", auto: "agent-full-access" }` |
+| `usage` | `per-turn`: input 10763 → 261 tokens for a one-word second turn |
+| `loads` | `true`: after `session/load` in a new process it named the codeword and the cut-off step |
+| `measuredOn` | `{ version: "2.2.2", date: "2026-10-21" }` |
+
+The modes come in both `modes` and a `configOptions` entry with `category: "mode"`. The
+start mode is `agent`.
+
+| mode | asked us | under `safe` | approved |
+| --- | --- | --- | --- |
+| `read-only` | for the edit and for the command | nothing written; the turn ends `cancelled` | both done |
+| `workspace-write` | for the edit and for the command | nothing written; the turn ends `cancelled` | both done |
+| `agent` ("Auto review") | **never**: a `Guardian Review` tool call of kind `think` approves each call | `edit.txt` written | — |
+| `agent-full-access` | never | both written | — |
+
+**Why `ask` gets `read-only` too.** Codex describes `workspace-write` as "Edit workspace
+files; ask before writing outside the workspace". It asked for everything here, but every
+test folder was one codex does not trust: the person's `~/.codex/config.toml` trusts only
+the kapelle checkout. In a trusted folder it would probably stop asking, and our `ask`
+would see nothing. That was not tested, because it needs a change to the person's codex
+config. `read-only` asks by its own description, and the approved runs show the work still
+gets done. Decided with the person, 2026-10-21.
+
+Other wire notes:
+
+- **A refused request ends the whole turn** with `stopReason: "cancelled"`. The other
+  steps of the turn do not run. Status comes from our own record, so this is not a
+  cancel.
+- The model often did the file edit and then skipped the shell step, so the command was
+  also measured alone, with a prompt that asked only for it.
+- `session/new` returns `models`, `modes` and `configOptions`: `mode`,
+  `collaboration_mode` (`default`, `plan`), `model` and `reasoning_effort`
+  (`category: "thought_level"`).
+- `initialize` sends `_meta.steering.supported: true` and
+  `agentCapabilities._meta.authStatus`.
+
+---
+
+## Kimi Code measured 2026-10-21 (M9-1)
+
+Kimi Code 2.3.0, `kimi acp`, native. Same method and prompt as §Codex. `2.3.0` is the
+handshake's `agentInfo.version`.
+
+| field | kimi 2.3.0 |
+| --- | --- |
+| `shell` | `internal`: commands run with no `terminal/*` request. **Files go through `fs/read_text_file` and `fs/write_text_file`**, in every mode |
+| `argvChannel` | `notification`, **late**: the `tool_call` has no `rawInput`. The arguments stream as text in `tool_call_update` content, and the command arrives whole in `rawInput` on a `tool_call_update` just after the permission request. The request names it only in its `content` text: `Requesting approval to Running: echo hi > shell.txt` |
+| `asksPermission` | **true** in `default` |
+| `modeMap` | `{ safe: "plan", ask: "default", auto: "yolo" }` |
+| `usage` | `absent`: no `usage` on the `session/prompt` reply. It sends `usage_update` |
+| `loads` | `true`: after `session/load` in a new process it named the codeword and the cut-off step |
+| `measuredOn` | `{ version: "2.3.0", date: "2026-10-21" }` |
+
+| mode | asked us | under `safe` | approved |
+| --- | --- | --- | --- |
+| `plan` | never | no tool ran: both calls stayed `pending` | — |
+| `default` | for the command and for the edit | nothing written | both done; the write came through `fs/write_text_file` |
+| `auto` | never for the command | `shell.txt` written; our refusal of `fs/write_text_file` kept `edit.txt` out | — |
+| `yolo` | never for the command | the same as `auto` | — |
+
+**Kimi honours a refused `fs/write_text_file`.** So the path guard and the `safe` policy
+still bind its file writes in `auto` and `yolo`. A shell command in those modes is outside
+our reach.
+
+**An `ask` question does not name the command.** The `tool_call` title is `Bash`, and the
+command comes only after the request. So `--mode ask` asked
+`kimi wants to run [execute] Bash` for `echo hi > shell.txt` (one run, 2026-10-21). The
+request's `content` text names the command, but we do not show it. A room question was
+not tried; it reads the same map, so it is very likely blind too.
+
+---
+
+## M9-1 re-measure · the four entries again — 2026-10-21
+
+The same probes on the versions installed here: opencode 2.0.18, pi-acp 0.0.34 (pi 1.1.0),
+claude-agent-acp 0.89.1, copilot 1.0.91. Each in its start mode with a second turn, and in
+each `modeMap` id but `auto`'s, which we never send. Then the M0-9 load probe (`clean`).
+
+**Every label still holds.** `shell` is `internal` on all four. `argvChannel` is
+`notification` on all four: pi in the `tool_call` title, claude late on the update,
+copilot on the `tool_call` and on the request, opencode on the update. `loads` is `true`
+on all four. Changed or new:
+
+- **claude's `usage` is measured at last: `per-turn`.** Input 4 → 2 tokens, total
+  48374 → 24315. It was carried forward until now.
+- copilot's `usage` is still `cumulative`: input 21440 → 43174.
+- claude in `plan` wrote a plan, then asked `switch_mode` "Approve Plan". Our refusal
+  ended the turn `cancelled`, with no file written.
+- copilot in `#plan` did nothing and asked nothing. In `#agent` it asked for both steps.
+- pi now sends `usage_update`. Its prompt reply still has no `usage`, so the label stays
+  `absent`.
+- **opencode 2.0.18 now sends `fs/write_text_file`, but writes the file itself too.** In
+  its start mode it ran the command unasked, then sent `fs/write_text_file` for
+  `edit.txt`. The `safe` policy refused it, and `edit.txt` was there anyway. §M0-1 saw no
+  `fs/*` at all on 1.18.18.
+- **opencode asks for a write outside the root, and a refusal of the request binds.**
+  Under `safe` the turn ended `cancelled` and no file was written. **Approved, it wrote
+  the file outside the root although `#guardPath` refused the `fs/write_text_file`**:
+  `-32000 path outside workspace root refused`, and the file held `OUT`. So on opencode the
+  path guard refuses, but it does not stop the write. `asksPermission` stays `false`: a
+  write inside the root never asks.
+
 ---
 
 ## What this note does not cover
@@ -1470,10 +1609,9 @@ logged out.
 M0's questions are answered; these are the edges, collected so that no downstream story
 mistakes silence for a negative result.
 
-- **`omp` and `gemini` were never run** — uninstalled on this machine. The M0 tables have
-  three columns because three harnesses existed to test at the time, not because the registry
-  has three entries; pi is measured separately above. `unknown` is the honest label, and it
-  should read as `internal` / `none` for warning purposes.
+- **`omp` and `gemini` were never run** — uninstalled on this machine. M9-1 removed both
+  from the registry (M9 D2). The M0 tables have three columns because three harnesses
+  existed to test at the time; pi, Codex and Kimi Code are measured in their own sections.
 - **Only copilot's M0 column was re-verified in-place; pi is not an M0 row but was
   measured later** (above). opencode is still 1.18.18 and claude-agent-acp still 0.49.0 in
   the M0 rows, the versions those rows were measured on. They will decay the same way the

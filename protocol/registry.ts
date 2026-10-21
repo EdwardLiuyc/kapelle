@@ -7,12 +7,12 @@
  * **The entry is split in two, and the split is load-bearing.** `launch` is a
  * recipe we choose: it is true until the harness changes its CLI. `measured`
  * is a lab report: every field is a claim about one *build*, and M0-7 watched
- * three of them change in three days (`docs/FINDINGS.md`). Two entries
- * (`omp`, `gemini`) have a real recipe and no lab report — they were never
- * installed here — so `measured` is optional, and its absence is the only
- * marker of an unverified harness (#62 B5, one mechanism, no second flag to
- * drift out of sync). Every consumer must handle it missing; `warningsFor`
- * is where that conservative reading lives.
+ * three of them change in three days (`docs/FINDINGS.md`). Every entry here
+ * has a lab report (M9 D2, #296): an unmeasured harness starts with `--cmd`.
+ * `measured` stays optional because `--cmd` builds an entry without one, and
+ * its absence is the only marker of an unverified harness (#62 B5, one
+ * mechanism, no second flag to drift out of sync). Every consumer must handle
+ * it missing; `warningsFor` is where that conservative reading lives.
  */
 
 // pi-lens-ignore: no-unsafe-dictionary-unknown
@@ -39,9 +39,10 @@ interface LaunchSpec {
  * What we saw on the wire. Present only for harnesses actually run here.
  *
  * `shell` says *where* a command runs; `argvChannel` says whether the command
- * text ever reaches us and on which message. They are independent — two of
- * three harnesses run commands internally yet still hand us the argv
- * (`docs/FINDINGS.md` §Roll-up, "What M1a-4 should put in the registry").
+ * text ever reaches us and on which message. They are independent — all six
+ * harnesses run commands internally, yet each still hands us the argv on a
+ * notification (`docs/FINDINGS.md` §Roll-up, "What M1a-4 should put in the
+ * registry"; §M9-1 re-measure).
  */
 interface MeasuredLabels {
   shell: "terminal" | "internal" | "unknown";
@@ -53,7 +54,9 @@ interface MeasuredLabels {
    *  pi-acp's ACP modes are thinking-effort levels, so mapping them to
    *  `safe`/`ask`/`auto` would claim a mode that does not restrict anything. */
   modeMap?: Record<ClientMode, string>;
-  /** Whether `usage_update.used` counts this turn or the whole session. */
+  /** Whether the `usage` on the `session/prompt` reply counts this turn or
+   *  the whole session (§M0-5). Not `usage_update.used`: that is the context
+   *  in use, on every harness. */
   usage: "per-turn" | "cumulative" | "absent";
   /** Vendor `_meta` flags the harness gates real behaviour on. */
   meta?: MetaFlags;
@@ -109,24 +112,22 @@ export const AGENTS: Record<string, AgentEntry> = {
       // `none` on 1.18.18. On 2.0.18 the command comes on the first
       // `tool_call_update` (§M0-3, 2026-10-09, #240).
       argvChannel: "notification",
-      // Zero permission requests in any mode — it wrote a file under `safe`.
+      // No permission request for a write inside the root: it wrote a file
+      // under `safe`. On 2.0.18 it asks for a write outside the root, and it
+      // also sends `fs/write_text_file` but writes the file even when we
+      // refuse that (§M9-1 re-measure). `false`, because the normal edit
+      // never asks, and `core/result.ts` reads that.
       asksPermission: false,
       // Advertises no `modes` at all; the ids appear only in `configOptions`
       // with `category: "mode"`, yet `session/set_mode` accepts and validates
       // them. Mode discovery must read both fields or opencode looks modeless.
       modeMap: { safe: "plan", ask: "build", auto: "build" },
       usage: "per-turn",
-      // §M0-9, on 2.0.18, 2026-09-27.
+      // §M0-9, on 2.0.18, 2026-09-27, and again on 2026-10-21.
       loads: true,
-      measuredOn: { version: "1.18.18", date: "2026-08-22" },
+      // Every field measured again on 2.0.18 (#296).
+      measuredOn: { version: "2.0.18", date: "2026-10-21" },
     },
-  },
-
-  // oh-my-pi ships native ACP too. Never installed here: no measured half.
-  omp: {
-    launch: { command: "omp", args: ["acp"] },
-    defaultMode: "ask",
-    maxMode: "auto",
   },
 
   // Vanilla Pi has no native mode; the community adapter spawns `pi --mode rpc`
@@ -149,11 +150,13 @@ export const AGENTS: Record<string, AgentEntry> = {
       // (`off`…`xhigh`), not as plan/build/bypass style safety modes. Sending
       // `session/set_mode` under `safe` would only change thinking effort and
       // would not make `safe` any more binding.
+      // No `usage` on the prompt reply. It sends `usage_update` on 0.0.34.
       usage: "absent",
-      // §M0-9, on 0.0.34, 2026-09-27.
+      // §M0-9, on 0.0.34, 2026-09-27, and again on 2026-10-21.
       loads: true,
-      // pi-acp 0.0.33 was measured against pi v0.85.1 on this machine.
-      measuredOn: { version: "0.0.33", date: "2026-09-09" },
+      // pi-acp 0.0.33 was measured against pi v0.85.1 on 2026-09-09. Every
+      // field measured again on 0.0.34 against pi 1.1.0 (#296).
+      measuredOn: { version: "0.0.34", date: "2026-10-21" },
     },
   },
 
@@ -184,28 +187,18 @@ export const AGENTS: Record<string, AgentEntry> = {
       // and a `{type:"terminal"}` content block — for a terminal never
       // created, with no command output and no exit code (§M0-3).
       meta: { terminal_output: true },
-      // §M0-9, on 0.81.1, 2026-09-27.
+      // §M0-9, on 0.81.1, 2026-09-27, and again on 2026-10-21.
       loads: true,
-      // Re-measured on 0.75.1, 2026-09-09. `shell`, `argvChannel`,
-      // `asksPermission`, `modeMap.safe` and `modeMap.auto` were all
-      // re-verified against the real adapter — argv still arrives empty on the
-      // `tool_call` and complete on the update, and `set_mode` still accepts
-      // both ids. **Two fields are carried forward, not re-verified**, and the
-      // date does not cover them: `usage`, because telling per-turn from
-      // cumulative needs two turns in one session, and no probe had run at this
-      // date — the second turn is reachable now (`docs/FINDINGS.md`
-      // §Multi-turn, 2026-09-15), but `usage` is still carried forward, not
-      // measured; and `meta`, because it describes what claude does when we
-      // advertise `terminal_output`, which this client does not.
-      measuredOn: { version: "0.75.1", date: "2026-09-09" },
+      // Measured again on 0.89.1 (#296): `shell`, `argvChannel` (still empty
+      // on the `tool_call`, complete on the update), `asksPermission`,
+      // `modeMap.safe` and `modeMap.ask`, and `loads`. `usage` is measured
+      // for the first time: two turns in one session, input 4 → 2 tokens.
+      // **Two fields are carried forward**, and the date does not cover them:
+      // `modeMap.auto`, which we never send, and `meta`, because it describes
+      // what claude does when we advertise `terminal_output`, which this
+      // client does not.
+      measuredOn: { version: "0.89.1", date: "2026-10-21" },
     },
-  },
-
-  // Gemini CLI exposes ACP behind a flag. Never installed here.
-  gemini: {
-    launch: { command: "gemini", args: ["--acp"] },
-    defaultMode: "ask",
-    maxMode: "auto",
   },
 
   // Copilot CLI runs an ACP server behind a flag, not a subcommand — confirmed
@@ -227,9 +220,67 @@ export const AGENTS: Record<string, AgentEntry> = {
         auto: "https://agentclientprotocol.com/protocol/session-modes#autopilot",
       },
       usage: "cumulative",
-      // §M0-9, on 1.0.88, 2026-09-27.
+      // §M0-9, on 1.0.88, 2026-09-27, and again on 2026-10-21.
       loads: true,
-      measuredOn: { version: "1.0.80", date: "2026-08-23" },
+      // Every field measured again on 1.0.91 (#296), except `modeMap.auto`,
+      // which we never send.
+      measuredOn: { version: "1.0.91", date: "2026-10-21" },
+    },
+  },
+
+  // Codex has no native ACP mode. The official adapter runs it behind an ACP
+  // front end and uses the `codex` login. Install the Codex CLI, then:
+  //   npm i -g @agentclientprotocol/codex-acp
+  codex: {
+    launch: { command: "codex-acp", args: [] },
+    defaultMode: "ask",
+    maxMode: "auto",
+    measured: {
+      // Runs commands itself. It adds `_meta.terminal_info` and a
+      // `{type:"terminal"}` block for a terminal it never asks us to create.
+      shell: "internal",
+      // In `rawInput.command` on the `tool_call`, and again on the request.
+      argvChannel: "notification",
+      // Only in `read-only` and `workspace-write`. Its start mode, `agent`,
+      // never asks us: its own model reviews each call. A refused request ends
+      // the turn with `cancelled`.
+      asksPermission: true,
+      // `read-only` asks for every edit and every command, and does the work
+      // once we approve. So it is `ask`'s id too. `workspace-write` also asked
+      // for everything, but only in a folder codex does not trust; its own
+      // description says it edits without asking (§Codex).
+      modeMap: {
+        safe: "read-only",
+        ask: "read-only",
+        auto: "agent-full-access",
+      },
+      usage: "per-turn",
+      loads: true,
+      measuredOn: { version: "2.2.2", date: "2026-10-21" },
+    },
+  },
+
+  // Kimi Code runs an ACP server as a subcommand. Install it with Kimi's
+  // own installer (§Models and login).
+  kimi: {
+    launch: { command: "kimi", args: ["acp"] },
+    defaultMode: "ask",
+    maxMode: "auto",
+    measured: {
+      shell: "internal",
+      // Late, as on claude: the `tool_call` has no `rawInput`, and the command
+      // arrives whole on a `tool_call_update` after the request. The request
+      // names it only in its `content` text.
+      argvChannel: "notification",
+      asksPermission: true,
+      // `plan` runs no tool. `default` asks for every edit and command. `auto`
+      // and `yolo` run commands without asking. It writes files through
+      // `fs/write_text_file` in every mode, and honours our refusal (§Kimi Code).
+      modeMap: { safe: "plan", ask: "default", auto: "yolo" },
+      // No `usage` on the prompt reply; it sends `usage_update` only.
+      usage: "absent",
+      loads: true,
+      measuredOn: { version: "2.3.0", date: "2026-10-21" },
     },
   },
 };

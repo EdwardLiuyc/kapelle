@@ -4767,6 +4767,13 @@ function screenRows(out: string) {
   return rows;
 }
 
+/** The pop-up's pick list as it is drawn now, one entry a row. `→` marks
+ *  the cursor. */
+const pickList = (out: string) =>
+  [...screenRows(out).values()].flatMap(
+    (row) => row.match(/┃ [→ ] (\S+)\s*┃/)?.[1] ?? [],
+  );
+
 /** The first row on screen whose text matches. 0 for none. */
 const rowOf = (out: string, re: RegExp) =>
   [...screenRows(out)].find(([, text]) => re.test(text))?.[0] ?? 0;
@@ -7424,7 +7431,8 @@ test("GET /harnesses lists every harness the daemon can launch, and which were m
       measured: a.measured !== undefined,
     })),
   );
-  assert.ok(r.body.some((h) => h.measured) && r.body.some((h) => !h.measured));
+  // M9 D2: the registry keeps only measured harnesses.
+  assert.ok(r.body.every((h) => h.measured));
 });
 
 test("the new-room form completes a folder with Tab, lists the measured harnesses, and adds an unadded folder on yes", {
@@ -7449,8 +7457,12 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   await press(`\x15${repo}\r`, "Enter/Space");
   // harness: a pick list of the measured ones. Esc keeps the row as it was.
   await press(`${DOWN}${DOWN}\r`, "claude");
-  // Only the measured ids are offered: gemini and omp have no lab report.
-  assert.doesNotMatch(plainText(out()), /\bgemini\b|\bomp\b/);
+  // Every registry entry is measured (M9 D2), so each one is offered.
+  assert.deepEqual(pickList(out()), [
+    "–",
+    ...Object.keys(AGENTS).sort((a, b) => a.localeCompare(b)),
+    "other…",
+  ]);
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
   // command, then open: the folder is not added, so the form asks.
@@ -7466,6 +7478,51 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   const repos = await api<string[]>(d, "GET", "/repos");
   assert.deepEqual(repos.body, [await realpath(repo)]);
   await press("\x03", "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("the new-room form leaves out a harness the daemon says is not measured", {
+  skip: noPty,
+}, async (t) => {
+  // The registry has no unmeasured entry today (M9 D2), so a fake daemon
+  // sends one: the filter is the only thing that keeps it out.
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const fake = createServer((req, res) => {
+    const body =
+      req.url === "/version"
+        ? { apiVersion: API_VERSION }
+        : req.url === "/harnesses"
+          ? [
+              { id: "lab-ok", measured: true },
+              { id: "lab-none", measured: false },
+            ]
+          : req.url === "/rooms"
+            ? []
+            : undefined;
+    res.writeHead(body ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(body ?? { error: { code: "no_route" } }));
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await press("\x0f", "new room …");
+  await press("\r", "folder");
+  // folder, title, harness: the harness row's pick list.
+  await press(`${DOWN}${DOWN}\r`, "other…");
+  assert.deepEqual(pickList(out()), ["–", "lab-ok", "other…"]);
+  await press("\x1b\x1b\x03", "ctrl+c");
   assert.equal(await exited, 0, out());
 });
 

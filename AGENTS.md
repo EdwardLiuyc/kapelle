@@ -81,7 +81,7 @@ npm run test           # node:test: pure functions and wire behaviour; no harnes
 npm run knip           # unused files and exports
 npm run selftest       # end to end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
 npm run test:harness   # the real harnesses; local only, needs credentials, spends tokens
-node cli.ts "<prompt>" [--agent opencode|omp|pi|claude|gemini|copilot] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
+node cli.ts "<prompt>" [--agent opencode|pi|claude|copilot|codex|kimi] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
 node cli.ts run --file <run.json> [--detach]   # N tasks (tasks.json is the example); --detach hands them to the daemon
 node cli.ts attach <runId> [--task <id>]       # replay then follow a detached run
 node cli.ts ps                                 # every run the daemon knows, with its tasks
@@ -157,7 +157,8 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 
 - **The policy is a filter, not a sandbox.** It decides what a harness *asks*, and the
   one change a harness can make through us: `fs/write_text_file`. A harness that edits
-  through its own shell is outside its reach. opencode and pi never ask at all.
+  through its own shell is outside its reach. pi never asks, and opencode asks only
+  for a write outside the root (§M9-1 re-measure).
   `core/policy.ts` is the one policy file, and `policyFor(mode)` is the only map from a
   mode to a decider.
 - **Keep the path guard separate from the policy.** `#guardPath` compares realpaths and
