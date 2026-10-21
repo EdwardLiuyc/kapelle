@@ -695,6 +695,13 @@ piped screen does not change. M7 runs beside M6.
 - **M7-4 — the question box**: a short diff, and number keys that move the cursor. Only
   Enter answers.
 - **M7-5 — the `ctrl+o` menu**: type to filter it.
+- **M7-6 — a plain transcript scrollbar** (added 2026-10-21): enable pi-tui's built-in
+  proportional bar with hover, thumb dragging and track-click jumping. It shows while the
+  person scrolls, then hides, and does not rewrap the transcript.
+- **M7-7 — a history rail with hover preview** (added 2026-10-21): a two-column gutter
+  beside the transcript, with one clickable mark per person message, a short preview on
+  hover, and a window around the active turn. Needs M7-6, whose bar keeps the
+  proportional position.
 
 ---
 

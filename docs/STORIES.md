@@ -2983,9 +2983,13 @@ opencode and Toad. In a room with many agents the timeline is hard to read: ever
 the same green, a tool call is one grey line with no result, and a busy agent shows only
 `…` in the sidebar. A design page compared the screens and proposed seven ideas, each with
 a sketch of today and after (<https://claude.ai/artifact/3G7sFoF53r7HF2n83mswv8>). The
-page is private to its author, so the stories below stand alone. They take all seven
-ideas, in the page's order: agent colours, activity rows and the footer as one story, then
-the tool rows, then the sidebar, the question box and the menu.
+page is private to its author, so the stories below stand alone. The five stories from
+that page take all seven ideas, in the page's order: agent colours, activity rows and the
+footer as one story, then the tool rows, then the sidebar, the question box and the menu.
+
+**Added 2026-10-21.** Two more M7 stories add a transcript gutter: M7-6 uses pi-tui's
+built-in proportional bar, and M7-7 adds a rail of clickable marks and a hover preview
+for the person's messages. They are not from the design page above.
 
 Three rules hold for every M7 story:
 
@@ -3001,7 +3005,7 @@ Three rules hold for every M7 story:
   `✕`, `◌`), so the screen works without colour. M7-1 makes the TUI obey `NO_COLOR`, so a
   test can prove it.
 
-All five are TUI only: the piped screen does not change. They can start beside M6.
+All seven are TUI only: the piped screen does not change. They can start beside M6.
 
 **Found while planning (2026-10-09).** The room log already carries every
 `session/update` (`core/room.ts`), so `tool_call_update`, `usage_update` and
@@ -3166,6 +3170,74 @@ each room, because the sidebar can be hidden. Esc first clears the filter, then 
 `ctrl+o` stays the key: `ctrl+p` moves the row cursor (M4-2).
 *Done when* tests cover the filter narrowing the rows, Enter running the top row, the Esc
 order, and the slash command on each row.
+
+**M7-6 · Plain transcript scrollbar · XS · needs nothing**
+**Added 2026-10-21.** The transcript's `ScrollView` hides its built-in scrollbar today.
+Set `scrollbar: "auto"` on the timeline, with a dim track and an inverse thumb. Leave
+`scrollbarHideDelayMs` at pi-tui's default. `auto` paints over the last cell and hides
+after the scroll, so the transcript's width and wrapping do not change. `always` would
+take a column from every line and rewrap the transcript; it is not used. The built-in
+bar already handles hover, thumb dragging and track-click jumping in `TuiAltScreen`, so
+this story adds no drawing, mouse code or layout part.
+**Verified 2026-10-21 against pi-tui 1.1.0:** the options are in
+`dist/components/scroll-view.d.ts`; `auto` keeps the full width and the default hide delay
+is 1000 ms (`getContentWidth()` and `scrollbarHideDelayMs` in
+`dist/components/scroll-view.js`); the bar paints over the last cell (`paintScrollbar()`
+in `dist/layout.js`); hover, drag and track click are in `dist/tui-alt-screen.js`
+(`handleScrollbarMouseEvent()`).
+*Done when* a pty test shows a page key or wheel paints the bar column. No test reaches
+into pi-tui's option object or re-tests its drag, track click or hide timer; those belong
+to the package and the version note above is what a bump must re-check. The #242 layout
+test still passes.
+**Decided 2026-10-21:** use pi-tui's bar as it is. A hand-drawn bar would duplicate
+hover, drag and track-click behaviour that the package already tests.
+
+**M7-7 · History rail with hover preview · M · needs M7-6**
+**Added 2026-10-21.** A two-column rail beside the timeline shows one mark per person
+message in the view: the same entries `ctrl+r` lists. Hovering a mark shows a short
+preview of that message. The rail is not proportional; a long answer must not push a
+turn's mark out of place. With more messages than rows, the marks window around the
+active one, and at the bottom the window pins to the tail. The active mark is the last
+person message whose measured top is at or above the viewport top, so it follows what
+the person is reading. M7-6's proportional bar stays.
+**The rows are known already.** `transcriptParts` keeps each message's component in
+`drawn`, but that is a `WeakMap` and cannot be iterated. A `marks(entries)` helper takes
+the ordered person entries from `sent()`, resolves each through `drawn.get()`, and sums
+`Transcript.rows` to get its top. `jump()` reads the same top and measures only when the
+row cache is missing, as after a width change or before the first draw. This keeps both
+paths on one model and avoids a full re-render on every scroll.
+**Drawing and input.** Add the rail as a direct `HStack` sibling between the timeline and
+the side view. Give it `basis: 2`, `shrink: 0` and a `visible` callback; no nested stack
+and no `auto`. `placeSide()` keeps the pane last, so the order is sidebar/strip, timeline,
+rail, pane. Click a mark to call the existing `jump(entry)`, and click `▲` or `▼` to jump
+to the nearest person message above or below the viewport. The rail is mouse-only because
+`ctrl+r` already gives the same actions from the keyboard.
+**Width is stable.** The two columns are reserved as soon as the view has two person
+messages, not when content outgrows the viewport, so a growing answer never changes the
+transcript width. It is absent when the side view takes the timeline's place, when there
+are fewer than two person messages, below `NARROW` (70 columns, the repo's existing
+threshold), or under three viewport rows (two chevrons and one mark are the minimum).
+**Hover preview.** After about 150 ms of rest on a mark, show a non-capturing overlay
+card to the left of the rail, clamped to the screen: up to two wrapped lines of the same
+row the history list shows, with `…` when cut. One pure `historyText()` helper formats
+the row for the side list and the preview. Moving to another mark replaces the card;
+leaving the rail, scrolling, switching views or hiding the rail closes it. The card never
+takes focus or keys, and the rail still receives click and wheel events. pi-tui already
+delivers `move` events to the side list's cursor (`chat/tui/pane.ts`), so a terminal that
+sends none is a graceful fallback: no card, with the side history still available.
+*Done when* pure tests in `chat/view.ts` cover mark order, the active mark, the sliding
+window, the tail at the bottom, hit mapping, the hide rules, the shared history text cut
+to two lines, and reserving the two columns before content overflows; a component test
+shows a mark click and a chevron click calling the right jump target, and shows the
+preview only after the hover delay, replacing it on a mark change and hiding it on leave
+or scroll without taking focus; the #242 layout test shows a numeric `basis`, `shrink: 0`
+and a `visible` callback, and no nested `HStack`; and a pty test clicks a mark, sees that
+message at the top, and sees the active mark move.
+**Decided 2026-10-21:** marks are person messages, not every transcript row, because
+`ctrl+r` already defines the history the person can pick and a mark stays put while an
+answer streams. The hover preview is part of this story, not a follow-up: a mark the
+person cannot identify is not useful enough to justify the rail. The side history list
+stays: it is the keyboard and narrow-screen route, and the rail is an overview.
 
 ## M8 — Orchestrator
 
@@ -3748,6 +3820,7 @@ landed on 2026-09-26 (#142).
 M7-1 ─┬─ M7-2
       └─ M7-3
 M7-4, M7-5   (need nothing)
+M7-6 ─ M7-7
 ```
 
 **M8 (added 2026-10-12)** stands on work that is done: M6-6a's worktree for each
