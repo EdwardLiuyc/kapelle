@@ -81,6 +81,7 @@ npm run test           # node:test: pure functions and wire behaviour; no harnes
 npm run knip           # unused files and exports
 npm run selftest       # end to end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
 npm run test:harness   # the real harnesses; local only, needs credentials, spends tokens
+node cli.ts                                     # the chat; starts the daemon first if none runs
 node cli.ts "<prompt>" [--agent opencode|pi|claude|copilot|codex|kimi] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
 node cli.ts run --file <run.json> [--detach]   # N tasks (tasks.json is the example); --detach hands them to the daemon
 node cli.ts attach <runId> [--task <id>]       # replay then follow a detached run
@@ -89,6 +90,7 @@ node cli.ts merge <runId> [--squash] [--cwd dir]
 node cli.ts workspace [--cwd dir]              # where this repo's worktrees and records live
 node cli.ts workspace move <old-repo> <new-repo>
 node cli.ts daemon start [--port n] [--permission-timeout s]   # same as: node daemon.ts
+node cli.ts daemon stop                        # SIGTERM to the pid in daemon.json, then wait
 node cli.ts daemon add <path>
 node cli.ts chat [new --agent <id> [--cwd dir]]   # chat rooms: runs chat.ts
 node chat.ts attach <roomId> | list | dismiss <roomId>
@@ -124,7 +126,7 @@ arrow that points back.
 | `core/eventlog.ts` | `events.jsonl`: write, replay and follow. |
 | `core/sweep.ts` | The daemon's boot sweep. |
 | `core/config.ts` | The config files and `KAPELLE_*` variables. |
-| `core/runtime.ts` | The user-level directories and `stateDirFor(root)`. |
+| `core/runtime.ts` | The user-level directories, `stateDir()` and `stateDirFor(root)`. |
 | `core/room.ts` | A chat room: a roster of participants, each one harness kept alive across turns. |
 | `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
 | `core/text.ts` | A harness's text made safe for a terminal (#229): `render.ts`, `cli.ts` and the `ask` prompt use it. `client/room.ts` has a copy, and `tests/text.test.ts` checks that they agree. |
@@ -134,6 +136,7 @@ arrow that points back.
 | `daemon/` | The parts of `daemon.ts` that tests can import (`daemon.ts` starts a daemon when imported). |
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
 | `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
+| `client/lifecycle.ts` | The daemon's life from a client (M9-2): start it detached with its log when none answers, wait for `daemon.json`, and stop it on SIGTERM. Bare `kapelle` uses it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
 | `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. Both `chat/` screens draw from it. |
 | `client/roomset.ts` | The rooms a screen follows (M4-11): one stream and one reducer per room, the poll that adds rooms made elsewhere, and when the screen must end. `readRoom` and `reconcile` too. |

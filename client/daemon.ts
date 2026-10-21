@@ -15,6 +15,8 @@
  * is a warning. It returns the warning rather than print it; printing is the
  * caller's. A client checks once per daemon — per token, since a restart
  * brings a new one — and a restart is exactly when a new version arrives.
+ * A refusal names `kapelle daemon stop` (M9-2): the daemon a new client
+ * cannot use has to go, and that is the command that does it.
  */
 
 import { readFile } from "node:fs/promises";
@@ -41,42 +43,69 @@ class UnreadableReply extends Error {
   }
 }
 
+/** What `daemon.json` names, even before the daemon is listening. */
+interface DaemonRecord {
+  /** The daemon's process id, when the file names a usable one. */
+  pid?: number;
+  /** Where it listens, once the port and token are both there. */
+  address?: DaemonAddress;
+}
+
 /**
- * `daemon.json`'s port and token. `"missing"` when there is no file — no
- * daemon, or one that stopped cleanly and removed it — and `"unready"` when
- * the file has no port or token: a daemon between its claim and its listen,
- * or a malformed file.
+ * `daemon.json`'s fields, or `"missing"` when there is no file.
+ *
+ * A daemon between its claim and its listen writes only `pid`, and a
+ * malformed file names nothing. Both read as an empty record here, so a
+ * caller can still see a live pid while it waits for the address (M9-2).
  */
-export async function readDaemonFile(
+export async function readDaemonRecord(
   file: string,
-): Promise<DaemonAddress | "missing" | "unready"> {
+): Promise<DaemonRecord | "missing"> {
   let text: string;
   try {
     text = await readFile(file, "utf8");
   } catch {
     return "missing";
   }
-  let holder: { port?: unknown; token?: unknown } = {};
+  let holder: { pid?: unknown; port?: unknown; token?: unknown } = {};
   try {
     const parsed: unknown = JSON.parse(text);
     // A non-object (`null`, `[]`, `42`) is as unready as a missing port: it
-    // must fall through to the check below, not throw on destructuring.
+    // must fall through to the checks below, not throw on destructuring.
     if (typeof parsed === "object" && parsed !== null) holder = parsed;
   } catch {
-    // Malformed: unready, below.
+    // Malformed: nothing usable, below.
   }
-  const { port, token } = holder;
+  const { pid, port, token } = holder;
+  const record: DaemonRecord = {};
+  if (typeof pid === "number" && Number.isInteger(pid) && pid > 0) {
+    record.pid = pid;
+  }
   if (
-    typeof port !== "number" ||
-    !Number.isInteger(port) ||
-    port < 1 ||
-    port > 65535 ||
-    typeof token !== "string" ||
-    !token
+    typeof port === "number" &&
+    Number.isInteger(port) &&
+    port >= 1 &&
+    port <= 65535 &&
+    typeof token === "string" &&
+    token !== ""
   ) {
-    return "unready";
+    record.address = { port, token };
   }
-  return { port, token };
+  return record;
+}
+
+/**
+ * `daemon.json`'s port and token. `"missing"` when there is no file — no
+ * daemon, or one that stopped cleanly and removed it — and `"unready"` when
+ * the file has no usable address: a daemon between its claim and its listen,
+ * or a malformed file.
+ */
+export async function readDaemonFile(
+  file: string,
+): Promise<DaemonAddress | "missing" | "unready"> {
+  const record = await readDaemonRecord(file);
+  if (record === "missing") return "missing";
+  return record.address ?? "unready";
 }
 
 /** One request, with the token on it. A body is JSON: the daemon refuses any
@@ -156,7 +185,7 @@ export async function checkVersion(
       throw new VersionRefused(
         `the daemon has no readable API version (GET /version answered ` +
           `HTTP ${err.status} with a non-JSON body); this client speaks ` +
-          `${ours}; update the daemon`,
+          `${ours}; stop it with: kapelle daemon stop`,
       );
     }
     throw err;
@@ -167,7 +196,7 @@ export async function checkVersion(
     if (r.status === 404) {
       throw new VersionRefused(
         `the daemon has no API version (this client speaks ${ours}); ` +
-          "update the daemon",
+          "stop it with: kapelle daemon stop",
       );
     }
     throw new VersionRefused(
@@ -182,12 +211,12 @@ export async function checkVersion(
   ) {
     throw new VersionRefused(
       `the daemon has no readable API version (this client speaks ${ours}); ` +
-        "update the daemon",
+        "stop it with: kapelle daemon stop",
     );
   }
   const both = `the daemon speaks API ${theirs.major}.${theirs.minor} and this client ${ours}`;
   if (theirs.major !== API_VERSION.major) {
-    throw new VersionRefused(`${both}; update the client or the daemon`);
+    throw new VersionRefused(`${both}; stop it with: kapelle daemon stop`);
   }
   if (theirs.minor !== API_VERSION.minor) {
     return `${both}; something was added or is missing`;

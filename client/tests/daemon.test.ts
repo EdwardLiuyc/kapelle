@@ -94,16 +94,20 @@ test("a different major is refused, and the refusal ends a stream", async (t) =>
   const d = await fake(t, version(API_VERSION.major + 1, 0));
   await assert.rejects(checkVersion(d), (err) => {
     assert.ok(err instanceof VersionRefused);
-    assert.match(err.message, /update the client or the daemon/);
+    assert.match(err.message, /kapelle daemon stop/);
     return true;
   });
 });
 
-test("a daemon with no GET /version is refused", async (t) => {
+test("a daemon with no GET /version is refused, and names the stop verb", async (t) => {
   const d = await fake(t, (res) =>
     json(res, 404, { error: { code: "no_route", message: "no such route" } }),
   );
-  await assert.rejects(checkVersion(d), VersionRefused);
+  await assert.rejects(checkVersion(d), (err) => {
+    assert.ok(err instanceof VersionRefused);
+    assert.match(err.message, /kapelle daemon stop/);
+    return true;
+  });
 });
 
 test("a 2xx non-JSON /version is a fatal refusal, not a retry", async (t) => {
@@ -115,6 +119,7 @@ test("a 2xx non-JSON /version is a fatal refusal, not a retry", async (t) => {
     assert.ok(err instanceof StreamClosed);
     assert.match(err.message, /no readable API version/);
     assert.match(err.message, /non-JSON/);
+    assert.match(err.message, /kapelle daemon stop/);
     assert.doesNotMatch(err.message, /undefined/);
     return true;
   });
@@ -170,6 +175,7 @@ test("a /version with no readable major/minor is refused without undefined", asy
     await assert.rejects(checkVersion(d), (err) => {
       assert.ok(err instanceof VersionRefused);
       assert.match(err.message, /no readable API version/);
+      assert.match(err.message, /kapelle daemon stop/);
       assert.doesNotMatch(err.message, /undefined/);
       return true;
     });

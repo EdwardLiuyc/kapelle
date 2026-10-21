@@ -18,6 +18,12 @@
  *
  * ^C sends `session/cancel`, waits 2 s, then stops the harness, and the
  * process exits only once the harness is gone.
+ *
+ * **Bare `kapelle` is the chat** (M9-2): on a terminal it starts the daemon
+ * detached when none answers (`client/lifecycle.ts`), then hands over to
+ * `chat.ts`. `kapelle --help` is the way to the help. On a pipe there is no
+ * screen, so it does what `kapelle chat` does there: the chat usage, no
+ * daemon. `kapelle daemon stop` is the other new verb.
  */
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -36,6 +42,7 @@ import {
   request,
   VersionRefused,
 } from "./client/daemon.ts";
+import { ensureDaemon, stopDaemon } from "./client/lifecycle.ts";
 import { type Connect, followEvents } from "./client/stream.ts";
 import {
   readProjectLinkPaths,
@@ -61,7 +68,7 @@ import {
   type TaskStatus,
 } from "./core/run.ts";
 import { type Task, validateRun } from "./core/runfile.ts";
-import { runtimeDir, stateDirFor } from "./core/runtime.ts";
+import { runtimeDir, stateDir, stateDirFor } from "./core/runtime.ts";
 import { clean, oneLine } from "./core/text.ts";
 import { moveWorkspace, stateDirRoot } from "./core/worktree.ts";
 import { AcpAgent } from "./protocol/agent.ts";
@@ -160,10 +167,30 @@ const DEFAULT_AGENT = "pi";
 // `kapelle chat` is `chat.ts` (S7a), with its own usage and its own flags.
 const chatVerb = positional[0] === "chat";
 
-if (!chatVerb && ((!promptText && !runFilePath) || has("help"))) {
+// `kapelle` alone is the chat (M9-2). A terminal gets the screen, so the
+// daemon is started first when none answers; a pipe has no screen, and
+// `chat.ts` prints its usage there without touching the daemon, as
+// `kapelle chat` does. The daemon is detached, so `/leave` ends only the chat.
+if (!chatVerb && argv.length === 0) {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    try {
+      await ensureDaemon({
+        file: daemonFile(),
+        log: join(stateDir(), "daemon.log"),
+        script: join(import.meta.dirname, "daemon.ts"),
+        cwd: import.meta.dirname,
+      });
+    } catch (err) {
+      console.error(`error: ${messageOf(err)}`);
+      process.exit(1);
+    }
+  }
+  await import("./chat.ts");
+} else if (!chatVerb && ((!promptText && !runFilePath) || has("help"))) {
   console.log(`
 kapelle — a minimal Agent Client Protocol client
 
+  kapelle                            the chat, starting the daemon if none runs
   kapelle "<prompt>" [options]
   kapelle run --file <run.json> [--cwd dir] [--verbose] [--quiet]
   kapelle run --file <run.json> --detach   hands the run to the daemon
@@ -175,6 +202,7 @@ kapelle — a minimal Agent Client Protocol client
   kapelle merge <runId> [--squash] [--cwd dir]
   kapelle daemon start [--port n] [--permission-timeout s]
                                      runs in this terminal until ^C or SIGTERM
+  kapelle daemon stop                stops the daemon named in daemon.json
   kapelle daemon add <path>          adds a repository to the running daemon
   kapelle chat [new | attach | list | dismiss]
                                      the chat rooms; kapelle chat --help
@@ -194,6 +222,7 @@ Options:
   --quiet          suppress normal output; safety notices still print
 
 Examples:
+  kapelle                              # the chat, starting the daemon if needed
   kapelle "list the top-level files and summarise this repo"
   kapelle "add a health endpoint" --cwd ../my-app --mode ask
   kapelle "what does src/index.ts do" --mode safe
@@ -201,7 +230,8 @@ Examples:
   kapelle run --file tasks.run.json --detach
   kapelle merge 20260909-101500-abc1
 `);
-  process.exit(promptText || runFilePath ? 0 : 1);
+  // `--help` is the one path here that is not a usage error (M9-2).
+  process.exit(has("help") ? 0 : 1);
 }
 
 const verbose = has("verbose");
@@ -1208,12 +1238,26 @@ async function attachRun(): Promise<number> {
 /**
  * `kapelle daemon add <path>`: `POST /repos` to the daemon named in
  * `daemon.json`, with the token from the same file (M2-4, #34).
+ *
+ * `kapelle daemon stop` is the other verb (M9-2): SIGTERM to the pid in the
+ * same file, then wait. It deliberately skips `findDaemon`, because the very
+ * daemon whose version this client refuses is the one that has to stop.
  */
 async function runDaemonCommand(): Promise<number> {
   const [, verb, ...rest] = positional;
+  if (verb === "stop" && rest.length === 0) {
+    const pid = await stopDaemon(daemonFile());
+    console.log(
+      pid === undefined
+        ? "no daemon is running"
+        : `stopped the daemon (pid ${pid})`,
+    );
+    return 0;
+  }
   if (verb !== "add" || rest.length !== 1) {
     console.error(
-      "usage: kapelle daemon start [--port n] | kapelle daemon add <path>",
+      "usage: kapelle daemon start [--port n] | kapelle daemon add <path> | " +
+        "kapelle daemon stop",
     );
     return 1;
   }
