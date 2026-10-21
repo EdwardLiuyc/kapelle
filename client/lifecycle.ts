@@ -207,11 +207,12 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
       ? { pid: record.pid, token: record.address.token }
       : undefined;
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const log = rotate(opts.log);
-    let child: ChildProcess;
-    try {
-      child = spawn(process.execPath, [opts.script], {
+  // One rotation per start: a retry appends to this start's log, so it
+  // cannot push the last start's log out of `${log}.1`.
+  const log = rotate(opts.log);
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const child = spawn(process.execPath, [opts.script], {
         cwd: opts.cwd,
         env: opts.env ?? process.env,
         // Its own session, so closing the terminal does not send it SIGHUP.
@@ -219,21 +220,19 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
         // It must not hold this CLI's terminal or pipes open.
         stdio: ["ignore", log, log],
       });
-    } catch (err) {
-      closeSync(log);
-      throw err;
-    }
-    closeSync(log);
-    child.unref();
+      child.unref();
 
-    const outcome = await waitForRecord(
-      opts,
-      stale,
-      opts.waitMs ?? START_WAIT_MS,
-      child,
-      attempt === 0,
-    );
-    if (outcome === "ready") return;
+      const outcome = await waitForRecord(
+        opts,
+        stale,
+        opts.waitMs ?? START_WAIT_MS,
+        child,
+        attempt === 0,
+      );
+      if (outcome === "ready") return;
+    }
+  } finally {
+    closeSync(log);
   }
 }
 

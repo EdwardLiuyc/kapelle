@@ -375,6 +375,7 @@ setInterval(() => {}, 1000);
     { mode: 0o600 },
   );
   const exiting = new Promise<void>((ok) => dummy.once("exit", () => ok()));
+  await writeFile(opts.log, "the previous start\n", { mode: 0o600 });
   await writeFile(
     opts.file,
     JSON.stringify({ pid: dummy.pid, port: 1, token: "stale" }),
@@ -415,6 +416,8 @@ setInterval(() => {}, 1000);
     readFile(early, "utf8"),
     "the retry found the stale pid alive",
   );
+  // The retry is the same start: it must not push the last start's log out.
+  assert.equal(await readFile(`${opts.log}.1`, "utf8"), "the previous start\n");
 
   const record = await readRecord(opts.file);
   assert.notEqual(record.pid, dummy.pid);
@@ -536,4 +539,32 @@ const timer = setInterval(() => {
   assert.equal(await stopping, child.pid);
   assert.equal(alive(child.pid), false);
   await assert.rejects(readFile(opts.file), "the record is gone");
+});
+
+test("stopDaemon removes the record a daemon left when SIGTERM killed it", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  // A process with no SIGTERM handler dies at once and removes nothing.
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  t.after(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  });
+  assert.ok(child.pid !== undefined);
+  await writeFile(
+    opts.file,
+    JSON.stringify({ pid: child.pid, port: 1, token: "left" }),
+    { mode: 0o600 },
+  );
+
+  assert.equal(await stopDaemon(opts.file, 5_000), child.pid);
+
+  assert.equal(alive(child.pid), false);
+  await assert.rejects(readFile(opts.file), "the left record is removed");
 });
