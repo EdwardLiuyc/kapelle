@@ -4767,6 +4767,13 @@ function screenRows(out: string) {
   return rows;
 }
 
+/** The pop-up's pick list as it is drawn now, one entry a row. `→` marks
+ *  the cursor. */
+const pickList = (out: string) =>
+  [...screenRows(out).values()].flatMap(
+    (row) => row.match(/┃ [→ ] (\S+)\s*┃/)?.[1] ?? [],
+  );
+
 /** The first row on screen whose text matches. 0 for none. */
 const rowOf = (out: string, re: RegExp) =>
   [...screenRows(out)].find(([, text]) => re.test(text))?.[0] ?? 0;
@@ -7451,8 +7458,11 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   // harness: a pick list of the measured ones. Esc keeps the row as it was.
   await press(`${DOWN}${DOWN}\r`, "claude");
   // Every registry entry is measured (M9 D2), so each one is offered.
-  for (const id of Object.keys(AGENTS))
-    assert.match(plainText(out()), new RegExp(`\\b${id}\\b`));
+  assert.deepEqual(pickList(out()), [
+    "–",
+    ...Object.keys(AGENTS).sort((a, b) => a.localeCompare(b)),
+    "other…",
+  ]);
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
   // command, then open: the folder is not added, so the form asks.
@@ -7501,8 +7511,7 @@ test("the new-room form leaves out a harness the daemon says is not measured", {
     JSON.stringify({ pid: process.pid, port, token: "t" }),
     { mode: 0o600 },
   );
-  // `ptyScreen` kills the screen when the test ends.
-  const { press, out } = await ptyScreen(
+  const { press, exited, out } = await ptyScreen(
     t,
     "stty cols 120 rows 40; node chat.ts",
     { XDG_RUNTIME_DIR: runtime },
@@ -7512,8 +7521,9 @@ test("the new-room form leaves out a harness the daemon says is not measured", {
   await press("\r", "folder");
   // folder, title, harness: the harness row's pick list.
   await press(`${DOWN}${DOWN}\r`, "other…");
-  assert.match(plainText(out()), /\blab-ok\b/);
-  assert.doesNotMatch(plainText(out()), /\blab-none\b/);
+  assert.deepEqual(pickList(out()), ["–", "lab-ok", "other…"]);
+  await press("\x1b\x1b\x03", "ctrl+c");
+  assert.equal(await exited, 0, out());
 });
 
 test("chat in a removed folder: bare stops, attach opens and its /new form survives", {

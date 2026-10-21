@@ -291,12 +291,14 @@ const REPLAYED = new Set([
   "usage_update",
 ]);
 
-// §M0-9's four harnesses, each with the binary that runs it.
+// The harnesses that load (§M0-9, §M9-1), each with the binary that runs it.
 for (const [agent, bin] of [
   ["opencode", "opencode"],
   ["claude", "claude-agent-acp"],
   ["copilot", "copilot"],
   ["pi", "pi-acp"],
+  ["codex", "codex-acp"],
+  ["kimi", "kimi"],
 ] as const) {
   test(`${agent}: a participant revived after a restart loads its session (M6-7b)`, {
     skip: needs(bin),
