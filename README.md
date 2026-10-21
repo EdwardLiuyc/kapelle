@@ -151,8 +151,8 @@ Pick one with `--agent <id>`. Each agent logs in by itself.
 | `claude` | `npm i -g @agentclientprotocol/claude-agent-acp`, then `claude auth login` | yes |
 | `copilot` | the Copilot CLI (`copilot --acp`) | yes |
 | `opencode` | `npm i -g opencode-ai`, then `opencode auth login` | yes |
-| `gemini` | the Gemini CLI (`gemini --acp`) | no |
-| `omp` | oh-my-pi (`omp acp`) | no |
+| `codex` | `npm i -g @openai/codex @agentclientprotocol/codex-acp`, then `codex login` | yes |
+| `kimi` | `npm i -g @moonshot-ai/kimi-code`, then `kimi login` | yes |
 
 Any other ACP agent works too: `--cmd "some-agent --acp"`.
 

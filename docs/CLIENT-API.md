@@ -398,14 +398,16 @@ repository. The daemon finds the repository root for you.
 
 **Experimental.** The harnesses the daemon can start by name, as `agent` in a run, a room
 or a participant. `measured` is `true` when kapelle measured how the harness behaves.
-`false` means nobody checked it. Neither says the harness is installed here.
+`false` means nobody checked it. Since M9-1, every harness on this list is measured, so
+`measured` is always `true`; a client should still handle `false`. Neither says the
+harness is installed here.
 
 **Reply `200`:**
 
 ```json
 [
   { "id": "opencode", "measured": true },
-  { "id": "gemini", "measured": false }
+  { "id": "kimi", "measured": true }
 ]
 ```
 

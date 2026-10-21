@@ -7424,7 +7424,8 @@ test("GET /harnesses lists every harness the daemon can launch, and which were m
       measured: a.measured !== undefined,
     })),
   );
-  assert.ok(r.body.some((h) => h.measured) && r.body.some((h) => !h.measured));
+  // M9 D2: the registry keeps only measured harnesses.
+  assert.ok(r.body.every((h) => h.measured));
 });
 
 test("the new-room form completes a folder with Tab, lists the measured harnesses, and adds an unadded folder on yes", {
@@ -7449,8 +7450,9 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   await press(`\x15${repo}\r`, "Enter/Space");
   // harness: a pick list of the measured ones. Esc keeps the row as it was.
   await press(`${DOWN}${DOWN}\r`, "claude");
-  // Only the measured ids are offered: gemini and omp have no lab report.
-  assert.doesNotMatch(plainText(out()), /\bgemini\b|\bomp\b/);
+  // Every registry entry is measured (M9 D2), so each one is offered.
+  for (const id of Object.keys(AGENTS))
+    assert.match(plainText(out()), new RegExp(`\\b${id}\\b`));
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
   // command, then open: the folder is not added, so the form asks.
