@@ -73,7 +73,8 @@ M1a-4's call, not this note's.
 
 At the time of the M0 runs below, `omp`, `pi` and `gemini` were uninstalled here:
 **`unknown` by absence, not by test.** pi was measured later (2026-09-09, below);
-`omp` and `gemini` remain unverified by absence. `unknown` should read as
+`omp` and `gemini` were never measured, and M9-1 removed both from the registry
+(M9 D2). `unknown` should read as
 `internal` / `none` for warning purposes.
 
 ### Containment vocabulary
@@ -1558,6 +1559,12 @@ Kimi Code 2.3.0, `kimi acp`, native. Same method and prompt as §Codex.
 **Kimi honours a refused `fs/write_text_file`.** So the path guard and the `safe` policy
 still bind its file writes in `auto` and `yolo`. A shell command in those modes is outside
 our reach.
+
+**An `ask` question does not name the command.** The `tool_call` title is `Bash`, and the
+command comes only after the request. So `--mode ask` asked
+`kimi wants to run [execute] Bash` for `echo hi > shell.txt` (one run, 2026-10-21). The
+request's `content` text names the command, but we do not show it. A room question was
+not tried; it reads the same map, so it is very likely blind too.
 
 ---
 

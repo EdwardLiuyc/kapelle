@@ -234,6 +234,7 @@ Agenda item #1 in the brief. Costs almost nothing and de-risks every design choi
    not a legal answer (`terminal/create` must return a `terminalId`, so the spike really
    executed), and the runnable set is the three installed harnesses — `omp`, `pi` and
    `gemini` are **unknown by absence, not by test**. **M3-5 is cut to documentation.**
+   pi was measured later (2026-09-09); M9-1 removed `omp` and `gemini` (M9 D2).
 4. ~~**Shell routing — the spike's second output.**~~ **Done by M0-3, and the binary was
    wrong.** All three execute internally, but the command text still reaches us for two of
    them — on ordinary `session/update` notifications, a channel this plan never considered.

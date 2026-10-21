@@ -7471,6 +7471,51 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   assert.equal(await exited, 0, out());
 });
 
+test("the new-room form leaves out a harness the daemon says is not measured", {
+  skip: noPty,
+}, async (t) => {
+  // The registry has no unmeasured entry today (M9 D2), so a fake daemon
+  // sends one: the filter is the only thing that keeps it out.
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const fake = createServer((req, res) => {
+    const body =
+      req.url === "/version"
+        ? { apiVersion: API_VERSION }
+        : req.url === "/harnesses"
+          ? [
+              { id: "lab-ok", measured: true },
+              { id: "lab-none", measured: false },
+            ]
+          : req.url === "/rooms"
+            ? []
+            : undefined;
+    res.writeHead(body ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(body ?? { error: { code: "no_route" } }));
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  // `ptyScreen` kills the screen when the test ends.
+  const { press, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await press("\x0f", "new room …");
+  await press("\r", "folder");
+  // folder, title, harness: the harness row's pick list.
+  await press(`${DOWN}${DOWN}\r`, "other…");
+  assert.match(plainText(out()), /\blab-ok\b/);
+  assert.doesNotMatch(plainText(out()), /\blab-none\b/);
+});
+
 test("chat in a removed folder: bare stops, attach opens and its /new form survives", {
   skip: noPty,
 }, async (t) => {
