@@ -81,7 +81,7 @@ npm run test           # node:test: pure functions and wire behaviour; no harnes
 npm run knip           # unused files and exports
 npm run selftest       # end to end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
 npm run test:harness   # the real harnesses; local only, needs credentials, spends tokens
-node cli.ts                                     # the chat; starts the daemon first if none runs
+node cli.ts                                     # on a terminal: the chat, starting the daemon if none runs; a pipe prints chat usage and exits 1
 node cli.ts "<prompt>" [--agent opencode|pi|claude|copilot|codex|kimi] [--cmd "<cmd>"] [--cwd dir] [--mode ask|safe|auto] [--verbose] [--quiet]
 node cli.ts run --file <run.json> [--detach]   # N tasks (tasks.json is the example); --detach hands them to the daemon
 node cli.ts attach <runId> [--task <id>]       # replay then follow a detached run

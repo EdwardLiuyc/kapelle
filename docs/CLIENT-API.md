@@ -59,7 +59,7 @@ the version your client was written for:
 | --- | --- |
 | Same `major`, same `minor` | Continue. |
 | Same `major`, different `minor` | Continue, and show a warning. Something was added or is missing. |
-| Different `major` | Stop, and tell the person to update the client or the daemon. |
+| Different `major` | Stop the daemon with `kapelle daemon stop`, then update the client or daemon. |
 
 The client keeps its own version. It never sends it to the daemon.
 

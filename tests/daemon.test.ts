@@ -628,6 +628,27 @@ test("kapelle daemon stop with no daemon says so and exits 0", async (t) => {
   assert.equal(stop.stdout.trim(), "no daemon is running");
 });
 
+test("kapelle daemon stop clears a stale record without claiming a stop", async (t) => {
+  const runtime = await tempDir(t);
+  const dir = join(runtime, "kapelle");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  assert.ok(dead !== undefined);
+  const file = join(dir, "daemon.json");
+  await writeFile(
+    file,
+    JSON.stringify({ pid: dead, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  const stop = await spawnCli(t, ["daemon", "stop"], "cli.ts", dirs(runtime))
+    .done;
+
+  assert.equal(stop.code, 0, stop.stderr);
+  assert.equal(stop.stdout.trim(), "no daemon is running");
+  await assert.rejects(readFile(file), "the stale record is removed");
+});
+
 // --- repos ----------------------------------------------------------------------
 
 test("POST /repos registers the repository root, once, and GET /repos lists it", async (t) => {

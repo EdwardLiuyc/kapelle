@@ -97,7 +97,10 @@ test("bare kapelle hands off to the chat; --help is the help", async (t) => {
   assert.equal(help.code, 0);
   assert.match(help.stdout, /minimal Agent Client Protocol client/);
   assert.match(help.stdout, /kapelle daemon stop/);
-  assert.match(help.stdout, /starting the daemon if none runs/);
+  assert.match(
+    help.stdout,
+    /starting the daemon\n.*if none runs; a pipe prints chat usage and exits 1/,
+  );
 });
 
 test("merge without a run id is a usage error, not a prompt", async (t) => {

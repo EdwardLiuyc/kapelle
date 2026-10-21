@@ -200,7 +200,8 @@ export async function checkVersion(
       );
     }
     throw new VersionRefused(
-      `the daemon refused GET /version: ${r.error.message}`,
+      `the daemon refused GET /version: ${r.error.message}; ` +
+        "stop it with: kapelle daemon stop",
     );
   }
   const theirs = r.body?.apiVersion;

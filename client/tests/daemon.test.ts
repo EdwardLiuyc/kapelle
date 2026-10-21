@@ -153,7 +153,8 @@ test("a non-404 /version refusal keeps the daemon's message", async (t) => {
     assert.ok(err instanceof StreamClosed);
     assert.equal(
       err.message,
-      "the daemon refused GET /version: missing or wrong token",
+      "the daemon refused GET /version: missing or wrong token; " +
+        "stop it with: kapelle daemon stop",
     );
     return true;
   });

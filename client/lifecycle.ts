@@ -12,9 +12,10 @@
  *
  * **The daemon's own lock settles a race.** Two `kapelle` starting together
  * may both spawn a daemon. `claim` in `daemon.ts` lets exactly one listen;
- * the loser exits, and its reason is only in the log. This module ignores
- * the child's exit and waits for `daemon.json` instead, so the second CLI
- * opens the chat on the winner rather than failing on the lock.
+ * the loser exits, and its reason is only in the log. This module watches
+ * the child's exit, but keeps waiting when another starter holds the lock or
+ * another live PID owns the record, so the second CLI opens the chat on the
+ * winner rather than failing on the lock.
  *
  * **`daemon.json` is the readiness signal.** It is written with only `pid`
  * at the claim and with `pid`, `port` and `token` once the port is open. A
@@ -32,7 +33,7 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, openSync, renameSync, rmSync } from "node:fs";
+import { closeSync, existsSync, openSync, renameSync, rmSync } from "node:fs";
 
 import { type DaemonAddress, readDaemonRecord, request } from "./daemon.ts";
 
@@ -103,19 +104,37 @@ function rotate(log: string): number {
  *
  * `stale` is the record that was there before a start: when it is set, the
  * new daemon's token has to differ, or the old file would be read as ready.
- * A spawn error is fatal at once; a child that exits normally is not, since
- * a loser in the start race exits exactly like that.
+ * A spawn error is fatal at once. A child that exits is also fatal unless
+ * another live PID owns the record, which is what a lock-race loser leaves
+ * behind, or the daemon's lock says another starter is still claiming it. If
+ * that stale PID disappears after the child exits, the caller may make one
+ * bounded retry.
  */
 async function waitForRecord(
   opts: StartOptions,
   stale: { pid?: number; token: string } | undefined,
   waitMs: number,
-  spawnError?: () => Error | undefined,
-): Promise<void> {
+  child?: ChildProcess,
+  retryAllowed = false,
+): Promise<"ready" | "retry"> {
+  let spawnError: Error | undefined;
+  let childExit:
+    | { code: number | null; signal: NodeJS.Signals | null }
+    | undefined;
+  if (child) {
+    child.on("error", (err) => {
+      spawnError = err;
+    });
+    child.on("exit", (code, signal) => {
+      childExit = { code, signal };
+    });
+  }
+
   const until = Date.now() + waitMs;
   for (;;) {
-    const failed = spawnError?.();
-    if (failed) throw new Error(`cannot start the daemon: ${failed.message}`);
+    if (spawnError) {
+      throw new Error(`cannot start the daemon: ${spawnError.message}`);
+    }
     const record = await readDaemonRecord(opts.file);
     if (
       record !== "missing" &&
@@ -123,7 +142,32 @@ async function waitForRecord(
       (stale === undefined ||
         (record.address.token !== stale.token && record.pid !== stale.pid))
     ) {
-      return;
+      return "ready";
+    }
+    if (childExit) {
+      const recordPid = record === "missing" ? undefined : record.pid;
+      const otherLive =
+        (recordPid !== undefined &&
+          recordPid !== child?.pid &&
+          alive(recordPid)) ||
+        (stale?.pid !== undefined &&
+          stale.pid !== child?.pid &&
+          alive(stale.pid));
+      // A concurrent starter can still hold the strict lock while the record
+      // shows a dead pid. This child was refused by that lock, so wait for
+      // the holder to publish instead of treating the exit as final.
+      if (!otherLive && !existsSync(`${opts.file}.lock`)) {
+        if (retryAllowed && stale?.pid !== undefined && !alive(stale.pid)) {
+          return "retry";
+        }
+        const reason =
+          childExit.signal !== null
+            ? `signal ${childExit.signal}`
+            : `exit code ${childExit.code ?? "unknown"}`;
+        throw new Error(
+          `the daemon exited before it was ready (${reason}); see ${opts.log}.`,
+        );
+      }
     }
     if (Date.now() >= until) {
       const seconds = Math.ceil(waitMs / 1000);
@@ -163,43 +207,43 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
       ? { pid: record.pid, token: record.address.token }
       : undefined;
 
-  const log = rotate(opts.log);
-  let child: ChildProcess;
-  try {
-    child = spawn(process.execPath, [opts.script], {
-      cwd: opts.cwd,
-      env: opts.env ?? process.env,
-      // Its own session, so closing the terminal does not send it SIGHUP.
-      detached: true,
-      // It must not hold this CLI's terminal or pipes open.
-      stdio: ["ignore", log, log],
-    });
-  } catch (err) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const log = rotate(opts.log);
+    let child: ChildProcess;
+    try {
+      child = spawn(process.execPath, [opts.script], {
+        cwd: opts.cwd,
+        env: opts.env ?? process.env,
+        // Its own session, so closing the terminal does not send it SIGHUP.
+        detached: true,
+        // It must not hold this CLI's terminal or pipes open.
+        stdio: ["ignore", log, log],
+      });
+    } catch (err) {
+      closeSync(log);
+      throw err;
+    }
     closeSync(log);
-    throw err;
-  }
-  closeSync(log);
+    child.unref();
 
-  let spawnError: Error | undefined;
-  child.on("error", (err) => {
-    spawnError = err;
-  });
-  child.unref();
-  await waitForRecord(
-    opts,
-    stale,
-    opts.waitMs ?? START_WAIT_MS,
-    () => spawnError,
-  );
+    const outcome = await waitForRecord(
+      opts,
+      stale,
+      opts.waitMs ?? START_WAIT_MS,
+      child,
+      attempt === 0,
+    );
+    if (outcome === "ready") return;
+  }
 }
 
 /**
  * Stop the daemon named in `file`, and wait for its pid to go.
  *
  * Answers the pid it stopped, or `undefined` when the file names none: no
- * daemon, a malformed record, or a record between claim and listen with no
- * pid. A pid that is already gone counts as stopped, because the goal — no
- * daemon — is met.
+ * daemon, a malformed record, a record between claim and listen with no pid,
+ * or a stale record whose pid is already gone. The stale record is removed,
+ * but no daemon is reported as stopped.
  */
 export async function stopDaemon(
   file: string,
@@ -216,6 +260,9 @@ export async function stopDaemon(
   } catch (err) {
     // Already gone: the record is all that is left, and it goes below.
     if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
+    const left = await readDaemonRecord(file);
+    if (left !== "missing" && left.pid === pid) rmSync(file, { force: true });
+    return undefined;
   }
 
   const until = Date.now() + waitMs;

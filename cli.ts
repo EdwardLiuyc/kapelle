@@ -190,7 +190,8 @@ if (!chatVerb && argv.length === 0) {
   console.log(`
 kapelle — a minimal Agent Client Protocol client
 
-  kapelle                            the chat, starting the daemon if none runs
+  kapelle                            the chat on a terminal, starting the daemon
+                                     if none runs; a pipe prints chat usage and exits 1
   kapelle "<prompt>" [options]
   kapelle run --file <run.json> [--cwd dir] [--verbose] [--quiet]
   kapelle run --file <run.json> --detach   hands the run to the daemon
@@ -222,7 +223,7 @@ Options:
   --quiet          suppress normal output; safety notices still print
 
 Examples:
-  kapelle                              # the chat, starting the daemon if needed
+  kapelle                              # on a terminal: the chat, starting the daemon if needed
   kapelle "list the top-level files and summarise this repo"
   kapelle "add a health endpoint" --cwd ../my-app --mode ask
   kapelle "what does src/index.ts do" --mode safe

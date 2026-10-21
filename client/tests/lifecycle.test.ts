@@ -13,12 +13,14 @@
  */
 
 import assert from "node:assert/strict";
-import { execFile as execFileCb, spawnSync } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile as execFileCb, spawn, spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
-import { REPO, tempDir } from "../../integration/helpers.ts";
+import { REPO } from "../../integration/helpers.ts";
 import { checkVersion } from "../daemon.ts";
 import { ensureDaemon, stopDaemon } from "../lifecycle.ts";
 
@@ -29,12 +31,62 @@ interface Dirs {
   state: string;
 }
 
+const sleep = (ms: number) => new Promise<void>((ok) => setTimeout(ok, ms));
+
+/** Poll a condition for a test that must observe a process mid-flight. */
+async function until(check: () => Promise<boolean>, message: string) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await sleep(20);
+  }
+  assert.fail(message);
+}
+
 /** Two user-level folders, as `kapelle` would have them. The state folder is
- *  created here because `stateDir()` belongs to the CLI, not this module. */
+ *  created here because `stateDir()` belongs to the CLI, not this module.
+ *
+ *  One teardown owns both folders and the daemon between them. It reads the
+ *  pid before removing anything, so a failed assertion cannot delete the
+ *  record a later cleanup needs, and it kills directly rather than waiting
+ *  for a test-timeout. */
 async function dirs(t: TestContext): Promise<Dirs> {
-  const runtime = await tempDir(t);
-  const state = await tempDir(t);
+  const runtime = await mkdtemp(join(tmpdir(), "acp-it-runtime-"));
+  const state = await mkdtemp(join(tmpdir(), "acp-it-state-"));
   await mkdir(join(state, "kapelle"), { recursive: true, mode: 0o700 });
+  t.after(async () => {
+    let pid: number | undefined;
+    try {
+      const record = JSON.parse(
+        await readFile(join(runtime, "kapelle", "daemon.json"), "utf8"),
+      ) as { pid?: unknown };
+      if (
+        typeof record.pid === "number" &&
+        Number.isInteger(record.pid) &&
+        record.pid > 0 &&
+        record.pid !== process.pid
+      ) {
+        pid = record.pid;
+      }
+    } catch {
+      // No record, unreadable record, or the daemon already stopped.
+    }
+    if (pid !== undefined) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+      for (
+        const deadline = Date.now() + 2_000;
+        alive(pid) && Date.now() < deadline;
+      ) {
+        await sleep(20);
+      }
+    }
+    await rm(runtime, { recursive: true, force: true });
+    await rm(state, { recursive: true, force: true });
+  });
   return { runtime, state };
 }
 
@@ -77,24 +129,11 @@ function alive(pid: number): boolean {
   }
 }
 
-/** Belt and braces: a failing assertion must not strand a daemon. */
-function reap(t: TestContext, file: string) {
-  t.after(async () => {
-    try {
-      const { pid } = await readRecord(file);
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // No record, or already stopped.
-    }
-  });
-}
-
 test("no daemon: starts one in its own session, logs it and answers", {
   skip: process.platform === "win32",
 }, async (t) => {
   const d = await dirs(t);
   const opts = options(d);
-  reap(t, opts.file);
 
   await ensureDaemon(opts);
 
@@ -118,7 +157,6 @@ test("no daemon: starts one in its own session, logs it and answers", {
 test("a daemon that answers is reused, and no log is written", async (t) => {
   const d = await dirs(t);
   const opts = options(d);
-  reap(t, opts.file);
   await ensureDaemon(opts);
   const first = await readRecord(opts.file);
   await rm(opts.log);
@@ -132,7 +170,6 @@ test("a daemon that answers is reused, and no log is written", async (t) => {
 test("two ensures at once leave one daemon", async (t) => {
   const d = await dirs(t);
   const opts = options(d);
-  reap(t, opts.file);
 
   await Promise.all([ensureDaemon(opts), ensureDaemon(opts)]);
 
@@ -158,7 +195,6 @@ test("a stale complete record is replaced, not obeyed", async (t) => {
     JSON.stringify({ pid: dead, port: 1, token: "stale" }),
     { mode: 0o600 },
   );
-  reap(t, opts.file);
 
   await ensureDaemon(opts);
 
@@ -166,6 +202,84 @@ test("a stale complete record is replaced, not obeyed", async (t) => {
   assert.notEqual(record.pid, dead);
   assert.notEqual(record.token, "stale");
   assert.equal(alive(record.pid), true);
+});
+
+test("a lock-refused start waits for the starter that holds the lock", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  assert.ok(dead !== undefined);
+  await writeFile(
+    opts.file,
+    JSON.stringify({ pid: dead, port: 1, token: "old" }),
+    { mode: 0o600 },
+  );
+  const lock = `${opts.file}.lock`;
+  await mkdir(lock);
+
+  const attempt = join(d.state, "lock-refused-attempt");
+  const script = join(d.state, "lock-refused-daemon.mjs");
+  await writeFile(
+    script,
+    `
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(attempt)}, "attempt");
+process.exit(1);
+`,
+    { mode: 0o600 },
+  );
+  const dummy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  t.after(() => {
+    try {
+      dummy.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  });
+  assert.ok(dummy.pid !== undefined);
+
+  let settled = false;
+  const starting = ensureDaemon({ ...opts, script, waitMs: 5_000 })
+    .then(
+      () => ({ ok: true as const }),
+      (err: unknown) => ({ ok: false as const, err }),
+    )
+    .finally(() => {
+      settled = true;
+    });
+  await until(
+    () =>
+      readFile(attempt, "utf8").then(
+        () => true,
+        () => false,
+      ),
+    "the fake starter did not exit like a lock-refused daemon",
+  );
+
+  // The lock holder is still claiming the record. A client must wait for it,
+  // not turn its own child's refusal into a startup failure.
+  await sleep(300);
+  assert.equal(settled, false, "ensureDaemon failed while the lock was held");
+  assert.equal(alive(dummy.pid), true);
+  await writeFile(
+    opts.file,
+    JSON.stringify({ pid: dummy.pid, port: 1, token: "fresh" }),
+    { mode: 0o600 },
+  );
+  await rm(lock, { recursive: true, force: true });
+
+  const result = await starting;
+  assert.equal(
+    result.ok,
+    true,
+    result.ok ? undefined : `unexpected failure: ${String(result.err)}`,
+  );
+  const record = await readRecord(opts.file);
+  assert.equal(record.pid, dummy.pid);
+  assert.equal(record.token, "fresh");
 });
 
 test("an unready record with a live pid is waited on, not duplicated", async (t) => {
@@ -183,7 +297,6 @@ test("an unready record with a live pid is waited on, not duplicated", async (t)
 test("the previous log is kept beside the new one", async (t) => {
   const d = await dirs(t);
   const opts = options(d);
-  reap(t, opts.file);
 
   await ensureDaemon(opts);
   assert.match(await readFile(opts.log, "utf8"), /listening on /);
@@ -200,7 +313,6 @@ test("the previous log is kept beside the new one", async (t) => {
 test("stopDaemon sends SIGTERM, waits for the pid and removes the record", async (t) => {
   const d = await dirs(t);
   const opts = options(d);
-  reap(t, opts.file);
   await ensureDaemon(opts);
   const record = await readRecord(opts.file);
 
@@ -209,4 +321,219 @@ test("stopDaemon sends SIGTERM, waits for the pid and removes the record", async
   assert.equal(alive(record.pid), false);
   await assert.rejects(readFile(opts.file), "the record is gone");
   assert.equal(await stopDaemon(opts.file), undefined, "nothing left to stop");
+});
+
+test("a start retries once when the stale live pid disappears", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const first = join(d.state, "first-attempt");
+  const early = join(d.state, "early-attempt");
+  const dummy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  t.after(() => {
+    try {
+      dummy.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  });
+  assert.ok(dummy.pid !== undefined);
+  const script = join(d.state, "retrying-daemon.mjs");
+  await writeFile(
+    script,
+    `
+import { existsSync, writeFileSync } from "node:fs";
+const file = ${JSON.stringify(opts.file)};
+const first = ${JSON.stringify(first)};
+const early = ${JSON.stringify(early)};
+const dummyPid = ${JSON.stringify(dummy.pid)};
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+if (!existsSync(first)) {
+  writeFileSync(first, "first");
+  process.exit(1);
+}
+if (alive(dummyPid)) {
+  writeFileSync(early, "early");
+  process.exit(1);
+}
+writeFileSync(file, JSON.stringify({
+  pid: process.pid,
+  port: 1,
+  token: "fresh",
+}), { mode: 0o600 });
+setInterval(() => {}, 1000);
+`,
+    { mode: 0o600 },
+  );
+  const exiting = new Promise<void>((ok) => dummy.once("exit", () => ok()));
+  await writeFile(
+    opts.file,
+    JSON.stringify({ pid: dummy.pid, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  const starting = ensureDaemon({ ...opts, script, waitMs: 5_000 }).then(
+    () => ({ ok: true as const }),
+    (err: unknown) => ({ ok: false as const, err }),
+  );
+  await until(
+    () =>
+      readFile(first, "utf8").then(
+        () => true,
+        () => false,
+      ),
+    "the first attempt did not exit",
+  );
+
+  // A retry now would run while the stale pid is still alive. Give an
+  // unconditional retry enough time to betray itself.
+  await sleep(300);
+  assert.equal(alive(dummy.pid), true);
+  await assert.rejects(
+    readFile(early, "utf8"),
+    "the retry ran while the stale pid was alive",
+  );
+
+  dummy.kill("SIGKILL");
+  await exiting;
+  const result = await starting;
+  assert.equal(
+    result.ok,
+    true,
+    result.ok ? undefined : `unexpected failure: ${String(result.err)}`,
+  );
+  await assert.rejects(
+    readFile(early, "utf8"),
+    "the retry found the stale pid alive",
+  );
+
+  const record = await readRecord(opts.file);
+  assert.notEqual(record.pid, dummy.pid);
+  assert.equal(record.token, "fresh");
+  assert.equal(alive(record.pid), true);
+});
+
+test("a daemon start that cannot listen fails promptly and names the log", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const d = await dirs(t);
+  const base = options(d);
+  const occupied = createServer();
+  await new Promise<void>((ok, fail) => {
+    occupied.once("error", fail);
+    occupied.listen(0, "127.0.0.1", ok);
+  });
+  t.after(() => occupied.close());
+  const address = occupied.address();
+  assert.ok(address && typeof address === "object");
+  const opts = {
+    ...base,
+    env: { ...base.env, KAPELLE_PORT: String(address.port) },
+    waitMs: 15_000,
+  };
+
+  const started = Date.now();
+  await assert.rejects(ensureDaemon(opts), (err: unknown) => {
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /exited before it was ready \(exit code 1\)/);
+    assert.ok(err.message.includes(opts.log), "the failure names the log");
+    return true;
+  });
+  assert.ok(
+    Date.now() - started < 5_000,
+    "a child that exits must not wait out the start timeout",
+  );
+  assert.match(
+    await readFile(opts.log, "utf8"),
+    /cannot listen on 127\.0\.0\.1/,
+  );
+  await assert.rejects(readFile(opts.file), "the refused start left no record");
+});
+
+test("stopDaemon waits for SIGTERM and process exit before reporting", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const marker = join(d.state, "term-received");
+  const release = join(d.state, "release");
+  const ready = join(d.state, "ready");
+  const script = join(d.state, "delayed-daemon.mjs");
+  await writeFile(
+    script,
+    `
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+const [record, marker, release, ready] = process.argv.slice(2);
+process.on("SIGTERM", () => writeFileSync(marker, "SIGTERM"));
+writeFileSync(ready, "ready");
+const timer = setInterval(() => {
+  if (!existsSync(release)) return;
+  clearInterval(timer);
+  rmSync(record, { force: true });
+  process.exit(0);
+}, 10);
+`,
+    { mode: 0o600 },
+  );
+  const child = spawn(
+    process.execPath,
+    [script, opts.file, marker, release, ready],
+    { cwd: REPO, stdio: "ignore" },
+  );
+  t.after(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  });
+  await until(
+    () =>
+      readFile(ready, "utf8").then(
+        () => true,
+        () => false,
+      ),
+    "the fake daemon did not become ready",
+  );
+  assert.ok(child.pid !== undefined);
+  await writeFile(
+    opts.file,
+    JSON.stringify({ pid: child.pid, port: 1, token: "fake" }),
+    { mode: 0o600 },
+  );
+
+  let returned = false;
+  const stopping = stopDaemon(opts.file, 5_000).then((pid) => {
+    returned = true;
+    return pid;
+  });
+  await until(
+    () =>
+      readFile(marker, "utf8").then(
+        () => true,
+        () => false,
+      ),
+    "the fake daemon did not receive SIGTERM",
+  );
+  assert.equal(returned, false, "stopDaemon returned before the daemon exited");
+  assert.equal(alive(child.pid), true);
+
+  // Keep it alive across more than one poll interval. A stop that sends
+  // SIGTERM and returns without checking process exit returns here.
+  await sleep(300);
+  assert.equal(returned, false, "stopDaemon returned while the daemon lived");
+  assert.equal(alive(child.pid), true);
+
+  await writeFile(release, "release");
+  assert.equal(await stopping, child.pid);
+  assert.equal(alive(child.pid), false);
+  await assert.rejects(readFile(opts.file), "the record is gone");
 });
