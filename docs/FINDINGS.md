@@ -1481,7 +1481,8 @@ again; their versions are still the ones installed here. codex also sent
 
 The install commands come from web search, not from the vendors' own pages. Here, `codex`
 came from the install script and `kimi` from Kimi's own installer, so the npm names were
-not tried.
+not tried. `codex-acp` came from `npm i -g @agentclientprotocol/codex-acp` (`npm ls -g`
+shows 2.2.2). The README names only the parts tried here.
 
 ---
 
@@ -1490,7 +1491,9 @@ not tried.
 codex-acp 2.2.2 spawning codex-cli 0.163.0, one machine, a new temporary folder for each
 run, wire-tap captures. Each run set one mode, then sent one prompt: run
 `echo hi > shell.txt`, then write `edit.txt` with the file tool. The `safe` policy refused
-every change it was asked about; the approving runs used `auto`.
+every change it was asked about; the approving runs used `auto`. `2.2.2` is the
+handshake's `agentInfo.version`, which `measuredOn` is compared with. kapelle never sees
+codex-cli's version.
 
 | field | codex-acp 2.2.2 |
 | --- | --- |
@@ -1537,7 +1540,8 @@ Other wire notes:
 
 ## Kimi Code measured 2026-10-21 (M9-1)
 
-Kimi Code 2.3.0, `kimi acp`, native. Same method and prompt as §Codex.
+Kimi Code 2.3.0, `kimi acp`, native. Same method and prompt as §Codex. `2.3.0` is the
+handshake's `agentInfo.version`.
 
 | field | kimi 2.3.0 |
 | --- | --- |

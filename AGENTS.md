@@ -157,7 +157,8 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 
 - **The policy is a filter, not a sandbox.** It decides what a harness *asks*, and the
   one change a harness can make through us: `fs/write_text_file`. A harness that edits
-  through its own shell is outside its reach. opencode and pi never ask at all.
+  through its own shell is outside its reach. pi never asks, and opencode asks only
+  for a write outside the root (§M9-1 re-measure).
   `core/policy.ts` is the one policy file, and `policyFor(mode)` is the only map from a
   mode to a decider.
 - **Keep the path guard separate from the policy.** `#guardPath` compares realpaths and

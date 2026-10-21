@@ -39,9 +39,10 @@ interface LaunchSpec {
  * What we saw on the wire. Present only for harnesses actually run here.
  *
  * `shell` says *where* a command runs; `argvChannel` says whether the command
- * text ever reaches us and on which message. They are independent — two of
- * three harnesses run commands internally yet still hand us the argv
- * (`docs/FINDINGS.md` §Roll-up, "What M1a-4 should put in the registry").
+ * text ever reaches us and on which message. They are independent — all six
+ * harnesses run commands internally, yet each still hands us the argv on a
+ * notification (`docs/FINDINGS.md` §Roll-up, "What M1a-4 should put in the
+ * registry"; §M9-1 re-measure).
  */
 interface MeasuredLabels {
   shell: "terminal" | "internal" | "unknown";
@@ -228,8 +229,8 @@ export const AGENTS: Record<string, AgentEntry> = {
   },
 
   // Codex has no native ACP mode. The official adapter runs it behind an ACP
-  // front end and uses the `codex` login. Install with:
-  //   npm i -g @openai/codex @agentclientprotocol/codex-acp
+  // front end and uses the `codex` login. Install the Codex CLI, then:
+  //   npm i -g @agentclientprotocol/codex-acp
   codex: {
     launch: { command: "codex-acp", args: [] },
     defaultMode: "ask",
@@ -259,8 +260,8 @@ export const AGENTS: Record<string, AgentEntry> = {
     },
   },
 
-  // Kimi Code runs an ACP server as a subcommand. Install with:
-  //   npm i -g @moonshot-ai/kimi-code
+  // Kimi Code runs an ACP server as a subcommand. Install it with Kimi's
+  // own installer (§Models and login).
   kimi: {
     launch: { command: "kimi", args: ["acp"] },
     defaultMode: "ask",

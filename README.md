@@ -151,8 +151,8 @@ Pick one with `--agent <id>`. Each agent logs in by itself.
 | `claude` | `npm i -g @agentclientprotocol/claude-agent-acp`, then `claude auth login` | yes |
 | `copilot` | the Copilot CLI (`copilot --acp`) | yes |
 | `opencode` | `npm i -g opencode-ai`, then `opencode auth login` | yes |
-| `codex` | `npm i -g @openai/codex @agentclientprotocol/codex-acp`, then `codex login` | yes |
-| `kimi` | `npm i -g @moonshot-ai/kimi-code`, then `kimi login` | yes |
+| `codex` | the Codex CLI, then `npm i -g @agentclientprotocol/codex-acp` and `codex login` | yes |
+| `kimi` | the Kimi Code CLI (`kimi acp`), then `kimi login` | yes |
 
 Any other ACP agent works too: `--cmd "some-agent --acp"`.
 
@@ -164,11 +164,11 @@ Any other ACP agent works too: `--cmd "some-agent --acp"`.
 | --- | --- |
 | `safe` | Allows reads. Refuses every change the agent asks about. |
 | `ask` | Allows reads. Asks you about each change. A run in your terminal needs the terminal: without one, kapelle uses `safe` and prints a notice. A room, or a run started with `--detach`, asks through the daemon instead: the question waits for your answer, and is refused at the time limit. |
-| `auto` | Allows everything. File paths outside the workspace are still refused. |
+| `auto` | Allows everything. A file request for a path outside the workspace is still refused. |
 
-**A mode is a filter, not a sandbox.** It decides the answer when an agent asks for permission. An agent that changes files through its own shell does not ask. pi and opencode never ask, so `safe` does not stop them.
+**A mode is a filter, not a sandbox.** It decides the answer when an agent asks for permission. An agent that changes files through its own shell does not ask. pi never asks. opencode asks only for a write outside the workspace. So `safe` does not stop them.
 
-kapelle always refuses a file path outside the workspace, in every mode. But this only covers file requests that go through kapelle.
+kapelle always refuses a file request for a path outside the workspace, in every mode. But this covers only file requests that go through kapelle. An agent can still write the file itself: opencode 2.0.18 did, after kapelle refused its request (#308).
 
 What each agent was measured to do is in [`docs/FINDINGS.md`](docs/FINDINGS.md).
 
