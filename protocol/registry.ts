@@ -208,6 +208,9 @@ export const AGENTS: Record<string, AgentEntry> = {
     maxMode: "auto",
   },
 
+  codex: { launch: { command: "codex-acp", args: [] }, defaultMode: "ask", maxMode: "auto" },
+  kimi: { launch: { command: "kimi", args: ["acp"] }, defaultMode: "ask", maxMode: "auto" },
+
   // Copilot CLI runs an ACP server behind a flag, not a subcommand — confirmed
   // against `copilot --help` on 1.0.78. Re-check there if this drifts.
   copilot: {
