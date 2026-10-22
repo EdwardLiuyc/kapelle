@@ -262,7 +262,8 @@ export function screenLayout(p: {
  *
  * **The person's shell** (M4-13): `/term` puts one shell, started in the
  * open room's `cwd`, in the side pane. It lives until it exits or the chat
- * ends, and a later `/term` shows the same one. While it has the keys it
+ * ends, and a later `/term` shows the same one. A clean `exit` hides the
+ * pane; any other end leaves it, to read why. While it has the keys it
  * gets every key but `ctrl+]`, before the screen's own (`chat/tui/term.ts`).
  *
  * **A fast-forward previews before it moves** (M6-11a). `@target /ff --from
@@ -738,10 +739,14 @@ function chatTui(
             tui.requestRender();
           }
         },
-        () => {
-          // The keys go back to the composer; the screen stays to read.
-          if (side.content && "shell" in side.content) {
-            if (side.content.shell === started) side.focus(false);
+        (how) => {
+          // A clean `exit` hides the view, as a terminal closes. Any other
+          // end keeps the screen to read why, and the keys go back to the
+          // composer.
+          const c = side.content;
+          if (c && "shell" in c && c.shell === started) {
+            if (how === "exited (code 0)") side.toggle(false);
+            else side.focus(false);
           }
           setStatus();
         },
