@@ -60,12 +60,13 @@ const reply = (done = false): HarnessesReply => ({
 
 async function fakeDaemon(
   t: TestContext,
-  { holdGet = false, holdDone = false } = {},
+  { holdGet = false, holdDone = false, holdPost = false } = {},
 ) {
   const getSeen = deferred();
   const getRelease = deferred();
   const doneSeen = deferred();
   const doneRelease = deferred();
+  const postRelease = deferred();
   let posts = 0;
   const server = createServer((req, res) => {
     void (async () => {
@@ -78,6 +79,7 @@ async function fakeDaemon(
       }
       if (req.method === "POST" && req.url === "/harnesses") {
         posts++;
+        if (holdPost) await postRelease.promise;
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(reply()));
         return;
@@ -111,6 +113,7 @@ async function fakeDaemon(
     getRelease,
     doneSeen,
     doneRelease,
+    postRelease,
     posts: () => posts,
   };
 }
@@ -212,4 +215,29 @@ test("a stale done reply does not close a newer setup panel", async (t) => {
     shown,
     "an unrelated panel titled agents must not be closed",
   );
+});
+
+test("the start draws the reply it holds while the daemon finds again", async (t) => {
+  const fake = await fakeDaemon(t, { holdPost: true });
+  const box = makeBox(fake.d);
+  const starting = box.atStart();
+  // The GET's list shows at once, not "looking for agents…".
+  for (let i = 0; i < 100 && fake.posts() === 0; i++) {
+    await new Promise((ok) => setTimeout(ok, 10));
+  }
+  assert.equal(fake.posts(), 1);
+  const lines = box.panel?.body.render(80).join("\n") ?? "";
+  assert.match(lines, /pi +ready \(pi 1\.3\.0, pi-acp 0\.0\.34\)/);
+  assert.doesNotMatch(lines, /looking for agents/);
+  fake.postRelease.resolve();
+  await starting;
+  assert.equal(box.panel?.title, "agents");
+});
+
+test("the start does not open setup over a busy side view", async (t) => {
+  const fake = await fakeDaemon(t);
+  const box = makeBox(fake.d);
+  await box.atStart(() => true);
+  assert.equal(box.panel, undefined);
+  assert.equal(fake.posts(), 0);
 });

@@ -12,8 +12,8 @@
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
  * `stateDirFor`, `validateRun`, `sweepBoot`, `runRun`,
  * `processIdentity` and the permission queue, `findAgents` for the
- * installed agents, and for chat rooms `roomAgents` and `openRoom`; worktrees, policy and harnesses
- * stay behind them. If orchestration grew here, the scheduler would be
+ * installed agents, and for chat rooms `roomAgents` and `openRoom`;
+ * worktrees, policy and the harness subprocesses stay behind them. If orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
  * implementation (`docs/STORIES.md`, M2-1).
  *

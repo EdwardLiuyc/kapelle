@@ -1286,7 +1286,8 @@ function chatTui(
     }
     set.start(list);
     open(view);
-    box.atStart();
+    // The shell or a diff in the side view keeps the keys (M9-3).
+    void box.atStart(() => side.shown).catch(gone);
   });
 }
 

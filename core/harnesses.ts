@@ -33,7 +33,7 @@ import {
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 
-import { AGENTS, resolveEnv } from "../protocol/registry.ts";
+import { AGENTS, type EnvSpec, resolveEnv } from "../protocol/registry.ts";
 import { stateDir } from "./runtime.ts";
 
 /** What the find saw for one agent. */
@@ -92,11 +92,12 @@ function onPath(name: string, path: string): string | undefined {
 }
 
 /** What `file --version` says, or nothing. stdin is closed, so a program
- *  that ignores the flag reads its end and stops. A probe gets the same
- *  secret-free environment as a harness, and the timeout or output limit
+ *  that ignores the flag reads its end and stops. A probe gets the
+ *  environment its harness would get: no `KAPELLE_*`, and the entry's own
+ *  `env` (claude drops its parent session's variables). The timeout or output limit
  *  kills its whole process group: a child can ignore SIGTERM, and one that
  *  leaves a descendant holding stdout open must not hold the find forever. */
-function versionOf(file: string): Promise<string | undefined> {
+function versionOf(file: string, env?: EnvSpec): Promise<string | undefined> {
   return new Promise((ok) => {
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
@@ -104,7 +105,7 @@ function versionOf(file: string): Promise<string | undefined> {
     const stderr: Buffer[] = [];
     let outputBytes = 0;
     const child = spawn(file, ["--version"], {
-      env: resolveEnv(undefined),
+      env: resolveEnv(env),
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -159,7 +160,8 @@ function versionOf(file: string): Promise<string | undefined> {
 }
 
 /** The `version` of the npm package `file` is in: the nearest
- *  `package.json` above the file a bin link points at. */
+ *  `package.json` above the file a bin link points at. A broken one is
+ *  the answer too, and gives none: the folder above is another package. */
 function packageVersion(file: string): string | undefined {
   let dir: string;
   try {
@@ -168,16 +170,21 @@ function packageVersion(file: string): string | undefined {
     return undefined;
   }
   for (;;) {
+    let text: string | undefined;
     try {
-      const pkg: unknown = JSON.parse(
-        readFileSync(join(dir, "package.json"), "utf8"),
-      );
-      const v = (pkg as { version?: unknown }).version;
-      // Validate and extract, as `--version` does: package text is not ours
-      // to print unchecked.
-      return typeof v === "string" ? VERSION.exec(v)?.[0] : undefined;
+      text = readFileSync(join(dir, "package.json"), "utf8");
     } catch {
       // No package here; one folder up.
+    }
+    if (text !== undefined) {
+      try {
+        const v = (JSON.parse(text) as { version?: unknown } | null)?.version;
+        // Validate and extract, as `--version` does: package text is not
+        // ours to print unchecked.
+        return typeof v === "string" ? VERSION.exec(v)?.[0] : undefined;
+      } catch {
+        return undefined;
+      }
     }
     const up = dirname(dir);
     if (up === dir) return undefined;
@@ -188,19 +195,21 @@ function packageVersion(file: string): string | undefined {
 /** Looks for every registry agent on `path`, all at once. */
 export async function findAgents(path: string): Promise<Setup["found"]> {
   const entries = Object.entries(AGENTS).flatMap(([id, a]) =>
-    a.setup ? [{ id, command: a.launch.command, ...a.setup }] : [],
+    a.setup
+      ? [{ id, command: a.launch.command, env: a.launch.env, ...a.setup }]
+      : [],
   );
   const found = await Promise.all(
     entries.map(async (e): Promise<[string, Found]> => {
       const program = onPath(e.program, path);
       const acp = e.command === e.program ? program : onPath(e.command, path);
       const [version, acpVersion] = await Promise.all([
-        program ? versionOf(program) : undefined,
+        program ? versionOf(program, e.env) : undefined,
         !acp || acp === program
           ? undefined
           : e.versionFromPackage
             ? packageVersion(acp)
-            : versionOf(acp),
+            : versionOf(acp, e.env),
       ]);
       return [
         e.id,
@@ -272,8 +281,10 @@ export function describe(s: Setup): AgentSetup[] {
       f.program && f.acp ? "ready" : f.program ? "main_only" : "not_installed";
     const m = a.measured?.measuredOn;
     const acpProgram = a.launch.command;
+    // Only a ready agent: a warning about a build next to "not installed"
+    // reads as a contradiction.
     const warning =
-      f.acp && m && f.acpVersion !== m.version
+      state === "ready" && m && f.acpVersion !== m.version
         ? `${acpProgram} ${f.acpVersion ?? "(version unknown)"} is not the ` +
           `build kapelle measured: ${m.version} (${m.date}).`
         : undefined;

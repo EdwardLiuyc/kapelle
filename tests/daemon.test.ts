@@ -7780,9 +7780,10 @@ test("the chat opens the setup list at start until done, and /setup opens it aga
     t,
     "stty cols 120 rows 40; node cli.ts chat",
     { XDG_RUNTIME_DIR: runtime },
-    "needs claude-agent-acp",
+    // The last row of the list: a frame comes in pieces, top to bottom.
+    "Enter done · Esc later",
   );
-  assert.match(out(), /Enter done · Esc later/);
+  assert.match(out(), /needs claude-agent-acp/);
   // Enter is "done": the list closes, and the daemon keeps it.
   await press("\r", "setup done");
   const r = await api<HarnessesReply>(d, "GET", "/harnesses");

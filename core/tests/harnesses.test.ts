@@ -339,3 +339,58 @@ test("the warning compares the ACP version, never the main version", () => {
     /opencode 1\.0\.0 is not the build kapelle measured: 2\.0\.18/,
   );
 });
+
+test("a version probe gets the entry's own env: claude's drops its parent session's variables", async (t) => {
+  const root = await tempDir(t);
+  const bin = join(root, "bin");
+  const seen = join(root, "claudecode.txt");
+  await mkdir(bin);
+  const record = `#!/bin/sh
+echo "\${CLAUDECODE-<missing>}" >> ${JSON.stringify(seen)}
+echo 0.89.1
+`;
+  await writeFile(join(bin, "claude"), record, { mode: 0o755 });
+  await writeFile(join(bin, "claude-agent-acp"), record, { mode: 0o755 });
+  const before = process.env.CLAUDECODE;
+  process.env.CLAUDECODE = "1";
+  t.after(() => {
+    if (before === undefined) delete process.env.CLAUDECODE;
+    else process.env.CLAUDECODE = before;
+  });
+
+  const found = await findAgents(bin);
+  assert.equal(found.claude?.acpVersion, "0.89.1");
+  assert.deepEqual((await readFile(seen, "utf8")).trim().split("\n"), [
+    "<missing>",
+    "<missing>",
+  ]);
+});
+
+test("only a ready agent gets a version warning", () => {
+  // codex-acp at a build kapelle did not measure, with no codex: the list
+  // says "not installed", so a warning about its build would contradict it.
+  const [codex] = describe({
+    checkedAt: "now",
+    done: false,
+    found: { codex: { program: false, acp: true, acpVersion: "9.9.9" } },
+  });
+  assert.equal(codex?.state, "not_installed");
+  assert.equal(codex?.warning, undefined);
+});
+
+test("a broken package.json gives pi-acp no version, never its parent's", async (t) => {
+  const root = await tempDir(t);
+  const bin = join(root, "bin");
+  const pkg = join(root, "lib", "pi-acp");
+  await mkdir(join(pkg, "dist"), { recursive: true });
+  await mkdir(bin);
+  await writeFile(join(bin, "pi"), "#!/bin/sh\necho 1.3.0\n", { mode: 0o755 });
+  await writeFile(join(pkg, "dist", "index.js"), "", { mode: 0o755 });
+  await symlink(join(pkg, "dist", "index.js"), join(bin, "pi-acp"));
+  await writeFile(join(pkg, "package.json"), "{broken");
+  await writeFile(join(root, "lib", "package.json"), '{"version":"7.7.7"}');
+
+  const found = await findAgents(bin);
+  assert.equal(found.pi?.acp, true);
+  assert.equal(found.pi?.acpVersion, undefined);
+});

@@ -3,8 +3,8 @@
  *
  * The box at the centre of the timeline (M4-5) and what it shows: the
  * ctrl+o menu, a pick list, a text box, the help, the setup list (M9-3),
- * and the two forms, new room and add agent. It owns the open pop-up. Esc goes back one level,
- * and a first-level menu closes it. A command it sends goes through the
+ * and the two forms, new room and add agent. It owns the open pop-up. Esc
+ * goes back one level, and a first-level menu closes it. A command it sends goes through the
  * screen's `run`; the question box is `chat/tui/question.ts`.
  *
  * The box has a thick border, yellow for a question and cyan for the rest,
@@ -221,9 +221,9 @@ function panelParts({
   let measured: string[] | undefined;
   /** Asks `GET /harnesses` once, when the screen is up, and does not wait.
    *  Its answer fills `measured`, and opens the setup list when the person
-   *  has not said "done" or no agent is ready (M9-3), unless a pop-up or a
-   *  question came first. */
-  const atStart = async () => {
+   *  has not said "done" or no agent is ready (M9-3), unless a pop-up, a
+   *  question or `busy` (the side view) came first. */
+  const atStart = async (busy: () => boolean = () => false) => {
     const res = await readHarnesses(d).catch(() => undefined);
     if (!res?.ok) return;
     const ids: string[] = [];
@@ -231,8 +231,16 @@ function panelParts({
     measured = ids.sort((a, b) => a.localeCompare(b));
     // A manual /setup, or its close, while this GET was pending is the
     // person's answer: the late startup reply must not reopen the list.
-    if (needsSetup(res.body) && !setupTouched && !panel && !queue.asking) {
-      await showSetup();
+    // The side view too: a list over the shell the person just opened
+    // would take the keys they are typing.
+    if (
+      needsSetup(res.body) &&
+      !setupTouched &&
+      !panel &&
+      !queue.asking &&
+      !busy()
+    ) {
+      await showSetup(res.body);
     }
   };
 
@@ -324,9 +332,11 @@ function panelParts({
   };
 
   /** The setup list (M9-3): a new find each time it opens, then one line
-   *  per agent. Enter is "done"; Esc closes it, and it opens again at the
-   *  next start. */
-  const showSetup = async () => {
+   *  per agent. `inHand` shows while the daemon looks, so the start draws
+   *  the reply it already has; the new find then catches an install made
+   *  since that find was saved. Enter is "done"; Esc closes it, and it
+   *  opens again at the next start. */
+  const showSetup = async (inHand?: HarnessesReply) => {
     setupTouched = true;
     const generation = ++setupGeneration;
     const list = (r?: HarnessesReply): Component => ({
@@ -353,7 +363,7 @@ function panelParts({
       },
       invalidate() {},
     });
-    const waiting = list();
+    const waiting = list(inHand);
     showPanel(SETUP, waiting, generation);
     await fresh();
     const r = await findAgain(d).catch(() => undefined);
