@@ -7,7 +7,9 @@
  * nothing new. An agent takes two rows. The first paints its mark and name
  * in its colour and puts its busy timer on the right; an idle unread
  * agent's right side is its unread count instead. The second shows
- * `harness · role` dim, under the name. The changed-files block sits under
+ * `harness · role` dim, under the name. When two rows per agent would fill
+ * 2/3 of the sidebar's height or more, every agent takes one row, with the
+ * harness dim after the name (#332). The changed-files block sits under
  * the rooms for the open thread.
  *
  * A room row takes its most urgent participant's mark, `?` > `!` > `✕` >
@@ -37,8 +39,12 @@ import { clock, colourOf, rows, same, type View } from "../view.ts";
 
 /** The sidebar's width, in columns. */
 const SIDEBAR_WIDTH = 32;
-/** Below this many columns the sidebar starts hidden. */
-const NARROW = 70;
+/** Below this many columns the sidebar starts hidden. 76 keeps the
+ *  timeline's 44 columns at the edge, as 70 did beside 26 (#332). */
+const NARROW = 76;
+/** Where an agent's name starts: the cursor, three spaces, the mark and a
+ *  space. Its second row starts here too. */
+const INDENT = 6;
 
 /** One participant's state. */
 type Participant = NonNullable<ReturnType<RoomState["participants"]["get"]>>;
@@ -155,14 +161,16 @@ function sidebarParts({
   height?: () => number;
   now?: () => number;
 }) {
-  /** A participant's two rows: the mark, name and timer, then the harness
-   *  and role, dim, under the name. The mark and name are one painted
-   *  piece, so a colour never splits them. */
+  /** A participant's rows. With `two`, the mark, name and timer, then the
+   *  harness and role, dim, under the name; without, one row with the
+   *  harness dim after the name. The mark and name are one painted piece,
+   *  so a colour never splits them. */
   const agentLines = (
     state: RoomState,
     p: Participant,
     cursor: string,
     inner: number,
+    two: boolean,
   ) => {
     const m = mark(state, p.id);
     const star = p.role === "orchestrator" ? " ★" : "";
@@ -178,19 +186,28 @@ function sidebarParts({
     // the timer.
     const room = Math.max(
       0,
-      inner - 6 - visibleWidth(star) - visibleWidth(tail),
+      inner - INDENT - visibleWidth(star) - visibleWidth(tail),
     );
     const name = truncateToWidth(p.name, room, "…");
     const head = `${cursor}   ${m.paint(`${m.glyph} ${name}`)}${star}`;
-    const about = p.role ? `${p.harness} · ${p.role}` : p.harness;
-    return [
-      head +
-        " ".repeat(
-          Math.max(0, inner - visibleWidth(head) - visibleWidth(tail)),
-        ) +
-        tail,
-      `      ${dim(truncateToWidth(about, Math.max(0, inner - 6), "…"))}`,
-    ];
+    const fill = (line: string) =>
+      line +
+      " ".repeat(Math.max(0, inner - visibleWidth(line) - visibleWidth(tail))) +
+      tail;
+    if (two) {
+      const about = p.role ? `${p.harness} · ${p.role}` : p.harness;
+      return [
+        fill(head),
+        `${" ".repeat(INDENT)}${dim(truncateToWidth(about, Math.max(0, inner - INDENT), "…"))}`,
+      ];
+    }
+    // One row: the harness gives way first.
+    const harnessRoom = inner - visibleWidth(head) - visibleWidth(tail) - 1;
+    const harness =
+      harnessRoom >= 1
+        ? ` ${dim(truncateToWidth(p.harness, harnessRoom, "…"))}`
+        : "";
+    return [fill(head + harness)];
   };
 
   /** The parsed changed files, by diff identity: a frame must not
@@ -206,9 +223,14 @@ function sidebarParts({
     const lines = [
       fit(`${dim("rooms")}${" ".repeat(Math.max(0, inner - 6))}«`),
     ];
-    // An agent takes two rows, so a click finds its view here by row.
+    // An agent can take two rows, so a click finds its view here by row.
     const opens: (View | undefined)[] = [undefined];
-    for (const row of rows(rooms)) {
+    const all = rows(rooms);
+    // Two rows per agent only while the header, the rooms and those rows
+    // stay under 2/3 of the height; the rest is the changed files' (#332).
+    const agents = all.filter((row) => row.participantId).length;
+    const two = 3 * (1 + all.length + agents) < 2 * height();
+    for (const row of all) {
       const r = rooms.get(row.roomId);
       if (!r) continue;
       const cursor = same(row, view()) ? "▸" : " ";
@@ -227,7 +249,7 @@ function sidebarParts({
       }
       const p = r.state.participants.get(row.participantId);
       if (!p) continue;
-      for (const l of agentLines(r.state, p, cursor, inner)) {
+      for (const l of agentLines(r.state, p, cursor, inner, two)) {
         lines.push(fit(l));
         opens.push(row);
       }

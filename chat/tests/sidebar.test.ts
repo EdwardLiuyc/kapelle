@@ -299,13 +299,44 @@ test("the heading and the +n more row count against the sidebar's height", () =>
     toggle() {},
     open() {},
     changes: () => diff,
-    height: () => 12,
+    height: () => 9,
   });
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   const rows = sidebar.render(32).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
-  // Header, room, 3 agents of 2 rows, heading, 2 files, +2 more = 12 rows.
-  assert.match(rows[11] ?? "", /\+2 more/);
-  assert.doesNotMatch(rows[12] ?? "", /M |A |D |changed files/);
+  // Two rows per agent would fill 8 of 9, so each agent takes one. Header,
+  // room, 3 agents, heading, 2 files, +2 more = 9 rows exactly.
+  assert.match(rows[8] ?? "", /\+2 more/);
+  assert.doesNotMatch(rows[9] ?? "", /M |A |D |changed files/);
+});
+
+test("an agent takes two rows only while they stay under 2/3 of the height", () => {
+  const { state, add } = mk();
+  add("p-ann", "ann", "claude", "orchestrator");
+  for (const name of ["bob", "cy"]) add(`p-${name}`, name, "pi");
+  const rowsAt = (height: number) => {
+    const { sidebar } = sidebarParts({
+      rooms: roomsOf(state),
+      view: () => ({ roomId: "r1" }),
+      toggle() {},
+      open() {},
+      height: () => height,
+    });
+    return (
+      sidebar
+        .render(32)
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+        .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))
+        .slice(0, height)
+        .join("\n")
+    );
+  };
+  // Header, room and 3 agents of 2 rows: 8 rows, under 2/3 of 13.
+  assert.match(rowsAt(13), /^ {4}○ ann ★ +│\n {6}claude · orchestrator +│$/m);
+  // 8 is 2/3 of 12, so each agent takes one row, the harness after the name.
+  const one = rowsAt(12);
+  assert.match(one, /^ {4}○ ann ★ claude +│$/m);
+  assert.match(one, /^ {4}○ bob pi +│\n {4}○ cy pi +│$/m);
+  assert.doesNotMatch(one, /orchestrator/);
 });
 
 test("a long changed path keeps its basename, and a no-hunk file has no counts", () => {

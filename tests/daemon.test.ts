@@ -5514,6 +5514,9 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
   await screen.seen("\x1b[35m? asker");
   assert.match(plainText(screen.out()), /! stuck +\d+[sm]/);
   assert.match(plainText(screen.out()), /\? asker +\d+[sm]/);
+  // The harness is on the agent's second row, dim, under the name (#332).
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  assert.match(screen.out(), / {6}\x1b\[2mmock-agent\x1b\[22m/);
   // Hidden, the sidebar leaves a count of the rooms that need the person.
   await screen.press("\x14", "● 2 rooms");
   screen.child.stdin.write("\x03");
@@ -6619,7 +6622,7 @@ test("kapelle chat takes a flag whose value is also a verb", async (t) => {
   assert.match(r.stdout, /node chat\.ts new --agent/);
 });
 
-test("kapelle chat opens the first room, and below 70 columns the sidebar starts hidden", {
+test("kapelle chat opens the first room, and below 76 columns the sidebar starts hidden", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -6638,7 +6641,7 @@ test("kapelle chat opens the first room, and below 70 columns the sidebar starts
   });
   // Without a verb, the first active room's timeline is the landing view.
   await screen.seen(`room ${open.body.id}`);
-  // Below 70 columns there is no sidebar, only the strip that opens it.
+  // Below 76 columns there is no sidebar, only the strip that opens it.
   assert.ok(screen.out().includes("»"), "the strip is hidden");
   assert.ok(!screen.out().includes("«"), "the sidebar header is hidden");
   // ctrl+t shows it, with the roster; ctrl+t hides it again.
@@ -6949,7 +6952,7 @@ test("chat.ts on a terminal under 8 columns shows the sidebar without failing", 
   skip: noPty,
 }, async (t) => {
   // pi-tui measures each part at the full width first, so the sidebar is
-  // drawn at 7 columns once, though its own width is 26.
+  // drawn at 7 columns once, though its own width is 32.
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
