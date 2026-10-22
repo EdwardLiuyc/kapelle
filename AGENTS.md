@@ -87,6 +87,7 @@ node cli.ts run --file <run.json> [--detach]   # N tasks (tasks.json is the exam
 node cli.ts attach <runId> [--task <id>]       # replay then follow a detached run
 node cli.ts ps                                 # every run the daemon knows, with its tasks
 node cli.ts merge <runId> [--squash] [--cwd dir]
+node cli.ts room info | send | add | ff | diff | remove [--room id] [--as name]   # from a participant's checkout
 node cli.ts workspace [--cwd dir]              # where this repo's worktrees and records live
 node cli.ts workspace move <old-repo> <new-repo>
 node cli.ts daemon start [--port n] [--permission-timeout s]   # same as: node daemon.ts

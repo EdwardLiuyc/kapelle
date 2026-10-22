@@ -50,6 +50,7 @@ const PARTICIPANT_KEYS = new Set(
     baseSha: 0,
     sessionId: 0,
     resumed: 0,
+    turnFrom: 0,
     status: 0,
     notices: 0,
   } satisfies Record<keyof ParticipantDto, 0>),

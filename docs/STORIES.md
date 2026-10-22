@@ -3424,6 +3424,16 @@ like every other daemon verb. R44's role list gains `reviewer`, a label like the
 *Done when* CLI tests against a daemon with mock agents cover each verb, the room and the
 sender found from a participant's checkout, a folder that is no checkout, `--room` and
 `--as`, the `reviewer` role, and each refusal by its code.
+**Decided 2026-10-22 (#267):** `info` reads who sent a busy worker's message from a new
+participant field, `turnFrom`, not from the stream. The CLI refuses `add`, `ff` and
+`remove` from a worker with `not_orchestrator`; the routes get no sender, because `from`
+already names the source on a fast-forward. The folder check derives the room and
+participant from the checkout path, requires the participant's recorded workspace inside
+that checkout and the real cwd inside the same checkout, so the checkout root, the
+workspace, and subfolders work; a renamed, moved, copied, or non-git folder is refused,
+never guessed. `--room` from a participant's checkout must name that checkout's own room,
+and the participant still sends; only from a folder that is no checkout does `--room`
+send as the person (#334). `not_orchestrator` is the CLI's own code, not the daemon's.
 
 **M8-4 · The orchestrator skill · M · needs M8-2, M8-3**
 One Markdown file in the package, generic, from the spikes' skill and D1–D12. It says how

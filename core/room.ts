@@ -231,7 +231,13 @@ type ParticipantStatus =
   | "dismissed";
 
 /** R44's closed set. A label only: it sends no text to the harness. */
-const ROLES = ["orchestrator", "developer", "tester", "architect"] as const;
+const ROLES = [
+  "orchestrator",
+  "developer",
+  "tester",
+  "architect",
+  "reviewer",
+] as const;
 type Role = (typeof ROLES)[number];
 
 /** R22: ASCII on purpose, so the first word of an `@name` message is always
@@ -331,6 +337,9 @@ export interface Participant {
   status(): ParticipantStatus;
   /** Messages waiting behind the live turn. */
   readonly queued: number;
+  /** The id of the participant whose message the live turn runs (M8-3).
+   *  None when the person sent it, or when no turn runs. */
+  readonly turnFrom?: string;
   /**
    * Starts a turn with this message, or queues it behind the live one.
    * Resolves when its turn ends, or when it is dropped from the queue.
@@ -1676,6 +1685,8 @@ function createParticipant({
       }
     | undefined;
   let calls = 0;
+  // M8-3: who sent the live turn's message, for `GET /rooms/:id`.
+  let turnFrom: string | undefined;
   const keep = (update: AgentEvent) => {
     if (!kept) return;
     if (update.sessionUpdate === "tool_call") {
@@ -1811,6 +1822,7 @@ function createParticipant({
     turns += 1;
     const controller = new AbortController();
     turnAbort = controller;
+    turnFrom = from?.id;
     kept = undefined;
     calls = 0;
     bus.emit({
@@ -1918,6 +1930,7 @@ function createParticipant({
         controller.abort();
         watch.close();
         turn = undefined;
+        turnFrom = undefined;
         next();
       });
     return turn;
@@ -2073,6 +2086,9 @@ function createParticipant({
     },
     get queued() {
       return waiting.length;
+    },
+    get turnFrom() {
+      return turnFrom;
     },
     send(text, sender, kind) {
       if (dismissed()) {

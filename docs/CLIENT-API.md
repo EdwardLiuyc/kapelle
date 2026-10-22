@@ -7,11 +7,12 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.13** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.14** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
-added replies and copies, and `PATCH /rooms/:id`, which renames a room).
+added replies and copies, `PATCH /rooms/:id`, which renames a room, and M8-3, #267,
+which added the `reviewer` role and a participant's `turnFrom`).
 
 ## Contents
 
@@ -1011,7 +1012,8 @@ An agent takes:
 - `agent` (a harness name) or `cmd` (a command line). One of them is required.
 - `name`: optional. It must match `^[A-Za-z0-9_-]{1,32}$`. The default is the harness
   name. When that name does not match, give a `name`.
-- `role`: optional. One of `orchestrator`, `developer`, `tester` or `architect`. No role
+- `role`: optional. One of `orchestrator`, `developer`, `tester`, `architect` or
+  `reviewer` (since 1.14). No role
   is given by default. A message goes to the `orchestrator`, so give that role to the
   agent that should answer.
 - `mode`: optional. `ask`, `safe` or `auto`. The default is `auto`. See [Modes](#modes).
@@ -1524,7 +1526,8 @@ room              id, cwd, title, base, createdAt, updatedAt, status
 participant       id, name, role?, harness, mode, settings,
                   branch, worktree, baseSha,
                   sessionId, resumed?: "loaded" | "fresh",
-                  status: idle | busy | exited | paused | killed | dismissed
+                  status: idle | busy | exited | paused | killed | dismissed,
+                  turnFrom?
 room list         [{id, cwd, title, status, updatedAt,
                     participants: [{id, name, role?, status}]}]
 room detail       the room fields above, plus every participant in full
@@ -1533,7 +1536,12 @@ room detail       the room fields above, plus every participant in full
 `resumed` is missing until a participant comes back. `fresh` means it started a new
 session. `loaded` means it kept its memory.
 
-`role` is one of `orchestrator`, `developer`, `tester` or `architect`, or missing. It is a
+`turnFrom` (since 1.14) is the id of the participant whose message the live turn runs,
+as `from` names it on `_client_user_message`. It is missing when the person sent that
+message, and when no turn runs. A reply's turn names the worker that replied.
+
+`role` is one of `orchestrator`, `developer`, `tester`, `architect` or `reviewer` (since
+1.14), or missing. It is a
 label. It sends no text to the agent. A client changes `name`, `mode` or `role` with one
 route, `PATCH /rooms/:id/agents/:agentId`. A room has at most one `orchestrator`: adding or
 changing a participant to that role is refused with `409` `orchestrator_exists` while

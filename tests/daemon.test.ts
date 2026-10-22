@@ -4408,7 +4408,7 @@ test("an explicit empty agents list, a 32-character name and every role open a r
 
   const agents: { cmd: string; name?: string; role?: string }[] = [
     { cmd: REMEMBER, name: "a".repeat(32) },
-    ...["developer", "tester", "architect"].map((role) => ({
+    ...["developer", "tester", "architect", "reviewer"].map((role) => ({
       cmd: REMEMBER,
       role,
     })),

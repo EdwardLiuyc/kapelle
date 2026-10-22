@@ -24,12 +24,20 @@
  * `chat.ts`. `kapelle --help` is the way to the help. On a pipe there is no
  * screen, so it does what `kapelle chat` does there: the chat usage, no
  * daemon. `kapelle daemon stop` is the other new verb.
+ *
+ * **`kapelle room`** (M8-3) is an orchestrator's hands in its room. It finds
+ * the room and the sender from the checkout it runs in (`roomAndSender`).
  */
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { text } from "node:stream/consumers";
+import { type RouteCommand, runCommand } from "./client/command.ts";
 import type {
+  MessageAccepted,
+  ParticipantDto,
   PendingDecision,
   RepoAdded,
+  RoomDto,
   RunAccepted,
   RunListEntry,
   RunStatus,
@@ -42,7 +50,9 @@ import {
   request,
   VersionRefused,
 } from "./client/daemon.ts";
+import { agentDiff } from "./client/diff.ts";
 import { ensureDaemon, stopDaemon } from "./client/lifecycle.ts";
+import { fold } from "./client/mention.ts";
 import { type Connect, followEvents } from "./client/stream.ts";
 import {
   readProjectLinkPaths,
@@ -186,6 +196,10 @@ kapelle — a minimal Agent Client Protocol client
   kapelle ps                         every run the daemon knows, and each
                                      task's id and status under it
   kapelle merge <runId> [--squash] [--cwd dir]
+  kapelle room info | send | add | ff | diff | remove
+                                     an orchestrator's verbs in its room,
+                                     run from its checkout; kapelle room
+                                     alone lists them
   kapelle daemon start [--port n] [--permission-timeout s]
                                      runs in this terminal until ^C or SIGTERM
   kapelle daemon stop                stops the daemon named in daemon.json
@@ -294,6 +308,11 @@ if (chatVerb) {
   await import("./daemon.ts");
 } else if (positional[0] === "daemon") {
   process.exitCode = await runDaemonCommand().catch((err) => {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  });
+} else if (positional[0] === "room") {
+  process.exitCode = await runRoomCommand().catch((err) => {
     console.error(`error: ${messageOf(err)}`);
     return 1;
   });
@@ -1278,5 +1297,301 @@ async function runDaemonCommand(): Promise<number> {
     return 1;
   }
   console.log(`added ${r.body.root}`);
+  return 0;
+}
+
+/** A daemon's refusal as one line, with its code for a script to match. */
+function printRefusal({ code, message }: { code: string; message: string }) {
+  console.error(`error: ${oneLine(message)}${code ? ` (${code})` : ""}`);
+}
+
+/**
+ * The room and the sender for `kapelle room` (M8-3), or why there are none.
+ *
+ * From the folder: a participant's checkout is
+ * `<state>/wt/<roomId>/<participantId>`. Git's top level from the folder
+ * gives that checkout, but the recorded workspace can be below it when the
+ * room was opened in a repository subdirectory. `GET /rooms/:id` must show
+ * that participant, its recorded workspace must be the checkout or below it,
+ * and the real cwd must be the checkout or below it. That containment is the
+ * whole check, so a renamed, moved or copied folder, or a run's checkout
+ * under the same `wt/`, is refused rather than guessed. A non-repository
+ * folder is refused even when its path happens to look right.
+ *
+ * `--room` names the room from a folder that is no checkout, and then the
+ * person sends. From a participant's checkout it must name that checkout's
+ * own room, and the participant still sends: `--room` never drops the sender
+ * (#334). `--as <name>` names another participant as the sender; to send as
+ * the person from inside a checkout, `--cwd` names a folder outside it. No
+ * `KAPELLE_*` variable carries
+ * either: the daemon strips them from a harness (M2-8).
+ */
+async function roomAndSender(
+  d: DaemonAddress,
+): Promise<{ room: RoomDto; sender?: ParticipantDto } | string> {
+  const roomFlag = flag("room");
+  const own = await ownCheckout(d);
+  let room: RoomDto;
+  let sender: ParticipantDto | undefined;
+  if (typeof own !== "string") {
+    if (roomFlag !== undefined && roomFlag !== own.room.id) {
+      return (
+        `this is ${own.self.name}'s checkout in room ${own.room.id}, not in ` +
+        `${roomFlag}; run it with --cwd <dir> outside the checkout`
+      );
+    }
+    room = own.room;
+    sender = own.self;
+  } else if (roomFlag === undefined) {
+    return own;
+  } else {
+    const r = await call<RoomDto>(d, `/rooms/${encodeURIComponent(roomFlag)}`);
+    if (!r.ok) return `${r.error.message} (${r.error.code})`;
+    room = r.body;
+  }
+  const as = flag("as");
+  if (as !== undefined) {
+    sender = byName(room, as);
+    if (!sender) return `no participant named ${as} in room ${room.id}`;
+  }
+  return sender ? { room, sender } : { room };
+}
+
+/** The room and the participant whose checkout `--cwd` is in, or why not. */
+async function ownCheckout(
+  d: DaemonAddress,
+): Promise<{ room: RoomDto; self: ParticipantDto } | string> {
+  const real = (p: string) => realpath(p).catch(() => p);
+  const typedCwd = resolve(flag("cwd", process.cwd()));
+  const cwd = await real(typedCwd);
+  const { root, isRepo } = await stateDirRoot(cwd);
+  const checkout = await real(root);
+  const refused =
+    `${checkout} is not a room participant's checkout; ` +
+    "name the room with --room <id> [--as <name>]";
+  // Its own words, so a test can tell this refusal from the containment
+  // one below (#334).
+  if (!isRepo) {
+    return (
+      `${checkout} is not in a git checkout; ` +
+      "name the room with --room <id> [--as <name>]"
+    );
+  }
+  const [wt, roomId, id] = checkout.split(sep).slice(-3);
+  if (wt !== "wt" || !roomId || !id) return refused;
+  const r = await call<RoomDto>(d, `/rooms/${encodeURIComponent(roomId)}`);
+  if (!r.ok) return refused;
+  const self = r.body.participants.find((p) => p.id === id);
+  if (!self) return refused;
+  const workspace = await real(self.worktree);
+  // `relative` rather than a string prefix: a sibling such as
+  // `<checkout>-copy` must not count as inside the checkout.
+  const inside = (child: string, parent: string) => {
+    const rel = relative(parent, child);
+    return (
+      rel === "" ||
+      (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+    );
+  };
+  if (!inside(workspace, checkout) || !inside(cwd, checkout)) return refused;
+  return { room: r.body, self };
+}
+
+/** A participant by its name, with or without `@`, in any case. */
+function byName(room: RoomDto, name: string): ParticipantDto | undefined {
+  const wanted = fold(name.replace(/^@/, ""));
+  return room.participants.find((p) => fold(p.name) === wanted);
+}
+
+/**
+ * `kapelle room <verb>` (M8-3): what an orchestrator does in its room, from
+ * its shell. `add`, `remove` and `ff` act as the screens' `/add`, `/remove`
+ * and `/ff` (`client/command.ts`). `send` returns at once: the turn's answer
+ * comes back as a reply (M8-2), so there is no `wait`.
+ *
+ * `send`, `add`, `ff` and `remove` are the orchestrator's. The daemon refuses
+ * `send` from a worker (`invalid_sender`); the others carry no sender, so
+ * the CLI refuses them here (`not_orchestrator`, decided 2026-10-22, #267).
+ * Like the daemon's, the check is a guard against a mistake, not a lock:
+ * `--as` passes it. `info` and `diff` only read, so anyone may run them.
+ */
+async function runRoomCommand(): Promise<number> {
+  const usage = [
+    "usage: kapelle room <verb> [--room <id>] [--as <name>] [--cwd dir]",
+    "  info                       the room, and who sent each busy agent's work",
+    "  send <name> [text]         a message; the text from stdin when none",
+    "  add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--base @name|ref]",
+    "  ff <name> --from <name>    move <name>'s branch up to the other's commit",
+    "  diff <name> [base]         what is not committed, or with base the branch;",
+    "                             made safe for a terminal, so not a patch to apply",
+    "  remove <name>",
+    "The checkout it runs in names the room and the sender. --as names another",
+    "participant as the sender; --cwd <dir> outside any checkout sends as the person.",
+  ].join("\n");
+  const [, verb, ...args] = positional as string[];
+  const takes: Record<string, [min: number, max: number]> = {
+    info: [0, 0],
+    send: [1, Infinity],
+    add: [0, 1],
+    ff: [1, 1],
+    diff: [1, 2],
+    remove: [1, 1],
+  };
+  // `hasOwn`: `takes.constructor` is not a verb (#334).
+  const range =
+    verb !== undefined && Object.hasOwn(takes, verb) ? takes[verb] : undefined;
+  if (
+    !range ||
+    args.length < range[0] ||
+    args.length > range[1] ||
+    (verb === "diff" && args[1] !== undefined && args[1] !== "base") ||
+    (verb === "ff" && !flag("from"))
+  ) {
+    console.error(usage);
+    return 1;
+  }
+  // An option the verb does not take is refused, never dropped: in `send`,
+  // `use --force now` would lose `--force now` from the message unseen.
+  const options = new Set(["room", "as", "cwd", "quiet", "verbose"]);
+  if (verb === "add") {
+    for (const o of ["cmd", "name", "role", "mode", "base"]) options.add(o);
+  }
+  if (verb === "ff") options.add("from");
+  const unknown = argv.find(
+    (a) => a.startsWith("--") && !options.has(a.slice(2)),
+  );
+  if (unknown !== undefined) {
+    const hint = verb === "send" ? "; send such text on stdin" : "";
+    console.error(`error: room ${verb} has no option ${unknown}${hint}`);
+    return 1;
+  }
+  // On a terminal, a stdin read would wait for ^D with no word (#334).
+  if (verb === "send" && args.length === 1 && process.stdin.isTTY) {
+    console.error(
+      "error: room send needs the text: after the name, or piped on stdin",
+    );
+    return 1;
+  }
+  const d = await findDaemon();
+  if (!d) return 1;
+  const found = await roomAndSender(d);
+  if (typeof found === "string") {
+    console.error(`error: ${oneLine(found)}`);
+    return 1;
+  }
+  const { room, sender } = found;
+  const named = (name: string) => {
+    const p = byName(room, name);
+    if (!p) console.error(`error: no participant named ${oneLine(name)}`);
+    return p;
+  };
+
+  if (verb === "info") {
+    const title = room.title ? `  ${oneLine(room.title)}` : "";
+    console.log(`${room.id}  ${room.status}${title}`);
+    for (const p of room.participants) {
+      const from =
+        p.status !== "busy"
+          ? ""
+          : p.turnFrom === undefined
+            ? ", from the person"
+            : `, from ${oneLine(room.participants.find((q) => q.id === p.turnFrom)?.name ?? p.turnFrom)}`;
+      console.log(
+        oneLine(
+          `  ${p.name}  ${p.role ?? "-"}  ${p.harness}  ${p.mode}  ${p.status}${from}`,
+        ),
+      );
+    }
+    return 0;
+  }
+
+  if (verb === "diff") {
+    const p = named(args[0] as string);
+    if (!p) return 1;
+    const r = await agentDiff(d, room.id, p.id, args[1] ? "base" : "head");
+    if (!r.ok) {
+      printRefusal(r.error);
+      return 1;
+    }
+    console.log(r.body.text ? clean(r.body.text) : "no changes");
+    return 0;
+  }
+
+  if (verb === "send") {
+    const p = named(args[0] as string);
+    if (!p) return 1;
+    const body =
+      args.length > 1 ? args.slice(1).join(" ") : await text(process.stdin);
+    if (!body.trim()) {
+      console.error("error: the message is empty");
+      return 1;
+    }
+    const r = await call<MessageAccepted>(
+      d,
+      `/rooms/${room.id}/agents/${p.id}/messages`,
+      {
+        method: "POST",
+        body: { text: body, ...(sender && { from: sender.id }) },
+      },
+    );
+    if (!r.ok) {
+      printRefusal(r.error);
+      return 1;
+    }
+    const name = oneLine(p.name);
+    console.log(
+      r.body.queued
+        ? `queued for ${name}, behind ${r.body.queued}`
+        : `sent to ${name}`,
+    );
+    return 0;
+  }
+
+  // add, ff, remove: orders.
+  if (sender && sender.role !== "orchestrator") {
+    printRefusal({
+      code: "not_orchestrator",
+      message: `only the orchestrator may ${verb}; ${sender.name} is ${sender.role ?? "a participant with no role"}`,
+    });
+    return 1;
+  }
+  let command: RouteCommand;
+  if (verb === "add") {
+    const role = flag("role");
+    command = {
+      verb,
+      agent: {
+        agent: args[0],
+        cmd: flag("cmd"),
+        name: flag("name"),
+        // `none` is no role, as in the screens' `/add` and `/role none`.
+        role: role === "none" ? undefined : role,
+        mode: flag("mode"),
+        base: flag("base"),
+      },
+    };
+  } else {
+    const p = named(args[0] as string);
+    if (!p) return 1;
+    if (verb === "remove") {
+      command = { verb, id: p.id, name: p.name };
+    } else {
+      const from = named(flag("from") as string);
+      if (!from) return 1;
+      command = {
+        verb: "forward",
+        id: p.id,
+        name: p.name,
+        fromId: from.id,
+        fromName: from.name,
+      };
+    }
+  }
+  const outcome = await runCommand(d, room.id, command);
+  if (!outcome.ok) {
+    printRefusal(outcome);
+    return 1;
+  }
+  console.log(outcome.line);
   return 0;
 }
