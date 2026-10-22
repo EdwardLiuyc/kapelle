@@ -5122,7 +5122,8 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   }
   await run('[ $$ = "$(cat shell.pid)" ] && echo "same=$((1))"', /same=1/);
 
-  // Its exit leaves the chat; the next /term starts a new shell.
+  // A failed exit leaves the view, to read why; the next /term starts a
+  // new shell.
   await press("exit 3\r", "exited (code 3) · /term starts a new one");
   // An exited shell takes no keys: ctrl+] gives the view its own, and Esc
   // gives them back (PR #286).
@@ -5144,7 +5145,9 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   assert.notEqual(second, pid);
   assert.throws(() => process.kill(pid, 0), "the first shell is gone");
 
-  await press("\x1d", "ctrl+] keys here");
+  // A clean exit hides the view, as a terminal closes, and the composer
+  // has the keys.
+  await press("exit\r", "ctrl+x view");
   child.stdin.write("/leave\r");
   await seen("rejoin with");
   assert.equal(await exited, 0, out());
