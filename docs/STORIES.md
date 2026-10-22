@@ -2136,7 +2136,7 @@ free for M4-4's completion. Two keys do one job: `alt+↑↓` is the easy one, a
 works where a terminal sends no alt+arrow (macOS Terminal without "Option as Meta", some
 tmux setups). A row's circle is `●` when something waits (unseen lines, a
 question or a stall) and `○` when nothing does; the name is magenta for a question and
-yellow for a stall. `«`/`»` and `ctrl+t` hide the sidebar, and it starts hidden below 70
+yellow for a stall. `«`/`»` and `ctrl+t` hide the sidebar, and it starts hidden below 70 (now 76, #332)
 columns. **`kapelle chat` moves here from M6-9**, with S7a's name.
 **Built 2026-09-30 (#48).** `client/mention.ts` resolves the target, and both screens
 send through it: piped `chat.ts` no longer sends to the first participant. The screen
@@ -3112,7 +3112,7 @@ and the timer of a busy agent on the right. `★` stays for the orchestrator. `e
 `killed` stay apart (R46): a clean exit left its files and its memory together.
 **A room row and the strip say why, too.** Today `roomMark` says why a room waits with
 colour only: magenta for a question, yellow for a stall. A room row now shows its most
-urgent agent's mark, `?` before `!`. Below 70 columns the sidebar is hidden, so the `»`
+urgent agent's mark, `?` before `!`. Below 76 columns the sidebar is hidden, so the `»`
 strip shows the same mark.
 **Changed files.** Under the rooms, a block lists the files that the open thread's agent
 changed. It reads `GET /rooms/:id/agents/:agentId/diff?against=base` (M4-6). `filesOf` in
@@ -3135,6 +3135,16 @@ and `against=base`; and a pty test shows a click opening the file in the side vi
 **Decided 2026-10-09:** the list reuses the diff route, so the daemon and the contract do
 not change. A light route that returns only names and counts is the follow-up, if a large
 diff makes the list slow.
+**Amended 2026-10-22 (#332):** at 26 columns the harness on an agent's row was often cut,
+and only the orchestrator's role showed, as `★`. The sidebar is now 32 columns, and an
+agent takes two rows: the mark, name, `★` and timer, then `harness · role` dim under the
+name. Two rows double the roster's height, so they hold only while the header, the rooms
+and the agents' rows stay under 2/3 of the sidebar's height; past that, every agent takes
+one row with the harness after the name, as before, and the last third stays for the
+changed files. `NARROW` moves from 70 to 76, so the timeline keeps its 44 columns at the
+edge. The row tests run at 32 columns. The two titles were dim and easy to miss: each is
+now bold cyan inside a dim line, `── rooms ── «` and `── changed files ──`, the way the
+transcript draws a heading, and an empty row comes before the changed files.
 
 **M7-4 · Question box: short diff and number keys · S · needs nothing**
 The title says who wants to do what, with `n of m` on the right (`client/questions.ts`).
@@ -3215,7 +3225,7 @@ to the nearest person message above or below the viewport. The rail is mouse-onl
 **Width is stable.** The two columns are reserved as soon as the view has two person
 messages, not when content outgrows the viewport, so a growing answer never changes the
 transcript width. It is absent when the side view takes the timeline's place, when there
-are fewer than two person messages, below `NARROW` (70 columns, the repo's existing
+are fewer than two person messages, below `NARROW` (76 columns, the repo's existing
 threshold), or under three viewport rows (two chevrons and one mark are the minimum).
 **Hover preview.** After about 150 ms of rest on a mark, show a non-capturing overlay
 card to the left of the rail, clamped to the screen: up to two wrapped lines of the same

@@ -4,10 +4,14 @@
  * The list of rooms and their participants on the left, the `»` strip that
  * stands in for it while it is hidden, and the state marks (M7-3): `?` asks,
  * `!` stalls, `◐` busy, `⏸` paused, `✕` killed, `◌` exited, `●` unread, `○`
- * nothing new. An agent's row paints its mark and name in its colour, shows
- * the harness dim, and puts its busy timer on the right; an idle unread
- * agent's right side is its unread count instead. The changed-files block
- * sits under the rooms for the open thread.
+ * nothing new. An agent takes two rows. The first paints its mark and name
+ * in its colour and puts its busy timer on the right; an idle unread
+ * agent's right side is its unread count instead. The second shows
+ * `harness · role` dim, under the name. When two rows per agent would fill
+ * 2/3 of the sidebar's height or more, every agent takes one row, with the
+ * harness dim after the name (#332). The changed-files block sits under
+ * the rooms for the open thread, after an empty row. Both titles are bold
+ * cyan in a dim line: `── rooms ───── «`, `── changed files ─────`.
  *
  * A room row takes its most urgent participant's mark, `?` > `!` > `✕` >
  * `⏸` > `◌` > `●` > `◐` > `○` (decided 2026-10-11). The strip shows the
@@ -31,13 +35,17 @@ import {
   roster,
 } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { dim, fg, magenta, plain, yellow } from "../common.ts";
+import { bold, cyan, dim, fg, magenta, plain, yellow } from "../common.ts";
 import { clock, colourOf, rows, same, type View } from "../view.ts";
 
 /** The sidebar's width, in columns. */
-const SIDEBAR_WIDTH = 26;
-/** Below this many columns the sidebar starts hidden. */
-const NARROW = 70;
+const SIDEBAR_WIDTH = 32;
+/** Below this many columns the sidebar starts hidden. 76 keeps the
+ *  timeline's 44 columns at the edge, as 70 did beside 26 (#332). */
+const NARROW = 76;
+/** Where an agent's name starts: the cursor, three spaces, the mark and a
+ *  space. Its second row starts here too. */
+const INDENT = 6;
 
 /** One participant's state. */
 type Participant = NonNullable<ReturnType<RoomState["participants"]["get"]>>;
@@ -142,7 +150,8 @@ function sidebarParts({
   changes = () => undefined,
   openFile = () => {},
   // The tests' value; the screen passes the sidebar's real visible height.
-  height = () => process.stdout.rows || 24,
+  // Fixed, so a test's rows do not hang on the terminal it runs in (#332).
+  height = () => 24,
   now = Date.now,
 }: {
   rooms: ReadonlyMap<string, Followed>;
@@ -154,13 +163,16 @@ function sidebarParts({
   height?: () => number;
   now?: () => number;
 }) {
-  /** A participant's one row. The mark and name are one painted piece, so
-   *  a colour never splits them. */
-  const agentLine = (
+  /** A participant's rows. With `two`, the mark, name and timer, then the
+   *  harness and role, dim, under the name; without, one row with the
+   *  harness dim after the name. The mark and name are one painted piece,
+   *  so a colour never splits them. */
+  const agentLines = (
     state: RoomState,
     p: Participant,
     cursor: string,
     inner: number,
+    two: boolean,
   ) => {
     const m = mark(state, p.id);
     const star = p.role === "orchestrator" ? " ★" : "";
@@ -176,22 +188,28 @@ function sidebarParts({
     // the timer.
     const room = Math.max(
       0,
-      inner - 6 - visibleWidth(star) - visibleWidth(tail),
+      inner - INDENT - visibleWidth(star) - visibleWidth(tail),
     );
     const name = truncateToWidth(p.name, room, "…");
     const head = `${cursor}   ${m.paint(`${m.glyph} ${name}`)}${star}`;
-    // The harness gives way first.
+    const fill = (line: string) =>
+      line +
+      " ".repeat(Math.max(0, inner - visibleWidth(line) - visibleWidth(tail))) +
+      tail;
+    if (two) {
+      const about = p.role ? `${p.harness} · ${p.role}` : p.harness;
+      return [
+        fill(head),
+        `${" ".repeat(INDENT)}${dim(truncateToWidth(about, Math.max(0, inner - INDENT), "…"))}`,
+      ];
+    }
+    // One row: the harness gives way first.
     const harnessRoom = inner - visibleWidth(head) - visibleWidth(tail) - 1;
     const harness =
       harnessRoom >= 1
         ? ` ${dim(truncateToWidth(p.harness, harnessRoom, "…"))}`
         : "";
-    const line = head + harness;
-    return (
-      line +
-      " ".repeat(Math.max(0, inner - visibleWidth(line) - visibleWidth(tail))) +
-      tail
-    );
+    return [fill(head + harness)];
   };
 
   /** The parsed changed files, by diff identity: a frame must not
@@ -199,14 +217,28 @@ function sidebarParts({
   let parsed: { diff: Diff; all: FileChange[] } | undefined;
 
   /** Every sidebar row, the changed-files block included. Told with the
-   *  file rows a click can open, and where the block starts. */
+   *  view each row opens, the file rows a click can open, and where the
+   *  block starts. */
   const draw = (inner: number) => {
     const fit = (s: string) =>
       `${truncateToWidth(s, inner, "…", true)} ${dim("│")}`;
-    const lines = [
-      fit(`${dim("rooms")}${" ".repeat(Math.max(0, inner - 6))}«`),
-    ];
-    for (const row of rows(rooms)) {
+    /** A title in a dim line, `── title ───end`: bold cyan, as the
+     *  transcript's headings (#332). */
+    const titled = (title: string, end = "") => {
+      const rest = inner - visibleWidth(`── ${title} `) - visibleWidth(end);
+      return fit(
+        `${dim("──")} ${bold(cyan(title))} ${dim("─".repeat(Math.max(0, rest)))}${end}`,
+      );
+    };
+    const lines = [titled("rooms", " «")];
+    // An agent can take two rows, so a click finds its view here by row.
+    const opens: (View | undefined)[] = [undefined];
+    const all = rows(rooms);
+    // Two rows per agent only while the header, the rooms and those rows
+    // stay under 2/3 of the height; the rest is the changed files' (#332).
+    const agents = all.filter((row) => row.participantId).length;
+    const two = 3 * (1 + all.length + agents) < 2 * height();
+    for (const row of all) {
       const r = rooms.get(row.roomId);
       if (!r) continue;
       const cursor = same(row, view()) ? "▸" : " ";
@@ -220,11 +252,15 @@ function sidebarParts({
             `${cursor} ${m.paint(m.glyph)} ${label} ${dim(basename(r.entry.cwd))}${paused}${lost}`,
           ),
         );
+        opens.push(row);
         continue;
       }
       const p = r.state.participants.get(row.participantId);
       if (!p) continue;
-      lines.push(fit(agentLine(r.state, p, cursor, inner)));
+      for (const l of agentLines(r.state, p, cursor, inner, two)) {
+        lines.push(fit(l));
+        opens.push(row);
+      }
     }
     // The changed files, under the rooms (M7-3). `more` is the route's own
     // `files` count, so a 512 KB cut still says how many it lost.
@@ -240,14 +276,15 @@ function sidebarParts({
         parsed = { diff: d, all: changesOf(d.text.split("\n")) };
       }
       const all = parsed.all;
-      // The heading and a `+n more` row are rows too: both come out of the
-      // sidebar's visible height.
+      // The empty row, the heading and a `+n more` row are rows too: all
+      // come out of the sidebar's visible height.
       const free = height() - lines.length;
-      if (all.length && free >= 2) {
+      if (all.length && free >= 3) {
+        lines.push(fit(""));
         heading = lines.length;
-        lines.push(fit(dim("changed files")));
-        const whole = d.files <= all.length && all.length <= free - 1;
-        const show = whole ? all.length : Math.max(0, free - 2);
+        lines.push(titled("changed files"));
+        const whole = d.files <= all.length && all.length <= free - 2;
+        const show = whole ? all.length : Math.max(0, free - 3);
         files.push(...all.slice(0, show));
         for (const f of files) lines.push(fit(changeLine(f, inner)));
         const more = d.files - files.length;
@@ -255,13 +292,13 @@ function sidebarParts({
         last = lines.length - 1;
       }
     }
-    return { lines, heading, last, files };
+    return { lines, opens, heading, last, files };
   };
 
   const sidebar: Component = {
     render(width) {
       // pi-tui measures each part at the full width first, so this can be
-      // any width, not only the sidebar's own 26.
+      // any width, not only the sidebar's own 32.
       const inner = Math.max(0, width - 2);
       const { lines } = draw(inner);
       // Full height, so the border reaches the status line.
@@ -276,13 +313,13 @@ function sidebarParts({
         if (e.x >= e.width - 4) toggle();
         return { handled: true };
       }
-      const { heading, last, files } = draw(SIDEBAR_WIDTH - 2);
+      const { opens, heading, last, files } = draw(SIDEBAR_WIDTH - 2);
       if (e.y > heading && heading >= 0 && e.y <= last) {
         const f = files[e.y - heading - 1];
         if (f) openFile(f);
         return { handled: true };
       }
-      const row = rows(rooms)[e.y - 1];
+      const row = opens[e.y];
       if (row) open(row);
       return { handled: true };
     },

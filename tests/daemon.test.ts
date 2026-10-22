@@ -5025,7 +5025,7 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   skip: noPty,
 }, async (t) => {
   // M4-13. The pty is 100 columns: the pane takes the timeline's place,
-  // beside the 26-column sidebar. sh, so no rc file draws the prompt.
+  // beside the 32-column sidebar. sh, so no rc file draws the prompt.
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
@@ -5068,8 +5068,8 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   assert.equal(after.rows, before.rows);
   assert.equal(
     after.cols,
-    before.cols + 24,
-    "the sidebar's 26 less the strip's 2",
+    before.cols + 30,
+    "the sidebar's 32 less the strip's 2",
   );
   // A shorter screen gives the shell fewer rows. The resize reaches the
   // shell after a redraw, so ask until it shows.
@@ -5512,8 +5512,11 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
   // painted piece (M7-3), and a busy row shows its timer at the right.
   await screen.seen("\x1b[33m! stuck");
   await screen.seen("\x1b[35m? asker");
-  assert.match(plainText(screen.out()), /! stuck \S+ +\d+[sm]/);
-  assert.match(plainText(screen.out()), /\? asker \S+ +\d+[sm]/);
+  assert.match(plainText(screen.out()), /! stuck +\d+[sm]/);
+  assert.match(plainText(screen.out()), /\? asker +\d+[sm]/);
+  // The harness is on the agent's second row, dim, under the name (#332).
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  assert.match(screen.out(), / {6}\x1b\[2mmock-agent\x1b\[22m/);
   // Hidden, the sidebar leaves a count of the rooms that need the person.
   await screen.press("\x14", "● 2 rooms");
   screen.child.stdin.write("\x03");
@@ -6619,7 +6622,7 @@ test("kapelle chat takes a flag whose value is also a verb", async (t) => {
   assert.match(r.stdout, /node chat\.ts new --agent/);
 });
 
-test("kapelle chat opens the first room, and below 70 columns the sidebar starts hidden", {
+test("kapelle chat opens the first room, and below 76 columns the sidebar starts hidden", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -6638,7 +6641,7 @@ test("kapelle chat opens the first room, and below 70 columns the sidebar starts
   });
   // Without a verb, the first active room's timeline is the landing view.
   await screen.seen(`room ${open.body.id}`);
-  // Below 70 columns there is no sidebar, only the strip that opens it.
+  // Below 76 columns there is no sidebar, only the strip that opens it.
   assert.ok(screen.out().includes("»"), "the strip is hidden");
   assert.ok(!screen.out().includes("«"), "the sidebar header is hidden");
   // ctrl+t shows it, with the roster; ctrl+t hides it again.
@@ -6693,7 +6696,7 @@ test("chat.ts on a real terminal hides the sidebar with a click on «, and shows
 }, async (t) => {
   const { child, press, seen, exited, out } = await chatOnPty(t);
   // SGR mouse, 1-based: the « sits at the end of the sidebar's first row.
-  await press("\x1b[<0;25;1M\x1b[<0;25;1m", "»");
+  await press("\x1b[<0;30;1M\x1b[<0;30;1m", "»");
   await press("\x1b[<0;1;1M\x1b[<0;1;1m", "rooms");
   child.stdin.write("\x03");
   await seen("left room");
@@ -6949,7 +6952,7 @@ test("chat.ts on a terminal under 8 columns shows the sidebar without failing", 
   skip: noPty,
 }, async (t) => {
   // pi-tui measures each part at the full width first, so the sidebar is
-  // drawn at 7 columns once, though its own width is 26.
+  // drawn at 7 columns once, though its own width is 32.
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
@@ -6959,8 +6962,9 @@ test("chat.ts on a terminal under 8 columns shows the sidebar without failing", 
     { XDG_RUNTIME_DIR: runtime },
     "»",
   );
-  // Only the sidebar's first 7 columns fit: its "rooms" header.
-  await screen.press("\x14", "rooms");
+  // Only the sidebar's first 7 columns fit: `── room` of its header, the
+  // title cyan.
+  await screen.press("\x14", "\x1b[36mroom");
   screen.child.stdin.write("\x03");
   assert.equal(await screen.exited, 0, screen.out());
   assert.doesNotMatch(screen.out(), /screen failed/);
