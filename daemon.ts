@@ -89,6 +89,7 @@ import { createEventBus } from "./core/events.ts";
 import {
   describe,
   findAgents,
+  readSavedDone,
   readSetup,
   type Setup,
   writeSetup,
@@ -1673,7 +1674,7 @@ async function setupNow(again: boolean): Promise<Setup> {
     .then((found) => {
       const s = {
         checkedAt: new Date().toISOString(),
-        done: readSetup()?.done ?? false,
+        done: readSavedDone(),
         found,
       };
       writeSetup(s);

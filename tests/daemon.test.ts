@@ -7698,7 +7698,7 @@ test("the daemon finds the agents on its own PATH, saves the find, and keeps don
   assert.equal(cli.code, 0, cli.stderr);
   assert.match(
     cli.stdout,
-    /^claude +needs claude-agent-acp: npm i -g @agentclientprotocol\/claude-agent-acp$/m,
+    /^claude +claude 2\.1\.307; needs claude-agent-acp: npm i -g @agentclientprotocol\/claude-agent-acp$/m,
   );
   assert.match(
     cli.stdout,
@@ -7708,6 +7708,37 @@ test("the daemon finds the agents on its own PATH, saves the find, and keeps don
   const after = await api<HarnessesReply>(d, "GET", "/harnesses");
   assert.equal(stateOf(after.body, "claude"), "main_only");
   assert.equal(after.body.done, true);
+});
+
+test("a find keeps done when an incomplete saved file forces it (M9-3)", async (t) => {
+  const bin = await fakePath(t);
+  const { d, runtime } = await bootFinding(t, bin);
+  const first = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(first.status, 200);
+  assert.equal(first.body.done, false);
+  assert.equal(
+    (await api<HarnessesReply>(d, "POST", "/harnesses/done")).body.done,
+    true,
+  );
+
+  // A later registry has an agent the saved file does not: readSetup calls
+  // the file incomplete and the next GET finds again. That must not reset
+  // the person's "done".
+  const file = join(runtime, "kapelle", "harnesses.json");
+  const saved = JSON.parse(await readFile(file, "utf8")) as HarnessesReply & {
+    found: Record<string, unknown>;
+  };
+  delete saved.found.kimi;
+  await writeFile(file, JSON.stringify(saved));
+
+  const again = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(again.status, 200);
+  assert.equal(again.body.done, true);
+  assert.equal(stateOf(again.body, "kimi"), "ready");
+  const rewritten = JSON.parse(await readFile(file, "utf8")) as {
+    done: unknown;
+  };
+  assert.equal(rewritten.done, true);
 });
 
 test("the piped chat prints the setup list on /setup, and /setup done says done (M9-3)", async (t) => {
@@ -7732,7 +7763,10 @@ test("the piped chat prints the setup list on /setup, and /setup done says done 
   c.child.stdin.end("/leave\n");
   const r = await c.done;
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /^claude +needs claude-agent-acp: /m);
+  assert.match(
+    r.stdout,
+    /^claude +claude 2\.1\.307; needs claude-agent-acp: /m,
+  );
   assert.match(r.stdout, /^opencode +ready \(opencode 2\.0\.18\)$/m);
   const after = await api<HarnessesReply>(d, "GET", "/harnesses");
   assert.equal(after.body.done, true);

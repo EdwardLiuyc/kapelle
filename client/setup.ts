@@ -12,6 +12,7 @@
 
 import type { HarnessEntry, HarnessesReply } from "./contract.ts";
 import { call, type DaemonAddress, type Reply } from "./daemon.ts";
+import { printable } from "./room.ts";
 
 interface SetupLine {
   text: string;
@@ -20,15 +21,27 @@ interface SetupLine {
 
 const ORDER = ["ready", "main_only", "not_installed"];
 
-/** What one agent's line says after its name. */
+/** What one agent's line says after its name. Every value comes from the
+ *  daemon, so each is made printable before it reaches a terminal. */
 function detail(h: HarnessEntry): string {
+  const program = printable(h.program ?? "?");
+  const version = printable(h.version ?? "?");
   if (h.state === "not_installed") {
-    return `not installed: no ${h.program} on the daemon's PATH`;
+    return `not installed: no ${program} on the daemon's PATH`;
   }
-  if (h.state === "main_only") return `needs ${h.acpProgram}: ${h.install}`;
-  const versions = [`${h.program} ${h.version ?? "?"}`];
+  if (h.state === "main_only") {
+    // The main program's version is shown, never compared. Keep the install
+    // command together at the end so it stays copyable.
+    return (
+      `${program} ${version}; needs ` +
+      `${printable(h.acpProgram ?? "?")}: ${printable(h.install ?? "?")}`
+    );
+  }
+  const versions = [`${program} ${version}`];
   if (h.acpProgram !== h.program) {
-    versions.push(`${h.acpProgram} ${h.acpVersion ?? "?"}`);
+    versions.push(
+      `${printable(h.acpProgram ?? "?")} ${printable(h.acpVersion ?? "?")}`,
+    );
   }
   return `ready (${versions.join(", ")})`;
 }
@@ -36,18 +49,23 @@ function detail(h: HarnessEntry): string {
 /** One line per agent, the ready ones first, then each warning, then what
  *  to do next. A daemon older than M9-3 sends no state: no lines. */
 export function setupLines(r: HarnessesReply): SetupLine[] {
+  // A pre-M9-3 daemon sends a bare list with no state: its contract is no
+  // lines, not a misleading "No agent is ready".
+  if (!r.harnesses.some((h) => h.state)) return [];
   const known = r.harnesses
     .filter((h) => h.state)
     .sort(
       (a, b) => ORDER.indexOf(a.state ?? "") - ORDER.indexOf(b.state ?? ""),
     );
-  const width = Math.max(0, ...known.map((h) => h.id.length));
+  const width = Math.max(0, ...known.map((h) => printable(h.id).length));
   const lines: SetupLine[] = known.map((h) => ({
-    text: `${h.id.padEnd(width)}  ${detail(h)}`,
+    text: `${printable(h.id).padEnd(width)}  ${detail(h)}`,
     ...(h.state === "not_installed" && { tone: "dim" as const }),
   }));
   for (const h of known) {
-    if (h.warning) lines.push({ text: `! ${h.warning}`, tone: "warn" });
+    if (h.warning) {
+      lines.push({ text: `! ${printable(h.warning)}`, tone: "warn" });
+    }
   }
   if (!known.some((h) => h.state === "ready")) {
     lines.push({ text: "No agent is ready: install one.", tone: "warn" });

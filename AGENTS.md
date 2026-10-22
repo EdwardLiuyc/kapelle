@@ -129,7 +129,7 @@ arrow that points back.
 | `core/sweep.ts` | The daemon's boot sweep. |
 | `core/config.ts` | The config files and `KAPELLE_*` variables. |
 | `core/runtime.ts` | The user-level directories, `stateDir()` and `stateDirFor(root)`. |
-| `core/harnesses.ts` | Which agents are installed (M9-3): the agent's program, then its ACP program, on the daemon's `PATH`, each version by `--version`, and `harnesses.json`. |
+| `core/harnesses.ts` | Which agents are installed (M9-3): the agent's program, then its ACP program, on the daemon's `PATH`, each version by `--version` (pi-acp's from its `package.json`), and `harnesses.json`. |
 | `core/room.ts` | A chat room: a roster of participants, each one harness kept alive across turns. |
 | `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
 | `core/text.ts` | A harness's text made safe for a terminal (#229): `render.ts`, `cli.ts` and the `ask` prompt use it. `client/room.ts` has a copy, and `tests/text.test.ts` checks that they agree. |

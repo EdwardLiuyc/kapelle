@@ -4,13 +4,32 @@
  */
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { fakePath, tempDir } from "../../integration/helpers.ts";
 import { describe, findAgents, readSetup, writeSetup } from "../harnesses.ts";
+
+/** Whether `pid` is still running, portably on POSIX. `ps` reports nothing
+ *  for a missing pid; a zombie has exited and is not running. */
+function running(pid: number): boolean {
+  const result = spawnSync("ps", ["-p", String(pid), "-o", "stat="], {
+    encoding: "utf8",
+  });
+  if (result.error || result.status !== 0) return false;
+  const stat = result.stdout.trim();
+  return stat !== "" && !stat.startsWith("Z");
+}
+
+async function waitGone(pid: number): Promise<boolean> {
+  const deadline = Date.now() + 2_000;
+  while (running(pid) && Date.now() < deadline) await delay(20);
+  return !running(pid);
+}
 
 test("the find gives each agent its state from PATH, the agent first", async (t) => {
   const bin = await fakePath(t);
@@ -84,4 +103,239 @@ test("the saved find reads back, and a file missing an agent reads as none", asy
 
   await writeFile(join(home, "kapelle", "harnesses.json"), "{not json");
   assert.equal(readSetup(), undefined);
+});
+
+test("a version probe gets the secret-free harness environment", async (t) => {
+  const root = await tempDir(t);
+  const bin = join(root, "bin");
+  const seen = join(root, "env.txt");
+  await mkdir(bin);
+  await writeFile(
+    join(bin, "opencode"),
+    `#!/bin/sh
+printf '%s|%s\n' "\${KAPELLE_TOKEN-<missing>}" "\${HARNESS_PROBE_VISIBLE-<missing>}" > ${JSON.stringify(seen)}
+echo 1.2.3
+`,
+    { mode: 0o755 },
+  );
+
+  const beforeToken = process.env.KAPELLE_TOKEN;
+  const beforeVisible = process.env.HARNESS_PROBE_VISIBLE;
+  process.env.KAPELLE_TOKEN = "daemon-secret";
+  process.env.HARNESS_PROBE_VISIBLE = "visible";
+  t.after(() => {
+    if (beforeToken === undefined) delete process.env.KAPELLE_TOKEN;
+    else process.env.KAPELLE_TOKEN = beforeToken;
+    if (beforeVisible === undefined) delete process.env.HARNESS_PROBE_VISIBLE;
+    else process.env.HARNESS_PROBE_VISIBLE = beforeVisible;
+  });
+
+  const found = await findAgents(bin);
+  assert.equal(found.opencode?.version, "1.2.3");
+  assert.equal(
+    (await readFile(seen, "utf8")).trim(),
+    "<missing>|visible",
+    "the probe must not see KAPELLE_TOKEN, but must keep ordinary env",
+  );
+});
+
+test("a version probe that ignores TERM cannot wedge the find", async (t) => {
+  const root = await tempDir(t);
+  const bin = join(root, "bin");
+  const pidFile = join(root, "probe.pid");
+  const sleepPidFile = join(root, "sleep.pid");
+  await mkdir(bin);
+  await writeFile(
+    join(bin, "opencode"),
+    `#!/bin/sh
+trap '' TERM
+echo $$ > ${JSON.stringify(pidFile)}
+sleep 30 &
+echo $! > ${JSON.stringify(sleepPidFile)}
+wait
+`,
+    { mode: 0o755 },
+  );
+  const pids = async () => {
+    const result: number[] = [];
+    for (const file of [pidFile, sleepPidFile]) {
+      try {
+        const pid = Number(await readFile(file, "utf8"));
+        if (Number.isInteger(pid) && pid > 0) result.push(pid);
+      } catch {
+        // It may not have started if the assertion fails very early.
+      }
+    }
+    return result;
+  };
+  t.after(async () => {
+    for (const pid of await pids()) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  });
+
+  const started = Date.now();
+  const found = await findAgents(bin);
+  const elapsed = Date.now() - started;
+  assert.ok(
+    elapsed < 10_000,
+    `findAgents must settle after its 5s version timeout; took ${elapsed}ms ` +
+      "because a SIGTERM-ignoring child wedged the probe",
+  );
+  assert.equal(found.opencode?.program, true);
+  assert.equal(
+    found.opencode?.version,
+    undefined,
+    "a timed-out probe contributes no version",
+  );
+
+  for (const pid of await pids()) {
+    assert.equal(
+      await waitGone(pid),
+      true,
+      `the version probe left pid ${pid} running`,
+    );
+  }
+});
+
+test("a version probe stops reading and kills a child that floods stdout", async (t) => {
+  const root = await tempDir(t);
+  const bin = join(root, "bin");
+  const pidFile = join(root, "probe.pid");
+  const sleepPidFile = join(root, "sleep.pid");
+  await mkdir(bin);
+  await writeFile(
+    join(bin, "opencode"),
+    `#!/bin/sh
+echo "opencode v2.0.18"
+echo $$ > ${JSON.stringify(pidFile)}
+sleep 30 &
+echo $! > ${JSON.stringify(sleepPidFile)}
+i=0
+while [ "$i" -lt 128 ]; do
+  printf '%1024s\\n' ''
+  i=$((i + 1))
+done
+wait
+`,
+    { mode: 0o755 },
+  );
+  const pids = async () => {
+    const result: number[] = [];
+    for (const file of [pidFile, sleepPidFile]) {
+      try {
+        const pid = Number(await readFile(file, "utf8"));
+        if (Number.isInteger(pid) && pid > 0) result.push(pid);
+      } catch {
+        // The probe was killed before this process started.
+      }
+    }
+    return result;
+  };
+  t.after(async () => {
+    for (const pid of await pids()) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  });
+
+  const started = Date.now();
+  const found = await findAgents(bin);
+  const elapsed = Date.now() - started;
+  assert.ok(
+    elapsed < 4_000,
+    `findAgents must cap probe output instead of waiting for its timeout; ` +
+      `took ${elapsed}ms`,
+  );
+  assert.equal(found.opencode?.program, true);
+  assert.equal(
+    found.opencode?.version,
+    "2.0.18",
+    "the valid version line before the flood is still seen",
+  );
+  const startedPids = await pids();
+  assert.ok(startedPids.length > 0, "the fake opencode recorded its pid");
+  for (const pid of startedPids) {
+    assert.equal(
+      await waitGone(pid),
+      true,
+      `the flooded version probe left pid ${pid} running`,
+    );
+  }
+});
+
+test("pi-acp's package version is extracted, not trusted as arbitrary text", async (t) => {
+  const root = await tempDir(t);
+  const bin = join(root, "bin");
+  const pkg = join(root, "lib", "pi-acp");
+  await mkdir(join(pkg, "dist"), { recursive: true });
+  await mkdir(bin);
+  await writeFile(join(bin, "pi"), "#!/bin/sh\necho 1.3.0\n", {
+    mode: 0o755,
+  });
+  await writeFile(join(pkg, "dist", "index.js"), "", { mode: 0o755 });
+  await symlink(join(pkg, "dist", "index.js"), join(bin, "pi-acp"));
+
+  const packageFile = join(pkg, "package.json");
+  await writeFile(
+    packageFile,
+    JSON.stringify({ version: "0.0.33\u001b]52;c;evil\u0007" }),
+  );
+  assert.equal(
+    (await findAgents(bin)).pi?.acpVersion,
+    "0.0.33",
+    "only the version-shaped part of package.json may reach setup output",
+  );
+
+  await writeFile(
+    packageFile,
+    JSON.stringify({ version: "\u001b]52;c;evil\u0007not-a-version" }),
+  );
+  assert.equal((await findAgents(bin)).pi?.acpVersion, undefined);
+});
+
+test("the warning compares the ACP version, never the main version", () => {
+  const base = {
+    checkedAt: "now",
+    done: false,
+    found: {
+      opencode: {
+        program: true,
+        version: "99.0.0",
+        acp: true,
+        acpVersion: "2.0.18",
+      },
+    },
+  };
+  assert.equal(
+    describe(base).find((a) => a.id === "opencode")?.warning,
+    undefined,
+    "a different main-program version must not warn",
+  );
+
+  const mismatched = {
+    ...base,
+    found: {
+      opencode: { ...base.found.opencode, acpVersion: "1.0.0" },
+    },
+  };
+  assert.match(
+    describe(mismatched).find((a) => a.id === "opencode")?.warning ?? "",
+    /opencode 1\.0\.0 is not the build kapelle measured: 2\.0\.18/,
+  );
 });

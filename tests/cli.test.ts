@@ -128,6 +128,34 @@ test("--rebase is refused as M3-4 territory", async (t) => {
   assert.match(r.stderr, /--rebase lands in M3-4/);
 });
 
+test("setup with an extra positional is a usage error, not a prompt", async (t) => {
+  const runtime = await tempDir(t);
+  const cwd = await tempDir(t);
+  const marker = join(cwd, "agent-ran");
+  const agent = join(cwd, "agent.sh");
+  await writeFile(agent, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, {
+    mode: 0o755,
+  });
+
+  // If this falls through to the prompt path, --cmd starts this agent.
+  const r = await spawnCli(
+    t,
+    ["setup", "extra", "--cmd", agent, "--cwd", cwd],
+    "cli.ts",
+    { XDG_RUNTIME_DIR: runtime },
+  ).done;
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /^usage: kapelle setup$/m);
+  assert.doesNotMatch(r.stderr, /no daemon is listening/);
+  await assert.rejects(readFile(marker), "setup usage must not start an agent");
+  await assert.rejects(
+    readFile(join(runtime, "kapelle", "daemon.json")),
+    "setup usage must not look for or start a daemon",
+  );
+});
+
 // --- notices and --quiet -----------------------------------------------------
 
 test("an unverified harness warns, and --quiet drops that line", async (t) => {

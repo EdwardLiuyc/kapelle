@@ -83,6 +83,8 @@ interface Panel {
   right?: string;
   body: Component;
   error?: string;
+  /** Which setup opening owns this panel. Generic panels never have one. */
+  setup?: number;
 }
 
 /**
@@ -166,6 +168,10 @@ function panelParts({
   /** The pop-up, while one is open (M4-5), and pi-tui's handle on it. */
   let panel: Panel | undefined;
   let overlay: OverlayHandle | undefined;
+  /** Each opening of the setup list, and whether the person has opened or
+   *  dismissed it. The startup response must not reopen it after a close. */
+  let setupGeneration = 0;
+  let setupTouched = false;
   /** How many rows a list in the pop-up may show. */
   const panelRoom = () =>
     Math.max(3, Math.min(12, (process.stdout.rows || 24) - 12));
@@ -217,24 +223,23 @@ function panelParts({
    *  Its answer fills `measured`, and opens the setup list when the person
    *  has not said "done" or no agent is ready (M9-3), unless a pop-up or a
    *  question came first. */
-  const atStart = () =>
-    void readHarnesses(d).then(
-      (res) => {
-        if (!res.ok) return;
-        const ids: string[] = [];
-        for (const h of res.body.harnesses) if (h.measured) ids.push(h.id);
-        measured = ids.sort((a, b) => a.localeCompare(b));
-        if (needsSetup(res.body) && !panel && !queue.asking) {
-          void showSetup();
-        }
-      },
-      () => {},
-    );
+  const atStart = async () => {
+    const res = await readHarnesses(d).catch(() => undefined);
+    if (!res?.ok) return;
+    const ids: string[] = [];
+    for (const h of res.body.harnesses) if (h.measured) ids.push(h.id);
+    measured = ids.sort((a, b) => a.localeCompare(b));
+    // A manual /setup, or its close, while this GET was pending is the
+    // person's answer: the late startup reply must not reopen the list.
+    if (needsSetup(res.body) && !setupTouched && !panel && !queue.asking) {
+      await showSetup();
+    }
+  };
 
   /** Shows `body` in the pop-up. A new body replaces the last one in
    *  the same box, as the menu gives way to a pick list. */
-  const showPanel = (title: string, body: Component) => {
-    panel = { title, body };
+  const showPanel = (title: string, body: Component, setup?: number) => {
+    panel = { title, body, ...(setup !== undefined && { setup }) };
     queue.show(undefined);
     if (!overlay) {
       // Centred on the timeline, not the terminal: pi-tui centres on
@@ -301,14 +306,19 @@ function panelParts({
   /** `/setup done`, or Enter in the setup list: the list stops opening at
    *  start. A refusal stays in the list when it is open. */
   const setupDone = async () => {
+    setupTouched = true;
+    // Capture the opening, not the title: a late answer for this one must
+    // not close a newer /setup, and an unrelated "agents" panel is not ours.
+    const target = panel?.setup;
     await fresh();
     const r = await markDone(d).catch(() => undefined);
     const error = !r ? NO_DAEMON : !r.ok ? r.error.message : undefined;
-    if (error && panel?.title === SETUP) {
+    const stillOurs = target !== undefined && panel?.setup === target;
+    if (error && stillOurs && panel) {
       panel.error = error;
       return tui.requestRender();
     }
-    if (panel?.title === SETUP) hidePanel();
+    if (stillOurs) hidePanel();
     say(error ? `! ${error}` : "setup done: /setup shows the list again");
     setStatus();
   };
@@ -317,6 +327,8 @@ function panelParts({
    *  per agent. Enter is "done"; Esc closes it, and it opens again at the
    *  next start. */
   const showSetup = async () => {
+    setupTouched = true;
+    const generation = ++setupGeneration;
     const list = (r?: HarnessesReply): Component => ({
       render: (w) => [
         ...(r
@@ -342,12 +354,12 @@ function panelParts({
       invalidate() {},
     });
     const waiting = list();
-    showPanel(SETUP, waiting);
+    showPanel(SETUP, waiting, generation);
     await fresh();
     const r = await findAgain(d).catch(() => undefined);
     // Closed, or replaced, while the daemon looked.
-    if (panel?.body !== waiting) return;
-    if (r?.ok) showPanel(SETUP, list(r.body));
+    if (panel?.setup !== generation) return;
+    if (r?.ok) showPanel(SETUP, list(r.body), generation);
     else panel.error = r ? r.error.message : NO_DAEMON;
     tui.requestRender();
   };

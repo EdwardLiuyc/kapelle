@@ -21,7 +21,7 @@
  * `POST /harnesses/done` sets it; a find keeps it.
  */
 
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   accessSync,
   constants,
@@ -33,7 +33,7 @@ import {
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 
-import { AGENTS } from "../protocol/registry.ts";
+import { AGENTS, resolveEnv } from "../protocol/registry.ts";
 import { stateDir } from "./runtime.ts";
 
 /** What the find saw for one agent. */
@@ -68,6 +68,10 @@ export interface AgentSetup {
 /** How long one `--version` may take. */
 const VERSION_TIMEOUT_MS = 5000;
 
+/** The most stdout+stderr a version probe may collect. Ordinary version
+ *  lines are tiny; a program that floods its output is not one we can read. */
+const VERSION_OUTPUT_LIMIT = 64 * 1024;
+
 /** The first `x.y.z` in a version line: `opencode v2.0.18`, `GitHub
  *  Copilot CLI 1.0.91.`, `@agentclientprotocol/codex-acp 2.2.2`. */
 const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]*[0-9A-Za-z])?/;
@@ -88,17 +92,69 @@ function onPath(name: string, path: string): string | undefined {
 }
 
 /** What `file --version` says, or nothing. stdin is closed, so a program
- *  that ignores the flag reads its end and stops, and the time limit ends
- *  one that does not. */
+ *  that ignores the flag reads its end and stops. A probe gets the same
+ *  secret-free environment as a harness, and the timeout or output limit
+ *  kills its whole process group: a child can ignore SIGTERM, and one that
+ *  leaves a descendant holding stdout open must not hold the find forever. */
 function versionOf(file: string): Promise<string | undefined> {
   return new Promise((ok) => {
-    const child = execFile(
-      file,
-      ["--version"],
-      { timeout: VERSION_TIMEOUT_MS, encoding: "utf8" },
-      (_err, stdout, stderr) => ok(VERSION.exec(`${stdout}\n${stderr}`)?.[0]),
-    );
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let outputBytes = 0;
+    const child = spawn(file, ["--version"], {
+      env: resolveEnv(undefined),
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.stdin?.destroy();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      const out = Buffer.concat(stdout).toString("utf8");
+      const err = Buffer.concat(stderr).toString("utf8");
+      ok(VERSION.exec(`${out}\n${err}`)?.[0]);
+    };
+    const killGroup = () => {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      }
+    };
+    const collect = (stream: "stdout" | "stderr", data: Buffer) => {
+      if (settled) return;
+      const room = VERSION_OUTPUT_LIMIT - outputBytes;
+      const kept = data.subarray(0, room);
+      (stream === "stdout" ? stdout : stderr).push(kept);
+      outputBytes += kept.length;
+      if (kept.length === data.length) return;
+      // Keep what fits so a version line at the start is still readable,
+      // then kill the group and settle: a flood is already not a version.
+      killGroup();
+      finish();
+    };
+    child.stdout.on("data", (data: Buffer) => {
+      collect("stdout", data);
+    });
+    child.stderr.on("data", (data: Buffer) => {
+      collect("stderr", data);
+    });
+    child.once("error", finish);
+    child.once("close", finish);
     child.stdin?.end();
+    // Kill the whole group, then settle here regardless: descendants can
+    // hold the pipes open after the direct child is gone.
+    timer = setTimeout(() => {
+      killGroup();
+      finish();
+    }, VERSION_TIMEOUT_MS);
   });
 }
 
@@ -117,7 +173,9 @@ function packageVersion(file: string): string | undefined {
         readFileSync(join(dir, "package.json"), "utf8"),
       );
       const v = (pkg as { version?: unknown }).version;
-      return typeof v === "string" ? v : undefined;
+      // Validate and extract, as `--version` does: package text is not ours
+      // to print unchecked.
+      return typeof v === "string" ? VERSION.exec(v)?.[0] : undefined;
     } catch {
       // No package here; one folder up.
     }
@@ -177,6 +235,21 @@ export function readSetup(): Setup | undefined {
     return { ...s, done: s.done === true };
   } catch {
     return undefined;
+  }
+}
+
+/** The person's saved `done`, even when the rest of the file is incomplete
+ *  and a new find will replace it. */
+export function readSavedDone(): boolean {
+  try {
+    const s: unknown = JSON.parse(readFileSync(setupFile(), "utf8"));
+    return (
+      typeof s === "object" &&
+      s !== null &&
+      (s as { done?: unknown }).done === true
+    );
+  } catch {
+    return false;
   }
 }
 

@@ -341,11 +341,16 @@ if (chatVerb) {
   } else {
     process.exitCode = await runFromFile(runFilePath);
   }
-} else if (positional[0] === "setup" && positional.length === 1) {
-  process.exitCode = await runSetup().catch((err) => {
-    console.error(`error: ${messageOf(err)}`);
-    return 1;
-  });
+} else if (positional[0] === "setup") {
+  if (positional.length !== 1) {
+    console.error("usage: kapelle setup");
+    process.exitCode = 1;
+  } else {
+    process.exitCode = await runSetup().catch((err) => {
+      console.error(`error: ${messageOf(err)}`);
+      return 1;
+    });
+  }
 } else if (positional[0] === "ps") {
   process.exitCode = await listRuns().catch((err) => {
     console.error(`error: ${messageOf(err)}`);

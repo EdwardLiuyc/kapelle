@@ -50,7 +50,7 @@ test("the list puts the ready agents first, with each command and warning", () =
   assert.deepEqual(setupLines(reply(false, true)), [
     { text: "pi      ready (pi 1.3.0, pi-acp 0.0.33)" },
     {
-      text: "claude  needs claude-agent-acp: npm i -g @agentclientprotocol/claude-agent-acp",
+      text: "claude  claude 2.1.307; needs claude-agent-acp: npm i -g @agentclientprotocol/claude-agent-acp",
     },
     {
       text: "kimi    not installed: no kimi on the daemon's PATH",
@@ -84,5 +84,41 @@ test("the list opens at start until done, and always with no agent ready", () =>
       harnesses: [{ id: "pi", measured: true }],
     }),
     false,
+  );
+});
+
+test("setup lines make daemon text printable", () => {
+  const lines = setupLines({
+    checkedAt: "",
+    done: false,
+    harnesses: [
+      {
+        id: "pi",
+        measured: true,
+        state: "ready",
+        program: "pi",
+        version: "1.3.0\u001b]52;c;stolen\u0007",
+        acpProgram: "pi-acp",
+        acpVersion: "0.0.34",
+        warning: "warning\u001b[31mred",
+      },
+    ],
+  });
+  for (const line of lines) {
+    assert.doesNotMatch(line.text, /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+  }
+  const text = lines.map((l) => l.text).join(" ");
+  assert.match(text, /pi 1\.3\.0/);
+  assert.match(text, /warning .*red/);
+});
+
+test("a pre-M9-3 bare list has no setup lines", () => {
+  assert.deepEqual(
+    setupLines({
+      checkedAt: "",
+      done: true,
+      harnesses: [{ id: "pi", measured: true }],
+    }),
+    [],
   );
 });
