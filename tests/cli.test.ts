@@ -78,15 +78,29 @@ test("a flag that is present but carries no value is a usage error", async (t) =
   assert.match(r.stderr, /--cmd needs a value/);
 });
 
-test("no prompt is a usage error; --help is not", async (t) => {
-  const bare = await runCli(t, []);
+test("bare kapelle hands off to the chat; --help is the help", async (t) => {
+  // M9-2: no arguments is the chat, not the CLI help. A pipe has no screen,
+  // so chat.ts prints its usage there and starts no daemon.
+  const runtime = await tempDir(t);
+  const bare = await spawnCli(t, [], "cli.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  }).done;
   assert.equal(bare.code, 1);
-  assert.match(bare.stdout, /minimal Agent Client Protocol client/);
-  assert.match(bare.stdout, /kapelle/);
-  assert.doesNotMatch(bare.stdout, /acp-mvp/);
+  assert.match(bare.stdout, /usage:\n {2}node chat\.ts/);
+  assert.doesNotMatch(bare.stdout, /minimal Agent Client Protocol client/);
+  await assert.rejects(
+    readFile(join(runtime, "kapelle", "daemon.json")),
+    "a pipe starts no daemon",
+  );
 
-  const help = await runCli(t, ["hi", "--help"]);
+  const help = await runCli(t, ["--help"]);
   assert.equal(help.code, 0);
+  assert.match(help.stdout, /minimal Agent Client Protocol client/);
+  assert.match(help.stdout, /kapelle daemon stop/);
+  assert.match(
+    help.stdout,
+    /starting the daemon\n.*if none runs; a pipe prints chat usage and exits 1/,
+  );
 });
 
 test("merge without a run id is a usage error, not a prompt", async (t) => {
@@ -501,7 +515,8 @@ test("a daemon with a different API major is refused, one with a different minor
 
   const refused = await ps([major + 1, 0]);
   assert.equal(refused.code, 1);
-  assert.match(refused.stderr, /^error: .*update the client or the daemon/m);
+  assert.match(refused.stderr, /^error: .*kapelle daemon stop/m);
+  assert.match(refused.stderr, /update the client or the daemon/);
 
   const warned = await ps([major, minor + 1]);
   assert.equal(warned.code, 0, warned.stderr);
@@ -541,7 +556,7 @@ test("attach checks the version again after a restart, and stops on a new major"
   }).done;
   assert.equal(r.code, 1, r.stderr);
   assert.match(r.stdout, /attached to r1/);
-  assert.match(r.stderr, /^error: .*update the client or the daemon/m);
+  assert.match(r.stderr, /^error: .*kapelle daemon stop/m);
   assert.doesNotMatch(r.stderr, /attach again/);
 });
 

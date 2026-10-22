@@ -12,7 +12,7 @@
  */
 
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readlinkSync } from "node:fs";
 import {
   chmod,
@@ -291,6 +291,13 @@ test("daemon.json holds port, pid and a random token, and only the owner can rea
   assert.equal(d.pid, d.childPid);
   assert.equal((await stat(d.file)).mode & 0o777, 0o600);
   assert.equal((await stat(join(d.file, ".."))).mode & 0o777, 0o700);
+  const identity = JSON.parse(await readFile(`${d.file}.identity`, "utf8")) as {
+    pid?: unknown;
+    startedAt?: unknown;
+  };
+  assert.equal(identity.pid, d.pid);
+  assert.equal(typeof identity.startedAt, "string");
+  assert.equal((await stat(`${d.file}.identity`)).mode & 0o777, 0o600);
 });
 
 test("a second daemon refuses to start, and leaves the first one's token alone", async (t) => {
@@ -319,6 +326,21 @@ test("a daemon.json left by a daemon that died is replaced, not obeyed", async (
 
   const d = await boot(t, runtime);
   assert.notEqual(d.token, "stale");
+  assert.equal(d.pid, d.childPid);
+});
+
+test("a pid 0 record is replaced, not obeyed", async (t) => {
+  // `process.kill(0, 0)` targets the process group and answers true, so a
+  // 0 pid must be rejected before `alive` or it wedges every start.
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: 0, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  const d = await boot(t, runtime);
   assert.equal(d.pid, d.childPid);
 });
 
@@ -439,6 +461,10 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     assert.equal(exit.code, 0, exit.stderr);
     assert.equal(await gone(harness), true, "the harness outlived the daemon");
     await assert.rejects(readFile(d.file), "daemon.json is removed");
+    await assert.rejects(
+      readFile(`${d.file}.identity`),
+      "the identity is removed with daemon.json",
+    );
     await assert.rejects(
       readFile(join(d.file, "..", "children.json")),
       "children.json is removed once no harness is live",
@@ -604,6 +630,49 @@ test("kapelle daemon add treats a non-object daemon.json as no daemon", async (t
   ).done;
   assert.equal(r.code, 1);
   assert.match(r.stderr, /no daemon is listening/);
+});
+
+test("kapelle daemon stop sends SIGTERM, waits, and removes the record", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+
+  const stop = await spawnCli(t, ["daemon", "stop"], "cli.ts", dirs(runtime))
+    .done;
+  assert.equal(stop.code, 0, stop.stderr);
+  assert.equal(stop.stdout.trim(), `stopped the daemon (pid ${d.pid})`);
+  assert.equal((await d.done).code, 0);
+  await assert.rejects(readFile(d.file), "daemon.json is removed");
+});
+
+test("kapelle daemon stop with no daemon says so and exits 0", async (t) => {
+  const runtime = await tempDir(t);
+
+  const stop = await spawnCli(t, ["daemon", "stop"], "cli.ts", dirs(runtime))
+    .done;
+
+  assert.equal(stop.code, 0, stop.stderr);
+  assert.equal(stop.stdout.trim(), "no daemon is running");
+});
+
+test("kapelle daemon stop clears a stale record without claiming a stop", async (t) => {
+  const runtime = await tempDir(t);
+  const dir = join(runtime, "kapelle");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  assert.ok(dead !== undefined);
+  const file = join(dir, "daemon.json");
+  await writeFile(
+    file,
+    JSON.stringify({ pid: dead, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  const stop = await spawnCli(t, ["daemon", "stop"], "cli.ts", dirs(runtime))
+    .done;
+
+  assert.equal(stop.code, 0, stop.stderr);
+  assert.equal(stop.stdout.trim(), "no daemon is running");
+  await assert.rejects(readFile(file), "the stale record is removed");
 });
 
 // --- repos ----------------------------------------------------------------------
@@ -4746,6 +4815,131 @@ async function chatOnPty(t: TestContext, agent = REMEMBER) {
   const screen = await ptyScreen(t, cmd, { XDG_RUNTIME_DIR: runtime });
   return { ...screen, d, cwd };
 }
+
+test("kapelle alone starts a daemon, opens the chat, and /leave leaves it running", {
+  skip: noPty,
+}, async (t) => {
+  // M9-2: a terminal with no daemon gets one in the background, then the
+  // screen. The daemon is in its own session, so the chat's exit is not its.
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  // A standalone `kapelle` must not fall through to the single-prompt path,
+  // which would start the default harness (pi) beside the chat.
+  const bin = await tempDir(t);
+  const marker = join(state, "pi-started");
+  const fake = join(bin, "pi-acp");
+  await writeFile(fake, '#!/bin/sh\nprintf spawned > "$PI_MARKER"\nexit 1\n', {
+    mode: 0o755,
+  });
+  await chmod(fake, 0o755);
+  const screen = await ptyScreen(t, "node cli.ts", {
+    XDG_RUNTIME_DIR: runtime,
+    XDG_STATE_HOME: state,
+    XDG_CONFIG_HOME: join(state, "config-home"),
+    KAPELLE_PORT: "0",
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    PI_MARKER: marker,
+  });
+  await new Promise((ok) => setTimeout(ok, 300));
+  await assert.rejects(readFile(marker), "bare kapelle started a harness");
+  const file = join(runtime, "kapelle", "daemon.json");
+  const { pid, port, token } = JSON.parse(await readFile(file, "utf8"));
+  t.after(() => {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already stopped.
+    }
+  });
+  assert.equal(alive(pid), true);
+  assert.match(
+    await readFile(join(state, "kapelle", "daemon.log"), "utf8"),
+    /listening on /,
+  );
+  // `detached` made the daemon a session leader: the terminal's session is
+  // not its own, so closing the terminal cannot hang it up.
+  const sid = execFileSync("ps", ["-o", "sid=", "-p", String(pid)])
+    .toString()
+    .trim();
+  assert.equal(sid, String(pid));
+
+  screen.child.stdin.write("/leave\r");
+  await screen.seen("left the chat");
+  assert.equal(await screen.exited, 0, screen.out());
+
+  // Only the chat ended.
+  assert.equal(alive(pid), true);
+  const answer = await fetch(`http://127.0.0.1:${port}/version`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(answer.status, 200);
+});
+
+test("two kapelle at once leave one daemon, and either key ends only the chat", {
+  skip: noPty,
+}, async (t) => {
+  // The daemon's own lock picks the winner. Both CLIs wait for its record
+  // instead of surfacing `another daemon is starting`, and both get a screen.
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const env = {
+    XDG_RUNTIME_DIR: runtime,
+    XDG_STATE_HOME: state,
+    XDG_CONFIG_HOME: join(state, "config-home"),
+    KAPELLE_PORT: "0",
+  };
+  await mkdir(join(state, "kapelle"), { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(state, "kapelle", "daemon.log"),
+    "the previous start\n",
+    {
+      mode: 0o600,
+    },
+  );
+  const [a, b] = await Promise.all([
+    ptyScreen(t, "node cli.ts", env),
+    ptyScreen(t, "node cli.ts", env),
+  ]);
+  const file = join(runtime, "kapelle", "daemon.json");
+  const { pid, port, token } = JSON.parse(await readFile(file, "utf8"));
+  t.after(() => {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already stopped.
+    }
+  });
+  assert.equal(alive(pid), true);
+  // Only one daemon ever listened. The loser's refusal is in the same log,
+  // or in the one rotation moved aside, and never reached a CLI.
+  const logs = await Promise.all(
+    [
+      join(state, "kapelle", "daemon.log"),
+      join(state, "kapelle", "daemon.log.1"),
+    ].map((path) => readFile(path, "utf8").catch(() => "")),
+  );
+  assert.equal(logs.join("").match(/listening on /g)?.length, 1);
+  assert.equal(
+    await readFile(join(state, "kapelle", "daemon.log.1"), "utf8"),
+    "the previous start\n",
+    "two starters rotated the log once",
+  );
+
+  a.child.stdin.write("/leave\r");
+  await a.seen("left the chat");
+  assert.equal(await a.exited, 0, a.out());
+  // Raw mode turns ^C into a key: only the screen's listener sees it.
+  b.child.stdin.write("\x03");
+  await b.seen("left the chat");
+  assert.equal(await b.exited, 0, b.out());
+
+  // One daemon served both chats, and it is still there.
+  assert.equal(alive(pid), true);
+  const answer = await fetch(`http://127.0.0.1:${port}/version`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(answer.status, 200);
+});
 
 /** CSI, OSC and APC sequences; pi-tui writes all three. */
 const ESCAPES =

@@ -694,7 +694,7 @@ test("a new daemon with a different major ends the set with the version message"
       end?.kind === "lost"
         ? (end.err as Error | undefined)?.message
         : end?.message;
-    assert.match(message ?? "", /update the client or the daemon/);
+    assert.match(message ?? "", /kapelle daemon stop/);
     assert.deepEqual(said.restarts, [], `${rooms.length} room(s)`);
   }
 });

@@ -2,15 +2,16 @@
  * The daemon's user-level files.
  *
  * Two directories, because they answer to different lifetimes. The **runtime**
- * directory holds what is only true while a daemon is up — `daemon.json` and
- * `children.json` — and is wiped at logout. The **state** directory holds what
- * must outlive that: `repos.json`, the list of repositories added with
- * `POST /repos` (M2-6, #36).
+ * directory holds what is only true while a daemon is up — `daemon.json`,
+ * its `.identity` sidecar and `children.json` — and is wiped at logout. The
+ * **state** directory holds what must outlive that: `repos.json`, the list of
+ * repositories added with `POST /repos` (M2-6, #36), and the auto-started
+ * daemon's log (M9-2).
  *
- * Its own file because two entry points need the one definition: `daemon.ts`
- * writes the token there and `cli.ts`'s `kapelle daemon add` reads it back
- * (M2-4, #34). `daemon.ts` cannot be imported for it — importing it starts a
- * daemon.
+ * Its own file because the entry points need the one definition: `daemon.ts`
+ * writes the token there, and `cli.ts` reads it back for `kapelle daemon
+ * add`, bare `kapelle` and `kapelle daemon stop` (M2-4, #34; M9-2).
+ * `daemon.ts` cannot be imported for it — importing it starts a daemon.
  */
 
 import { createHash } from "node:crypto";
@@ -81,8 +82,11 @@ function ours(dir: string): string {
  * not the shared place `tmpdir()` is, but `XDG_STATE_HOME` can name anywhere,
  * and this file decides which folders the daemon will start harnesses in —
  * a list worth no less care than the token beside it.
+ *
+ * Exported for the auto-started daemon's log (M9-2). Everything else in the
+ * folder goes through `stateDirFor` or the repository list here.
  */
-function stateDir(): string {
+export function stateDir(): string {
   // XDG says an empty or relative value means unset, and `runtimeDir` already
   // treats an empty base the same way. A `""` base here would otherwise
   // resolve to the relative `./kapelle`, putting the list in whatever
