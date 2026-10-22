@@ -1417,6 +1417,21 @@ async function runRoomCommand(): Promise<number> {
     console.error(usage);
     return 1;
   }
+  // An option the verb does not take is refused, never dropped: in `send`,
+  // `use --force now` would lose `--force now` from the message unseen.
+  const options = new Set(["room", "as", "cwd", "quiet", "verbose"]);
+  if (verb === "add") {
+    for (const o of ["cmd", "name", "role", "mode", "base"]) options.add(o);
+  }
+  if (verb === "ff") options.add("from");
+  const unknown = argv.find(
+    (a) => a.startsWith("--") && !options.has(a.slice(2)),
+  );
+  if (unknown !== undefined) {
+    const hint = verb === "send" ? "; send such text on stdin" : "";
+    console.error(`error: room ${verb} has no option ${unknown}${hint}`);
+    return 1;
+  }
   const d = await findDaemon();
   if (!d) return 1;
   const found = await roomAndSender(d);

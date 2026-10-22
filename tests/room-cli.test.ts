@@ -418,4 +418,21 @@ test("a verb it does not know, or a wrong shape, prints the usage", async (t) =>
     assert.equal(r.code, 1, args.join(" "));
     assert.match(r.stderr, /^usage: kapelle room <verb>/, args.join(" "));
   }
+
+  // An option the verb does not take is refused, not dropped from the text.
+  const send = await room(t, dir, dir, [
+    "send",
+    "dev",
+    "use",
+    "--force",
+    "now",
+  ]);
+  assert.equal(send.code, 1);
+  assert.equal(
+    send.stderr.trim(),
+    "error: room send has no option --force; send such text on stdin",
+  );
+  const info = await room(t, dir, dir, ["info", "--from", "po"]);
+  assert.equal(info.code, 1);
+  assert.equal(info.stderr.trim(), "error: room info has no option --from");
 });
