@@ -6,9 +6,11 @@
  */
 
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { promisify } from "node:util";
 import type { ParticipantDto, RoomDto } from "../client/contract.ts";
 import {
   addRepo,
@@ -115,6 +117,14 @@ test("from a participant's checkout, info and send find the room and the sender"
   // `send` returned while the turn still runs: it never waits.
   const dev = await until(f, "dev", (p) => p.status === "busy");
   assert.equal(dev.turnFrom, po.id, "the folder named the sender");
+
+  // A second message waits behind the live turn, and says so.
+  const queued = await room(t, f.runtime, po.worktree, ["send", "dev", "next"]);
+  assert.equal(queued.code, 0, queued.stderr);
+  assert.equal(queued.stdout.trim(), "queued for dev, behind 1");
+  const empty = await room(t, f.runtime, po.worktree, ["send", "dev"], " \n");
+  assert.equal(empty.code, 1);
+  assert.match(empty.stderr, /the message is empty/);
 
   // The person, by `--room` from a folder that is no checkout, with stdin.
   const byPerson = await room(
@@ -267,6 +277,16 @@ test("the orchestrator adds a reviewer, moves a branch, reads a diff and removes
   const changed = await room(t, f.runtime, po.worktree, ["diff", "dev"]);
   assert.equal(changed.code, 0, changed.stderr);
   assert.match(changed.stdout, /\+a line/);
+  // Committed, it leaves the plain diff and shows against the base.
+  const git = (...args: string[]) =>
+    promisify(execFile)("git", args, { cwd: dev.worktree });
+  await git("add", "notes.txt");
+  await git("commit", "-q", "-m", "notes");
+  const head = await room(t, f.runtime, po.worktree, ["diff", "dev"]);
+  assert.equal(head.stdout.trim(), "no changes", head.stderr);
+  const base = await room(t, f.runtime, po.worktree, ["diff", "dev", "base"]);
+  assert.equal(base.code, 0, base.stderr);
+  assert.match(base.stdout, /\+a line/);
 
   const remove = await room(t, f.runtime, po.worktree, ["remove", "qa"]);
   assert.equal(remove.code, 0, remove.stderr);
