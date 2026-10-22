@@ -167,26 +167,11 @@ const DEFAULT_AGENT = "pi";
 // `kapelle chat` is `chat.ts` (S7a), with its own usage and its own flags.
 const chatVerb = positional[0] === "chat";
 
-// `kapelle` alone is the chat (M9-2). A terminal gets the screen, so the
-// daemon is started first when none answers; a pipe has no screen, and
-// `chat.ts` prints its usage there without touching the daemon, as
-// `kapelle chat` does. The daemon is detached, so `/leave` ends only the chat.
-if (!chatVerb && argv.length === 0) {
-  if (process.stdin.isTTY && process.stdout.isTTY) {
-    try {
-      await ensureDaemon({
-        file: daemonFile(),
-        log: join(stateDir(), "daemon.log"),
-        script: join(import.meta.dirname, "daemon.ts"),
-        cwd: import.meta.dirname,
-      });
-    } catch (err) {
-      console.error(`error: ${messageOf(err)}`);
-      process.exit(1);
-    }
-  }
-  await import("./chat.ts");
-} else if (!chatVerb && ((!promptText && !runFilePath) || has("help"))) {
+if (
+  !chatVerb &&
+  argv.length !== 0 &&
+  ((!promptText && !runFilePath) || has("help"))
+) {
   console.log(`
 kapelle — a minimal Agent Client Protocol client
 
@@ -274,6 +259,26 @@ if (chatVerb) {
     (a, i) => i !== chatAt && a !== "--quiet" && a !== "--verbose",
   );
   process.argv.splice(2, Infinity, ...rest);
+  await import("./chat.ts");
+} else if (argv.length === 0) {
+  // `kapelle` alone is the chat (M9-2). It stays in this chain: an earlier
+  // standalone `if` let execution fall through to the single-agent path,
+  // which started the default harness (pi) beside the chat. A terminal gets
+  // the screen, so the daemon starts first when none answers; a pipe has no
+  // screen, and `chat.ts` prints its usage without touching the daemon.
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    try {
+      await ensureDaemon({
+        file: daemonFile(),
+        log: join(stateDir(), "daemon.log"),
+        script: join(import.meta.dirname, "daemon.ts"),
+        cwd: import.meta.dirname,
+      });
+    } catch (err) {
+      console.error(`error: ${messageOf(err)}`);
+      process.exit(1);
+    }
+  }
   await import("./chat.ts");
 } else if (positional[0] === "daemon" && positional[1] === "start") {
   // `daemon.ts` parses its own flags from `process.argv`, so the words that

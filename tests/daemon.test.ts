@@ -4808,12 +4808,25 @@ test("kapelle alone starts a daemon, opens the chat, and /leave leaves it runnin
   // screen. The daemon is in its own session, so the chat's exit is not its.
   const runtime = await tempDir(t);
   const state = await tempDir(t);
+  // A standalone `kapelle` must not fall through to the single-prompt path,
+  // which would start the default harness (pi) beside the chat.
+  const bin = await tempDir(t);
+  const marker = join(state, "pi-started");
+  const fake = join(bin, "pi-acp");
+  await writeFile(fake, '#!/bin/sh\nprintf spawned > "$PI_MARKER"\nexit 1\n', {
+    mode: 0o755,
+  });
+  await chmod(fake, 0o755);
   const screen = await ptyScreen(t, "node cli.ts", {
     XDG_RUNTIME_DIR: runtime,
     XDG_STATE_HOME: state,
     XDG_CONFIG_HOME: join(state, "config-home"),
     KAPELLE_PORT: "0",
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    PI_MARKER: marker,
   });
+  await new Promise((ok) => setTimeout(ok, 300));
+  await assert.rejects(readFile(marker), "bare kapelle started a harness");
   const file = join(runtime, "kapelle", "daemon.json");
   const { pid, port, token } = JSON.parse(await readFile(file, "utf8"));
   t.after(() => {
