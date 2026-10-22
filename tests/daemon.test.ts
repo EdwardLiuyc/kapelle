@@ -8997,28 +8997,22 @@ test("a paused room is deleted without a revive, and its open stream ends (#235)
 
 // The test drives the shutdown flow: its call count is the test.
 // pi-lens-ignore: high-fan-out
-test("a room opened while the daemon shuts down does not come back", async (t) => {
+test("a room opened while the daemon shuts down does not come back (#316)", async (t) => {
   const runtime = await tempDir(t);
   const state = await tempDir(t);
   const first = await boot(t, runtime, [], state);
   const cwd = await realpath(await added(first, await gitRepo(t)));
-  // A deaf turn holds the shutdown open for its 2 s grace, so the open below
-  // finishes while `stopping` is set.
-  const keeper = await api<RoomReply>(first, "POST", "/rooms", {
-    ...withAgent(cwd, `node ${MOCK_AGENT} --scenario deaf`),
-  });
-  assert.equal(keeper.status, 201, keeper.body.error?.message);
-  const sent = await api(first, "POST", `/rooms/${keeper.body.id}/messages`, {
-    text: "busy",
-  });
-  assert.equal(sent.status, 202, sent.body.error?.message);
 
   // A harness that answers ACP after a delay, so the request is inside
-  // `openRoom` when the signal lands.
+  // `openRoom` when the signal lands. No other room holds the shutdown
+  // open: it must wait for this request by itself.
   const slowInit = join(cwd, "slow-init.mjs");
+  const pidFile = join(cwd, "slow-init.pid");
   await writeFile(
     slowInit,
-    `await new Promise((ok) => setTimeout(ok, 500));\n` +
+    `import { writeFileSync } from "node:fs";\n` +
+      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+      `await new Promise((ok) => setTimeout(ok, 500));\n` +
       `await import(${JSON.stringify(MOCK_AGENT)});\n`,
   );
   const opening = fetch(`${first.url}/rooms`, {
@@ -9029,16 +9023,14 @@ test("a room opened while the daemon shuts down does not come back", async (t) =
     },
     body: JSON.stringify(withAgent(cwd, `node ${slowInit}`)),
   });
-  // Its log directory appears before the harness starts: past the
-  // `stopping` check, inside `openRoom`.
-  const roomsDir = join(stateDirFor(cwd), "rooms");
-  for (const until = Date.now() + 5_000; ; ) {
-    if (readdirSync(roomsDir).length >= 2) break;
+  // The harness has started: past the `stopping` check, inside `openRoom`.
+  for (const until = Date.now() + 5_000; !existsSync(pidFile); ) {
     if (Date.now() > until) {
       throw new Error("the opening request never reached openRoom");
     }
     await new Promise((ok) => setTimeout(ok, 10));
   }
+  const harness = Number(await readFile(pidFile, "utf8"));
   process.kill(first.pid, "SIGTERM");
 
   const refused = await opening;
@@ -9048,21 +9040,148 @@ test("a room opened while the daemon shuts down does not come back", async (t) =
     "shutting_down",
   );
   assert.equal((await first.done).code, 0);
+  assert.throws(
+    () => process.kill(harness, 0),
+    "the harness does not outlive the daemon",
+  );
 
   // Nothing of it is left on disk: no record, no log, no stderr log.
+  const roomsDir = join(stateDirFor(cwd), "rooms");
   assert.deepEqual(
     readdirSync(roomsDir),
-    [keeper.body.id],
+    [],
     "the refused room's folder is gone",
   );
 
   const second = await boot(t, runtime, [], state);
   const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
   assert.deepEqual(
-    list.body.map((r) => r.id).sort(),
-    [keeper.body.id],
+    list.body,
+    [],
     "the room the client never got must not come back",
   );
+});
+
+test("a shutdown still waits for a room create whose client has gone (#316)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const cwd = await realpath(await added(first, await gitRepo(t)));
+
+  // The same slow harness: the request is inside `openRoom` when its
+  // client goes and the signal lands.
+  const slowInit = join(cwd, "slow-init.mjs");
+  const pidFile = join(cwd, "slow-init.pid");
+  await writeFile(
+    slowInit,
+    `import { writeFileSync } from "node:fs";\n` +
+      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+      `await new Promise((ok) => setTimeout(ok, 500));\n` +
+      `await import(${JSON.stringify(MOCK_AGENT)});\n`,
+  );
+  const gone = new AbortController();
+  const opening = fetch(`${first.url}/rooms`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${first.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(withAgent(cwd, `node ${slowInit}`)),
+    signal: gone.signal,
+  });
+  for (const until = Date.now() + 5_000; !existsSync(pidFile); ) {
+    if (Date.now() > until) {
+      throw new Error("the opening request never reached openRoom");
+    }
+    await new Promise((ok) => setTimeout(ok, 10));
+  }
+  const harness = Number(await readFile(pidFile, "utf8"));
+  gone.abort();
+  await assert.rejects(opening);
+  process.kill(first.pid, "SIGTERM");
+
+  assert.equal((await first.done).code, 0);
+  assert.throws(
+    () => process.kill(harness, 0),
+    "the harness does not outlive the daemon",
+  );
+  assert.deepEqual(
+    readdirSync(join(stateDirFor(cwd), "rooms")),
+    [],
+    "the room's folder is gone",
+  );
+});
+
+test("a shutdown waits for a room delete in flight, which answers 204 (#316)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  // A `git` that sleeps before each `worktree prune`, so the delete is
+  // inside `removeRoom` when the signal lands.
+  const bin = await tempDir(t);
+  const marker = join(bin, "removing");
+  const realGit = execFileSync("sh", ["-c", "command -v git"], {
+    encoding: "utf8",
+  }).trim();
+  await writeFile(
+    join(bin, "git"),
+    `#!/bin/sh\n` +
+      `if [ "$1" = worktree ] && [ "$2" = prune ]; then\n` +
+      `  : > ${JSON.stringify(marker)}; sleep 1\n` +
+      `fi\n` +
+      `exec ${JSON.stringify(realGit)} "$@"\n`,
+    { mode: 0o755 },
+  );
+  const first = await boot(t, runtime, [], state, {
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+  });
+  const cwd = await added(first, await gitRepo(t));
+  const open = await api<RoomReply>(
+    first,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const alice = open.body.participants[0] as ParticipantDto;
+  // A commit keeps the checkout and its branch past the dismiss, so the
+  // delete has both to remove.
+  execFileSync("git", [
+    "-C",
+    alice.worktree as string,
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@t",
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "work",
+  ]);
+  assert.equal((await api(first, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  assert.equal(hasBranch(cwd, alice.branch as string), true);
+  // The boot sweep prunes too; only the delete may set the marker now.
+  await rm(marker, { force: true });
+
+  const deleting = fetch(`${first.url}/rooms/${id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${first.token}` },
+  });
+  for (const until = Date.now() + 5_000; !existsSync(marker); ) {
+    if (Date.now() > until) throw new Error("the delete never reached git");
+    await new Promise((ok) => setTimeout(ok, 10));
+  }
+  process.kill(first.pid, "SIGTERM");
+
+  assert.equal((await deleting).status, 204);
+  assert.equal((await first.done).code, 0);
+  assert.equal(existsSync(join(stateDirFor(cwd), "rooms", id)), false);
+  // Before the next boot, whose sweep would remove a branch left behind.
+  assert.equal(existsSync(alice.worktree as string), false);
+  assert.equal(hasBranch(cwd, alice.branch as string), false);
+
+  const second = await boot(t, runtime, [], state);
+  assert.equal((await api(second, "GET", `/rooms/${id}`)).status, 404);
 });
 
 /** Starts a request now and sends its JSON body only after `later` ran, so

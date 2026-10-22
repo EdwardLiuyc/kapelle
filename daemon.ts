@@ -388,6 +388,21 @@ const repos = new Set<string>(addedRepos);
 const runs = new Map<string, RunState>();
 /** Every run still in flight, so a shutdown can wait for them to settle. */
 const inFlight = new Set<Promise<void>>();
+/** Each room create or delete still unanswered (#316). Neither room is in
+ *  `rooms` for the shutdown to pause, so it waits for the work and its reply
+ *  instead. */
+const roomChanges = new Set<Promise<void>>();
+
+/** Holds the shutdown until `work` has settled and `res` is sent. A client
+ *  that has gone does not end it: the work goes on without the client.
+ *  Answers `work`, so its refusal still reaches `route`. */
+function holdShutdown(res: ServerResponse, work: Promise<void>) {
+  const sent = new Promise<void>((ok) => res.once("close", ok));
+  const held = Promise.all([work.catch(() => {}), sent]).then(() => {});
+  roomChanges.add(held);
+  void held.then(() => roomChanges.delete(held));
+  return work;
+}
 /** Kept beside the record rather than on it, so a `GET` never serialises one. */
 const cancels = new Map<string, AbortController>();
 /** Settles once `runRun` hands over the log, or with `undefined` when the run
@@ -1689,7 +1704,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       [...runs.values()].map(toRunListEntry) satisfies RunListEntry[],
     );
   } else if (req.method === "POST" && pathname === "/rooms") {
-    await postRoom(req, res);
+    await holdShutdown(res, postRoom(req, res));
   } else if (req.method === "GET" && pathname === "/rooms") {
     send(
       res,
@@ -1699,7 +1714,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       ) satisfies RoomListEntry[],
     );
   } else if (req.method === "DELETE" && room) {
-    await deleteRoom(room[1] as string, res);
+    await holdShutdown(res, deleteRoom(room[1] as string, res));
   } else if (req.method === "GET" && room) {
     const { state, room: live } = roomEntry(room[1] as string);
     send(res, 200, toRoomDto(state, live) satisfies RoomDto);
@@ -1840,6 +1855,8 @@ let stopping = false;
  * **A room is paused, not dismissed** (M6-7a, R42c): its live turns are
  * cancelled, its harnesses stopped and its checkouts kept, and the next boot
  * brings it back. A turn still live after the 2 s grace reads `killed`.
+ * A room create or delete still unanswered is waited for too (#316): the
+ * create then dismisses its room, and the delete ends with its 204.
  *
  * No kill loop of its own. A cancelled task stops its harness through
  * `core/run.ts` (2 s after the abort), and `AcpAgent.stop()` closes stdin
@@ -1857,6 +1874,7 @@ async function shutdown(signal: string): Promise<void> {
   for (const canceller of cancels.values()) canceller.abort("cancel");
   await Promise.all([
     ...inFlight,
+    ...roomChanges,
     ...[...rooms.values()].map(({ room }) => room.pause()),
   ]);
   removeDaemonFiles(file);
