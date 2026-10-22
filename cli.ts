@@ -29,7 +29,7 @@
  * the room and the sender from the checkout it runs in (`roomAndSender`).
  */
 import { readFile, realpath } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { text } from "node:stream/consumers";
 import { type RouteCommand, runCommand } from "./client/command.ts";
 import type {
@@ -1309,12 +1309,17 @@ function printRefusal({ code, message }: { code: string; message: string }) {
  * The room and the sender for `kapelle room` (M8-3), or why there are none.
  *
  * From the folder: a participant's checkout is
- * `<state>/wt/<roomId>/<participantId>`, and `GET /rooms/:id` must show that
- * participant with that very worktree. That exact match is the whole check,
- * so a renamed, moved or copied folder, or a run's checkout under the same
- * `wt/`, is refused rather than guessed. `--room` names the room instead,
- * and then the person sends; `--as <name>` names the sender. No `KAPELLE_*`
- * variable carries either: the daemon strips them from a harness (M2-8).
+ * `<state>/wt/<roomId>/<participantId>`. Git's top level from the folder
+ * gives that checkout, but the recorded workspace can be below it when the
+ * room was opened in a repository subdirectory. `GET /rooms/:id` must show
+ * that participant, its recorded workspace must be the checkout or below it,
+ * and the real cwd must be the checkout or below it. That containment is the
+ * whole check, so a renamed, moved or copied folder, or a run's checkout
+ * under the same `wt/`, is refused rather than guessed. A non-repository
+ * folder is refused even when its path happens to look right. `--room` names
+ * the room instead, and then the person sends; `--as <name>` names the sender.
+ * No `KAPELLE_*` variable carries either: the daemon strips them from a
+ * harness (M2-8).
  */
 async function roomAndSender(
   d: DaemonAddress,
@@ -1327,18 +1332,32 @@ async function roomAndSender(
     if (!r.ok) return `${r.error.message} (${r.error.code})`;
     room = r.body;
   } else {
-    const { root } = await stateDirRoot(resolve(flag("cwd", process.cwd())));
     const real = (p: string) => realpath(p).catch(() => p);
-    const top = await real(root);
+    const typedCwd = resolve(flag("cwd", process.cwd()));
+    const cwd = await real(typedCwd);
+    const { root, isRepo } = await stateDirRoot(cwd);
+    const checkout = await real(root);
     const refused =
-      `${top} is not a room participant's checkout; ` +
+      `${checkout} is not a room participant's checkout; ` +
       "name the room with --room <id> [--as <name>]";
-    const [wt, roomId, id] = top.split(sep).slice(-3);
+    if (!isRepo) return refused;
+    const [wt, roomId, id] = checkout.split(sep).slice(-3);
     if (wt !== "wt" || !roomId || !id) return refused;
     const r = await call<RoomDto>(d, `/rooms/${encodeURIComponent(roomId)}`);
     if (!r.ok) return refused;
     const self = r.body.participants.find((p) => p.id === id);
-    if (!self || (await real(self.worktree)) !== top) return refused;
+    if (!self) return refused;
+    const workspace = await real(self.worktree);
+    // `relative` rather than a string prefix: a sibling such as
+    // `<checkout>-copy` must not count as inside the checkout.
+    const inside = (child: string, parent: string) => {
+      const rel = relative(parent, child);
+      return (
+        rel === "" ||
+        (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+      );
+    };
+    if (!inside(workspace, checkout) || !inside(cwd, checkout)) return refused;
     room = r.body;
     sender = self;
   }
@@ -1423,7 +1442,9 @@ async function runRoomCommand(): Promise<number> {
             ? ", from the person"
             : `, from ${oneLine(room.participants.find((q) => q.id === p.turnFrom)?.name ?? p.turnFrom)}`;
       console.log(
-        `  ${oneLine(p.name)}  ${p.role ?? "-"}  ${p.harness}  ${p.mode}  ${p.status}${from}`,
+        oneLine(
+          `  ${p.name}  ${p.role ?? "-"}  ${p.harness}  ${p.mode}  ${p.status}${from}`,
+        ),
       );
     }
     return 0;
@@ -1481,13 +1502,15 @@ async function runRoomCommand(): Promise<number> {
   }
   let command: RouteCommand;
   if (verb === "add") {
+    const role = flag("role");
     command = {
       verb,
       agent: {
         agent: args[0],
         cmd: flag("cmd"),
         name: flag("name"),
-        role: flag("role"),
+        // `none` is no role, as in the screens' `/add` and `/role none`.
+        role: role === "none" ? undefined : role,
         mode: flag("mode"),
         base: flag("base"),
       },

@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
@@ -154,6 +154,112 @@ test("from a participant's checkout, info and send find the room and the sender"
   await writeFile(join(rev.worktree, "runs.go"), "");
   const done = await until(f, "dev", (p) => p.status === "idle");
   assert.equal(done.turnFrom, undefined);
+});
+
+test("a room opened in a repository subdirectory is found from its checkout, workspace and below", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await bootDaemon(t, runtime);
+  const repo = await addRepo(
+    d,
+    await gitRepo(t, { files: { "packages/app/README.md": "app\n" } }),
+  );
+  const opened = await api<RoomDto>(d, "POST", "/rooms", {
+    cwd: join(repo, "packages", "app"),
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT} --scenario remember`,
+        name: "po",
+        role: "orchestrator",
+      },
+    ],
+  });
+  assert.equal(opened.status, 201, JSON.stringify(opened.body));
+  const po = opened.body.participants.find((p) => p.name === "po");
+  assert.ok(po);
+  // The recorded workspace is the checkout root plus the cwd prefix, not the
+  // checkout root itself. Discovery has to allow that workspace and below it,
+  // and the checkout root itself when the participant runs from there.
+  const { stdout } = await promisify(execFile)(
+    "git",
+    ["rev-parse", "--show-toplevel"],
+    { cwd: po.worktree },
+  );
+  const checkout = stdout.trim();
+  const inside = join(po.worktree, "nested");
+  await mkdir(inside);
+
+  for (const cwd of [checkout, po.worktree, inside]) {
+    const info = await room(t, runtime, cwd, ["info"]);
+    assert.equal(info.code, 0, info.stderr);
+    assert.match(info.stdout, new RegExp(`^${opened.body.id}  active`));
+  }
+});
+
+test("a non-git folder at the recorded checkout path is refused", async (t) => {
+  const f = await fixture(t);
+  const po = f.p("po");
+  const metadata = join(po.worktree, ".git");
+  const aside = join(po.worktree, ".git.kapelle-test-aside");
+  await rename(metadata, aside);
+  try {
+    const info = await room(t, f.runtime, po.worktree, ["info"]);
+    assert.equal(info.code, 1);
+    assert.match(info.stderr, /is not a room participant's checkout/);
+  } finally {
+    await rename(aside, metadata);
+  }
+});
+
+test("a room add and info keep an ESC in a harness label off the terminal", async (t) => {
+  const f = await fixture(t);
+  const po = f.p("po");
+  const evil = join(await tempDir(t), "mock\u001b[2J-agent.mjs");
+  await copyFile(MOCK_AGENT, evil);
+
+  const add = await room(t, f.runtime, po.worktree, [
+    "add",
+    "--cmd",
+    `node ${evil}`,
+    "--name",
+    "esc",
+  ]);
+  assert.equal(add.code, 0, add.stderr);
+  for (const output of [add.stdout, add.stderr]) {
+    assert.ok(!output.includes("\u001b"), JSON.stringify(output));
+  }
+
+  // The display is sanitized, but the DTO still carries the label as sent.
+  const roster = (await api<RoomDto>(f.d, "GET", `/rooms/${f.room.id}`)).body;
+  const esc = roster.participants.find((p) => p.name === "esc");
+  assert.ok(esc);
+  assert.ok(esc.harness.includes("\u001b[2J"));
+
+  const info = await room(t, f.runtime, po.worktree, ["info"]);
+  assert.equal(info.code, 0, info.stderr);
+  assert.match(info.stdout, new RegExp(`^${f.room.id}  active`));
+  for (const output of [info.stdout, info.stderr]) {
+    assert.ok(!output.includes("\u001b"), JSON.stringify(output));
+  }
+});
+
+test("--role none adds a participant with no role", async (t) => {
+  const f = await fixture(t);
+  const add = await room(t, f.runtime, f.p("po").worktree, [
+    "add",
+    "--cmd",
+    `node ${MOCK_AGENT}`,
+    "--name",
+    "plain",
+    "--role",
+    "none",
+  ]);
+  assert.equal(add.code, 0, add.stderr);
+  assert.equal(add.stdout.trim(), "added plain (mock-agent, auto)");
+
+  const roster = (await api<RoomDto>(f.d, "GET", `/rooms/${f.room.id}`)).body;
+  const plain = roster.participants.find((p) => p.name === "plain");
+  assert.ok(plain);
+  assert.equal(Object.hasOwn(plain, "role"), false, "the role is omitted");
 });
 
 test("a folder that is no checkout, or not the participant's own, is refused", async (t) => {

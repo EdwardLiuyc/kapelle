@@ -3417,9 +3417,11 @@ sender found from a participant's checkout, a folder that is no checkout, `--roo
 **Decided 2026-10-22 (#267):** `info` reads who sent a busy worker's message from a new
 participant field, `turnFrom`, not from the stream. The CLI refuses `add`, `ff` and
 `remove` from a worker with `not_orchestrator`; the routes get no sender, because `from`
-already names the source on a fast-forward. The folder check is an exact match of the
-checkout with the participant's recorded worktree, so a renamed folder is refused, never
-guessed.
+already names the source on a fast-forward. The folder check derives the room and
+participant from the checkout path, requires the participant's recorded workspace inside
+that checkout and the real cwd inside the same checkout, so the checkout root, the
+workspace, and subfolders work; a renamed, moved, copied, or non-git folder is refused,
+never guessed.
 
 **M8-4 · The orchestrator skill · M · needs M8-2, M8-3**
 One Markdown file in the package, generic, from the spikes' skill and D1–D12. It says how

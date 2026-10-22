@@ -374,7 +374,7 @@ export async function runCommand(
       const role = p.role ? `, ${p.role}` : "";
       return {
         ok: true,
-        line: `added ${p.name} (${p.harness}${role}, ${p.mode})`,
+        line: printable(`added ${p.name} (${p.harness}${role}, ${p.mode})`),
       };
     }
     case "remove": {
