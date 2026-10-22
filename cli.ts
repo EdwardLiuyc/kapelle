@@ -1321,7 +1321,9 @@ function printRefusal({ code, message }: { code: string; message: string }) {
  * `--room` names the room from a folder that is no checkout, and then the
  * person sends. From a participant's checkout it must name that checkout's
  * own room, and the participant still sends: `--room` never drops the sender
- * (#334). `--as <name>` names the sender. No `KAPELLE_*` variable carries
+ * (#334). `--as <name>` names another participant as the sender; to send as
+ * the person from inside a checkout, `--cwd` names a folder outside it. No
+ * `KAPELLE_*` variable carries
  * either: the daemon strips them from a harness (M2-8).
  */
 async function roomAndSender(
@@ -1333,7 +1335,10 @@ async function roomAndSender(
   let sender: ParticipantDto | undefined;
   if (typeof own !== "string") {
     if (roomFlag !== undefined && roomFlag !== own.room.id) {
-      return `this is ${own.self.name}'s checkout in room ${own.room.id}, not in ${roomFlag}`;
+      return (
+        `this is ${own.self.name}'s checkout in room ${own.room.id}, not in ` +
+        `${roomFlag}; run it with --cwd <dir> outside the checkout`
+      );
     }
     room = own.room;
     sender = own.self;
@@ -1364,7 +1369,14 @@ async function ownCheckout(
   const refused =
     `${checkout} is not a room participant's checkout; ` +
     "name the room with --room <id> [--as <name>]";
-  if (!isRepo) return refused;
+  // Its own words, so a test can tell this refusal from the containment
+  // one below (#334).
+  if (!isRepo) {
+    return (
+      `${checkout} is not in a git checkout; ` +
+      "name the room with --room <id> [--as <name>]"
+    );
+  }
   const [wt, roomId, id] = checkout.split(sep).slice(-3);
   if (wt !== "wt" || !roomId || !id) return refused;
   const r = await call<RoomDto>(d, `/rooms/${encodeURIComponent(roomId)}`);
@@ -1413,6 +1425,8 @@ async function runRoomCommand(): Promise<number> {
     "  diff <name> [base]         what is not committed, or with base the branch;",
     "                             made safe for a terminal, so not a patch to apply",
     "  remove <name>",
+    "The checkout it runs in names the room and the sender. --as names another",
+    "participant as the sender; --cwd <dir> outside any checkout sends as the person.",
   ].join("\n");
   const [, verb, ...args] = positional as string[];
   const takes: Record<string, [min: number, max: number]> = {

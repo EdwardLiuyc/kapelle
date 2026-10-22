@@ -204,7 +204,7 @@ test("a non-git folder at the recorded checkout path is refused", async (t) => {
   try {
     const info = await room(t, f.runtime, po.worktree, ["info"]);
     assert.equal(info.code, 1);
-    assert.match(info.stderr, /is not a room participant's checkout/);
+    assert.match(info.stderr, /is not in a git checkout; name the room/);
   } finally {
     await rename(aside, metadata);
   }
@@ -340,7 +340,8 @@ test("a worker's orders are refused, each by its code; --as overrides the sender
   assert.match(
     elsewhere.stderr,
     new RegExp(
-      `this is dev's checkout in room ${f.room.id}, not in room-other`,
+      `this is dev's checkout in room ${f.room.id}, not in room-other; ` +
+        "run it with --cwd <dir> outside the checkout",
     ),
   );
   const roster = (await api<RoomDto>(f.d, "GET", `/rooms/${f.room.id}`)).body;
