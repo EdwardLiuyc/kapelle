@@ -5025,7 +5025,7 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   skip: noPty,
 }, async (t) => {
   // M4-13. The pty is 100 columns: the pane takes the timeline's place,
-  // beside the 26-column sidebar. sh, so no rc file draws the prompt.
+  // beside the 32-column sidebar. sh, so no rc file draws the prompt.
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
@@ -5068,8 +5068,8 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   assert.equal(after.rows, before.rows);
   assert.equal(
     after.cols,
-    before.cols + 24,
-    "the sidebar's 26 less the strip's 2",
+    before.cols + 30,
+    "the sidebar's 32 less the strip's 2",
   );
   // A shorter screen gives the shell fewer rows. The resize reaches the
   // shell after a redraw, so ask until it shows.
@@ -5512,8 +5512,8 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
   // painted piece (M7-3), and a busy row shows its timer at the right.
   await screen.seen("\x1b[33m! stuck");
   await screen.seen("\x1b[35m? asker");
-  assert.match(plainText(screen.out()), /! stuck \S+ +\d+[sm]/);
-  assert.match(plainText(screen.out()), /\? asker \S+ +\d+[sm]/);
+  assert.match(plainText(screen.out()), /! stuck +\d+[sm]/);
+  assert.match(plainText(screen.out()), /\? asker +\d+[sm]/);
   // Hidden, the sidebar leaves a count of the rooms that need the person.
   await screen.press("\x14", "● 2 rooms");
   screen.child.stdin.write("\x03");
@@ -6693,7 +6693,7 @@ test("chat.ts on a real terminal hides the sidebar with a click on «, and shows
 }, async (t) => {
   const { child, press, seen, exited, out } = await chatOnPty(t);
   // SGR mouse, 1-based: the « sits at the end of the sidebar's first row.
-  await press("\x1b[<0;25;1M\x1b[<0;25;1m", "»");
+  await press("\x1b[<0;30;1M\x1b[<0;30;1m", "»");
   await press("\x1b[<0;1;1M\x1b[<0;1;1m", "rooms");
   child.stdin.write("\x03");
   await seen("left room");

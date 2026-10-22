@@ -4,10 +4,11 @@
  * The list of rooms and their participants on the left, the `»` strip that
  * stands in for it while it is hidden, and the state marks (M7-3): `?` asks,
  * `!` stalls, `◐` busy, `⏸` paused, `✕` killed, `◌` exited, `●` unread, `○`
- * nothing new. An agent's row paints its mark and name in its colour, shows
- * the harness dim, and puts its busy timer on the right; an idle unread
- * agent's right side is its unread count instead. The changed-files block
- * sits under the rooms for the open thread.
+ * nothing new. An agent takes two rows. The first paints its mark and name
+ * in its colour and puts its busy timer on the right; an idle unread
+ * agent's right side is its unread count instead. The second shows
+ * `harness · role` dim, under the name. The changed-files block sits under
+ * the rooms for the open thread.
  *
  * A room row takes its most urgent participant's mark, `?` > `!` > `✕` >
  * `⏸` > `◌` > `●` > `◐` > `○` (decided 2026-10-11). The strip shows the
@@ -35,7 +36,7 @@ import { dim, fg, magenta, plain, yellow } from "../common.ts";
 import { clock, colourOf, rows, same, type View } from "../view.ts";
 
 /** The sidebar's width, in columns. */
-const SIDEBAR_WIDTH = 26;
+const SIDEBAR_WIDTH = 32;
 /** Below this many columns the sidebar starts hidden. */
 const NARROW = 70;
 
@@ -154,9 +155,10 @@ function sidebarParts({
   height?: () => number;
   now?: () => number;
 }) {
-  /** A participant's one row. The mark and name are one painted piece, so
-   *  a colour never splits them. */
-  const agentLine = (
+  /** A participant's two rows: the mark, name and timer, then the harness
+   *  and role, dim, under the name. The mark and name are one painted
+   *  piece, so a colour never splits them. */
+  const agentLines = (
     state: RoomState,
     p: Participant,
     cursor: string,
@@ -180,18 +182,15 @@ function sidebarParts({
     );
     const name = truncateToWidth(p.name, room, "…");
     const head = `${cursor}   ${m.paint(`${m.glyph} ${name}`)}${star}`;
-    // The harness gives way first.
-    const harnessRoom = inner - visibleWidth(head) - visibleWidth(tail) - 1;
-    const harness =
-      harnessRoom >= 1
-        ? ` ${dim(truncateToWidth(p.harness, harnessRoom, "…"))}`
-        : "";
-    const line = head + harness;
-    return (
-      line +
-      " ".repeat(Math.max(0, inner - visibleWidth(line) - visibleWidth(tail))) +
-      tail
-    );
+    const about = p.role ? `${p.harness} · ${p.role}` : p.harness;
+    return [
+      head +
+        " ".repeat(
+          Math.max(0, inner - visibleWidth(head) - visibleWidth(tail)),
+        ) +
+        tail,
+      `      ${dim(truncateToWidth(about, Math.max(0, inner - 6), "…"))}`,
+    ];
   };
 
   /** The parsed changed files, by diff identity: a frame must not
@@ -199,13 +198,16 @@ function sidebarParts({
   let parsed: { diff: Diff; all: FileChange[] } | undefined;
 
   /** Every sidebar row, the changed-files block included. Told with the
-   *  file rows a click can open, and where the block starts. */
+   *  view each row opens, the file rows a click can open, and where the
+   *  block starts. */
   const draw = (inner: number) => {
     const fit = (s: string) =>
       `${truncateToWidth(s, inner, "…", true)} ${dim("│")}`;
     const lines = [
       fit(`${dim("rooms")}${" ".repeat(Math.max(0, inner - 6))}«`),
     ];
+    // An agent takes two rows, so a click finds its view here by row.
+    const opens: (View | undefined)[] = [undefined];
     for (const row of rows(rooms)) {
       const r = rooms.get(row.roomId);
       if (!r) continue;
@@ -220,11 +222,15 @@ function sidebarParts({
             `${cursor} ${m.paint(m.glyph)} ${label} ${dim(basename(r.entry.cwd))}${paused}${lost}`,
           ),
         );
+        opens.push(row);
         continue;
       }
       const p = r.state.participants.get(row.participantId);
       if (!p) continue;
-      lines.push(fit(agentLine(r.state, p, cursor, inner)));
+      for (const l of agentLines(r.state, p, cursor, inner)) {
+        lines.push(fit(l));
+        opens.push(row);
+      }
     }
     // The changed files, under the rooms (M7-3). `more` is the route's own
     // `files` count, so a 512 KB cut still says how many it lost.
@@ -255,13 +261,13 @@ function sidebarParts({
         last = lines.length - 1;
       }
     }
-    return { lines, heading, last, files };
+    return { lines, opens, heading, last, files };
   };
 
   const sidebar: Component = {
     render(width) {
       // pi-tui measures each part at the full width first, so this can be
-      // any width, not only the sidebar's own 26.
+      // any width, not only the sidebar's own 32.
       const inner = Math.max(0, width - 2);
       const { lines } = draw(inner);
       // Full height, so the border reaches the status line.
@@ -276,13 +282,13 @@ function sidebarParts({
         if (e.x >= e.width - 4) toggle();
         return { handled: true };
       }
-      const { heading, last, files } = draw(SIDEBAR_WIDTH - 2);
+      const { opens, heading, last, files } = draw(SIDEBAR_WIDTH - 2);
       if (e.y > heading && heading >= 0 && e.y <= last) {
         const f = files[e.y - heading - 1];
         if (f) openFile(f);
         return { handled: true };
       }
-      const row = rows(rooms)[e.y - 1];
+      const row = opens[e.y];
       if (row) open(row);
       return { handled: true };
     },
