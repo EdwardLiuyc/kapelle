@@ -217,7 +217,10 @@ export async function checkVersion(
   }
   const both = `the daemon speaks API ${theirs.major}.${theirs.minor} and this client ${ours}`;
   if (theirs.major !== API_VERSION.major) {
-    throw new VersionRefused(`${both}; stop it with: kapelle daemon stop`);
+    throw new VersionRefused(
+      `${both}; update the client or the daemon, then stop it with: ` +
+        "kapelle daemon stop",
+    );
   }
   if (theirs.minor !== API_VERSION.minor) {
     return `${both}; something was added or is missing`;

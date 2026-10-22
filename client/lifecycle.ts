@@ -162,8 +162,9 @@ async function verifiedDaemon(d: DaemonAddress): Promise<boolean> {
 /** A process's start time, as `ps` prints it, or null when it cannot be read.
  *  `client/` may not import `core/sweep.ts`, where the daemon's own copy of
  *  this check lives; the comparison is identical and is what tells a reused
- *  pid from the process that wrote the record. */
-async function processIdentity(pid: number): Promise<string | null> {
+ *  pid from the process that wrote the record. Exported so a test can check
+ *  that the two copies still agree. */
+export async function processIdentity(pid: number): Promise<string | null> {
   try {
     const { stdout } = await execFile(
       "ps",
@@ -318,7 +319,8 @@ async function waitForOtherStart(
   }
 }
 
-/** Remove `expected`, but only the file still describes the same record. */
+/** Remove `expected`, but only while the file still describes the same
+ *  record. */
 async function removeRecordIfUnchanged(
   file: string,
   expected: RecordLike,
@@ -374,6 +376,7 @@ function rotate(log: string): number {
  *
  * `stale` is the record that was there before a start: when it is set, the
  * new daemon's token has to differ, or the old file would be read as ready.
+ * Only the token is compared: a recycled pid can name the new daemon too.
  * A spawn error is fatal at once. A child that exits is also fatal unless
  * another live PID owns the record, which is what a lock-race loser leaves
  * behind, or the daemon's lock says another starter is still claiming it. If
@@ -409,8 +412,7 @@ async function waitForRecord(
     if (
       record !== "missing" &&
       record.address !== undefined &&
-      (stale === undefined ||
-        (record.address.token !== stale.token && record.pid !== stale.pid))
+      (stale === undefined || record.address.token !== stale.token)
     ) {
       return "ready";
     }
@@ -464,7 +466,20 @@ async function waitForRecord(
  */
 export async function ensureDaemon(opts: StartOptions): Promise<void> {
   const waitMs = opts.waitMs ?? START_WAIT_MS;
+  const until = Date.now() + waitMs;
+  /** One deadline for the whole start: a `continue` cannot restart it. */
+  const remaining = (): number => {
+    const left = until - Date.now();
+    if (left <= 0) {
+      throw new Error(
+        `the daemon did not start within ${Math.ceil(waitMs / 1000)} s; ` +
+          `see ${opts.log}.`,
+      );
+    }
+    return left;
+  };
   for (;;) {
+    const budget = remaining();
     const record = await readDaemonRecord(opts.file);
     if (
       record !== "missing" &&
@@ -478,7 +493,10 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
     if (!release) {
       const staleToken =
         record === "missing" ? undefined : record.address?.token;
-      if (await waitForOtherStart(opts, staleToken, waitMs)) return;
+      if (await waitForOtherStart(opts, staleToken, budget)) return;
+      // The lock can be released without a record; do not spin through
+      // another acquire-and-lose immediately.
+      await sleep(POLL_MS);
       continue;
     }
 
@@ -497,7 +515,7 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
                 "kapelle daemon stop.",
             );
           }
-          await waitForRecord(opts, undefined, waitMs);
+          await waitForRecord(opts, undefined, budget);
           return;
         }
         if (
@@ -506,7 +524,7 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
           alive(current.pid)
         ) {
           if (current.address === undefined) {
-            await waitForRecord(opts, undefined, waitMs);
+            await waitForRecord(opts, undefined, budget);
             return;
           }
           // No identity to prove the pid is stale. Keep the old behaviour:
@@ -514,6 +532,7 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
           // once it is gone.
           stale = { pid: current.pid, token: current.address.token };
         } else if (!(await removeRecordIfUnchanged(opts.file, current))) {
+          await sleep(POLL_MS);
           continue;
         }
       }
@@ -523,6 +542,7 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
       const log = rotate(opts.log);
       try {
         for (let attempt = 0; attempt < 2; attempt += 1) {
+          const attemptBudget = remaining();
           const child = spawn(process.execPath, [opts.script], {
             cwd: opts.cwd,
             env: opts.env ?? process.env,
@@ -536,12 +556,15 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
           const outcome = await waitForRecord(
             opts,
             stale,
-            waitMs,
+            attemptBudget,
             child,
             attempt === 0,
           );
           if (outcome === "ready") return;
         }
+        // `retryAllowed` is true only on the first attempt, so the second
+        // cannot answer "retry"; falling out means the bound changed.
+        throw new Error("the daemon start retry is bounded to one retry");
       } finally {
         closeSync(log);
       }

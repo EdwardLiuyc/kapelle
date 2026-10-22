@@ -348,7 +348,12 @@ function claim(file: string, startedAt: string | null): number {
     } catch {
       // Unreadable: nothing live is vouching for it, so it counts as stale.
     }
-    if (typeof holder.pid === "number" && alive(holder.pid)) {
+    if (
+      typeof holder.pid === "number" &&
+      Number.isInteger(holder.pid) &&
+      holder.pid > 0 &&
+      alive(holder.pid)
+    ) {
       throw new Error(
         `a daemon is already running: pid ${holder.pid}, port ${holder.port} ` +
           `(${file}).`,

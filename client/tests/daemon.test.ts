@@ -94,6 +94,7 @@ test("a different major is refused, and the refusal ends a stream", async (t) =>
   const d = await fake(t, version(API_VERSION.major + 1, 0));
   await assert.rejects(checkVersion(d), (err) => {
     assert.ok(err instanceof VersionRefused);
+    assert.match(err.message, /update the client or the daemon/);
     assert.match(err.message, /kapelle daemon stop/);
     return true;
   });

@@ -21,9 +21,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
+import { processIdentity as coreIdentity } from "../../core/sweep.ts";
 import { REPO } from "../../integration/helpers.ts";
 import { checkVersion } from "../daemon.ts";
-import { ensureDaemon, stopDaemon } from "../lifecycle.ts";
+import {
+  processIdentity as clientIdentity,
+  ensureDaemon,
+  stopDaemon,
+} from "../lifecycle.ts";
 
 const execFile = promisify(execFileCb);
 
@@ -265,6 +270,54 @@ test("a stale live pid with a mismatched identity is replaced", async (t) => {
   const record = await readRecord(opts.file);
   assert.notEqual(record.pid, stranger.pid);
   assert.equal(alive(record.pid), true);
+});
+
+test("a fresh token is enough when the new daemon reports the stale pid", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const stranger = spawn(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" },
+  );
+  t.after(() => {
+    try {
+      stranger.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  });
+  assert.ok(stranger.pid !== undefined);
+  await writeFile(
+    opts.file,
+    JSON.stringify({ pid: stranger.pid, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  // The live pid has no identity, so it stays as the stale record. The fake
+  // daemon publishes a fresh token under the same pid; only the token proves
+  // a new start, because the OS may have handed the pid on.
+  const script = join(d.state, "reused-pid-daemon.mjs");
+  await writeFile(
+    script,
+    `
+import { writeFileSync } from "node:fs";
+writeFileSync(
+  ${JSON.stringify(opts.file)},
+  JSON.stringify({ pid: ${JSON.stringify(stranger.pid)}, port: 1, token: "fresh" }),
+  { mode: 0o600 },
+);
+process.exit(0);
+`,
+    { mode: 0o600 },
+  );
+
+  await ensureDaemon({ ...opts, script, waitMs: 1_000 });
+
+  const record = await readRecord(opts.file);
+  assert.equal(record.pid, stranger.pid);
+  assert.equal(record.token, "fresh");
 });
 
 test("a stale complete record is replaced, not obeyed", async (t) => {
@@ -876,4 +929,17 @@ server.listen(0, "127.0.0.1", () => {
 
   assert.equal(alive(child.pid), false);
   await assert.rejects(readFile(opts.file), "the left record is removed");
+});
+
+test("the two process identity readers agree", {
+  skip: process.platform === "win32",
+}, async () => {
+  // `client/lifecycle.ts` cannot import `core/sweep.ts`; a drift in the `ps`
+  // flags or locale env would make every identity read as stale.
+  const [client, core] = await Promise.all([
+    clientIdentity(process.pid),
+    coreIdentity(process.pid),
+  ]);
+  assert.equal(client, core);
+  assert.ok(client, "ps could not read this process's start time");
 });

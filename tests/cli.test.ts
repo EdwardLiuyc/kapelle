@@ -516,7 +516,7 @@ test("a daemon with a different API major is refused, one with a different minor
   const refused = await ps([major + 1, 0]);
   assert.equal(refused.code, 1);
   assert.match(refused.stderr, /^error: .*kapelle daemon stop/m);
-  assert.doesNotMatch(refused.stderr, /update the client or the daemon/);
+  assert.match(refused.stderr, /update the client or the daemon/);
 
   const warned = await ps([major, minor + 1]);
   assert.equal(warned.code, 0, warned.stderr);

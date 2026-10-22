@@ -329,6 +329,21 @@ test("a daemon.json left by a daemon that died is replaced, not obeyed", async (
   assert.equal(d.pid, d.childPid);
 });
 
+test("a pid 0 record is replaced, not obeyed", async (t) => {
+  // `process.kill(0, 0)` targets the process group and answers true, so a
+  // 0 pid must be rejected before `alive` or it wedges every start.
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: 0, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  const d = await boot(t, runtime);
+  assert.equal(d.pid, d.childPid);
+});
+
 test("a runtime directory other users can enter is refused", async (t) => {
   const runtime = await tempDir(t);
   const dir = join(runtime, "kapelle");

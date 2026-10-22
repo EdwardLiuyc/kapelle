@@ -136,7 +136,7 @@ arrow that points back.
 | `daemon/` | The parts of `daemon.ts` that tests can import (`daemon.ts` starts a daemon when imported). |
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
 | `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
-| `client/lifecycle.ts` | The daemon's life from a client (M9-2): start it detached with its log when none answers, wait for `daemon.json`, and stop it on SIGTERM. Bare `kapelle` uses it. |
+| `client/lifecycle.ts` | The daemon's life from a client (M9-2): start it detached with its log when none answers, wait for `daemon.json`, and stop it on SIGTERM. Its subprocesses are `node daemon.ts` (detached) and `ps` for the start-time identity. Bare `kapelle` uses it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
 | `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. Both `chat/` screens draw from it. |
 | `client/roomset.ts` | The rooms a screen follows (M4-11): one stream and one reducer per room, the poll that adds rooms made elsewhere, and when the screen must end. `readRoom` and `reconcile` too. |
