@@ -16,7 +16,7 @@ import {
 import type { Followed } from "../../client/roomset.ts";
 import { bannerPart } from "../tui/banner.ts";
 import { paneParts } from "../tui/pane.ts";
-import { sidebarParts } from "../tui/sidebar.ts";
+import { SIDEBAR_WIDTH, sidebarParts } from "../tui/sidebar.ts";
 import { transcriptParts } from "../tui/transcript.ts";
 import { screenLayout } from "../tui.ts";
 
@@ -61,7 +61,7 @@ test("no HStack in the chat screen holds another, and each of its parts has a se
       tui,
       editor,
       setStatus() {},
-      gutter: () => 26,
+      gutter: () => SIDEBAR_WIDTH,
       height: () => 20,
       released() {},
     }).pane,

@@ -150,7 +150,8 @@ function sidebarParts({
   changes = () => undefined,
   openFile = () => {},
   // The tests' value; the screen passes the sidebar's real visible height.
-  height = () => process.stdout.rows || 24,
+  // Fixed, so a test's rows do not hang on the terminal it runs in (#332).
+  height = () => 24,
   now = Date.now,
 }: {
   rooms: ReadonlyMap<string, Followed>;

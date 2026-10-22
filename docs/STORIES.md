@@ -2136,7 +2136,7 @@ free for M4-4's completion. Two keys do one job: `alt+↑↓` is the easy one, a
 works where a terminal sends no alt+arrow (macOS Terminal without "Option as Meta", some
 tmux setups). A row's circle is `●` when something waits (unseen lines, a
 question or a stall) and `○` when nothing does; the name is magenta for a question and
-yellow for a stall. `«`/`»` and `ctrl+t` hide the sidebar, and it starts hidden below 70
+yellow for a stall. `«`/`»` and `ctrl+t` hide the sidebar, and it starts hidden below 70 (now 76, #332)
 columns. **`kapelle chat` moves here from M6-9**, with S7a's name.
 **Built 2026-09-30 (#48).** `client/mention.ts` resolves the target, and both screens
 send through it: piped `chat.ts` no longer sends to the first participant. The screen
