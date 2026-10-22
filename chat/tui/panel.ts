@@ -54,7 +54,7 @@ const EDITOR_THEME = {
 
 /** The roles (R44) and modes (R12) the menu offers. The daemon checks
  *  them; an unknown one it adds later is typed as `@name /role x`. */
-const ROLES = ["orchestrator", "developer", "tester", "architect"];
+const ROLES = ["orchestrator", "developer", "tester", "architect", "reviewer"];
 const MODES = ["auto", "ask", "safe"];
 /** The last entry of the base and harness lists: it turns the list into a
  *  text box, for a git ref or a harness the daemon did not list. */

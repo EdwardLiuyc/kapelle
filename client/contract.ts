@@ -46,7 +46,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 13 } as const;
+export const API_VERSION = { major: 1, minor: 14 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -288,7 +288,9 @@ export type ParticipantRole =
   | "orchestrator"
   | "developer"
   | "tester"
-  | "architect";
+  | "architect"
+  /** Since 1.14 (M8-3). */
+  | "reviewer";
 
 /** A participant's settings (R15, amended 2026-09-28): the run-file `Task`
  *  fields that act in a room today. @public */
@@ -328,6 +330,9 @@ export interface ParticipantDto {
    *  `_client_participant_revived`. */
   resumed?: "loaded" | "fresh";
   status: ParticipantStatus;
+  /** The id of the participant whose message the live turn runs. Absent
+   *  when the person sent it, or when no turn runs. Since 1.14 (M8-3). */
+  turnFrom?: string;
   notices: Notice[];
 }
 

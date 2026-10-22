@@ -218,6 +218,7 @@ export function toParticipantDto(p: Participant): ParticipantDto {
   if (p.branch !== undefined) dto.branch = p.branch;
   if (p.baseSha !== undefined) dto.baseSha = p.baseSha;
   if (p.resumed !== undefined) dto.resumed = p.resumed;
+  if (p.turnFrom !== undefined) dto.turnFrom = p.turnFrom;
   return dto;
 }
 
