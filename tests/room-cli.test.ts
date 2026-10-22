@@ -273,10 +273,12 @@ test("a folder that is no checkout, or not the participant's own, is refused", a
     /is not a room participant's checkout; name the room with --room/,
   );
 
-  // The right shape, but not the worktree the daemon recorded: a renamed or
-  // copied checkout. The exact match refuses it rather than guess.
+  // The right shape, and a repository, but not the worktree the daemon
+  // recorded: a renamed or copied checkout. The containment check refuses
+  // it rather than guess; `git init` gets it past the non-git check (#334).
   const copy = join(await tempDir(t), "wt", f.room.id, po.id);
   await mkdir(copy, { recursive: true });
+  await promisify(execFile)("git", ["init", "-q"], { cwd: copy });
   const shaped = await room(t, f.runtime, copy, ["send", "dev", "hi"]);
   assert.equal(shaped.code, 1);
   assert.match(shaped.stderr, /is not a room participant's checkout/);
@@ -311,13 +313,36 @@ test("a worker's orders are refused, each by its code; --as overrides the sender
     ["ff", "dev", "--from", "rev"],
     ["remove", "rev"],
   ]) {
-    const r = await room(t, f.runtime, dev.worktree, args);
-    assert.equal(r.code, 1, args.join(" "));
-    assert.match(
-      r.stderr,
-      /only the orchestrator may .*; dev is developer \(not_orchestrator\)/,
-    );
+    // `--room` with the checkout's own room keeps the sender (#334).
+    for (const extra of [[], ["--room", f.room.id]]) {
+      const r = await room(t, f.runtime, dev.worktree, [...args, ...extra]);
+      assert.equal(r.code, 1, [...args, ...extra].join(" "));
+      assert.match(
+        r.stderr,
+        /only the orchestrator may .*; dev is developer \(not_orchestrator\)/,
+      );
+    }
   }
+  const roomed = await room(t, f.runtime, dev.worktree, [
+    "send",
+    "po",
+    "done",
+    "--room",
+    f.room.id,
+  ]);
+  assert.match(roomed.stderr, /\(invalid_sender\)/, "still from dev");
+  const elsewhere = await room(t, f.runtime, dev.worktree, [
+    "info",
+    "--room",
+    "room-other",
+  ]);
+  assert.equal(elsewhere.code, 1);
+  assert.match(
+    elsewhere.stderr,
+    new RegExp(
+      `this is dev's checkout in room ${f.room.id}, not in room-other`,
+    ),
+  );
   const roster = (await api<RoomDto>(f.d, "GET", `/rooms/${f.room.id}`)).body;
   assert.equal(roster.participants.length, 3, "nothing changed");
 
@@ -410,6 +435,8 @@ test("a verb it does not know, or a wrong shape, prints the usage", async (t) =>
   for (const args of [
     [],
     ["nope"],
+    ["constructor"],
+    ["__proto__"],
     ["send"],
     ["diff", "dev", "x"],
     ["ff", "dev"],

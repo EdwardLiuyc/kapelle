@@ -3421,7 +3421,9 @@ already names the source on a fast-forward. The folder check derives the room an
 participant from the checkout path, requires the participant's recorded workspace inside
 that checkout and the real cwd inside the same checkout, so the checkout root, the
 workspace, and subfolders work; a renamed, moved, copied, or non-git folder is refused,
-never guessed.
+never guessed. `--room` from a participant's checkout must name that checkout's own room,
+and the participant still sends; only from a folder that is no checkout does `--room`
+send as the person (#334). `not_orchestrator` is the CLI's own code, not the daemon's.
 
 **M8-4 · The orchestrator skill · M · needs M8-2, M8-3**
 One Markdown file in the package, generic, from the spikes' skill and D1–D12. It says how

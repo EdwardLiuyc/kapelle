@@ -1316,50 +1316,33 @@ function printRefusal({ code, message }: { code: string; message: string }) {
  * and the real cwd must be the checkout or below it. That containment is the
  * whole check, so a renamed, moved or copied folder, or a run's checkout
  * under the same `wt/`, is refused rather than guessed. A non-repository
- * folder is refused even when its path happens to look right. `--room` names
- * the room instead, and then the person sends; `--as <name>` names the sender.
- * No `KAPELLE_*` variable carries either: the daemon strips them from a
- * harness (M2-8).
+ * folder is refused even when its path happens to look right.
+ *
+ * `--room` names the room from a folder that is no checkout, and then the
+ * person sends. From a participant's checkout it must name that checkout's
+ * own room, and the participant still sends: `--room` never drops the sender
+ * (#334). `--as <name>` names the sender. No `KAPELLE_*` variable carries
+ * either: the daemon strips them from a harness (M2-8).
  */
 async function roomAndSender(
   d: DaemonAddress,
 ): Promise<{ room: RoomDto; sender?: ParticipantDto } | string> {
   const roomFlag = flag("room");
+  const own = await ownCheckout(d);
   let room: RoomDto;
   let sender: ParticipantDto | undefined;
-  if (roomFlag !== undefined) {
+  if (typeof own !== "string") {
+    if (roomFlag !== undefined && roomFlag !== own.room.id) {
+      return `this is ${own.self.name}'s checkout in room ${own.room.id}, not in ${roomFlag}`;
+    }
+    room = own.room;
+    sender = own.self;
+  } else if (roomFlag === undefined) {
+    return own;
+  } else {
     const r = await call<RoomDto>(d, `/rooms/${encodeURIComponent(roomFlag)}`);
     if (!r.ok) return `${r.error.message} (${r.error.code})`;
     room = r.body;
-  } else {
-    const real = (p: string) => realpath(p).catch(() => p);
-    const typedCwd = resolve(flag("cwd", process.cwd()));
-    const cwd = await real(typedCwd);
-    const { root, isRepo } = await stateDirRoot(cwd);
-    const checkout = await real(root);
-    const refused =
-      `${checkout} is not a room participant's checkout; ` +
-      "name the room with --room <id> [--as <name>]";
-    if (!isRepo) return refused;
-    const [wt, roomId, id] = checkout.split(sep).slice(-3);
-    if (wt !== "wt" || !roomId || !id) return refused;
-    const r = await call<RoomDto>(d, `/rooms/${encodeURIComponent(roomId)}`);
-    if (!r.ok) return refused;
-    const self = r.body.participants.find((p) => p.id === id);
-    if (!self) return refused;
-    const workspace = await real(self.worktree);
-    // `relative` rather than a string prefix: a sibling such as
-    // `<checkout>-copy` must not count as inside the checkout.
-    const inside = (child: string, parent: string) => {
-      const rel = relative(parent, child);
-      return (
-        rel === "" ||
-        (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
-      );
-    };
-    if (!inside(workspace, checkout) || !inside(cwd, checkout)) return refused;
-    room = r.body;
-    sender = self;
   }
   const as = flag("as");
   if (as !== undefined) {
@@ -1367,6 +1350,39 @@ async function roomAndSender(
     if (!sender) return `no participant named ${as} in room ${room.id}`;
   }
   return sender ? { room, sender } : { room };
+}
+
+/** The room and the participant whose checkout `--cwd` is in, or why not. */
+async function ownCheckout(
+  d: DaemonAddress,
+): Promise<{ room: RoomDto; self: ParticipantDto } | string> {
+  const real = (p: string) => realpath(p).catch(() => p);
+  const typedCwd = resolve(flag("cwd", process.cwd()));
+  const cwd = await real(typedCwd);
+  const { root, isRepo } = await stateDirRoot(cwd);
+  const checkout = await real(root);
+  const refused =
+    `${checkout} is not a room participant's checkout; ` +
+    "name the room with --room <id> [--as <name>]";
+  if (!isRepo) return refused;
+  const [wt, roomId, id] = checkout.split(sep).slice(-3);
+  if (wt !== "wt" || !roomId || !id) return refused;
+  const r = await call<RoomDto>(d, `/rooms/${encodeURIComponent(roomId)}`);
+  if (!r.ok) return refused;
+  const self = r.body.participants.find((p) => p.id === id);
+  if (!self) return refused;
+  const workspace = await real(self.worktree);
+  // `relative` rather than a string prefix: a sibling such as
+  // `<checkout>-copy` must not count as inside the checkout.
+  const inside = (child: string, parent: string) => {
+    const rel = relative(parent, child);
+    return (
+      rel === "" ||
+      (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+    );
+  };
+  if (!inside(workspace, checkout) || !inside(cwd, checkout)) return refused;
+  return { room: r.body, self };
 }
 
 /** A participant by its name, with or without `@`, in any case. */
@@ -1394,7 +1410,8 @@ async function runRoomCommand(): Promise<number> {
     "  send <name> [text]         a message; the text from stdin when none",
     "  add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--base @name|ref]",
     "  ff <name> --from <name>    move <name>'s branch up to the other's commit",
-    "  diff <name> [base]         what is not committed, or with base the branch",
+    "  diff <name> [base]         what is not committed, or with base the branch;",
+    "                             made safe for a terminal, so not a patch to apply",
     "  remove <name>",
   ].join("\n");
   const [, verb, ...args] = positional as string[];
@@ -1406,7 +1423,9 @@ async function runRoomCommand(): Promise<number> {
     diff: [1, 2],
     remove: [1, 1],
   };
-  const range = verb === undefined ? undefined : takes[verb];
+  // `hasOwn`: `takes.constructor` is not a verb (#334).
+  const range =
+    verb !== undefined && Object.hasOwn(takes, verb) ? takes[verb] : undefined;
   if (
     !range ||
     args.length < range[0] ||
@@ -1430,6 +1449,13 @@ async function runRoomCommand(): Promise<number> {
   if (unknown !== undefined) {
     const hint = verb === "send" ? "; send such text on stdin" : "";
     console.error(`error: room ${verb} has no option ${unknown}${hint}`);
+    return 1;
+  }
+  // On a terminal, a stdin read would wait for ^D with no word (#334).
+  if (verb === "send" && args.length === 1 && process.stdin.isTTY) {
+    console.error(
+      "error: room send needs the text: after the name, or piped on stdin",
+    );
     return 1;
   }
   const d = await findDaemon();
