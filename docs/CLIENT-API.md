@@ -123,7 +123,7 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| `GET /harnesses` | Experimental | M4-5 added it for `chat.ts` |
+| `GET /harnesses`, `POST /harnesses`, `POST /harnesses/done` | Experimental | M4-5 added the list for `chat.ts`; M9-3 the find; M9-4 the login check; M9-8 makes them stable |
 
 **Planned, not built yet:** cancel one task (M5-8).
 
@@ -317,7 +317,9 @@ the `GET` routes take none.
 | `GET /version` | The contract version and the capabilities. |
 | `POST /repos` | Add a repository. |
 | `GET /repos` | List the added repositories. |
-| `GET /harnesses` | List the harnesses the daemon can start by name. Experimental. |
+| `GET /harnesses` | List the harnesses the daemon can start by name, and which are installed. Experimental. |
+| `POST /harnesses` | Find the installed harnesses again. Experimental. |
+| `POST /harnesses/done` | The person has seen the setup list. Experimental. |
 | `POST /runs` | Start a run. |
 | `GET /runs` | List all runs. |
 | `GET /runs/:id` | One run in full. |
@@ -398,22 +400,84 @@ repository. The daemon finds the repository root for you.
 ### `GET /harnesses`
 
 **Experimental.** The harnesses the daemon can start by name, as `agent` in a run, a room
-or a participant. `measured` is `true` when kapelle measured how the harness behaves.
-`false` means nobody checked it. Since M9-1, every harness on this list is measured, so
-`measured` is always `true`; a client should still handle `false`. Neither says the
-harness is installed here.
+or a participant, and which of them are installed (M9-3). `measured` is `true` when
+kapelle measured how the harness behaves. `false` means nobody checked it. Since M9-1,
+every harness on this list is measured, so `measured` is always `true`; a client should
+still handle `false`.
+
+**Installed** means found on the **daemon's** `PATH`, because the daemon starts the
+harnesses. The daemon looks for the agent's own program first (`program`, such as `pi`),
+then for the program it starts (`acpProgram`, such as `pi-acp`). Some agents are their
+own ACP program: then the two are the same. Each version comes from `--version`, or for
+pi-acp from its npm `package.json`, so no session starts.
+
+`state` is one of:
+
+- `ready`: both programs are there.
+- `main_only`: the agent is there, its ACP program is not. `install` is the command that
+  installs it. The person runs it; kapelle does not.
+- `not_installed`: anything else.
+
+`warning` is set when the ACP program is not the build kapelle measured. The agent's own
+version is shown, never compared.
+
+The daemon saves the find in `$XDG_STATE_HOME/kapelle/harnesses.json`. The first ask with
+no saved find runs one, which takes about a second. Later asks read the saved one.
+`checkedAt` is when it ran. `done` is `true` once the person said "done" to the setup
+list (`POST /harnesses/done`); a new find keeps it. The chat opens the list at start
+while `done` is `false`, and while no harness is `ready`.
 
 **Reply `200`:**
 
 ```json
-[
-  { "id": "opencode", "measured": true },
-  { "id": "kimi", "measured": true }
-]
+{
+  "checkedAt": "2026-10-22T09:30:00.000Z",
+  "done": false,
+  "harnesses": [
+    {
+      "id": "pi",
+      "measured": true,
+      "state": "ready",
+      "program": "pi",
+      "version": "1.3.0",
+      "acpProgram": "pi-acp",
+      "acpVersion": "0.0.34"
+    },
+    {
+      "id": "claude",
+      "measured": true,
+      "state": "main_only",
+      "program": "claude",
+      "version": "2.1.307",
+      "acpProgram": "claude-agent-acp",
+      "install": "npm i -g @agentclientprotocol/claude-agent-acp"
+    },
+    {
+      "id": "kimi",
+      "measured": true,
+      "state": "not_installed",
+      "program": "kimi",
+      "acpProgram": "kimi"
+    }
+  ]
+}
 ```
 
-A daemon older than this route answers `404` `no_route`. Then a client can still take a
-name typed by the person.
+A daemon older than M9-3 sends only the `harnesses` list, as a bare array, with `id` and
+`measured`. A daemon older than M4-5 answers `404` `no_route`. Then a client can still
+take a name typed by the person.
+
+### `POST /harnesses`
+
+**Experimental.** Finds the installed harnesses again, saves the find, and replies as
+`GET /harnesses` does. It keeps `done`. `kapelle setup` and the chat's `/setup` call it.
+No body.
+
+### `POST /harnesses/done`
+
+**Experimental.** The person said "done" to the setup list: `done` becomes `true`, and the
+chat stops opening the list at start. The reply is the same as `GET /harnesses`. No
+body.
 
 ### Runs
 

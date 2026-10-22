@@ -15,15 +15,28 @@
 
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import { AcpAgent } from "../protocol/agent.ts";
-import { resolveAgent, resolveEnv } from "../protocol/registry.ts";
+import { AGENTS, resolveAgent, resolveEnv } from "../protocol/registry.ts";
 
 /** The repository root, and the cwd of every subprocess spawned here. */
 export const REPO = join(import.meta.dirname, "..");
@@ -247,6 +260,67 @@ export function useDaemonDirs(runtime: string, state: string = runtime) {
   };
 }
 
+/**
+ * A saved find with every agent ready and "done" (M9-3), unless the test
+ * wrote its own. Without it, each test daemon would run `--version` on this
+ * machine's agents, and the chat screen would open the setup list over
+ * what a test waits for.
+ */
+export function savedSetup(state: string): void {
+  const dir = join(state, "kapelle");
+  const file = join(dir, "harnesses.json");
+  if (existsSync(file)) return;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const found = Object.fromEntries(
+    Object.entries(AGENTS).map(([id, a]) => {
+      const version = a.measured?.measuredOn.version;
+      return [id, { program: true, version, acp: true, acpVersion: version }];
+    }),
+  );
+  writeFileSync(
+    file,
+    JSON.stringify({
+      checkedAt: "2026-10-22T00:00:00.000Z",
+      done: true,
+      found,
+    }),
+    { mode: 0o600 },
+  );
+}
+
+/**
+ * A folder to use as `PATH`, with fake agents (M9-3). Each one prints a
+ * version line, as the real one does.
+ *
+ * - opencode `v2.0.18` and kimi `2.3.0`: ready, their own ACP program.
+ * - pi `1.3.0`, and pi-acp as an npm bin link to a package at `0.0.33`:
+ *   ready, with a version warning. pi-acp writes `pi-acp.ran` beside its
+ *   package if anything runs it: its version must come from the file.
+ * - claude only, with no claude-agent-acp: the ACP program is missing.
+ * - codex-acp with no codex, and no copilot: not installed.
+ */
+export async function fakePath(t: TestContext): Promise<string> {
+  const root = await tempDir(t);
+  const bin = join(root, "bin");
+  const pkg = join(root, "lib", "pi-acp");
+  await mkdir(join(pkg, "dist"), { recursive: true });
+  await mkdir(bin);
+  const script = async (file: string, body: string) =>
+    writeFile(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  await script(join(bin, "opencode"), 'echo "opencode v2.0.18"');
+  await script(join(bin, "kimi"), "echo 2.3.0");
+  await script(join(bin, "pi"), "echo 1.3.0");
+  await script(join(bin, "claude"), 'echo "2.1.307 (Claude Code)"');
+  await script(join(bin, "codex-acp"), "echo 2.2.2");
+  await writeFile(join(pkg, "package.json"), '{"version":"0.0.33"}');
+  await script(
+    join(pkg, "dist", "index.js"),
+    `touch ${join(pkg, "pi-acp.ran")}`,
+  );
+  await symlink(join(pkg, "dist", "index.js"), join(bin, "pi-acp"));
+  return bin;
+}
+
 /** Spawns `daemon.ts` with `runtime` as its runtime directory and `state` as
  *  its state directory (defaulting to `runtime`). `extraEnv` merges last, so a
  *  test can point `HOME`/`XDG_STATE_HOME` wherever it needs. */
@@ -257,6 +331,7 @@ export function startDaemon(
   state: string = runtime,
   extraEnv: Record<string, string> = {},
 ) {
+  savedSetup(state);
   return spawnCli(t, ["--port", "0", ...args], "daemon.ts", {
     ...useDaemonDirs(runtime, state),
     ...extraEnv,

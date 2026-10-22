@@ -66,6 +66,28 @@ export const CAPABILITIES = [
 export interface HarnessEntry {
   id: string;
   measured: boolean;
+  /** Since M9-3, what the daemon found on its `PATH`: the agent's own
+   *  program and its ACP program both (`ready`), the program only
+   *  (`main_only`), or not the program. */
+  state?: "ready" | "main_only" | "not_installed";
+  /** The agent's own program (`pi`), and its version. */
+  program?: string;
+  version?: string;
+  /** The program kapelle starts (`pi-acp`); may be `program`. */
+  acpProgram?: string;
+  acpVersion?: string;
+  /** The command that installs the ACP program; on `main_only` only. */
+  install?: string;
+  /** The ACP program is not the build kapelle measured. */
+  warning?: string;
+}
+
+/** `GET /harnesses` (M9-3): the last find, and whether the person said
+ *  "done" to it. Experimental. */
+export interface HarnessesReply {
+  checkedAt: string;
+  done: boolean;
+  harnesses: HarnessEntry[];
 }
 
 /** `GET /version`. `capabilities` is `string[]`, not the list above: a

@@ -11,8 +11,8 @@
  *
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
  * `stateDirFor`, `validateRun`, `sweepBoot`, `runRun`,
- * `processIdentity` and the permission queue, and for chat rooms
- * `roomAgents` and `openRoom`; worktrees, policy and harnesses
+ * `processIdentity` and the permission queue, `findAgents` for the
+ * installed agents, and for chat rooms `roomAgents` and `openRoom`; worktrees, policy and harnesses
  * stay behind them. If orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
  * implementation (`docs/STORIES.md`, M2-1).
@@ -59,7 +59,7 @@ import {
   CAPABILITIES,
   type Diff,
   type ErrorReply,
-  type HarnessEntry,
+  type HarnessesReply,
   type MessageAccepted,
   type ParticipantDto,
   type PendingDecision,
@@ -86,6 +86,13 @@ import {
 import { checkoutDiff, rangeDiff } from "./core/diff.ts";
 import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
+import {
+  describe,
+  findAgents,
+  readSetup,
+  type Setup,
+  writeSetup,
+} from "./core/harnesses.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
 import {
@@ -1650,6 +1657,47 @@ async function postPermission(
   send(res, 200, { id, allow } satisfies PermissionAnswered);
 }
 
+/** The find in flight, so asks that meet share it. */
+let finding: Promise<Setup> | undefined;
+
+/**
+ * The installed agents (M9-3): the saved find, or a new one when `again` is
+ * set or none is saved. The first ask finds, not the boot, so a daemon
+ * nobody asks spawns no `--version`. A new find keeps the person's `done`,
+ * read once it ends, so a "done" during it is kept.
+ */
+async function setupNow(again: boolean): Promise<Setup> {
+  const saved = again ? undefined : readSetup();
+  if (saved) return saved;
+  finding ??= findAgents(process.env.PATH ?? "")
+    .then((found) => {
+      const s = {
+        checkedAt: new Date().toISOString(),
+        done: readSetup()?.done ?? false,
+        found,
+      };
+      writeSetup(s);
+      return s;
+    })
+    .finally(() => {
+      finding = undefined;
+    });
+  return finding;
+}
+
+function harnessesReply(s: Setup): HarnessesReply {
+  const found = new Map(describe(s).map((a) => [a.id, a]));
+  return {
+    checkedAt: s.checkedAt,
+    done: s.done,
+    harnesses: Object.entries(AGENTS).map(([id, a]) => ({
+      id,
+      measured: a.measured !== undefined,
+      ...found.get(id),
+    })),
+  };
+}
+
 /** A parse base for `req.url`, which is a path, not a URL. Never fetched;
  *  named as a constant so it is not mistaken for a configurable endpoint. */
 const REQUEST_URL_BASE = "http://daemon";
@@ -1683,14 +1731,13 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       capabilities: [...CAPABILITIES],
     } satisfies VersionReply);
   } else if (req.method === "GET" && pathname === "/harnesses") {
-    send(
-      res,
-      200,
-      Object.entries(AGENTS).map(([id, a]) => ({
-        id,
-        measured: a.measured !== undefined,
-      })) satisfies HarnessEntry[],
-    );
+    send(res, 200, harnessesReply(await setupNow(false)));
+  } else if (req.method === "POST" && pathname === "/harnesses") {
+    send(res, 200, harnessesReply(await setupNow(true)));
+  } else if (req.method === "POST" && pathname === "/harnesses/done") {
+    const s = { ...(await setupNow(false)), done: true };
+    writeSetup(s);
+    send(res, 200, harnessesReply(s));
   } else if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
   } else if (req.method === "GET" && pathname === "/repos") {
