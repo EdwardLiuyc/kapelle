@@ -389,14 +389,19 @@ const runs = new Map<string, RunState>();
 /** Every run still in flight, so a shutdown can wait for them to settle. */
 const inFlight = new Set<Promise<void>>();
 /** Each room create or delete still unanswered (#316). Neither room is in
- *  `rooms` for the shutdown to pause, so it waits for the reply instead. */
+ *  `rooms` for the shutdown to pause, so it waits for the work and its reply
+ *  instead. */
 const roomChanges = new Set<Promise<void>>();
 
-/** Holds the shutdown until `res` is sent, or its client has gone. */
-function holdShutdown(res: ServerResponse) {
+/** Holds the shutdown until `work` has settled and `res` is sent. A client
+ *  that has gone does not end it: the work goes on without the client.
+ *  Answers `work`, so its refusal still reaches `route`. */
+function holdShutdown(res: ServerResponse, work: Promise<void>) {
   const sent = new Promise<void>((ok) => res.once("close", ok));
-  roomChanges.add(sent);
-  void sent.then(() => roomChanges.delete(sent));
+  const held = Promise.all([work.catch(() => {}), sent]).then(() => {});
+  roomChanges.add(held);
+  void held.then(() => roomChanges.delete(held));
+  return work;
 }
 /** Kept beside the record rather than on it, so a `GET` never serialises one. */
 const cancels = new Map<string, AbortController>();
@@ -1699,8 +1704,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       [...runs.values()].map(toRunListEntry) satisfies RunListEntry[],
     );
   } else if (req.method === "POST" && pathname === "/rooms") {
-    holdShutdown(res);
-    await postRoom(req, res);
+    await holdShutdown(res, postRoom(req, res));
   } else if (req.method === "GET" && pathname === "/rooms") {
     send(
       res,
@@ -1710,8 +1714,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       ) satisfies RoomListEntry[],
     );
   } else if (req.method === "DELETE" && room) {
-    holdShutdown(res);
-    await deleteRoom(room[1] as string, res);
+    await holdShutdown(res, deleteRoom(room[1] as string, res));
   } else if (req.method === "GET" && room) {
     const { state, room: live } = roomEntry(room[1] as string);
     send(res, 200, toRoomDto(state, live) satisfies RoomDto);
