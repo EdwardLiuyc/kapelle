@@ -10,7 +10,8 @@
  * `harness · role` dim, under the name. When two rows per agent would fill
  * 2/3 of the sidebar's height or more, every agent takes one row, with the
  * harness dim after the name (#332). The changed-files block sits under
- * the rooms for the open thread.
+ * the rooms for the open thread, after an empty row. Both titles are bold
+ * cyan in a dim line: `── rooms ───── «`, `── changed files ─────`.
  *
  * A room row takes its most urgent participant's mark, `?` > `!` > `✕` >
  * `⏸` > `◌` > `●` > `◐` > `○` (decided 2026-10-11). The strip shows the
@@ -34,7 +35,7 @@ import {
   roster,
 } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { dim, fg, magenta, plain, yellow } from "../common.ts";
+import { bold, cyan, dim, fg, magenta, plain, yellow } from "../common.ts";
 import { clock, colourOf, rows, same, type View } from "../view.ts";
 
 /** The sidebar's width, in columns. */
@@ -220,9 +221,15 @@ function sidebarParts({
   const draw = (inner: number) => {
     const fit = (s: string) =>
       `${truncateToWidth(s, inner, "…", true)} ${dim("│")}`;
-    const lines = [
-      fit(`${dim("rooms")}${" ".repeat(Math.max(0, inner - 6))}«`),
-    ];
+    /** A title in a dim line, `── title ───end`: bold cyan, as the
+     *  transcript's headings (#332). */
+    const titled = (title: string, end = "") => {
+      const rest = inner - visibleWidth(`── ${title} `) - visibleWidth(end);
+      return fit(
+        `${dim("──")} ${bold(cyan(title))} ${dim("─".repeat(Math.max(0, rest)))}${end}`,
+      );
+    };
+    const lines = [titled("rooms", " «")];
     // An agent can take two rows, so a click finds its view here by row.
     const opens: (View | undefined)[] = [undefined];
     const all = rows(rooms);
@@ -268,14 +275,15 @@ function sidebarParts({
         parsed = { diff: d, all: changesOf(d.text.split("\n")) };
       }
       const all = parsed.all;
-      // The heading and a `+n more` row are rows too: both come out of the
-      // sidebar's visible height.
+      // The empty row, the heading and a `+n more` row are rows too: all
+      // come out of the sidebar's visible height.
       const free = height() - lines.length;
-      if (all.length && free >= 2) {
+      if (all.length && free >= 3) {
+        lines.push(fit(""));
         heading = lines.length;
-        lines.push(fit(dim("changed files")));
-        const whole = d.files <= all.length && all.length <= free - 1;
-        const show = whole ? all.length : Math.max(0, free - 2);
+        lines.push(titled("changed files"));
+        const whole = d.files <= all.length && all.length <= free - 2;
+        const show = whole ? all.length : Math.max(0, free - 3);
         files.push(...all.slice(0, show));
         for (const f of files) lines.push(fit(changeLine(f, inner)));
         const more = d.files - files.length;

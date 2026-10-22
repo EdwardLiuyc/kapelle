@@ -3142,7 +3142,9 @@ name. Two rows double the roster's height, so they hold only while the header, t
 and the agents' rows stay under 2/3 of the sidebar's height; past that, every agent takes
 one row with the harness after the name, as before, and the last third stays for the
 changed files. `NARROW` moves from 70 to 76, so the timeline keeps its 44 columns at the
-edge. The row tests run at 32 columns.
+edge. The row tests run at 32 columns. The two titles were dim and easy to miss: each is
+now bold cyan inside a dim line, `── rooms ── «` and `── changed files ──`, the way the
+transcript draws a heading, and an empty row comes before the changed files.
 
 **M7-4 · Question box: short diff and number keys · S · needs nothing**
 The title says who wants to do what, with `n of m` on the right (`client/questions.ts`).

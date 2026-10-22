@@ -266,7 +266,9 @@ const blockRows = (diff: Diff, height = 24) => {
 test("the changed-files block letters each file, and the cut file has no counts", () => {
   const rows = blockRows({ text: CUT_TEXT, files: 7, added: 12, removed: 9 });
   const text = rows.join("\n");
-  assert.match(text, /changed files/);
+  // Both titles sit in a line, and an empty row comes before the files'.
+  assert.match(rows[0] ?? "", /^── rooms ─{19} « │$/);
+  assert.match(text, /\n {30} │\n── changed files ─{13} │\n {2}M cli/);
   assert.match(text, / {2}M cli\.ts +\+2 −1 │/);
   assert.match(text, / {2}A new\.ts +\+1 −0 │/);
   assert.match(text, / {2}D old\.ts +\+0 −1 │/);
@@ -278,7 +280,7 @@ test("the changed-files block letters each file, and the cut file has no counts"
 test("the block shows +n more from the route's files when the rows run out", () => {
   const text = blockRows(
     { text: CUT_TEXT, files: 5, added: 12, removed: 9 },
-    9,
+    10,
   ).join("\n");
   assert.match(text, / {2}M cli\.ts +\+2 −1 │/);
   assert.match(text, / {2}A new\.ts +\+1 −0 │/);
@@ -299,14 +301,14 @@ test("the heading and the +n more row count against the sidebar's height", () =>
     toggle() {},
     open() {},
     changes: () => diff,
-    height: () => 9,
+    height: () => 10,
   });
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   const rows = sidebar.render(32).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
-  // Two rows per agent would fill 8 of 9, so each agent takes one. Header,
-  // room, 3 agents, heading, 2 files, +2 more = 9 rows exactly.
-  assert.match(rows[8] ?? "", /\+2 more/);
-  assert.doesNotMatch(rows[9] ?? "", /M |A |D |changed files/);
+  // Two rows per agent would fill 8 of 10, so each agent takes one. Header,
+  // room, 3 agents, empty row, heading, 2 files, +2 more = 10 rows exactly.
+  assert.match(rows[9] ?? "", /\+2 more/);
+  assert.doesNotMatch(rows[10] ?? "", /M |A |D |changed files/);
 });
 
 test("an agent takes two rows only while they stay under 2/3 of the height", () => {
@@ -370,12 +372,13 @@ test("a click on a changed-file row opens that file", () => {
     openFile: (f) => opened.push(f),
   });
   const cut = CUT_LINES.findIndex((l) => l.startsWith("diff --git a/cut.ts"));
-  // Row 0 is the header, 1 the room, 2-3 the agent, 4 `changed files`, 5-8 the files.
+  // Row 0 is the header, 1 the room, 2-3 the agent, 4 empty, 5 `changed
+  // files`, 6-9 the files.
   sidebar.handleMouse?.({
     type: "click",
     button: "left",
     x: 4,
-    y: 8,
+    y: 9,
   } as never);
   assert.equal(opened[0]?.path, "cut.ts");
   assert.equal(opened[0]?.line, cut);

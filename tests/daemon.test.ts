@@ -6962,8 +6962,9 @@ test("chat.ts on a terminal under 8 columns shows the sidebar without failing", 
     { XDG_RUNTIME_DIR: runtime },
     "»",
   );
-  // Only the sidebar's first 7 columns fit: its "rooms" header.
-  await screen.press("\x14", "rooms");
+  // Only the sidebar's first 7 columns fit: `── room` of its header, the
+  // title cyan.
+  await screen.press("\x14", "\x1b[36mroom");
   screen.child.stdin.write("\x03");
   assert.equal(await screen.exited, 0, screen.out());
   assert.doesNotMatch(screen.out(), /screen failed/);
