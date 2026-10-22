@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCb, spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -143,6 +144,11 @@ test("no daemon: starts one in its own session, logs it and answers", {
     await checkVersion({ port: record.port, token: record.token }),
     undefined,
   );
+  const identity = JSON.parse(
+    await readFile(`${opts.file}.identity`, "utf8"),
+  ) as { pid?: unknown; startedAt?: unknown };
+  assert.equal(identity.pid, record.pid);
+  assert.equal(typeof identity.startedAt, "string");
   assert.match(
     await readFile(opts.log, "utf8"),
     /listening on http:\/\/127\.0\.0\.1:/,
@@ -182,6 +188,83 @@ test("two ensures at once leave one daemon", async (t) => {
     ),
   );
   assert.equal(logs.join("").match(/listening on /g)?.length, 1);
+});
+
+test("two starts at once keep the previous log", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await writeFile(opts.log, "the previous start\n", { mode: 0o600 });
+
+  await Promise.all([ensureDaemon(opts), ensureDaemon(opts)]);
+
+  assert.equal(await readFile(`${opts.log}.1`, "utf8"), "the previous start\n");
+  assert.match(await readFile(opts.log, "utf8"), /listening on /);
+});
+
+test("a start lock left by a dead process does not block a start", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const dead = spawnSync(process.execPath, ["-e", "0"]).pid;
+  assert.ok(dead !== undefined);
+  await writeFile(`${opts.file}.starting`, String(dead), { mode: 0o600 });
+
+  await ensureDaemon(opts);
+
+  const record = await readRecord(opts.file);
+  assert.equal(alive(record.pid), true);
+});
+
+test("an empty current log does not overwrite the last one", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await writeFile(opts.log, "", { mode: 0o600 });
+  await writeFile(`${opts.log}.1`, "the last useful start\n", {
+    mode: 0o600,
+  });
+
+  await ensureDaemon(opts);
+
+  assert.equal(
+    await readFile(`${opts.log}.1`, "utf8"),
+    "the last useful start\n",
+  );
+  assert.match(await readFile(opts.log, "utf8"), /listening on /);
+});
+
+test("a stale live pid with a mismatched identity is replaced", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const stranger = spawn(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" },
+  );
+  t.after(() => {
+    try {
+      stranger.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  });
+  assert.ok(stranger.pid !== undefined);
+  await writeFile(
+    opts.file,
+    JSON.stringify({ pid: stranger.pid, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+  await writeFile(
+    `${opts.file}.identity`,
+    JSON.stringify({ pid: stranger.pid, startedAt: "not its start time" }),
+    { mode: 0o600 },
+  );
+
+  await ensureDaemon(opts);
+
+  const record = await readRecord(opts.file);
+  assert.notEqual(record.pid, stranger.pid);
+  assert.equal(alive(record.pid), true);
 });
 
 test("a stale complete record is replaced, not obeyed", async (t) => {
@@ -321,6 +404,88 @@ test("stopDaemon sends SIGTERM, waits for the pid and removes the record", async
   assert.equal(alive(record.pid), false);
   await assert.rejects(readFile(opts.file), "the record is gone");
   assert.equal(await stopDaemon(opts.file), undefined, "nothing left to stop");
+});
+
+test("stopDaemon leaves a live pid with no answering daemon alone", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const stranger = spawn(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" },
+  );
+  t.after(() => {
+    try {
+      stranger.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  });
+  assert.ok(stranger.pid !== undefined);
+  await writeFile(
+    opts.file,
+    JSON.stringify({ pid: stranger.pid, port: 1, token: "stale" }),
+    { mode: 0o600 },
+  );
+
+  assert.equal(await stopDaemon(opts.file, 2_000), undefined);
+  assert.equal(alive(stranger.pid), true, "the stranger was not signalled");
+  await assert.rejects(readFile(opts.file), "the stale record is gone");
+});
+
+test("stopDaemon does not trust a foreign answer on the recorded port", async (t) => {
+  // A 401 is another daemon's token; a non-JSON 200 is another server. Neither
+  // proves the recorded pid is the daemon, so neither may be signalled.
+  for (const reply of [
+    { status: 401, body: '{"error":{"code":"unauthorized"}}' },
+    { status: 200, body: "<html>not a daemon</html>" },
+  ]) {
+    const d = await dirs(t);
+    const opts = options(d);
+    await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+    const stranger = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { stdio: "ignore" },
+    );
+    t.after(() => {
+      try {
+        stranger.kill("SIGKILL");
+      } catch {
+        // Already exited.
+      }
+    });
+    assert.ok(stranger.pid !== undefined);
+    const server = createHttpServer((_req, res) => {
+      res.writeHead(reply.status, { "content-type": "application/json" });
+      res.end(reply.body);
+    });
+    await new Promise<void>((ok, fail) => {
+      server.once("error", fail);
+      server.listen(0, "127.0.0.1", ok);
+    });
+    t.after(() => server.close());
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    await writeFile(
+      opts.file,
+      JSON.stringify({
+        pid: stranger.pid,
+        port: address.port,
+        token: "stale",
+      }),
+      { mode: 0o600 },
+    );
+
+    assert.equal(await stopDaemon(opts.file, 2_000), undefined);
+    assert.equal(
+      alive(stranger.pid),
+      true,
+      `a ${reply.status} answer on the port signalled the stranger`,
+    );
+    await assert.rejects(readFile(opts.file), "the stale record is gone");
+  }
 });
 
 test("a start retries once when the stale live pid disappears", async (t) => {
@@ -474,13 +639,26 @@ test("stopDaemon waits for SIGTERM and process exit before reporting", async (t)
     script,
     `
 import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 const [record, marker, release, ready] = process.argv.slice(2);
+const server = createServer((_req, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ apiVersion: { major: 1, minor: 0 } }));
+});
 process.on("SIGTERM", () => writeFileSync(marker, "SIGTERM"));
-writeFileSync(ready, "ready");
+server.listen(0, "127.0.0.1", () => {
+  writeFileSync(
+    record,
+    JSON.stringify({ pid: process.pid, port: server.address().port, token: "fake" }),
+    { mode: 0o600 },
+  );
+  writeFileSync(ready, "ready");
+});
 const timer = setInterval(() => {
   if (!existsSync(release)) return;
   clearInterval(timer);
   rmSync(record, { force: true });
+  server.close();
   process.exit(0);
 }, 10);
 `,
@@ -507,11 +685,6 @@ const timer = setInterval(() => {
     "the fake daemon did not become ready",
   );
   assert.ok(child.pid !== undefined);
-  await writeFile(
-    opts.file,
-    JSON.stringify({ pid: child.pid, port: 1, token: "fake" }),
-    { mode: 0o600 },
-  );
 
   let returned = false;
   const stopping = stopDaemon(opts.file, 5_000).then((pid) => {
@@ -541,12 +714,41 @@ const timer = setInterval(() => {
   await assert.rejects(readFile(opts.file), "the record is gone");
 });
 
-test("stopDaemon removes the record a daemon left when SIGTERM killed it", async (t) => {
+test("stopDaemon waits for a pid-only record to publish its address", async (t) => {
   const d = await dirs(t);
   const opts = options(d);
   await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
-  // A process with no SIGTERM handler dies at once and removes nothing.
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  const script = join(d.state, "slow-record.mjs");
+  await writeFile(
+    script,
+    `
+import { renameSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+const [record] = process.argv.slice(2);
+const writeRecord = (body) => {
+  const tmp = \`\${record}.\${process.pid}\`;
+  writeFileSync(tmp, JSON.stringify(body), { mode: 0o600 });
+  renameSync(tmp, record);
+};
+writeRecord({ pid: process.pid });
+setTimeout(() => {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ apiVersion: { major: 1, minor: 0 } }));
+  });
+  server.listen(0, "127.0.0.1", () => {
+    writeRecord({
+      pid: process.pid,
+      port: server.address().port,
+      token: "slow",
+    });
+  });
+}, 150);
+`,
+    { mode: 0o600 },
+  );
+  const child = spawn(process.execPath, [script, opts.file], {
+    cwd: REPO,
     stdio: "ignore",
   });
   t.after(() => {
@@ -557,10 +759,117 @@ test("stopDaemon removes the record a daemon left when SIGTERM killed it", async
     }
   });
   assert.ok(child.pid !== undefined);
+  await until(
+    () =>
+      readFile(opts.file, "utf8").then(
+        () => true,
+        () => false,
+      ),
+    "the fake daemon did not write its pid",
+  );
+
+  assert.equal(await stopDaemon(opts.file, 5_000), child.pid);
+  assert.equal(alive(child.pid), false);
+  await assert.rejects(readFile(opts.file), "the record is gone");
+});
+
+test("stopDaemon reports a daemon that ignores SIGTERM", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const script = join(d.state, "stubborn-daemon.mjs");
   await writeFile(
-    opts.file,
-    JSON.stringify({ pid: child.pid, port: 1, token: "left" }),
+    script,
+    `
+import { writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+const [record] = process.argv.slice(2);
+const server = createServer((_req, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ apiVersion: { major: 1, minor: 0 } }));
+});
+process.on("SIGTERM", () => {});
+server.listen(0, "127.0.0.1", () => {
+  writeFileSync(
+    record,
+    JSON.stringify({ pid: process.pid, port: server.address().port, token: "stubborn" }),
     { mode: 0o600 },
+  );
+});
+`,
+    { mode: 0o600 },
+  );
+  const child = spawn(process.execPath, [script, opts.file], {
+    cwd: REPO,
+    stdio: "ignore",
+  });
+  t.after(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  });
+  assert.ok(child.pid !== undefined);
+  await until(
+    () =>
+      readFile(opts.file, "utf8").then(
+        () => true,
+        () => false,
+      ),
+    "the stubborn daemon did not write its record",
+  );
+
+  await assert.rejects(stopDaemon(opts.file, 250), /did not stop within 1 s/);
+  assert.equal(alive(child.pid), true);
+  await readFile(opts.file, "utf8");
+});
+
+test("stopDaemon removes the record a daemon left when SIGTERM killed it", async (t) => {
+  const d = await dirs(t);
+  const opts = options(d);
+  await mkdir(join(d.runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const script = join(d.state, "left-daemon.mjs");
+  await writeFile(
+    script,
+    `
+import { writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+const [record] = process.argv.slice(2);
+const server = createServer((_req, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ apiVersion: { major: 1, minor: 0 } }));
+});
+server.listen(0, "127.0.0.1", () => {
+  writeFileSync(
+    record,
+    JSON.stringify({ pid: process.pid, port: server.address().port, token: "left" }),
+    { mode: 0o600 },
+  );
+});
+`,
+    { mode: 0o600 },
+  );
+  // A process with no SIGTERM handler dies at once and removes nothing.
+  const child = spawn(process.execPath, [script, opts.file], {
+    cwd: REPO,
+    stdio: "ignore",
+  });
+  t.after(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already exited.
+    }
+  });
+  assert.ok(child.pid !== undefined);
+  await until(
+    () =>
+      readFile(opts.file, "utf8").then(
+        () => true,
+        () => false,
+      ),
+    "the fake daemon did not write its record",
   );
 
   assert.equal(await stopDaemon(opts.file, 5_000), child.pid);

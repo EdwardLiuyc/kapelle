@@ -10,12 +10,11 @@
  * folder. `daemon.log` is this start's; the previous one is renamed to
  * `daemon.log.1` first, so one last log is kept beside it.
  *
- * **The daemon's own lock settles a race.** Two `kapelle` starting together
- * may both spawn a daemon. `claim` in `daemon.ts` lets exactly one listen;
- * the loser exits, and its reason is only in the log. This module watches
- * the child's exit, but keeps waiting when another starter holds the lock or
- * another live PID owns the record, so the second CLI opens the chat on the
- * winner rather than failing on the lock.
+ * **A start lock rotates the log once.** Two `kapelle` starting together
+ * both see no daemon; one takes `${daemon.json}.starting`, rotates the log
+ * and spawns. The other waits for that start instead of rotating the new log
+ * over the previous one. The daemon's own lock still settles a race with
+ * `kapelle daemon start` or another copy of this module.
  *
  * **`daemon.json` is the readiness signal.** It is written with only `pid`
  * at the claim and with `pid`, `port` and `token` once the port is open. A
@@ -25,6 +24,14 @@
  * different token), because the stale record is still readable for the few
  * milliseconds before the new daemon claims the file.
  *
+ * **A pid is not an identity.** `daemon.ts` writes `${daemon.json}.identity`
+ * with its `ps` start time. Before treating a live pid as a daemon, this
+ * module compares that time. A recycled pid is then stale: it is never
+ * signalled by `daemon stop`, and it does not block a fresh start. A missing
+ * identity falls back to a verified `/version` answer at the address, and
+ * then to the old behaviour of waiting for a live pid, so an older daemon
+ * still works.
+ *
  * **A stop is SIGTERM and a wait.** `daemon.ts` cancels its runs and pauses
  * its rooms on SIGTERM, then removes `daemon.json` and exits. This waits for
  * the pid to go, then removes a record the daemon did not remove itself —
@@ -32,10 +39,33 @@
  * meantime keeps its file.
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, existsSync, openSync, renameSync, rmSync } from "node:fs";
-
-import { type DaemonAddress, readDaemonRecord, request } from "./daemon.ts";
+import {
+  type ChildProcess,
+  execFile as execFileCb,
+  spawn,
+} from "node:child_process";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from "node:fs";
+import { readFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import { promisify } from "node:util";
+import type { VersionReply } from "./contract.ts";
+import {
+  call,
+  type DaemonAddress,
+  readDaemonRecord,
+  request,
+} from "./daemon.ts";
 
 /** How often a start or stop looks at the daemon again. */
 const POLL_MS = 50;
@@ -45,6 +75,8 @@ const PROBE_MS = 2_000;
 const START_WAIT_MS = 15_000;
 /** A stop waits for runs and rooms to settle, so it gets longer. */
 const STOP_WAIT_MS = 30_000;
+/** A lock file with no pid is given this long to be filled in. */
+const START_LOCK_GRACE_MS = 500;
 
 interface StartOptions {
   /** `daemon.json`. */
@@ -61,7 +93,23 @@ interface StartOptions {
   waitMs?: number;
 }
 
+interface RecordLike {
+  pid?: number;
+  address?: DaemonAddress;
+}
+
+interface DaemonIdentity {
+  pid: number;
+  startedAt: string;
+}
+
+/** Start locks this process holds, so a second call does not take ours for stale. */
+const heldStarts = new Set<string>();
+
 const sleep = (ms: number) => new Promise<void>((ok) => setTimeout(ok, ms));
+const execFile = promisify(execFileCb);
+const identityPath = (file: string) => `${file}.identity`;
+const startLockPath = (file: string) => `${file}.starting`;
 
 /** Is `pid` a live process? `EPERM` means it is, and is someone else's. */
 function alive(pid: number): boolean {
@@ -73,8 +121,10 @@ function alive(pid: number): boolean {
   }
 }
 
-/** True when the daemon behind `d` answers at all; the version is not read
- *  here, because `chat.ts` and the verbs compare it and print its warning. */
+/** True when anything answers at the address, even a 401. This is enough to
+ *  reuse a daemon for a chat, where the version check and its message come
+ *  next; it is not proof that a pid is the daemon, so a stop never signals on
+ *  it alone. */
 async function answers(d: DaemonAddress): Promise<boolean> {
   try {
     const res = await request(d, "/version", {
@@ -88,11 +138,231 @@ async function answers(d: DaemonAddress): Promise<boolean> {
   }
 }
 
-/** Rename the last log aside and open the new one, appended so two starters
- *  that race can write into the same file without truncating each other. */
+/**
+ * True only when the address answers `/version` as a daemon: a successful
+ * reply with a readable API version. A 401, a 404, or a non-JSON body is
+ * another listener on the port, not proof that the recorded pid is the
+ * daemon. The version itself is not compared, because `daemon stop` has to
+ * work against a daemon this client refuses (M9-2).
+ */
+async function verifiedDaemon(d: DaemonAddress): Promise<boolean> {
+  try {
+    const r = await call<Partial<VersionReply>>(d, "/version", {
+      signal: AbortSignal.timeout(PROBE_MS),
+    });
+    if (!r.ok) return false;
+    const v = r.body?.apiVersion;
+    if (typeof v !== "object" || v === null) return false;
+    return Number.isInteger(v.major) && Number.isInteger(v.minor);
+  } catch {
+    return false;
+  }
+}
+
+/** A process's start time, as `ps` prints it, or null when it cannot be read.
+ *  `client/` may not import `core/sweep.ts`, where the daemon's own copy of
+ *  this check lives; the comparison is identical and is what tells a reused
+ *  pid from the process that wrote the record. */
+async function processIdentity(pid: number): Promise<string | null> {
+  try {
+    const { stdout } = await execFile(
+      "ps",
+      ["-p", String(pid), "-o", "lstart="],
+      {
+        encoding: "utf8",
+        timeout: 2_000,
+        env: { ...process.env, LC_ALL: "C", LANG: "C", TZ: "UTC" },
+      },
+    );
+    const identity = stdout.trim();
+    return identity === "" ? null : identity;
+  } catch {
+    return null;
+  }
+}
+
+/** The identity beside `daemon.json`, when it is readable and well formed. */
+async function readIdentity(file: string): Promise<DaemonIdentity | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(
+      await readFile(identityPath(file), "utf8"),
+    );
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const { pid, startedAt } = parsed as {
+      pid?: unknown;
+      startedAt?: unknown;
+    };
+    if (
+      typeof pid === "number" &&
+      Number.isInteger(pid) &&
+      pid > 0 &&
+      typeof startedAt === "string" &&
+      startedAt !== ""
+    ) {
+      return { pid, startedAt };
+    }
+  } catch {
+    // Missing, unreadable or malformed: the address is the fallback.
+  }
+  return undefined;
+}
+
+/**
+ * What `record.pid` names now: `"live"` when its start time matches the
+ * identity, `"stale"` when it is gone or differs, and `"unknown"` when there
+ * is no identity or `ps` cannot answer. Unknown is never treated as stale by
+ * itself.
+ */
+async function ownerState(
+  file: string,
+  record: RecordLike,
+): Promise<"live" | "stale" | "unknown"> {
+  const { pid } = record;
+  if (pid === undefined) return "unknown";
+  if (!alive(pid)) return "stale";
+  const identity = await readIdentity(file);
+  if (identity === undefined) return "unknown";
+  if (identity.pid !== pid) {
+    return record.address === undefined ? "unknown" : "stale";
+  }
+  const actual = await processIdentity(pid);
+  if (actual === identity.startedAt) return "live";
+  if (actual === null) return alive(pid) ? "unknown" : "stale";
+  return "stale";
+}
+
+/** The pid in a start lock, when it wrote one. */
+function startLockPid(lock: string): number | undefined {
+  try {
+    const pid = Number(readFileSync(lock, "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Is another process, or another call here, still starting the daemon? */
+function startLockHeld(lock: string): boolean {
+  const pid = startLockPid(lock);
+  if (pid === process.pid) return heldStarts.has(lock);
+  if (pid !== undefined) return alive(pid);
+  try {
+    return Date.now() - lstatSync(lock).mtimeMs < START_LOCK_GRACE_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Take the start lock, or answer undefined when another starter holds it.
+ *
+ * A lock left by a dead process is removed. A lock with no pid is trusted for
+ * a moment, because the winner opens it and writes the pid in two steps.
+ */
+function acquireStartLock(file: string): (() => void) | undefined {
+  const lock = startLockPath(file);
+  // `cli.ts` calls `runtimeDir()` first; a test or a library caller may not
+  // have made the folder yet. `daemon.ts` still guards it before it listens.
+  mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fd = openSync(lock, "wx", 0o600);
+      try {
+        writeSync(fd, String(process.pid));
+      } finally {
+        closeSync(fd);
+      }
+      heldStarts.add(lock);
+      return () => {
+        heldStarts.delete(lock);
+        try {
+          if (readFileSync(lock, "utf8").trim() !== String(process.pid)) return;
+          rmSync(lock, { force: true });
+        } catch {
+          // Already removed, or replaced by a starter we must not touch.
+        }
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+    if (startLockHeld(lock)) return undefined;
+    rmSync(lock, { force: true });
+  }
+  return undefined;
+}
+
+/** Wait for the process holding `${daemon.json}.starting`, or for its record. */
+async function waitForOtherStart(
+  opts: StartOptions,
+  staleToken: string | undefined,
+  waitMs: number,
+): Promise<boolean> {
+  const lock = startLockPath(opts.file);
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const record = await readDaemonRecord(opts.file);
+    if (
+      record !== "missing" &&
+      record.address !== undefined &&
+      (staleToken === undefined || record.address.token !== staleToken)
+    ) {
+      return true;
+    }
+    if (!startLockHeld(lock)) return false;
+    if (Date.now() >= until) {
+      throw new Error(
+        `another kapelle is starting the daemon; see ${opts.log}.`,
+      );
+    }
+    await sleep(POLL_MS);
+  }
+}
+
+/** Remove `expected`, but only the file still describes the same record. */
+async function removeRecordIfUnchanged(
+  file: string,
+  expected: RecordLike,
+): Promise<boolean> {
+  const now = await readDaemonRecord(file);
+  if (now === "missing") {
+    if (expected.pid !== undefined) {
+      const identity = await readIdentity(file);
+      if (identity?.pid === expected.pid) {
+        rmSync(identityPath(file), { force: true });
+      }
+    }
+    return true;
+  }
+  if (now.pid !== expected.pid) return false;
+  if ((now.address === undefined) !== (expected.address === undefined)) {
+    return false;
+  }
+  if (
+    now.address !== undefined &&
+    expected.address !== undefined &&
+    (now.address.port !== expected.address.port ||
+      now.address.token !== expected.address.token)
+  ) {
+    return false;
+  }
+  rmSync(file, { force: true });
+  if (expected.pid !== undefined) {
+    const identity = await readIdentity(file);
+    if (identity === undefined || identity.pid === expected.pid) {
+      rmSync(identityPath(file), { force: true });
+    }
+  }
+  return true;
+}
+
+/** Rename the last log aside and open the new one, appended so a retry can
+ *  keep writing into the same start's log. */
 function rotate(log: string): number {
   try {
-    renameSync(log, `${log}.1`);
+    // An empty current log is a start that has not written yet. Rotating it
+    // would push the last useful log out of `${log}.1`, exactly the loss a
+    // second starter or a crash between rotate and spawn can cause.
+    if (statSync(log).size > 0) renameSync(log, `${log}.1`);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
@@ -193,47 +463,107 @@ async function waitForRecord(
  * a daemon: no record, a dead pid, or a complete record whose port refuses.
  */
 export async function ensureDaemon(opts: StartOptions): Promise<void> {
-  const record = await readDaemonRecord(opts.file);
-  if (record !== "missing") {
-    if (record.address) {
-      if (await answers(record.address)) return;
-    } else if (record.pid !== undefined && alive(record.pid)) {
-      await waitForRecord(opts, undefined, opts.waitMs ?? START_WAIT_MS);
+  const waitMs = opts.waitMs ?? START_WAIT_MS;
+  for (;;) {
+    const record = await readDaemonRecord(opts.file);
+    if (
+      record !== "missing" &&
+      record.address !== undefined &&
+      (await answers(record.address))
+    ) {
       return;
     }
-  }
-  const stale =
-    record !== "missing" && record.address
-      ? { pid: record.pid, token: record.address.token }
-      : undefined;
 
-  // One rotation per start: a retry appends to this start's log, so it
-  // cannot push the last start's log out of `${log}.1`.
-  const log = rotate(opts.log);
-  try {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const child = spawn(process.execPath, [opts.script], {
-        cwd: opts.cwd,
-        env: opts.env ?? process.env,
-        // Its own session, so closing the terminal does not send it SIGHUP.
-        detached: true,
-        // It must not hold this CLI's terminal or pipes open.
-        stdio: ["ignore", log, log],
-      });
-      child.unref();
-
-      const outcome = await waitForRecord(
-        opts,
-        stale,
-        opts.waitMs ?? START_WAIT_MS,
-        child,
-        attempt === 0,
-      );
-      if (outcome === "ready") return;
+    const release = acquireStartLock(opts.file);
+    if (!release) {
+      const staleToken =
+        record === "missing" ? undefined : record.address?.token;
+      if (await waitForOtherStart(opts, staleToken, waitMs)) return;
+      continue;
     }
-  } finally {
-    closeSync(log);
+
+    try {
+      const current = await readDaemonRecord(opts.file);
+      let stale: { pid?: number; token: string } | undefined;
+      if (current !== "missing") {
+        if (current.address !== undefined && (await answers(current.address))) {
+          return;
+        }
+        const owner = await ownerState(opts.file, current);
+        if (owner === "live") {
+          if (current.address !== undefined) {
+            throw new Error(
+              `the daemon (pid ${current.pid}) did not answer; stop it with: ` +
+                "kapelle daemon stop.",
+            );
+          }
+          await waitForRecord(opts, undefined, waitMs);
+          return;
+        }
+        if (
+          owner === "unknown" &&
+          current.pid !== undefined &&
+          alive(current.pid)
+        ) {
+          if (current.address === undefined) {
+            await waitForRecord(opts, undefined, waitMs);
+            return;
+          }
+          // No identity to prove the pid is stale. Keep the old behaviour:
+          // let the daemon's claim refuse while that pid lives, then retry
+          // once it is gone.
+          stale = { pid: current.pid, token: current.address.token };
+        } else if (!(await removeRecordIfUnchanged(opts.file, current))) {
+          continue;
+        }
+      }
+
+      // One rotation per start: a retry appends to this start's log, so it
+      // cannot push the last start's log out of `${log}.1`.
+      const log = rotate(opts.log);
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const child = spawn(process.execPath, [opts.script], {
+            cwd: opts.cwd,
+            env: opts.env ?? process.env,
+            // Its own session, so closing the terminal does not send it SIGHUP.
+            detached: true,
+            // It must not hold this CLI's terminal or pipes open.
+            stdio: ["ignore", log, log],
+          });
+          child.unref();
+
+          const outcome = await waitForRecord(
+            opts,
+            stale,
+            waitMs,
+            child,
+            attempt === 0,
+          );
+          if (outcome === "ready") return;
+        }
+      } finally {
+        closeSync(log);
+      }
+    } finally {
+      release();
+    }
   }
+}
+
+/** Is the record that verified `target` still the one at `file`? */
+async function targetStillCurrent(
+  file: string,
+  target: RecordLike & { pid: number },
+): Promise<boolean> {
+  const now = await readDaemonRecord(file);
+  if (now === "missing" || now.pid !== target.pid) return false;
+  if (target.address === undefined) return true;
+  return (
+    now.address !== undefined &&
+    now.address.port === target.address.port &&
+    now.address.token === target.address.token
+  );
 }
 
 /**
@@ -243,24 +573,76 @@ export async function ensureDaemon(opts: StartOptions): Promise<void> {
  * daemon, a malformed record, a record between claim and listen with no pid,
  * or a stale record whose pid is already gone. The stale record is removed,
  * but no daemon is reported as stopped.
+ *
+ * A live pid is not enough to signal. When the identity says it is a reused
+ * pid, or a complete record does not verify as a daemon at its address, the
+ * record is cleared instead. A record with only a pid is waited on until it
+ * publishes an address.
  */
 export async function stopDaemon(
   file: string,
   waitMs = STOP_WAIT_MS,
 ): Promise<number | undefined> {
-  const record = await readDaemonRecord(file);
-  if (record === "missing" || record.pid === undefined) return undefined;
-  const { pid } = record;
-  if (pid === process.pid) {
-    throw new Error(`${file} names this process (pid ${pid}); not stopping it`);
+  let target: (RecordLike & { pid: number }) | undefined;
+  const readyBy = Date.now() + Math.min(waitMs, START_WAIT_MS);
+  while (target === undefined) {
+    const record = await readDaemonRecord(file);
+    if (record === "missing" || record.pid === undefined) {
+      return undefined;
+    }
+    const { pid } = record;
+    if (pid === process.pid) {
+      throw new Error(
+        `${file} names this process (pid ${pid}); not stopping it`,
+      );
+    }
+    const owner = await ownerState(file, record);
+    if (owner === "stale") {
+      await removeRecordIfUnchanged(file, record);
+      return undefined;
+    }
+    if (owner === "live") {
+      target = { pid, address: record.address };
+      break;
+    }
+    if (record.address !== undefined) {
+      if (await verifiedDaemon(record.address)) {
+        target = { pid, address: record.address };
+        break;
+      }
+      await removeRecordIfUnchanged(file, record);
+      return undefined;
+    }
+    if (!alive(pid)) {
+      await removeRecordIfUnchanged(file, record);
+      return undefined;
+    }
+    if (Date.now() >= readyBy) {
+      throw new Error(
+        `the daemon (pid ${pid}) has not written its address; cannot verify ` +
+          "it. Try again.",
+      );
+    }
+    await sleep(POLL_MS);
+  }
+
+  const { pid } = target;
+  // The file can change while the identity check runs. Do not signal a pid
+  // whose record has moved on; a new daemon keeps its own file.
+  if (!(await targetStillCurrent(file, target))) return undefined;
+  const identity = await readIdentity(file);
+  if (
+    identity?.pid === pid &&
+    (await processIdentity(pid)) !== identity.startedAt
+  ) {
+    return undefined;
   }
   try {
     process.kill(pid, "SIGTERM");
   } catch (err) {
     // Already gone: the record is all that is left, and it goes below.
     if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
-    const left = await readDaemonRecord(file);
-    if (left !== "missing" && left.pid === pid) rmSync(file, { force: true });
+    await removeRecordIfUnchanged(file, target);
     return undefined;
   }
 
@@ -276,7 +658,6 @@ export async function stopDaemon(
 
   // The daemon removes its own file on shutdown. A process that died without
   // that leaves it; remove it only while it still names this pid.
-  const left = await readDaemonRecord(file);
-  if (left !== "missing" && left.pid === pid) rmSync(file, { force: true });
+  await removeRecordIfUnchanged(file, target);
   return pid;
 }

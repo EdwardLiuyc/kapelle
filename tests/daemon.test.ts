@@ -291,6 +291,13 @@ test("daemon.json holds port, pid and a random token, and only the owner can rea
   assert.equal(d.pid, d.childPid);
   assert.equal((await stat(d.file)).mode & 0o777, 0o600);
   assert.equal((await stat(join(d.file, ".."))).mode & 0o777, 0o700);
+  const identity = JSON.parse(await readFile(`${d.file}.identity`, "utf8")) as {
+    pid?: unknown;
+    startedAt?: unknown;
+  };
+  assert.equal(identity.pid, d.pid);
+  assert.equal(typeof identity.startedAt, "string");
+  assert.equal((await stat(`${d.file}.identity`)).mode & 0o777, 0o600);
 });
 
 test("a second daemon refuses to start, and leaves the first one's token alone", async (t) => {
@@ -439,6 +446,10 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     assert.equal(exit.code, 0, exit.stderr);
     assert.equal(await gone(harness), true, "the harness outlived the daemon");
     await assert.rejects(readFile(d.file), "daemon.json is removed");
+    await assert.rejects(
+      readFile(`${d.file}.identity`),
+      "the identity is removed with daemon.json",
+    );
     await assert.rejects(
       readFile(join(d.file, "..", "children.json")),
       "children.json is removed once no harness is live",
@@ -4849,6 +4860,14 @@ test("two kapelle at once leave one daemon, and either key ends only the chat", 
     XDG_CONFIG_HOME: join(state, "config-home"),
     KAPELLE_PORT: "0",
   };
+  await mkdir(join(state, "kapelle"), { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(state, "kapelle", "daemon.log"),
+    "the previous start\n",
+    {
+      mode: 0o600,
+    },
+  );
   const [a, b] = await Promise.all([
     ptyScreen(t, "node cli.ts", env),
     ptyScreen(t, "node cli.ts", env),
@@ -4872,6 +4891,11 @@ test("two kapelle at once leave one daemon, and either key ends only the chat", 
     ].map((path) => readFile(path, "utf8").catch(() => "")),
   );
   assert.equal(logs.join("").match(/listening on /g)?.length, 1);
+  assert.equal(
+    await readFile(join(state, "kapelle", "daemon.log.1"), "utf8"),
+    "the previous start\n",
+    "two starters rotated the log once",
+  );
 
   a.child.stdin.write("/leave\r");
   await a.seen("left the chat");

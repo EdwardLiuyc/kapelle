@@ -2,10 +2,11 @@
  * The daemon's user-level files.
  *
  * Two directories, because they answer to different lifetimes. The **runtime**
- * directory holds what is only true while a daemon is up — `daemon.json` and
- * `children.json` — and is wiped at logout. The **state** directory holds what
- * must outlive that: `repos.json`, the list of repositories added with
- * `POST /repos` (M2-6, #36), and the auto-started daemon's log (M9-2).
+ * directory holds what is only true while a daemon is up — `daemon.json`,
+ * its `.identity` sidecar and `children.json` — and is wiped at logout. The
+ * **state** directory holds what must outlive that: `repos.json`, the list of
+ * repositories added with `POST /repos` (M2-6, #36), and the auto-started
+ * daemon's log (M9-2).
  *
  * Its own file because the entry points need the one definition: `daemon.ts`
  * writes the token there, and `cli.ts` reads it back for `kapelle daemon

@@ -165,6 +165,57 @@ function orExit<T>(f: () => T): T {
   }
 }
 
+/** A private sidecar that ties `daemon.json`'s pid to this process start. */
+function identityPath(file: string): string {
+  return `${file}.identity`;
+}
+
+/** Remove both files a live daemon owns. */
+function removeDaemonFiles(file: string): void {
+  rmSync(file, { force: true });
+  rmSync(identityPath(file), { force: true });
+}
+
+/**
+ * Record what `ps` calls this process's start time, beside `daemon.json`.
+ *
+ * The pid alone cannot tell a live daemon from a later process that reused
+ * the pid after a crash. A client compares this identity before it signals
+ * the pid or decides that a start is still in progress (M9-2).
+ *
+ * `null` means `ps` could not answer. The file is then removed: an address
+ * that answers is still enough for a client to verify the daemon, and a
+ * missing identity is safer than an identity that does not match.
+ */
+function writeIdentity(file: string, startedAt: string | null): void {
+  const path = identityPath(file);
+  if (startedAt === null) {
+    rmSync(path, { force: true });
+    return;
+  }
+  const tmp = `${path}.${process.pid}`;
+  try {
+    writeFileSync(tmp, JSON.stringify({ pid: process.pid, startedAt }), {
+      mode: 0o600,
+    });
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/** Publish the identity after the claim succeeds, or leave no files behind. */
+function publish(file: string, fd: number, startedAt: string | null): number {
+  try {
+    writeIdentity(file, startedAt);
+  } catch (err) {
+    closeSync(fd);
+    removeDaemonFiles(file);
+    throw err;
+  }
+  return fd;
+}
+
 const userConfig = orExit(() => readUserConfig());
 warnUnknownConfigEnv();
 const configEnv = orExit(() => readEnvConfig());
@@ -263,12 +314,14 @@ function create(file: string, replace = false): number {
  * every client of the first one is using. A pid that is dead was left by a
  * daemon that crashed or was stopped, and its file is replaced.
  */
-function claim(file: string): number {
+function claim(file: string, startedAt: string | null): number {
+  let fd: number | undefined;
   try {
-    return create(file);
+    fd = create(file);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
   }
+  if (fd !== undefined) return publish(file, fd, startedAt);
   // Replacing a stale file is check-then-act, so two daemons starting in the
   // same instant could both see it stale and both replace it. `mkdir` is
   // atomic, so exactly one gets past here; the other refuses rather than
@@ -301,7 +354,7 @@ function claim(file: string): number {
           `(${file}).`,
       );
     }
-    return create(file, true);
+    return publish(file, create(file, true), startedAt);
   } finally {
     rmSync(lock, { recursive: true, force: true });
   }
@@ -314,7 +367,10 @@ const file = join(dir, "daemon.json");
 // line rather than a stack, and stops it before `daemon.json` exists, so a
 // start that refused leaves nothing behind for the next one to clear.
 const addedRepos = orExit(readRepos);
-const fd = orExit(() => claim(file));
+// Read before the claim: the sidecar is how a client tells this process from
+// a later one that reuses the pid.
+const daemonStartedAt = await processIdentity(process.pid);
+const fd = orExit(() => claim(file, daemonStartedAt));
 
 const token = randomBytes(32).toString("hex");
 const expected = digest(token);
@@ -453,7 +509,7 @@ function restoreRuns(): void {
 // M2-4 works to avoid. These two do that much and no more: there is no run to
 // cancel yet.
 const bailOut = () => {
-  rmSync(file, { force: true });
+  removeDaemonFiles(file);
   process.exit(0);
 };
 process.once("SIGTERM", bailOut);
@@ -1798,7 +1854,7 @@ async function shutdown(signal: string): Promise<void> {
     ...inFlight,
     ...[...rooms.values()].map(({ room }) => room.pause()),
   ]);
-  rmSync(file, { force: true });
+  removeDaemonFiles(file);
   process.exit(0);
 }
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -1812,7 +1868,7 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 await restoreRooms();
 
 server.on("error", (err) => {
-  rmSync(file, { force: true });
+  removeDaemonFiles(file);
   console.error(`cannot listen on 127.0.0.1:${port}: ${messageOf(err)}`);
   process.exit(1);
 });
