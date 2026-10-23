@@ -521,7 +521,7 @@ function transcriptParts({
       for (const e of entries) draw(r.state, e);
     } else {
       note("no rooms. ctrl+o → new room, or type /new <harness>.");
-      note("ctrl+c leaves.");
+      note("ctrl+c twice leaves.");
     }
     setStatus();
   };

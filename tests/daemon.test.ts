@@ -4810,6 +4810,10 @@ async function ptyScreen(
  * `chat.ts new` on a pseudo-terminal, against a fresh daemon, once the
  * screen is up.
  */
+/** The keys that leave the chat screen: ctrl+c twice. pi-tui splits the
+ *  chunk into two keys, as it does for a terminal that sends them at once. */
+const LEAVE = "\x03\x03";
+
 async function chatOnPty(t: TestContext, agent = REMEMBER) {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
@@ -4936,7 +4940,7 @@ test("two kapelle at once leave one daemon, and either key ends only the chat", 
   await a.seen("left the chat");
   assert.equal(await a.exited, 0, a.out());
   // Raw mode turns ^C into a key: only the screen's listener sees it.
-  b.child.stdin.write("\x03");
+  b.child.stdin.write(LEAVE);
   await b.seen("left the chat");
   assert.equal(await b.exited, 0, b.out());
 
@@ -5012,7 +5016,7 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
 });
 
 for (const [how, keys] of [
-  ["^C", "\x03"],
+  ["^C twice", LEAVE],
   ["/leave", "/leave\r"],
 ] as const) {
   test(`chat.ts on a real terminal: ${how} leaves the chat with exit 0`, {
@@ -5027,6 +5031,40 @@ for (const [how, keys] of [
     assert.match(out(), /left room \S+; rejoin with/);
   });
 }
+
+test("chat.ts on a real terminal: one ^C only says to press it again, and the tip goes", {
+  skip: noPty,
+}, async (t) => {
+  const { child, seen, exited, out } = await chatOnPty(t);
+  const at = out().length;
+  child.stdin.write("\x03");
+  await seen("press ctrl+c again to leave");
+  // The tip runs out after 1.5 s: a ^C after it is a first one again.
+  await new Promise((ok) => setTimeout(ok, 2000));
+  child.stdin.write("\x03");
+  await new Promise((ok) => setTimeout(ok, 300));
+  assert.doesNotMatch(out().slice(at), /rejoin with/);
+  child.stdin.write("\x03");
+  await seen("rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts on a real terminal: a view change takes the ^C tip away, and the next ^C does not leave", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, seen, exited, out } = await chatOnPty(t);
+  await press("\x03", "press ctrl+c again to leave");
+  // alt+↓ opens the agent's thread, and a view change clears the status
+  // line's message: the tip is gone, so a ^C now is a first one again.
+  await press("\x1b[1;3B", "@mock-agent");
+  const at = out().length;
+  child.stdin.write("\x03");
+  await new Promise((ok) => setTimeout(ok, 300));
+  assert.doesNotMatch(out().slice(at), /rejoin with/);
+  child.stdin.write("\x03");
+  await seen("rejoin with");
+  assert.equal(await exited, 0, out());
+});
 
 test("chat.ts on a real terminal: /term runs a shell in the room's folder that resizes, takes vim, Esc and ^C, and ends with the chat", {
   skip: noPty,
@@ -5203,7 +5241,7 @@ test("chat.ts on a real terminal: a question that came while the shell had the k
   await screen.seen("? asker");
   assert.doesNotMatch(screen.out(), / 1 of 1 ━┓/);
   await screen.press("\x1d", " 1 of 1 ━┓");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5526,7 +5564,7 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
   assert.match(screen.out(), / {6}\x1b\[2mmock-agent\x1b\[22m/);
   // Hidden, the sidebar leaves a count of the rooms that need the person.
   await screen.press("\x14", "● 2 rooms");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5549,7 +5587,7 @@ test("chat.ts on a real terminal draws a stall warning", {
   screen.child.stdin.write("go\r");
   await screen.seen("! stuck: no activity for");
   // The stalled harness never ends its turn, so ^C is the way out.
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5612,7 +5650,7 @@ test("chat.ts on a real terminal shows a question off screen in the banner, ring
   await screen.press(`\x1b[<0;40;${row}M\x1b[<0;40;${row}m`, " 1 of 1 ━┓");
   await screen.seen("→ asker");
   assert.equal(bells(), 1, "one bell for one participant that waits");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5639,7 +5677,7 @@ test("chat.ts on a real terminal lists the person's messages on ctrl+r, lights t
   // A move with no button over the first row lights it.
   await screen.press("\x1b[<35;90;2M", "history · 1 of 2");
   await screen.press("\x1b[<0;90;3M\x1b[<0;90;3m", "history · 2 of 2");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5719,7 +5757,7 @@ test("chat.ts on a real terminal maps the mouse to the right row of a history li
   // The mouse on the list's top row, row 2 of the screen, is not message 1.
   const n = await lightMoves(screen, "\x1b[<35;90;2M", 15, 15);
   assert.ok(n > 1, `the top row is message ${n}`);
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5750,7 +5788,7 @@ test("chat.ts on a real terminal keeps the wheel over the side view out of the t
   await screen.press("\x1b[6~".repeat(20), "previous: m16");
   await send("m18");
   await screen.seen("previous: m17");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5764,7 +5802,7 @@ test("chat.ts on a narrow real terminal sends the page keys with the composer to
   // A page is the view's height less one row. That height moves with the
   // rows under the composer, so the test asks only that the light left row 1.
   await lightMoves(screen, "\x1b[6~", 15, 1);
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5870,7 +5908,7 @@ test("chat.ts on a real terminal answers a question in its pop-up, and a piped o
   );
   observer.child.stdin.end("/leave\n");
   assert.equal((await observer.done).code, 0);
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5914,7 +5952,7 @@ test("chat.ts on a real terminal keeps a question waiting while the person types
   });
   assert.equal(other.status, 200, other.body.error?.message);
   await screen.seen("asker's question closed: allowed (client)");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -5964,7 +6002,7 @@ test("chat.ts on a real terminal opens over a thread's @name pre-fill, and Esc p
   const q = await pendingOne(d);
   const other = await api(d, "POST", `/permissions/${q.id}`, { allow: true });
   assert.equal(other.status, 200, other.body.error?.message);
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -6214,7 +6252,7 @@ test("chat.ts on a real terminal says why a lost answer lost, keeps the box's co
   screen.child.stdin.write("\r");
   await new Promise((ok) => setTimeout(ok, 500));
   assert.ok(!posted.includes("/permissions/q3"), posted.join(" "));
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -6431,7 +6469,7 @@ test("chat.ts on a real terminal loads the changed files once per turn end or ex
     await new Promise((ok) => setTimeout(ok, 50));
   }
   assert.match(diffs[2] ?? "", /against=base/);
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -6471,7 +6509,7 @@ test("chat.ts keeps the newest changed files when a crash's two loads land out o
     /A other\.ts/,
     "the older reply replaced the newer one",
   );
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -6490,7 +6528,7 @@ test("chat.ts on a real terminal opens a clicked changed file in the side view",
     `\x1b[<0;6;${row}M\x1b[<0;6;${row}m`,
     "whole branch · other.ts (new) (2 of 2)",
   );
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -6522,7 +6560,7 @@ test("chat.ts on a real terminal drops the changed-files block when the diff rou
     await new Promise((ok) => setTimeout(ok, 50));
   }
   assert.doesNotMatch(shown(), /changed files/);
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -6556,7 +6594,7 @@ test("chat.ts on a short terminal keeps the question's action in its box", {
   );
   assert.equal(sent.status, 202, sent.body.error?.message);
   await screen.seen("edit · Write ACP_TEST.md");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -6604,7 +6642,7 @@ test("chat.ts on a real terminal moves an untouched thread @name to a new name",
   await seen("→ bob");
   child.stdin.write("hi\r");
   await seen("previous: (none)");
-  child.stdin.write("\x03");
+  child.stdin.write(LEAVE);
   assert.equal(await exited, 0, out());
 });
 
@@ -6672,7 +6710,7 @@ test("kapelle chat with no rooms opens the screen, and says how to open one", {
     { XDG_RUNTIME_DIR: runtime },
     "ctrl+o → new room",
   );
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left the chat");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -6705,7 +6743,7 @@ test("chat.ts on a real terminal hides the sidebar with a click on «, and shows
   // SGR mouse, 1-based: the « sits at the end of the sidebar's first row.
   await press("\x1b[<0;30;1M\x1b[<0;30;1m", "»");
   await press("\x1b[<0;1;1M\x1b[<0;1;1m", "rooms");
-  child.stdin.write("\x03");
+  child.stdin.write(LEAVE);
   await seen("left room");
   assert.equal(await exited, 0, out());
 });
@@ -6743,7 +6781,7 @@ test("chat.ts on a real terminal opens a question that came behind the menu once
   await screen.seen("1 question · ctrl+o");
   assert.doesNotMatch(plainText(screen.out()), / 1 of 1 ━┓/);
   await screen.press("\x1b", " 1 of 1 ━┓");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });
@@ -6850,7 +6888,7 @@ test("chat.ts on a real terminal keeps a thread's @name whole after Enter on it 
   // The editor trims what it submits. Giving back "@mock-agent" with no
   // space would make this "@mock-agentx", a name nobody has.
   await press("x\r", "previous: (none)");
-  child.stdin.write("\x03");
+  child.stdin.write(LEAVE);
   assert.equal(await exited, 0, out());
 });
 
@@ -6863,7 +6901,7 @@ test("chat.ts on a real terminal gives a bare @name back with its space on the t
   // The editor trims what it submits; without the space back, this would
   // be "@mock-agentx".
   await press("x\r", "previous: (none)");
-  child.stdin.write("\x03");
+  child.stdin.write(LEAVE);
   assert.equal(await exited, 0, out());
 });
 
@@ -6877,7 +6915,7 @@ test("chat.ts on a real terminal takes /dismiss after a thread's @name", {
   await press("\x1b[1;3B", "@mock-agent");
   // The last room gone, the screen stays, empty, until ^C (M4-5).
   await press("/dismiss\r", "ctrl+o → new room");
-  await press("\x03", "left the chat");
+  await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
   assert.doesNotMatch(plainText(out()), /you → mock-agent/);
 });
@@ -6930,7 +6968,7 @@ test("chat.ts on a real terminal falls back to the timeline when the open thread
     await new Promise((ok) => setTimeout(ok, 50));
   }
   await press("hi\r", "previous: (none)");
-  child.stdin.write("\x03");
+  child.stdin.write(LEAVE);
   assert.equal(await exited, 0, out());
 });
 
@@ -6951,7 +6989,7 @@ test("chat.ts on a real terminal shows the checkout of a participant added after
   // The thread header names the checkout, from `GET /rooms/:id`; the path
   // itself wraps, so the " · " before it is what shows it was read.
   await press("\x1b[1;3B\x1b[1;3B", "carol (mock-agent) · ");
-  child.stdin.write("\x03");
+  child.stdin.write(LEAVE);
   assert.equal(await exited, 0, out());
 });
 
@@ -6972,7 +7010,7 @@ test("chat.ts on a terminal under 8 columns shows the sidebar without failing", 
   // Only the sidebar's first 7 columns fit: `── room` of its header, the
   // title cyan.
   await screen.press("\x14", "\x1b[36mroom");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   assert.equal(await screen.exited, 0, screen.out());
   assert.doesNotMatch(screen.out(), /screen failed/);
 });
@@ -7466,7 +7504,7 @@ test("ctrl+o in a thread opens that agent's menu over the timeline, and a mode p
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
   await press("x", "@mock-agent x");
-  await press("\x03", "rejoin with");
+  await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
   // The status line said it; the transcript never did.
   assert.doesNotMatch(scrollback(out()), /is now in ask mode/);
@@ -7501,7 +7539,7 @@ test("Esc in a second-level pop-up goes back to the menu", {
   await press(`${DOWN}\r`, "harness");
   await press("\x1b", "agent …");
   await press("\x1b", "enter to send");
-  child.stdin.write("\x03");
+  child.stdin.write(LEAVE);
   await seen("rejoin with");
   assert.equal(await exited, 0, out());
 });
@@ -7527,7 +7565,7 @@ test("/add alone opens its form; a refusal stays in the form, and a fix adds the
     room?.participants.map((p) => p.name),
     ["mock-agent", "bob"],
   );
-  await press("\x03", "rejoin with");
+  await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
 });
 
@@ -7552,7 +7590,7 @@ test("a double Enter on the new-room form opens one room", {
   await new Promise((ok) => setTimeout(ok, 1500));
   const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
   assert.equal(rooms.body.length, 1, JSON.stringify(rooms.body));
-  await press("\x03", "rejoin with");
+  await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
 });
 
@@ -7573,7 +7611,7 @@ test("kapelle chat with no rooms opens one with /new, and shows its timeline", {
     "opened room fix",
   );
   await screen.press("hello\r", "previous: (none)");
-  await screen.press("\x03", "rejoin with");
+  await screen.press(LEAVE, "rejoin with");
   assert.equal(await screen.exited, 0, screen.out());
 });
 
@@ -7606,7 +7644,7 @@ test("the menu opens over the timeline with the sidebar hidden; a typed agent co
   // Refused before any request: the agent is still there.
   const room = await api<RoomReply>(d, "GET", `/rooms/${open.body.id}`);
   assert.equal(room.body.participants.length, 1);
-  await screen.press("\x03", "rejoin with");
+  await screen.press(LEAVE, "rejoin with");
   assert.equal(await screen.exited, 0, screen.out());
 });
 
@@ -7624,7 +7662,7 @@ test("after the last agent is removed, the status line names no one and a messag
   assert.doesNotMatch(out().slice(from), /→ mock-agent|you → /);
   const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
   assert.deepEqual(room?.participants, []);
-  await press("\x03", "rejoin with");
+  await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
 });
 
@@ -7797,7 +7835,7 @@ test("the chat opens the setup list at start until done, and /setup opens it aga
   await press("/setup\r", "needs claude-agent-acp");
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
-  await press("\x03", "left the chat");
+  await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 
   // The next start: done, and an agent is ready, so no list.
@@ -7806,7 +7844,7 @@ test("the chat opens the setup list at start until done, and /setup opens it aga
   });
   await new Promise((ok) => setTimeout(ok, 1000));
   assert.doesNotMatch(next.out(), /Enter done · Esc later/);
-  await next.press("\x03", "left the chat");
+  await next.press(LEAVE, "left the chat");
   assert.equal(await next.exited, 0, next.out());
 });
 
@@ -7826,7 +7864,7 @@ test("the chat opens the setup list at every start while no agent is ready, done
   );
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
-  await press("\x03", "left the chat");
+  await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 });
 
@@ -7872,7 +7910,7 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   await press("\r", "opened room");
   const repos = await api<string[]>(d, "GET", "/repos");
   assert.deepEqual(repos.body, [await realpath(repo)]);
-  await press("\x03", "rejoin with");
+  await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
 });
 
@@ -7917,7 +7955,7 @@ test("the new-room form leaves out a harness the daemon says is not measured", {
   // folder, title, harness: the harness row's pick list.
   await press(`${DOWN}${DOWN}\r`, "other…");
   assert.deepEqual(pickList(out()), ["–", "lab-ok", "other…"]);
-  await press("\x1b\x1b\x03", "ctrl+c");
+  await press(`\x1b\x1b${LEAVE}`, "left the chat");
   assert.equal(await exited, 0, out());
 });
 
@@ -8064,7 +8102,7 @@ test("the room view's menu picks an agent, and a rename reaches its route", {
     room?.participants.map((p) => p.name),
     ["bob"],
   );
-  await press("\x03", "rejoin with");
+  await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
 });
 
@@ -8081,7 +8119,7 @@ test("the row keys do nothing while a pop-up is open, so a form keeps what was t
   child.stdin.write("\x0e\x10\x1b[1;3B\x1b[1;3A");
   await new Promise((ok) => setTimeout(ok, 300));
   await press("d\r", "abcd");
-  await press("\x03", "rejoin with");
+  await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
 });
 
@@ -8097,7 +8135,7 @@ test("the status line swaps its key hint while a pop-up is open", {
     "\x0f",
     "enter to send · ctrl+o menu · alt+↑↓ rows · ctrl+t rooms",
   );
-  child.stdin.write("\x03");
+  child.stdin.write(LEAVE);
   await seen("rejoin with");
   assert.equal(await exited, 0, out());
 });
@@ -8140,7 +8178,7 @@ test("the menu's help row shows the commands", {
   // Help is a second-level pop-up: Esc returns to the menu.
   await press("\x1b", "new room …");
   await press("\x1b", "enter to send");
-  await press("\x03", "left the chat");
+  await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 });
 
@@ -8160,7 +8198,7 @@ test("Esc in a form opened from the menu goes back to the menu", {
   // Esc returns to the menu; a second Esc still closes it.
   await press("\x1b", "new room …");
   await press("\x1b", "enter to send");
-  await press("\x03", "left the chat");
+  await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 });
 
@@ -8192,7 +8230,7 @@ test("Esc in the folder-not-added prompt goes back to the new-room form", {
     plainText(out().slice(from)).includes(repo),
     plainText(out().slice(from)),
   );
-  child.stdin.write("\x03");
+  child.stdin.write(LEAVE);
   await seen("left the chat");
   assert.equal(await exited, 0, out());
 });
@@ -8455,7 +8493,7 @@ test("chat.ts on a real terminal shows a question's diff beside the timeline, go
     `/permissions/${write.id}`,
   );
   assert.deepEqual([decided.body.allow, decided.body.reason], [true, "client"]);
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   assert.equal(await screen.exited, 0, screen.out());
 });
 
@@ -8501,7 +8539,7 @@ test("chat.ts on a real terminal answers a question from the pane with n", {
     [decided.body.allow, decided.body.reason],
     [false, "client"],
   );
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   assert.equal(await screen.exited, 0, screen.out());
   await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
 });
@@ -8569,7 +8607,7 @@ test("chat.ts on a real terminal keeps a waiting question's keys when view chang
   // gave them up (#225 review): typed text reaches the composer.
   await screen.press("\x1b", "ctrl+] view");
   await screen.press("hello", "hello");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   assert.equal(await screen.exited, 0, screen.out());
   await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
 });
@@ -8612,7 +8650,7 @@ test("chat.ts on a real terminal under 120 columns puts the question's diff wher
   // timeline's own text must also be gone, not merely cut from this row.
   await screen.press("\x1b[B\x1b[B\r", "ACP_TEST.md (new) · +1 −0");
   assert.doesNotMatch(screen.out().slice(beforeOpen), /you → asker/);
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   assert.equal(await screen.exited, 0, screen.out());
 });
 
@@ -8686,7 +8724,7 @@ test("chat.ts on a real terminal shows what an auto agent changed, from /diff an
   // ctrl+x hides the view and keeps what it shows.
   await screen.press("\x18", "ctrl+x view");
   await screen.press("\x18", "bob · uncommitted · README.md (1 of 3)");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   assert.equal(await screen.exited, 0, screen.out());
 });
 
@@ -8710,7 +8748,7 @@ test("chat.ts on a real terminal gives a refused /diff its line back", {
   await screen.press("@bob /diff\r", "no diff for bob");
   // As every refused command does (#225 review): the text comes back to fix.
   await screen.press("x", "@bob /diff x");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   assert.equal(await screen.exited, 0, screen.out());
 });
 
@@ -8947,7 +8985,7 @@ test("the TUI rides out a restart: it says so, marks the participant paused, and
   await screen.seen("⏸ al");
   await screen.press("hi\r", "previous: (none)");
   await roomIdle(second, id);
-  await screen.press("\x03", "rejoin with");
+  await screen.press(LEAVE, "rejoin with");
   assert.equal(await screen.exited, 0, plainText(screen.out()));
 });
 
@@ -9622,7 +9660,7 @@ test("chat.ts on a real terminal folds a tool run at the next note without movin
   await wait(600);
   await screen.press(`\x1b[<0;50;${row}M\x1b[<0;50;${row}m`, "▸ 6 tool calls");
   assert.equal(rowOf(screen.out(), /Read f0\.ts/), 0, "folded again");
-  screen.child.stdin.write("\x03");
+  screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
 });

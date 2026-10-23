@@ -155,6 +155,9 @@ class Screen extends TuiAltScreen {
 
 /** What the screen says in a room with no participant (M4-5). */
 const NO_AGENTS = "no agents: ctrl+o → add agent";
+/** What the first ctrl+c says, and how long a second one leaves. */
+const AGAIN = "press ctrl+c again to leave";
+const AGAIN_MS = 1500;
 
 /**
  * Where the screen's parts go (#242). One `HStack`, `row`: the sidebar or
@@ -420,6 +423,8 @@ function chatTui(
   let shown = (process.stdout.columns || 80) >= NARROW;
   /** One line about a room that ended, until the next view change. */
   let flash = "";
+  /** Takes the ctrl+c tip away once it runs out. */
+  let leaving: ReturnType<typeof setTimeout> | undefined;
   /** The `@name ` this screen put in the composer, while it is untouched. */
   let prefill = "";
   /** The open questions over every room, oldest first (M4-3). The reducers
@@ -903,6 +908,7 @@ function chatTui(
       set.stop();
       shell?.kill();
       clearInterval(timer);
+      clearTimeout(leaving);
       // The screen is going: a later throw gets Node's default again, a
       // stack and a non-zero exit, instead of being swallowed here.
       process.off("uncaughtException", crash);
@@ -953,8 +959,23 @@ function chatTui(
         else side.key(data);
         return { consume: true };
       }
+      // ctrl+c twice leaves, as in Claude Code: one stray press does not
+      // close the screen. The first one only says so, for a short time.
+      // The tip on screen is the arm: whatever replaces it disarms too.
       if (matchesKey(data, Key.ctrl("c"))) {
-        end(0, left());
+        clearTimeout(leaving);
+        if (flash === AGAIN) {
+          end(0, left());
+          return { consume: true };
+        }
+        const keep = flash;
+        flash = AGAIN;
+        setStatus();
+        leaving = setTimeout(() => {
+          if (flash !== AGAIN) return;
+          flash = keep;
+          setStatus();
+        }, AGAIN_MS);
         return { consume: true };
       }
       if (matchesKey(data, Key.ctrl("o"))) {
