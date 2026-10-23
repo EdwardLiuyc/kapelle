@@ -76,15 +76,13 @@ test("/add takes a harness or --cmd, and quotes keep spaces", () => {
   assert.ok(two && "error" in two && /one harness/.test(two.error));
 });
 
-test("/new makes its harness the orchestrator, and resolves --cwd", () => {
+test("/new makes its harness a developer, and resolves --cwd", () => {
   assert.deepEqual(parse("/new pi --name ann --cwd sub --title fix"), {
     verb: "new",
     body: {
       cwd: resolve("sub"),
       title: "fix",
-      agents: [
-        { agent: "pi", cmd: undefined, name: "ann", role: "orchestrator" },
-      ],
+      agents: [{ agent: "pi", cmd: undefined, name: "ann", role: "developer" }],
     },
   });
   const empty = parse("/new --title x");

@@ -100,7 +100,8 @@
  * **A turn's answer goes back to its sender** (M8-2). When a turn from a
  * participant's message ends, its sender gets a reply: `[reply from <name>]`,
  * how the turn ended and its tool calls, then the answer. When the person
- * messaged a worker, the orchestrator gets a copy instead: `[copy] you →
+ * messaged a worker the orchestrator gave an order to (`orderedBy`, #333),
+ * the orchestrator gets a copy instead: `[copy] you →
  * <name>`, the same status, the message, then the answer. The answer is the
  * text after the last tool call, or the last text before it when that is
  * empty, each cut at `ANSWER_CAP` bytes; the person's message is sent whole.
@@ -340,6 +341,10 @@ export interface Participant {
   /** The id of the participant whose message the live turn runs (M8-3).
    *  None when the person sent it, or when no turn runs. */
   readonly turnFrom?: string;
+  /** The id of the last participant whose order started one of its turns:
+   *  a message with `from` and no `kind`. The orchestrator gets a copy of the person's
+   *  message to it only when that is the orchestrator's id (#333). */
+  readonly orderedBy?: string;
   /**
    * Starts a turn with this message, or queues it behind the live one.
    * Resolves when its turn ends, or when it is dropped from the queue.
@@ -399,6 +404,8 @@ interface ParticipantRecord {
   sessionId: string;
   /** Its turns so far, so a restored one goes on counting (S12's `turn`). */
   turns?: number;
+  /** As `Participant.orderedBy`, so a restored room still sends copies. */
+  orderedBy?: string;
   status: ParticipantStatus;
   /** Its own notices: the worktree's and the sweep's, not the mode lines,
    *  which are worked out again. */
@@ -976,6 +983,7 @@ async function buildRoom(
       ...(m.renamed() && { branchRenamed: true }),
       sessionId: p.sessionId,
       turns: m.turns(),
+      ...(p.orderedBy && { orderedBy: p.orderedBy }),
       status: p.status(),
       notices: [...m.own],
       ...(p.resumed && { resumed: p.resumed }),
@@ -1181,8 +1189,12 @@ async function buildRoom(
       text = `[reply from ${worker.name}] ${status}`;
       if (a.body) text += `\n${a.body}`;
     } else {
+      // Only for a worker the orchestrator gave work to (#333): a room
+      // with no loop wakes nobody.
       target = participants.find((p) => p.role === "orchestrator");
-      if (!target || target === worker) return;
+      if (!target || target === worker || worker.orderedBy !== target.id) {
+        return;
+      }
       kind = "copy";
       text = `[copy] you → ${worker.name} · ${status}\n${a.text}`;
       if (a.body) text += `\n\n[answer]\n${a.body}`;
@@ -1602,6 +1614,7 @@ function createParticipant({
   // what it left open in the queue as `cancel`. Between turns it is already
   // aborted, so a request there is denied, not queued.
   let turns = saved?.turns ?? 0;
+  let orderedBy = saved?.orderedBy;
   let turnAbort = new AbortController();
   turnAbort.abort();
   // Read live, so a mode change applies to the next request.
@@ -1823,6 +1836,8 @@ function createParticipant({
     const controller = new AbortController();
     turnAbort = controller;
     turnFrom = from?.id;
+    // Before the line below, whose save keeps it.
+    if (from && !kind) orderedBy = from.id;
     kept = undefined;
     calls = 0;
     bus.emit({
@@ -2089,6 +2104,9 @@ function createParticipant({
     },
     get turnFrom() {
       return turnFrom;
+    },
+    get orderedBy() {
+      return orderedBy;
     },
     send(text, sender, kind) {
       if (dismissed()) {

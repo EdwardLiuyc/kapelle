@@ -11,7 +11,10 @@ const ROSTER = [
   { id: "p-a", name: "alice", role: "orchestrator" },
   { id: "p-b", name: "Bob" },
 ];
-const NO_ORCHESTRATOR = [{ id: "p-b", name: "bob" }];
+const NO_ORCHESTRATOR = [
+  { id: "p-b", name: "bob", role: "developer" },
+  { id: "p-c", name: "carol" },
+];
 
 test("no mention goes to the orchestrator, text unchanged", () => {
   assert.deepEqual(resolveTarget("look at @bob's change", ROSTER), {
@@ -76,7 +79,16 @@ test("refused: two mentions, known names or not", () => {
   assert.deepEqual(resolveTarget("@alice, @bob hi", ROSTER), error);
 });
 
-test("refused: no mention in a room with no orchestrator", () => {
+test("no mention goes to the only agent when there is no orchestrator (#333)", () => {
+  assert.deepEqual(resolveTarget("hi", NO_ORCHESTRATOR.slice(0, 1)), {
+    id: "p-b",
+    text: "hi",
+  });
+  const r = resolveTarget("hi", []);
+  assert.ok("error" in r && /no orchestrator/.test(r.error));
+});
+
+test("refused: no mention, two agents and no orchestrator", () => {
   const r = resolveTarget("hi", NO_ORCHESTRATOR);
   assert.ok("error" in r);
   assert.match(r.error, /no orchestrator: start with @name/);

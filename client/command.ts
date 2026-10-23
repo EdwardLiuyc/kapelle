@@ -246,8 +246,7 @@ export function parseCommand(
       body: {
         cwd: folder,
         title,
-        agents:
-          agent || cmd ? [{ agent, cmd, name, role: "orchestrator" }] : [],
+        agents: agent || cmd ? [{ agent, cmd, name, role: "developer" }] : [],
       },
     };
   }

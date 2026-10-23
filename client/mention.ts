@@ -1,6 +1,7 @@
 /**
  * The composer's target (R43): a leading `@name` names the participant, and
- * no mention names the orchestrator. The rules are `docs/CLIENT-API.md`
+ * no mention names the orchestrator, or the only participant when there is
+ * no orchestrator (#333). The rules are `docs/CLIENT-API.md`
  * § Addressing; this file is the one place a client applies them, so the
  * TUI and piped `chat.ts` cannot differ (S8).
  *
@@ -36,15 +37,18 @@ export function targetOf(input: string, roster: readonly Named[]): Target {
   const text = input.trimStart();
   const m = MENTION.exec(text);
   if (!m) {
-    const orchestrator = roster.find((p) => p.role === "orchestrator");
-    if (!orchestrator) {
+    // The only agent needs no name (#333).
+    const lead =
+      roster.find((p) => p.role === "orchestrator") ??
+      (roster.length === 1 ? roster[0] : undefined);
+    if (!lead) {
       return {
         error:
           "this room has no orchestrator: start with @name, " +
           "or give a participant the orchestrator role",
       };
     }
-    return { id: orchestrator.id, text };
+    return { id: lead.id, text };
   }
   const rest = text.slice(m[0].length);
   if (rest.startsWith("@")) {

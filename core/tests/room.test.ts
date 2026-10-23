@@ -2177,7 +2177,17 @@ async function loopRoom(
       () => room.participants.every((p) => p.status() !== "busy"),
       "every participant idle",
     );
-  return { room, po, dev, of, told, settled, logged };
+  return {
+    room,
+    po,
+    dev,
+    of,
+    told,
+    settled,
+    logged,
+    repo,
+    file: roomFile(repo, roomId),
+  };
 }
 
 const said = (events: AgentEventEnvelope[]) =>
@@ -2213,26 +2223,56 @@ test("a reply carries the last text before the last tool calls when none follows
   ]);
 });
 
-test("a person's message to a worker sends the orchestrator one copy, and nothing else", async (t) => {
+test("a person's message to a worker the orchestrator ordered sends it one copy, and nothing else", async (t) => {
   const { room, po, dev, told, settled } = await loopRoom(t, "remember");
+  // No order yet: no copy (#333).
   await dev.send("hi");
   await settled();
-  assert.deepEqual(told(po), [
-    [
-      "[copy] you → dev · end_turn, 0 tool calls\nhi\n\n[answer]\nprevious: (none)",
-      dev.id,
-      "copy",
-    ],
+  assert.deepEqual(told(po), []);
+  assert.equal(dev.orderedBy, undefined);
+
+  await dev.send("a", po);
+  await settled();
+  assert.equal(dev.orderedBy, po.id);
+  await dev.send("hi");
+  await settled();
+  assert.deepEqual(told(po).at(-1), [
+    "[copy] you → dev · end_turn, 0 tool calls\nhi\n\n[answer]\nprevious: [from po]\na",
+    dev.id,
+    "copy",
   ]);
-  assert.deepEqual(told(dev), [["hi", undefined, undefined]]);
+  assert.equal(dev.orderedBy, po.id, "a person's message keeps the mark");
+  assert.deepEqual(told(dev).at(-1), ["hi", undefined, undefined]);
 
   // To the orchestrator itself, or in a room with none: nothing.
   await po.send("plan");
   room.update(po.id, { role: null });
   await dev.send("again");
   await settled();
-  assert.equal(told(po).length, 2);
-  assert.equal(told(dev).length, 2);
+  assert.equal(told(po).length, 3);
+
+  // A new orchestrator does not take over po's mark.
+  const lead = await room.add(
+    roomAgent({
+      cmd: `node ${MOCK_AGENT}`,
+      name: "lead",
+      role: "orchestrator",
+    }),
+  );
+  await dev.send("more");
+  await settled();
+  assert.equal(told(lead).length, 0);
+});
+
+test("the orchestrator's mark on a worker survives a pause and a restore (#333)", async (t) => {
+  const { room, po, dev, settled, repo, file } = await loopRoom(t, "remember");
+  await dev.send("a", po);
+  await settled();
+  await room.pause();
+  const record = readRoomRecord(file);
+  assert.equal(record.participants[1]?.orderedBy, po.id);
+  const back = await restored(t, repo, record);
+  assert.equal(back.room.participants[1]?.orderedBy, po.id);
 });
 
 test("an error turn replies with its error, and none of its text", async (t) => {
