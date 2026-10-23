@@ -9701,7 +9701,12 @@ test("chat.ts on a real terminal paints the transcript's scrollbar over its last
     await new Promise((ok) => setTimeout(ok, 50));
   }
   const last = Math.max(...rows().map(answerEnd));
+  const pageFrom = screen.out().length;
   await screen.press("\x1b[5~", "┃");
+  assert.ok(
+    screen.out().slice(pageFrom).includes("\x1b[7m┃"),
+    "the resting thumb is inverse",
+  );
   // With no side view open, the timeline's last column is the screen's.
   for (const r of rows().filter((r) => r.includes("┃"))) {
     assert.equal(r.indexOf("┃"), 99, `not the last column:\n${r}`);

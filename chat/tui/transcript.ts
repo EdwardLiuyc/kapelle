@@ -21,9 +21,10 @@
  * **The scrollbar is pi-tui's** (M7-6, pi-tui 1.1.0). `auto` paints it over
  * the last column while the person scrolls, then hides it, so no line
  * rewraps. pi-tui drags it and jumps on a track click. The track is dim and
- * the thumb plain: a hover draws the thumb as `█`, and inverse would paint
- * that in the background colour. A bump re-checks `getContentWidth()` in
- * its `scroll-view.js` and `paintScrollbar()` in its `layout.js`.
+ * the resting thumb inverse. A hover draws the thumb as `█`; that block
+ * stays plain because inverse would paint it in the background colour. A
+ * bump re-checks `getContentWidth()` in its `scroll-view.js` and
+ * `paintScrollbar()` in its `layout.js`.
  */
 
 import {
@@ -54,9 +55,9 @@ import {
   endedLine,
   fg,
   green,
+  inverse,
   italic,
   magenta,
-  plain,
   red,
   revivedLine,
   sgr,
@@ -261,7 +262,7 @@ function transcriptParts({
     primary: true,
     scrollbar: "auto",
     scrollbarTrackStyle: dim,
-    scrollbarThumbStyle: plain,
+    scrollbarThumbStyle: (s) => (s === "█" ? s : inverse(s)),
   });
   /** The part drawn for each message to an agent, to jump to. */
   let drawn = new WeakMap<Entry, Component>();
