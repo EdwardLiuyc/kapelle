@@ -9711,7 +9711,11 @@ test("chat.ts on a real terminal paints the transcript's scrollbar over its last
   );
   // With no side view open, the timeline's last column is the screen's. A
   // row's index is its column only because the answer is plain ASCII.
-  for (const r of rows().filter((r) => r.includes("┃"))) {
+  // The bar hides 1 s after the scroll: a slow read finds none, and an empty
+  // loop would check nothing.
+  const bar = rows().filter((r) => r.includes("┃"));
+  assert.ok(bar.length > 0, `the bar went away: ${screen.out()}`);
+  for (const r of bar) {
     assert.equal(r.indexOf("┃"), 99, `not the last column:\n${r}`);
     assert.equal(answerEnd(r), last, `the answer rewrapped:\n${r}`);
   }
