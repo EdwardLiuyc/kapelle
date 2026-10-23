@@ -65,6 +65,7 @@ import {
   MOCK_AGENT,
   REPO,
   runCli,
+  savedSetup,
   spawnCli,
   startDaemon as start,
   tempDir,
@@ -4834,6 +4835,9 @@ test("kapelle alone starts a daemon, opens the chat, and /leave leaves it runnin
     mode: 0o755,
   });
   await chmod(fake, 0o755);
+  // As every test daemon: a saved find, so the setup list does not open
+  // over the screen and take the `/leave` this test types (M9-3).
+  savedSetup(state);
   const screen = await ptyScreen(t, "node cli.ts", {
     XDG_RUNTIME_DIR: runtime,
     XDG_STATE_HOME: state,
@@ -4898,6 +4902,7 @@ test("two kapelle at once leave one daemon, and either key ends only the chat", 
       mode: 0o600,
     },
   );
+  savedSetup(state);
   const [a, b] = await Promise.all([
     ptyScreen(t, "node cli.ts", env),
     ptyScreen(t, "node cli.ts", env),
