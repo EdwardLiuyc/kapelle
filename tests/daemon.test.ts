@@ -9688,14 +9688,16 @@ test("chat.ts on a real terminal paints the transcript's scrollbar over its last
     "xxxxxxxxxx",
   );
   const rows = () => [...screenRows(screen.out()).values()];
-  const thumb = () => rows().some((r) => r.includes("┃"));
+  /** A thumb in the last column; the pop-up's border is `┃` too. */
+  const thumb = () => rows().some((r) => r.endsWith("┃"));
   /** Where a row of the answer ends, or -1. */
   const answerEnd = (r: string) => {
     const m = /x{10,}/.exec(r);
     return m ? m.index + m[0].length - 1 : -1;
   };
 
-  // No bar while nothing scrolls.
+  // The bar hides once nothing scrolls; an `always` bar never would. A bar
+  // that shows at the start and then hides passes: that is `auto`.
   for (const until = Date.now() + 10_000; thumb(); ) {
     assert.ok(Date.now() < until, `a bar with no scroll: ${screen.out()}`);
     await new Promise((ok) => setTimeout(ok, 50));
@@ -9707,7 +9709,8 @@ test("chat.ts on a real terminal paints the transcript's scrollbar over its last
     screen.out().slice(pageFrom).includes("\x1b[7m┃"),
     "the resting thumb is inverse",
   );
-  // With no side view open, the timeline's last column is the screen's.
+  // With no side view open, the timeline's last column is the screen's. A
+  // row's index is its column only because the answer is plain ASCII.
   for (const r of rows().filter((r) => r.includes("┃"))) {
     assert.equal(r.indexOf("┃"), 99, `not the last column:\n${r}`);
     assert.equal(answerEnd(r), last, `the answer rewrapped:\n${r}`);

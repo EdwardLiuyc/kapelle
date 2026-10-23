@@ -23,8 +23,10 @@
  * rewraps. pi-tui drags it and jumps on a track click. The track is dim and
  * the resting thumb inverse. A hover draws the thumb as `█`; that block
  * stays plain because inverse would paint it in the background colour. A
- * bump re-checks `getContentWidth()` in its `scroll-view.js` and
- * `paintScrollbar()` in its `layout.js`.
+ * bump re-checks, in pi-tui's `dist/`: `getContentWidth()` and the 1000 ms
+ * hide delay in `components/scroll-view.js`; `paintScrollbar()` in
+ * `layout.js`, which picks the glyph and styles one cell per call; and
+ * `handleScrollbarMouseEvent()` in `tui-alt-screen.js`, which sets hover.
  */
 
 import {
