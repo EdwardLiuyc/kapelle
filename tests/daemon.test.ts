@@ -7835,7 +7835,7 @@ test("the chat opens the setup list at start until done, and /setup opens it aga
   await press("/setup\r", "needs claude-agent-acp");
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
-  await press("\x03", "left the chat");
+  await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 
   // The next start: done, and an agent is ready, so no list.
@@ -7844,7 +7844,7 @@ test("the chat opens the setup list at start until done, and /setup opens it aga
   });
   await new Promise((ok) => setTimeout(ok, 1000));
   assert.doesNotMatch(next.out(), /Enter done · Esc later/);
-  await next.press("\x03", "left the chat");
+  await next.press(LEAVE, "left the chat");
   assert.equal(await next.exited, 0, next.out());
 });
 
@@ -7864,7 +7864,7 @@ test("the chat opens the setup list at every start while no agent is ready, done
   );
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
-  await press("\x03", "left the chat");
+  await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 });
 
