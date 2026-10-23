@@ -9633,18 +9633,16 @@ test("chat.ts on a real terminal folds a tool run at the next note without movin
   // The person scrolls up a little, to read the message. The run is above.
   await screen.press("\x1b[<64;50;10M", "q3");
   await wait(300);
-  const before = rowOf(screen.out(), /│ q30\s*$/);
+  // The row can end with the scrollbar for a second after a scroll (M7-6).
+  const q30 = /│ q30\s*[│┃]?$/;
+  const before = rowOf(screen.out(), q30);
   assert.ok(before > 0, `q30 in view: ${screen.out()}`);
   assert.equal(rowOf(screen.out(), /Read f0\.ts/), 0, "the run is above");
   // The next note folds the run, above the view.
   await writeFile(join(ann.worktree, "runs.go"), "");
   await roomIdle(d, open.body.id);
   await wait(300);
-  assert.equal(
-    rowOf(screen.out(), /│ q30\s*$/),
-    before,
-    "the row in view did not move",
-  );
+  assert.equal(rowOf(screen.out(), q30), before, "the row in view moved");
   // Up to the top: the run is one line. A click opens it, a second folds it.
   for (let i = 0; i < 20; i++) screen.child.stdin.write("\x1b[<64;50;10M");
   for (const until = Date.now() + 10_000; ; ) {
@@ -9660,6 +9658,73 @@ test("chat.ts on a real terminal folds a tool run at the next note without movin
   await wait(600);
   await screen.press(`\x1b[<0;50;${row}M\x1b[<0;50;${row}m`, "▸ 6 tool calls");
   assert.equal(rowOf(screen.out(), /Read f0\.ts/), 0, "folded again");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal paints the transcript's scrollbar over its last column on a page key (M7-6)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario long`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const sent = await api(d, "POST", `/rooms/${open.body.id}/messages`, {
+    text: "go",
+  });
+  assert.equal(sent.status, 202);
+  await roomIdle(d, open.body.id);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+    "xxxxxxxxxx",
+  );
+  const rows = () => [...screenRows(screen.out()).values()];
+  /** A thumb in the last column; the pop-up's border is `┃` too. */
+  const thumb = () => rows().some((r) => r.endsWith("┃"));
+  /** Where a row of the answer ends, or -1. */
+  const answerEnd = (r: string) => {
+    const m = /x{10,}/.exec(r);
+    return m ? m.index + m[0].length - 1 : -1;
+  };
+
+  // The bar hides once nothing scrolls; an `always` bar never would. A bar
+  // that shows at the start and then hides passes: that is `auto`.
+  for (const until = Date.now() + 10_000; thumb(); ) {
+    assert.ok(Date.now() < until, `a bar with no scroll: ${screen.out()}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  const last = Math.max(...rows().map(answerEnd));
+  const pageFrom = screen.out().length;
+  await screen.press("\x1b[5~", "┃");
+  assert.ok(
+    screen.out().slice(pageFrom).includes("\x1b[7m┃"),
+    "the resting thumb is inverse",
+  );
+  // With no side view open, the timeline's last column is the screen's. A
+  // row's index is its column only because the answer is plain ASCII.
+  // The bar hides 1 s after the scroll: a slow read finds none, and an empty
+  // loop would check nothing.
+  const bar = rows().filter((r) => r.includes("┃"));
+  assert.ok(bar.length > 0, `the bar went away: ${screen.out()}`);
+  for (const r of bar) {
+    assert.equal(r.indexOf("┃"), 99, `not the last column:\n${r}`);
+    assert.equal(answerEnd(r), last, `the answer rewrapped:\n${r}`);
+  }
+  // A hover draws the thumb as a full block. It must stay visible: an
+  // inverse block is the background colour.
+  const row = rowOf(screen.out(), /┃$/);
+  const from = screen.out().length;
+  await screen.press(`\x1b[<35;100;${row}M`, "█");
+  assert.ok(!screen.out().slice(from).includes("\x1b[7m█"), "an inverse block");
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

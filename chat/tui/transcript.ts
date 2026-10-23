@@ -17,6 +17,16 @@
  * A click on the line opens the run, and a second folds it. A fold above
  * the rows the person reads keeps them where they are. A question never
  * folds.
+ *
+ * **The scrollbar is pi-tui's** (M7-6, pi-tui 1.1.0). `auto` paints it over
+ * the last column while the person scrolls, then hides it, so no line
+ * rewraps. pi-tui drags it and jumps on a track click. The track is dim and
+ * the resting thumb inverse. A hover draws the thumb as `█`; that block
+ * stays plain because inverse would paint it in the background colour. A
+ * bump re-checks, in pi-tui's `dist/`: `getContentWidth()` and the 1000 ms
+ * hide delay in `components/scroll-view.js`; `paintScrollbar()` in
+ * `layout.js`, which picks the glyph and styles one cell per call; and
+ * `handleScrollbarMouseEvent()` in `tui-alt-screen.js`, which sets hover.
  */
 
 import {
@@ -47,6 +57,7 @@ import {
   endedLine,
   fg,
   green,
+  inverse,
   italic,
   magenta,
   red,
@@ -248,7 +259,13 @@ function transcriptParts({
   setStatus: () => void;
 }) {
   const transcript = new Transcript();
-  const scroll = new ScrollView(transcript, { follow: "end", primary: true });
+  const scroll = new ScrollView(transcript, {
+    follow: "end",
+    primary: true,
+    scrollbar: "auto",
+    scrollbarTrackStyle: dim,
+    scrollbarThumbStyle: (s) => (s === "█" ? s : inverse(s)),
+  });
   /** The part drawn for each message to an agent, to jump to. */
   let drawn = new WeakMap<Entry, Component>();
   /** The line drawn for each question, which its answer sets again. */
