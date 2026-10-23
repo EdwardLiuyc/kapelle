@@ -58,8 +58,8 @@ git status --porcelain
 - Read the AC list from step 1.
 - For each AC, check the branch's actual code, tests, and CI result. Run the repo's full
   local gate (this repo: `npm test && npm run check && npm run fmt:check && npm run knip
-  && npm run selftest`) and read `gh pr checks <N>` — do not claim a check you have not run
-  or read.
+  && npm run selftest`; only the Markdown lint when every changed file is Markdown) and
+  read `gh pr checks <N>` — do not claim a check you have not run or read.
 - If any AC is not met, stop and report exactly which ACs are still unmet. Do not fix them
   here and do not merge.
 - If all ACs are met, continue.
