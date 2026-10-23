@@ -2,9 +2,9 @@
  * `chat/tui/panel.ts` — the full-screen chat's pop-up (M4-12).
  *
  * The box at the centre of the timeline (M4-5) and what it shows: the
- * ctrl+o menu, a pick list, a text box, the help, and the two forms, new
- * room and add agent. It owns the open pop-up. Esc goes back one level,
- * and a first-level menu closes it. A command it sends goes through the
+ * ctrl+o menu, a pick list, a text box, the help, the setup list (M9-3),
+ * and the two forms, new room and add agent. It owns the open pop-up. Esc
+ * goes back one level, and a first-level menu closes it. A command it sends goes through the
  * screen's `run`; the question box is `chat/tui/question.ts`.
  *
  * The box has a thick border, yellow for a question and cyan for the rest,
@@ -27,7 +27,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { HELP, type RouteCommand } from "../../client/command.ts";
-import type { HarnessEntry, RepoAdded } from "../../client/contract.ts";
+import type { HarnessesReply, RepoAdded } from "../../client/contract.ts";
 import { call, type DaemonAddress } from "../../client/daemon.ts";
 import {
   absoluteFolder,
@@ -36,6 +36,13 @@ import {
 } from "../../client/folder.ts";
 import { nameOf, roster } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
+import {
+  findAgain,
+  markDone,
+  needsSetup,
+  readHarnesses,
+  setupLines,
+} from "../../client/setup.ts";
 import { bold, cyan, dim, inverse, NO_DAEMON, yellow } from "../common.ts";
 import type { View } from "../view.ts";
 import type { Queue } from "./question.ts";
@@ -60,6 +67,8 @@ const MODES = ["auto", "ask", "safe"];
  *  text box, for a git ref or a harness the daemon did not list. */
 const OTHER_REF = "other ref…";
 const OTHER_HARNESS = "other…";
+/** The setup list's title (M9-3). */
+const SETUP = "agents";
 const TYPE_IT = new Set([OTHER_REF, OTHER_HARNESS]);
 
 /**
@@ -74,6 +83,8 @@ interface Panel {
   right?: string;
   body: Component;
   error?: string;
+  /** Which setup opening owns this panel. Generic panels never have one. */
+  setup?: number;
 }
 
 /**
@@ -157,6 +168,10 @@ function panelParts({
   /** The pop-up, while one is open (M4-5), and pi-tui's handle on it. */
   let panel: Panel | undefined;
   let overlay: OverlayHandle | undefined;
+  /** Each opening of the setup list, and whether the person has opened or
+   *  dismissed it. The startup response must not reopen it after a close. */
+  let setupGeneration = 0;
+  let setupTouched = false;
   /** How many rows a list in the pop-up may show. */
   const panelRoom = () =>
     Math.max(3, Math.min(12, (process.stdout.rows || 24) - 12));
@@ -200,25 +215,39 @@ function panelParts({
     if (!away) offer();
   };
 
-  /** The measured harnesses, from `GET /harnesses`, asked once at the
-   *  start and not awaited. Unset until it answers, and for good when this
-   *  daemon has no such route or the ask failed: then the harness row is
-   *  a text box. */
+  /** The measured harnesses, from `GET /harnesses`. Unset until it
+   *  answers, and for good when this daemon has no such route or the ask
+   *  failed: then the harness row is a text box. */
   let measured: string[] | undefined;
-  call<HarnessEntry[]>(d, "/harnesses").then(
-    (res) => {
-      if (!res.ok) return;
-      const ids: string[] = [];
-      for (const h of res.body) if (h.measured) ids.push(h.id);
-      measured = ids.sort((a, b) => a.localeCompare(b));
-    },
-    () => {},
-  );
+  /** Asks `GET /harnesses` once, when the screen is up, and does not wait.
+   *  Its answer fills `measured`, and opens the setup list when the person
+   *  has not said "done" or no agent is ready (M9-3), unless a pop-up, a
+   *  question or `busy` (the side view) came first. */
+  const atStart = async (busy: () => boolean = () => false) => {
+    const res = await readHarnesses(d).catch(() => undefined);
+    if (!res?.ok) return;
+    const ids: string[] = [];
+    for (const h of res.body.harnesses) if (h.measured) ids.push(h.id);
+    measured = ids.sort((a, b) => a.localeCompare(b));
+    // A manual /setup, or its close, while this GET was pending is the
+    // person's answer: the late startup reply must not reopen the list.
+    // The side view too: a list over the shell the person just opened
+    // would take the keys they are typing.
+    if (
+      needsSetup(res.body) &&
+      !setupTouched &&
+      !panel &&
+      !queue.asking &&
+      !busy()
+    ) {
+      await showSetup(res.body);
+    }
+  };
 
   /** Shows `body` in the pop-up. A new body replaces the last one in
    *  the same box, as the menu gives way to a pick list. */
-  const showPanel = (title: string, body: Component) => {
-    panel = { title, body };
+  const showPanel = (title: string, body: Component, setup?: number) => {
+    panel = { title, body, ...(setup !== undefined && { setup }) };
     queue.show(undefined);
     if (!overlay) {
       // Centred on the timeline, not the terminal: pi-tui centres on
@@ -281,6 +310,69 @@ function panelParts({
       },
       invalidate() {},
     });
+
+  /** `/setup done`, or Enter in the setup list: the list stops opening at
+   *  start. A refusal stays in the list when it is open. */
+  const setupDone = async () => {
+    setupTouched = true;
+    // Capture the opening, not the title: a late answer for this one must
+    // not close a newer /setup, and an unrelated "agents" panel is not ours.
+    const target = panel?.setup;
+    await fresh();
+    const r = await markDone(d).catch(() => undefined);
+    const error = !r ? NO_DAEMON : !r.ok ? r.error.message : undefined;
+    const stillOurs = target !== undefined && panel?.setup === target;
+    if (error && stillOurs && panel) {
+      panel.error = error;
+      return tui.requestRender();
+    }
+    if (stillOurs) hidePanel();
+    say(error ? `! ${error}` : "setup done: /setup shows the list again");
+    setStatus();
+  };
+
+  /** The setup list (M9-3): a new find each time it opens, then one line
+   *  per agent. `inHand` shows while the daemon looks, so the start draws
+   *  the reply it already has; the new find then catches an install made
+   *  since that find was saved. Enter is "done"; Esc closes it, and it
+   *  opens again at the next start. */
+  const showSetup = async (inHand?: HarnessesReply) => {
+    setupTouched = true;
+    const generation = ++setupGeneration;
+    const list = (r?: HarnessesReply): Component => ({
+      render: (w) => [
+        ...(r
+          ? setupLines(r)
+          : [{ text: "looking for agents…", tone: "dim" as const }]
+        ).flatMap((l) =>
+          wrapTextWithAnsi(
+            l.tone === "dim"
+              ? dim(l.text)
+              : l.tone === "warn"
+                ? yellow(l.text)
+                : l.text,
+            w,
+          ),
+        ),
+        "",
+        dim("Enter done · Esc later"),
+      ],
+      handleInput(key) {
+        if (matchesKey(key, Key.escape)) hidePanel();
+        else if (matchesKey(key, Key.enter)) void setupDone();
+      },
+      invalidate() {},
+    });
+    const waiting = list(inHand);
+    showPanel(SETUP, waiting, generation);
+    await fresh();
+    const r = await findAgain(d).catch(() => undefined);
+    // Closed, or replaced, while the daemon looked.
+    if (panel?.setup !== generation) return;
+    if (r?.ok) showPanel(SETUP, list(r.body), generation);
+    else panel.error = r ? r.error.message : NO_DAEMON;
+    tui.requestRender();
+  };
 
   /** Opens the ctrl+o menu. `pid` is the agent whose commands it lists;
    *  `back` is where Esc goes. It reopens itself as `self`, so a menu or
@@ -693,6 +785,9 @@ function panelParts({
     words,
     menu,
     showHelp,
+    showSetup,
+    setupDone,
+    atStart,
     newForm,
     addForm,
     askToAdd,

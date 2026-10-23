@@ -86,6 +86,7 @@ node cli.ts "<prompt>" [--agent opencode|pi|claude|copilot|codex|kimi] [--cmd "<
 node cli.ts run --file <run.json> [--detach]   # N tasks (tasks.json is the example); --detach hands them to the daemon
 node cli.ts attach <runId> [--task <id>]       # replay then follow a detached run
 node cli.ts ps                                 # every run the daemon knows, with its tasks
+node cli.ts setup                              # the agents the daemon finds on its PATH, and what to install
 node cli.ts merge <runId> [--squash] [--cwd dir]
 node cli.ts room info | send | add | ff | diff | remove [--room id] [--as name]   # from a participant's checkout
 node cli.ts workspace [--cwd dir]              # where this repo's worktrees and records live
@@ -128,6 +129,7 @@ arrow that points back.
 | `core/sweep.ts` | The daemon's boot sweep. |
 | `core/config.ts` | The config files and `KAPELLE_*` variables. |
 | `core/runtime.ts` | The user-level directories, `stateDir()` and `stateDirFor(root)`. |
+| `core/harnesses.ts` | Which agents are installed (M9-3): the agent's program, then its ACP program, on the daemon's `PATH`, each version by `--version` (pi-acp's from its `package.json`), and `harnesses.json`. |
 | `core/room.ts` | A chat room: a roster of participants, each one harness kept alive across turns. |
 | `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
 | `core/text.ts` | A harness's text made safe for a terminal (#229): `render.ts`, `cli.ts` and the `ask` prompt use it. `client/room.ts` has a copy, and `tests/text.test.ts` checks that they agree. |
@@ -146,6 +148,7 @@ arrow that points back.
 | `client/folder.ts` | Tab completion for a folder path, folders only (M4-5), and a typed folder as a full path, with no throw when the current folder was removed. |
 | `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. Both screens and the pop-up forms use it. |
 | `client/diff.ts` | A diff text read for a screen (M4-6): where each file starts, the question box's `±` line, and the changed-files block's per-file letters and counts (M7-3). |
+| `client/setup.ts` | The setup list (M9-3): the agents the daemon found, as lines, and when the chat opens it. Both screens and `kapelle setup` print it. |
 | `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. Both `chat/` screens read a line through it. |
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
 | `chat/` | The chat screens (M4-7): `tui.ts`, a pi-tui screen over every room on a TTY; `piped.ts`, one room as plain lines; `common.ts`, what both use. With `chat.ts`, they talk HTTP only, and import only `client/`, pi-tui, `core/runtime.ts` and each other; `chat/tui/term.ts` also imports `@xterm/headless`. Their subprocesses are the clipboard tool (`chat/tui/clipboard.ts`) and the person's shell (`chat/tui/term.ts`). |

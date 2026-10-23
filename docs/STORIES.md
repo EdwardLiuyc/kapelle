@@ -3567,6 +3567,9 @@ and login):
 - **D6. Kapelle never installs and never logs in.** It shows the command; the person runs
   it. This is the rule that kapelle never touches a key. For the same reason, no story
   calls `providers/set` (`FINDINGS.md` §Models and login).
+  **Amended 2026-10-22 (#298):** kapelle may install an agent's ACP wrapper, and only the
+  ones the person checks (M9-3b). It still never installs a main program, and never logs
+  in.
 
 **The user state folder.** M9-2, M9-3 and M9-4 each keep a file in
 `$XDG_STATE_HOME/kapelle`. `stateDir()` in `core/runtime.ts` is private today. The first
@@ -3608,14 +3611,17 @@ no second one; two `kapelle` at the same time, so one daemon; the daemon in its 
 session; the log file, and the last one kept; `/leave` with the daemon still running;
 `daemon stop`; and the version message.
 
-**M9-3 · Find the installed agents · S · needs M9-1, M9-2**
-For each registry entry, look for its ACP program and its main program on `PATH`, and
-read the ACP program's version without starting a session. Each agent gets one state:
-ready; main program only, with the install command for the ACP program (for example
-`npm i -g @agentclientprotocol/claude-agent-acp`); or not installed. An ACP program whose
+**M9-3 · Find the installed agents · M · needs M9-1, M9-2**
+For each registry entry, look for its main program on `PATH` first, then its ACP program,
+and read both versions without starting a session. Each agent gets one state: ready
+(both found); main program only, with the install command for the ACP program (for
+example `npm i -g @agentclientprotocol/claude-agent-acp`); or not installed (anything
+else). opencode, copilot and kimi are their own ACP program. An ACP program whose
 version is not `measuredOn.version` gets a warning line. `measuredOn` describes the ACP
-program, so the main program's version is not compared. The registry entry gains the main
-program's name and the install command. The result is saved in the user state folder.
+program, so the main program's version is shown and never compared. The ACP version
+comes from `--version`; pi-acp has no such flag, so its version comes from its own
+`package.json`. The registry entry gains the main program's name and the install
+command. The result is saved in the user state folder.
 A new verb, `kapelle setup`, runs it again, and M9-4's check after it. It also runs at the
 first start, and when the saved result is missing. The chat screen shows it at the first
 start, with each command to run. The help in `cli.ts` and the commands in `AGENTS.md` get
@@ -3624,8 +3630,33 @@ start, with each command to run. The help in `cli.ts` and the commands in `AGENT
 the one that counts, because the daemon starts the agents. The result goes on the
 existing experimental route `GET /harnesses` (M4-5), so it needs no version step;
 `docs/CLIENT-API.md` names this story in that route's row.
-*Done when* tests with a fake `PATH` cover each state, the version warning, the saved
-result, `kapelle setup`, and the route's new fields in `docs/CLIENT-API.md`.
+**Decided 2026-10-22 (#298):** the daemon owns the state. The saved result has
+`checkedAt` and a `done` flag. Only the person sets `done`, with "done" in the chat's
+setup list (`POST /harnesses/done`); closing the chat does not. The chat shows the list
+at start until `done`, and always when no agent is ready. A not-installed agent shows in
+grey, with no install command. A new chat command, `/setup`, opens the list at any time.
+The list finds again each time it opens (`POST /harnesses`), so it has no "check again".
+`kapelle setup` prints the list and does not set `done`. The routes stay experimental;
+M9-8 makes them stable. No install here: M9-3b adds it.
+*Done when* tests with a fake `PATH` cover each state, the version warning (pi-acp's from
+`package.json` too), the saved result and its `done` flag, both new routes, `/setup` in
+both screens, the list at start (shown before `done`, hidden after, shown with no agent
+ready), `kapelle setup`, and the routes' new fields in `docs/CLIENT-API.md`.
+
+**M9-3b · Install the ACP wrappers from the chat · M · needs M9-3**
+Added 2026-10-22 (#298). In the setup list, each "main program only" agent gets a check
+box, and the list gets a "setup" button. The chat sends the checked agent ids to a new
+route, `POST /harnesses/install`, and never a command. The daemon takes each command from
+its registry, runs it, and streams the output to the chat. The daemon runs it, not the
+chat, so a chat on another machine than the daemon installs in the right place. The
+command pins the measured version (for example `npm i -g pi-acp@0.0.34`), so no version
+warning follows the install. When the install fails, for example because it needs
+`sudo`, the chat shows the error and the command for the person to run. After the
+install, the daemon finds the agents again. `AGENTS.md` gets the rule for this new
+subprocess: npm, with a command from the registry only.
+*Done when* tests cover the check boxes, the route (ids only: a command string or an
+unknown id is refused), the streamed output, a failed install, the pinned version, and
+the find after the install.
 
 **M9-4 · Check the login and save the models · M · needs M9-3**
 For each agent M9-3 found ready, and only those, start a check session: `initialize` and
@@ -3787,6 +3818,9 @@ The first release. The person does steps 1 and 2 by hand.
    `npm publish`. It needs `id-token: write`. If npm needs the package to exist before a
    trusted publisher can be added, the first publish is `npm publish` by hand.
 5. Write the release notes on GitHub for the tag. They say Linux and macOS only.
+6. **Added 2026-10-22 (#298):** before the publish, make the `/harnesses` routes stable in
+   `docs/CLIENT-API.md`, with one minor version. M9-3, M9-3b and M9-4 change them, so
+   they stay experimental until then.
 
 The npm page shows `README.md`. Its logo (`src="assets/icon.svg"`) is a relative link,
 and npm points relative links at the repository. So the logo shows only once the
@@ -3859,10 +3893,10 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 **M9 (added 2026-10-15)** needs nothing that is open. More stories will join it.
 
 ```text
-M9-1 ─┬─ M9-3 ─ M9-4 ─ M9-5 ─ M9-6
-M9-2 ─┘
+M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─ M9-6
+M9-2 ─┘        └─ M9-3b
 M9-7   (needs nothing)
-M9-1..M9-7 ─ M9-8   (the first publish)
+M9-1..M9-7, M9-3b ─ M9-8   (the first publish)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:

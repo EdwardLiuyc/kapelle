@@ -16,7 +16,9 @@ permissions:
 
 jobs:
     check:
-        runs-on: ubuntu-latest
+        # Set the repo variable RUNNER to `self-hosted` to run on our own
+        # machine. Delete it to go back to GitHub's runners.
+        runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
         # Defence in depth: the suite spawns subprocesses, and a regression that
         # makes one go silent must not become an endless job.
         timeout-minutes: 15

@@ -53,6 +53,7 @@ import {
 import { agentDiff } from "./client/diff.ts";
 import { ensureDaemon, stopDaemon } from "./client/lifecycle.ts";
 import { fold } from "./client/mention.ts";
+import { findAgain, setupLines } from "./client/setup.ts";
 import { type Connect, followEvents } from "./client/stream.ts";
 import {
   readProjectLinkPaths,
@@ -193,6 +194,8 @@ kapelle — a minimal Agent Client Protocol client
   kapelle attach <runId> [--task <taskId>]
                                      streams a detached run, answers its asks;
                                      --task draws that one task in full
+  kapelle setup                      the agents the daemon finds on its PATH,
+                                     and the command to install what is missing
   kapelle ps                         every run the daemon knows, and each
                                      task's id and status under it
   kapelle merge <runId> [--squash] [--cwd dir]
@@ -337,6 +340,16 @@ if (chatVerb) {
     });
   } else {
     process.exitCode = await runFromFile(runFilePath);
+  }
+} else if (positional[0] === "setup") {
+  if (positional.length !== 1) {
+    console.error("usage: kapelle setup");
+    process.exitCode = 1;
+  } else {
+    process.exitCode = await runSetup().catch((err) => {
+      console.error(`error: ${messageOf(err)}`);
+      return 1;
+    });
   }
 } else if (positional[0] === "ps") {
   process.exitCode = await listRuns().catch((err) => {
@@ -911,6 +924,23 @@ async function detachRun(path: string): Promise<number> {
         `  one task in full: kapelle attach ${id} --task <taskId>`,
     );
   }
+  return 0;
+}
+
+/**
+ * `kapelle setup` (M9-3, #298): the daemon finds the agents again, and the
+ * list prints here, as the chat shows it (`client/setup.ts`). It does not
+ * say "done": only the chat does. M9-4 adds its login check after it.
+ */
+async function runSetup(): Promise<number> {
+  const d = await findDaemon();
+  if (!d) return 1;
+  const r = await findAgain(d);
+  if (!r.ok) {
+    console.error(`error: ${r.error.message}`);
+    return 1;
+  }
+  for (const l of setupLines(r.body)) console.log(l.text);
   return 0;
 }
 

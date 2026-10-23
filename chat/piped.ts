@@ -31,6 +31,7 @@ import {
   readRoom,
   reconcile,
 } from "../client/roomset.ts";
+import { findAgain, markDone, setupLines } from "../client/setup.ts";
 import { parseLine } from "../client/submit.ts";
 import {
   address,
@@ -267,6 +268,17 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       console.error(
         "! a shell needs the full-screen chat: run kapelle chat on a terminal",
       );
+      continue;
+    }
+    if (c.verb === "setup") {
+      const r = await (c.done ? markDone(d) : findAgain(d)).catch(
+        () => undefined,
+      );
+      if (!r) console.error(`! ${NO_DAEMON}`);
+      else if (!r.ok) console.error(`! ${r.error.message}`);
+      else if (c.done)
+        console.log("setup done: the list no longer opens at start");
+      else for (const l of setupLines(r.body)) console.log(l.text);
       continue;
     }
     if (c.verb === "form") {
