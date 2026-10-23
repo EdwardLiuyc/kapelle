@@ -67,8 +67,23 @@ interface MeasuredLabels {
   measuredOn: { version: string; date: string };
 }
 
+/**
+ * How to find the harness on `PATH` (M9-3). Our choice, as `launch` is.
+ * `program` is the agent itself (`pi`); `launch.command` is its ACP program
+ * (`pi-acp`), which may be the same program. `install` installs the ACP
+ * program, and is set only where it is a separate one.
+ */
+interface SetupSpec {
+  program: string;
+  install?: string;
+  /** The ACP program has no `--version`: read its npm `package.json`. */
+  versionFromPackage?: true;
+}
+
 export interface AgentEntry {
   launch: LaunchSpec;
+  /** Absent for `--cmd`: such a harness is not looked for. */
+  setup?: SetupSpec;
   measured?: MeasuredLabels;
   /** Client policy, not measurement: where a run starts and how far it may go. */
   defaultMode?: ClientMode;
@@ -105,6 +120,7 @@ export const AGENTS: Record<string, AgentEntry> = {
   // Native ACP support: `opencode acp` starts it as an ACP subprocess.
   opencode: {
     launch: { command: "opencode", args: ["acp"] },
+    setup: { program: "opencode" },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {
@@ -134,6 +150,12 @@ export const AGENTS: Record<string, AgentEntry> = {
   // behind an ACP front end. Install with: npm i -g pi-acp
   pi: {
     launch: { command: "pi-acp", args: [] },
+    // pi-acp has no `--version`: it starts its server instead (#298).
+    setup: {
+      program: "pi",
+      install: "npm i -g pi-acp",
+      versionFromPackage: true,
+    },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {
@@ -172,6 +194,10 @@ export const AGENTS: Record<string, AgentEntry> = {
       args: [],
       env: CLAUDE_PARENT_ENV,
     },
+    setup: {
+      program: "claude",
+      install: "npm i -g @agentclientprotocol/claude-agent-acp",
+    },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {
@@ -205,6 +231,7 @@ export const AGENTS: Record<string, AgentEntry> = {
   // against `copilot --help` on 1.0.78. Re-check there if this drifts.
   copilot: {
     launch: { command: "copilot", args: ["--acp"] },
+    setup: { program: "copilot" },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {
@@ -233,6 +260,10 @@ export const AGENTS: Record<string, AgentEntry> = {
   //   npm i -g @agentclientprotocol/codex-acp
   codex: {
     launch: { command: "codex-acp", args: [] },
+    setup: {
+      program: "codex",
+      install: "npm i -g @agentclientprotocol/codex-acp",
+    },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {
@@ -264,6 +295,7 @@ export const AGENTS: Record<string, AgentEntry> = {
   // own installer (§Models and login).
   kimi: {
     launch: { command: "kimi", args: ["acp"] },
+    setup: { program: "kimi" },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {

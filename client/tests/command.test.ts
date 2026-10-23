@@ -200,3 +200,12 @@ test("@name /ff --from @name names the target and the source", () => {
     assert.ok(r && "error" in r, line);
   }
 });
+
+test("/setup opens the agent list, and /setup done says done (M9-3)", () => {
+  assert.deepEqual(parse("/setup"), { verb: "setup", done: false });
+  assert.deepEqual(parse("@bob /setup done"), { verb: "setup", done: true });
+  assert.deepEqual(parse("/setup now"), { error: "usage: /setup [done]" });
+  assert.deepEqual(parse("/setup done now"), {
+    error: "usage: /setup [done]",
+  });
+});

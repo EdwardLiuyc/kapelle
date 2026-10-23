@@ -1061,6 +1061,10 @@ function chatTui(
       }
       if (c.verb === "leave") return end(0, left());
       if (c.verb === "help") return showHelp();
+      if (c.verb === "setup") {
+        editor.addToHistory(text);
+        return c.done ? box.setupDone() : box.showSetup();
+      }
       // Typed again to show the shell: ↑ brings it back (ctrl+p steps rows).
       if (c.verb === "term") {
         editor.addToHistory(text);
@@ -1282,6 +1286,8 @@ function chatTui(
     }
     set.start(list);
     open(view);
+    // The shell or a diff in the side view keeps the keys (M9-3).
+    void box.atStart(() => side.shown).catch(gone);
   });
 }
 

@@ -23,6 +23,7 @@ import {
   realpath,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { createServer, request, type ServerResponse } from "node:http";
@@ -39,7 +40,7 @@ import {
 import {
   API_VERSION,
   type Diff,
-  type HarnessEntry,
+  type HarnessesReply,
   type MessageAccepted,
   type ParticipantDto,
   type PermissionDecision,
@@ -58,11 +59,13 @@ import {
   type Daemon,
   daemonApi,
   useDaemonDirs as dirs,
+  fakePath,
   gitRepo,
   HOSTILE_AGENT,
   MOCK_AGENT,
   REPO,
   runCli,
+  savedSetup,
   spawnCli,
   startDaemon as start,
   tempDir,
@@ -4832,6 +4835,9 @@ test("kapelle alone starts a daemon, opens the chat, and /leave leaves it runnin
     mode: 0o755,
   });
   await chmod(fake, 0o755);
+  // As every test daemon: a saved find, so the setup list does not open
+  // over the screen and take the `/leave` this test types (M9-3).
+  savedSetup(state);
   const screen = await ptyScreen(t, "node cli.ts", {
     XDG_RUNTIME_DIR: runtime,
     XDG_STATE_HOME: state,
@@ -4896,6 +4902,7 @@ test("two kapelle at once leave one daemon, and either key ends only the chat", 
       mode: 0o600,
     },
   );
+  savedSetup(state);
   const [a, b] = await Promise.all([
     ptyScreen(t, "node cli.ts", env),
     ptyScreen(t, "node cli.ts", env),
@@ -7623,17 +7630,204 @@ test("after the last agent is removed, the status line names no one and a messag
 
 test("GET /harnesses lists every harness the daemon can launch, and which were measured", async (t) => {
   const d = await boot(t);
-  const r = await api<HarnessEntry[]>(d, "GET", "/harnesses");
+  const r = await api<HarnessesReply>(d, "GET", "/harnesses");
   assert.equal(r.status, 200);
   assert.deepEqual(
-    r.body,
+    r.body.harnesses.map(({ id, measured }) => ({ id, measured })),
     Object.entries(AGENTS).map(([id, a]) => ({
       id,
       measured: a.measured !== undefined,
     })),
   );
   // M9 D2: the registry keeps only measured harnesses.
-  assert.ok(r.body.every((h) => h.measured));
+  assert.ok(r.body.harnesses.every((h) => h.measured));
+});
+
+/** A daemon whose `PATH` is `path`, with no saved find, so the first ask
+ *  finds (M9-3). */
+async function bootFinding(t: TestContext, path: string) {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime, [], runtime, { PATH: path });
+  await rm(join(runtime, "kapelle", "harnesses.json"));
+  return { d, runtime };
+}
+
+const stateOf = (r: HarnessesReply, id: string) =>
+  r.harnesses.find((h) => h.id === id)?.state;
+
+test("the daemon finds the agents on its own PATH, saves the find, and keeps done (M9-3)", async (t) => {
+  const bin = await fakePath(t);
+  const { d, runtime } = await bootFinding(t, bin);
+  const r = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(r.status, 200);
+  assert.equal(r.body.done, false);
+  assert.deepEqual(
+    Object.fromEntries(r.body.harnesses.map((h) => [h.id, h.state])),
+    {
+      opencode: "ready",
+      pi: "ready",
+      claude: "main_only",
+      copilot: "not_installed",
+      codex: "not_installed",
+      kimi: "ready",
+    },
+  );
+  assert.match(
+    r.body.harnesses.find((h) => h.id === "pi")?.warning ?? "",
+    /pi-acp 0\.0\.33/,
+  );
+  assert.ok(existsSync(join(runtime, "kapelle", "harnesses.json")));
+
+  const done = await api<HarnessesReply>(d, "POST", "/harnesses/done");
+  assert.equal(done.status, 200);
+  assert.equal(done.body.done, true);
+
+  // The person installs claude's ACP program. A GET reads the saved find;
+  // a POST finds again, and keeps "done".
+  await writeFile(join(bin, "claude-agent-acp"), "#!/bin/sh\necho 0.89.1\n", {
+    mode: 0o755,
+  });
+  const saved = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(stateOf(saved.body, "claude"), "main_only");
+  const again = await api<HarnessesReply>(d, "POST", "/harnesses");
+  assert.equal(again.status, 200);
+  assert.equal(stateOf(again.body, "claude"), "ready");
+  assert.equal(again.body.done, true);
+  assert.notEqual(again.body.checkedAt, r.body.checkedAt);
+
+  // `kapelle setup` finds again and prints the list; it does not say done.
+  await rm(join(bin, "claude-agent-acp"));
+  const cli = await spawnCli(t, ["setup"], "cli.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  }).done;
+  assert.equal(cli.code, 0, cli.stderr);
+  assert.match(
+    cli.stdout,
+    /^claude +claude 2\.1\.307; needs claude-agent-acp: npm i -g @agentclientprotocol\/claude-agent-acp$/m,
+  );
+  assert.match(
+    cli.stdout,
+    /^codex +not installed: no codex on the daemon's PATH$/m,
+  );
+  assert.match(cli.stdout, /^! pi-acp 0\.0\.33 is not the build/m);
+  const after = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(stateOf(after.body, "claude"), "main_only");
+  assert.equal(after.body.done, true);
+});
+
+test("a find keeps done when an incomplete saved file forces it (M9-3)", async (t) => {
+  const bin = await fakePath(t);
+  const { d, runtime } = await bootFinding(t, bin);
+  const first = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(first.status, 200);
+  assert.equal(first.body.done, false);
+  assert.equal(
+    (await api<HarnessesReply>(d, "POST", "/harnesses/done")).body.done,
+    true,
+  );
+
+  // A later registry has an agent the saved file does not: readSetup calls
+  // the file incomplete and the next GET finds again. That must not reset
+  // the person's "done".
+  const file = join(runtime, "kapelle", "harnesses.json");
+  const saved = JSON.parse(await readFile(file, "utf8")) as HarnessesReply & {
+    found: Record<string, unknown>;
+  };
+  delete saved.found.kimi;
+  await writeFile(file, JSON.stringify(saved));
+
+  const again = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(again.status, 200);
+  assert.equal(again.body.done, true);
+  assert.equal(stateOf(again.body, "kimi"), "ready");
+  const rewritten = JSON.parse(await readFile(file, "utf8")) as {
+    done: unknown;
+  };
+  assert.equal(rewritten.done, true);
+});
+
+test("the piped chat prints the setup list on /setup, and /setup done says done (M9-3)", async (t) => {
+  // The fake agents, and only the tools the room needs: node for the mock
+  // harness, git for the repository.
+  const bin = await fakePath(t);
+  await symlink(process.execPath, join(bin, "node"));
+  await symlink(
+    execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim(),
+    join(bin, "git"),
+  );
+  const { d, runtime } = await bootFinding(t, bin);
+  const cwd = await added(d, await gitRepo(t));
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await c.waitFor("type a message");
+  c.child.stdin.write("/setup\n");
+  await c.waitFor("After an install");
+  c.child.stdin.write("/setup done\n");
+  await c.waitFor("setup done");
+  c.child.stdin.end("/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(
+    r.stdout,
+    /^claude +claude 2\.1\.307; needs claude-agent-acp: /m,
+  );
+  assert.match(r.stdout, /^opencode +ready \(opencode 2\.0\.18\)$/m);
+  const after = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(after.body.done, true);
+});
+
+test("the chat opens the setup list at start until done, and /setup opens it again (M9-3)", {
+  skip: noPty,
+}, async (t) => {
+  const { d, runtime } = await bootFinding(t, await fakePath(t));
+  const { child, press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    // The last row of the list: a frame comes in pieces, top to bottom.
+    "Enter done · Esc later",
+  );
+  assert.match(out(), /needs claude-agent-acp/);
+  // Enter is "done": the list closes, and the daemon keeps it.
+  await press("\r", "setup done");
+  const r = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(r.body.done, true);
+  // `/setup` opens it again, with a new find. Esc closes it.
+  await press("/setup\r", "needs claude-agent-acp");
+  child.stdin.write("\x1b");
+  await new Promise((ok) => setTimeout(ok, 300));
+  await press("\x03", "left the chat");
+  assert.equal(await exited, 0, out());
+
+  // The next start: done, and an agent is ready, so no list.
+  const next = await ptyScreen(t, "stty cols 120 rows 40; node cli.ts chat", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await new Promise((ok) => setTimeout(ok, 1000));
+  assert.doesNotMatch(next.out(), /Enter done · Esc later/);
+  await next.press("\x03", "left the chat");
+  assert.equal(await next.exited, 0, next.out());
+});
+
+test("the chat opens the setup list at every start while no agent is ready, done or not (M9-3)", {
+  skip: noPty,
+}, async (t) => {
+  const { d, runtime } = await bootFinding(t, await tempDir(t));
+  assert.equal(
+    (await api<HarnessesReply>(d, "POST", "/harnesses/done")).body.done,
+    true,
+  );
+  const { child, press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "No agent is ready",
+  );
+  child.stdin.write("\x1b");
+  await new Promise((ok) => setTimeout(ok, 300));
+  await press("\x03", "left the chat");
+  assert.equal(await exited, 0, out());
 });
 
 test("the new-room form completes a folder with Tab, lists the measured harnesses, and adds an unadded folder on yes", {
