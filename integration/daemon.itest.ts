@@ -4,7 +4,7 @@
  *
  * - **An `ask` run answered over HTTP.** Only claude and copilot ask us
  *   (`asksPermission: true`), so only they reach the daemon's queue (M2-3,
- *   M5-4). `tests/daemon.test.ts` proves the queue against `mock-agent.mjs`;
+ *   M5-4). `tests/daemon-runs.test.ts` proves the queue against `mock-agent.mjs`;
  *   this proves a real request reaches it, and that the answer is obeyed.
  * - **A room participant whose mode changes between turns** (M6-5, #149). The
  *   room sends `modeMap.safe` for `safe` and `modeMap.ask` for `auto`, before

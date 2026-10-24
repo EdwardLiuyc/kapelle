@@ -5,7 +5,7 @@
  * field its route does not take is refused (C8); a body that is not JSON by
  * `Content-Type` is a 415 (J2), and one over 4 MiB a 413 before it is held
  * in memory (J1). The route-specific codes are asserted beside the tests of
- * their routes in `tests/daemon.test.ts`; this file holds the ones every
+ * their routes in `tests/daemon*.test.ts`; this file holds the ones every
  * write shares. The daemon is a real subprocess reached over HTTP.
  */
 

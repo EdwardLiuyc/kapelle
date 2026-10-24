@@ -1,7 +1,7 @@
 /**
  * The person's shell — `chat/tui/term.ts`, story M4-13 (#249): a key from
  * pi-tui as a shell's bytes, and a row of cells as text. The shell itself is
- * driven on a pty in `tests/daemon.test.ts`.
+ * driven on a pty in `tests/chat-tui.test.ts`.
  */
 
 import assert from "node:assert/strict";

@@ -1,7 +1,7 @@
 /**
  * The event stream over a real socket — `daemon/sse.ts`, story M5-6 (#138).
  *
- * `tests/daemon.test.ts` proves replay and `Last-Event-ID` through a whole
+ * `tests/daemon-runs.test.ts` proves replay and `Last-Event-ID` through a whole
  * daemon. This file serves one log from a bare HTTP server, so it can shorten
  * the ping and read the server's own socket buffer while a client stalls.
  */

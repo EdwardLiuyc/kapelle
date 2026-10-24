@@ -320,7 +320,7 @@ test("--file runs every task and reports each one", async (t) => {
 
 test("--file runs write the same event log the daemon replays", async (t) => {
   // M2-2 acceptance: `core/run.ts` subscribes the log, so the run-file path
-  // writes one too. The daemon half is covered in tests/daemon.test.ts.
+  // writes one too. The daemon half is covered in tests/daemon-runs.test.ts.
   const cwd = await tempDir(t);
   const file = await runFile(t, mockRun([{ id: "one", prompt: "hi" }]));
 

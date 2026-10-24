@@ -1,6 +1,7 @@
 /**
  * The setup list — `client/setup.ts`, story M9-3 (#298). No daemon:
- * `tests/daemon.test.ts` sends it from a real one, with a fake `PATH`.
+ * `tests/chat-piped.test.ts` and `tests/chat-tui-forms.test.ts` show it from
+ * a real one, with a fake `PATH`.
  */
 
 import assert from "node:assert/strict";

@@ -107,8 +107,9 @@ that answer to `po` too, and `po` guessed, correctly, that the person had asked.
 9. **Worktrees need `node_modules`.** Every worker in every room linked the main
    checkout's copy by hand. Before the spikes, one test run hung for 24 minutes without it.
 10. **The full suite fails from a room worktree's long path.** A pty test in
-    `tests/daemon.test.ts` clips the mock agent's command at 100 or 120 columns. Workers
-    ran the suite from a short temporary worktree instead.
+    `tests/daemon.test.ts` (since #340, the `tests/chat-tui*.test.ts` files) clips the
+    mock agent's command at 100 or 120 columns. Workers ran the suite from a short
+    temporary worktree instead.
 11. **The full suite ran three times on code that had not changed** (spike 1): at the
     build, in the review, and after a change to a comment only. Each run takes 4 to 5
     minutes.

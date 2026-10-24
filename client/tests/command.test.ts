@@ -1,7 +1,7 @@
 /**
  * The typed room commands — `client/command.ts`, story M4-5 (#181).
  *
- * Only the parser: no daemon. `tests/daemon.test.ts` sends each command to
+ * Only the parser: no daemon. `tests/daemon-rooms.test.ts` sends each command to
  * its route, and shows each refusal's message, against `mock-agent.mjs`.
  */
 

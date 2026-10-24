@@ -3,7 +3,7 @@
  *
  * `connect` is faked with bodies built here, so each kind of cut is one line
  * to stage: a body that errors, a body that goes quiet, a refused connect.
- * `tests/daemon.test.ts` proves the same reader against a daemon that is
+ * `tests/attach.test.ts` proves the same reader against a daemon that is
  * killed and started again.
  */
 
