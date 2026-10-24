@@ -78,7 +78,7 @@ kapelle chat attach <roomId>        # rejoin a room; its history replays
 kapelle chat dismiss <roomId>       # stop the room's agents
 ```
 
-In a room, type a message and press Enter. It goes to the room's orchestrator. Start it with `@name` to send it to that agent instead. In an agent's thread, the box always starts with its `@name`. `/leave` exits and keeps the agents alive. `/dismiss` stops the room's agents. Both work in any view, after an agent's `@name` too, and never reach an agent. In a room, kapelle never commits for an agent: uncommitted work stays in the agent's checkout.
+In a room, type a message and press Enter. It goes to the room's orchestrator, or to the only agent when the room has no orchestrator. Start it with `@name` to send it to that agent instead. In an agent's thread, the box always starts with its `@name`. `/leave` exits and keeps the agents alive. `/dismiss` stops the room's agents. Both work in any view, after an agent's `@name` too, and never reach an agent. In a room, kapelle never commits for an agent: uncommitted work stays in the agent's checkout.
 
 On a terminal, a sidebar lists every room and its agents. Click a row, or press `alt+↑`/`alt+↓` (or `ctrl+p`/`ctrl+n`), to see a room's timeline or one agent's thread. A `●` means something waits for you: magenta is a question, yellow is an agent that looks stuck. `ctrl+t`, or a click on `«`, hides the sidebar.
 

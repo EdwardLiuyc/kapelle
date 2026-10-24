@@ -24,8 +24,9 @@
  * A line already drawn keeps the name it had.
  *
  * **The composer names the target** (R43): a leading `@name` goes to that
- * participant, and no mention goes to the orchestrator. Both screens resolve
- * it with `client/mention.ts`, so they cannot differ. Room commands
+ * participant, and no mention goes to the orchestrator, or to the only agent
+ * when the room has none. Both screens resolve it with `client/mention.ts`,
+ * so they cannot differ. Room commands
  * (`/add`, `@name /mode ask`, …) go through `client/command.ts` the same way
  * (M4-5), and never reach an agent.
  *
@@ -59,8 +60,9 @@ is not a valid name, as for --cmd "/opt/bin/my-agent".
 
 kapelle chat takes the same verbs.
 
-in a room, type a message and press enter. It goes to the orchestrator;
-start it with @name to send it to that agent instead.
+in a room, type a message and press enter. It goes to the orchestrator, or to
+the only agent when the room has none; start it with @name to send it to that
+agent instead.
   /leave     exit; the rooms and their harnesses stay alive
   /dismiss   stop the room's harnesses; uncommitted work stays in each
              checkout, because the supervisor never commits for it (R37)
@@ -139,7 +141,7 @@ async function main(): Promise<number> {
             agent: values.agent,
             cmd: values.cmd,
             name: values.name,
-            role: "orchestrator",
+            role: "developer",
           },
         ],
       },

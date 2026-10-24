@@ -2275,6 +2275,16 @@ test("the orchestrator's mark on a worker survives a pause and a restore (#333)"
   assert.equal(back.room.participants[1]?.orderedBy, po.id);
 });
 
+test("a reply or a copy never counts as an order (#333)", async (t) => {
+  const { po, dev, settled } = await loopRoom(t, "remember");
+  await dev.send("go", po);
+  await settled();
+  assert.equal(po.orderedBy, undefined, "a reply is not an order");
+  await dev.send("again");
+  await settled();
+  assert.equal(po.orderedBy, undefined, "a copy is not an order");
+});
+
 test("an error turn replies with its error, and none of its text", async (t) => {
   const { po, dev, told, settled } = await loopRoom(t, "prompt-error");
   await dev.send("go", po);

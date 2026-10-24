@@ -4538,6 +4538,23 @@ test("chat.ts new --name names an agent whose harness label is not a valid name"
   assert.match(r.stdout, /· bob \(/);
 });
 
+test("chat.ts new opens its agent as a developer (#333)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  const [room] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  assert.deepEqual(
+    room?.participants.map((p) => [p.name, p.role]),
+    [["mock-agent", "developer"]],
+  );
+});
+
 test("chat.ts talks to a room end to end: messages in, answers out, /dismiss stops it", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
@@ -5000,7 +5017,7 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   const text = raw.replace(/[ \t]+$/gm, "");
   assert.match(
     text,
-    /▎ you → mock-agent\n▎ alpha\n[\s\S]*▎ mock-agent · mock-agent · orchestrator · \d\d:\d\d\n▎ previous: \(none\)\n[\s\S]*left room \S+; rejoin with/,
+    /▎ you → mock-agent\n▎ alpha\n[\s\S]*▎ mock-agent · mock-agent · developer · \d\d:\d\d\n▎ previous: \(none\)\n[\s\S]*left room \S+; rejoin with/,
     "the typed message, the answer, then the exit line",
   );
   // A line as wide as the terminal gets an empty line after it where the
@@ -7528,7 +7545,7 @@ test("Esc in a second-level pop-up goes back to the menu", {
   await press("\r", "mock-agent · mock-agent");
   // Each second-level list returns to the agent's menu on Esc.
   await press(`${DOWN}\r`, "mock-agent · mode");
-  await press("\x1b", "role · orchestrator");
+  await press("\x1b", "role · developer");
   await press(`${DOWN.repeat(2)}\r`, "mock-agent · role");
   await press("\x1b", "rename …");
   await press(`${DOWN.repeat(3)}\r`, "rename mock-agent");
@@ -7915,6 +7932,11 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
     "is not added to the daemon. Add its repository?",
   );
   await press("\r", "opened room");
+  const [room] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  assert.deepEqual(
+    room?.participants.map((p) => [p.name, p.role]),
+    [["mock-agent", "developer"]],
+  );
   const repos = await api<string[]>(d, "GET", "/repos");
   assert.deepEqual(repos.body, [await realpath(repo)]);
   await press(LEAVE, "rejoin with");
