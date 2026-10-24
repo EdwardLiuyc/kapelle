@@ -1391,7 +1391,10 @@ Since 1.12. When a turn ends, the daemon may send its answer on as a new message
   to another participant that the orchestrator gave work to: a message from the
   orchestrator, with `from`, started one of that participant's turns. A room with no
   orchestrator gets no copies, and a new orchestrator gets none for work the old one
-  gave (#333). The room keeps this across a restart. Its first line is
+  gave. The room keeps this across a restart. **Changed 2026-10-24 (#333), still
+  1.14:** before, the orchestrator got a copy of the person's message to
+  any other participant. Nothing was added,
+  so the version did not change. Its first line is
   `[copy] you → <name> · <end>, <n> tool calls`, then the person's message, then
   `[answer]` and the answer.
 

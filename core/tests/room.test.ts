@@ -2242,14 +2242,21 @@ test("a person's message to a worker the orchestrator ordered sends it one copy,
     "copy",
   ]);
   assert.equal(dev.orderedBy, po.id, "a person's message keeps the mark");
-  assert.deepEqual(told(dev).at(-1), ["hi", undefined, undefined]);
+  assert.equal(told(dev).length, 3, "and dev gets nothing back");
 
-  // To the orchestrator itself, or in a room with none: nothing.
+  // To the orchestrator itself, even with its own mark: nothing.
+  await po.send("self", po);
+  await settled();
+  assert.equal(po.orderedBy, po.id);
+  const before = told(po).length;
   await po.send("plan");
+  await settled();
+  assert.equal(told(po).length, before + 1);
+  // In a room with no orchestrator: nothing.
   room.update(po.id, { role: null });
   await dev.send("again");
   await settled();
-  assert.equal(told(po).length, 3);
+  assert.equal(told(po).length, before + 1);
 
   // A new orchestrator does not take over po's mark.
   const lead = await room.add(
@@ -2273,6 +2280,17 @@ test("the orchestrator's mark on a worker survives a pause and a restore (#333)"
   assert.equal(record.participants[1]?.orderedBy, po.id);
   const back = await restored(t, repo, record);
   assert.equal(back.room.participants[1]?.orderedBy, po.id);
+
+  // A hand edit that is not an id is dropped.
+  const [first, second] = record.participants as [
+    RoomRecord["participants"][number],
+    RoomRecord["participants"][number],
+  ];
+  writeRoomRecord(file, {
+    ...record,
+    participants: [first, { ...second, orderedBy: 42 as unknown as string }],
+  });
+  assert.equal(readRoomRecord(file).participants[1]?.orderedBy, undefined);
 });
 
 test("a reply or a copy never counts as an order (#333)", async (t) => {
