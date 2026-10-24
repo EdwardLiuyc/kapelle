@@ -793,8 +793,9 @@ export function readRoomRecord(path: string): RoomRecord {
         allowReadOutsideRoot: p.settings?.allowReadOutsideRoot === true,
       },
       notices: Array.isArray(p.notices) ? p.notices : [],
-      ...(Number.isInteger(p.turns) && { turns: p.turns }),
-      // A value that is not an id is dropped, so it is never saved again.
+      // A value that is not what we write is dropped, so it is never saved
+      // again.
+      turns: Number.isInteger(p.turns) ? p.turns : undefined,
       orderedBy: typeof p.orderedBy === "string" ? p.orderedBy : undefined,
     })),
   };

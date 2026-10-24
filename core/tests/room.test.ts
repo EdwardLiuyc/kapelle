@@ -1784,6 +1784,26 @@ test("a restored participant goes on counting its turns (S12)", async (t) => {
   );
 });
 
+test("a restored participant counts from 1 when room.json has a bad turns (#343)", async (t) => {
+  const { repo, room, p, file } = await pausable(t, "remember");
+  await p.send("one");
+  await room.pause();
+
+  const record = readRoomRecord(file);
+  const [saved] = record.participants as [RoomRecord["participants"][number]];
+  writeRoomRecord(file, {
+    ...record,
+    participants: [{ ...saved, turns: "x" as unknown as number }],
+  });
+  const read = readRoomRecord(file);
+  assert.equal(read.participants[0]?.turns, undefined);
+
+  const back = await restored(t, repo, read);
+  await back.p.send("two");
+  const [line] = back.of("_client_user_message");
+  assert.equal((line?.update as { turn?: number } | undefined)?.turn, 1);
+});
+
 test("an add after a pause is refused and starts no harness", async (t) => {
   const { room, of } = await pausable(t, "remember");
   await room.pause();
