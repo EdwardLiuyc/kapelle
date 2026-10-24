@@ -1078,8 +1078,9 @@ An agent takes:
   name. When that name does not match, give a `name`.
 - `role`: optional. One of `orchestrator`, `developer`, `tester`, `architect` or
   `reviewer` (since 1.14). No role
-  is given by default. A message goes to the `orchestrator`, so give that role to the
-  agent that should answer.
+  is given by default. A message with no `@name` goes to the `orchestrator`, or to the
+  only participant when the room has one and no orchestrator: see
+  [Addressing](#addressing).
 - `mode`: optional. `ask`, `safe` or `auto`. The default is `auto`. See [Modes](#modes).
 - `base`: optional. The git ref the participant's branch starts from. It can be another
   participant's `branch`, so a reviewer starts from the developer's commits. The default
@@ -1387,8 +1388,15 @@ Since 1.12. When a turn ends, the daemon may send its answer on as a new message
 - **A reply** (`kind: "reply"`) goes to the participant that sent the turn's message
   with `from`. Its first line is `[reply from <name>] <end>, <n> tool calls`.
 - **A copy** (`kind: "copy"`) goes to the orchestrator when the person sent the message
-  to another participant. Its first line is `[copy] you → <name> · <end>, <n> tool
-  calls`, then the person's message, then `[answer]` and the answer.
+  to another participant that the orchestrator gave work to: a message from the
+  orchestrator, with `from`, started one of that participant's turns. A room with no
+  orchestrator gets no copies, and a new orchestrator gets none for work the old one
+  gave. The room keeps this across a restart. **Changed 2026-10-24 (#333), still
+  1.14:** before, the orchestrator got a copy of the person's message to
+  any other participant. Nothing was added,
+  so the version did not change. Its first line is
+  `[copy] you → <name> · <end>, <n> tool calls`, then the person's message, then
+  `[answer]` and the answer.
 
 `from` is the participant whose turn ended. `<end>` is the turn's stop reason,
 `cancelled`, or `error`. The answer is the text after the turn's last tool call, or the
@@ -1633,9 +1641,10 @@ the same rules, so the TUI and piped `chat.ts` behave the same:
 - **Two or more mentions** at the start are a client-side error, known names or not.
   Taking the first and ignoring the rest would send `@edward @bab hi` to edward with
   `@bab` as text, so a typo in the second name would pass unnoticed. Refusing catches it.
-- **No mention** sends the message to the participant whose `role` is `orchestrator`. A
-  room with no orchestrator refuses before the request, and says: start with `@name`, or
-  give a participant the orchestrator role.
+- **No mention** sends the message to the participant whose `role` is `orchestrator`.
+  A room with no orchestrator and one participant sends it to that participant (#333).
+  A room with no orchestrator and two or more participants, or none, refuses before the
+  request, and says: start with `@name`, or give a participant the orchestrator role.
 - After the first word that does not begin with `@`, an `@` is plain text. `@alice ask
   @bob` goes to alice. To start a message with a literal `@`, put it in backticks,
   like `` `@property` ``, or put a word before it.

@@ -2128,6 +2128,13 @@ participant's watchdog warns, never cancels.
 without losing a stream, a message starting `@name` reaches that participant, a message
 with no mention reaches the orchestrator, opening a participant's thread pre-fills its
 `@name`, and every refusal in § Addressing has a resolver test.
+**Amended 2026-10-23 (R43, #333):** `/new` now adds its agent as a `developer`, so a
+normal room has no orchestrator, and no copies wake an agent the message was not for
+(M8-2). So a message with no mention goes to the orchestrator, or to the only
+participant when there is no orchestrator; with two or more and no orchestrator it is
+refused, as before. The rule is in the client only: the room-wide
+`POST /rooms/:id/messages` still needs an orchestrator, and no kapelle client calls it.
+Rooms made before keep their roles.
 Decisions: R8, R19, R43, S11, R38. (S11 settled as (a) plus the additive `_client_room_closed`.)
 **Decided at pickup 2026-09-30 (#48):** the sidebar lists every active room the daemon
 holds, from all repositories; a filter for one repository comes later. A click,
@@ -3382,7 +3389,12 @@ when the turn ends, is cancelled, or its harness exits or is killed. A run task 
 keeps its text from the same events (`transcript` and `prose` in `core/run.ts`). When
 the person messaged a worker, and the room has an orchestrator that is not that worker,
 the orchestrator gets one copy when the turn ends: `[copy] you → <name>`, the person's
-message, then the answer. **A reply or a copy never causes another one:**
+message, then the answer. **Amended 2026-10-23 (#333):** only when the orchestrator gave
+that worker work: a message from it started one of the worker's turns. The room keeps
+the sender's id as `orderedBy` in `room.json`, so a restart keeps it, and a new
+orchestrator does not take over the old one's. So an orchestrator a person set by hand,
+with no loop, wakes only for its own workers. **A reply or a copy never causes another
+one:**
 `_client_user_message` marks it with `kind: "reply"` or `kind: "copy"`, and a turn that
 starts from one sends nothing when it ends. A reply and a copy carry `from` (the
 worker), and their own first line takes the place of M8-1's. A turn that ends with an

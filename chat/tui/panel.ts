@@ -765,7 +765,7 @@ function panelParts({
                       agent: v.agent,
                       cmd: v.cmd,
                       name: v.name,
-                      role: "orchestrator",
+                      role: "developer",
                     },
                   ]
                 : [],

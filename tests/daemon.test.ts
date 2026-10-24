@@ -3983,7 +3983,7 @@ test("one room log names each line's room and participant, and a participant's s
     text: "to bob",
   });
   assert.equal(toBob.status, 202);
-  // Bob's turn sends alice a copy (M8-2), so she is idle only after him.
+  // Alice never ordered bob, so his turn sends her no copy (#333).
   await agentIdle(d, id, bob.id);
   await agentIdle(d, id, alice.id);
   const nobody = `/rooms/${id}/agents/p-nobody`;
@@ -4015,10 +4015,7 @@ test("one room log names each line's room and participant, and a participant's s
       .filter((e) => e.update.sessionUpdate === "_client_user_message")
       .map((e) => e.update.text);
   assert.deepEqual(said(bobs), ["to bob"]);
-  assert.deepEqual(said(await roomEvents(d, id, alice.id)), [
-    "to alice",
-    "[copy] you → bob · end_turn, 0 tool calls\nto bob\n\n[answer]\nprevious: (none)",
-  ]);
+  assert.deepEqual(said(await roomEvents(d, id, alice.id)), ["to alice"]);
 });
 
 test("POST /rooms refuses an unadded folder, a missing or unknown harness, and a bad message", async (t) => {
@@ -4541,6 +4538,23 @@ test("chat.ts new --name names an agent whose harness label is not a valid name"
   assert.match(r.stdout, /· bob \(/);
 });
 
+test("chat.ts new opens its agent as a developer (#333)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  const [room] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  assert.deepEqual(
+    room?.participants.map((p) => [p.name, p.role]),
+    [["mock-agent", "developer"]],
+  );
+});
+
 test("chat.ts talks to a room end to end: messages in, answers out, /dismiss stops it", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
@@ -5003,7 +5017,7 @@ test("chat.ts on a real terminal is the full-screen chat, and leaves the convers
   const text = raw.replace(/[ \t]+$/gm, "");
   assert.match(
     text,
-    /▎ you → mock-agent\n▎ alpha\n[\s\S]*▎ mock-agent · mock-agent · orchestrator · \d\d:\d\d\n▎ previous: \(none\)\n[\s\S]*left room \S+; rejoin with/,
+    /▎ you → mock-agent\n▎ alpha\n[\s\S]*▎ mock-agent · mock-agent · developer · \d\d:\d\d\n▎ previous: \(none\)\n[\s\S]*left room \S+; rejoin with/,
     "the typed message, the answer, then the exit line",
   );
   // A line as wide as the terminal gets an empty line after it where the
@@ -5456,24 +5470,37 @@ test("chat.ts attributes an answer to the roster name, not the harness label", a
   assert.doesNotMatch(r.stdout, /mock-agent: previous/);
 });
 
-test("piped chat.ts refuses a message with no mention in a room with no orchestrator, and @name reaches the participant", async (t) => {
+test("piped chat.ts with no orchestrator: no mention reaches the only agent, is refused with two, and @name reaches the participant", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
   // Built through the API, so no participant has the orchestrator role.
-  const open = await api<RoomReply>(d, "POST", "/rooms", {
-    cwd,
-    agents: [{ cmd: REMEMBER, name: "bob" }],
-  });
-  assert.equal(open.status, 201, open.body.error?.message);
-  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
-    XDG_RUNTIME_DIR: runtime,
-  });
-  c.child.stdin.end("hi\n@Bob, hi\n/dismiss\n");
-  const r = await c.done;
-  assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stderr, /no orchestrator: start with @name/);
-  assert.match(r.stdout, /you → bob: hi\nbob: previous: \(none\)/);
+  const piped = async (
+    agents: { cmd: string; name: string }[],
+    in_: string,
+  ) => {
+    const open = await api<RoomReply>(d, "POST", "/rooms", { cwd, agents });
+    assert.equal(open.status, 201, open.body.error?.message);
+    const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+      XDG_RUNTIME_DIR: runtime,
+    });
+    c.child.stdin.end(in_);
+    const r = await c.done;
+    assert.equal(r.code, 0, r.stderr);
+    return r;
+  };
+  const bob = { cmd: REMEMBER, name: "bob" };
+  // One agent (#333).
+  const one = await piped([bob], "hi\n/dismiss\n");
+  assert.doesNotMatch(one.stderr, /no orchestrator/);
+  assert.match(one.stdout, /you → bob: hi\nbob: previous: \(none\)/);
+
+  const two = await piped(
+    [bob, { cmd: REMEMBER, name: "carol" }],
+    "hi\n@Bob, hi\n/dismiss\n",
+  );
+  assert.match(two.stderr, /no orchestrator: start with @name/);
+  assert.match(two.stdout, /you → bob: hi\nbob: previous: \(none\)/);
 });
 
 test("piped chat.ts sends a message with no mention to the orchestrator, and @name to that participant", async (t) => {
@@ -5497,12 +5524,9 @@ test("piped chat.ts sends a message with no mention to the orchestrator, and @na
   // Each answers with its own previous prompt: two memories, one room.
   assert.match(r.stdout, /you → alice: one\nalice: previous: \(none\)/);
   assert.match(r.stdout, /you → bob: two\nbob: previous: \(none\)/);
-  // Bob's answer reached alice as a copy (M8-2) before "three" was sent.
-  assert.match(r.stdout, /bob → alice: \[copy\] you → bob · end_turn/);
-  assert.match(
-    r.stdout,
-    /you → alice: three\nalice: previous: \[copy\] you → bob/,
-  );
+  // Alice never ordered bob, so his answer sent her no copy (#333).
+  assert.doesNotMatch(r.stdout, /\[copy\]/);
+  assert.match(r.stdout, /you → alice: three\nalice: previous: one/);
   assert.match(r.stderr, /name one participant/);
   assert.match(r.stderr, /nothing to send/);
 });
@@ -5929,11 +5953,11 @@ test("chat.ts on a real terminal keeps a question waiting while the person types
     t,
     `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
-    // The warning is long: the key hints drop (M7-1).
-    "no orchestrator",
+    // The only agent is the target (#333).
+    "→ asker",
   );
   // Text in the composer: the box must not take the next keys.
-  await screen.press("@asker hel", "→ asker");
+  await screen.press("@asker hel", "@asker hel");
   const sent = await api(
     d,
     "POST",
@@ -6583,8 +6607,8 @@ test("chat.ts on a short terminal keeps the question's action in its box", {
     t,
     `stty cols 100 rows 12; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
-    // The warning is long: the key hints drop (M7-1).
-    "no orchestrator",
+    // The only agent is the target (#333).
+    "→ asker",
   );
   const sent = await api(
     d,
@@ -6764,10 +6788,10 @@ test("chat.ts on a real terminal opens a question that came behind the menu once
     t,
     `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
-    // The warning is long: the key hints drop (M7-1).
-    "no orchestrator",
+    // The only agent is the target (#333).
+    "→ asker",
   );
-  // The menu; its key hints dropped beside the long warning.
+  // The menu.
   await screen.press("\x0f", "new room …");
   const sent = await api(
     d,
@@ -7260,7 +7284,7 @@ test("every typed room command reaches its route", async (t) => {
   assert.equal(opened.line, "opened room fix");
   const roomId = opened.room.id;
   const alice = only(opened.room);
-  assert.equal(alice.role, "orchestrator");
+  assert.equal(alice.role, "developer");
 
   // A commit on alice's branch, so `--base @alice` is not the room's HEAD.
   const git = (...args: string[]) =>
@@ -7521,7 +7545,7 @@ test("Esc in a second-level pop-up goes back to the menu", {
   await press("\r", "mock-agent · mock-agent");
   // Each second-level list returns to the agent's menu on Esc.
   await press(`${DOWN}\r`, "mock-agent · mode");
-  await press("\x1b", "role · orchestrator");
+  await press("\x1b", "role · developer");
   await press(`${DOWN.repeat(2)}\r`, "mock-agent · role");
   await press("\x1b", "rename …");
   await press(`${DOWN.repeat(3)}\r`, "rename mock-agent");
@@ -7908,6 +7932,11 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
     "is not added to the daemon. Add its repository?",
   );
   await press("\r", "opened room");
+  const [room] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  assert.deepEqual(
+    room?.participants.map((p) => [p.name, p.role]),
+    [["mock-agent", "developer"]],
+  );
   const repos = await api<string[]>(d, "GET", "/repos");
   assert.deepEqual(repos.body, [await realpath(repo)]);
   await press(LEAVE, "rejoin with");
