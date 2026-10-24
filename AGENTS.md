@@ -202,10 +202,6 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 
 ## Tests
 
-- Before a change is done, run the full gate:
-  `npm test && npm run check && npm run fmt:check && npm run knip && npm run selftest`.
-  If every changed file is a `.md` file, run only markdownlint (see "Markdown lint"). No
-  test reads a tracked `.md` file. CI runs the full gate each time.
 - Suites live in a `tests/` folder beside their sources. `npm run test` needs no harness,
   so CI needs no credentials.
 - `mock-agent.mjs` is the offline, well-behaved harness. **Check a change to
@@ -265,6 +261,9 @@ npx -y markdownlint-cli2 --config .markdownlint.json $(git ls-files '*.md')
 
 Fix findings before finishing. An inline `<!-- markdownlint-disable MD0xx -->` is allowed
 only with a comment saying why.
+
+If every changed file is a `.md` file, this is the only check to run. No test reads a
+tracked `.md` file.
 
 ## Format and lint (TS/JS)
 
