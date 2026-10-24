@@ -1,12 +1,15 @@
 /**
- * Shared plumbing for the real-harness integration suite.
+ * Shared plumbing for the suites that drive the real entry points.
  *
- * These tests drive the **actual CLI** as a subprocess against the **actual
- * harness binaries**, so they need credentials and they spend real tokens.
- * The `*.itest.ts` files stay out of CI: `node --test` does not discover the
- * suffix. The generic plumbing below (spawn helpers, temp dirs, `MOCK_AGENT`)
- * is shared with `tests/cli.test.ts`, which *does* run in CI — keep those parts
- * CI-safe. Run the opt-in files with `npm run test:harness`.
+ * Two kinds of suite use it. The `*.itest.ts` files drive the **actual CLI**
+ * against the **actual harness binaries**, so they need credentials and spend
+ * real tokens; they stay out of CI because `node --test` does not discover the
+ * suffix. Run them with `npm run test:harness`. Most of this file serves the
+ * other kind, which **does** run in CI: `tests/cli.test.ts`, the contract
+ * tests, and the daemon suites (`tests/daemon*.test.ts`, `tests/attach.test.ts`,
+ * `tests/chat-*.test.ts`), whose own helpers are the last section. They use
+ * `mock-agent.mjs`, so everything here except `twoTurns` must stay
+ * credential-free.
  *
  * **Assert on what we control, never on what the model says.** File on disk or
  * not, exit code, our own notice lines. A test that greps for the agent's prose
@@ -598,64 +601,6 @@ export async function gone(pid: number): Promise<boolean> {
   return false;
 }
 
-export interface Stream {
-  status: number;
-  frames: {
-    id: number;
-    data: {
-      seq: number;
-      agent: string;
-      update: { sessionUpdate: string; status?: string };
-    };
-  }[];
-  /** Resolves when the daemon ends the stream. */
-  ended: Promise<void>;
-}
-
-/** Opens the SSE stream and parses frames as they arrive. */
-export async function stream(
-  d: Daemon,
-  id: string,
-  lastEventId?: number | string,
-): Promise<Stream> {
-  const headers: Record<string, string> = {
-    authorization: `Bearer ${d.token}`,
-  };
-  if (lastEventId !== undefined) headers["last-event-id"] = String(lastEventId);
-  const res = await fetch(`${d.url}/runs/${id}/events`, { headers });
-  const out: Stream = {
-    status: res.status,
-    frames: [],
-    ended: Promise.resolve(),
-  };
-  if (res.status !== 200 || !res.body) {
-    await res.body?.cancel();
-    return out;
-  }
-  assert.equal(res.headers.get("content-type"), "text/event-stream");
-  const body = res.body.pipeThrough(new TextDecoderStream());
-  out.ended = (async () => {
-    let buffer = "";
-    for await (const text of body) {
-      buffer += text;
-      for (
-        let end = buffer.indexOf("\n\n");
-        end !== -1;
-        end = buffer.indexOf("\n\n")
-      ) {
-        const frame = buffer.slice(0, end);
-        buffer = buffer.slice(end + 2);
-        const id = /^id: (\d+)$/m.exec(frame)?.[1];
-        const data = /^data: (.*)$/m.exec(frame)?.[1];
-        // A `: ping` block (M5-6) has no data and is no event.
-        if (data === undefined) continue;
-        out.frames.push({ id: Number(id), data: JSON.parse(data) });
-      }
-    }
-  })();
-  return out;
-}
-
 export async function until(
   what: string,
   /** Awaited, so a check that has to ask the daemon is written inline. */
@@ -827,7 +772,7 @@ export async function chatOnPty(t: TestContext, agent = REMEMBER) {
 }
 
 /** CSI, OSC and APC sequences; pi-tui writes all three. */
-export const ESCAPES =
+const ESCAPES =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
   /\x1b(\[[0-9;?<>]*[A-Za-z~]|\][^\x07\x1b]*(\x07|\x1b\\)|_[^\x1b]*\x1b\\)/g;
 

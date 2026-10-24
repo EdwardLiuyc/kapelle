@@ -45,11 +45,9 @@ import {
   type Pending,
   pendingOne,
   type Reply,
-  type Stream,
   settled,
   spawnCli,
   startDaemon as start,
-  stream,
   tempDir,
   until,
 } from "../integration/helpers.ts";
@@ -519,6 +517,64 @@ test("containment notices reach the run record, where nothing drops them", async
 });
 
 // --- GET /runs/:id/events, M2-2 -------------------------------------------------
+
+interface Stream {
+  status: number;
+  frames: {
+    id: number;
+    data: {
+      seq: number;
+      agent: string;
+      update: { sessionUpdate: string; status?: string };
+    };
+  }[];
+  /** Resolves when the daemon ends the stream. */
+  ended: Promise<void>;
+}
+
+/** Opens the SSE stream and parses frames as they arrive. */
+async function stream(
+  d: Daemon,
+  id: string,
+  lastEventId?: number | string,
+): Promise<Stream> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${d.token}`,
+  };
+  if (lastEventId !== undefined) headers["last-event-id"] = String(lastEventId);
+  const res = await fetch(`${d.url}/runs/${id}/events`, { headers });
+  const out: Stream = {
+    status: res.status,
+    frames: [],
+    ended: Promise.resolve(),
+  };
+  if (res.status !== 200 || !res.body) {
+    await res.body?.cancel();
+    return out;
+  }
+  assert.equal(res.headers.get("content-type"), "text/event-stream");
+  const body = res.body.pipeThrough(new TextDecoderStream());
+  out.ended = (async () => {
+    let buffer = "";
+    for await (const text of body) {
+      buffer += text;
+      for (
+        let end = buffer.indexOf("\n\n");
+        end !== -1;
+        end = buffer.indexOf("\n\n")
+      ) {
+        const frame = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const id = /^id: (\d+)$/m.exec(frame)?.[1];
+        const data = /^data: (.*)$/m.exec(frame)?.[1];
+        // A `: ping` block (M5-6) has no data and is no event.
+        if (data === undefined) continue;
+        out.frames.push({ id: Number(id), data: JSON.parse(data) });
+      }
+    }
+  })();
+  return out;
+}
 
 test("a stream attached mid-run gets the history then the live tail, contiguously, as the log file has it", async (t) => {
   const d = await boot(t);
