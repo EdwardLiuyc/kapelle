@@ -262,6 +262,9 @@ npx -y markdownlint-cli2 --config .markdownlint.json $(git ls-files '*.md')
 Fix findings before finishing. An inline `<!-- markdownlint-disable MD0xx -->` is allowed
 only with a comment saying why.
 
+If every changed file is a `.md` file, this is the only check to run. No test reads a
+tracked `.md` file.
+
 ## Format and lint (TS/JS)
 
 `biome` (config: `biome.json`) is the formatter and linter for all tracked TS/JS. After
