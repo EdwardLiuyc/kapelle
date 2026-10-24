@@ -15,8 +15,8 @@
  * nothing else, so anything it can do, a bridge to another chat app can do
  * too. From this repository it and `chat/` import `client/`, which is the
  * transport and the contract's types, and `core/runtime.ts`, which says
- * where `daemon.json` lives (M4-1, S8). `tests/daemon.test.ts` holds that
- * line.
+ * where `daemon.json` lives (M4-1, S8). `tests/chat-piped.test.ts` holds
+ * that line.
  *
  * **It parses no event itself.** Each line goes through the room reducer
  * (`client/room.ts`, M6-10), and both screens draw the entry it returns. The

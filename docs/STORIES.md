@@ -3541,7 +3541,7 @@ orchestrator, so each is its own issue:
   repository, and a cloned repository must not start a process through it. Every worker
   in the spikes linked `node_modules` by hand.
 - **This repository's full suite from a long path.** A pty test in
-  `tests/daemon.test.ts` clips the mock agent's command at 100 or 120 columns, so the
+  the `tests/chat-tui*.test.ts` files clips the mock agent's command at 100 or 120 columns, so the
   suite fails from a room worktree.
 - **This repository's own loop.** Its recipe, `.kapelle/loops/fix-issue.md`, with a
   worker rule to run the full suite once per code change (it ran three times on

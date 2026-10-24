@@ -20,9 +20,9 @@
   // opt-in test suite, so they are ignored rather than misdeclared as
   // production roots. `npm run check` still type-checks them.
   "ignore": ["protocol/types.ts", "integration/**"],
-  // script(1) is util-linux's, spawned by tests/daemon.test.ts to give `attach`
-  // (M2-9) and chat.ts a real pseudo-terminal. A system binary, not an npm one,
-  // so nothing lists it. vim is the same: the /term test (M4-13) runs it in
+  // script(1) is util-linux's, spawned by tests/attach.test.ts and
+  // tests/chat-tui*.test.ts to give `attach` (M2-9) and chat.ts a real
+  // pseudo-terminal. A system binary, not an npm one, so nothing lists it. vim is the same: the /term test (M4-13) runs it in
   // the person's shell when the system has it.
   "ignoreBinaries": ["script", "vim"],
   // Entry points. The `!` suffix marks a *production* entry: without it, knip's
@@ -39,9 +39,9 @@
   // as a subprocess, never imported, so nothing reaches it through the graph.
   //
   // daemon.ts (M2-1) is the second production root: `node daemon.ts` runs it,
-  // and nothing imports it — tests/daemon.test.ts spawns it as a subprocess.
+  // and nothing imports it — the daemon suites spawn it as a subprocess.
   // chat.ts (chat MVP) is the third, for the same reason: `node chat.ts`, spawned
-  // by tests/daemon.test.ts, imported by nothing.
+  // by tests/chat-*.test.ts, imported by nothing.
   "entry": [
     "cli.ts!",
     "daemon.ts!",

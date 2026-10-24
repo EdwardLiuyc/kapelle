@@ -26,6 +26,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -35,6 +36,12 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
+import type {
+  ParticipantDto,
+  RoomDto,
+  RoomEventLine,
+} from "../client/contract.ts";
+import { stateDirFor } from "../core/runtime.ts";
 import { AcpAgent } from "../protocol/agent.ts";
 import { AGENTS, resolveAgent, resolveEnv } from "../protocol/registry.ts";
 
@@ -109,7 +116,7 @@ export interface CliResult {
  * developer's `npm test` would deposit branches and checkouts in their real
  * `~/.local/state/kapelle`. Forced rather than defaulted — inheriting the
  * developer's own is exactly the accident worth closing — and `env` still
- * wins, which is how `tests/daemon.test.ts` gives each daemon its own.
+ * wins, which is how the daemon suites give each daemon its own.
  */
 const SPAWNED_STATE_HOME = mkdtempSync(
   join(tmpdir(), "kapelle-spawned-state-"),
@@ -229,8 +236,8 @@ export function runCli(
 
 /** A daemon under test: its address, its token, and how to read its exit.
  *
- *  Shared by `tests/daemon.test.ts` and `tests/contract/run-dto.test.ts`, so
- *  neither suite copies the boot/HTTP plumbing (AGENTS.md: share, don't
+ *  Shared by the daemon suites and `tests/contract/run-dto.test.ts`, so no
+ *  suite copies the boot/HTTP plumbing (AGENTS.md: share, don't
  *  copy). */
 export interface Daemon {
   url: string;
@@ -490,5 +497,415 @@ export async function twoTurns(t: TestContext, id: string): Promise<TwoTurns> {
     sessionBefore,
     sessionAfter: agent.sessionId,
     spawns,
+  };
+}
+
+// --- the daemon and chat suites (#340) ------------------------------------------
+//
+// `tests/daemon*.test.ts`, `tests/attach.test.ts` and `tests/chat-*.test.ts`
+// were one file. What more than one of them needs is here.
+
+/** The exit of a daemon expected to refuse, or `null` if it kept running. */
+export async function exitOf(
+  d: ReturnType<typeof startDaemon>,
+): Promise<CliResult | null> {
+  const late = new Promise<null>((ok) => setTimeout(() => ok(null), 5_000));
+  return Promise.race([d.done, late]);
+}
+
+/** A run record, a repo, and the `{error}` every refusal sends, typed as the
+ *  tests read them: each test asserts only the fields its reply carries. */
+export interface Reply {
+  id: string;
+  status: string;
+  cwd: string;
+  root: string;
+  source: "live" | "restored";
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  turns?: number;
+  error: { code: string; message: string };
+  cancelRequested?: true;
+  /** One shape live and restored: a field the record cannot fill is omitted. */
+  tasks: {
+    id: string;
+    status: string;
+    agent?: string;
+    durationMs?: number;
+    sessionId?: string;
+    warnings?: { kind: string; text: string }[];
+  }[];
+  notices: { taskId: string; text: string }[];
+}
+
+/** The suite's default reply type; `daemonApi` itself is shared. */
+export async function api<T = Reply>(
+  d: Daemon,
+  method: string,
+  path: string,
+  body?: unknown,
+  token: string | null = d.token,
+): Promise<{ status: number; body: T }> {
+  return daemonApi<T>(d, method, path, body, token);
+}
+
+export const mockRun = (
+  tasks: Record<string, unknown>[],
+  rest: Record<string, unknown> = {},
+) => ({ cmd: `node ${MOCK_AGENT}`, mode: "auto", ...rest, tasks });
+
+/** Polls `GET /runs/:id` until the run leaves `running`. */
+export async function settled(d: Daemon, id: string): Promise<Reply> {
+  for (const until = Date.now() + 20_000; Date.now() < until; ) {
+    const r = await api(d, "GET", `/runs/${id}`);
+    assert.equal(r.status, 200);
+    if (r.body.status !== "running") return r.body;
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  throw new Error(`run ${id} never settled`);
+}
+
+/** Does the repository have this exact local branch? */
+export function hasBranch(root: string, branch: string): boolean {
+  return (
+    spawnSync("git", ["rev-parse", "--verify", `refs/heads/${branch}`], {
+      cwd: root,
+    }).status === 0
+  );
+}
+
+/** Is `pid` a live process right now? */
+export function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True once `pid` is gone, false if it is still alive after 10s. */
+export async function gone(pid: number): Promise<boolean> {
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  return false;
+}
+
+export interface Stream {
+  status: number;
+  frames: {
+    id: number;
+    data: {
+      seq: number;
+      agent: string;
+      update: { sessionUpdate: string; status?: string };
+    };
+  }[];
+  /** Resolves when the daemon ends the stream. */
+  ended: Promise<void>;
+}
+
+/** Opens the SSE stream and parses frames as they arrive. */
+export async function stream(
+  d: Daemon,
+  id: string,
+  lastEventId?: number | string,
+): Promise<Stream> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${d.token}`,
+  };
+  if (lastEventId !== undefined) headers["last-event-id"] = String(lastEventId);
+  const res = await fetch(`${d.url}/runs/${id}/events`, { headers });
+  const out: Stream = {
+    status: res.status,
+    frames: [],
+    ended: Promise.resolve(),
+  };
+  if (res.status !== 200 || !res.body) {
+    await res.body?.cancel();
+    return out;
+  }
+  assert.equal(res.headers.get("content-type"), "text/event-stream");
+  const body = res.body.pipeThrough(new TextDecoderStream());
+  out.ended = (async () => {
+    let buffer = "";
+    for await (const text of body) {
+      buffer += text;
+      for (
+        let end = buffer.indexOf("\n\n");
+        end !== -1;
+        end = buffer.indexOf("\n\n")
+      ) {
+        const frame = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const id = /^id: (\d+)$/m.exec(frame)?.[1];
+        const data = /^data: (.*)$/m.exec(frame)?.[1];
+        // A `: ping` block (M5-6) has no data and is no event.
+        if (data === undefined) continue;
+        out.frames.push({ id: Number(id), data: JSON.parse(data) });
+      }
+    }
+  })();
+  return out;
+}
+
+export async function until(
+  what: string,
+  /** Awaited, so a check that has to ask the daemon is written inline. */
+  check: () => boolean | Promise<boolean>,
+  ms = 20_000,
+): Promise<void> {
+  for (const end = Date.now() + ms; Date.now() < end; ) {
+    if (await check()) return;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+export interface Pending {
+  id: string;
+  runId: string;
+  taskId: string;
+  kind: string;
+  title: string;
+}
+
+/** A run file naming no mode: every registry entry defaults to `ask`, so this
+ *  is the file people actually write. */
+export const askRun = (cwd: string) => ({
+  cwd,
+  run: { cmd: `node ${MOCK_AGENT}`, tasks: [{ id: "one", prompt: "hi" }] },
+});
+
+/** Polls `GET /permissions` until one decision is pending, and returns it. */
+export async function pendingOne(d: Daemon): Promise<Pending> {
+  for (const end = Date.now() + 20_000; Date.now() < end; ) {
+    const r = await api<Pending[]>(d, "GET", "/permissions");
+    assert.equal(r.status, 200);
+    const [found] = r.body;
+    if (found) return found;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  throw new Error("no permission ever became pending");
+}
+
+export const REMEMBER = `node ${MOCK_AGENT} --scenario remember`;
+
+export interface RoomReply extends RoomDto {
+  error: { code: string; message: string };
+}
+
+/** A `POST /rooms` body with one orchestrator running `cmd`. */
+export const withAgent = (cwd: string, cmd: string) => ({
+  cwd,
+  agents: [{ cmd, role: "orchestrator" }],
+});
+
+/** The room's one participant. */
+export const only = (room: RoomDto): ParticipantDto => {
+  assert.equal(room.participants.length, 1);
+  return room.participants[0] as ParticipantDto;
+};
+
+/** Polls `GET /rooms/:id` until its participant is no longer `busy`. */
+export async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
+  for (const until = Date.now() + 20_000; Date.now() < until; ) {
+    const r = await api<RoomReply>(d, "GET", `/rooms/${id}`);
+    assert.equal(r.status, 200);
+    if (only(r.body).status !== "busy") return r.body;
+    await new Promise((ok) => setTimeout(ok, 25));
+  }
+  throw new Error(`room ${id} never went idle`);
+}
+
+/** Commits one file in a participant's checkout, as the agent itself would
+ *  (R37: the supervisor never commits). */
+export async function commitAt(worktree: string, file: string) {
+  await writeFile(join(worktree, file), `${file}\n`);
+  for (const args of [
+    ["add", file],
+    ["commit", "-qm", file],
+  ]) {
+    const r = spawnSync("git", args, { cwd: worktree, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+  }
+}
+
+/** A checkout's HEAD sha. */
+export const headAt = (worktree: string) =>
+  spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: worktree,
+    encoding: "utf8",
+  }).stdout.trim();
+
+/** `script` from util-linux gives a child a real pseudo-terminal. Its flags
+ *  differ on macOS, so the TTY test is Linux-only; it skips elsewhere. */
+export const noPty =
+  process.platform !== "linux" ||
+  spawnSync("script", ["--version"]).status !== 0
+    ? "needs util-linux script(1) for a pseudo-terminal"
+    : false;
+
+/**
+ * A command on a pseudo-terminal, once `until` is on screen. Pipes never
+ * reach this path: only a TTY gets the pi-tui screen. A pty made by `script`
+ * from a pipe has no size, so the command sets one.
+ *
+ * `press` writes keys and waits for `text` in what is drawn after them,
+ * because a string that was already on screen proves nothing about a key.
+ */
+export async function ptyScreen(
+  t: TestContext,
+  command: string,
+  env: Record<string, string>,
+  until = "enter to send",
+) {
+  const child = spawn("script", ["-qfec", command, "/dev/null"], {
+    cwd: join(import.meta.dirname, ".."),
+    env: { ...process.env, ...env },
+  });
+  t.after(() => void child.kill("SIGKILL"));
+
+  let out = "";
+  child.stdout.setEncoding("utf8").on("data", (c: string) => {
+    out += c;
+  });
+  const seen = (text: string) =>
+    new Promise<void>((ok, fail) => {
+      const bail = setTimeout(
+        () => fail(new Error(`never saw ${text}: ${out}`)),
+        20_000,
+      );
+      const check = () => {
+        if (!out.includes(text)) return;
+        clearTimeout(bail);
+        child.stdout.off("data", check);
+        ok();
+      };
+      child.stdout.on("data", check);
+      check();
+    });
+  const press = async (keys: string, text: string) => {
+    const from = out.length;
+    child.stdin.write(keys);
+    for (const until = Date.now() + 20_000; ; ) {
+      if (out.slice(from).includes(text)) return;
+      assert.ok(Date.now() < until, `${JSON.stringify(keys)}: ${out}`);
+      await new Promise((ok) => setTimeout(ok, 50));
+    }
+  };
+  const exited = new Promise<number | null>((ok) =>
+    child.on("close", (code) => ok(code)),
+  );
+
+  await seen(until);
+  return { child, seen, press, exited, out: () => out };
+}
+
+/**
+ * `chat.ts new` on a pseudo-terminal, against a fresh daemon, once the
+ * screen is up.
+ */
+/** The keys that leave the chat screen: ctrl+c twice. pi-tui splits the
+ *  chunk into two keys, as it does for a terminal that sends them at once. */
+export const LEAVE = "\x03\x03";
+
+export async function chatOnPty(t: TestContext, agent = REMEMBER) {
+  const runtime = await tempDir(t);
+  const d = await bootDaemon(t, runtime);
+  const cwd = await addRepo(d, await gitRepo(t));
+  const cmd = `stty cols 100 rows 30; node chat.ts new --cmd '${agent}' --cwd '${cwd}'`;
+  const screen = await ptyScreen(t, cmd, { XDG_RUNTIME_DIR: runtime });
+  return { ...screen, d, cwd };
+}
+
+/** CSI, OSC and APC sequences; pi-tui writes all three. */
+export const ESCAPES =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
+  /\x1b(\[[0-9;?<>]*[A-Za-z~]|\][^\x07\x1b]*(\x07|\x1b\\)|_[^\x1b]*\x1b\\)/g;
+
+/** Terminal output as text: no escapes, no carriage returns. */
+export const plainText = (out: string) =>
+  out.replace(ESCAPES, "").replace(/\r/g, "");
+
+/** The screen now, by row. pi-tui writes a row as CSI row;1H, CSI 2K, so
+ *  the last text written to each row is what it shows. */
+export function screenRows(out: string) {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
+  const parts = out.split(/\x1b\[(\d+);1H\x1b\[2K/);
+  const rows = new Map<number, string>();
+  for (let i = 1; i < parts.length; i += 2) {
+    rows.set(Number(parts[i]), plainText(parts[i + 1] ?? ""));
+  }
+  return rows;
+}
+
+/** The first row on screen whose text matches. 0 for none. */
+export const rowOf = (out: string, re: RegExp) =>
+  [...screenRows(out)].find(([, text]) => re.test(text))?.[0] ?? 0;
+
+/** What stays on the normal screen once the alternate one is left. */
+export const scrollback = (out: string) =>
+  plainText(out.slice(out.lastIndexOf("\x1b[?1049l")));
+
+/** A daemon whose `PATH` is `path`, with no saved find, so the first ask
+ *  finds (M9-3). */
+export async function bootFinding(t: TestContext, path: string) {
+  const runtime = await tempDir(t);
+  const d = await bootDaemon(t, runtime, [], runtime, { PATH: path });
+  await rm(join(runtime, "kapelle", "harnesses.json"));
+  return { d, runtime };
+}
+
+/** Every line of a room's log, read from disk. */
+export async function roomLog(
+  root: string,
+  id: string,
+): Promise<
+  (Omit<RoomEventLine, "update"> & { update: Record<string, unknown> })[]
+> {
+  const text = await readFile(
+    join(stateDirFor(root), "rooms", id, "events.jsonl"),
+    "utf8",
+  );
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+/** The answers in `lines`, in order. */
+export const answersIn = (lines: { update: Record<string, unknown> }[]) =>
+  lines
+    .filter((l) => l.update.sessionUpdate === "agent_message_chunk")
+    .map((l) => (l.update.content as { text: string }).text);
+
+/** A room with one `cmd` participant on a first daemon, and what a second
+ *  daemon on the same directories needs. */
+export async function roomToRestart(t: TestContext, cmd: string) {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await bootDaemon(t, runtime, [], state);
+  const cwd = await realpath(await addRepo(first, await gitRepo(t)));
+  const open = await api<RoomReply>(first, "POST", "/rooms", {
+    ...withAgent(cwd, cmd),
+    title: "kept",
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const again = () => bootDaemon(t, runtime, [], state);
+  return {
+    first,
+    cwd,
+    id: open.body.id,
+    alice: only(open.body),
+    again,
+    runtime,
   };
 }
