@@ -1790,13 +1790,16 @@ test("a restored participant counts from 1 when room.json has a bad turns (#343)
   await room.pause();
 
   const record = readRoomRecord(file);
-  const [saved] = record.participants as [RoomRecord["participants"][number]];
+  const saved = record.participants[0];
+  assert.ok(saved);
   writeRoomRecord(file, {
     ...record,
     participants: [{ ...saved, turns: "x" as unknown as number }],
   });
   const read = readRoomRecord(file);
-  assert.equal(read.participants[0]?.turns, undefined);
+  const got = read.participants[0];
+  assert.ok(got);
+  assert.equal(got.turns, undefined);
 
   const back = await restored(t, repo, read);
   await back.p.send("two");
