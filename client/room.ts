@@ -142,7 +142,7 @@ const DETAIL_KEYS = [
   "pattern",
   "query",
   "url",
-];
+] as const;
 /** The most a tool row's title or detail keeps, in characters. */
 const TOOL_TEXT = 200;
 /** The most a slot keeps of each text: enough to compare, with no whole
@@ -160,7 +160,12 @@ interface ToolSlot {
   location?: string;
   /** Every base this call has had while its late details arrive. */
   bases: Set<string>;
+  /** An update arrived, or the call was already terminal. */
+  settled: boolean;
 }
+
+/** A call's title can change while it settles; keep only a bounded history. */
+const MAX_TOOL_BASES = 8;
 
 // ACP raw JSON is unknown at this boundary; this helper narrows it.
 // pi-lens-ignore: no-unknown-parameters, no-runtime-typeof
@@ -307,6 +312,8 @@ interface StallAnchor {
   bases: string[];
   /** Stable `rawInput` or location, when the harness has sent one. */
   detail?: string;
+  /** The call had not had an update or a terminal status when it warned. */
+  provisional?: true;
 }
 
 /** A live watchdog warning. The transcript entry is the history; this is only
@@ -400,6 +407,16 @@ export interface RoomState {
   tools: Map<string, ToolSlot>;
 }
 
+/** Adds this call's current base, keeping only the recent history. */
+function rememberBase(slot: ToolSlot): void {
+  slot.bases.add(toolIdentity(slot).base);
+  while (slot.bases.size > MAX_TOOL_BASES) {
+    const oldest = slot.bases.values().next().value;
+    if (oldest === undefined) break;
+    slot.bases.delete(oldest);
+  }
+}
+
 /** What distinguishes one tool operation from another. `toolCallId` only
  *  correlates a call with its updates; it is never the identity itself. Keep
  *  the stable keys in step with `core/watchdog.ts`: `client/` cannot import
@@ -438,8 +455,10 @@ function resolveRepeat(
     anchor.base = next.base;
     anchor.bases = bases;
     if (next.detail !== undefined) anchor.detail = next.detail;
+    if (slot.settled) anchor.provisional = undefined;
     return;
   }
+  if (anchor.provisional) return;
   if (!anchor.bases.includes(next.base)) {
     p.stall = undefined;
     return;
@@ -632,12 +651,18 @@ export function applyLine(
         title: str(u.title) ?? "",
         input: detailInput(u.rawInput),
         bases: new Set(),
+        settled: false,
       };
       const location = str(u.locations?.[0]?.path);
       if (location) slot.location = location;
       showTool(slot);
       toolFacts(slot.entry, u);
-      slot.bases.add(toolIdentity(slot).base);
+      rememberBase(slot);
+      const identity = toolIdentity(slot);
+      slot.settled =
+        identity.detail !== undefined ||
+        status === "completed" ||
+        status === "failed";
       state.tools.set(`${participantId} ${u.toolCallId}`, slot);
       if (p) {
         p.thinking = undefined;
@@ -675,10 +700,16 @@ export function applyLine(
       if (status) entry.status = status;
       showTool(slot);
       toolFacts(entry, u);
-      slot.bases.add(toolIdentity(slot).base);
-      // An old call's late update says nothing about the operation the
-      // warning is about; only the live one can resolve it.
-      if (p && p.toolId === u.toolCallId) resolveRepeat(p, u.toolCallId, slot);
+      rememberBase(slot);
+      slot.settled = true;
+      // A non-live call may still be the warning's own provisional anchor.
+      if (
+        p &&
+        (p.toolId === u.toolCallId ||
+          p.stall?.anchor?.toolCallId === u.toolCallId)
+      ) {
+        resolveRepeat(p, u.toolCallId, slot);
+      }
       // Output alone (`_meta.terminal_output`) changes nothing drawn.
       return drawn() === was ? undefined : entry;
     }
@@ -753,6 +784,7 @@ export function applyLine(
             toolCallId: p.toolId,
             bases: [...slot.bases],
             ...toolIdentity(slot),
+            ...(!slot.settled && { provisional: true as const }),
           };
         }
         p.stall = stall;

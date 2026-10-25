@@ -18,10 +18,9 @@
  *   kind as the fallback. `toolCallId` correlates updates and is never the
  *   identity itself: a new id is a new call, not necessarily a new operation.
  *
- * A repeat warning rings once for an identity family in one watch. The set
- * includes the late-refined identities of the operations that produced it, so
- * one loop does not ring again as each call gets its command; a different
- * identity that itself reaches the threshold rings anew.
+ * A repeat warning moves to the settled identity when the operations that
+ * produced it refine together. One identity rings once in a watch; a different
+ * identity that reaches the threshold re-arms the warning.
  *
  * Both warn and the task keeps running. Only the longer `ttlMs` acts, and all
  * it does is ask the caller to cancel: ACP gives no way to nudge a turn in
@@ -126,8 +125,8 @@ interface WatchState {
   /** Questions asked and not yet answered. Idle does not count while one waits. */
   asking: number;
   idleWarned: boolean;
-  /** Identities of the streak that already rang, including refinements. */
-  warnedIdentities?: Set<string>;
+  /** The identity whose repeat already rang for this watch. */
+  warnedIdentity?: string;
   /** The operations that made up the warned streak. */
   warnedIds?: Set<string>;
   timedOut: boolean;
@@ -204,9 +203,26 @@ function refreshRepeat(state: WatchState): void {
   state.repeatCount = count;
   state.lastIdentity = last.identity;
   state.lastTitle = last.title;
+  if (state.warnedIds) {
+    const liveIds = new Set(state.operations.map((operation) => operation.id));
+    for (const id of state.warnedIds) {
+      if (!liveIds.has(id)) state.warnedIds.delete(id);
+    }
+    if (state.warnedIds.size === 0) state.warnedIds = undefined;
+  }
+  if (
+    state.warnedIds &&
+    state.repeatCount >= state.limits.stallRepeatCount &&
+    state.operations.every((operation) => state.warnedIds?.has(operation.id))
+  ) {
+    state.warnedIdentity = last.identity;
+    state.warnedIds = undefined;
+  }
 }
 
 /** Starts or refines an operation; only a `tool_call` starts a new one. */
+// The two wire shapes share one merge path; splitting it would duplicate the map.
+// pi-lens-ignore: high-complexity
 function recordTool(
   state: WatchState,
   update: AgentEventEnvelope["update"],
@@ -250,8 +266,8 @@ function recordTool(
     const location = bounded(update.locations?.[0]?.path);
     if (location) operation.location = location;
     operation.identity = identityOf(operation);
-    if (state.warnedIds?.has(operation.id)) {
-      state.warnedIdentities?.add(operation.identity);
+    if (state.warnedIds && operation.identity === state.warnedIdentity) {
+      state.warnedIds.add(operation.id);
     }
   } else {
     return;
@@ -351,9 +367,9 @@ function check(
     stallRepeatCount > 0 &&
     state.repeatCount >= stallRepeatCount &&
     state.lastIdentity !== undefined &&
-    !state.warnedIdentities?.has(state.lastIdentity)
+    state.lastIdentity !== state.warnedIdentity
   ) {
-    state.warnedIdentities = new Set([state.lastIdentity]);
+    state.warnedIdentity = state.lastIdentity;
     state.warnedIds = new Set(
       state.operations.map((operation) => operation.id),
     );

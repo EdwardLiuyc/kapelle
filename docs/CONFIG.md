@@ -130,8 +130,7 @@ Known name → knob → accepted values:
 | `KAPELLE_RETENTION_MS` | `retentionMs` | integer ≥ 0 |
 
 `stallRepeatCount` also bounds retained history: each operation keeps up to
-seven identity strings of 800 characters, so a very large value costs memory
-in proportion.
+about 12 KB of identity text, so a very large value costs memory in proportion.
 
 ## Precedence and built-in floors
 

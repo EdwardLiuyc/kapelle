@@ -617,6 +617,11 @@ test("a detail-less repeat warning clears on one different operation", () => {
     kind: "other",
   });
   send(state, "alice", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "todo-1",
+    status: "completed",
+  });
+  send(state, "alice", {
     sessionUpdate: "_client_stall_warning",
     kind: "repeat",
     text: '3× "Update todos" in a row',
@@ -630,6 +635,49 @@ test("a detail-less repeat warning clears on one different operation", () => {
     kind: "execute",
   });
   assert.equal(needsAttention(state, "alice"), false);
+});
+
+test("a provisional anchor is refined by its own late update", () => {
+  const state = aliceTurn();
+  send(state, "alice", {
+    sessionUpdate: "tool_call",
+    toolCallId: "batch-1",
+    title: "Terminal",
+    kind: "execute",
+  });
+  send(state, "alice", {
+    sessionUpdate: "_client_stall_warning",
+    kind: "repeat",
+    text: '3× "Terminal" in a row',
+  });
+  send(state, "alice", {
+    sessionUpdate: "tool_call",
+    toolCallId: "batch-2",
+    title: "Terminal",
+    kind: "execute",
+  });
+  assert.equal(needsAttention(state, "alice"), true);
+
+  // batch-1 settles after batch-2 became the live call.
+  send(state, "alice", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "batch-1",
+    title: "pytest",
+    kind: "execute",
+    rawInput: { command: "pytest" },
+  });
+  send(state, "alice", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "batch-2",
+    title: "pytest",
+    kind: "execute",
+    rawInput: { command: "pytest" },
+  });
+  assert.equal(
+    needsAttention(state, "alice"),
+    true,
+    "the same loop stays live",
+  );
 });
 
 test("a late-refined loop stays the same operation across iterations", () => {

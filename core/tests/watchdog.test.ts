@@ -390,6 +390,34 @@ test("a batch of unrefined calls warns once after refinement", () => {
   );
 });
 
+test("distinct refinements do not mask a later repeat", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+
+  for (let i = 1; i <= 3; i++) {
+    h.wd.note(toolCall("a", "Terminal", undefined, "execute", `t${i}`));
+  }
+  h.wd.sweep();
+  assert.equal(h.warns.length, 1);
+
+  for (const [i, command] of ["pytest", "eslint", "tsc"].entries()) {
+    h.wd.note(toolUpdate("a", `t${i + 1}`, { command }, "execute", command));
+  }
+  h.wd.sweep();
+  assert.equal(h.warns.length, 1, "the batch was not a loop");
+
+  for (let i = 1; i <= 3; i++) {
+    h.wd.note(
+      toolCall("a", "pytest", { command: "pytest" }, "execute", `p${i}`),
+    );
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [
+    ["a", "repeat"],
+    ["a", "repeat"],
+  ]);
+});
+
 test("stallRepeatCount 0 disables the repeat signal", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 0 }));
