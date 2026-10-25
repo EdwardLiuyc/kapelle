@@ -143,13 +143,14 @@ test("from a participant's checkout, info and send find the room and the sender"
   assert.equal(info.code, 0, info.stderr);
   assert.match(info.stdout, new RegExp(`^${f.room.id}  active`));
   // Each participant's branch follows its mode (#358).
-  assert.ok(po.branch);
-  assert.ok(
-    info.stdout
-      .split("\n")
-      .includes(`  po  orchestrator  mock-agent  auto  ${po.branch}  idle`),
-    info.stdout,
-  );
+  const rows = info.stdout.split("\n");
+  for (const p of [po, dev, rev]) {
+    assert.ok(p.branch);
+    const row = rows.find((line) => line.startsWith(`  ${p.name}  `));
+    assert.ok(row, `${p.name}: ${info.stdout}`);
+    const throughBranch = `  ${p.name}  ${p.role ?? "-"}  ${p.harness}  ${p.mode}  ${p.branch}  `;
+    assert.ok(row.startsWith(throughBranch), `${p.name}: ${row}`);
+  }
   assert.match(info.stdout, /^ {2}dev {2}developer .* busy, from po$/m);
   assert.match(info.stdout, /^ {2}rev {2}reviewer .* busy, from the person$/m);
 
@@ -458,6 +459,13 @@ test("the orchestrator adds a reviewer, moves a branch, reads a diff and removes
     roster.participants.map((p) => p.name),
     ["po", "dev", "rev"],
   );
+});
+
+test("the room usage says info shows each agent's branch", async (t) => {
+  const dir = await tempDir(t);
+  const r = await room(t, dir, dir, ["nope"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^ {2}info .*branch/m, r.stderr);
 });
 
 test("a verb it does not know, or a wrong shape, prints the usage", async (t) => {
