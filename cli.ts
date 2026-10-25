@@ -1448,7 +1448,8 @@ function byName(room: RoomDto, name: string): ParticipantDto | undefined {
 async function runRoomCommand(): Promise<number> {
   const usage = [
     "usage: kapelle room <verb> [--room <id>] [--as <name>] [--cwd dir]",
-    "  info                       the room, and who sent each busy agent's work",
+    "  info                       the room, each agent's branch, and who sent",
+    "                             each busy agent's work",
     "  send <name> [text]         a message; the text from stdin when none",
     "  add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--base @name|ref]",
     "  ff <name> --from <name>    move <name>'s branch up to the other's commit",
@@ -1528,7 +1529,7 @@ async function runRoomCommand(): Promise<number> {
             : `, from ${oneLine(room.participants.find((q) => q.id === p.turnFrom)?.name ?? p.turnFrom)}`;
       console.log(
         oneLine(
-          `  ${p.name}  ${p.role ?? "-"}  ${p.harness}  ${p.mode}  ${p.status}${from}`,
+          `  ${p.name}  ${p.role ?? "-"}  ${p.harness}  ${p.mode}  ${p.branch ?? "-"}  ${p.status}${from}`,
         ),
       );
     }
