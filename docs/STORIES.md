@@ -3477,6 +3477,22 @@ recorded runs with this repository's recipe pass, added to
 `docs/ORCHESTRATOR-SPIKES.md`: one with no choice reaches the hand-over with only "go" from
 the person, and one with a choice stops and goes on after the person answers `dev`
 directly.
+**Decided 2026-10-24 (#268):** the two runs need this repository's recipe before M8-5
+exists, so this story writes `.kapelle/loops/fix-issue.md` too; #276 keeps only its two
+skill changes. The runs start by hand, as the spikes did: `/add` the orchestrator in
+`auto`, then one message that points it at the skill and the recipe. M8-5 only automates
+that start. The skill is `assets/orchestrator.md`. A disagreement between `dev` and a reviewer is no
+longer a stop: the reviewer is gone once its commits land, so `dev` decides each finding
+alone. It rejects one that is not valid, reverts a wrong fix, and improves a weak one,
+and it raises a point as a choice only when the person must decide. The skill calls
+`dev` "the main developer", because the recipe names it.
+**Decided 2026-10-25 (#268):** the first run passes when the orchestrator stops only for a
+real choice. An outside review can raise a choice in any task, so no task can promise
+none (`docs/ORCHESTRATOR-SPIKES.md`, run 1). No test reads the skill: a test that
+reads a tracked `.md` file breaks `AGENTS.md`'s rule, because a change to Markdown alone
+runs only markdownlint, and a grep for a list of names cannot show that the skill is
+generic anyway. The review of the skill checks that it names nothing from this
+repository.
 
 **M8-5 · `kapelle loop`: recipes and the start · S · needs M8-4**
 `kapelle loop <recipe> <task> ["<note>"] [--agent <harness>] [--cwd dir]`, and `/loop`
@@ -3545,9 +3561,10 @@ orchestrator, so each is its own issue:
   suite fails from a room worktree.
 - **This repository's own loop.** Its recipe, `.kapelle/loops/fix-issue.md`, with a
   worker rule to run the full suite once per code change (it ran three times on
-  unchanged code in spike 1), and two changes to its skills: `review-local` asks the
-  person nothing the loop decides, and names the branch's commit, not its snapshot's;
-  `pickup-issue` posts its scope comment before the build starts.
+  unchanged code in spike 1). **Amended 2026-10-24:** M8-4 writes the recipe (#268),
+  because its runs need it first. Two changes to its skills stay here: `review-local`
+  asks the person nothing the loop decides, and names the branch's commit, not its
+  snapshot's; `pickup-issue` posts its scope comment before the build starts.
 
 ---
 

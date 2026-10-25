@@ -3,7 +3,7 @@
 What three throwaway runs of an orchestrator agent showed, on 2026-10-11 and 2026-10-12.
 They are the evidence for M8 in `docs/STORIES.md`. `docs/FINDINGS.md` measures what each
 harness does on its own; this file measures a loop of agents in one room, so it is kept
-apart.
+apart. The last section holds the runs of the shipped skill (M8-4), from 2026-10-24.
 
 ## The question
 
@@ -146,3 +146,99 @@ that answer to `po` too, and `po` guessed, correctly, that the person had asked.
 - A stop button, a turn cap or a bell: none exists yet.
 - A worker that fails twice, or `dev` and `rev` that disagree.
 - More than one issue at a time.
+
+## The skill's runs (M8-4)
+
+Three runs of the shipped skill, `assets/orchestrator.md`, with this repository's recipe,
+`.kapelle/loops/fix-issue.md`. They test the skill, not kapelle: the daemon's replies and
+copies (M8-2) and `kapelle room` (M8-3) took the place of the spikes' scripts. Each run
+started by hand: a room, `po` added as an orchestrator in `auto`, and one message that
+pointed it at the skill and the recipe. Run 3 had a pi orchestrator, and its note asked
+for pi workers.
+
+| | Run 1 | Run 2 | Run 3 |
+| --- | --- | --- | --- |
+| Issue, size | #343, XS | #317, S | #348, M |
+| PR | #346 | #349 | #350 (closed), then #356 |
+| Room | `room-20261024-214725-fewd`, "spike-343" | `room-20261025-104523-4usd`, "spike-317" | `room-20261025-134614-etd9`, "spike-348" |
+| `po`, `dev`, `rev` | claude, claude, pi | claude, claude, pi | pi; pi, then claude; pi |
+| Start to hand-over | 1 h 47 min, with a 75 min wait for the person | 1 h 44 min, with about 50 min of waits for the person | 4 h 40 min, with a split by the person after 3 h 43 min |
+| Turns: `po`, `dev`, `rev` | 10, 6, 1 | 14, 10, 2 | 29; 8 for claude `dev`; 1 for each `rev` |
+| Cost: `po`, `dev` | $1.19, $2.40; pi reports none | $1.07, $5.82; pi reports none | none from pi; claude `dev` $5.89 |
+| Bot rounds | 2 | 2 | 5 on #350, 2 on #356 |
+| Person messages before the hand-over | 2: "go", and the answer to one choice | 6: "go", two answers to `dev`, a question to `dev`, a cancel and a "continue" to `rev` | 10: 6 to `po` (a question, two "go", two more rounds, the split), 4 to `dev` |
+
+**Run 1** had no choice at pick-up. `rev` found nothing, so no review landed and
+`kapelle room ff` did not run. The bot's round 1 raised a real choice (fix only a code
+comment, or also refuse a negative `turns`), and `po` stopped for it, as D6 says. The
+person answered `po` with "go with A". Round 2 had only optional items, so the review loop
+ended. After the hand-over the person told `dev` "merge close" directly, and `po`'s copy
+of it led to a correct closing report.
+
+What the run found:
+
+1. **A worker waited in the background.** `dev` started the bot wait as a background
+   command, and its turn ended at once. `po` saw it from the reply and sent it back to
+   wait, at the cost of one turn. The skill now tells the worker to wait in the
+   foreground, and tells `po` what to do when a reply says the worker still waits.
+2. **`po` typed `node cli.ts room`, not `kapelle room`.** It read this repository's own
+   command list. Both work here; only `kapelle` works in another repository, so the
+   skill now says to type `kapelle`.
+3. **`gh issue view --comments` failed** on `gh` 2.45 (#345). `po` tried again with
+   `--json`.
+
+**Run 2** stopped for a choice at pick-up: where to write the early record. The person
+asked `dev` for diagrams, then answered `dev` directly: "let's pick A". `dev` recorded it
+and went no further, as its first rules say; `po` read the copy and sent the order to
+build. A failing test brought a second choice, which the person also answered on `dev`.
+`rev` then went quiet for six minutes. The person cancelled it; `po` got the cancelled
+reply and stopped to ask. The person told `rev` to go on, `rev` added one test, and `po`
+landed it with `kapelle room ff`. `dev` kept the finding and wrote a simpler test. Round 2
+of the bot said "Ship it", with only nits, and `po` handed over.
+
+What the run found:
+
+1. **The two run 1 fixes held.** `dev` waited for the bot inside its turn, and `po`
+   typed `kapelle room` every time.
+2. **A quiet worker wakes nobody.** The daemon's stall warning goes to the screen, not to
+   `po`, so only the person saw that `rev` had stopped. The skill cannot react to it.
+3. **"Found nothing" was not specific.** An empty or wrong range of commits would also
+   find nothing. The recipe now asks `rev` to name the commits it reviewed, and `po` to
+   check that they end at `dev`'s last commit.
+
+**Run 3** had a pi orchestrator. Its first turn went wrong: the first message named the
+skill by its path in another room's checkout, and `po` ran `cd` there before
+`kapelle room info`. The command finds its room from the folder it runs in, so `po` saw
+that other room, and its plan said it would remove that room's `dev`. The person asked
+where that `dev` came from; `po` saw the mix-up and changed nothing. At pick-up `dev`
+offered a small fix (A) or a full one (B); the person took `dev`'s recommendation, B.
+The build, the review and `ff` went well, but the bot found a new bug in each round, each
+time in the code the last fix had changed. At the limit `po` offered "fix without
+another review", but it also recommended one more round, three times. After round 5 the
+person stopped the loop and split the task: #348 kept the screen fix, and #354 took the
+rest. `po` showed a new plan, swapped the pi `dev` for a claude one, and ran the new
+loop to PR #356 in two rounds. It stopped for each choice, and it did not take the
+person's question to `dev` for a decision.
+
+What the run found:
+
+1. **`po` must not run `kapelle room` from another folder.** The skill now says to run
+   it only in the folder `po` starts in, to read other folders by their path, and to
+   stop when `kapelle room info` shows a room or a team it did not expect. Once M8-5
+   pastes the skill into the first message, no path invites the `cd`.
+2. **The round limit was soft.** The skill now says the limit is hard: at the limit,
+   `po` offers hand over as it is, fix without another review, or a split, and never
+   another round. `po` tells `dev` which round is the last, and the recipe asks `dev` to
+   read every round's findings together and prove each fix in that round.
+3. **Pick-up chose the bigger scope.** That is `pickup-issue`'s judgement, not the
+   loop's, so the change is in #276: recommend the smaller option and a new issue for the
+   rest.
+4. **`po` read the daemon's `room.json`** to find `dev`'s checkout, because
+   `kapelle room info` does not show it. It found the file through `kapelle workspace`,
+   so a project with no kapelle source would not stop it. The skill now says to learn
+   about the room only through `kapelle room`, and #358 adds each branch to `info`.
+
+**Decided 2026-10-25:** runs 1 and 2 pass. M8-4's first run asks for "no choice", but the bot
+can raise a choice in any review, so no issue can promise none. The test is that `po`
+stops only for a real choice, and in run 1 it did. Run 2 stopped for a choice and went on
+after the person answered `dev` directly, as M8-4 asks.
