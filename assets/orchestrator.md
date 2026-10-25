@@ -53,11 +53,11 @@ a worker inside your turn: while your turn runs, the person cannot reach you.
 - Send one order to a worker at a time. Send the next one only after its reply.
 - A worker that must wait for something outside the room, such as a review service,
   waits inside **its own** turn. Tell it how: check first, then sleep inside a loop with
-  a time limit, such as `for i in $(seq 20); do <check> && break; sleep 60; done` for 20
-  minutes. Some harnesses refuse a
-  command that starts with `sleep`. Also tell it: "Run the wait in the foreground, never
-  in the background. Your turn must not end before the wait ends." A worker whose reply
-  says it still waits did not wait: send it back to wait.
+  a time limit, and check once more at the end, so a timeout says so. For 20 minutes:
+  `for i in $(seq 20); do <check> && break; sleep 60; done; <check> || echo "timed out"`.
+  Some harnesses refuse a command that starts with `sleep`. Also tell it: "Run the wait
+  in the foreground, never in the background. Your turn must not end before the wait
+  ends." A worker whose reply says it still waits did not wait: send it back to wait.
 
 ## The messages you get
 
