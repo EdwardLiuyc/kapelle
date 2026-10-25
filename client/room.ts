@@ -354,8 +354,8 @@ interface ParticipantState {
   /** Timeline entries not from the person, since the last `seen`. */
   unread: number;
   /** The live stall warning, until it is resolved or its turn ends. An
-   *  idle one is resolved by the next line of this participant's; a repeat
-   *  one by a `tool_call` with another title. */
+   *  idle one is resolved by its harness's next line; a repeat one by a
+   *  `tool_call` with another title. */
   stall?: Stall;
   /** The line that resolved an idle warning, so `quiet` keeps its frame. */
   stallResolvedAt?: number;
@@ -407,6 +407,22 @@ export const newRoomState = (): RoomState => ({
   tools: new Map(),
 });
 
+/** The `_client_` events `protocol/agent.ts` emits. With every harness
+ *  update, they are what the watchdog sees; the room's own lines, such as a
+ *  queued message or a rename, never reach it (`core/room.ts`). */
+const AGENT_EVENTS = new Set([
+  "_client_harness_spawned",
+  "_client_harness_exited",
+  "_client_permission_pending",
+  "_client_permission",
+  "_client_wrote_file",
+  "_client_cancel_requested",
+]);
+
+/** A line the harness's process sent, so the watchdog counted it. */
+const fromHarness = (kind: string) =>
+  !kind.startsWith("_client_") || AGENT_EVENTS.has(kind);
+
 /**
  * Applies one line. Returns the timeline entry it added or changed, or
  * `undefined` when the timeline did not change: a repeated `seq`, a roster
@@ -421,9 +437,9 @@ export function applyLine(
   if (seq <= state.seq) return undefined;
   state.seq = seq;
   const p = state.participants.get(participantId);
-  // Any line of its own ends an idle spell, as in `core/watchdog.ts`. A
+  // Its harness's traffic ends an idle spell, as in `core/watchdog.ts`. A
   // busy loop is traffic too, so a repeat warning waits for a new title.
-  if (p?.stall?.kind === "idle") {
+  if (p?.stall?.kind === "idle" && fromHarness(u.sessionUpdate)) {
     p.stall = undefined;
     p.stallResolvedAt = seq;
   }

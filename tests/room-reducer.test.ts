@@ -431,7 +431,7 @@ test("seen keeps a stall warning for the bell, out of attention; the next turn s
   assert.equal(who(state, "alice").stall, undefined);
 });
 
-test("an idle warning is resolved by the next line of the same participant's, of any kind (#348)", () => {
+test("an idle warning is resolved by the next line of the same participant's harness (#348)", () => {
   const next: RoomEventLine["update"][] = [
     {
       sessionUpdate: "agent_message_chunk",
@@ -471,6 +471,19 @@ test("an idle warning is resolved by the next line of the same participant's, of
       update.sessionUpdate,
     );
   }
+});
+
+test("an idle warning outlives the room's own lines: the watchdog never sees them (#348)", () => {
+  const { state, line, warn } = stallRoom();
+  warn("alice", "idle");
+  // The person nudges the silent agent, then renames it.
+  line("alice", {
+    sessionUpdate: "_client_message_queued",
+    text: "are you there?",
+  });
+  line("alice", { sessionUpdate: "_client_participant_changed", name: "al" });
+  assert.equal(needsAttention(state, "alice"), true);
+  assert.equal(who(state, "alice").stall?.kind, "idle");
 });
 
 test("a repeat warning is resolved only by a tool call of another title (#348)", () => {
