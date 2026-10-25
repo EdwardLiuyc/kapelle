@@ -210,7 +210,10 @@ function recordTool(
 ): void {
   if (state.limits.stallRepeatCount <= 0) return;
   /** The wire is free-form JSON: keep only a comparable prefix of each text. */
+  // The type says string, but the harness owns the JSON; keep the boundary check.
+  // pi-lens-ignore: no-unknown-parameters
   const bounded = (value: unknown) =>
+    // pi-lens-ignore: no-runtime-typeof
     typeof value === "string" ? value.slice(0, STABLE_TEXT) : "";
   if (update.sessionUpdate === "tool_call") {
     const operation: ToolOperation = {
