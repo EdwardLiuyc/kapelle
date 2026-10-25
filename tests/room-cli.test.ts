@@ -142,17 +142,15 @@ test("from a participant's checkout, info and send find the room and the sender"
   const info = await room(t, f.runtime, dev.worktree, ["info"]);
   assert.equal(info.code, 0, info.stderr);
   assert.match(info.stdout, new RegExp(`^${f.room.id}  active`));
-  // Each participant's branch follows its mode (#358).
-  const rows = info.stdout.split("\n");
-  for (const p of [po, dev, rev]) {
-    assert.ok(p.branch);
-    const row = rows.find((line) => line.startsWith(`  ${p.name}  `));
-    assert.ok(row, `${p.name}: ${info.stdout}`);
-    const throughBranch = `  ${p.name}  ${p.role ?? "-"}  ${p.harness}  ${p.mode}  ${p.branch}  `;
-    assert.ok(row.startsWith(throughBranch), `${p.name}: ${row}`);
-  }
-  assert.match(info.stdout, /^ {2}dev {2}developer .* busy, from po$/m);
-  assert.match(info.stdout, /^ {2}rev {2}reviewer .* busy, from the person$/m);
+  // Each participant's branch follows its mode (#358). Whole rows, so a
+  // column added anywhere fails here.
+  for (const p of [po, dev, rev]) assert.ok(p.branch, p.name);
+  assert.deepEqual(info.stdout.split("\n").slice(1), [
+    `  po  orchestrator  mock-agent  auto  ${po.branch}  idle`,
+    `  dev  developer  mock-agent  auto  ${dev.branch}  busy, from po`,
+    `  rev  reviewer  mock-agent  auto  ${rev.branch}  busy, from the person`,
+    "",
+  ]);
 
   // The turns end; the field goes with them.
   await writeFile(join(dev.worktree, "runs.go"), "");
@@ -216,7 +214,9 @@ test("info shows - for a participant with no branch", async (t) => {
     ],
   });
   assert.equal(opened.status, 201, JSON.stringify(opened.body));
-  assert.equal(opened.body.participants[0]?.branch, undefined);
+  const [po] = opened.body.participants;
+  assert.ok(po, JSON.stringify(opened.body));
+  assert.equal(po.branch, undefined);
 
   const info = await room(t, runtime, cwd, ["info", "--room", opened.body.id]);
   assert.equal(info.code, 0, info.stderr);

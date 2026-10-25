@@ -37,13 +37,14 @@ kapelle room remove <name>
 
 `kapelle room` finds the room from the folder it runs in. Run it only in the folder you
 start in. Read other folders by their path; do not `cd` into them. If
-`kapelle room info` shows a room or a team you did not expect, stop and ask. Read a
-worker's commits with `git log <its branch>`, from your own folder.
+`kapelle room info` shows a room or a team you did not expect, stop and ask.
 
 Learn about the room and its workers only through `kapelle room`. Never read kapelle's
 own files, such as the folders `kapelle workspace` names: their format is private, and
-they hold other rooms too. When `kapelle room` does not tell you what you need, ask the
-worker or the person.
+they hold other rooms too. A worker's commits are the version history, not kapelle's
+files: `kapelle room info` gives its branch, and you read them with
+`git log <its branch>` from your own folder. When `kapelle room` does not tell you what
+you need, ask the worker or the person.
 
 ## Short turns
 
