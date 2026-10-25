@@ -9,14 +9,16 @@
  */
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { chmod, readFile, writeFile } from "node:fs/promises";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import {
   gitRepo,
   isolateStateHome,
+  needs,
   tempDir,
+  until,
 } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import { AGENTS, resolveAgent, warningsFor } from "../../protocol/registry.ts";
@@ -1040,4 +1042,73 @@ test("a preflight that throws leaves a failed record with its error, and an empt
   assert.deepEqual(record.tasks, [{ id: "t0", status: "queued" }]);
   const log = join(stateDirFor(root), "runs", RECORD_RUN, "events.jsonl");
   assert.equal(await readFile(log, "utf8"), "");
+});
+
+// One blocked preflight: the wrapper setup, the read and the resume are the test.
+// pi-lens-ignore: high-fan-out
+test("the running record and log exist before the worktree preflight (#317)", {
+  skip: process.platform === "win32" ? "requires POSIX signals" : needs("sh"),
+}, async (t) => {
+  // Hold the preflight's first `git status` in a wrapper that stops itself.
+  // At that point the record and the log must already exist; a regression that
+  // writes them after the preflight would let a daemon crash in this window
+  // lose the run again.
+  const root = await gitRepo(t);
+  const bin = await tempDir(t);
+  const started = join(bin, "preflight-started");
+  const realGit = (process.env.PATH ?? "")
+    .split(delimiter)
+    .map((dir) => join(dir, "git"))
+    .find((path) => existsSync(path));
+  if (realGit === undefined) throw new Error("git is not on PATH");
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const wrapper = join(bin, "git");
+  await writeFile(
+    wrapper,
+    `#!/bin/sh
+if [ "$1" = "status" ] && [ ! -e ${quote(started)} ]; then
+  echo $$ > ${quote(started)}
+  kill -STOP $$
+fi
+exec ${quote(realGit)} "$@"
+`,
+  );
+  await chmod(wrapper, 0o755);
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}:${previousPath ?? ""}`;
+  t.after(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  });
+
+  const running = runRun(
+    runOf(1, 1),
+    { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+    async () => ({ stopReason: "end_turn" }),
+  );
+  let preflightPid = 0;
+  await until("the preflight's git status", () => {
+    try {
+      preflightPid = Number(readFileSync(started, "utf8"));
+    } catch {
+      return false;
+    }
+    return Number.isInteger(preflightPid) && preflightPid > 0;
+  });
+  const runDir = join(stateDirFor(root), "runs", RECORD_RUN);
+  let failure: unknown;
+  try {
+    const record = JSON.parse(await readFile(join(runDir, "run.json"), "utf8"));
+    assert.equal(record.status, "running");
+    assert.deepEqual(record.tasks, [{ id: "t0", status: "queued" }]);
+    assert.equal(await readFile(join(runDir, "events.jsonl"), "utf8"), "");
+  } catch (err) {
+    failure = err;
+  } finally {
+    // Always resume the wrapper, so a failed assertion cannot hang the suite.
+    process.kill(preflightPid, "SIGCONT");
+  }
+  await running;
+  assert.equal(failure, undefined, String(failure));
 });
