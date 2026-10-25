@@ -238,6 +238,8 @@ test("chat.ts on a real terminal: a view change takes the ^C tip away, and the n
   skip: noPty,
 }, async (t) => {
   const { child, press, seen, exited, out } = await chatOnPty(t);
+  // The agent's row first: alt+↓ before it is drawn moves nowhere.
+  await seen("○ mock-agent");
   await press("\x03", "press ctrl+c again to leave");
   // alt+↓ opens the agent's thread, and a view change clears the status
   // line's message: the tip is gone, so a ^C now is a first one again.
