@@ -30,7 +30,7 @@ kapelle room add <harness> --name <name> --role <role> [--mode <mode>] [--base @
 kapelle room send <name> <<'EOF'
 the message
 EOF
-kapelle room diff <name> [base]       what is not committed; with base, the whole branch
+kapelle room diff <name> [base]       what is not committed; with the word base, the whole branch
 kapelle room ff <name> --from <other> move <name>'s branch up to <other>'s commit
 kapelle room remove <name>
 ```

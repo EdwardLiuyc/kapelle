@@ -59,8 +59,9 @@ None.
 ## Rules for every worker
 
 - Git: you may commit on your own branch, push it, open the PR and comment on it. This
-  overrides the `AGENTS.md` rule on commits and PRs, for this loop only. Never merge.
-  Never push to `master`.
+  overrides the `AGENTS.md` rule on commits and PRs, and a skill's own rule against
+  committing, such as `review-local`'s, for this loop only. Never merge. Never push to
+  `master`.
 - Run the full test suite at most once for each code change.
 - A skill's own "what to do now" lines are advice to a person. Here the orchestrator
   decides the next step.
