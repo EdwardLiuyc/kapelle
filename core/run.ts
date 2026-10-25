@@ -56,6 +56,7 @@ import {
   changedPaths,
   openWorktrees,
   stateDirRoot,
+  type WorktreeSetup,
   type Worktrees,
 } from "./worktree.ts";
 
@@ -486,22 +487,19 @@ export async function runRun(
   // Preflight once for the run, not once per task: every refusal it raises is
   // a property of the repository, so N tasks would raise the same one N times
   // — and the first worktree would already exist by then.
-  let worktrees: Worktrees | null;
+  // Only the preflight is in the `try`, so its catch never reports another
+  // throw, such as a notice sink's, as the preflight's error.
+  let setup: WorktreeSetup;
   try {
-    let notice: string | undefined;
-    let advisory: string | undefined;
-    ({ worktrees, notice, advisory } = await openWorktrees(options.cwd, runId, {
+    setup = await openWorktrees(options.cwd, runId, {
       linkPaths: options.linkPaths ?? [],
-    }));
-    // Two kinds, one route. The fallback notice says isolation is absent,
-    // which #13 makes unsuppressible; the dirty-tree line (#129) is a
-    // courtesy the operator can silence.
-    if (notice) options.onNotice?.("run", notice, "containment");
-    if (advisory) options.onNotice?.("run", advisory, "advisory");
+    });
   } catch (err) {
     // A terminal record with the reason, and a log that ends, so a run the
-    // daemon accepted explains its failure after a restart too (#317). No
-    // `_client_run_finished`: a run that threw never sends one.
+    // daemon accepted explains its failure after a restart too (#317). Only
+    // when the run has a log folder: without one, `persist` writes nothing
+    // and there is no log to end. No `_client_run_finished`: a run that
+    // threw never sends one.
     await persist(
       "failed",
       new Date().toISOString(),
@@ -510,6 +508,12 @@ export async function runRun(
     await eventLog?.close();
     throw err;
   }
+  const { worktrees, notice, advisory } = setup;
+  // Two kinds, one route. The fallback notice says isolation is absent, which
+  // #13 makes unsuppressible; the dirty-tree line (#129) is a courtesy the
+  // operator can silence.
+  if (notice) options.onNotice?.("run", notice, "containment");
+  if (advisory) options.onNotice?.("run", advisory, "advisory");
 
   const results = new Array<TaskRun>(run.tasks.length);
   const queue = run.tasks.map((task, index) => ({ task, index }));
