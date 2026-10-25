@@ -22,9 +22,37 @@ const limits = (over: Partial<WatchdogLimits> = {}): WatchdogLimits => ({
   ...over,
 });
 
-const toolCall = (id: string, title: string): AgentEventEnvelope => ({
+let nextTool = 0;
+const toolCall = (
+  id: string,
+  title: string,
+  rawInput?: Record<string, unknown>,
+  kind?: "execute" | "read" | "search",
+  toolCallId = `${id}-tool-${++nextTool}`,
+): AgentEventEnvelope => ({
   agent: id,
-  update: { sessionUpdate: "tool_call", toolCallId: `${title}-1`, title },
+  update: {
+    sessionUpdate: "tool_call",
+    toolCallId,
+    title,
+    ...(rawInput && { rawInput }),
+    ...(kind && { kind }),
+  },
+});
+
+const toolUpdate = (
+  id: string,
+  toolCallId: string,
+  rawInput?: Record<string, unknown>,
+  kind?: "execute" | "read" | "search",
+): AgentEventEnvelope => ({
+  agent: id,
+  update: {
+    sessionUpdate: "tool_call_update",
+    toolCallId,
+    ...(rawInput && { rawInput }),
+    ...(kind && { kind }),
+  },
 });
 
 const chunk = (id: string): AgentEventEnvelope => ({
@@ -175,7 +203,7 @@ test("stallIdleMs 0 disables the idle signal", () => {
 
 // --- repeat ----------------------------------------------------------------
 
-test("the same tool title stallRepeatCount times in a row warns once", () => {
+test("the same operation stallRepeatCount times in a row warns once", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 3 }));
 
@@ -231,14 +259,61 @@ test("only tool_call counts toward a repeat streak", () => {
   h.wd.watch("a", limits({ stallRepeatCount: 2 }));
 
   // `tool_call_update` is progress on a call already counted, not a new one.
-  h.wd.note(toolCall("a", "grep"));
-  h.wd.note({
-    agent: "a",
-    update: { sessionUpdate: "tool_call_update", toolCallId: "grep-1" },
-  });
+  h.wd.note(toolCall("a", "grep", undefined, undefined, "grep-1"));
+  h.wd.note(toolUpdate("a", "grep-1"));
   h.wd.note(chunk("a"));
   h.wd.sweep();
   assert.deepEqual(h.warns, []);
+});
+
+test("distinct same-title operations do not make a repeat", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+
+  h.wd.note(toolCall("a", "Terminal", { command: "python" }, "execute"));
+  h.wd.note(toolCall("a", "Terminal", { command: "sed" }, "execute"));
+  h.wd.note(toolCall("a", "Terminal", { command: "grep" }, "execute"));
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "the command is part of the identity");
+});
+
+test("the same command under one title still repeats", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+
+  for (let i = 0; i < 3; i++) {
+    h.wd.note(toolCall("a", "Terminal", { command: "pytest" }, "execute"));
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
+});
+
+test("late rawInput updates refine the operation identity", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+
+  for (const [id, command] of [
+    ["t1", "python"],
+    ["t2", "sed"],
+    ["t3", "grep"],
+  ] as const) {
+    h.wd.note(toolCall("a", "Terminal", undefined, "execute", id));
+    h.wd.note(toolUpdate("a", id, { command }, "execute"));
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "the late commands distinguish the calls");
+});
+
+test("late updates do not erase a real repeat", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+
+  for (const id of ["t1", "t2", "t3"]) {
+    h.wd.note(toolCall("a", "Terminal", undefined, "execute", id));
+    h.wd.note(toolUpdate("a", id, { command: "pytest" }, "execute"));
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
 });
 
 test("stallRepeatCount 0 disables the repeat signal", () => {

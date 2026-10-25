@@ -12,8 +12,11 @@
  *
  * - **idle** — nothing on this task's bus for `stallIdleMs`, and no question
  *   waiting for a person.
- * - **repeat** — the same `tool_call` title `stallRepeatCount` times running,
- *   which is the busy-loop case idle time structurally cannot see.
+ * - **repeat** — the same logical tool operation `stallRepeatCount` times
+ *   running, which is the busy-loop case idle time structurally cannot see.
+ *   Identity is title, kind and stable `rawInput`/location, with title and
+ *   kind as the fallback. `toolCallId` correlates updates and is never the
+ *   identity itself: a new id is a new call, not necessarily a new operation.
  *
  * Both warn and the task keeps running. Only the longer `ttlMs` acts, and all
  * it does is ask the caller to cancel: ACP gives no way to nudge a turn in
@@ -35,7 +38,7 @@ export type StallKind = "idle" | "repeat";
 export interface WatchdogLimits {
   /** No events for this long → warn. `0` disables. */
   stallIdleMs: number;
-  /** This many identical tool titles in a row → warn. `0` disables. */
+  /** This many identical tool operations in a row → warn. `0` disables. */
   stallRepeatCount: number;
   /** Wall time for the whole task → cancel. `0` disables. */
   ttlMs: number;
@@ -96,12 +99,24 @@ export interface Watchdog {
   sweep: () => void;
 }
 
+interface ToolOperation {
+  title: string;
+  kind: string;
+  input: Record<string, string>;
+  location?: string;
+  identity: string;
+}
+
 interface WatchState {
   limits: WatchdogLimits;
   startedAt: number;
   lastEventAt: number;
   lastTitle?: string;
+  lastIdentity?: string;
   repeatCount: number;
+  operations: ToolOperation[];
+  /** Tool calls by id, so a late update refines the operation it belongs to. */
+  byId: Map<string, ToolOperation>;
   /** Questions asked and not yet answered. Idle does not count while one waits. */
   asking: number;
   idleWarned: boolean;
@@ -109,6 +124,118 @@ interface WatchState {
   timedOut: boolean;
 }
 
+/** Keep enough to compare a command without retaining a whole heredoc. */
+const STABLE_TEXT = 800;
+
+/** The `rawInput` keys that identify one operation, in a stable order. */
+const STABLE_INPUT_KEYS = [
+  "command",
+  "path",
+  "file_path",
+  "filePath",
+  "pattern",
+  "query",
+  "url",
+] as const;
+
+// `rawInput` is ACP's free-form JSON, so this decoder narrows it.
+// pi-lens-ignore: no-unknown-parameters, no-runtime-typeof, no-known-value-widening, no-unsafe-dictionary-unknown
+const stableInput = (raw: unknown): Record<string, string> => {
+  // pi-lens-ignore: no-runtime-typeof
+  if (typeof raw !== "object" || raw === null) return {};
+  // pi-lens-ignore: no-known-value-widening
+  const input: Record<string, string> = {};
+  for (const key of STABLE_INPUT_KEYS) {
+    // pi-lens-ignore: no-unsafe-dictionary-unknown
+    const value = (raw as Record<string, unknown>)[key];
+    // pi-lens-ignore: no-runtime-typeof
+    if (typeof value === "string" && value) {
+      input[key] = value.slice(0, STABLE_TEXT);
+    }
+  }
+  return input;
+};
+
+/** Title and kind, then a stable detail when there is one (`rawInput` first). */
+const identityOf = (operation: ToolOperation): string => {
+  const input = STABLE_INPUT_KEYS.flatMap((key) => {
+    const value = operation.input[key];
+    return value ? [`${key}=${value}`] : [];
+  });
+  let detail: string[] = [];
+  if (input.length > 0) detail = input;
+  else if (operation.location) detail = [`location=${operation.location}`];
+  return JSON.stringify([operation.title, operation.kind, detail]);
+};
+
+/** Recomputes the trailing streak after a call or a late identity update. */
+function refreshRepeat(state: WatchState): void {
+  const last = state.operations.at(-1);
+  if (!last) {
+    state.repeatCount = 0;
+    state.lastTitle = undefined;
+    state.lastIdentity = undefined;
+    state.repeatWarned = false;
+    return;
+  }
+  let count = 1;
+  for (let i = state.operations.length - 2; i >= 0; i--) {
+    if (state.operations[i]?.identity !== last.identity) break;
+    count += 1;
+  }
+  state.repeatCount = count;
+  if (state.lastIdentity !== last.identity) {
+    state.repeatWarned = false;
+    state.lastIdentity = last.identity;
+  }
+  state.lastTitle = last.title;
+  if (count < state.limits.stallRepeatCount) state.repeatWarned = false;
+}
+
+/** Starts or refines an operation; only a `tool_call` starts a new one. */
+function recordTool(
+  state: WatchState,
+  update: AgentEventEnvelope["update"],
+): void {
+  if (update.sessionUpdate === "tool_call") {
+    const operation: ToolOperation = {
+      title: update.title,
+      kind: update.kind ?? "",
+      input: stableInput(update.rawInput),
+      identity: "",
+    };
+    const location = update.locations?.[0]?.path;
+    if (location) operation.location = location;
+    operation.identity = identityOf(operation);
+    const known = state.byId.get(update.toolCallId);
+    if (known) {
+      known.title = operation.title;
+      known.kind = operation.kind;
+      Object.assign(known.input, operation.input);
+      // pi-lens-ignore: deep-nesting
+      if (operation.location) known.location = operation.location;
+      known.identity = identityOf(known);
+    } else {
+      state.operations.push(operation);
+      state.byId.set(update.toolCallId, operation);
+    }
+  } else if (update.sessionUpdate === "tool_call_update") {
+    const operation = state.byId.get(update.toolCallId);
+    if (!operation) return;
+    if (update.title !== undefined) operation.title = update.title;
+    if (update.kind !== undefined) operation.kind = update.kind;
+    Object.assign(operation.input, stableInput(update.rawInput));
+    const location = update.locations?.[0]?.path;
+    if (location) operation.location = location;
+    operation.identity = identityOf(operation);
+  } else {
+    return;
+  }
+  refreshRepeat(state);
+}
+
+// One timer, one map and the sweep's closures; the tool logic is in recordTool.
+// pi-lens-ignore: high-complexity
 export function createWatchdog(hooks: WatchdogHooks): Watchdog {
   const now = hooks.now ?? Date.now;
   const live = new Map<string, WatchState>();
@@ -129,17 +256,7 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
       state.asking = Math.max(0, state.asking - 1);
     }
 
-    // Only a *new* call counts. `tool_call_update` is progress on one already
-    // counted, and counting it would make a single slow tool look like a loop.
-    if (event.update.sessionUpdate !== "tool_call") return;
-    const title = event.update.title;
-    if (title === state.lastTitle) {
-      state.repeatCount += 1;
-    } else {
-      state.lastTitle = title;
-      state.repeatCount = 1;
-      state.repeatWarned = false;
-    }
+    recordTool(state, event.update);
   };
 
   return {
@@ -150,6 +267,8 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
         startedAt: started,
         lastEventAt: started,
         repeatCount: 0,
+        operations: [],
+        byId: new Map(),
         asking: 0,
         idleWarned: false,
         repeatWarned: false,

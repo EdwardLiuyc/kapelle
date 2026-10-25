@@ -1324,10 +1324,12 @@ instead of the retired script.
 **M1c-1 · `core/watchdog.ts` · M · needs M1b-2, M0-4**
 One interval timer over all running tasks (default 60s). Two signals, both chosen because
 they port across vendors: **idle** — no events for `stallIdleMs`; and **repeat** — the same
-tool title firing `stallRepeatCount` times consecutively (default ~8), the busy-loop case
-idle time structurally cannot see. Repeat reuses the `toolCallId → {title, kind, rawInput}` map
-already maintained as a protocol invariant, so it needs only a per-task last-title and
-count. Both signals warn and the task keeps running; the separate, longer `ttlMs` calls
+logical tool operation firing `stallRepeatCount` times consecutively (default ~8), the
+busy-loop case idle time structurally cannot see. Operation identity is title, kind and
+stable `rawInput`/location, with title and kind as the fallback. A per-task
+`toolCallId → {title, kind, rawInput, locations}` map lets a late update refine the
+operation; the id correlates and is never the identity itself. Both signals warn and the
+task keeps running; the separate, longer `ttlMs` calls
 `session/cancel`, preserves the branch and marks the task `timed_out`. Every knob disabled
 at `0`. Best-effort throughout — one task's failure must never halt the sweep.
 **M0-4 fills in the TTL rung** (`docs/FINDINGS.md` §M0-4): every harness ended its turn
@@ -1354,8 +1356,8 @@ on the harness where turns run longest. If a context signal is ever wanted, it b
 a per-harness trust flag, not in the vendor-neutral core.
 
 **M1c-2 · `mock-agent` stall and repeat modes · XS · needs M1c-1**
-Stall: accepts the prompt, emits nothing, never returns. Repeat: the same tool title on a
-loop. One per watchdog signal.
+Stall: accepts the prompt, emits nothing, never returns. Repeat: the same tool operation on
+a loop. One per watchdog signal.
 *Done when* stall produces a warning then a cancel at TTL with the branch intact, and repeat
 produces a warning and is **not** cancelled.
 **Amended 2026-09-09 (#26).** Stall writes one file **at startup**, before the handshake. A
@@ -2198,9 +2200,12 @@ messages in the view, in the side view, one row each, cut to its width. A click 
 scrolls the transcript there, and the row under the mouse lights up.
 **Built 2026-10-05 (#50).** `chat/view.ts` says who waits (`waiting`), the banner's rows
 (`banner`) and when the bell rings (`bell`); `chat/tui/banner.ts` draws the rows. A wait is
-an open question, or a stall warning in the live turn: the reducer keeps the warning's
-text on the turn, so `seen` hides it from the banner but not from the bell. The bell looks
-after each chunk of lines, so a replay rings only for what is still open at its end.
+an open question, or an unresolved stall warning: the reducer keeps the warning's kind,
+text, `seq`, seen state and repeat operation anchor. An idle warning clears on the next
+event from that participant; a repeat warning clears when the operation identity changes.
+`seen` hides it from attention, while the occurrence remains a bell wait. A resolved
+warning leaves `waiting()`. The bell looks after each chunk of lines, so a replay rings
+only for what is still open at its end.
 `ctrl+r` opens the history list; the side view shows a list as well as a diff. `@` at the
 start of the composer, or Tab after it, lists the room's names (`mentionsFor`,
 `client/mention.ts`). The re-parse cost was 13 to 23 ms at 53k chars (§M4-4), past the
@@ -4020,7 +4025,9 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   own USD, so the table would mostly add a second, worse number.
 - **`stallRepeatCount` per-harness tuning.** *Trigger:* an observed false positive. Safe to
   wait — a task re-running the same test command while iterating is a legitimate repeat, the
-  default is deliberately generous, and repeats only ever warn.
+  default is deliberately generous, and repeats only ever warn. **Trigger partly fired
+  2026-10-25 (#348):** title-only detection treated different commands under one title as a
+  repeat. Identity-aware detection landed; per-harness threshold tuning remains open.
 - **`session/load` where a harness advertises it.** *Trigger:* M0-1 recording a harness with
   `agentCapabilities.loadSession`. **Trigger fired — all three advertise it**, and opencode
   and claude-agent-acp also advertise `sessionCapabilities.resume`/`.fork`. Still not

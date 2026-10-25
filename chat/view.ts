@@ -13,7 +13,8 @@
  * - What is on screen is seen: the timeline marks its whole room, and a
  *   thread marks its participant.
  * - Who waits on the person (M4-4): the banner shows the waits off screen,
- *   and the bell rings once when a participant starts to wait.
+ *   and the bell rings once for each warning occurrence. A resolved warning
+ *   stops waiting; seeing one hides only its attention marks.
  * - The look (M7-1): each agent's colour, the activity rows under the
  *   timeline (the banner's waits and the open room's busy agents), when
  *   the screen ticks, and how the status line fits its width.
@@ -136,6 +137,8 @@ export function edited(
 
 /** A line came in room `roomId`: an untouched thread pre-fill moves to the
  *  participant's new name. `undefined` when nothing changes. */
+// The pre-fill and view are positional in every call site; #348 leaves it so.
+// pi-lens-ignore: long-parameter-list
 export function renamed(
   state: RoomState,
   roomId: string,
@@ -173,8 +176,7 @@ export const dismissed = (rooms: Rooms, view: View, roomId: string) =>
   view.roomId === roomId ? (rows(rooms)[0] ?? { roomId: "" }) : undefined;
 
 /** A thing a participant waits on the person for (M4-4): its oldest open
- *  question, or a stall warning in its live turn. A participant can have
- *  both. */
+ *  question, or its unresolved stall warning. A participant can have both. */
 export interface Wait {
   roomId: string;
   participantId: string;
@@ -183,6 +185,8 @@ export interface Wait {
   text: string;
   /** The question's id. */
   question?: string;
+  /** The stall warning's event sequence, so a later one rings again. */
+  occurrence?: number;
 }
 
 /** Every wait, seen or not, in sidebar order: a participant's question
@@ -197,8 +201,13 @@ export function waiting(rooms: Rooms): Wait[] {
       if (q) {
         out.push({ ...at, why: "question", text: q.title, question: q.id });
       }
-      if (turn?.state === "open" && turn.stall) {
-        out.push({ ...at, why: "stall", text: turn.stall });
+      if (p.stall && turn?.state === "open") {
+        out.push({
+          ...at,
+          why: "stall",
+          text: p.stall.text,
+          occurrence: p.stall.seq,
+        });
       }
     }
   }
@@ -214,7 +223,7 @@ export function banner(rooms: Rooms, view: View) {
     const key = `${w.roomId} ${w.participantId}`;
     if (rows.has(key) || shows(view, w.roomId, w.participantId)) continue;
     const p = rooms.get(w.roomId)?.state.participants.get(w.participantId);
-    if (w.why === "question" || p?.stalled) rows.set(key, w);
+    if (w.why === "question" || (p?.stall && !p.stall.seen)) rows.set(key, w);
   }
   return [...rows.values()];
 }
@@ -428,6 +437,8 @@ export function usageText(u?: {
  * alone do not fit, they are joined and the line wraps: a flash is never
  * cut. `measure` is the drawn width.
  */
+// The footer sizes a line from positional parts; #348 does not change it.
+// pi-lens-ignore: long-parameter-list
 export function footer(
   width: number,
   left: string,
@@ -439,7 +450,8 @@ export function footer(
   const sep = " · ";
   for (let n = hints.length; n >= 0; n--) {
     const kept = hints.slice(0, n).join(sep);
-    const line = left + (n ? paint(`${left ? sep : ""}${kept}`) : "");
+    let line = left;
+    if (n > 0) line += paint(`${left ? sep : ""}${kept}`);
     const gap = width - measure(line) - measure(right);
     if (!right && gap >= 0) return line;
     if (right && gap >= 2) return line + " ".repeat(gap) + right;
@@ -455,6 +467,8 @@ export const quiet = (state: RoomState, line: RoomEventLine) =>
   state.participants.get(line.participantId)?.thinking !== line.seq;
 
 /** The question box's keys (M7-4), each to its row: deny, allow, view diff. */
+// The keys are read by a string lookup, so the record's index stays open.
+// pi-lens-ignore: no-known-value-widening
 const PICK: Record<string, number> = { "1": 0, n: 0, "2": 1, y: 1, "3": 2 };
 
 /**
@@ -474,12 +488,14 @@ export function pickRow(typed: string, rows: number): number | undefined {
 }
 
 /** The waits now, and whether one of them is new: the bell rings once for
- *  a question and once for a stall, on screen or not. A question after a
- *  stall the person saw rings; the stall left when the question closes
- *  does not. */
+ *  a question and once for each stall occurrence, on screen or not. The
+ *  occurrence is in the key because a seen warning still waits for the bell
+ *  and a later warning in the same turn must not reuse its key. */
 export function bell(before: ReadonlySet<string>, now: readonly Wait[]) {
   const keys = new Set(
-    now.map((w) => `${w.roomId} ${w.participantId} ${w.why}`),
+    now.map(
+      (w) => `${w.roomId} ${w.participantId} ${w.why} ${w.occurrence ?? ""}`,
+    ),
   );
   return { keys, ring: [...keys].some((k) => !before.has(k)) };
 }

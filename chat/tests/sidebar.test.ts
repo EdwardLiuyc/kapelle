@@ -89,6 +89,8 @@ test("a paused room and its paused and killed participants are marked", () => {
   assert.match(text, /✕ bob +│\n {6}mock +│/);
 });
 
+// This one test reads the whole two-row shape; splitting it hides the contract.
+// pi-lens-ignore: high-fan-out
 test("an agent's two rows at 32 columns: mark, timer, unread count, then harness · role", () => {
   const { state, line, add } = mk();
   add("p-ann", "ann", "claude", "orchestrator");
@@ -189,8 +191,8 @@ test("the room mark takes its most urgent agent's mark", () => {
   assert.equal(roomMark(state).glyph, "✕", "killed before exited");
   line("p-ann", {
     sessionUpdate: "_client_stall_warning",
-    kind: "idle",
-    text: "no activity",
+    kind: "repeat",
+    text: "possible loop",
   });
   assert.equal(roomMark(state).glyph, "!", "stall before killed");
   line("p-ann", {

@@ -3,9 +3,10 @@
  *
  * **No I/O.** It reads the `{seq, roomId, participantId, update}` lines a
  * client already has and keeps what a screen draws: the roster and each
- * participant's status, the room timeline, each turn, the queue, the open
- * permission questions, unread and attention marks, and what an activity
- * row and the footer show (M7-1): thinking, the last tool, the last usage.
+ * participant's status, the room timeline, each turn, the live stall warning,
+ * the queue, the open permission questions, unread and attention marks, and
+ * what an activity row and the footer show (M7-1): thinking, the last tool,
+ * the last usage.
  * It keeps no thinking text, and of a tool's diff only its counts (M7-2).
  * A TUI and a bridge
  * share it, so neither parses events itself.
@@ -158,11 +159,15 @@ interface ToolSlot {
   location?: string;
 }
 
+// ACP raw JSON is unknown at this boundary; this helper narrows it.
+// pi-lens-ignore: no-unknown-parameters, no-runtime-typeof
 const str = (v: unknown) =>
+  // pi-lens-ignore: no-runtime-typeof
   typeof v === "string" ? v.slice(0, SLOT_TEXT) : undefined;
 
 const STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
 /** The status if it is one ACP defines; the log is the harness's JSON. */
+// pi-lens-ignore: no-unknown-parameters
 const statusOf = (v: unknown) =>
   STATUSES.has(v as string) ? (v as ToolCallStatus) : undefined;
 
@@ -179,6 +184,7 @@ const KINDS = new Set([
   "other",
 ]);
 /** The kind if it is one ACP defines; a fold line counts by it (M7-2). */
+// pi-lens-ignore: no-unknown-parameters
 const kindOf = (v: unknown) =>
   KINDS.has(v as string) ? (v as ToolKind) : undefined;
 
@@ -195,14 +201,17 @@ const linesOf = (s: string) =>
  */
 // ponytail: counts too high for an edit in several places; a line diff
 // (Myers) if the numbers mislead.
+// pi-lens-ignore: no-unknown-parameters, no-runtime-typeof
 function diffCount(content: unknown) {
   if (!Array.isArray(content)) return undefined;
   let added = 0;
   let removed = 0;
   let any = false;
   for (const c of content) {
+    // pi-lens-ignore: no-runtime-typeof
     if (c?.type !== "diff" || typeof c.newText !== "string") continue;
     any = true;
+    // pi-lens-ignore: no-runtime-typeof
     const a = linesOf(typeof c.oldText === "string" ? c.oldText : "");
     const b = linesOf(c.newText);
     let start = 0;
@@ -238,10 +247,14 @@ const toolText = (s: string) => {
 };
 
 /** The keys of `raw` a detail can use. `raw` is the harness's JSON. */
+// pi-lens-ignore: no-unknown-parameters, no-runtime-typeof, no-known-value-widening, no-unsafe-dictionary-unknown
 function detailInput(raw: unknown): Record<string, string> {
+  // pi-lens-ignore: no-runtime-typeof
   if (typeof raw !== "object" || raw === null) return {};
+  // pi-lens-ignore: no-known-value-widening
   const input: Record<string, string> = {};
   for (const k of [...DETAIL_KEYS, "description"]) {
+    // pi-lens-ignore: no-unsafe-dictionary-unknown
     const v = str((raw as Record<string, unknown>)[k]);
     if (v) input[k] = v;
   }
@@ -278,7 +291,28 @@ function showTool(slot: ToolSlot) {
   slot.entry.title = toolText(slot.title);
   const detail = detailOf(slot);
   if (detail) slot.entry.detail = detail;
+  // The entry has no detail key rather than an undefined one.
+  // pi-lens-ignore: ts-delete-property
   else delete slot.entry.detail;
+}
+
+interface StallAnchor {
+  toolCallId: string;
+  /** Title and kind, before any stable detail. */
+  base: string;
+  /** Stable `rawInput` or location, when the harness has sent one. */
+  detail?: string;
+}
+
+/** A live watchdog warning. The transcript entry is the history; this is only
+ *  what still contributes to attention. */
+interface LiveStall {
+  kind: "idle" | "repeat";
+  text: string;
+  seq: number;
+  seen: boolean;
+  /** For `repeat`, the operation whose identity change resolves it. */
+  anchor?: StallAnchor;
 }
 
 interface Turn {
@@ -294,9 +328,6 @@ interface Turn {
   tentative?: true;
   stopReason?: string;
   error?: string;
-  /** The last stall warning's text. Unlike `stalled`, `seen` keeps it: the
-   *  bell (M4-4) rings for a person who looks somewhere else. */
-  stall?: string;
 }
 
 interface ParticipantState {
@@ -322,8 +353,9 @@ interface ParticipantState {
   answer?: Answer;
   /** Timeline entries not from the person, since the last `seen`. */
   unread: number;
-  /** A stall warning in the live turn, until it ends or is `seen`. */
-  stalled: boolean;
+  /** The live stall warning. `seen` hides attention; the warning remains a
+   *  bell wait until an event or identity change resolves it. */
+  stall?: LiveStall;
   /** The `seq` of the thought chunk that set the flag (M7-1). Only the
    *  flag: the text is large (pi), and never drawn. An answer chunk, a tool
    *  call or the turn's end clears it, and nothing else: a `usage_update`
@@ -333,6 +365,8 @@ interface ParticipantState {
   /** The live turn's last tool call (M7-1). The entry, not its title:
    *  its updates set the title in place (#240). */
   tool?: Tool;
+  /** The id of `tool`, for correlating its updates with its identity. */
+  toolId?: string;
   /** The last `usage_update`. The cost in it is a running total for the
    *  session (§M0-5): never add two of them up. */
   usage?: UsageUpdate;
@@ -361,6 +395,56 @@ export interface RoomState {
   tools: Map<string, ToolSlot>;
 }
 
+/** What distinguishes one tool operation from another. `toolCallId` only
+ *  correlates a call with its updates; it is never the identity itself. Keep
+ *  the stable keys in step with `core/watchdog.ts`: `client/` cannot import
+ *  `core/`. */
+function toolIdentity(slot: ToolSlot) {
+  const input = DETAIL_KEYS.flatMap((key) => {
+    const value = slot.input[key];
+    return value ? [`${key}=${value}`] : [];
+  });
+  let detail: string | undefined;
+  if (input.length > 0) detail = input.join("\0");
+  else if (slot.location) detail = `location=${slot.location}`;
+  return {
+    base: `${slot.title}\0${slot.entry.kind ?? ""}`,
+    ...(detail !== undefined && { detail }),
+  };
+}
+
+/** Clears a repeat warning only when later tool traffic proves the operation
+ *  changed. A missing late detail waits; it never makes every new call differ. */
+function resolveRepeat(
+  p: ParticipantState,
+  toolCallId: string,
+  slot: ToolSlot,
+): void {
+  const stall = p.stall;
+  if (stall?.kind !== "repeat") return;
+  const next = toolIdentity(slot);
+  if (!stall.anchor) {
+    stall.anchor = { toolCallId, ...next };
+    return;
+  }
+  const anchor = stall.anchor;
+  if (anchor.toolCallId === toolCallId) {
+    anchor.base = next.base;
+    if (next.detail !== undefined) anchor.detail = next.detail;
+    return;
+  }
+  if (anchor.base !== next.base) {
+    p.stall = undefined;
+    return;
+  }
+  if (next.detail === undefined) return;
+  if (anchor.detail === undefined) {
+    stall.anchor = { toolCallId, ...next };
+    return;
+  }
+  if (anchor.detail !== next.detail) p.stall = undefined;
+}
+
 export const newRoomState = (): RoomState => ({
   seq: 0,
   participants: new Map(),
@@ -375,6 +459,8 @@ export const newRoomState = (): RoomState => ({
  * `undefined` when the timeline did not change: a repeated `seq`, a roster
  * line, or an event no screen draws.
  */
+// One event switch is the reducer's shape; #348 adds warning state to it.
+// pi-lens-ignore: high-complexity, high-fan-out
 export function applyLine(
   state: RoomState,
   { seq, at: time, participantId, update: u }: RoomEventLine,
@@ -382,6 +468,9 @@ export function applyLine(
   if (seq <= state.seq) return undefined;
   state.seq = seq;
   const p = state.participants.get(participantId);
+  // Any later traffic ends an idle spell. Repeat needs an identity change,
+  // so it waits for a tool call or update below.
+  if (p?.stall?.kind === "idle") p.stall = undefined;
   const add = (entry: Entry) => {
     state.timeline.push(entry);
     if (p) {
@@ -417,7 +506,6 @@ export function applyLine(
         turns: [],
         queue: [],
         unread: 0,
-        stalled: false,
       });
       return undefined;
     }
@@ -425,6 +513,8 @@ export function applyLine(
       if (!p) return undefined;
       if (u.name !== undefined) p.name = u.name;
       if (u.mode !== undefined) p.mode = u.mode;
+      // A role is absent from the roster, not present as undefined.
+      // pi-lens-ignore: ts-delete-property
       if (u.role === null) delete p.role;
       else if (u.role !== undefined) p.role = u.role;
       return undefined;
@@ -450,10 +540,11 @@ export function applyLine(
         // A turn that starts while messages wait is the oldest of them.
         p.queue.shift();
         p.status = p.reported?.status ?? "busy";
-        p.stalled = false;
+        p.stall = undefined;
         // A cut turn ends here.
         p.thinking = undefined;
         p.tool = undefined;
+        p.toolId = undefined;
         p.turns.push({
           ...(u.turn !== undefined && { number: u.turn }),
           text,
@@ -536,6 +627,8 @@ export function applyLine(
       if (p) {
         p.thinking = undefined;
         p.tool = slot.entry;
+        p.toolId = u.toolCallId;
+        resolveRepeat(p, u.toolCallId, slot);
       }
       return slot.entry;
     }
@@ -567,6 +660,9 @@ export function applyLine(
       if (status) entry.status = status;
       showTool(slot);
       toolFacts(entry, u);
+      // An old call's late update says nothing about the operation the
+      // warning is about; only the live one can resolve it.
+      if (p && p.toolId === u.toolCallId) resolveRepeat(p, u.toolCallId, slot);
       // Output alone (`_meta.terminal_output`) changes nothing drawn.
       return drawn() === was ? undefined : entry;
     }
@@ -590,9 +686,10 @@ export function applyLine(
         if (!p.reported && p.status !== "exited" && p.status !== "killed") {
           p.status = "idle";
         }
-        p.stalled = false;
+        p.stall = undefined;
         p.thinking = undefined;
         p.tool = undefined;
+        p.toolId = undefined;
       }
       return add({
         ...at,
@@ -628,11 +725,18 @@ export function applyLine(
       });
     }
     case "_client_stall_warning": {
-      if (p) p.stalled = true;
       // A repeat warning quotes the harness's tool title.
       const text = printable(u.text);
-      const turn = openTurn();
-      if (turn) turn.stall = text;
+      if (p) {
+        const slot = p.toolId
+          ? state.tools.get(`${participantId} ${p.toolId}`)
+          : undefined;
+        const stall: LiveStall = { kind: u.kind, text, seq, seen: false };
+        if (u.kind === "repeat" && slot && p.toolId) {
+          stall.anchor = { toolCallId: p.toolId, ...toolIdentity(slot) };
+        }
+        p.stall = stall;
+      }
       return add({ ...at, type: "stall", kind: u.kind, text });
     }
     case "_client_permission_queued": {
@@ -696,10 +800,11 @@ export function applyStatus(state: RoomState, room: RoomDto): boolean {
     // Only what a screen draws counts: a participant already paused stays
     // paused, and its every turn end must not rebuild the transcript.
     const last = p.turns.at(-1);
-    const moved = p.status !== status || p.stalled || last?.state === "open";
+    const moved =
+      p.status !== status || Boolean(p.stall) || last?.state === "open";
     p.reported = report;
     p.status = status;
-    p.stalled = false;
+    p.stall = undefined;
     if (last?.state === "open") {
       last.state = "cut";
       last.tentative = true;
@@ -733,12 +838,13 @@ export const senderOf = (state: RoomState, from: string | undefined) =>
   from === undefined ? "you" : nameOf(state, from);
 
 /** The person looked at this participant's thread. An open question still
- *  needs attention after this; only its answer clears it. */
+ *  needs attention after this; only its answer clears it. A live stall keeps
+ *  its occurrence for the bell until the event stream resolves it. */
 export function seen(state: RoomState, id: string) {
   const p = state.participants.get(id);
   if (!p) return;
   p.unread = 0;
-  p.stalled = false;
+  if (p.stall) p.stall.seen = true;
 }
 
 /** This participant's oldest open question, if one waits. */
@@ -747,6 +853,7 @@ export const questionOf = (state: RoomState, id: string) =>
 
 /** Whether this participant needs the person: a question waits, or its
  *  live turn looks stuck. */
-export const needsAttention = (state: RoomState, id: string) =>
-  Boolean(state.participants.get(id)?.stalled) ||
-  questionOf(state, id) !== undefined;
+export const needsAttention = (state: RoomState, id: string) => {
+  const stall = state.participants.get(id)?.stall;
+  return Boolean(stall && !stall.seen) || questionOf(state, id) !== undefined;
+};
