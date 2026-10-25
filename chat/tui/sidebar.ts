@@ -77,7 +77,8 @@ const mark = (state: RoomState, id: string): Mark => {
   if (!p) return { glyph: "○", paint: plain, waits: false };
   const waits = Boolean(p.unread) || needsAttention(state, id);
   if (questionOf(state, id)) return { glyph: "?", paint: magenta, waits: true };
-  if (p.stalled) return { glyph: "!", paint: yellow, waits: true };
+  if (p.stall?.seen === false)
+    return { glyph: "!", paint: yellow, waits: true };
   const colour = colourOf(state, id);
   const tint = colour === undefined ? plain : fg(colour);
   if (p.status === "busy") return { glyph: "◐", paint: tint, waits };
@@ -89,6 +90,8 @@ const mark = (state: RoomState, id: string): Mark => {
 
 /** How a room row paints the glyph: why it waits, never an agent's colour. */
 const roomPaint = (glyph: Mark["glyph"]) =>
+  // Two short cases; an if/else is no clearer.
+  // pi-lens-ignore: nested-ternary
   glyph === "?" ? magenta : glyph === "!" || glyph === "✕" ? yellow : plain;
 
 /** A room's mark: its most urgent participant's (decided 2026-10-11). */
@@ -113,7 +116,7 @@ const tailPath = (path: string, room: number) => {
   if (room <= 0) return "";
   if (visibleWidth(path) <= room) return path;
   let out = "";
-  for (const ch of [...path].reverse()) {
+  for (const ch of [...path].toReversed()) {
     if (visibleWidth(`…${ch}${out}`) > room) break;
     out = `${ch}${out}`;
   }
@@ -142,6 +145,8 @@ const changeLine = (f: FileChange, inner: number) => {
  * `openFile` opens one of its files in the side pane, and `now` is the
  * clock, for a test.
  */
+// One closure holds the sidebar's rows and their builders.
+// pi-lens-ignore: high-complexity, high-fan-out
 function sidebarParts({
   rooms,
   view,
@@ -167,6 +172,8 @@ function sidebarParts({
    *  harness and role, dim, under the name; without, one row with the
    *  harness dim after the name. The mark and name are one painted piece,
    *  so a colour never splits them. */
+  // The row's parts are positional at its one call site.
+  // pi-lens-ignore: long-parameter-list
   const agentLines = (
     state: RoomState,
     p: Participant,
@@ -178,6 +185,8 @@ function sidebarParts({
     const star = p.role === "orchestrator" ? " ★" : "";
     const start = Date.parse(p.turns.at(-1)?.start ?? "");
     const right =
+      // Two short cases; an if/else is no clearer.
+      // pi-lens-ignore: nested-ternary
       p.status === "busy" && !Number.isNaN(start)
         ? clock(now() - start)
         : p.unread
@@ -219,6 +228,8 @@ function sidebarParts({
   /** Every sidebar row, the changed-files block included. Told with the
    *  view each row opens, the file rows a click can open, and where the
    *  block starts. */
+  // The one draw routine owns every row and the files block.
+  // pi-lens-ignore: high-complexity, high-fan-out
   const draw = (inner: number) => {
     const fit = (s: string) =>
       `${truncateToWidth(s, inner, "…", true)} ${dim("│")}`;
@@ -288,6 +299,8 @@ function sidebarParts({
         files.push(...all.slice(0, show));
         for (const f of files) lines.push(fit(changeLine(f, inner)));
         const more = d.files - files.length;
+        // One guard inside the files block's loop.
+        // pi-lens-ignore: deep-nesting
         if (more > 0) lines.push(fit(dim(`  +${more} more`)));
         last = lines.length - 1;
       }

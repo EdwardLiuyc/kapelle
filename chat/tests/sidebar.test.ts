@@ -89,6 +89,8 @@ test("a paused room and its paused and killed participants are marked", () => {
   assert.match(text, /✕ bob +│\n {6}mock +│/);
 });
 
+// One test reads the whole two-row shape: its call count is the test.
+// pi-lens-ignore: high-fan-out
 test("an agent's two rows at 32 columns: mark, timer, unread count, then harness · role", () => {
   const { state, line, add } = mk();
   add("p-ann", "ann", "claude", "orchestrator");
@@ -201,6 +203,40 @@ test("the room mark takes its most urgent agent's mark", () => {
   });
   assert.equal(roomMark(state).glyph, "?", "question before stall");
   assert.equal(roomMark(state).waits, true, "a question waits");
+});
+
+test("a seen or resolved stall leaves the stall mark (#348)", () => {
+  const { state, line, add } = mk();
+  for (const [id, name] of [
+    ["p-ann", "ann"],
+    ["p-bob", "bob"],
+  ]) {
+    add(id, name);
+    line(id, { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  }
+  const warn = (kind: "idle" | "repeat") =>
+    line("p-ann", {
+      sessionUpdate: "_client_stall_warning",
+      kind,
+      text: "stuck",
+    });
+  const call = (id: string, title: string) =>
+    line(id, { sessionUpdate: "tool_call", toolCallId: title, title });
+  warn("idle");
+  assert.equal(roomMark(state).glyph, "!");
+  seen(state, "p-ann");
+  assert.notEqual(roomMark(state).glyph, "!", "seen");
+  warn("idle");
+  call("p-bob", "Read");
+  assert.equal(roomMark(state).glyph, "!", "bob's line is not ann's");
+  line("p-ann", { sessionUpdate: "usage_update", used: 1, size: 10 });
+  assert.notEqual(roomMark(state).glyph, "!", "an idle stall resolved");
+  call("p-ann", "Terminal");
+  warn("repeat");
+  call("p-ann", "Terminal");
+  assert.equal(roomMark(state).glyph, "!", "the same title");
+  call("p-ann", "Read");
+  assert.notEqual(roomMark(state).glyph, "!", "a repeat stall resolved");
 });
 
 test("the strip shows the open room's mark", () => {

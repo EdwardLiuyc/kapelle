@@ -3,9 +3,10 @@
  *
  * **No I/O.** It reads the `{seq, roomId, participantId, update}` lines a
  * client already has and keeps what a screen draws: the roster and each
- * participant's status, the room timeline, each turn, the queue, the open
- * permission questions, unread and attention marks, and what an activity
- * row and the footer show (M7-1): thinking, the last tool, the last usage.
+ * participant's status, the room timeline, each turn, the live stall
+ * warning, the queue, the open permission questions, unread and attention
+ * marks, and what an activity row and the footer show (M7-1): thinking, the
+ * last tool, the last usage.
  * It keeps no thinking text, and of a tool's diff only its counts (M7-2).
  * A TUI and a bridge
  * share it, so neither parses events itself.
@@ -158,11 +159,16 @@ interface ToolSlot {
   location?: string;
 }
 
+// The log is the harness's JSON: this decodes it at the edge.
+// pi-lens-ignore: no-unknown-parameters
 const str = (v: unknown) =>
+  // pi-lens-ignore: no-runtime-typeof
   typeof v === "string" ? v.slice(0, SLOT_TEXT) : undefined;
 
 const STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
 /** The status if it is one ACP defines; the log is the harness's JSON. */
+// The log is the harness's JSON: this decodes it at the edge.
+// pi-lens-ignore: no-unknown-parameters
 const statusOf = (v: unknown) =>
   STATUSES.has(v as string) ? (v as ToolCallStatus) : undefined;
 
@@ -179,6 +185,8 @@ const KINDS = new Set([
   "other",
 ]);
 /** The kind if it is one ACP defines; a fold line counts by it (M7-2). */
+// The log is the harness's JSON: this decodes it at the edge.
+// pi-lens-ignore: no-unknown-parameters
 const kindOf = (v: unknown) =>
   KINDS.has(v as string) ? (v as ToolKind) : undefined;
 
@@ -195,14 +203,18 @@ const linesOf = (s: string) =>
  */
 // ponytail: counts too high for an edit in several places; a line diff
 // (Myers) if the numbers mislead.
+// The log is the harness's JSON: this decodes it at the edge.
+// pi-lens-ignore: no-unknown-parameters
 function diffCount(content: unknown) {
   if (!Array.isArray(content)) return undefined;
   let added = 0;
   let removed = 0;
   let any = false;
   for (const c of content) {
+    // pi-lens-ignore: no-runtime-typeof
     if (c?.type !== "diff" || typeof c.newText !== "string") continue;
     any = true;
+    // pi-lens-ignore: no-runtime-typeof
     const a = linesOf(typeof c.oldText === "string" ? c.oldText : "");
     const b = linesOf(c.newText);
     let start = 0;
@@ -238,10 +250,16 @@ const toolText = (s: string) => {
 };
 
 /** The keys of `raw` a detail can use. `raw` is the harness's JSON. */
+// The log is the harness's JSON: this decodes it at the edge.
+// pi-lens-ignore: no-unknown-parameters
 function detailInput(raw: unknown): Record<string, string> {
+  // pi-lens-ignore: no-runtime-typeof
   if (typeof raw !== "object" || raw === null) return {};
+  // Filled key by key below, so the literal starts empty.
+  // pi-lens-ignore: no-known-value-widening
   const input: Record<string, string> = {};
   for (const k of [...DETAIL_KEYS, "description"]) {
+    // pi-lens-ignore: no-unsafe-dictionary-unknown
     const v = str((raw as Record<string, unknown>)[k]);
     if (v) input[k] = v;
   }
@@ -278,6 +296,8 @@ function showTool(slot: ToolSlot) {
   slot.entry.title = toolText(slot.title);
   const detail = detailOf(slot);
   if (detail) slot.entry.detail = detail;
+  // The entry has no detail key, not an undefined one.
+  // pi-lens-ignore: ts-delete-property
   else delete slot.entry.detail;
 }
 
@@ -294,9 +314,20 @@ interface Turn {
   tentative?: true;
   stopReason?: string;
   error?: string;
-  /** The last stall warning's text. Unlike `stalled`, `seen` keeps it: the
-   *  bell (M4-4) rings for a person who looks somewhere else. */
-  stall?: string;
+}
+
+/** A live stall warning (#348). The timeline entry is its history; this is
+ *  only what still asks for attention. */
+interface Stall {
+  kind: "idle" | "repeat";
+  text: string;
+  /** Its line's `seq`: a later warning in the same turn rings again. */
+  seq: number;
+  /** The person looked. Unlike a resolve, `seen` keeps it for the bell
+   *  (M4-4): it rings for a person who looks somewhere else. */
+  seen: boolean;
+  /** For `repeat`, the `tool_call` title it warned about. */
+  title?: string;
 }
 
 interface ParticipantState {
@@ -322,8 +353,12 @@ interface ParticipantState {
   answer?: Answer;
   /** Timeline entries not from the person, since the last `seen`. */
   unread: number;
-  /** A stall warning in the live turn, until it ends or is `seen`. */
-  stalled: boolean;
+  /** The live stall warning, until it is resolved or its turn ends. An
+   *  idle one is resolved by its harness's next line; a repeat one by a
+   *  `tool_call` with another title. */
+  stall?: Stall;
+  /** The line that resolved an idle warning, so `quiet` keeps its frame. */
+  stallResolvedAt?: number;
   /** The `seq` of the thought chunk that set the flag (M7-1). Only the
    *  flag: the text is large (pi), and never drawn. An answer chunk, a tool
    *  call or the turn's end clears it, and nothing else: a `usage_update`
@@ -333,6 +368,8 @@ interface ParticipantState {
   /** The live turn's last tool call (M7-1). The entry, not its title:
    *  its updates set the title in place (#240). */
   tool?: Tool;
+  /** The live turn's last `tool_call` title, as the watchdog compares it. */
+  callTitle?: string;
   /** The last `usage_update`. The cost in it is a running total for the
    *  session (§M0-5): never add two of them up. */
   usage?: UsageUpdate;
@@ -370,11 +407,29 @@ export const newRoomState = (): RoomState => ({
   tools: new Map(),
 });
 
+/** The `_client_` events `protocol/agent.ts` emits. With every harness
+ *  update, they are what the watchdog sees; the room's own lines, such as a
+ *  queued message or a rename, never reach it (`core/room.ts`). */
+const AGENT_EVENTS = new Set([
+  "_client_harness_spawned",
+  "_client_harness_exited",
+  "_client_permission_pending",
+  "_client_permission",
+  "_client_wrote_file",
+  "_client_cancel_requested",
+]);
+
+/** A line the harness's process sent, so the watchdog counted it. */
+const fromHarness = (kind: string) =>
+  !kind.startsWith("_client_") || AGENT_EVENTS.has(kind);
+
 /**
  * Applies one line. Returns the timeline entry it added or changed, or
  * `undefined` when the timeline did not change: a repeated `seq`, a roster
  * line, or an event no screen draws.
  */
+// One switch over the event kinds is the reducer's shape.
+// pi-lens-ignore: high-complexity, high-fan-out
 export function applyLine(
   state: RoomState,
   { seq, at: time, participantId, update: u }: RoomEventLine,
@@ -382,6 +437,12 @@ export function applyLine(
   if (seq <= state.seq) return undefined;
   state.seq = seq;
   const p = state.participants.get(participantId);
+  // Its harness's traffic ends an idle spell, as in `core/watchdog.ts`. A
+  // busy loop is traffic too, so a repeat warning waits for a new title.
+  if (p?.stall?.kind === "idle" && fromHarness(u.sessionUpdate)) {
+    p.stall = undefined;
+    p.stallResolvedAt = seq;
+  }
   const add = (entry: Entry) => {
     state.timeline.push(entry);
     if (p) {
@@ -417,7 +478,6 @@ export function applyLine(
         turns: [],
         queue: [],
         unread: 0,
-        stalled: false,
       });
       return undefined;
     }
@@ -425,6 +485,8 @@ export function applyLine(
       if (!p) return undefined;
       if (u.name !== undefined) p.name = u.name;
       if (u.mode !== undefined) p.mode = u.mode;
+      // A role is absent from the roster, not present as undefined.
+      // pi-lens-ignore: ts-delete-property
       if (u.role === null) delete p.role;
       else if (u.role !== undefined) p.role = u.role;
       return undefined;
@@ -450,10 +512,11 @@ export function applyLine(
         // A turn that starts while messages wait is the oldest of them.
         p.queue.shift();
         p.status = p.reported?.status ?? "busy";
-        p.stalled = false;
+        p.stall = undefined;
         // A cut turn ends here.
         p.thinking = undefined;
         p.tool = undefined;
+        p.callTitle = undefined;
         p.turns.push({
           ...(u.turn !== undefined && { number: u.turn }),
           text,
@@ -536,6 +599,14 @@ export function applyLine(
       if (p) {
         p.thinking = undefined;
         p.tool = slot.entry;
+        p.callTitle = slot.title;
+        if (
+          p.stall?.kind === "repeat" &&
+          p.stall.title !== undefined &&
+          p.stall.title !== slot.title
+        ) {
+          p.stall = undefined;
+        }
       }
       return slot.entry;
     }
@@ -590,9 +661,10 @@ export function applyLine(
         if (!p.reported && p.status !== "exited" && p.status !== "killed") {
           p.status = "idle";
         }
-        p.stalled = false;
+        p.stall = undefined;
         p.thinking = undefined;
         p.tool = undefined;
+        p.callTitle = undefined;
       }
       return add({
         ...at,
@@ -628,11 +700,14 @@ export function applyLine(
       });
     }
     case "_client_stall_warning": {
-      if (p) p.stalled = true;
       // A repeat warning quotes the harness's tool title.
       const text = printable(u.text);
-      const turn = openTurn();
-      if (turn) turn.stall = text;
+      if (p) {
+        p.stall = { kind: u.kind, text, seq, seen: false };
+        if (u.kind === "repeat" && p.callTitle !== undefined) {
+          p.stall.title = p.callTitle;
+        }
+      }
       return add({ ...at, type: "stall", kind: u.kind, text });
     }
     case "_client_permission_queued": {
@@ -696,10 +771,11 @@ export function applyStatus(state: RoomState, room: RoomDto): boolean {
     // Only what a screen draws counts: a participant already paused stays
     // paused, and its every turn end must not rebuild the transcript.
     const last = p.turns.at(-1);
-    const moved = p.status !== status || p.stalled || last?.state === "open";
+    const moved =
+      p.status !== status || p.stall?.seen === false || last?.state === "open";
     p.reported = report;
     p.status = status;
-    p.stalled = false;
+    p.stall = undefined;
     if (last?.state === "open") {
       last.state = "cut";
       last.tentative = true;
@@ -738,15 +814,15 @@ export function seen(state: RoomState, id: string) {
   const p = state.participants.get(id);
   if (!p) return;
   p.unread = 0;
-  p.stalled = false;
+  if (p.stall) p.stall.seen = true;
 }
 
 /** This participant's oldest open question, if one waits. */
 export const questionOf = (state: RoomState, id: string) =>
   [...state.questions.values()].find((q) => q.participantId === id);
 
-/** Whether this participant needs the person: a question waits, or its
- *  live turn looks stuck. */
+/** Whether this participant needs the person: a question waits, or a live
+ *  stall warning the person has not seen. */
 export const needsAttention = (state: RoomState, id: string) =>
-  Boolean(state.participants.get(id)?.stalled) ||
+  state.participants.get(id)?.stall?.seen === false ||
   questionOf(state, id) !== undefined;

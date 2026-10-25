@@ -13,7 +13,8 @@
  * - What is on screen is seen: the timeline marks its whole room, and a
  *   thread marks its participant.
  * - Who waits on the person (M4-4): the banner shows the waits off screen,
- *   and the bell rings once when a participant starts to wait.
+ *   and the bell rings once for each wait, and again for a later stall
+ *   warning (#348). A resolved stall warning no longer waits.
  * - The look (M7-1): each agent's colour, the activity rows under the
  *   timeline (the banner's waits and the open room's busy agents), when
  *   the screen ticks, and how the status line fits its width.
@@ -136,6 +137,8 @@ export function edited(
 
 /** A line came in room `roomId`: an untouched thread pre-fill moves to the
  *  participant's new name. `undefined` when nothing changes. */
+// Each call site passes these in this order; an object adds nothing.
+// pi-lens-ignore: long-parameter-list
 export function renamed(
   state: RoomState,
   roomId: string,
@@ -173,8 +176,8 @@ export const dismissed = (rooms: Rooms, view: View, roomId: string) =>
   view.roomId === roomId ? (rows(rooms)[0] ?? { roomId: "" }) : undefined;
 
 /** A thing a participant waits on the person for (M4-4): its oldest open
- *  question, or a stall warning in its live turn. A participant can have
- *  both. */
+ *  question, or its live stall warning that nothing resolved yet. A
+ *  participant can have both. */
 export interface Wait {
   roomId: string;
   participantId: string;
@@ -183,6 +186,8 @@ export interface Wait {
   text: string;
   /** The question's id. */
   question?: string;
+  /** The stall warning's `seq`, so a later warning rings again. */
+  seq?: number;
 }
 
 /** Every wait, seen or not, in sidebar order: a participant's question
@@ -197,8 +202,8 @@ export function waiting(rooms: Rooms): Wait[] {
       if (q) {
         out.push({ ...at, why: "question", text: q.title, question: q.id });
       }
-      if (turn?.state === "open" && turn.stall) {
-        out.push({ ...at, why: "stall", text: turn.stall });
+      if (turn?.state === "open" && p.stall) {
+        out.push({ ...at, why: "stall", text: p.stall.text, seq: p.stall.seq });
       }
     }
   }
@@ -214,7 +219,7 @@ export function banner(rooms: Rooms, view: View) {
     const key = `${w.roomId} ${w.participantId}`;
     if (rows.has(key) || shows(view, w.roomId, w.participantId)) continue;
     const p = rooms.get(w.roomId)?.state.participants.get(w.participantId);
-    if (w.why === "question" || p?.stalled) rows.set(key, w);
+    if (w.why === "question" || p?.stall?.seen === false) rows.set(key, w);
   }
   return [...rows.values()];
 }
@@ -428,6 +433,8 @@ export function usageText(u?: {
  * alone do not fit, they are joined and the line wraps: a flash is never
  * cut. `measure` is the drawn width.
  */
+// Each call site passes these in this order; an object adds nothing.
+// pi-lens-ignore: long-parameter-list
 export function footer(
   width: number,
   left: string,
@@ -439,6 +446,8 @@ export function footer(
   const sep = " · ";
   for (let n = hints.length; n >= 0; n--) {
     const kept = hints.slice(0, n).join(sep);
+    // Two short cases; an if/else is no clearer.
+    // pi-lens-ignore: nested-ternary
     const line = left + (n ? paint(`${left ? sep : ""}${kept}`) : "");
     const gap = width - measure(line) - measure(right);
     if (!right && gap >= 0) return line;
@@ -450,11 +459,18 @@ export function footer(
 /** Whether a line changes nothing on screen, so it asks for no frame: a
  *  thought chunk that did not set the thinking flag. One room's log was 95%
  *  thought chunks (§M4 · Chat layout). */
-export const quiet = (state: RoomState, line: RoomEventLine) =>
-  line.update.sessionUpdate === "agent_thought_chunk" &&
-  state.participants.get(line.participantId)?.thinking !== line.seq;
+export const quiet = (state: RoomState, line: RoomEventLine) => {
+  const p = state.participants.get(line.participantId);
+  return (
+    line.update.sessionUpdate === "agent_thought_chunk" &&
+    p?.thinking !== line.seq &&
+    p?.stallResolvedAt !== line.seq
+  );
+};
 
 /** The question box's keys (M7-4), each to its row: deny, allow, view diff. */
+// A typed key is looked up by string, so the index stays open.
+// pi-lens-ignore: no-known-value-widening
 const PICK: Record<string, number> = { "1": 0, n: 0, "2": 1, y: 1, "3": 2 };
 
 /**
@@ -474,12 +490,12 @@ export function pickRow(typed: string, rows: number): number | undefined {
 }
 
 /** The waits now, and whether one of them is new: the bell rings once for
- *  a question and once for a stall, on screen or not. A question after a
- *  stall the person saw rings; the stall left when the question closes
- *  does not. */
+ *  a question and once for each stall warning, on screen or not. A question
+ *  after a stall the person saw rings; the stall left when the question
+ *  closes does not. */
 export function bell(before: ReadonlySet<string>, now: readonly Wait[]) {
   const keys = new Set(
-    now.map((w) => `${w.roomId} ${w.participantId} ${w.why}`),
+    now.map((w) => `${w.roomId} ${w.participantId} ${w.why} ${w.seq ?? ""}`),
   );
   return { keys, ring: [...keys].some((k) => !before.has(k)) };
 }

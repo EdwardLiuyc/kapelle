@@ -55,6 +55,8 @@ interface Recording {
   carol: string;
 }
 
+// It drives one whole room: its call count is the recording.
+// pi-lens-ignore: high-fan-out
 async function record(t: TestContext): Promise<Recording> {
   const repo = await gitRepo(t);
   const roomId = newRoomId();
@@ -379,39 +381,155 @@ test("a turn that ends with an error keeps the error on the turn and the entry",
   assert.equal(who(state, "alice").status, "killed", "it died mid-turn");
 });
 
-test("a turn keeps its stall warning after seen, for the bell; the next turn starts without one", () => {
-  const update = (
-    seq: number,
-    value: RoomEventLine["update"],
-  ): RoomEventLine => ({
-    seq,
-    at: "2026-10-05T00:00:00Z",
-    roomId: "room",
-    participantId: "alice",
-    update: value,
-  });
-  const state = replay([
-    update(1, {
+/** Lines by hand for the stall tests (#348): `line(who, update)` gives each
+ *  the next `seq`. alice and bob are on the roster, each in a turn. */
+const stallRoom = () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (participantId: string, update: RoomEventLine["update"]) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-25T00:00:00Z",
+      roomId: "room",
+      participantId,
+      update,
+    });
+  for (const name of ["alice", "bob"]) {
+    line(name, {
       sessionUpdate: "_client_participant_added",
-      name: "alice",
+      name,
       harness: "mock-agent",
       mode: "auto",
-    }),
-    update(2, { sessionUpdate: "_client_user_message", text: "a", turn: 1 }),
-    update(3, {
+    });
+    line(name, { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  }
+  const warn = (participantId: string, kind: "idle" | "repeat") =>
+    line(participantId, {
       sessionUpdate: "_client_stall_warning",
-      kind: "idle",
-      text: "no activity for 5s",
-    }),
-  ]);
+      kind,
+      text: kind === "idle" ? "no activity for 5s" : '8× "Terminal" in a row',
+    });
+  const call = (participantId: string, id: string, title: string) =>
+    line(participantId, {
+      sessionUpdate: "tool_call",
+      toolCallId: id,
+      title,
+      rawInput: { command: id },
+    });
+  return { state, line, warn, call };
+};
+
+test("seen keeps a stall warning for the bell, out of attention; the next turn starts without one", () => {
+  const { state, line, warn } = stallRoom();
+  warn("alice", "idle");
+  assert.equal(needsAttention(state, "alice"), true);
   seen(state, "alice");
-  assert.equal(who(state, "alice").stalled, false, "seen clears the mark");
-  assert.equal(who(state, "alice").turns[0]?.stall, "no activity for 5s");
-  replay(
-    [update(4, { sessionUpdate: "_client_user_message", text: "b", turn: 2 })],
-    state,
-  );
-  assert.equal(who(state, "alice").turns[1]?.stall, undefined);
+  assert.equal(needsAttention(state, "alice"), false, "seen clears the mark");
+  assert.equal(who(state, "alice").stall?.text, "no activity for 5s");
+  assert.equal(who(state, "alice").stall?.seen, true);
+  line("alice", { sessionUpdate: "_client_user_message", text: "b", turn: 2 });
+  assert.equal(who(state, "alice").stall, undefined);
+});
+
+test("an idle warning is resolved by the next line of the same participant's harness (#348)", () => {
+  const next: RoomEventLine["update"][] = [
+    {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "back" },
+    },
+    {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "hm" },
+    },
+    { sessionUpdate: "tool_call", toolCallId: "t2", title: "Terminal" },
+    {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+    },
+    { sessionUpdate: "usage_update", used: 1, size: 10 },
+  ];
+  for (const update of next) {
+    const { state, line, warn, call } = stallRoom();
+    call("alice", "t1", "Terminal");
+    warn("alice", "idle");
+    assert.equal(needsAttention(state, "alice"), true, update.sessionUpdate);
+    // Another participant's line is not alice's activity.
+    line("bob", update);
+    assert.equal(
+      needsAttention(state, "alice"),
+      true,
+      `bob's ${update.sessionUpdate}`,
+    );
+    line("alice", update);
+    assert.equal(needsAttention(state, "alice"), false, update.sessionUpdate);
+    assert.equal(who(state, "alice").stall, undefined, update.sessionUpdate);
+    // History stays.
+    assert.equal(
+      state.timeline.filter((e) => e.type === "stall").length,
+      1,
+      update.sessionUpdate,
+    );
+  }
+});
+
+test("an idle warning outlives the room's own lines: the watchdog never sees them (#348)", () => {
+  const { state, line, warn } = stallRoom();
+  warn("alice", "idle");
+  // The person nudges the silent agent, then renames it.
+  line("alice", {
+    sessionUpdate: "_client_message_queued",
+    text: "are you there?",
+  });
+  line("alice", { sessionUpdate: "_client_participant_changed", name: "al" });
+  assert.equal(needsAttention(state, "alice"), true);
+  assert.equal(who(state, "alice").stall?.kind, "idle");
+});
+
+test("a repeat warning is resolved only by a tool call of another title (#348)", () => {
+  const { state, line, warn, call } = stallRoom();
+  call("alice", "t1", "Terminal");
+  warn("alice", "repeat");
+  assert.equal(who(state, "alice").stall?.title, "Terminal");
+  // A busy loop is traffic too: none of it resolves a repeat.
+  line("alice", {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "still" },
+  });
+  line("alice", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    title: "Read",
+    rawInput: { command: "other" },
+    status: "completed",
+  });
+  // Same title, other input: still the same title, as the watchdog sees it.
+  call("alice", "t2", "Terminal");
+  assert.equal(needsAttention(state, "alice"), true);
+  // Another participant's new title is not alice's.
+  call("bob", "t3", "Read");
+  assert.equal(needsAttention(state, "alice"), true);
+  call("alice", "t4", "Read");
+  assert.equal(needsAttention(state, "alice"), false);
+  assert.equal(who(state, "alice").stall, undefined);
+});
+
+test("a later warning replaces the live one with its own seq; a turn end clears it", () => {
+  const { state, line, warn } = stallRoom();
+  warn("alice", "idle");
+  const first = who(state, "alice").stall?.seq;
+  seen(state, "alice");
+  line("alice", { sessionUpdate: "usage_update", used: 1, size: 10 });
+  warn("alice", "idle");
+  const second = who(state, "alice").stall;
+  assert.ok(first !== undefined && second && second.seq > first);
+  assert.equal(second.seen, false);
+  assert.equal(needsAttention(state, "alice"), true);
+  line("alice", {
+    sessionUpdate: "_client_turn_ended",
+    stopReason: "end_turn",
+  });
+  assert.equal(who(state, "alice").stall, undefined);
 });
 
 test("a question's title and input lose their control characters", () => {
@@ -650,6 +768,8 @@ test("after a shutdown: a turn the log ended is ended, whatever GET came first",
 
 /** A room whose harness is killed during a turn, then revived by the next
  *  message, as `core/room.ts` writes it. */
+// It drives one whole room: its call count is the recording.
+// pi-lens-ignore: high-fan-out
 async function recordRevive(t: TestContext) {
   const repo = await gitRepo(t);
   const roomId = newRoomId();
