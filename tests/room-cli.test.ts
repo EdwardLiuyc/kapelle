@@ -461,13 +461,6 @@ test("the orchestrator adds a reviewer, moves a branch, reads a diff and removes
   );
 });
 
-test("the room usage says info shows each agent's branch", async (t) => {
-  const dir = await tempDir(t);
-  const r = await room(t, dir, dir, ["nope"]);
-  assert.equal(r.code, 1);
-  assert.match(r.stderr, /^ {2}info .*branch/m, r.stderr);
-});
-
 test("a verb it does not know, or a wrong shape, prints the usage", async (t) => {
   // Refused before any daemon is looked for.
   const dir = await tempDir(t);
@@ -483,6 +476,8 @@ test("a verb it does not know, or a wrong shape, prints the usage", async (t) =>
     const r = await room(t, dir, dir, args);
     assert.equal(r.code, 1, args.join(" "));
     assert.match(r.stderr, /^usage: kapelle room <verb>/, args.join(" "));
+    // `info` says it shows each agent's branch (#358).
+    assert.match(r.stderr, /^ {2}info .*branch/m, args.join(" "));
   }
 
   // An option the verb does not take is refused, not dropped from the text.
