@@ -357,6 +357,8 @@ interface ParticipantState {
    *  idle one is resolved by the next line of this participant's; a repeat
    *  one by a `tool_call` with another title. */
   stall?: Stall;
+  /** The line that resolved an idle warning, so `quiet` keeps its frame. */
+  stallResolvedAt?: number;
   /** The `seq` of the thought chunk that set the flag (M7-1). Only the
    *  flag: the text is large (pi), and never drawn. An answer chunk, a tool
    *  call or the turn's end clears it, and nothing else: a `usage_update`
@@ -421,7 +423,10 @@ export function applyLine(
   const p = state.participants.get(participantId);
   // Any line of its own ends an idle spell, as in `core/watchdog.ts`. A
   // busy loop is traffic too, so a repeat warning waits for a new title.
-  if (p?.stall?.kind === "idle") p.stall = undefined;
+  if (p?.stall?.kind === "idle") {
+    p.stall = undefined;
+    p.stallResolvedAt = seq;
+  }
   const add = (entry: Entry) => {
     state.timeline.push(entry);
     if (p) {

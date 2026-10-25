@@ -459,9 +459,14 @@ export function footer(
 /** Whether a line changes nothing on screen, so it asks for no frame: a
  *  thought chunk that did not set the thinking flag. One room's log was 95%
  *  thought chunks (§M4 · Chat layout). */
-export const quiet = (state: RoomState, line: RoomEventLine) =>
-  line.update.sessionUpdate === "agent_thought_chunk" &&
-  state.participants.get(line.participantId)?.thinking !== line.seq;
+export const quiet = (state: RoomState, line: RoomEventLine) => {
+  const p = state.participants.get(line.participantId);
+  return (
+    line.update.sessionUpdate === "agent_thought_chunk" &&
+    p?.thinking !== line.seq &&
+    p?.stallResolvedAt !== line.seq
+  );
+};
 
 /** The question box's keys (M7-4), each to its row: deny, allow, view diff. */
 // A typed key is looked up by string, so the index stays open.

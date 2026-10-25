@@ -383,6 +383,48 @@ test("a resolved stall leaves the waits and the banner; a later one rings again 
   assert.equal(bell(kept, waiting(all)).ring, true, "a new seq is a new wait");
 });
 
+test("a thought chunk that resolves an idle warning asks for a frame (#348)", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (update: RoomEventLine["update"]) => {
+    const at = {
+      seq: ++seq,
+      at: "2026-10-25T00:00:00Z",
+      roomId: "r1",
+      participantId: "p-ann",
+    };
+    applyLine(state, { ...at, update });
+    return { ...at, update } satisfies RoomEventLine;
+  };
+  line({
+    sessionUpdate: "_client_participant_added",
+    name: "ann",
+    harness: "mock",
+    mode: "auto",
+  });
+  line({ sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  line({
+    sessionUpdate: "agent_thought_chunk",
+    content: { type: "text", text: "one" },
+  });
+  line({
+    sessionUpdate: "_client_stall_warning",
+    kind: "idle",
+    text: "no activity for 5s",
+  });
+  const all = rooms(["r1", state]);
+  assert.deepEqual(
+    banner(all, { roomId: "r2" }).map((w) => w.why),
+    ["stall"],
+  );
+  const next = line({
+    sessionUpdate: "agent_thought_chunk",
+    content: { type: "text", text: "two" },
+  });
+  assert.deepEqual(banner(all, { roomId: "r2" }), []);
+  assert.equal(quiet(state, next), false, "the resolved warning needs a frame");
+});
+
 test("the where bar names the open view's checkout and branch (4a)", () => {
   const participant = (
     id: string,
