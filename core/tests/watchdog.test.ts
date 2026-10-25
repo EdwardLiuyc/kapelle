@@ -367,6 +367,29 @@ test("a late-refined loop warns once, not once per sweep", () => {
   assert.deepEqual(h.warns, [["a", "repeat"]]);
 });
 
+test("a batch of unrefined calls warns once after refinement", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+
+  for (let i = 1; i <= 3; i++) {
+    h.wd.note(toolCall("a", "Terminal", undefined, "execute", `t${i}`));
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
+
+  for (let i = 1; i <= 3; i++) {
+    h.wd.note(
+      toolUpdate("a", `t${i}`, { command: "pytest" }, "execute", "pytest"),
+    );
+  }
+  h.wd.sweep();
+  assert.deepEqual(
+    h.warns,
+    [["a", "repeat"]],
+    "the refinements are the same loop",
+  );
+});
+
 test("stallRepeatCount 0 disables the repeat signal", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 0 }));

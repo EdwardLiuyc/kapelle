@@ -134,13 +134,21 @@ const texts = (entries: Entry[], type: Entry["type"]) =>
 
 const identityKeys = async (path: string, name: string) => {
   const source = await readFile(new URL(path, import.meta.url), "utf8");
-  // The path and name are fixed by the test, never user input.
-  // pi-lens-ignore: unsafe-regex
-  const match = source.match(
-    new RegExp(`const ${name} = \\[([\\s\\S]*?)\\](?: as const)?;`),
-  );
-  assert.ok(match, `${name} is an as-const key list in ${path}`);
-  return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  const marker = `const ${name} = [`;
+  const start = source.indexOf(marker);
+  assert.ok(start >= 0, `${name} declares a key list in ${path}`);
+  let depth = 0;
+  let end = -1;
+  for (let i = start + marker.length - 1; i < source.length; i++) {
+    if (source[i] === "[") depth += 1;
+    else if (source[i] === "]" && --depth === 0) {
+      end = i;
+      break;
+    }
+  }
+  assert.ok(end > start, `${name} closes its key list in ${path}`);
+  const body = source.slice(start + marker.length, end);
+  return [...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 };
 
 test("the watchdog and room reducer use the same tool identity keys", async () => {
@@ -596,6 +604,30 @@ test("a late tool update refines a repeat anchor without clearing it", () => {
     toolCallId: "next",
     kind: "execute",
     rawInput: { command: "sed" },
+  });
+  assert.equal(needsAttention(state, "alice"), false);
+});
+
+test("a detail-less repeat warning clears on one different operation", () => {
+  const state = aliceTurn();
+  send(state, "alice", {
+    sessionUpdate: "tool_call",
+    toolCallId: "todo-1",
+    title: "Update todos",
+    kind: "other",
+  });
+  send(state, "alice", {
+    sessionUpdate: "_client_stall_warning",
+    kind: "repeat",
+    text: '3× "Update todos" in a row',
+  });
+  assert.equal(needsAttention(state, "alice"), true);
+
+  send(state, "alice", {
+    sessionUpdate: "tool_call",
+    toolCallId: "pytest-1",
+    title: "pytest",
+    kind: "execute",
   });
   assert.equal(needsAttention(state, "alice"), false);
 });

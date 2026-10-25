@@ -440,16 +440,16 @@ function resolveRepeat(
     if (next.detail !== undefined) anchor.detail = next.detail;
     return;
   }
+  if (!anchor.bases.includes(next.base)) {
+    p.stall = undefined;
+    return;
+  }
   if (anchor.detail === undefined) {
     // The warning was raised before this operation's detail arrived. Adopt
     // the first settled identity rather than guessing that it changed.
     if (next.detail !== undefined) {
       stall.anchor = { toolCallId, bases, ...next };
     }
-    return;
-  }
-  if (!anchor.bases.includes(next.base)) {
-    p.stall = undefined;
     return;
   }
   if (next.detail === undefined) return;

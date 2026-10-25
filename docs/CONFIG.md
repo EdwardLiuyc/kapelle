@@ -71,7 +71,7 @@ skipped. The daemon keeps booting and serving the rest.
 | --- | --- | --- | --- |
 | ✅ | file absent | — | no opinion → env → built-ins |
 | ✅ | idle threshold | `{"stallIdleMs": 1000}` | stall warning after 1 s; `0` disables |
-| ✅ | repeat threshold | `{"stallRepeatCount": 3}` | repeat warning at 3 in a row; `0` disables |
+| ✅ | repeat threshold | `{"stallRepeatCount": 3}` | repeat warning at 3 in a row; `0` disables. The value also bounds the watchdog's retained tool-operation history |
 | ✅ | TTL | `{"ttlMs": 60000}` | cancel at 60 s; `0` disables |
 | ✅ | concurrency | `{"maxConcurrency": 2}` | run-file default parallelism 2 (minimum 1) |
 | ✅ | retention | `{"retentionMs": 86400000}` | this repo's terminal runs and dismissed rooms reaped after 1 day; `0` = reap on next sweep |
@@ -128,6 +128,10 @@ Known name → knob → accepted values:
 | `KAPELLE_TTL_MS` | `ttlMs` | integer ≥ 0 |
 | `KAPELLE_MAX_CONCURRENCY` | `maxConcurrency` | integer ≥ 1 |
 | `KAPELLE_RETENTION_MS` | `retentionMs` | integer ≥ 0 |
+
+`stallRepeatCount` also bounds retained history: each operation keeps up to
+seven identity strings of 800 characters, so a very large value costs memory
+in proportion.
 
 ## Precedence and built-in floors
 

@@ -18,6 +18,11 @@
  *   kind as the fallback. `toolCallId` correlates updates and is never the
  *   identity itself: a new id is a new call, not necessarily a new operation.
  *
+ * A repeat warning rings once for an identity family in one watch. The set
+ * includes the late-refined identities of the operations that produced it, so
+ * one loop does not ring again as each call gets its command; a different
+ * identity that itself reaches the threshold rings anew.
+ *
  * Both warn and the task keeps running. Only the longer `ttlMs` acts, and all
  * it does is ask the caller to cancel: ACP gives no way to nudge a turn in
  * flight, and a second `session/prompt` kills the running turn and reads as
@@ -121,8 +126,10 @@ interface WatchState {
   /** Questions asked and not yet answered. Idle does not count while one waits. */
   asking: number;
   idleWarned: boolean;
-  /** The identity whose repeat already rang for this watch. */
-  warnedIdentity?: string;
+  /** Identities of the streak that already rang, including refinements. */
+  warnedIdentities?: Set<string>;
+  /** The operations that made up the warned streak. */
+  warnedIds?: Set<string>;
   timedOut: boolean;
 }
 
@@ -243,6 +250,9 @@ function recordTool(
     const location = bounded(update.locations?.[0]?.path);
     if (location) operation.location = location;
     operation.identity = identityOf(operation);
+    if (state.warnedIds?.has(operation.id)) {
+      state.warnedIdentities?.add(operation.identity);
+    }
   } else {
     return;
   }
@@ -340,9 +350,13 @@ function check(
   if (
     stallRepeatCount > 0 &&
     state.repeatCount >= stallRepeatCount &&
-    state.lastIdentity !== state.warnedIdentity
+    state.lastIdentity !== undefined &&
+    !state.warnedIdentities?.has(state.lastIdentity)
   ) {
-    state.warnedIdentity = state.lastIdentity;
+    state.warnedIdentities = new Set([state.lastIdentity]);
+    state.warnedIds = new Set(
+      state.operations.map((operation) => operation.id),
+    );
     hooks.onWarn(
       taskId,
       "repeat",
