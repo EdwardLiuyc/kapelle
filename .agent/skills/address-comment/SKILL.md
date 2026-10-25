@@ -162,8 +162,9 @@ Close with the CI state and the one thing that still blocks a merge.
   already uses. (`-F body="$(cat reply.md)"` does keep newlines — quoted command
   substitution does not word-split — but it drops the trailing newline and puts the body
   back through the shell for no gain.)
-- `gh pr edit` fails on some repos with Projects (classic) enabled. When updating a PR
-  body, use `gh api -X PATCH repos/{owner}/{repo}/pulls/<N> -F body=@<file>` instead, then
-  read it back to confirm it landed.
+- `gh pr edit` fails on an older `gh` (2.45 here): it asks for `projectCards`, which GitHub
+  turned off with Projects (classic). When updating a PR body, use
+  `gh api -X PATCH repos/{owner}/{repo}/pulls/<N> -F body=@<file>` instead, then read it
+  back to confirm it landed.
 - If a comment is ambiguous enough that two readings produce different code, **ask** rather
   than guessing — a wrong fix plus a confident reply is worse than a question.
