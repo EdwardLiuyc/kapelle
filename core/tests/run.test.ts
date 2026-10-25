@@ -9,7 +9,8 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -1047,23 +1048,26 @@ test("the running record and log exist before the worktree preflight (#317)", {
   skip: needs("sh"),
 }, async (t) => {
   // A git wrapper copies the record and the log when the preflight's first
-  // `git status` starts. A regression that writes them after the preflight
-  // leaves nothing to copy, and a daemon crash in this window loses the run.
+  // `git status` starts, once. A regression that writes them after the
+  // preflight leaves nothing to copy, and a daemon crash in this window loses
+  // the run.
   const root = await gitRepo(t);
   const bin = await tempDir(t);
+  const copies = await tempDir(t);
   const runDir = join(stateDirFor(root), "runs", RECORD_RUN);
-  const realGit = (process.env.PATH ?? "")
-    .split(delimiter)
-    .map((dir) => join(dir, "git"))
-    .find((path) => existsSync(path));
-  if (realGit === undefined) throw new Error("git is not on PATH");
+  const realGit = spawnSync("sh", ["-c", "command -v git"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  assert.ok(realGit, "git is not on PATH");
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const once = quote(join(copies, ".copied"));
   const wrapper = join(bin, "git");
   await writeFile(
     wrapper,
     `#!/bin/sh
-if [ "$1" = "status" ] && [ ! -e ${quote(join(bin, "run.json"))} ]; then
-  cp ${quote(join(runDir, "run.json"))} ${quote(join(runDir, "events.jsonl"))} ${quote(bin)}
+if [ "$1" = "status" ] && [ ! -e ${once} ]; then
+  touch ${once}
+  cp ${quote(join(runDir, "run.json"))} ${quote(join(runDir, "events.jsonl"))} ${quote(copies)}
 fi
 exec ${quote(realGit)} "$@"
 `,
@@ -1081,8 +1085,8 @@ exec ${quote(realGit)} "$@"
     { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
     async () => ({ stopReason: "end_turn" }),
   );
-  const record = JSON.parse(await readFile(join(bin, "run.json"), "utf8"));
+  const record = JSON.parse(await readFile(join(copies, "run.json"), "utf8"));
   assert.equal(record.status, "running");
   assert.deepEqual(record.tasks, [{ id: "t0", status: "queued" }]);
-  assert.equal(await readFile(join(bin, "events.jsonl"), "utf8"), "");
+  assert.equal(await readFile(join(copies, "events.jsonl"), "utf8"), "");
 });
