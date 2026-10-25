@@ -30,7 +30,8 @@ gh issue view <N> --json number,title,body,state,labels,milestone,comments
 ```
 
 Use only this `--json` form. Never `gh issue view <N> --comments` or the plain-text view:
-`gh` 2.45 asks there for `projectCards`, which GitHub turned off, so the call fails.
+an older `gh` (2.45 here) asks there for `projectCards`, which GitHub turned off, so the
+call fails.
 
 - Not found, or not in this repo → stop and say so. Do not scope an issue you cannot read.
 - `state: CLOSED` → stop and ask whether to reopen or pick a different issue.

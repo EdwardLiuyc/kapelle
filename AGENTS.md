@@ -318,8 +318,6 @@ and points back here: `.pi/skills/` (pi, invoked as `/skill:<name>`) and `.claud
 (Claude Code, invoked as `/<name>`). Keep procedure edits in `.agent/skills/`; the shims
 carry discovery metadata only.
 
-Read issues and PRs only with `gh issue|pr view <N> --json ...`; the plain view fails.
-
 - **[`pickup-issue`](.agent/skills/pickup-issue/SKILL.md)** — run when asked to pick up,
   start, scope or break down a GitHub issue, before writing any code.
 - **[`address-comment`](.agent/skills/address-comment/SKILL.md)** — run when asked to
@@ -334,3 +332,5 @@ Read issues and PRs only with `gh issue|pr view <N> --json ...`; the plain view 
   a pull request after verifying all acceptance criteria are met. Merges, cleans up the
   branch, checks whether a linked issue auto-closed without closing it manually, and
   moves whatever that issue was blocking to `Ready` once it has no open blocker left.
+
+Read issues and PRs only with `gh issue|pr view <N> --json ...`; the plain view fails.
