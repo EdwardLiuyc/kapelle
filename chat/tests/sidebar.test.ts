@@ -205,6 +205,26 @@ test("the room mark takes its most urgent agent's mark", () => {
   assert.equal(roomMark(state).waits, true, "a question waits");
 });
 
+test("a seen or resolved stall leaves the room's stall mark", () => {
+  const { state, line, add } = mk();
+  add("p-ann", "ann");
+  line("p-ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  line("p-ann", {
+    sessionUpdate: "_client_stall_warning",
+    kind: "idle",
+    text: "no activity for 5s",
+  });
+  assert.equal(roomMark(state).glyph, "!");
+  seen(state, "p-ann");
+  assert.notEqual(roomMark(state).glyph, "!", "seen is not a stall mark");
+  // The next event ends the idle warning; it is history, not attention.
+  line("p-ann", {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "back" },
+  });
+  assert.notEqual(roomMark(state).glyph, "!", "a resolved stall is gone");
+});
+
 test("the strip shows the open room's mark", () => {
   const { state, line, add } = mk();
   add("p-ann", "ann");

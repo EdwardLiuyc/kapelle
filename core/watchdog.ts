@@ -100,6 +100,7 @@ export interface Watchdog {
 }
 
 interface ToolOperation {
+  id: string;
   title: string;
   kind: string;
   input: Record<string, string>;
@@ -168,6 +169,16 @@ const identityOf = (operation: ToolOperation): string => {
   return JSON.stringify([operation.title, operation.kind, detail]);
 };
 
+/** Keeps the history the check needs and nothing more: the last threshold
+ *  operations are enough to tell whether a streak reaches it. */
+function trimOperations(state: WatchState): void {
+  const excess = state.operations.length - state.limits.stallRepeatCount;
+  if (excess <= 0) return;
+  for (const old of state.operations.splice(0, excess)) {
+    if (state.byId.get(old.id) === old) state.byId.delete(old.id);
+  }
+}
+
 /** Recomputes the trailing streak after a call or a late identity update. */
 function refreshRepeat(state: WatchState): void {
   const last = state.operations.at(-1);
@@ -197,14 +208,19 @@ function recordTool(
   state: WatchState,
   update: AgentEventEnvelope["update"],
 ): void {
+  if (state.limits.stallRepeatCount <= 0) return;
+  /** The wire is free-form JSON: keep only a comparable prefix of each text. */
+  const bounded = (value: unknown) =>
+    typeof value === "string" ? value.slice(0, STABLE_TEXT) : "";
   if (update.sessionUpdate === "tool_call") {
     const operation: ToolOperation = {
-      title: update.title,
-      kind: update.kind ?? "",
+      id: update.toolCallId,
+      title: bounded(update.title),
+      kind: bounded(update.kind ?? ""),
       input: stableInput(update.rawInput),
       identity: "",
     };
-    const location = update.locations?.[0]?.path;
+    const location = bounded(update.locations?.[0]?.path);
     if (location) operation.location = location;
     operation.identity = identityOf(operation);
     const known = state.byId.get(update.toolCallId);
@@ -222,15 +238,16 @@ function recordTool(
   } else if (update.sessionUpdate === "tool_call_update") {
     const operation = state.byId.get(update.toolCallId);
     if (!operation) return;
-    if (update.title !== undefined) operation.title = update.title;
-    if (update.kind !== undefined) operation.kind = update.kind;
+    if (update.title !== undefined) operation.title = bounded(update.title);
+    if (update.kind !== undefined) operation.kind = bounded(update.kind);
     Object.assign(operation.input, stableInput(update.rawInput));
-    const location = update.locations?.[0]?.path;
+    const location = bounded(update.locations?.[0]?.path);
     if (location) operation.location = location;
     operation.identity = identityOf(operation);
   } else {
     return;
   }
+  trimOperations(state);
   refreshRepeat(state);
 }
 

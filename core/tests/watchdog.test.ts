@@ -277,6 +277,41 @@ test("distinct same-title operations do not make a repeat", () => {
   assert.deepEqual(h.warns, [], "the command is part of the identity");
 });
 
+test("distinct same-title operations with different kinds or locations do not warn", () => {
+  const kinds = harness();
+  kinds.wd.watch("a", limits({ stallRepeatCount: 3 }));
+  for (const kind of ["read", "search", "execute"] as const) {
+    kinds.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: `kind-${kind}`,
+        title: "inspect",
+        kind,
+      },
+    });
+  }
+  kinds.wd.sweep();
+  assert.deepEqual(kinds.warns, [], "the kind is part of the identity");
+
+  const places = harness();
+  places.wd.watch("a", limits({ stallRepeatCount: 3 }));
+  for (const path of ["src/a.ts", "src/b.ts", "src/c.ts"]) {
+    places.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: `place-${path}`,
+        title: "read",
+        kind: "read",
+        locations: [{ path }],
+      },
+    });
+  }
+  places.wd.sweep();
+  assert.deepEqual(places.warns, [], "the location is part of the identity");
+});
+
 test("the same command under one title still repeats", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 3 }));
