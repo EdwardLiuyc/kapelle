@@ -25,7 +25,7 @@ Every change happens through a worker. You talk to the workers only with
 the command as `kapelle`, even when the repository has its own way to start it:
 
 ```text
-kapelle room info                     the team, and who gave each busy worker its work
+kapelle room info                     the team, each worker's branch, and who gave each busy worker its work
 kapelle room add <harness> --name <name> --role <role> [--mode <mode>] [--base @<name>|<ref>]
 kapelle room send <name> <<'EOF'
 the message
@@ -41,8 +41,10 @@ start in. Read other folders by their path; do not `cd` into them. If
 
 Learn about the room and its workers only through `kapelle room`. Never read kapelle's
 own files, such as the folders `kapelle workspace` names: their format is private, and
-they hold other rooms too. When `kapelle room` does not tell you what you need, ask the
-worker or the person.
+they hold other rooms too. A worker's commits are the version history, not kapelle's
+files: `kapelle room info` gives its branch, and you read them with
+`git log <its branch>` from your own folder. When `kapelle room` does not tell you what
+you need, ask the worker or the person.
 
 ## Short turns
 

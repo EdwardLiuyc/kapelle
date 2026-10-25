@@ -142,12 +142,15 @@ test("from a participant's checkout, info and send find the room and the sender"
   const info = await room(t, f.runtime, dev.worktree, ["info"]);
   assert.equal(info.code, 0, info.stderr);
   assert.match(info.stdout, new RegExp(`^${f.room.id}  active`));
-  assert.match(
-    info.stdout,
-    /^ {2}po {2}orchestrator {2}mock-agent {2}auto {2}idle$/m,
-  );
-  assert.match(info.stdout, /^ {2}dev {2}developer .* busy, from po$/m);
-  assert.match(info.stdout, /^ {2}rev {2}reviewer .* busy, from the person$/m);
+  // Each participant's branch follows its mode (#358). Whole rows, so a
+  // column added anywhere fails here.
+  for (const p of [po, dev, rev]) assert.ok(p.branch, p.name);
+  assert.deepEqual(info.stdout.split("\n").slice(1), [
+    `  po  orchestrator  mock-agent  auto  ${po.branch}  idle`,
+    `  dev  developer  mock-agent  auto  ${dev.branch}  busy, from po`,
+    `  rev  reviewer  mock-agent  auto  ${rev.branch}  busy, from the person`,
+    "",
+  ]);
 
   // The turns end; the field goes with them.
   await writeFile(join(dev.worktree, "runs.go"), "");
@@ -193,6 +196,34 @@ test("a room opened in a repository subdirectory is found from its checkout, wor
     assert.equal(info.code, 0, info.stderr);
     assert.match(info.stdout, new RegExp(`^${opened.body.id}  active`));
   }
+});
+
+test("info shows - for a participant with no branch", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await bootDaemon(t, runtime);
+  // Not a git repository, so the participant shares the cwd and has no branch.
+  const cwd = await addRepo(d, await tempDir(t));
+  const opened = await api<RoomDto>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `node ${MOCK_AGENT} --scenario remember`,
+        name: "po",
+        role: "orchestrator",
+      },
+    ],
+  });
+  assert.equal(opened.status, 201, JSON.stringify(opened.body));
+  const [po] = opened.body.participants;
+  assert.ok(po, JSON.stringify(opened.body));
+  assert.equal(po.branch, undefined);
+
+  const info = await room(t, runtime, cwd, ["info", "--room", opened.body.id]);
+  assert.equal(info.code, 0, info.stderr);
+  assert.match(
+    info.stdout,
+    /^ {2}po {2}orchestrator {2}mock-agent {2}auto {2}- {2}idle$/m,
+  );
 });
 
 test("a non-git folder at the recorded checkout path is refused", async (t) => {
@@ -445,6 +476,8 @@ test("a verb it does not know, or a wrong shape, prints the usage", async (t) =>
     const r = await room(t, dir, dir, args);
     assert.equal(r.code, 1, args.join(" "));
     assert.match(r.stderr, /^usage: kapelle room <verb>/, args.join(" "));
+    // `info` says it shows each agent's branch (#358).
+    assert.match(r.stderr, /^ {2}info .*branch/m, args.join(" "));
   }
 
   // An option the verb does not take is refused, not dropped from the text.
