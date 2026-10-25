@@ -729,21 +729,22 @@ test("a stream-only client learns the run is over and its status, live and after
   assert.equal(replayed.body.status, replayEnd?.data.update.status);
 });
 
-test("a run that fails before its log exists answers no_event_log, and GET still has the status", async (t) => {
-  // M5-5 (#137): `openWorktrees` runs before the run's log is created
-  // (core/run.ts:381, :426), so a pre-flight failure leaves no stream at all.
-  // The events route answers `no_event_log` while `GET /runs/:id` settles
-  // `failed` — the real fallback, not a stream that ends with the event.
-  const d = await boot(t);
+test("a run whose preflight throws after its 202 keeps a record, a log and its error across a restart (#317)", async (t) => {
+  // A corrupt index passes every check before the 202, then fails the
+  // preflight's `git status`. The record and the log are written before the
+  // preflight, so the failure has a record that a restart can read.
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
   const root = await gitRepo(t);
   const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], {
     cwd: root,
     encoding: "utf8",
   }).stdout.trim();
   await writeFile(join(root, gitDir, "index"), "not an index\n");
-  const cwd = await added(d, root);
+  const cwd = await added(first, root);
 
-  const posted = await api(d, "POST", "/runs", {
+  const posted = await api(first, "POST", "/runs", {
     cwd,
     run: mockRun([{ id: "one", prompt: "hi" }]),
   });
@@ -752,12 +753,31 @@ test("a run that fails before its log exists answers no_event_log, and GET still
   assert.equal(posted.status, 202, posted.body.error?.message);
   const { id } = posted.body;
 
-  const settledRun = await settled(d, id);
-  assert.equal(settledRun.status, "failed");
+  const live = await settled(first, id);
+  assert.equal(live.status, "failed");
+  assert.equal(typeof live.error, "string");
+  const liveEvents = await stream(first, id);
+  assert.equal(liveEvents.status, 200, "a stream, not no_event_log");
+  await liveEvents.ended;
+  assert.deepEqual(liveEvents.frames, [], "an empty log that ends");
 
-  const events = await api(d, "GET", `/runs/${id}/events`);
-  assert.equal(events.status, 404);
-  assert.equal(events.body.error.code, "no_event_log");
+  const record = JSON.parse(
+    await readFile(join(stateDirFor(cwd), "runs", id, "run.json"), "utf8"),
+  );
+  assert.equal(record.status, "failed");
+  assert.equal(record.error, live.error);
+
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const second = await boot(t, runtime, [], state);
+  const restored = await api(second, "GET", `/runs/${id}`);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.status, "failed");
+  assert.equal(restored.body.error, live.error);
+  const replay = await stream(second, id);
+  assert.equal(replay.status, 200, "a stream after a restart too");
+  await replay.ended;
+  assert.deepEqual(replay.frames, [], "the same empty log after a restart");
 });
 
 test("events for an unknown run are 404, a bad Last-Event-ID is 400, and the token is required", async (t) => {

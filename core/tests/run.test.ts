@@ -1014,3 +1014,30 @@ test("a run with no worktrees still writes a record", async (t) => {
   );
   assert.equal(typeof record.tasks[0].durationMs, "number");
 });
+
+test("a preflight that throws leaves a failed record with its error, and an empty log (#317)", async (t) => {
+  // A corrupt index: `git rev-parse` still finds the root, and the preflight's
+  // `git status` throws. The record and the log came first, so both survive.
+  const root = await gitRepo(t);
+  await writeFile(join(root, ".git", "index"), "not an index\n");
+  let ran = false;
+  await assert.rejects(
+    runRun(
+      runOf(1, 1),
+      { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+      async () => {
+        ran = true;
+        return { stopReason: "end_turn" };
+      },
+    ),
+  );
+  assert.equal(ran, false, "no task runs after a failed preflight");
+
+  const record = await recordIn(root, RECORD_RUN);
+  assert.equal(record.status, "failed");
+  assert.equal(typeof record.error, "string");
+  assert.equal(typeof record.endedAt, "string");
+  assert.deepEqual(record.tasks, [{ id: "t0", status: "queued" }]);
+  const log = join(stateDirFor(root), "runs", RECORD_RUN, "events.jsonl");
+  assert.equal(await readFile(log, "utf8"), "");
+});

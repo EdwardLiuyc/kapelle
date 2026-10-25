@@ -52,7 +52,12 @@ import {
 import type { Run, Task } from "./runfile.ts";
 import { stateDirFor } from "./runtime.ts";
 import { createWatchdog, sweepIntervalMs, type Watchdog } from "./watchdog.ts";
-import { changedPaths, openWorktrees, type Worktrees } from "./worktree.ts";
+import {
+  changedPaths,
+  openWorktrees,
+  stateDirRoot,
+  type Worktrees,
+} from "./worktree.ts";
 
 /**
  * Every terminal state a task can reach.
@@ -375,22 +380,13 @@ export async function runRun(
     );
   // Before the first await, so a caller that has just started the run can
   // list its tasks at once — `daemon.ts` answers its 202 right after this
-  // call returns, and the first `persist` is a preflight away (M2-10).
+  // call returns, and the first `persist` is a git call away (M2-10).
   options.onTasks?.(snapshot());
 
-  // Preflight once for the run, not once per task: every refusal it raises is
-  // a property of the repository, so N tasks would raise the same one N times
-  // — and the first worktree would already exist by then.
-  const { worktrees, notice, advisory, root } = await openWorktrees(
-    options.cwd,
-    runId,
-    { linkPaths: options.linkPaths ?? [] },
-  );
-  // Two kinds, one route. The fallback notice says isolation is absent, which
-  // #13 makes unsuppressible; the dirty-tree line (#129) is a courtesy the
-  // operator can silence.
-  if (notice) options.onNotice?.("run", notice, "containment");
-  if (advisory) options.onNotice?.("run", advisory, "advisory");
+  // The root only, before the preflight (#317). `stateDirRoot` never throws,
+  // so the log and the record exist before anything that can: a preflight
+  // that throws after the daemon's 202 still leaves a record that says why.
+  const { root } = await stateDirRoot(options.cwd);
 
   // Beside the worktrees, in the same per-repository state directory, and
   // made once for the run (M1b-7). Since #129 that is outside the repository:
@@ -448,6 +444,7 @@ export async function runRun(
   const persist = (
     status: TaskStatus | "running",
     endedAt?: string,
+    error?: string,
   ): Promise<void> => {
     const tasks = snapshot();
     options.onTasks?.(tasks);
@@ -463,6 +460,7 @@ export async function runRun(
           status,
           startedAt: new Date(started).toISOString(),
           ...(endedAt ? { endedAt } : {}),
+          ...(error ? { error } : {}),
           logDir,
           tasks,
         }),
@@ -484,6 +482,34 @@ export async function runRun(
   // Before any task starts, so a run that dies during its first spawn still
   // has a record naming every task it was going to run.
   await persist("running");
+
+  // Preflight once for the run, not once per task: every refusal it raises is
+  // a property of the repository, so N tasks would raise the same one N times
+  // — and the first worktree would already exist by then.
+  let worktrees: Worktrees | null;
+  try {
+    let notice: string | undefined;
+    let advisory: string | undefined;
+    ({ worktrees, notice, advisory } = await openWorktrees(options.cwd, runId, {
+      linkPaths: options.linkPaths ?? [],
+    }));
+    // Two kinds, one route. The fallback notice says isolation is absent,
+    // which #13 makes unsuppressible; the dirty-tree line (#129) is a
+    // courtesy the operator can silence.
+    if (notice) options.onNotice?.("run", notice, "containment");
+    if (advisory) options.onNotice?.("run", advisory, "advisory");
+  } catch (err) {
+    // A terminal record with the reason, and a log that ends, so a run the
+    // daemon accepted explains its failure after a restart too (#317). No
+    // `_client_run_finished`: a run that threw never sends one.
+    await persist(
+      "failed",
+      new Date().toISOString(),
+      err instanceof Error ? err.message : String(err),
+    );
+    await eventLog?.close();
+    throw err;
+  }
 
   const results = new Array<TaskRun>(run.tasks.length);
   const queue = run.tasks.map((task, index) => ({ task, index }));
@@ -665,6 +691,8 @@ interface RunRecordInput {
   status: TaskStatus | "running";
   startedAt: string;
   endedAt?: string;
+  /** Why the run itself failed, when it threw before any task ran (#317). */
+  error?: string;
   logDir: string;
   tasks: RecordTask[];
 }
@@ -705,6 +733,7 @@ async function writeRunRecord(input: RunRecordInput): Promise<void> {
     status: input.status,
     startedAt: input.startedAt,
     ...(input.endedAt ? { endedAt: input.endedAt } : {}),
+    ...(input.error ? { error: input.error } : {}),
     tasks: input.tasks,
   };
   const path = join(input.logDir, "run.json");
