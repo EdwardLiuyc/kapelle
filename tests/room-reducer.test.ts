@@ -680,6 +680,44 @@ test("a provisional anchor is refined by its own late update", () => {
   );
 });
 
+test("a content-only update does not settle the provisional anchor", () => {
+  const state = aliceTurn();
+  send(state, "alice", {
+    sessionUpdate: "tool_call",
+    toolCallId: "content-1",
+    title: "Terminal",
+    kind: "execute",
+  });
+  send(state, "alice", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "content-1",
+    status: "in_progress",
+  });
+  send(state, "alice", {
+    sessionUpdate: "_client_stall_warning",
+    kind: "repeat",
+    text: '3× "Terminal" in a row',
+  });
+  send(state, "alice", {
+    sessionUpdate: "tool_call",
+    toolCallId: "content-2",
+    title: "Terminal",
+    kind: "execute",
+  });
+  send(state, "alice", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "content-2",
+    title: "pytest",
+    kind: "execute",
+    rawInput: { command: "pytest" },
+  });
+  assert.equal(
+    needsAttention(state, "alice"),
+    true,
+    "the anchor is still provisional",
+  );
+});
+
 test("a late-refined loop stays the same operation across iterations", () => {
   const state = aliceTurn();
   send(state, "alice", {

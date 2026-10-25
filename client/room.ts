@@ -312,7 +312,8 @@ interface StallAnchor {
   bases: string[];
   /** Stable `rawInput` or location, when the harness has sent one. */
   detail?: string;
-  /** The call had not had an update or a terminal status when it warned. */
+  /** The call had not settled when it warned. Only its own update or turn
+   *  end may clear it; a different call cannot prove that it changed. */
   provisional?: true;
 }
 
@@ -407,14 +408,23 @@ export interface RoomState {
   tools: Map<string, ToolSlot>;
 }
 
-/** Adds this call's current base, keeping only the recent history. */
+/** Adds this call's current base, keeping the first and recent history. */
 function rememberBase(slot: ToolSlot): void {
   slot.bases.add(toolIdentity(slot).base);
-  while (slot.bases.size > MAX_TOOL_BASES) {
-    const oldest = slot.bases.values().next().value;
-    if (oldest === undefined) break;
-    slot.bases.delete(oldest);
-  }
+  if (slot.bases.size <= MAX_TOOL_BASES) return;
+  const bases = slot.bases.values();
+  bases.next();
+  const evict = bases.next().value;
+  if (evict !== undefined) slot.bases.delete(evict);
+}
+
+/** A stable detail or a terminal status makes an identity final. */
+function isSettled(slot: ToolSlot): boolean {
+  return (
+    toolIdentity(slot).detail !== undefined ||
+    slot.entry.status === "completed" ||
+    slot.entry.status === "failed"
+  );
 }
 
 /** What distinguishes one tool operation from another. `toolCallId` only
@@ -446,8 +456,9 @@ function resolveRepeat(
   if (stall?.kind !== "repeat") return;
   const next = toolIdentity(slot);
   const bases = [...slot.bases];
+  const provisional = !slot.settled && { provisional: true as const };
   if (!stall.anchor) {
-    stall.anchor = { toolCallId, bases, ...next };
+    stall.anchor = { toolCallId, bases, ...next, ...provisional };
     return;
   }
   const anchor = stall.anchor;
@@ -467,7 +478,7 @@ function resolveRepeat(
     // The warning was raised before this operation's detail arrived. Adopt
     // the first settled identity rather than guessing that it changed.
     if (next.detail !== undefined) {
-      stall.anchor = { toolCallId, bases, ...next };
+      stall.anchor = { toolCallId, bases, ...next, ...provisional };
     }
     return;
   }
@@ -658,11 +669,7 @@ export function applyLine(
       showTool(slot);
       toolFacts(slot.entry, u);
       rememberBase(slot);
-      const identity = toolIdentity(slot);
-      slot.settled =
-        identity.detail !== undefined ||
-        status === "completed" ||
-        status === "failed";
+      slot.settled = isSettled(slot);
       state.tools.set(`${participantId} ${u.toolCallId}`, slot);
       if (p) {
         p.thinking = undefined;
@@ -701,7 +708,7 @@ export function applyLine(
       showTool(slot);
       toolFacts(entry, u);
       rememberBase(slot);
-      slot.settled = true;
+      slot.settled = isSettled(slot);
       // A non-live call may still be the warning's own provisional anchor.
       if (
         p &&

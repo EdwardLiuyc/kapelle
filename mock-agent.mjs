@@ -211,6 +211,8 @@ const lastPrompt = new Map();
 
 /** `--store`'s file for one session: every prompt it saw, in order. */
 const storeFile = (sid) => join(store, `${sid}.json`);
+// The store is fixture-owned; invalid JSON should fail the test loudly.
+// pi-lens-ignore: unchecked-throwing-call-js
 const stored = (sid) => JSON.parse(readFileSync(storeFile(sid), "utf8"));
 const keep = (sid, prompts) =>
   store && writeFileSync(storeFile(sid), JSON.stringify(prompts));
@@ -486,7 +488,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
           toolCallId: `loop${i}`,
           title: REPEAT_TITLE,
           kind: "search",
-          status: "pending",
+          status: "completed",
         });
         await sleep(REPEAT_GAP_MS);
       }

@@ -29,12 +29,14 @@ const toolCall = (
   rawInput?: Record<string, unknown>,
   kind?: "execute" | "read" | "search",
   toolCallId = `${id}-tool-${++nextTool}`,
+  status: "pending" | "in_progress" | "completed" | "failed" = "completed",
 ): AgentEventEnvelope => ({
   agent: id,
   update: {
     sessionUpdate: "tool_call",
     toolCallId,
     title,
+    status,
     ...(rawInput && { rawInput }),
     ...(kind && { kind }),
   },
@@ -46,6 +48,7 @@ const toolUpdate = (
   rawInput?: Record<string, unknown>,
   kind?: "execute" | "read" | "search",
   title?: string,
+  status?: "pending" | "in_progress" | "completed" | "failed",
 ): AgentEventEnvelope => ({
   agent: id,
   update: {
@@ -54,6 +57,7 @@ const toolUpdate = (
     ...(rawInput && { rawInput }),
     ...(kind && { kind }),
     ...(title && { title }),
+    ...(status && { status }),
   },
 });
 
@@ -334,7 +338,7 @@ test("late rawInput updates refine the operation identity", () => {
     ["t2", "sed"],
     ["t3", "grep"],
   ] as const) {
-    h.wd.note(toolCall("a", "Terminal", undefined, "execute", id));
+    h.wd.note(toolCall("a", "Terminal", undefined, "execute", id, "pending"));
     h.wd.note(toolUpdate("a", id, { command }, "execute"));
   }
   h.wd.sweep();
@@ -346,7 +350,7 @@ test("late updates do not erase a real repeat", () => {
   h.wd.watch("a", limits({ stallRepeatCount: 3 }));
 
   for (const id of ["t1", "t2", "t3"]) {
-    h.wd.note(toolCall("a", "Terminal", undefined, "execute", id));
+    h.wd.note(toolCall("a", "Terminal", undefined, "execute", id, "pending"));
     h.wd.note(toolUpdate("a", id, { command: "pytest" }, "execute"));
   }
   h.wd.sweep();
@@ -359,7 +363,7 @@ test("a late-refined loop warns once, not once per sweep", () => {
 
   for (let i = 1; i <= 4; i++) {
     const id = `t${i}`;
-    h.wd.note(toolCall("a", "Terminal", undefined, "execute", id));
+    h.wd.note(toolCall("a", "Terminal", undefined, "execute", id, "pending"));
     h.wd.sweep();
     h.wd.note(toolUpdate("a", id, { command: "pytest" }, "execute", "pytest"));
     h.wd.sweep();
@@ -372,10 +376,12 @@ test("a batch of unrefined calls warns once after refinement", () => {
   h.wd.watch("a", limits({ stallRepeatCount: 3 }));
 
   for (let i = 1; i <= 3; i++) {
-    h.wd.note(toolCall("a", "Terminal", undefined, "execute", `t${i}`));
+    h.wd.note(
+      toolCall("a", "Terminal", undefined, "execute", `t${i}`, "pending"),
+    );
   }
   h.wd.sweep();
-  assert.deepEqual(h.warns, [["a", "repeat"]]);
+  assert.deepEqual(h.warns, [], "unrefined calls do not count");
 
   for (let i = 1; i <= 3; i++) {
     h.wd.note(
@@ -383,11 +389,7 @@ test("a batch of unrefined calls warns once after refinement", () => {
     );
   }
   h.wd.sweep();
-  assert.deepEqual(
-    h.warns,
-    [["a", "repeat"]],
-    "the refinements are the same loop",
-  );
+  assert.deepEqual(h.warns, [["a", "repeat"]], "the refinements are one loop");
 });
 
 test("distinct refinements do not mask a later repeat", () => {
@@ -395,16 +397,18 @@ test("distinct refinements do not mask a later repeat", () => {
   h.wd.watch("a", limits({ stallRepeatCount: 3 }));
 
   for (let i = 1; i <= 3; i++) {
-    h.wd.note(toolCall("a", "Terminal", undefined, "execute", `t${i}`));
+    h.wd.note(
+      toolCall("a", "Terminal", undefined, "execute", `t${i}`, "pending"),
+    );
   }
   h.wd.sweep();
-  assert.equal(h.warns.length, 1);
+  assert.equal(h.warns.length, 0);
 
   for (const [i, command] of ["pytest", "eslint", "tsc"].entries()) {
     h.wd.note(toolUpdate("a", `t${i + 1}`, { command }, "execute", command));
   }
   h.wd.sweep();
-  assert.equal(h.warns.length, 1, "the batch was not a loop");
+  assert.equal(h.warns.length, 0, "the batch was not a loop");
 
   for (let i = 1; i <= 3; i++) {
     h.wd.note(
@@ -412,10 +416,28 @@ test("distinct refinements do not mask a later repeat", () => {
     );
   }
   h.wd.sweep();
-  assert.deepEqual(h.warns, [
-    ["a", "repeat"],
-    ["a", "repeat"],
-  ]);
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
+});
+
+test("a long batch of unrefined calls still warns once", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+
+  for (let i = 1; i <= 6; i++) {
+    h.wd.note(
+      toolCall("a", "Terminal", undefined, "execute", `b${i}`, "pending"),
+    );
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, []);
+
+  for (let i = 4; i <= 6; i++) {
+    h.wd.note(
+      toolUpdate("a", `b${i}`, { command: "pytest" }, "execute", "pytest"),
+    );
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
 });
 
 test("stallRepeatCount 0 disables the repeat signal", () => {

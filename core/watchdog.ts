@@ -18,9 +18,10 @@
  *   kind as the fallback. `toolCallId` correlates updates and is never the
  *   identity itself: a new id is a new call, not necessarily a new operation.
  *
- * A repeat warning moves to the settled identity when the operations that
- * produced it refine together. One identity rings once in a watch; a different
- * identity that reaches the threshold re-arms the warning.
+ * Only a call with a final identity counts towards a repeat streak: a stable
+ * `rawInput`/location detail, or a terminal status. A generic call that has
+ * not refined yet can neither warn nor add to a loop. One final identity rings
+ * once in a watch; a different identity that reaches the threshold re-arms it.
  *
  * Both warn and the task keeps running. Only the longer `ttlMs` acts, and all
  * it does is ask the caller to cancel: ACP gives no way to nudge a turn in
@@ -35,6 +36,7 @@
  */
 
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
+import type { ToolCallStatus } from "../protocol/types.ts";
 
 /** The two things a stalled task can look like. */
 export type StallKind = "idle" | "repeat";
@@ -109,6 +111,9 @@ interface ToolOperation {
   kind: string;
   input: Record<string, string>;
   location?: string;
+  status?: ToolCallStatus;
+  /** Stable `rawInput` or location text, when there is one. */
+  detail?: string;
   identity: string;
 }
 
@@ -127,8 +132,6 @@ interface WatchState {
   idleWarned: boolean;
   /** The identity whose repeat already rang for this watch. */
   warnedIdentity?: string;
-  /** The operations that made up the warned streak. */
-  warnedIds?: Set<string>;
   timedOut: boolean;
 }
 
@@ -165,7 +168,7 @@ const stableInput = (raw: unknown): Record<string, string> => {
 };
 
 /** Title and kind, then a stable detail when there is one (`rawInput` first). */
-const identityOf = (operation: ToolOperation): string => {
+function setIdentity(operation: ToolOperation): void {
   const input = STABLE_INPUT_KEYS.flatMap((key) => {
     const value = operation.input[key];
     return value ? [`${key}=${value}`] : [];
@@ -173,8 +176,33 @@ const identityOf = (operation: ToolOperation): string => {
   let detail: string[] = [];
   if (input.length > 0) detail = input;
   else if (operation.location) detail = [`location=${operation.location}`];
-  return JSON.stringify([operation.title, operation.kind, detail]);
-};
+  operation.detail = detail.length > 0 ? detail.join("\0") : undefined;
+  operation.identity = JSON.stringify([
+    operation.title,
+    operation.kind,
+    detail,
+  ]);
+}
+
+/** Merges a re-sent `tool_call` into the operation it names. */
+function mergeOperation(
+  target: ToolOperation,
+  source: ToolOperation,
+  status: ToolCallStatus | undefined,
+): void {
+  target.title = source.title;
+  target.kind = source.kind;
+  Object.assign(target.input, source.input);
+  if (source.location) target.location = source.location;
+  if (status !== undefined) target.status = status;
+  setIdentity(target);
+}
+
+/** A stable detail or a terminal status makes an identity final. */
+const isFinal = (operation: ToolOperation): boolean =>
+  operation.detail !== undefined ||
+  operation.status === "completed" ||
+  operation.status === "failed";
 
 /** Keeps the history the check needs and nothing more: the last threshold
  *  operations are enough to tell whether a streak reaches it. */
@@ -189,7 +217,7 @@ function trimOperations(state: WatchState): void {
 /** Recomputes the trailing streak after a call or a late identity update. */
 function refreshRepeat(state: WatchState): void {
   const last = state.operations.at(-1);
-  if (!last) {
+  if (!last || !isFinal(last)) {
     state.repeatCount = 0;
     state.lastTitle = undefined;
     state.lastIdentity = undefined;
@@ -197,27 +225,19 @@ function refreshRepeat(state: WatchState): void {
   }
   let count = 1;
   for (let i = state.operations.length - 2; i >= 0; i--) {
-    if (state.operations[i]?.identity !== last.identity) break;
+    const operation = state.operations[i];
+    if (
+      !operation ||
+      !isFinal(operation) ||
+      operation.identity !== last.identity
+    ) {
+      break;
+    }
     count += 1;
   }
   state.repeatCount = count;
   state.lastIdentity = last.identity;
   state.lastTitle = last.title;
-  if (state.warnedIds) {
-    const liveIds = new Set(state.operations.map((operation) => operation.id));
-    for (const id of state.warnedIds) {
-      if (!liveIds.has(id)) state.warnedIds.delete(id);
-    }
-    if (state.warnedIds.size === 0) state.warnedIds = undefined;
-  }
-  if (
-    state.warnedIds &&
-    state.repeatCount >= state.limits.stallRepeatCount &&
-    state.operations.every((operation) => state.warnedIds?.has(operation.id))
-  ) {
-    state.warnedIdentity = last.identity;
-    state.warnedIds = undefined;
-  }
 }
 
 /** Starts or refines an operation; only a `tool_call` starts a new one. */
@@ -240,19 +260,15 @@ function recordTool(
       title: bounded(update.title),
       kind: bounded(update.kind ?? ""),
       input: stableInput(update.rawInput),
+      status: update.status,
       identity: "",
     };
     const location = bounded(update.locations?.[0]?.path);
     if (location) operation.location = location;
-    operation.identity = identityOf(operation);
+    setIdentity(operation);
     const known = state.byId.get(update.toolCallId);
     if (known) {
-      known.title = operation.title;
-      known.kind = operation.kind;
-      Object.assign(known.input, operation.input);
-      // pi-lens-ignore: deep-nesting
-      if (operation.location) known.location = operation.location;
-      known.identity = identityOf(known);
+      mergeOperation(known, operation, update.status);
     } else {
       state.operations.push(operation);
       state.byId.set(update.toolCallId, operation);
@@ -265,10 +281,8 @@ function recordTool(
     Object.assign(operation.input, stableInput(update.rawInput));
     const location = bounded(update.locations?.[0]?.path);
     if (location) operation.location = location;
-    operation.identity = identityOf(operation);
-    if (state.warnedIds && operation.identity === state.warnedIdentity) {
-      state.warnedIds.add(operation.id);
-    }
+    if (update.status !== undefined) operation.status = update.status;
+    setIdentity(operation);
   } else {
     return;
   }
@@ -370,9 +384,6 @@ function check(
     state.lastIdentity !== state.warnedIdentity
   ) {
     state.warnedIdentity = state.lastIdentity;
-    state.warnedIds = new Set(
-      state.operations.map((operation) => operation.id),
-    );
     hooks.onWarn(
       taskId,
       "repeat",
