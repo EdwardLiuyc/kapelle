@@ -55,6 +55,8 @@ interface Recording {
   carol: string;
 }
 
+// It records the whole room shape; splitting it would hide that contract.
+// pi-lens-ignore: high-fan-out
 async function record(t: TestContext): Promise<Recording> {
   const repo = await gitRepo(t);
   const roomId = newRoomId();
@@ -129,6 +131,25 @@ const texts = (entries: Entry[], type: Entry["type"]) =>
   entries
     .filter((e) => e.type === type)
     .map((e) => ("text" in e ? e.text : e.type));
+
+const identityKeys = async (path: string, name: string) => {
+  const source = await readFile(new URL(path, import.meta.url), "utf8");
+  // The path and name are fixed by the test, never user input.
+  // pi-lens-ignore: unsafe-regex
+  const match = source.match(
+    new RegExp(`const ${name} = \\[([\\s\\S]*?)\\](?: as const)?;`),
+  );
+  assert.ok(match, `${name} is an as-const key list in ${path}`);
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+};
+
+test("the watchdog and room reducer use the same tool identity keys", async () => {
+  const [room, watchdog] = await Promise.all([
+    identityKeys("../client/room.ts", "DETAIL_KEYS"),
+    identityKeys("../core/watchdog.ts", "STABLE_INPUT_KEYS"),
+  ]);
+  assert.deepEqual(room, watchdog);
+});
 
 const who = (state: RoomState, id: string) => {
   const p = state.participants.get(id);
@@ -575,6 +596,66 @@ test("a late tool update refines a repeat anchor without clearing it", () => {
     toolCallId: "next",
     kind: "execute",
     rawInput: { command: "sed" },
+  });
+  assert.equal(needsAttention(state, "alice"), false);
+});
+
+test("a late-refined loop stays the same operation across iterations", () => {
+  const state = aliceTurn();
+  send(state, "alice", {
+    sessionUpdate: "tool_call",
+    toolCallId: "loop-1",
+    title: "Terminal",
+    kind: "execute",
+  });
+  send(state, "alice", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "loop-1",
+    title: "pytest -q",
+    kind: "execute",
+    rawInput: { command: "pytest -q" },
+  });
+  send(state, "alice", {
+    sessionUpdate: "_client_stall_warning",
+    kind: "repeat",
+    text: '3× "pytest -q" in a row',
+  });
+  assert.equal(needsAttention(state, "alice"), true);
+
+  // claude and opencode start the next iteration with the generic title.
+  send(state, "alice", {
+    sessionUpdate: "tool_call",
+    toolCallId: "loop-2",
+    title: "Terminal",
+    kind: "execute",
+  });
+  assert.equal(
+    needsAttention(state, "alice"),
+    true,
+    "the generic title is the call's early identity",
+  );
+  send(state, "alice", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "loop-2",
+    title: "pytest -q",
+    kind: "execute",
+    rawInput: { command: "pytest -q" },
+  });
+  assert.equal(needsAttention(state, "alice"), true);
+
+  send(state, "alice", {
+    sessionUpdate: "tool_call",
+    toolCallId: "loop-3",
+    title: "Terminal",
+    kind: "execute",
+  });
+  assert.equal(needsAttention(state, "alice"), true);
+  send(state, "alice", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "loop-3",
+    title: "eslint",
+    kind: "execute",
+    rawInput: { command: "eslint" },
   });
   assert.equal(needsAttention(state, "alice"), false);
 });

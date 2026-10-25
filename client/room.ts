@@ -132,7 +132,8 @@ type Question = Extract<Entry, { type: "permission" }>;
 type Tool = Extract<Entry, { type: "tool" }>;
 
 /** The `rawInput` keys a tool row may show, in this order (#240). Never a
- *  whole file (`old_string`, `file_text`, `content`) or `rawOutput`. */
+ *  whole file (`old_string`, `file_text`, `content`) or `rawOutput`. Shared
+ *  with the watchdog's identity keys; `tests/room-reducer.test.ts` checks it. */
 const DETAIL_KEYS = [
   "command",
   "path",
@@ -157,6 +158,8 @@ interface ToolSlot {
   title: string;
   input: Record<string, string>;
   location?: string;
+  /** Every base this call has had while its late details arrive. */
+  bases: Set<string>;
 }
 
 // ACP raw JSON is unknown at this boundary; this helper narrows it.
@@ -300,6 +303,8 @@ interface StallAnchor {
   toolCallId: string;
   /** Title and kind, before any stable detail. */
   base: string;
+  /** Bases this call showed while its late details arrived. */
+  bases: string[];
   /** Stable `rawInput` or location, when the harness has sent one. */
   detail?: string;
 }
@@ -423,26 +428,34 @@ function resolveRepeat(
   const stall = p.stall;
   if (stall?.kind !== "repeat") return;
   const next = toolIdentity(slot);
+  const bases = [...slot.bases];
   if (!stall.anchor) {
-    stall.anchor = { toolCallId, ...next };
+    stall.anchor = { toolCallId, bases, ...next };
     return;
   }
   const anchor = stall.anchor;
   if (anchor.toolCallId === toolCallId) {
     anchor.base = next.base;
+    anchor.bases = bases;
     if (next.detail !== undefined) anchor.detail = next.detail;
     return;
   }
-  if (anchor.base !== next.base) {
+  if (anchor.detail === undefined) {
+    // The warning was raised before this operation's detail arrived. Adopt
+    // the first settled identity rather than guessing that it changed.
+    if (next.detail !== undefined) {
+      stall.anchor = { toolCallId, bases, ...next };
+    }
+    return;
+  }
+  if (!anchor.bases.includes(next.base)) {
     p.stall = undefined;
     return;
   }
   if (next.detail === undefined) return;
-  if (anchor.detail === undefined) {
-    stall.anchor = { toolCallId, ...next };
-    return;
+  if (anchor.base !== next.base || anchor.detail !== next.detail) {
+    p.stall = undefined;
   }
-  if (anchor.detail !== next.detail) p.stall = undefined;
 }
 
 export const newRoomState = (): RoomState => ({
@@ -618,11 +631,13 @@ export function applyLine(
         }) as Tool,
         title: str(u.title) ?? "",
         input: detailInput(u.rawInput),
+        bases: new Set(),
       };
       const location = str(u.locations?.[0]?.path);
       if (location) slot.location = location;
       showTool(slot);
       toolFacts(slot.entry, u);
+      slot.bases.add(toolIdentity(slot).base);
       state.tools.set(`${participantId} ${u.toolCallId}`, slot);
       if (p) {
         p.thinking = undefined;
@@ -660,6 +675,7 @@ export function applyLine(
       if (status) entry.status = status;
       showTool(slot);
       toolFacts(entry, u);
+      slot.bases.add(toolIdentity(slot).base);
       // An old call's late update says nothing about the operation the
       // warning is about; only the live one can resolve it.
       if (p && p.toolId === u.toolCallId) resolveRepeat(p, u.toolCallId, slot);
@@ -733,7 +749,11 @@ export function applyLine(
           : undefined;
         const stall: LiveStall = { kind: u.kind, text, seq, seen: false };
         if (u.kind === "repeat" && slot && p.toolId) {
-          stall.anchor = { toolCallId: p.toolId, ...toolIdentity(slot) };
+          stall.anchor = {
+            toolCallId: p.toolId,
+            bases: [...slot.bases],
+            ...toolIdentity(slot),
+          };
         }
         p.stall = stall;
       }

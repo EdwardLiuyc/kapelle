@@ -121,7 +121,8 @@ interface WatchState {
   /** Questions asked and not yet answered. Idle does not count while one waits. */
   asking: number;
   idleWarned: boolean;
-  repeatWarned: boolean;
+  /** The identity whose repeat already rang for this watch. */
+  warnedIdentity?: string;
   timedOut: boolean;
 }
 
@@ -186,7 +187,6 @@ function refreshRepeat(state: WatchState): void {
     state.repeatCount = 0;
     state.lastTitle = undefined;
     state.lastIdentity = undefined;
-    state.repeatWarned = false;
     return;
   }
   let count = 1;
@@ -195,12 +195,8 @@ function refreshRepeat(state: WatchState): void {
     count += 1;
   }
   state.repeatCount = count;
-  if (state.lastIdentity !== last.identity) {
-    state.repeatWarned = false;
-    state.lastIdentity = last.identity;
-  }
+  state.lastIdentity = last.identity;
   state.lastTitle = last.title;
-  if (count < state.limits.stallRepeatCount) state.repeatWarned = false;
 }
 
 /** Starts or refines an operation; only a `tool_call` starts a new one. */
@@ -291,7 +287,6 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
         byId: new Map(),
         asking: 0,
         idleWarned: false,
-        repeatWarned: false,
         timedOut: false,
       });
       return {
@@ -344,10 +339,10 @@ function check(
 
   if (
     stallRepeatCount > 0 &&
-    !state.repeatWarned &&
-    state.repeatCount >= stallRepeatCount
+    state.repeatCount >= stallRepeatCount &&
+    state.lastIdentity !== state.warnedIdentity
   ) {
-    state.repeatWarned = true;
+    state.warnedIdentity = state.lastIdentity;
     hooks.onWarn(
       taskId,
       "repeat",

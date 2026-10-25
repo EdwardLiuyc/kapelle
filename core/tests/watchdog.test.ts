@@ -45,6 +45,7 @@ const toolUpdate = (
   toolCallId: string,
   rawInput?: Record<string, unknown>,
   kind?: "execute" | "read" | "search",
+  title?: string,
 ): AgentEventEnvelope => ({
   agent: id,
   update: {
@@ -52,6 +53,7 @@ const toolUpdate = (
     toolCallId,
     ...(rawInput && { rawInput }),
     ...(kind && { kind }),
+    ...(title && { title }),
   },
 });
 
@@ -348,6 +350,20 @@ test("late updates do not erase a real repeat", () => {
     h.wd.note(toolUpdate("a", id, { command: "pytest" }, "execute"));
   }
   h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
+});
+
+test("a late-refined loop warns once, not once per sweep", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+
+  for (let i = 1; i <= 4; i++) {
+    const id = `t${i}`;
+    h.wd.note(toolCall("a", "Terminal", undefined, "execute", id));
+    h.wd.sweep();
+    h.wd.note(toolUpdate("a", id, { command: "pytest" }, "execute", "pytest"));
+    h.wd.sweep();
+  }
   assert.deepEqual(h.warns, [["a", "repeat"]]);
 });
 
