@@ -9,13 +9,15 @@
  */
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, readFile, writeFile } from "node:fs/promises";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import {
   gitRepo,
   isolateStateHome,
+  needs,
   tempDir,
 } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
@@ -1013,4 +1015,78 @@ test("a run with no worktrees still writes a record", async (t) => {
     [["t0", "done", "mock-agent"]],
   );
   assert.equal(typeof record.tasks[0].durationMs, "number");
+});
+
+test("a preflight that throws leaves a failed record with its error, and an empty log (#317)", async (t) => {
+  // A corrupt index: `git rev-parse` still finds the root, and the preflight's
+  // `git status` throws. The record and the log came first, so both survive.
+  const root = await gitRepo(t);
+  await writeFile(join(root, ".git", "index"), "not an index\n");
+  let ran = false;
+  await assert.rejects(
+    runRun(
+      runOf(1, 1),
+      { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+      async () => {
+        ran = true;
+        return { stopReason: "end_turn" };
+      },
+    ),
+  );
+  assert.equal(ran, false, "no task runs after a failed preflight");
+
+  const record = await recordIn(root, RECORD_RUN);
+  assert.equal(record.status, "failed");
+  assert.equal(typeof record.error, "string");
+  assert.equal(typeof record.endedAt, "string");
+  assert.deepEqual(record.tasks, [{ id: "t0", status: "queued" }]);
+  const log = join(stateDirFor(root), "runs", RECORD_RUN, "events.jsonl");
+  assert.equal(await readFile(log, "utf8"), "");
+});
+
+test("the running record and log exist before the worktree preflight (#317)", {
+  skip: needs("sh"),
+}, async (t) => {
+  // A git wrapper copies the record and the log when the preflight's first
+  // `git status` starts, once. A regression that writes them after the
+  // preflight leaves nothing to copy, and a daemon crash in this window loses
+  // the run.
+  const root = await gitRepo(t);
+  const bin = await tempDir(t);
+  const copies = await tempDir(t);
+  const runDir = join(stateDirFor(root), "runs", RECORD_RUN);
+  const realGit = spawnSync("sh", ["-c", "command -v git"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  assert.ok(realGit, "git is not on PATH");
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const once = quote(join(copies, ".copied"));
+  const wrapper = join(bin, "git");
+  await writeFile(
+    wrapper,
+    `#!/bin/sh
+if [ "$1" = "status" ] && [ ! -e ${once} ]; then
+  touch ${once}
+  cp ${quote(join(runDir, "run.json"))} ${quote(join(runDir, "events.jsonl"))} ${quote(copies)}
+fi
+exec ${quote(realGit)} "$@"
+`,
+  );
+  await chmod(wrapper, 0o755);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+  t.after(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  });
+
+  await runRun(
+    runOf(1, 1),
+    { cwd: root, runId: RECORD_RUN, bus: createEventBus() },
+    async () => ({ stopReason: "end_turn" }),
+  );
+  const record = JSON.parse(await readFile(join(copies, "run.json"), "utf8"));
+  assert.equal(record.status, "running");
+  assert.deepEqual(record.tasks, [{ id: "t0", status: "queued" }]);
+  assert.equal(await readFile(join(copies, "events.jsonl"), "utf8"), "");
 });

@@ -636,7 +636,7 @@ omitted, never `null`.
 | `turns` | live run, after it ends | How many tasks got a prompt. Absent on a restored run. |
 | `notices` | always | A list of `{taskId, text, kind?}`. Lines for the person to read. See below. |
 | `tasks` | always | One task per entry; `[]` when the record has none. |
-| `error` | run could not start | Why. No task ran. |
+| `error` | run could not start | Why. No task ran. A restored run has it too. |
 | `cancelRequested` | after a cancel | `true`. The status stays `running` until the run stops. |
 
 Each task has `id` and `status`, and when known `agent`, `durationMs`, `error`,
@@ -777,9 +777,12 @@ your connection and it does not slow the run. No ping is written while it waits.
   connection was cut, or the run failed inside the daemon a moment ago and its status
   is not saved yet. In the second case, the new stream ends at once, and `GET` then
   shows `failed`.
-- A run that failed before the daemon opened its log — the worktree preflight can
-  fail before the log exists — has no stream at all. `GET /runs/:id/events` answers
-  `404 no_event_log`, and `GET /runs/:id` still carries the `failed` status.
+- A run whose worktree preflight failed has an empty stream. It ends at once, with
+  no `_client_run_finished`. `GET /runs/:id` shows `failed` and the `error`, also
+  after a restart.
+- A run whose state folder the daemon could not make has no log. Then
+  `GET /runs/:id/events` answers `404 no_event_log`. `GET /runs/:id` carries the
+  status until the daemon stops, but no record is kept.
 - For a room, the stream ends when the room closes.
 - For a finished run, you get the history and then the end.
 

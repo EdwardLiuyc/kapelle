@@ -237,7 +237,8 @@ export interface RunDto {
   /** The run's own elapsed time and turn count: live-only, not persisted. */
   durationMs?: number;
   turns?: number;
-  /** The run itself failed to start, so no task record exists. */
+  /** Why the run itself failed before any task ran. It is kept in the
+   *  record, so a restored run has it too. */
   error?: string;
   cancelRequested?: true;
   notices: (Notice & { taskId: string })[];

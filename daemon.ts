@@ -414,9 +414,9 @@ function holdShutdown(res: ServerResponse, work: Promise<void>) {
 /** Kept beside the record rather than on it, so a `GET` never serialises one. */
 const cancels = new Map<string, AbortController>();
 /** Settles once `runRun` hands over the log, or with `undefined` when the run
- *  ended without one — a preflight that threw, or a state dir it could not
- *  make. A `GET /events` that arrives first waits here rather than 404ing a
- *  run that exists. */
+ *  ended without one — a state dir it could not make. A preflight that throws
+ *  still has its log (#317). A `GET /events` that arrives first waits here
+ *  rather than 404ing a run that exists. */
 const eventLogs = new Map<string, Promise<EventLog | undefined>>();
 /** `events.jsonl` on disk, by run id, for runs restored at boot. Held as a
  *  path rather than an open log: opening one scans the whole file, and most
@@ -508,6 +508,8 @@ function restoreRuns(): void {
       ) {
         state.endedAt = record.endedAt;
       }
+      // A run that threw before any task ran says why (#317).
+      if (typeof record.error === "string") state.error = record.error;
       if (Array.isArray(record.tasks)) {
         // Trusted for its runId and status, but a hand-edited `tasks` can
         // still hold junk, and the route destructures every element: one
