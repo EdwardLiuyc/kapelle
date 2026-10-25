@@ -47,6 +47,9 @@ A skill starts with `/<name>` in claude and with `/skill:<name>` in pi. For exam
 - **Reading it:** the bot's last comment:
   `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | last | .body'`.
 - **Answer:** `dev` runs the `address-comment` skill for the PR, on the latest comment.
+  When the order says the next round is the last one, `dev` first reads the findings of
+  every round together and looks for a shared cause. It proves each fix: a test that fails before the fix and passes
+  after it, or a reason from the code. No fix is a guess.
 - **Rounds:** at most 3.
 
 ## Protected paths

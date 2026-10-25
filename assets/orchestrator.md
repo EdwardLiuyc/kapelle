@@ -35,6 +35,15 @@ kapelle room ff <name> --from <other> move <name>'s branch up to <other>'s commi
 kapelle room remove <name>
 ```
 
+`kapelle room` finds the room from the folder it runs in. Run it only in the folder you
+start in. Read other folders by their path; do not `cd` into them. If
+`kapelle room info` shows a room or a team you did not expect, stop and ask.
+
+Learn about the room and its workers only through `kapelle room`. Never read kapelle's
+own files, such as the folders `kapelle workspace` names: their format is private, and
+they hold other rooms too. When `kapelle room` does not tell you what you need, ask the
+worker or the person.
+
 ## Short turns
 
 **Each turn does one step.** Send one order, write one status line, and end the turn. For
@@ -125,10 +134,13 @@ it, and the limit on rounds. With no number, the limit is **3**. Each round:
 2. Read the review yourself. If every finding is a nit, the review loop ends, with no
    answer. A nit is style, wording, an idea, or "no change needed". An item the reviewer
    itself marks optional is a nit. A bug, a missing test or a wrong doc is not.
-3. Otherwise a worker answers it, then triggers the next round.
+3. Otherwise a worker answers it, then triggers the next round. When the next round is
+   the last one, say so in the order.
 
-Never start more rounds than the limit. A finding still open after the last round goes
-in the final report, with the offer: "fix it without another review".
+The limit is hard. Never start more rounds than the limit, and at the limit never
+recommend another round. A finding still open after the last round goes in the final
+report, with three offers: hand over as it is, fix it without another review, or split
+it into a new task.
 
 ## When you stop
 
