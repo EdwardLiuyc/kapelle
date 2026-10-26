@@ -412,6 +412,18 @@ async function roomCheckouts(root: string, roomId: string): Promise<string[]> {
   return all.filter((w) => w.runId === roomId).map((w) => w.path);
 }
 
+/** What `DELETE /rooms/:id` would remove from git: every branch the room
+ *  owns, with the commits each one holds that no ref outside the room can
+ *  reach. A branch merged into another branch outside the room has no such
+ *  commits. */
+export interface RoomDeletePreview {
+  branches: {
+    branch: string;
+    participant?: string;
+    commits: { sha: string; subject: string }[];
+  }[];
+}
+
 /**
  * What a room delete would lose (#235): each checkout's uncommitted files,
  * untracked ones too, as full paths. Empty means the room can go.
@@ -468,6 +480,75 @@ async function roomBranches(
     if (await hasBranch(root, branch)) branches.add(branch);
   }
   return branches;
+}
+
+/**
+ * The branches `DELETE /rooms/:id` would remove, each with the commits that
+ * would become unreachable (#352). "Outside the room" means every other ref,
+ * local or remote, plus a tag or a detached HEAD. That is what a delete
+ * leaves behind, so work merged into `main` reads as merged while a branch
+ * based on another room branch still shows the commits both will lose.
+ */
+export async function roomDeletePreview(
+  root: string,
+  roomId: string,
+): Promise<RoomDeletePreview> {
+  let record: RoomRecord | undefined;
+  const file = roomFile(root, roomId);
+  if (existsSync(file)) {
+    try {
+      record = readRoomRecord(file);
+    } catch {
+      // As `removeRoom`: only the room's own namespace can be named.
+    }
+  }
+  // A room whose cwd is no repository has no branches to lose, as
+  // `removeRoom` says.
+  if ((await tryGit(root, ["rev-parse", "--git-dir"])) === null)
+    return { branches: [] };
+  const branches = await roomBranches(root, roomId, record, []);
+  if (branches.size === 0) return { branches: [] };
+
+  const owned = new Set([...branches].map((branch) => `refs/heads/${branch}`));
+  const refs = await git(root, ["for-each-ref", "--format=%(refname)"]);
+  const outside = refs.split("\n").filter((ref) => ref && !owned.has(ref));
+  // A detached main checkout is a ref too: its commit survives the delete.
+  if (
+    (await tryGit(root, ["symbolic-ref", "--quiet", "--short", "HEAD"])) ===
+    null
+  ) {
+    outside.push("HEAD");
+  }
+  const names = new Map<string, string>();
+  for (const p of record?.participants ?? []) {
+    if (p.branch) names.set(p.branch, p.name);
+  }
+
+  return {
+    branches: await Promise.all(
+      [...branches].sort().map(async (branch) => {
+        const args = [
+          "log",
+          "--format=%H%x00%s",
+          branch,
+          ...(outside.length ? ["--not", ...outside] : []),
+        ];
+        const log = await git(root, args);
+        const commits = log
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [sha = "", subject = ""] = line.split("\0");
+            return { sha, subject };
+          });
+        return {
+          branch,
+          ...(names.has(branch) && { participant: names.get(branch) }),
+          commits,
+        };
+      }),
+    ),
+  };
 }
 
 /**

@@ -46,7 +46,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 14 } as const;
+export const API_VERSION = { major: 1, minor: 15 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -376,6 +376,18 @@ export interface RoomDto {
    *  `client/room.ts` `applyStatus` reads it. */
   seq: number;
   participants: ParticipantDto[];
+}
+
+/** `GET /rooms/:id/delete-preview` (since 1.15): what the delete would remove
+ *  from git. `participant` is the current roster participant that owns the
+ *  branch, when the record still knows one. `commits` holds only commits no
+ *  ref outside the room can reach. A read-only snapshot. */
+export interface DeletePreview {
+  branches: {
+    branch: string;
+    participant?: string;
+    commits: { sha: string; subject: string }[];
+  }[];
 }
 
 /** One entry of `GET /rooms`: the roster inline and short, so a list of

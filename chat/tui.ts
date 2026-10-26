@@ -59,7 +59,12 @@ import {
   VStack,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { type RouteCommand, runCommand } from "../client/command.ts";
+import {
+  deletePreview,
+  deletePreviewLines,
+  type RouteCommand,
+  runCommand,
+} from "../client/command.ts";
 import type {
   Diff,
   MessageAccepted,
@@ -273,7 +278,9 @@ export function screenLayout(p: {
  * **A fast-forward previews before it moves** (M6-11a). `@target /ff --from
  * @source`, or the target's `ctrl+o` menu, puts the commits the move would
  * bring in the side pane; Enter confirms. A line under the composer always
- * names the open view's checkout and branch.
+ * names the open view's checkout and branch. `/delete`, typed or picked from
+ * the room menu, uses the same pane to show the branches and commits it would
+ * remove, and confirms with Enter (#352).
  *
  * **The composer names the target** (R43), through `client/mention.ts`, and
  * the status line shows it while the person types. A sent line is read by
@@ -449,6 +456,7 @@ function chatTui(
     _target: { id: string; name: string },
     _from: { id: string; name: string },
   ) => Promise.resolve(false);
+  let previewDelete = async () => false;
   /** The daemon went away mid-request: say so, and wait for it, as the
    *  streams do (M6-7d). The set ends the screen if it does not come back.
    *  Answers false, so a typed line goes back to the composer. */
@@ -543,6 +551,7 @@ function chatTui(
     question: (id) => question(id),
     changes: (who) => void changes(who, "head").catch(gone),
     forward: (target, from) => void forward(target, from).catch(gone),
+    deleteRoom: () => void previewDelete().catch(gone),
     run: (c) => run(c),
     end: (code, ...last) => end(code, ...last),
     left,
@@ -1103,6 +1112,11 @@ function chatTui(
         return term();
       }
       if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
+      if (c.verb === "delete") {
+        editor.addToHistory(text);
+        if (!(await previewDelete().catch(gone))) giveBack();
+        return;
+      }
       if (c.verb === "ff") {
         editor.addToHistory(text);
         if (!(await forward(c, c.from).catch(gone))) giveBack();
@@ -1212,6 +1226,7 @@ function chatTui(
         flash = `dismissing ${r?.entry.title ?? view.roomId}: stopping its harnesses…`;
         setStatus();
       }
+      if (c.verb === "delete" && view.roomId) set.retain(view.roomId);
       let out: Awaited<ReturnType<typeof runCommand>>;
       await set.fresh();
       try {
@@ -1227,16 +1242,34 @@ function chatTui(
           askToAdd(c);
           return true;
         }
+        if (c.verb === "delete") {
+          const status =
+            out.room?.status ?? rooms.get(view.roomId)?.entry.status;
+          set.retain(view.roomId, status === "dismissed");
+        }
+        const text =
+          c.verb === "delete" && out.code === "uncommitted_work"
+            ? `! ${out.message}; commit or remove them, then type /delete again`
+            : `! ${out.message}`;
         if (box.panel) {
-          box.panel.error = out.message;
+          box.panel.error = text.slice(2);
           tui.requestRender();
         } else {
-          flash = `! ${out.message}`;
+          flash = text;
           setStatus();
         }
         return false;
       }
       if (box.panel) hidePanel();
+      if (c.verb === "delete") {
+        const id = view.roomId;
+        set.drop(id);
+        const next = dismissed(rooms, view, id);
+        if (next) open(next);
+        flash = out.line;
+        setStatus();
+        return true;
+      }
       if (c.verb === "title" && out.room?.title) {
         set.retitle(out.room.id, out.room.title);
       }
@@ -1259,6 +1292,41 @@ function chatTui(
       }
       // A dismiss ends the room's stream, and `closed` says so.
       if (c.verb !== "dismiss") flash = out.line;
+      setStatus();
+      return true;
+    };
+
+    /** Shows what `/delete` would remove in the side pane, and confirms on
+     *  Enter (#352). Answers whether the pane was filled. */
+    previewDelete = async () => {
+      const id = view.roomId;
+      if (!id) {
+        flash = "! no room: ctrl+o → new room";
+        setStatus();
+        return false;
+      }
+      await set.fresh();
+      const res = await deletePreview(d, id);
+      if (!res.ok) {
+        flash = `! ${res.error.message}`;
+        setStatus();
+        return false;
+      }
+      const n = res.body.branches.length;
+      side.fill({
+        title: `${rooms.get(id)?.entry.title ?? id} · delete · ${n} branch${n === 1 ? "" : "es"}`,
+        text: deletePreviewLines(res.body),
+        keys: [
+          {
+            key: "enter",
+            hint: "enter delete room",
+            run: () =>
+              void run({ verb: "delete" })
+                .then(() => side.toggle(false))
+                .catch(gone),
+          },
+        ],
+      });
       setStatus();
       return true;
     };
@@ -1316,6 +1384,8 @@ function chatTui(
       crash(err);
       return;
     }
+    if (selected && list.find((r) => r.id === selected)?.status === "dismissed")
+      set.retain(selected);
     set.start(list);
     open(view);
     // The shell or a diff in the side view keeps the keys (M9-3).

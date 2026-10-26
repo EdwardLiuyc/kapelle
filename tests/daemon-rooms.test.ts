@@ -26,6 +26,7 @@ import {
   runCommand,
 } from "../client/command.ts";
 import type {
+  DeletePreview,
   Diff,
   MessageAccepted,
   ParticipantDto,
@@ -659,6 +660,7 @@ test("every room route answers room_not_found for an unknown id", async (t) => {
     ["POST", "/rooms/nope/dismiss", undefined],
     ["POST", "/rooms/nope/messages", { text: "hi" }],
     ["GET", "/rooms/nope/events", undefined],
+    ["GET", "/rooms/nope/delete-preview", undefined],
     ["POST", "/rooms/nope/agents/p-x/messages", { text: "hi" }],
     ["GET", "/rooms/nope/agents/p-x/events", undefined],
     ["POST", "/rooms/nope/agents/p-x/turns/current/cancel", undefined],
@@ -1438,6 +1440,14 @@ test("every typed room command reaches its route", async (t) => {
   const gone = await typed(d, roomId, "/dismiss");
   assert.ok(gone.ok, JSON.stringify(gone));
   assert.equal(gone.room?.status, "dismissed");
+
+  // The stall scenario left its uncommitted file in carol's kept checkout.
+  assert.ok(bob?.worktree);
+  await rm(join(bob.worktree, "stalled.txt"), { force: true });
+  const deleted = await typed(d, roomId, "/delete");
+  assert.ok(deleted.ok, JSON.stringify(deleted));
+  assert.equal(deleted.line, `deleted ${roomId}`);
+  assert.equal((await api(d, "GET", `/rooms/${roomId}`)).status, 404);
 });
 
 test("each room command shows the daemon's own message for each refusal its route documents", async (t) => {
@@ -1960,6 +1970,75 @@ test("a dismissed room comes back dismissed after a restart, and a message is re
 
 // The test drives the whole room-lifecycle flow: its call count is the test.
 // pi-lens-ignore: high-fan-out
+test("the delete preview lists every owned branch and the commits no outside ref reaches (#352)", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const dev = only(open.body);
+  assert.ok(dev.branch);
+  await commitAt(dev.worktree, "dev.txt");
+
+  const bob = await addAgent(d, id, { cmd: REMEMBER, name: "bob" });
+  assert.ok(bob.branch);
+  await commitAt(bob.worktree, "bob.txt");
+  const removed = await api<RoomReply>(
+    d,
+    "DELETE",
+    `/rooms/${id}/agents/${bob.id}`,
+  );
+  assert.equal(removed.status, 200, removed.body.error?.message);
+
+  const preview = await api<DeletePreview>(
+    d,
+    "GET",
+    `/rooms/${id}/delete-preview`,
+  );
+  assert.equal(preview.status, 200, JSON.stringify(preview.body));
+  const branch = (name: string) =>
+    preview.body.branches.find((b) => b.branch === name);
+  assert.equal(branch(dev.branch)?.participant, dev.name);
+  assert.deepEqual(
+    branch(dev.branch)?.commits.map((c) => c.subject),
+    ["dev.txt"],
+  );
+  assert.equal(branch(bob.branch)?.participant, undefined);
+  assert.deepEqual(
+    branch(bob.branch)?.commits.map((c) => c.subject),
+    ["bob.txt"],
+  );
+
+  // Once dev's branch is reachable from main, none of its commits would be
+  // lost by removing the room's refs.
+  const merged = spawnSync("git", ["merge", "--ff-only", dev.branch], {
+    cwd,
+    encoding: "utf8",
+  });
+  assert.equal(merged.status, 0, merged.stderr);
+  const after = await api<DeletePreview>(
+    d,
+    "GET",
+    `/rooms/${id}/delete-preview`,
+  );
+  assert.deepEqual(
+    after.body.branches.find((b) => b.branch === dev.branch)?.commits,
+    [],
+  );
+  assert.deepEqual(
+    after.body.branches
+      .find((b) => b.branch === bob.branch)
+      ?.commits.map((c) => c.subject),
+    ["bob.txt"],
+  );
+  assert.equal((await api(d, "GET", "/rooms/nope/delete-preview")).status, 404);
+});
+
 test("DELETE refuses an active room and uncommitted work, then removes a dismissed room whole (#235)", async (t) => {
   const d = await boot(t);
   const root = await gitRepo(t);

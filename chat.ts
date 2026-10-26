@@ -30,8 +30,8 @@
  * (`/add`, `@name /mode ask`, …) go through `client/command.ts` the same way
  * (M4-5), and never reach an agent.
  *
- * A room keeps its harnesses alive between messages, until `/dismiss`.
- * Leaving (`/leave`, end of input, ^C) keeps every room, and `attach`
+ * A room keeps its harnesses alive between messages, until `/dismiss` or
+ * `/delete`. Leaving (`/leave`, end of input, ^C) keeps every room, and `attach`
  * replays a room's whole conversation from its event log.
  *
  * **Two screens.** On a TTY it is a full-screen `pi-tui` app over every
@@ -66,6 +66,8 @@ agent instead.
   /leave     exit; the rooms and their harnesses stay alive
   /dismiss   stop the room's harnesses; uncommitted work stays in each
              checkout, because the supervisor never commits for it (R37)
+  /delete    show the branches and unmerged commits, then confirm; removes
+             the room and every branch it owns
   /help      the commands below, on the screen
   /setup     the agents the daemon found, and what to install; it opens at
              the start until "done" (/setup done), or while no agent is ready

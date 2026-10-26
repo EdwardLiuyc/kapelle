@@ -6,10 +6,10 @@
  * shows stays while it is hidden. Below `WIDE` columns it takes the
  * timeline's place. It shows any diff text: a question's edit, an agent's
  * checkout, and the preview a fast-forward hands in before it moves
- * (M6-11a). It also shows a list to pick from: the messages the view
- * shows, `ctrl+r` (M4-4, #362). And it shows the person's shell, `/term`
- * (M4-13, `chat/tui/term.ts`). Before anything is put in it, it says how to
- * fill it.
+ * (M6-11a), and the lines `/delete` would remove (#352). It also shows a
+ * list to pick from: the messages the view shows, `ctrl+r` (M4-4, #362).
+ * And it shows the person's shell, `/term` (M4-13,
+ * `chat/tui/term.ts`). Before anything is put in it, it says how to fill it.
  *
  * **Many files are one scroll.** The title names the file at the top of the
  * pane, `2 of 20`, and `]` and `[` jump between files. Each diff line is one
@@ -54,9 +54,9 @@ interface PaneList {
   empty: string;
 }
 
-/** What the pane shows, a diff or a list, and the keys that act on it. */
+/** What the pane shows, and the keys that act on it. */
 type PaneContent = {
-  /** What the diff is of, before the file: `bob · uncommitted`. */
+  /** What the content is, before the file: `bob · uncommitted`. */
   title: string;
   /** The content's own keys, after scrolling, `]` and `[`. */
   keys: { key: string; hint: string; run: () => void }[];
@@ -64,7 +64,12 @@ type PaneContent = {
   back?: () => void;
   /** The question it shows, while that question is open. */
   question?: string;
-} & ({ diff: Diff } | { list: PaneList } | { shell: Shell });
+} & (
+  | { diff: Diff }
+  | { text: string[] }
+  | { list: PaneList }
+  | { shell: Shell }
+);
 
 /** What the view says before anything is put in it. */
 const EMPTY = [
@@ -310,6 +315,11 @@ function paneParts({
           ),
         ];
       }
+      if ("text" in content) {
+        return [
+          dim(truncateToWidth(`┌ ${content.title} ${"─".repeat(w)}`, w, "")),
+        ];
+      }
       const d = content.diff;
       const at = current();
       const f = files[at];
@@ -374,7 +384,9 @@ function paneParts({
    *  file's header line to jump to (M7-3). */
   const fill = (c: PaneContent, at?: number) => {
     content = c;
-    const text = "diff" in c ? c.diff.text : "";
+    let text = "";
+    if ("diff" in c) text = c.diff.text;
+    else if ("text" in c) text = c.text.join("\n");
     lines = text ? text.split("\n") : [];
     files = filesOf(lines);
     picked = undefined;

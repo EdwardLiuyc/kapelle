@@ -136,6 +136,7 @@ function panelParts({
   question,
   changes,
   forward,
+  deleteRoom,
   run,
   end,
   left,
@@ -161,6 +162,8 @@ function panelParts({
     target: { id: string; name: string },
     from: { id: string; name: string },
   ) => void;
+  /** Opens the delete preview in the side pane (#352). */
+  deleteRoom: () => void;
   run: (c: RouteCommand) => Promise<boolean>;
   end: (code: number, ...last: string[]) => void;
   left: () => string;
@@ -408,6 +411,7 @@ function panelParts({
     if (r) items.push({ value: "title", label: "rename room …" });
     items.push({ value: "new", label: "new room …" });
     if (r) items.push({ value: "dismiss", label: "dismiss room" });
+    if (r) items.push({ value: "delete", label: "delete room …" });
     items.push({ value: "help", label: "help" });
     items.push({ value: "leave", label: "leave" });
     let title = "menu";
@@ -433,6 +437,11 @@ function panelParts({
     if (value === "new") return newForm(self);
     if (value === "add") return addForm(self);
     if (value === "dismiss") return void run({ verb: "dismiss" });
+    if (value === "delete") {
+      hidePanel();
+      deleteRoom();
+      return;
+    }
     if (value === "title" && r) {
       const input = textBox(r.entry.title ?? "");
       // An empty title is the daemon's refusal, shown in the pop-up.

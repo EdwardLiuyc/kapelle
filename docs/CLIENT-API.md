@@ -7,12 +7,13 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.14** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.15** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
-added replies and copies, `PATCH /rooms/:id`, which renames a room, and M8-3, #267,
-which added the `reviewer` role and a participant's `turnFrom`).
+added replies and copies, `PATCH /rooms/:id`, which renames a room, M8-3, #267,
+which added the `reviewer` role and a participant's `turnFrom`, and #352, which added
+the delete preview).
 
 ## Contents
 
@@ -335,6 +336,7 @@ the `GET` routes take none.
 | `POST /rooms/:id/messages` | Send a message to the room's orchestrator. |
 | `GET /rooms/:id/events` | A room's event stream. |
 | `POST /rooms/:id/dismiss` | End a room. |
+| `GET /rooms/:id/delete-preview` | What a delete would remove from git. |
 | `DELETE /rooms/:id` | Throw a stopped room away, with its work on disk. |
 | `POST /rooms/:id/agents` | Add a participant. |
 | `GET /rooms/:id/agents` | List a room's participants. |
@@ -354,7 +356,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 8 },
+  "apiVersion": { "major": 1, "minor": 15 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -1263,12 +1265,44 @@ names it.
 `dismissed`. `404` `room_not_found` for an unknown room. `409` `room_dismissed` when the
 room was already dismissed.
 
+### `GET /rooms/:id/delete-preview`
+
+Since 1.15. What [`DELETE /rooms/:id`](#delete-roomsid) would remove from git.
+Every branch the room owns appears, including one with no current participant, such as a
+failed add or a removed participant. `commits` holds the commits on that branch that no
+ref outside the room can reach: local branches, remote-tracking branches and tags. A
+branch merged into `main` therefore has none. A branch based on another room branch can
+still show the commits both would lose.
+
+Read-only, so it works on an active room.
+
+**Reply `200`:**
+
+```json
+{
+  "branches": [
+    {
+      "branch": "kapelle/room-20261026-121039-6ehf/p-0k3x9a2b",
+      "participant": "dev",
+      "commits": [{ "sha": "3f2a…", "subject": "Add the delete preview" }]
+    }
+  ]
+}
+```
+
+`participant` is omitted when the room record no longer names one. `commits` is empty
+when every commit is already reachable outside the room.
+
+**Refusals:** `404` `room_not_found`.
+
 ### `DELETE /rooms/:id`
 
 Throws a room away. Its checkouts, the branches it owns, its record and its event log are
-removed at once. Branches go even when nothing merged them. A branch the harness renamed
-into is the room's own and goes too; a branch it switched to that already existed belongs
-to its owner and is left, and the daemon's log names it. Open streams of the room end.
+removed at once. Branches go even when nothing merged them.
+[`GET /rooms/:id/delete-preview`](#get-roomsiddelete-preview) lists them and their
+unmerged commits first. A branch the harness renamed into is the room's own and goes too;
+a branch it switched to that already existed belongs to its owner and is left, and the
+daemon's log names it. Open streams of the room end.
 
 Only a stopped room can be deleted: a dismissed one, or a paused one that no message has
 revived. A paused room is deleted as it is; no harness starts first. Dismiss an active room

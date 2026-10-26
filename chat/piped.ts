@@ -4,12 +4,20 @@
  * Piped, `chat.ts` is one room as plain lines, which is what a script or a
  * test reads. It reads a line through `client/submit.ts`, as the TUI does.
  * A question is not answered here: the piped screen only prints the
- * question and how it closed (M4-3).
+ * question and how it closed (M4-3). `/delete` prints its preview, and the
+ * next non-empty line must be `/delete` again to confirm. A dismissed room
+ * stays read-only so a `409` can be fixed and retried (#352).
  */
 
 import { createInterface } from "node:readline";
 
-import { USAGE as COMMAND_USAGE, HELP, runCommand } from "../client/command.ts";
+import {
+  USAGE as COMMAND_USAGE,
+  deletePreview,
+  deletePreviewLines,
+  HELP,
+  runCommand,
+} from "../client/command.ts";
 import type { MessageAccepted, RoomDto } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
 import { agentDiff } from "../client/diff.ts";
@@ -194,8 +202,11 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
   let waiting:
     | { id: string; after: number; left: number; done: () => void }
     | undefined;
-
-  const ended = readRoom(current, room.id, (line) => {
+  /** Let the loop wake for input or for the stream's end. */
+  let wake = () => {};
+  /** What the stream settled with, once it did. */
+  let stream: { ended?: Ended; error?: string } | undefined;
+  const streamDone = readRoom(current, room.id, (line) => {
     const e = applyLine(state, line);
     if (!e) return;
     printer.show(e);
@@ -210,17 +221,19 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       waiting = undefined;
     }
   }).then(
-    (e): { ended?: Ended } => ({ ended: e }),
-    (err): { ended?: Ended } => {
-      console.error(`! ${(err as Error).message}`);
-      return {};
+    (ended) => {
+      stream = { ended };
+      wake();
+    },
+    (err) => {
+      stream = { error: (err as Error).message };
+      wake();
     },
   );
 
   const rl = createInterface({ input: process.stdin, terminal: false });
   const lines: string[] = [];
   let inputDone = false;
-  let wake = () => {};
   rl.on("line", (l) => {
     lines.push(l);
     wake();
@@ -229,39 +242,110 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     inputDone = true;
     wake();
   });
-  const nextLine = async (): Promise<string | null> => {
-    while (lines.length === 0) {
-      if (inputDone) return null;
-      await new Promise<void>((ok) => {
-        wake = ok;
-      });
-    }
-    return lines.shift() ?? null;
-  };
+
+  /** A dismissed room stays in read-only mode so `/delete` can retry after
+   *  409. An active room enters it as soon as a delete dismisses it. */
+  let readOnly = room.status === "dismissed";
+  let holdDismissed = readOnly;
+  let pendingDelete = false;
+  let toldDismissed = false;
 
   let code = 0;
   for (;;) {
-    const next = await Promise.race([nextLine(), ended]);
-    if (typeof next === "object" && next !== null) {
-      const r = next.ended ?? (await reconcile(current, room.id));
-      code = codeOf(r);
-      (code ? console.error : console.log)(endedLine(r, room.id));
+    if (stream) {
+      const ended = stream.ended ?? (await reconcile(current, room.id));
+      stream = undefined;
+      if (
+        holdDismissed &&
+        (ended.kind === "dismissed" || ended.kind === "unknown")
+      ) {
+        readOnly = true;
+        pendingDelete = false;
+        if (!toldDismissed) {
+          console.log(
+            "the room is dismissed; /delete to remove it, /leave to exit",
+          );
+          toldDismissed = true;
+        }
+        continue;
+      }
+      code = codeOf(ended);
+      (code ? console.error : console.log)(endedLine(ended, room.id));
       break;
     }
-    if (next === null) break;
-    const text = next.trim();
+    if (lines.length === 0) {
+      if (inputDone) break;
+      await new Promise<void>((ok) => {
+        wake = ok;
+      });
+      continue;
+    }
+    const text = (lines.shift() ?? "").trim();
     if (!text) continue;
+
     // A send right after a restart must carry the new token.
     await current().catch(() => {});
+    const confirming = pendingDelete && text === "/delete";
+    pendingDelete = false;
     const c = parseLine(text, rosterOf(state, room.participants));
     if ("error" in c) {
       console.error(`! ${c.error}`);
+      continue;
+    }
+    if (
+      readOnly &&
+      c.verb !== "delete" &&
+      c.verb !== "help" &&
+      c.verb !== "leave"
+    ) {
+      console.error("! the room is dismissed; /delete, /help or /leave");
       continue;
     }
     if (c.verb === "leave") break;
     if (c.verb === "help") {
       for (const l of HELP) console.log(l);
       continue;
+    }
+    if (c.verb === "delete") {
+      if (!confirming) {
+        const p = await deletePreview(d, room.id).catch(() => undefined);
+        if (!p) {
+          console.error(`! ${NO_DAEMON}`);
+          continue;
+        }
+        if (!p.ok) {
+          console.error(`! ${p.error.message}`);
+          continue;
+        }
+        const n = p.body.branches.length;
+        console.log(
+          `delete ${printable(room.title ?? room.id)}: ${n} branch${n === 1 ? "" : "es"}`,
+        );
+        for (const l of deletePreviewLines(p.body)) console.log(l);
+        console.log("type /delete again to confirm; any other input cancels");
+        pendingDelete = true;
+        continue;
+      }
+      holdDismissed = true;
+      const r = await runCommand(d, room.id, c).catch(() => undefined);
+      if (!r) {
+        holdDismissed = readOnly;
+        console.error(`! ${NO_DAEMON}`);
+        continue;
+      }
+      if (!r.ok) {
+        const dismissed = readOnly || r.room?.status === "dismissed";
+        holdDismissed = dismissed;
+        readOnly = dismissed;
+        console.error(`! ${r.message}`);
+        if (r.code === "uncommitted_work") {
+          console.error("commit or remove them, then type /delete again");
+        }
+        continue;
+      }
+      console.log(r.line);
+      code = 0;
+      break;
     }
     if (c.verb === "ff") {
       console.error(
@@ -327,7 +411,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
         }
         continue;
       }
-      await ended;
+      await streamDone;
       console.log("the room was dismissed");
       break;
     }
@@ -364,7 +448,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       new Promise<void>((done) => {
         waiting = { id: t.id, after, left, done };
       }),
-      ended,
+      streamDone,
     ]);
   }
 

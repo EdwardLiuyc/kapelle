@@ -57,6 +57,7 @@ import { parseArgs } from "node:util";
 import {
   API_VERSION,
   CAPABILITIES,
+  type DeletePreview,
   type Diff,
   type ErrorReply,
   type HarnessesReply,
@@ -119,6 +120,7 @@ import {
 import {
   processIdentity,
   removeRoom,
+  roomDeletePreview,
   roomWork,
   sweepBoot,
 } from "./core/sweep.ts";
@@ -1562,6 +1564,17 @@ async function dismissRoom(id: string, res: ServerResponse) {
 }
 
 /**
+ * `GET /rooms/:id/delete-preview` — what `DELETE` would remove from git
+ * (#352): every branch the room owns, with its commits that no ref outside
+ * the room can reach. Read-only, so it works on an active room too.
+ */
+async function previewDeleteRoom(id: string, res: ServerResponse) {
+  const entry = roomEntry(id);
+  const preview = await roomDeletePreview(entry.root, id);
+  send(res, 200, preview satisfies DeletePreview);
+}
+
+/**
  * `DELETE /rooms/:id` — a person throws the room away (R18, #235): its
  * checkouts, branches, record and log go at once, and the answer is `204`.
  * Only a stopped room can go: a dismissed one, or a paused one nothing has
@@ -1719,9 +1732,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const events = /^\/runs\/([^/]+)\/events$/.exec(pathname);
   const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
   const room = /^\/rooms\/([^/]+)$/.exec(pathname);
-  const roomSub = /^\/rooms\/([^/]+)\/(events|messages|dismiss|agents)$/.exec(
-    pathname,
-  );
+  const roomSub =
+    /^\/rooms\/([^/]+)\/(events|messages|dismiss|agents|delete-preview)$/.exec(
+      pathname,
+    );
   const agentOne = /^\/rooms\/([^/]+)\/agents\/([^/]+)$/.exec(pathname);
   const agentSub =
     /^\/rooms\/([^/]+)\/agents\/([^/]+)\/(messages|events|diff|fast-forward|turns\/current\/cancel)$/.exec(
@@ -1763,6 +1777,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
         toRoomListEntry(state, room),
       ) satisfies RoomListEntry[],
     );
+  } else if (req.method === "GET" && roomSub?.[2] === "delete-preview") {
+    await previewDeleteRoom(roomSub[1] as string, res);
   } else if (req.method === "DELETE" && room) {
     await holdShutdown(res, deleteRoom(room[1] as string, res));
   } else if (req.method === "GET" && room) {

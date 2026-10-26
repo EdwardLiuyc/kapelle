@@ -2,7 +2,8 @@
  * The rooms a screen follows (M4-11): one stream and one reducer per room.
  *
  * - A room made elsewhere joins on the next `GET /rooms`, every 5 s.
- * - A dismissed room leaves the set.
+ * - A dismissed room leaves the set, unless the screen retains it for
+ *   `/delete` (#352).
  * - A room whose stream ended and that was not dismissed stays, marked
  *   lost.
  * - The set ends when every room in it lost its stream. With no room left
@@ -207,6 +208,9 @@ export interface Followed {
   /** The last poll asked before this screen renamed the room. Its reply,
    *  and every older one, may hold the old title, so they keep this one. */
   renamedAfter?: number;
+  /** Kept in the set after its stream ended `dismissed`, so its screen can
+   *  offer `/delete` (#352). */
+  held?: boolean;
 }
 
 /** Why the set ends: every room lost its stream (the last one to go is
@@ -252,6 +256,13 @@ export interface RoomSet {
   retitle(id: string, title: string): void;
   /** Stops the poll. */
   stop(): void;
+  /** Keep a room in the set after its stream ends `dismissed` (`keep`
+   *  false undoes it). Used for an attached dismissed room and while a
+   *  delete runs, so the screen can show its refusal and retry. */
+  retain(id: string, keep?: boolean): void;
+  /** Drops a room without treating its end as a close. The screen calls this
+   *  after a successful delete and chooses where to go. */
+  drop(id: string): void;
   /** Reads `daemon.json` now, as the next poll would, so a send right after
    *  a restart has the new token. Never throws: a call on `d` says why. */
   fresh(): Promise<void>;
@@ -267,6 +278,10 @@ export function roomSet(
   waitMs = WAIT_MS,
 ): RoomSet {
   const rooms = new Map<string, Followed>();
+  const retained = new Set<string>();
+  /** Rooms a successful delete removed. A poll answer from before it must
+   *  not bring one back. */
+  const dropped = new Set<string>();
   // A restart writes no line: read each room again for what it left.
   const current = followDaemon(d, address, (warning) => {
     on.restarted(warning);
@@ -355,13 +370,23 @@ export function roomSet(
   const closed = async (id: string, known?: Ended, err?: unknown) => {
     const ended = known ?? (await reconcile(current, id));
     const r = rooms.get(id);
-    if (ended.kind === "dismissed") rooms.delete(id);
-    else if (r) r.lost = ended;
+    if (!r && dropped.has(id)) return;
+    // A delete still reading a dirty room is briefly out of `GET /rooms`:
+    // while held, its stream's 404 is not the room's end (#352).
+    const held =
+      r?.held === true &&
+      (ended.kind === "dismissed" || ended.kind === "unknown");
+    if (ended.kind === "dismissed" && !held) rooms.delete(id);
+    else if (r) {
+      if (held) r.lost = undefined;
+      else r.lost = ended;
+    }
     const all = [...rooms.values()];
-    if (all.length > 0 && !all.some((x) => !x.lost)) {
+    if (all.length > 0 && !all.some((x) => !x.lost || x.held)) {
       finish({ kind: "lost", roomId: id, ended, err });
       return;
     }
+    if (held) return;
     on.closed(id, ended, r);
   };
 
@@ -374,7 +399,11 @@ export function roomSet(
 
   const add = (entry: RoomListEntry) => {
     if (rooms.has(entry.id)) return;
-    const r: Followed = { entry: shownEntry(entry), state: newRoomState() };
+    const r: Followed = {
+      entry: shownEntry(entry),
+      state: newRoomState(),
+      ...(retained.has(entry.id) && { held: true }),
+    };
     rooms.set(entry.id, r);
     loadDto(r);
     readRoom(current, entry.id, (line) => onLine(r, line), waitMs).then(
@@ -408,7 +437,8 @@ export function roomSet(
               r.entry = shownEntry(
                 stale ? { ...entry, title: r.entry.title } : entry,
               );
-            } else if (entry.status !== "dismissed") add(entry);
+            } else if (entry.status !== "dismissed" && !dropped.has(entry.id))
+              add(entry);
           }
           on.polled();
         },
@@ -437,6 +467,17 @@ export function roomSet(
     },
     stop() {
       clearInterval(poll);
+    },
+    retain(id, keep = true) {
+      if (keep) retained.add(id);
+      else retained.delete(id);
+      const r = rooms.get(id);
+      if (r) r.held = keep;
+    },
+    drop(id) {
+      retained.delete(id);
+      dropped.add(id);
+      rooms.delete(id);
     },
     retitle(id, title) {
       const r = rooms.get(id);
