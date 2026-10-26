@@ -73,6 +73,7 @@ import { questionQueue } from "../client/questions.ts";
 import {
   cleanLines,
   type Entry,
+  inThread,
   nameOf,
   seen,
   thread,
@@ -858,9 +859,15 @@ function chatTui(
       setStatus();
       return;
     }
-    if (shows(view, roomId, line.participantId)) {
-      seen(r.state, line.participantId);
-      if (e) draw(r.state, e);
+    const onScreen = shows(view, roomId, line.participantId);
+    if (onScreen) seen(r.state, line.participantId);
+    // A thread also shows the messages its participant sent. Their line
+    // names the recipient, so `shows` alone misses them (#362).
+    if (
+      e &&
+      (onScreen || (view.participantId && inThread(e, view.participantId)))
+    ) {
+      draw(r.state, e);
     }
     // The open thread's files reload when its turn ends (M7-3). An exit
     // ends the work too, and R46 is why its files matter.

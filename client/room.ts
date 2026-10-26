@@ -1008,21 +1008,22 @@ export function applyStatus(state: RoomState, room: RoomDto): boolean {
   return changed;
 }
 
-/** One participant's thread: the timeline filtered by id (R8c), plus the
- *  messages it meant to send, so an orchestrator's thread holds the orders
- *  it gave (#362). A `reply` or a `copy` is left out: the daemon sends it
- *  `from` the worker, and the worker's own answer already says the same
- *  thing in its thread. It walks the whole timeline, so call it when a
- *  screen opens a thread, not per line: a streamed line redraws the one
- *  entry `applyLine` returns. */
+/** Whether one entry is in this participant's thread: it was for them, or
+ *  they meant to send it (#362). A `reply` or a `copy` is left out, as the
+ *  daemon sends it `from` the worker. */
+export const inThread = (e: Entry, id: string) =>
+  e.participantId === id ||
+  ((e.type === "user" || e.type === "queued") &&
+    e.kind === undefined &&
+    e.from === id);
+
+/** One participant's thread: the timeline filtered by `inThread` (R8c). An
+ *  orchestrator's thread holds the orders it gave as well as what it
+ *  received, so the transcript and history agree (#362). It walks the whole
+ *  timeline, so call it when a screen opens a thread, not per line: a
+ *  streamed line redraws the one entry `applyLine` returns. */
 export const thread = (state: RoomState, id: string) =>
-  state.timeline.filter(
-    (e) =>
-      e.participantId === id ||
-      ((e.type === "user" || e.type === "queued") &&
-        e.kind === undefined &&
-        e.from === id),
-  );
+  state.timeline.filter((e) => inThread(e, id));
 
 /** The participants still on the roster, in join order. */
 export const roster = (state: RoomState) =>

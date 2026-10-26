@@ -173,6 +173,61 @@ test("chat.ts on a real terminal lists an orchestrator's order on ctrl+r, and no
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("chat.ts on a real terminal draws an orchestrator's order into its open thread and history", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "po", role: "orchestrator" },
+      { cmd: REMEMBER, name: "ana" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const po = open.body.participants[0]?.id as string;
+  const ana = open.body.participants[1]?.id as string;
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  // Rows: the room, po, ana. Wait for the roster, then open po's thread.
+  await screen.seen("○ po");
+  await screen.seen("○ ana");
+  await screen.press("\x1b[1;3B", "po (mock-agent)");
+  const from = screen.out().length;
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${ana}/messages`,
+    { text: "fix the login bug", from: po },
+  );
+  assert.equal(sent.status, 202, screen.out());
+  // The reply is an incoming line in po's thread. Its arrival proves the
+  // outgoing order's line was handled while the thread stayed open.
+  await screen.seen("[reply from ana]");
+  const threadText = plainText(screen.out().slice(from));
+  assert.match(
+    threadText,
+    /po → ana/,
+    `the order was not drawn: ${threadText}`,
+  );
+  assert.match(
+    threadText,
+    /fix the login bug/,
+    `the order had no text: ${threadText}`,
+  );
+  // The history reads the same entry, so it can jump to the drawn line.
+  await screen.press("\x12", "history · 1 of 1");
+  await screen.seen("po → ana: fix the login bug");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 /**
  * A room with 15 messages sent, attached on a pseudo-terminal 16 rows high,
  * so the history list shows fewer rows than it has. At 120 columns and more
