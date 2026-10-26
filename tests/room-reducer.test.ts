@@ -1206,7 +1206,32 @@ test("a tool call's command breaks at a real newline and at a `;` that separates
   assert.deepEqual(of('echo "a\\"; b"'), ['echo "a\\"; b"']);
   assert.deepEqual(of("echo $(a; b) c"), ["echo $(a; b) c"]);
   assert.deepEqual(of("echo `a; b` c"), ["echo `a; b` c"]);
-  // A quote that never closes takes the rest of its line, and no more.
+  // The contexts nest: a quote, a subshell or arithmetic inside `$()` does
+  // not end the outer one.
+  assert.deepEqual(of('echo "$(echo "a;b")"; ls'), [
+    'echo "$(echo "a;b")";',
+    "ls",
+  ]);
+  assert.deepEqual(of("echo $( (echo a); echo b)"), [
+    "echo $( (echo a); echo b)",
+  ]);
+  assert.deepEqual(of("echo $(echo $(a; b); c)"), ["echo $(echo $(a; b); c)"]);
+  assert.deepEqual(of('echo "`echo a;b`"; ls'), ['echo "`echo a;b`";', "ls"]);
+  assert.deepEqual(of('for ((i=0; i<3; i++)); do echo "$i"; done'), [
+    "for ((i=0; i<3; i++));",
+    'do echo "$i";',
+    "done",
+  ]);
+  // A comment and parameter text hold their `;` too.
+  assert.deepEqual(of("echo hi # a; b\nls; pwd"), [
+    "echo hi # a; b",
+    "ls;",
+    "pwd",
+  ]);
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter text
+  assert.deepEqual(of("echo ${x:-a;b}; ls"), ["echo ${x:-a;b};", "ls"]);
+  // A quote stays open across a real newline: the newline makes rows, but
+  // the `;` on the next line is still inside it.
   assert.deepEqual(of("echo 'a; b\nc; d"), ["echo 'a; b", "c; d"]);
   // A heredoc body is text, not commands. The tag ends it.
   assert.deepEqual(of("cat > f <<'EOF'\na; b\nEOF\nls; pwd"), [
@@ -1230,8 +1255,27 @@ test("a tool call's command breaks at a real newline and at a `;` that separates
     "b; 2",
     "… 1 more line",
   ]);
-  // `<<<` is a here-string, so its `;` still separates.
-  assert.deepEqual(of("cat <<<x; ls"), ["cat <<<x;", "ls"]);
+  // `<<<` is a here-string, so its `;` still separates and it starts no
+  // body on the next line.
+  assert.deepEqual(of("cat <<<x; ls\npwd; echo"), [
+    "cat <<<x;",
+    "ls",
+    "pwd;",
+    "echo",
+  ]);
+  // A backslash quotes any character of the tag, as the shell does.
+  assert.deepEqual(of("cat <<\\EOF\na; b\nEOF\nls"), [
+    "cat <<\\EOF",
+    "a; b",
+    "EOF",
+    "ls",
+  ]);
+  assert.deepEqual(of("cat <<E\\OF\na; b\nEOF\nls"), [
+    "cat <<E\\OF",
+    "a; b",
+    "EOF",
+    "ls",
+  ]);
 });
 
 test("a tool row shows four lines at most, each cut at 200 characters (#351)", () => {
@@ -1249,7 +1293,9 @@ test("a tool row shows four lines at most, each cut at 200 characters (#351)", (
   ]);
   assert.deepEqual(of("a;b;c;d;e"), ["a;", "b;", "c;", "d;", "… 1 more line"]);
   assert.deepEqual(of("a;b;c;d"), ["a;", "b;", "c;", "d"]);
-  // Each line keeps its own cut.
+  // Each line keeps its own cut, at exactly 200 characters.
+  assert.deepEqual(of("x".repeat(200)), ["x".repeat(200)]);
+  assert.deepEqual(of("x".repeat(201)), [`${"x".repeat(199)}…`]);
   const long = `${"x".repeat(250)};${"y".repeat(250)}`;
   assert.deepEqual(of(long), [`${"x".repeat(199)}…`, `${"y".repeat(199)}…`]);
   // The detail follows the same rules. Here the title says none of it.
@@ -1273,6 +1319,14 @@ test("a tool call's command shows no escape or control character (#229, #351)", 
   const [row] = rows({ title: command, rawInput: { command } });
   assert.deepEqual(String(row?.[0]).split("\n"), ["echo [2J a b c;", "ls"]);
   assert.equal(row?.[1], undefined, "the title says the command already");
+  // The detail takes the same path when the title does not say it.
+  const [detail] = rows({ title: "shell", rawInput: { command } });
+  assert.deepEqual(String(detail?.[1]).split("\n"), ["echo [2J a b c;", "ls"]);
+  for (const text of [row?.[0], detail?.[1]]) {
+    for (const bad of ["\x1b", "\u202e", "\r"]) {
+      assert.ok(!String(text).includes(bad), "no control reaches the screen");
+    }
+  }
 });
 
 test("a tool call's update neither splits a streaming answer nor counts as unread", () => {

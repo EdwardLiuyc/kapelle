@@ -255,32 +255,120 @@ function toolFacts(entry: Tool, u: { kind?: unknown; content?: unknown }) {
 /**
  * A shell command's lines (#351). Most commands are several commands in
  * one, so a real newline stays a line, and a `;` starts the next one. Not
- * a shell parser: it knows only where a `;` does not separate — inside
- * `'…'` or `"…"`, inside `$(…)` or backticks, and inside a heredoc body.
- * `&&`, `||` and `|` never break, because they read as one thought. A `;`
- * ends its own line, so a trailing one makes no empty line, and a line
- * with nothing on it is dropped.
+ * a shell parser: it knows the common places where a `;` does not
+ * separate — inside `'…'` or `"…"`, `$(…)`, process substitutions,
+ * arithmetic, `${…}`, backticks, comments, and heredoc bodies. `&&`,
+ * `||` and `|` never break, because they read as one thought. A `;` ends
+ * its own line, so a trailing one makes no empty line, and a line with
+ * nothing on it is dropped.
  *
  * A newline always breaks, even inside a quote: what a person reads must
- * match what the harness sent.
+ * match what the harness sent. A quote can stay open across that row, as
+ * it does in the shell.
  */
 // ponytail: quoting rules only, no words and no expansion. A real shell
 // lexer if a command ever breaks in the wrong place.
 function commandLines(text: string) {
+  type Frame =
+    | { kind: "single" }
+    | { kind: "double" }
+    | { kind: "command"; depth: number }
+    | { kind: "tick" }
+    | { kind: "parameter"; depth: number }
+    | { kind: "arithmetic"; depth: number }
+    | { kind: "comment" };
+  /** A heredoc's delimiter, after quote removal. */
+  type Heredoc = { tag: string; stripTabs: boolean };
   const out: string[] = [];
-  /** The quote we are in: `'` takes everything, `"` takes a backslash. */
-  let quote: "'" | '"' | undefined;
-  /** How deep in `$(…)`. */
-  let paren = 0;
-  let tick = false;
-  /** The heredoc body we are in: it ends on a line that is its tag. */
-  let heredoc: string | undefined;
-  /** Tags read on this line; each body starts after the line. */
-  const pending: string[] = [];
+  /** The shell context around this character. */
+  const frames: Frame[] = [];
+  /** Tags read on the current command line, in body order. */
+  const pending: Heredoc[] = [];
+  /** Bodies whose delimiter has not arrived, in order. */
+  const bodies: Heredoc[] = [];
+  const top = () => frames.at(-1);
+
+  /** The delimiter after `<<`, if this is a heredoc rather than a
+   *  here-string (`<<<`) or the tail of one. Reads a shell word and
+   *  removes its quotes and backslashes, as the shell does for a tag. */
+  const heredocAt = (raw: string, from: number) => {
+    if (
+      raw[from] !== "<" ||
+      raw[from + 1] !== "<" ||
+      raw[from + 2] === "<" ||
+      raw[from - 1] === "<"
+    ) {
+      return undefined;
+    }
+    let i = from + 2;
+    const stripTabs = raw[i] === "-";
+    if (stripTabs) i++;
+    while (raw[i] === " " || raw[i] === "\t") i++;
+    let tag = "";
+    let found = false;
+    while (i < raw.length) {
+      const c = raw[i] as string;
+      if (c === "'") {
+        found = true;
+        i++;
+        while (i < raw.length && raw[i] !== "'") tag += raw[i++];
+        if (i < raw.length) i++;
+        continue;
+      }
+      if (c === '"') {
+        found = true;
+        i++;
+        while (i < raw.length && raw[i] !== '"') {
+          const d = raw[i] as string;
+          if (d === "\\" && i + 1 < raw.length) {
+            const next = raw[i + 1] as string;
+            if (next === "$" || next === "`" || next === '"' || next === "\\") {
+              tag += next;
+              i += 2;
+              continue;
+            }
+          }
+          tag += d;
+          i++;
+        }
+        if (i < raw.length) i++;
+        continue;
+      }
+      if (c === "\\") {
+        i++;
+        if (i < raw.length) {
+          found = true;
+          tag += raw[i++];
+        }
+        continue;
+      }
+      if (/[\s;&|<>()]/.test(c)) break;
+      found = true;
+      tag += c;
+      i++;
+    }
+    if (!found) return undefined;
+    return { tag, stripTabs, end: i };
+  };
+
+  /** A `$(` or `$((` at `i`: push its context and return the last char it
+   *  takes. The caller appends the rest of the operator. */
+  const dollarAt = (raw: string, i: number) => {
+    if (raw[i + 1] !== "(") return undefined;
+    if (raw[i + 2] === "(") {
+      frames.push({ kind: "arithmetic", depth: 2 });
+      return i + 2;
+    }
+    frames.push({ kind: "command", depth: 0 });
+    return i + 1;
+  };
+
   for (const raw of text.split("\n")) {
-    if (heredoc !== undefined) {
+    const body = bodies[0];
+    if (body) {
       out.push(raw);
-      if (raw.trim() === heredoc) heredoc = pending.shift();
+      const line = body.stripTabs ? raw.replace(/^[\t ]+/, "") : raw;
+      if (line === body.tag) bodies.shift();
       continue;
     }
     let cur = "";
@@ -294,56 +382,215 @@ function commandLines(text: string) {
     for (let i = 0; i < raw.length; i++) {
       const c = raw[i] as string;
       cur += c;
-      if (quote === "'") {
-        if (c === "'") quote = undefined;
+      const frame = top();
+      if (frame?.kind === "comment") continue;
+      if (frame?.kind === "single") {
+        if (c === "'") frames.pop();
         continue;
       }
-      // A backslash takes the next character, in `"…"` and outside a quote.
+      if (frame?.kind === "double") {
+        if (c === "\\" && i + 1 < raw.length) {
+          cur += raw[++i];
+          continue;
+        }
+        if (c === '"') {
+          frames.pop();
+          continue;
+        }
+        if (c === "$") {
+          const end = dollarAt(raw, i);
+          if (end !== undefined) {
+            cur += raw.slice(i + 1, end + 1);
+            i = end;
+            continue;
+          }
+          if (raw[i + 1] === "{") {
+            cur += raw[++i];
+            frames.push({ kind: "parameter", depth: 1 });
+            continue;
+          }
+        }
+        if (c === "`") frames.push({ kind: "tick" });
+        continue;
+      }
+      if (frame?.kind === "tick") {
+        if (c === "\\" && i + 1 < raw.length) {
+          cur += raw[++i];
+          continue;
+        }
+        if (c === "`") frames.pop();
+        continue;
+      }
+      if (frame?.kind === "parameter") {
+        if (c === "\\" && i + 1 < raw.length) {
+          cur += raw[++i];
+          continue;
+        }
+        if (c === "'") {
+          frames.push({ kind: "single" });
+          continue;
+        }
+        if (c === '"') {
+          frames.push({ kind: "double" });
+          continue;
+        }
+        if (c === "`") {
+          frames.push({ kind: "tick" });
+          continue;
+        }
+        if (c === "$") {
+          const end = dollarAt(raw, i);
+          if (end !== undefined) {
+            cur += raw.slice(i + 1, end + 1);
+            i = end;
+            continue;
+          }
+          if (raw[i + 1] === "{") {
+            cur += raw[++i];
+            frame.depth++;
+            continue;
+          }
+        }
+        if (c === "{") {
+          frame.depth++;
+          continue;
+        }
+        if (c === "}") {
+          frame.depth--;
+          if (frame.depth === 0) frames.pop();
+        }
+        continue;
+      }
+      if (frame?.kind === "arithmetic") {
+        if (c === "\\" && i + 1 < raw.length) {
+          cur += raw[++i];
+          continue;
+        }
+        if (c === "(") {
+          frame.depth++;
+          continue;
+        }
+        if (c === ")") {
+          frame.depth--;
+          if (frame.depth === 0) frames.pop();
+        }
+        continue;
+      }
+      if (frame?.kind === "command") {
+        if (c === "\\" && i + 1 < raw.length) {
+          cur += raw[++i];
+          continue;
+        }
+        if (c === "'") {
+          frames.push({ kind: "single" });
+          continue;
+        }
+        if (c === '"') {
+          frames.push({ kind: "double" });
+          continue;
+        }
+        if (c === "`") {
+          frames.push({ kind: "tick" });
+          continue;
+        }
+        if (c === "$") {
+          const end = dollarAt(raw, i);
+          if (end !== undefined) {
+            cur += raw.slice(i + 1, end + 1);
+            i = end;
+            continue;
+          }
+          if (raw[i + 1] === "{") {
+            cur += raw[++i];
+            frames.push({ kind: "parameter", depth: 1 });
+            continue;
+          }
+        }
+        const heredoc = heredocAt(raw, i);
+        if (heredoc) {
+          cur += raw.slice(i + 1, heredoc.end);
+          i = heredoc.end - 1;
+          pending.push({ tag: heredoc.tag, stripTabs: heredoc.stripTabs });
+          continue;
+        }
+        if (c === "(") {
+          if (raw[i + 1] === "(") {
+            cur += raw[++i];
+            frames.push({ kind: "arithmetic", depth: 2 });
+          } else {
+            frame.depth++;
+          }
+          continue;
+        }
+        if (c === ")") {
+          if (frame.depth > 0) frame.depth--;
+          else frames.pop();
+          continue;
+        }
+        if (
+          c === "#" &&
+          (i === 0 || /[\s;|&(){}]/.test(raw[i - 1] as string))
+        ) {
+          frames.push({ kind: "comment" });
+        }
+        continue;
+      }
+      // No frame: the top level of a command.
       if (c === "\\" && i + 1 < raw.length) {
         cur += raw[++i];
         continue;
       }
-      if (quote === '"') {
-        if (c === '"') quote = undefined;
+      if (c === "'") {
+        frames.push({ kind: "single" });
         continue;
       }
-      if (c === "'" || c === '"') {
-        quote = c;
+      if (c === '"') {
+        frames.push({ kind: "double" });
         continue;
       }
       if (c === "`") {
-        tick = !tick;
+        frames.push({ kind: "tick" });
         continue;
       }
-      if (c === "$" && raw[i + 1] === "(") {
-        cur += raw[++i];
-        paren++;
-        continue;
-      }
-      if (c === ")" && paren > 0) {
-        paren--;
-        continue;
-      }
-      // `<<tag`, `<<-tag`, `<<'tag'`: the body starts after this line.
-      // `<<<` is a here-string, not a heredoc.
-      if (c === "<" && raw[i + 1] === "<" && raw[i + 2] !== "<") {
-        let j = i + 2;
-        if (raw[j] === "-") j++;
-        while (raw[j] === " ") j++;
-        const tag = /^(?:'([^']*)'|"([^"]*)"|([A-Za-z_]\w*))/.exec(
-          raw.slice(j),
-        );
-        if (tag) {
-          pending.push((tag[1] ?? tag[2] ?? tag[3]) as string);
-          cur += raw.slice(i + 1, j + tag[0].length);
-          i = j + tag[0].length - 1;
+      if (c === "$") {
+        const end = dollarAt(raw, i);
+        if (end !== undefined) {
+          cur += raw.slice(i + 1, end + 1);
+          i = end;
+          continue;
+        }
+        if (raw[i + 1] === "{") {
+          cur += raw[++i];
+          frames.push({ kind: "parameter", depth: 1 });
           continue;
         }
       }
-      if (c === ";" && paren === 0 && !tick) push();
+      const heredoc = heredocAt(raw, i);
+      if (heredoc) {
+        cur += raw.slice(i + 1, heredoc.end);
+        i = heredoc.end - 1;
+        pending.push({ tag: heredoc.tag, stripTabs: heredoc.stripTabs });
+        continue;
+      }
+      if ((c === "<" || c === ">") && raw[i + 1] === "(") {
+        cur += raw[++i];
+        frames.push({ kind: "command", depth: 0 });
+        continue;
+      }
+      if (c === "(" && raw[i + 1] === "(") {
+        cur += raw[++i];
+        frames.push({ kind: "arithmetic", depth: 2 });
+        continue;
+      }
+      if (c === "#" && (i === 0 || /[\s;|&(){}]/.test(raw[i - 1] as string))) {
+        frames.push({ kind: "comment" });
+        continue;
+      }
+      if (c === ";") push();
     }
     push();
-    heredoc = pending.shift();
+    while (top()?.kind === "comment") frames.pop();
+    if (pending.length > 0) bodies.push(...pending.splice(0));
   }
   return out;
 }
