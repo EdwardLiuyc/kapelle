@@ -20,6 +20,8 @@
  *   the screen ticks, and how the status line fits its width.
  * - Tool runs (M7-2): which tool calls fold into one line, and when.
  * - The question box's keys (M7-4): where a typed key moves its cursor.
+ * - The history list (#362): which messages it lists, and a row's text.
+ *   M7-7's rail reads the same two, so the two can never disagree.
  *
  * **In `chat/`, not `client/`** (decided 2026-10-02): rows, the `@name`
  * pre-fill and seen marks are this screen's own rules.
@@ -34,9 +36,11 @@ import type { RoomDto, RoomEventLine } from "../client/contract.ts";
 import {
   type Entry,
   nameOf,
+  printable,
   questionOf,
   type RoomState,
   roster,
+  senderOf,
 } from "../client/room.ts";
 
 /** What the transcript shows: a room's timeline, or one participant's
@@ -99,6 +103,31 @@ export const touched = (text: string, prefill: string) =>
 /** The `@name ` a thread's composer holds, or "" in a timeline. */
 const mention = (state: RoomState, view: View) =>
   view.participantId ? `@${nameOf(state, view.participantId)} ` : "";
+
+/** One message the history list shows: a turn-start message with no `kind`,
+ *  so a `reply` or a `copy` the daemon wrote cannot be one, even for a
+ *  caller that builds its own instead of using `messages` (#364 review). */
+export type Message = Entry & { type: "user"; kind?: undefined };
+
+/** The messages in `entries` someone meant to send (M4-4, #362): the
+ *  person's, and an orchestrator's orders to its workers. A `reply` or a
+ *  `copy` the daemon wrote at the end of a turn carries a `kind`, so it is
+ *  left out. Only a `user` entry counts, so a message that waited in a
+ *  queue is listed once, when its turn starts. M7-7's rail reads the same
+ *  list. */
+export const messages = (entries: readonly Entry[]): Message[] =>
+  entries.filter(
+    (e): e is Message => e.type === "user" && e.kind === undefined,
+  );
+
+/** One history row: both ends of the message, then its text on one line
+ *  (#362). The person's own reads `you → ana`, an order `po → ana`. */
+export const historyRow = (state: RoomState, e: Message) =>
+  `${senderOf(state, e.from)} → ${nameOf(state, e.participantId)}: ${printable(
+    e.text,
+  )
+    .replace(/\s+/g, " ")
+    .trim()}`;
 
 /** The participants the person sees in `view`. The timeline marks every
  *  one, those off the roster too. */

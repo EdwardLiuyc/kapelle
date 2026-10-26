@@ -6,9 +6,10 @@
  * shows stays while it is hidden. Below `WIDE` columns it takes the
  * timeline's place. It shows any diff text: a question's edit, an agent's
  * checkout, and the preview a fast-forward hands in before it moves
- * (M6-11a). It also shows a list to pick from: the person's messages,
- * `ctrl+r` (M4-4). And it shows the person's shell, `/term` (M4-13,
- * `chat/tui/term.ts`). Before anything is put in it, it says how to fill it.
+ * (M6-11a). It also shows a list to pick from: the messages the view
+ * shows, `ctrl+r` (M4-4, #362). And it shows the person's shell, `/term`
+ * (M4-13, `chat/tui/term.ts`). Before anything is put in it, it says how to
+ * fill it.
  *
  * **Many files are one scroll.** The title names the file at the top of the
  * pane, `2 of 20`, and `]` and `[` jump between files. Each diff line is one
@@ -70,7 +71,7 @@ const EMPTY = [
   "nothing here yet",
   "/diff @name   what an agent changed",
   "view diff     in a question",
-  "ctrl+r        your messages",
+  "ctrl+r        messages",
   "/term         a shell",
 ];
 

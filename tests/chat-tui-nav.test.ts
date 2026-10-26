@@ -95,7 +95,7 @@ test("chat.ts on a real terminal follows a second room off screen, switches to i
   assert.equal(await exited, 0, out());
 });
 
-test("chat.ts on a real terminal lists the person's messages on ctrl+r, lights the row under the mouse, and a pick jumps", {
+test("chat.ts on a real terminal lists the messages on ctrl+r, lights the row under the mouse, and a pick jumps", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -112,11 +112,117 @@ test("chat.ts on a real terminal lists the person's messages on ctrl+r, lights t
   screen.child.stdin.write("beta\r");
   await screen.seen("previous: alpha");
   await screen.press("\x12", "history · 1 of 2");
-  await screen.seen("→ mock-agent: alpha");
+  // A row names both ends, so the person's own reads `you → ` (#362).
+  await screen.seen("you → mock-agent: alpha");
   await screen.press("\x1b[B", "history · 2 of 2");
   // A move with no button over the first row lights it.
   await screen.press("\x1b[<35;90;2M", "history · 1 of 2");
   await screen.press("\x1b[<0;90;3M\x1b[<0;90;3m", "history · 2 of 2");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal lists an orchestrator's order on ctrl+r, and not the reply it got back", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "po", role: "orchestrator" },
+      { cmd: REMEMBER, name: "ana" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const po = open.body.participants[0]?.id as string;
+  const ana = open.body.participants[1]?.id as string;
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  // The person's own message, with no mention, goes to the orchestrator.
+  screen.child.stdin.write("ask ana to fix the login bug\r");
+  await screen.seen("previous: (none)");
+  // po's order to ana. The daemon replies to po when ana's turn ends, so
+  // the room holds one order and one reply.
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${ana}/messages`,
+    {
+      text: "fix the login bug",
+      from: po,
+    },
+  );
+  assert.equal(sent.status, 202, screen.out());
+  await screen.seen("[reply from ana]");
+  // Two rows, not three: the reply the daemon wrote is left out.
+  await screen.press("\x12", "history · 1 of 2");
+  await screen.seen("you → po: ask ana to fix the login bug");
+  await screen.seen("po → ana: fix the login bug");
+  assert.ok(
+    !plainText(screen.out()).includes("ana → po: [reply"),
+    `the reply is not a history row: ${screen.out()}`,
+  );
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal draws an orchestrator's order into its open thread and history", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "po", role: "orchestrator" },
+      { cmd: REMEMBER, name: "ana" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const po = open.body.participants[0]?.id as string;
+  const ana = open.body.participants[1]?.id as string;
+  const screen = await ptyScreen(
+    t,
+    `stty cols 130 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  // Rows: the room, po, ana. Wait for the roster, then open po's thread.
+  await screen.seen("○ po");
+  await screen.seen("○ ana");
+  await screen.press("\x1b[1;3B", "po (mock-agent)");
+  const from = screen.out().length;
+  const sent = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${ana}/messages`,
+    { text: "fix the login bug", from: po },
+  );
+  assert.equal(sent.status, 202, screen.out());
+  // The reply is an incoming line in po's thread. Its arrival proves the
+  // outgoing order's line was handled while the thread stayed open.
+  await screen.seen("[reply from ana]");
+  const threadText = plainText(screen.out().slice(from));
+  assert.match(
+    threadText,
+    /po → ana/,
+    `the order was not drawn: ${threadText}`,
+  );
+  assert.match(
+    threadText,
+    /fix the login bug/,
+    `the order had no text: ${threadText}`,
+  );
+  // The history reads the same entry, so it can jump to the drawn line.
+  await screen.press("\x12", "history · 1 of 1");
+  await screen.seen("po → ana: fix the login bug");
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
@@ -175,7 +281,7 @@ async function lightMoves(
       .map((m) => Number(m[1]))
       .find((n) => n !== was);
     if (at !== undefined) {
-      assert.match(drawn, new RegExp(`\\x1b\\[7m→ mock-agent: m${at} `));
+      assert.match(drawn, new RegExp(`\\x1b\\[7myou → mock-agent: m${at} `));
       return at;
     }
     assert.ok(Date.now() < until, drawn);

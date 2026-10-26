@@ -22,9 +22,10 @@
  *
  * **The stream is the only source** (R13a, R8c). The roster is built from
  * `_client_participant_*` lines, so a replay shows it as it was at each
- * `seq`. A thread is the timeline filtered by `participantId`. A line whose
- * `seq` is not above the last one is skipped, so a reconnect that repeats a
- * line adds nothing.
+ * `seq`. A thread is the timeline filtered by `participantId`, plus the
+ * messages that participant meant to send, so an orchestrator's thread holds
+ * the orders it gave (#362). A line whose `seq` is not above the last one is
+ * skipped, so a reconnect that repeats a line adds nothing.
  *
  * **A turn is open, ended or cut.** A cut turn has a `_client_user_message`
  * and no `_client_turn_ended`; the reducer learns of it when the next turn of
@@ -41,7 +42,7 @@
  * way (S11).
  */
 
-import type { UsageUpdate } from "../protocol/types.ts";
+import type { MessageKind, UsageUpdate } from "../protocol/types.ts";
 import type {
   Diff,
   PermissionReason,
@@ -56,15 +57,23 @@ type Mode = "ask" | "safe" | "auto";
 /** One thing the timeline shows, in the order it first appeared. An answer
  *  grows in place while its chunks arrive, and a permission question gets
  *  its answer in place. A message's `from` is the id of the participant
- *  that sent it; none is the person (M8-1). */
+ *  that sent it; none is the person (M8-1). A message's `kind` says the
+ *  daemon wrote it at the end of a turn (M8-2); none means someone meant to
+ *  send it, which is what the history list shows (#362). */
 export type Entry = {
   seq: number;
   participantId: string;
   /** When the line was written (M7-1): the heading shows it. */
   at: string;
 } & (
-  | { type: "user"; text: string; turn?: number; from?: string }
-  | { type: "queued"; text: string; from?: string }
+  | {
+      type: "user";
+      text: string;
+      turn?: number;
+      from?: string;
+      kind?: MessageKind;
+    }
+  | { type: "queued"; text: string; from?: string; kind?: MessageKind }
   | { type: "queue_cleared"; count: number }
   | { type: "answer"; text: string }
   /** One tool call. Its `tool_call_update`s change it in place (#240).
@@ -746,6 +755,7 @@ export function applyLine(
         text,
         ...(u.turn !== undefined && { turn: u.turn }),
         ...(u.from !== undefined && { from: u.from }),
+        ...(u.kind !== undefined && { kind: u.kind }),
       });
     }
     case "_client_message_queued": {
@@ -756,6 +766,7 @@ export function applyLine(
         type: "queued",
         text,
         ...(u.from !== undefined && { from: u.from }),
+        ...(u.kind !== undefined && { kind: u.kind }),
       });
     }
     case "_client_queue_cleared":
@@ -997,11 +1008,22 @@ export function applyStatus(state: RoomState, room: RoomDto): boolean {
   return changed;
 }
 
-/** One participant's thread: the timeline filtered by id (R8c). It walks
- *  the whole timeline, so call it when a screen opens a thread, not per
- *  line: a streamed line redraws the one entry `applyLine` returns. */
+/** Whether one entry is in this participant's thread: it was for them, or
+ *  they meant to send it (#362). A `reply` or a `copy` is left out, as the
+ *  daemon sends it `from` the worker. */
+export const inThread = (e: Entry, id: string) =>
+  e.participantId === id ||
+  ((e.type === "user" || e.type === "queued") &&
+    e.kind === undefined &&
+    e.from === id);
+
+/** One participant's thread: the timeline filtered by `inThread` (R8c). An
+ *  orchestrator's thread holds the orders it gave as well as what it
+ *  received, so the transcript and history agree (#362). It walks the whole
+ *  timeline, so call it when a screen opens a thread, not per line: a
+ *  streamed line redraws the one entry `applyLine` returns. */
 export const thread = (state: RoomState, id: string) =>
-  state.timeline.filter((e) => e.participantId === id);
+  state.timeline.filter((e) => inThread(e, id));
 
 /** The participants still on the roster, in join order. */
 export const roster = (state: RoomState) =>
