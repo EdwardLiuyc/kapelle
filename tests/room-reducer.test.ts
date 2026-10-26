@@ -1612,3 +1612,95 @@ test("a tool call keeps its kind and its diff's +a −d: a new file counts every
   });
   assert.deepEqual([many.added, many.removed], [2, 1]);
 });
+
+/**
+ * The orchestrator's own messages (#362). A message the daemon wrote at the
+ * end of a turn carries a `kind`, and the reducer keeps it, so a screen can
+ * tell an order from an echo. A thread holds what its participant received
+ * and the orders it sent, and never a `reply` or a `copy`.
+ */
+test("a message keeps its kind, and a thread holds the orders its participant sent (#362)", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (participantId: string, update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-26T09:00:00Z",
+      roomId: "r1",
+      participantId,
+      update: update as unknown as RoomEventLine["update"],
+    });
+  const po = "p-po";
+  const ana = "p-ana";
+  line(po, {
+    sessionUpdate: "_client_participant_added",
+    name: "po",
+    harness: "claude",
+    mode: "ask",
+    role: "orchestrator",
+  });
+  line(ana, {
+    sessionUpdate: "_client_participant_added",
+    name: "ana",
+    harness: "claude",
+    mode: "ask",
+  });
+  // The person's own message: no sender, no kind.
+  const asked = line(po, {
+    sessionUpdate: "_client_user_message",
+    text: "ask ana to fix the login bug",
+    turn: 1,
+  });
+  // po's order to ana, and a copy of it that waited in ana's queue.
+  const order = line(ana, {
+    sessionUpdate: "_client_user_message",
+    text: "fix the login bug",
+    turn: 1,
+    from: po,
+  });
+  const waited = line(ana, {
+    sessionUpdate: "_client_message_queued",
+    text: "and push it",
+    from: po,
+  });
+  // ana's turn ended, so the daemon replied to po as ana.
+  const replied = line(po, {
+    sessionUpdate: "_client_user_message",
+    text: "[reply from ana] end_turn, 1 tool call\nfixed",
+    turn: 2,
+    from: ana,
+    kind: "reply",
+  });
+  const repliedLate = line(po, {
+    sessionUpdate: "_client_message_queued",
+    text: "[reply from ana] end_turn, 0 tool calls",
+    from: ana,
+    kind: "reply",
+  });
+
+  assert.equal("kind" in (asked ?? {}), false, "the person's has no kind");
+  assert.equal("kind" in (order ?? {}), false, "an order has no kind");
+  assert.deepEqual(
+    [
+      order?.type === "user" && order.from,
+      waited?.type === "queued" && waited.from,
+    ],
+    [po, po],
+  );
+  assert.equal(replied?.type === "user" && replied.kind, "reply");
+  assert.equal(repliedLate?.type === "queued" && repliedLate.kind, "reply");
+
+  // po's thread: what po received, and the orders po sent to ana, the one
+  // that waited in ana's queue included. The history lists `user` entries
+  // only, so the queued one adds no second row.
+  assert.deepEqual(
+    thread(state, po).filter((e) => e.type === "user" || e.type === "queued"),
+    [asked, order, waited, replied, repliedLate],
+  );
+  // ana's thread: what ana received only. The reply the daemon sent as ana
+  // stays out, so ana's own answer is not quoted back into her thread.
+  assert.deepEqual(
+    thread(state, ana).filter((e) => e.type === "user" || e.type === "queued"),
+    [order, waited],
+  );
+});

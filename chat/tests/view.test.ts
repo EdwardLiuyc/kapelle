@@ -28,6 +28,8 @@ import {
   dismissed,
   edited,
   footer,
+  historyRow,
+  messages,
   opened,
   PALETTE,
   participantLeft,
@@ -822,4 +824,63 @@ test("a key in the question box only moves its cursor, and any other typed chara
   for (const key of ["\x1b[A", "\x1b[B", "\r", "\x1b", "2\r"]) {
     assert.equal(pickRow(key, 3), undefined);
   }
+});
+
+/**
+ * The history list (#362). `messages` picks what someone meant to send, and
+ * `historyRow` names both ends. A `reply` or a `copy` the daemon wrote has a
+ * `kind`, so neither is listed; a queued order is listed by its turn-start
+ * entry only, so it adds no second row.
+ */
+test("the history lists the messages someone meant to send, both ends named (#362)", () => {
+  const state = room(["po", "ana"]);
+  const base = { at: "2026-10-26T09:00:00Z" } as const;
+  const all: Entry[] = [
+    {
+      ...base,
+      seq: 1,
+      participantId: "p-po",
+      type: "user",
+      text: "ask ana to fix\nthe login bug",
+    },
+    {
+      ...base,
+      seq: 2,
+      participantId: "p-ana",
+      type: "user",
+      text: "fix the login bug",
+      from: "p-po",
+    },
+    {
+      ...base,
+      seq: 3,
+      participantId: "p-po",
+      type: "user",
+      text: "[reply from ana] end_turn, 1 tool call",
+      from: "p-ana",
+      kind: "reply",
+    },
+    {
+      ...base,
+      seq: 4,
+      participantId: "p-po",
+      type: "user",
+      text: "[copy] you → ana",
+      from: "p-ana",
+      kind: "copy",
+    },
+    {
+      ...base,
+      seq: 5,
+      participantId: "p-ana",
+      type: "queued",
+      text: "and push it",
+      from: "p-po",
+    },
+    { ...base, seq: 6, participantId: "p-ana", type: "answer", text: "fixed" },
+  ];
+  assert.deepEqual(
+    messages(all).map((e) => historyRow(state, e)),
+    ["you → po: ask ana to fix the login bug", "po → ana: fix the login bug"],
+  );
 });

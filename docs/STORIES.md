@@ -2208,6 +2208,11 @@ threshold, so an answer's finished blocks go into their own `Markdown` (`settled
 **Amended 2026-10-09 (#242):** the banner sits under the timeline row, full width. On top
 of the timeline it nested an `HStack` below another, and each frame then joined every
 transcript line (§M4 · Chat layout).
+**Amended 2026-10-26 (#362):** the list is no longer the person's own messages. It holds
+every message someone meant to send in the view, the orchestrator's orders to its workers
+included, and a row names both ends: `you → ana`, `po → ana`. A `reply` or a `copy` the
+daemon wrote at the end of a turn carries a `kind` (M8-2), so neither is listed. `messages`
+and `historyRow` in `chat/view.ts` are the rule, so M7-7's rail reads the same list.
 
 **M4-5 · Room and roster commands in the TUI · M · needs M4-2, M6-3, M6-4, M6-5**
 **Added 2026-09-26.** M6-2..M6-5 build the routes, and M4-2 only lists
@@ -3255,6 +3260,10 @@ message at the top, and sees the active mark move.
 answer streams. The hover preview is part of this story, not a follow-up: a mark the
 person cannot identify is not useful enough to justify the rail. The side history list
 stays: it is the keyboard and narrow-screen route, and the rail is an overview.
+**Amended 2026-10-26 (#362):** "person message" above now reads "message", as the history
+does: the orchestrator's orders are in the list too. `messages(entries)` in `chat/view.ts`
+is the selector, and `historyRow` is the planned `historyText()` — the rail reuses both,
+so the rail and the list can never disagree.
 
 ## M8 — Orchestrator
 

@@ -73,9 +73,7 @@ import { questionQueue } from "../client/questions.ts";
 import {
   cleanLines,
   type Entry,
-  fromPerson,
   nameOf,
-  printable,
   seen,
   thread,
 } from "../client/room.ts";
@@ -120,6 +118,8 @@ import {
   dismissed,
   edited,
   footer,
+  historyRow,
+  messages,
   opened,
   participantLeft,
   quiet,
@@ -761,7 +761,8 @@ function chatTui(
     side.fill({ title: `shell · ${shell.cwd}`, shell, keys: [] });
   };
 
-  /** The person's messages in the view, oldest first. */
+  /** The messages the view shows in its history, oldest first: `messages`
+   *  in `chat/view.ts` says which ones (#362). */
   // ponytail: walks the view's entries on each frame while the list shows;
   // keep the list per view if a long room makes it lag.
   const sent = () => {
@@ -769,30 +770,26 @@ function chatTui(
     if (!r) return [];
     const id = view.participantId;
     const all = id ? thread(r.state, id) : r.state.timeline;
-    return all.flatMap((e) =>
-      e.type === "user" && fromPerson(e) ? [{ r, e }] : [],
-    );
+    return messages(all).map((e) => ({ r, e }));
   };
-  /** The history list (M4-4, `ctrl+r`): the person's messages in the view,
-   *  one row each, in the side view. A pick scrolls the transcript to it;
-   *  on a narrow screen the view hides first, so the transcript shows. It
-   *  follows the view, and grows as messages are sent. */
+  /** The history list (M4-4, `ctrl+r`): the messages in the view, one row
+   *  each, in the side view. A row names both ends, so an order reads
+   *  `po → ana` and the person's own reads `you → ana` (#362). A pick
+   *  scrolls the transcript to it; on a narrow screen the view hides first,
+   *  so the transcript shows. It follows the view, and grows as messages
+   *  are sent. */
   const history = () =>
     side.fill({
       title: "history",
       list: {
-        rows: () =>
-          sent().map(
-            ({ r, e }) =>
-              `→ ${nameOf(r.state, e.participantId)}: ${printable(e.text).replace(/\s+/g, " ").trim()}`,
-          ),
+        rows: () => sent().map(({ r, e }) => historyRow(r.state, e)),
         pick: (at) => {
           const s = sent()[at];
           if (!s) return;
           if (!side.wide()) side.toggle(false);
           jump(s.e);
         },
-        empty: "nothing sent in this view yet",
+        empty: "no messages in this view yet",
       },
       keys: [],
     });

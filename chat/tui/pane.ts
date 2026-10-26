@@ -70,7 +70,7 @@ const EMPTY = [
   "nothing here yet",
   "/diff @name   what an agent changed",
   "view diff     in a question",
-  "ctrl+r        your messages",
+  "ctrl+r        messages",
   "/term         a shell",
 ];
 
