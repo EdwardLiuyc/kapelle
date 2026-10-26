@@ -104,8 +104,10 @@ export const touched = (text: string, prefill: string) =>
 const mention = (state: RoomState, view: View) =>
   view.participantId ? `@${nameOf(state, view.participantId)} ` : "";
 
-/** One message the history list shows. */
-export type Message = Entry & { type: "user" };
+/** One message the history list shows: a turn-start message with no `kind`,
+ *  so a `reply` or a `copy` the daemon wrote cannot be one, even for a
+ *  caller that builds its own instead of using `messages` (#364 review). */
+export type Message = Entry & { type: "user"; kind?: undefined };
 
 /** The messages in `entries` someone meant to send (M4-4, #362): the
  *  person's, and an orchestrator's orders to its workers. A `reply` or a
