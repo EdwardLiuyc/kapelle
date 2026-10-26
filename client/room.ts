@@ -153,8 +153,12 @@ const TOOL_TEXT = 200;
  *  lines` (#351). */
 const TOOL_LINES = 4;
 /** The most a slot keeps of each text: enough to compare, with no whole
- *  file in a command such as `python - <<'EOF'`. */
-const SLOT_TEXT = 4 * TOOL_TEXT;
+ *  file in a command such as `python - <<'EOF'`. One character more than
+ *  a row can ever show, so a text cut here still has a line left over and
+ *  `… N more lines` is reachable (#361 review). The count can still be
+ *  low, which decision 2A on #351 accepts: the marker says there is more,
+ *  not how much. */
+const SLOT_TEXT = TOOL_LINES * TOOL_TEXT + 1;
 
 /** A tool call's entry, and what its detail is worked out from. Only the
  *  keys the detail can use are kept, each cut at `SLOT_TEXT`. */
@@ -252,21 +256,6 @@ function toolFacts(entry: Tool, u: { kind?: unknown; content?: unknown }) {
   if (n) Object.assign(entry, n);
 }
 
-/**
- * A shell command's lines (#351). Most commands are several commands in
- * one, so a real newline stays a line, and a `;` starts the next one. Not
- * a shell parser: it knows the common places where a `;` does not
- * separate — inside `'…'` or `"…"`, `$(…)`, process substitutions,
- * arithmetic, `${…}`, backticks, comments, and heredoc bodies. `&&`,
- * `||` and `|` never break, because they read as one thought. A `;` ends
- * its own line, so a trailing one makes no empty line, and a line with
- * nothing on it is dropped.
- *
- * A newline always breaks, even inside a quote: what a person reads must
- * match what the harness sent. A quote can stay open across that row, as
- * it does in the shell.
- */
-
 /** A heredoc's delimiter, with its quotes and backslashes removed as the
  *  shell removes them, and whether `<<-` strips the body's indent. */
 interface Heredoc {
@@ -291,6 +280,22 @@ const heredocAt = (raw: string, from: number) => {
   };
 };
 
+/**
+ * A shell command's lines (#351). Most commands are several commands in
+ * one, so a real newline stays a line, and a `;` starts the next one. Not
+ * a shell parser: it knows the common places where a `;` does not
+ * separate — inside `'…'` or `"…"`, `$(…)`, process substitutions,
+ * arithmetic, `${…}`, backticks, comments, and heredoc bodies. `&&`,
+ * `||`, `|` and a backgrounding `&` never break, because they read as one
+ * thought. A `;` ends its own line, so a trailing one makes no empty
+ * line.
+ *
+ * A newline always breaks, even inside a quote: what a person reads must
+ * match what the harness sent. A quote can stay open across that row, as
+ * it does in the shell. A line left with nothing on it is dropped, so a
+ * blank line between two commands takes no row; a blank line inside a
+ * heredoc body keeps its own, since the body is text.
+ */
 // ponytail: quoting rules only, no words and no expansion. A real shell
 // lexer if a command ever breaks in the wrong place.
 function commandLines(text: string) {
@@ -300,11 +305,14 @@ function commandLines(text: string) {
   type Frame = {
     kind: "single" | "double" | "tick" | "comment" | "command" | "parameter";
     depth: number;
+    /** `$((…))` or `((…))`, where `<<` is a left shift, not a heredoc. */
+    arith: boolean;
   };
   const out: string[] = [];
   /** Innermost last. A `;` separates only when this is empty. */
   const frames: Frame[] = [];
-  const open = (kind: Frame["kind"], depth = 0) => frames.push({ kind, depth });
+  const open = (kind: Frame["kind"], depth = 0, arith = false) =>
+    frames.push({ kind, depth, arith });
   /** Tags read on the current line; their bodies start after it. */
   const pending: Heredoc[] = [];
   /** Bodies whose delimiter has not arrived, in order. */
@@ -359,7 +367,7 @@ function commandLines(text: string) {
       if (c === "$" && raw[i + 1] === "(") {
         const arith = raw[i + 2] === "(";
         take(arith ? 2 : 1);
-        open("command", arith ? 1 : 0);
+        open("command", arith ? 1 : 0, arith);
         continue;
       }
       if (c === "$" && raw[i + 1] === "{") {
@@ -383,8 +391,9 @@ function commandLines(text: string) {
         continue;
       }
       // A command, or the whole line: both can start a heredoc, and both
-      // count their parentheses.
-      const here = c === "<" ? heredocAt(raw, i) : undefined;
+      // count their parentheses. In arithmetic `<<` shifts, so `$((1<<20))`
+      // starts no body (#361 review).
+      const here = c === "<" && !f?.arith ? heredocAt(raw, i) : undefined;
       if (here) {
         take(here.end - i - 1);
         pending.push(here);
@@ -400,7 +409,7 @@ function commandLines(text: string) {
         // at the top level `(a; b)` really is two commands.
         if (raw[i + 1] === "(") {
           take(1);
-          open("command", 1);
+          open("command", 1, true);
         } else if (f?.kind === "command") f.depth++;
         continue;
       }
@@ -425,9 +434,12 @@ function commandLines(text: string) {
 
 /** A tool's title or detail as rows: its lines, each cut at `TOOL_TEXT`,
  *  at most `TOOL_LINES` of them, then `… N more lines` (#351). The rows
- *  are one string with newlines, as every screen draws them together. */
-const toolText = (s: string) => {
-  const lines = commandLines(cleanLines(s));
+ *  are one string with newlines, as every screen draws them together.
+ *  Only a shell command breaks at a `;`; every other text keeps its real
+ *  newlines and nothing else (#361 review). */
+const toolText = (s: string, shell = true) => {
+  const text = cleanLines(s);
+  const lines = shell ? commandLines(text) : text.split("\n");
   const rows = lines
     .slice(0, TOOL_LINES)
     .map((l) => (l.length > TOOL_TEXT ? `${l.slice(0, TOOL_TEXT - 1)}…` : l));
@@ -475,7 +487,14 @@ function detailOf({ title, input, location }: ToolSlot) {
       : [input.description, location]
           .filter((v): v is string => Boolean(v) && !said(v as string))
           .slice(0, 1);
-  return shown.length > 0 ? toolText(shown.join(" ")) : undefined;
+  if (shown.length === 0) return undefined;
+  // Only a `command` on its own is a shell command. A pattern, a path or
+  // a url can hold a `;` that separates nothing, and pi's `str_replace`
+  // joined with its path is an operation, not a command (#361 review).
+  return toolText(
+    shown.join(" "),
+    shown.length === 1 && shown[0] === input.command,
+  );
 }
 
 /** Sets the entry's title and detail from its slot. */

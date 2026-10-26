@@ -1276,6 +1276,19 @@ test("a tool call's command breaks at a real newline and at a `;` that separates
     "EOF",
     "ls",
   ]);
+  // A `<<` inside arithmetic is a left shift, not a heredoc: it must not
+  // swallow the lines after it (#361 review).
+  assert.deepEqual(of("dd bs=$((1<<20))\necho a; echo b\nls"), [
+    "dd bs=$((1<<20))",
+    "echo a;",
+    "echo b",
+    "ls",
+  ]);
+  assert.deepEqual(of("if ((x << 2)); then ls; fi"), [
+    "if ((x << 2));",
+    "then ls;",
+    "fi",
+  ]);
 });
 
 test("a tool row shows four lines at most, each cut at 200 characters (#351)", () => {
@@ -1310,6 +1323,34 @@ test("a tool row shows four lines at most, each cut at 200 characters (#351)", (
     "d;",
     "… 1 more line",
   ]);
+  // The slot keeps one character more than four full lines, so a fifth
+  // line is always seen and the marker is reachable (#361 review).
+  const five = `${"x".repeat(199)};`.repeat(5);
+  assert.deepEqual(of(five), [
+    ...Array(4).fill(`${"x".repeat(199)};`),
+    "… 1 more line",
+  ]);
+});
+
+test("only a command is split at a `;`: a pattern, a path or a url is not (#361 review)", () => {
+  const { rows } = toolRoom();
+  const detail = (rawInput: Record<string, string>) => {
+    const [row] = rows({ title: "Search", rawInput });
+    return String(row?.[1]).split("\n");
+  };
+  // A grep pattern holds no shell separator.
+  assert.deepEqual(detail({ pattern: "a;.*b" }), ["a;.*b"]);
+  assert.deepEqual(detail({ url: "https://x/a;b=c" }), ["https://x/a;b=c"]);
+  assert.deepEqual(detail({ path: "/w/a;b.ts" }), ["/w/a;b.ts"]);
+  // pi sends its editor's operation under `command`: joined with a path,
+  // it is no shell command either, so it does not split.
+  assert.deepEqual(detail({ command: "str_replace", path: "/w/a;b.ts" }), [
+    "str_replace /w/a;b.ts",
+  ]);
+  // A command alone still splits.
+  assert.deepEqual(detail({ command: "cd /w; ls" }), ["cd /w;", "ls"]);
+  // A real newline still makes a line, whatever the key.
+  assert.deepEqual(detail({ query: "one\ntwo" }), ["one", "two"]);
 });
 
 test("a tool call's command shows no escape or control character (#229, #351)", () => {
