@@ -205,7 +205,8 @@ type Tool = Extract<Entry, { type: "tool" }>;
 /** A tool call's rows: its title, its diff's `+a −d`, its mark, and its
  *  detail under it (M7-2). The spinner shows only while `live`: a call
  *  left open after its turn gets no mark. The bar before them is the
- *  agent's (M7-1). */
+ *  agent's (M7-1). A title or a detail can be several lines (#351); the
+ *  counts and the mark stay on the first, and the rest line up under it. */
 function toolLines(e: Tool, live: boolean, now: number) {
   const counts =
     e.added === undefined
@@ -219,8 +220,10 @@ function toolLines(e: Tool, live: boolean, now: number) {
         : live
           ? dim(` ${spin(now)}`)
           : "";
-  const rows = [`${dim(`· ${e.title}`)}${counts}${mark}`];
-  if (e.detail) rows.push(dim(`  ${e.detail}`));
+  const under = (lines: string[]) => lines.map((l) => dim(`  ${l}`));
+  const [head = "", ...rest] = e.title.split("\n");
+  const rows = [`${dim(`· ${head}`)}${counts}${mark}`, ...under(rest)];
+  if (e.detail) rows.push(...under(e.detail.split("\n")));
   return rows;
 }
 

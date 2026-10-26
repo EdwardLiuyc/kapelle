@@ -506,6 +506,52 @@ test("a tool call is one row that its updates change in place, with ✗ in red (
   assert.ok(rows.at(-2)?.includes("\x1b[31m ✗"), "failed is red");
 });
 
+test("a multi-line command is one row per line, the mark on the first (#351)", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const line = (update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-10T00:00:00Z",
+      roomId: "r1",
+      participantId: "p-ann",
+      update: update as unknown as RoomEventLine["update"],
+    });
+  line({
+    sessionUpdate: "_client_participant_added",
+    name: "ann",
+    harness: "mock",
+    mode: "auto",
+  });
+  line({
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "shell",
+    rawInput: { command: "cd /w; ls; pwd" },
+    status: "completed",
+  });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+  });
+  parts.redraw();
+  const plain = parts.transcript
+    .render(40)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+    .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  assert.deepEqual(plain.slice(-4), [
+    "▎ · shell ✓",
+    "▎   cd /w;",
+    "▎   ls;",
+    "▎   pwd",
+  ]);
+});
+
 /** ann's room drawn in a transcript, and a line maker that draws each
  *  line it changes, as the screen does. `plain()` is the rows without
  *  colour. */

@@ -1181,6 +1181,100 @@ test("a tool call's updates change its one entry: the title, the detail and the 
   );
 });
 
+test("a tool call's command breaks at a real newline and at a `;` that separates (#351)", () => {
+  const { rows } = toolRoom();
+  /** The title's lines for one command. The command is the title, so
+   *  there is no detail. */
+  const of = (command: string) => {
+    const [row] = rows({ title: command, rawInput: { command } });
+    return String(row?.[0]).split("\n");
+  };
+  assert.deepEqual(of("for n in 1 2; do echo $n; done"), [
+    "for n in 1 2;",
+    "do echo $n;",
+    "done",
+  ]);
+  // A real newline is a line of its own.
+  assert.deepEqual(of("cd /w\nnpm test"), ["cd /w", "npm test"]);
+  // A trailing `;` ends its own line and makes no empty one.
+  assert.deepEqual(of("a; b;"), ["a;", "b;"]);
+  // `&&`, `||` and `|` read as one thought.
+  assert.deepEqual(of("a && b || c | d"), ["a && b || c | d"]);
+  // A `;` inside a quote, `$(…)` or a backtick separates nothing.
+  assert.deepEqual(of("echo 'a; b'"), ["echo 'a; b'"]);
+  assert.deepEqual(of('echo "a; b"'), ['echo "a; b"']);
+  assert.deepEqual(of('echo "a\\"; b"'), ['echo "a\\"; b"']);
+  assert.deepEqual(of("echo $(a; b) c"), ["echo $(a; b) c"]);
+  assert.deepEqual(of("echo `a; b` c"), ["echo `a; b` c"]);
+  // A quote that never closes takes the rest of its line, and no more.
+  assert.deepEqual(of("echo 'a; b\nc; d"), ["echo 'a; b", "c; d"]);
+  // A heredoc body is text, not commands. The tag ends it.
+  assert.deepEqual(of("cat > f <<'EOF'\na; b\nEOF\nls; pwd"), [
+    "cat > f <<'EOF'",
+    "a; b",
+    "EOF",
+    "ls;",
+    "… 1 more line",
+  ]);
+  assert.deepEqual(of("cat <<-END\nx; y\nEND\nz"), [
+    "cat <<-END",
+    "x; y",
+    "END",
+    "z",
+  ]);
+  // Two heredocs on one line: the second body follows the first.
+  assert.deepEqual(of("f <<A <<B\na; 1\nA\nb; 2\nB"), [
+    "f <<A <<B",
+    "a; 1",
+    "A",
+    "b; 2",
+    "… 1 more line",
+  ]);
+  // `<<<` is a here-string, so its `;` still separates.
+  assert.deepEqual(of("cat <<<x; ls"), ["cat <<<x;", "ls"]);
+});
+
+test("a tool row shows four lines at most, each cut at 200 characters (#351)", () => {
+  const { rows } = toolRoom();
+  const of = (command: string) => {
+    const [row] = rows({ title: command, rawInput: { command } });
+    return String(row?.[0]).split("\n");
+  };
+  assert.deepEqual(of("a;b;c;d;e;f"), [
+    "a;",
+    "b;",
+    "c;",
+    "d;",
+    "… 2 more lines",
+  ]);
+  assert.deepEqual(of("a;b;c;d;e"), ["a;", "b;", "c;", "d;", "… 1 more line"]);
+  assert.deepEqual(of("a;b;c;d"), ["a;", "b;", "c;", "d"]);
+  // Each line keeps its own cut.
+  const long = `${"x".repeat(250)};${"y".repeat(250)}`;
+  assert.deepEqual(of(long), [`${"x".repeat(199)}…`, `${"y".repeat(199)}…`]);
+  // The detail follows the same rules. Here the title says none of it.
+  const [row] = rows({
+    title: "Terminal",
+    rawInput: { command: "a;b;c;d;e" },
+  });
+  assert.deepEqual(String(row?.[1]).split("\n"), [
+    "a;",
+    "b;",
+    "c;",
+    "d;",
+    "… 1 more line",
+  ]);
+});
+
+test("a tool call's command shows no escape or control character (#229, #351)", () => {
+  const { rows } = toolRoom();
+  // An escape sequence, a right-to-left override and a carriage return.
+  const command = "echo\x1b[2J a\u202eb\rc; ls";
+  const [row] = rows({ title: command, rawInput: { command } });
+  assert.deepEqual(String(row?.[0]).split("\n"), ["echo [2J a b c;", "ls"]);
+  assert.equal(row?.[1], undefined, "the title says the command already");
+});
+
 test("a tool call's update neither splits a streaming answer nor counts as unread", () => {
   const { state, send } = toolRoom();
   const chunk = (text: string) =>
@@ -1279,7 +1373,8 @@ test("a tool call's title and detail lose their control characters, are capped, 
   });
   assert.equal(e?.type, "tool");
   if (e?.type !== "tool") return;
-  assert.equal(e.title, "rm [2J -rf /");
+  // The escape goes; the real newline stays a line (#351).
+  assert.equal(e.title, "rm [2J -rf\n/");
   assert.equal(e.detail?.length, 200);
   assert.ok(e.detail?.endsWith("…"));
   assert.ok(!e.detail?.includes("\x07"));

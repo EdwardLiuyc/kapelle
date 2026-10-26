@@ -11,6 +11,11 @@
  * A TUI and a bridge
  * share it, so neither parses events itself.
  *
+ * **A tool's title and detail are several lines** (#351): most shell
+ * commands are several commands in one. `commandLines` keeps a real
+ * newline and breaks after a `;` that separates. Every screen draws the
+ * first line with its own prefix and the rest under it.
+ *
  * **It mutates the state it is given.** An answer arrives one chunk at a
  * time, and copying the timeline per chunk would be quadratic. `applyLine`
  * returns the entry it added or changed, so a screen redraws only that one.
@@ -142,8 +147,11 @@ const DETAIL_KEYS = [
   "query",
   "url",
 ];
-/** The most a tool row's title or detail keeps, in characters. */
+/** The most a tool row's title or detail keeps, in characters per line. */
 const TOOL_TEXT = 200;
+/** The most lines a tool row's title or detail shows, before `… N more
+ *  lines` (#351). */
+const TOOL_LINES = 4;
 /** The most a slot keeps of each text: enough to compare, with no whole
  *  file in a command such as `python - <<'EOF'`. */
 const SLOT_TEXT = 4 * TOOL_TEXT;
@@ -244,9 +252,113 @@ function toolFacts(entry: Tool, u: { kind?: unknown; content?: unknown }) {
   if (n) Object.assign(entry, n);
 }
 
+/**
+ * A shell command's lines (#351). Most commands are several commands in
+ * one, so a real newline stays a line, and a `;` starts the next one. Not
+ * a shell parser: it knows only where a `;` does not separate — inside
+ * `'…'` or `"…"`, inside `$(…)` or backticks, and inside a heredoc body.
+ * `&&`, `||` and `|` never break, because they read as one thought. A `;`
+ * ends its own line, so a trailing one makes no empty line, and a line
+ * with nothing on it is dropped.
+ *
+ * A newline always breaks, even inside a quote: what a person reads must
+ * match what the harness sent.
+ */
+// ponytail: quoting rules only, no words and no expansion. A real shell
+// lexer if a command ever breaks in the wrong place.
+function commandLines(text: string) {
+  const out: string[] = [];
+  /** The quote we are in: `'` takes everything, `"` takes a backslash. */
+  let quote: "'" | '"' | undefined;
+  /** How deep in `$(…)`. */
+  let paren = 0;
+  let tick = false;
+  /** The heredoc body we are in: it ends on a line that is its tag. */
+  let heredoc: string | undefined;
+  /** Tags read on this line; each body starts after the line. */
+  const pending: string[] = [];
+  for (const raw of text.split("\n")) {
+    if (heredoc !== undefined) {
+      out.push(raw);
+      if (raw.trim() === heredoc) heredoc = pending.shift();
+      continue;
+    }
+    let cur = "";
+    let first = true;
+    const push = () => {
+      const seg = first ? cur : cur.trimStart();
+      if (seg !== "") out.push(seg);
+      first = false;
+      cur = "";
+    };
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i] as string;
+      cur += c;
+      if (quote === "'") {
+        if (c === "'") quote = undefined;
+        continue;
+      }
+      // A backslash takes the next character, in `"…"` and outside a quote.
+      if (c === "\\" && i + 1 < raw.length) {
+        cur += raw[++i];
+        continue;
+      }
+      if (quote === '"') {
+        if (c === '"') quote = undefined;
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        quote = c;
+        continue;
+      }
+      if (c === "`") {
+        tick = !tick;
+        continue;
+      }
+      if (c === "$" && raw[i + 1] === "(") {
+        cur += raw[++i];
+        paren++;
+        continue;
+      }
+      if (c === ")" && paren > 0) {
+        paren--;
+        continue;
+      }
+      // `<<tag`, `<<-tag`, `<<'tag'`: the body starts after this line.
+      // `<<<` is a here-string, not a heredoc.
+      if (c === "<" && raw[i + 1] === "<" && raw[i + 2] !== "<") {
+        let j = i + 2;
+        if (raw[j] === "-") j++;
+        while (raw[j] === " ") j++;
+        const tag = /^(?:'([^']*)'|"([^"]*)"|([A-Za-z_]\w*))/.exec(
+          raw.slice(j),
+        );
+        if (tag) {
+          pending.push((tag[1] ?? tag[2] ?? tag[3]) as string);
+          cur += raw.slice(i + 1, j + tag[0].length);
+          i = j + tag[0].length - 1;
+          continue;
+        }
+      }
+      if (c === ";" && paren === 0 && !tick) push();
+    }
+    push();
+    heredoc = pending.shift();
+  }
+  return out;
+}
+
+/** A tool's title or detail as rows: its lines, each cut at `TOOL_TEXT`,
+ *  at most `TOOL_LINES` of them, then `… N more lines` (#351). The rows
+ *  are one string with newlines, as every screen draws them together. */
 const toolText = (s: string) => {
-  const t = printable(s);
-  return t.length > TOOL_TEXT ? `${t.slice(0, TOOL_TEXT - 1)}…` : t;
+  const lines = commandLines(cleanLines(s));
+  const rows = lines
+    .slice(0, TOOL_LINES)
+    .map((l) => (l.length > TOOL_TEXT ? `${l.slice(0, TOOL_TEXT - 1)}…` : l));
+  const more = lines.length - rows.length;
+  if (more > 0) rows.push(`… ${more} more line${more === 1 ? "" : "s"}`);
+  return rows.join("\n");
 };
 
 /** The keys of `raw` a detail can use. `raw` is the harness's JSON. */

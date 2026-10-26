@@ -60,6 +60,55 @@ test("a tool call prints again only when its title, detail or failure changed", 
   );
 });
 
+test("a multi-line command lines up under the first line (#351)", (t) => {
+  const state = newRoomState();
+  const printer = makePrinter(state);
+  let out = "";
+  t.mock.method(process.stdout, "write", (s: string) => {
+    out += s;
+    return true;
+  });
+  let seq = 0;
+  const send = (update: Record<string, unknown>) => {
+    const e = applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-10T00:00:00Z",
+      roomId: "r1",
+      participantId: "p-ann",
+      update: update as unknown as RoomEventLine["update"],
+    });
+    if (e) printer.show(e);
+  };
+  send({
+    sessionUpdate: "_client_participant_added",
+    name: "ann",
+    harness: "mock",
+    mode: "auto",
+  });
+  // The title is the command: every line but the first is indented, and
+  // `— failed` stays on the first.
+  send({
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "cd /w; ls",
+    rawInput: { command: "cd /w; ls" },
+    status: "failed",
+  });
+  // A label title with the command as its detail: the detail is indented
+  // line by line too.
+  send({
+    sessionUpdate: "tool_call",
+    toolCallId: "t2",
+    title: "shell",
+    rawInput: { command: "a; b" },
+  });
+  t.mock.restoreAll();
+  assert.equal(
+    out,
+    "ann:\n  · cd /w; — failed\n    ls\n  · shell\n    a;\n    b\n",
+  );
+});
+
 test("a message from the orchestrator prints po → ann, live and queued (M8-1)", (t) => {
   const state = newRoomState();
   const printer = makePrinter(state);
