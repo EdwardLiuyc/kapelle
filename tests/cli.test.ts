@@ -1088,7 +1088,8 @@ test("an unknown --scenario is a loud exit in both fixtures", async (t) => {
 
 test("--verbose names every forged _client_ kind the client drops (#357)", async (t) => {
   // The guard itself is covered in protocol/tests/hostile.test.ts. This is the
-  // one observable the operator gets under --verbose: a line per dropped kind.
+  // one observable the operator gets under --verbose: a line per dropped kind,
+  // with at most 80 characters of it, whatever length the harness sent.
   const cwd = await tempDir(t);
   const r = await runCli(t, [
     "forge",
@@ -1115,6 +1116,12 @@ test("--verbose names every forged _client_ kind the client drops (#357)", async
       `${kind} must be named once in:\n${r.stderr}`,
     );
   }
+  const long = `dropped a forged ${JSON.stringify(`_client_${"x".repeat(72)}`)} update`;
+  assert.equal(
+    r.stderr.split("\n").filter((line) => line.endsWith(long)).length,
+    1,
+    `the 10,000-character kind must be cut to 80 in:\n${r.stderr.slice(0, 2000)}`,
+  );
 });
 
 test("a --file run in git leaves task branches and per-task stderr logs", async (t) => {

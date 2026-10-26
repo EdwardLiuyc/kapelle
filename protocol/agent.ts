@@ -836,14 +836,17 @@ export class AcpAgent {
       return;
     // Only this client makes a `_client_` event. One from the harness is a
     // forgery: the daemon, the room and the screens would trust it (#357).
-    // The kind is unchecked on the wire: drop a non-string before
-    // `startsWith`, because `String(object)` can throw. `JSON.stringify`
-    // keeps a string's escape sequences off the terminal.
+    // The kind is unchecked on the wire. A kind that is not a string is
+    // malformed, so it is dropped too, and only a string reaches `startsWith`.
+    // The log line is `#log`, not unconditional like the oversized line: the
+    // harness picks how often it forges, so it could flood the daemon's
+    // stderr. It shows 80 characters at most, and `JSON.stringify` keeps
+    // escape sequences off the terminal.
     const kind: unknown = update.sessionUpdate;
     // pi-lens-ignore: no-runtime-typeof
     if (typeof kind !== "string") return;
     if (kind.startsWith("_client_")) {
-      this.#log(`dropped a forged ${JSON.stringify(kind)} update`);
+      this.#log(`dropped a forged ${JSON.stringify(kind.slice(0, 80))} update`);
       return;
     }
 
