@@ -95,7 +95,7 @@ test("chat.ts on a real terminal follows a second room off screen, switches to i
   assert.equal(await exited, 0, out());
 });
 
-test("chat.ts on a real terminal lists the person's messages on ctrl+r, lights the row under the mouse, and a pick jumps", {
+test("chat.ts on a real terminal lists the messages on ctrl+r, lights the row under the mouse, and a pick jumps", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);

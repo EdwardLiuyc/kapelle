@@ -764,8 +764,10 @@ function chatTui(
 
   /** The messages the view shows in its history, oldest first: `messages`
    *  in `chat/view.ts` says which ones (#362). */
-  // ponytail: walks the view's entries on each frame while the list shows;
-  // keep the list per view if a long room makes it lag.
+  // ponytail: in a thread this walks the timeline twice on each frame while
+  // the list shows — once for `thread`, once for `messages` — so that
+  // `messages` stays the one place the history's rule lives. Keep the list
+  // per view if a long room makes it lag.
   const sent = () => {
     const r = rooms.get(view.roomId);
     if (!r) return [];
