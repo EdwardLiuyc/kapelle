@@ -153,14 +153,18 @@ const TOOL_TEXT = 200;
  *  lines` (#351). */
 const TOOL_LINES = 4;
 /** The most a slot keeps of each text: enough to compare, with no whole
- *  file in a command such as `python - <<'EOF'`. One character more than
- *  four full lines, so a text cut here that fits `TOOL_TEXT` a line still
- *  has a fifth line and shows `… N more lines` (#361 review). Past that
- *  width the marker can be missing as well as low: three 300-character
- *  lines fill the slot, and the per-line `…` is then the only hint. Raising
- *  it further is decision 2A on #351: the room keeps this text for every
- *  tool call. */
-const SLOT_TEXT = TOOL_LINES * TOOL_TEXT + 1;
+ *  file in a command such as `python - <<'EOF'`. It budgets four full
+ *  lines, a separator each, and one character over, so a fifth line is
+ *  always left for `… N more lines` to count (#361 review). The separator
+ *  has to be paid for: a `;` stays on its line, but a newline belongs to
+ *  no line, and without its budget four 200-character lines fill the slot
+ *  and the fifth goes with nothing on screen to say so.
+ *
+ *  Only lines that fit `TOOL_TEXT` are counted this way. Wider ones still
+ *  lose the marker — three 300-character lines fill the slot — and the
+ *  per-line `…` is then the only hint. Raising it further is decision 2A
+ *  on #351: the room keeps this text for every tool call. */
+const SLOT_TEXT = TOOL_LINES * (TOOL_TEXT + 1) + 1;
 
 /** A tool call's entry, and what its detail is worked out from. Only the
  *  keys the detail can use are kept, each cut at `SLOT_TEXT`. */

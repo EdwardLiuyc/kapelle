@@ -1323,13 +1323,26 @@ test("a tool row shows four lines at most, each cut at 200 characters (#351)", (
     "d;",
     "… 1 more line",
   ]);
-  // The slot keeps one character more than four full lines, so a fifth
-  // line is always seen and the marker is reachable (#361 review).
-  const five = `${"x".repeat(199)};`.repeat(5);
-  assert.deepEqual(of(five), [
+  // The slot budgets a separator a line, so a fifth full line is seen
+  // whichever separator made it (#361 review). With `;`, which stays on
+  // its own line:
+  const semis = `${"x".repeat(199)};`.repeat(5);
+  assert.deepEqual(of(semis), [
     ...Array(4).fill(`${"x".repeat(199)};`),
     "… 1 more line",
   ]);
+  // And with a newline, which belongs to no line and so costs the slot a
+  // character the lines do not get back.
+  const wide = Array(5).fill("x".repeat(200)).join("\n");
+  assert.deepEqual(of(wide), [
+    ...Array(4).fill("x".repeat(200)),
+    "… 1 more line",
+  ]);
+  // Four full lines fit, so nothing is lost and no marker shows.
+  assert.deepEqual(
+    of(Array(4).fill("x".repeat(200)).join("\n")),
+    Array(4).fill("x".repeat(200)),
+  );
 });
 
 test("only a command is split at a `;`: a pattern, a path or a url is not (#361 review)", () => {
