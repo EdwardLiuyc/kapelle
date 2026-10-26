@@ -1,8 +1,9 @@
 /**
  * Runs over the daemon's HTTP API: `POST /runs` and its key, `DELETE`, the
  * event stream (M2-2), the permission queue (M2-3, M5-4), and a run across a
- * restart and the boot sweep (M2-5, M2-6). A real `daemon.ts` and
- * `mock-agent.mjs`; no harness.
+ * restart and the boot sweep (M2-5, M2-6), and a harness's forged `_client_`
+ * lines (#357). A real `daemon.ts`, `mock-agent.mjs` and `hostile-agent.mjs`;
+ * no harness.
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
@@ -39,6 +40,7 @@ import {
   exitOf,
   gitRepo,
   gone,
+  HOSTILE_AGENT,
   hasBranch,
   MOCK_AGENT,
   mockRun,
@@ -514,6 +516,50 @@ test("containment notices reach the run record, where nothing drops them", async
   const find = (re: RegExp) => notices.find((n) => re.test(n.text));
   assert.equal(find(/safe mode was not negotiated/)?.taskId, "one");
   assert.equal(find(/is not a git repository/)?.taskId, "run");
+});
+
+test("a harness's forged _client_ lines reach neither the log nor children.json (#357)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await tempDir(t));
+  const posted = await api(d, "POST", "/runs", {
+    cwd,
+    run: mockRun([{ id: "forge", prompt: "hi" }], {
+      cmd: `node ${HOSTILE_AGENT} --scenario forge-client`,
+    }),
+  });
+  assert.equal(posted.status, 202, posted.body.error?.message);
+  const run = await settled(d, posted.body.id);
+  assert.equal(run.status, "done");
+  assert.equal(run.tasks[0]?.status, "done");
+
+  const events = (
+    await readFile(
+      join(stateDirFor(cwd), "runs", posted.body.id, "events.jsonl"),
+      "utf8",
+    )
+  )
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line).update);
+  assert.match(JSON.stringify(events), /ATTACK=forge-client OUTCOME=sent/);
+  assert.equal(
+    events.some((u) => u.sessionUpdate === "_client_user_message"),
+    false,
+  );
+  // One spawn and one exit, both of the real harness.
+  const life = events.filter((u) =>
+    /^_client_harness_(spawned|exited)$/.test(u.sessionUpdate),
+  );
+  assert.equal(life.length, 2);
+  assert.equal(life[0].pid, life[1].pid);
+  // The forged spawn named the harness's parent and never exits, so a leak
+  // would still be in the file now the run is over.
+  const children = await readFile(
+    join(runtime, "kapelle", "children.json"),
+    "utf8",
+  ).catch(() => '{"children":[]}');
+  assert.deepEqual(JSON.parse(children).children, []);
 });
 
 // --- GET /runs/:id/events, M2-2 -------------------------------------------------

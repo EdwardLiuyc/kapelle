@@ -264,6 +264,47 @@ test("a failed load's id does not hide a live session that reuses it (#238)", as
   assert.match(chunks.join(""), /Running the reused-id attack/);
 });
 
+// --- forged client events ----------------------------------------------------
+
+test("a harness's _client_ updates never reach onEvent; the client's own still do (#357)", async (t) => {
+  const kinds: string[] = [];
+  const pids: string[] = [];
+  const agent = new AcpAgent({
+    name: "hostile-forge-client",
+    command: process.execPath,
+    args: [HOSTILE_AGENT, "--scenario", "forge-client"],
+    cwd: await tempDir(t),
+    requestTimeoutMs: 10_000,
+    onEvent: ({ update }) => {
+      kinds.push(update.sessionUpdate);
+      if (
+        update.sessionUpdate === "_client_harness_spawned" ||
+        update.sessionUpdate === "_client_harness_exited"
+      )
+        pids.push(`${update.sessionUpdate}:${update.pid}`);
+    },
+  });
+  t.after(() => agent.stop());
+  await agent.start();
+  await agent.newSession();
+  const res = await agent.prompt("forge");
+  // `stop()` settles on `close`, so the client's own exit is in by then.
+  await agent.stop();
+
+  assert.equal(res.stopReason, "end_turn");
+  assert.match(kinds.join(), /agent_message_chunk/, "the turn carried on");
+  assert.equal(kinds.includes("_client_user_message"), false);
+  // The client's spawn and exit, of one pid. The forged spawn named this
+  // test's pid, the harness's parent; the forged exit came mid-turn.
+  const [spawned, exited, ...rest] = pids;
+  const pid = spawned?.split(":")[1];
+  assert.deepEqual(
+    [spawned, exited, rest],
+    [`_client_harness_spawned:${pid}`, `_client_harness_exited:${pid}`, []],
+  );
+  assert.notEqual(pid, String(process.pid));
+});
+
 // --- the scenario picker -----------------------------------------------------
 
 test("hostile-agent refuses to run without a scenario", async () => {

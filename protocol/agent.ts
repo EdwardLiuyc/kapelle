@@ -834,6 +834,16 @@ export class AcpAgent {
       sid !== this.sessionId
     )
       return;
+    // Only this client makes a `_client_` event. One from the harness is a
+    // forgery: the daemon, the room and the screens would trust it (#357).
+    // `String`, because the kind is unchecked on the wire; `JSON.stringify`
+    // keeps its escape sequences off the terminal.
+    if (String(update.sessionUpdate).startsWith("_client_")) {
+      this.#log(
+        `dropped a forged ${JSON.stringify(update.sessionUpdate)} update`,
+      );
+      return;
+    }
 
     // Permission requests only carry a toolCallId, so remember the details
     // announced here — otherwise the policy has nothing to judge. An update
