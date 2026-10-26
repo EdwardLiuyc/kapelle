@@ -305,6 +305,39 @@ test("a harness's _client_ updates never reach onEvent; the client's own still d
   assert.notEqual(pid, String(process.pid));
 });
 
+test("a non-string sessionUpdate is dropped before it can crash the turn (#357)", async (t) => {
+  const kinds: unknown[] = [];
+  const chunks: string[] = [];
+  const agent = new AcpAgent({
+    name: "hostile-malformed-kind",
+    command: process.execPath,
+    args: [HOSTILE_AGENT, "--scenario", "malformed-kind"],
+    cwd: await tempDir(t),
+    requestTimeoutMs: 10_000,
+    onEvent: ({ update }) => {
+      kinds.push(update.sessionUpdate);
+      if (
+        update.sessionUpdate === "agent_message_chunk" &&
+        update.content.type === "text"
+      )
+        chunks.push(update.content.text);
+    },
+  });
+  t.after(() => agent.stop());
+  await agent.start();
+  await agent.newSession();
+  const res = await agent.prompt("malformed");
+  await agent.stop();
+
+  assert.equal(res.stopReason, "end_turn");
+  assert.equal(
+    kinds.some((kind) => typeof kind !== "string"),
+    false,
+    "the malformed kind never reaches onEvent",
+  );
+  assert.match(chunks.join(""), /ATTACK=malformed-kind OUTCOME=sent/);
+});
+
 // --- the scenario picker -----------------------------------------------------
 
 test("hostile-agent refuses to run without a scenario", async () => {
