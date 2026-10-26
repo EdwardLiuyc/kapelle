@@ -154,10 +154,12 @@ const TOOL_TEXT = 200;
 const TOOL_LINES = 4;
 /** The most a slot keeps of each text: enough to compare, with no whole
  *  file in a command such as `python - <<'EOF'`. One character more than
- *  a row can ever show, so a text cut here still has a line left over and
- *  `… N more lines` is reachable (#361 review). The count can still be
- *  low, which decision 2A on #351 accepts: the marker says there is more,
- *  not how much. */
+ *  four full lines, so a text cut here that fits `TOOL_TEXT` a line still
+ *  has a fifth line and shows `… N more lines` (#361 review). Past that
+ *  width the marker can be missing as well as low: three 300-character
+ *  lines fill the slot, and the per-line `…` is then the only hint. Raising
+ *  it further is decision 2A on #351: the room keeps this text for every
+ *  tool call. */
 const SLOT_TEXT = TOOL_LINES * TOOL_TEXT + 1;
 
 /** A tool call's entry, and what its detail is worked out from. Only the

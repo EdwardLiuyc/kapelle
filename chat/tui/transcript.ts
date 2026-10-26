@@ -206,7 +206,11 @@ type Tool = Extract<Entry, { type: "tool" }>;
  *  detail under it (M7-2). The spinner shows only while `live`: a call
  *  left open after its turn gets no mark. The bar before them is the
  *  agent's (M7-1). A title or a detail can be several lines (#351); the
- *  counts and the mark stay on the first, and the rest line up under it. */
+ *  counts and the mark stay on the first, and the rest line up under it.
+ *  On the first by choice, not by constraint: they sit with the `·`, so a
+ *  call reads the same whether its title is one line or four. `toolRow`
+ *  joins these rows into one `Text`, so the last row would cost nothing
+ *  either (#361 review). */
 function toolLines(e: Tool, live: boolean, now: number) {
   const counts =
     e.added === undefined

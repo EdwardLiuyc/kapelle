@@ -1505,8 +1505,8 @@ test("a tool detail: a prose title word hides no path, a said description gives 
     }),
     [["plan it", "/w/b", undefined]],
   );
-  // The slot keeps 800 characters of each; both are cut alike, so a
-  // command that is its title still matches.
+  // The slot keeps `SLOT_TEXT` characters of each; both are cut alike, so
+  // a command that is its title still matches.
   const long = `python - <<'EOF'\n${"x".repeat(5000)}`;
   assert.deepEqual(
     rows({ title: long, rawInput: { command: long } }).map(([, d]) => d),
