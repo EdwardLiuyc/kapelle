@@ -1086,6 +1086,37 @@ test("an unknown --scenario is a loud exit in both fixtures", async (t) => {
 
 // --- M1b end-to-end: full CLI flows that span run files, git, and hostile ---
 
+test("--verbose names every forged _client_ kind the client drops (#357)", async (t) => {
+  // The guard itself is covered in protocol/tests/hostile.test.ts. This is the
+  // one observable the operator gets under --verbose: a line per dropped kind.
+  const cwd = await tempDir(t);
+  const r = await runCli(t, [
+    "forge",
+    "--cmd",
+    `node ${HOSTILE_AGENT} --scenario forge-client`,
+    "--mode",
+    "auto",
+    "--cwd",
+    cwd,
+    "--verbose",
+  ]);
+
+  assert.equal(r.code, 0, r.stderr);
+  for (const kind of [
+    "_client_harness_spawned",
+    "_client_harness_exited",
+    "_client_user_message",
+  ]) {
+    const message = `dropped a forged ${JSON.stringify(kind)} update`;
+    const lines = r.stderr.split("\n").filter((line) => line.endsWith(message));
+    assert.equal(
+      lines.length,
+      1,
+      `${kind} must be named once in:\n${r.stderr}`,
+    );
+  }
+});
+
 test("a --file run in git leaves task branches and per-task stderr logs", async (t) => {
   const cwd = await gitRepo(t);
   const file = await runFile(
