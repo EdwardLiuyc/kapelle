@@ -266,102 +266,49 @@ function toolFacts(entry: Tool, u: { kind?: unknown; content?: unknown }) {
  * match what the harness sent. A quote can stay open across that row, as
  * it does in the shell.
  */
+
+/** A heredoc's delimiter, with its quotes and backslashes removed as the
+ *  shell removes them, and whether `<<-` strips the body's indent. */
+interface Heredoc {
+  tag: string;
+  stripTabs: boolean;
+}
+/** `<<tag`, `<<-tag`, `<<'tag'`, `<<"tag"`, `<<E\OF`: the delimiter is one
+ *  shell word. */
+const HEREDOC = /^<<(-?)[ \t]*((?:'[^']*'|"[^"]*"|\\.|[^\s;&|<>()'"\\])+)/;
+/** The heredoc that starts at `from`, and where its operator ends. Not the
+ *  tail of a here-string (`<<<`), which starts no body. */
+// ponytail: no `\"` inside a quoted tag. Nobody writes `<<"E\"OF"`.
+const heredocAt = (raw: string, from: number) => {
+  if (raw[from - 1] === "<" || raw[from + 2] === "<") return undefined;
+  const m = HEREDOC.exec(raw.slice(from));
+  if (!m) return undefined;
+  const word = m[2] as string;
+  return {
+    tag: word.replace(/'([^']*)'|"([^"]*)"|\\(.)/g, "$1$2$3"),
+    stripTabs: m[1] === "-",
+    end: from + m[0].length,
+  };
+};
+
 // ponytail: quoting rules only, no words and no expansion. A real shell
 // lexer if a command ever breaks in the wrong place.
 function commandLines(text: string) {
-  type Frame =
-    | { kind: "single" }
-    | { kind: "double" }
-    | { kind: "command"; depth: number }
-    | { kind: "tick" }
-    | { kind: "parameter"; depth: number }
-    | { kind: "arithmetic"; depth: number }
-    | { kind: "comment" };
-  /** A heredoc's delimiter, after quote removal. */
-  type Heredoc = { tag: string; stripTabs: boolean };
+  /** The shell context around a character. `command` is `$(…)`, `<(…)`,
+   *  `$((…))` or a subshell inside one, and `depth` is how many `)` it
+   *  still needs; `parameter` is `${…}`, and `depth` counts its braces. */
+  type Frame = {
+    kind: "single" | "double" | "tick" | "comment" | "command" | "parameter";
+    depth: number;
+  };
   const out: string[] = [];
-  /** The shell context around this character. */
+  /** Innermost last. A `;` separates only when this is empty. */
   const frames: Frame[] = [];
-  /** Tags read on the current command line, in body order. */
+  const open = (kind: Frame["kind"], depth = 0) => frames.push({ kind, depth });
+  /** Tags read on the current line; their bodies start after it. */
   const pending: Heredoc[] = [];
   /** Bodies whose delimiter has not arrived, in order. */
   const bodies: Heredoc[] = [];
-  const top = () => frames.at(-1);
-
-  /** The delimiter after `<<`, if this is a heredoc rather than a
-   *  here-string (`<<<`) or the tail of one. Reads a shell word and
-   *  removes its quotes and backslashes, as the shell does for a tag. */
-  const heredocAt = (raw: string, from: number) => {
-    if (
-      raw[from] !== "<" ||
-      raw[from + 1] !== "<" ||
-      raw[from + 2] === "<" ||
-      raw[from - 1] === "<"
-    ) {
-      return undefined;
-    }
-    let i = from + 2;
-    const stripTabs = raw[i] === "-";
-    if (stripTabs) i++;
-    while (raw[i] === " " || raw[i] === "\t") i++;
-    let tag = "";
-    let found = false;
-    while (i < raw.length) {
-      const c = raw[i] as string;
-      if (c === "'") {
-        found = true;
-        i++;
-        while (i < raw.length && raw[i] !== "'") tag += raw[i++];
-        if (i < raw.length) i++;
-        continue;
-      }
-      if (c === '"') {
-        found = true;
-        i++;
-        while (i < raw.length && raw[i] !== '"') {
-          const d = raw[i] as string;
-          if (d === "\\" && i + 1 < raw.length) {
-            const next = raw[i + 1] as string;
-            if (next === "$" || next === "`" || next === '"' || next === "\\") {
-              tag += next;
-              i += 2;
-              continue;
-            }
-          }
-          tag += d;
-          i++;
-        }
-        if (i < raw.length) i++;
-        continue;
-      }
-      if (c === "\\") {
-        i++;
-        if (i < raw.length) {
-          found = true;
-          tag += raw[i++];
-        }
-        continue;
-      }
-      if (/[\s;&|<>()]/.test(c)) break;
-      found = true;
-      tag += c;
-      i++;
-    }
-    if (!found) return undefined;
-    return { tag, stripTabs, end: i };
-  };
-
-  /** A `$(` or `$((` at `i`: push its context and return the last char it
-   *  takes. The caller appends the rest of the operator. */
-  const dollarAt = (raw: string, i: number) => {
-    if (raw[i + 1] !== "(") return undefined;
-    if (raw[i + 2] === "(") {
-      frames.push({ kind: "arithmetic", depth: 2 });
-      return i + 2;
-    }
-    frames.push({ kind: "command", depth: 0 });
-    return i + 1;
-  };
 
   for (const raw of text.split("\n")) {
     const body = bodies[0];
@@ -379,218 +326,99 @@ function commandLines(text: string) {
       first = false;
       cur = "";
     };
-    for (let i = 0; i < raw.length; i++) {
+    /** Takes `n` more characters of `raw` into the line. */
+    let i = 0;
+    const take = (n: number) => {
+      cur += raw.slice(i + 1, i + 1 + n);
+      i += n;
+    };
+    for (; i < raw.length; i++) {
       const c = raw[i] as string;
       cur += c;
-      const frame = top();
-      if (frame?.kind === "comment") continue;
-      if (frame?.kind === "single") {
+      const f = frames.at(-1);
+      // Nothing nests in these three, so they come first.
+      if (f?.kind === "comment") continue;
+      if (f?.kind === "single") {
         if (c === "'") frames.pop();
         continue;
       }
-      if (frame?.kind === "double") {
-        if (c === "\\" && i + 1 < raw.length) {
-          cur += raw[++i];
-          continue;
-        }
-        if (c === '"') {
-          frames.pop();
-          continue;
-        }
-        if (c === "$") {
-          const end = dollarAt(raw, i);
-          if (end !== undefined) {
-            cur += raw.slice(i + 1, end + 1);
-            i = end;
-            continue;
-          }
-          if (raw[i + 1] === "{") {
-            cur += raw[++i];
-            frames.push({ kind: "parameter", depth: 1 });
-            continue;
-          }
-        }
-        if (c === "`") frames.push({ kind: "tick" });
+      if (c === "\\" && i + 1 < raw.length) {
+        take(1);
         continue;
       }
-      if (frame?.kind === "tick") {
-        if (c === "\\" && i + 1 < raw.length) {
-          cur += raw[++i];
-          continue;
-        }
+      if (f?.kind === "tick") {
         if (c === "`") frames.pop();
         continue;
       }
-      if (frame?.kind === "parameter") {
-        if (c === "\\" && i + 1 < raw.length) {
-          cur += raw[++i];
-          continue;
-        }
-        if (c === "'") {
-          frames.push({ kind: "single" });
-          continue;
-        }
-        if (c === '"') {
-          frames.push({ kind: "double" });
-          continue;
-        }
-        if (c === "`") {
-          frames.push({ kind: "tick" });
-          continue;
-        }
-        if (c === "$") {
-          const end = dollarAt(raw, i);
-          if (end !== undefined) {
-            cur += raw.slice(i + 1, end + 1);
-            i = end;
-            continue;
-          }
-          if (raw[i + 1] === "{") {
-            cur += raw[++i];
-            frame.depth++;
-            continue;
-          }
-        }
-        if (c === "{") {
-          frame.depth++;
-          continue;
-        }
-        if (c === "}") {
-          frame.depth--;
-          if (frame.depth === 0) frames.pop();
-        }
+      if (f?.kind === "double" && c === '"') {
+        frames.pop();
         continue;
       }
-      if (frame?.kind === "arithmetic") {
-        if (c === "\\" && i + 1 < raw.length) {
-          cur += raw[++i];
-          continue;
-        }
-        if (c === "(") {
-          frame.depth++;
-          continue;
-        }
-        if (c === ")") {
-          frame.depth--;
-          if (frame.depth === 0) frames.pop();
-        }
+      // `$(`, `$((` and `${` nest everywhere but the three above.
+      // `$((…))` is arithmetic: one frame that two `)` close.
+      if (c === "$" && raw[i + 1] === "(") {
+        const arith = raw[i + 2] === "(";
+        take(arith ? 2 : 1);
+        open("command", arith ? 1 : 0);
         continue;
       }
-      if (frame?.kind === "command") {
-        if (c === "\\" && i + 1 < raw.length) {
-          cur += raw[++i];
-          continue;
-        }
-        if (c === "'") {
-          frames.push({ kind: "single" });
-          continue;
-        }
-        if (c === '"') {
-          frames.push({ kind: "double" });
-          continue;
-        }
-        if (c === "`") {
-          frames.push({ kind: "tick" });
-          continue;
-        }
-        if (c === "$") {
-          const end = dollarAt(raw, i);
-          if (end !== undefined) {
-            cur += raw.slice(i + 1, end + 1);
-            i = end;
-            continue;
-          }
-          if (raw[i + 1] === "{") {
-            cur += raw[++i];
-            frames.push({ kind: "parameter", depth: 1 });
-            continue;
-          }
-        }
-        const heredoc = heredocAt(raw, i);
-        if (heredoc) {
-          cur += raw.slice(i + 1, heredoc.end);
-          i = heredoc.end - 1;
-          pending.push({ tag: heredoc.tag, stripTabs: heredoc.stripTabs });
-          continue;
-        }
-        if (c === "(") {
-          if (raw[i + 1] === "(") {
-            cur += raw[++i];
-            frames.push({ kind: "arithmetic", depth: 2 });
-          } else {
-            frame.depth++;
-          }
-          continue;
-        }
-        if (c === ")") {
-          if (frame.depth > 0) frame.depth--;
-          else frames.pop();
-          continue;
-        }
-        if (
-          c === "#" &&
-          (i === 0 || /[\s;|&(){}]/.test(raw[i - 1] as string))
-        ) {
-          frames.push({ kind: "comment" });
-        }
-        continue;
-      }
-      // No frame: the top level of a command.
-      if (c === "\\" && i + 1 < raw.length) {
-        cur += raw[++i];
-        continue;
-      }
-      if (c === "'") {
-        frames.push({ kind: "single" });
-        continue;
-      }
-      if (c === '"') {
-        frames.push({ kind: "double" });
+      if (c === "$" && raw[i + 1] === "{") {
+        take(1);
+        open("parameter", 1);
         continue;
       }
       if (c === "`") {
-        frames.push({ kind: "tick" });
+        open("tick");
         continue;
       }
-      if (c === "$") {
-        const end = dollarAt(raw, i);
-        if (end !== undefined) {
-          cur += raw.slice(i + 1, end + 1);
-          i = end;
-          continue;
-        }
-        if (raw[i + 1] === "{") {
-          cur += raw[++i];
-          frames.push({ kind: "parameter", depth: 1 });
-          continue;
-        }
+      // In `"…"` a quote, a brace and a `;` are plain text.
+      if (f?.kind === "double") continue;
+      if (c === "'" || c === '"') {
+        open(c === "'" ? "single" : "double");
+        continue;
       }
-      const heredoc = heredocAt(raw, i);
-      if (heredoc) {
-        cur += raw.slice(i + 1, heredoc.end);
-        i = heredoc.end - 1;
-        pending.push({ tag: heredoc.tag, stripTabs: heredoc.stripTabs });
+      if (f?.kind === "parameter") {
+        if (c === "{") f.depth++;
+        else if (c === "}" && --f.depth === 0) frames.pop();
+        continue;
+      }
+      // A command, or the whole line: both can start a heredoc, and both
+      // count their parentheses.
+      const here = c === "<" ? heredocAt(raw, i) : undefined;
+      if (here) {
+        take(here.end - i - 1);
+        pending.push(here);
         continue;
       }
       if ((c === "<" || c === ">") && raw[i + 1] === "(") {
-        cur += raw[++i];
-        frames.push({ kind: "command", depth: 0 });
+        take(1);
+        open("command");
         continue;
       }
-      if (c === "(" && raw[i + 1] === "(") {
-        cur += raw[++i];
-        frames.push({ kind: "arithmetic", depth: 2 });
+      if (c === "(") {
+        // `((…))` is arithmetic. A bare `(` only deepens a substitution:
+        // at the top level `(a; b)` really is two commands.
+        if (raw[i + 1] === "(") {
+          take(1);
+          open("command", 1);
+        } else if (f?.kind === "command") f.depth++;
+        continue;
+      }
+      if (c === ")" && f?.kind === "command") {
+        if (f.depth > 0) f.depth--;
+        else frames.pop();
         continue;
       }
       if (c === "#" && (i === 0 || /[\s;|&(){}]/.test(raw[i - 1] as string))) {
-        frames.push({ kind: "comment" });
+        open("comment");
         continue;
       }
-      if (c === ";") push();
+      if (c === ";" && frames.length === 0) push();
     }
     push();
-    while (top()?.kind === "comment") frames.pop();
-    if (pending.length > 0) bodies.push(...pending.splice(0));
+    // A comment ends with its line; a quote stays open across the next.
+    if (frames.at(-1)?.kind === "comment") frames.pop();
+    bodies.push(...pending.splice(0));
   }
   return out;
 }
