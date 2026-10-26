@@ -862,10 +862,15 @@ function chatTui(
     const onScreen = shows(view, roomId, line.participantId);
     if (onScreen) seen(r.state, line.participantId);
     // A thread also shows the messages its participant sent. Their line
-    // names the recipient, so `shows` alone misses them (#362).
+    // names the recipient, so `shows` alone misses them (#362). The room
+    // still has to be the open one: a participant id is unique within one
+    // room only (`core/ids.ts`), which is why `shows` checks it too.
     if (
       e &&
-      (onScreen || (view.participantId && inThread(e, view.participantId)))
+      (onScreen ||
+        (roomId === view.roomId &&
+          view.participantId &&
+          inThread(e, view.participantId)))
     ) {
       draw(r.state, e);
     }
