@@ -1181,6 +1181,208 @@ test("a tool call's updates change its one entry: the title, the detail and the 
   );
 });
 
+test("a tool call's command breaks at a real newline and at a `;` that separates (#351)", () => {
+  const { rows } = toolRoom();
+  /** The title's lines for one command. The command is the title, so
+   *  there is no detail. */
+  const of = (command: string) => {
+    const [row] = rows({ title: command, rawInput: { command } });
+    return String(row?.[0]).split("\n");
+  };
+  assert.deepEqual(of("for n in 1 2; do echo $n; done"), [
+    "for n in 1 2;",
+    "do echo $n;",
+    "done",
+  ]);
+  // A real newline is a line of its own.
+  assert.deepEqual(of("cd /w\nnpm test"), ["cd /w", "npm test"]);
+  // A trailing `;` ends its own line and makes no empty one.
+  assert.deepEqual(of("a; b;"), ["a;", "b;"]);
+  // `&&`, `||` and `|` read as one thought.
+  assert.deepEqual(of("a && b || c | d"), ["a && b || c | d"]);
+  // A `;` inside a quote, `$(…)` or a backtick separates nothing.
+  assert.deepEqual(of("echo 'a; b'"), ["echo 'a; b'"]);
+  assert.deepEqual(of('echo "a; b"'), ['echo "a; b"']);
+  assert.deepEqual(of('echo "a\\"; b"'), ['echo "a\\"; b"']);
+  assert.deepEqual(of("echo $(a; b) c"), ["echo $(a; b) c"]);
+  assert.deepEqual(of("echo `a; b` c"), ["echo `a; b` c"]);
+  // The contexts nest: a quote, a subshell or arithmetic inside `$()` does
+  // not end the outer one.
+  assert.deepEqual(of('echo "$(echo "a;b")"; ls'), [
+    'echo "$(echo "a;b")";',
+    "ls",
+  ]);
+  assert.deepEqual(of("echo $( (echo a); echo b)"), [
+    "echo $( (echo a); echo b)",
+  ]);
+  assert.deepEqual(of("echo $(echo $(a; b); c)"), ["echo $(echo $(a; b); c)"]);
+  assert.deepEqual(of('echo "`echo a;b`"; ls'), ['echo "`echo a;b`";', "ls"]);
+  assert.deepEqual(of('for ((i=0; i<3; i++)); do echo "$i"; done'), [
+    "for ((i=0; i<3; i++));",
+    'do echo "$i";',
+    "done",
+  ]);
+  // A comment and parameter text hold their `;` too.
+  assert.deepEqual(of("echo hi # a; b\nls; pwd"), [
+    "echo hi # a; b",
+    "ls;",
+    "pwd",
+  ]);
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter text
+  assert.deepEqual(of("echo ${x:-a;b}; ls"), ["echo ${x:-a;b};", "ls"]);
+  // A quote stays open across a real newline: the newline makes rows, but
+  // the `;` on the next line is still inside it.
+  assert.deepEqual(of("echo 'a; b\nc; d"), ["echo 'a; b", "c; d"]);
+  // A heredoc body is text, not commands. The tag ends it.
+  assert.deepEqual(of("cat > f <<'EOF'\na; b\nEOF\nls; pwd"), [
+    "cat > f <<'EOF'",
+    "a; b",
+    "EOF",
+    "ls;",
+    "… 1 more line",
+  ]);
+  assert.deepEqual(of("cat <<-END\nx; y\nEND\nz"), [
+    "cat <<-END",
+    "x; y",
+    "END",
+    "z",
+  ]);
+  // Two heredocs on one line: the second body follows the first.
+  assert.deepEqual(of("f <<A <<B\na; 1\nA\nb; 2\nB"), [
+    "f <<A <<B",
+    "a; 1",
+    "A",
+    "b; 2",
+    "… 1 more line",
+  ]);
+  // `<<<` is a here-string, so its `;` still separates and it starts no
+  // body on the next line.
+  assert.deepEqual(of("cat <<<x; ls\npwd; echo"), [
+    "cat <<<x;",
+    "ls",
+    "pwd;",
+    "echo",
+  ]);
+  // A backslash quotes any character of the tag, as the shell does.
+  assert.deepEqual(of("cat <<\\EOF\na; b\nEOF\nls"), [
+    "cat <<\\EOF",
+    "a; b",
+    "EOF",
+    "ls",
+  ]);
+  assert.deepEqual(of("cat <<E\\OF\na; b\nEOF\nls"), [
+    "cat <<E\\OF",
+    "a; b",
+    "EOF",
+    "ls",
+  ]);
+  // A `<<` inside arithmetic is a left shift, not a heredoc: it must not
+  // swallow the lines after it (#361 review).
+  assert.deepEqual(of("dd bs=$((1<<20))\necho a; echo b\nls"), [
+    "dd bs=$((1<<20))",
+    "echo a;",
+    "echo b",
+    "ls",
+  ]);
+  assert.deepEqual(of("if ((x << 2)); then ls; fi"), [
+    "if ((x << 2));",
+    "then ls;",
+    "fi",
+  ]);
+});
+
+test("a tool row shows four lines at most, each cut at 200 characters (#351)", () => {
+  const { rows } = toolRoom();
+  const of = (command: string) => {
+    const [row] = rows({ title: command, rawInput: { command } });
+    return String(row?.[0]).split("\n");
+  };
+  assert.deepEqual(of("a;b;c;d;e;f"), [
+    "a;",
+    "b;",
+    "c;",
+    "d;",
+    "… 2 more lines",
+  ]);
+  assert.deepEqual(of("a;b;c;d;e"), ["a;", "b;", "c;", "d;", "… 1 more line"]);
+  assert.deepEqual(of("a;b;c;d"), ["a;", "b;", "c;", "d"]);
+  // Each line keeps its own cut, at exactly 200 characters.
+  assert.deepEqual(of("x".repeat(200)), ["x".repeat(200)]);
+  assert.deepEqual(of("x".repeat(201)), [`${"x".repeat(199)}…`]);
+  const long = `${"x".repeat(250)};${"y".repeat(250)}`;
+  assert.deepEqual(of(long), [`${"x".repeat(199)}…`, `${"y".repeat(199)}…`]);
+  // The detail follows the same rules. Here the title says none of it.
+  const [row] = rows({
+    title: "Terminal",
+    rawInput: { command: "a;b;c;d;e" },
+  });
+  assert.deepEqual(String(row?.[1]).split("\n"), [
+    "a;",
+    "b;",
+    "c;",
+    "d;",
+    "… 1 more line",
+  ]);
+  // The slot budgets a separator a line, so a fifth full line is seen
+  // whichever separator made it (#361 review). With `;`, which stays on
+  // its own line:
+  const semis = `${"x".repeat(199)};`.repeat(5);
+  assert.deepEqual(of(semis), [
+    ...Array(4).fill(`${"x".repeat(199)};`),
+    "… 1 more line",
+  ]);
+  // And with a newline, which belongs to no line and so costs the slot a
+  // character the lines do not get back.
+  const wide = Array(5).fill("x".repeat(200)).join("\n");
+  assert.deepEqual(of(wide), [
+    ...Array(4).fill("x".repeat(200)),
+    "… 1 more line",
+  ]);
+  // Four full lines fit, so nothing is lost and no marker shows.
+  assert.deepEqual(
+    of(Array(4).fill("x".repeat(200)).join("\n")),
+    Array(4).fill("x".repeat(200)),
+  );
+});
+
+test("only a command is split at a `;`: a pattern, a path or a url is not (#361 review)", () => {
+  const { rows } = toolRoom();
+  const detail = (rawInput: Record<string, string>) => {
+    const [row] = rows({ title: "Search", rawInput });
+    return String(row?.[1]).split("\n");
+  };
+  // A grep pattern holds no shell separator.
+  assert.deepEqual(detail({ pattern: "a;.*b" }), ["a;.*b"]);
+  assert.deepEqual(detail({ url: "https://x/a;b=c" }), ["https://x/a;b=c"]);
+  assert.deepEqual(detail({ path: "/w/a;b.ts" }), ["/w/a;b.ts"]);
+  // pi sends its editor's operation under `command`: joined with a path,
+  // it is no shell command either, so it does not split.
+  assert.deepEqual(detail({ command: "str_replace", path: "/w/a;b.ts" }), [
+    "str_replace /w/a;b.ts",
+  ]);
+  // A command alone still splits.
+  assert.deepEqual(detail({ command: "cd /w; ls" }), ["cd /w;", "ls"]);
+  // A real newline still makes a line, whatever the key.
+  assert.deepEqual(detail({ query: "one\ntwo" }), ["one", "two"]);
+});
+
+test("a tool call's command shows no escape or control character (#229, #351)", () => {
+  const { rows } = toolRoom();
+  // An escape sequence, a right-to-left override and a carriage return.
+  const command = "echo\x1b[2J a\u202eb\rc; ls";
+  const [row] = rows({ title: command, rawInput: { command } });
+  assert.deepEqual(String(row?.[0]).split("\n"), ["echo [2J a b c;", "ls"]);
+  assert.equal(row?.[1], undefined, "the title says the command already");
+  // The detail takes the same path when the title does not say it.
+  const [detail] = rows({ title: "shell", rawInput: { command } });
+  assert.deepEqual(String(detail?.[1]).split("\n"), ["echo [2J a b c;", "ls"]);
+  for (const text of [row?.[0], detail?.[1]]) {
+    for (const bad of ["\x1b", "\u202e", "\r"]) {
+      assert.ok(!String(text).includes(bad), "no control reaches the screen");
+    }
+  }
+});
+
 test("a tool call's update neither splits a streaming answer nor counts as unread", () => {
   const { state, send } = toolRoom();
   const chunk = (text: string) =>
@@ -1279,7 +1481,8 @@ test("a tool call's title and detail lose their control characters, are capped, 
   });
   assert.equal(e?.type, "tool");
   if (e?.type !== "tool") return;
-  assert.equal(e.title, "rm [2J -rf /");
+  // The escape goes; the real newline stays a line (#351).
+  assert.equal(e.title, "rm [2J -rf\n/");
   assert.equal(e.detail?.length, 200);
   assert.ok(e.detail?.endsWith("…"));
   assert.ok(!e.detail?.includes("\x07"));
@@ -1315,8 +1518,8 @@ test("a tool detail: a prose title word hides no path, a said description gives 
     }),
     [["plan it", "/w/b", undefined]],
   );
-  // The slot keeps 800 characters of each; both are cut alike, so a
-  // command that is its title still matches.
+  // The slot keeps `SLOT_TEXT` characters of each; both are cut alike, so
+  // a command that is its title still matches.
   const long = `python - <<'EOF'\n${"x".repeat(5000)}`;
   assert.deepEqual(
     rows({ title: long, rawInput: { command: long } }).map(([, d]) => d),

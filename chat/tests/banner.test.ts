@@ -187,6 +187,21 @@ test("a busy row: thinking, then the last tool, then working, with its timer and
   assert.deepEqual(text(), [], "idle: no row");
 });
 
+test("a busy row shows a multi-line tool title's first line only (#351)", () => {
+  const { line, text } = busySetup();
+  line({
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "for n in 1 2; do echo $n; done",
+    rawInput: { command: "for n in 1 2; do echo $n; done" },
+  });
+  assert.deepEqual(text(), ["▌◓ ann for n in 1 2;… · 1m 05s · @ann /cancel"]);
+  assert.ok(!text().join("").includes("\n"), "one row stays one row");
+  // A title that is one line already gets no `…`.
+  line({ sessionUpdate: "tool_call_update", toolCallId: "t1", title: "ls" });
+  assert.deepEqual(text(), ["▌◓ ann ls · 1m 05s · @ann /cancel"]);
+});
+
 test("NO_COLOR: the activity rows lose their colours (M7-1)", (t) => {
   const was = process.env.NO_COLOR;
   t.after(() => {

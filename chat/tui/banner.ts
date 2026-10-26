@@ -10,7 +10,9 @@
  *
  * **A busy agent of the open room gets a row too** (M7-1): a spinner, then
  * `thinking`, its last tool title or `working`, then a timer from the turn's
- * start, and the command that cancels the turn. A busy agent whose question
+ * start, and the command that cancels the turn. A tool title can be several
+ * lines (#351): the row shows the first, with `…` after it when there are
+ * more. A busy agent whose question
  * is on screen waits for the person, not for its work: its row says what it
  * asks, with a magenta `?` after the bar in its own colour, and names no
  * cancel. A click on it opens the question, as on a wait row. The screen redraws once a
@@ -30,6 +32,13 @@ import {
   spin,
   type View,
 } from "../view.ts";
+
+/** A tool title's first line, with `…` when it has more (#351). The row
+ *  is one line, and `truncateToWidth` does not stop at a newline. */
+const firstLine = (s: string) => {
+  const end = s.indexOf("\n");
+  return end === -1 ? s : `${s.slice(0, end)}…`;
+};
 
 /** The activity rows. The view is read at each draw; `open` and `question`
  *  are the screen's. `now` is the clock, for a test. */
@@ -62,7 +71,9 @@ function bannerPart({
       ? `asks: ${asked.title}`
       : p?.thinking !== undefined
         ? "thinking"
-        : (p?.tool?.title ?? "working");
+        : p?.tool
+          ? firstLine(p.tool.title)
+          : "working";
     const start = Date.parse(p?.turns.at(-1)?.start ?? "");
     const timer = Number.isNaN(start) ? "" : ` · ${clock(now() - start)}`;
     const cancel = asked ? "" : ` · @${name} /cancel`;

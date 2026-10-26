@@ -11,6 +11,11 @@
  * A TUI and a bridge
  * share it, so neither parses events itself.
  *
+ * **A tool's title and detail are several lines** (#351): most shell
+ * commands are several commands in one. `commandLines` keeps a real
+ * newline and breaks after a `;` that separates. Every screen draws the
+ * first line with its own prefix and the rest under it.
+ *
  * **It mutates the state it is given.** An answer arrives one chunk at a
  * time, and copying the timeline per chunk would be quadratic. `applyLine`
  * returns the entry it added or changed, so a screen redraws only that one.
@@ -142,11 +147,24 @@ const DETAIL_KEYS = [
   "query",
   "url",
 ];
-/** The most a tool row's title or detail keeps, in characters. */
+/** The most a tool row's title or detail keeps, in characters per line. */
 const TOOL_TEXT = 200;
+/** The most lines a tool row's title or detail shows, before `… N more
+ *  lines` (#351). */
+const TOOL_LINES = 4;
 /** The most a slot keeps of each text: enough to compare, with no whole
- *  file in a command such as `python - <<'EOF'`. */
-const SLOT_TEXT = 4 * TOOL_TEXT;
+ *  file in a command such as `python - <<'EOF'`. It budgets four full
+ *  lines, a separator each, and one character over, so a fifth line is
+ *  always left for `… N more lines` to count (#361 review). The separator
+ *  has to be paid for: a `;` stays on its line, but a newline belongs to
+ *  no line, and without its budget four 200-character lines fill the slot
+ *  and the fifth goes with nothing on screen to say so.
+ *
+ *  Only lines that fit `TOOL_TEXT` are counted this way. Wider ones still
+ *  lose the marker — three 300-character lines fill the slot — and the
+ *  per-line `…` is then the only hint. Raising it further is decision 2A
+ *  on #351: the room keeps this text for every tool call. */
+const SLOT_TEXT = TOOL_LINES * (TOOL_TEXT + 1) + 1;
 
 /** A tool call's entry, and what its detail is worked out from. Only the
  *  keys the detail can use are kept, each cut at `SLOT_TEXT`. */
@@ -244,9 +262,196 @@ function toolFacts(entry: Tool, u: { kind?: unknown; content?: unknown }) {
   if (n) Object.assign(entry, n);
 }
 
-const toolText = (s: string) => {
-  const t = printable(s);
-  return t.length > TOOL_TEXT ? `${t.slice(0, TOOL_TEXT - 1)}…` : t;
+/** A heredoc's delimiter, with its quotes and backslashes removed as the
+ *  shell removes them, and whether `<<-` strips the body's indent. */
+interface Heredoc {
+  tag: string;
+  stripTabs: boolean;
+}
+/** `<<tag`, `<<-tag`, `<<'tag'`, `<<"tag"`, `<<E\OF`: the delimiter is one
+ *  shell word. */
+const HEREDOC = /^<<(-?)[ \t]*((?:'[^']*'|"[^"]*"|\\.|[^\s;&|<>()'"\\])+)/;
+/** The heredoc that starts at `from`, and where its operator ends. Not the
+ *  tail of a here-string (`<<<`), which starts no body. */
+// ponytail: no `\"` inside a quoted tag. Nobody writes `<<"E\"OF"`.
+const heredocAt = (raw: string, from: number) => {
+  if (raw[from - 1] === "<" || raw[from + 2] === "<") return undefined;
+  const m = HEREDOC.exec(raw.slice(from));
+  if (!m) return undefined;
+  const word = m[2] as string;
+  return {
+    tag: word.replace(/'([^']*)'|"([^"]*)"|\\(.)/g, "$1$2$3"),
+    stripTabs: m[1] === "-",
+    end: from + m[0].length,
+  };
+};
+
+/**
+ * A shell command's lines (#351). Most commands are several commands in
+ * one, so a real newline stays a line, and a `;` starts the next one. Not
+ * a shell parser: it knows the common places where a `;` does not
+ * separate — inside `'…'` or `"…"`, `$(…)`, process substitutions,
+ * arithmetic, `${…}`, backticks, comments, and heredoc bodies. `&&`,
+ * `||`, `|` and a backgrounding `&` never break, because they read as one
+ * thought. A `;` ends its own line, so a trailing one makes no empty
+ * line.
+ *
+ * A newline always breaks, even inside a quote: what a person reads must
+ * match what the harness sent. A quote can stay open across that row, as
+ * it does in the shell. A line left with nothing on it is dropped, so a
+ * blank line between two commands takes no row; a blank line inside a
+ * heredoc body keeps its own, since the body is text.
+ */
+// ponytail: quoting rules only, no words and no expansion. A real shell
+// lexer if a command ever breaks in the wrong place.
+function commandLines(text: string) {
+  /** The shell context around a character. `command` is `$(…)`, `<(…)`,
+   *  `$((…))` or a subshell inside one, and `depth` is how many `)` it
+   *  still needs; `parameter` is `${…}`, and `depth` counts its braces. */
+  type Frame = {
+    kind: "single" | "double" | "tick" | "comment" | "command" | "parameter";
+    depth: number;
+    /** `$((…))` or `((…))`, where `<<` is a left shift, not a heredoc. */
+    arith: boolean;
+  };
+  const out: string[] = [];
+  /** Innermost last. A `;` separates only when this is empty. */
+  const frames: Frame[] = [];
+  const open = (kind: Frame["kind"], depth = 0, arith = false) =>
+    frames.push({ kind, depth, arith });
+  /** Tags read on the current line; their bodies start after it. */
+  const pending: Heredoc[] = [];
+  /** Bodies whose delimiter has not arrived, in order. */
+  const bodies: Heredoc[] = [];
+
+  for (const raw of text.split("\n")) {
+    const body = bodies[0];
+    if (body) {
+      out.push(raw);
+      const line = body.stripTabs ? raw.replace(/^[\t ]+/, "") : raw;
+      if (line === body.tag) bodies.shift();
+      continue;
+    }
+    let cur = "";
+    let first = true;
+    const push = () => {
+      const seg = first ? cur : cur.trimStart();
+      if (seg !== "") out.push(seg);
+      first = false;
+      cur = "";
+    };
+    /** Takes `n` more characters of `raw` into the line. */
+    let i = 0;
+    const take = (n: number) => {
+      cur += raw.slice(i + 1, i + 1 + n);
+      i += n;
+    };
+    for (; i < raw.length; i++) {
+      const c = raw[i] as string;
+      cur += c;
+      const f = frames.at(-1);
+      // Nothing nests in these three, so they come first.
+      if (f?.kind === "comment") continue;
+      if (f?.kind === "single") {
+        if (c === "'") frames.pop();
+        continue;
+      }
+      if (c === "\\" && i + 1 < raw.length) {
+        take(1);
+        continue;
+      }
+      if (f?.kind === "tick") {
+        if (c === "`") frames.pop();
+        continue;
+      }
+      if (f?.kind === "double" && c === '"') {
+        frames.pop();
+        continue;
+      }
+      // `$(`, `$((` and `${` nest everywhere but the three above.
+      // `$((…))` is arithmetic: one frame that two `)` close.
+      if (c === "$" && raw[i + 1] === "(") {
+        const arith = raw[i + 2] === "(";
+        take(arith ? 2 : 1);
+        open("command", arith ? 1 : 0, arith);
+        continue;
+      }
+      if (c === "$" && raw[i + 1] === "{") {
+        take(1);
+        open("parameter", 1);
+        continue;
+      }
+      if (c === "`") {
+        open("tick");
+        continue;
+      }
+      // In `"…"` a quote, a brace and a `;` are plain text.
+      if (f?.kind === "double") continue;
+      if (c === "'" || c === '"') {
+        open(c === "'" ? "single" : "double");
+        continue;
+      }
+      if (f?.kind === "parameter") {
+        if (c === "{") f.depth++;
+        else if (c === "}" && --f.depth === 0) frames.pop();
+        continue;
+      }
+      // A command, or the whole line: both can start a heredoc, and both
+      // count their parentheses. In arithmetic `<<` shifts, so `$((1<<20))`
+      // starts no body (#361 review).
+      const here = c === "<" && !f?.arith ? heredocAt(raw, i) : undefined;
+      if (here) {
+        take(here.end - i - 1);
+        pending.push(here);
+        continue;
+      }
+      if ((c === "<" || c === ">") && raw[i + 1] === "(") {
+        take(1);
+        open("command");
+        continue;
+      }
+      if (c === "(") {
+        // `((…))` is arithmetic. A bare `(` only deepens a substitution:
+        // at the top level `(a; b)` really is two commands.
+        if (raw[i + 1] === "(") {
+          take(1);
+          open("command", 1, true);
+        } else if (f?.kind === "command") f.depth++;
+        continue;
+      }
+      if (c === ")" && f?.kind === "command") {
+        if (f.depth > 0) f.depth--;
+        else frames.pop();
+        continue;
+      }
+      if (c === "#" && (i === 0 || /[\s;|&(){}]/.test(raw[i - 1] as string))) {
+        open("comment");
+        continue;
+      }
+      if (c === ";" && frames.length === 0) push();
+    }
+    push();
+    // A comment ends with its line; a quote stays open across the next.
+    if (frames.at(-1)?.kind === "comment") frames.pop();
+    bodies.push(...pending.splice(0));
+  }
+  return out;
+}
+
+/** A tool's title or detail as rows: its lines, each cut at `TOOL_TEXT`,
+ *  at most `TOOL_LINES` of them, then `… N more lines` (#351). The rows
+ *  are one string with newlines, as every screen draws them together.
+ *  Only a shell command breaks at a `;`; every other text keeps its real
+ *  newlines and nothing else (#361 review). */
+const toolText = (s: string, shell = true) => {
+  const text = cleanLines(s);
+  const lines = shell ? commandLines(text) : text.split("\n");
+  const rows = lines
+    .slice(0, TOOL_LINES)
+    .map((l) => (l.length > TOOL_TEXT ? `${l.slice(0, TOOL_TEXT - 1)}…` : l));
+  const more = lines.length - rows.length;
+  if (more > 0) rows.push(`… ${more} more line${more === 1 ? "" : "s"}`);
+  return rows.join("\n");
 };
 
 /** The keys of `raw` a detail can use. `raw` is the harness's JSON. */
@@ -288,7 +493,14 @@ function detailOf({ title, input, location }: ToolSlot) {
       : [input.description, location]
           .filter((v): v is string => Boolean(v) && !said(v as string))
           .slice(0, 1);
-  return shown.length > 0 ? toolText(shown.join(" ")) : undefined;
+  if (shown.length === 0) return undefined;
+  // Only a `command` on its own is a shell command. A pattern, a path or
+  // a url can hold a `;` that separates nothing, and pi's `str_replace`
+  // joined with its path is an operation, not a command (#361 review).
+  return toolText(
+    shown.join(" "),
+    shown.length === 1 && shown[0] === input.command,
+  );
 }
 
 /** Sets the entry's title and detail from its slot. */

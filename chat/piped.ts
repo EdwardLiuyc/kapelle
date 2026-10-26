@@ -97,9 +97,14 @@ function makePrinter(state: RoomState) {
           // A pipe cannot change a line: the call prints again only when
           // what it shows changed (#240).
           const failed = e.status === "failed" ? " — failed" : "";
+          // A title or a detail can be several lines (#351): the rest of
+          // them line up under the first.
+          const under = (lines: string[]) => lines.map((l) => `    ${l}`);
+          const [head = "", ...rest] = e.title.split("\n");
           const text = [
-            `  · ${e.title}${failed}`,
-            ...(e.detail ? [`    ${e.detail}`] : []),
+            `  · ${head}${failed}`,
+            ...under(rest),
+            ...(e.detail ? under(e.detail.split("\n")) : []),
           ].join("\n");
           if (shown.get(e) === text) return;
           shown.set(e, text);
