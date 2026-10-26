@@ -11,7 +11,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -98,6 +98,7 @@ test("the ctrl+o menu previews /delete and Enter confirms it", {
   const dev = only(full.body);
   await commitAt(dev.worktree, "dev.txt");
 
+  await seen("○ mock-agent");
   await press("\x0f", "delete room …");
   await press(`${DOWN.repeat(5)}\r`, "delete · 1 branch");
   await seen("dev.txt");
@@ -141,6 +142,37 @@ test("an attached dismissed room stays open for /delete", {
   screen.child.stdin.write(LEAVE);
   await screen.seen("left the chat");
   assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("a refused TUI delete shows the dirty file and allows a retry", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, exited, out, d } = await chatOnPty(t);
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  assert.ok(room);
+  const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
+  const dev = only(full.body);
+  const draft = join(dev.worktree, "draft.txt");
+  await writeFile(draft, "uncommitted\n");
+
+  await press("/delete\r", "delete · 1 branch");
+  assert.equal(
+    (await api<RoomReply>(d, "GET", `/rooms/${room.id}`)).body.status,
+    "active",
+  );
+  await press("\r", "work nobody committed");
+  assert.match(plainText(out()).replaceAll(" ", ""), /draft\.txt/);
+  assert.match(plainText(out()), /commit or remove them/);
+  assert.equal(
+    (await api<RoomReply>(d, "GET", `/rooms/${room.id}`)).body.status,
+    "dismissed",
+  );
+  await access(draft);
+  await rm(draft);
+  await press("/delete\r", "delete · 1 branch");
+  await press("\r", "deleted room-");
+  child.stdin.write(LEAVE);
+  assert.equal(await exited, 0, out());
 });
 
 test("the target's ctrl+o menu previews a fast-forward from another participant", {
