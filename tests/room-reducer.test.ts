@@ -1678,8 +1678,11 @@ test("a message keeps its kind, and a thread holds the orders its participant se
     kind: "reply",
   });
 
-  assert.equal("kind" in (asked ?? {}), false, "the person's has no kind");
-  assert.equal("kind" in (order ?? {}), false, "an order has no kind");
+  // `assert.equal("kind" in (e ?? {}), false)` would pass on a missing
+  // entry too: `"kind" in {}` is false (#364 review). The entry has to be
+  // there and carry no kind.
+  assert.ok(asked && !("kind" in asked), "the person's has no kind");
+  assert.ok(order && !("kind" in order), "an order has no kind");
   assert.deepEqual(
     [
       order?.type === "user" && order.from,
