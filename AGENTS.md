@@ -89,6 +89,8 @@ node cli.ts ps                                 # every run the daemon knows, wit
 node cli.ts setup                              # the agents the daemon finds on its PATH, and what to install
 node cli.ts merge <runId> [--squash] [--cwd dir]
 node cli.ts room info | send | add | ff | diff | remove [--room id] [--as name]   # from a participant's checkout
+node cli.ts loop <recipe> <task> ["<note>"] [--agent id] [--cmd "<cmd>"] [--cwd dir]   # a room whose orchestrator drives the recipe
+node cli.ts loop list [--cwd dir]              # every recipe, its folder, and which one wins a name
 node cli.ts workspace [--cwd dir]              # where this repo's worktrees and records live
 node cli.ts workspace move <old-repo> <new-repo>
 node cli.ts daemon start [--port n] [--permission-timeout s]   # same as: node daemon.ts
@@ -148,6 +150,7 @@ arrow that points back.
 | `client/folder.ts` | Tab completion for a folder path, folders only (M4-5), and a typed folder as a full path, with no throw when the current folder was removed. |
 | `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. Both screens and the pop-up forms use it. |
 | `client/diff.ts` | A diff text read for a screen (M4-6): where each file starts, the question box's `±` line, and the changed-files block's per-file letters and counts (M7-3). |
+| `client/loop.ts` | Loop recipes (M8-5): the two folders a recipe is looked for in, the list, and the orchestrator's first message. `kapelle loop` and `/loop` use it through `client/command.ts`. |
 | `client/setup.ts` | The setup list (M9-3): the agents the daemon found, as lines, and when the chat opens it. Both screens and `kapelle setup` print it. |
 | `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. Both `chat/` screens read a line through it. |
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |

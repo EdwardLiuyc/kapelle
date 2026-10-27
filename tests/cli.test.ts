@@ -96,6 +96,7 @@ test("bare kapelle hands off to the chat; --help is the help", async (t) => {
   const help = await runCli(t, ["--help"]);
   assert.equal(help.code, 0);
   assert.match(help.stdout, /minimal Agent Client Protocol client/);
+  assert.match(help.stdout, /kapelle loop <recipe> <task>/);
   assert.match(help.stdout, /kapelle daemon stop/);
   assert.match(
     help.stdout,

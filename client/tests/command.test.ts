@@ -10,7 +10,7 @@ import { mkdtemp, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { deletePreviewLines, parseCommand } from "../command.ts";
+import { deletePreviewLines, loopCommand, parseCommand } from "../command.ts";
 import { FOLDER_GONE } from "../folder.ts";
 
 const roster = [
@@ -151,6 +151,7 @@ test("/new in a removed folder is refused, unless --cwd is a full path", async (
 
   assert.deepEqual(parse("/new pi"), { error: FOLDER_GONE });
   assert.deepEqual(parse("/new pi --cwd sub"), { error: FOLDER_GONE });
+  assert.deepEqual(parse("/loop fix 1"), { error: FOLDER_GONE });
   const full = parse("/new pi --cwd /tmp");
   assert.ok(full && "body" in full, JSON.stringify(full));
   assert.equal(full.body.cwd, "/tmp");
@@ -243,4 +244,53 @@ test("/setup opens the agent list, and /setup done says done (M9-3)", () => {
   assert.deepEqual(parse("/setup done now"), {
     error: "usage: /setup [done]",
   });
+});
+
+test("/loop opens <recipe>-<task> with po in auto, on claude unless --agent or --cmd names another (M8-5)", () => {
+  const po = { name: "po", role: "orchestrator", mode: "auto" };
+  assert.deepEqual(parse(`@bob /loop fix 269 "only the CLI" --cwd sub`), {
+    verb: "loop",
+    recipe: "fix",
+    task: "269",
+    note: "only the CLI",
+    body: {
+      cwd: resolve("sub"),
+      title: "fix-269",
+      agents: [{ agent: "claude", ...po }],
+    },
+  });
+  const pi = parse("/loop fix 269 --agent pi");
+  assert.ok(pi && "body" in pi);
+  assert.deepEqual(pi.body.agents, [{ agent: "pi", ...po }]);
+  assert.ok(!("note" in pi), "no note");
+  const cmd = parse(`/loop fix 269 --cmd "node x.mjs"`);
+  assert.ok(cmd && "body" in cmd);
+  assert.deepEqual(cmd.body.agents, [{ cmd: "node x.mjs", ...po }]);
+  const usage = {
+    error:
+      'usage: /loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--cwd dir]',
+  };
+  for (const s of [
+    "/loop",
+    "/loop fix",
+    '/loop fix "   "',
+    "/loop fix 1 note more",
+  ]) {
+    assert.deepEqual(parse(s), usage, s);
+  }
+  const bad = parse("/loop fix 1 --mode ask");
+  assert.ok(bad && "error" in bad && /--mode/.test(bad.error));
+});
+
+test("/loop and loopCommand trim the task and the note, so the CLI and the screens agree (#368 review)", () => {
+  const typed = parse(`/loop fix "  7  " "  a note  "`);
+  assert.ok(typed && "verb" in typed && typed.verb === "loop");
+  assert.equal(typed.task, "7");
+  assert.equal(typed.note, "a note");
+  assert.equal(typed.body.title, "fix-7");
+  // The CLI's path: `loopCommand` itself.
+  const cli = loopCommand({ recipe: "fix", task: " 7\n", note: " ", cwd: "/" });
+  assert.equal(cli.task, "7");
+  assert.equal(cli.body.title, "fix-7");
+  assert.ok(!("note" in cli), "a blank note is no note");
 });

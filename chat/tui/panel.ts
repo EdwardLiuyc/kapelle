@@ -651,11 +651,11 @@ function panelParts({
   });
 
   /**
-   * `/new` in a folder the daemon has not added: ask, in the pop-up, and
+   * `/new` or `/loop` in a folder the daemon has not added: ask, in the pop-up, and
    * on yes add its repository and open the room in one step. The question
    * is ours, from the code: the daemon's message is advice for a program.
    */
-  const askToAdd = (c: Extract<RouteCommand, { verb: "new" }>) => {
+  const askToAdd = (c: Extract<RouteCommand, { verb: "new" | "loop" }>) => {
     const back = panel;
     const toForm = () => {
       if (back) showPanel(back.title, back.body);

@@ -10,9 +10,14 @@
  * **A participant command starts with `@name`**, as a message does (R43):
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
  * the orchestrator, so a bare `/remove` cannot drop it. Room commands
- * (`/new`, `/add`, `/title`, `/dismiss`, `/delete`, `/leave`, `/help`,
- * `/term`, `/setup`) ignore a mention, so they work after a thread's pre-filled
- * `@name`.
+ * (`/new`, `/add`, `/loop`, `/title`, `/dismiss`, `/delete`, `/leave`,
+ * `/help`, `/term`, `/setup`) ignore a mention, so they work after a thread's
+ * pre-filled `@name`.
+ *
+ * **`/loop` is `/new` with a start** (M8-5): a room titled
+ * `<recipe>-<task>`, the orchestrator `po` in `auto`, and its first message
+ * from `client/loop.ts`. `kapelle loop` builds the same command with
+ * `loopCommand`, so the CLI and both screens cannot differ.
  *
  * **The screen never guesses** (M4-5). A value the daemon checks (a role, a
  * mode, a harness) is sent as typed, and a refusal is the daemon's own
@@ -27,9 +32,15 @@
 
 import { parseArgs } from "node:util";
 
-import type { DeletePreview, ParticipantDto, RoomDto } from "./contract.ts";
+import type {
+  DeletePreview,
+  MessageAccepted,
+  ParticipantDto,
+  RoomDto,
+} from "./contract.ts";
 import { call, type DaemonAddress, type Reply } from "./daemon.ts";
 import { absoluteFolder, FOLDER_GONE } from "./folder.ts";
+import { loopMessage } from "./loop.ts";
 import { fold, MENTION, type Named, targetOf } from "./mention.ts";
 import { printable } from "./room.ts";
 
@@ -54,6 +65,7 @@ interface NewRoom {
 /** A command that calls a route. */
 export type RouteCommand =
   | { verb: "new"; body: NewRoom }
+  | { verb: "loop"; body: NewRoom; recipe: string; task: string; note?: string }
   | { verb: "add"; agent: AgentSpec }
   | { verb: "dismiss" }
   | { verb: "delete" }
@@ -95,6 +107,7 @@ export type Command =
 export const HELP = [
   "/new [harness] [--cmd c] [--name n] [--title t] [--cwd dir]",
   "/add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--base @name|ref]",
+  '/loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--cwd dir]',
   "/title <new title>",
   "@name /rename <new name>",
   "@name /role <role|none>",
@@ -110,6 +123,7 @@ export const HELP = [
 export const USAGE: Record<string, string> = {
   new: HELP[0] as string,
   add: HELP[1] as string,
+  loop: `usage: ${HELP[2]}`,
   title: "usage: /title <new title>",
   rename: "usage: @name /rename <new name>",
   role: "usage: @name /role <role|none>",
@@ -124,6 +138,7 @@ export const USAGE: Record<string, string> = {
 const ROOM_VERBS = new Set([
   "new",
   "add",
+  "loop",
   "title",
   "dismiss",
   "delete",
@@ -141,6 +156,44 @@ const AGENT_VERBS = new Set([
   "diff",
   "ff",
 ]);
+
+/** The orchestrator's name in a loop's room. */
+const ORCHESTRATOR = "po";
+
+/**
+ * A loop's start (M8-5) as a command: the room titled `<recipe>-<task>`, and
+ * the orchestrator in `auto`, on claude unless `agent` or `cmd` names
+ * another harness. The recipe is read when the command runs, not here.
+ * The task and the note are trimmed here, once, so `kapelle loop` and
+ * `/loop` send the same; a blank note is none.
+ */
+export function loopCommand(o: {
+  recipe: string;
+  task: string;
+  note?: string | undefined;
+  agent?: string | undefined;
+  cmd?: string | undefined;
+  cwd: string;
+}): Extract<RouteCommand, { verb: "loop" }> {
+  const task = o.task.trim();
+  const note = o.note?.trim();
+  const harness = o.cmd
+    ? { ...(o.agent && { agent: o.agent }), cmd: o.cmd }
+    : { agent: o.agent || "claude" };
+  return {
+    verb: "loop",
+    recipe: o.recipe,
+    task,
+    ...(note && { note }),
+    body: {
+      cwd: o.cwd,
+      title: `${o.recipe}-${task}`,
+      agents: [
+        { ...harness, name: ORCHESTRATOR, role: "orchestrator", mode: "auto" },
+      ],
+    },
+  };
+}
 
 /** Words, with `"…"` or `'…'` keeping spaces: `--cmd "node x.mjs"`. */
 const words = (s: string) =>
@@ -216,6 +269,16 @@ export function parseCommand(
     const quoted = /^(["'])((?:(?!\1)[\s\S])*)\1$/.exec(raw);
     const title = (quoted?.[2] ?? raw).trim();
     return title ? { verb, title } : { error: USAGE.title as string };
+  }
+  if (verb === "loop") {
+    const o = options(args, ["agent", "cmd", "cwd"]);
+    if ("error" in o) return { error: `${o.error}; ${USAGE.loop}` };
+    const [recipe, task, note, ...extra] = o.positionals;
+    if (!recipe || !task?.trim() || extra.length)
+      return { error: USAGE.loop as string };
+    const cwd = absoluteFolder(o.values.cwd);
+    if (!cwd) return { error: FOLDER_GONE };
+    return loopCommand({ ...o.values, recipe, task, note, cwd });
   }
   if (verb === "new" || verb === "add") {
     if (!args.length) return { verb: "form", form: verb };
@@ -388,6 +451,37 @@ export async function runCommand(
     return {
       ok: true,
       line: `opened room ${printable(r.body.title ?? r.body.id)}`,
+      room: r.body,
+    };
+  }
+  if (c.verb === "loop") {
+    // The recipe first: a missing one opens no room.
+    const start = await loopMessage(c, c.body.cwd);
+    if ("error" in start) return refused(start.error, "no_recipe");
+    const r = await call<RoomDto>(d, "/rooms", {
+      method: "POST",
+      body: c.body,
+    });
+    if (!r.ok) return refused(r.error.message, r.error.code);
+    const opened = `opened room ${printable(r.body.title ?? r.body.id)}`;
+    const sent = await call<MessageAccepted>(
+      d,
+      `/rooms/${r.body.id}/messages`,
+      {
+        method: "POST",
+        body: { text: start.text },
+      },
+    );
+    if (!sent.ok) {
+      return refused(
+        `${opened}, but its first message failed: ${sent.error.message}`,
+        sent.error.code,
+        r.body,
+      );
+    }
+    return {
+      ok: true,
+      line: `${opened}; ${ORCHESTRATOR} has the start`,
       room: r.body,
     };
   }
