@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { getEventListeners } from "node:events";
 import {
   appendFile,
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -51,7 +52,8 @@ const chunk = (text: string, agent = "t0"): AgentEventEnvelope => ({
 
 const indexPath = (path: string) => path.replace(/\.jsonl$/, ".idx");
 const INDEX_VERSION = 3;
-const INDEX_HEADER_BYTES = 16;
+const INDEX_HEADER_BYTES = 40;
+const V2_HEADER_BYTES = 16;
 const INDEX_END_BYTES = 8;
 const INDEX_CHUNK_HEADER_BYTES = 8;
 const INDEX_CHUNK_CRC_BYTES = 4;
@@ -63,12 +65,26 @@ const indexSize = (lines: number) =>
   lines * INDEX_END_BYTES +
   Math.ceil(lines / INDEX_CHUNK_ENTRIES) * INDEX_CHUNK_OVERHEAD_BYTES;
 
-function v3Header(): Buffer {
+interface TestIdentity {
+  dev: bigint;
+  ino: bigint;
+  birthtimeNs: bigint;
+}
+
+const fileIdentity = async (path: string): Promise<TestIdentity> => {
+  const stats = await stat(path, { bigint: true });
+  return { dev: stats.dev, ino: stats.ino, birthtimeNs: stats.birthtimeNs };
+};
+
+function v3Header(identity: TestIdentity): Buffer {
   const header = Buffer.alloc(INDEX_HEADER_BYTES);
   header.write("KIDX", 0, "ascii");
   header.writeUInt16LE(INDEX_VERSION, 4);
   header.writeUInt16LE(INDEX_HEADER_BYTES, 6);
   header.writeUInt32LE(INDEX_CHUNK_ENTRIES, 8);
+  header.writeBigUInt64LE(identity.dev, 12);
+  header.writeBigUInt64LE(identity.ino, 20);
+  header.writeBigUInt64LE(identity.birthtimeNs, 28);
   return header;
 }
 
@@ -87,8 +103,8 @@ function v3Chunk(ends: number[], from: number, to: number): Buffer {
 
 /** Builds a structurally valid v3 sidecar, even when `ends` claims the wrong
  *  line boundaries. */
-function v3Index(ends: number[]): Buffer {
-  const chunks = [v3Header()];
+function v3Index(ends: number[], identity: TestIdentity): Buffer {
+  const chunks = [v3Header(identity)];
   for (let from = 0; from < ends.length; from += INDEX_CHUNK_ENTRIES) {
     chunks.push(
       v3Chunk(ends, from, Math.min(from + INDEX_CHUNK_ENTRIES, ends.length)),
@@ -148,16 +164,16 @@ function v3Ends(data: Buffer): number[] {
 
 /** A complete v2 sidecar from the previous format. */
 function v2Index(ends: number[]): Buffer {
-  const trailerOffset = INDEX_HEADER_BYTES + ends.length * INDEX_END_BYTES;
+  const trailerOffset = V2_HEADER_BYTES + ends.length * INDEX_END_BYTES;
   const trailerFixed = 24;
   const checksumBytes = 32;
   const data = Buffer.alloc(trailerOffset + trailerFixed + checksumBytes);
   data.write("KIDX", 0, "ascii");
   data.writeUInt16LE(2, 4);
-  data.writeUInt16LE(INDEX_HEADER_BYTES, 6);
+  data.writeUInt16LE(V2_HEADER_BYTES, 6);
   data.writeUInt32LE(ends.length, 8);
   ends.forEach((end, i) => {
-    data.writeDoubleLE(end, INDEX_HEADER_BYTES + i * INDEX_END_BYTES);
+    data.writeDoubleLE(end, V2_HEADER_BYTES + i * INDEX_END_BYTES);
   });
   // The old format's trailer magic is intentional, not a typo.
   // pi-lens-ignore: typos:unknown
@@ -985,7 +1001,10 @@ test("a CRC-valid sidecar with wrong line boundaries is rejected by the anchors"
 
   // Its CRC is valid, but one record says the whole JSONL is one line. The
   // bounded first-line and last-line checks catch this without a full scan.
-  await writeFile(indexPath(path), v3Index([fileBytes]));
+  await writeFile(
+    indexPath(path),
+    v3Index([fileBytes], await fileIdentity(path)),
+  );
 
   const replay = await openEventLog(path);
   assert.equal(replay.size, 3, "the wrong sidecar is not trusted");
@@ -998,6 +1017,41 @@ test("a CRC-valid sidecar with wrong line boundaries is rejected by the anchors"
     await r.done;
     assert.deepEqual(r.seqs, range(after + 1, 3), `replay after ${after}`);
   }
+});
+
+test("a sidecar copied from another log is rejected by the file identity", async (t) => {
+  const one = await logIn(t);
+  const two = await logIn(t);
+  for (const [i, text] of [
+    "a".repeat(10),
+    "b".repeat(20),
+    "c".repeat(30),
+    "d".repeat(40),
+  ].entries()) {
+    one.log.append(chunk(text, `t${i}`));
+  }
+  for (const [i, text] of [
+    "a".repeat(10),
+    "b".repeat(30),
+    "c".repeat(20),
+    "d".repeat(40),
+  ].entries()) {
+    two.log.append(chunk(text, `t${i}`));
+  }
+  await one.log.close();
+  await two.log.close();
+  assert.equal((await stat(one.path)).size, (await stat(two.path)).size);
+  await copyFile(indexPath(two.path), indexPath(one.path));
+
+  const replay = await openEventLog(one.path);
+  assert.equal(replay.size, 4);
+  const r = collect(replay, 2);
+  await r.done;
+  assert.deepEqual(r.seqs, [3, 4]);
+  assert.deepEqual(
+    r.lines.map((line) => JSON.parse(line).update.content.text),
+    ["c".repeat(30), "d".repeat(40)],
+  );
 });
 
 test("a stale sidecar gains complete tail lines and ignores a partial one", async (t) => {

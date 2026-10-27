@@ -55,6 +55,7 @@ import {
   type FileHandle,
   open,
   readFile,
+  stat,
   truncate,
   writeFile,
 } from "node:fs/promises";
@@ -65,10 +66,12 @@ import type { AgentEvent } from "../protocol/types.ts";
 
 const CHUNK_BYTES = 64 * 1024;
 const NEWLINE = 0x0a;
-/** KIDX version 3. A 16-byte header is followed by append-only chunks. Each
+/** KIDX version 3. A 40-byte header is followed by append-only chunks. Each
  *  chunk carries a fast CRC32 and up to `INDEX_CHUNK_ENTRIES` dense end offsets,
  *  one per complete line. Starts are the previous end, so a line needs only one
  *  float64. IEEE-754 doubles exactly represent every safe-integer byte offset.
+ *  The header names the log file (device, inode, birth time), so a sidecar
+ *  copied from another log is rebuilt rather than trusted.
  *
  *  The CRC and the bounded first-line/last-line anchors catch accidental,
  *  truncated, stale and cross-version sidecars. They do not prove that every
@@ -78,7 +81,7 @@ const NEWLINE = 0x0a;
  *  writer with state-directory access can already modify the JSONL itself. */
 const INDEX_MAGIC = Buffer.from("KIDX");
 const INDEX_VERSION = 3;
-const INDEX_HEADER_BYTES = 16;
+const INDEX_HEADER_BYTES = 40;
 const INDEX_END_BYTES = 8;
 const INDEX_CHUNK_MAGIC = Buffer.from("KCHK");
 const INDEX_CHUNK_HEADER_BYTES = 8;
@@ -120,10 +123,31 @@ export interface EventLog {
 }
 
 /** The lines already on disk: where each ends, and the bytes they take. */
+interface LogIdentity {
+  dev: bigint;
+  ino: bigint;
+  birthtimeNs: bigint;
+}
+
+const identityOf = (stats: {
+  dev: bigint;
+  ino: bigint;
+  birthtimeNs: bigint;
+}): LogIdentity => ({
+  dev: stats.dev,
+  ino: stats.ino,
+  birthtimeNs: stats.birthtimeNs,
+});
+
+const fileIdentity = async (path: string): Promise<LogIdentity> =>
+  identityOf(await stat(path, { bigint: true }));
+
 interface Index {
   /** `ends[seq - 1]` is the byte offset after that line. */
   ends: Float64Array;
   bytes: number;
+  /** The log file this index belongs to, so a copied sidecar is not trusted. */
+  identity: LogIdentity;
   /** The usable sidecar prefix, when one exists. `count` offsets end at
    *  `at` bytes, so new chunks can be appended without copying the old ones. */
   sidecar?: { at: number; count: number };
@@ -184,6 +208,7 @@ export function createEventLog(
 
   // The sidecar is a cache. Keep its append queue separate from the JSONL so a
   // slow or failed cache write never delays a line or reaches `onError`.
+  let identity = from?.identity;
   let sidecarAt = from?.sidecar?.at;
   let sidecarCount = from?.sidecar?.count ?? 0;
   let sidecarWrite = Promise.resolve();
@@ -205,7 +230,8 @@ export function createEventLog(
         if (sidecarAt === undefined) {
           // Missing, invalid, or a failed update: rebuild this cache once. It
           // is only this path that copies the dense prefix.
-          const data = encodeIndex(ends.subarray(0, to));
+          identity ??= await fileIdentity(path);
+          const data = encodeIndex(ends.subarray(0, to), identity);
           await writeFile(sidecarPath(path), data);
           sidecarAt = data.length;
           sidecarCount = to;
@@ -420,12 +446,15 @@ async function lastLineStart(
   return 0;
 }
 
-function encodeIndexHeader(): Buffer {
+function encodeIndexHeader(identity: LogIdentity): Buffer {
   const header = Buffer.alloc(INDEX_HEADER_BYTES);
   INDEX_MAGIC.copy(header, 0);
   header.writeUInt16LE(INDEX_VERSION, 4);
   header.writeUInt16LE(INDEX_HEADER_BYTES, 6);
   header.writeUInt32LE(INDEX_CHUNK_ENTRIES, 8);
+  header.writeBigUInt64LE(identity.dev, 12);
+  header.writeBigUInt64LE(identity.ino, 20);
+  header.writeBigUInt64LE(identity.birthtimeNs, 28);
   return header;
 }
 
@@ -457,9 +486,9 @@ function encodeChunks(ends: Float64Array, from: number, to: number): Buffer {
 }
 
 /** A complete sidecar. Only missing/invalid sidecars take this copy path. */
-function encodeIndex(ends: Float64Array): Buffer {
+function encodeIndex(ends: Float64Array, identity: LogIdentity): Buffer {
   return Buffer.concat([
-    encodeIndexHeader(),
+    encodeIndexHeader(identity),
     encodeChunks(ends, 0, ends.length),
   ]);
 }
@@ -479,12 +508,17 @@ interface ParsedSidecar {
 function parseSidecar(
   data: Buffer,
   logBytes: number,
+  identity: LogIdentity,
 ): ParsedSidecar | undefined {
   if (
     data.length < INDEX_HEADER_BYTES ||
     !data.subarray(0, INDEX_MAGIC.length).equals(INDEX_MAGIC) ||
     data.readUInt16LE(4) !== INDEX_VERSION ||
-    data.readUInt16LE(6) !== INDEX_HEADER_BYTES
+    data.readUInt16LE(6) !== INDEX_HEADER_BYTES ||
+    data.readUInt32LE(8) !== INDEX_CHUNK_ENTRIES ||
+    data.readBigUInt64LE(12) !== identity.dev ||
+    data.readBigUInt64LE(20) !== identity.ino ||
+    data.readBigUInt64LE(28) !== identity.birthtimeNs
   ) {
     return undefined;
   }
@@ -557,14 +591,16 @@ function parseSidecar(
 }
 
 /** A valid saved index prefix, or undefined when there is no usable v3 header.
- *  The chunk CRCs catch accidental corruption. The first-line and last-line
- *  anchors catch a structurally valid sidecar from another log without a full
- *  scan. A forged sidecar with valid CRCs but wrong interior offsets is a
- *  stated non-goal: catching it would cost the warm-index budget. */
+ *  The file identity and chunk CRCs catch accidental corruption and a sidecar
+ *  copied from another log. The first-line and last-line anchors catch changed
+ *  boundaries without a full scan. A forged sidecar with valid CRCs and the
+ *  right file identity but wrong interior offsets is a stated non-goal:
+ *  catching it would cost the warm-index budget. */
 async function readSidecar(
   path: string,
   log: FileHandle,
   logBytes: number,
+  identity: LogIdentity,
 ): Promise<ParsedSidecar | undefined> {
   let data: Buffer;
   try {
@@ -572,7 +608,7 @@ async function readSidecar(
   } catch {
     return undefined;
   }
-  const parsed = parseSidecar(data, logBytes);
+  const parsed = parseSidecar(data, logBytes, identity);
   if (!parsed) return undefined;
   if (parsed.count === 0) return parsed;
 
@@ -595,9 +631,10 @@ async function readSidecar(
 async function indexOf(path: string): Promise<Index> {
   const file = await open(path, "r");
   try {
-    const stat = await file.stat();
-    const size = stat.size;
-    const saved = await readSidecar(path, file, size);
+    const stats = await file.stat({ bigint: true });
+    const size = Number(stats.size);
+    const identity = identityOf(stats);
+    const saved = await readSidecar(path, file, size, identity);
     let ends = saved?.ends ?? new Float64Array(0);
     let count = ends.length;
     const from = saved?.bytes ?? 0;
@@ -624,14 +661,14 @@ async function indexOf(path: string): Promise<Index> {
       }
     } else {
       try {
-        const data = encodeIndex(complete);
+        const data = encodeIndex(complete, identity);
         await writeFile(sidecarPath(path), data);
         sidecar = { at: data.length, count };
       } catch {
         // The next open pays for the rebuild instead.
       }
     }
-    return { ends: complete, bytes, sidecar };
+    return { ends: complete, bytes, identity, sidecar };
   } finally {
     await file.close();
   }
