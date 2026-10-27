@@ -517,7 +517,11 @@ export async function roomDeletePreview(
   if (branches.size === 0) return { branches: [] };
 
   const owned = new Set([...branches].map((branch) => `refs/heads/${branch}`));
-  const refs = await git(root, ["for-each-ref", "--format=%(refname)"]);
+  const refs = await gitWithInput(
+    root,
+    ["for-each-ref", "--format=%(refname)"],
+    "",
+  );
   const outside = refs.split("\n").filter((ref) => ref && !owned.has(ref));
   // A detached main checkout is a ref too: its commit survives the delete.
   if (
@@ -799,8 +803,8 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return stdout;
 }
 
-/** `git` with revisions on stdin, so a list too long for argv still works.
- *  `--stdin` reads `^<ref>` lines and leaves argv for the one branch. */
+/** `git` with a string on stdin, so long revision lists stay off argv and a
+ *  read is not capped by `execFile`'s buffer. `--stdin` reads `^<ref>` lines. */
 function gitWithInput(
   cwd: string,
   args: string[],

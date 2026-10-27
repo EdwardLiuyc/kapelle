@@ -447,7 +447,7 @@ function chatTui(
    *  call them. */
   let done = false;
   let end = (_code: number, ..._last: string[]) => {};
-  let run = (_c: RouteCommand) => Promise.resolve(false);
+  let run = (_c: RouteCommand, _roomId?: string) => Promise.resolve(false);
   let changes = (
     _who: { id: string; name: string },
     _against: "head" | "base",
@@ -1201,7 +1201,7 @@ function chatTui(
      * at a time: a second Enter on a form would send it again.
      */
     let busy = false;
-    run = async (c: RouteCommand): Promise<boolean> => {
+    run = async (c: RouteCommand, roomId?: string): Promise<boolean> => {
       if (busy) {
         const wait = "wait: the last command is still running";
         if (box.panel) {
@@ -1215,16 +1215,16 @@ function chatTui(
       }
       busy = true;
       try {
-        return await send(c);
+        return await send(c, roomId);
       } finally {
         busy = false;
       }
     };
-    const send = async (c: RouteCommand): Promise<boolean> => {
+    const send = async (c: RouteCommand, target?: string): Promise<boolean> => {
       // A sidebar click or arrow key can move the view while a dismiss or
       // delete waits. Every step of this command stays on the room it began
       // in (#352 review).
-      const roomId = view.roomId;
+      const roomId = target ?? view.roomId;
       if (c.verb === "dismiss") {
         const r = rooms.get(roomId);
         flash = `dismissing ${r?.entry.title ?? roomId}: stopping its harnesses…`;
@@ -1325,7 +1325,7 @@ function chatTui(
             run: () =>
               // A refusal must give the composer its keys back: the retry
               // is a typed `/delete` again.
-              void run({ verb: "delete" })
+              void run({ verb: "delete" }, id)
                 .then(() => side.toggle(false))
                 .catch(gone),
           },
@@ -1338,8 +1338,9 @@ function chatTui(
     /** Shows what a fast-forward would bring in the side pane, and confirms
      *  the move on Enter (M6-11a, 3b). Answers whether the pane was filled. */
     forward = async (target, from) => {
+      const roomId = view.roomId;
       await set.fresh();
-      const res = await agentForwardDiff(d, view.roomId, target.id, from.id);
+      const res = await agentForwardDiff(d, roomId, target.id, from.id);
       if (!res.ok) {
         flash = `! ${res.error.message}`;
         setStatus();
@@ -1353,13 +1354,16 @@ function chatTui(
             key: "enter",
             hint: `enter fast-forward ${target.name}`,
             run: () =>
-              void run({
-                verb: "forward",
-                id: target.id,
-                name: target.name,
-                fromId: from.id,
-                fromName: from.name,
-              })
+              void run(
+                {
+                  verb: "forward",
+                  id: target.id,
+                  name: target.name,
+                  fromId: from.id,
+                  fromName: from.name,
+                },
+                roomId,
+              )
                 .then((ok) => {
                   if (ok) side.toggle(false);
                 })
