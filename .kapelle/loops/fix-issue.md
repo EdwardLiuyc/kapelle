@@ -27,24 +27,16 @@ A skill starts with `/<name>` in claude and with `/skill:<name>` in pi. For exam
    Check them: the list is not empty, and it ends at `dev`'s last commit. If not, the
    review did not happen: send `rev1` back once. When it found problems, it commits its
    fixes and reports them as a list of `comment -> fix`.
-4. **Land review 1.** As the orchestrator skill says, fast-forward `dev` from `rev1`
-   when `rev1` made commits, then remove `rev1`. If it made no commits, remove it
-   without a fast-forward. Tell `dev` the findings and fixes. `dev` judges each one: it
-   rejects an invalid finding, reverts a wrong fix, and replaces or improves a weak one
-   with a new commit. Check the report: every finding is settled, and every correction
-   is committed before `rev2` starts.
-5. **Review 2.** Add `rev2` from `dev`'s branch after `rev1` is removed and `dev`'s
-   checks are committed. `rev2` runs the `review-local` skill for the issue, as developer
+4. **Land review 1.** As the orchestrator skill says. Do this before `rev2` joins.
+5. **Review 2.** Add `rev2` from `dev`'s branch after step 4. `rev2` runs the
+   `review-local` skill for the issue, as developer
    and tester: "The change is in the commits on your branch that are not on
    `origin/master`." Its report names the commit it reviewed and the commits it covered.
    Check them: the list is not empty, and the commit it reviewed is the tip of `dev`'s
    branch when `rev2` was added. If not, the review did not happen: send `rev2` back
    once. When it found problems, it commits its fixes and reports them as a list of
    `comment -> fix`.
-6. **Land review 2.** As the orchestrator skill says, fast-forward `dev` from `rev2`
-   when `rev2` made commits, then remove `rev2`. If it made no commits, remove it
-   without a fast-forward. Tell `dev` the findings and fixes. `dev` judges each one the
-   same way and commits any correction.
+6. **Land review 2.** As the orchestrator skill says.
 7. **PR.** `dev` pushes its branch, opens the PR with `Closes #<issue>` in its body,
    then starts the outside review.
 8. **Outside review.** Below.
