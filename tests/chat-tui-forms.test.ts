@@ -460,6 +460,40 @@ test("kapelle chat with no rooms opens one with /new, and shows its timeline", {
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("/loop on the full screen opens <recipe>-<task>, and kapelle loop on a terminal opens the chat on its room (M8-5)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(
+    d,
+    await gitRepo(t, { files: { ".kapelle/loops/fix.md": "steps\n" } }),
+  );
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  await screen.press(
+    `/loop fix 9 --cmd "${REMEMBER}" --cwd ${cwd}\r`,
+    "opened room fix-9",
+  );
+  await screen.press(LEAVE, "rejoin with");
+  assert.equal(await screen.exited, 0, screen.out());
+
+  const cli = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node cli.ts loop fix 10 --cmd '${REMEMBER}' --cwd '${cwd}'`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await cli.seen("fix-10");
+  await cli.press(LEAVE, "rejoin with");
+  assert.equal(await cli.exited, 0, cli.out());
+  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  assert.deepEqual(rooms.body.map((r) => r.title).sort(), ["fix-10", "fix-9"]);
+});
+
 test("the menu opens over the timeline with the sidebar hidden; a typed agent command with no @name is refused on the status line", {
   skip: noPty,
 }, async (t) => {

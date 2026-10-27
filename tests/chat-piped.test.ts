@@ -696,10 +696,13 @@ test("piped /delete changes nothing unless the next line is /delete", async (t) 
   assert.equal(still.body.status, "active");
 });
 
-test("piped chat.ts takes the room commands, and names the room /new opened", async (t) => {
+test("piped chat.ts takes the room commands, and names the room /new or /loop opened", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
-  const cwd = await added(d, await gitRepo(t));
+  const cwd = await added(
+    d,
+    await gitRepo(t, { files: { ".kapelle/loops/fix.md": "steps\n" } }),
+  );
   // Both participants are in the room the pipe reads at the start, so each
   // `@name` resolves without waiting for the stream to replay.
   const open = await api<RoomReply>(d, "POST", "/rooms", {
@@ -719,6 +722,7 @@ test("piped chat.ts takes the room commands, and names the room /new opened", as
       "@bob /mode safe\n" +
       "@bob /remove\n" +
       `/new --cmd "${REMEMBER}" --title second --cwd ${cwd}\n` +
+      `/loop fix 9 --cmd "${REMEMBER}" --cwd ${cwd}\n` +
       "/dismiss\n",
   );
   const r = await c.done;
@@ -729,6 +733,7 @@ test("piped chat.ts takes the room commands, and names the room /new opened", as
     "bob is now in safe mode",
     "removed bob",
     "opened room second",
+    "opened room fix-9; po has the start",
     "the room was dismissed",
   ]) {
     assert.ok(
@@ -742,6 +747,12 @@ test("piped chat.ts takes the room commands, and names the room /new opened", as
   assert.ok(second, JSON.stringify(rooms.body));
   assert.ok(
     r.stdout.includes(`attach with: kapelle chat attach ${second.id}`),
+    r.stdout,
+  );
+  const loop = rooms.body.find((room) => room.title === "fix-9");
+  assert.ok(loop, JSON.stringify(rooms.body));
+  assert.ok(
+    r.stdout.includes(`attach with: kapelle chat attach ${loop.id}`),
     r.stdout,
   );
 });

@@ -27,11 +27,19 @@
  *
  * **`kapelle room`** (M8-3) is an orchestrator's hands in its room. It finds
  * the room and the sender from the checkout it runs in (`roomAndSender`).
+ *
+ * **`kapelle loop`** (M8-5) is the screens' `/loop` from a shell: the same
+ * command (`client/command.ts`), then the chat on that room on a terminal,
+ * as `kapelle chat new` does.
  */
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { text } from "node:stream/consumers";
-import { type RouteCommand, runCommand } from "./client/command.ts";
+import {
+  loopCommand,
+  type RouteCommand,
+  runCommand,
+} from "./client/command.ts";
 import type {
   MessageAccepted,
   ParticipantDto,
@@ -51,7 +59,9 @@ import {
   VersionRefused,
 } from "./client/daemon.ts";
 import { agentDiff } from "./client/diff.ts";
+import { absoluteFolder, FOLDER_GONE } from "./client/folder.ts";
 import { ensureDaemon, stopDaemon } from "./client/lifecycle.ts";
+import { listRecipes, loopFolders } from "./client/loop.ts";
 import { fold } from "./client/mention.ts";
 import { findAgain, setupLines } from "./client/setup.ts";
 import { type Connect, followEvents } from "./client/stream.ts";
@@ -199,6 +209,10 @@ kapelle — a minimal Agent Client Protocol client
   kapelle ps                         every run the daemon knows, and each
                                      task's id and status under it
   kapelle merge <runId> [--squash] [--cwd dir]
+  kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"] [--cwd dir]
+                                     a room whose orchestrator drives the
+                                     recipe for the task; claude by default
+  kapelle loop list [--cwd dir]      every recipe, its folder, and which wins
   kapelle room info | send | add | ff | diff | remove
                                      an orchestrator's verbs in its room,
                                      run from its checkout; kapelle room
@@ -311,6 +325,11 @@ if (chatVerb) {
   await import("./daemon.ts");
 } else if (positional[0] === "daemon") {
   process.exitCode = await runDaemonCommand().catch((err) => {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  });
+} else if (positional[0] === "loop") {
+  process.exitCode = await runLoopCommand().catch((err) => {
     console.error(`error: ${messageOf(err)}`);
     return 1;
   });
@@ -1431,6 +1450,83 @@ async function ownCheckout(
 function byName(room: RoomDto, name: string): ParticipantDto | undefined {
   const wanted = fold(name.replace(/^@/, ""));
   return room.participants.find((p) => fold(p.name) === wanted);
+}
+
+/**
+ * `kapelle loop` (M8-5): a recipe's start, or `list`. A start opens the room
+ * and sends the orchestrator its first message (`client/command.ts`), then
+ * opens the chat on that room on a terminal; a pipe gets the room's id.
+ */
+async function runLoopCommand(): Promise<number> {
+  const usage = [
+    'usage: kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"] [--cwd dir]',
+    "       kapelle loop list [--cwd dir]",
+    "A recipe is <repo>/.kapelle/loops/<recipe>.md, or else",
+    "$XDG_CONFIG_HOME/kapelle/loops/<recipe>.md. The orchestrator runs on claude",
+    "unless --agent or --cmd names another harness.",
+  ].join("\n");
+  const [, first, ...args] = positional as string[];
+  const list = first === "list";
+  if (!first || (list ? args.length > 0 : args.length < 1 || args.length > 2)) {
+    console.error(usage);
+    return 1;
+  }
+  const options = new Set(["cwd", "quiet", "verbose"]);
+  if (!list) for (const o of ["agent", "cmd"]) options.add(o);
+  const unknown = argv.find(
+    (a) => a.startsWith("--") && !options.has(a.slice(2)),
+  );
+  if (unknown !== undefined) {
+    console.error(`error: loop has no option ${unknown}`);
+    return 1;
+  }
+  const cwd = absoluteFolder(flag("cwd"));
+  if (!cwd) {
+    console.error(`error: ${FOLDER_GONE}`);
+    return 1;
+  }
+
+  if (list) {
+    const recipes = await listRecipes(cwd);
+    if (!recipes.length) {
+      console.log(`no recipes: looked in ${loopFolders(cwd).join(" and ")}`);
+    }
+    for (const r of recipes) {
+      const hidden = r.wins ? "" : "  (hidden: the one above wins)";
+      console.log(oneLine(`${r.name}  ${r.path}${hidden}`));
+    }
+    return 0;
+  }
+
+  const [task, note] = args as [string, string | undefined];
+  const c = loopCommand({
+    recipe: first,
+    task,
+    note,
+    agent: flag("agent"),
+    cmd: flag("cmd"),
+    cwd,
+  });
+  const d = await findDaemon();
+  if (!d) return 1;
+  const out = await runCommand(d, undefined, c);
+  if (!out.ok) {
+    printRefusal(out);
+    if (out.code === "repo_not_added") {
+      console.error(`add the repository first: kapelle daemon add ${cwd}`);
+    }
+    return 1;
+  }
+  const id = out.room?.id as string;
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    // As for `chat`: `chat.ts` parses `process.argv` itself.
+    process.argv.splice(2, Infinity, "attach", id);
+    await import("./chat.ts");
+    return 0;
+  }
+  console.log(oneLine(out.line));
+  console.log(`attach with: kapelle chat attach ${id}`);
+  return 0;
 }
 
 /**

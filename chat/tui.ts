@@ -1242,7 +1242,10 @@ function chatTui(
         return false;
       }
       if (!out.ok) {
-        if (out.code === "repo_not_added" && c.verb === "new") {
+        if (
+          out.code === "repo_not_added" &&
+          (c.verb === "new" || c.verb === "loop")
+        ) {
           askToAdd(c);
           return true;
         }
@@ -1275,7 +1278,7 @@ function chatTui(
       if (c.verb === "title" && out.room?.title) {
         set.retitle(out.room.id, out.room.title);
       }
-      if (c.verb === "new" && out.room) {
+      if ((c.verb === "new" || c.verb === "loop") && out.room) {
         const { id, cwd, title, status, updatedAt, participants } = out.room;
         set.add({
           id,

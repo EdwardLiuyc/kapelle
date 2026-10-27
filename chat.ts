@@ -71,7 +71,7 @@ agent instead.
   /help      the commands below, on the screen
   /setup     the agents the daemon found, and what to install; it opens at
              the start until "done" (/setup done), or while no agent is ready
-  ${HELP.slice(0, 8).join("\n  ")}
+  ${HELP.slice(0, 9).join("\n  ")}
 a command never reaches an agent. Room commands work after a thread's
 @name too; an agent's command needs its @name.
 

@@ -395,7 +395,10 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       if (!r.ok) {
         console.error(`! ${r.message}`);
         // A pipe cannot ask, as the screen does: say how to add it.
-        if (r.code === "repo_not_added" && c.verb === "new") {
+        if (
+          r.code === "repo_not_added" &&
+          (c.verb === "new" || c.verb === "loop")
+        ) {
           console.error(`add it first: kapelle daemon add ${c.body.cwd}`);
         }
         if (c.verb === "dismiss") {
@@ -408,7 +411,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
         console.log(r.line);
         // A pipe stays in the room it started in, so name the new room:
         // its id is not on the line when it has a title.
-        if (c.verb === "new" && r.room) {
+        if ((c.verb === "new" || c.verb === "loop") && r.room) {
           console.log(`attach with: kapelle chat attach ${r.room.id}`);
         }
         continue;
