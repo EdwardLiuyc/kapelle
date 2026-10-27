@@ -197,3 +197,18 @@ test("the first message holds the skill, the recipe, the task and the note, in t
   const bare = await loopMessage({ recipe: "fix", task: "269" }, f.top, f.env);
   assert.ok("text" in bare && bare.text.endsWith("[the task]\n269"));
 });
+
+test("an unreadable skill is a refusal, not a throw (#368 review)", async (t) => {
+  // A throw escapes `runCommand`, and the full screen reads any throw there
+  // as "the daemon is not reachable".
+  const f = await folders(t, { "fix.md": "steps\n" }, {});
+  const missing = join(f.root, "no-skill.md");
+  const r = await loopMessage(
+    { recipe: "fix", task: "7" },
+    f.top,
+    f.env,
+    missing,
+  );
+  assert.ok("error" in r, JSON.stringify(r));
+  assert.match(r.error, new RegExp(`^cannot read ${missing}: `));
+});

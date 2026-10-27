@@ -152,15 +152,23 @@ const firstMessage = (p: {
   ].join("\n");
 
 /** The orchestrator's first message for a loop, or why there is none: the
- *  recipe is missing or cannot be read. */
+ *  recipe is missing, or it or the skill cannot be read. Never a throw:
+ *  `runCommand` would pass it on, and a screen reads a throw there as a
+ *  daemon that cannot be reached. `skillPath` is for a test. */
 export async function loopMessage(
   l: { recipe: string; task: string; note?: string },
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
+  skillPath = SKILL,
 ): Promise<{ text: string } | { error: string }> {
   const recipe = await readRecipe(l.recipe, cwd, env);
   if ("error" in recipe) return recipe;
-  const skill = await readFile(SKILL, "utf8");
+  let skill: string;
+  try {
+    skill = await readFile(skillPath, "utf8");
+  } catch (err) {
+    return { error: `cannot read ${skillPath}: ${(err as Error).message}` };
+  }
   return {
     text: firstMessage({
       skill,
