@@ -5,7 +5,15 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -53,15 +61,24 @@ test("the user folder follows core/config.ts's XDG_CONFIG_HOME rule", () => {
   }
 });
 
-test("the repository's folder comes first, found from a subfolder; outside a repository only the user's", async (t) => {
-  const f = await folders(t, {}, {});
+test("the repository's folder comes first, found from a subfolder or a symlink to one; outside a repository only the user's", async (t) => {
+  const f = await folders(t, { "fix.md": "repo fix" }, {});
+  const user = join(f.env.XDG_CONFIG_HOME, "kapelle", "loops");
   assert.deepEqual(loopFolders(f.sub, f.env), [
     join(f.top, ".kapelle", "loops"),
-    join(f.env.XDG_CONFIG_HOME, "kapelle", "loops"),
+    user,
   ]);
-  assert.deepEqual(loopFolders(f.root, f.env), [
-    join(f.env.XDG_CONFIG_HOME, "kapelle", "loops"),
+  assert.deepEqual(loopFolders(f.root, f.env), [user]);
+
+  // A --cwd through a symlink to a subfolder is still inside the repository.
+  const link = join(f.root, "src-link");
+  await symlink(f.sub, link);
+  assert.deepEqual(loopFolders(link, f.env), [
+    join(await realpath(f.top), ".kapelle", "loops"),
+    user,
   ]);
+  const start = await loopMessage({ recipe: "fix", task: "7" }, link, f.env);
+  assert.ok("text" in start && start.text.includes("repo fix"));
 });
 
 test("the list names each recipe and its folder; for one name the repository's wins", async (t) => {
@@ -84,6 +101,19 @@ test("the list names each recipe and its folder; for one name the repository's w
   assert.ok(!start.text.includes("user fix"));
   const mine = await loopMessage({ recipe: "mine", task: "7" }, f.sub, f.env);
   assert.ok("text" in mine && mine.text.includes("\nmine\n"));
+});
+
+test("a directory named like a recipe neither wins nor hides the user's file", async (t) => {
+  const f = await folders(t, {}, { "fix.md": "user fix" });
+  const repo = join(f.top, ".kapelle", "loops");
+  const user = join(f.env.XDG_CONFIG_HOME, "kapelle", "loops");
+  await mkdir(join(repo, "fix.md"));
+
+  assert.deepEqual(await listRecipes(f.sub, f.env), [
+    { name: "fix", path: join(user, "fix.md"), wins: true },
+  ]);
+  const start = await loopMessage({ recipe: "fix", task: "7" }, f.sub, f.env);
+  assert.ok("text" in start && start.text.includes("user fix"));
 });
 
 test("a missing recipe is refused by name, with every folder it looked in", async (t) => {

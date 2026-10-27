@@ -59,10 +59,17 @@ test("kapelle loop opens <recipe>-<task> with po in auto, and sends it the skill
     [["po", "orchestrator", "auto"]],
   );
 
+  const readLog = async () => {
+    try {
+      return await roomLog(repo, id);
+    } catch {
+      return []; // the room may not have written its log yet
+    }
+  };
   let text = "";
   for (const until = Date.now() + 20_000; !text; ) {
     assert.ok(Date.now() < until, "the first message never reached the log");
-    const lines = await roomLog(repo, id).catch(() => []);
+    const lines = await readLog();
     const first = lines.find(
       (l) => l.update.sessionUpdate === "_client_user_message",
     );
@@ -93,6 +100,15 @@ test("kapelle loop --agent names the orchestrator's harness", async (t) => {
   assert.equal(r.code, 1);
   // The daemon's refusal: the value reached it as typed.
   assert.match(r.stderr, /unknown agent "nosuch".*\(invalid_request\)/);
+  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  assert.deepEqual(rooms.body, [], "no room");
+});
+
+test("kapelle loop refuses an empty task and opens no room", async (t) => {
+  const { d, loop } = await fixture(t);
+  const r = await loop(["fix", "   ", "--cmd", REMEMBER]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /usage: kapelle loop/);
   const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
   assert.deepEqual(rooms.body, [], "no room");
 });

@@ -270,7 +270,7 @@ export function parseCommand(
     const o = options(args, ["agent", "cmd", "cwd"]);
     if ("error" in o) return { error: `${o.error}; ${USAGE.loop}` };
     const [recipe, task, note, ...extra] = o.positionals;
-    if (!recipe || !task || extra.length)
+    if (!recipe || !task?.trim() || extra.length)
       return { error: USAGE.loop as string };
     const cwd = absoluteFolder(o.values.cwd);
     if (!cwd) return { error: FOLDER_GONE };

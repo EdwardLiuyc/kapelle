@@ -270,7 +270,12 @@ test("/loop opens <recipe>-<task> with po in auto, on claude unless --agent or -
     error:
       'usage: /loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--cwd dir]',
   };
-  for (const s of ["/loop", "/loop fix", "/loop fix 1 note more"]) {
+  for (const s of [
+    "/loop",
+    "/loop fix",
+    '/loop fix "   "',
+    "/loop fix 1 note more",
+  ]) {
     assert.deepEqual(parse(s), usage, s);
   }
   const bad = parse("/loop fix 1 --mode ask");

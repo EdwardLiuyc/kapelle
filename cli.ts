@@ -1471,6 +1471,11 @@ async function runLoopCommand(): Promise<number> {
     console.error(usage);
     return 1;
   }
+  const [task = "", note] = args;
+  if (!list && !task.trim()) {
+    console.error(usage);
+    return 1;
+  }
   const options = new Set(["cwd", "quiet", "verbose"]);
   if (!list) for (const o of ["agent", "cmd"]) options.add(o);
   const unknown = argv.find(
@@ -1498,7 +1503,6 @@ async function runLoopCommand(): Promise<number> {
     return 0;
   }
 
-  const [task, note] = args as [string, string | undefined];
   const c = loopCommand({
     recipe: first,
     task,

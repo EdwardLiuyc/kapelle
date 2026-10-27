@@ -21,18 +21,32 @@
  * loopback only, so the screen and the daemon share it.
  */
 
-import { type Dirent, existsSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { type Dirent, existsSync, realpathSync } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
 const SKILL = join(import.meta.dirname, "..", "assets", "orchestrator.md");
 
-/** The nearest folder at or above `cwd` with a `.git`, or none. */
-function gitTop(cwd: string): string | undefined {
-  for (let dir = cwd; ; dir = dirname(dir)) {
+/** The nearest folder at or above `path` with a `.git`, or none. */
+function gitTopAt(path: string): string | undefined {
+  for (let dir = path; ; dir = dirname(dir)) {
     if (existsSync(join(dir, ".git"))) return dir;
     if (dirname(dir) === dir) return undefined;
+  }
+}
+
+/** The nearest folder at or above `cwd` with a `.git`, or none. A symlink to
+ *  a folder inside a repository can hide the marker from the lexical walk, so
+ *  retry on the real path. */
+function gitTop(cwd: string): string | undefined {
+  const direct = gitTopAt(cwd);
+  if (direct) return direct;
+  try {
+    const real = realpathSync(cwd);
+    return real === cwd ? undefined : gitTopAt(real);
+  } catch {
+    return undefined;
   }
 }
 
@@ -63,7 +77,8 @@ export interface Recipe {
   wins: boolean;
 }
 
-/** Every recipe in the folders, by name; for one name, the winner first. */
+/** Every regular recipe file in the folders, by name; for one name, the
+ *  winner first. */
 export async function listRecipes(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -71,18 +86,34 @@ export async function listRecipes(
   const found: Recipe[] = [];
   const seen = new Set<string>();
   for (const folder of loopFolders(cwd, env)) {
-    const entries = await readdir(folder, { withFileTypes: true }).catch(
-      (): Dirent[] => [],
-    );
+    let entries: Dirent[];
+    try {
+      entries = await readdir(folder, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
     for (const e of entries) {
-      if (e.isDirectory() || !e.name.endsWith(".md")) continue;
+      if (!e.name.endsWith(".md")) continue;
+      const path = join(folder, e.name);
+      if (!e.isFile()) {
+        if (e.isDirectory()) continue;
+        try {
+          const info = await stat(path);
+          if (!info.isFile()) continue;
+        } catch {
+          continue; // a broken link, or an entry that vanished
+        }
+      }
       const name = e.name.slice(0, -".md".length);
-      found.push({ name, path: join(folder, e.name), wins: !seen.has(name) });
+      found.push({ name, path, wins: !seen.has(name) });
       seen.add(name);
     }
   }
   // A stable sort keeps the folder order inside one name.
-  return found.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return found.sort((a, b) => {
+    if (a.name === b.name) return 0;
+    return a.name < b.name ? -1 : 1;
+  });
 }
 
 /** The text of recipe `name`, from the folder that wins, or why not. */
@@ -98,10 +129,13 @@ async function readRecipe(
   for (const folder of folders) {
     const path = join(folder, `${name}.md`);
     try {
+      const info = await stat(path);
+      if (!info.isFile()) continue;
       return { text: await readFile(path, "utf8") };
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") continue;
+      if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR")
+        continue;
       return { error: `cannot read ${path}: ${(err as Error).message}` };
     }
   }
