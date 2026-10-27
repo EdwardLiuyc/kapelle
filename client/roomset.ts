@@ -413,10 +413,13 @@ export function roomSet(
   };
 
   // Rooms made in another terminal join here. While a room is open, a failed
-  // poll changes nothing: a stream that ends says what happened. With none
-  // open, no stream would: a daemon gone for `waitMs`, a `401`, or a new
+  // poll changes nothing: a stream that ends says what happened. With no live
+  // stream left, one would: a daemon gone for `waitMs`, a `401`, or a new
   // daemon that refuses our version ends the set (M4-5, M6-7d).
   let away: number | undefined;
+  /** A held dismissed room has no live stream but must keep the screen open
+   *  while the daemon answers, so `/delete` can still be used (#352). */
+  const noLive = () => ![...rooms.values()].some((r) => !r.lost && !r.held);
   const tick = () => {
     const ask = ++asked;
     current()
@@ -425,7 +428,7 @@ export function roomSet(
         (res) => {
           away = undefined;
           if (!res.ok) {
-            if (res.status === 401 && rooms.size === 0) {
+            if (res.status === 401 && noLive()) {
               finish({ kind: "gone" });
             }
             return;
@@ -444,13 +447,12 @@ export function roomSet(
         },
         (err) => {
           if (err instanceof VersionRefused) {
-            if (rooms.size === 0)
-              finish({ kind: "gone", message: err.message });
+            if (noLive()) finish({ kind: "gone", message: err.message });
             return;
           }
           if (away === undefined) on.away(waitMs);
           away ??= Date.now();
-          if (rooms.size === 0 && Date.now() - away >= waitMs) {
+          if (noLive() && Date.now() - away >= waitMs) {
             finish({ kind: "gone" });
           }
         },

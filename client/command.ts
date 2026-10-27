@@ -328,15 +328,19 @@ export function deletePreviewLines(preview: DeletePreview): string[] {
     const who = b.participant
       ? printable(b.participant)
       : "no current participant";
-    const n = b.commits.length;
+    const n = b.total;
     const state =
       n === 0 ? "all merged" : `${n} unmerged commit${n === 1 ? "" : "s"}`;
+    const more = b.total - b.commits.length;
     return [
       `${state} · ${who}`,
       `  ${printable(b.branch)}`,
       ...b.commits.map(
         (commit) => `  ${commit.sha.slice(0, 8)} ${printable(commit.subject)}`,
       ),
+      ...(more > 0
+        ? [`  … and ${more} more commit${more === 1 ? "" : "s"}`]
+        : []),
     ];
   });
 }

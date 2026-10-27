@@ -644,6 +644,34 @@ test("piped /delete waits for the next line, then keeps a dismissed room open af
   assert.equal((await api(d, "GET", `/rooms/${room.id}`)).status, 404);
 });
 
+test("piped attach of a dismissed room waits in read-only mode", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  assert.equal(
+    (await api(d, "POST", `/rooms/${open.body.id}/dismiss`)).status,
+    200,
+  );
+
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await c.waitFor(
+    "the room is dismissed; /delete to remove it, /leave to exit",
+  );
+  c.child.stdin.end("/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /the room is dismissed; \/delete to remove it/);
+});
+
 test("piped /delete changes nothing unless the next line is /delete", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);

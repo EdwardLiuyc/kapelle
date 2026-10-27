@@ -468,6 +468,23 @@ test("a retained dismissed room stays until the screen drops it", async (t) => {
   assert.equal(set.rooms.has("r1"), false);
 });
 
+test("a held room lets the set end when the daemon is gone", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "dismissed");
+  const { set, said } = follow(t, daemon.d);
+  set.retain("r1");
+  set.start([{ ...entry("r1"), status: "dismissed" }]);
+  await until(() => daemon.streams.has("r1"));
+  daemon.release("r1");
+  await until(() => set.rooms.get("r1")?.held === true);
+  await until(() => daemon.polls > 0);
+  assert.deepEqual(said.ends, [], "the daemon still answers");
+
+  daemon.stop();
+  await until(() => said.ends.length === 1);
+  assert.deepEqual(said.ends, [{ kind: "gone" }]);
+});
+
 test("the set ends when every room lost its stream", async (t) => {
   const daemon = await fake(t);
   daemon.status.set("r1", "active");

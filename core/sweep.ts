@@ -47,7 +47,7 @@
  * `restoreRuns` follows.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { rename, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
@@ -412,6 +412,10 @@ async function roomCheckouts(root: string, roomId: string): Promise<string[]> {
   return all.filter((w) => w.runId === roomId).map((w) => w.path);
 }
 
+/** The most commits one branch's preview carries. A branch with more shows
+ *  `total` minus the returned list as a count. */
+const DELETE_PREVIEW_COMMITS = 200;
+
 /** What `DELETE /rooms/:id` would remove from git: every branch the room
  *  owns, with the commits each one holds that no ref outside the room can
  *  reach. A branch merged into another branch outside the room has no such
@@ -421,6 +425,9 @@ export interface RoomDeletePreview {
     branch: string;
     participant?: string;
     commits: { sha: string; subject: string }[];
+    /** Every unreachable commit on the branch, including those left out of
+     *  `commits` by the preview cap. */
+    total: number;
   }[];
 }
 
@@ -524,16 +531,23 @@ export async function roomDeletePreview(
     if (p.branch) names.set(p.branch, p.name);
   }
 
+  // `--stdin` keeps a repository with thousands of refs off the argv.
+  const negative = outside.map((ref) => `^${ref}`).join("\n");
   return {
     branches: await Promise.all(
       [...branches].sort().map(async (branch) => {
-        const args = [
-          "log",
-          "--format=%H%x00%s",
-          branch,
-          ...(outside.length ? ["--not", ...outside] : []),
-        ];
-        const log = await git(root, args);
+        const log = await gitWithInput(
+          root,
+          [
+            "log",
+            "--format=%H%x00%s",
+            `--max-count=${DELETE_PREVIEW_COMMITS + 1}`,
+            branch,
+            "--stdin",
+            "--",
+          ],
+          negative,
+        );
         const commits = log
           .split("\n")
           .filter(Boolean)
@@ -541,10 +555,21 @@ export async function roomDeletePreview(
             const [sha = "", subject = ""] = line.split("\0");
             return { sha, subject };
           });
+        const total =
+          commits.length > DELETE_PREVIEW_COMMITS
+            ? Number(
+                await gitWithInput(
+                  root,
+                  ["rev-list", "--count", branch, "--stdin", "--"],
+                  negative,
+                ),
+              )
+            : commits.length;
         return {
           branch,
           ...(names.has(branch) && { participant: names.get(branch) }),
-          commits,
+          commits: commits.slice(0, DELETE_PREVIEW_COMMITS),
+          total,
         };
       }),
     ),
@@ -772,6 +797,40 @@ async function reapRun(
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await run("git", args, { cwd });
   return stdout;
+}
+
+/** `git` with revisions on stdin, so a list too long for argv still works.
+ *  `--stdin` reads `^<ref>` lines and leaves argv for the one branch. */
+function gitWithInput(
+  cwd: string,
+  args: string[],
+  input: string,
+): Promise<string> {
+  return new Promise((ok, fail) => {
+    const child = spawn("git", args, { cwd });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (text) => {
+      stdout += text;
+    });
+    child.stderr.setEncoding("utf8").on("data", (text) => {
+      stderr += text;
+    });
+    child.on("error", fail);
+    child.on("close", (code) => {
+      if (code === 0) ok(stdout);
+      else
+        fail(
+          new Error(
+            stderr.trim() ||
+              `git ${args[0] ?? "command"} exited with code ${code}`,
+          ),
+        );
+    });
+    // A git that exits before reading stdin makes this write fail.
+    child.stdin.on("error", () => {});
+    child.stdin.end(input);
+  });
 }
 
 /**

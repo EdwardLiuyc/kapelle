@@ -33,6 +33,7 @@ import {
   gitRepo,
   headAt,
   LEAVE,
+  MOCK_AGENT,
   noPty,
   only,
   plainText,
@@ -173,6 +174,55 @@ test("a refused TUI delete shows the dirty file and allows a retry", {
   await press("\r", "deleted room-");
   child.stdin.write(LEAVE);
   assert.equal(await exited, 0, out());
+});
+
+test("a delete drops the room it started on after the view moves", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const wrapper = join(await tempDir(t), "slow-agent.sh");
+  await writeFile(
+    wrapper,
+    `#!/bin/sh\nnode ${MOCK_AGENT} --scenario remember\nsleep 2\n`,
+    { mode: 0o755 },
+  );
+  const doomed = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    title: "doomed",
+    agents: [{ cmd: wrapper, name: "slow" }],
+  });
+  assert.equal(doomed.status, 201, doomed.body.error?.message);
+  const kept = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    title: "kept",
+    agents: [{ cmd: REMEMBER, name: "bob" }],
+  });
+  assert.equal(kept.status, 201, kept.body.error?.message);
+
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${doomed.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen("○ bob");
+  screen.child.stdin.write("/delete\r");
+  await screen.seen("delete · 1 branch");
+  screen.child.stdin.write("\r");
+  // The delete is still waiting for the slow harness to stop.
+  await new Promise((ok) => setTimeout(ok, 100));
+  await screen.press("\x1d\x1b[1;3B", "→ bob");
+  await screen.seen("deleted room-");
+  await new Promise((ok) => setTimeout(ok, 200));
+
+  const rows = [...screenRows(screen.out()).values()].join("\n");
+  assert.match(rows, /○ bob/);
+  assert.doesNotMatch(rows, /doomed/);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+  assert.equal((await api(d, "GET", `/rooms/${kept.body.id}`)).status, 200);
 });
 
 test("the target's ctrl+o menu previews a fast-forward from another participant", {

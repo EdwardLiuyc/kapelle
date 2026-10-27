@@ -1284,14 +1284,18 @@ Read-only, so it works on an active room.
     {
       "branch": "kapelle/room-20261026-121039-6ehf/p-0k3x9a2b",
       "participant": "dev",
-      "commits": [{ "sha": "3f2a…", "subject": "Add the delete preview" }]
+      "commits": [
+        { "sha": "3f2a…", "subject": "Add the delete preview" }
+      ],
+      "total": 1
     }
   ]
 }
 ```
 
 `participant` is omitted when the room record no longer names one. `commits` is empty
-when every commit is already reachable outside the room.
+when every commit is already reachable outside the room. It carries at most 200 commits
+per branch; `total` is the full count, so a client can say how many were left out.
 
 **Refusals:** `404` `room_not_found`.
 

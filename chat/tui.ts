@@ -1221,16 +1221,20 @@ function chatTui(
       }
     };
     const send = async (c: RouteCommand): Promise<boolean> => {
+      // A sidebar click or arrow key can move the view while a dismiss or
+      // delete waits. Every step of this command stays on the room it began
+      // in (#352 review).
+      const roomId = view.roomId;
       if (c.verb === "dismiss") {
-        const r = rooms.get(view.roomId);
-        flash = `dismissing ${r?.entry.title ?? view.roomId}: stopping its harnesses…`;
+        const r = rooms.get(roomId);
+        flash = `dismissing ${r?.entry.title ?? roomId}: stopping its harnesses…`;
         setStatus();
       }
-      if (c.verb === "delete" && view.roomId) set.retain(view.roomId);
+      if (c.verb === "delete" && roomId) set.retain(roomId);
       let out: Awaited<ReturnType<typeof runCommand>>;
       await set.fresh();
       try {
-        out = await runCommand(d, view.roomId || undefined, c);
+        out = await runCommand(d, roomId || undefined, c);
       } catch {
         // A restart: the screen waits for the daemon (M6-7d).
         flash = `! ${NO_DAEMON}`;
@@ -1243,9 +1247,8 @@ function chatTui(
           return true;
         }
         if (c.verb === "delete") {
-          const status =
-            out.room?.status ?? rooms.get(view.roomId)?.entry.status;
-          set.retain(view.roomId, status === "dismissed");
+          const status = out.room?.status ?? rooms.get(roomId)?.entry.status;
+          set.retain(roomId, status === "dismissed");
         }
         const text =
           c.verb === "delete" && out.code === "uncommitted_work"
@@ -1262,9 +1265,8 @@ function chatTui(
       }
       if (box.panel) hidePanel();
       if (c.verb === "delete") {
-        const id = view.roomId;
-        set.drop(id);
-        const next = dismissed(rooms, view, id);
+        set.drop(roomId);
+        const next = dismissed(rooms, view, roomId);
         if (next) open(next);
         flash = out.line;
         setStatus();
@@ -1321,6 +1323,8 @@ function chatTui(
             key: "enter",
             hint: "enter delete room",
             run: () =>
+              // A refusal must give the composer its keys back: the retry
+              // is a typed `/delete` again.
               void run({ verb: "delete" })
                 .then(() => side.toggle(false))
                 .catch(gone),

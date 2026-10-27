@@ -386,7 +386,9 @@ export interface DeletePreview {
   branches: {
     branch: string;
     participant?: string;
+    /** At most 200 commits; `total` also counts the rest. */
     commits: { sha: string; subject: string }[];
+    total: number;
   }[];
 }
 

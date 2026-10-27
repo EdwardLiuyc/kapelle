@@ -2039,6 +2039,76 @@ test("the delete preview lists every owned branch and the commits no outside ref
   assert.equal((await api(d, "GET", "/rooms/nope/delete-preview")).status, 404);
 });
 
+test("the delete preview caps a long branch and reports its total", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const p = only(open.body);
+  for (let i = 0; i < 201; i++) {
+    const made = spawnSync(
+      "git",
+      ["commit", "--allow-empty", "-qm", `preview commit ${i}`],
+      { cwd: p.worktree, encoding: "utf8" },
+    );
+    assert.equal(made.status, 0, made.stderr);
+  }
+
+  const preview = await api<DeletePreview>(
+    d,
+    "GET",
+    `/rooms/${open.body.id}/delete-preview`,
+  );
+  assert.equal(preview.status, 200, JSON.stringify(preview.body));
+  const branch = preview.body.branches.find((b) => b.branch === p.branch);
+  assert.equal(branch?.commits.length, 200);
+  assert.equal(branch?.total, 201);
+});
+
+test("the delete preview accepts a renamed branch named like a tracked path (#352 review)", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(
+    d,
+    await gitRepo(t, { files: { "docs/readme.md": "docs\n" } }),
+  );
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario read-only`),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const p = only(open.body);
+  const renamed = spawnSync("git", ["branch", "-m", "docs"], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(renamed.status, 0, renamed.stderr);
+  await commitAt(p.worktree, "agent.txt");
+  const sent = await api(d, "POST", `/rooms/${id}/messages`, { text: "go" });
+  assert.equal(sent.status, 202, sent.body.error?.message);
+  await roomIdle(d, id);
+
+  const preview = await api<DeletePreview>(
+    d,
+    "GET",
+    `/rooms/${id}/delete-preview`,
+  );
+  assert.equal(preview.status, 200, JSON.stringify(preview.body));
+  assert.deepEqual(
+    preview.body.branches
+      .find((b) => b.branch === "docs")
+      ?.commits.map((c) => c.subject),
+    ["agent.txt"],
+  );
+});
+
 test("DELETE refuses an active room and uncommitted work, then removes a dismissed room whole (#235)", async (t) => {
   const d = await boot(t);
   const root = await gitRepo(t);
