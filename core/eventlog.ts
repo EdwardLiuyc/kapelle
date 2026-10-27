@@ -13,7 +13,9 @@
  * **The file is the only replay source.** `follow` tails it from the reader's
  * own position, so history and the live tail come out of one loop and there
  * is no ring-to-file hand-off to get wrong. Memory holds a byte offset per
- * line, never the events.
+ * line, never the events. A dense binary `events.idx` persists those offsets
+ * (#321): open reads it and scans only the unindexed tail, rebuilding it when
+ * missing or invalid. The JSONL stays authoritative after a crash.
  *
  * **A caught-up reader skips the disk.** Each committed line rings the
  * readers with the line itself, and a reader waiting for exactly that `seq`
@@ -43,18 +45,34 @@
  * display name changes on a rename, while the id never does.
  *
  * **A room's log is reopened after a restart** (M6-7a, #151):
- * `reopenEventLog` scans the old file, cuts a partial last line, and goes on
- * appending, with `seq` carried on from the last line.
+ * `reopenEventLog` restores saved offsets or scans the old file, cuts a
+ * partial last line, and goes on appending with `seq` carried on.
  */
 
 import { createWriteStream, existsSync } from "node:fs";
-import { type FileHandle, open, truncate } from "node:fs/promises";
+import {
+  appendFile,
+  type FileHandle,
+  open,
+  readFile,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { finished } from "node:stream/promises";
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
 import type { AgentEvent } from "../protocol/types.ts";
 
 const CHUNK_BYTES = 64 * 1024;
 const NEWLINE = 0x0a;
+/** KIDX, version 1, then one {start, end} float64 pair per complete line.
+ *  IEEE-754 doubles exactly represent every safe-integer byte offset. */
+const INDEX_HEADER = Buffer.from([0x4b, 0x49, 0x44, 0x58, 1, 0, 0, 0]);
+const INDEX_RECORD_BYTES = 16;
+
+const sidecarPath = (path: string) =>
+  path.endsWith(".jsonl")
+    ? `${path.slice(0, -".jsonl".length)}.idx`
+    : `${path}.idx`;
 
 /** Sends one line. A promise back means "full": send no more until it
  *  settles. */
@@ -87,6 +105,8 @@ export interface EventLog {
 interface Index {
   starts: number[];
   bytes: number;
+  /** Whether the sidecar already covers exactly these lines. */
+  sidecarReady: boolean;
 }
 
 /** A new log at `path`, or with `from`, one that appends after the lines
@@ -97,6 +117,10 @@ export function createEventLog(
   from?: Index,
 ): EventLog {
   const out = createWriteStream(path, { flags: from ? "a" : "w" });
+  const indexOut = createWriteStream(sidecarPath(path), {
+    flags: from?.sidecarReady ? "a" : "w",
+  });
+  if (!from?.sidecarReady) indexOut.write(INDEX_HEADER);
   /** `starts[seq - 1]` is where that line begins. */
   const starts: number[] = from ? [...from.starts] : [];
   let appended = starts.length;
@@ -109,23 +133,32 @@ export function createEventLog(
   const wakers = new Set<() => void>();
 
   let over = false;
-  let markEnded = () => {};
-  const ended = new Promise<void>((ok) => {
-    markEnded = () => {
-      over = true;
-      for (const waker of wakers) waker();
-      ok();
-    };
-  });
+  let closing: Promise<void> | undefined;
+  const markEnded = () => {
+    over = true;
+    for (const waker of wakers) waker();
+  };
 
+  let reportedCode: string | undefined;
+  let errorReported = false;
+  const report = (err: Error) => {
+    const { code } = err as NodeJS.ErrnoException;
+    if (errorReported && code === reportedCode) return;
+    errorReported = true;
+    reportedCode = code;
+    onError(err);
+  };
   out.on("error", (err) => {
     // The run goes on without its durable copy, the same as a stderr log that
     // cannot be written (M1b-7). Readers end at what was committed.
     if (!accepting) return;
     accepting = false;
-    onError(err);
+    indexOut.end();
+    report(err);
     markEnded();
   });
+  // An index failure costs the next boot's optimization, never the JSONL.
+  indexOut.on("error", report);
 
   return {
     append(event) {
@@ -137,6 +170,10 @@ export function createEventLog(
       const bytes = Buffer.byteLength(line) + 1;
       starts.push(appendedBytes);
       appendedBytes += bytes;
+      const record = Buffer.allocUnsafe(INDEX_RECORD_BYTES);
+      record.writeDoubleLE(starts[seq - 1] as number, 0);
+      record.writeDoubleLE(appendedBytes, 8);
+      indexOut.write(record);
       // Write callbacks fire in write order, so `committed` only ever moves
       // forward by one line.
       out.write(`${line}\n`, (err) => {
@@ -173,7 +210,9 @@ export function createEventLog(
           if (full) {
             await withAbort(full, signal);
             full = undefined;
-          } else if (next <= committed) {
+            continue;
+          }
+          if (next <= committed) {
             file ??= await open(path, "r");
             const to = committedBytes;
             await readLines(
@@ -186,21 +225,19 @@ export function createEventLog(
                 return !full;
               },
             );
-          } else if (over) {
-            return;
-          } else {
-            // Parked: the bell sends each new line. It wakes the loop when a
-            // send fills the reader, and `markEnded` wakes it at the end.
-            // Never a race on `ended`: that promise lives as long as the
-            // log, and a race leaves a handler on it for every park, which
-            // a slow reader repeats once per pause.
-            await withAbort(
-              new Promise<void>((ok) => {
-                wake = ok;
-              }),
-              signal,
-            );
+            continue;
           }
+          if (over) return;
+          // Parked: the bell sends each new line. It wakes the loop when a
+          // send fills the reader, and `markEnded` wakes it at the end.
+          // Each park replaces `wake`, so repeated pauses leave no old
+          // resolver or abort listener behind.
+          await withAbort(
+            new Promise<void>((ok) => {
+              wake = ok;
+            }),
+            signal,
+          );
         }
       } finally {
         bells.delete(bell);
@@ -213,12 +250,15 @@ export function createEventLog(
       return committed;
     },
 
-    async close() {
-      if (!accepting) return ended;
-      accepting = false;
-      out.end();
-      await finished(out).catch(() => {});
-      markEnded();
+    close() {
+      closing ??= (async () => {
+        accepting = false;
+        out.end();
+        indexOut.end();
+        await Promise.allSettled([finished(out), finished(indexOut)]);
+        markEnded();
+      })();
+      return closing;
     },
   };
 }
@@ -231,10 +271,10 @@ export function createEventLog(
  * path. Read-only on purpose: a run that is over gets no more lines.
  * `reopenEventLog` is the one that appends.
  *
- * The one scan at open is what M2-6's amendment calls rebuilding the index —
- * line offsets and the line count, never the events. A trailing partial line,
- * which is what a `kill -9` mid-write leaves, is dropped by `readLines`: the
- * same "committed, not appended" rule the writer follows.
+ * A valid sidecar supplies the line offsets and count; only the unindexed tail
+ * needs scanning. A missing or invalid sidecar is rebuilt. A trailing partial
+ * line, which is what a `kill -9` mid-write leaves, is dropped by `readLines`:
+ * the same "committed, not appended" rule the writer follows.
  */
 export async function openEventLog(path: string): Promise<EventLog> {
   const { starts, bytes } = await indexOf(path);
@@ -279,26 +319,106 @@ export async function openEventLog(path: string): Promise<EventLog> {
   };
 }
 
-/** Where each whole line of `path` starts. A partial last line is not
- *  counted. */
-async function indexOf(path: string): Promise<Index> {
+/** A valid saved index, or undefined when the JSONL must rebuild it. */
+async function readSidecar(
+  path: string,
+  log: FileHandle,
+  logBytes: number,
+): Promise<Index | undefined> {
+  let data: Buffer;
+  try {
+    data = await readFile(sidecarPath(path));
+  } catch {
+    return undefined;
+  }
+  if (
+    data.length < INDEX_HEADER.length ||
+    (data.length - INDEX_HEADER.length) % INDEX_RECORD_BYTES !== 0 ||
+    !data.subarray(0, INDEX_HEADER.length).equals(INDEX_HEADER)
+  ) {
+    return undefined;
+  }
   const starts: number[] = [];
   let bytes = 0;
-  const index = await open(path, "r");
+  for (
+    let pos = INDEX_HEADER.length;
+    pos < data.length;
+    pos += INDEX_RECORD_BYTES
+  ) {
+    const start = data.readDoubleLE(pos);
+    const end = data.readDoubleLE(pos + 8);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) {
+      return undefined;
+    }
+    if (start !== bytes || end <= start || end > logBytes) return undefined;
+    starts.push(start);
+    bytes = end;
+  }
+  if (bytes > 0) {
+    const newline = Buffer.alloc(1);
+    const { bytesRead } = await log.read(newline, 0, 1, bytes - 1);
+    if (bytesRead !== 1 || newline[0] !== NEWLINE) return undefined;
+  }
+  return { starts, bytes, sidecarReady: true };
+}
+
+/** Binary records for `starts[from:]`, with a header for a full rebuild. */
+function encodeIndex(
+  starts: number[],
+  bytes: number,
+  from: number,
+  header: boolean,
+): Buffer {
+  const offset = header ? INDEX_HEADER.length : 0;
+  const data = Buffer.alloc(
+    offset + (starts.length - from) * INDEX_RECORD_BYTES,
+  );
+  if (header) INDEX_HEADER.copy(data);
+  for (let i = from; i < starts.length; i++) {
+    const pos = offset + (i - from) * INDEX_RECORD_BYTES;
+    data.writeDoubleLE(starts[i] as number, pos);
+    data.writeDoubleLE(starts[i + 1] ?? bytes, pos + 8);
+  }
+  return data;
+}
+
+/** Where each whole line of `path` starts. A partial last line is not counted.
+ *  Persist new offsets, but never refuse a readable log for its sidecar. */
+async function indexOf(path: string): Promise<Index> {
+  const file = await open(path, "r");
   try {
-    await readLines(index, 0, (await index.stat()).size, undefined, (line) => {
+    const stat = await file.stat();
+    const size = stat.size;
+    const saved = await readSidecar(path, file, size);
+    const indexed = saved?.starts.length ?? 0;
+    const starts = saved?.starts ?? [];
+    const from = saved?.bytes ?? 0;
+    let bytes = from;
+    await readLines(file, from, size, undefined, (line) => {
       starts.push(bytes);
       bytes += Buffer.byteLength(line) + 1;
     });
+    let sidecarReady = saved !== undefined;
+    if (!saved || bytes !== from) {
+      const records = encodeIndex(starts, bytes, indexed, !saved);
+      try {
+        if (saved) await appendFile(sidecarPath(path), records);
+        else await writeFile(sidecarPath(path), records);
+        sidecarReady = true;
+      } catch {
+        sidecarReady = false;
+      }
+    }
+    return { starts, bytes, sidecarReady };
   } finally {
-    await index.close();
+    await file.close();
   }
-  return { starts, bytes };
 }
 
 /**
  * A room's log after a restart (M6-7a): the lines on disk stay, and new ones
- * are appended with the next `seq`. A partial last line, which a `kill -9`
+ * are appended with the next `seq`. Its sidecar avoids a full scan when valid.
+ * A partial last line, which a `kill -9`
  * mid-write leaves, is cut first: an append after it would join the two into
  * one bad line. A log that is not there starts empty.
  */
@@ -314,6 +434,8 @@ export async function reopenEventLog(
 
 /** Sends each whole line in `[from, to)`; `to` always sits on a line end.
  *  Stops early, mid-chunk too, when `onLine` returns false. */
+// Keep the internal hot path positional rather than allocating an options object.
+// pi-lens-ignore: long-parameter-list
 async function readLines(
   file: FileHandle,
   from: number,

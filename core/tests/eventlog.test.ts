@@ -6,9 +6,19 @@
 
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import test, { type TestContext } from "node:test";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import {
@@ -36,6 +46,10 @@ const chunk = (text: string, agent = "t0"): AgentEventEnvelope => ({
     content: { type: "text", text },
   },
 });
+
+const indexPath = (path: string) => path.replace(/\.jsonl$/, ".idx");
+const INDEX_HEADER_BYTES = 8;
+const INDEX_RECORD_BYTES = 16;
 
 const tick = () => new Promise((ok) => setImmediate(ok));
 
@@ -664,4 +678,159 @@ test("a reopened log that is not there starts empty", async (t) => {
   fresh.append(chunk("first"));
   await fresh.close();
   assert.equal(JSON.parse(await readFile(`${path}.missing`, "utf8")).seq, 1);
+});
+
+// --- the persistent dense index (#321) ------------------------------------
+
+test("a dense sidecar survives append and reopen with exact arbitrary replay", async (t) => {
+  const { log, path } = await logIn(t);
+  log.append(chunk("one"));
+  log.append(chunk("two"));
+  await log.close();
+
+  const before = await readFile(indexPath(path));
+  assert.equal(before.subarray(0, 4).toString("ascii"), "KIDX");
+  assert.equal(before.readUInt32LE(4), 1);
+  assert.equal(before.length, INDEX_HEADER_BYTES + 2 * INDEX_RECORD_BYTES);
+
+  const again = await reopenEventLog(path, (err) => {
+    throw err;
+  });
+  again.append(chunk("three"));
+  await again.close();
+  const after = await readFile(indexPath(path));
+  assert.equal(after.length, INDEX_HEADER_BYTES + 3 * INDEX_RECORD_BYTES);
+  assert.deepEqual(after.subarray(0, before.length), before);
+
+  const replay = await openEventLog(path);
+  const r = collect(replay, 1);
+  await r.done;
+  assert.deepEqual(r.seqs, [2, 3]);
+  assert.deepEqual(
+    r.lines.map((line) => JSON.parse(line).update.content.text),
+    ["two", "three"],
+  );
+});
+
+for (const kind of ["missing", "corrupt"]) {
+  test(`a ${kind} sidecar is rebuilt without changing replay`, async (t) => {
+    const { log, path } = await logIn(t);
+    for (const text of ["one", "two", "three"]) log.append(chunk(text));
+    await log.close();
+    if (kind === "missing") {
+      await rm(indexPath(path));
+    } else {
+      const damaged = await readFile(indexPath(path));
+      damaged.writeDoubleLE(1, INDEX_HEADER_BYTES);
+      await writeFile(indexPath(path), damaged);
+    }
+
+    const replay = await openEventLog(path);
+    const r = collect(replay, 1);
+    await r.done;
+    assert.equal(replay.size, 3);
+    assert.deepEqual(r.seqs, [2, 3]);
+    assert.deepEqual(
+      r.lines.map((line) => JSON.parse(line).update.content.text),
+      ["two", "three"],
+    );
+    const rebuilt = await stat(indexPath(path));
+    assert.equal(rebuilt.size, INDEX_HEADER_BYTES + 3 * INDEX_RECORD_BYTES);
+  });
+}
+
+test("a stale sidecar gains complete tail lines and ignores a partial one", async (t) => {
+  const { log, path } = await logIn(t);
+  log.append(chunk("one"));
+  log.append(chunk("two"));
+  await log.close();
+  const third = JSON.stringify({ seq: 3, ...chunk("three") });
+  const fourth = JSON.stringify({ seq: 4, ...chunk("four") });
+  await appendFile(path, `${third}\n${fourth}\n{"seq":5,"agen`);
+
+  const replay = await openEventLog(path);
+  const r = collect(replay, 2);
+  await r.done;
+  assert.equal(replay.size, 4);
+  assert.deepEqual(r.seqs, [3, 4]);
+  assert.deepEqual(
+    r.lines.map((line) => JSON.parse(line).update.content.text),
+    ["three", "four"],
+  );
+  const rebuilt = await stat(indexPath(path));
+  assert.equal(rebuilt.size, INDEX_HEADER_BYTES + 4 * INDEX_RECORD_BYTES);
+});
+
+test("a sidecar ahead of the log is rebuilt from the complete lines", async (t) => {
+  const { log, path } = await logIn(t);
+  for (const text of ["one", "two", "three"]) log.append(chunk(text));
+  await log.close();
+  const index = await readFile(indexPath(path));
+  const secondEnd = index.readDoubleLE(
+    INDEX_HEADER_BYTES + INDEX_RECORD_BYTES + 8,
+  );
+  await truncate(path, secondEnd);
+
+  const replay = await openEventLog(path);
+  assert.equal(replay.size, 2);
+  const r = collect(replay, 1);
+  await r.done;
+  assert.deepEqual(r.seqs, [2]);
+  assert.equal(
+    (await stat(indexPath(path))).size,
+    INDEX_HEADER_BYTES + 2 * INDEX_RECORD_BYTES,
+  );
+});
+
+test("a sidecar write failure does not sacrifice the JSONL", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "kapelle-eventlog-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, "events.jsonl");
+  await mkdir(indexPath(path));
+  const errors: string[] = [];
+  const log = createEventLog(path, (err) => errors.push(err.message));
+  log.append(chunk("safe"));
+  await log.close();
+
+  assert.equal(log.size, 1);
+  assert.equal(errors.length, 1);
+  assert.equal(
+    JSON.parse(await readFile(path, "utf8")).update.content.text,
+    "safe",
+  );
+});
+
+test("a synthetic 1 M-line log measures initial and sidecar boot indexing", async (t) => {
+  const { log, path } = await logIn(t);
+  await log.close();
+  const TOTAL = 1_000_000;
+  const BATCH = 10_000;
+  for (let first = 1; first <= TOTAL; first += BATCH) {
+    const lines: string[] = [];
+    for (let seq = first; seq < first + BATCH; seq++) {
+      lines.push(`{"seq":${seq}}`);
+    }
+    await appendFile(path, `${lines.join("\n")}\n`);
+  }
+
+  let started = performance.now();
+  const initial = await openEventLog(path);
+  const initialMs = performance.now() - started;
+  assert.equal(initial.size, TOTAL);
+  const last = collect(initial, TOTAL - 1);
+  await last.done;
+  assert.deepEqual(last.seqs, [TOTAL]);
+  assert.equal(JSON.parse(last.lines[0] as string).seq, TOTAL);
+
+  started = performance.now();
+  const warm = await openEventLog(path);
+  const warmMs = performance.now() - started;
+  assert.equal(warm.size, TOTAL);
+  assert.equal(
+    (await stat(indexPath(path))).size,
+    INDEX_HEADER_BYTES + TOTAL * INDEX_RECORD_BYTES,
+  );
+  t.diagnostic(
+    `1 M-line boot index: initial ${initialMs.toFixed(1)} ms; valid sidecar ${warmMs.toFixed(1)} ms`,
+  );
 });
