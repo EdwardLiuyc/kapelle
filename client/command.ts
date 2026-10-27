@@ -164,6 +164,8 @@ const ORCHESTRATOR = "po";
  * A loop's start (M8-5) as a command: the room titled `<recipe>-<task>`, and
  * the orchestrator in `auto`, on claude unless `agent` or `cmd` names
  * another harness. The recipe is read when the command runs, not here.
+ * The task and the note are trimmed here, once, so `kapelle loop` and
+ * `/loop` send the same; a blank note is none.
  */
 export function loopCommand(o: {
   recipe: string;
@@ -173,17 +175,19 @@ export function loopCommand(o: {
   cmd?: string | undefined;
   cwd: string;
 }): Extract<RouteCommand, { verb: "loop" }> {
+  const task = o.task.trim();
+  const note = o.note?.trim();
   const harness = o.cmd
     ? { ...(o.agent && { agent: o.agent }), cmd: o.cmd }
     : { agent: o.agent || "claude" };
   return {
     verb: "loop",
     recipe: o.recipe,
-    task: o.task,
-    ...(o.note?.trim() && { note: o.note }),
+    task,
+    ...(note && { note }),
     body: {
       cwd: o.cwd,
-      title: `${o.recipe}-${o.task}`,
+      title: `${o.recipe}-${task}`,
       agents: [
         { ...harness, name: ORCHESTRATOR, role: "orchestrator", mode: "auto" },
       ],

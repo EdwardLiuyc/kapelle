@@ -10,7 +10,7 @@ import { mkdtemp, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { deletePreviewLines, parseCommand } from "../command.ts";
+import { deletePreviewLines, loopCommand, parseCommand } from "../command.ts";
 import { FOLDER_GONE } from "../folder.ts";
 
 const roster = [
@@ -280,4 +280,17 @@ test("/loop opens <recipe>-<task> with po in auto, on claude unless --agent or -
   }
   const bad = parse("/loop fix 1 --mode ask");
   assert.ok(bad && "error" in bad && /--mode/.test(bad.error));
+});
+
+test("/loop and loopCommand trim the task and the note, so the CLI and the screens agree (#368 review)", () => {
+  const typed = parse(`/loop fix "  7  " "  a note  "`);
+  assert.ok(typed && "verb" in typed && typed.verb === "loop");
+  assert.equal(typed.task, "7");
+  assert.equal(typed.note, "a note");
+  assert.equal(typed.body.title, "fix-7");
+  // The CLI's path: `loopCommand` itself.
+  const cli = loopCommand({ recipe: "fix", task: " 7\n", note: " ", cwd: "/" });
+  assert.equal(cli.task, "7");
+  assert.equal(cli.body.title, "fix-7");
+  assert.ok(!("note" in cli), "a blank note is no note");
 });
