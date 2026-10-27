@@ -11,11 +11,11 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import {
   API_VERSION,
   type HarnessesReply,
@@ -33,6 +33,7 @@ import {
   gitRepo,
   headAt,
   LEAVE,
+  MOCK_AGENT,
   noPty,
   only,
   plainText,
@@ -55,6 +56,34 @@ const pickList = (out: string) =>
   [...screenRows(out).values()].flatMap(
     (row) => row.match(/┃ [→ ] (\S+)\s*┃/)?.[1] ?? [],
   );
+
+/** Two rooms on one screen: `doomed` starts the attached room, `kept` is the
+ *  other row. `longStop` keeps a delete from finishing before a test moves
+ *  the view. */
+async function twoRoomPty(t: TestContext, firstAgent: string) {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const doomed = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    title: "doomed",
+    agents: [{ cmd: firstAgent, name: "slow" }],
+  });
+  assert.equal(doomed.status, 201, doomed.body.error?.message);
+  const kept = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    title: "kept",
+    agents: [{ cmd: REMEMBER, name: "bob" }],
+  });
+  assert.equal(kept.status, 201, kept.body.error?.message);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${doomed.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen("○ bob");
+  return { screen, d, doomed: doomed.body, kept: kept.body };
+}
 
 test("chat.ts on a real terminal previews a fast-forward and moves on Enter", {
   skip: noPty,
@@ -86,6 +115,144 @@ test("chat.ts on a real terminal previews a fast-forward and moves on Enter", {
   assert.equal(headAt(dev.worktree), revHead);
   child.stdin.write("/leave\r");
   assert.equal(await exited, 0, out());
+});
+
+test("the ctrl+o menu previews /delete and Enter confirms it", {
+  skip: noPty,
+}, async (t) => {
+  const { child, seen, press, exited, out, d } = await chatOnPty(t);
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  assert.ok(room);
+  const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
+  const dev = only(full.body);
+  await commitAt(dev.worktree, "dev.txt");
+
+  await seen("○ mock-agent");
+  await press("\x0f", "delete room …");
+  await press(`${DOWN.repeat(5)}\r`, "delete · 1 branch");
+  await seen("dev.txt");
+  await press("\r", "deleted room-");
+  await seen("ctrl+o → new room");
+  assert.equal((await api(d, "GET", `/rooms/${room.id}`)).status, 404);
+  child.stdin.write(LEAVE);
+  assert.equal(await exited, 0, out());
+});
+
+test("an attached dismissed room stays open for /delete", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const dev = only(open.body);
+  await commitAt(dev.worktree, "dev.txt");
+  assert.equal(
+    (await api(d, "POST", `/rooms/${open.body.id}/dismiss`)).status,
+    200,
+  );
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen(open.body.id);
+  screen.child.stdin.write("/delete\r");
+  await screen.seen("delete · 1 branch");
+  await screen.seen("1 unmerged commit");
+  await screen.seen("dev.txt");
+  await screen.press("\r", "deleted room-");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left the chat");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("a refused TUI delete shows the dirty file and allows a retry", {
+  skip: noPty,
+}, async (t) => {
+  const { child, press, exited, out, d } = await chatOnPty(t);
+  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  assert.ok(room);
+  const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
+  const dev = only(full.body);
+  const draft = join(dev.worktree, "draft.txt");
+  await writeFile(draft, "uncommitted\n");
+
+  await press("/delete\r", "delete · 1 branch");
+  assert.equal(
+    (await api<RoomReply>(d, "GET", `/rooms/${room.id}`)).body.status,
+    "active",
+  );
+  await press("\r", "work nobody committed");
+  assert.match(plainText(out()).replaceAll(" ", ""), /draft\.txt/);
+  assert.match(plainText(out()), /commit or remove them/);
+  assert.equal(
+    (await api<RoomReply>(d, "GET", `/rooms/${room.id}`)).body.status,
+    "dismissed",
+  );
+  await access(draft);
+  await rm(draft);
+  await press("/delete\r", "delete · 1 branch");
+  await press("\r", "deleted room-");
+  child.stdin.write(LEAVE);
+  assert.equal(await exited, 0, out());
+});
+
+test("a delete drops the room it started on after the view moves", {
+  skip: noPty,
+}, async (t) => {
+  const wrapper = join(await tempDir(t), "slow-agent.sh");
+  await writeFile(
+    wrapper,
+    `#!/bin/sh\nnode ${MOCK_AGENT} --scenario remember\nsleep 2\n`,
+    { mode: 0o755 },
+  );
+  const { screen, d, doomed, kept } = await twoRoomPty(t, wrapper);
+  screen.child.stdin.write("/delete\r");
+  await screen.seen("delete · 1 branch");
+  screen.child.stdin.write("\r");
+  // The delete is still waiting for the slow harness to stop. Move past
+  // doomed's participant row to the kept room's timeline.
+  await new Promise((ok) => setTimeout(ok, 100));
+  await screen.press("\x1d", "ctrl+] view");
+  await screen.press("\x1b[1;3B\x1b[1;3B", "→ bob");
+  await screen.seen("deleted room-");
+  await new Promise((ok) => setTimeout(ok, 200));
+
+  const rows = [...screenRows(screen.out()).values()].join("\n");
+  assert.match(rows, /○ bob/);
+  assert.doesNotMatch(rows, /doomed/);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+  assert.equal((await api(d, "GET", `/rooms/${doomed.id}`)).status, 404);
+  assert.equal((await api(d, "GET", `/rooms/${kept.id}`)).status, 200);
+});
+
+test("a delete confirms the room its preview showed, not the current view", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, d, doomed, kept } = await twoRoomPty(t, REMEMBER);
+  screen.child.stdin.write("/delete\r");
+  await screen.seen("delete · 1 branch");
+  // Move past doomed's participant row to kept, then return the keys to the
+  // stale preview and confirm.
+  await screen.press("\x1d", "ctrl+] view");
+  await screen.press("\x1b[1;3B\x1b[1;3B", "→ bob");
+  await screen.press("\x1d", "ctrl+] type");
+  await screen.press("\r", "deleted room-");
+
+  assert.equal((await api(d, "GET", `/rooms/${doomed.id}`)).status, 404);
+  assert.equal((await api(d, "GET", `/rooms/${kept.id}`)).status, 200);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
 });
 
 test("the target's ctrl+o menu previews a fast-forward from another participant", {

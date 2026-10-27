@@ -47,7 +47,7 @@
  * `restoreRuns` follows.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { rename, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
@@ -412,6 +412,25 @@ async function roomCheckouts(root: string, roomId: string): Promise<string[]> {
   return all.filter((w) => w.runId === roomId).map((w) => w.path);
 }
 
+/** The most commits one branch's preview carries. A branch with more shows
+ *  `total` minus the returned list as a count. */
+const DELETE_PREVIEW_COMMITS = 200;
+
+/** What `DELETE /rooms/:id` would remove from git: every branch the room
+ *  owns, with the commits each one holds that no ref outside the room can
+ *  reach. A branch merged into another branch outside the room has no such
+ *  commits. */
+export interface RoomDeletePreview {
+  branches: {
+    branch: string;
+    participant?: string;
+    commits: { sha: string; subject: string }[];
+    /** Every unreachable commit on the branch, including those left out of
+     *  `commits` by the preview cap. */
+    total: number;
+  }[];
+}
+
 /**
  * What a room delete would lose (#235): each checkout's uncommitted files,
  * untracked ones too, as full paths. Empty means the room can go.
@@ -468,6 +487,97 @@ async function roomBranches(
     if (await hasBranch(root, branch)) branches.add(branch);
   }
   return branches;
+}
+
+/**
+ * The branches `DELETE /rooms/:id` would remove, each with the commits that
+ * would become unreachable (#352). "Outside the room" means every other ref,
+ * local or remote, plus a tag or a detached HEAD. That is what a delete
+ * leaves behind, so work merged into `main` reads as merged while a branch
+ * based on another room branch still shows the commits both will lose.
+ */
+export async function roomDeletePreview(
+  root: string,
+  roomId: string,
+): Promise<RoomDeletePreview> {
+  let record: RoomRecord | undefined;
+  const file = roomFile(root, roomId);
+  if (existsSync(file)) {
+    try {
+      record = readRoomRecord(file);
+    } catch {
+      // As `removeRoom`: only the room's own namespace can be named.
+    }
+  }
+  // A room whose cwd is no repository has no branches to lose, as
+  // `removeRoom` says.
+  if ((await tryGit(root, ["rev-parse", "--git-dir"])) === null)
+    return { branches: [] };
+  const branches = await roomBranches(root, roomId, record, []);
+  if (branches.size === 0) return { branches: [] };
+
+  const owned = new Set([...branches].map((branch) => `refs/heads/${branch}`));
+  const refs = await gitWithInput(
+    root,
+    ["for-each-ref", "--format=%(refname)"],
+    "",
+  );
+  const outside = refs.split("\n").filter((ref) => ref && !owned.has(ref));
+  // A detached main checkout is a ref too: its commit survives the delete.
+  if (
+    (await tryGit(root, ["symbolic-ref", "--quiet", "--short", "HEAD"])) ===
+    null
+  ) {
+    outside.push("HEAD");
+  }
+  const names = new Map<string, string>();
+  for (const p of record?.participants ?? []) {
+    if (p.branch) names.set(p.branch, p.name);
+  }
+
+  // `--stdin` keeps a repository with thousands of refs off the argv.
+  const negative = outside.map((ref) => `^${ref}`).join("\n");
+  return {
+    branches: await Promise.all(
+      [...branches].sort().map(async (branch) => {
+        const log = await gitWithInput(
+          root,
+          [
+            "log",
+            "--format=%H%x00%s",
+            `--max-count=${DELETE_PREVIEW_COMMITS + 1}`,
+            branch,
+            "--stdin",
+            "--",
+          ],
+          negative,
+        );
+        const commits = log
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [sha = "", subject = ""] = line.split("\0");
+            return { sha, subject };
+          });
+        const total =
+          commits.length > DELETE_PREVIEW_COMMITS
+            ? Number(
+                await gitWithInput(
+                  root,
+                  ["rev-list", "--count", branch, "--stdin", "--"],
+                  negative,
+                ),
+              )
+            : commits.length;
+        return {
+          branch,
+          ...(names.has(branch) && { participant: names.get(branch) }),
+          commits: commits.slice(0, DELETE_PREVIEW_COMMITS),
+          total,
+        };
+      }),
+    ),
+  };
 }
 
 /**
@@ -691,6 +801,40 @@ async function reapRun(
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await run("git", args, { cwd });
   return stdout;
+}
+
+/** `git` with a string on stdin, so long revision lists stay off argv and a
+ *  read is not capped by `execFile`'s buffer. `--stdin` reads `^<ref>` lines. */
+function gitWithInput(
+  cwd: string,
+  args: string[],
+  input: string,
+): Promise<string> {
+  return new Promise((ok, fail) => {
+    const child = spawn("git", args, { cwd });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (text) => {
+      stdout += text;
+    });
+    child.stderr.setEncoding("utf8").on("data", (text) => {
+      stderr += text;
+    });
+    child.on("error", fail);
+    child.on("close", (code) => {
+      if (code === 0) ok(stdout);
+      else
+        fail(
+          new Error(
+            stderr.trim() ||
+              `git ${args[0] ?? "command"} exited with code ${code}`,
+          ),
+        );
+    });
+    // A git that exits before reading stdin makes this write fail.
+    child.stdin.on("error", () => {});
+    child.stdin.end(input);
+  });
 }
 
 /**

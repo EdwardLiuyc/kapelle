@@ -4,13 +4,14 @@
  *
  * **Both screens and the pop-up forms go through here**, so they cannot
  * differ (S8). `parseCommand` turns typed text into a `Command`; a form
- * builds the same `Command` from its fields; `runCommand` sends it.
+ * builds the same `Command` from its fields; `runCommand` sends the routes it
+ * names.
  *
  * **A participant command starts with `@name`**, as a message does (R43):
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
  * the orchestrator, so a bare `/remove` cannot drop it. Room commands
- * (`/new`, `/add`, `/title`, `/dismiss`, `/leave`, `/help`, `/term`,
- * `/setup`) ignore a mention, so they work after a thread's pre-filled
+ * (`/new`, `/add`, `/title`, `/dismiss`, `/delete`, `/leave`, `/help`,
+ * `/term`, `/setup`) ignore a mention, so they work after a thread's pre-filled
  * `@name`.
  *
  * **The screen never guesses** (M4-5). A value the daemon checks (a role, a
@@ -26,8 +27,8 @@
 
 import { parseArgs } from "node:util";
 
-import type { ParticipantDto, RoomDto } from "./contract.ts";
-import { call, type DaemonAddress } from "./daemon.ts";
+import type { DeletePreview, ParticipantDto, RoomDto } from "./contract.ts";
+import { call, type DaemonAddress, type Reply } from "./daemon.ts";
 import { absoluteFolder, FOLDER_GONE } from "./folder.ts";
 import { fold, MENTION, type Named, targetOf } from "./mention.ts";
 import { printable } from "./room.ts";
@@ -55,6 +56,7 @@ export type RouteCommand =
   | { verb: "new"; body: NewRoom }
   | { verb: "add"; agent: AgentSpec }
   | { verb: "dismiss" }
+  | { verb: "delete" }
   | { verb: "title"; title: string }
   | { verb: "remove" | "cancel"; id: string; name: string }
   | {
@@ -101,7 +103,7 @@ export const HELP = [
   "@name /remove",
   "@name /diff [base]",
   "@name /ff --from @name",
-  "/setup [done]   /term   /dismiss   /leave   /help",
+  "/setup [done]   /term   /dismiss   /delete   /leave   /help",
   "/new and /add alone open a form; ctrl+o opens the menu",
 ];
 
@@ -124,6 +126,7 @@ const ROOM_VERBS = new Set([
   "add",
   "title",
   "dismiss",
+  "delete",
   "leave",
   "help",
   "term",
@@ -192,6 +195,7 @@ export function parseCommand(
   if (
     verb === "leave" ||
     verb === "dismiss" ||
+    verb === "delete" ||
     verb === "help" ||
     verb === "term"
   ) {
@@ -299,13 +303,47 @@ export function parseCommand(
 /** What a route said: a line for the status bar, or the daemon's refusal. */
 export type Outcome =
   | { ok: true; line: string; room?: RoomDto }
-  | { ok: false; code: string; message: string };
+  | { ok: false; code: string; message: string; room?: RoomDto };
 
-const refused = (message: string, code = ""): Outcome => ({
+const refused = (message: string, code = "", room?: RoomDto): Outcome => ({
   ok: false,
   code,
   message,
+  ...(room && { room }),
 });
+
+/** What `DELETE /rooms/:id` would remove from git (since 1.15). */
+export const deletePreview = (
+  d: DaemonAddress,
+  roomId: string,
+): Promise<Reply<DeletePreview>> =>
+  call<DeletePreview>(d, `/rooms/${roomId}/delete-preview`);
+
+/** The preview as rows both screens can draw. A branch says `all merged`
+ *  when the delete would not make any of its commits unreachable. */
+export function deletePreviewLines(preview: DeletePreview): string[] {
+  if (preview.branches.length === 0)
+    return ["no room-owned branches would be removed"];
+  return preview.branches.flatMap((b) => {
+    const who = b.participant
+      ? printable(b.participant)
+      : "no current participant";
+    const n = b.total;
+    const state =
+      n === 0 ? "all merged" : `${n} unmerged commit${n === 1 ? "" : "s"}`;
+    const more = b.total - b.commits.length;
+    return [
+      `${state} · ${who}`,
+      `  ${printable(b.branch)}`,
+      ...b.commits.map(
+        (commit) => `  ${commit.sha.slice(0, 8)} ${printable(commit.subject)}`,
+      ),
+      ...(more > 0
+        ? [`  … and ${more} more commit${more === 1 ? "" : "s"}`]
+        : []),
+    ];
+  });
+}
 
 /** An agent spec as the daemon takes it: empty fields left out, and a
  *  `base` of `@name` turned into that participant's branch. */
@@ -360,6 +398,26 @@ export async function runCommand(
       const r = await call<RoomDto>(d, `${room}/dismiss`, { method: "POST" });
       if (!r.ok) return refused(r.error.message, r.error.code);
       return { ok: true, line: `dismissed ${roomId}`, room: r.body };
+    }
+    case "delete": {
+      let r = await call<void>(d, room, { method: "DELETE" });
+      let dismissed: RoomDto | undefined;
+      if (!r.ok && r.error.code === "room_active") {
+        const closed = await call<RoomDto>(d, `${room}/dismiss`, {
+          method: "POST",
+        });
+        if (!closed.ok && closed.error.code !== "room_dismissed") {
+          return refused(closed.error.message, closed.error.code);
+        }
+        if (closed.ok) dismissed = closed.body;
+        else {
+          const got = await call<RoomDto>(d, room);
+          if (got.ok) dismissed = got.body;
+        }
+        r = await call<void>(d, room, { method: "DELETE" });
+      }
+      if (!r.ok) return refused(r.error.message, r.error.code, dismissed);
+      return { ok: true, line: `deleted ${roomId}` };
     }
     case "title": {
       const r = await call<RoomDto>(d, room, {

@@ -10,7 +10,7 @@ import { mkdtemp, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { parseCommand } from "../command.ts";
+import { deletePreviewLines, parseCommand } from "../command.ts";
 import { FOLDER_GONE } from "../folder.ts";
 
 const roster = [
@@ -197,6 +197,43 @@ test("@name /ff --from @name names the target and the source", () => {
     const r = parse(line);
     assert.ok(r && "error" in r, line);
   }
+});
+
+test("/delete is a room command, exact, and works after a mention", () => {
+  assert.deepEqual(parse("/delete"), { verb: "delete" });
+  assert.deepEqual(parse("@bob /delete"), { verb: "delete" });
+  assert.equal(parse("/delete now"), undefined);
+});
+
+test("the delete preview names every branch and only its unmerged commits", () => {
+  assert.deepEqual(
+    deletePreviewLines({
+      branches: [
+        {
+          branch: "kapelle/room-1/p-a",
+          participant: "alice",
+          commits: [{ sha: "1234567890", subject: "fix it" }],
+          total: 3,
+        },
+        {
+          branch: "kapelle/room-1/p-old",
+          commits: [],
+          total: 0,
+        },
+      ],
+    }),
+    [
+      "3 unmerged commits · alice",
+      "  kapelle/room-1/p-a",
+      "  12345678 fix it",
+      "  … and 2 more commits",
+      "all merged · no current participant",
+      "  kapelle/room-1/p-old",
+    ],
+  );
+  assert.deepEqual(deletePreviewLines({ branches: [] }), [
+    "no room-owned branches would be removed",
+  ]);
 });
 
 test("/setup opens the agent list, and /setup done says done (M9-3)", () => {

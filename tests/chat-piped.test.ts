@@ -13,7 +13,15 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join, relative, sep } from "node:path";
@@ -29,9 +37,11 @@ import {
   api,
   bootDaemon as boot,
   bootFinding,
+  commitAt,
   fakePath,
   gitRepo,
   MOCK_AGENT,
+  only,
   REMEMBER,
   REPO,
   type RoomReply,
@@ -41,6 +51,8 @@ import {
   runCli,
   spawnCli,
   tempDir,
+  until,
+  withAgent,
 } from "../integration/helpers.ts";
 
 // --- chat rooms (chat MVP) ------------------------------------------------------
@@ -582,6 +594,106 @@ test("piped chat.ts refuses a bare /new or /add, and /term: each needs a termina
   assert.match(r.stderr, /! a form needs a terminal: \/new/);
   assert.match(r.stderr, /! a form needs a terminal: \/add </);
   assert.match(r.stderr, /! a shell needs the full-screen chat/);
+});
+
+test("piped /delete waits for the next line, then keeps a dismissed room open after 409", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const room = open.body;
+  const dev = only(room);
+  await commitAt(dev.worktree, "dev.txt");
+  await writeFile(join(dev.worktree, "draft.txt"), "half a thought\n");
+
+  const c = spawnCli(t, ["attach", room.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  let stderr = "";
+  c.child.stderr.setEncoding("utf8").on("data", (text) => {
+    stderr += text;
+  });
+  c.child.stdin.write("/delete\n/delete\n");
+  await until("the delete refusal", () => stderr.includes("draft.txt"));
+  assert.match(stderr, /commit or remove them, then type \/delete again/);
+  const held = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
+  assert.equal(held.status, 200);
+  assert.equal(held.body.status, "dismissed");
+  assert.ok(
+    existsSync(join(dev.worktree, "draft.txt")),
+    "the refused delete kept the file",
+  );
+  assert.equal(c.child.exitCode, null, stderr);
+
+  await rm(join(dev.worktree, "draft.txt"));
+  c.child.stdin.write("/delete\n/delete\n");
+  c.child.stdin.end();
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /delete room-[^:]+: 1 branch/);
+  assert.match(r.stdout, /1 unmerged commit/);
+  assert.match(r.stdout, /dev\.txt/);
+  assert.match(r.stdout, /the room is dismissed; \/delete to remove it/);
+  assert.match(r.stdout, /deleted room-/);
+  assert.equal((await api(d, "GET", `/rooms/${room.id}`)).status, 404);
+});
+
+test("piped attach of a dismissed room waits in read-only mode", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  assert.equal(
+    (await api(d, "POST", `/rooms/${open.body.id}/dismiss`)).status,
+    200,
+  );
+
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await c.waitFor(
+    "the room is dismissed; /delete to remove it, /leave to exit",
+  );
+  c.child.stdin.end("/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /the room is dismissed; \/delete to remove it/);
+});
+
+test("piped /delete changes nothing unless the next line is /delete", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("/delete\n/help\n/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /type \/delete again to confirm/);
+  assert.match(r.stdout, /\/setup \[done\]/);
+  const still = await api<RoomReply>(d, "GET", `/rooms/${open.body.id}`);
+  assert.equal(still.status, 200);
+  assert.equal(still.body.status, "active");
 });
 
 test("piped chat.ts takes the room commands, and names the room /new opened", async (t) => {
