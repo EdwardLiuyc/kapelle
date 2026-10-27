@@ -35,9 +35,7 @@ const SKILL = join(import.meta.dirname, "..", "assets", "orchestrator.md");
  *  none. A folder that does not exist is walked as typed. */
 function gitTop(cwd: string): string | undefined {
   let dir = cwd;
-  try {
-    dir = realpathSync(cwd);
-  } catch {}
+  if (existsSync(cwd)) dir = realpathSync(cwd);
   for (; ; dir = dirname(dir)) {
     if (existsSync(join(dir, ".git"))) return dir;
     if (dirname(dir) === dir) return undefined;

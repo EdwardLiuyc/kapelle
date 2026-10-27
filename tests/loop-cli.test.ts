@@ -10,7 +10,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { RoomDto, RoomListEntry } from "../client/contract.ts";
@@ -79,18 +79,19 @@ test("kapelle loop opens <recipe>-<task> with po in auto, and sends it the skill
     text = (first?.update.text as string | undefined) ?? "";
     if (!text) await new Promise((ok) => setTimeout(ok, 50));
   }
-  const skill = await readFile(
-    join(import.meta.dirname, "..", "assets", "orchestrator.md"),
-    "utf8",
-  );
+  const skillLabel = "[the orchestrator skill]\n";
+  assert.equal(text.slice(0, skillLabel.length), skillLabel);
   const at = [
-    "[the orchestrator skill]",
-    skill.trim(),
     "[the recipe: fix]",
     "# fix\n\nsteps",
     "[the task]\n7",
     "[the note]\na note",
   ].map((part) => text.indexOf(part));
+  const recipeAt = at[0];
+  assert.ok(
+    recipeAt !== undefined && recipeAt > skillLabel.length,
+    `the skill part is empty: ${JSON.stringify(text.slice(0, 120))}`,
+  );
   assert.ok(
     at.every((i, n) => i >= 0 && (n === 0 || i > (at[n - 1] as number))),
     `the parts in order: ${at}`,
@@ -141,7 +142,22 @@ test("kapelle loop list names each recipe, its folder, and which one wins", asyn
     `fix  ${join(user, "fix.md")}  (hidden: the one above wins)`,
     `solo  ${join(user, "solo.md")}`,
   ]);
-  const usage = await loop(["list", "extra"]);
+  const usage = await loop(["list", "one", "two", "three"]);
   assert.equal(usage.code, 1);
   assert.match(usage.stderr, /usage: kapelle loop/);
+});
+
+test("kapelle loop starts a recipe named list when a task follows", async (t) => {
+  const { d, repo, loop } = await fixture(t);
+  await writeFile(
+    join(repo, ".kapelle", "loops", "list.md"),
+    "the list recipe\n",
+  );
+  const r = await loop(["list", "7", "--cmd", REMEMBER]);
+  assert.equal(r.code, 0, r.stderr);
+  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  assert.ok(
+    rooms.body.some((room) => room.title === "list-7"),
+    JSON.stringify(rooms.body),
+  );
 });

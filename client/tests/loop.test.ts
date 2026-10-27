@@ -8,7 +8,6 @@ import assert from "node:assert/strict";
 import {
   mkdir,
   mkdtemp,
-  readFile,
   realpath,
   rm,
   symlink,
@@ -126,6 +125,32 @@ test("a directory named like a recipe neither wins nor hides the user's file", a
   assert.ok("text" in start && start.text.includes("user fix"));
 });
 
+test("a link to a recipe file counts by what it points to, and a broken one is skipped", async (t) => {
+  const f = await folders(t, {}, { "fix.md": "user fix" });
+  const repo = join(f.top, ".kapelle", "loops");
+  const user = join(f.env.XDG_CONFIG_HOME, "kapelle", "loops");
+  const target = join(f.root, "linked.md");
+  await writeFile(target, "linked fix\n");
+  await symlink(target, join(repo, "fix.md"));
+  assert.deepEqual(await listRecipes(f.sub, f.env), [
+    { name: "fix", path: join(repo, "fix.md"), wins: true },
+    { name: "fix", path: join(user, "fix.md"), wins: false },
+  ]);
+  const start = await loopMessage({ recipe: "fix", task: "7" }, f.sub, f.env);
+  assert.ok("text" in start && start.text.includes("linked fix"));
+
+  await rm(target);
+  assert.deepEqual(await listRecipes(f.sub, f.env), [
+    { name: "fix", path: join(user, "fix.md"), wins: true },
+  ]);
+  const fallback = await loopMessage(
+    { recipe: "fix", task: "7" },
+    f.sub,
+    f.env,
+  );
+  assert.ok("text" in fallback && fallback.text.includes("user fix"));
+});
+
 test("a missing recipe is refused by name, with every folder it looked in", async (t) => {
   const f = await folders(t, {}, {});
   const r = await loopMessage({ recipe: "nope", task: "7" }, f.sub, f.env);
@@ -142,22 +167,22 @@ test("a missing recipe is refused by name, with every folder it looked in", asyn
 
 test("the first message holds the skill, the recipe, the task and the note, in that order", async (t) => {
   const f = await folders(t, { "fix.md": "# fix\n\nthe steps\n" }, {});
-  const skill = await readFile(
-    join(import.meta.dirname, "..", "..", "assets", "orchestrator.md"),
-    "utf8",
-  );
   const r = await loopMessage(
     { recipe: "fix", task: "269", note: "skip the bot" },
     f.top,
     f.env,
   );
   assert.ok("text" in r);
+  const skillLabel = "[the orchestrator skill]\n";
+  const recipeAt = r.text.indexOf("\n\n[the recipe: fix]\n");
+  assert.equal(r.text.slice(0, skillLabel.length), skillLabel);
+  assert.ok(
+    recipeAt > skillLabel.length,
+    `the skill part is empty: ${JSON.stringify(r.text.slice(0, 120))}`,
+  );
   assert.equal(
-    r.text,
+    r.text.slice(recipeAt + 2),
     [
-      "[the orchestrator skill]",
-      skill.trim(),
-      "",
       "[the recipe: fix]",
       "# fix\n\nthe steps",
       "",

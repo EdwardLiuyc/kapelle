@@ -488,6 +488,10 @@ test("/loop on the full screen opens <recipe>-<task>, and kapelle loop on a term
     { XDG_RUNTIME_DIR: runtime },
   );
   await cli.seen("fix-10");
+  const listed = await api<RoomReply[]>(d, "GET", "/rooms");
+  const fix10 = listed.body.find((room) => room.title === "fix-10");
+  assert.ok(fix10, JSON.stringify(listed.body));
+  await cli.seen(`room ${fix10.id} ·`);
   await cli.press(LEAVE, "rejoin with");
   assert.equal(await cli.exited, 0, cli.out());
   const rooms = await api<RoomReply[]>(d, "GET", "/rooms");

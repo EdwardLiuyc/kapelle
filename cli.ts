@@ -1466,7 +1466,7 @@ async function runLoopCommand(): Promise<number> {
     "unless --agent or --cmd names another harness.",
   ].join("\n");
   const [, first, ...args] = positional as string[];
-  const list = first === "list";
+  const list = first === "list" && args.length === 0;
   if (!first || (list ? args.length > 0 : args.length < 1 || args.length > 2)) {
     console.error(usage);
     return 1;
