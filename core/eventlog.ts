@@ -49,7 +49,7 @@
  * partial last line, and goes on appending with `seq` carried on.
  */
 
-import { createWriteStream, existsSync } from "node:fs";
+import { createWriteStream, existsSync, rmSync } from "node:fs";
 import {
   appendFile,
   type FileHandle,
@@ -66,7 +66,8 @@ import type { AgentEvent } from "../protocol/types.ts";
 
 const CHUNK_BYTES = 64 * 1024;
 const NEWLINE = 0x0a;
-/** KIDX version 3. A 40-byte header is followed by append-only chunks. Each
+/** KIDX version 3 (1 and 2 were in-branch iterations). A 40-byte header is
+ *  followed by append-only chunks. Each
  *  chunk carries a fast CRC32 and up to `INDEX_CHUNK_ENTRIES` dense end offsets,
  *  one per complete line. Starts are the previous end, so a line needs only one
  *  float64. IEEE-754 doubles exactly represent every safe-integer byte offset.
@@ -122,7 +123,7 @@ export interface EventLog {
   close(): Promise<void>;
 }
 
-/** The lines already on disk: where each ends, and the bytes they take. */
+/** The log's device, inode and birth time, used to reject a copied sidecar. */
 interface LogIdentity {
   dev: bigint;
   ino: bigint;
@@ -142,6 +143,7 @@ const identityOf = (stats: {
 const fileIdentity = async (path: string): Promise<LogIdentity> =>
   identityOf(await stat(path, { bigint: true }));
 
+/** The lines already on disk: where each ends, and the bytes they take. */
 interface Index {
   /** `ends[seq - 1]` is the byte offset after that line. */
   ends: Float64Array;
@@ -165,11 +167,24 @@ function growOffsets(ends: Float64Array, needed: number): Float64Array {
 
 /** A new log at `path`, or with `from`, one that appends after the lines
  *  `from` indexed. */
+// One closure owns the writer, readers and cache so their committed state cannot drift.
+// pi-lens-ignore: high-fan-out, high-complexity
+// `from` is an optional restored index, not a boolean mode switch.
+// pi-lens-ignore: no-flag-argument
 export function createEventLog(
   path: string,
   onError: (err: Error) => void,
   from?: Index,
 ): EventLog {
+  if (!from) {
+    // Truncating a log in place keeps its identity. Remove the old cache
+    // before the stream opens so a crash cannot pair it with the new JSONL.
+    try {
+      rmSync(sidecarPath(path), { force: true });
+    } catch {
+      // Cache errors stay separate from the JSONL stream's error contract.
+    }
+  }
   const out = createWriteStream(path, { flags: from ? "a" : "w" });
   let ends = from?.ends ?? new Float64Array(0);
   let appended = ends.length;
@@ -188,21 +203,12 @@ export function createEventLog(
     for (const waker of wakers) waker();
   };
 
-  let reportedCode: string | undefined;
-  let errorReported = false;
-  const report = (err: Error) => {
-    const { code } = err as NodeJS.ErrnoException;
-    if (errorReported && code === reportedCode) return;
-    errorReported = true;
-    reportedCode = code;
-    onError(err);
-  };
   out.on("error", (err) => {
     // The run goes on without its durable copy, the same as a stderr log that
     // cannot be written (M1b-7). Readers end at what was committed.
     if (!accepting) return;
     accepting = false;
-    report(err);
+    onError(err);
     markEnded();
   });
 
@@ -213,11 +219,19 @@ export function createEventLog(
   let sidecarCount = from?.sidecar?.count ?? 0;
   let sidecarWrite = Promise.resolve();
   let sidecarFailed = false;
+  let flushQueued = false;
 
+  // The close-only flag also controls whether a partial tail may be written.
+  // pi-lens-ignore: no-flag-argument
   const flushSidecar = (force = false): Promise<void> => {
     if (sidecarFailed) return sidecarWrite;
+    if (!force) {
+      if (flushQueued) return sidecarWrite;
+      flushQueued = true;
+    }
     sidecarWrite = sidecarWrite
       .then(async () => {
+        if (!force) flushQueued = false;
         if (sidecarFailed) return;
         // Live writes contain full chunks only. The final partial chunk is
         // forced at close; after a crash its lines are recovered from JSONL.
@@ -433,14 +447,20 @@ async function lastLineStart(
   let cursor = end - 1;
   while (cursor > 0) {
     const from = Math.max(0, cursor - buf.length);
-    let pos = from;
-    while (pos < cursor) {
-      const { bytesRead } = await log.read(buf, 0, cursor - pos, pos);
+    let filled = 0;
+    for (; from + filled < cursor; ) {
+      const position = from + filled;
+      const { bytesRead } = await log.read(
+        buf,
+        filled,
+        cursor - position,
+        position,
+      );
       if (bytesRead === 0) return undefined;
-      const newline = buf.subarray(0, bytesRead).lastIndexOf(NEWLINE);
-      if (newline !== -1) return pos + newline + 1;
-      pos += bytesRead;
+      filled += bytesRead;
     }
+    const newline = buf.subarray(0, filled).lastIndexOf(NEWLINE);
+    if (newline !== -1) return from + newline + 1;
     cursor = from;
   }
   return 0;
@@ -603,8 +623,16 @@ async function readSidecar(
   identity: LogIdentity,
 ): Promise<ParsedSidecar | undefined> {
   let data: Buffer;
+  const cachePath = sidecarPath(path);
   try {
-    data = await readFile(sidecarPath(path));
+    const stats = await stat(cachePath);
+    // One line needs at least one JSONL byte. Even a one-entry chunk costs
+    // at most 20 sidecar bytes, so anything larger cannot be a valid cache.
+    const maxBytes =
+      INDEX_HEADER_BYTES +
+      logBytes * (INDEX_END_BYTES + INDEX_CHUNK_OVERHEAD_BYTES);
+    if (stats.size > maxBytes) return undefined;
+    data = await readFile(cachePath);
   } catch {
     return undefined;
   }

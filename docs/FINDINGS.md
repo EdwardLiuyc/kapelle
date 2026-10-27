@@ -1604,6 +1604,22 @@ on all four. Changed or new:
 
 ---
 
+## Event-log sidecar · #321 — 2026-10-27
+
+Linux, Node 24, temporary files, no harness. These are client indexing measurements, not
+an agent run. The synthetic test writes 1 M short JSONL lines, then opens the log with a
+missing and a valid sidecar. Timing is diagnostic, not a wall-clock CI assertion.
+
+| probe | client at | result |
+| --- | --- | --- |
+| 1 M lines, missing sidecar, full suite running | `efbd08a` | 885.5 ms |
+| 1 M lines, valid sidecar, full suite running | `efbd08a` | **49.6 ms** |
+| 500,000 live appends, compact sidecar | `ba46a5124d6e51a4ab71194583cd853d2d6c66cd` | 4.02 MB; **23.8 ms** warm open |
+| 1 M lines plus one unindexed line | `ba46a5124d6e51a4ab71194583cd853d2d6c66cd` | **43.1 ms**; existing sidecar prefix preserved |
+
+The original 26-room / 324 MB workspace was not rerun. The 1 M-line test stays in the
+default suite because #321 explicitly requires it; temporary files are removed after it.
+
 ## What this note does not cover
 
 M0's questions are answered; these are the edges, collected so that no downstream story

@@ -1840,6 +1840,12 @@ task with no branch by name, which beats "no run record. Run it first."
 `sessionId` rides the task entry, set once `session/new` answers — the success
 path, a cancel before the prompt, and a throw out of the harness.
 
+**Amended 2026-10-27 (#321):** the index is now a dense `ends` `Float64Array`,
+persisted as a versioned `events.idx` beside the JSONL. `openEventLog` still never changes
+the JSONL, but it creates or refreshes that sidecar. A valid sidecar avoids the full scan;
+a missing, stale, torn, accidentally corrupt or copied one is rebuilt or reconciled from
+the JSONL. Live writes append full 256-entry chunks, and close flushes the partial tail.
+
 **Amended (room model):** rooms persist under `stateDirFor(root)/rooms/<roomId>/` with `room.json`, participant records and the room event log; restore is no longer read-only — a restored room comes back `paused` and a participant revives on its next message with a fresh session (S3(b), R42) — and the participant record carries `sessionId` (S4). `session/load` reattachment (S3(c), Half B) stays capability-gated and deferred.
 
 **M2-7 · Config · S · needs M2-1**

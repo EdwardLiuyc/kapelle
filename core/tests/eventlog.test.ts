@@ -822,6 +822,34 @@ test("a reopened log keeps its lines, cuts a half-written one, and goes on with 
   );
 });
 
+test("a fresh log removes a stale sidecar before its first flush", async (t) => {
+  const { log, path } = await logIn(t);
+  log.append(chunk("old"));
+  await log.close();
+
+  const fresh = createEventLog(path, (err) => {
+    throw err;
+  });
+  await assert.rejects(readFile(indexPath(path)), { code: "ENOENT" });
+  fresh.append(chunk("new"));
+  await assert.rejects(
+    readFile(indexPath(path)),
+    { code: "ENOENT" },
+    "the partial live tail has not recreated the cache yet",
+  );
+  await fresh.close();
+
+  assert.deepEqual(
+    v3Ends(await readFile(indexPath(path))),
+    await jsonlEnds(path),
+  );
+  const replay = await openEventLog(path);
+  assert.equal(replay.size, 1);
+  const r = collect(replay, 0);
+  await r.done;
+  assert.equal(JSON.parse(r.lines[0] as string).update.content.text, "new");
+});
+
 test("a reopened log that is not there starts empty", async (t) => {
   const { path } = await logIn(t);
   await rm(path, { force: true });
