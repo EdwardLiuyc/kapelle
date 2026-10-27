@@ -9,7 +9,7 @@ PR, answer the bot, hand over. The task is the issue number.
 | --- | --- | --- | --- |
 | `dev` | claude | `developer`, the main developer | at the start |
 | `rev1` | pi | `reviewer`, the first reviewer | after `dev` commits, from `dev`'s branch |
-| `rev2` | pi | `reviewer`, the second reviewer | after `rev1` is removed and `dev` has checked it, from `dev`'s branch |
+| `rev2` | pi | `reviewer`, the second reviewer | after `rev1` is removed, from `dev`'s branch |
 
 A skill starts with `/<name>` in claude and with `/skill:<name>` in pi. For example:
 `/pickup-issue 268` for `dev`, and `/skill:review-local 268` for `rev1` and `rev2`.
@@ -27,16 +27,18 @@ A skill starts with `/<name>` in claude and with `/skill:<name>` in pi. For exam
    Check them: the list is not empty, and it ends at `dev`'s last commit. If not, the
    review did not happen: send `rev1` back once. When it found problems, it commits its
    fixes and reports them as a list of `comment -> fix`.
-4. **Land review 1.** As the orchestrator skill says. Do this before `rev2` joins.
-5. **Review 2.** Add `rev2` from `dev`'s branch after step 4. `rev2` runs the
-   `review-local` skill for the issue, as developer
-   and tester: "The change is in the commits on your branch that are not on
-   `origin/master`." Its report names the commit it reviewed and the commits it covered.
-   Check them: the list is not empty, and the commit it reviewed is the tip of `dev`'s
-   branch when `rev2` was added. If not, the review did not happen: send `rev2` back
+4. **Land review 1.** As the orchestrator skill says. If `rev1` found no problem, remove
+   it and go to step 5.
+5. **Review 2.** Add `rev2` from `dev`'s branch after step 4. This is a second full,
+   independent review of the whole change, not only `rev1`'s fixes or the delta. `rev2`
+   runs the `review-local` skill for the issue, as developer and tester: "The change is
+   in the commits on your branch that are not on `origin/master`." Its report names the
+   commit it reviewed and the commits it covered. Check them: the list is not empty, and
+   it ends at `dev`'s last commit. If not, the review did not happen: send `rev2` back
    once. When it found problems, it commits its fixes and reports them as a list of
    `comment -> fix`.
-6. **Land review 2.** As the orchestrator skill says.
+6. **Land review 2.** As the orchestrator skill says. If `rev2` found no problem, remove
+   it and go to step 7.
 7. **PR.** `dev` pushes its branch, opens the PR with `Closes #<issue>` in its body,
    then starts the outside review.
 8. **Outside review.** Below.
