@@ -26,9 +26,9 @@ A skill starts with `/<name>` in claude and with `/skill:<name>` in pi. For exam
    `origin/master`." Its report names the commit it reviewed and the commits it covered.
    Check them: the list is not empty, and it ends at `dev`'s last commit. If not, the
    review did not happen: send `rev1` back once. When it found problems, it commits its
-   fixes and reports them as a list of `comment -> fix`.
-4. **Land review 1.** As the orchestrator skill says. If `rev1` found no problem, remove
-   it and go to step 5.
+   fixes and reports them as a list of `comment -> fix`. Only if `rev1` found no problem,
+   remove it and go to step 5 (skip step 4).
+4. **Land review 1.** As the orchestrator skill says.
 5. **Review 2.** Add `rev2` from `dev`'s branch after step 4. This is a second full,
    independent review of the whole change, not only `rev1`'s fixes or the delta. `rev2`
    runs the `review-local` skill for the issue, as developer and tester: "The change is
@@ -36,9 +36,8 @@ A skill starts with `/<name>` in claude and with `/skill:<name>` in pi. For exam
    commit it reviewed and the commits it covered. Check them: the list is not empty, and
    it ends at `dev`'s last commit. If not, the review did not happen: send `rev2` back
    once. When it found problems, it commits its fixes and reports them as a list of
-   `comment -> fix`.
-6. **Land review 2.** As the orchestrator skill says. If `rev2` found no problem, remove
-   it and go to step 7.
+   `comment -> fix`. Only if `rev2` found no problem, remove it and go to step 7.
+6. **Land review 2.** As the orchestrator skill says.
 7. **PR.** `dev` pushes its branch, opens the PR with `Closes #<issue>` in its body,
    then starts the outside review.
 8. **Outside review.** Below.
