@@ -5,6 +5,7 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { getEventListeners } from "node:events";
 import {
   appendFile,
@@ -20,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import test, { type TestContext } from "node:test";
+import { crc32 } from "node:zlib";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
 import {
   createEventLog,
@@ -48,8 +50,132 @@ const chunk = (text: string, agent = "t0"): AgentEventEnvelope => ({
 });
 
 const indexPath = (path: string) => path.replace(/\.jsonl$/, ".idx");
-const INDEX_HEADER_BYTES = 8;
-const INDEX_RECORD_BYTES = 16;
+const INDEX_VERSION = 3;
+const INDEX_HEADER_BYTES = 16;
+const INDEX_END_BYTES = 8;
+const INDEX_CHUNK_HEADER_BYTES = 8;
+const INDEX_CHUNK_CRC_BYTES = 4;
+const INDEX_CHUNK_OVERHEAD_BYTES =
+  INDEX_CHUNK_HEADER_BYTES + INDEX_CHUNK_CRC_BYTES;
+const INDEX_CHUNK_ENTRIES = 256;
+const indexSize = (lines: number) =>
+  INDEX_HEADER_BYTES +
+  lines * INDEX_END_BYTES +
+  Math.ceil(lines / INDEX_CHUNK_ENTRIES) * INDEX_CHUNK_OVERHEAD_BYTES;
+
+function v3Header(): Buffer {
+  const header = Buffer.alloc(INDEX_HEADER_BYTES);
+  header.write("KIDX", 0, "ascii");
+  header.writeUInt16LE(INDEX_VERSION, 4);
+  header.writeUInt16LE(INDEX_HEADER_BYTES, 6);
+  header.writeUInt32LE(INDEX_CHUNK_ENTRIES, 8);
+  return header;
+}
+
+function v3Chunk(ends: number[], from: number, to: number): Buffer {
+  const count = to - from;
+  const checksumAt = INDEX_CHUNK_HEADER_BYTES + count * INDEX_END_BYTES;
+  const chunk = Buffer.alloc(checksumAt + INDEX_CHUNK_CRC_BYTES);
+  chunk.write("KCHK", 0, "ascii");
+  chunk.writeUInt32LE(count, 4);
+  for (let i = 0; i < count; i++) {
+    chunk.writeDoubleLE(ends[from + i] as number, 8 + i * INDEX_END_BYTES);
+  }
+  chunk.writeUInt32LE(crc32(chunk.subarray(0, checksumAt)), checksumAt);
+  return chunk;
+}
+
+/** Builds a structurally valid v3 sidecar, even when `ends` claims the wrong
+ *  line boundaries. */
+function v3Index(ends: number[]): Buffer {
+  const chunks = [v3Header()];
+  for (let from = 0; from < ends.length; from += INDEX_CHUNK_ENTRIES) {
+    chunks.push(
+      v3Chunk(ends, from, Math.min(from + INDEX_CHUNK_ENTRIES, ends.length)),
+    );
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Parses every whole v3 chunk and returns the count it indexes. */
+function v3LineCount(data: Buffer): number {
+  assert.equal(data.subarray(0, 4).toString("ascii"), "KIDX");
+  assert.equal(data.readUInt16LE(4), INDEX_VERSION);
+  let count = 0;
+  for (
+    let pos = INDEX_HEADER_BYTES;
+    pos + INDEX_CHUNK_OVERHEAD_BYTES <= data.length;
+  ) {
+    assert.equal(data.subarray(pos, pos + 4).toString("ascii"), "KCHK");
+    const chunkCount = data.readUInt32LE(pos + 4);
+    const checksumAt =
+      pos + INDEX_CHUNK_HEADER_BYTES + chunkCount * INDEX_END_BYTES;
+    assert.equal(
+      crc32(data.subarray(pos, checksumAt)),
+      data.readUInt32LE(checksumAt),
+    );
+    count += chunkCount;
+    pos = checksumAt + INDEX_CHUNK_CRC_BYTES;
+  }
+  return count;
+}
+
+/** Every complete v3 end offset, in order. */
+function v3Ends(data: Buffer): number[] {
+  assert.equal(data.subarray(0, 4).toString("ascii"), "KIDX");
+  assert.equal(data.readUInt16LE(4), INDEX_VERSION);
+  const ends: number[] = [];
+  for (
+    let pos = INDEX_HEADER_BYTES;
+    pos + INDEX_CHUNK_OVERHEAD_BYTES <= data.length;
+  ) {
+    assert.equal(data.subarray(pos, pos + 4).toString("ascii"), "KCHK");
+    const count = data.readUInt32LE(pos + 4);
+    const checksumAt = pos + INDEX_CHUNK_HEADER_BYTES + count * INDEX_END_BYTES;
+    assert.equal(
+      crc32(data.subarray(pos, checksumAt)),
+      data.readUInt32LE(checksumAt),
+    );
+    for (let i = 0; i < count; i++) {
+      ends.push(
+        data.readDoubleLE(pos + INDEX_CHUNK_HEADER_BYTES + i * INDEX_END_BYTES),
+      );
+    }
+    pos = checksumAt + INDEX_CHUNK_CRC_BYTES;
+  }
+  return ends;
+}
+
+/** A complete v2 sidecar from the previous format. */
+function v2Index(ends: number[]): Buffer {
+  const trailerOffset = INDEX_HEADER_BYTES + ends.length * INDEX_END_BYTES;
+  const trailerFixed = 24;
+  const checksumBytes = 32;
+  const data = Buffer.alloc(trailerOffset + trailerFixed + checksumBytes);
+  data.write("KIDX", 0, "ascii");
+  data.writeUInt16LE(2, 4);
+  data.writeUInt16LE(INDEX_HEADER_BYTES, 6);
+  data.writeUInt32LE(ends.length, 8);
+  ends.forEach((end, i) => {
+    data.writeDoubleLE(end, INDEX_HEADER_BYTES + i * INDEX_END_BYTES);
+  });
+  // The old format's trailer magic is intentional, not a typo.
+  // pi-lens-ignore: typos:unknown
+  data.write("KEND", trailerOffset, "ascii");
+  data.writeUInt32LE(ends.length, trailerOffset + 4);
+  data.writeDoubleLE(ends[0] ?? 0, trailerOffset + 8);
+  data.writeDoubleLE(
+    ends.length > 1 ? (ends[ends.length - 2] as number) : 0,
+    trailerOffset + 16,
+  );
+  // The v2 trailer carried SHA-256, so this is a genuinely valid old file.
+  // A v3 reader must reject it by version before it looks at the trailer.
+  createHash("sha256")
+    .update(data.subarray(0, trailerOffset + trailerFixed))
+    .digest()
+    .copy(data, trailerOffset + trailerFixed);
+  return data;
+}
 
 const tick = () => new Promise((ok) => setImmediate(ok));
 
@@ -62,6 +188,18 @@ async function waitFor(ok: () => boolean, what: string, ms = 5_000) {
     await tick();
   }
   assert.ok(ok(), `timed out waiting for ${what}`);
+}
+
+async function waitForAsync(
+  ok: () => Promise<boolean>,
+  what: string,
+  ms = 5_000,
+) {
+  for (const end = Date.now() + ms; Date.now() < end; ) {
+    if (await ok()) return;
+    await tick();
+  }
+  assert.ok(await ok(), `timed out waiting for ${what}`);
 }
 
 /** Everything `follow` sends, in order. */
@@ -682,38 +820,96 @@ test("a reopened log that is not there starts empty", async (t) => {
 
 // --- the persistent dense index (#321) ------------------------------------
 
-test("a dense sidecar survives append and reopen with exact arbitrary replay", async (t) => {
+/** Byte end of every complete line in the JSONL. */
+async function jsonlEnds(path: string): Promise<number[]> {
+  const data = await readFile(path);
+  const ends: number[] = [];
+  for (let at = 0; at < data.length; ) {
+    const newline = data.indexOf(0x0a, at);
+    if (newline === -1) break;
+    ends.push(newline + 1);
+    at = newline + 1;
+  }
+  return ends;
+}
+
+test("live sidecar writes use full chunks and close flushes the partial tail", async (t) => {
   const { log, path } = await logIn(t);
-  log.append(chunk("one"));
-  log.append(chunk("two"));
+  for (let i = 0; i < INDEX_CHUNK_ENTRIES; i++) log.append(chunk(`line ${i}`));
+  await waitForAsync(async () => {
+    try {
+      return (
+        v3LineCount(await readFile(indexPath(path))) === INDEX_CHUNK_ENTRIES
+      );
+    } catch {
+      return false;
+    }
+  }, "the first full live sidecar chunk");
+
+  const full = await readFile(indexPath(path));
+  assert.equal(full.length, indexSize(INDEX_CHUNK_ENTRIES));
+  log.append(chunk("pending"));
+  await waitFor(() => log.size === INDEX_CHUNK_ENTRIES + 1, "the tail commit");
+  assert.equal(
+    v3LineCount(await readFile(indexPath(path))),
+    INDEX_CHUNK_ENTRIES,
+    "a live partial chunk stays in memory, not in one-chunk-per-event writes",
+  );
+
+  await log.close();
+  const complete = await readFile(indexPath(path));
+  assert.equal(v3LineCount(complete), INDEX_CHUNK_ENTRIES + 1);
+  assert.equal(complete.length, indexSize(INDEX_CHUNK_ENTRIES + 1));
+  assert.deepEqual(complete.subarray(0, full.length), full);
+  assert.deepEqual(v3Ends(complete), await jsonlEnds(path));
+});
+
+test("a stale valid sidecar is refreshed in place and another open sees all lines", async (t) => {
+  const { log, path } = await logIn(t);
+  for (const text of ["one", "two", "three", "four", "five"]) {
+    log.append(chunk(text));
+  }
   await log.close();
 
   const before = await readFile(indexPath(path));
-  assert.equal(before.subarray(0, 4).toString("ascii"), "KIDX");
-  assert.equal(before.readUInt32LE(4), 1);
-  assert.equal(before.length, INDEX_HEADER_BYTES + 2 * INDEX_RECORD_BYTES);
-
-  const again = await reopenEventLog(path, (err) => {
-    throw err;
-  });
-  again.append(chunk("three"));
-  await again.close();
-  const after = await readFile(indexPath(path));
-  assert.equal(after.length, INDEX_HEADER_BYTES + 3 * INDEX_RECORD_BYTES);
-  assert.deepEqual(after.subarray(0, before.length), before);
+  const beforeCount = v3LineCount(before);
+  assert.equal(beforeCount, 5);
+  await appendFile(path, `${JSON.stringify({ seq: 6, ...chunk("six") })}\n`);
 
   const replay = await openEventLog(path);
-  const r = collect(replay, 1);
-  await r.done;
-  assert.deepEqual(r.seqs, [2, 3]);
-  assert.deepEqual(
-    r.lines.map((line) => JSON.parse(line).update.content.text),
-    ["two", "three"],
+  assert.equal(replay.size, 6);
+  const after = await readFile(indexPath(path));
+  assert.equal(
+    v3LineCount(after),
+    6,
+    "the stale open appended the new complete line",
   );
+  assert.deepEqual(
+    after.subarray(0, before.length),
+    before,
+    "the existing indexed prefix bytes survive the incremental refresh",
+  );
+  assert.deepEqual(v3Ends(after), await jsonlEnds(path));
+
+  const middle = collect(replay, 2);
+  await middle.done;
+  assert.deepEqual(middle.seqs, [3, 4, 5, 6]);
+  assert.deepEqual(
+    middle.lines.map((line) => JSON.parse(line).update.content.text),
+    ["three", "four", "five", "six"],
+  );
+
+  const again = await openEventLog(path);
+  const all = collect(again, 0);
+  await all.done;
+  assert.deepEqual(all.seqs, [1, 2, 3, 4, 5, 6]);
+  const tail = collect(again, again.size);
+  await tail.done;
+  assert.deepEqual(tail.seqs, []);
 });
 
-for (const kind of ["missing", "corrupt"]) {
-  test(`a ${kind} sidecar is rebuilt without changing replay`, async (t) => {
+for (const kind of ["missing", "corrupt"] as const) {
+  test(`a ${kind} sidecar is rebuilt in v3 without changing replay`, async (t) => {
     const { log, path } = await logIn(t);
     for (const text of ["one", "two", "three"]) log.append(chunk(text));
     await log.close();
@@ -721,32 +917,103 @@ for (const kind of ["missing", "corrupt"]) {
       await rm(indexPath(path));
     } else {
       const damaged = await readFile(indexPath(path));
-      damaged.writeDoubleLE(1, INDEX_HEADER_BYTES);
+      damaged.writeDoubleLE(1, INDEX_HEADER_BYTES + INDEX_CHUNK_HEADER_BYTES);
       await writeFile(indexPath(path), damaged);
     }
 
     const replay = await openEventLog(path);
-    const r = collect(replay, 1);
-    await r.done;
     assert.equal(replay.size, 3);
-    assert.deepEqual(r.seqs, [2, 3]);
     assert.deepEqual(
-      r.lines.map((line) => JSON.parse(line).update.content.text),
-      ["two", "three"],
+      v3Ends(await readFile(indexPath(path))),
+      await jsonlEnds(path),
     );
-    const rebuilt = await stat(indexPath(path));
-    assert.equal(rebuilt.size, INDEX_HEADER_BYTES + 3 * INDEX_RECORD_BYTES);
+    for (const after of [0, 1, 2, 3]) {
+      const r = collect(replay, after);
+      await r.done;
+      assert.deepEqual(r.seqs, range(after + 1, 3), `replay after ${after}`);
+    }
   });
 }
+
+test("a truncated final sidecar chunk is ignored and rebuilt from its valid prefix", async (t) => {
+  const { log, path } = await logIn(t);
+  const total = 300;
+  for (let i = 1; i <= total; i++) log.append(chunk(`line ${i}`));
+  await log.close();
+
+  const complete = await readFile(indexPath(path));
+  const firstChunkEnd =
+    INDEX_HEADER_BYTES +
+    INDEX_CHUNK_OVERHEAD_BYTES +
+    INDEX_CHUNK_ENTRIES * INDEX_END_BYTES;
+  await writeFile(indexPath(path), complete.subarray(0, firstChunkEnd + 17));
+
+  const replay = await openEventLog(path);
+  assert.equal(replay.size, total);
+  const rebuilt = await readFile(indexPath(path));
+  assert.equal(v3LineCount(rebuilt), total);
+  assert.deepEqual(v3Ends(rebuilt), await jsonlEnds(path));
+  const tail = collect(replay, total - 2);
+  await tail.done;
+  assert.deepEqual(tail.seqs, [total - 1, total]);
+});
+
+test("a v2 sidecar is rejected and rebuilt as v3", async (t) => {
+  const { log, path } = await logIn(t);
+  for (const text of ["one", "two", "three"]) log.append(chunk(text));
+  await log.close();
+
+  const ends = await jsonlEnds(path);
+  await writeFile(indexPath(path), v2Index(ends));
+  const replay = await openEventLog(path);
+  assert.equal(replay.size, 3);
+  const rebuilt = await readFile(indexPath(path));
+  assert.equal(rebuilt.readUInt16LE(4), INDEX_VERSION);
+  assert.equal(v3LineCount(rebuilt), 3);
+  assert.deepEqual(v3Ends(rebuilt), ends);
+
+  const r = collect(replay, 1);
+  await r.done;
+  assert.deepEqual(r.seqs, [2, 3]);
+});
+
+test("a CRC-valid sidecar with wrong line boundaries is rejected by the anchors", async (t) => {
+  const { log, path } = await logIn(t);
+  for (const text of ["one", "two", "three"]) log.append(chunk(text));
+  await log.close();
+  const fileBytes = (await stat(path)).size;
+
+  // Its CRC is valid, but one record says the whole JSONL is one line. The
+  // bounded first-line and last-line checks catch this without a full scan.
+  await writeFile(indexPath(path), v3Index([fileBytes]));
+
+  const replay = await openEventLog(path);
+  assert.equal(replay.size, 3, "the wrong sidecar is not trusted");
+  const rebuilt = await readFile(indexPath(path));
+  assert.equal(v3LineCount(rebuilt), 3);
+  assert.deepEqual(v3Ends(rebuilt), await jsonlEnds(path));
+
+  for (const after of [0, 1, 2, 3]) {
+    const r = collect(replay, after);
+    await r.done;
+    assert.deepEqual(r.seqs, range(after + 1, 3), `replay after ${after}`);
+  }
+});
 
 test("a stale sidecar gains complete tail lines and ignores a partial one", async (t) => {
   const { log, path } = await logIn(t);
   log.append(chunk("one"));
   log.append(chunk("two"));
   await log.close();
-  const third = JSON.stringify({ seq: 3, ...chunk("three") });
-  const fourth = JSON.stringify({ seq: 4, ...chunk("four") });
-  await appendFile(path, `${third}\n${fourth}\n{"seq":5,"agen`);
+
+  const partial = '{"seq":5,"agen';
+  await appendFile(
+    path,
+    `${JSON.stringify({ seq: 3, ...chunk("three") })}\n${JSON.stringify({
+      seq: 4,
+      ...chunk("four"),
+    })}\n${partial}`,
+  );
 
   const replay = await openEventLog(path);
   const r = collect(replay, 2);
@@ -757,43 +1024,92 @@ test("a stale sidecar gains complete tail lines and ignores a partial one", asyn
     r.lines.map((line) => JSON.parse(line).update.content.text),
     ["three", "four"],
   );
-  const rebuilt = await stat(indexPath(path));
-  assert.equal(rebuilt.size, INDEX_HEADER_BYTES + 4 * INDEX_RECORD_BYTES);
+  const rebuilt = await readFile(indexPath(path));
+  assert.equal(v3LineCount(rebuilt), 4);
+  assert.deepEqual(v3Ends(rebuilt), await jsonlEnds(path));
 });
 
 test("a sidecar ahead of the log is rebuilt from the complete lines", async (t) => {
   const { log, path } = await logIn(t);
   for (const text of ["one", "two", "three"]) log.append(chunk(text));
   await log.close();
-  const index = await readFile(indexPath(path));
-  const secondEnd = index.readDoubleLE(
-    INDEX_HEADER_BYTES + INDEX_RECORD_BYTES + 8,
-  );
-  await truncate(path, secondEnd);
+  const ends = v3Ends(await readFile(indexPath(path)));
+  await truncate(path, ends[1] as number);
 
   const replay = await openEventLog(path);
   assert.equal(replay.size, 2);
   const r = collect(replay, 1);
   await r.done;
   assert.deepEqual(r.seqs, [2]);
-  assert.equal(
-    (await stat(indexPath(path))).size,
-    INDEX_HEADER_BYTES + 2 * INDEX_RECORD_BYTES,
-  );
+  const rebuilt = await readFile(indexPath(path));
+  assert.equal(v3LineCount(rebuilt), 2);
+  assert.deepEqual(v3Ends(rebuilt), await jsonlEnds(path));
 });
 
-test("a sidecar write failure does not sacrifice the JSONL", async (t) => {
+test("two reopen and append cycles reuse no seq and keep the sidecar exact", async (t) => {
+  const { log, path } = await logIn(t);
+  log.append(chunk("one"));
+  log.append(chunk("two"));
+  await log.close();
+
+  const second = await reopenEventLog(path, (err) => {
+    throw err;
+  });
+  assert.equal(second.size, 2);
+  const secondPrefix = await readFile(indexPath(path));
+  second.append(chunk("three"));
+  await waitFor(() => second.size === 3, "the reopened log's commit");
+  assert.equal(
+    v3LineCount(await readFile(indexPath(path))),
+    2,
+    "the partial live tail waits for close",
+  );
+  await second.close();
+  const secondSidecar = await readFile(indexPath(path));
+  assert.deepEqual(
+    secondSidecar.subarray(0, secondPrefix.length),
+    secondPrefix,
+  );
+
+  const third = await reopenEventLog(path, (err) => {
+    throw err;
+  });
+  assert.equal(third.size, 3, "the first reopen did not reuse seq 2");
+  third.append(chunk("four"));
+  await third.close();
+
+  const final = await openEventLog(path);
+  assert.equal(final.size, 4);
+  const all = collect(final, 0);
+  await all.done;
+  assert.deepEqual(all.seqs, [1, 2, 3, 4]);
+  assert.deepEqual(
+    all.lines.map((line) => JSON.parse(line).update.content.text),
+    ["one", "two", "three", "four"],
+  );
+  const sidecar = await readFile(indexPath(path));
+  assert.equal(v3LineCount(sidecar), 4);
+  assert.deepEqual(v3Ends(sidecar), await jsonlEnds(path));
+});
+
+test("a sidecar write failure at close does not reject or sacrifice the JSONL", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "kapelle-eventlog-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const path = join(dir, "events.jsonl");
   await mkdir(indexPath(path));
+  // One line is below the live chunk threshold. The sidecar's first write is
+  // therefore the forced close flush, and it is the one that fails here.
   const errors: string[] = [];
   const log = createEventLog(path, (err) => errors.push(err.message));
   log.append(chunk("safe"));
   await log.close();
 
   assert.equal(log.size, 1);
-  assert.equal(errors.length, 1);
+  assert.deepEqual(
+    errors,
+    [],
+    "the sidecar cache never reports as log failure",
+  );
   assert.equal(
     JSON.parse(await readFile(path, "utf8")).update.content.text,
     "safe",
@@ -826,10 +1142,7 @@ test("a synthetic 1 M-line log measures initial and sidecar boot indexing", asyn
   const warm = await openEventLog(path);
   const warmMs = performance.now() - started;
   assert.equal(warm.size, TOTAL);
-  assert.equal(
-    (await stat(indexPath(path))).size,
-    INDEX_HEADER_BYTES + TOTAL * INDEX_RECORD_BYTES,
-  );
+  assert.equal((await stat(indexPath(path))).size, indexSize(TOTAL));
   t.diagnostic(
     `1 M-line boot index: initial ${initialMs.toFixed(1)} ms; valid sidecar ${warmMs.toFixed(1)} ms`,
   );

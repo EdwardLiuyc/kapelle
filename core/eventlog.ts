@@ -59,15 +59,33 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { finished } from "node:stream/promises";
+import { crc32 } from "node:zlib";
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
 import type { AgentEvent } from "../protocol/types.ts";
 
 const CHUNK_BYTES = 64 * 1024;
 const NEWLINE = 0x0a;
-/** KIDX, version 1, then one {start, end} float64 pair per complete line.
- *  IEEE-754 doubles exactly represent every safe-integer byte offset. */
-const INDEX_HEADER = Buffer.from([0x4b, 0x49, 0x44, 0x58, 1, 0, 0, 0]);
-const INDEX_RECORD_BYTES = 16;
+/** KIDX version 3. A 16-byte header is followed by append-only chunks. Each
+ *  chunk carries a fast CRC32 and up to `INDEX_CHUNK_ENTRIES` dense end offsets,
+ *  one per complete line. Starts are the previous end, so a line needs only one
+ *  float64. IEEE-754 doubles exactly represent every safe-integer byte offset.
+ *
+ *  The CRC and the bounded first-line/last-line anchors catch accidental,
+ *  truncated, stale and cross-version sidecars. They do not prove that every
+ *  interior offset is a real line boundary: doing that would require reading
+ *  all of events.jsonl and would defeat the warm-index budget. Corruption here
+ *  means a missing, torn or accidentally modified cache, not a forged one: a
+ *  writer with state-directory access can already modify the JSONL itself. */
+const INDEX_MAGIC = Buffer.from("KIDX");
+const INDEX_VERSION = 3;
+const INDEX_HEADER_BYTES = 16;
+const INDEX_END_BYTES = 8;
+const INDEX_CHUNK_MAGIC = Buffer.from("KCHK");
+const INDEX_CHUNK_HEADER_BYTES = 8;
+const INDEX_CHUNK_CRC_BYTES = 4;
+const INDEX_CHUNK_OVERHEAD_BYTES =
+  INDEX_CHUNK_HEADER_BYTES + INDEX_CHUNK_CRC_BYTES;
+const INDEX_CHUNK_ENTRIES = 256;
 
 const sidecarPath = (path: string) =>
   path.endsWith(".jsonl")
@@ -101,12 +119,24 @@ export interface EventLog {
   close(): Promise<void>;
 }
 
-/** The lines already on disk: where each starts, and the bytes they take. */
+/** The lines already on disk: where each ends, and the bytes they take. */
 interface Index {
-  starts: number[];
+  /** `ends[seq - 1]` is the byte offset after that line. */
+  ends: Float64Array;
   bytes: number;
-  /** Whether the sidecar already covers exactly these lines. */
-  sidecarReady: boolean;
+  /** The usable sidecar prefix, when one exists. `count` offsets end at
+   *  `at` bytes, so new chunks can be appended without copying the old ones. */
+  sidecar?: { at: number; count: number };
+}
+
+/** Grows a dense offset view without copying on every append. */
+function growOffsets(ends: Float64Array, needed: number): Float64Array {
+  if (needed <= ends.length) return ends;
+  let length = ends.length || 16;
+  while (length < needed) length *= 2;
+  const grown = new Float64Array(length);
+  grown.set(ends);
+  return grown;
 }
 
 /** A new log at `path`, or with `from`, one that appends after the lines
@@ -117,13 +147,8 @@ export function createEventLog(
   from?: Index,
 ): EventLog {
   const out = createWriteStream(path, { flags: from ? "a" : "w" });
-  const indexOut = createWriteStream(sidecarPath(path), {
-    flags: from?.sidecarReady ? "a" : "w",
-  });
-  if (!from?.sidecarReady) indexOut.write(INDEX_HEADER);
-  /** `starts[seq - 1]` is where that line begins. */
-  const starts: number[] = from ? [...from.starts] : [];
-  let appended = starts.length;
+  let ends = from?.ends ?? new Float64Array(0);
+  let appended = ends.length;
   let appendedBytes = from?.bytes ?? 0;
   let committed = appended;
   let committedBytes = appendedBytes;
@@ -153,12 +178,51 @@ export function createEventLog(
     // cannot be written (M1b-7). Readers end at what was committed.
     if (!accepting) return;
     accepting = false;
-    indexOut.end();
     report(err);
     markEnded();
   });
-  // An index failure costs the next boot's optimization, never the JSONL.
-  indexOut.on("error", report);
+
+  // The sidecar is a cache. Keep its append queue separate from the JSONL so a
+  // slow or failed cache write never delays a line or reaches `onError`.
+  let sidecarAt = from?.sidecar?.at;
+  let sidecarCount = from?.sidecar?.count ?? 0;
+  let sidecarWrite = Promise.resolve();
+  let sidecarFailed = false;
+
+  const flushSidecar = (force = false): Promise<void> => {
+    if (sidecarFailed) return sidecarWrite;
+    sidecarWrite = sidecarWrite
+      .then(async () => {
+        if (sidecarFailed) return;
+        // Live writes contain full chunks only. The final partial chunk is
+        // forced at close; after a crash its lines are recovered from JSONL.
+        const pending = committed - sidecarCount;
+        const to = force
+          ? committed
+          : sidecarCount +
+            Math.floor(pending / INDEX_CHUNK_ENTRIES) * INDEX_CHUNK_ENTRIES;
+        if (to <= sidecarCount) return;
+        if (sidecarAt === undefined) {
+          // Missing, invalid, or a failed update: rebuild this cache once. It
+          // is only this path that copies the dense prefix.
+          const data = encodeIndex(ends.subarray(0, to));
+          await writeFile(sidecarPath(path), data);
+          sidecarAt = data.length;
+          sidecarCount = to;
+          return;
+        }
+        const data = encodeChunks(ends, sidecarCount, to);
+        await appendFile(sidecarPath(path), data);
+        sidecarAt += data.length;
+        sidecarCount = to;
+      })
+      .catch(() => {
+        // A cache failure costs the next boot's warm start, never the JSONL
+        // or the live log. Do not report it to the caller.
+        sidecarFailed = true;
+      });
+    return sidecarWrite;
+  };
 
   return {
     append(event) {
@@ -168,18 +232,18 @@ export function createEventLog(
       const at = new Date().toISOString();
       const line = JSON.stringify({ seq, at, ...event });
       const bytes = Buffer.byteLength(line) + 1;
-      starts.push(appendedBytes);
       appendedBytes += bytes;
-      const record = Buffer.allocUnsafe(INDEX_RECORD_BYTES);
-      record.writeDoubleLE(starts[seq - 1] as number, 0);
-      record.writeDoubleLE(appendedBytes, 8);
-      indexOut.write(record);
+      ends = growOffsets(ends, appended);
+      ends[appended - 1] = appendedBytes;
       // Write callbacks fire in write order, so `committed` only ever moves
       // forward by one line.
       out.write(`${line}\n`, (err) => {
         if (err) return;
         committed = seq;
         committedBytes += bytes;
+        if (committed - sidecarCount >= INDEX_CHUNK_ENTRIES) {
+          void flushSidecar();
+        }
         for (const bell of bells) bell(seq, line);
       });
     },
@@ -215,16 +279,11 @@ export function createEventLog(
           if (next <= committed) {
             file ??= await open(path, "r");
             const to = committedBytes;
-            await readLines(
-              file,
-              starts[next - 1] ?? to,
-              to,
-              signal,
-              (line) => {
-                push(line);
-                return !full;
-              },
-            );
+            const start = next > 1 ? (ends[next - 2] as number) : 0;
+            await readLines(file, start, to, signal, (line) => {
+              push(line);
+              return !full;
+            });
             continue;
           }
           if (over) return;
@@ -254,9 +313,11 @@ export function createEventLog(
       closing ??= (async () => {
         accepting = false;
         out.end();
-        indexOut.end();
-        await Promise.allSettled([finished(out), finished(indexOut)]);
+        await finished(out).catch(() => {});
         markEnded();
+        // Flush the offsets committed by the callbacks above. `flushSidecar`
+        // swallows cache failures, so close cannot reject because of a cache.
+        await flushSidecar(true);
       })();
       return closing;
     },
@@ -277,7 +338,7 @@ export function createEventLog(
  * the same "committed, not appended" rule the writer follows.
  */
 export async function openEventLog(path: string): Promise<EventLog> {
-  const { starts, bytes } = await indexOf(path);
+  const { ends, bytes } = await indexOf(path);
 
   return {
     // Nothing writes to a run that is over. Present because the interface is
@@ -285,23 +346,18 @@ export async function openEventLog(path: string): Promise<EventLog> {
     append() {},
 
     async follow(after, send, signal) {
-      if (after >= starts.length || signal?.aborted) return;
+      if (after >= ends.length || signal?.aborted) return;
       const file = await open(path, "r");
       try {
         let next = after + 1;
-        while (next <= starts.length && !signal?.aborted) {
+        while (next <= ends.length && !signal?.aborted) {
           let full: Promise<void> | undefined;
-          await readLines(
-            file,
-            starts[next - 1] as number,
-            bytes,
-            signal,
-            (line) => {
-              full = send(next, line);
-              next += 1;
-              return !full;
-            },
-          );
+          const start = next > 1 ? (ends[next - 2] as number) : 0;
+          await readLines(file, start, bytes, signal, (line) => {
+            full = send(next, line);
+            next += 1;
+            return !full;
+          });
           if (full) await withAbort(full, signal);
         }
       } finally {
@@ -312,104 +368,270 @@ export async function openEventLog(path: string): Promise<EventLog> {
     },
 
     get size() {
-      return starts.length;
+      return ends.length;
     },
 
     async close() {},
   };
 }
 
-/** A valid saved index, or undefined when the JSONL must rebuild it. */
+/** The first complete line end in `[0, limit)`, or undefined when there is no
+ *  newline. This reads only until the first newline. */
+async function firstLineEnd(
+  log: FileHandle,
+  limit: number,
+): Promise<number | undefined> {
+  const buf = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, Math.max(1, limit)));
+  for (let pos = 0; pos < limit; ) {
+    const { bytesRead } = await log.read(
+      buf,
+      0,
+      Math.min(buf.length, limit - pos),
+      pos,
+    );
+    if (bytesRead === 0) return undefined;
+    const newline = buf.subarray(0, bytesRead).indexOf(NEWLINE);
+    if (newline !== -1) return pos + newline + 1;
+    pos += bytesRead;
+  }
+  return undefined;
+}
+
+/** The byte offset where the complete line ending at `end` starts. It scans
+ *  backwards, so a sidecar can check its last boundary without a full scan. */
+async function lastLineStart(
+  log: FileHandle,
+  end: number,
+): Promise<number | undefined> {
+  const buf = Buffer.allocUnsafe(CHUNK_BYTES);
+  let cursor = end - 1;
+  while (cursor > 0) {
+    const from = Math.max(0, cursor - buf.length);
+    let pos = from;
+    while (pos < cursor) {
+      const { bytesRead } = await log.read(buf, 0, cursor - pos, pos);
+      if (bytesRead === 0) return undefined;
+      const newline = buf.subarray(0, bytesRead).lastIndexOf(NEWLINE);
+      if (newline !== -1) return pos + newline + 1;
+      pos += bytesRead;
+    }
+    cursor = from;
+  }
+  return 0;
+}
+
+function encodeIndexHeader(): Buffer {
+  const header = Buffer.alloc(INDEX_HEADER_BYTES);
+  INDEX_MAGIC.copy(header, 0);
+  header.writeUInt16LE(INDEX_VERSION, 4);
+  header.writeUInt16LE(INDEX_HEADER_BYTES, 6);
+  header.writeUInt32LE(INDEX_CHUNK_ENTRIES, 8);
+  return header;
+}
+
+/** One appendable chunk. The CRC covers the magic, count and every end
+ *  offset; a torn final chunk can therefore be ignored without trusting it. */
+function encodeChunk(ends: Float64Array, from: number, to: number): Buffer {
+  const count = to - from;
+  const checksumAt = INDEX_CHUNK_HEADER_BYTES + count * INDEX_END_BYTES;
+  const data = Buffer.allocUnsafe(checksumAt + INDEX_CHUNK_CRC_BYTES);
+  INDEX_CHUNK_MAGIC.copy(data, 0);
+  data.writeUInt32LE(count, 4);
+  for (let i = 0; i < count; i++) {
+    data.writeDoubleLE(ends[from + i] as number, 8 + i * INDEX_END_BYTES);
+  }
+  data.writeUInt32LE(crc32(data.subarray(0, checksumAt)), checksumAt);
+  return data;
+}
+
+/** New chunks for dense offsets `[from, to)`, without copying offsets before
+ *  `from`. This is the stale-refresh and live-append path. */
+function encodeChunks(ends: Float64Array, from: number, to: number): Buffer {
+  const chunks: Buffer[] = [];
+  for (let start = from; start < to; start += INDEX_CHUNK_ENTRIES) {
+    chunks.push(
+      encodeChunk(ends, start, Math.min(start + INDEX_CHUNK_ENTRIES, to)),
+    );
+  }
+  return Buffer.concat(chunks);
+}
+
+/** A complete sidecar. Only missing/invalid sidecars take this copy path. */
+function encodeIndex(ends: Float64Array): Buffer {
+  return Buffer.concat([
+    encodeIndexHeader(),
+    encodeChunks(ends, 0, ends.length),
+  ]);
+}
+
+interface ParsedSidecar {
+  ends: Float64Array;
+  bytes: number;
+  /** Usable prefix length. Bytes after it are an incomplete/corrupt tail. */
+  at: number;
+  count: number;
+  complete: boolean;
+}
+
+/** Parses whole valid chunks and stops at the first incomplete or corrupt
+ *  one. The valid prefix is still useful: the JSONL tail is scanned from its
+ *  last end, then the bad tail is replaced. */
+function parseSidecar(
+  data: Buffer,
+  logBytes: number,
+): ParsedSidecar | undefined {
+  if (
+    data.length < INDEX_HEADER_BYTES ||
+    !data.subarray(0, INDEX_MAGIC.length).equals(INDEX_MAGIC) ||
+    data.readUInt16LE(4) !== INDEX_VERSION ||
+    data.readUInt16LE(6) !== INDEX_HEADER_BYTES
+  ) {
+    return undefined;
+  }
+
+  let ends: Float64Array = new Float64Array(0);
+  let count = 0;
+  let pos = INDEX_HEADER_BYTES;
+  let complete = true;
+  for (; pos < data.length; ) {
+    const remaining = data.length - pos;
+    if (remaining < INDEX_CHUNK_OVERHEAD_BYTES) {
+      complete = false;
+      break;
+    }
+    if (!data.subarray(pos, pos + 4).equals(INDEX_CHUNK_MAGIC)) {
+      complete = false;
+      break;
+    }
+    const chunkCount = data.readUInt32LE(pos + 4);
+    if (chunkCount === 0 || chunkCount > INDEX_CHUNK_ENTRIES) {
+      complete = false;
+      break;
+    }
+    const checksumAt =
+      pos + INDEX_CHUNK_HEADER_BYTES + chunkCount * INDEX_END_BYTES;
+    const frameBytes = checksumAt + INDEX_CHUNK_CRC_BYTES - pos;
+    if (remaining < frameBytes) {
+      complete = false;
+      break;
+    }
+    if (
+      crc32(data.subarray(pos, checksumAt)) !== data.readUInt32LE(checksumAt)
+    ) {
+      complete = false;
+      break;
+    }
+
+    const chunkEnds = new Float64Array(chunkCount);
+    let previous = count > 0 ? (ends[count - 1] as number) : 0;
+    let chunkValid = true;
+    for (let i = 0; i < chunkCount; i++) {
+      const end = data.readDoubleLE(
+        pos + INDEX_CHUNK_HEADER_BYTES + i * INDEX_END_BYTES,
+      );
+      if (!Number.isSafeInteger(end) || end <= previous || end > logBytes) {
+        chunkValid = false;
+        break;
+      }
+      chunkEnds[i] = end;
+      previous = end;
+    }
+    if (!chunkValid) {
+      complete = false;
+      break;
+    }
+
+    ends = growOffsets(ends, count + chunkCount);
+    ends.set(chunkEnds, count);
+    count += chunkCount;
+    pos += frameBytes;
+  }
+
+  return {
+    ends: ends.subarray(0, count),
+    bytes: count > 0 ? (ends[count - 1] as number) : 0,
+    at: pos,
+    count,
+    complete: complete && pos === data.length,
+  };
+}
+
+/** A valid saved index prefix, or undefined when there is no usable v3 header.
+ *  The chunk CRCs catch accidental corruption. The first-line and last-line
+ *  anchors catch a structurally valid sidecar from another log without a full
+ *  scan. A forged sidecar with valid CRCs but wrong interior offsets is a
+ *  stated non-goal: catching it would cost the warm-index budget. */
 async function readSidecar(
   path: string,
   log: FileHandle,
   logBytes: number,
-): Promise<Index | undefined> {
+): Promise<ParsedSidecar | undefined> {
   let data: Buffer;
   try {
     data = await readFile(sidecarPath(path));
   } catch {
     return undefined;
   }
-  if (
-    data.length < INDEX_HEADER.length ||
-    (data.length - INDEX_HEADER.length) % INDEX_RECORD_BYTES !== 0 ||
-    !data.subarray(0, INDEX_HEADER.length).equals(INDEX_HEADER)
-  ) {
-    return undefined;
-  }
-  const starts: number[] = [];
-  let bytes = 0;
-  for (
-    let pos = INDEX_HEADER.length;
-    pos < data.length;
-    pos += INDEX_RECORD_BYTES
-  ) {
-    const start = data.readDoubleLE(pos);
-    const end = data.readDoubleLE(pos + 8);
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) {
-      return undefined;
-    }
-    if (start !== bytes || end <= start || end > logBytes) return undefined;
-    starts.push(start);
-    bytes = end;
-  }
-  if (bytes > 0) {
-    const newline = Buffer.alloc(1);
-    const { bytesRead } = await log.read(newline, 0, 1, bytes - 1);
-    if (bytesRead !== 1 || newline[0] !== NEWLINE) return undefined;
-  }
-  return { starts, bytes, sidecarReady: true };
+  const parsed = parseSidecar(data, logBytes);
+  if (!parsed) return undefined;
+  if (parsed.count === 0) return parsed;
+
+  const bytes = parsed.bytes;
+  const newline = Buffer.allocUnsafe(1);
+  const { bytesRead } = await log.read(newline, 0, 1, bytes - 1);
+  if (bytesRead !== 1 || newline[0] !== NEWLINE) return undefined;
+  const firstEnd = parsed.ends[0] as number;
+  const lastStart =
+    parsed.count > 1 ? (parsed.ends[parsed.count - 2] as number) : 0;
+  if ((await firstLineEnd(log, bytes)) !== firstEnd) return undefined;
+  if ((await lastLineStart(log, bytes)) !== lastStart) return undefined;
+  return parsed;
 }
 
-/** Binary records for `starts[from:]`, with a header for a full rebuild. */
-function encodeIndex(
-  starts: number[],
-  bytes: number,
-  from: number,
-  header: boolean,
-): Buffer {
-  const offset = header ? INDEX_HEADER.length : 0;
-  const data = Buffer.alloc(
-    offset + (starts.length - from) * INDEX_RECORD_BYTES,
-  );
-  if (header) INDEX_HEADER.copy(data);
-  for (let i = from; i < starts.length; i++) {
-    const pos = offset + (i - from) * INDEX_RECORD_BYTES;
-    data.writeDoubleLE(starts[i] as number, pos);
-    data.writeDoubleLE(starts[i + 1] ?? bytes, pos + 8);
-  }
-  return data;
-}
-
-/** Where each whole line of `path` starts. A partial last line is not counted.
- *  Persist new offsets, but never refuse a readable log for its sidecar. */
+/** Where each whole line of `path` ends. A partial last line is not counted.
+ *  A valid sidecar is used as a prefix; only its unindexed tail is scanned.
+ *  Newly scanned offsets are appended as chunks, so a stale open does not
+ *  rewrite or re-hash the dense prefix. */
 async function indexOf(path: string): Promise<Index> {
   const file = await open(path, "r");
   try {
     const stat = await file.stat();
     const size = stat.size;
     const saved = await readSidecar(path, file, size);
-    const indexed = saved?.starts.length ?? 0;
-    const starts = saved?.starts ?? [];
+    let ends = saved?.ends ?? new Float64Array(0);
+    let count = ends.length;
     const from = saved?.bytes ?? 0;
     let bytes = from;
     await readLines(file, from, size, undefined, (line) => {
-      starts.push(bytes);
+      ends = growOffsets(ends, count + 1);
       bytes += Buffer.byteLength(line) + 1;
+      ends[count] = bytes;
+      count += 1;
     });
-    let sidecarReady = saved !== undefined;
-    if (!saved || bytes !== from) {
-      const records = encodeIndex(starts, bytes, indexed, !saved);
+    const complete = ends.subarray(0, count);
+
+    let sidecar: Index["sidecar"];
+    if (saved) {
+      const added = encodeChunks(complete, saved.count, count);
       try {
-        if (saved) await appendFile(sidecarPath(path), records);
-        else await writeFile(sidecarPath(path), records);
-        sidecarReady = true;
+        // A crash can leave a partial final chunk. Drop only that unusable
+        // tail; every byte of the valid indexed prefix survives.
+        if (!saved.complete) await truncate(sidecarPath(path), saved.at);
+        if (added.length > 0) await appendFile(sidecarPath(path), added);
+        sidecar = { at: saved.at + added.length, count };
       } catch {
-        sidecarReady = false;
+        // The next open pays for the rebuild instead.
+      }
+    } else {
+      try {
+        const data = encodeIndex(complete);
+        await writeFile(sidecarPath(path), data);
+        sidecar = { at: data.length, count };
+      } catch {
+        // The next open pays for the rebuild instead.
       }
     }
-    return { starts, bytes, sidecarReady };
+    return { ends: complete, bytes, sidecar };
   } finally {
     await file.close();
   }
