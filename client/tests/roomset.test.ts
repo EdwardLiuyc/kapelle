@@ -316,15 +316,26 @@ test("a turn-end read that finds a paused participant redraws the room", async (
   const daemon = await fake(t);
   daemon.status.set("r1", "active");
   daemon.participants = [{ id: "p1", status: "idle" }];
-  daemon.lines.set("r1", [added(1, "p1", "ann")]);
   const { set, said } = follow(t, daemon.d);
   set.start([entry("r1")]);
-  // The first read lands before the turn end, so the reload below is the
-  // only trigger waiting: no participant-added line queues a `loaded` first.
+  await until(() => daemon.streams.has("r1"));
   await until(() => set.rooms.get("r1")?.dto !== undefined);
-  await until(() => said.loaded.length === 1);
+  const r = set.rooms.get("r1");
+  const stream = daemon.streams.get("r1");
+  assert.ok(r, "the room is followed");
+  assert.ok(stream, "the room stream is open");
+  assert.deepEqual(said.loaded, ["r1"]);
+
+  // Add the participant after the first read: the DTO already names it, so
+  // this line cannot queue the follow-up `loaded` read (#363).
+  const join = added(1, "p1", "ann");
+  stream.write(`id: ${join.seq}\ndata: ${JSON.stringify(join)}\n\n`);
+  await until(() => r.state.participants.get("p1")?.status === "idle");
+  assert.deepEqual(daemon.reads, ["r1"], "only the first read so far");
+
+  // Hold the turn-end read and move the status while its reply waits.
   daemon.holdReads = true;
-  daemon.streams.get("r1")?.write(
+  stream.write(
     `id: 2\ndata: ${JSON.stringify({
       seq: 2,
       at: "",
@@ -333,15 +344,13 @@ test("a turn-end read that finds a paused participant redraws the room", async (
       update: { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" },
     })}\n\n`,
   );
-  await until(() => daemon.reads.length === 2);
+  await until(() => daemon.readsInFlight > 0);
   daemon.participants = [{ id: "p1", status: "paused" }];
   daemon.releaseRead();
-  await until(() => said.loaded.length === 2);
-  assert.equal(
-    said.reloads.includes("r1"),
-    false,
-    "a status move needs the full redraw, not a header refresh",
-  );
+  await until(() => said.loaded.length >= 2);
+  assert.deepEqual(said.loaded, ["r1", "r1"]);
+  assert.deepEqual(said.reloads, []);
+  assert.equal(r.state.participants.get("p1")?.status, "paused");
 });
 
 test("an already-paused room refreshes its header on a turn end, not the transcript", async (t) => {
