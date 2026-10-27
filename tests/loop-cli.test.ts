@@ -10,7 +10,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { RoomDto, RoomListEntry } from "../client/contract.ts";
@@ -31,11 +31,14 @@ async function fixture(t: TestContext) {
   const d = await bootDaemon(t, runtime);
   const repo = await addRepo(
     d,
-    await gitRepo(t, {
-      files: { ".kapelle/loops/fix.md": "# fix\n\nsteps\n" },
-    }),
+    // The real path: the lookup walks it (macOS links /var to /private/var).
+    await realpath(
+      await gitRepo(t, {
+        files: { ".kapelle/loops/fix.md": "# fix\n\nsteps\n" },
+      }),
+    ),
   );
-  const config = await tempDir(t);
+  const config = await realpath(await tempDir(t));
   const loop = (args: string[]) =>
     spawnCli(t, ["loop", ...args, "--cwd", repo], "cli.ts", {
       XDG_RUNTIME_DIR: runtime,

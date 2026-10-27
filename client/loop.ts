@@ -11,9 +11,12 @@
  *
  * Two folders, and for one name the first wins: `<repo>/.kapelle/loops/`,
  * then `$XDG_CONFIG_HOME/kapelle/loops/`. The repository is the nearest
- * folder at or above the given one that holds a `.git`: a folder in a main
- * checkout, a file in a worktree. It is found on disk, with no git
- * subprocess. The `XDG_CONFIG_HOME` rule is a copy of `userConfigPath`'s
+ * folder at or above the given one's real path that holds a `.git`: a folder
+ * in a main checkout, a file in a worktree. The real path, as git and the
+ * daemon see it: a link from one repository into another names the other
+ * one. It is found on disk, with no git subprocess. A recipe is a file: a
+ * folder named `<name>.md` is skipped, and a link counts by what it points
+ * to. The `XDG_CONFIG_HOME` rule is a copy of `userConfigPath`'s
  * (`core/config.ts`), because `client/` never imports `core/`;
  * `client/tests/loop.test.ts` checks that they agree.
  *
@@ -28,27 +31,25 @@ import { dirname, isAbsolute, join } from "node:path";
 
 const SKILL = join(import.meta.dirname, "..", "assets", "orchestrator.md");
 
-/** The nearest folder at or above `path` with a `.git`, or none. */
-function gitTopAt(path: string): string | undefined {
-  for (let dir = path; ; dir = dirname(dir)) {
+/** The nearest folder at or above `cwd`'s real path with a `.git`, or
+ *  none. A folder that does not exist is walked as typed. */
+function gitTop(cwd: string): string | undefined {
+  let dir = cwd;
+  try {
+    dir = realpathSync(cwd);
+  } catch {}
+  for (; ; dir = dirname(dir)) {
     if (existsSync(join(dir, ".git"))) return dir;
     if (dirname(dir) === dir) return undefined;
   }
 }
 
-/** The nearest folder at or above `cwd` with a `.git`, or none. A symlink to
- *  a folder inside a repository can hide the marker from the lexical walk, so
- *  retry on the real path. */
-function gitTop(cwd: string): string | undefined {
-  const direct = gitTopAt(cwd);
-  if (direct) return direct;
-  try {
-    const real = realpathSync(cwd);
-    return real === cwd ? undefined : gitTopAt(real);
-  } catch {
-    return undefined;
-  }
-}
+/** Whether `path` is a file, following a link. */
+const isFile = (path: string) =>
+  stat(path).then(
+    (s) => s.isFile(),
+    () => false,
+  );
 
 /** The folders a recipe is looked for in, the one that wins first. Outside
  *  a repository, only the person's own. */
@@ -77,8 +78,7 @@ export interface Recipe {
   wins: boolean;
 }
 
-/** Every regular recipe file in the folders, by name; for one name, the
- *  winner first. */
+/** Every recipe in the folders, by name; for one name, the winner first. */
 export async function listRecipes(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -95,15 +95,7 @@ export async function listRecipes(
     for (const e of entries) {
       if (!e.name.endsWith(".md")) continue;
       const path = join(folder, e.name);
-      if (!e.isFile()) {
-        if (e.isDirectory()) continue;
-        try {
-          const info = await stat(path);
-          if (!info.isFile()) continue;
-        } catch {
-          continue; // a broken link, or an entry that vanished
-        }
-      }
+      if (!(await isFile(path))) continue;
       const name = e.name.slice(0, -".md".length);
       found.push({ name, path, wins: !seen.has(name) });
       seen.add(name);
@@ -128,14 +120,10 @@ async function readRecipe(
   const folders = loopFolders(cwd, env);
   for (const folder of folders) {
     const path = join(folder, `${name}.md`);
+    if (!(await isFile(path))) continue;
     try {
-      const info = await stat(path);
-      if (!info.isFile()) continue;
       return { text: await readFile(path, "utf8") };
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR")
-        continue;
       return { error: `cannot read ${path}: ${(err as Error).message}` };
     }
   }

@@ -27,7 +27,8 @@ async function folders(
   repo: Record<string, string>,
   user: Record<string, string>,
 ) {
-  const root = await mkdtemp(join(tmpdir(), "kapelle-loop-"));
+  // The real path: the lookup walks it (macOS links /var to /private/var).
+  const root = await realpath(await mkdtemp(join(tmpdir(), "kapelle-loop-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const top = join(root, "repo");
   const sub = join(top, "src");
@@ -61,7 +62,7 @@ test("the user folder follows core/config.ts's XDG_CONFIG_HOME rule", () => {
   }
 });
 
-test("the repository's folder comes first, found from a subfolder or a symlink to one; outside a repository only the user's", async (t) => {
+test("the repository's folder comes first, found from a subfolder or a link to one, by the real path; outside a repository only the user's", async (t) => {
   const f = await folders(t, { "fix.md": "repo fix" }, {});
   const user = join(f.env.XDG_CONFIG_HOME, "kapelle", "loops");
   assert.deepEqual(loopFolders(f.sub, f.env), [
@@ -74,11 +75,20 @@ test("the repository's folder comes first, found from a subfolder or a symlink t
   const link = join(f.root, "src-link");
   await symlink(f.sub, link);
   assert.deepEqual(loopFolders(link, f.env), [
-    join(await realpath(f.top), ".kapelle", "loops"),
+    join(f.top, ".kapelle", "loops"),
     user,
   ]);
   const start = await loopMessage({ recipe: "fix", task: "7" }, link, f.env);
   assert.ok("text" in start && start.text.includes("repo fix"));
+  // A link from another repository into this one names this one, as git
+  // and the daemon do, not the repository the link sits in.
+  const other = join(f.root, "other");
+  await mkdir(join(other, ".git"), { recursive: true });
+  await symlink(f.sub, join(other, "in"));
+  assert.deepEqual(loopFolders(join(other, "in"), f.env), [
+    join(f.top, ".kapelle", "loops"),
+    user,
+  ]);
 });
 
 test("the list names each recipe and its folder; for one name the repository's wins", async (t) => {
