@@ -1490,6 +1490,11 @@ test("the check saves each ready agent's models and login, and POST checks again
     entryOf(again.body, "opencode")?.loginCheckedAt,
     opencode?.loginCheckedAt,
   );
+  // A logged-out agent settles too: no list, yet no new check (M9-4).
+  assert.equal(
+    entryOf(again.body, "kimi")?.loginCheckedAt,
+    entryOf(r.body, "kimi")?.loginCheckedAt,
+  );
   const forced = await api<HarnessesReply>(d, "POST", "/harnesses");
   assert.equal(forced.status, 200);
   assert.notEqual(

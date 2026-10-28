@@ -75,13 +75,15 @@ const SCENARIOS = {
   half: "a note and a tool call, then waits for a cancel, like stall, and answers it end_turn, as copilot does (§M0-4)",
   "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
   models:
-    "session/new lists two models in a group; the handshake offers session/delete, which drops the session's --store file",
+    "session/new and session/load list two models in a group; the handshake offers session/delete, which drops the session's --store file",
   "auth-required":
     "session/new fails with -32000 Authentication required, as pi does logged out",
   "auth-none":
     "sends _auth/status_update with kind none after initialize, as claude does logged out",
   "auth-account":
     "sends _auth/status_update with an account after initialize, as claude does logged in",
+  "auth-repeat":
+    "sends _auth/status_update twenty times after initialize, its kind switching between none and account",
   "auth-malformed":
     "sends _auth/status_update with a kind that is not a string",
 };
@@ -282,6 +284,32 @@ function callClient(method, params) {
   });
 }
 
+/** `models`' model option, on `session/new` and `session/load` alike. */
+const modelOptions = () =>
+  scenario === "models"
+    ? {
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "mock/fast",
+            options: [
+              {
+                group: "mock",
+                name: "Mock",
+                options: [
+                  { value: "mock/fast", name: "Fast" },
+                  { value: "mock/smart", name: "Smart" },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+    : {};
+
 const update = (sessionId, u) =>
   notify("session/update", { sessionId, update: u });
 
@@ -346,6 +374,13 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         },
       });
     }
+    if (scenario === "auth-repeat") {
+      for (let i = 0; i < 20; i++) {
+        notify("_auth/status_update", {
+          authStatus: { kind: i % 2 ? "account" : "none" },
+        });
+      }
+    }
     if (scenario === "auth-malformed") {
       notify("_auth/status_update", {
         authStatus: { kind: 42, label: "not a kind" },
@@ -378,30 +413,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       chmodSync("locked", 0o500);
       chmodSync(".", 0o500);
     }
-    reply(msg.id, {
-      sessionId: sid,
-      ...(scenario === "models" && {
-        configOptions: [
-          {
-            id: "model",
-            name: "Model",
-            category: "model",
-            type: "select",
-            currentValue: "mock/fast",
-            options: [
-              {
-                group: "mock",
-                name: "Mock",
-                options: [
-                  { value: "mock/fast", name: "Fast" },
-                  { value: "mock/smart", name: "Smart" },
-                ],
-              },
-            ],
-          },
-        ],
-      }),
-    });
+    reply(msg.id, { sessionId: sid, ...modelOptions() });
   }
 
   if (msg.method === "session/delete") {
@@ -441,7 +453,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     });
     sessions.add(sid);
     if (prompts.length > 0) lastPrompt.set(sid, prompts.at(-1));
-    reply(msg.id, {});
+    reply(msg.id, modelOptions());
     return;
   }
 

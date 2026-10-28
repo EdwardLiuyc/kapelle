@@ -1754,6 +1754,10 @@ function createParticipant({
   /** Starts a harness in the checkout, loads session `load` when the
    *  harness can, or else opens a fresh one. True when it loaded. */
   const launch = async (load?: string): Promise<boolean> => {
+    // One login notice per harness start is saved (M9-4): each is a
+    // synchronous write, and a harness may send many. A later change shows
+    // at the next start or check.
+    let noticed = false;
     const next: AcpAgent = new AcpAgent({
       name: spec.name,
       command: spec.launch.command,
@@ -1765,7 +1769,9 @@ function createParticipant({
       stderrLog: stderrLog(),
       // Only a registry agent has a login signal; nothing waits for it.
       onAuthStatus: (kind) => {
-        if (spec.setup) report?.(noticeSeen(kind));
+        if (!spec.setup || noticed) return;
+        noticed = true;
+        report?.(noticeSeen(kind));
       },
       onEvent: ({ update }) => {
         // Only the live harness's exit stops the participant. A pause or a
@@ -1799,15 +1805,14 @@ function createParticipant({
         session = await next.loadSession(load).catch(() => undefined);
         loaded = session !== undefined;
       }
-      if (!session) {
-        session = await next.newSession().catch((err: unknown) => {
-          const seen = spec.setup && failureSeen(err);
-          if (seen) report?.(seen);
-          throw err;
-        });
-        // A real session's models replace the saved ones (3A).
-        if (spec.setup) report?.(sessionSeen(spec.setup, next.configOptions));
-      }
+      session ??= await next.newSession().catch((err: unknown) => {
+        const seen = spec.setup && failureSeen(err);
+        if (seen) report?.(seen);
+        throw err;
+      });
+      // A real session's models replace the saved ones (3A): a revive's
+      // load is a real session too.
+      if (spec.setup) report?.(sessionSeen(spec.setup, next.configOptions));
     } catch (err) {
       await next.stop();
       throw err;

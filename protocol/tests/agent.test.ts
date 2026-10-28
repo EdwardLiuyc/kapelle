@@ -1744,3 +1744,29 @@ test("deleteSession removes the session from the harness", async (t) => {
   await agent.deleteSession();
   await assert.rejects(() => readFile(join(store, `${sid}.json`), "utf8"));
 });
+
+test("deleteSession forgets the session, so nothing more is sent to it (M9-4)", async (t) => {
+  const store = await mkdtemp(join(tmpdir(), "acp-delete-"));
+  t.after(() => rm(store, { recursive: true, force: true }));
+  const { agent } = await signalAgent(t, "models", store);
+  await agent.start();
+  await agent.newSession();
+  await agent.deleteSession();
+  assert.equal(agent.sessionId, null);
+  assert.equal(agent.configOptions.length, 0);
+  await assert.rejects(() => agent.prompt("hi"), /no session/);
+});
+
+test("session/load keeps its configOptions, as session/new does (M9-4)", async (t) => {
+  const store = await mkdtemp(join(tmpdir(), "acp-load-"));
+  t.after(() => rm(store, { recursive: true, force: true }));
+  const first = await signalAgent(t, "models", store);
+  await first.agent.start();
+  const sid = await first.agent.newSession();
+  await first.agent.stop();
+
+  const second = await signalAgent(t, "models", store);
+  await second.agent.start();
+  await second.agent.loadSession(sid);
+  assert.equal(second.agent.configOptions[0]?.category, "model");
+});

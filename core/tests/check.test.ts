@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -149,6 +149,7 @@ async function stateHome(t: TestContext) {
     if (before === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = before;
   });
+  return home;
 }
 
 test("a real session replaces the models and the login, and keeps the version", async (t) => {
@@ -295,7 +296,10 @@ test("a temporary folder that cannot be made is unknown, not a throw", async (t)
   });
 });
 
-test("a temporary folder that cannot be removed does not fail the check", async (t) => {
+// `chmod` does not stop root, so as root the folder is removed after all.
+test("a temporary folder that cannot be removed does not fail the check", {
+  skip: process.getuid?.() === 0 && "root can remove any folder",
+}, async (t) => {
   const dir = await tempDir(t);
   const record = join(dir, "requests.jsonl");
   assert.deepEqual(
@@ -364,4 +368,37 @@ test("stopping checks cancels them without saving an unknown result", async (t) 
   assert.equal(saved?.login, "ok");
   assert.deepEqual(saved?.models, [{ id: "kept", name: "Kept" }]);
   assert.equal(saved?.model, "kept");
+});
+
+test("a logged-out or unknown agent with no model list settles; one logged in is due (M9-4)", () => {
+  const s = allReady();
+  const checks = fresh(s);
+  for (const id of ["pi", "kimi", "copilot"]) delete checks[id]?.models;
+  const kimi = checks.kimi;
+  const copilot = checks.copilot;
+  assert.ok(kimi && copilot);
+  kimi.login = "logged_out";
+  copilot.login = "unknown";
+  // pi says ok with no list: its list is what is missing.
+  assert.deepEqual(dueForCheck(s, checks, false), ["pi"]);
+});
+
+test("a checks.json that cannot be written never fails a check or a session (M9-4)", async (t) => {
+  const home = await stateHome(t);
+  // The write goes through `checks.json.tmp`: a folder there makes it fail,
+  // for root too.
+  await mkdir(join(home, "kapelle"), { mode: 0o700 });
+  await mkdir(join(home, "kapelle", "checks.json.tmp"));
+  const launch = AGENTS.opencode.launch;
+  AGENTS.opencode.launch = mock("--scenario", "models");
+  t.after(() => {
+    AGENTS.opencode.launch = launch;
+  });
+  await runChecks(
+    ["opencode"],
+    { opencode: { program: true, acp: true, acpVersion: "2.0.18" } },
+    10_000,
+  );
+  noteSession("opencode", { login: "ok" });
+  assert.deepEqual(readChecks(), {});
 });

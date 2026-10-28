@@ -436,18 +436,23 @@ while `done` is `false`, and while no harness is `ready`.
 `initialize` and `session/new` in a new temporary folder, with no prompt, so no tokens.
 All start at the same time, each with a 15-second limit, and the reply waits for them:
 about 5 seconds. A `GET` checks a harness only when it has no saved check, its ACP
-version changed, or it has no saved model list; every `POST /harnesses` checks them all.
-Each real `session/new` in a room also updates its harness, at no cost. The result is
+version changed, or it is `ok` with no saved model list; every `POST /harnesses` checks
+them all. Each real session in a room (`session/new`, or `session/load` on a revive)
+also updates its harness, at no cost. copilot cannot delete a session, so each check
+leaves one empty session in copilot's own history. The result is
 saved in `$XDG_STATE_HOME/kapelle/checks.json`, and a `ready` harness that was checked
 gets these fields:
 
-- `login`: `ok` (logged in), `logged_out`, or `unknown`. copilot never says, so it is
-  always `unknown`; a check that failed or ran out of time is `unknown` too.
+- `login`: `ok`, `logged_out`, or `unknown`. `ok` means the harness can open a session
+  and use its models, not that the person has an account: opencode with no login is
+  `ok`, with its free models. copilot never says, so it is always `unknown`; a check
+  that failed or ran out of time is `unknown` too.
 - `loginHint`: what the person runs to log in, such as `kimi login`. Only when `login`
   is not `ok`.
-- `models` (`id` and `name`) and `model`: the harness's model list and its current model,
-  from the `configOptions` entry with `category: "model"`. Absent when the harness sent
-  none, such as pi logged out.
+- `models` (`id` and `name`) and `model`: the harness's model list, and the model its
+  last session started with, from the `configOptions` entry with `category: "model"`. A
+  change of model during a session is not saved. Absent when the harness sent none, such
+  as pi logged out.
 - `loginCheckedAt`: when a check or a real session last said this.
 
 No account field is kept: claude's `_auth/status_update` holds an e-mail and an

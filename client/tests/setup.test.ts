@@ -192,3 +192,24 @@ test("a ready agent that is logged out, or may be, gets its login hint (M9-4)", 
     },
   ]);
 });
+
+test("a login line with no hint names no command (M9-4)", () => {
+  const lines = setupLines({
+    checkedAt: "2026-10-28T00:00:00.000Z",
+    done: true,
+    harnesses: [
+      {
+        id: "pi",
+        measured: true,
+        state: "ready",
+        program: "pi",
+        acpProgram: "pi-acp",
+        login: "logged_out",
+      },
+    ],
+  });
+  assert.deepEqual(lines.at(-1), {
+    text: "! pi is not logged in",
+    tone: "warn",
+  });
+});

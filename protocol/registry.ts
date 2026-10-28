@@ -75,10 +75,13 @@ interface MeasuredLabels {
  * `measuredOn.version` (M9-3b), so the version lives in one place.
  *
  * `login` is what the person runs to log in (M9-4), from the agent's own
- * `--help`. `loginSignal` says how the agent tells us it is logged out
+ * `--help`. `loginSignal` says how the agent tells us it cannot work
  * (§Models and login). By default, `session/new` fails with `-32000`, so a
- * session that opens means logged in. `notice`: claude's
- * `_auth/status_update`. `none`: copilot, which never says.
+ * session that opens means `ok`: the agent can use its models. That is the
+ * meaning, not "the person has an account" (decided 2026-10-28): opencode
+ * opens a session with its free models and no login, and it is `ok`.
+ * `notice`: claude's `_auth/status_update`. `none`: copilot, which never
+ * says.
  */
 export interface SetupSpec {
   program: string;

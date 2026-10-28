@@ -8,6 +8,10 @@
  * agent. Every check has a time limit. A temporary folder, so a project's own
  * settings (pi and opencode read them) show only in a real session there.
  *
+ * **`login` means "this agent can open a session and use its models"**, not
+ * "the person has an account" (decided by the person, 2026-10-28). So
+ * opencode is `ok` whenever `session/new` opens, free models included.
+ *
  * **The login state comes from each agent's own signal** (§Models and login,
  * `loginSignal` in the registry). `-32000` on `session/new` is "logged out"
  * for every agent: pi, codex and kimi send it. claude opens a session logged
@@ -22,6 +26,10 @@
  * The file holds facts only, as `harnesses.json` does. The login hint comes
  * from today's registry when it is read. Never an account field: only the
  * notice's kind leaves `AcpAgent`, and only the state is saved.
+ *
+ * **The file is a cache.** A write that fails is dropped, in one place
+ * (`saveCheck`): no check, route or room fails over it, and the next check
+ * writes it again.
  */
 
 import { mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -133,24 +141,18 @@ export async function checkAgent(
   const noticed = new Promise<string>((ok) => {
     heard = ok;
   });
-  let agent: AcpAgent;
-  try {
-    agent = new AcpAgent({
-      name: setup.program,
-      command: launch.command,
-      args: launch.args,
-      env: resolveEnv(launch.env),
-      cwd,
-      requestTimeoutMs: timeoutMs,
-      onAuthStatus: (kind) => {
-        notice ??= kind;
-        heard(kind);
-      },
-    });
-  } catch {
-    await rm(cwd, { recursive: true, force: true }).catch(() => {});
-    return { login: "unknown" };
-  }
+  const agent = new AcpAgent({
+    name: setup.program,
+    command: launch.command,
+    args: launch.args,
+    env: resolveEnv(launch.env),
+    cwd,
+    requestTimeoutMs: timeoutMs,
+    onAuthStatus: (kind) => {
+      notice ??= kind;
+      heard(kind);
+    },
+  });
   let cancel!: () => void;
   const cancelled = new Promise<undefined>((ok) => {
     cancel = () => ok(undefined);
@@ -231,22 +233,35 @@ export function readChecks(): Record<string, AgentCheck> {
 }
 
 /** Changes one agent's entry, atomically. Read and write are synchronous,
- *  so a check and a room session in the same daemon never lose a write. */
-function saveCheck(id: string, change: (old?: AgentCheck) => AgentCheck) {
+ *  so a check and a room session in the same daemon never lose a write.
+ *  False when the write failed: the file is a cache, so that is dropped. */
+function saveCheck(
+  id: string,
+  change: (old?: AgentCheck) => AgentCheck,
+): boolean {
   const all = readChecks();
   all[id] = change(all[id]);
-  const file = checksFile();
-  const tmp = `${file}.tmp`;
-  // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
-  // pi-lens-ignore: no-raw-json-store-write
-  writeFileSync(tmp, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmp, file);
+  try {
+    // `stateDir` throws too, on a state folder that is not safe.
+    const file = checksFile();
+    const tmp = `${file}.tmp`;
+    // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
+    // pi-lens-ignore: no-raw-json-store-write
+    writeFileSync(tmp, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, file);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * The ready agents to check: all of them when `force` (every
  * `POST /harnesses`, decided 2026-10-28), else each one with no saved
- * check (the first start), a new version, or no saved model list.
+ * check (the first start), a new version, or a list missing from an agent
+ * that can open a session. One logged out, or unknown, settles: else each
+ * chat start would start it again. `POST /harnesses` or a real session
+ * updates it.
  */
 export function dueForCheck(
   s: Setup,
@@ -258,7 +273,12 @@ export function dueForCheck(
     .map((a) => a.id)
     .filter((id) => {
       const c = checks[id];
-      return force || !c || c.version !== s.found[id]?.acpVersion || !c.models;
+      return (
+        force ||
+        !c ||
+        c.version !== s.found[id]?.acpVersion ||
+        (c.login === "ok" && !c.models)
+      );
     });
 }
 
@@ -299,23 +319,17 @@ export async function runChecks(
  * What a real room session said (3A, decided 2026-10-28): its models replace
  * the saved ones, and its login state replaces the saved one. The version
  * stays the last check's. An agent kapelle does not look for is skipped.
- * A write that fails is dropped: the file is a cache, and a room must not
- * fail to start over it. The next check writes it again.
  */
 export function noteSession(id: string, seen: Seen): void {
   if (!Object.hasOwn(AGENTS, id) || !AGENTS[id]?.setup) return;
   if (Object.keys(seen).length === 0) return;
-  try {
-    saveCheck(id, (old) => ({
-      login: "unknown",
-      ...old,
-      ...seen,
-      checkedAt: new Date().toISOString(),
-    }));
-    sessionWrites.set(id, (sessionWrites.get(id) ?? 0) + 1);
-  } catch {
-    // See above: a cache write.
-  }
+  const saved = saveCheck(id, (old) => ({
+    login: "unknown",
+    ...old,
+    ...seen,
+    checkedAt: new Date().toISOString(),
+  }));
+  if (saved) sessionWrites.set(id, (sessionWrites.get(id) ?? 0) + 1);
 }
 
 /** What a room needs to report its session: the state an open session

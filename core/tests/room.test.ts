@@ -37,6 +37,7 @@ import type {
   ClientMessageQueuedEvent,
   ClientUserMessageEvent,
 } from "../../protocol/types.ts";
+import type { Seen } from "../check.ts";
 import { readProjectLinkPaths } from "../config.ts";
 import { checkoutDiff } from "../diff.ts";
 import { createEventBus, type EventBus } from "../events.ts";
@@ -2500,3 +2501,32 @@ for (const how of ["remove", "dismiss"] as const) {
     assert.deepEqual(told(po), []);
   });
 }
+
+test("a room reports one auth notice per harness start, however many come (M9-4)", async (t) => {
+  const launch = AGENTS.claude.launch;
+  AGENTS.claude.launch = {
+    command: process.execPath,
+    args: [MOCK_AGENT, "--scenario", "auth-repeat"],
+  };
+  t.after(() => {
+    AGENTS.claude.launch = launch;
+  });
+  const repo = await gitRepo(t);
+  const roomId = newRoomId();
+  const logins: Seen[] = [];
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [roomAgent({ agent: "claude", name: "alice" })],
+    setup: await openWorktrees(repo, roomId),
+    bus: createEventBus(),
+    permissions: queue,
+    noteSession: (agent, seen) => {
+      if (agent === "claude" && seen.login) logins.push(seen);
+    },
+  });
+  t.after(() => room.dismiss());
+  // All twenty came before `session/new` answered. Each report is a
+  // synchronous write of `checks.json`, so one per start bounds them.
+  assert.deepEqual(logins, [{ login: "logged_out" }]);
+});

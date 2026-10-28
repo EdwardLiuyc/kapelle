@@ -294,8 +294,9 @@ export class AcpAgent {
   agentInfo: Implementation | null;
   agentCapabilities: AgentCapabilities | null;
   onAuthStatus: (kind: string) => void;
-  /** The `configOptions` of the last `session/new`, where the models are
-   *  (M9-4). Empty until then, and when the harness sent none. */
+  /** The `configOptions` of the last `session/new` or `session/load`, where
+   *  the models are (M9-4). Empty until then, after a delete, and when the
+   *  harness sent none. */
   configOptions: SessionConfigOption[] = [];
 
   #proc: ChildProcessWithoutNullStreams | null = null;
@@ -542,13 +543,16 @@ export class AcpAgent {
     return this.sessionId;
   }
 
-  /** Removes the session from the harness's own history (M9-4). Only when
+  /** Removes the session from the harness's own history (M9-4), and
+   *  forgets it here, so nothing more is sent to it. Only when
    *  `agentCapabilities.sessionCapabilities.delete` is set: copilot has no
    *  such method. */
   async deleteSession(): Promise<void> {
     if (!this.sessionId)
       throw new Error("no session — call newSession() first");
     await this.request("session/delete", { sessionId: this.sessionId });
+    this.sessionId = null;
+    this.configOptions = [];
   }
 
   /**
@@ -563,8 +567,9 @@ export class AcpAgent {
     { mcpServers = [] }: { mcpServers?: McpServer[] } = {},
   ): Promise<SessionId> {
     this.#replaying = true;
+    let res: LoadSessionResponse;
     try {
-      await this.request<LoadSessionResponse>("session/load", {
+      res = await this.request<LoadSessionResponse>("session/load", {
         sessionId,
         cwd: this.cwd,
         mcpServers,
@@ -576,6 +581,9 @@ export class AcpAgent {
       this.#replaying = false;
     }
     this.sessionId = sessionId;
+    this.configOptions = Array.isArray(res?.configOptions)
+      ? res.configOptions
+      : [];
     return sessionId;
   }
 

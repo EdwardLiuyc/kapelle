@@ -12,7 +12,8 @@
  * `installAgents` (M9-3b) sends the checked ids, never a command: the
  * daemon builds each command from its registry and streams npm's output.
  *
- * M9-4 adds each ready agent's login state and hint under its warnings.
+ * M9-4 adds a line for each ready agent that is logged out, or may be, with
+ * its login hint, after all the warnings.
  */
 
 import type {
@@ -88,15 +89,18 @@ export function setupLines(r: HarnessesReply): SetupLine[] {
   }
   // M9-4: a ready agent that is logged out, or may be, and how to log in.
   for (const h of known) {
-    const hint = printable(h.loginHint ?? "?");
+    // No hint, no command: a `?` would read as one.
+    const hint = h.loginHint && printable(h.loginHint);
     if (h.login === "logged_out") {
       lines.push({
-        text: `! ${printable(h.id)} is not logged in: ${hint}`,
+        text: `! ${printable(h.id)} is not logged in${hint ? `: ${hint}` : ""}`,
         tone: "warn",
       });
     } else if (h.login === "unknown") {
       lines.push({
-        text: `${printable(h.id)}: login not known; to log in: ${hint}`,
+        text:
+          `${printable(h.id)}: login not known` +
+          (hint ? `; to log in: ${hint}` : ""),
         tone: "dim",
       });
     }
