@@ -126,6 +126,7 @@ import {
   footer,
   historyRow,
   messages,
+  moved,
   opened,
   participantLeft,
   quiet,
@@ -435,6 +436,8 @@ function chatTui(
   let leaving: ReturnType<typeof setTimeout> | undefined;
   /** The `@name ` this screen put in the composer, while it is untouched. */
   let prefill = "";
+  /** Each room's draft, by room id, while another room is open (#355). */
+  const drafts = new Map<string, string>();
   /** The open questions over every room, oldest first (M4-3). The reducers
    *  hold them; the queue keeps their order and the ones put aside. */
   const queue = questionQueue<{ r: Followed; q: Question }>((roomId, id) => {
@@ -816,12 +819,26 @@ function chatTui(
   const open = (next: View) => {
     // A pop-up belongs to the view it opened on.
     if (box.panel) hidePanel();
+    const from = view.roomId;
     view = next;
     flash = "";
     // A thread shows the files its agent changed (M7-3).
     if (next.participantId) void loadChanges(next.roomId, next.participantId);
     const r = rooms.get(next.roomId);
-    compose(opened(r?.state, next, editor.getText(), prefill));
+    const text = editor.getText();
+    if (next.roomId === from) compose(opened(r?.state, next, text, prefill));
+    else {
+      // A draft stays in its room (#355).
+      const c = moved(
+        r?.state,
+        next,
+        { text, prefill },
+        drafts.get(next.roomId),
+      );
+      if (c.left) drafts.set(from, c.left);
+      else drafts.delete(from);
+      compose(c);
+    }
     // The person looks at the view: its lines are seen.
     if (r) for (const id of seenIn(r.state, next)) seen(r.state, id);
     redraw();
@@ -911,6 +928,7 @@ function chatTui(
     const label = r?.entry.title ?? id;
     const next = wasDismissed ? dismissed(rooms, view, id) : undefined;
     if (next) open(next);
+    if (wasDismissed) drafts.delete(id);
     flash = wasDismissed ? `${label} was dismissed` : endedLine(ended, id);
     setStatus();
   };

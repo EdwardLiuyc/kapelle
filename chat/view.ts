@@ -6,8 +6,11 @@
  *   keys step one row down or up.
  * - The pre-fill: in a thread, the composer holds `@name ` until the person
  *   types (R43, decided 2026-09-30). A pre-fill the person did not touch
- *   follows the view and a rename, and clears when no room is left. Typed
- *   text stays.
+ *   follows the view and a rename, and clears when no room is left.
+ * - The draft (#355): one per room. Typed text stays across the views of
+ *   its room, where a `@name` finds the same agent. A room change keeps it
+ *   as that room's draft and puts back the next room's: text never moves
+ *   rooms, where the same `@name`, or no name, can reach another agent.
  * - A thread whose participant left goes back to its room's timeline. A
  *   view in a dismissed room goes to the first row.
  * - What is on screen is seen: the timeline marks its whole room, and a
@@ -134,9 +137,9 @@ export const historyRow = (state: RoomState, e: Message) =>
 export const seenIn = (state: RoomState, view: View) =>
   view.participantId ? [view.participantId] : [...state.participants.keys()];
 
-/** The composer when `next` opens in a room with this state: an untouched
- *  pre-fill follows the view, and typed text stays. With no room (`state`
- *  unset), an untouched pre-fill clears, as in a timeline. */
+/** The composer when `next` opens in the same room, with this state: an
+ *  untouched pre-fill follows the view, and typed text stays. With no room
+ *  (`state` unset), an untouched pre-fill clears, as in a timeline. */
 export function opened(
   state: RoomState | undefined,
   next: View,
@@ -146,6 +149,21 @@ export function opened(
   if (touched(text, prefill)) return { prefill };
   const p = state ? mention(state, next) : "";
   return { prefill: p, text: p };
+}
+
+/** The composer when `next` opens in another room (#355): that room's
+ *  `draft`, or its pre-fill. `left` is the draft the room left keeps: its
+ *  typed text, or "" when there is none, since a pre-fill is not a draft. */
+export function moved(
+  state: RoomState | undefined,
+  next: View,
+  now: { text: string; prefill: string },
+  draft?: string,
+): Composer & { left: string } {
+  const left = touched(now.text, now.prefill) ? now.text : "";
+  if (draft) return { prefill: "", text: draft, left };
+  const p = state ? mention(state, next) : "";
+  return { prefill: p, text: p, left };
 }
 
 /** The composer after the person edits it. Typed text drops the
