@@ -66,7 +66,14 @@ export interface AgentCheck {
   login: Login;
   models?: Model[];
   model?: string;
+  /** The last check could not open a session: it ran out of time, or the
+   *  agent failed to start or to answer. Its login is `unknown`, and the
+   *  models stay as they were: a failure disproves no list. A real session
+   *  that reports clears it. */
+  failed?: Failure;
 }
+
+type Failure = "timeout" | "error";
 
 /** What a session said: a check's whole result, or part of one. */
 export type Seen = Partial<Pick<AgentCheck, "login" | "models" | "model">>;
@@ -74,6 +81,9 @@ export type Seen = Partial<Pick<AgentCheck, "login" | "models" | "model">>;
 /** How long one check may take. claude's own login probe may take 5 s
  *  before its notice comes; the slowest start measured is 3.5 s. */
 const CHECK_TIMEOUT_MS = 15_000;
+
+/** The share of a check's limit claude's notice may take: 12 s of 15. */
+const NOTICE_SHARE = 0.8;
 
 /** `session/new` failed this way: log in first (§Models and login). */
 const AUTH_REQUIRED = -32000;
@@ -125,17 +135,18 @@ export async function stopChecks(): Promise<void> {
   await Promise.all(active.map(({ done }) => done));
 }
 
-/** Runs one check session. Never throws: what went wrong is `unknown`. */
+/** Runs one check session. Never throws: a check that could not open a
+ *  session is `failed`, with its login `unknown`. */
 export async function checkAgent(
   launch: AgentEntry["launch"],
   setup: SetupSpec,
   timeoutMs = CHECK_TIMEOUT_MS,
-): Promise<Seen & { login: Login }> {
+): Promise<Seen & { login: Login; failed?: Failure }> {
   let cwd: string;
   try {
     cwd = mkdtempSync(join(tmpdir(), "kapelle-check-"));
   } catch {
-    return { login: "unknown" };
+    return { login: "unknown", failed: "error" };
   }
   let notice: string | undefined;
   let heard: (kind: string) => void = () => {};
@@ -165,8 +176,18 @@ export async function checkAgent(
   const active = { cancel, done };
   runningChecks.add(active);
   let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
   const late = new Promise<undefined>((ok) => {
-    timer = setTimeout(() => ok(undefined), timeoutMs);
+    timer = setTimeout(() => {
+      timedOut = true;
+      ok(undefined);
+    }, timeoutMs);
+  });
+  // claude's notice is waited for only so long, inside the check's own
+  // limit: a session that opened with no notice did not fail.
+  let noticeTimer: NodeJS.Timeout | undefined;
+  const noticeLate = new Promise<undefined>((ok) => {
+    noticeTimer = setTimeout(() => ok(undefined), timeoutMs * NOTICE_SHARE);
   });
   const work = async (): Promise<Seen & { login: Login }> => {
     const init = await agent.start();
@@ -182,7 +203,7 @@ export async function checkAgent(
     }
     // claude's notice comes after `initialize`, from a probe of its own.
     if (setup.loginSignal === "notice") {
-      notice ??= await Promise.race([noticed, late]);
+      notice ??= await Promise.race([noticed, noticeLate]);
     }
     const login = notice ? fromNotice(notice) : fromSession(setup);
     return { ...seen, login: login ?? "unknown" };
@@ -192,12 +213,16 @@ export async function checkAgent(
   working.catch(() => {});
   try {
     return (
-      (await Promise.race([working, late, cancelled])) ?? { login: "unknown" }
+      (await Promise.race([working, late, cancelled])) ?? {
+        login: "unknown",
+        failed: timedOut ? "timeout" : "error",
+      }
     );
   } catch {
-    return { login: "unknown" };
+    return { login: "unknown", failed: "error" };
   } finally {
     clearTimeout(timer);
+    clearTimeout(noticeTimer);
     try {
       await agent.stop();
     } finally {
@@ -218,8 +243,9 @@ export async function checkAgent(
 const checksFile = () => join(stateDir(), "checks.json");
 
 /** One map per running `runChecks`: what real sessions said while it ran,
- *  by agent. Those fields are newer than the check's result, and only those:
- *  a session wins the fields it gave, the check wins the rest. */
+ *  by agent. A session wins the fields it gave, the check wins the rest.
+ *  "Newer" means it arrived during the check, not that it is later than the
+ *  check's own answer: a live session is the stronger evidence. */
 const sessionsDuringChecks = new Set<Map<string, Seen>>();
 
 /** The saved checks, by agent id. Empty when the file is missing or bad. */
@@ -292,27 +318,38 @@ export async function runChecks(
   // by field, so a models-only load does not throw away a fresh login.
   const during = new Map<string, Seen>();
   sessionsDuringChecks.add(during);
-  const results = await Promise.all(
-    ids.map(async (id) => {
-      const a = AGENTS[id];
-      return [
-        id,
-        a?.setup ? await checkAgent(a.launch, a.setup, timeoutMs) : undefined,
-      ] as const;
-    }),
-  );
-  sessionsDuringChecks.delete(during);
+  let results: (readonly [string, Awaited<ReturnType<typeof checkAgent>>?])[];
+  try {
+    results = await Promise.all(
+      ids.map(async (id) => {
+        const a = AGENTS[id];
+        return [
+          id,
+          a?.setup ? await checkAgent(a.launch, a.setup, timeoutMs) : undefined,
+        ] as const;
+      }),
+    );
+  } finally {
+    // Here, not after: a throw must not leave a map nobody reads.
+    sessionsDuringChecks.delete(during);
+  }
   // A shutdown canceled these checks: its unknown answers are not new facts.
   if (generation !== checkGeneration) return;
   const checkedAt = new Date().toISOString();
   for (const [id, r] of results) {
     if (!r) continue;
     const version = found[id]?.acpVersion;
-    saveCheck(id, () => ({
+    const { failed, ...result } = r;
+    const said = during.get(id);
+    saveCheck(id, (old) => ({
       checkedAt,
       ...(version && { version }),
-      ...r,
-      ...during.get(id),
+      // A failed check disproves no model list: the saved one stays.
+      ...(failed && { models: old?.models, model: old?.model }),
+      ...result,
+      ...said,
+      // Unless a session during the check showed that the agent works.
+      ...(failed && !said && { failed }),
     }));
   }
 }
@@ -325,10 +362,12 @@ export async function runChecks(
 export function noteSession(id: string, seen: Seen): void {
   if (!Object.hasOwn(AGENTS, id) || !AGENTS[id]?.setup) return;
   if (Object.keys(seen).length === 0) return;
+  // A session that reports opened: the agent works, so no failure stays.
   saveCheck(id, (old) => ({
     login: "unknown",
     ...old,
     ...seen,
+    failed: undefined,
     checkedAt: new Date().toISOString(),
   }));
   // Newer than any check running now, even when the write failed.
@@ -366,6 +405,7 @@ export const failureSeen = (err: unknown): Seen | undefined =>
 interface CheckFields {
   login?: Login;
   loginHint?: string;
+  checkFailed?: Failure;
   models?: Model[];
   model?: string;
   loginCheckedAt?: string;
@@ -381,7 +421,10 @@ export function checkFields(
   const hint = AGENTS[id]?.setup?.login;
   return {
     login: c.login,
-    ...(c.login !== "ok" && hint && { loginHint: hint }),
+    // A failed check is no login problem: no login advice for it.
+    ...(c.failed
+      ? { checkFailed: c.failed }
+      : c.login !== "ok" && hint && { loginHint: hint }),
     ...(c.models && { models: c.models }),
     ...(c.model !== undefined && { model: c.model }),
     loginCheckedAt: c.checkedAt,

@@ -213,3 +213,37 @@ test("a login line with no hint names no command (M9-4)", () => {
     tone: "warn",
   });
 });
+
+test("a failed check says so, and gives no login advice (M9-4)", () => {
+  const lines = setupLines({
+    checkedAt: "2026-10-28T00:00:00.000Z",
+    done: true,
+    harnesses: [
+      {
+        id: "kimi",
+        measured: true,
+        state: "ready",
+        program: "kimi",
+        acpProgram: "kimi",
+        login: "unknown",
+        checkFailed: "timeout",
+      },
+      {
+        id: "pi",
+        measured: true,
+        state: "ready",
+        program: "pi",
+        acpProgram: "pi-acp",
+        login: "unknown",
+        checkFailed: "error",
+      },
+    ],
+  });
+  assert.deepEqual(lines.slice(-2), [
+    {
+      text: "! kimi: the check timed out; /setup checks again",
+      tone: "warn",
+    },
+    { text: "! pi: the check failed; /setup checks again", tone: "warn" },
+  ]);
+});

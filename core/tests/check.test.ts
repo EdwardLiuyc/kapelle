@@ -72,24 +72,32 @@ test("claude's notice gives its state, and copilot's is unknown", async () => {
       .login,
     "ok",
   );
-  // A notice that never comes is no answer.
-  assert.equal(
-    (await checkAgent(mock(), setup("notice"), 500)).login,
-    "unknown",
+  // A notice that never comes is no answer, but the session opened: the
+  // check did not fail, and its models count.
+  assert.deepEqual(
+    await checkAgent(mock("--scenario", "models"), setup("notice"), 500),
+    {
+      models: [
+        { id: "mock/fast", name: "Fast" },
+        { id: "mock/smart", name: "Smart" },
+      ],
+      model: "mock/fast",
+      login: "unknown",
+    },
   );
   assert.equal((await checkAgent(mock(), setup("none"))).login, "unknown");
 });
 
-test("a check that runs out of time, or cannot start, is unknown", async () => {
+test("a check that runs out of time, or cannot start, failed, and its login is unknown", async () => {
   const started = Date.now();
   assert.deepEqual(
     await checkAgent(mock("--scenario", "silent-session"), setup(), 300),
-    { login: "unknown" },
+    { login: "unknown", failed: "timeout" },
   );
   assert.ok(Date.now() - started < 5000);
   assert.deepEqual(
     await checkAgent({ command: "/no/such/agent-acp", args: [] }, setup()),
-    { login: "unknown" },
+    { login: "unknown", failed: "error" },
   );
 });
 
@@ -303,6 +311,7 @@ test("a temporary folder that cannot be made is unknown, not a throw", async (t)
 
   assert.deepEqual(await checkAgent(mock(), setup(), 100), {
     login: "unknown",
+    failed: "error",
   });
 });
 
@@ -455,4 +464,36 @@ test("a models-only session during a check keeps the login the check measured (M
   assert.deepEqual(saved?.models, [{ id: "loaded", name: "Loaded" }]);
   assert.equal(saved?.model, "loaded");
   assert.equal(saved?.version, "2.0.18");
+});
+
+test("a failed check keeps the saved models, and a later session clears the failure (M9-4)", async (t) => {
+  await stateHome(t);
+  noteSession("opencode", {
+    login: "ok",
+    models: [{ id: "kept", name: "Kept" }],
+    model: "kept",
+  });
+  const launch = AGENTS.opencode.launch;
+  AGENTS.opencode.launch = mock("--scenario", "silent-session");
+  t.after(() => {
+    AGENTS.opencode.launch = launch;
+  });
+  await runChecks(
+    ["opencode"],
+    { opencode: { program: true, acp: true, acpVersion: "2.0.18" } },
+    300,
+  );
+  // The failure is shown, not hidden: the login is unknown. The models stay:
+  // a check that failed did not disprove them.
+  const failed = readChecks().opencode;
+  assert.equal(failed?.login, "unknown");
+  assert.equal(failed?.failed, "timeout");
+  assert.deepEqual(failed?.models, [{ id: "kept", name: "Kept" }]);
+  assert.equal(failed?.model, "kept");
+  assert.deepEqual(checkFields("opencode", failed).loginHint, undefined);
+  assert.equal(checkFields("opencode", failed).checkFailed, "timeout");
+
+  // A real session that opens says the agent works again.
+  noteSession("opencode", { login: "ok" });
+  assert.equal(readChecks().opencode?.failed, undefined);
 });

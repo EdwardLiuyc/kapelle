@@ -91,7 +91,13 @@ export function setupLines(r: HarnessesReply): SetupLine[] {
   for (const h of known) {
     // No hint, no command: a `?` would read as one.
     const hint = h.loginHint && printable(h.loginHint);
-    if (h.login === "logged_out") {
+    if (h.checkFailed) {
+      const what = h.checkFailed === "timeout" ? "timed out" : "failed";
+      lines.push({
+        text: `! ${printable(h.id)}: the check ${what}; /setup checks again`,
+        tone: "warn",
+      });
+    } else if (h.login === "logged_out") {
       lines.push({
         text: `! ${printable(h.id)} is not logged in${hint ? `: ${hint}` : ""}`,
         tone: "warn",

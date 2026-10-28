@@ -1475,9 +1475,11 @@ test("the check saves each ready agent's models and login, and POST checks again
   assert.equal(entryOf(r.body, "kimi")?.login, "logged_out");
   assert.equal(entryOf(r.body, "kimi")?.loginHint, "kimi login");
   assert.equal(entryOf(r.body, "claude")?.login, "ok");
-  // The fake pi-acp is no ACP agent: the check cannot tell.
+  // The fake pi-acp is no ACP agent: the check fails, and the list says so
+  // rather than give login advice that would not help.
   assert.equal(entryOf(r.body, "pi")?.login, "unknown");
-  assert.equal(entryOf(r.body, "pi")?.loginHint, "pi, then /login");
+  assert.equal(entryOf(r.body, "pi")?.checkFailed, "error");
+  assert.equal(entryOf(r.body, "pi")?.loginHint, undefined);
   // Not ready: never checked.
   assert.equal(entryOf(r.body, "copilot")?.login, undefined);
   // Only the state is kept, never claude's account.

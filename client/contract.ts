@@ -84,8 +84,13 @@ export interface HarnessEntry {
    *  session and use its models), `logged_out`, or `unknown` (copilot never
    *  says; a check that failed). */
   login?: "ok" | "logged_out" | "unknown";
-  /** What the person runs to log in; when `login` is not `ok`. */
+  /** What the person runs to log in; when `login` is not `ok` and the check
+   *  did not fail. */
   loginHint?: string;
+  /** The last check could not open a session: it ran out of time
+   *  (`timeout`), or the agent failed to start or answer (`error`). `login`
+   *  is then `unknown`, and `models` stay from before. */
+  checkFailed?: "timeout" | "error";
   /** The agent's models, and the one its last session started with. */
   models?: { id: string; name: string }[];
   model?: string;
