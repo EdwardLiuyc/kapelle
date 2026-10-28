@@ -1295,16 +1295,31 @@ test("an npm that exits 0 but leaves the ACP program off the daemon's PATH is a 
   const { d } = await bootFinding(t, bin);
   const r = await install(d, { ids: ["claude"] });
   assert.equal(r.status, 200);
+  // No `command`: running it by hand would land in the same folder (#374).
   assert.deepEqual(r.last?.failed, [
     {
       id: "claude",
-      command: CLAUDE_PIN,
       error:
         "npm finished, but claude-agent-acp is still not on the daemon's " +
         "PATH: put npm's global bin folder on it, then restart the daemon",
     },
   ]);
   assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "main_only");
+});
+
+test("an agent the find calls ready is not a failure, whatever npm said (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  // npm links the program, then fails, as one its time limit kills late does.
+  await writeFile(
+    join(bin, "npm"),
+    `#!/bin/sh\nprintf '#!/bin/sh\\necho 0.89.1\\n' > "${join(bin, "claude-agent-acp")}"\n` +
+      `${absolute("chmod")} 755 "${join(bin, "claude-agent-acp")}"\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  const { d } = await bootFinding(t, bin);
+  const r = await install(d, { ids: ["claude"] });
+  assert.deepEqual(r.last?.failed, []);
+  assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "ready");
 });
 
 test("POST /harnesses/install takes agent ids only, and only main-only ones (M9-3b)", async (t) => {

@@ -507,10 +507,14 @@ stops.
 **Reply `200`:** `application/x-ndjson`, one JSON object per line, as it happens. Each
 install starts with its command, then npm's output in pieces. The last line has each
 install that failed, and a new find, the same as `GET /harnesses` replies. The find
-decides, not npm's exit code: an install whose harness is not `ready` after it is a
-failure, also when npm exited 0. That happens when npm's global bin folder is not on the
-daemon's `PATH`, and its `error` says so. A failed install leaves its harness `main_only`;
-show its `command` for the person to run, for example with `sudo`.
+decides, not npm's exit code, in both directions. A harness that is `ready` after its
+install is no failure, whatever npm said. A harness that is not `ready` is a failure, also
+when npm exited 0:
+
+- npm failed: `error` is npm's, and `command` is the command that ran. Show it for the
+  person to run, for example with `sudo`.
+- npm exited 0: its global bin folder is not on the daemon's `PATH`. `error` says so, and
+  there is no `command`: run by hand, it would install into the same folder.
 
 ```json
 {"id":"claude","command":"npm i -g @agentclientprotocol/claude-agent-acp@0.89.1"}

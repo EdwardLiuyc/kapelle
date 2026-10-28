@@ -489,13 +489,23 @@ function panelParts({
       return tui.requestRender();
     }
     // The command on its own line, so it does not wrap and stays copyable.
-    const before = failed.flatMap((f) => [
-      {
-        text: `! ${printable(f.id)}: ${printable(f.error)}. Run it yourself:`,
-        tone: "warn" as const,
-      },
-      { text: `  ${printable(f.command)}`, tone: "warn" as const },
-    ]);
+    // A failure with no command is one a hand run cannot help (#374).
+    const before = failed.flatMap((f) =>
+      f.command
+        ? [
+            {
+              text: `! ${printable(f.id)}: ${printable(f.error)}. Run it yourself:`,
+              tone: "warn" as const,
+            },
+            { text: `  ${printable(f.command)}`, tone: "warn" as const },
+          ]
+        : [
+            {
+              text: `! ${printable(f.id)}: ${printable(f.error)}.`,
+              tone: "warn" as const,
+            },
+          ],
+    );
     if (failed.length) {
       for (const l of out.slice(-6)) before.push({ text: l, tone: "warn" });
     }

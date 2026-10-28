@@ -98,9 +98,11 @@ export type InstallLine =
   | { id: string; output: string }
   | InstallResult;
 
-/** The last line: each install that failed, and the find after them. */
+/** The last line: each install that failed, and the find after them. A
+ *  failure has `command` only when running it by hand can help: npm itself
+ *  failed. An install npm put off the daemon's `PATH` has none. */
 export interface InstallResult {
-  failed: { id: string; command: string; error: string }[];
+  failed: { id: string; command?: string; error: string }[];
   setup: HarnessesReply;
 }
 

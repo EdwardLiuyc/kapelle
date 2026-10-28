@@ -702,6 +702,32 @@ test("the setup list checks several main-only agents and sends both ids (M9-3b)"
   assert.equal(await exited, 0, out());
 });
 
+test("an install npm put off the daemon's PATH says so, with no command to run by hand (M9-3b)", {
+  skip: noPty,
+}, async (t) => {
+  const bin = await fakePath(t);
+  await writeFile(join(bin, "npm"), '#!/bin/sh\necho "added 1 package"\n', {
+    mode: 0o755,
+  });
+  const { runtime } = await bootFinding(t, bin);
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 200 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "Space check · Enter done · Esc later",
+  );
+  await press(" ", "[x] claude");
+  await press("\r", "restart the daemon");
+  const from = plainText(out()).lastIndexOf("npm finished");
+  assert.ok(from >= 0, out());
+  // The command's own line, indented under the error; npm's output tail
+  // shows the command too, but as "$ npm …".
+  assert.doesNotMatch(plainText(out()).slice(from), /┃ {3}npm i -g /);
+  await press("\x1b", "enter to send");
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
 test("a failed install shows npm's error and the command to run by hand (M9-3b)", {
   skip: noPty,
 }, async (t) => {

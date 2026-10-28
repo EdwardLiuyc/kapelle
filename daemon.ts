@@ -1792,19 +1792,27 @@ async function postInstall(req: IncomingMessage, res: ServerResponse) {
       res.destroy();
       return;
     }
-    // The find is the result, not npm's exit code (#374): npm exits 0 when
-    // it installs into a global bin folder that is not on our PATH.
+    // The find is the result, not npm's exit code (#374), both ways: npm
+    // exits 0 when it installs into a global bin folder that is not on our
+    // PATH, and a ready agent is no failure whatever npm said. `command` is
+    // only for a failure that running it by hand can help.
     const setup = await setupNow(true);
     const now = new Map(describe(setup).map((a) => [a.id, a]));
     const failed = plan.flatMap(({ id, args }) => {
       const a = now.get(id);
-      const error =
-        npmError.get(id) ??
-        (a?.state === "ready"
-          ? undefined
-          : `npm finished, but ${a?.acpProgram} is still not on the daemon's ` +
-            "PATH: put npm's global bin folder on it, then restart the daemon");
-      return error ? [{ id, command: installCommand(args), error }] : [];
+      if (a?.state === "ready") return [];
+      const error = npmError.get(id);
+      return [
+        error
+          ? { id, command: installCommand(args), error }
+          : {
+              id,
+              error:
+                `npm finished, but ${a?.acpProgram} is still not on the ` +
+                "daemon's PATH: put npm's global bin folder on it, then " +
+                "restart the daemon",
+            },
+      ];
     });
     line({ failed, setup: harnessesReply(setup) });
     res.end();
