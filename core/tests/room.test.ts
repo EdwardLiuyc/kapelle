@@ -2353,6 +2353,25 @@ test("a cancel drops the kept text: the reply is its first line only", async (t)
   ]);
 });
 
+test("a person's cancel of a worker's turn says so in the copy too (#377)", async (t) => {
+  const { po, dev, of, told, settled } = await loopRoom(t, "half");
+  const order = dev.send("go", po);
+  await until(() => of(dev, "tool_call").length > 0, "dev's first tool call");
+  dev.cancel();
+  await order;
+  await settled();
+  const direct = dev.send("hi");
+  await until(() => of(dev, "tool_call").length > 1, "dev's second tool call");
+  dev.cancel();
+  await direct;
+  await settled();
+  assert.deepEqual(told(po).at(-1), [
+    "[copy] you → dev · cancelled by the person, 1 tool call\nhi",
+    dev.id,
+    "copy",
+  ]);
+});
+
 test("a harness exit drops the kept text: the reply is the error only", async (t) => {
   const { po, dev, of, told, settled } = await loopRoom(t, "half");
   const turn = dev.send("go", po);
