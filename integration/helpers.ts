@@ -332,10 +332,11 @@ export async function fakePath(t: TestContext): Promise<string> {
 }
 
 /** A fake `npm` in `bin` (M9-3b). It adds its argv as a line to
- *  `bin/npm.argv`, and puts a `claude-agent-acp` that says 0.89.1 on `bin`.
- *  `fail` exits 243 with npm's EACCES line, as an install that needs `sudo`
- *  does. `hold` waits for a file `bin/go` first. `bin` may be the daemon's
- *  whole `PATH`, so the script names `chmod` and `sleep` by their paths. */
+ *  `bin/npm.argv`, and puts the named ACP program on `bin`: claude 0.89.1 or
+ *  codex 2.2.2. `fail` exits 243 with npm's EACCES line, as an install that
+ *  needs `sudo` does. `hold` waits for a file `bin/go` first. `bin` may be
+ *  the daemon's whole `PATH`, so the script names `chmod` and `sleep` by
+ *  their paths. */
 export async function fakeNpm(
   bin: string,
   { fail = false, hold = false } = {},
@@ -344,18 +345,24 @@ export async function fakeNpm(
     spawnSync("sh", ["-c", `command -v ${cmd}`], {
       encoding: "utf8",
     }).stdout.trim();
-  const acp = join(bin, "claude-agent-acp");
+  const claude = join(bin, "claude-agent-acp");
+  const codex = join(bin, "codex-acp");
   const body = [
     `echo "$*" >> "${join(bin, "npm.argv")}"`,
+    'echo "npm http fetch GET 200 https://registry.npmjs.org/ 12ms"',
     ...(hold
       ? [`while [ ! -e "${join(bin, "go")}" ]; do ${where("sleep")} 0.05; done`]
       : []),
-    'echo "npm http fetch GET 200 https://registry.npmjs.org/ 12ms"',
     ...(fail
       ? ['echo "npm error code EACCES" >&2', "exit 243"]
       : [
-          `printf '#!/bin/sh\\necho 0.89.1\\n' > "${acp}"`,
-          `${where("chmod")} 755 "${acp}"`,
+          'case "$*" in',
+          `  *claude-agent-acp*) file="${claude}"; version=0.89.1 ;;`,
+          `  *codex-acp*) file="${codex}"; version=2.2.2 ;;`,
+          "  *) exit 0 ;;",
+          "esac",
+          `printf '#!/bin/sh\\necho %s\\n' "$version" > "$file"`,
+          `${where("chmod")} 755 "$file"`,
           'echo "added 1 package in 1s"',
         ]),
   ];

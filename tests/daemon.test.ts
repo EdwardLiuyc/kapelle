@@ -1132,6 +1132,165 @@ test("POST /harnesses/install runs the pinned npm command, streams its output, a
   );
 });
 
+test("POST /harnesses/install runs the checked agents one after the other (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  await writeFile(join(bin, "codex"), "#!/bin/sh\necho 1.0.0\n", {
+    mode: 0o755,
+  });
+  await rm(join(bin, "codex-acp"));
+  const absolute = (cmd: string) =>
+    spawnSync("sh", ["-c", `command -v ${cmd}`], {
+      encoding: "utf8",
+    }).stdout.trim();
+  const log = join(bin, "npm.log");
+  const claudeAcp = join(bin, "claude-agent-acp");
+  const codexAcp = join(bin, "codex-acp");
+  const claude = "i -g @agentclientprotocol/claude-agent-acp@0.89.1";
+  const codex = "i -g @agentclientprotocol/codex-acp@2.2.2";
+  const installProgram = (file: string, version: string) =>
+    `printf '#!/bin/sh\\necho ${version}\\n' > "${file}"\n` +
+    `${absolute("chmod")} 755 "${file}"`;
+  await writeFile(
+    join(bin, "npm"),
+    '#!/bin/sh\nargs="$*"\n' +
+      `echo "start $args" >> "${log}"\n${absolute("sleep")} 0.1\n` +
+      `if [ "$args" = "${claude}" ]; then\n${installProgram(claudeAcp, "0.89.1")}\n` +
+      `elif [ "$args" = "${codex}" ]; then\n${installProgram(codexAcp, "2.2.2")}\nfi\n` +
+      `echo "end $args" >> "${log}"\n`,
+    { mode: 0o755 },
+  );
+  const { d } = await bootFinding(t, bin);
+  const before = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(stateOf(before.body, "claude"), "main_only");
+  assert.equal(stateOf(before.body, "codex"), "main_only");
+
+  const r = await install(d, { ids: ["claude", "codex"] });
+  assert.deepEqual(r.last?.failed, []);
+  assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "ready");
+  assert.equal(stateOf(r.last?.setup as HarnessesReply, "codex"), "ready");
+  assert.equal(
+    await readFile(log, "utf8"),
+    `start ${claude}\nend ${claude}\nstart ${codex}\nend ${codex}\n`,
+  );
+});
+
+test("the install's find starts after npm, not with one already in flight (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin, { hold: true });
+  // opencode's version probe holds the find open across npm's install.
+  const absolute = (cmd: string) =>
+    spawnSync("sh", ["-c", `command -v ${cmd}`], {
+      encoding: "utf8",
+    }).stdout.trim();
+  const started = join(bin, "version-started");
+  await writeFile(
+    join(bin, "opencode"),
+    `#!/bin/sh\n${absolute("touch")} "${started}"\n${absolute("sleep")} 1\n` +
+      'echo "opencode v2.0.18"\n',
+    { mode: 0o755 },
+  );
+  const { d } = await bootFinding(t, bin);
+  const installing = install(d, { ids: ["claude"] });
+  while (!existsSync(join(bin, "npm.argv"))) {
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  // This find snapshots PATH before npm writes claude-agent-acp.
+  const before = api<HarnessesReply>(d, "POST", "/harnesses");
+  while (!existsSync(started)) {
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  await writeFile(join(bin, "go"), "");
+  const [r, stale] = await Promise.all([installing, before]);
+  assert.equal(stale.status, 200);
+  assert.equal(stateOf(stale.body, "claude"), "main_only");
+  assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "ready");
+});
+
+test("the install stream reaches a chat before npm ends, and a chat that leaves does not stop npm (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin, { hold: true });
+  const { d } = await bootFinding(t, bin);
+  const res = await fetch(`${d.url}/harnesses/install`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${d.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ ids: ["claude"] }),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "application/x-ndjson");
+  const reader = res.body?.getReader();
+  assert.ok(reader);
+  const decoder = new TextDecoder();
+  let buffered = "";
+  const readLine = async () => {
+    for (;;) {
+      const at = buffered.indexOf("\n");
+      if (at >= 0) {
+        const line = buffered.slice(0, at);
+        buffered = buffered.slice(at + 1);
+        return line;
+      }
+      const { done, value } = await reader.read();
+      assert.equal(done, false);
+      buffered += decoder.decode(value, { stream: true });
+    }
+  };
+  assert.deepEqual(JSON.parse(await readLine()), {
+    id: "claude",
+    command: CLAUDE_PIN,
+  });
+  const output = JSON.parse(await readLine()) as { output?: string };
+  assert.match(output.output ?? "", /npm http fetch GET 200/);
+  assert.equal(existsSync(join(bin, "go")), false, "npm still runs");
+
+  // The chat leaves before npm exits. Its response body is cancelled, but
+  // the daemon's install keeps going and writes the new find.
+  await reader.cancel();
+  await writeFile(join(bin, "go"), "");
+  let found: HarnessesReply | undefined;
+  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+    found = (await api<HarnessesReply>(d, "GET", "/harnesses")).body;
+    if (stateOf(found, "claude") === "ready") break;
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  assert.equal(stateOf(found as HarnessesReply, "claude"), "ready");
+});
+
+test("an install error after its headers cuts the stream and leaves the daemon up (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin, { hold: true });
+  const { d, runtime } = await bootFinding(t, bin);
+  const dir = join(runtime, "kapelle");
+  const res = await fetch(`${d.url}/harnesses/install`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${d.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ ids: ["claude"] }),
+  });
+  assert.equal(res.status, 200);
+  const reader = res.body?.getReader();
+  assert.ok(reader);
+  await reader.read();
+  // Let the stream start, then make the final find's write fail.
+  await chmod(dir, 0o555);
+  try {
+    await writeFile(join(bin, "go"), "");
+    try {
+      for (;;) if ((await reader.read()).done) break;
+    } catch {
+      // The daemon cuts a stream whose headers are already sent.
+    }
+    const after = await api<unknown>(d, "GET", "/version");
+    assert.equal(after.status, 200);
+  } finally {
+    await chmod(dir, 0o755);
+  }
+});
+
 test("POST /harnesses/install takes agent ids only, and only main-only ones (M9-3b)", async (t) => {
   const bin = await fakePath(t);
   await fakeNpm(bin);

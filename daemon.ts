@@ -1689,6 +1689,12 @@ let finding: Promise<Setup> | undefined;
 async function setupNow(again: boolean): Promise<Setup> {
   const saved = again ? undefined : readSetup();
   if (saved) return saved;
+  // An install needs a find that began after npm wrote its program. A find
+  // already in flight may have read PATH before that.
+  if (again && finding) {
+    await finding.catch(() => {});
+    if (finding) return finding;
+  }
   finding ??= findAgents(process.env.PATH ?? "")
     .then((found) => {
       const s = {
@@ -1758,23 +1764,30 @@ async function postInstall(req: IncomingMessage, res: ServerResponse) {
       }
       return { id, args };
     });
-    res.writeHead(200, {
-      "content-type": "application/x-ndjson",
-      "cache-control": "no-cache",
-    });
-    res.flushHeaders();
-    const line = (l: InstallLine) => {
-      if (!res.destroyed) res.write(`${JSON.stringify(l)}\n`);
-    };
-    const failed: { id: string; command: string; error: string }[] = [];
-    for (const { id, args } of plan) {
-      const command = installCommand(args);
-      line({ id, command });
-      const error = await runNpm(args, (output) => line({ id, output }));
-      if (error) failed.push({ id, command, error });
+    try {
+      res.writeHead(200, {
+        "content-type": "application/x-ndjson",
+        "cache-control": "no-cache",
+      });
+      res.flushHeaders();
+      const line = (l: InstallLine) => {
+        if (!res.destroyed) res.write(`${JSON.stringify(l)}\n`);
+      };
+      const failed: { id: string; command: string; error: string }[] = [];
+      for (const { id, args } of plan) {
+        const command = installCommand(args);
+        line({ id, command });
+        const error = await runNpm(args, (output) => line({ id, output }));
+        if (error) failed.push({ id, command, error });
+      }
+      line({ failed, setup: harnessesReply(await setupNow(true)) });
+      res.end();
+    } catch (err) {
+      if (!res.headersSent) throw err;
+      // A JSON refusal can no longer replace a stream already started.
+      console.error(`install: ${messageOf(err)}`);
+      res.destroy();
     }
-    line({ failed, setup: harnessesReply(await setupNow(true)) });
-    res.end();
   } finally {
     installing = false;
   }

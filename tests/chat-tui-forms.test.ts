@@ -52,6 +52,7 @@ import {
   screenRows,
   scrollback,
   tempDir,
+  until,
   withAgent,
 } from "../integration/helpers.ts";
 import { AGENTS } from "../protocol/registry.ts";
@@ -614,9 +615,9 @@ test("the setup list checks a main-only agent, and Enter installs it with the pi
   skip: noPty,
 }, async (t) => {
   const bin = await fakePath(t);
-  await fakeNpm(bin);
+  await fakeNpm(bin, { hold: true });
   const { runtime } = await bootFinding(t, bin);
-  const { press, exited, out } = await ptyScreen(
+  const { press, seen, exited, out } = await ptyScreen(
     t,
     "stty cols 160 rows 40; node cli.ts chat",
     { XDG_RUNTIME_DIR: runtime },
@@ -624,13 +625,78 @@ test("the setup list checks a main-only agent, and Enter installs it with the pi
   );
   // claude is the one main-only agent: the cursor is on its box.
   assert.match(plainText(out()), /› \[ \] claude/);
+  // Space checks it, checks it off, and checks it again.
   await press(" ", "[x] claude");
-  await press("\r", "claude-agent-acp 0.89.1)");
+  await press(" ", "[ ] claude");
+  await press(" ", "[x] claude");
+  // npm's first line reaches the list before npm exits.
+  await press("\r", "npm http fetch GET 200");
+  await writeFile(join(bin, "go"), "");
+  await seen("claude-agent-acp 0.89.1)");
   assert.equal(
     await readFile(join(bin, "npm.argv"), "utf8"),
     "i -g @agentclientprotocol/claude-agent-acp@0.89.1\n",
   );
   // Ready now, so no box is left, and Enter is "done" again.
+  await press("\r", "setup done");
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("the setup list checks several main-only agents and sends both ids (M9-3b)", {
+  skip: noPty,
+}, async (t) => {
+  const bin = await fakePath(t);
+  await writeFile(join(bin, "codex"), "#!/bin/sh\necho 1.0.0\n", {
+    mode: 0o755,
+  });
+  await rm(join(bin, "codex-acp"));
+  await fakeNpm(bin);
+  // The second find is held open, so the keys arrive before its reply. That
+  // reply must keep the cursor on codex, not put it back on the first box.
+  const first = join(bin, "opencode-first");
+  const second = join(bin, "opencode-second");
+  const go = join(bin, "opencode-go");
+  await writeFile(
+    join(bin, "opencode"),
+    `#!${process.execPath}\nconst fs = require("node:fs");\n` +
+      `if (!fs.existsSync(${JSON.stringify(first)})) {\n` +
+      `  fs.writeFileSync(${JSON.stringify(first)}, "");\n` +
+      `  console.log("opencode v2.0.18");\n} else {\n` +
+      `  fs.writeFileSync(${JSON.stringify(second)}, "");\n` +
+      `  const timer = setInterval(() => {\n` +
+      `    if (!fs.existsSync(${JSON.stringify(go)})) return;\n` +
+      "    clearInterval(timer);\n" +
+      `    console.log("opencode v2.0.19");\n  }, 10);\n}\n`,
+    { mode: 0o755 },
+  );
+  const { runtime } = await bootFinding(t, bin);
+  const { press, seen, exited, out } = await ptyScreen(
+    t,
+    "stty cols 160 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "Space check · Enter done · Esc later",
+  );
+  await until("the setup's second find to start", async () => {
+    try {
+      await access(second);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  assert.match(plainText(out()), /› \[ \] claude/);
+  await press(" ", "[x] claude");
+  await press(DOWN, "[ ] codex");
+  await writeFile(go, "");
+  await seen("opencode 2.0.19");
+  await press(" ", "[x] codex");
+  await press("\r", "claude-agent-acp 0.89.1)");
+  assert.equal(
+    await readFile(join(bin, "npm.argv"), "utf8"),
+    "i -g @agentclientprotocol/claude-agent-acp@0.89.1\n" +
+      "i -g @agentclientprotocol/codex-acp@2.2.2\n",
+  );
   await press("\r", "setup done");
   await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());

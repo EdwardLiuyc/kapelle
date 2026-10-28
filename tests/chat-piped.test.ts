@@ -556,7 +556,7 @@ test("the piped chat prints the setup list on /setup, and /setup done says done 
   assert.equal(r.code, 0, r.stderr);
   assert.match(
     r.stdout,
-    /^claude +claude 2\.1\.307; needs claude-agent-acp: /m,
+    /^claude +claude 2\.1\.307; needs claude-agent-acp: npm i -g @agentclientprotocol\/claude-agent-acp@0\.89\.1$/m,
   );
   assert.match(r.stdout, /^opencode +ready \(opencode 2\.0\.18\)$/m);
   const after = await api<HarnessesReply>(d, "GET", "/harnesses");

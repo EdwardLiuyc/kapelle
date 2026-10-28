@@ -347,19 +347,21 @@ function panelParts({
    *  one line per agent. A "main program only" agent has a check box
    *  (M9-3b): ↑↓ move, Space checks, and Enter installs the checked ones,
    *  or is "done" when none is. Esc closes it, and it opens again at the
-   *  next start. `checked` outlives one body, so a box checked while the
-   *  daemon looks stays checked in the new find, if it still has a box. */
+   *  next start. `checked` and `focus` outlive one body, so the new find
+   *  keeps a checked box and the cursor on the agent the person chose. */
   const setupList = (
     r: HarnessesReply | undefined,
     before: { text: string; tone?: "dim" | "warn" }[] = [],
     checked = new Set<string>(),
+    focus?: { id?: string },
   ): Component => {
     const lines = r
       ? setupLines(r)
       : [{ text: "looking for agents…", tone: "dim" as const }];
     const boxes = lines.flatMap((l) => (l.install ? [l.install] : []));
     for (const id of checked) if (!boxes.includes(id)) checked.delete(id);
-    let at = 0;
+    let at = focus?.id === undefined ? 0 : Math.max(0, boxes.indexOf(focus.id));
+    if (focus) focus.id = boxes[at];
     return {
       render: (w) => [
         ...before.flatMap((l) => wrapTextWithAnsi(toned(l), w)),
@@ -382,9 +384,12 @@ function panelParts({
       ],
       handleInput(key) {
         if (matchesKey(key, Key.escape)) hidePanel();
-        else if (matchesKey(key, Key.up)) at = Math.max(0, at - 1);
-        else if (matchesKey(key, Key.down)) {
+        else if (matchesKey(key, Key.up)) {
+          at = Math.max(0, at - 1);
+          if (focus) focus.id = boxes[at];
+        } else if (matchesKey(key, Key.down)) {
           at = Math.min(boxes.length - 1, at + 1);
+          if (focus) focus.id = boxes[at];
         } else if (matchesKey(key, Key.space) && boxes[at]) {
           const id = boxes[at] as string;
           if (!checked.delete(id)) checked.add(id);
@@ -405,12 +410,14 @@ function panelParts({
     setupTouched = true;
     const generation = ++setupGeneration;
     const checked = new Set<string>();
-    showPanel(SETUP, setupList(inHand, [], checked), generation);
+    const focus: { id?: string } = {};
+    showPanel(SETUP, setupList(inHand, [], checked, focus), generation);
     await fresh();
     const r = await findAgain(d).catch(() => undefined);
     // Closed, or replaced, while the daemon looked.
     if (panel?.setup !== generation) return;
-    if (r?.ok) showPanel(SETUP, setupList(r.body, [], checked), generation);
+    if (r?.ok)
+      showPanel(SETUP, setupList(r.body, [], checked, focus), generation);
     else panel.error = r ? r.error.message : NO_DAEMON;
     tui.requestRender();
   };
