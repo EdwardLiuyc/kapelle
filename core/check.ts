@@ -95,30 +95,72 @@ function fromSession(setup: SetupSpec): Login | undefined {
   return setup.loginSignal === "none" ? "unknown" : "ok";
 }
 
+/** Checks that are running, so the daemon's shutdown can stop them too. */
+const runningChecks = new Set<{
+  cancel: () => void;
+  done: Promise<void>;
+}>();
+
+/** Bumped by `stopChecks`, so a canceled run does not save its unknown result. */
+let checkGeneration = 0;
+
+/**
+ * Cancels every check in flight and resolves once each has stopped its harness
+ * and finished its own cleanup. The daemon calls this on shutdown, as it does
+ * `stopNpmInstalls`, so no check outlives the process.
+ */
+export async function stopChecks(): Promise<void> {
+  checkGeneration += 1;
+  const active = [...runningChecks];
+  for (const check of active) check.cancel();
+  await Promise.all(active.map(({ done }) => done));
+}
+
 /** Runs one check session. Never throws: what went wrong is `unknown`. */
 export async function checkAgent(
   launch: AgentEntry["launch"],
   setup: SetupSpec,
   timeoutMs = CHECK_TIMEOUT_MS,
 ): Promise<Seen & { login: Login }> {
-  const cwd = mkdtempSync(join(tmpdir(), "kapelle-check-"));
+  let cwd: string;
+  try {
+    cwd = mkdtempSync(join(tmpdir(), "kapelle-check-"));
+  } catch {
+    return { login: "unknown" };
+  }
   let notice: string | undefined;
   let heard: (kind: string) => void = () => {};
   const noticed = new Promise<string>((ok) => {
     heard = ok;
   });
-  const agent = new AcpAgent({
-    name: setup.program,
-    command: launch.command,
-    args: launch.args,
-    env: resolveEnv(launch.env),
-    cwd,
-    requestTimeoutMs: timeoutMs,
-    onAuthStatus: (kind) => {
-      notice ??= kind;
-      heard(kind);
-    },
+  let agent: AcpAgent;
+  try {
+    agent = new AcpAgent({
+      name: setup.program,
+      command: launch.command,
+      args: launch.args,
+      env: resolveEnv(launch.env),
+      cwd,
+      requestTimeoutMs: timeoutMs,
+      onAuthStatus: (kind) => {
+        notice ??= kind;
+        heard(kind);
+      },
+    });
+  } catch {
+    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    return { login: "unknown" };
+  }
+  let cancel!: () => void;
+  const cancelled = new Promise<undefined>((ok) => {
+    cancel = () => ok(undefined);
   });
+  let finish!: () => void;
+  const done = new Promise<void>((ok) => {
+    finish = ok;
+  });
+  const active = { cancel, done };
+  runningChecks.add(active);
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<undefined>((ok) => {
     timer = setTimeout(() => ok(undefined), timeoutMs);
@@ -146,13 +188,27 @@ export async function checkAgent(
   const working = work();
   working.catch(() => {});
   try {
-    return (await Promise.race([working, late])) ?? { login: "unknown" };
+    return (
+      (await Promise.race([working, late, cancelled])) ?? { login: "unknown" }
+    );
   } catch {
     return { login: "unknown" };
   } finally {
     clearTimeout(timer);
-    await agent.stop();
-    await rm(cwd, { recursive: true, force: true });
+    try {
+      await agent.stop();
+    } finally {
+      // Cleanup is best effort: a harness can make its temporary folder
+      // undeletable, but that must not turn the check into a throw.
+      await rm(cwd, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      }).catch(() => {});
+      runningChecks.delete(active);
+      finish();
+    }
   }
 }
 
@@ -212,6 +268,7 @@ export async function runChecks(
   found: Setup["found"],
   timeoutMs?: number,
 ): Promise<void> {
+  const generation = checkGeneration;
   // A real session can report while a check runs. Remember how many writes
   // each agent had at the start, so the check does not replace a newer one
   // when it finishes.
@@ -227,6 +284,8 @@ export async function runChecks(
       ] as const;
     }),
   );
+  // A shutdown canceled these checks: its unknown answers are not new facts.
+  if (generation !== checkGeneration) return;
   const checkedAt = new Date().toISOString();
   for (const [id, r] of results) {
     if (!r) continue;

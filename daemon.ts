@@ -11,8 +11,9 @@
  *
  * **Transport over `core/`, and nothing more.** It calls `stateDirRoot`,
  * `stateDirFor`, `validateRun`, `sweepBoot`, `runRun`,
- * `processIdentity` and the permission queue, `findAgents` for the
- * installed agents, and for chat rooms `roomAgents` and `openRoom`;
+ * `processIdentity` and the permission queue, `findAgents` and the login
+ * checks for the installed agents, and for chat rooms `roomAgents` and
+ * `openRoom`;
  * worktrees, policy and the harness subprocesses stay behind them. If orchestration grew here, the scheduler would be
  * untestable without a server and the CLI would drift into a second
  * implementation (`docs/STORIES.md`, M2-1).
@@ -83,6 +84,7 @@ import {
   noteSession,
   readChecks,
   runChecks,
+  stopChecks,
 } from "./core/check.ts";
 import {
   readEnvConfig,
@@ -1721,6 +1723,9 @@ async function setupNow(again: boolean): Promise<Setup> {
   return finding;
 }
 
+/** Set once SIGTERM/SIGINT has begun: no new check or install may start. */
+let stopping = false;
+
 /** The check in flight (M9-4): one at a time, so two asks never start the
  *  same agents twice. */
 let checking: Promise<void> | undefined;
@@ -1732,7 +1737,9 @@ let checking: Promise<void> | undefined;
  * then checks only what is still due.
  */
 async function checkNow(s: Setup, force: boolean): Promise<void> {
+  if (stopping) return;
   while (checking) await checking.catch(() => {});
+  if (stopping) return;
   const ids = dueForCheck(s, readChecks(), force);
   if (ids.length === 0) return;
   checking = runChecks(ids, s.found).finally(() => {
@@ -1759,8 +1766,6 @@ function harnessesReply(s: Setup): HarnessesReply {
 
 /** Set while `POST /harnesses/install` runs: one install at a time. */
 let installing = false;
-/** Set once SIGTERM/SIGINT has begun: an install must not start another npm. */
-let stopping = false;
 
 /**
  * `POST /harnesses/install` (M9-3b): the person's checked agents, by id.
@@ -2071,7 +2076,8 @@ const server = createServer(
 /**
  * SIGTERM or SIGINT: cancel every run, pause every room, wait for each to
  * settle, then remove `daemon.json` and exit 0 (M2-4, #34). An install's npm
- * is killed rather than waited for, so a stop leaves no install running.
+ * is killed rather than waited for, and a check's harness is stopped and its
+ * temporary folder cleaned up, so a stop leaves neither running.
  *
  * **A room is paused, not dismissed** (M6-7a, R42c): its live turns are
  * cancelled, its harnesses stopped and its checkouts kept, and the next boot
@@ -2093,11 +2099,13 @@ async function shutdown(signal: string): Promise<void> {
   // daemon, and wait for the next one (`readRoom` in `client/roomset.ts`).
   server.close();
   stopNpmInstalls();
+  const checksStopped = stopChecks();
   for (const canceller of cancels.values()) canceller.abort("cancel");
   await Promise.all([
     ...inFlight,
     ...roomChanges,
     ...[...rooms.values()].map(({ room }) => room.pause()),
+    checksStopped,
   ]);
   removeDaemonFiles(file);
   process.exit(0);

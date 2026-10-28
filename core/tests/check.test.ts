@@ -6,12 +6,13 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { type TestContext, test } from "node:test";
 
-import { MOCK_AGENT, tempDir } from "../../integration/helpers.ts";
+import { MOCK_AGENT, tempDir, until } from "../../integration/helpers.ts";
 import { AGENTS, type SetupSpec } from "../../protocol/registry.ts";
 import {
   type AgentCheck,
@@ -21,6 +22,7 @@ import {
   noteSession,
   readChecks,
   runChecks,
+  stopChecks,
 } from "../check.ts";
 import type { Setup } from "../harnesses.ts";
 
@@ -278,4 +280,88 @@ test("a check leaves a session the agent cannot delete (M9-4)", async (t) => {
     .split("\n")
     .map((line) => (JSON.parse(line) as { method: string }).method);
   assert.deepEqual(methods, ["initialize", "session/new"]);
+});
+
+test("a temporary folder that cannot be made is unknown, not a throw", async (t) => {
+  const before = process.env.TMPDIR;
+  process.env.TMPDIR = join(await tempDir(t), "missing");
+  t.after(() => {
+    if (before === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = before;
+  });
+
+  assert.deepEqual(await checkAgent(mock(), setup(), 100), {
+    login: "unknown",
+  });
+});
+
+test("a temporary folder that cannot be removed does not fail the check", async (t) => {
+  const dir = await tempDir(t);
+  const record = join(dir, "requests.jsonl");
+  assert.deepEqual(
+    await checkAgent(
+      mock("--scenario", "models", "--record", record, "--lock-cwd"),
+      setup(),
+    ),
+    {
+      models: [
+        { id: "mock/fast", name: "Fast" },
+        { id: "mock/smart", name: "Smart" },
+      ],
+      model: "mock/fast",
+      login: "ok",
+    },
+  );
+
+  const requests = (await readFile(record, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { cwd: string });
+  const cwd = requests[0]?.cwd;
+  assert.ok(cwd);
+  // Best effort means the check still answers, even when cleanup could not.
+  assert.equal(existsSync(cwd), true);
+  for (const path of [join(cwd, "locked"), cwd]) {
+    try {
+      await chmod(path, 0o700);
+    } catch {
+      // The locked folder or the check folder may already be gone.
+    }
+  }
+  await rm(cwd, { recursive: true, force: true });
+});
+
+test("stopping checks cancels them without saving an unknown result", async (t) => {
+  await stateHome(t);
+  noteSession("opencode", {
+    login: "ok",
+    models: [{ id: "kept", name: "Kept" }],
+    model: "kept",
+  });
+  const dir = await tempDir(t);
+  const record = join(dir, "requests.jsonl");
+  const launch = AGENTS.opencode.launch;
+  AGENTS.opencode.launch = mock(
+    "--scenario",
+    "silent-session",
+    "--record",
+    record,
+  );
+  t.after(() => {
+    AGENTS.opencode.launch = launch;
+  });
+
+  const checking = runChecks(
+    ["opencode"],
+    { opencode: { program: true, acp: true, acpVersion: "2.0.18" } },
+    10_000,
+  );
+  await until("the check to start", () => existsSync(record));
+  await stopChecks();
+  await checking;
+
+  const saved = readChecks().opencode;
+  assert.equal(saved?.login, "ok");
+  assert.deepEqual(saved?.models, [{ id: "kept", name: "Kept" }]);
+  assert.equal(saved?.model, "kept");
 });

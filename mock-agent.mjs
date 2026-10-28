@@ -19,15 +19,18 @@
  * `loadSession: true`. The load replays the old turns as `session/update`
  * before it answers, as every real harness does (§M0-9).
  *
- * Three test controls make timing observable: `--record <file>` logs each
- * request with its cwd, `--barrier <dir> --barrier-count <n>` holds
- * `initialize` until n agents start, and `--auth-hold <file>` holds claude's
- * auth notice until that file exists.
+ * Four test controls make timing observable or exercise cleanup:
+ * `--record <file>` logs each request with its cwd, `--barrier <dir>
+ * --barrier-count <n>` holds `initialize` until n agents start,
+ * `--auth-hold <file>` holds claude's auth notice until that file exists, and
+ * `--lock-cwd` makes `session/new` leave a folder the client cannot remove.
  */
 import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -79,6 +82,8 @@ const SCENARIOS = {
     "sends _auth/status_update with kind none after initialize, as claude does logged out",
   "auth-account":
     "sends _auth/status_update with an account after initialize, as claude does logged in",
+  "auth-malformed":
+    "sends _auth/status_update with a kind that is not a string",
 };
 
 const storeAt = process.argv.indexOf("--store");
@@ -92,6 +97,7 @@ const barrierCount =
   barrierCountAt === -1 ? 0 : Number(process.argv[barrierCountAt + 1]);
 const authHoldAt = process.argv.indexOf("--auth-hold");
 const authHoldFile = authHoldAt === -1 ? null : process.argv[authHoldAt + 1];
+const lockCwd = process.argv.includes("--lock-cwd");
 
 const at = process.argv.indexOf("--scenario");
 const scenario = at === -1 ? null : process.argv[at + 1];
@@ -340,6 +346,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         },
       });
     }
+    if (scenario === "auth-malformed") {
+      notify("_auth/status_update", {
+        authStatus: { kind: 42, label: "not a kind" },
+      });
+    }
   }
 
   if (msg.method === "session/new") {
@@ -361,6 +372,12 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       : `sess_mock_${++sessionCount}`;
     sessions.add(sid);
     keep(sid, []);
+    if (lockCwd) {
+      mkdirSync("locked", { recursive: true });
+      writeFileSync("locked/file", "locked\n");
+      chmodSync("locked", 0o500);
+      chmodSync(".", 0o500);
+    }
     reply(msg.id, {
       sessionId: sid,
       ...(scenario === "models" && {

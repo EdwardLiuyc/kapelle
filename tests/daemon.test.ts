@@ -2,8 +2,9 @@
  * The daemon process — `daemon.ts`, M2-1 (#31) — driven as a real subprocess
  * over real HTTP: the token and the Host check, `daemon.json` and its lock,
  * start, stop and add, the config, the repositories, and the agents it finds
- * (M9-3) and installs (M9-3b). The other subjects have their own files: `daemon-runs`,
- * `daemon-rooms`, `attach` and the `chat-*` files (#340).
+ * (M9-3), installs (M9-3b) and checks login for (M9-4). The other subjects
+ * have their own files: `daemon-runs`, `daemon-rooms`, `attach` and the
+ * `chat-*` files (#340).
  *
  * **None of this needs a harness**, so it runs in CI like `tests/cli.test.ts`:
  * every run points at `mock-agent.mjs`, and every refusal fails before a
@@ -1538,6 +1539,86 @@ test("a real room session updates the saved models and login (M9-4)", async (t) 
   const out = await api<HarnessesReply>(d, "GET", "/harnesses");
   assert.equal(entryOf(out.body, "kimi")?.login, "logged_out");
   assert.equal(entryOf(out.body, "kimi")?.loginHint, "kimi login");
+});
+
+test("daemon stop cancels a check and removes its temporary folder (M9-4)", async (t) => {
+  const bin = await tempDir(t);
+  const pidFile = join(bin, "check.pid");
+  const cwdFile = join(bin, "check.cwd");
+  await writeFile(
+    join(bin, "opencode"),
+    [
+      `#!${process.execPath}`,
+      'const { writeFileSync } = require("node:fs");',
+      'if (process.argv[2] === "--version") {',
+      '  console.log("opencode v2.0.18");',
+      "  process.exit(0);",
+      "}",
+      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      `writeFileSync(${JSON.stringify(cwdFile)}, process.cwd());`,
+      'for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {',
+      "  process.on(signal, () => {});",
+      "}",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const { d, runtime } = await bootFinding(t, bin);
+  // No saved checks, so the first GET starts one.
+  await rm(join(runtime, "kapelle", "checks.json"));
+
+  let childPid = 0;
+  let checkCwd: string | undefined;
+  t.after(async () => {
+    if (childPid) {
+      try {
+        process.kill(childPid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    if (checkCwd) {
+      try {
+        await chmod(checkCwd, 0o700);
+      } catch {
+        // Already gone, or not ours to chmod.
+      }
+      try {
+        await rm(checkCwd, { recursive: true, force: true });
+      } catch {
+        // Already gone, or still held by the process killed above.
+      }
+    }
+  });
+
+  const listing = (async () => {
+    try {
+      await api<HarnessesReply>(d, "GET", "/harnesses");
+    } catch {
+      // The daemon closes the request when it exits.
+    }
+  })();
+  await until("the check harness to start", () => existsSync(pidFile));
+  childPid = Number(await readFile(pidFile, "utf8"));
+  checkCwd = (await readFile(cwdFile, "utf8")).trim();
+  assert.ok(childPid > 0);
+  assert.ok(checkCwd);
+
+  process.kill(d.pid, "SIGTERM");
+  const exit = await d.done;
+  assert.equal(exit.code, 0, exit.stderr);
+  assert.equal(
+    await gone(childPid),
+    true,
+    "the check harness outlived the daemon",
+  );
+  assert.equal(
+    existsSync(checkCwd),
+    false,
+    "the check's temporary folder remains",
+  );
+  await listing;
 });
 
 test("a room does not wait for claude's auth notice, and saves it when it comes (M9-4)", async (t) => {

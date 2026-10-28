@@ -1707,6 +1707,15 @@ test("claude's auth status reaches onAuthStatus as its kind only, and never onEv
   assert.deepEqual(logged.kinds, ["subscription"]);
 });
 
+test("a malformed auth status is ignored", async (t) => {
+  const { agent, events, kinds } = await signalAgent(t, "auth-malformed");
+  await agent.start();
+  await agent.newSession();
+  // The kind is wire data. A number must not become a login state or an event.
+  assert.deepEqual(kinds, []);
+  assert.deepEqual(turnEvents(events), []);
+});
+
 test("session/new keeps its configOptions, and an error keeps its code", async (t) => {
   const { agent } = await signalAgent(t, "models");
   await agent.start();
