@@ -2564,7 +2564,7 @@ async function bodyAfter(
   return reply;
 }
 
-test("a shutdown answers PATCH and fast-forward with 503, not room_dismissed", async (t) => {
+test("a shutdown answers PATCH, fast-forward and an install with 503, not room_dismissed", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
@@ -2584,17 +2584,20 @@ test("a shutdown answers PATCH and fast-forward with 503, not room_dismissed", a
     process.kill(d.pid, "SIGTERM");
     await new Promise((ok) => setTimeout(ok, 300));
   };
-  const [patched, forwarded] = await Promise.all([
+  const later = () => new Promise<void>((ok) => setTimeout(ok, 300));
+  const [patched, forwarded, installed] = await Promise.all([
     bodyAfter(d, "PATCH", `/rooms/${id}/agents/${p}`, { name: "x" }, stop),
     bodyAfter(
       d,
       "POST",
       `/rooms/${id}/agents/${p}/fast-forward`,
       { from: p },
-      () => new Promise((ok) => setTimeout(ok, 300)),
+      later,
     ),
+    // M9-3b: refused before its find, so a stop probes no agent.
+    bodyAfter(d, "POST", "/harnesses/install", { ids: ["claude"] }, later),
   ]);
-  for (const r of [patched, forwarded]) {
+  for (const r of [patched, forwarded, installed]) {
     assert.equal(r.status, 503, JSON.stringify(r.body));
     assert.equal(r.body.error.code, "shutting_down");
   }

@@ -175,7 +175,9 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   `POST /harnesses/install` takes agent ids, never a command. `installArgs` builds
   `npm i -g <setup.npm>@<measuredOn.version>`, and `runNpm` starts it with no shell. It
   installs only an ACP program the person checked, never a main program, and it never
-  logs in (D6, as amended).
+  logs in (D6, as amended). npm runs the package's own install scripts as the daemon's
+  user: the one place kapelle runs third-party code outside a harness. The check box and
+  the registry's pin are what contain it, so never widen either without the person.
 - **Keep the path guard separate from the policy.** `#guardPath` compares realpaths and
   applies in every mode, `auto` included.
 - **Keep the `toolCallId → {title, kind, rawInput}` map in `AcpAgent`.** A permission

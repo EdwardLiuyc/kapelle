@@ -501,13 +501,16 @@ own program.
 **Refusals:** `400` `invalid_request` when `ids` is not a non-empty list of strings, when
 the body has any other field, or when an id is not a harness whose state is `main_only`
 now. The daemon finds again before it checks, and one bad id refuses the whole list.
-`409` `install_running` while another install runs.
+`409` `install_running` while another install runs. `503` `shutting_down` while the daemon
+stops.
 
 **Reply `200`:** `application/x-ndjson`, one JSON object per line, as it happens. Each
 install starts with its command, then npm's output in pieces. The last line has each
-install that failed, and a new find, the same as `GET /harnesses` replies. A failed
-install leaves its harness `main_only`; show its `command` for the person to run, for
-example with `sudo`.
+install that failed, and a new find, the same as `GET /harnesses` replies. The find
+decides, not npm's exit code: an install whose harness is not `ready` after it is a
+failure, also when npm exited 0. That happens when npm's global bin folder is not on the
+daemon's `PATH`, and its `error` says so. A failed install leaves its harness `main_only`;
+show its `command` for the person to run, for example with `sudo`.
 
 ```json
 {"id":"claude","command":"npm i -g @agentclientprotocol/claude-agent-acp@0.89.1"}
@@ -515,7 +518,10 @@ example with `sudo`.
 {"failed":[],"setup":{"checkedAt":"2026-10-28T11:00:00.000Z","done":false,"harnesses":[]}}
 ```
 
-A client that closes the connection does not stop npm. The next find shows what it did.
+A client that closes the connection does not stop npm. The next find shows what it did. A
+daemon that stops during an install stops npm, and ends the stream with no last line. A
+stream that ends without the last line is such a stop, or a cut connection: find again
+(`POST /harnesses`) to see what is installed.
 
 ### Runs
 

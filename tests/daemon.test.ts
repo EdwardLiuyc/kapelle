@@ -1285,6 +1285,28 @@ test("an install error after its headers cuts the stream and leaves the daemon u
   }
 });
 
+test("an npm that exits 0 but leaves the ACP program off the daemon's PATH is a failure (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  // npm's global bin folder is not on the daemon's PATH: npm says it added
+  // the package, and the find still sees no claude-agent-acp.
+  await writeFile(join(bin, "npm"), '#!/bin/sh\necho "added 1 package"\n', {
+    mode: 0o755,
+  });
+  const { d } = await bootFinding(t, bin);
+  const r = await install(d, { ids: ["claude"] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.last?.failed, [
+    {
+      id: "claude",
+      command: CLAUDE_PIN,
+      error:
+        "npm finished, but claude-agent-acp is still not on the daemon's " +
+        "PATH: put npm's global bin folder on it, then restart the daemon",
+    },
+  ]);
+  assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "main_only");
+});
+
 test("POST /harnesses/install takes agent ids only, and only main-only ones (M9-3b)", async (t) => {
   const bin = await fakePath(t);
   await fakeNpm(bin);

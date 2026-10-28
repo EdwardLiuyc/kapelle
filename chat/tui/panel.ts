@@ -441,7 +441,7 @@ function panelParts({
       {
         render: (w) => [
           dim(`installing ${ids.map(printable).join(", ")}…`),
-          ...out.slice(-10).flatMap((l) => wrapTextWithAnsi(dim(l), w)),
+          ...out.flatMap((l) => wrapTextWithAnsi(dim(l), w)),
           "",
           dim("Esc hides this; the install goes on"),
         ],

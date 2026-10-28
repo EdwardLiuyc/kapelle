@@ -1747,6 +1747,9 @@ async function postInstall(req: IncomingMessage, res: ServerResponse) {
   ) {
     throw refusal(400, "invalid_request", "ids must be a list of agent ids");
   }
+  if (stopping) {
+    throw refusal(503, "shutting_down", "the daemon is shutting down");
+  }
   if (installing) {
     throw refusal(409, "install_running", "an install is already running");
   }
@@ -1775,14 +1778,13 @@ async function postInstall(req: IncomingMessage, res: ServerResponse) {
     const line = (l: InstallLine) => {
       if (!res.destroyed) res.write(`${JSON.stringify(l)}\n`);
     };
-    const failed: { id: string; command: string; error: string }[] = [];
+    const npmError = new Map<string, string>();
     for (const { id, args } of plan) {
       if (stopping) break;
-      const command = installCommand(args);
-      line({ id, command });
+      line({ id, command: installCommand(args) });
       const error = await runNpm(args, (output) => line({ id, output }));
       if (stopping) break;
-      if (error) failed.push({ id, command, error });
+      if (error) npmError.set(id, error);
     }
     // The daemon is going: no final find and no second agent. The stream's
     // client sees it end, and the next daemon finds what npm wrote.
@@ -1790,7 +1792,21 @@ async function postInstall(req: IncomingMessage, res: ServerResponse) {
       res.destroy();
       return;
     }
-    line({ failed, setup: harnessesReply(await setupNow(true)) });
+    // The find is the result, not npm's exit code (#374): npm exits 0 when
+    // it installs into a global bin folder that is not on our PATH.
+    const setup = await setupNow(true);
+    const now = new Map(describe(setup).map((a) => [a.id, a]));
+    const failed = plan.flatMap(({ id, args }) => {
+      const a = now.get(id);
+      const error =
+        npmError.get(id) ??
+        (a?.state === "ready"
+          ? undefined
+          : `npm finished, but ${a?.acpProgram} is still not on the daemon's ` +
+            "PATH: put npm's global bin folder on it, then restart the daemon");
+      return error ? [{ id, command: installCommand(args), error }] : [];
+    });
+    line({ failed, setup: harnessesReply(setup) });
     res.end();
   } finally {
     installing = false;
