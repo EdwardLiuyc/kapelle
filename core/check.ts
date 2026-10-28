@@ -261,7 +261,8 @@ function saveCheck(
  * check (the first start), a new version, or a list missing from an agent
  * that can open a session. One logged out, or unknown, settles: else each
  * chat start would start it again. `POST /harnesses` or a real session
- * updates it.
+ * updates it. `ok` with no list cannot loop today: every measured harness
+ * sends the model option, and an empty one still saves `models: []`.
  */
 export function dueForCheck(
   s: Setup,
@@ -309,9 +310,15 @@ export async function runChecks(
   const checkedAt = new Date().toISOString();
   for (const [id, r] of results) {
     if (!r) continue;
-    if ((sessionWrites.get(id) ?? 0) !== writesAtStart.get(id)) continue;
     const version = found[id]?.acpVersion;
-    saveCheck(id, () => ({ checkedAt, ...(version && { version }), ...r }));
+    const newer = (sessionWrites.get(id) ?? 0) !== writesAtStart.get(id);
+    // A newer real session keeps its facts. The version this check ran on is
+    // still kept, so the agent is not due again for it.
+    saveCheck(id, (old) =>
+      newer && old
+        ? { ...old, ...(version && { version }) }
+        : { checkedAt, ...(version && { version }), ...r },
+    );
   }
 }
 
@@ -332,13 +339,16 @@ export function noteSession(id: string, seen: Seen): void {
   if (saved) sessionWrites.set(id, (sessionWrites.get(id) ?? 0) + 1);
 }
 
-/** What a room needs to report its session: the state an open session
- *  gives, and the models in it. */
+/** What a room needs to report its session: the models in it, and the
+ *  state an open session gives. Only for `session/new`: whether a
+ *  `session/load` works logged out is not measured (§Models and login), so
+ *  a `loaded` session gives no login state. */
 export function sessionSeen(
   setup: SetupSpec,
   options: SessionConfigOption[],
+  loaded: boolean,
 ): Seen {
-  const login = fromSession(setup);
+  const login = loaded ? undefined : fromSession(setup);
   return { ...modelsOf(options), ...(login && { login }) };
 }
 

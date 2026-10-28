@@ -437,8 +437,9 @@ while `done` is `false`, and while no harness is `ready`.
 All start at the same time, each with a 15-second limit, and the reply waits for them:
 about 5 seconds. A `GET` checks a harness only when it has no saved check, its ACP
 version changed, or it is `ok` with no saved model list; every `POST /harnesses` checks
-them all. Each real session in a room (`session/new`, or `session/load` on a revive)
-also updates its harness, at no cost. copilot cannot delete a session, so each check
+them all. Each real session in a room also updates its harness, at no cost: its models
+and login state on `session/new`, and its models only on a revive's `session/load`,
+because whether a load works logged out is not measured. copilot cannot delete a session, so each check
 leaves one empty session in copilot's own history. The result is
 saved in `$XDG_STATE_HOME/kapelle/checks.json`, and a `ready` harness that was checked
 gets these fields:

@@ -1811,8 +1811,10 @@ function createParticipant({
         throw err;
       });
       // A real session's models replace the saved ones (3A): a revive's
-      // load is a real session too.
-      if (spec.setup) report?.(sessionSeen(spec.setup, next.configOptions));
+      // load is a real session too, but it gives no login state.
+      if (spec.setup) {
+        report?.(sessionSeen(spec.setup, next.configOptions, loaded));
+      }
     } catch (err) {
       await next.stop();
       throw err;

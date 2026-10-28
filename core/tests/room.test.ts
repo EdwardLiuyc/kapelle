@@ -1549,7 +1549,12 @@ async function pausable(
 }
 
 /** The room `room.json` names, restored on a new bus. */
-async function restored(t: TestContext, repo: string, record: RoomRecord) {
+async function restored(
+  t: TestContext,
+  repo: string,
+  record: RoomRecord,
+  noteSession?: (agent: string, seen: Seen) => void,
+) {
   const bus = createEventBus();
   const events: AgentEventEnvelope[] = [];
   bus.addListener((e) => events.push(e));
@@ -1558,6 +1563,7 @@ async function restored(t: TestContext, repo: string, record: RoomRecord) {
     setup: await openWorktrees(record.cwd, record.id),
     bus,
     permissions: queue,
+    ...(noteSession && { noteSession }),
   });
   t.after(() => room.dismiss());
   const of = (kind: string) =>
@@ -1942,7 +1948,7 @@ async function loading(
   });
   t.after(() => room.dismiss());
   const p = room.participants[0] as Participant;
-  return { repo, roomId, room, p, file: roomFile(repo, roomId) };
+  return { repo, roomId, room, p, file: roomFile(repo, roomId), agent };
 }
 
 /** The revive event's fields, once there is one. */
@@ -2529,4 +2535,31 @@ test("a room reports one auth notice per harness start, however many come (M9-4)
   // All twenty came before `session/new` answered. Each report is a
   // synchronous write of `checks.json`, so one per start bounds them.
   assert.deepEqual(logins, [{ login: "logged_out" }]);
+});
+
+test("a revive's load saves the models, but no login state (M9-4)", async (t) => {
+  const { repo, room, p, file, agent } = await loading(t, "models");
+  await p.send("one");
+  await room.pause();
+  // Now a registry agent kapelle checks, so the revive reports.
+  const entry = AGENTS[agent];
+  assert.ok(entry);
+  entry.setup = { program: "mock", login: "mock login" };
+  const seen: Seen[] = [];
+  const back = await restored(t, repo, readRoomRecord(file), (_id, s) =>
+    seen.push(s),
+  );
+  await back.p.send("two");
+  assert.equal(back.p.resumed, "loaded");
+  // Whether a load works logged out is not measured, so a load says
+  // nothing about the login (§Models and login).
+  assert.deepEqual(seen, [
+    {
+      models: [
+        { id: "mock/fast", name: "Fast" },
+        { id: "mock/smart", name: "Smart" },
+      ],
+      model: "mock/fast",
+    },
+  ]);
 });

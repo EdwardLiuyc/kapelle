@@ -239,6 +239,8 @@ test("a real session during a check is not overwritten by the older check result
   assert.equal(saved?.login, "ok");
   assert.deepEqual(saved?.models, [{ id: "fresh", name: "Fresh" }]);
   assert.equal(saved?.model, "fresh");
+  // The version the check ran on is kept, so the agent is not due again.
+  assert.equal(saved?.version, "2.0.18");
 });
 
 test("checks start all at once (M9-4)", async (t) => {
