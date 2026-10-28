@@ -430,6 +430,12 @@ function panelParts({
   const setupInstall = async (ids: string[]) => {
     const generation = ++setupGeneration;
     const out: string[] = [];
+    // Only the last ten lines ever draw. npm can write for three minutes, so
+    // keep the list from growing with its whole output.
+    const remember = (line: string) => {
+      out.push(line);
+      if (out.length > 10) out.splice(0, out.length - 10);
+    };
     showPanel(
       SETUP,
       {
@@ -450,18 +456,26 @@ function panelParts({
     const r = await installAgents(d, ids, (l) => {
       const text = "command" in l ? `$ ${l.command}` : l.output;
       for (const line of text.split(/\r?\n/)) {
-        if (line.trim()) out.push(printable(line));
+        if (line.trim()) remember(printable(line));
       }
       if (panel?.setup === generation) tui.requestRender();
     }).catch((err: unknown) =>
-      // `fetch` throws a TypeError when no daemon answers.
-      err instanceof TypeError ? NO_DAEMON : String(err),
+      // `fetch` throws a TypeError when no daemon answers. A broken reply is
+      // another Error, so it keeps its message.
+      err instanceof TypeError
+        ? NO_DAEMON
+        : err instanceof Error
+          ? err.message
+          : String(err),
     );
     const ours = panel?.setup === generation;
     if (typeof r === "string" || !r.ok) {
       const error = typeof r === "string" ? r : r.error.message;
       if (ours && panel) panel.error = error;
-      else say(`! setup: ${error}`);
+      else {
+        say(`! setup: ${error}`);
+        setStatus();
+      }
       return tui.requestRender();
     }
     const { failed, setup } = r.body;
@@ -471,6 +485,7 @@ function panelParts({
           ? `! setup: ${failed.map((f) => printable(f.id)).join(", ")} failed: /setup`
           : `setup: installed ${ids.map(printable).join(", ")}`,
       );
+      setStatus();
       return tui.requestRender();
     }
     // The command on its own line, so it does not wrap and stays copyable.

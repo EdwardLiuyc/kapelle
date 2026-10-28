@@ -97,6 +97,7 @@ import {
   readSetup,
   runNpm,
   type Setup,
+  stopNpmInstalls,
   writeSetup,
 } from "./core/harnesses.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
@@ -1726,6 +1727,8 @@ function harnessesReply(s: Setup): HarnessesReply {
 
 /** Set while `POST /harnesses/install` runs: one install at a time. */
 let installing = false;
+/** Set once SIGTERM/SIGINT has begun: an install must not start another npm. */
+let stopping = false;
 
 /**
  * `POST /harnesses/install` (M9-3b): the person's checked agents, by id.
@@ -1774,10 +1777,18 @@ async function postInstall(req: IncomingMessage, res: ServerResponse) {
     };
     const failed: { id: string; command: string; error: string }[] = [];
     for (const { id, args } of plan) {
+      if (stopping) break;
       const command = installCommand(args);
       line({ id, command });
       const error = await runNpm(args, (output) => line({ id, output }));
+      if (stopping) break;
       if (error) failed.push({ id, command, error });
+    }
+    // The daemon is going: no final find and no second agent. The stream's
+    // client sees it end, and the next daemon finds what npm wrote.
+    if (stopping) {
+      res.destroy();
+      return;
     }
     line({ failed, setup: harnessesReply(await setupNow(true)) });
     res.end();
@@ -1994,11 +2005,10 @@ const server = createServer(
   },
 );
 
-let stopping = false;
-
 /**
  * SIGTERM or SIGINT: cancel every run, pause every room, wait for each to
- * settle, then remove `daemon.json` and exit 0 (M2-4, #34).
+ * settle, then remove `daemon.json` and exit 0 (M2-4, #34). An install's npm
+ * is killed rather than waited for, so a stop leaves no install running.
  *
  * **A room is paused, not dismissed** (M6-7a, R42c): its live turns are
  * cancelled, its harnesses stopped and its checkouts kept, and the next boot
@@ -2019,6 +2029,7 @@ async function shutdown(signal: string): Promise<void> {
   // Before the pause: a chat screen whose room stream ends must then find no
   // daemon, and wait for the next one (`readRoom` in `client/roomset.ts`).
   server.close();
+  stopNpmInstalls();
   for (const canceller of cancels.values()) canceller.abort("cancel");
   await Promise.all([
     ...inFlight,

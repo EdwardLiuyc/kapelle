@@ -472,3 +472,55 @@ test("runNpm kills an npm that takes too long, with its whole group (M9-3b)", as
   assert.ok(pid > 0, r.out);
   assert.ok(await waitGone(pid), "the child npm left behind is gone");
 });
+
+test("runNpm stops forwarding output once its time limit ends (M9-3b)", async (t) => {
+  const bin = await tempDir(t);
+  await writeFile(
+    join(bin, "npm"),
+    [
+      `#!${process.execPath}`,
+      'const { spawn } = require("node:child_process");',
+      `spawn(process.execPath, ["-e", "setTimeout(() => console.log('late'), 600)"], { detached: true, stdio: ["ignore", 1, 2] });`,
+      "setTimeout(() => {}, 30_000);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+  let out = "";
+  const error = await runNpm(
+    ["i", "-g", "pi-acp@0.0.34"],
+    (text) => {
+      out += text;
+    },
+    200,
+  );
+  assert.equal(error, "npm took longer than 0.2 s");
+  // A descendant the group kill did not reach still holds stdout. Its output
+  // must not arrive after the timeout and be mistaken for the next agent's.
+  await delay(1_000);
+  assert.equal(out, "");
+});
+
+test("an agent with no measured build gets no install (M9-3b)", () => {
+  const claude = AGENTS.claude;
+  assert.ok(claude);
+  const measured = claude.measured;
+  assert.ok(measured);
+  delete claude.measured;
+  try {
+    assert.equal(installArgs("claude"), undefined);
+    const found = describe({
+      checkedAt: "now",
+      done: false,
+      found: { claude: { program: true, version: "2.1.307", acp: false } },
+    });
+    assert.equal(found.find((a) => a.id === "claude")?.install, undefined);
+  } finally {
+    claude.measured = measured;
+  }
+});

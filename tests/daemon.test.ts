@@ -60,6 +60,7 @@ import {
   spawnCli,
   startDaemon as start,
   tempDir,
+  until,
 } from "../integration/helpers.ts";
 import { AGENTS } from "../protocol/registry.ts";
 
@@ -1189,14 +1190,10 @@ test("the install's find starts after npm, not with one already in flight (M9-3b
   );
   const { d } = await bootFinding(t, bin);
   const installing = install(d, { ids: ["claude"] });
-  while (!existsSync(join(bin, "npm.argv"))) {
-    await new Promise((ok) => setTimeout(ok, 20));
-  }
+  await until("npm to start", () => existsSync(join(bin, "npm.argv")));
   // This find snapshots PATH before npm writes claude-agent-acp.
   const before = api<HarnessesReply>(d, "POST", "/harnesses");
-  while (!existsSync(started)) {
-    await new Promise((ok) => setTimeout(ok, 20));
-  }
+  await until("the stale find to start", () => existsSync(started));
   await writeFile(join(bin, "go"), "");
   const [r, stale] = await Promise.all([installing, before]);
   assert.equal(stale.status, 200);
@@ -1248,11 +1245,10 @@ test("the install stream reaches a chat before npm ends, and a chat that leaves 
   await reader.cancel();
   await writeFile(join(bin, "go"), "");
   let found: HarnessesReply | undefined;
-  for (const until = Date.now() + 10_000; Date.now() < until; ) {
+  await until("the find after the install", async () => {
     found = (await api<HarnessesReply>(d, "GET", "/harnesses")).body;
-    if (stateOf(found, "claude") === "ready") break;
-    await new Promise((ok) => setTimeout(ok, 20));
-  }
+    return stateOf(found, "claude") === "ready";
+  });
   assert.equal(stateOf(found as HarnessesReply, "claude"), "ready");
 });
 
@@ -1335,9 +1331,9 @@ test("a second install while one runs is refused (M9-3b)", async (t) => {
   const { d } = await bootFinding(t, bin);
   const first = install(d, { ids: ["claude"] });
   // The first one holds npm until bin/go exists.
-  while (!existsSync(join(bin, "npm.argv"))) {
-    await new Promise((ok) => setTimeout(ok, 20));
-  }
+  await until("the first npm to start", () =>
+    existsSync(join(bin, "npm.argv")),
+  );
   const second = await install(d, { ids: ["claude"] });
   assert.equal(second.status, 409);
   assert.equal(second.error?.code, "install_running");
@@ -1346,4 +1342,28 @@ test("a second install while one runs is refused (M9-3b)", async (t) => {
   assert.deepEqual(r.last?.failed, []);
   // The guard is released: the next one runs (claude is ready now, so 400).
   assert.equal((await install(d, { ids: ["claude"] })).status, 400);
+});
+
+test("a daemon stop kills an npm that is still installing (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  const pidFile = join(bin, "npm.pid");
+  const go = join(bin, "go");
+  await writeFile(
+    join(bin, "npm"),
+    `#!/bin/sh\necho $$ > "${pidFile}"\n` +
+      `while [ ! -e "${go}" ]; do ${absolute("sleep")} 0.05; done\n`,
+    { mode: 0o755 },
+  );
+  t.after(async () => {
+    await writeFile(go, "").catch(() => {});
+  });
+  const { d } = await bootFinding(t, bin);
+  const installing = install(d, { ids: ["claude"] }).catch(() => undefined);
+  await until("npm to start", () => existsSync(pidFile));
+  const pid = Number(await readFile(pidFile, "utf8"));
+  assert.ok(pid > 0);
+  process.kill(d.pid, "SIGTERM");
+  await d.done;
+  assert.ok(await gone(pid), "the install's npm is gone with the daemon");
+  await installing;
 });

@@ -27,7 +27,7 @@
  * never installs a main program (D6, as amended).
  */
 
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import {
   accessSync,
   constants,
@@ -74,6 +74,9 @@ export interface AgentSetup {
 /** How long one `npm i -g` may take. Under undici's 300 s body timeout, so
  *  the chat's reply stream is not cut while npm is quiet. */
 const INSTALL_TIMEOUT_MS = 180_000;
+
+/** The npm processes the daemon still runs, so a shutdown can stop them. */
+const npmRunning = new Set<ChildProcess>();
 
 /** How long one `--version` may take. */
 const VERSION_TIMEOUT_MS = 5000;
@@ -337,31 +340,46 @@ export function runNpm(
   timeoutMs = INSTALL_TIMEOUT_MS,
 ): Promise<string | undefined> {
   return new Promise((ok) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
     const child = spawn("npm", args, {
       env: resolveEnv(undefined),
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const timer = setTimeout(() => {
+    npmRunning.add(child);
+    // The first answer wins. Close the pipes too: a descendant can hold them
+    // after the group kill, and its output must not reach the next install.
+    const finish = (error: string | undefined) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      npmRunning.delete(child);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      ok(error);
+    };
+    timer = setTimeout(() => {
       try {
         if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
       } catch {
         child.kill("SIGKILL");
       }
-      ok(`npm took longer than ${timeoutMs / 1000} s`);
+      finish(`npm took longer than ${timeoutMs / 1000} s`);
     }, timeoutMs);
     for (const stream of [child.stdout, child.stderr]) {
       stream.setEncoding("utf8");
-      stream.on("data", out);
+      stream.on("data", (text) => {
+        if (!settled) out(text);
+      });
     }
-    // The first answer wins: a kill on the time limit closes the child later.
     child.once("error", (err: NodeJS.ErrnoException) => {
-      clearTimeout(timer);
-      ok(err.code === "ENOENT" ? "no npm on the daemon's PATH" : err.message);
+      finish(
+        err.code === "ENOENT" ? "no npm on the daemon's PATH" : err.message,
+      );
     });
     child.once("close", (code, signal) => {
-      clearTimeout(timer);
-      ok(
+      finish(
         code === 0
           ? undefined
           : code === null
@@ -370,4 +388,16 @@ export function runNpm(
       );
     });
   });
+}
+
+/** Stops every install npm still runs. The daemon's shutdown calls it, so a
+ *  stopped daemon leaves no install running in the background. */
+export function stopNpmInstalls(): void {
+  for (const child of npmRunning) {
+    try {
+      if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+    } catch {
+      child.kill("SIGKILL");
+    }
+  }
 }

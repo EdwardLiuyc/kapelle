@@ -708,7 +708,7 @@ test("a failed install shows npm's error and the command to run by hand (M9-3b)"
   const bin = await fakePath(t);
   await fakeNpm(bin, { fail: true });
   const { runtime } = await bootFinding(t, bin);
-  const { child, press, exited, out } = await ptyScreen(
+  const { press, exited, out } = await ptyScreen(
     t,
     "stty cols 200 rows 40; node cli.ts chat",
     { XDG_RUNTIME_DIR: runtime },
@@ -724,8 +724,8 @@ test("a failed install shows npm's error and the command to run by hand (M9-3b)"
     /┃ {3}npm i -g @agentclientprotocol\/claude-agent-acp@0\.89\.1 +┃/,
   );
   assert.match(shown, /npm error code EACCES/);
-  child.stdin.write("\x1b");
-  await new Promise((ok) => setTimeout(ok, 300));
+  // Esc hides the output. The normal key hint is back on screen.
+  await press("\x1b", "enter to send");
   await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 });

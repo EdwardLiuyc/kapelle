@@ -1,14 +1,17 @@
 /**
- * The setup list — `client/setup.ts`, story M9-3 (#298). No daemon:
+ * The setup list — `client/setup.ts`, story M9-3 (#298). No real daemon: a
+ * bare server stages the install stream's end, and
  * `tests/chat-piped.test.ts` and `tests/chat-tui-forms.test.ts` show it from
  * a real one, with a fake `PATH`.
  */
 
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 
 import type { HarnessesReply } from "../contract.ts";
-import { needsSetup, setupLines } from "../setup.ts";
+import { installAgents, needsSetup, setupLines } from "../setup.ts";
 
 const reply = (done: boolean, ready: boolean): HarnessesReply => ({
   checkedAt: "2026-10-22T00:00:00.000Z",
@@ -122,5 +125,40 @@ test("a pre-M9-3 bare list has no setup lines", () => {
       harnesses: [{ id: "pi", measured: true }],
     }),
     [],
+  );
+});
+
+test("an install stream cut after its headers is not a missing daemon (M9-3b)", async (t) => {
+  const server = createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "application/x-ndjson" });
+    res.write(
+      `${JSON.stringify({ id: "claude", command: "npm i -g x@1" })}\n`,
+      () => res.destroy(),
+    );
+  });
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  t.after(
+    () =>
+      new Promise<void>((ok) => {
+        server.close(() => ok());
+        server.closeAllConnections();
+      }),
+  );
+  const d = {
+    port: (server.address() as AddressInfo).port,
+    token: "test",
+  };
+  await assert.rejects(
+    installAgents(d, ["claude"], () => {}),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.ok(
+        !(err instanceof TypeError),
+        "a cut stream is not a daemon that did not answer",
+      );
+      assert.match(err.message, /install reply broke/);
+      return true;
+    },
   );
 });
