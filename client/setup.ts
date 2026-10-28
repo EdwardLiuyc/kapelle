@@ -125,15 +125,6 @@ export function markDone(d: DaemonAddress) {
   return call<HarnessesReply>(d, "/harnesses/done", { method: "POST" });
 }
 
-const reasonOf = (err: unknown) =>
-  err instanceof Error ? err.message : String(err);
-
-/** A reply body that stopped or broke: not a fetch that could not connect. */
-const brokenInstall = (err: unknown) =>
-  new Error(`the daemon's install reply broke: ${reasonOf(err)}`, {
-    cause: err,
-  });
-
 /** `POST /harnesses/install`: the daemon installs `ids`, and `on` gets each
  *  line as it comes. Answers the last line. A stream that ends before it
  *  throws: the next find shows what was installed. */
@@ -142,26 +133,17 @@ export async function installAgents(
   ids: string[],
   on: (l: Exclude<InstallLine, InstallResult>) => void,
 ): Promise<Reply<InstallResult>> {
-  // A fetch TypeError here means no daemon answered; the caller maps it to
-  // NO_DAEMON. A TypeError while reading the body is not the same thing.
+  // A TypeError from the request means no daemon answered, and the caller
+  // says so. One from the body is a cut reply, so it is wrapped below.
   const res = await request(d, "/harnesses/install", {
     method: "POST",
     body: JSON.stringify({ ids }),
   });
-  if (!res.ok || !res.body) {
-    let text: string;
-    try {
-      text = await res.text();
-    } catch (err) {
-      throw brokenInstall(err);
-    }
-    const reply = replyOf<InstallResult>(res, text);
-    if (!reply.ok) return reply;
-    throw new Error("the daemon sent no install reply");
-  }
-  let rest = "";
   try {
-    for await (const chunk of res.body.pipeThrough(new TextDecoderStream())) {
+    if (!res.ok) return replyOf(res, await res.text());
+    let rest = "";
+    const body = res.body?.pipeThrough(new TextDecoderStream()) ?? [];
+    for await (const chunk of body) {
       const lines = (rest + chunk).split("\n");
       rest = lines.pop() ?? "";
       for (const text of lines) {
@@ -172,7 +154,10 @@ export async function installAgents(
       }
     }
   } catch (err) {
-    throw brokenInstall(err);
+    throw new Error(
+      `the daemon's install reply broke: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
   }
   throw new Error(
     "the daemon ended the install early: /setup shows the result",
