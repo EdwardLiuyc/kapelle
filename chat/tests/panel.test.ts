@@ -10,6 +10,7 @@ import test, { type TestContext } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { HarnessesReply } from "../../client/contract.ts";
 import type { DaemonAddress } from "../../client/daemon.ts";
+import { until } from "../../integration/helpers.ts";
 import { yellow } from "../common.ts";
 import { border, panelParts } from "../tui/panel.ts";
 
@@ -55,18 +56,52 @@ const reply = (done = false): HarnessesReply => ({
       acpProgram: "pi-acp",
       acpVersion: "0.0.34",
     },
+    {
+      id: "claude",
+      measured: true,
+      state: "main_only",
+      program: "claude",
+      version: "2.1.307",
+      acpProgram: "claude-agent-acp",
+      install: "npm i -g @agentclientprotocol/claude-agent-acp@0.89.1",
+    },
+  ],
+});
+
+/** The same find after the fake install put claude-agent-acp in place. */
+const installedReply = (): HarnessesReply => ({
+  checkedAt: "now",
+  done: false,
+  harnesses: [
+    {
+      id: "claude",
+      measured: true,
+      state: "ready",
+      program: "claude",
+      version: "2.1.307",
+      acpProgram: "claude-agent-acp",
+      acpVersion: "0.89.1",
+    },
   ],
 });
 
 async function fakeDaemon(
   t: TestContext,
-  { holdGet = false, holdDone = false, holdPost = false } = {},
+  {
+    holdGet = false,
+    holdDone = false,
+    holdPost = false,
+    holdInstall = false,
+  } = {},
 ) {
   const getSeen = deferred();
   const getRelease = deferred();
   const doneSeen = deferred();
   const doneRelease = deferred();
   const postRelease = deferred();
+  const installSeen = deferred();
+  const installRelease = deferred();
+  let installBody: unknown;
   let posts = 0;
   const server = createServer((req, res) => {
     void (async () => {
@@ -89,6 +124,19 @@ async function fakeDaemon(
         if (holdDone) await doneRelease.promise;
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(reply(true)));
+        return;
+      }
+      if (req.method === "POST" && req.url === "/harnesses/install") {
+        let text = "";
+        for await (const chunk of req) text += chunk;
+        installBody = JSON.parse(text);
+        installSeen.resolve();
+        if (holdInstall) await installRelease.promise;
+        res.writeHead(200, { "content-type": "application/x-ndjson" });
+        res.write(
+          `${JSON.stringify({ id: "claude", command: "npm i -g x@1" })}\n`,
+        );
+        res.end(`${JSON.stringify({ failed: [], setup: installedReply() })}\n`);
         return;
       }
       res.writeHead(404, { "content-type": "application/json" });
@@ -114,11 +162,20 @@ async function fakeDaemon(
     doneSeen,
     doneRelease,
     postRelease,
+    installSeen,
+    installRelease,
+    installBody: () => installBody,
     posts: () => posts,
   };
 }
 
-function makeBox(d: DaemonAddress) {
+function makeBox(
+  d: DaemonAddress,
+  {
+    onSay,
+    onStatus,
+  }: { onSay?: (text: string) => void; onStatus?: () => void } = {},
+) {
   return panelParts({
     d,
     fresh: async () => {},
@@ -136,8 +193,8 @@ function makeBox(d: DaemonAddress) {
     rooms: new Map(),
     view: () => ({ roomId: "r" }),
     shown: () => true,
-    say() {},
-    setStatus() {},
+    say: onSay ?? (() => {}),
+    setStatus: onStatus ?? (() => {}),
     offer() {},
     question() {},
     changes() {},
@@ -232,6 +289,40 @@ test("the start draws the reply it holds while the daemon finds again", async (t
   fake.postRelease.resolve();
   await starting;
   assert.equal(box.panel?.title, "agents");
+});
+
+test("an install that ends after Esc says so on the status line", async (t) => {
+  const fake = await fakeDaemon(t, { holdInstall: true });
+  const said: string[] = [];
+  let statusCalls = 0;
+  const box = makeBox(fake.d, {
+    onSay: (text) => said.push(text),
+    onStatus: () => {
+      statusCalls++;
+    },
+  });
+  await box.showSetup();
+  const list = box.panel?.body;
+  assert.ok(list, "the setup list is open");
+  assert.match(list.render(80).join("\n"), /\[ \] claude/);
+  list.handleInput?.(" ");
+  assert.match(box.panel?.body.render(80).join("\n") ?? "", /\[x\] claude/);
+  list.handleInput?.("\r");
+  await fake.installSeen.promise;
+  assert.deepEqual(fake.installBody(), { ids: ["claude"] });
+
+  // The person hides the output; npm goes on, and the result must reach the
+  // status line, not only a `say` the next status refresh may drop.
+  box.hidePanel();
+  const atHide = statusCalls;
+  fake.installRelease.resolve();
+  await until("the install's result", () =>
+    said.some((s) => s.includes("setup: installed claude")),
+  );
+  assert.ok(
+    statusCalls > atHide,
+    "the status line is told the install ended after the panel is gone",
+  );
 });
 
 test("the start does not open setup over a busy side view", async (t) => {

@@ -61,6 +61,7 @@ import {
   type Diff,
   type ErrorReply,
   type HarnessesReply,
+  type InstallLine,
   type MessageAccepted,
   type ParticipantDto,
   type PendingDecision,
@@ -90,9 +91,13 @@ import { createEventBus } from "./core/events.ts";
 import {
   describe,
   findAgents,
+  installArgs,
+  installCommand,
   readSavedDone,
   readSetup,
+  runNpm,
   type Setup,
+  stopNpmInstalls,
   writeSetup,
 } from "./core/harnesses.ts";
 import { newRoomId, newRunId } from "./core/ids.ts";
@@ -1685,6 +1690,12 @@ let finding: Promise<Setup> | undefined;
 async function setupNow(again: boolean): Promise<Setup> {
   const saved = again ? undefined : readSetup();
   if (saved) return saved;
+  // An install needs a find that began after npm wrote its program. A find
+  // already in flight may have read PATH before that.
+  if (again && finding) {
+    await finding.catch(() => {});
+    if (finding) return finding;
+  }
   finding ??= findAgents(process.env.PATH ?? "")
     .then((found) => {
       const s = {
@@ -1712,6 +1723,103 @@ function harnessesReply(s: Setup): HarnessesReply {
       ...found.get(id),
     })),
   };
+}
+
+/** Set while `POST /harnesses/install` runs: one install at a time. */
+let installing = false;
+/** Set once SIGTERM/SIGINT has begun: an install must not start another npm. */
+let stopping = false;
+
+/**
+ * `POST /harnesses/install` (M9-3b): the person's checked agents, by id.
+ * The body takes `ids` only, so a command never arrives here: the daemon
+ * builds each one from its registry (`installArgs`). Each id must be an
+ * agent the find now calls `main_only`. The reply streams NDJSON: each
+ * install's command and npm's output, then the failures and a new find. A
+ * chat that leaves does not stop npm; the next find sees what it did.
+ */
+async function postInstall(req: IncomingMessage, res: ServerResponse) {
+  const { ids } = await readBody(req, ["ids"]);
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    !ids.every((id) => typeof id === "string")
+  ) {
+    throw refusal(400, "invalid_request", "ids must be a list of agent ids");
+  }
+  if (stopping) {
+    throw refusal(503, "shutting_down", "the daemon is shutting down");
+  }
+  if (installing) {
+    throw refusal(409, "install_running", "an install is already running");
+  }
+  installing = true;
+  try {
+    const state = new Map(
+      describe(await setupNow(true)).map((a) => [a.id, a.state]),
+    );
+    const plan = [...new Set(ids as string[])].map((id) => {
+      const args = installArgs(id);
+      if (!args || state.get(id) !== "main_only") {
+        throw refusal(
+          400,
+          "invalid_request",
+          `${JSON.stringify(id)} is not an agent kapelle can install: ` +
+            "only one whose own program is installed and its ACP program is not",
+        );
+      }
+      return { id, args };
+    });
+    res.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "cache-control": "no-cache",
+    });
+    res.flushHeaders();
+    const line = (l: InstallLine) => {
+      if (!res.destroyed) res.write(`${JSON.stringify(l)}\n`);
+    };
+    const npmError = new Map<string, string>();
+    for (const { id, args } of plan) {
+      if (stopping) break;
+      line({ id, command: installCommand(args) });
+      const error = await runNpm(args, (output) => line({ id, output }));
+      if (stopping) break;
+      if (error) npmError.set(id, error);
+    }
+    // The daemon is going: no final find and no second agent. The stream's
+    // client sees it end, and the next daemon finds what npm wrote.
+    if (stopping) {
+      res.destroy();
+      return;
+    }
+    // The find is the result, not npm's exit code (#374), both ways: npm
+    // exits 0 when it installs into a global bin folder that is not on our
+    // PATH, and a ready agent is no failure whatever npm said, unless it has
+    // a warning too: then npm died after its link, and its error stays.
+    // `command` is only for a failure that running it by hand can help.
+    const setup = await setupNow(true);
+    const now = new Map(describe(setup).map((a) => [a.id, a]));
+    const failed = plan.flatMap(({ id, args }) => {
+      const a = now.get(id);
+      const error = npmError.get(id);
+      if (a?.state === "ready" && !(a.warning && error)) return [];
+      return [
+        error
+          ? { id, command: installCommand(args), error }
+          : {
+              id,
+              error:
+                `npm finished, but ${a?.acpProgram} is still not on the ` +
+                "daemon's PATH: put npm's global bin folder on it, then " +
+                "restart the daemon",
+            },
+      ];
+    });
+    line({ failed, setup: harnessesReply(setup) });
+    res.end();
+  } finally {
+    installing = false;
+  }
 }
 
 /** A parse base for `req.url`, which is a path, not a URL. Never fetched;
@@ -1755,6 +1863,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const s = { ...(await setupNow(false)), done: true };
     writeSetup(s);
     send(res, 200, harnessesReply(s));
+  } else if (req.method === "POST" && pathname === "/harnesses/install") {
+    await postInstall(req, res);
   } else if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
   } else if (req.method === "GET" && pathname === "/repos") {
@@ -1896,6 +2006,14 @@ const server = createServer(
   { requireHostHeader: false, requestTimeout: 30_000 },
   (req, res) => {
     route(req, res).catch((err) => {
+      // A stream already started (an SSE log, an install): no JSON refusal
+      // can follow its headers, and a second `writeHead` would throw here,
+      // outside any catch. Cut it, so the client sees the end.
+      if (res.headersSent) {
+        console.error(`${req.method} ${req.url}: ${messageOf(err)}`);
+        res.destroy();
+        return;
+      }
       const { status, code } =
         err instanceof Refusal
           ? err
@@ -1912,11 +2030,10 @@ const server = createServer(
   },
 );
 
-let stopping = false;
-
 /**
  * SIGTERM or SIGINT: cancel every run, pause every room, wait for each to
- * settle, then remove `daemon.json` and exit 0 (M2-4, #34).
+ * settle, then remove `daemon.json` and exit 0 (M2-4, #34). An install's npm
+ * is killed rather than waited for, so a stop leaves no install running.
  *
  * **A room is paused, not dismissed** (M6-7a, R42c): its live turns are
  * cancelled, its harnesses stopped and its checkouts kept, and the next boot
@@ -1937,6 +2054,7 @@ async function shutdown(signal: string): Promise<void> {
   // Before the pause: a chat screen whose room stream ends must then find no
   // daemon, and wait for the next one (`readRoom` in `client/roomset.ts`).
   server.close();
+  stopNpmInstalls();
   for (const canceller of cancels.values()) canceller.abort("cancel");
   await Promise.all([
     ...inFlight,

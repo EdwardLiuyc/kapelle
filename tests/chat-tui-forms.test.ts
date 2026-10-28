@@ -1,7 +1,7 @@
 /**
  * The full-screen chat's pop-ups on a real terminal through `script(1)`: the
  * menu, the forms, the typed room commands (M4-5), a fast-forward's preview,
- * and the setup list (M9-3).
+ * and the setup list (M9-3) with its install (M9-3b).
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
@@ -11,7 +11,14 @@
  */
 
 import assert from "node:assert/strict";
-import { access, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -29,6 +36,7 @@ import {
   bootFinding,
   chatOnPty,
   commitAt,
+  fakeNpm,
   fakePath,
   gitRepo,
   headAt,
@@ -44,6 +52,7 @@ import {
   screenRows,
   scrollback,
   tempDir,
+  until,
   withAgent,
 } from "../integration/helpers.ts";
 import { AGENTS } from "../protocol/registry.ts";
@@ -598,6 +607,151 @@ test("the chat opens the setup list at every start while no agent is ready, done
   );
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("the setup list checks a main-only agent, and Enter installs it with the pinned command (M9-3b)", {
+  skip: noPty,
+}, async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin, { hold: true });
+  const { runtime } = await bootFinding(t, bin);
+  const { press, seen, exited, out } = await ptyScreen(
+    t,
+    "stty cols 160 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "Space check · Enter done · Esc later",
+  );
+  // claude is the one main-only agent: the cursor is on its box.
+  assert.match(plainText(out()), /› \[ \] claude/);
+  // Space checks it, checks it off, and checks it again.
+  await press(" ", "[x] claude");
+  await press(" ", "[ ] claude");
+  await press(" ", "[x] claude");
+  // npm's first line reaches the list before npm exits.
+  await press("\r", "npm http fetch GET 200");
+  await writeFile(join(bin, "go"), "");
+  await seen("claude-agent-acp 0.89.1)");
+  assert.equal(
+    await readFile(join(bin, "npm.argv"), "utf8"),
+    "i -g @agentclientprotocol/claude-agent-acp@0.89.1\n",
+  );
+  // Ready now, so no box is left, and Enter is "done" again.
+  await press("\r", "setup done");
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("the setup list checks several main-only agents and sends both ids (M9-3b)", {
+  skip: noPty,
+}, async (t) => {
+  const bin = await fakePath(t);
+  await writeFile(join(bin, "codex"), "#!/bin/sh\necho 1.0.0\n", {
+    mode: 0o755,
+  });
+  await rm(join(bin, "codex-acp"));
+  await fakeNpm(bin);
+  // The second find is held open, so the keys arrive before its reply. That
+  // reply must keep the cursor on codex, not put it back on the first box.
+  const first = join(bin, "opencode-first");
+  const second = join(bin, "opencode-second");
+  const go = join(bin, "opencode-go");
+  await writeFile(
+    join(bin, "opencode"),
+    `#!${process.execPath}\nconst fs = require("node:fs");\n` +
+      `if (!fs.existsSync(${JSON.stringify(first)})) {\n` +
+      `  fs.writeFileSync(${JSON.stringify(first)}, "");\n` +
+      `  console.log("opencode v2.0.18");\n} else {\n` +
+      `  fs.writeFileSync(${JSON.stringify(second)}, "");\n` +
+      `  const timer = setInterval(() => {\n` +
+      `    if (!fs.existsSync(${JSON.stringify(go)})) return;\n` +
+      "    clearInterval(timer);\n" +
+      `    console.log("opencode v2.0.19");\n  }, 10);\n}\n`,
+    { mode: 0o755 },
+  );
+  const { runtime } = await bootFinding(t, bin);
+  const { press, seen, exited, out } = await ptyScreen(
+    t,
+    "stty cols 160 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "Space check · Enter done · Esc later",
+  );
+  await until("the setup's second find to start", async () => {
+    try {
+      await access(second);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  assert.match(plainText(out()), /› \[ \] claude/);
+  await press(" ", "[x] claude");
+  await press(DOWN, "[ ] codex");
+  await writeFile(go, "");
+  await seen("opencode 2.0.19");
+  await press(" ", "[x] codex");
+  await press("\r", "claude-agent-acp 0.89.1)");
+  assert.equal(
+    await readFile(join(bin, "npm.argv"), "utf8"),
+    "i -g @agentclientprotocol/claude-agent-acp@0.89.1\n" +
+      "i -g @agentclientprotocol/codex-acp@2.2.2\n",
+  );
+  await press("\r", "setup done");
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("an install npm put off the daemon's PATH says so, with no command to run by hand (M9-3b)", {
+  skip: noPty,
+}, async (t) => {
+  const bin = await fakePath(t);
+  await writeFile(join(bin, "npm"), '#!/bin/sh\necho "added 1 package"\n', {
+    mode: 0o755,
+  });
+  const { runtime } = await bootFinding(t, bin);
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 200 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "Space check · Enter done · Esc later",
+  );
+  await press(" ", "[x] claude");
+  await press("\r", "restart the daemon");
+  const from = plainText(out()).lastIndexOf("npm finished");
+  assert.ok(from >= 0, out());
+  // The command's own line, indented under the error; npm's output tail
+  // shows the command too, but as "$ npm …".
+  assert.doesNotMatch(plainText(out()).slice(from), /┃ {3}npm i -g /);
+  await press("\x1b", "enter to send");
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("a failed install shows npm's error and the command to run by hand (M9-3b)", {
+  skip: noPty,
+}, async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin, { fail: true });
+  const { runtime } = await bootFinding(t, bin);
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 200 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "Space check · Enter done · Esc later",
+  );
+  await press(" ", "[x] claude");
+  await press("\r", "Run it yourself");
+  const shown = plainText(out());
+  assert.match(shown, /! claude: npm exited with code 243\. Run it yourself:/);
+  // The command has a line of its own: whole, so it can be copied.
+  assert.match(
+    shown,
+    /┃ {3}npm i -g @agentclientprotocol\/claude-agent-acp@0\.89\.1 +┃/,
+  );
+  assert.match(shown, /npm error code EACCES/);
+  // Esc hides the output. The normal key hint is back on screen.
+  await press("\x1b", "enter to send");
   await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 });

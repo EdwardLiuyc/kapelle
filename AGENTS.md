@@ -131,7 +131,7 @@ arrow that points back.
 | `core/sweep.ts` | The daemon's boot sweep. |
 | `core/config.ts` | The config files and `KAPELLE_*` variables. |
 | `core/runtime.ts` | The user-level directories, `stateDir()` and `stateDirFor(root)`. |
-| `core/harnesses.ts` | Which agents are installed (M9-3): the agent's program, then its ACP program, on the daemon's `PATH`, each version by `--version` (pi-acp's from its `package.json`), and `harnesses.json`. |
+| `core/harnesses.ts` | Which agents are installed (M9-3): the agent's program, then its ACP program, on the daemon's `PATH`, each version by `--version` (pi-acp's from its `package.json`), and `harnesses.json`. The install (M9-3b): the pinned npm command, and `npm` run with no shell. |
 | `core/room.ts` | A chat room: a roster of participants, each one harness kept alive across turns. |
 | `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
 | `core/text.ts` | A harness's text made safe for a terminal (#229): `render.ts`, `cli.ts` and the `ask` prompt use it. `client/room.ts` has a copy, and `tests/text.test.ts` checks that they agree. |
@@ -151,7 +151,7 @@ arrow that points back.
 | `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. Both screens and the pop-up forms use it. |
 | `client/diff.ts` | A diff text read for a screen (M4-6): where each file starts, the question box's `±` line, and the changed-files block's per-file letters and counts (M7-3). |
 | `client/loop.ts` | Loop recipes (M8-5): the two folders a recipe is looked for in, the list, and the orchestrator's first message. `kapelle loop` and `/loop` use it through `client/command.ts`. |
-| `client/setup.ts` | The setup list (M9-3): the agents the daemon found, as lines, and when the chat opens it. Both screens and `kapelle setup` print it. |
+| `client/setup.ts` | The setup list (M9-3): the agents the daemon found, as lines, and when the chat opens it. Both screens and `kapelle setup` print it. The install request and its streamed lines (M9-3b). |
 | `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. Both `chat/` screens read a line through it. |
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
 | `chat/` | The chat screens (M4-7): `tui.ts`, a pi-tui screen over every room on a TTY; `piped.ts`, one room as plain lines; `common.ts`, what both use. With `chat.ts`, they talk HTTP only, and import only `client/`, pi-tui, `core/runtime.ts` and each other; `chat/tui/term.ts` also imports `@xterm/headless`. Their subprocesses are the clipboard tool (`chat/tui/clipboard.ts`) and the person's shell (`chat/tui/term.ts`). |
@@ -171,6 +171,13 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   for a write outside the root (§M9-1 re-measure).
   `core/policy.ts` is the one policy file, and `policyFor(mode)` is the only map from a
   mode to a decider.
+- **The daemon's one install is npm, with a command from the registry only** (M9-3b).
+  `POST /harnesses/install` takes agent ids, never a command. `installArgs` builds
+  `npm i -g <setup.npm>@<measuredOn.version>`, and `runNpm` starts it with no shell. It
+  installs only an ACP program the person checked, never a main program, and it never
+  logs in (D6, as amended). npm runs the package's own install scripts as the daemon's
+  user: the one place kapelle runs third-party code outside a harness. The check box and
+  the registry's pin are what contain it, so never widen either without the person.
 - **Keep the path guard separate from the policy.** `#guardPath` compares realpaths and
   applies in every mode, `auto` included.
 - **Keep the `toolCallId → {title, kind, rawInput}` map in `AcpAgent`.** A permission

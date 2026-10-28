@@ -141,7 +141,11 @@ export async function call<T>(
     signal,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const text = await res.text();
+  return replyOf<T>(res, await res.text());
+}
+
+/** A reply's text as a `Reply`: the body, or the daemon's refusal. */
+export function replyOf<T>(res: Response, text: string): Reply<T> {
   let parsed: unknown;
   try {
     parsed = text ? JSON.parse(text) : undefined;

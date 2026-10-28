@@ -34,10 +34,11 @@ import {
   completeFolder,
   FOLDER_GONE,
 } from "../../client/folder.ts";
-import { nameOf, roster } from "../../client/room.ts";
+import { nameOf, printable, roster } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import {
   findAgain,
+  installAgents,
   markDone,
   needsSetup,
   readHarnesses,
@@ -334,46 +335,181 @@ function panelParts({
     setStatus();
   };
 
-  /** The setup list (M9-3): a new find each time it opens, then one line
-   *  per agent. `inHand` shows while the daemon looks, so the start draws
-   *  the reply it already has; the new find then catches an install made
-   *  since that find was saved. Enter is "done"; Esc closes it, and it
-   *  opens again at the next start. */
-  const showSetup = async (inHand?: HarnessesReply) => {
-    setupTouched = true;
-    const generation = ++setupGeneration;
-    const list = (r?: HarnessesReply): Component => ({
+  /** One setup line, in its tone. */
+  const toned = (l: { text: string; tone?: "dim" | "warn" }) =>
+    l.tone === "dim"
+      ? dim(l.text)
+      : l.tone === "warn"
+        ? yellow(l.text)
+        : l.text;
+
+  /** The setup list's body: the lines `before` (an install's result), then
+   *  one line per agent. A "main program only" agent has a check box
+   *  (M9-3b): ↑↓ move, Space checks, and Enter installs the checked ones,
+   *  or is "done" when none is. Esc closes it, and it opens again at the
+   *  next start. `checked` and `focus` outlive one body, so the new find
+   *  keeps a checked box and the cursor on the agent the person chose. */
+  const setupList = (
+    r: HarnessesReply | undefined,
+    before: { text: string; tone?: "dim" | "warn" }[] = [],
+    checked = new Set<string>(),
+    focus?: { id?: string },
+  ): Component => {
+    const lines = r
+      ? setupLines(r)
+      : [{ text: "looking for agents…", tone: "dim" as const }];
+    const boxes = lines.flatMap((l) => (l.install ? [l.install] : []));
+    for (const id of checked) if (!boxes.includes(id)) checked.delete(id);
+    let at = focus?.id === undefined ? 0 : Math.max(0, boxes.indexOf(focus.id));
+    if (focus) focus.id = boxes[at];
+    return {
       render: (w) => [
-        ...(r
-          ? setupLines(r)
-          : [{ text: "looking for agents…", tone: "dim" as const }]
-        ).flatMap((l) =>
-          wrapTextWithAnsi(
-            l.tone === "dim"
-              ? dim(l.text)
-              : l.tone === "warn"
-                ? yellow(l.text)
-                : l.text,
-            w,
-          ),
-        ),
+        ...before.flatMap((l) => wrapTextWithAnsi(toned(l), w)),
+        ...(before.length ? [""] : []),
+        ...lines.flatMap((l) => {
+          if (!boxes.length) return wrapTextWithAnsi(toned(l), w);
+          const box = l.install
+            ? `${boxes[at] === l.install ? cyan("›") : " "} [${checked.has(l.install) ? "x" : " "}] `
+            : "      ";
+          return wrapTextWithAnsi(`${box}${toned(l)}`, w);
+        }),
         "",
-        dim("Enter done · Esc later"),
+        dim(
+          checked.size
+            ? "Enter setup · Space check · Esc later"
+            : boxes.length
+              ? "Space check · Enter done · Esc later"
+              : "Enter done · Esc later",
+        ),
       ],
       handleInput(key) {
         if (matchesKey(key, Key.escape)) hidePanel();
-        else if (matchesKey(key, Key.enter)) void setupDone();
+        else if (matchesKey(key, Key.up)) {
+          at = Math.max(0, at - 1);
+          if (focus) focus.id = boxes[at];
+        } else if (matchesKey(key, Key.down)) {
+          at = Math.min(boxes.length - 1, at + 1);
+          if (focus) focus.id = boxes[at];
+        } else if (matchesKey(key, Key.space) && boxes[at]) {
+          const id = boxes[at] as string;
+          if (!checked.delete(id)) checked.add(id);
+        } else if (matchesKey(key, Key.enter)) {
+          void (checked.size ? setupInstall([...checked]) : setupDone());
+        }
+        tui.requestRender();
       },
       invalidate() {},
-    });
-    const waiting = list(inHand);
-    showPanel(SETUP, waiting, generation);
+    };
+  };
+
+  /** The setup list (M9-3): a new find each time it opens, then one line
+   *  per agent. `inHand` shows while the daemon looks, so the start draws
+   *  the reply it already has; the new find then catches an install made
+   *  since that find was saved. */
+  const showSetup = async (inHand?: HarnessesReply) => {
+    setupTouched = true;
+    const generation = ++setupGeneration;
+    const checked = new Set<string>();
+    const focus: { id?: string } = {};
+    showPanel(SETUP, setupList(inHand, [], checked, focus), generation);
     await fresh();
     const r = await findAgain(d).catch(() => undefined);
     // Closed, or replaced, while the daemon looked.
     if (panel?.setup !== generation) return;
-    if (r?.ok) showPanel(SETUP, list(r.body), generation);
+    if (r?.ok)
+      showPanel(SETUP, setupList(r.body, [], checked, focus), generation);
     else panel.error = r ? r.error.message : NO_DAEMON;
+    tui.requestRender();
+  };
+
+  /** The "setup" button (M9-3b): the daemon installs the checked agents,
+   *  and the list shows npm's output as it comes, then the new find. A
+   *  failed install shows its error and the command to run by hand. Esc
+   *  hides the output; the install goes on, and the status line says how
+   *  it ended. */
+  const setupInstall = async (ids: string[]) => {
+    const generation = ++setupGeneration;
+    const out: string[] = [];
+    // Only the last ten lines ever draw. npm can write for three minutes, so
+    // keep the list from growing with its whole output.
+    const remember = (line: string) => {
+      out.push(line);
+      if (out.length > 10) out.splice(0, out.length - 10);
+    };
+    showPanel(
+      SETUP,
+      {
+        render: (w) => [
+          dim(`installing ${ids.map(printable).join(", ")}…`),
+          ...out.flatMap((l) => wrapTextWithAnsi(dim(l), w)),
+          "",
+          dim("Esc hides this; the install goes on"),
+        ],
+        handleInput(key) {
+          if (matchesKey(key, Key.escape)) hidePanel();
+        },
+        invalidate() {},
+      },
+      generation,
+    );
+    await fresh();
+    const r = await installAgents(d, ids, (l) => {
+      const text = "command" in l ? `$ ${l.command}` : l.output;
+      for (const line of text.split(/\r?\n/)) {
+        if (line.trim()) remember(printable(line));
+      }
+      if (panel?.setup === generation) tui.requestRender();
+    }).catch((err: unknown) =>
+      // `fetch` throws a TypeError when no daemon answers. A broken reply is
+      // another Error, so it keeps its message.
+      err instanceof TypeError
+        ? NO_DAEMON
+        : err instanceof Error
+          ? err.message
+          : String(err),
+    );
+    const ours = panel?.setup === generation;
+    if (typeof r === "string" || !r.ok) {
+      const error = typeof r === "string" ? r : r.error.message;
+      if (ours && panel) panel.error = error;
+      else {
+        say(`! setup: ${error}`);
+        setStatus();
+      }
+      return tui.requestRender();
+    }
+    const { failed, setup } = r.body;
+    if (!ours) {
+      say(
+        failed.length
+          ? `! setup: ${failed.map((f) => printable(f.id)).join(", ")} failed: /setup`
+          : `setup: installed ${ids.map(printable).join(", ")}`,
+      );
+      setStatus();
+      return tui.requestRender();
+    }
+    // The command on its own line, so it does not wrap and stays copyable.
+    // A failure with no command is one a hand run cannot help (#374).
+    const before = failed.flatMap((f) =>
+      f.command
+        ? [
+            {
+              text: `! ${printable(f.id)}: ${printable(f.error)}. Run it yourself:`,
+              tone: "warn" as const,
+            },
+            { text: `  ${printable(f.command)}`, tone: "warn" as const },
+          ]
+        : [
+            {
+              text: `! ${printable(f.id)}: ${printable(f.error)}.`,
+              tone: "warn" as const,
+            },
+          ],
+    );
+    if (failed.length) {
+      for (const l of out.slice(-6)) before.push({ text: l, tone: "warn" });
+    }
+    showPanel(SETUP, setupList(setup, before), generation);
     tui.requestRender();
   };
 

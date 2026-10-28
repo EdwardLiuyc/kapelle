@@ -804,7 +804,9 @@ test("a load that missed its deadline still drops the replay that comes late", a
       command: process.execPath,
       args: [MOCK_AGENT, "--scenario", scenario, "--store", store],
       cwd: root,
-      requestTimeoutMs: 200,
+      // Under the mock's 1000 ms slow load, so the load still misses it,
+      // with room for a cold start on a busy runner (CI on #374).
+      requestTimeoutMs: 500,
       onEvent: (e) => seen.push(e),
     });
     t.after(() => agent.stop());

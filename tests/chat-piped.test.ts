@@ -556,7 +556,7 @@ test("the piped chat prints the setup list on /setup, and /setup done says done 
   assert.equal(r.code, 0, r.stderr);
   assert.match(
     r.stdout,
-    /^claude +claude 2\.1\.307; needs claude-agent-acp: /m,
+    /^claude +claude 2\.1\.307; needs claude-agent-acp: npm i -g @agentclientprotocol\/claude-agent-acp@0\.89\.1$/m,
   );
   assert.match(r.stdout, /^opencode +ready \(opencode 2\.0\.18\)$/m);
   const after = await api<HarnessesReply>(d, "GET", "/harnesses");
@@ -620,7 +620,11 @@ test("piped /delete waits for the next line, then keeps a dismissed room open af
     stderr += text;
   });
   c.child.stdin.write("/delete\n/delete\n");
-  await until("the delete refusal", () => stderr.includes("draft.txt"));
+  // The refusal is two writes to stderr: wait for the last, then check both.
+  await until("the delete refusal", () =>
+    stderr.includes("then type /delete again"),
+  );
+  assert.match(stderr, /draft\.txt/);
   assert.match(stderr, /commit or remove them, then type \/delete again/);
   const held = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
   assert.equal(held.status, 200);
