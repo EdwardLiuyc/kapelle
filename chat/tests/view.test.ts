@@ -30,6 +30,7 @@ import {
   footer,
   historyRow,
   messages,
+  moved,
   opened,
   PALETTE,
   participantLeft,
@@ -120,6 +121,68 @@ test("typed text stays when the view changes", () => {
   const bob = { roomId: "r1", participantId: "p-bob" };
   assert.deepEqual(opened(s, bob, "@ann hi", "@ann "), { prefill: "@ann " });
   assert.deepEqual(opened(s, bob, "hi", ""), { prefill: "" });
+});
+
+test("a `@dev` draft stays in its room, not the other room's dev (#355)", () => {
+  const a = { roomId: "rA" };
+  const b = { roomId: "rB" };
+  const typed = { text: "@dev fix the test", prefill: "" };
+  // To room B, which also has a dev: its timeline opens empty.
+  assert.deepEqual(moved(room(["dev"]), b, typed), {
+    prefill: "",
+    text: "",
+    left: "@dev fix the test",
+  });
+  // Back to room A: the draft returns as typed.
+  assert.deepEqual(
+    moved(room(["dev"]), a, { text: "", prefill: "" }, typed.text),
+    {
+      prefill: "",
+      text: "@dev fix the test",
+      left: "",
+    },
+  );
+});
+
+test("an unnamed draft stays in its room, not the other one-agent room (#355)", () => {
+  const ann = { roomId: "rB", participantId: "p-ann" };
+  // To ann's thread in room B: it opens with its own pre-fill.
+  assert.deepEqual(moved(room(["ann"]), ann, { text: "hi", prefill: "" }), {
+    prefill: "@ann ",
+    text: "@ann ",
+    left: "hi",
+  });
+  // Back to room A: the draft returns with no `@name` added.
+  const a = { roomId: "rA" };
+  assert.deepEqual(
+    moved(room(["bob"]), a, { text: "@ann ", prefill: "@ann " }, "hi"),
+    {
+      prefill: "",
+      text: "hi",
+      left: "",
+    },
+  );
+});
+
+test("a room's own draft wins over the destination view's pre-fill", () => {
+  const ann = { roomId: "rB", participantId: "p-ann" };
+  assert.deepEqual(
+    moved(room(["ann"]), ann, { text: "from A", prefill: "" }, "from B"),
+    {
+      prefill: "",
+      text: "from B",
+      left: "from A",
+    },
+  );
+});
+
+test("a pre-fill alone is not a draft; with no room the composer clears", () => {
+  const now = { text: "@bob ", prefill: "@bob " };
+  assert.deepEqual(moved(undefined, { roomId: "" }, now), {
+    prefill: "",
+    text: "",
+    left: "",
+  });
 });
 
 test("with no room, an untouched pre-fill clears and typed text stays", () => {

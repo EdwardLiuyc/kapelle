@@ -126,6 +126,7 @@ import {
   footer,
   historyRow,
   messages,
+  moved,
   opened,
   participantLeft,
   quiet,
@@ -435,6 +436,8 @@ function chatTui(
   let leaving: ReturnType<typeof setTimeout> | undefined;
   /** The `@name ` this screen put in the composer, while it is untouched. */
   let prefill = "";
+  /** Each room's draft, by room id, while another room is open (#355). */
+  const drafts = new Map<string, string>();
   /** The open questions over every room, oldest first (M4-3). The reducers
    *  hold them; the queue keeps their order and the ones put aside. */
   const queue = questionQueue<{ r: Followed; q: Question }>((roomId, id) => {
@@ -812,16 +815,48 @@ function chatTui(
     prefill = c.prefill;
     if (c.text !== undefined) editor.setText(c.text);
   };
+  /** pi-tui's `setText` keeps the old text as an undo step. At a room
+   *  boundary that step would bring another room's draft back (#355). */
+  const clearComposerUndo = () => {
+    // SAFETY: pi-tui 1.1.0 has no public undo clear; its Editor undoStack
+    // is an ordinary UndoStack field, whose clear method is public. A
+    // release that moves it must not throw here: the undo step comes back,
+    // and the PTY test in `tests/chat-tui-nav.test.ts` fails at the bump.
+    (
+      editor as unknown as { undoStack?: { clear?(): void } }
+    ).undoStack?.clear?.();
+  };
 
   const open = (next: View) => {
     // A pop-up belongs to the view it opened on.
     if (box.panel) hidePanel();
+    const from = view.roomId;
     view = next;
     flash = "";
     // A thread shows the files its agent changed (M7-3).
     if (next.participantId) void loadChanges(next.roomId, next.participantId);
     const r = rooms.get(next.roomId);
-    compose(opened(r?.state, next, editor.getText(), prefill));
+    const changingRoom = next.roomId !== from;
+    // A large paste is a marker in `getText`, and its content lives in the
+    // editor. A draft leaves the editor, so save the content it stands for.
+    const text = changingRoom ? editor.getExpandedText() : editor.getText();
+    if (!changingRoom) compose(opened(r?.state, next, text, prefill));
+    else {
+      // A draft stays in its room (#355).
+      const c = moved(
+        r?.state,
+        next,
+        { text, prefill },
+        drafts.get(next.roomId),
+      );
+      // With no room open, `from` is "": not a room, so not a draft key.
+      if (from) {
+        if (c.left) drafts.set(from, c.left);
+        else drafts.delete(from);
+      }
+      compose(c);
+      clearComposerUndo();
+    }
     // The person looks at the view: its lines are seen.
     if (r) for (const id of seenIn(r.state, next)) seen(r.state, id);
     redraw();
@@ -911,6 +946,7 @@ function chatTui(
     const label = r?.entry.title ?? id;
     const next = wasDismissed ? dismissed(rooms, view, id) : undefined;
     if (next) open(next);
+    if (wasDismissed) drafts.delete(id);
     flash = wasDismissed ? `${label} was dismissed` : endedLine(ended, id);
     setStatus();
   };
@@ -1271,6 +1307,9 @@ function chatTui(
         set.drop(roomId);
         const next = dismissed(rooms, view, roomId);
         if (next) open(next);
+        // `open` saves the draft of the room it leaves; a deleted room has
+        // nowhere to return to.
+        drafts.delete(roomId);
         flash = out.line;
         setStatus();
         return true;

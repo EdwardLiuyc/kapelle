@@ -2160,6 +2160,10 @@ seen: the timeline marks its whole room, and a thread marks its participant. A
 `@name` pre-fill the person did not touch follows the view, so it never names the
 thread just left. In a thread, an empty composer always holds the thread's `@name`: after a
 send, and after a delete by hand (R43, amended the same day).
+**Amended 2026-10-28 (#355):** typed text stays only within its room. A room change keeps
+it as that room's draft and puts back the next room's draft, or its pre-fill, so a message
+can no longer reach a same-named agent, or the only agent, in another room. A dismissed
+room loses its draft, and drafts live only while the screen runs.
 
 **M4-3 · Answer per-participant permissions from the TUI · M · needs M4-2, M5-4, M6-5**
 With a person at the keyboard, a participant can run `ask`: a queued permission names the
