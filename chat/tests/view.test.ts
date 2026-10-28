@@ -164,6 +164,18 @@ test("an unnamed draft stays in its room, not the other one-agent room (#355)", 
   );
 });
 
+test("a room's own draft wins over the destination view's pre-fill", () => {
+  const ann = { roomId: "rB", participantId: "p-ann" };
+  assert.deepEqual(
+    moved(room(["ann"]), ann, { text: "from A", prefill: "" }, "from B"),
+    {
+      prefill: "",
+      text: "from B",
+      left: "from A",
+    },
+  );
+});
+
 test("a pre-fill alone is not a draft; with no room the composer clears", () => {
   const now = { text: "@bob ", prefill: "@bob " };
   assert.deepEqual(moved(undefined, { roomId: "" }, now), {

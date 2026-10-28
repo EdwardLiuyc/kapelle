@@ -26,8 +26,11 @@ import {
   ptyScreen,
   REMEMBER,
   type RoomReply,
+  roomLog,
+  screenRows,
   scrollback,
   tempDir,
+  until,
   withAgent,
 } from "../integration/helpers.ts";
 
@@ -92,6 +95,69 @@ test("chat.ts on a real terminal follows a second room off screen, switches to i
   await press("\x14", "»");
   child.stdin.write("/leave\r");
   await seen("left room");
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts keeps the old room's draft out of the new room's undo history (#355)", {
+  skip: noPty,
+}, async (t) => {
+  const { child, seen, press, exited, out, d, cwd } = await chatOnPty(t);
+  const b = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, name: "bob" }],
+  });
+  assert.equal(b.status, 201, b.body.error?.message);
+  await seen("○ bob");
+  await press("alpha-away", "alpha-away");
+  // Room A timeline -> its agent -> room B timeline.
+  await press("\x1b[1;3B\x1b[1;3B", "→ bob");
+  // Ctrl+- then ctrl+o makes a frame even if undo changes nothing.
+  await press("\x1f\x0f", "new room …");
+  assert.equal(
+    [...screenRows(out()).values()].some((row) => row.includes("alpha-away")),
+    false,
+    "the new room's screen still shows the old room's draft",
+  );
+  child.stdin.write(LEAVE);
+  assert.equal(await exited, 0, out());
+});
+
+test("chat.ts brings a pasted draft back with its text, not its marker (#355)", {
+  skip: noPty,
+}, async (t) => {
+  const { child, seen, press, exited, out, d, cwd } = await chatOnPty(t);
+  const [a] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const b = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, name: "bob" }],
+  });
+  assert.equal(b.status, 201, b.body.error?.message);
+  assert.ok(a);
+  await seen("○ bob");
+
+  const pasted = Array.from({ length: 12 }, (_, i) => `paste line ${i}`).join(
+    "\n",
+  );
+  child.stdin.write(`\x1b[200~${pasted}\x1b[201~`);
+  await seen("[paste #1 +12 lines]");
+
+  // A timeline -> A agent -> B timeline -> B agent.
+  await press("\x1b[1;3B\x1b[1;3B", "→ bob");
+  // Back to A's timeline.
+  await press("\x1b[1;3A\x1b[1;3A", "→ mock-agent");
+  child.stdin.write("\r");
+  await seen("previous: (none)");
+  await until(
+    "the full pasted text is the room's user message",
+    async () =>
+      (await roomLog(cwd, a.id)).some(
+        (line) =>
+          line.update.sessionUpdate === "_client_user_message" &&
+          line.update.text === pasted,
+      ),
+    5_000,
+  );
+  child.stdin.write(LEAVE);
   assert.equal(await exited, 0, out());
 });
 
