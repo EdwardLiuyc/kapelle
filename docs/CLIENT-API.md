@@ -432,6 +432,27 @@ no saved find runs one, which takes about a second. Later asks read the saved on
 list (`POST /harnesses/done`); a new find keeps it. The chat opens the list at start
 while `done` is `false`, and while no harness is `ready`.
 
+**The login check** (M9-4). For each `ready` harness, the daemon starts a check session:
+`initialize` and `session/new` in a new temporary folder, with no prompt, so no tokens.
+All start at the same time, each with a 15-second limit, and the reply waits for them:
+about 5 seconds. A `GET` checks a harness only when it has no saved check, its ACP
+version changed, or it has no saved model list; every `POST /harnesses` checks them all.
+Each real `session/new` in a room also updates its harness, at no cost. The result is
+saved in `$XDG_STATE_HOME/kapelle/checks.json`, and a `ready` harness that was checked
+gets these fields:
+
+- `login`: `ok` (logged in), `logged_out`, or `unknown`. copilot never says, so it is
+  always `unknown`; a check that failed or ran out of time is `unknown` too.
+- `loginHint`: what the person runs to log in, such as `kimi login`. Only when `login`
+  is not `ok`.
+- `models` (`id` and `name`) and `model`: the harness's model list and its current model,
+  from the `configOptions` entry with `category: "model"`. Absent when the harness sent
+  none, such as pi logged out.
+- `loginCheckedAt`: when a check or a real session last said this.
+
+No account field is kept: claude's `_auth/status_update` holds an e-mail and an
+organisation, and only its `kind` is read.
+
 **Reply `200`:**
 
 ```json
@@ -446,7 +467,11 @@ while `done` is `false`, and while no harness is `ready`.
       "program": "pi",
       "version": "1.3.0",
       "acpProgram": "pi-acp",
-      "acpVersion": "0.0.34"
+      "acpVersion": "0.0.34",
+      "login": "ok",
+      "models": [{ "id": "deepseek/deepseek-chat", "name": "DeepSeek Chat" }],
+      "model": "deepseek/deepseek-chat",
+      "loginCheckedAt": "2026-10-22T09:30:04.000Z"
     },
     {
       "id": "claude",
@@ -474,9 +499,9 @@ take a name typed by the person.
 
 ### `POST /harnesses`
 
-**Experimental.** Finds the installed harnesses again, saves the find, and replies as
-`GET /harnesses` does. It keeps `done`. `kapelle setup` and the chat's `/setup` call it.
-No body.
+**Experimental.** Finds the installed harnesses again, saves the find, checks the login
+of every `ready` one (M9-4), and replies as `GET /harnesses` does. It keeps `done`.
+`kapelle setup` and the chat's `/setup` call it. No body.
 
 ### `POST /harnesses/done`
 

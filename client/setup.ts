@@ -84,6 +84,21 @@ export function setupLines(r: HarnessesReply): SetupLine[] {
       lines.push({ text: `! ${printable(h.warning)}`, tone: "warn" });
     }
   }
+  // M9-4: a ready agent that is logged out, or may be, and how to log in.
+  for (const h of known) {
+    const hint = printable(h.loginHint ?? "?");
+    if (h.login === "logged_out") {
+      lines.push({
+        text: `! ${printable(h.id)} is not logged in: ${hint}`,
+        tone: "warn",
+      });
+    } else if (h.login === "unknown") {
+      lines.push({
+        text: `${printable(h.id)}: login not known; to log in: ${hint}`,
+        tone: "dim",
+      });
+    }
+  }
   if (!known.some((h) => h.state === "ready")) {
     lines.push({ text: "No agent is ready: install one.", tone: "warn" });
   }

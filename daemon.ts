@@ -78,6 +78,13 @@ import {
   type VersionReply,
 } from "./client/contract.ts";
 import {
+  checkFields,
+  dueForCheck,
+  noteSession,
+  readChecks,
+  runChecks,
+} from "./core/check.ts";
+import {
   readEnvConfig,
   readProjectConfig,
   readProjectLinkPaths,
@@ -1051,6 +1058,7 @@ async function restoreRooms(): Promise<void> {
           setup,
           bus,
           permissions,
+          noteSession,
           ...(limits && { limits }),
           ...(roomNotice && { roomNotice }),
         });
@@ -1161,6 +1169,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
       setup,
       bus,
       permissions,
+      noteSession,
       limits,
     });
   } catch (err) {
@@ -1712,8 +1721,29 @@ async function setupNow(again: boolean): Promise<Setup> {
   return finding;
 }
 
+/** The check in flight (M9-4): one at a time, so two asks never start the
+ *  same agents twice. */
+let checking: Promise<void> | undefined;
+
+/**
+ * Checks the ready agents of find `s` that are due (`dueForCheck`): all of
+ * them when `force`. The reply waits for it (decided 2026-10-28): about 5 s,
+ * and the chat does not block on it. An ask that meets a check waits for it,
+ * then checks only what is still due.
+ */
+async function checkNow(s: Setup, force: boolean): Promise<void> {
+  while (checking) await checking.catch(() => {});
+  const ids = dueForCheck(s, readChecks(), force);
+  if (ids.length === 0) return;
+  checking = runChecks(ids, s.found).finally(() => {
+    checking = undefined;
+  });
+  await checking;
+}
+
 function harnessesReply(s: Setup): HarnessesReply {
   const found = new Map(describe(s).map((a) => [a.id, a]));
+  const checks = readChecks();
   return {
     checkedAt: s.checkedAt,
     done: s.done,
@@ -1721,6 +1751,8 @@ function harnessesReply(s: Setup): HarnessesReply {
       id,
       measured: a.measured !== undefined,
       ...found.get(id),
+      // A check describes a ready agent only.
+      ...(found.get(id)?.state === "ready" && checkFields(id, checks[id])),
     })),
   };
 }
@@ -1798,6 +1830,8 @@ async function postInstall(req: IncomingMessage, res: ServerResponse) {
     // a warning too: then npm died after its link, and its error stays.
     // `command` is only for a failure that running it by hand can help.
     const setup = await setupNow(true);
+    // A newly ready agent has no saved check, so it is due.
+    await checkNow(setup, false);
     const now = new Map(describe(setup).map((a) => [a.id, a]));
     const failed = plan.flatMap(({ id, args }) => {
       const a = now.get(id);
@@ -1856,9 +1890,13 @@ async function route(req: IncomingMessage, res: ServerResponse) {
       capabilities: [...CAPABILITIES],
     } satisfies VersionReply);
   } else if (req.method === "GET" && pathname === "/harnesses") {
-    send(res, 200, harnessesReply(await setupNow(false)));
+    const s = await setupNow(false);
+    await checkNow(s, false);
+    send(res, 200, harnessesReply(s));
   } else if (req.method === "POST" && pathname === "/harnesses") {
-    send(res, 200, harnessesReply(await setupNow(true)));
+    const s = await setupNow(true);
+    await checkNow(s, true);
+    send(res, 200, harnessesReply(s));
   } else if (req.method === "POST" && pathname === "/harnesses/done") {
     const s = { ...(await setupNow(false)), done: true };
     writeSetup(s);

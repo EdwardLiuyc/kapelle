@@ -1425,3 +1425,116 @@ test("a daemon stop kills an npm that is still installing (M9-3b)", async (t) =>
   assert.ok(await gone(pid), "the install's npm is gone with the daemon");
   await installing;
 });
+
+// --- the login check (M9-4) ---------------------------------------------------
+
+/** `bin/<name>` answers `--version` with `version`, as the find asks, and
+ *  else runs the mock agent in `scenario`. */
+const mockOnPath = (
+  bin: string,
+  name: string,
+  version: string,
+  scenario: string,
+) =>
+  writeFile(
+    join(bin, name),
+    [
+      "#!/bin/sh",
+      `if [ "$1" = "--version" ]; then echo ${version}; exit 0; fi`,
+      `exec "${process.execPath}" "${MOCK_AGENT}" --scenario ${scenario}`,
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+const entryOf = (r: HarnessesReply, id: string) =>
+  r.harnesses.find((h) => h.id === id);
+
+test("the check saves each ready agent's models and login, and POST checks again (M9-4)", async (t) => {
+  const bin = await fakePath(t);
+  await mockOnPath(bin, "opencode", "2.0.18", "models");
+  await mockOnPath(bin, "kimi", "2.3.0", "auth-required");
+  await mockOnPath(bin, "claude-agent-acp", "0.89.1", "auth-account");
+  const { d, runtime } = await bootFinding(t, bin);
+  // The first start: no saved check either.
+  const file = join(runtime, "kapelle", "checks.json");
+  await rm(file);
+
+  const r = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(r.status, 200);
+  const opencode = entryOf(r.body, "opencode");
+  assert.equal(opencode?.login, "ok");
+  assert.equal(opencode?.loginHint, undefined);
+  assert.deepEqual(opencode?.models, [
+    { id: "mock/fast", name: "Fast" },
+    { id: "mock/smart", name: "Smart" },
+  ]);
+  assert.equal(opencode?.model, "mock/fast");
+  assert.equal(entryOf(r.body, "kimi")?.login, "logged_out");
+  assert.equal(entryOf(r.body, "kimi")?.loginHint, "kimi login");
+  assert.equal(entryOf(r.body, "claude")?.login, "ok");
+  // The fake pi-acp is no ACP agent: the check cannot tell.
+  assert.equal(entryOf(r.body, "pi")?.login, "unknown");
+  assert.equal(entryOf(r.body, "pi")?.loginHint, "pi, then /login");
+  // Not ready: never checked.
+  assert.equal(entryOf(r.body, "copilot")?.login, undefined);
+  // Only the state is kept, never claude's account.
+  const saved = await readFile(file, "utf8");
+  assert.doesNotMatch(saved, /person@example\.com|Example Org|Claude Max/);
+
+  // A GET reads what is saved; every POST checks again.
+  const again = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(
+    entryOf(again.body, "opencode")?.loginCheckedAt,
+    opencode?.loginCheckedAt,
+  );
+  const forced = await api<HarnessesReply>(d, "POST", "/harnesses");
+  assert.equal(forced.status, 200);
+  assert.notEqual(
+    entryOf(forced.body, "opencode")?.loginCheckedAt,
+    opencode?.loginCheckedAt,
+  );
+
+  // The setup list says who is logged out, and how to log in.
+  const cli = await spawnCli(t, ["setup"], "cli.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  }).done;
+  assert.equal(cli.code, 0, cli.stderr);
+  assert.match(cli.stdout, /^! kimi is not logged in: kimi login$/m);
+});
+
+test("a real room session updates the saved models and login (M9-4)", async (t) => {
+  const bin = await tempDir(t);
+  await mockOnPath(bin, "opencode", "2.0.18", "models");
+  await mockOnPath(bin, "kimi", "2.3.0", "auth-required");
+  const runtime = await tempDir(t);
+  // Every agent is saved as checked, so no GET below starts a check: what
+  // changes is the room's own doing.
+  const d = await boot(t, runtime, [], runtime, {
+    PATH: `${bin}:${process.env.PATH}`,
+  });
+  const root = await added(d, await gitRepo(t));
+  const before = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.deepEqual(entryOf(before.body, "opencode")?.models, []);
+
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd: root,
+    agents: [{ agent: "opencode", name: "alice" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const after = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.deepEqual(
+    entryOf(after.body, "opencode")?.models?.map((m) => m.id),
+    ["mock/fast", "mock/smart"],
+  );
+  assert.equal(entryOf(after.body, "opencode")?.login, "ok");
+
+  const refused = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd: root,
+    agents: [{ agent: "kimi", name: "bob" }],
+  });
+  assert.notEqual(refused.status, 201);
+  const out = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(entryOf(out.body, "kimi")?.login, "logged_out");
+  assert.equal(entryOf(out.body, "kimi")?.loginHint, "kimi login");
+});

@@ -20,7 +20,7 @@
  * before it answers, as every real harness does (§M0-9).
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -59,6 +59,14 @@ const SCENARIOS = {
     "like long, in a 3-byte character, so 64 KiB splits one, then a tool call",
   half: "a note and a tool call, then waits for a cancel, like stall, and answers it end_turn, as copilot does (§M0-4)",
   "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
+  models:
+    "session/new lists two models in a group; the handshake offers session/delete, which drops the session's --store file",
+  "auth-required":
+    "session/new fails with -32000 Authentication required, as pi does logged out",
+  "auth-none":
+    "sends _auth/status_update with kind none after initialize, as claude does logged out",
+  "auth-account":
+    "sends _auth/status_update with an account after initialize, as claude does logged in",
 };
 
 const storeAt = process.argv.indexOf("--store");
@@ -258,7 +266,30 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       },
       agentInfo: { name: "mock-agent", version: "0.1.0" },
       authMethods: [],
+      ...(scenario === "models" && {
+        agentCapabilities: {
+          loadSession: store !== null,
+          promptCapabilities: {},
+          sessionCapabilities: { delete: {} },
+        },
+      }),
     });
+    // claude sends its login state after the reply (§Models and login).
+    if (scenario === "auth-none") {
+      notify("_auth/status_update", {
+        authStatus: { kind: "none", label: "Not logged in" },
+      });
+    }
+    if (scenario === "auth-account") {
+      notify("_auth/status_update", {
+        authStatus: {
+          kind: "subscription",
+          label: "Claude Max",
+          email: "person@example.com",
+          organization: "Example Org",
+        },
+      });
+    }
   }
 
   if (msg.method === "session/new") {
@@ -266,13 +297,52 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // (`protocol/agent.ts:503`) is the thing under test, and any reply at all
     // would answer it.
     if (scenario === "silent-session") return;
+    if (scenario === "auth-required") {
+      send({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "Authentication required" },
+      });
+      return;
+    }
     // Unique with a store, so one process never loads another's session.
     const sid = store
       ? `sess_mock_${randomUUID()}`
       : `sess_mock_${++sessionCount}`;
     sessions.add(sid);
     keep(sid, []);
-    reply(msg.id, { sessionId: sid });
+    reply(msg.id, {
+      sessionId: sid,
+      ...(scenario === "models" && {
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "mock/fast",
+            options: [
+              {
+                group: "mock",
+                name: "Mock",
+                options: [
+                  { value: "mock/fast", name: "Fast" },
+                  { value: "mock/smart", name: "Smart" },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    });
+  }
+
+  if (msg.method === "session/delete") {
+    const { sessionId: sid } = msg.params;
+    sessions.delete(sid);
+    if (store) rmSync(storeFile(sid), { force: true });
+    reply(msg.id, {});
+    return;
   }
 
   if (msg.method === "session/load") {

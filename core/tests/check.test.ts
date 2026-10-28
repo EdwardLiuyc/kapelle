@@ -1,0 +1,182 @@
+/**
+ * The login check and the saved models (M9-4, #299): a check session against
+ * `mock-agent.mjs`, each login signal, the time-out, the delete, which agents
+ * are due, and a real session's update. `tests/daemon.test.ts` drives the
+ * routes and a room with a fake `PATH`.
+ */
+
+import assert from "node:assert/strict";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type TestContext, test } from "node:test";
+
+import { MOCK_AGENT, tempDir } from "../../integration/helpers.ts";
+import { AGENTS, type SetupSpec } from "../../protocol/registry.ts";
+import {
+  type AgentCheck,
+  checkAgent,
+  checkFields,
+  dueForCheck,
+  noteSession,
+  readChecks,
+} from "../check.ts";
+import type { Setup } from "../harnesses.ts";
+
+const mock = (...args: string[]) => ({
+  command: process.execPath,
+  args: [MOCK_AGENT, ...args],
+});
+const setup = (loginSignal?: SetupSpec["loginSignal"]): SetupSpec => ({
+  program: "mock",
+  login: "mock login",
+  ...(loginSignal && { loginSignal }),
+});
+
+test("a check reads the models, flat, and an open session is logged in", async () => {
+  assert.deepEqual(await checkAgent(mock("--scenario", "models"), setup()), {
+    models: [
+      { id: "mock/fast", name: "Fast" },
+      { id: "mock/smart", name: "Smart" },
+    ],
+    model: "mock/fast",
+    login: "ok",
+  });
+});
+
+test("-32000 on session/new is logged out", async () => {
+  assert.deepEqual(
+    await checkAgent(mock("--scenario", "auth-required"), setup()),
+    { login: "logged_out" },
+  );
+});
+
+test("claude's notice gives its state, and copilot's is unknown", async () => {
+  assert.equal(
+    (await checkAgent(mock("--scenario", "auth-none"), setup("notice"))).login,
+    "logged_out",
+  );
+  assert.equal(
+    (await checkAgent(mock("--scenario", "auth-account"), setup("notice")))
+      .login,
+    "ok",
+  );
+  // A notice that never comes is no answer.
+  assert.equal(
+    (await checkAgent(mock(), setup("notice"), 500)).login,
+    "unknown",
+  );
+  assert.equal((await checkAgent(mock(), setup("none"))).login, "unknown");
+});
+
+test("a check that runs out of time, or cannot start, is unknown", async () => {
+  const started = Date.now();
+  assert.deepEqual(
+    await checkAgent(mock("--scenario", "silent-session"), setup(), 300),
+    { login: "unknown" },
+  );
+  assert.ok(Date.now() - started < 5000);
+  assert.deepEqual(
+    await checkAgent({ command: "/no/such/agent-acp", args: [] }, setup()),
+    { login: "unknown" },
+  );
+});
+
+test("a check deletes its session when the agent can", async (t) => {
+  const store = await mkdtemp(join(tmpdir(), "check-store-"));
+  t.after(() => rm(store, { recursive: true, force: true }));
+  await checkAgent(mock("--scenario", "models", "--store", store), setup());
+  assert.deepEqual(await readdir(store), []);
+});
+
+/** A find where every agent is ready at its measured version. */
+const allReady = (): Setup => ({
+  checkedAt: "2026-10-28T00:00:00.000Z",
+  done: true,
+  found: Object.fromEntries(
+    Object.entries(AGENTS).map(([id, a]) => {
+      const v = a.measured?.measuredOn.version;
+      return [id, { program: true, version: v, acp: true, acpVersion: v }];
+    }),
+  ),
+});
+
+const fresh = (s: Setup): Record<string, AgentCheck> =>
+  Object.fromEntries(
+    Object.keys(AGENTS).map((id) => [
+      id,
+      {
+        checkedAt: "2026-10-28T00:00:00.000Z",
+        version: s.found[id]?.acpVersion,
+        login: "ok",
+        models: [],
+      },
+    ]),
+  );
+
+test("which ready agents are due: first start, a new version, no list, or a forced check", () => {
+  const s = allReady();
+  const ids = Object.keys(AGENTS);
+  // The first start: nothing saved.
+  assert.deepEqual(dueForCheck(s, {}, false), ids);
+  const checks = fresh(s);
+  assert.deepEqual(dueForCheck(s, checks, false), []);
+  assert.deepEqual(dueForCheck(s, checks, true), ids);
+
+  const pi = s.found.pi;
+  assert.ok(pi);
+  pi.acpVersion = "0.0.35";
+  delete checks.opencode?.models;
+  assert.deepEqual(dueForCheck(s, checks, false), ["opencode", "pi"]);
+
+  // Never an agent that is not ready.
+  pi.acp = false;
+  assert.deepEqual(
+    dueForCheck(s, {}, true),
+    ids.filter((id) => id !== "pi"),
+  );
+});
+
+/** Points the user state folder at a new temp folder for this test. */
+async function stateHome(t: TestContext) {
+  const home = await tempDir(t);
+  const before = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = home;
+  t.after(() => {
+    if (before === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = before;
+  });
+}
+
+test("a real session replaces the models and the login, and keeps the version", async (t) => {
+  await stateHome(t);
+  assert.deepEqual(readChecks(), {});
+  noteSession("pi", { login: "logged_out" });
+  assert.equal(readChecks().pi?.login, "logged_out");
+
+  noteSession("pi", {
+    login: "ok",
+    models: [{ id: "a", name: "A" }],
+    model: "a",
+  });
+  noteSession("pi", { models: [{ id: "b", name: "B" }], model: "b" });
+  const pi = readChecks().pi;
+  assert.equal(pi?.login, "ok");
+  assert.deepEqual(pi?.models, [{ id: "b", name: "B" }]);
+  assert.equal(pi?.version, undefined);
+
+  // A `--cmd` harness is not saved.
+  noteSession("mock-agent", { login: "ok" });
+  assert.equal(readChecks()["mock-agent"], undefined);
+});
+
+test("the route shows the hint only when the person may need it", () => {
+  const c = (login: AgentCheck["login"]): AgentCheck => ({
+    checkedAt: "2026-10-28T00:00:00.000Z",
+    login,
+  });
+  assert.equal(checkFields("kimi", c("logged_out")).loginHint, "kimi login");
+  assert.equal(checkFields("copilot", c("unknown")).loginHint, "copilot login");
+  assert.equal(checkFields("kimi", c("ok")).loginHint, undefined);
+  assert.deepEqual(checkFields("kimi", undefined), {});
+});

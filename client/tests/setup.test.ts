@@ -162,3 +162,33 @@ test("an install stream cut after its headers is not a missing daemon (M9-3b)", 
     },
   );
 });
+
+test("a ready agent that is logged out, or may be, gets its login hint (M9-4)", () => {
+  const ready = (id: string, login: "ok" | "logged_out" | "unknown") => ({
+    id,
+    measured: true,
+    state: "ready" as const,
+    program: id,
+    version: "1.0.0",
+    acpProgram: id,
+    acpVersion: "1.0.0",
+    login,
+    ...(login !== "ok" && { loginHint: `${id} login` }),
+  });
+  const lines = setupLines({
+    checkedAt: "2026-10-28T00:00:00.000Z",
+    done: true,
+    harnesses: [
+      ready("kimi", "logged_out"),
+      ready("copilot", "unknown"),
+      ready("opencode", "ok"),
+    ],
+  });
+  assert.deepEqual(lines.slice(3), [
+    { text: "! kimi is not logged in: kimi login", tone: "warn" },
+    {
+      text: "copilot: login not known; to log in: copilot login",
+      tone: "dim",
+    },
+  ]);
+});

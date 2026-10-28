@@ -73,12 +73,20 @@ interface MeasuredLabels {
  * (`pi-acp`), which may be the same program. `npm` is the ACP program's npm
  * package, set only where it is a separate one. The install pins it to
  * `measuredOn.version` (M9-3b), so the version lives in one place.
+ *
+ * `login` is what the person runs to log in (M9-4), from the agent's own
+ * `--help`. `loginSignal` says how the agent tells us it is logged out
+ * (§Models and login). By default, `session/new` fails with `-32000`, so a
+ * session that opens means logged in. `notice`: claude's
+ * `_auth/status_update`. `none`: copilot, which never says.
  */
-interface SetupSpec {
+export interface SetupSpec {
   program: string;
   npm?: string;
   /** The ACP program has no `--version`: read its npm `package.json`. */
   versionFromPackage?: true;
+  login: string;
+  loginSignal?: "notice" | "none";
 }
 
 export interface AgentEntry {
@@ -121,7 +129,7 @@ export const AGENTS: Record<string, AgentEntry> = {
   // Native ACP support: `opencode acp` starts it as an ACP subprocess.
   opencode: {
     launch: { command: "opencode", args: ["acp"] },
-    setup: { program: "opencode" },
+    setup: { program: "opencode", login: "opencode auth login" },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {
@@ -156,6 +164,7 @@ export const AGENTS: Record<string, AgentEntry> = {
       program: "pi",
       npm: "pi-acp",
       versionFromPackage: true,
+      login: "pi, then /login",
     },
     defaultMode: "ask",
     maxMode: "auto",
@@ -198,6 +207,8 @@ export const AGENTS: Record<string, AgentEntry> = {
     setup: {
       program: "claude",
       npm: "@agentclientprotocol/claude-agent-acp",
+      login: "claude auth login",
+      loginSignal: "notice",
     },
     defaultMode: "ask",
     maxMode: "auto",
@@ -232,7 +243,8 @@ export const AGENTS: Record<string, AgentEntry> = {
   // against `copilot --help` on 1.0.78. Re-check there if this drifts.
   copilot: {
     launch: { command: "copilot", args: ["--acp"] },
-    setup: { program: "copilot" },
+    // copilot gives no login signal (decided 2026-10-15).
+    setup: { program: "copilot", login: "copilot login", loginSignal: "none" },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {
@@ -264,6 +276,7 @@ export const AGENTS: Record<string, AgentEntry> = {
     setup: {
       program: "codex",
       npm: "@agentclientprotocol/codex-acp",
+      login: "codex login",
     },
     defaultMode: "ask",
     maxMode: "auto",
@@ -296,7 +309,7 @@ export const AGENTS: Record<string, AgentEntry> = {
   // own installer (§Models and login).
   kimi: {
     launch: { command: "kimi", args: ["acp"] },
-    setup: { program: "kimi" },
+    setup: { program: "kimi", login: "kimi login" },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {
