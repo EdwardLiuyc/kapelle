@@ -2,7 +2,7 @@
  * The daemon process — `daemon.ts`, M2-1 (#31) — driven as a real subprocess
  * over real HTTP: the token and the Host check, `daemon.json` and its lock,
  * start, stop and add, the config, the repositories, and the agents it finds
- * (M9-3). The other subjects have their own files: `daemon-runs`,
+ * (M9-3) and installs (M9-3b). The other subjects have their own files: `daemon-runs`,
  * `daemon-rooms`, `attach` and the `chat-*` files (#340).
  *
  * **None of this needs a harness**, so it runs in CI like `tests/cli.test.ts`:
@@ -35,7 +35,12 @@ import { request } from "node:http";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import type { HarnessesReply } from "../client/contract.ts";
+import type {
+  ErrorReply,
+  HarnessesReply,
+  InstallLine,
+  InstallResult,
+} from "../client/contract.ts";
 import {
   addRepo as added,
   api,
@@ -44,6 +49,7 @@ import {
   type Daemon,
   useDaemonDirs as dirs,
   exitOf,
+  fakeNpm,
   fakePath,
   gitRepo,
   gone,
@@ -1027,7 +1033,7 @@ test("the daemon finds the agents on its own PATH, saves the find, and keeps don
   assert.equal(cli.code, 0, cli.stderr);
   assert.match(
     cli.stdout,
-    /^claude +claude 2\.1\.307; needs claude-agent-acp: npm i -g @agentclientprotocol\/claude-agent-acp$/m,
+    /^claude +claude 2\.1\.307; needs claude-agent-acp: npm i -g @agentclientprotocol\/claude-agent-acp@0\.89\.1$/m,
   );
   assert.match(
     cli.stdout,
@@ -1068,4 +1074,119 @@ test("a find keeps done when an incomplete saved file forces it (M9-3)", async (
     done: unknown;
   };
   assert.equal(rewritten.done, true);
+});
+
+/** `POST /harnesses/install` with `body`, every NDJSON line read. */
+async function install(d: Daemon, body: unknown) {
+  const res = await fetch(`${d.url}/harnesses/install`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${d.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    return {
+      status: res.status,
+      error: (JSON.parse(text) as ErrorReply).error,
+    };
+  }
+  assert.equal(res.headers.get("content-type"), "application/x-ndjson");
+  const lines = text
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as InstallLine);
+  const last = lines.at(-1) as InstallResult;
+  const output = lines.map((l) => ("output" in l ? l.output : "")).join("");
+  return { status: res.status, lines, last, output };
+}
+
+const CLAUDE_PIN = "npm i -g @agentclientprotocol/claude-agent-acp@0.89.1";
+
+test("POST /harnesses/install runs the pinned npm command, streams its output, and finds again (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin);
+  const { d } = await bootFinding(t, bin);
+  const before = await api<HarnessesReply>(d, "GET", "/harnesses");
+  const claude = before.body.harnesses.find((h) => h.id === "claude");
+  assert.equal(claude?.state, "main_only");
+  // The list shows the very command the install runs.
+  assert.equal(claude?.install, CLAUDE_PIN);
+
+  const r = await install(d, { ids: ["claude", "claude"] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.lines?.[0], { id: "claude", command: CLAUDE_PIN });
+  assert.match(r.output ?? "", /added 1 package/);
+  assert.deepEqual(r.last?.failed, []);
+  assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "ready");
+  assert.equal(
+    r.last?.setup.harnesses.find((h) => h.id === "claude")?.warning,
+    undefined,
+  );
+  // One npm, with the pin from the registry, and the duplicate id dropped.
+  assert.equal(
+    await readFile(join(bin, "npm.argv"), "utf8"),
+    "i -g @agentclientprotocol/claude-agent-acp@0.89.1\n",
+  );
+});
+
+test("POST /harnesses/install takes agent ids only, and only main-only ones (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin);
+  const { d } = await bootFinding(t, bin);
+  for (const body of [
+    { command: "npm i -g evil" },
+    { ids: ["claude"], command: "npm i -g evil" },
+    { ids: "claude" },
+    { ids: [] },
+    { ids: [1] },
+    { ids: ["npm i -g evil"] },
+    { ids: ["nope"] },
+    { ids: ["__proto__"] },
+    // Ready: no box (1A). opencode is its own ACP program; codex has no main.
+    { ids: ["pi"] },
+    { ids: ["opencode"] },
+    { ids: ["codex"] },
+    // One bad id refuses the whole list, before npm runs.
+    { ids: ["claude", "nope"] },
+  ]) {
+    const r = await install(d, body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.equal(r.error?.code, "invalid_request", JSON.stringify(body));
+  }
+  assert.equal(existsSync(join(bin, "npm.argv")), false);
+});
+
+test("a failed install names the error and the command, and the agent stays main-only (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin, { fail: true });
+  const { d } = await bootFinding(t, bin);
+  const r = await install(d, { ids: ["claude"] });
+  assert.equal(r.status, 200);
+  assert.match(r.output ?? "", /EACCES/);
+  assert.deepEqual(r.last?.failed, [
+    { id: "claude", command: CLAUDE_PIN, error: "npm exited with code 243" },
+  ]);
+  assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "main_only");
+});
+
+test("a second install while one runs is refused (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin, { hold: true });
+  const { d } = await bootFinding(t, bin);
+  const first = install(d, { ids: ["claude"] });
+  // The first one holds npm until bin/go exists.
+  while (!existsSync(join(bin, "npm.argv"))) {
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  const second = await install(d, { ids: ["claude"] });
+  assert.equal(second.status, 409);
+  assert.equal(second.error?.code, "install_running");
+  await writeFile(join(bin, "go"), "");
+  const r = await first;
+  assert.deepEqual(r.last?.failed, []);
+  // The guard is released: the next one runs (claude is ready now, so 400).
+  assert.equal((await install(d, { ids: ["claude"] })).status, 400);
 });

@@ -8,15 +8,31 @@
  * The daemon does the find (`core/harnesses.ts`). `findAgain` asks it for a
  * new one, and `markDone` records the person's "done". The list opens with a
  * new find, so it has no "check again".
+ *
+ * `installAgents` (M9-3b) sends the checked ids, never a command: the
+ * daemon builds each command from its registry and streams npm's output.
  */
 
-import type { HarnessEntry, HarnessesReply } from "./contract.ts";
-import { call, type DaemonAddress, type Reply } from "./daemon.ts";
+import type {
+  HarnessEntry,
+  HarnessesReply,
+  InstallLine,
+  InstallResult,
+} from "./contract.ts";
+import {
+  call,
+  type DaemonAddress,
+  type Reply,
+  replyOf,
+  request,
+} from "./daemon.ts";
 import { printable } from "./room.ts";
 
 interface SetupLine {
   text: string;
   tone?: "dim" | "warn";
+  /** The agent the TUI may install from this line (M9-3b). */
+  install?: string;
 }
 
 const ORDER = ["ready", "main_only", "not_installed"];
@@ -61,6 +77,7 @@ export function setupLines(r: HarnessesReply): SetupLine[] {
   const lines: SetupLine[] = known.map((h) => ({
     text: `${printable(h.id).padEnd(width)}  ${detail(h)}`,
     ...(h.state === "not_installed" && { tone: "dim" as const }),
+    ...(h.state === "main_only" && h.install && { install: h.id }),
   }));
   for (const h of known) {
     if (h.warning) {
@@ -106,4 +123,33 @@ export function findAgain(d: DaemonAddress) {
 /** The person said "done": the list stops opening at start. */
 export function markDone(d: DaemonAddress) {
   return call<HarnessesReply>(d, "/harnesses/done", { method: "POST" });
+}
+
+/** `POST /harnesses/install`: the daemon installs `ids`, and `on` gets each
+ *  line as it comes. Answers the last line. A stream that ends before it
+ *  throws: the next find shows what was installed. */
+export async function installAgents(
+  d: DaemonAddress,
+  ids: string[],
+  on: (l: Exclude<InstallLine, InstallResult>) => void,
+): Promise<Reply<InstallResult>> {
+  const res = await request(d, "/harnesses/install", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok || !res.body) return replyOf(res, await res.text());
+  let rest = "";
+  for await (const chunk of res.body.pipeThrough(new TextDecoderStream())) {
+    const lines = (rest + chunk).split("\n");
+    rest = lines.pop() ?? "";
+    for (const text of lines) {
+      if (!text) continue;
+      const l = JSON.parse(text) as InstallLine;
+      if ("failed" in l) return { ok: true, status: res.status, body: l };
+      on(l);
+    }
+  }
+  throw new Error(
+    "the daemon ended the install early: /setup shows the result",
+  );
 }

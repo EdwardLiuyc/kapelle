@@ -61,6 +61,7 @@ import {
   type Diff,
   type ErrorReply,
   type HarnessesReply,
+  type InstallLine,
   type MessageAccepted,
   type ParticipantDto,
   type PendingDecision,
@@ -90,8 +91,11 @@ import { createEventBus } from "./core/events.ts";
 import {
   describe,
   findAgents,
+  installArgs,
+  installCommand,
   readSavedDone,
   readSetup,
+  runNpm,
   type Setup,
   writeSetup,
 } from "./core/harnesses.ts";
@@ -1714,6 +1718,68 @@ function harnessesReply(s: Setup): HarnessesReply {
   };
 }
 
+/** Set while `POST /harnesses/install` runs: one install at a time. */
+let installing = false;
+
+/**
+ * `POST /harnesses/install` (M9-3b): the person's checked agents, by id.
+ * The body takes `ids` only, so a command never arrives here: the daemon
+ * builds each one from its registry (`installArgs`). Each id must be an
+ * agent the find now calls `main_only`. The reply streams NDJSON: each
+ * install's command and npm's output, then the failures and a new find. A
+ * chat that leaves does not stop npm; the next find sees what it did.
+ */
+async function postInstall(req: IncomingMessage, res: ServerResponse) {
+  const { ids } = await readBody(req, ["ids"]);
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    !ids.every((id) => typeof id === "string")
+  ) {
+    throw refusal(400, "invalid_request", "ids must be a list of agent ids");
+  }
+  if (installing) {
+    throw refusal(409, "install_running", "an install is already running");
+  }
+  installing = true;
+  try {
+    const state = new Map(
+      describe(await setupNow(true)).map((a) => [a.id, a.state]),
+    );
+    const plan = [...new Set(ids as string[])].map((id) => {
+      const args = installArgs(id);
+      if (!args || state.get(id) !== "main_only") {
+        throw refusal(
+          400,
+          "invalid_request",
+          `${JSON.stringify(id)} is not an agent kapelle can install: ` +
+            "only one whose own program is installed and its ACP program is not",
+        );
+      }
+      return { id, args };
+    });
+    res.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "cache-control": "no-cache",
+    });
+    res.flushHeaders();
+    const line = (l: InstallLine) => {
+      if (!res.destroyed) res.write(`${JSON.stringify(l)}\n`);
+    };
+    const failed: { id: string; command: string; error: string }[] = [];
+    for (const { id, args } of plan) {
+      const command = installCommand(args);
+      line({ id, command });
+      const error = await runNpm(args, (output) => line({ id, output }));
+      if (error) failed.push({ id, command, error });
+    }
+    line({ failed, setup: harnessesReply(await setupNow(true)) });
+    res.end();
+  } finally {
+    installing = false;
+  }
+}
+
 /** A parse base for `req.url`, which is a path, not a URL. Never fetched;
  *  named as a constant so it is not mistaken for a configurable endpoint. */
 const REQUEST_URL_BASE = "http://daemon";
@@ -1755,6 +1821,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     const s = { ...(await setupNow(false)), done: true };
     writeSetup(s);
     send(res, 200, harnessesReply(s));
+  } else if (req.method === "POST" && pathname === "/harnesses/install") {
+    await postInstall(req, res);
   } else if (req.method === "POST" && pathname === "/repos") {
     await postRepo(req, res);
   } else if (req.method === "GET" && pathname === "/repos") {

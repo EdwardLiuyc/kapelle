@@ -28,7 +28,7 @@ const reply = (done: boolean, ready: boolean): HarnessesReply => ({
       program: "claude",
       version: "2.1.307",
       acpProgram: "claude-agent-acp",
-      install: "npm i -g @agentclientprotocol/claude-agent-acp",
+      install: "npm i -g @agentclientprotocol/claude-agent-acp@0.89.1",
     },
     ...(ready
       ? [
@@ -51,7 +51,8 @@ test("the list puts the ready agents first, with each command and warning", () =
   assert.deepEqual(setupLines(reply(false, true)), [
     { text: "pi      ready (pi 1.3.0, pi-acp 0.0.33)" },
     {
-      text: "claude  claude 2.1.307; needs claude-agent-acp: npm i -g @agentclientprotocol/claude-agent-acp",
+      text: "claude  claude 2.1.307; needs claude-agent-acp: npm i -g @agentclientprotocol/claude-agent-acp@0.89.1",
+      install: "claude",
     },
     {
       text: "kimi    not installed: no kimi on the daemon's PATH",

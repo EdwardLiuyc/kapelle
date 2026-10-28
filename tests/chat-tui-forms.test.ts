@@ -1,7 +1,7 @@
 /**
  * The full-screen chat's pop-ups on a real terminal through `script(1)`: the
  * menu, the forms, the typed room commands (M4-5), a fast-forward's preview,
- * and the setup list (M9-3).
+ * and the setup list (M9-3) with its install (M9-3b).
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
@@ -11,7 +11,14 @@
  */
 
 import assert from "node:assert/strict";
-import { access, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -29,6 +36,7 @@ import {
   bootFinding,
   chatOnPty,
   commitAt,
+  fakeNpm,
   fakePath,
   gitRepo,
   headAt,
@@ -596,6 +604,60 @@ test("the chat opens the setup list at every start while no agent is ready, done
     { XDG_RUNTIME_DIR: runtime },
     "No agent is ready",
   );
+  child.stdin.write("\x1b");
+  await new Promise((ok) => setTimeout(ok, 300));
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("the setup list checks a main-only agent, and Enter installs it with the pinned command (M9-3b)", {
+  skip: noPty,
+}, async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin);
+  const { runtime } = await bootFinding(t, bin);
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 160 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "Space check · Enter done · Esc later",
+  );
+  // claude is the one main-only agent: the cursor is on its box.
+  assert.match(plainText(out()), /› \[ \] claude/);
+  await press(" ", "[x] claude");
+  await press("\r", "claude-agent-acp 0.89.1)");
+  assert.equal(
+    await readFile(join(bin, "npm.argv"), "utf8"),
+    "i -g @agentclientprotocol/claude-agent-acp@0.89.1\n",
+  );
+  // Ready now, so no box is left, and Enter is "done" again.
+  await press("\r", "setup done");
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("a failed install shows npm's error and the command to run by hand (M9-3b)", {
+  skip: noPty,
+}, async (t) => {
+  const bin = await fakePath(t);
+  await fakeNpm(bin, { fail: true });
+  const { runtime } = await bootFinding(t, bin);
+  const { child, press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 200 rows 40; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "Space check · Enter done · Esc later",
+  );
+  await press(" ", "[x] claude");
+  await press("\r", "Run it yourself");
+  const shown = plainText(out());
+  assert.match(shown, /! claude: npm exited with code 243\. Run it yourself:/);
+  // The command has a line of its own: whole, so it can be copied.
+  assert.match(
+    shown,
+    /┃ {3}npm i -g @agentclientprotocol\/claude-agent-acp@0\.89\.1 +┃/,
+  );
+  assert.match(shown, /npm error code EACCES/);
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
   await press(LEAVE, "left the chat");

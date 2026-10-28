@@ -90,6 +90,20 @@ export interface HarnessesReply {
   harnesses: HarnessEntry[];
 }
 
+/** One line of `POST /harnesses/install` (M9-3b), sent as NDJSON as it
+ *  happens: an install starts (`command`), npm writes (`output`), and last
+ *  the result, with the new find. Experimental. */
+export type InstallLine =
+  | { id: string; command: string }
+  | { id: string; output: string }
+  | InstallResult;
+
+/** The last line: each install that failed, and the find after them. */
+export interface InstallResult {
+  failed: { id: string; command: string; error: string }[];
+  setup: HarnessesReply;
+}
+
 /** `GET /version`. `capabilities` is `string[]`, not the list above: a
  *  newer daemon sends names this file does not know yet. */
 export interface VersionReply {
@@ -141,6 +155,7 @@ export type ErrorCode =
   | "shutting_down"
   | "room_open_failed"
   | "no_diff"
+  | "install_running"
   | "internal";
 
 /** Every refusal, on every route. `code` is `string`, not `ErrorCode`: a

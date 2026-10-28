@@ -124,7 +124,7 @@ changes each one.
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| `GET /harnesses`, `POST /harnesses`, `POST /harnesses/done` | Experimental | M4-5 added the list for `chat.ts`; M9-3 the find; M9-4 the login check; M9-8 makes them stable |
+| `GET /harnesses`, `POST /harnesses`, `POST /harnesses/done`, `POST /harnesses/install` | Experimental | M4-5 added the list for `chat.ts`; M9-3 the find; M9-3b the install; M9-4 the login check; M9-8 makes them stable |
 
 **Planned, not built yet:** cancel one task (M5-8).
 
@@ -277,6 +277,7 @@ request that is not valid HTTP gets `400`.
 | `name_taken` | `409` | Another participant in the room has this name. Names are compared without ASCII case, so `Alice` takes `alice`. | Choose another name. |
 | `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
 | `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. | Show the message. |
+| `install_running` | `409` | An install already runs (`POST /harnesses/install`). | Wait for its last line, then send again. |
 | `no_diff` | `409` | The participant's changes cannot be shown: its checkout is not a git checkout, it has no branch to compare with, or git failed for another reason. The message says which. | Show the message. |
 | `internal` | `500` | An error the daemon did not expect. For example, a bug, or a git command that failed in a broken repository. | Show the message. Report it if the repository is fine. |
 
@@ -321,6 +322,7 @@ the `GET` routes take none.
 | `GET /harnesses` | List the harnesses the daemon can start by name, and which are installed. Experimental. |
 | `POST /harnesses` | Find the installed harnesses again. Experimental. |
 | `POST /harnesses/done` | The person has seen the setup list. Experimental. |
+| `POST /harnesses/install` | Install the ACP programs of the harnesses the person checked. Experimental. |
 | `POST /runs` | Start a run. |
 | `GET /runs` | List all runs. |
 | `GET /runs/:id` | One run in full. |
@@ -417,7 +419,8 @@ pi-acp from its npm `package.json`, so no session starts.
 
 - `ready`: both programs are there.
 - `main_only`: the agent is there, its ACP program is not. `install` is the command that
-  installs it. The person runs it; kapelle does not.
+  installs it, pinned to the build kapelle measured. The person runs it, or checks the agent
+  in the chat's setup list (`POST /harnesses/install`).
 - `not_installed`: anything else.
 
 `warning` is set when the ACP program is not the build kapelle measured. The agent's own
@@ -452,7 +455,7 @@ while `done` is `false`, and while no harness is `ready`.
       "program": "claude",
       "version": "2.1.307",
       "acpProgram": "claude-agent-acp",
-      "install": "npm i -g @agentclientprotocol/claude-agent-acp"
+      "install": "npm i -g @agentclientprotocol/claude-agent-acp@0.89.1"
     },
     {
       "id": "kimi",
@@ -480,6 +483,39 @@ No body.
 **Experimental.** The person said "done" to the setup list: `done` becomes `true`, and the
 chat stops opening the list at start. The reply is the same as `GET /harnesses`. No
 body.
+
+### `POST /harnesses/install`
+
+**Experimental** (M9-3b). Installs the ACP program of each harness in `ids`. The body
+takes ids only, never a command: the daemon builds each command from its registry. It
+runs `npm i -g <package>@<measured version>` on the daemon's `PATH`, with no shell, one
+harness after the other, each with a 3-minute limit. kapelle never installs a harness's
+own program.
+
+**Request:**
+
+```json
+{ "ids": ["claude"] }
+```
+
+**Refusals:** `400` `invalid_request` when `ids` is not a non-empty list of strings, when
+the body has any other field, or when an id is not a harness whose state is `main_only`
+now. The daemon finds again before it checks, and one bad id refuses the whole list.
+`409` `install_running` while another install runs.
+
+**Reply `200`:** `application/x-ndjson`, one JSON object per line, as it happens. Each
+install starts with its command, then npm's output in pieces. The last line has each
+install that failed, and a new find, the same as `GET /harnesses` replies. A failed
+install leaves its harness `main_only`; show its `command` for the person to run, for
+example with `sudo`.
+
+```json
+{"id":"claude","command":"npm i -g @agentclientprotocol/claude-agent-acp@0.89.1"}
+{"id":"claude","output":"added 1 package in 3s\n"}
+{"failed":[],"setup":{"checkedAt":"2026-10-28T11:00:00.000Z","done":false,"harnesses":[]}}
+```
+
+A client that closes the connection does not stop npm. The next find shows what it did.
 
 ### Runs
 

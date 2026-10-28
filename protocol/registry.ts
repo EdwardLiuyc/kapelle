@@ -70,12 +70,13 @@ interface MeasuredLabels {
 /**
  * How to find the harness on `PATH` (M9-3). Our choice, as `launch` is.
  * `program` is the agent itself (`pi`); `launch.command` is its ACP program
- * (`pi-acp`), which may be the same program. `install` installs the ACP
- * program, and is set only where it is a separate one.
+ * (`pi-acp`), which may be the same program. `npm` is the ACP program's npm
+ * package, set only where it is a separate one. The install pins it to
+ * `measuredOn.version` (M9-3b), so the version lives in one place.
  */
 interface SetupSpec {
   program: string;
-  install?: string;
+  npm?: string;
   /** The ACP program has no `--version`: read its npm `package.json`. */
   versionFromPackage?: true;
 }
@@ -153,7 +154,7 @@ export const AGENTS: Record<string, AgentEntry> = {
     // pi-acp has no `--version`: it starts its server instead (#298).
     setup: {
       program: "pi",
-      install: "npm i -g pi-acp",
+      npm: "pi-acp",
       versionFromPackage: true,
     },
     defaultMode: "ask",
@@ -196,7 +197,7 @@ export const AGENTS: Record<string, AgentEntry> = {
     },
     setup: {
       program: "claude",
-      install: "npm i -g @agentclientprotocol/claude-agent-acp",
+      npm: "@agentclientprotocol/claude-agent-acp",
     },
     defaultMode: "ask",
     maxMode: "auto",
@@ -262,7 +263,7 @@ export const AGENTS: Record<string, AgentEntry> = {
     launch: { command: "codex-acp", args: [] },
     setup: {
       program: "codex",
-      install: "npm i -g @agentclientprotocol/codex-acp",
+      npm: "@agentclientprotocol/codex-acp",
     },
     defaultMode: "ask",
     maxMode: "auto",

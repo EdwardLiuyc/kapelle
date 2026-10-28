@@ -19,6 +19,12 @@
  *
  * `done` is the person's own "I have seen this, stop showing it" (#298). Only
  * `POST /harnesses/done` sets it; a find keeps it.
+ *
+ * **The install (M9-3b, #335) runs npm, with arguments from the registry
+ * only.** The command is the entry's npm package at `measuredOn.version`, so
+ * no version warning follows it, and the list shows that same command. It
+ * runs without a shell, one agent at a time, with a time limit. kapelle
+ * never installs a main program (D6, as amended).
  */
 
 import { spawn } from "node:child_process";
@@ -64,6 +70,10 @@ export interface AgentSetup {
   /** The ACP program is not the build kapelle measured. */
   warning?: string;
 }
+
+/** How long one `npm i -g` may take. Under undici's 300 s body timeout, so
+ *  the chat's reply stream is not cut while npm is quiet. */
+const INSTALL_TIMEOUT_MS = 180_000;
 
 /** How long one `--version` may take. */
 const VERSION_TIMEOUT_MS = 5000;
@@ -288,7 +298,8 @@ export function describe(s: Setup): AgentSetup[] {
         ? `${acpProgram} ${f.acpVersion ?? "(version unknown)"} is not the ` +
           `build kapelle measured: ${m.version} (${m.date}).`
         : undefined;
-    const install = state === "main_only" ? a.setup.install : undefined;
+    const args = state === "main_only" ? installArgs(id) : undefined;
+    const install = args && installCommand(args);
     return [
       {
         id,
@@ -301,5 +312,62 @@ export function describe(s: Setup): AgentSetup[] {
         ...(warning && { warning }),
       },
     ];
+  });
+}
+
+/** The npm arguments that install `id`'s ACP program at the build kapelle
+ *  measured, or nothing when it has no npm package or no measured build. */
+export function installArgs(id: string): string[] | undefined {
+  const a = Object.hasOwn(AGENTS, id) ? AGENTS[id] : undefined;
+  const pkg = a?.setup?.npm;
+  const version = a?.measured?.measuredOn.version;
+  return pkg && version ? ["i", "-g", `${pkg}@${version}`] : undefined;
+}
+
+/** `args` as the person would type them. */
+export const installCommand = (args: string[]) => `npm ${args.join(" ")}`;
+
+/** Runs `npm args` on the daemon's `PATH`, with no shell and no
+ *  `KAPELLE_*` variable, and passes its output on as it comes. Answers why
+ *  it failed, or nothing when npm exits 0. The time limit kills its whole
+ *  process group, as the version probe does. */
+export function runNpm(
+  args: string[],
+  out: (text: string) => void,
+  timeoutMs = INSTALL_TIMEOUT_MS,
+): Promise<string | undefined> {
+  return new Promise((ok) => {
+    const child = spawn("npm", args, {
+      env: resolveEnv(undefined),
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const timer = setTimeout(() => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+      ok(`npm took longer than ${timeoutMs / 1000} s`);
+    }, timeoutMs);
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.setEncoding("utf8");
+      stream.on("data", out);
+    }
+    // The first answer wins: a kill on the time limit closes the child later.
+    child.once("error", (err: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      ok(err.code === "ENOENT" ? "no npm on the daemon's PATH" : err.message);
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      ok(
+        code === 0
+          ? undefined
+          : code === null
+            ? `npm stopped on ${signal}`
+            : `npm exited with code ${code}`,
+      );
+    });
   });
 }
