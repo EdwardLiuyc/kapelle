@@ -109,12 +109,12 @@
  * cancel or the harness's exit. A cancelled turn replies with its first line
  * only, and that line says `cancelled by the person`: only the person
  * cancels a turn that replies (#377). An error turn, an exit included,
- * replies with the error in place of the answer. The answer is taken before the checkout read that ends a turn, so a
- * cancel during that read does not cut it. A
- * reply and a copy carry `kind`, skip `QUEUE_BOUND`, and their own turns
- * send nothing, so a loop cannot start. A stop (remove, dismiss or pause)
- * sends nothing either; a reply to a sender no longer on the roster is
- * dropped, and the daemon's stderr says so.
+ * replies with the error in place of the answer. The answer is taken before
+ * the checkout read that ends a turn, so a cancel during that read does not
+ * cut it. A reply and a copy carry `kind`, skip `QUEUE_BOUND`, and their own
+ * turns send nothing, so a loop cannot start. A stop (remove, dismiss or
+ * pause) sends nothing either; a reply to a sender no longer on the roster
+ * is dropped, and the daemon's stderr says so.
  *
  * **One log for the room** (S10). The bus names each event's participant by
  * its id in `agent`, and the log writes it as `participantId` beside the

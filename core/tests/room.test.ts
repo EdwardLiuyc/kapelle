@@ -2340,7 +2340,7 @@ test("an error turn replies with its error, and none of its text", async (t) => 
 });
 
 // `half` answers the cancel `end_turn`, as copilot does: the reply still
-// says `cancelled`, from our own record (§M0-4).
+// says `cancelled by the person`, from our own record (§M0-4).
 test("a cancel drops the kept text: the reply is its first line only", async (t) => {
   const { po, dev, of, told, settled } = await loopRoom(t, "half");
   const turn = dev.send("go", po);
