@@ -127,7 +127,7 @@ arrow that points back.
 | `core/notify.ts` | Bell and desktop notification for the two attention events. |
 | `core/permissions.ts` | The daemon's queue of pending `ask` decisions. |
 | `core/diff.ts` | `git diff` text for a person (M4-6): a question's edit, and an agent's checkout. |
-| `core/eventlog.ts` | `events.jsonl`: write, replay and follow. |
+| `core/eventlog.ts` | `events.jsonl` and its `events.idx` cache: write, replay and follow. |
 | `core/sweep.ts` | The daemon's boot sweep. |
 | `core/config.ts` | The config files and `KAPELLE_*` variables. |
 | `core/runtime.ts` | The user-level directories, `stateDir()` and `stateDirFor(root)`. |
