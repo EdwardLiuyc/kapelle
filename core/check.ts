@@ -158,6 +158,10 @@ export async function checkAgent(
 
 const checksFile = () => join(stateDir(), "checks.json");
 
+/** Real-session writes per agent, so a check that started earlier can tell
+ *  that its result is now older and must not replace one. */
+const sessionWrites = new Map<string, number>();
+
 /** The saved checks, by agent id. Empty when the file is missing or bad. */
 export function readChecks(): Record<string, AgentCheck> {
   try {
@@ -208,6 +212,12 @@ export async function runChecks(
   found: Setup["found"],
   timeoutMs?: number,
 ): Promise<void> {
+  // A real session can report while a check runs. Remember how many writes
+  // each agent had at the start, so the check does not replace a newer one
+  // when it finishes.
+  const writesAtStart = new Map(
+    ids.map((id) => [id, sessionWrites.get(id) ?? 0]),
+  );
   const results = await Promise.all(
     ids.map(async (id) => {
       const a = AGENTS[id];
@@ -220,6 +230,7 @@ export async function runChecks(
   const checkedAt = new Date().toISOString();
   for (const [id, r] of results) {
     if (!r) continue;
+    if ((sessionWrites.get(id) ?? 0) !== writesAtStart.get(id)) continue;
     const version = found[id]?.acpVersion;
     saveCheck(id, () => ({ checkedAt, ...(version && { version }), ...r }));
   }
@@ -234,6 +245,7 @@ export async function runChecks(
  */
 export function noteSession(id: string, seen: Seen): void {
   if (!Object.hasOwn(AGENTS, id) || !AGENTS[id]?.setup) return;
+  if (Object.keys(seen).length === 0) return;
   try {
     saveCheck(id, (old) => ({
       login: "unknown",
@@ -241,6 +253,7 @@ export function noteSession(id: string, seen: Seen): void {
       ...seen,
       checkedAt: new Date().toISOString(),
     }));
+    sessionWrites.set(id, (sessionWrites.get(id) ?? 0) + 1);
   } catch {
     // See above: a cache write.
   }

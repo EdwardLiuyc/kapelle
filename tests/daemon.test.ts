@@ -1435,13 +1435,14 @@ const mockOnPath = (
   name: string,
   version: string,
   scenario: string,
+  extra = "",
 ) =>
   writeFile(
     join(bin, name),
     [
       "#!/bin/sh",
       `if [ "$1" = "--version" ]; then echo ${version}; exit 0; fi`,
-      `exec "${process.execPath}" "${MOCK_AGENT}" --scenario ${scenario}`,
+      `exec "${process.execPath}" "${MOCK_AGENT}" --scenario ${scenario}${extra ? ` ${extra}` : ""}`,
       "",
     ].join("\n"),
     { mode: 0o755 },
@@ -1537,4 +1538,63 @@ test("a real room session updates the saved models and login (M9-4)", async (t) 
   const out = await api<HarnessesReply>(d, "GET", "/harnesses");
   assert.equal(entryOf(out.body, "kimi")?.login, "logged_out");
   assert.equal(entryOf(out.body, "kimi")?.loginHint, "kimi login");
+});
+
+test("a room does not wait for claude's auth notice, and saves it when it comes (M9-4)", async (t) => {
+  const bin = await tempDir(t);
+  const gate = join(bin, "auth.go");
+  await mockOnPath(bin, "claude", "2.1.307", "auth-account");
+  await mockOnPath(
+    bin,
+    "claude-agent-acp",
+    "0.89.1",
+    "auth-account",
+    `--auth-hold ${JSON.stringify(gate)}`,
+  );
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime, [], runtime, {
+    PATH: `${bin}:${process.env.PATH}`,
+  });
+  const root = await added(d, await gitRepo(t));
+
+  // The saved check says unknown, so the notice's later update is visible.
+  const file = join(runtime, "kapelle", "checks.json");
+  const checks = JSON.parse(await readFile(file, "utf8")) as Record<
+    string,
+    { login?: string; models?: unknown[] }
+  >;
+  assert.ok(checks.claude);
+  checks.claude.login = "unknown";
+  checks.claude.models = [];
+  await writeFile(file, JSON.stringify(checks));
+
+  let timer: NodeJS.Timeout | undefined;
+  const tooLong = new Promise<undefined>((ok) => {
+    timer = setTimeout(() => ok(undefined), 10_000);
+  });
+  let result: Awaited<ReturnType<typeof api<RoomReply>>> | undefined;
+  try {
+    result = await Promise.race([
+      api<RoomReply>(d, "POST", "/rooms", {
+        cwd: root,
+        agents: [{ agent: "claude", name: "alice" }],
+      }),
+      tooLong,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!result) {
+    await writeFile(gate, "go");
+    assert.fail("the room waited for claude's auth notice");
+  }
+  assert.equal(result.status, 201, result.body.error?.message);
+  const before = await api<HarnessesReply>(d, "GET", "/harnesses");
+  assert.equal(entryOf(before.body, "claude")?.login, "unknown");
+
+  await writeFile(gate, "go");
+  await until("claude's auth notice", async () => {
+    const after = await api<HarnessesReply>(d, "GET", "/harnesses");
+    return entryOf(after.body, "claude")?.login === "ok";
+  });
 });

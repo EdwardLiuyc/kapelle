@@ -6,9 +6,9 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { type TestContext, test } from "node:test";
 
 import { MOCK_AGENT, tempDir } from "../../integration/helpers.ts";
@@ -20,6 +20,7 @@ import {
   dueForCheck,
   noteSession,
   readChecks,
+  runChecks,
 } from "../check.ts";
 import type { Setup } from "../harnesses.ts";
 
@@ -179,4 +180,102 @@ test("the route shows the hint only when the person may need it", () => {
   assert.equal(checkFields("copilot", c("unknown")).loginHint, "copilot login");
   assert.equal(checkFields("kimi", c("ok")).loginHint, undefined);
   assert.deepEqual(checkFields("kimi", undefined), {});
+});
+
+test("a check uses a temporary folder, sends no prompt, and deletes its session (M9-4)", async (t) => {
+  const dir = await tempDir(t);
+  const record = join(dir, "requests.jsonl");
+  assert.deepEqual(
+    await checkAgent(mock("--scenario", "models", "--record", record), setup()),
+    {
+      models: [
+        { id: "mock/fast", name: "Fast" },
+        { id: "mock/smart", name: "Smart" },
+      ],
+      model: "mock/fast",
+      login: "ok",
+    },
+  );
+
+  const requests = (await readFile(record, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { method: string; cwd: string });
+  assert.deepEqual(
+    requests.map(({ method }) => method),
+    ["initialize", "session/new", "session/delete"],
+  );
+  const cwd = requests[0]?.cwd;
+  assert.ok(cwd);
+  assert.match(basename(cwd), /^kapelle-check-/);
+  assert.ok(requests.every((request) => request.cwd === cwd));
+  await assert.rejects(readdir(cwd));
+});
+
+test("a real session during a check is not overwritten by the older check result (M9-4)", async (t) => {
+  await stateHome(t);
+  const launch = AGENTS.opencode.launch;
+  AGENTS.opencode.launch = mock("--scenario", "silent-session");
+  t.after(() => {
+    AGENTS.opencode.launch = launch;
+  });
+
+  const checking = runChecks(
+    ["opencode"],
+    { opencode: { program: true, acp: true, acpVersion: "2.0.18" } },
+    300,
+  );
+  noteSession("opencode", {
+    login: "ok",
+    models: [{ id: "fresh", name: "Fresh" }],
+    model: "fresh",
+  });
+  await checking;
+
+  const saved = readChecks().opencode;
+  assert.equal(saved?.login, "ok");
+  assert.deepEqual(saved?.models, [{ id: "fresh", name: "Fresh" }]);
+  assert.equal(saved?.model, "fresh");
+});
+
+test("checks start all at once (M9-4)", async (t) => {
+  await stateHome(t);
+  const barrier = await tempDir(t);
+  const launch = () =>
+    mock("--scenario", "models", "--barrier", barrier, "--barrier-count", "2");
+  const opencode = AGENTS.opencode.launch;
+  const kimi = AGENTS.kimi.launch;
+  AGENTS.opencode.launch = launch();
+  AGENTS.kimi.launch = launch();
+  t.after(() => {
+    AGENTS.opencode.launch = opencode;
+    AGENTS.kimi.launch = kimi;
+  });
+
+  await runChecks(
+    ["opencode", "kimi"],
+    {
+      opencode: { program: true, acp: true, acpVersion: "2.0.18" },
+      kimi: { program: true, acp: true, acpVersion: "2.3.0" },
+    },
+    10_000,
+  );
+  const checks = readChecks();
+  assert.equal(checks.opencode?.login, "ok");
+  assert.equal(checks.opencode?.version, "2.0.18");
+  assert.equal(checks.kimi?.login, "ok");
+  assert.equal(checks.kimi?.version, "2.3.0");
+});
+
+test("a check leaves a session the agent cannot delete (M9-4)", async (t) => {
+  const dir = await tempDir(t);
+  const record = join(dir, "requests.jsonl");
+  assert.deepEqual(await checkAgent(mock("--record", record), setup()), {
+    login: "ok",
+  });
+  const methods = (await readFile(record, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => (JSON.parse(line) as { method: string }).method);
+  assert.deepEqual(methods, ["initialize", "session/new"]);
 });

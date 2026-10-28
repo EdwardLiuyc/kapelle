@@ -11,6 +11,8 @@
  *
  * `installAgents` (M9-3b) sends the checked ids, never a command: the
  * daemon builds each command from its registry and streams npm's output.
+ *
+ * M9-4 adds each ready agent's login state and hint under its warnings.
  */
 
 import type {

@@ -9,6 +9,10 @@
  * (`docs/FINDINGS.md` §Multi-turn). A prompt *during* a live turn is still
  * refused, here as `busy` and below as `AcpAgent`'s in-flight guard (#62 R5).
  *
+ * **A real session reports its models and login state** (M9-4) to
+ * `noteSession`, from the `session/new` response and an auth notice. The room
+ * never waits for the notice.
+ *
  * **A daemon shutdown is a pause, not a dismiss** (M6-7a, R42c). `pause`
  * cancels each live turn, waits `pauseGraceMs` (2 s, §M0-4) for it to end,
  * stops each harness and keeps every checkout as it is: nothing is released.
