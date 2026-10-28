@@ -107,8 +107,9 @@
  * empty, each cut at `ANSWER_CAP` bytes; the person's message is sent whole.
  * It is kept from the prompt's send to the turn's end, and dropped at a
  * cancel or the harness's exit. A cancelled turn replies with its first line
- * only; an error turn, an exit included, with the error in place of the
- * answer. The answer is taken before the checkout read that ends a turn, so a
+ * only, and that line says `cancelled by the person`: only the person
+ * cancels a turn that replies (#377). An error turn, an exit included,
+ * replies with the error in place of the answer. The answer is taken before the checkout read that ends a turn, so a
  * cancel during that read does not cut it. A
  * reply and a copy carry `kind`, skip `QUEUE_BOUND`, and their own turns
  * send nothing, so a loop cannot start. A stop (remove, dismiss or pause)
@@ -300,7 +301,7 @@ interface Answer {
   /** The message the turn started from, and its sender. */
   text: string;
   from?: Sender;
-  /** The stop reason, `cancelled`, or `error`. */
+  /** The stop reason, `cancelled by the person`, or `error`. */
   end: string;
   calls: number;
   /** The answer, the error, or empty after a cancel or an exit. */
@@ -1922,9 +1923,10 @@ function createParticipant({
       .then(
         async ({ stopReason }) => {
           // Our own record, not `stopReason`: copilot answers `end_turn` for
-          // a turn it cancelled (§M0-4).
+          // a turn it cancelled (§M0-4). A stop sends nothing, so an abort
+          // that replies is the person's cancel (#377).
           const answer = take(
-            controller.signal.aborted ? "cancelled" : stopReason,
+            controller.signal.aborted ? "cancelled by the person" : stopReason,
           );
           await after();
           bus.emit({

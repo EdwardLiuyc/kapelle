@@ -3434,6 +3434,10 @@ replies with its error, also with no text. M8-6's stop stays the one cut that se
 nothing. The log keeps a reply's and a copy's whole text, first line included: that line
 holds the end, the tool calls and the cut, which no field carries, and the screens need
 no change.
+**Amended 2026-10-28 (#377):** the orchestrator read `cancelled` as "my order was cut"
+and sent it again. Only the person cancels a turn that replies, so the reply and the
+copy now say `cancelled by the person`. The orchestrator skill says: do not send the
+order again, wait for the person.
 
 **M8-3 · `kapelle room` for an orchestrator · S · needs M8-1**
 `kapelle room info | add | send | ff | diff | remove`, from the spikes' `room.sh`; `add` and

@@ -2349,7 +2349,7 @@ test("a cancel drops the kept text: the reply is its first line only", async (t)
   await turn;
   await settled();
   assert.deepEqual(told(po), [
-    ["[reply from dev] cancelled, 1 tool call", dev.id, "reply"],
+    ["[reply from dev] cancelled by the person, 1 tool call", dev.id, "reply"],
   ]);
 });
 
