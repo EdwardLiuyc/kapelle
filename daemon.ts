@@ -1764,30 +1764,23 @@ async function postInstall(req: IncomingMessage, res: ServerResponse) {
       }
       return { id, args };
     });
-    try {
-      res.writeHead(200, {
-        "content-type": "application/x-ndjson",
-        "cache-control": "no-cache",
-      });
-      res.flushHeaders();
-      const line = (l: InstallLine) => {
-        if (!res.destroyed) res.write(`${JSON.stringify(l)}\n`);
-      };
-      const failed: { id: string; command: string; error: string }[] = [];
-      for (const { id, args } of plan) {
-        const command = installCommand(args);
-        line({ id, command });
-        const error = await runNpm(args, (output) => line({ id, output }));
-        if (error) failed.push({ id, command, error });
-      }
-      line({ failed, setup: harnessesReply(await setupNow(true)) });
-      res.end();
-    } catch (err) {
-      if (!res.headersSent) throw err;
-      // A JSON refusal can no longer replace a stream already started.
-      console.error(`install: ${messageOf(err)}`);
-      res.destroy();
+    res.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "cache-control": "no-cache",
+    });
+    res.flushHeaders();
+    const line = (l: InstallLine) => {
+      if (!res.destroyed) res.write(`${JSON.stringify(l)}\n`);
+    };
+    const failed: { id: string; command: string; error: string }[] = [];
+    for (const { id, args } of plan) {
+      const command = installCommand(args);
+      line({ id, command });
+      const error = await runNpm(args, (output) => line({ id, output }));
+      if (error) failed.push({ id, command, error });
     }
+    line({ failed, setup: harnessesReply(await setupNow(true)) });
+    res.end();
   } finally {
     installing = false;
   }
@@ -1977,6 +1970,14 @@ const server = createServer(
   { requireHostHeader: false, requestTimeout: 30_000 },
   (req, res) => {
     route(req, res).catch((err) => {
+      // A stream already started (an SSE log, an install): no JSON refusal
+      // can follow its headers, and a second `writeHead` would throw here,
+      // outside any catch. Cut it, so the client sees the end.
+      if (res.headersSent) {
+        console.error(`${req.method} ${req.url}: ${messageOf(err)}`);
+        res.destroy();
+        return;
+      }
       const { status, code } =
         err instanceof Refusal
           ? err

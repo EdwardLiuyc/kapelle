@@ -1103,6 +1103,12 @@ async function install(d: Daemon, body: unknown) {
   return { status: res.status, lines, last, output };
 }
 
+/** Where `cmd` is: a fake program on a bare `PATH` names its tools in full. */
+const absolute = (cmd: string) =>
+  spawnSync("sh", ["-c", `command -v ${cmd}`], {
+    encoding: "utf8",
+  }).stdout.trim();
+
 const CLAUDE_PIN = "npm i -g @agentclientprotocol/claude-agent-acp@0.89.1";
 
 test("POST /harnesses/install runs the pinned npm command, streams its output, and finds again (M9-3b)", async (t) => {
@@ -1138,10 +1144,6 @@ test("POST /harnesses/install runs the checked agents one after the other (M9-3b
     mode: 0o755,
   });
   await rm(join(bin, "codex-acp"));
-  const absolute = (cmd: string) =>
-    spawnSync("sh", ["-c", `command -v ${cmd}`], {
-      encoding: "utf8",
-    }).stdout.trim();
   const log = join(bin, "npm.log");
   const claudeAcp = join(bin, "claude-agent-acp");
   const codexAcp = join(bin, "codex-acp");
@@ -1178,10 +1180,6 @@ test("the install's find starts after npm, not with one already in flight (M9-3b
   const bin = await fakePath(t);
   await fakeNpm(bin, { hold: true });
   // opencode's version probe holds the find open across npm's install.
-  const absolute = (cmd: string) =>
-    spawnSync("sh", ["-c", `command -v ${cmd}`], {
-      encoding: "utf8",
-    }).stdout.trim();
   const started = join(bin, "version-started");
   await writeFile(
     join(bin, "opencode"),
