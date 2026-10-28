@@ -7,7 +7,15 @@
 
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -403,4 +411,48 @@ test("a checks.json that cannot be written never fails a check or a session (M9-
   );
   noteSession("opencode", { login: "ok" });
   assert.deepEqual(readChecks(), {});
+});
+
+test("a models-only session during a check keeps the login the check measured (M9-4)", async (t) => {
+  await stateHome(t);
+  noteSession("opencode", { login: "logged_out" });
+  // The check's agent waits at `initialize` until a second file is in
+  // `barrier`, so the session report below lands while it runs.
+  const barrier = await tempDir(t);
+  const launch = AGENTS.opencode.launch;
+  AGENTS.opencode.launch = mock(
+    "--scenario",
+    "models",
+    "--barrier",
+    barrier,
+    "--barrier-count",
+    "2",
+  );
+  t.after(() => {
+    AGENTS.opencode.launch = launch;
+  });
+
+  const checking = runChecks(
+    ["opencode"],
+    { opencode: { program: true, acp: true, acpVersion: "2.0.18" } },
+    10_000,
+  );
+  await until(
+    "the check to start",
+    async () => (await readdir(barrier)).length > 0,
+  );
+  // A revive's `session/load`: models, and no login state.
+  noteSession("opencode", {
+    models: [{ id: "loaded", name: "Loaded" }],
+    model: "loaded",
+  });
+  await writeFile(join(barrier, "go"), "");
+  await checking;
+
+  const saved = readChecks().opencode;
+  // The session wins the fields it gave; the check wins the login.
+  assert.equal(saved?.login, "ok");
+  assert.deepEqual(saved?.models, [{ id: "loaded", name: "Loaded" }]);
+  assert.equal(saved?.model, "loaded");
+  assert.equal(saved?.version, "2.0.18");
 });

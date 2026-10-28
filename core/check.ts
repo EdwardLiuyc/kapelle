@@ -57,7 +57,8 @@ interface Model {
 
 /** One agent in `checks.json`. */
 export interface AgentCheck {
-  /** When a check or a real session last said something. */
+  /** When a check or a real session last said something. A revive whose
+   *  load sends no models says nothing, so it leaves this as it was. */
   checkedAt: string;
   /** The ACP program's version the find saw at the last check. A real
    *  session keeps it. */
@@ -216,9 +217,10 @@ export async function checkAgent(
 
 const checksFile = () => join(stateDir(), "checks.json");
 
-/** Real-session writes per agent, so a check that started earlier can tell
- *  that its result is now older and must not replace one. */
-const sessionWrites = new Map<string, number>();
+/** One map per running `runChecks`: what real sessions said while it ran,
+ *  by agent. Those fields are newer than the check's result, and only those:
+ *  a session wins the fields it gave, the check wins the rest. */
+const sessionsDuringChecks = new Set<Map<string, Seen>>();
 
 /** The saved checks, by agent id. Empty when the file is missing or bad. */
 export function readChecks(): Record<string, AgentCheck> {
@@ -234,11 +236,8 @@ export function readChecks(): Record<string, AgentCheck> {
 
 /** Changes one agent's entry, atomically. Read and write are synchronous,
  *  so a check and a room session in the same daemon never lose a write.
- *  False when the write failed: the file is a cache, so that is dropped. */
-function saveCheck(
-  id: string,
-  change: (old?: AgentCheck) => AgentCheck,
-): boolean {
+ *  A write that fails is dropped: the file is a cache. */
+function saveCheck(id: string, change: (old?: AgentCheck) => AgentCheck) {
   const all = readChecks();
   all[id] = change(all[id]);
   try {
@@ -249,9 +248,8 @@ function saveCheck(
     // pi-lens-ignore: no-raw-json-store-write
     writeFileSync(tmp, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, file);
-    return true;
   } catch {
-    return false;
+    // Dropped, as above.
   }
 }
 
@@ -290,12 +288,10 @@ export async function runChecks(
   timeoutMs?: number,
 ): Promise<void> {
   const generation = checkGeneration;
-  // A real session can report while a check runs. Remember how many writes
-  // each agent had at the start, so the check does not replace a newer one
-  // when it finishes.
-  const writesAtStart = new Map(
-    ids.map((id) => [id, sessionWrites.get(id) ?? 0]),
-  );
+  // A real session can report while a check runs: keep what it said, field
+  // by field, so a models-only load does not throw away a fresh login.
+  const during = new Map<string, Seen>();
+  sessionsDuringChecks.add(during);
   const results = await Promise.all(
     ids.map(async (id) => {
       const a = AGENTS[id];
@@ -305,20 +301,19 @@ export async function runChecks(
       ] as const;
     }),
   );
+  sessionsDuringChecks.delete(during);
   // A shutdown canceled these checks: its unknown answers are not new facts.
   if (generation !== checkGeneration) return;
   const checkedAt = new Date().toISOString();
   for (const [id, r] of results) {
     if (!r) continue;
     const version = found[id]?.acpVersion;
-    const newer = (sessionWrites.get(id) ?? 0) !== writesAtStart.get(id);
-    // A newer real session keeps its facts. The version this check ran on is
-    // still kept, so the agent is not due again for it.
-    saveCheck(id, (old) =>
-      newer && old
-        ? { ...old, ...(version && { version }) }
-        : { checkedAt, ...(version && { version }), ...r },
-    );
+    saveCheck(id, () => ({
+      checkedAt,
+      ...(version && { version }),
+      ...r,
+      ...during.get(id),
+    }));
   }
 }
 
@@ -330,19 +325,26 @@ export async function runChecks(
 export function noteSession(id: string, seen: Seen): void {
   if (!Object.hasOwn(AGENTS, id) || !AGENTS[id]?.setup) return;
   if (Object.keys(seen).length === 0) return;
-  const saved = saveCheck(id, (old) => ({
+  saveCheck(id, (old) => ({
     login: "unknown",
     ...old,
     ...seen,
     checkedAt: new Date().toISOString(),
   }));
-  if (saved) sessionWrites.set(id, (sessionWrites.get(id) ?? 0) + 1);
+  // Newer than any check running now, even when the write failed.
+  for (const d of sessionsDuringChecks) d.set(id, { ...d.get(id), ...seen });
 }
 
 /** What a room needs to report its session: the models in it, and the
  *  state an open session gives. Only for `session/new`: whether a
  *  `session/load` works logged out is not measured (§Models and login), so
- *  a `loaded` session gives no login state. */
+ *  a `loaded` session gives no login state.
+ *
+ *  Its models are not measured after a load either, yet saving them is safe:
+ *  a harness that sends no options on a load gives `{}`, and `noteSession`
+ *  writes nothing, not even `checkedAt`; one that sends options answers for
+ *  itself. claude's notice after a load is the same: the harness's own
+ *  statement of its login, not a guess from a load that worked. */
 export function sessionSeen(
   setup: SetupSpec,
   options: SessionConfigOption[],
