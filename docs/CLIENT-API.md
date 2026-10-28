@@ -508,8 +508,9 @@ stops.
 install starts with its command, then npm's output in pieces. The last line has each
 install that failed, and a new find, the same as `GET /harnesses` replies. The find
 decides, not npm's exit code, in both directions. A harness that is `ready` after its
-install is no failure, whatever npm said. A harness that is not `ready` is a failure, also
-when npm exited 0:
+install is no failure, whatever npm said, unless it also has a `warning` and npm failed:
+then npm stopped after it linked the program, and the install is a failure with npm's
+`error`. A harness that is not `ready` is a failure, also when npm exited 0:
 
 - npm failed: `error` is npm's, and `command` is the command that ran. Show it for the
   person to run, for example with `sudo`.

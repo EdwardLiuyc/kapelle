@@ -1322,6 +1322,27 @@ test("an agent the find calls ready is not a failure, whatever npm said (M9-3b)"
   assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "ready");
 });
 
+test("a ready agent with a warning keeps npm's error when npm failed (M9-3b)", async (t) => {
+  const bin = await fakePath(t);
+  // npm links a program whose version cannot be read, then dies: the find
+  // calls it ready with "version unknown", and npm's error must not be lost.
+  const acp = join(bin, "claude-agent-acp");
+  await writeFile(
+    join(bin, "npm"),
+    `#!/bin/sh\nprintf '#!/bin/sh\\nexit 1\\n' > "${acp}"\n` +
+      `${absolute("chmod")} 755 "${acp}"\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  const { d } = await bootFinding(t, bin);
+  const r = await install(d, { ids: ["claude"] });
+  const claude = r.last?.setup.harnesses.find((h) => h.id === "claude");
+  assert.equal(claude?.state, "ready");
+  assert.match(claude?.warning ?? "", /version unknown/);
+  assert.deepEqual(r.last?.failed, [
+    { id: "claude", command: CLAUDE_PIN, error: "npm exited with code 1" },
+  ]);
+});
+
 test("POST /harnesses/install takes agent ids only, and only main-only ones (M9-3b)", async (t) => {
   const bin = await fakePath(t);
   await fakeNpm(bin);
