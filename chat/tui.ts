@@ -819,8 +819,12 @@ function chatTui(
    *  boundary that step would bring another room's draft back (#355). */
   const clearComposerUndo = () => {
     // SAFETY: pi-tui 1.1.0 has no public undo clear; its Editor undoStack
-    // is an ordinary UndoStack field, whose clear method is public.
-    (editor as unknown as { undoStack: { clear(): void } }).undoStack.clear();
+    // is an ordinary UndoStack field, whose clear method is public. A
+    // release that moves it must not throw here: the undo step comes back,
+    // and the PTY test in `tests/chat-tui-nav.test.ts` fails at the bump.
+    (
+      editor as unknown as { undoStack?: { clear?(): void } }
+    ).undoStack?.clear?.();
   };
 
   const open = (next: View) => {
