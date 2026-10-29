@@ -1192,6 +1192,9 @@ test("the install's find starts after npm, not with one already in flight (M9-3b
   const { d } = await bootFinding(t, bin);
   const installing = install(d, { ids: ["claude"] });
   await until("npm to start", () => existsSync(join(bin, "npm.argv")));
+  // The install's own find ran opencode before npm. Remove its marker so the
+  // wait below proves the stale find started.
+  await rm(started);
   // This find snapshots PATH before npm writes claude-agent-acp.
   const before = api<HarnessesReply>(d, "POST", "/harnesses");
   await until("the stale find to start", () => existsSync(started));
