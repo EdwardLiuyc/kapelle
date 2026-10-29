@@ -10,10 +10,13 @@
  * an answer's next chunk re-sets the same one, and the history list can
  * scroll to a message of the person's (M4-4).
  *
- * **Tool runs fold** (M7-2). A tool row ends with `✓`, `✗`, or a spinner
- * while its turn is live, and an edit shows `+a −d`. When the agent's
- * next note comes, or its turn ends, its tool calls since the last note
- * fold into one line at the run's first place; `chat/view.ts` says which.
+ * **Tool runs fold** (M7-2). A tool call gets a status background and a
+ * coloured empty row above and below it: neutral while open, green when
+ * completed, red when failed. Completed and failed calls end with `✓` or
+ * `✗`, a live one gets a spinner, and an edit shows `+a −d`. Uncoloured
+ * empty rows separate calls and follow the last one. When the agent's next
+ * note comes, or its turn ends, its tool calls since the last note fold
+ * into one line at the run's first place; `chat/view.ts` says which.
  * A click on the line opens the run, and a second folds it. A fold above
  * the rows the person reads keeps them where they are. A question never
  * folds.
@@ -27,6 +30,9 @@
  * hide delay in `components/scroll-view.js`; `paintScrollbar()` in
  * `layout.js`, which picks the glyph and styles one cell per call; and
  * `handleScrollbarMouseEvent()` in `tui-alt-screen.js`, which sets hover.
+ * A status's mark changes with its background, so `setText` invalidates the
+ * wrap. If those marks ever go, `line()` also relies on
+ * `Text.setCustomBgFn()` in `components/text.js` invalidating it.
  */
 
 import {
@@ -51,6 +57,7 @@ import {
 import type { Followed } from "../../client/roomset.ts";
 import {
   bg,
+  bgRgb,
   bold,
   cyan,
   dim,
@@ -166,6 +173,11 @@ const hhmm = (at: string) => {
  *  dark terminal. */
 const YOU_BAR = fg(244);
 const YOU_BG = bg(236);
+/** Active calls deliberately reuse the person's neutral background. */
+const TOOL_ACTIVE_BG = YOU_BG;
+/** Match pi's dark-theme green and pi-tui's 256-colour fallback. */
+const TOOL_SUCCESS_BG = bgRgb(37, 65, 49, 23);
+const TOOL_FAILURE_BG = bg(52);
 
 /** The transcript: it keeps the width and the rows drawn last, to find a
  *  row, and to hold a fold above the view where it is. */
@@ -203,11 +215,12 @@ class Transcript extends Container {
 type Tool = Extract<Entry, { type: "tool" }>;
 
 /** A tool call's rows: its title, its diff's `+a −d`, its mark, and its
- *  detail under it (M7-2). The spinner shows only while `live`: a call
- *  left open after its turn gets no mark. The bar before them is the
+ *  detail under it (M7-2). Completion colours all of them, not just the
+ *  first line. The spinner shows only while `live`: a call left open after
+ *  its turn gets no mark. The bar before them is the
  *  agent's (M7-1). A title or a detail can be several lines (#351); the
  *  counts and the mark stay on the first, and the rest line up under it.
- *  On the first by choice, not by constraint: they sit with the `·`, so a
+ *  On the first by choice, not by constraint: they sit with the `$`, so a
  *  call reads the same whether its title is one line or four. `toolRow`
  *  joins these rows into one `Text`, so the last row would cost nothing
  *  either (#361 review). */
@@ -216,17 +229,13 @@ function toolLines(e: Tool, live: boolean, now: number) {
     e.added === undefined
       ? ""
       : ` ${green(`+${e.added}`)} ${red(`−${e.removed ?? 0}`)}`;
-  const mark =
-    e.status === "completed"
-      ? green(" ✓")
-      : e.status === "failed"
-        ? red(" ✗")
-        : live
-          ? dim(` ${spin(now)}`)
-          : "";
-  const under = (lines: string[]) => lines.map((l) => dim(`  ${l}`));
+  let mark = "";
+  if (e.status === "completed") mark = green(" ✓");
+  else if (e.status === "failed") mark = red(" ✗");
+  else if (live) mark = ` ${spin(now)}`;
+  const under = (lines: string[]) => lines.map((l) => `  ${l}`);
   const [head = "", ...rest] = e.title.split("\n");
-  const rows = [`${dim(`· ${head}`)}${counts}${mark}`, ...under(rest)];
+  const rows = [`${bold("$")} ${head}${counts}${mark}`, ...under(rest)];
   if (e.detail) rows.push(...under(e.detail.split("\n")));
   return rows;
 }
@@ -237,12 +246,18 @@ function runLine(run: Run, open: boolean) {
   return `${dim(`${open ? "▾" : "▸"} ${text}`)}${failed ? red(` · ${failed} failed`) : ""}`;
 }
 
-/** A `Text` set only when its text changes: `setText` drops the wrap. */
-function line() {
-  const t = new Text("", 1, 0);
+/** A `Text` set only when its text or background changes: both setters drop
+ *  the cached wrap. */
+function line(paddingY = 0) {
+  const t = new Text("", 1, paddingY);
   let was = "";
+  let background: ((s: string) => string) | undefined;
   return {
-    render(width: number, s: string) {
+    render(width: number, s: string, paint?: (s: string) => string) {
+      if (paint !== background) {
+        background = paint;
+        t.setCustomBgFn(paint);
+      }
       if (s !== was) {
         was = s;
         t.setText(s);
@@ -303,11 +318,13 @@ function transcriptParts({
 
   /** A tool call's row in its run. The run's first call draws the run's
    *  line above its own row once the run folded, and only that line while
-   *  it is shut; the others draw nothing then. */
+   *  it is shut; the others draw nothing then. Plain empty rows separate
+   *  the coloured blocks and follow the last one. */
   const toolRow = (state: RoomState, e: Tool, run: Run): Component => {
     const head = line();
-    const own = line();
+    const own = line(1);
     const first = () => run.tools[0] === e;
+    const last = () => run.tools.at(-1) === e;
     const shut = () => run.folded && !opened.has(run.tools[0] as Entry);
     /** The rows the run's line took when drawn last: it can wrap. */
     let headRows = 0;
@@ -322,9 +339,18 @@ function transcriptParts({
         const live =
           !run.over &&
           state.participants.get(e.participantId)?.status === "busy";
+        let paint = TOOL_ACTIVE_BG;
+        if (e.status === "completed") paint = TOOL_SUCCESS_BG;
+        else if (e.status === "failed") paint = TOOL_FAILURE_BG;
         return [
           ...out,
-          ...own.render(width, toolLines(e, live, Date.now()).join("\n")),
+          ...(first() ? [] : [""]),
+          ...own.render(
+            width,
+            toolLines(e, live, Date.now()).join("\n"),
+            paint,
+          ),
+          ...(last() ? [""] : []),
         ];
       },
       handleMouse(m: TuiMouseEvent) {
