@@ -1828,12 +1828,13 @@ test("setConfigOption carries the request deadline (M9-5)", async (t) => {
     command: process.execPath,
     args: ["-e", CONFIG_OPTION_PROBE],
     env: { ...process.env, CONFIG_OPTION_HANG: "1" },
-    requestTimeoutMs: 150,
   });
   t.after(() => agent.stop());
 
   await agent.start();
   await agent.newSession();
+  // Short only now: a slow machine's start must not meet it (#387).
+  agent.requestTimeoutMs = 150;
   await assert.rejects(
     () => agent.setConfigOption("model", "mock/smart"),
     /did not answer "session\/set_config_option" within 150ms/,
