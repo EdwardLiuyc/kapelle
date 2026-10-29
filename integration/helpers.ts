@@ -271,10 +271,11 @@ export function useDaemonDirs(runtime: string, state: string = runtime) {
 }
 
 /**
- * A saved find with every agent ready and "done" (M9-3), unless the test
- * wrote its own. Without it, each test daemon would run `--version` on this
- * machine's agents, and the chat screen would open the setup list over
- * what a test waits for.
+ * A saved find with every agent ready and "done" (M9-3), and a saved check
+ * for each (M9-4), unless the test wrote its own. Without them, each test
+ * daemon would run `--version` on this machine's agents, then start each one
+ * for a check, and the chat screen would open the setup list over what a
+ * test waits for.
  */
 export function savedSetup(state: string): void {
   const dir = join(state, "kapelle");
@@ -287,6 +288,20 @@ export function savedSetup(state: string): void {
       return [id, { program: true, version, acp: true, acpVersion: version }];
     }),
   );
+  const checks = Object.fromEntries(
+    Object.entries(AGENTS).map(([id, a]) => [
+      id,
+      {
+        checkedAt: "2026-10-22T00:00:00.000Z",
+        version: a.measured?.measuredOn.version,
+        login: "ok",
+        models: [],
+      },
+    ]),
+  );
+  writeFileSync(join(dir, "checks.json"), JSON.stringify(checks), {
+    mode: 0o600,
+  });
   writeFileSync(
     file,
     JSON.stringify({

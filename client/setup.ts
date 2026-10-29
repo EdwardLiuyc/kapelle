@@ -11,6 +11,9 @@
  *
  * `installAgents` (M9-3b) sends the checked ids, never a command: the
  * daemon builds each command from its registry and streams npm's output.
+ *
+ * M9-4 adds a line for each ready agent that is logged out, or may be, with
+ * its login hint, after all the warnings.
  */
 
 import type {
@@ -82,6 +85,32 @@ export function setupLines(r: HarnessesReply): SetupLine[] {
   for (const h of known) {
     if (h.warning) {
       lines.push({ text: `! ${printable(h.warning)}`, tone: "warn" });
+    }
+  }
+  // M9-4: a ready agent that is logged out, or may be, and how to log in.
+  for (const h of known) {
+    // No hint, no command: a `?` would read as one.
+    const hint = h.loginHint && printable(h.loginHint);
+    if (h.checkFailed) {
+      const what = h.checkFailed === "timeout" ? "timed out" : "failed";
+      lines.push({
+        text:
+          `! ${printable(h.id)}: the check ${what}; to check again: ` +
+          "/setup in the chat, or kapelle setup",
+        tone: "warn",
+      });
+    } else if (h.login === "logged_out") {
+      lines.push({
+        text: `! ${printable(h.id)} is not logged in${hint ? `: ${hint}` : ""}`,
+        tone: "warn",
+      });
+    } else if (h.login === "unknown") {
+      lines.push({
+        text:
+          `${printable(h.id)}: login not known` +
+          (hint ? `; to log in: ${hint}` : ""),
+        tone: "dim",
+      });
     }
   }
   if (!known.some((h) => h.state === "ready")) {

@@ -80,6 +80,22 @@ export interface HarnessEntry {
   install?: string;
   /** The ACP program is not the build kapelle measured. */
   warning?: string;
+  /** Since M9-4, on a `ready` agent that was checked: `ok` (it can open a
+   *  session and use its models), `logged_out`, or `unknown` (copilot never
+   *  says; a check that failed). */
+  login?: "ok" | "logged_out" | "unknown";
+  /** What the person runs to log in; when `login` is not `ok` and the check
+   *  did not fail. */
+  loginHint?: string;
+  /** The last check could not open a session: it ran out of time
+   *  (`timeout`), or the agent failed to start or answer (`error`). `login`
+   *  is then `unknown`, and `models` stay from before. */
+  checkFailed?: "timeout" | "error";
+  /** The agent's models, and the one its last session started with. */
+  models?: { id: string; name: string }[];
+  model?: string;
+  /** When a check or a real session last said this. */
+  loginCheckedAt?: string;
 }
 
 /** `GET /harnesses` (M9-3): the last find, and whether the person said

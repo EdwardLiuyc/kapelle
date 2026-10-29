@@ -162,3 +162,91 @@ test("an install stream cut after its headers is not a missing daemon (M9-3b)", 
     },
   );
 });
+
+test("a ready agent that is logged out, or may be, gets its login hint (M9-4)", () => {
+  const ready = (id: string, login: "ok" | "logged_out" | "unknown") => ({
+    id,
+    measured: true,
+    state: "ready" as const,
+    program: id,
+    version: "1.0.0",
+    acpProgram: id,
+    acpVersion: "1.0.0",
+    login,
+    ...(login !== "ok" && { loginHint: `${id} login` }),
+  });
+  const lines = setupLines({
+    checkedAt: "2026-10-28T00:00:00.000Z",
+    done: true,
+    harnesses: [
+      ready("kimi", "logged_out"),
+      ready("copilot", "unknown"),
+      ready("opencode", "ok"),
+    ],
+  });
+  assert.deepEqual(lines.slice(3), [
+    { text: "! kimi is not logged in: kimi login", tone: "warn" },
+    {
+      text: "copilot: login not known; to log in: copilot login",
+      tone: "dim",
+    },
+  ]);
+});
+
+test("a login line with no hint names no command (M9-4)", () => {
+  const lines = setupLines({
+    checkedAt: "2026-10-28T00:00:00.000Z",
+    done: true,
+    harnesses: [
+      {
+        id: "pi",
+        measured: true,
+        state: "ready",
+        program: "pi",
+        acpProgram: "pi-acp",
+        login: "logged_out",
+      },
+    ],
+  });
+  assert.deepEqual(lines.at(-1), {
+    text: "! pi is not logged in",
+    tone: "warn",
+  });
+});
+
+test("a failed check says so, and gives no login advice (M9-4)", () => {
+  const lines = setupLines({
+    checkedAt: "2026-10-28T00:00:00.000Z",
+    done: true,
+    harnesses: [
+      {
+        id: "kimi",
+        measured: true,
+        state: "ready",
+        program: "kimi",
+        acpProgram: "kimi",
+        login: "unknown",
+        checkFailed: "timeout",
+      },
+      {
+        id: "pi",
+        measured: true,
+        state: "ready",
+        program: "pi",
+        acpProgram: "pi-acp",
+        login: "unknown",
+        checkFailed: "error",
+      },
+    ],
+  });
+  assert.deepEqual(lines.slice(-2), [
+    {
+      text: "! kimi: the check timed out; to check again: /setup in the chat, or kapelle setup",
+      tone: "warn",
+    },
+    {
+      text: "! pi: the check failed; to check again: /setup in the chat, or kapelle setup",
+      tone: "warn",
+    },
+  ]);
+});

@@ -9,6 +9,10 @@
  * (`docs/FINDINGS.md` §Multi-turn). A prompt *during* a live turn is still
  * refused, here as `busy` and below as `AcpAgent`'s in-flight guard (#62 R5).
  *
+ * **A real session reports its models and login state** (M9-4) to
+ * `noteSession`, from the `session/new` response and an auth notice. The room
+ * never waits for the notice.
+ *
  * **A daemon shutdown is a pause, not a dismiss** (M6-7a, R42c). `pause`
  * cancels each live turn, waits `pauseGraceMs` (2 s, §M0-4) for it to end,
  * stops each harness and keeps every checkout as it is: nothing is released.
@@ -163,6 +167,7 @@ import {
   warningsFor,
 } from "../protocol/registry.ts";
 import type { AgentEvent, MessageKind } from "../protocol/types.ts";
+import { failureSeen, noticeSeen, type Seen, sessionSeen } from "./check.ts";
 import {
   createEventLog,
   type EventLog,
@@ -668,6 +673,9 @@ interface RoomDeps {
   roomNotice?: string;
   /** The daemon's own log, for what no client is told: a dropped reply. */
   log?: (line: string) => void;
+  /** Gets what each real session of a registry agent said: its models and
+   *  its login state (M9-4, `core/check.ts`). The daemon saves it. */
+  noteSession?: (agent: string, seen: Seen) => void;
 }
 
 export interface RoomOptions extends RoomDeps {
@@ -888,6 +896,7 @@ async function buildRoom(
     pauseGraceMs = PAUSE_GRACE_MS,
     roomNotice,
     log = (line) => console.error(line),
+    noteSession,
   }: RoomDeps,
   meta: RoomMeta,
   from?: RoomRecord,
@@ -1236,6 +1245,9 @@ async function buildRoom(
       watchdog,
       limits: watchLimits,
       ...(saved && { saved }),
+      ...(noteSession && {
+        report: (seen: Seen) => noteSession(request.spec.name, seen),
+      }),
       onRevive: () => {
         paused = false;
       },
@@ -1564,6 +1576,7 @@ function createParticipant({
   onRevive,
   onAnswer,
   onCheckout,
+  report,
 }: {
   id: string;
   roomId: string;
@@ -1595,6 +1608,8 @@ function createParticipant({
     baseSha?: string;
     renamed?: boolean;
   }) => void;
+  /** Where what a session said goes (M9-4). */
+  report?: (seen: Seen) => void;
 }): Omit<Member, "spec" | "source" | "own" | "onNotice"> {
   /** The live harness; undefined before `launch` and once it has stopped. */
   let agent: AcpAgent | undefined;
@@ -1739,6 +1754,10 @@ function createParticipant({
   /** Starts a harness in the checkout, loads session `load` when the
    *  harness can, or else opens a fresh one. True when it loaded. */
   const launch = async (load?: string): Promise<boolean> => {
+    // One login notice per harness start is saved (M9-4): each is a
+    // synchronous write, and a harness may send many. A later change shows
+    // at the next start or check.
+    let noticed = false;
     const next: AcpAgent = new AcpAgent({
       name: spec.name,
       command: spec.launch.command,
@@ -1748,6 +1767,12 @@ function createParticipant({
       policy,
       allowReadOutsideRoot: readsOutside(),
       stderrLog: stderrLog(),
+      // Only a registry agent has a login signal; nothing waits for it.
+      onAuthStatus: (kind) => {
+        if (!spec.setup || noticed) return;
+        noticed = true;
+        report?.(noticeSeen(kind));
+      },
       onEvent: ({ update }) => {
         // Only the live harness's exit stops the participant. A pause or a
         // remove sets the status itself. One that dies during a turn may
@@ -1780,7 +1805,16 @@ function createParticipant({
         session = await next.loadSession(load).catch(() => undefined);
         loaded = session !== undefined;
       }
-      session ??= await next.newSession();
+      session ??= await next.newSession().catch((err: unknown) => {
+        const seen = spec.setup && failureSeen(err);
+        if (seen) report?.(seen);
+        throw err;
+      });
+      // A real session's models replace the saved ones (3A): a revive's
+      // load is a real session too, but it gives no login state.
+      if (spec.setup) {
+        report?.(sessionSeen(spec.setup, next.configOptions, loaded));
+      }
     } catch (err) {
       await next.stop();
       throw err;

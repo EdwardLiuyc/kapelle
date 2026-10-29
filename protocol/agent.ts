@@ -19,6 +19,7 @@ import type {
   PromptResponse,
   ReadTextFileResponse,
   RequestPermissionResponse,
+  SessionConfigOption,
   SessionId,
   SessionModeId,
   SessionUpdate,
@@ -49,6 +50,7 @@ const TIMED_METHODS = new Set([
   "session/new",
   "session/load",
   "session/close",
+  "session/delete",
   "session/set_mode",
 ]);
 
@@ -162,6 +164,10 @@ export interface AcpAgentOptions {
   requestTimeoutMs?: number;
   /** How long `stop()` waits after closing stdin before SIGKILL. Defaults to 5s. */
   stopGraceMs?: number;
+  /** Gets the `kind` of each `_auth/status_update` (M9-4): claude's login
+   *  signal, `"none"` when logged out. Only the kind: the notice also holds
+   *  the e-mail and the organisation, and they never leave this class. */
+  onAuthStatus?: (kind: string) => void;
 }
 
 // --- internal wire shapes ----------------------------------------------------
@@ -241,6 +247,16 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The harness answered a request with a JSON-RPC error. `code` tells a
+ *  caller what it was: `-32000` on `session/new` is "log in first" (M9-4). */
+export class RpcError extends Error {
+  readonly code: number;
+  constructor(message: string, code: number) {
+    super(`${message} (code ${code})`);
+    this.code = code;
+  }
+}
+
 /**
  * A single ACP agent subprocess.
  *
@@ -248,8 +264,10 @@ function errorMessage(err: unknown): string {
  * requests for file access, and decide its permissions.
  *
  * It handles exactly three inbound requests — `fs/read_text_file`,
- * `fs/write_text_file` and `session/request_permission` — and one
- * notification, `session/update`, which it forwards to `onEvent`.
+ * `fs/write_text_file` and `session/request_permission` — and two
+ * notifications: `session/update`, which it forwards to `onEvent`, and
+ * claude's `_auth/status_update`, whose kind alone goes to `onAuthStatus`
+ * (M9-4). That one is not a `_client_*` event and never reaches a log.
  *
  * Ported from `acp.mjs` (M1a-3), then grown one behaviour at a time. Landed so
  * far: the per-request timeout (#62 B1), the in-flight prompt guard (#62 R5),
@@ -275,6 +293,11 @@ export class AcpAgent {
   sessionId: SessionId | null;
   agentInfo: Implementation | null;
   agentCapabilities: AgentCapabilities | null;
+  onAuthStatus: (kind: string) => void;
+  /** The `configOptions` of the last `session/new` or `session/load`, where
+   *  the models are (M9-4). Empty until then, after a delete, and when the
+   *  harness sent none. */
+  configOptions: SessionConfigOption[] = [];
 
   #proc: ChildProcessWithoutNullStreams | null = null;
   #nextId = 1;
@@ -328,7 +351,9 @@ export class AcpAgent {
     stderrLog,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     stopGraceMs = DEFAULT_STOP_GRACE_MS,
+    onAuthStatus = () => {},
   }: AcpAgentOptions) {
+    this.onAuthStatus = onAuthStatus;
     this.name = name ?? command;
     this.command = command;
     this.args = args;
@@ -512,7 +537,22 @@ export class AcpAgent {
       mcpServers,
     });
     this.sessionId = res.sessionId;
+    this.configOptions = Array.isArray(res.configOptions)
+      ? res.configOptions
+      : [];
     return this.sessionId;
+  }
+
+  /** Removes the session from the harness's own history (M9-4), and
+   *  forgets it here, so nothing more is sent to it. Only when
+   *  `agentCapabilities.sessionCapabilities.delete` is set: copilot has no
+   *  such method. */
+  async deleteSession(): Promise<void> {
+    if (!this.sessionId)
+      throw new Error("no session — call newSession() first");
+    await this.request("session/delete", { sessionId: this.sessionId });
+    this.sessionId = null;
+    this.configOptions = [];
   }
 
   /**
@@ -527,8 +567,9 @@ export class AcpAgent {
     { mcpServers = [] }: { mcpServers?: McpServer[] } = {},
   ): Promise<SessionId> {
     this.#replaying = true;
+    let res: LoadSessionResponse;
     try {
-      await this.request<LoadSessionResponse>("session/load", {
+      res = await this.request<LoadSessionResponse>("session/load", {
         sessionId,
         cwd: this.cwd,
         mcpServers,
@@ -540,6 +581,9 @@ export class AcpAgent {
       this.#replaying = false;
     }
     this.sessionId = sessionId;
+    this.configOptions = Array.isArray(res?.configOptions)
+      ? res.configOptions
+      : [];
     return sessionId;
   }
 
@@ -772,7 +816,7 @@ export class AcpAgent {
     if (!entry) return;
     this.#pending.delete(msg.id);
     if (msg.error) {
-      entry.reject(new Error(`${msg.error.message} (code ${msg.error.code})`));
+      entry.reject(new RpcError(msg.error.message, msg.error.code));
     } else {
       entry.resolve(msg.result);
     }
@@ -818,6 +862,16 @@ export class AcpAgent {
   }
 
   #onNotification(msg: IncomingMessage): void {
+    if (msg.method === "_auth/status_update") {
+      // claude's login signal (§Models and login). Only the kind goes on: the
+      // rest names the account.
+      const kind: unknown = (
+        msg.params as { authStatus?: { kind?: unknown } } | undefined
+      )?.authStatus?.kind;
+      // pi-lens-ignore: no-runtime-typeof
+      if (typeof kind === "string") this.onAuthStatus(kind);
+      return;
+    }
     if (msg.method !== "session/update") return;
     const params = msg.params as
       | { sessionId?: SessionId; update?: SessionUpdate }

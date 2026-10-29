@@ -432,6 +432,40 @@ no saved find runs one, which takes about a second. Later asks read the saved on
 list (`POST /harnesses/done`); a new find keeps it. The chat opens the list at start
 while `done` is `false`, and while no harness is `ready`.
 
+**The login check** (M9-4). For each `ready` harness, the daemon starts a check session:
+`initialize` and `session/new` in a new temporary folder, with no prompt, so no tokens.
+All start at the same time, each with a 15-second limit, and the reply waits for them:
+about 5 seconds. A `GET` checks a harness only when it has no saved check, its ACP
+version changed, or it is `ok` with no saved model list; every `POST /harnesses` checks
+them all. Each real session in a room also updates its harness, at no cost: its models
+and login state on `session/new`, and its models only on a revive's `session/load`,
+because whether a load works logged out is not measured. A session that reports while
+a check runs wins only the fields it gave; the check keeps the rest. copilot cannot
+delete a session, so each check leaves one empty session in copilot's own history. The
+result is saved in `$XDG_STATE_HOME/kapelle/checks.json`, and a `ready` harness that
+was checked gets these fields:
+
+- `login`: `ok`, `logged_out`, or `unknown`. `ok` means the harness can open a session
+  and use its models, not that the person has an account: opencode with no login is
+  `ok`, with its free models. copilot never says, so it is always `unknown`; a check
+  that failed or ran out of time is `unknown` too.
+- `loginHint`: what the person runs to log in, such as `kimi login`. Only when `login`
+  is not `ok` and the check did not fail.
+- `checkFailed`: the last check could not open a session: it ran out of time
+  (`timeout`), or the harness failed to start or answer (`error`). `login` is then
+  `unknown`, with no login hint, since logging in would not fix it, and `models` stay
+  from before, since a failure disproves no list. The next real session that gives a
+  login clears it; one that gives models only, such as a revive, leaves it.
+- `models` (`id` and `name`) and `model`: the harness's model list, and the model its
+  last session started with, from the `configOptions` entry with `category: "model"`. A
+  change of model during a session is not saved. Absent when the harness sent none, such
+  as pi logged out.
+- `loginCheckedAt`: when a check or a real session last said something. A revive whose
+  load sends no models says nothing, so it does not change this time.
+
+No account field is kept: claude's `_auth/status_update` holds an e-mail and an
+organisation, and only its `kind` is read.
+
 **Reply `200`:**
 
 ```json
@@ -446,7 +480,11 @@ while `done` is `false`, and while no harness is `ready`.
       "program": "pi",
       "version": "1.3.0",
       "acpProgram": "pi-acp",
-      "acpVersion": "0.0.34"
+      "acpVersion": "0.0.34",
+      "login": "ok",
+      "models": [{ "id": "deepseek/deepseek-chat", "name": "DeepSeek Chat" }],
+      "model": "deepseek/deepseek-chat",
+      "loginCheckedAt": "2026-10-22T09:30:04.000Z"
     },
     {
       "id": "claude",
@@ -474,9 +512,9 @@ take a name typed by the person.
 
 ### `POST /harnesses`
 
-**Experimental.** Finds the installed harnesses again, saves the find, and replies as
-`GET /harnesses` does. It keeps `done`. `kapelle setup` and the chat's `/setup` call it.
-No body.
+**Experimental.** Finds the installed harnesses again, saves the find, checks the login
+of every `ready` one (M9-4), and replies as `GET /harnesses` does. It keeps `done`.
+`kapelle setup` and the chat's `/setup` call it. No body.
 
 ### `POST /harnesses/done`
 

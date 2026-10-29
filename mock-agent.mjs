@@ -18,9 +18,24 @@
  * can `session/load` it (M6-7b). Only then does the handshake advertise
  * `loadSession: true`. The load replays the old turns as `session/update`
  * before it answers, as every real harness does (§M0-9).
+ *
+ * Four test controls make timing observable or exercise cleanup:
+ * `--record <file>` logs each request with its cwd, `--barrier <dir>
+ * --barrier-count <n>` holds `initialize` until n agents start,
+ * `--auth-hold <file>` holds claude's auth notice until that file exists, and
+ * `--lock-cwd` makes `session/new` leave a folder the client cannot remove.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -59,10 +74,32 @@ const SCENARIOS = {
     "like long, in a 3-byte character, so 64 KiB splits one, then a tool call",
   half: "a note and a tool call, then waits for a cancel, like stall, and answers it end_turn, as copilot does (§M0-4)",
   "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
+  models:
+    "session/new and session/load list two models in a group; the handshake offers session/delete, which drops the session's --store file",
+  "auth-required":
+    "session/new fails with -32000 Authentication required, as pi does logged out",
+  "auth-none":
+    "sends _auth/status_update with kind none after initialize, as claude does logged out",
+  "auth-account":
+    "sends _auth/status_update with an account after initialize, as claude does logged in",
+  "auth-repeat":
+    "sends _auth/status_update twenty times after initialize, its kind switching between none and account",
+  "auth-malformed":
+    "sends _auth/status_update with a kind that is not a string",
 };
 
 const storeAt = process.argv.indexOf("--store");
 const store = storeAt === -1 ? null : process.argv[storeAt + 1];
+const recordAt = process.argv.indexOf("--record");
+const recordFile = recordAt === -1 ? null : process.argv[recordAt + 1];
+const barrierAt = process.argv.indexOf("--barrier");
+const barrierDir = barrierAt === -1 ? null : process.argv[barrierAt + 1];
+const barrierCountAt = process.argv.indexOf("--barrier-count");
+const barrierCount =
+  barrierCountAt === -1 ? 0 : Number(process.argv[barrierCountAt + 1]);
+const authHoldAt = process.argv.indexOf("--auth-hold");
+const authHoldFile = authHoldAt === -1 ? null : process.argv[authHoldAt + 1];
+const lockCwd = process.argv.includes("--lock-cwd");
 
 const at = process.argv.indexOf("--scenario");
 const scenario = at === -1 ? null : process.argv[at + 1];
@@ -184,6 +221,24 @@ const REPEAT_GAP_MS = 150;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Wait until `--barrier-count` mock agents have reached `initialize`.
+ *  A test uses this to tell simultaneous starts from a sequence. */
+const waitForBarrier = async () => {
+  if (!barrierDir) return;
+  writeFileSync(join(barrierDir, `${process.pid}-${randomUUID()}.ready`), "");
+  const until = Date.now() + 5000;
+  while (readdirSync(barrierDir).length < barrierCount) {
+    if (Date.now() >= until) process.exit(3);
+    await sleep(10);
+  }
+};
+
+/** Hold a vendor auth notice until the test makes `--auth-hold`'s file. */
+const waitForAuth = async () => {
+  if (!authHoldFile) return;
+  while (!existsSync(authHoldFile)) await sleep(10);
+};
+
 /** How long a `slow` turn lasts: long enough that a test's next messages
  *  reach the room while it runs, so they queue (M6-4). */
 const SLOW_MS = 1000;
@@ -229,6 +284,32 @@ function callClient(method, params) {
   });
 }
 
+/** `models`' model option, on `session/new` and `session/load` alike. */
+const modelOptions = () =>
+  scenario === "models"
+    ? {
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "mock/fast",
+            options: [
+              {
+                group: "mock",
+                name: "Mock",
+                options: [
+                  { value: "mock/fast", name: "Fast" },
+                  { value: "mock/smart", name: "Smart" },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+    : {};
+
 const update = (sessionId, u) =>
   notify("session/update", { sessionId, update: u });
 
@@ -243,6 +324,13 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     return;
   }
 
+  if (recordFile && msg.method) {
+    appendFileSync(
+      recordFile,
+      `${JSON.stringify({ method: msg.method, cwd: process.cwd(), at: Date.now() })}\n`,
+    );
+  }
+
   if (msg.id !== undefined && !msg.method) {
     pending.get(msg.id)?.(msg.result);
     pending.delete(msg.id);
@@ -250,6 +338,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   }
 
   if (msg.method === "initialize") {
+    await waitForBarrier();
     reply(msg.id, {
       protocolVersion: 1,
       agentCapabilities: {
@@ -258,7 +347,45 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       },
       agentInfo: { name: "mock-agent", version: "0.1.0" },
       authMethods: [],
+      ...(scenario === "models" && {
+        agentCapabilities: {
+          loadSession: store !== null,
+          promptCapabilities: {},
+          sessionCapabilities: { delete: {} },
+        },
+      }),
     });
+    // claude sends its login state after the reply (§Models and login).
+    if (scenario === "auth-none" || scenario === "auth-account") {
+      await waitForAuth();
+    }
+    if (scenario === "auth-none") {
+      notify("_auth/status_update", {
+        authStatus: { kind: "none", label: "Not logged in" },
+      });
+    }
+    if (scenario === "auth-account") {
+      notify("_auth/status_update", {
+        authStatus: {
+          kind: "subscription",
+          label: "Claude Max",
+          email: "person@example.com",
+          organization: "Example Org",
+        },
+      });
+    }
+    if (scenario === "auth-repeat") {
+      for (let i = 0; i < 20; i++) {
+        notify("_auth/status_update", {
+          authStatus: { kind: i % 2 ? "account" : "none" },
+        });
+      }
+    }
+    if (scenario === "auth-malformed") {
+      notify("_auth/status_update", {
+        authStatus: { kind: 42, label: "not a kind" },
+      });
+    }
   }
 
   if (msg.method === "session/new") {
@@ -266,13 +393,35 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // (`protocol/agent.ts:503`) is the thing under test, and any reply at all
     // would answer it.
     if (scenario === "silent-session") return;
+    if (scenario === "auth-required") {
+      send({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "Authentication required" },
+      });
+      return;
+    }
     // Unique with a store, so one process never loads another's session.
     const sid = store
       ? `sess_mock_${randomUUID()}`
       : `sess_mock_${++sessionCount}`;
     sessions.add(sid);
     keep(sid, []);
-    reply(msg.id, { sessionId: sid });
+    if (lockCwd) {
+      mkdirSync("locked", { recursive: true });
+      writeFileSync("locked/file", "locked\n");
+      chmodSync("locked", 0o500);
+      chmodSync(".", 0o500);
+    }
+    reply(msg.id, { sessionId: sid, ...modelOptions() });
+  }
+
+  if (msg.method === "session/delete") {
+    const { sessionId: sid } = msg.params;
+    sessions.delete(sid);
+    if (store) rmSync(storeFile(sid), { force: true });
+    reply(msg.id, {});
+    return;
   }
 
   if (msg.method === "session/load") {
@@ -304,7 +453,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     });
     sessions.add(sid);
     if (prompts.length > 0) lastPrompt.set(sid, prompts.at(-1));
-    reply(msg.id, {});
+    reply(msg.id, modelOptions());
     return;
   }
 

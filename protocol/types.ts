@@ -731,10 +731,13 @@ export interface PromptCapabilities extends Meta {
 }
 
 /** What we read off the handshake today: `loadSession`, `promptCapabilities`
- *  (`protocol/agent.ts`). The schema carries more; extend when a consumer needs it. */
+ *  (`protocol/agent.ts`), and `sessionCapabilities.delete` (M9-4: its
+ *  presence means `session/delete` works). The schema carries more; extend
+ *  when a consumer needs it. */
 export interface AgentCapabilities extends Meta {
   loadSession?: boolean;
   promptCapabilities?: PromptCapabilities;
+  sessionCapabilities?: { delete?: Meta } & Meta;
 }
 
 export interface InitializeRequest extends Meta {

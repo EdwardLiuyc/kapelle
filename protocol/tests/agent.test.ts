@@ -1669,3 +1669,104 @@ test("every session gets a fresh id, and a forged one is refused", async (t) => 
   agent.sessionId = "sess_never_issued" as typeof second;
   await assert.rejects(() => agent.prompt("hi"), /unknown session/);
 });
+
+// --- M9-4: the login signal, the models and the delete ----------------------
+
+/** A mock agent in `scenario`, with what reached `onEvent` and
+ *  `onAuthStatus`. */
+async function signalAgent(t: TestContext, scenario: string, store?: string) {
+  const events: CapturedEvent[] = [];
+  const kinds: string[] = [];
+  const agent = new AcpAgent({
+    name: "mock",
+    command: process.execPath,
+    args: [
+      MOCK_AGENT,
+      "--scenario",
+      scenario,
+      ...(store ? ["--store", store] : []),
+    ],
+    onEvent: (e) => events.push(e as CapturedEvent),
+    onAuthStatus: (kind) => kinds.push(kind),
+  });
+  t.after(() => agent.stop());
+  return { agent, events, kinds };
+}
+
+test("claude's auth status reaches onAuthStatus as its kind only, and never onEvent", async (t) => {
+  const { agent, events, kinds } = await signalAgent(t, "auth-none");
+  await agent.start();
+  await agent.newSession();
+  assert.deepEqual(kinds, ["none"]);
+  assert.deepEqual(turnEvents(events), []);
+
+  const logged = await signalAgent(t, "auth-account");
+  await logged.agent.start();
+  await logged.agent.newSession();
+  // A string, not the object: the e-mail and the organisation stay behind.
+  assert.deepEqual(logged.kinds, ["subscription"]);
+});
+
+test("a malformed auth status is ignored", async (t) => {
+  const { agent, events, kinds } = await signalAgent(t, "auth-malformed");
+  await agent.start();
+  await agent.newSession();
+  // The kind is wire data. A number must not become a login state or an event.
+  assert.deepEqual(kinds, []);
+  assert.deepEqual(turnEvents(events), []);
+});
+
+test("session/new keeps its configOptions, and an error keeps its code", async (t) => {
+  const { agent } = await signalAgent(t, "models");
+  await agent.start();
+  assert.equal(agent.configOptions.length, 0);
+  await agent.newSession();
+  assert.equal(agent.configOptions[0]?.category, "model");
+
+  const out = await signalAgent(t, "auth-required");
+  await out.agent.start();
+  await assert.rejects(
+    () => out.agent.newSession(),
+    (err: Error & { code?: number }) =>
+      err.code === -32000 &&
+      /Authentication required \(code -32000\)/.test(err.message),
+  );
+});
+
+test("deleteSession removes the session from the harness", async (t) => {
+  const store = await mkdtemp(join(tmpdir(), "acp-delete-"));
+  t.after(() => rm(store, { recursive: true, force: true }));
+  const { agent } = await signalAgent(t, "models", store);
+  const init = await agent.start();
+  assert.ok(init.agentCapabilities?.sessionCapabilities?.delete);
+  const sid = await agent.newSession();
+  await readFile(join(store, `${sid}.json`), "utf8");
+  await agent.deleteSession();
+  await assert.rejects(() => readFile(join(store, `${sid}.json`), "utf8"));
+});
+
+test("deleteSession forgets the session, so nothing more is sent to it (M9-4)", async (t) => {
+  const store = await mkdtemp(join(tmpdir(), "acp-delete-"));
+  t.after(() => rm(store, { recursive: true, force: true }));
+  const { agent } = await signalAgent(t, "models", store);
+  await agent.start();
+  await agent.newSession();
+  await agent.deleteSession();
+  assert.equal(agent.sessionId, null);
+  assert.equal(agent.configOptions.length, 0);
+  await assert.rejects(() => agent.prompt("hi"), /no session/);
+});
+
+test("session/load keeps its configOptions, as session/new does (M9-4)", async (t) => {
+  const store = await mkdtemp(join(tmpdir(), "acp-load-"));
+  t.after(() => rm(store, { recursive: true, force: true }));
+  const first = await signalAgent(t, "models", store);
+  await first.agent.start();
+  const sid = await first.agent.newSession();
+  await first.agent.stop();
+
+  const second = await signalAgent(t, "models", store);
+  await second.agent.start();
+  await second.agent.loadSession(sid);
+  assert.equal(second.agent.configOptions[0]?.category, "model");
+});
