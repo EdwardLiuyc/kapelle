@@ -545,8 +545,10 @@ test("command rows keep their slash command at the default 80-column panel width
   const shown = stripTerminalSequences(
     box.panel?.body.render(40).join("\n") ?? "",
   );
-  assert.match(shown, /new room … +\/new/);
-  assert.match(shown, /help +\/help/);
+  // Anchored: the whole row is the label, the command and padding, so a
+  // crop that cut the command or added a stray `…` fails here.
+  assert.match(shown, /^ {2}new room … +\/new *$/m);
+  assert.match(shown, /^ {2}help +\/help *$/m);
 
   // A label cut to fit says so: a long name must not read as another name.
   const thread = makeBox(NO_DAEMON_YET, {
