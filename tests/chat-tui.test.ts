@@ -505,7 +505,7 @@ test("the TUI rides out a restart: it says so, marks the participant paused, and
   assert.equal((await first.done).code, 0);
   const second = await again();
   await screen.seen("the daemon restarted");
-  await screen.seen("⏸ al");
+  await screen.seen("‖ al");
   await screen.press("hi\r", "previous: (none)");
   await roomIdle(second, id);
   await screen.press(LEAVE, "rejoin with");

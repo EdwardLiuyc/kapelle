@@ -3,7 +3,7 @@
  *
  * The list of rooms and their participants on the left, the `»` strip that
  * stands in for it while it is hidden, and the state marks (M7-3): `?` asks,
- * `!` stalls, `◐` busy, `⏸` paused, `✕` killed, `◌` exited, `●` unread, `○`
+ * `!` stalls, `◐` busy, `‖` paused, `✕` killed, `◌` exited, `●` unread, `○`
  * nothing new. An agent takes two rows. The first paints its mark and name
  * in its colour and puts its busy timer on the right; an idle unread
  * agent's right side is its unread count instead. The second shows
@@ -14,7 +14,7 @@
  * cyan in a dim line: `── rooms ───── «`, `── changed files ─────`.
  *
  * A room row takes its most urgent participant's mark, `?` > `!` > `✕` >
- * `⏸` > `◌` > `●` > `◐` > `○` (decided 2026-10-11). The strip shows the
+ * `‖` > `◌` > `●` > `◐` > `○` (decided 2026-10-11). The strip shows the
  * open room's mark. Which rows there are is `chat/view.ts`; this file draws
  * them, draws the files, and reads a click.
  */
@@ -53,7 +53,7 @@ type Participant = NonNullable<ReturnType<RoomState["participants"]["get"]>>;
 /** A state mark: its glyph, how it paints what it is drawn on, and whether
  *  something new or waiting is behind it. */
 interface Mark {
-  glyph: "?" | "!" | "◐" | "⏸" | "✕" | "◌" | "●" | "○";
+  glyph: "?" | "!" | "◐" | "‖" | "✕" | "◌" | "●" | "○";
   paint: (s: string) => string;
   /** The hidden-sidebar room count in `chat/tui.ts` uses this. */
   waits: boolean;
@@ -64,7 +64,7 @@ const URGENCY: readonly Mark["glyph"][] = [
   "?",
   "!",
   "✕",
-  "⏸",
+  "‖",
   "◌",
   "●",
   "◐",
@@ -82,7 +82,7 @@ const mark = (state: RoomState, id: string): Mark => {
   const colour = colourOf(state, id);
   const tint = colour === undefined ? plain : fg(colour);
   if (p.status === "busy") return { glyph: "◐", paint: tint, waits };
-  if (p.status === "paused") return { glyph: "⏸", paint: tint, waits };
+  if (p.status === "paused") return { glyph: "‖", paint: tint, waits };
   if (p.status === "killed") return { glyph: "✕", paint: yellow, waits };
   if (p.status === "exited") return { glyph: "◌", paint: tint, waits };
   return { glyph: p.unread ? "●" : "○", paint: tint, waits };
