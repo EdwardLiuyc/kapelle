@@ -83,6 +83,8 @@ const magenta = colour(35, 39);
 /** One of the 256 colours, as text and as background. */
 const fg = (n: number) => colour(`38;5;${n}`, 39);
 const bg = (n: number) => colour(`48;5;${n}`, 49);
+const bgRgb = (r: number, g: number, b: number) =>
+  colour(`48;2;${r};${g};${b}`, 49);
 const plain = (s: string) => s;
 
 /** A rendered line without its padding: the trailing spaces and the style
@@ -126,6 +128,7 @@ const rosterOf = (state: RoomState, fallback: readonly Named[]) =>
 export {
   address,
   bg,
+  bgRgb,
   bold,
   cyan,
   dim,
