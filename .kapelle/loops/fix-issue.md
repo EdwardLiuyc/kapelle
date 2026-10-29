@@ -54,8 +54,8 @@ A skill starts with `/<name>` in claude and with `/skill:<name>` in pi. For exam
   Call that N. After it comments, it checks every 60 seconds until comment N + 1 exists
   and its body starts with `**Claude finished`. It gives up after 20 minutes and says
   so.
-- **Reading it:** the bot's last comment:
-  `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | last | .body'`.
+- **Reading it:** `dev` reads the bot's last comment and its link, for the report:
+  `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | last | .url, .body'`.
 - **Answer:** `dev` runs the `address-comment` skill for the PR, on the latest comment.
   When the order says the next round is the last one, `dev` first reads the findings of
   every round together and looks for a shared cause. It proves each fix: a test that
