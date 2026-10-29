@@ -1672,6 +1672,56 @@ test("every session gets a fresh id, and a forged one is refused", async (t) => 
 
 // --- M9-4: the login signal, the models and the delete ----------------------
 
+/**
+ * Answers `initialize` and `session/new`, then checks every field of the next
+ * `session/set_config_option` before answering it. `CONFIG_OPTION_HANG=1`
+ * leaves that call unanswered, so the request deadline is observable.
+ */
+const CONFIG_OPTION_PROBE = [
+  'let buf = "";',
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });',
+  '    else if (msg.method === "session/new")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s1" } });',
+  '    else if (msg.method === "session/set_config_option") {',
+  '      if (process.env.CONFIG_OPTION_HANG === "1") continue;',
+  "      const p = msg.params;",
+  "      if (",
+  '        p.sessionId !== "s1" ||',
+  '        p.configId !== "model" ||',
+  '        p.value !== "mock/smart"',
+  "      ) {",
+  '        write({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "wrong params" } });',
+  "      } else {",
+  "        write({",
+  '          jsonrpc: "2.0",',
+  "          id: msg.id,",
+  "          result: {",
+  "            configOptions: [{",
+  '              id: "model",',
+  '              name: "Model",',
+  '              category: "model",',
+  '              type: "select",',
+  "              currentValue: p.value,",
+  "              options: [],",
+  "            }],",
+  "          },",
+  "        });",
+  "      }",
+  "    }",
+  "  }",
+  "});",
+].join("\n");
+
 /** A mock agent in `scenario`, with what reached `onEvent` and
  *  `onAuthStatus`. */
 async function signalAgent(t: TestContext, scenario: string, store?: string) {
@@ -1755,6 +1805,39 @@ test("deleteSession forgets the session, so nothing more is sent to it (M9-4)", 
   assert.equal(agent.sessionId, null);
   assert.equal(agent.configOptions.length, 0);
   await assert.rejects(() => agent.prompt("hi"), /no session/);
+});
+
+test("setConfigOption sends the session id, config id and value (M9-5)", async (t) => {
+  const agent = new AcpAgent({
+    name: "config-probe",
+    command: process.execPath,
+    args: ["-e", CONFIG_OPTION_PROBE],
+    requestTimeoutMs: 1_000,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+  const res = await agent.setConfigOption("model", "mock/smart");
+  assert.equal(res.configOptions?.[0]?.currentValue, "mock/smart");
+});
+
+test("setConfigOption carries the request deadline (M9-5)", async (t) => {
+  const agent = new AcpAgent({
+    name: "config-hangs",
+    command: process.execPath,
+    args: ["-e", CONFIG_OPTION_PROBE],
+    env: { ...process.env, CONFIG_OPTION_HANG: "1" },
+    requestTimeoutMs: 150,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  await agent.newSession();
+  await assert.rejects(
+    () => agent.setConfigOption("model", "mock/smart"),
+    /did not answer "session\/set_config_option" within 150ms/,
+  );
 });
 
 test("session/load keeps its configOptions, as session/new does (M9-4)", async (t) => {

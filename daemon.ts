@@ -1198,7 +1198,7 @@ function roomEntry(id: string) {
 }
 
 /**
- * `POST /rooms/:id/agents {agent | cmd, name?, role?, mode?, base?,
+ * `POST /rooms/:id/agents {agent | cmd, name?, role?, mode?, model?, base?,
  * settings?}` — one more participant (M6-3). 201 once its harness has a
  * session, as for `POST /rooms` (S13).
  */

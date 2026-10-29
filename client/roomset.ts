@@ -347,10 +347,13 @@ export function roomSet(
     const e = applyLine(r.state, line);
     on.line(r.entry.id, line, e);
     const update = line.update.sessionUpdate;
-    // The header's branch and base are in `GET /rooms/:id`, not the reducer.
-    // A turn can rename the branch or rebase it, so read the room again when
-    // the turn ends.
-    if (update === "_client_turn_ended") {
+    // The header's branch, base and model are in `GET /rooms/:id`, not the
+    // reducer. A turn can rename the branch or rebase it, and a revive can
+    // set the model, so read the room again when either ends.
+    if (
+      update === "_client_turn_ended" ||
+      update === "_client_participant_revived"
+    ) {
       loadDto(r, "reloaded");
     } else if (
       // A participant who joined after the room was read has no checkout or

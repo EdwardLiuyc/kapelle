@@ -905,7 +905,9 @@ test("the new-room form's model row lists the harness's saved models, or is a te
         posted.push(JSON.parse(raw));
         res.writeHead(400, { "content-type": "application/json" });
         res.end(
-          JSON.stringify({ error: { code: "invalid_request", message: "no" } }),
+          JSON.stringify({
+            error: { code: "invalid_request", message: `no ${posted.length}` },
+          }),
         );
         return;
       }
@@ -955,18 +957,196 @@ test("the new-room form's model row lists the harness's saved models, or is a te
   await press(`${DOWN}${DOWN}${DOWN}\r`, "other model…");
   assert.deepEqual(pickList(out()), ["–", "m-1", "m-2"]);
   await press(`${DOWN}${DOWN}\r`, "m-2");
-  // harness again: up from lab-ok is lab-bare, which has no models.
-  await press(`${UP}${UP}${UP}\r`, "other…");
+  // A model picked from the saved list reaches the request, not only the row.
+  await press(`${DOWN}\r`, "no 1");
+  assert.deepEqual(posted[0]?.agents?.[0], {
+    agent: "lab-ok",
+    model: "m-2",
+    role: "developer",
+  });
+  // Harness again: up from the send row is lab-ok, then lab-bare has no models.
+  await press(`${UP.repeat(4)}\r`, "other…");
   await press(`${UP}\r`, "lab-bare");
   // The model row is a text box now: type one.
   await press(`${DOWN}${DOWN}${DOWN}\r`, "> ");
   await press("\x15typed/x\r", "typed/x");
-  await press(`${DOWN}\r`, "no");
+  await press(`${DOWN}\r`, "no 2");
   assert.deepEqual(
     posted.map((b) => b.agents?.[0]),
-    [{ agent: "lab-bare", model: "typed/x", role: "developer" }],
+    [
+      { agent: "lab-ok", model: "m-2", role: "developer" },
+      { agent: "lab-bare", model: "typed/x", role: "developer" },
+    ],
   );
   await press(`\x1b\x1b${LEAVE}`, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("the add-agent form lists the harness's models, or uses a text box when it has none (M9-5)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const roomId = "room-model-form";
+  const room = {
+    id: roomId,
+    cwd: process.cwd(),
+    status: "active",
+    title: "model form",
+    createdAt: "",
+    updatedAt: "",
+    seq: 1,
+    participants: [
+      {
+        id: "p1",
+        name: "alice",
+        harness: "lab-bare",
+        mode: "auto",
+        settings: { allowReadOutsideRoot: false },
+        worktree: process.cwd(),
+        sessionId: "s1",
+        status: "idle",
+        notices: [],
+      },
+    ],
+  };
+  const posted: { agent?: string; model?: string }[] = [];
+  const fake = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => {
+      raw += c;
+    });
+    req.on("end", () => {
+      if (req.method === "POST" && req.url === `/rooms/${roomId}/agents`) {
+        posted.push(JSON.parse(raw));
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: { code: "invalid_request", message: `no ${posted.length}` },
+          }),
+        );
+        return;
+      }
+      if (req.url === "/version") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ apiVersion: API_VERSION }));
+        return;
+      }
+      if (req.url === "/harnesses") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            checkedAt: "",
+            done: true,
+            harnesses: [
+              {
+                id: "lab-bare",
+                measured: true,
+                state: "ready",
+                program: "lab-bare",
+                version: "1",
+              },
+              {
+                id: "lab-ok",
+                measured: true,
+                state: "ready",
+                program: "lab-ok",
+                version: "1",
+                models: [
+                  { id: "m-1", name: "One" },
+                  { id: "m-2", name: "Two" },
+                ],
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      if (req.url === "/rooms") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify([
+            {
+              id: roomId,
+              cwd: room.cwd,
+              title: room.title,
+              status: room.status,
+              updatedAt: room.updatedAt,
+              participants: [{ id: "p1", name: "alice", status: "idle" }],
+            },
+          ]),
+        );
+        return;
+      }
+      if (req.url === `/rooms/${roomId}`) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(room));
+        return;
+      }
+      if (req.url === `/rooms/${roomId}/events`) {
+        res.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+        });
+        const line = {
+          seq: 1,
+          at: "",
+          roomId,
+          participantId: "p1",
+          update: {
+            sessionUpdate: "_client_participant_added",
+            name: "alice",
+            harness: "lab-bare",
+            mode: "auto",
+          },
+        };
+        res.write(`id: 1\ndata: ${JSON.stringify(line)}\n\n`);
+        return;
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: { code: "no_route", message: `no ${req.url}` },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  const { press, seen, exited, out } = await ptyScreen(
+    t,
+    `stty cols 120 rows 40; node chat.ts attach ${roomId}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await seen("○ alice");
+  const UP = "\x1b[A";
+  await press("/add\r", "add agent");
+  // Harness: –, lab-bare, lab-ok, other…; lab-ok has a saved model list.
+  await press("\r", "other…");
+  await press(`${DOWN}${DOWN}\r`, "lab-ok");
+  await press(`${DOWN.repeat(5)}\r`, "other model…");
+  assert.deepEqual(pickList(out()), ["–", "m-1", "m-2"]);
+  await press(`${DOWN}${DOWN}\r`, "m-2");
+  await press(`${DOWN.repeat(2)}\r`, "no 1");
+  assert.deepEqual(posted[0], { agent: "lab-ok", mode: "auto", model: "m-2" });
+  // Back to the harness row; lab-bare has no models, so its model row is text.
+  await press(`${UP.repeat(7)}\r`, "other…");
+  await press(`${UP}\r`, "lab-bare");
+  await press(`${DOWN.repeat(5)}\r`, "> ");
+  await press("\x15typed/x\r", "typed/x");
+  await press(`${DOWN.repeat(2)}\r`, "no 2");
+  assert.deepEqual(posted[1], {
+    agent: "lab-bare",
+    mode: "auto",
+    model: "typed/x",
+  });
+  await press(`\x1b\x1b${LEAVE}`, "left room");
   assert.equal(await exited, 0, out());
 });
 
