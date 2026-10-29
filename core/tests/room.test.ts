@@ -2590,8 +2590,14 @@ test("a revive's load saves the models, but no login state (M9-4)", async (t) =>
 // --- M9-5: the model a participant asks for -----------------------------
 
 /** A room whose `alice` runs the mock's `scenario` and asks for `model`.
+ *  `modelCurrent` makes the mock's set reply name that model instead.
  *  `methods` lists each request her harness got, in order. */
-async function modelRoom(t: TestContext, model?: string, scenario = "models") {
+async function modelRoom(
+  t: TestContext,
+  model?: string,
+  scenario = "models",
+  modelCurrent?: string,
+) {
   const repo = await gitRepo(t);
   const record = join(await tempDir(t), "requests.jsonl");
   const roomId = newRoomId();
@@ -2600,7 +2606,9 @@ async function modelRoom(t: TestContext, model?: string, scenario = "models") {
     cwd: repo,
     agents: [
       roomAgent({
-        cmd: `node ${MOCK_AGENT} --scenario ${scenario} --record ${record}`,
+        cmd:
+          `node ${MOCK_AGENT} --scenario ${scenario} --record ${record}` +
+          `${modelCurrent ? ` --model-current ${modelCurrent}` : ""}`,
         name: "alice",
         ...(model && { model }),
       }),
@@ -2631,6 +2639,14 @@ test("an asked model is set after session/new, before the first turn, and room.j
   const set = sent.indexOf("session/set_config_option");
   assert.ok(set > sent.indexOf("session/new"), sent.join(" "));
   assert.ok(set < sent.indexOf("session/prompt"), sent.join(" "));
+  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
+});
+
+test("the model in use comes from the set reply, not the request (M9-5)", async (t) => {
+  const { p, file } = await modelRoom(t, "mock/smart", "models", "mock/fast");
+  assert.equal(p.model, "mock/fast", "the harness's reply");
+  assert.deepEqual(modelLines(p), []);
+  // The request is still what room.json keeps, for the next revive.
   assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
 });
 
