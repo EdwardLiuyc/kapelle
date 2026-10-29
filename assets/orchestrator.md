@@ -144,7 +144,8 @@ it, and the limit on rounds. With no number, the limit is **3**. Each round:
    real; a finding only the person can decide is a choice. Tell it to report only:
    whether the review finished or timed out, the link to the review, and one line for
    each finding with its verdict (real, nit or choice) beside the reviewer's own label
-   (such as its severity or "optional", or "none"). It never pastes the review's text.
+   (such as its severity or "optional", or "none"); for a choice, also its options and
+   the worker's recommendation. It never pastes the review's text.
 2. Decide from that list. The reviewer's labels let you check the verdicts; when one
    looks wrong, open the link. If the review timed out, stop, as "When you stop" says.
    If a finding is a choice, stop for it. If the review finished and every finding is
