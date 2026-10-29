@@ -1050,6 +1050,11 @@ function panelParts({
       (v) => {
         const cwd = absoluteFolder(v.cwd || ".");
         if (!cwd) return { error: FOLDER_GONE };
+        // As `/new --model` alone is refused: an empty room has no agent
+        // to set it on.
+        if (v.model && !v.agent && !v.cmd) {
+          return { error: "a model needs a harness or a command" };
+        }
         return {
           verb: "new",
           body: {

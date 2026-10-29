@@ -434,6 +434,11 @@ async function agentBody(
   return { body };
 }
 
+/** A refused or swapped model still adds the agent (M9-5): the line says so
+ *  at once. The room's notice says why. */
+const notSet = (asked: string | undefined, p: ParticipantDto | undefined) =>
+  asked && asked !== p?.model ? `; ! the model "${asked}" was not set` : "";
+
 /**
  * Sends one command to its route. `roomId` is the room on screen; `/new`
  * needs none. Never throws for a refusal; a daemon that cannot be reached
@@ -453,9 +458,10 @@ export async function runCommand(
     );
     const r = await call<RoomDto>(d, "/rooms", { method: "POST", body });
     if (!r.ok) return refused(r.error.message, r.error.code);
+    const off = notSet(c.body.agents?.[0]?.model, r.body.participants[0]);
     return {
       ok: true,
-      line: `opened room ${printable(r.body.title ?? r.body.id)}`,
+      line: printable(`opened room ${r.body.title ?? r.body.id}${off}`),
       room: r.body,
     };
   }
@@ -541,12 +547,7 @@ export async function runCommand(
       const p = r.body;
       const role = p.role ? `, ${p.role}` : "";
       const model = p.model ? `, ${p.model}` : "";
-      // A refused model still adds the agent (M9-5): say so at once.
-      const asked = spec.body.model;
-      const off =
-        asked && asked !== p.model
-          ? `; ! the model "${asked}" was not set`
-          : "";
+      const off = notSet(spec.body.model, p);
       return {
         ok: true,
         line: printable(

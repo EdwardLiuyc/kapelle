@@ -950,6 +950,13 @@ test("the new-room form's model row lists the harness's saved models, or is a te
   const UP = "\x1b[A";
   await press("\x0f", "new room …");
   await press("\r", "folder");
+  // No harness yet: the model row is a text box, and open refuses it, as
+  // `/new --model` alone is refused. Nothing is posted.
+  await press(`${DOWN.repeat(5)}\r`, "> ");
+  await press("x/y\r", "x/y");
+  await press(`${DOWN}\r`, "a model needs a harness or a command");
+  assert.equal(posted.length, 0);
+  await press(UP.repeat(6), "folder");
   // harness: –, lab-bare, lab-ok, other…; down twice is lab-ok.
   await press(`${DOWN}${DOWN}\r`, "other…");
   await press(`${DOWN}${DOWN}\r`, "lab-ok");

@@ -1461,7 +1461,20 @@ test("a model reaches both routes, typed or posted, and a refused one still adds
   );
   assert.ok(opened.ok && opened.room, JSON.stringify(opened));
   assert.equal(only(opened.room).model, "mock/smart");
+  assert.equal(opened.line, `opened room ${opened.room.id}`);
   const roomId = opened.room.id;
+  // `/new` says a refused model at once, as `/add` does.
+  const other = await typed(
+    d,
+    undefined,
+    `/new --cmd "${MODELS}" --model mock/bogus --title other --cwd ${cwd}`,
+  );
+  assert.ok(other.ok && other.room, JSON.stringify(other));
+  assert.equal(
+    other.line,
+    'opened room other; ! the model "mock/bogus" was not set',
+  );
+  await api(d, "POST", `/rooms/${other.room.id}/dismiss`);
 
   const bob = await typed(
     d,

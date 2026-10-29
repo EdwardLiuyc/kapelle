@@ -1175,9 +1175,10 @@ An agent takes:
 - `model`: optional, since 1.16. A model id, such as one from the agent's `models` in
   [`GET /harnesses`](#get-harnesses). The daemon does not check it against that list; the
   harness does. The daemon sets it after each start of the harness, a revive too, before
-  the first turn. When the harness refuses it, or lists no models, the agent still joins,
-  on the model the harness chose, and a notice says so. Without `model`, the harness
-  chooses.
+  the first turn. When the harness refuses it, does not answer, answers with another
+  model, or lists no models, the agent still joins, on the model the harness chose, and a
+  notice says so. A failed set is tried again at the next revive, not before. Without
+  `model`, the harness chooses.
 - `base`: optional. The git ref the participant's branch starts from. It can be another
   participant's `branch`, so a reviewer starts from the developer's commits. The default
   is the repository's `HEAD`. Only committed work is on a branch. The participant's
@@ -1265,13 +1266,12 @@ turn ends. A client that shows the whole-branch diff needs no extra step:
 **Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
 bad `title`, a bad or missing harness, a bad `name`, `role`, `mode`, `model` or
-`settings`, or an unknown agent field; `409` `name_taken` or `orchestrator_exists` when two agents in the
-list clash; `400` `invalid_config` when the repository's `.kapelle/config.json` is not
-valid, because the room reads its watchdog limits and `linkPaths` from it; `400`
-`invalid_request` for a
-bad `base`; `503` `shutting_down` when the
-daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example its
-binary is not installed).
+`settings`, or an unknown agent field; `409` `name_taken` or `orchestrator_exists` when
+two agents in the list clash; `400` `invalid_config` when the repository's
+`.kapelle/config.json` is not valid, because the room reads its watchdog limits and
+`linkPaths` from it; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when
+the daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example
+its binary is not installed).
 
 A `base` is bad when it is not a commit, or when its commit has no copy of the folder
 `cwd` names inside the repository. That folder must be in the commit even when no `base`

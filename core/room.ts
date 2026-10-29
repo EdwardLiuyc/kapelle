@@ -166,7 +166,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { AcpAgent, type Policy } from "../protocol/agent.ts";
+import { AcpAgent, type Policy, RpcError } from "../protocol/agent.ts";
 import {
   type ClientMode,
   type ResolvedAgent,
@@ -1724,7 +1724,10 @@ function createParticipant({
   let modelLine: RoomNotice | undefined;
   /** Sets the asked model on a harness that just started. A refusal leaves
    *  it on its own model: pi and claude say only `Internal error`, so the
-   *  line is ours, with theirs after it. */
+   *  line is ours, with theirs after it. A time-out or an exit is no
+   *  refusal, and the harness may still apply it, so its line says less. A
+   *  failed set is not tried again in this process: the next start does,
+   *  and so may the person (M9-6). */
   const syncModel = async (next: AcpAgent) => {
     const option = next.configOptions.find((o) => o.category === "model");
     const own = option?.type === "select" ? option.currentValue : undefined;
@@ -1742,10 +1745,20 @@ function createParticipant({
       const res = await next.setConfigOption(option.id, asked);
       const now = res?.configOptions?.find((o) => o.category === "model");
       model = now?.type === "select" ? now.currentValue : asked;
+      // It took the set, yet names another model.
+      if (model !== asked) {
+        modelLine = {
+          text: `${spec.name} took the model "${asked}" but runs on "${model}"`,
+        };
+      }
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       modelLine = {
-        text: `${spec.name} refused the model "${asked}" (${why}); it runs on ${on}`,
+        text:
+          err instanceof RpcError
+            ? `${spec.name} refused the model "${asked}" (${why}); it runs on ${on}`
+            : `${spec.name} did not confirm the model "${asked}" (${why}); ` +
+              `it may still run on ${on}`,
       };
     }
   };
@@ -1871,7 +1884,9 @@ function createParticipant({
         throw err;
       });
       // A real session's models replace the saved ones (3A): a revive's
-      // load is a real session too, but it gives no login state.
+      // load is a real session too, but it gives no login state. Before
+      // `syncModel`, so `model` here is the one the session started with;
+      // `configOptions` does not follow a set (M9-6 must keep that order).
       if (spec.setup) {
         report?.(sessionSeen(spec.setup, next.configOptions, loaded));
       }

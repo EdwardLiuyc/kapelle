@@ -76,7 +76,7 @@ const SCENARIOS = {
   half: "a note and a tool call, then waits for a cancel, like stall, and answers it end_turn, as copilot does (§M0-4)",
   "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
   models:
-    "session/new and session/load list two models in a group, both starting on mock/fast; session/set_config_option takes a listed model and refuses any other with -32603, as pi and claude do; --model-current makes its reply name another model; the handshake offers session/delete, which drops the session's --store file",
+    "session/new and session/load list two models in a group, both starting on mock/fast; session/set_config_option takes a listed model and refuses any other with -32603, as pi and claude do; --model-current makes its reply name another model, and --model-exit makes the harness exit instead of answering; the handshake offers session/delete, which drops the session's --store file",
   "auth-required":
     "session/new fails with -32000 Authentication required, as pi does logged out",
   "auth-none":
@@ -101,6 +101,7 @@ const barrierCount =
 const modelCurrentAt = process.argv.indexOf("--model-current");
 const modelCurrent =
   modelCurrentAt === -1 ? null : process.argv[modelCurrentAt + 1];
+const modelExit = process.argv.includes("--model-exit");
 const authHoldAt = process.argv.indexOf("--auth-hold");
 const authHoldFile = authHoldAt === -1 ? null : process.argv[authHoldAt + 1];
 const lockCwd = process.argv.includes("--lock-cwd");
@@ -483,6 +484,8 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       fail(msg.id, `no option "${configId}"`);
       return;
     }
+    // No answer at all, as a harness that dies or hangs gives.
+    if (modelExit) process.exit(1);
     if (!MODELS.includes(value)) {
       send({
         jsonrpc: "2.0",

@@ -2597,6 +2597,7 @@ async function modelRoom(
   model?: string,
   scenario = "models",
   modelCurrent?: string,
+  flags = "",
 ) {
   const repo = await gitRepo(t);
   const record = join(await tempDir(t), "requests.jsonl");
@@ -2608,7 +2609,7 @@ async function modelRoom(
       roomAgent({
         cmd:
           `node ${MOCK_AGENT} --scenario ${scenario} --record ${record}` +
-          `${modelCurrent ? ` --model-current ${modelCurrent}` : ""}`,
+          `${modelCurrent ? ` --model-current ${modelCurrent}` : ""}${flags}`,
         name: "alice",
         ...(model && { model }),
       }),
@@ -2645,9 +2646,29 @@ test("an asked model is set after session/new, before the first turn, and room.j
 test("the model in use comes from the set reply, not the request (M9-5)", async (t) => {
   const { p, file } = await modelRoom(t, "mock/smart", "models", "mock/fast");
   assert.equal(p.model, "mock/fast", "the harness's reply");
-  assert.deepEqual(modelLines(p), []);
+  // The room says so, as the /add line does.
+  assert.deepEqual(modelLines(p), [
+    'mock-agent took the model "mock/smart" but runs on "mock/fast"',
+  ]);
   // The request is still what room.json keeps, for the next revive.
   assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
+});
+
+test("a set the harness never answers is no refusal: its notice says so (M9-5)", async (t) => {
+  const { p } = await modelRoom(
+    t,
+    "mock/smart",
+    "models",
+    undefined,
+    " --model-exit",
+  );
+  const [line] = modelLines(p);
+  assert.match(
+    line ?? "",
+    /^mock-agent did not confirm the model "mock\/smart" \(/,
+  );
+  assert.match(line ?? "", /; it may still run on the model "mock\/fast"$/);
+  assert.equal(p.model, "mock/fast");
 });
 
 test("with no model asked, nothing is sent and the harness's own model shows (M9-5)", async (t) => {
