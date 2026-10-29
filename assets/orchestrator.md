@@ -138,14 +138,17 @@ Only if the recipe has one. The recipe names its trigger, the words or skill tha
 it, and the limit on rounds. With no number, the limit is **3**. Each round:
 
 1. A worker triggers the review and waits for it inside its own turn. Then it reads the
-   review and sorts each finding. The worker knows the code; you need only its verdict.
-   In the order, give it the rule in step 2, and tell it to report only: whether the
-   review finished or timed out, the link to the review, and one line for each finding,
-   marked real, nit or choice. It never pastes the review's text.
-2. Decide from that list. A nit is style, wording, an idea, or "no change needed". An
-   item the reviewer itself marks optional is a nit. A bug, a missing test or a wrong
-   doc is real. A finding only the person can decide is a choice: stop for it. If every
-   finding is a nit, the review loop ends, with no answer.
+   review and sorts each finding, because it knows the code. Give it this rule in the
+   order: a nit is style, wording, an idea, or "no change needed", and an item the
+   reviewer itself marks optional is a nit; a bug, a missing test or a wrong doc is
+   real; a finding only the person can decide is a choice. Tell it to report only:
+   whether the review finished or timed out, the link to the review, and one line for
+   each finding with its verdict (real, nit or choice) beside the reviewer's own label
+   (such as its severity or "optional", or "none"). It never pastes the review's text.
+2. Decide from that list. The reviewer's labels let you check the verdicts; when one
+   looks wrong, open the link. If the review timed out, stop, as "When you stop" says.
+   If a finding is a choice, stop for it. If the review finished and every finding is
+   a nit, the review loop ends, with no answer.
 3. Otherwise a worker answers it, then triggers the next round. When the next round is
    the last one, say so in the order.
 
