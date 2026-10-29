@@ -1,6 +1,7 @@
 /**
  * The pop-up's top border — `chat/tui/panel.ts`, story M7-4 (#247) — and
- * the setup race guards (M9-3, #298).
+ * the setup race guards (M9-3, #298), and the ctrl+o menu's filter, slash
+ * commands and `open` rows (M7-5, #248).
  */
 
 import assert from "node:assert/strict";
@@ -10,6 +11,8 @@ import test, { type TestContext } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { HarnessesReply } from "../../client/contract.ts";
 import type { DaemonAddress } from "../../client/daemon.ts";
+import { newRoomState, type RoomState } from "../../client/room.ts";
+import type { Followed } from "../../client/roomset.ts";
 import { until } from "../../integration/helpers.ts";
 import { yellow } from "../common.ts";
 import { border, panelParts } from "../tui/panel.ts";
@@ -174,7 +177,16 @@ function makeBox(
   {
     onSay,
     onStatus,
-  }: { onSay?: (text: string) => void; onStatus?: () => void } = {},
+    rooms = new Map(),
+    view = { roomId: "r" },
+    open = () => {},
+  }: {
+    onSay?: (text: string) => void;
+    onStatus?: () => void;
+    rooms?: ReadonlyMap<string, Followed>;
+    view?: { roomId: string; participantId?: string };
+    open?: (next: { roomId: string; participantId?: string }) => void;
+  } = {},
 ) {
   return panelParts({
     d,
@@ -189,9 +201,10 @@ function makeBox(
       asking: false,
       show() {},
       away: () => false,
+      open: () => [],
     },
-    rooms: new Map(),
-    view: () => ({ roomId: "r" }),
+    rooms,
+    view: () => view,
     shown: () => true,
     say: onSay ?? (() => {}),
     setStatus: onStatus ?? (() => {}),
@@ -199,6 +212,7 @@ function makeBox(
     question() {},
     changes() {},
     forward() {},
+    open,
     run: async () => true,
     end() {},
     left: () => "",
@@ -331,4 +345,129 @@ test("the start does not open setup over a busy side view", async (t) => {
   await box.atStart(() => true);
   assert.equal(box.panel, undefined);
   assert.equal(fake.posts(), 0);
+});
+
+/** A followed room `id`, titled `title`, whose roster is these names, each
+ *  id `p-<name>`. */
+const followed = (id: string, title: string, names: string[]): Followed => {
+  const state: RoomState = newRoomState();
+  for (const name of names) {
+    state.participants.set(`p-${name}`, {
+      id: `p-${name}`,
+      name,
+      harness: "mock",
+      mode: "safe",
+      status: "idle",
+      removed: false,
+      turns: [],
+      queue: [],
+      unread: 0,
+    });
+  }
+  return { entry: { id, title }, state } as unknown as Followed;
+};
+const NO_DAEMON_YET: DaemonAddress = { port: 0, token: "test" };
+const twoRooms = () =>
+  new Map([
+    ["r1", followed("r1", "app", ["ann", "bob"])],
+    ["r2", followed("r2", "docs", ["cid"])],
+  ]);
+/** The open pop-up's lines, without their SGR codes. */
+const shownOf = (box: ReturnType<typeof makeBox>) =>
+  stripTerminalSequences(box.panel?.body.render(70).join("\n") ?? "");
+const type = (box: ReturnType<typeof makeBox>, keys: string) => {
+  for (const k of keys) box.panel?.body.handleInput?.(k);
+};
+
+test("each menu row shows its slash command on the right (M7-5)", () => {
+  const room = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+  });
+  room.menu();
+  const roomRows = shownOf(room);
+  for (const [label, command] of [
+    ["add agent …", "/add"],
+    ["rename room …", "/title"],
+    ["new room …", "/new"],
+    ["dismiss room", "/dismiss"],
+    ["delete room …", "/delete"],
+    ["help", "/help"],
+    ["leave", "/leave"],
+  ]) {
+    assert.match(roomRows, new RegExp(`${label} +${command}\\b`), label);
+  }
+
+  const thread = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+  });
+  thread.menu();
+  const agentRows = shownOf(thread);
+  for (const [label, command] of [
+    ["cancel turn", "/cancel"],
+    ["mode · safe", "/mode"],
+    ["role · none", "/role"],
+    ["rename …", "/rename"],
+    ["view changes", "/diff"],
+    ["fast-forward from …", "/ff"],
+    ["remove ann", "/remove"],
+  ]) {
+    assert.match(agentRows, new RegExp(`${label} +@ann ${command}\\b`), label);
+  }
+});
+
+test("typed letters narrow the menu, Backspace widens it, and Enter runs the top row (M7-5)", () => {
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+  });
+  box.menu();
+  const all = shownOf(box);
+  assert.match(all, /cancel turn/);
+  type(box, "ff");
+  const narrowed = shownOf(box);
+  assert.match(narrowed, /> ff/);
+  assert.match(narrowed, /fast-forward from …/);
+  assert.doesNotMatch(narrowed, /cancel turn|remove ann|leave/);
+  type(box, "\x7f\x7f");
+  assert.equal(shownOf(box), all);
+  type(box, "ff\r");
+  assert.equal(box.panel?.title, "fast-forward ann from");
+});
+
+test("Esc first clears the filter, then goes back (M7-5)", () => {
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+  });
+  box.menu();
+  const all = shownOf(box);
+  type(box, "zzz");
+  assert.notEqual(shownOf(box), all);
+  type(box, "\x1b");
+  assert.equal(box.panel?.title, "app", "the menu stays open");
+  assert.equal(shownOf(box), all);
+  type(box, "\x1b");
+  assert.equal(box.panel, undefined);
+});
+
+test("the menu has an open row for each room and agent but the open view, and it opens that view (M7-5)", () => {
+  const opened: unknown[] = [];
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+    open: (next) => opened.push(next),
+  });
+  box.menu();
+  // The menu is longer than the box: the filter brings the rows in view.
+  type(box, "open");
+  const shown = shownOf(box);
+  assert.match(shown, /open app\b/);
+  assert.match(shown, /open @bob +app/);
+  assert.match(shown, /open docs\b/);
+  assert.match(shown, /open @cid +docs/);
+  assert.doesNotMatch(shown, /open @ann/, "the open view is left out");
+  type(box, " cid\r");
+  assert.deepEqual(opened, [{ roomId: "r2", participantId: "p-cid" }]);
 });

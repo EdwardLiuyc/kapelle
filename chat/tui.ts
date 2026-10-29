@@ -555,6 +555,7 @@ function chatTui(
     changes: (who) => void changes(who, "head").catch(gone),
     forward: (target, from) => void forward(target, from).catch(gone),
     deleteRoom: () => void previewDelete().catch(gone),
+    open: (next) => open(next),
     run: (c) => run(c),
     end: (code, ...last) => end(code, ...last),
     left,
