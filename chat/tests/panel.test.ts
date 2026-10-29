@@ -421,7 +421,7 @@ test("each menu row shows its slash command on the right (M7-5)", () => {
     ["fast-forward from …", "/ff"],
     ["remove ann", "/remove"],
   ]) {
-    assertCommandRight(agentRows, label, `@ann ${command}`);
+    assertCommandRight(agentRows, label, command);
   }
 });
 
@@ -440,7 +440,7 @@ test("typed letters narrow the menu, Backspace widens it, and Enter runs the top
   assert.doesNotMatch(narrowed, /cancel turn|remove ann|leave/);
   type(box, "\x7f\x7f");
   assert.equal(shownOf(box), all);
-  type(box, "@ann /ff");
+  type(box, "/ff");
   const byCommand = shownOf(box);
   assert.match(byCommand, /fast-forward from …/);
   assert.doesNotMatch(byCommand, /cancel turn|remove ann|leave/);
@@ -531,5 +531,6 @@ test("command rows keep their slash command at the default 80-column panel width
   const cut = stripTerminalSequences(
     thread.panel?.body.render(40).join("\n") ?? "",
   );
-  assert.match(cut, /remove reviewer-bac… /);
+  assert.match(cut, /remove reviewer-bac… +\/remove/);
+  assert.match(cut, /cancel turn +\/cancel/);
 });

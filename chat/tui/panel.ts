@@ -622,19 +622,20 @@ function panelParts({
       const forwardable = r
         ? roster(r.state).some((q) => q.id !== p.id)
         : false;
-      const at = `@${p.name} /`;
+      // Only the command: `@name ` before it would push it out of a narrow
+      // box when the name is long. The title names the agent (M7-5).
       items.push(
-        row("cancel", "cancel turn", `${at}cancel`),
+        row("cancel", "cancel turn", "/cancel"),
         // The value is in the label: the right column holds the command.
-        row("mode", `mode · ${p.mode}`, `${at}mode`),
-        row("role", `role · ${p.role ?? "none"}`, `${at}role`),
-        row("rename", "rename …", `${at}rename`),
-        row("diff", "view changes", `${at}diff`),
+        row("mode", `mode · ${p.mode}`, "/mode"),
+        row("role", `role · ${p.role ?? "none"}`, "/role"),
+        row("rename", "rename …", "/rename"),
+        row("diff", "view changes", "/diff"),
       );
       if (forwardable) {
-        items.push(row("forward", "fast-forward from …", `${at}ff`));
+        items.push(row("forward", "fast-forward from …", "/ff"));
       }
-      items.push(row("remove", `remove ${p.name}`, `${at}remove`));
+      items.push(row("remove", `remove ${p.name}`, "/remove"));
     } else if (r && roster(r.state).length > 0) {
       items.push({ value: "agent", label: "agent …" });
     }
