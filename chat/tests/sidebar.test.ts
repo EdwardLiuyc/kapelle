@@ -85,7 +85,7 @@ test("a paused room and its paused and killed participants are marked", () => {
   } as unknown as RoomDto);
   const text = rowsOf(roomsOf(state, "paused")).join("\n");
   assert.match(text, /✕ kapelle app paused/);
-  assert.match(text, /⏸ ana +│\n {6}mock +│/);
+  assert.match(text, /‖ ana +│\n {6}mock +│/);
   assert.match(text, /✕ bob +│\n {6}mock +│/);
 });
 
@@ -183,7 +183,7 @@ test("the room mark takes its most urgent agent's mark", () => {
   applyStatus(state, {
     participants: [{ id: "p-pat", status: "paused" }],
   } as unknown as RoomDto);
-  assert.equal(roomMark(state).glyph, "⏸", "paused before exited");
+  assert.equal(roomMark(state).glyph, "‖", "paused before exited");
   add("p-dan", "dan");
   line("p-dan", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
   line("p-dan", { sessionUpdate: "_client_harness_exited", pid: 1 });
@@ -248,9 +248,9 @@ test("the strip shows the open room's mark", () => {
     kind: "edit",
     title: "Write x",
   });
-  const stripAt = (roomId: string) => {
+  const stripAt = (roomId: string, of = state) => {
     const lines = sidebarParts({
-      rooms: roomsOf(state),
+      rooms: roomsOf(of),
       view: () => ({ roomId }),
       toggle() {},
       open() {},
@@ -260,6 +260,12 @@ test("the strip shows the open room's mark", () => {
   };
   assert.equal(stripAt("r1"), "»?");
   assert.equal(stripAt("gone"), "»");
+  const paused = mk();
+  paused.add("p-pat", "pat");
+  applyStatus(paused.state, {
+    participants: [{ id: "p-pat", status: "paused" }],
+  } as unknown as RoomDto);
+  assert.equal(stripAt("r1", paused.state), "»‖");
 });
 
 const CUT_LINES = [
