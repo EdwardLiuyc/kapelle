@@ -576,3 +576,24 @@ test("clearing the filter puts the cursor back on the current value (M7-5)", () 
   assert.equal(box.panel?.title, "ann · mode", "Esc clears, the list stays");
   assert.match(shownOf(box), /→ safe/, "Esc to empty");
 });
+
+test("Enter on a filter that matches nothing runs nothing and keeps the box (M7-5)", () => {
+  const ran: RouteCommand[] = [];
+  const opened: unknown[] = [];
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+    open: (next) => opened.push(next),
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  box.menu();
+  type(box, "zzz");
+  assert.match(shownOf(box), /No matching/);
+  type(box, "\r");
+  assert.equal(box.panel?.title, "app");
+  assert.deepEqual(ran, []);
+  assert.deepEqual(opened, []);
+});
