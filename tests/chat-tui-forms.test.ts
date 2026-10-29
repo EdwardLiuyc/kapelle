@@ -540,6 +540,41 @@ test("the menu opens over the timeline with the sidebar hidden; a typed agent co
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("the menu's open row opens another room while the sidebar is hidden (M7-5)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const first = await api<RoomReply>(d, "POST", "/rooms", {
+    ...withAgent(cwd, REMEMBER),
+    title: "start",
+  });
+  assert.equal(first.status, 201, first.body.error?.message);
+  const second = await api<RoomReply>(d, "POST", "/rooms", {
+    ...withAgent(cwd, REMEMBER),
+    title: "kept",
+  });
+  assert.equal(second.status, 201, second.body.error?.message);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 60 rows 30; node chat.ts attach ${first.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen(`room ${first.body.id}`);
+  assert.ok(screen.out().includes("»"), "the sidebar starts hidden");
+  assert.ok(!screen.out().includes("«"), "the sidebar header is hidden");
+  // The filter brings the other room's open row into view; Enter runs it.
+  await screen.press("\x0f", "type to filter");
+  await screen.press("open kept\r", `room ${second.body.id}`);
+  const rows = [...screenRows(screen.out()).values()].join("\n");
+  assert.match(rows, /»/);
+  assert.doesNotMatch(rows, /«/);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 test("after the last agent is removed, the status line names no one and a message is refused before any request", {
   skip: noPty,
 }, async (t) => {

@@ -9,6 +9,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import type { RouteCommand } from "../../client/command.ts";
 import type { HarnessesReply } from "../../client/contract.ts";
 import type { DaemonAddress } from "../../client/daemon.ts";
 import { newRoomState, type RoomState } from "../../client/room.ts";
@@ -180,12 +181,14 @@ function makeBox(
     rooms = new Map(),
     view = { roomId: "r" },
     open = () => {},
+    run = async () => true,
   }: {
     onSay?: (text: string) => void;
     onStatus?: () => void;
     rooms?: ReadonlyMap<string, Followed>;
     view?: { roomId: string; participantId?: string };
     open?: (next: { roomId: string; participantId?: string }) => void;
+    run?: (c: RouteCommand) => Promise<boolean>;
   } = {},
 ) {
   return panelParts({
@@ -213,7 +216,7 @@ function makeBox(
     changes() {},
     forward() {},
     open,
-    run: async () => true,
+    run,
     end() {},
     left: () => "",
   } as unknown as Parameters<typeof panelParts>[0]);
@@ -446,6 +449,29 @@ test("typed letters narrow the menu, Backspace widens it, and Enter runs the top
   assert.doesNotMatch(byCommand, /cancel turn|remove ann|leave/);
   type(box, "\r");
   assert.equal(box.panel?.title, "fast-forward ann from");
+});
+
+test("a slash-only query searches commands, and Enter runs the best row (M7-5)", () => {
+  const ran: RouteCommand[] = [];
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  box.menu();
+  // Move off the top, so Enter can only pass when the filter selects its
+  // best row afresh.
+  for (let i = 0; i < 5; i++) box.panel?.body.handleInput?.("\x1b[B");
+  type(box, "/di");
+  const narrowed = shownOf(box);
+  // `view changes` holds `diff` only in its right-hand slash command.
+  assert.match(narrowed, /view changes +\/diff/);
+  assert.match(narrowed, /→ dismiss room +\/dismiss/);
+  type(box, "\r");
+  assert.deepEqual(ran, [{ verb: "dismiss" }]);
 });
 
 test("Esc first clears the filter, then goes back (M7-5)", () => {
