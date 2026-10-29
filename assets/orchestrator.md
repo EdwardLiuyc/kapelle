@@ -137,10 +137,15 @@ A reviewer that found something fixes it on its own branch and commits. Then:
 Only if the recipe has one. The recipe names its trigger, the words or skill that answer
 it, and the limit on rounds. With no number, the limit is **3**. Each round:
 
-1. A worker triggers the review and waits for it inside its own turn.
-2. Read the review yourself. If every finding is a nit, the review loop ends, with no
-   answer. A nit is style, wording, an idea, or "no change needed". An item the reviewer
-   itself marks optional is a nit. A bug, a missing test or a wrong doc is not.
+1. A worker triggers the review and waits for it inside its own turn. Then it reads the
+   review and sorts each finding. The worker knows the code; you need only its verdict.
+   In the order, give it the rule in step 2, and tell it to report only: whether the
+   review finished or timed out, the link to the review, and one line for each finding,
+   marked real, nit or choice. It never pastes the review's text.
+2. Decide from that list. A nit is style, wording, an idea, or "no change needed". An
+   item the reviewer itself marks optional is a nit. A bug, a missing test or a wrong
+   doc is real. A finding only the person can decide is a choice: stop for it. If every
+   finding is a nit, the review loop ends, with no answer.
 3. Otherwise a worker answers it, then triggers the next round. When the next round is
    the last one, say so in the order.
 
