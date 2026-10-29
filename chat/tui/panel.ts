@@ -311,11 +311,15 @@ function panelParts({
         PICK_LAYOUT,
       );
       l.onSelect = ({ value }) => then(value);
+      // The full list starts on the current value, also after the filter
+      // is cleared, so Enter on it keeps the value. A filtered list starts
+      // on its best match.
+      const at =
+        shown === items ? items.findIndex((i) => i.value === current) : -1;
+      if (at > 0) l.setSelectedIndex(at);
       return l;
     };
     let list = listOf(items);
-    const at = items.findIndex((i) => i.value === current);
-    if (at > 0) list.setSelectedIndex(at);
     const narrow = () => {
       const q = filter.getValue().trim();
       list = listOf(

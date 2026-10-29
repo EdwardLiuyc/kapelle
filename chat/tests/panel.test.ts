@@ -560,3 +560,19 @@ test("command rows keep their slash command at the default 80-column panel width
   assert.match(cut, /remove reviewer-bac… +\/remove/);
   assert.match(cut, /cancel turn +\/cancel/);
 });
+
+test("clearing the filter puts the cursor back on the current value (M7-5)", () => {
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+  });
+  box.menu();
+  type(box, "/mode\r");
+  assert.equal(box.panel?.title, "ann · mode");
+  assert.match(shownOf(box), /→ safe/);
+  type(box, "a\x7f");
+  assert.match(shownOf(box), /→ safe/, "Backspace to empty");
+  type(box, "a\x1b");
+  assert.equal(box.panel?.title, "ann · mode", "Esc clears, the list stays");
+  assert.match(shownOf(box), /→ safe/, "Esc to empty");
+});
