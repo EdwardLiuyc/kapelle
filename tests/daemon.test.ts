@@ -1181,28 +1181,35 @@ test("POST /harnesses/install runs the checked agents one after the other (M9-3b
 test("the install's find starts after npm, not with one already in flight (M9-3b)", async (t) => {
   const bin = await fakePath(t);
   await fakeNpm(bin, { hold: true });
-  // opencode's version probe holds the find open across npm's install.
+  // The last setup entry's probe can start only after every onPath lookup.
+  // Holding it open keeps the stale find in flight while npm installs.
   const started = join(bin, "version-started");
+  const hold = join(bin, "version-hold");
+  const lastSetup = Object.entries(AGENTS).findLast(([, a]) => a.setup);
+  assert.ok(lastSetup?.[1].setup);
   await writeFile(
-    join(bin, "opencode"),
-    `#!/bin/sh\n${absolute("touch")} "${started}"\n${absolute("sleep")} 1\n` +
-      'echo "opencode v2.0.18"\n',
+    join(bin, lastSetup[1].setup.program),
+    `#!/bin/sh\n${absolute("touch")} "${started}"\n` +
+      `while [ -e "${hold}" ]; do ${absolute("sleep")} 0.05; done\n` +
+      'echo "2.3.0"\n',
     { mode: 0o755 },
   );
   const { d } = await bootFinding(t, bin);
   const installing = install(d, { ids: ["claude"] });
   await until("npm to start", () => existsSync(join(bin, "npm.argv")));
-  // The install's own find ran opencode before npm. Remove its marker so the
-  // wait below proves the stale find started.
-  await rm(started);
+  // The install's own find has ended. Hold the stale probe open, so the
+  // stale find is still in flight when npm writes claude-agent-acp.
+  await writeFile(hold, "");
+  await rm(started, { force: true });
   // This find snapshots PATH before npm writes claude-agent-acp.
   const before = api<HarnessesReply>(d, "POST", "/harnesses");
   await until("the stale find to start", () => existsSync(started));
-  // The marker only says the opencode probe started. Finish the stale find
-  // before npm can write claude-agent-acp, so its path snapshot is complete.
-  const stale = await before;
   await writeFile(join(bin, "go"), "");
-  const r = await installing;
+  await until("npm to write the acp program", () =>
+    existsSync(join(bin, "claude-agent-acp")),
+  );
+  await rm(hold);
+  const [r, stale] = await Promise.all([installing, before]);
   assert.equal(stale.status, 200);
   assert.equal(stateOf(stale.body, "claude"), "main_only");
   assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "ready");
