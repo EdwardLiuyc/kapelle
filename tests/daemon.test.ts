@@ -1198,8 +1198,11 @@ test("the install's find starts after npm, not with one already in flight (M9-3b
   // This find snapshots PATH before npm writes claude-agent-acp.
   const before = api<HarnessesReply>(d, "POST", "/harnesses");
   await until("the stale find to start", () => existsSync(started));
+  // The marker only says the opencode probe started. Finish the stale find
+  // before npm can write claude-agent-acp, so its path snapshot is complete.
+  const stale = await before;
   await writeFile(join(bin, "go"), "");
-  const [r, stale] = await Promise.all([installing, before]);
+  const r = await installing;
   assert.equal(stale.status, 200);
   assert.equal(stateOf(stale.body, "claude"), "main_only");
   assert.equal(stateOf(r.last?.setup as HarnessesReply, "claude"), "ready");
