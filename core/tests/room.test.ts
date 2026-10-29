@@ -2347,7 +2347,7 @@ test("an error turn replies with its error, and none of its text", async (t) => 
 });
 
 // `half` answers the cancel `end_turn`, as copilot does: the reply still
-// says `cancelled`, from our own record (§M0-4).
+// says `cancelled by the person`, from our own record (§M0-4).
 test("a cancel drops the kept text: the reply is its first line only", async (t) => {
   const { po, dev, of, told, settled } = await loopRoom(t, "half");
   const turn = dev.send("go", po);
@@ -2356,7 +2356,26 @@ test("a cancel drops the kept text: the reply is its first line only", async (t)
   await turn;
   await settled();
   assert.deepEqual(told(po), [
-    ["[reply from dev] cancelled, 1 tool call", dev.id, "reply"],
+    ["[reply from dev] cancelled by the person, 1 tool call", dev.id, "reply"],
+  ]);
+});
+
+test("a person's cancel of a worker's turn says so in the copy too (#377)", async (t) => {
+  const { po, dev, of, told, settled } = await loopRoom(t, "half");
+  const order = dev.send("go", po);
+  await until(() => of(dev, "tool_call").length > 0, "dev's first tool call");
+  dev.cancel();
+  await order;
+  await settled();
+  const direct = dev.send("hi");
+  await until(() => of(dev, "tool_call").length > 1, "dev's second tool call");
+  dev.cancel();
+  await direct;
+  await settled();
+  assert.deepEqual(told(po).at(-1), [
+    "[copy] you → dev · cancelled by the person, 1 tool call\nhi",
+    dev.id,
+    "copy",
   ]);
 });
 

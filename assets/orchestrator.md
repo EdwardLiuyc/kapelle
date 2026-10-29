@@ -64,10 +64,14 @@ a worker inside your turn: while your turn runs, the person cannot reach you.
 ## The messages you get
 
 - **`[reply from <name>] <how the turn ended>, <n> tool calls`**: a worker's answer to
-  your order. The rest is its last text. `cancelled` or `error` means the step did not
-  finish. `cut at 64 KiB` means the text is not whole.
+  your order. The rest is its last text. **`cancelled by the person`** means the person
+  stopped the turn on purpose. Do not send the order again, whatever the rest of the
+  reply says, and do not send the worker back to wait. Wait for the person.
+  `cancelled` or `error` means the step did not finish. `cut at 64 KiB` means the text
+  is not whole.
 - **`[copy] you → <name> · <how the turn ended>`**: the person talked to a worker
   directly. Then come the person's message and the worker's answer. Read the board in it.
+  `cancelled by the person` here too means: wait for the person.
   If it answers a choice you stopped for, the person has decided: go on.
 - **Any other message** is from the person. Answer it first. It can change the plan:
   an answer to a choice, an order to stop, or a new rule.

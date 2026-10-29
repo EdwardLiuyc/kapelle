@@ -111,13 +111,14 @@
  * empty, each cut at `ANSWER_CAP` bytes; the person's message is sent whole.
  * It is kept from the prompt's send to the turn's end, and dropped at a
  * cancel or the harness's exit. A cancelled turn replies with its first line
- * only; an error turn, an exit included, with the error in place of the
- * answer. The answer is taken before the checkout read that ends a turn, so a
- * cancel during that read does not cut it. A
- * reply and a copy carry `kind`, skip `QUEUE_BOUND`, and their own turns
- * send nothing, so a loop cannot start. A stop (remove, dismiss or pause)
- * sends nothing either; a reply to a sender no longer on the roster is
- * dropped, and the daemon's stderr says so.
+ * only, and that line says `cancelled by the person`: only the person
+ * cancels a turn that replies (#377). An error turn, an exit included,
+ * replies with the error in place of the answer. The answer is taken before
+ * the checkout read that ends a turn, so a cancel during that read does not
+ * cut it. A reply and a copy carry `kind`, skip `QUEUE_BOUND`, and their own
+ * turns send nothing, so a loop cannot start. A stop (remove, dismiss or
+ * pause) sends nothing either; a reply to a sender no longer on the roster
+ * is dropped, and the daemon's stderr says so.
  *
  * **One log for the room** (S10). The bus names each event's participant by
  * its id in `agent`, and the log writes it as `participantId` beside the
@@ -305,7 +306,7 @@ interface Answer {
   /** The message the turn started from, and its sender. */
   text: string;
   from?: Sender;
-  /** The stop reason, `cancelled`, or `error`. */
+  /** The stop reason, `cancelled by the person`, `cancelled`, or `error`. */
   end: string;
   calls: number;
   /** The answer, the error, or empty after a cancel or an exit. */
@@ -1956,9 +1957,15 @@ function createParticipant({
       .then(
         async ({ stopReason }) => {
           // Our own record, not `stopReason`: copilot answers `end_turn` for
-          // a turn it cancelled (§M0-4).
+          // a turn it cancelled (§M0-4). The abort's reason says who cut it
+          // (#377): `cancel()` gives `person`.
+          const { aborted, reason } = controller.signal;
           const answer = take(
-            controller.signal.aborted ? "cancelled" : stopReason,
+            !aborted
+              ? stopReason
+              : reason === "person"
+                ? "cancelled by the person"
+                : "cancelled",
           );
           await after();
           bus.emit({
@@ -2184,8 +2191,9 @@ function createParticipant({
       drop();
       kept = undefined;
       // Before the harness hears of the cancel, so the request it waits on
-      // is answered at once.
-      turnAbort.abort();
+      // is answered at once. Only the person's route calls this: the reason
+      // makes the reply say `cancelled by the person` (#377).
+      turnAbort.abort("person");
       agent?.cancel();
       // The history now holds a cut turn, as after a pause's cancel (§M0-9).
       turnCancelled = true;
