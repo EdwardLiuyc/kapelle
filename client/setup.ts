@@ -94,7 +94,9 @@ export function setupLines(r: HarnessesReply): SetupLine[] {
     if (h.checkFailed) {
       const what = h.checkFailed === "timeout" ? "timed out" : "failed";
       lines.push({
-        text: `! ${printable(h.id)}: the check ${what}; /setup checks again`,
+        text:
+          `! ${printable(h.id)}: the check ${what}; to check again: ` +
+          "/setup in the chat, or kapelle setup",
         tone: "warn",
       });
     } else if (h.login === "logged_out") {

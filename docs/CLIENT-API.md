@@ -454,7 +454,8 @@ was checked gets these fields:
 - `checkFailed`: the last check could not open a session: it ran out of time
   (`timeout`), or the harness failed to start or answer (`error`). `login` is then
   `unknown`, with no login hint, since logging in would not fix it, and `models` stay
-  from before, since a failure disproves no list. The next real session clears it.
+  from before, since a failure disproves no list. The next real session that gives a
+  login clears it; one that gives models only, such as a revive, leaves it.
 - `models` (`id` and `name`) and `model`: the harness's model list, and the model its
   last session started with, from the `configOptions` entry with `category: "model"`. A
   change of model during a session is not saved. Absent when the harness sent none, such

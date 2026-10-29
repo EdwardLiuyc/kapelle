@@ -241,9 +241,12 @@ test("a failed check says so, and gives no login advice (M9-4)", () => {
   });
   assert.deepEqual(lines.slice(-2), [
     {
-      text: "! kimi: the check timed out; /setup checks again",
+      text: "! kimi: the check timed out; to check again: /setup in the chat, or kapelle setup",
       tone: "warn",
     },
-    { text: "! pi: the check failed; /setup checks again", tone: "warn" },
+    {
+      text: "! pi: the check failed; to check again: /setup in the chat, or kapelle setup",
+      tone: "warn",
+    },
   ]);
 });

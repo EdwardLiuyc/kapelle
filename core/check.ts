@@ -82,7 +82,9 @@ export type Seen = Partial<Pick<AgentCheck, "login" | "models" | "model">>;
  *  before its notice comes; the slowest start measured is 3.5 s. */
 const CHECK_TIMEOUT_MS = 15_000;
 
-/** The share of a check's limit claude's notice may take: 12 s of 15. */
+/** How far into a check's limit claude's notice may come: 12 s of 15. It is
+ *  counted from the check's start, so it covers the harness start too: a
+ *  3.5 s start and a 5 s probe (§Models and login) leave 3.5 s to spare. */
 const NOTICE_SHARE = 0.8;
 
 /** `session/new` failed this way: log in first (§Models and login). */
@@ -203,7 +205,10 @@ export async function checkAgent(
     }
     // claude's notice comes after `initialize`, from a probe of its own.
     if (setup.loginSignal === "notice") {
-      notice ??= await Promise.race([noticed, noticeLate]);
+      // Read `notice` after the wait: one that came in the same tick as the
+      // timer is kept, not overwritten.
+      const heardKind = await Promise.race([noticed, noticeLate]);
+      notice ??= heardKind;
     }
     const login = notice ? fromNotice(notice) : fromSession(setup);
     return { ...seen, login: login ?? "unknown" };
@@ -348,8 +353,9 @@ export async function runChecks(
       ...(failed && { models: old?.models, model: old?.model }),
       ...result,
       ...said,
-      // Unless a session during the check showed that the agent works.
-      ...(failed && !said && { failed }),
+      // The mark explains the `unknown` login. Only a session that gave a
+      // login of its own replaces both; a models-only one leaves them.
+      ...(failed && !said?.login && { failed }),
     }));
   }
 }
@@ -362,12 +368,13 @@ export async function runChecks(
 export function noteSession(id: string, seen: Seen): void {
   if (!Object.hasOwn(AGENTS, id) || !AGENTS[id]?.setup) return;
   if (Object.keys(seen).length === 0) return;
-  // A session that reports opened: the agent works, so no failure stays.
+  // The same rule as `runChecks`: the failed mark goes with the login it
+  // explains, so only a session that gives a login clears it.
   saveCheck(id, (old) => ({
     login: "unknown",
     ...old,
     ...seen,
-    failed: undefined,
+    ...(seen.login && { failed: undefined }),
     checkedAt: new Date().toISOString(),
   }));
   // Newer than any check running now, even when the write failed.

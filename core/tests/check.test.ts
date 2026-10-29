@@ -493,7 +493,34 @@ test("a failed check keeps the saved models, and a later session clears the fail
   assert.deepEqual(checkFields("opencode", failed).loginHint, undefined);
   assert.equal(checkFields("opencode", failed).checkFailed, "timeout");
 
-  // A real session that opens says the agent works again.
+  // A models-only report (a revive's load) says nothing about the login,
+  // so the mark that explains the `unknown` stays.
+  noteSession("opencode", { models: [{ id: "new", name: "New" }] });
+  assert.equal(readChecks().opencode?.failed, "timeout");
+
+  // A real session that reports a login says the agent works again.
   noteSession("opencode", { login: "ok" });
   assert.equal(readChecks().opencode?.failed, undefined);
+});
+
+test("a models-only session during a failed check keeps the failed mark (M9-4)", async (t) => {
+  await stateHome(t);
+  noteSession("opencode", { login: "logged_out" });
+  const launch = AGENTS.opencode.launch;
+  AGENTS.opencode.launch = mock("--scenario", "silent-session");
+  t.after(() => {
+    AGENTS.opencode.launch = launch;
+  });
+  const checking = runChecks(
+    ["opencode"],
+    { opencode: { program: true, acp: true, acpVersion: "2.0.18" } },
+    300,
+  );
+  noteSession("opencode", { models: [{ id: "loaded", name: "Loaded" }] });
+  await checking;
+  const saved = readChecks().opencode;
+  // The session wins the models; the failure still explains the login.
+  assert.equal(saved?.login, "unknown");
+  assert.equal(saved?.failed, "timeout");
+  assert.deepEqual(saved?.models, [{ id: "loaded", name: "Loaded" }]);
 });
