@@ -434,12 +434,14 @@ async function agentBody(
   return { body };
 }
 
-/** A model the agent does not run on still adds it (M9-5): the line says so
- *  at once. It says only what the reply shows, never why: a set that timed
- *  out may still apply, and a harness may rename the id. The why is the
- *  room's notice, the one place that saw it. */
+/** A model the reply does not confirm still adds the agent (M9-5): the
+ *  line says so at once. It claims neither why nor what runs: a set that
+ *  timed out may still apply, and a harness may rename the id. The room's
+ *  notice says both, the one place that saw them. */
 const notOn = (asked: string | undefined, p: ParticipantDto | undefined) =>
-  asked && asked !== p?.model ? `; ! not running on the model "${asked}"` : "";
+  asked && asked !== p?.model
+    ? `; ! not confirmed on the model "${asked}"`
+    : "";
 
 /**
  * Sends one command to its route. `roomId` is the room on screen; `/new`
