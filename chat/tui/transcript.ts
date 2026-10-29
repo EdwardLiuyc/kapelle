@@ -30,8 +30,9 @@
  * hide delay in `components/scroll-view.js`; `paintScrollbar()` in
  * `layout.js`, which picks the glyph and styles one cell per call; and
  * `handleScrollbarMouseEvent()` in `tui-alt-screen.js`, which sets hover.
- * Tool rows also rely on `Text.setCustomBgFn()` in `components/text.js`
- * invalidating the cached wrap when a call's status changes.
+ * A status's mark changes with its background, so `setText` invalidates the
+ * wrap. If those marks ever go, `line()` also relies on
+ * `Text.setCustomBgFn()` in `components/text.js` invalidating it.
  */
 
 import {
@@ -174,7 +175,7 @@ const YOU_BAR = fg(244);
 const YOU_BG = bg(236);
 /** Active calls deliberately reuse the person's neutral background. */
 const TOOL_ACTIVE_BG = YOU_BG;
-/** Match pi's dark-theme success green, with its 256-colour fallback. */
+/** Match pi's dark-theme green and pi-tui's 256-colour fallback. */
 const TOOL_SUCCESS_BG = bgRgb(37, 65, 49, 23);
 const TOOL_FAILURE_BG = bg(52);
 
@@ -245,7 +246,8 @@ function runLine(run: Run, open: boolean) {
   return `${dim(`${open ? "▾" : "▸"} ${text}`)}${failed ? red(` · ${failed} failed`) : ""}`;
 }
 
-/** A `Text` set only when its text or background changes. */
+/** A `Text` set only when its text or background changes: both setters drop
+ *  the cached wrap. */
 function line(paddingY = 0) {
   const t = new Text("", 1, paddingY);
   let was = "";

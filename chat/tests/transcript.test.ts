@@ -582,16 +582,20 @@ test("a completed multi-line command has a background on every row (#351)", (t) 
     rows.some((l) => l.includes("\x1b[1m$\x1b[22m")),
     "the tool marker is bold",
   );
-  process.env.COLORTERM = "256color";
-  assert.equal(
-    bgRgb(37, 65, 49, 23)("x"),
-    "\x1b[48;5;23mx\x1b[49m",
-    "truecolor has a 256-colour fallback",
-  );
   assert.ok(
     !rows.at(-1)?.includes("\x1b[48;"),
     "an uncoloured row follows the last tool block",
   );
+});
+
+test("an RGB background uses its fallback outside truecolor terminals", (t) => {
+  const colourTerm = process.env.COLORTERM;
+  t.after(() => {
+    if (colourTerm === undefined) delete process.env.COLORTERM;
+    else process.env.COLORTERM = colourTerm;
+  });
+  process.env.COLORTERM = "256color";
+  assert.equal(bgRgb(37, 65, 49, 23)("x"), "\x1b[48;5;23mx\x1b[49m");
 });
 
 /** ann's room drawn in a transcript, and a line maker that draws each
