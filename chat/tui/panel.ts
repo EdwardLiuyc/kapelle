@@ -25,6 +25,7 @@ import {
   type OverlayHandle,
   type SelectItem,
   SelectList,
+  type SelectListLayoutOptions,
   type SettingItem,
   SettingsList,
   type TuiAltScreen,
@@ -66,8 +67,13 @@ const EDITOR_THEME = {
   },
 };
 /** Let a pick list size its label column to its widest row, so a command
- *  still fits on the right in the 80-column chat's pop-up. */
-const PICK_LAYOUT = { minPrimaryColumnWidth: 1, maxPrimaryColumnWidth: 22 };
+ *  still fits on the right in the 80-column chat's pop-up. A label cut to
+ *  fit ends with `…`, so a long name does not read as another name. */
+const PICK_LAYOUT: SelectListLayoutOptions = {
+  minPrimaryColumnWidth: 1,
+  maxPrimaryColumnWidth: 22,
+  truncatePrimary: ({ text, maxWidth }) => truncateToWidth(text, maxWidth, "…"),
+};
 
 /** The roles (R44) and modes (R12) the menu offers. The daemon checks
  *  them; an unknown one it adds later is typed as `@name /role x`. */

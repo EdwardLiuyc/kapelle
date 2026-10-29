@@ -521,4 +521,15 @@ test("command rows keep their slash command at the default 80-column panel width
   );
   assert.match(shown, /new room … +\/new/);
   assert.match(shown, /help +\/help/);
+
+  // A label cut to fit says so: a long name must not read as another name.
+  const thread = makeBox(NO_DAEMON_YET, {
+    rooms: new Map([["r1", followed("r1", "app", ["reviewer-backend"])]]),
+    view: { roomId: "r1", participantId: "p-reviewer-backend" },
+  });
+  thread.menu();
+  const cut = stripTerminalSequences(
+    thread.panel?.body.render(40).join("\n") ?? "",
+  );
+  assert.match(cut, /remove reviewer-bac… /);
 });
