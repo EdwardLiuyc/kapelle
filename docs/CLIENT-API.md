@@ -1487,8 +1487,8 @@ Since 1.12. When a turn ends, the daemon may send its answer on as a new message
   `[answer]` and the answer.
 
 `from` is the participant whose turn ended. `<end>` is the turn's stop reason,
-`cancelled by the person`, or `error`. Only the person cancels a turn that replies: a
-stop sends nothing. The answer is the text after the turn's last tool call, or the
+`cancelled by the person`, a plain `cancelled` from any other cut, or `error`. Only the
+person cancels a turn that replies: a stop sends nothing. The answer is the text after the turn's last tool call, or the
 last text before it when that is empty. Each is cut at 64 KiB of UTF-8, never inside a
 character, and the first line then ends with `, cut at 64 KiB`. Only the answer is cut:
 a copy carries the person's message whole, as the worker got it. A cancelled turn sends
