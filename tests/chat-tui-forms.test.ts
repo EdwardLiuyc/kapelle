@@ -409,10 +409,10 @@ test("/add alone opens its form; a refusal stays in the form, and a fix adds the
   await press(`${REMEMBER}\r`, "Enter/Space");
   await press(`${DOWN}\rmock-agent\r`, "mock-agent");
   // Down to the last row, `add`: the name is taken.
-  await press(`${DOWN.repeat(4)}\r`, "is taken");
+  await press(`${DOWN.repeat(5)}\r`, "is taken");
   // Up to the name, clear it, and send again.
-  await press(`${"\x1b[A".repeat(4)}\r\x15bob\r`, "bob");
-  await press(`${DOWN.repeat(4)}\r`, "added bob (mock-agent, auto)");
+  await press(`${"\x1b[A".repeat(5)}\r\x15bob\r`, "bob");
+  await press(`${DOWN.repeat(5)}\r`, "added bob (mock-agent, auto)");
   await seen("○ bob");
   const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
   assert.deepEqual(
@@ -439,7 +439,7 @@ test("a double Enter on the new-room form opens one room", {
   await press("\r", "folder");
   await press(`\r\x15${cwd}\r`, cwd);
   // Down to `open`, and Enter twice before the first answer.
-  await press(`${DOWN.repeat(5)}\r\r`, "opened room");
+  await press(`${DOWN.repeat(6)}\r\r`, "opened room");
   // No event says a second request was not sent: give it time to land.
   await new Promise((ok) => setTimeout(ok, 1500));
   const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
@@ -827,7 +827,7 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   // never shows `mock-agent.mjs`.
   await press(`${DOWN}\r${REMEMBER}\r`, REMEMBER.slice(0, 40));
   await press(
-    `${DOWN}${DOWN}\r`,
+    `${DOWN.repeat(3)}\r`,
     "is not added to the daemon. Add its repository?",
   );
   await press("\r", "opened room");
@@ -887,6 +887,104 @@ test("the new-room form leaves out a harness the daemon says is not measured", {
   assert.equal(await exited, 0, out());
 });
 
+test("the new-room form's model row lists the harness's saved models, or is a text box with none (M9-5)", {
+  skip: noPty,
+}, async (t) => {
+  // A fake daemon: two harnesses, one with saved models. It keeps each
+  // POST /rooms body and refuses it, so the form stays open.
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const posted: { agents?: { agent?: string; model?: string }[] }[] = [];
+  const fake = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => {
+      raw += c;
+    });
+    req.on("end", () => {
+      if (req.method === "POST" && req.url === "/rooms") {
+        posted.push(JSON.parse(raw));
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({ error: { code: "invalid_request", message: "no" } }),
+        );
+        return;
+      }
+      const body =
+        req.url === "/version"
+          ? { apiVersion: API_VERSION }
+          : req.url === "/harnesses"
+            ? [
+                { id: "lab-bare", measured: true },
+                {
+                  id: "lab-ok",
+                  measured: true,
+                  models: [
+                    { id: "m-1", name: "One" },
+                    { id: "m-2", name: "Two" },
+                  ],
+                },
+              ]
+            : req.url === "/rooms"
+              ? []
+              : undefined;
+      res.writeHead(body ? 200 : 404, { "content-type": "application/json" });
+      res.end(JSON.stringify(body ?? { error: { code: "no_route" } }));
+    });
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  const UP = "\x1b[A";
+  await press("\x0f", "new room …");
+  await press("\r", "folder");
+  // harness: –, lab-bare, lab-ok, other…; down twice is lab-ok.
+  await press(`${DOWN}${DOWN}\r`, "other…");
+  await press(`${DOWN}${DOWN}\r`, "lab-ok");
+  // command, name, model: lab-ok's saved models.
+  await press(`${DOWN}${DOWN}${DOWN}\r`, "other model…");
+  assert.deepEqual(pickList(out()), ["–", "m-1", "m-2"]);
+  await press(`${DOWN}${DOWN}\r`, "m-2");
+  // harness again: up from lab-ok is lab-bare, which has no models.
+  await press(`${UP}${UP}${UP}\r`, "other…");
+  await press(`${UP}\r`, "lab-bare");
+  // The model row is a text box now: type one.
+  await press(`${DOWN}${DOWN}${DOWN}\r`, "> ");
+  await press("\x15typed/x\r", "typed/x");
+  await press(`${DOWN}\r`, "no");
+  assert.deepEqual(
+    posted.map((b) => b.agents?.[0]),
+    [{ agent: "lab-bare", model: "typed/x", role: "developer" }],
+  );
+  await press(`\x1b\x1b${LEAVE}`, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("the status line shows the model the agent runs on (M9-5)", {
+  skip: noPty,
+}, async (t) => {
+  const MODELS = `node ${MOCK_AGENT} --scenario models`;
+  const { press, seen, exited, out } = await chatOnPty(t, MODELS);
+  await seen("auto · mock/fast");
+  await press(
+    `/add --cmd "${MODELS}" --name bob --model mock/smart\r`,
+    "added bob (mock-agent, auto, mock/smart)",
+  );
+  await press("@bob ", "auto · mock/smart");
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
 test("chat in a removed folder: bare stops, attach opens and its /new form survives", {
   skip: noPty,
 }, async (t) => {
@@ -919,7 +1017,7 @@ test("chat in a removed folder: bare stops, attach opens and its /new form survi
   child.stdin.write("/new\r");
   await seen("new room");
   // A relative folder in a removed cwd is refused in the form, not a crash.
-  child.stdin.write(`\rsub\r${DOWN.repeat(5)}\r`);
+  child.stdin.write(`\rsub\r${DOWN.repeat(6)}\r`);
   await seen("the current folder was removed");
   // Esc closes the form, so /leave still reaches the composer.
   child.stdin.write("\x1b");
@@ -1044,7 +1142,7 @@ test("Esc in the folder-not-added prompt goes back to the new-room form", {
   await press("\r", "Enter/Space");
   // Open on an unadded folder: the daemon asks to add the repo.
   await press(
-    `${DOWN.repeat(5)}\r`,
+    `${DOWN.repeat(6)}\r`,
     "is not added to the daemon. Add its repository?",
   );
   // Esc returns to the form, with the folder still there.

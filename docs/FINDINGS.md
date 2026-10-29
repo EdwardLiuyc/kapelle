@@ -1463,7 +1463,8 @@ installed with claude-agent-acp; this repository does not depend on the SDK.
 an empty home. A keyring the harness reaches on its own D-Bus path was not blocked; copilot's
 log shows it found no login. Not measured: whether the model stays after `session/load`
 (the mode does not, §Mode after load), and what each harness does on the first prompt when
-logged out.
+logged out. M9-5 (#300) left the first one unmeasured on purpose: a room sends
+the model again after every load, so nothing depends on it.
 
 **Added 2026-10-21 (M9-1, #296):** the codex-acp and kimi columns. Same probe and the same
 logged-out method, but with the model switch and the bogus id taken out: the person had one

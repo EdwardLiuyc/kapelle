@@ -80,6 +80,7 @@ import {
   type Entry,
   inThread,
   nameOf,
+  printable,
   seen,
   thread,
 } from "../client/room.ts";
@@ -679,7 +680,12 @@ function chatTui(
           : { error: NO_AGENTS };
       if ("id" in t) {
         const p = r.state.participants.get(t.id);
-        const mode = p ? ` ${dim(p.mode)}` : "";
+        // The model in use (M9-5) is in the room's reply, read again after
+        // each join and turn, as the branch is.
+        const model = r.dto?.participants.find((q) => q.id === t.id)?.model;
+        const mode = p
+          ? ` ${dim(model ? `${p.mode} · ${printable(model)}` : p.mode)}`
+          : "";
         parts.push(`${bold(`→ ${nameOf(r.state, t.id)}`)}${mode}`);
         right = usageText(p?.usage);
       } else parts.push(yellow(`! ${t.error}`));

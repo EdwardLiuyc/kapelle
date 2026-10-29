@@ -53,6 +53,8 @@ interface AgentSpec {
   role?: string;
   mode?: string;
   base?: string;
+  /** The harness checks the id (M9-5); the screen sends it as typed. */
+  model?: string;
 }
 
 /** A `POST /rooms` body. */
@@ -105,8 +107,8 @@ export type Command =
     };
 
 export const HELP = [
-  "/new [harness] [--cmd c] [--name n] [--title t] [--cwd dir]",
-  "/add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--base @name|ref]",
+  "/new [harness] [--cmd c] [--name n] [--model id] [--title t] [--cwd dir]",
+  "/add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--model id] [--base @name|ref]",
   '/loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--cwd dir]',
   "/title <new title>",
   "@name /rename <new name>",
@@ -284,13 +286,13 @@ export function parseCommand(
     if (!args.length) return { verb: "form", form: verb };
     const names =
       verb === "new"
-        ? ["cmd", "name", "title", "cwd"]
-        : ["cmd", "name", "role", "mode", "base"];
+        ? ["cmd", "name", "model", "title", "cwd"]
+        : ["cmd", "name", "role", "mode", "model", "base"];
     const o = options(args, names);
     if ("error" in o) return { error: `${o.error}; ${USAGE[verb]}` };
     const [agent, ...extra] = o.positionals;
     if (extra.length) return { error: `one harness only; ${USAGE[verb]}` };
-    const { cmd, name, title, cwd, role, mode, base } = o.values;
+    const { cmd, name, title, cwd, role, mode, base, model } = o.values;
     if (verb === "add") {
       // `none` is no role, as in `@name /role none` and the form.
       const spec: AgentSpec = {
@@ -299,12 +301,14 @@ export function parseCommand(
         name,
         role: role === "none" ? undefined : role,
         mode,
+        model,
         base,
       };
       return { verb, agent: spec };
     }
-    if (!agent && !cmd && name) {
-      return { error: `--name needs a harness or --cmd; ${USAGE.new}` };
+    if (!agent && !cmd && (name || model)) {
+      const flag = name ? "--name" : "--model";
+      return { error: `${flag} needs a harness or --cmd; ${USAGE.new}` };
     }
     const folder = absoluteFolder(cwd);
     if (!folder) return { error: FOLDER_GONE };
@@ -313,7 +317,8 @@ export function parseCommand(
       body: {
         cwd: folder,
         title,
-        agents: agent || cmd ? [{ agent, cmd, name, role: "developer" }] : [],
+        agents:
+          agent || cmd ? [{ agent, cmd, name, model, role: "developer" }] : [],
       },
     };
   }
@@ -535,9 +540,18 @@ export async function runCommand(
       if (!r.ok) return refused(r.error.message, r.error.code);
       const p = r.body;
       const role = p.role ? `, ${p.role}` : "";
+      const model = p.model ? `, ${p.model}` : "";
+      // A refused model still adds the agent (M9-5): say so at once.
+      const asked = spec.body.model;
+      const off =
+        asked && asked !== p.model
+          ? `; ! the model "${asked}" was not set`
+          : "";
       return {
         ok: true,
-        line: printable(`added ${p.name} (${p.harness}${role}, ${p.mode})`),
+        line: printable(
+          `added ${p.name} (${p.harness}${role}, ${p.mode}${model})${off}`,
+        ),
       };
     }
     case "remove": {
