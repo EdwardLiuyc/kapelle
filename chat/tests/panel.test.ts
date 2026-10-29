@@ -378,6 +378,14 @@ const shownOf = (box: ReturnType<typeof makeBox>) =>
 const type = (box: ReturnType<typeof makeBox>, keys: string) => {
   for (const k of keys) box.panel?.body.handleInput?.(k);
 };
+/** Assert that `command` is on `label`'s row, after a gap of spaces. */
+const assertCommandRight = (rows: string, label: string, command: string) => {
+  const labelAt = rows.indexOf(label);
+  assert.notEqual(labelAt, -1, `${label} is shown`);
+  const commandAt = rows.indexOf(command, labelAt + label.length);
+  assert.notEqual(commandAt, -1, `${label} shows ${command}`);
+  assert.match(rows.slice(labelAt + label.length, commandAt), /^ +$/, label);
+};
 
 test("each menu row shows its slash command on the right (M7-5)", () => {
   const room = makeBox(NO_DAEMON_YET, {
@@ -395,7 +403,7 @@ test("each menu row shows its slash command on the right (M7-5)", () => {
     ["help", "/help"],
     ["leave", "/leave"],
   ]) {
-    assert.match(roomRows, new RegExp(`${label} +${command}\\b`), label);
+    assertCommandRight(roomRows, label, command);
   }
 
   const thread = makeBox(NO_DAEMON_YET, {
@@ -413,7 +421,7 @@ test("each menu row shows its slash command on the right (M7-5)", () => {
     ["fast-forward from …", "/ff"],
     ["remove ann", "/remove"],
   ]) {
-    assert.match(agentRows, new RegExp(`${label} +@ann ${command}\\b`), label);
+    assertCommandRight(agentRows, label, `@ann ${command}`);
   }
 });
 
@@ -432,7 +440,11 @@ test("typed letters narrow the menu, Backspace widens it, and Enter runs the top
   assert.doesNotMatch(narrowed, /cancel turn|remove ann|leave/);
   type(box, "\x7f\x7f");
   assert.equal(shownOf(box), all);
-  type(box, "ff\r");
+  type(box, "@ann /ff");
+  const byCommand = shownOf(box);
+  assert.match(byCommand, /fast-forward from …/);
+  assert.doesNotMatch(byCommand, /cancel turn|remove ann|leave/);
+  type(box, "\r");
   assert.equal(box.panel?.title, "fast-forward ann from");
 });
 
@@ -470,4 +482,43 @@ test("the menu has an open row for each room and agent but the open view, and it
   assert.doesNotMatch(shown, /open @ann/, "the open view is left out");
   type(box, " cid\r");
   assert.deepEqual(opened, [{ roomId: "r2", participantId: "p-cid" }]);
+});
+
+test("every pick list in a form filters: the role list narrows (M7-5)", () => {
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+  });
+  box.addForm();
+  const form = box.panel?.body;
+  assert.ok(form, "the add form is open");
+  for (let i = 0; i < 3; i++) form.handleInput?.("\x1b[B");
+  form.handleInput?.("\r");
+  assert.match(shownOf(box), /none/);
+  assert.match(shownOf(box), /reviewer/);
+  type(box, "dev");
+  const narrowed = shownOf(box);
+  assert.match(narrowed, /developer/);
+  assert.doesNotMatch(narrowed, /orchestrator|tester|architect|reviewer/);
+  type(box, "\r");
+  assert.match(shownOf(box), /role\s+developer/);
+});
+
+test("command rows keep their slash command at the default 80-column panel width (M7-5)", () => {
+  const rooms = new Map([
+    ["r1", followed("r1", "app", ["ann"])],
+    ["r2", followed("r2", "a room title long enough to fill the label", [])],
+  ]);
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms,
+    view: { roomId: "r1" },
+  });
+  box.menu();
+  // At 80 columns with the sidebar shown, the pop-up is 44 wide and its
+  // body gets 40; the menu is what the person sees at the default size.
+  const shown = stripTerminalSequences(
+    box.panel?.body.render(40).join("\n") ?? "",
+  );
+  assert.match(shown, /new room … +\/new/);
+  assert.match(shown, /help +\/help/);
 });

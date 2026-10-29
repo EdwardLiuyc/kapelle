@@ -65,6 +65,9 @@ const EDITOR_THEME = {
     noMatch: dim,
   },
 };
+/** Let a pick list size its label column to its widest row, so a command
+ *  still fits on the right in the 80-column chat's pop-up. */
+const PICK_LAYOUT = { minPrimaryColumnWidth: 1, maxPrimaryColumnWidth: 22 };
 
 /** The roles (R44) and modes (R12) the menu offers. The daemon checks
  *  them; an unknown one it adds later is typed as `@name /role x`. */
@@ -280,24 +283,27 @@ function panelParts({
   const focusPanel = () => {
     if (panel) tui.setFocus(frame);
   };
-  /** A pick list in the pop-up. `back` is where Esc goes: the parent menu
-   *  on a second-level list, and the whole pop-up closes by default.
-   *  Typed letters filter the rows (M7-5), fuzzy over the label and the
-   *  description, which holds a row's slash command, best match first.
-   *  pi-tui's `setFilter` is not used: it matches only the start of the
-   *  hidden `value`. Esc first clears the filter, then goes back. */
-  // The fifth parameter is the optional Esc fallback, not a required input.
-  // pi-lens-ignore: long-parameter-list
-  const pickList = (
-    title: string,
+  /** A filterable list. Typed letters filter the rows (M7-5), fuzzy over
+   *  the label and the description, which holds a row's slash command, best
+   *  match first. pi-tui's `setFilter` is not used: it matches only the
+   *  start of the hidden `value`. Esc first clears the filter, then calls
+   *  `back`. */
+  // Its calls are one component's render, input and list plumbing.
+  // pi-lens-ignore: high-fan-out
+  const picker = (
     items: SelectItem[],
     current: string | undefined,
     then: (value: string) => void,
-    back: () => void = hidePanel,
-  ) => {
+    back: () => void,
+  ): Component => {
     const filter = textBox("");
     const listOf = (shown: SelectItem[]) => {
-      const l = new SelectList(shown, panelRoom(), EDITOR_THEME.selectList);
+      const l = new SelectList(
+        shown,
+        panelRoom(),
+        EDITOR_THEME.selectList,
+        PICK_LAYOUT,
+      );
       l.onSelect = ({ value }) => then(value);
       return l;
     };
@@ -319,10 +325,17 @@ function panelParts({
       "tui.select.pageDown",
       "tui.select.confirm",
     ] as const;
-    showPanel(title, {
+    // SelectList draws descriptions only above 40 columns. The default
+    // 80-column chat's pop-up body is 40, so render at 41 and crop the
+    // result. The narrow label column leaves the command inside that line.
+    const listLines = (w: number) =>
+      list
+        .render(Math.max(w, 41))
+        .map((line) => truncateToWidth(line, w, "…", true));
+    return {
       render: (w) => [
         ...(filter.getValue() ? filter.render(w) : []),
-        ...list.render(w),
+        ...listLines(w),
         dim(
           filter.getValue()
             ? "↑↓ Enter · Esc clear"
@@ -344,9 +357,23 @@ function panelParts({
         }
         tui.requestRender();
       },
-      invalidate: () => list.invalidate(),
-    });
+      invalidate: () => {
+        filter.invalidate();
+        list.invalidate();
+      },
+    };
   };
+  /** A pick list in the pop-up. `back` is where Esc goes: the parent menu
+   *  on a second-level list, and the whole pop-up closes by default. */
+  // The fifth parameter is the optional Esc fallback, not a required input.
+  // pi-lens-ignore: long-parameter-list
+  const pickList = (
+    title: string,
+    items: SelectItem[],
+    current: string | undefined,
+    then: (value: string) => void,
+    back: () => void = hidePanel,
+  ) => showPanel(title, picker(items, current, then, back));
   const words = (values: string[]) =>
     values.map((v) => ({ value: v, label: v }));
   /** A text box holding `value`, with the cursor after it: pi-tui's
@@ -822,20 +849,16 @@ function panelParts({
           return f.folder ? folderField(value, done) : field(value, done);
         // The last pick can turn the list into a text box: a git ref.
         let now: Component;
-        const list = new SelectList(
+        now = picker(
           words(f.pick),
-          panelRoom(),
-          EDITOR_THEME.selectList,
+          value,
+          (v) => {
+            if (!TYPE_IT.has(v)) return done(v);
+            now = field("", done);
+            tui.requestRender();
+          },
+          () => done(),
         );
-        const at = f.pick.indexOf(value);
-        if (at > 0) list.setSelectedIndex(at);
-        list.onCancel = () => done();
-        list.onSelect = ({ value: v }) => {
-          if (!TYPE_IT.has(v)) return done(v);
-          now = field("", done);
-          tui.requestRender();
-        };
-        now = list;
         return {
           render: (w) => now.render(w),
           handleInput: (k) => now.handleInput?.(k),
