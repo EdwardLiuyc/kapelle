@@ -1472,7 +1472,7 @@ test("a model reaches both routes, typed or posted, and a refused one still adds
   assert.ok(other.ok && other.room, JSON.stringify(other));
   assert.equal(
     other.line,
-    'opened room other; ! the model "mock/bogus" was not set',
+    'opened room other; ! not running on the model "mock/bogus"',
   );
   await api(d, "POST", `/rooms/${other.room.id}/dismiss`);
 
@@ -1484,8 +1484,17 @@ test("a model reaches both routes, typed or posted, and a refused one still adds
   assert.ok(bob.ok, JSON.stringify(bob));
   assert.equal(
     bob.line,
-    'added bob (mock-agent, auto, mock/fast); ! the model "mock/bogus" was not set',
+    'added bob (mock-agent, auto, mock/fast); ! not running on the model "mock/bogus"',
   );
+  // A harness that never answers the set may still apply it, so the line
+  // claims no outcome: the room's notice says "did not confirm".
+  const eve = await typed(
+    d,
+    roomId,
+    `/add --cmd "${MODELS} --model-exit" --name eve --model mock/smart`,
+  );
+  assert.ok(eve.ok, JSON.stringify(eve));
+  assert.match(eve.line ?? "", /; ! not running on the model "mock\/smart"$/);
   const posted = await api<ParticipantDto>(
     d,
     "POST",

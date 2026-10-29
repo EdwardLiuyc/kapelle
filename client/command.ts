@@ -434,10 +434,12 @@ async function agentBody(
   return { body };
 }
 
-/** A refused or swapped model still adds the agent (M9-5): the line says so
- *  at once. The room's notice says why. */
-const notSet = (asked: string | undefined, p: ParticipantDto | undefined) =>
-  asked && asked !== p?.model ? `; ! the model "${asked}" was not set` : "";
+/** A model the agent does not run on still adds it (M9-5): the line says so
+ *  at once. It says only what the reply shows, never why: a set that timed
+ *  out may still apply, and a harness may rename the id. The why is the
+ *  room's notice, the one place that saw it. */
+const notOn = (asked: string | undefined, p: ParticipantDto | undefined) =>
+  asked && asked !== p?.model ? `; ! not running on the model "${asked}"` : "";
 
 /**
  * Sends one command to its route. `roomId` is the room on screen; `/new`
@@ -458,7 +460,7 @@ export async function runCommand(
     );
     const r = await call<RoomDto>(d, "/rooms", { method: "POST", body });
     if (!r.ok) return refused(r.error.message, r.error.code);
-    const off = notSet(c.body.agents?.[0]?.model, r.body.participants[0]);
+    const off = notOn(c.body.agents?.[0]?.model, r.body.participants[0]);
     return {
       ok: true,
       line: printable(`opened room ${r.body.title ?? r.body.id}${off}`),
@@ -547,7 +549,7 @@ export async function runCommand(
       const p = r.body;
       const role = p.role ? `, ${p.role}` : "";
       const model = p.model ? `, ${p.model}` : "";
-      const off = notSet(spec.body.model, p);
+      const off = notOn(spec.body.model, p);
       return {
         ok: true,
         line: printable(

@@ -3767,7 +3767,10 @@ shows the running agent's live list and `@name /model <id>` picks one, in both s
 The room sends the change before the participant's next turn, never during a turn. The
 reply to `session/set_config_option` updates the saved current model only. It must not
 replace the saved options: copilot's reply left out one of the options its `session/new`
-sent (§Models and login). The contract gets a minor version.
+sent (§Models and login). Nothing reads `config_option_update` yet (#387 review): a
+harness that answers the set with its old options and reports the switch there would
+show the old model and a false "runs on" notice, so check it on each harness first. The
+contract gets a minor version.
 *Done when* tests cover the route, the command in both screens, a change while the agent
 is busy (sent before its next turn), a refused model, and a reply with fewer options that
 leaves the saved options as they were.
