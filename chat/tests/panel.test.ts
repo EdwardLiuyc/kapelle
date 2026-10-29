@@ -1,6 +1,7 @@
 /**
  * The pop-up's top border — `chat/tui/panel.ts`, story M7-4 (#247) — and
- * the setup race guards (M9-3, #298).
+ * the setup race guards (M9-3, #298), and the ctrl+o menu's filter, slash
+ * commands and `open` rows (M7-5, #248).
  */
 
 import assert from "node:assert/strict";
@@ -8,8 +9,11 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import type { RouteCommand } from "../../client/command.ts";
 import type { HarnessesReply } from "../../client/contract.ts";
 import type { DaemonAddress } from "../../client/daemon.ts";
+import { newRoomState, type RoomState } from "../../client/room.ts";
+import type { Followed } from "../../client/roomset.ts";
 import { until } from "../../integration/helpers.ts";
 import { yellow } from "../common.ts";
 import { border, panelParts } from "../tui/panel.ts";
@@ -174,7 +178,18 @@ function makeBox(
   {
     onSay,
     onStatus,
-  }: { onSay?: (text: string) => void; onStatus?: () => void } = {},
+    rooms = new Map(),
+    view = { roomId: "r" },
+    open = () => {},
+    run = async () => true,
+  }: {
+    onSay?: (text: string) => void;
+    onStatus?: () => void;
+    rooms?: ReadonlyMap<string, Followed>;
+    view?: { roomId: string; participantId?: string };
+    open?: (next: { roomId: string; participantId?: string }) => void;
+    run?: (c: RouteCommand) => Promise<boolean>;
+  } = {},
 ) {
   return panelParts({
     d,
@@ -189,9 +204,10 @@ function makeBox(
       asking: false,
       show() {},
       away: () => false,
+      open: () => [],
     },
-    rooms: new Map(),
-    view: () => ({ roomId: "r" }),
+    rooms,
+    view: () => view,
     shown: () => true,
     say: onSay ?? (() => {}),
     setStatus: onStatus ?? (() => {}),
@@ -199,7 +215,8 @@ function makeBox(
     question() {},
     changes() {},
     forward() {},
-    run: async () => true,
+    open,
+    run,
     end() {},
     left: () => "",
   } as unknown as Parameters<typeof panelParts>[0]);
@@ -331,4 +348,254 @@ test("the start does not open setup over a busy side view", async (t) => {
   await box.atStart(() => true);
   assert.equal(box.panel, undefined);
   assert.equal(fake.posts(), 0);
+});
+
+/** A followed room `id`, titled `title`, whose roster is these names, each
+ *  id `p-<name>`. */
+const followed = (id: string, title: string, names: string[]): Followed => {
+  const state: RoomState = newRoomState();
+  for (const name of names) {
+    state.participants.set(`p-${name}`, {
+      id: `p-${name}`,
+      name,
+      harness: "mock",
+      mode: "safe",
+      status: "idle",
+      removed: false,
+      turns: [],
+      queue: [],
+      unread: 0,
+    });
+  }
+  return { entry: { id, title }, state } as unknown as Followed;
+};
+const NO_DAEMON_YET: DaemonAddress = { port: 0, token: "test" };
+const twoRooms = () =>
+  new Map([
+    ["r1", followed("r1", "app", ["ann", "bob"])],
+    ["r2", followed("r2", "docs", ["cid"])],
+  ]);
+/** The open pop-up's lines, without their SGR codes. */
+const shownOf = (box: ReturnType<typeof makeBox>) =>
+  stripTerminalSequences(box.panel?.body.render(70).join("\n") ?? "");
+const type = (box: ReturnType<typeof makeBox>, keys: string) => {
+  for (const k of keys) box.panel?.body.handleInput?.(k);
+};
+/** Assert that `command` is on `label`'s row, after a gap of spaces. */
+const assertCommandRight = (rows: string, label: string, command: string) => {
+  const labelAt = rows.indexOf(label);
+  assert.notEqual(labelAt, -1, `${label} is shown`);
+  const commandAt = rows.indexOf(command, labelAt + label.length);
+  assert.notEqual(commandAt, -1, `${label} shows ${command}`);
+  assert.match(rows.slice(labelAt + label.length, commandAt), /^ +$/, label);
+};
+
+test("each menu row shows its slash command on the right (M7-5)", () => {
+  const room = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+  });
+  room.menu();
+  const roomRows = shownOf(room);
+  for (const [label, command] of [
+    ["add agent …", "/add"],
+    ["rename room …", "/title"],
+    ["new room …", "/new"],
+    ["dismiss room", "/dismiss"],
+    ["delete room …", "/delete"],
+    ["help", "/help"],
+    ["leave", "/leave"],
+  ]) {
+    assertCommandRight(roomRows, label, command);
+  }
+
+  const thread = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+  });
+  thread.menu();
+  const agentRows = shownOf(thread);
+  for (const [label, command] of [
+    ["cancel turn", "/cancel"],
+    ["mode · safe", "/mode"],
+    ["role · none", "/role"],
+    ["rename …", "/rename"],
+    ["view changes", "/diff"],
+    ["fast-forward from …", "/ff"],
+    ["remove ann", "/remove"],
+  ]) {
+    assertCommandRight(agentRows, label, command);
+  }
+});
+
+test("typed letters narrow the menu, Backspace widens it, and Enter runs the top row (M7-5)", () => {
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+  });
+  box.menu();
+  const all = shownOf(box);
+  assert.match(all, /cancel turn/);
+  type(box, "ff");
+  const narrowed = shownOf(box);
+  assert.match(narrowed, /> ff/);
+  assert.match(narrowed, /fast-forward from …/);
+  assert.doesNotMatch(narrowed, /cancel turn|remove ann|leave/);
+  type(box, "\x7f\x7f");
+  assert.equal(shownOf(box), all);
+  type(box, "/ff");
+  const byCommand = shownOf(box);
+  assert.match(byCommand, /fast-forward from …/);
+  assert.doesNotMatch(byCommand, /cancel turn|remove ann|leave/);
+  type(box, "\r");
+  assert.equal(box.panel?.title, "fast-forward ann from");
+});
+
+test("a slash-only query searches commands, and Enter runs the best row (M7-5)", () => {
+  const ran: RouteCommand[] = [];
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  box.menu();
+  // Move off the top, so Enter can only pass when the filter selects its
+  // best row afresh.
+  for (let i = 0; i < 5; i++) box.panel?.body.handleInput?.("\x1b[B");
+  type(box, "/di");
+  const narrowed = shownOf(box);
+  // `view changes` holds `diff` only in its right-hand slash command.
+  assert.match(narrowed, /view changes +\/diff/);
+  assert.match(narrowed, /→ dismiss room +\/dismiss/);
+  type(box, "\r");
+  assert.deepEqual(ran, [{ verb: "dismiss" }]);
+});
+
+test("Esc first clears the filter, then goes back (M7-5)", () => {
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+  });
+  box.menu();
+  const all = shownOf(box);
+  type(box, "zzz");
+  assert.notEqual(shownOf(box), all);
+  type(box, "\x1b");
+  assert.equal(box.panel?.title, "app", "the menu stays open");
+  assert.equal(shownOf(box), all);
+  type(box, "\x1b");
+  assert.equal(box.panel, undefined);
+});
+
+test("the menu has an open row for each room and agent but the open view, and it opens that view (M7-5)", () => {
+  const opened: unknown[] = [];
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+    open: (next) => opened.push(next),
+  });
+  box.menu();
+  // The menu is longer than the box: the filter brings the rows in view.
+  type(box, "open");
+  const shown = shownOf(box);
+  assert.match(shown, /open app\b/);
+  assert.match(shown, /open @bob +app/);
+  assert.match(shown, /open docs\b/);
+  assert.match(shown, /open @cid +docs/);
+  assert.doesNotMatch(shown, /open @ann/, "the open view is left out");
+  type(box, " cid\r");
+  assert.deepEqual(opened, [{ roomId: "r2", participantId: "p-cid" }]);
+});
+
+test("every pick list in a form filters: the role list narrows (M7-5)", () => {
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+  });
+  box.addForm();
+  const form = box.panel?.body;
+  assert.ok(form, "the add form is open");
+  for (let i = 0; i < 3; i++) form.handleInput?.("\x1b[B");
+  form.handleInput?.("\r");
+  assert.match(shownOf(box), /none/);
+  assert.match(shownOf(box), /reviewer/);
+  type(box, "dev");
+  const narrowed = shownOf(box);
+  assert.match(narrowed, /developer/);
+  assert.doesNotMatch(narrowed, /orchestrator|tester|architect|reviewer/);
+  type(box, "\r");
+  assert.match(shownOf(box), /role\s+developer/);
+});
+
+test("command rows keep their slash command at the default 80-column panel width (M7-5)", () => {
+  const rooms = new Map([
+    ["r1", followed("r1", "app", ["ann"])],
+    ["r2", followed("r2", "a room title long enough to fill the label", [])],
+  ]);
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms,
+    view: { roomId: "r1" },
+  });
+  box.menu();
+  // At 80 columns with the sidebar shown, the pop-up is 44 wide and its
+  // body gets 40; the menu is what the person sees at the default size.
+  const shown = stripTerminalSequences(
+    box.panel?.body.render(40).join("\n") ?? "",
+  );
+  // Anchored: the whole row is the label, the command and padding, so a
+  // crop that cut the command or added a stray `…` fails here.
+  assert.match(shown, /^ {2}new room … +\/new *$/m);
+  assert.match(shown, /^ {2}help +\/help *$/m);
+
+  // A label cut to fit says so: a long name must not read as another name.
+  const thread = makeBox(NO_DAEMON_YET, {
+    rooms: new Map([["r1", followed("r1", "app", ["reviewer-backend"])]]),
+    view: { roomId: "r1", participantId: "p-reviewer-backend" },
+  });
+  thread.menu();
+  const cut = stripTerminalSequences(
+    thread.panel?.body.render(40).join("\n") ?? "",
+  );
+  assert.match(cut, /remove reviewer-bac… +\/remove/);
+  assert.match(cut, /cancel turn +\/cancel/);
+});
+
+test("clearing the filter puts the cursor back on the current value (M7-5)", () => {
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1", participantId: "p-ann" },
+  });
+  box.menu();
+  type(box, "/mode\r");
+  assert.equal(box.panel?.title, "ann · mode");
+  assert.match(shownOf(box), /→ safe/);
+  type(box, "a\x7f");
+  assert.match(shownOf(box), /→ safe/, "Backspace to empty");
+  type(box, "a\x1b");
+  assert.equal(box.panel?.title, "ann · mode", "Esc clears, the list stays");
+  assert.match(shownOf(box), /→ safe/, "Esc to empty");
+});
+
+test("Enter on a filter that matches nothing runs nothing and keeps the box (M7-5)", () => {
+  const ran: RouteCommand[] = [];
+  const opened: unknown[] = [];
+  const box = makeBox(NO_DAEMON_YET, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+    open: (next) => opened.push(next),
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  box.menu();
+  type(box, "zzz");
+  assert.match(shownOf(box), /No matching/);
+  type(box, "\r");
+  assert.equal(box.panel?.title, "app");
+  assert.deepEqual(ran, []);
+  assert.deepEqual(opened, []);
 });

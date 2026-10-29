@@ -7,18 +7,25 @@
  * goes back one level, and a first-level menu closes it. A command it sends goes through the
  * screen's `run`; the question box is `chat/tui/question.ts`.
  *
+ * Typed letters filter a pick list (M7-5). Each menu row shows its slash
+ * command on the right, and the menu has an `open` row for each room and
+ * agent, because the sidebar can be hidden.
+ *
  * The box has a thick border, yellow for a question and cyan for the rest,
  * with the title as a chip. `Screen` in `chat/tui.ts` dims what is behind.
  */
 
 import {
   type Component,
+  fuzzyFilter,
+  getKeybindings,
   Input,
   Key,
   matchesKey,
   type OverlayHandle,
   type SelectItem,
   SelectList,
+  type SelectListLayoutOptions,
   type SettingItem,
   SettingsList,
   type TuiAltScreen,
@@ -45,7 +52,7 @@ import {
   setupLines,
 } from "../../client/setup.ts";
 import { bold, cyan, dim, inverse, NO_DAEMON, yellow } from "../common.ts";
-import type { View } from "../view.ts";
+import { rows, same, type View } from "../view.ts";
 import type { Queue } from "./question.ts";
 import { SIDEBAR_WIDTH } from "./sidebar.ts";
 
@@ -58,6 +65,14 @@ const EDITOR_THEME = {
     scrollInfo: dim,
     noMatch: dim,
   },
+};
+/** Let a pick list size its label column to its widest row, so a command
+ *  still fits on the right in the 80-column chat's pop-up. A label cut to
+ *  fit ends with `…`, so a long name does not read as another name. */
+const PICK_LAYOUT: SelectListLayoutOptions = {
+  minPrimaryColumnWidth: 1,
+  maxPrimaryColumnWidth: 22,
+  truncatePrimary: ({ text, maxWidth }) => truncateToWidth(text, maxWidth, "…"),
 };
 
 /** The roles (R44) and modes (R12) the menu offers. The daemon checks
@@ -138,6 +153,7 @@ function panelParts({
   changes,
   forward,
   deleteRoom,
+  open,
   run,
   end,
   left,
@@ -165,6 +181,8 @@ function panelParts({
   ) => void;
   /** Opens the delete preview in the side pane (#352). */
   deleteRoom: () => void;
+  /** Opens a room or a thread, as a sidebar row does (M7-5). */
+  open: (next: View) => void;
   run: (c: RouteCommand) => Promise<boolean>;
   end: (code: number, ...last: string[]) => void;
   left: () => string;
@@ -191,9 +209,6 @@ function panelParts({
         `${edge("┃")} ${truncateToWidth(l, inner, "…", true)} ${edge("┃")}`;
       const lines = [border(panel.title, panel.right, width, edge)];
       for (const l of panel.body.render(inner)) lines.push(side(l));
-      if (panel.body instanceof SelectList) {
-        lines.push(side(dim("↑↓ Enter · Esc back")));
-      }
       if (panel.error) {
         for (const l of wrapTextWithAnsi(yellow(`! ${panel.error}`), inner)) {
           lines.push(side(l));
@@ -274,6 +289,90 @@ function panelParts({
   const focusPanel = () => {
     if (panel) tui.setFocus(frame);
   };
+  /** A filterable list. Typed letters filter the rows (M7-5), fuzzy over
+   *  the label and the description, which holds a row's slash command, best
+   *  match first. pi-tui's `setFilter` is not used: it matches only the
+   *  start of the hidden `value`. Esc first clears the filter, then calls
+   *  `back`. */
+  // Its calls are one component's render, input and list plumbing.
+  // pi-lens-ignore: high-fan-out
+  const picker = (
+    items: SelectItem[],
+    current: string | undefined,
+    then: (value: string) => void,
+    back: () => void,
+  ): Component => {
+    const filter = textBox("");
+    const listOf = (shown: SelectItem[]) => {
+      const l = new SelectList(
+        shown,
+        panelRoom(),
+        EDITOR_THEME.selectList,
+        PICK_LAYOUT,
+      );
+      l.onSelect = ({ value }) => then(value);
+      // The full list starts on the current value, also after the filter
+      // is cleared, so Enter on it keeps the value. A filtered list starts
+      // on its best match.
+      const at =
+        shown === items ? items.findIndex((i) => i.value === current) : -1;
+      if (at > 0) l.setSelectedIndex(at);
+      return l;
+    };
+    let list = listOf(items);
+    const narrow = () => {
+      const q = filter.getValue().trim();
+      list = listOf(
+        q
+          ? fuzzyFilter(items, q, (i) => `${i.label} ${i.description ?? ""}`)
+          : items,
+      );
+    };
+    const LIST_KEYS = [
+      "tui.select.up",
+      "tui.select.down",
+      "tui.select.pageUp",
+      "tui.select.pageDown",
+      "tui.select.confirm",
+    ] as const;
+    // SelectList draws descriptions only above 40 columns. The default
+    // 80-column chat's pop-up body is 40, so render at 41 and crop the
+    // result. The narrow label column leaves the command inside that line.
+    const listLines = (w: number) =>
+      list
+        .render(Math.max(w, 41))
+        .map((line) => truncateToWidth(line, w, "…", true));
+    return {
+      render: (w) => [
+        ...(filter.getValue() ? filter.render(w) : []),
+        ...listLines(w),
+        dim(
+          filter.getValue()
+            ? "↑↓ Enter · Esc clear"
+            : "type to filter · ↑↓ Enter · Esc back",
+        ),
+      ],
+      handleInput(key) {
+        const kb = getKeybindings();
+        if (kb.matches(key, "tui.select.cancel")) {
+          if (!filter.getValue()) return back();
+          filter.setValue("");
+          narrow();
+        } else if (LIST_KEYS.some((k) => kb.matches(key, k))) {
+          list.handleInput(key);
+        } else {
+          const was = filter.getValue();
+          filter.handleInput(key);
+          if (filter.getValue() !== was) narrow();
+        }
+        tui.requestRender();
+      },
+      invalidate: () => {
+        filter.invalidate();
+        list.invalidate();
+      },
+    };
+  };
   /** A pick list in the pop-up. `back` is where Esc goes: the parent menu
    *  on a second-level list, and the whole pop-up closes by default. */
   // The fifth parameter is the optional Esc fallback, not a required input.
@@ -284,14 +383,7 @@ function panelParts({
     current: string | undefined,
     then: (value: string) => void,
     back: () => void = hidePanel,
-  ) => {
-    const list = new SelectList(items, panelRoom(), EDITOR_THEME.selectList);
-    const at = items.findIndex((i) => i.value === current);
-    if (at > 0) list.setSelectedIndex(at);
-    list.onSelect = ({ value }) => then(value);
-    list.onCancel = back;
-    showPanel(title, list);
-  };
+  ) => showPanel(title, picker(items, current, then, back));
   const words = (values: string[]) =>
     values.map((v) => ({ value: v, label: v }));
   /** A text box holding `value`, with the cursor after it: pi-tui's
@@ -523,38 +615,73 @@ function panelParts({
       value: `?${q.id}`,
       label: `? ${nameOf(qr.state, q.participantId)} asks: ${q.title}`,
     }));
+    // Each command row shows its slash command on the right, so the person
+    // learns it (M7-5).
+    const row = (value: string, label: string, command: string) => ({
+      value,
+      label,
+      description: command,
+    });
     if (p) {
       const forwardable = r
         ? roster(r.state).some((q) => q.id !== p.id)
         : false;
+      // Only the command: `@name ` before it would push it out of a narrow
+      // box when the name is long. The title names the agent (M7-5).
       items.push(
-        { value: "cancel", label: "cancel turn" },
-        // The value is in the label: the sidebar is too narrow for a
-        // second column.
-        { value: "mode", label: `mode · ${p.mode}` },
-        { value: "role", label: `role · ${p.role ?? "none"}` },
-        { value: "rename", label: "rename …" },
-        { value: "diff", label: "view changes" },
+        row("cancel", "cancel turn", "/cancel"),
+        // The value is in the label: the right column holds the command.
+        row("mode", `mode · ${p.mode}`, "/mode"),
+        row("role", `role · ${p.role ?? "none"}`, "/role"),
+        row("rename", "rename …", "/rename"),
+        row("diff", "view changes", "/diff"),
       );
       if (forwardable) {
-        items.push({ value: "forward", label: "fast-forward from …" });
+        items.push(row("forward", "fast-forward from …", "/ff"));
       }
-      items.push({ value: "remove", label: `remove ${p.name}` });
+      items.push(row("remove", `remove ${p.name}`, "/remove"));
     } else if (r && roster(r.state).length > 0) {
       items.push({ value: "agent", label: "agent …" });
     }
-    if (r) items.push({ value: "add", label: "add agent …" });
-    if (r) items.push({ value: "title", label: "rename room …" });
-    items.push({ value: "new", label: "new room …" });
-    if (r) items.push({ value: "dismiss", label: "dismiss room" });
-    if (r) items.push({ value: "delete", label: "delete room …" });
-    items.push({ value: "help", label: "help" });
-    items.push({ value: "leave", label: "leave" });
+    if (r) items.push(row("add", "add agent …", "/add"));
+    if (r) items.push(row("title", "rename room …", "/title"));
+    items.push(row("new", "new room …", "/new"));
+    if (r) items.push(row("dismiss", "dismiss room", "/dismiss"));
+    if (r) items.push(row("delete", "delete room …", "/delete"));
+    // A row for each room and agent, as the sidebar has, because the
+    // sidebar can be hidden. The view the person is on is left out.
+    const opens = rows(rooms).filter((v) => !same(v, view()));
+    opens.forEach((v, i) => {
+      const f = rooms.get(v.roomId);
+      if (!f) return;
+      const room = f.entry.title ?? f.entry.id;
+      items.push(
+        v.participantId
+          ? {
+              value: `>${i}`,
+              label: `open @${nameOf(f.state, v.participantId)}`,
+              description: room,
+            }
+          : { value: `>${i}`, label: `open ${room}` },
+      );
+    });
+    items.push(row("help", "help", "/help"));
+    items.push(row("leave", "leave", "/leave"));
     let title = "menu";
     if (p) title = `${p.name} · ${p.harness}${p.role ? ` · ${p.role}` : ""}`;
     else if (r) title = r.entry.title ?? r.entry.id;
     const self = () => openMenu(pid, back);
-    pickList(title, items, undefined, (value) => choose(value, p, self), back);
+    pickList(
+      title,
+      items,
+      undefined,
+      (value) => {
+        const next = value.startsWith(">") && opens[Number(value.slice(1))];
+        if (next) open(next);
+        else choose(value, p, self);
+      },
+      back,
+    );
   };
 
   /** The first-level menu for the open view: an agent's commands in a
@@ -733,20 +860,16 @@ function panelParts({
           return f.folder ? folderField(value, done) : field(value, done);
         // The last pick can turn the list into a text box: a git ref.
         let now: Component;
-        const list = new SelectList(
+        now = picker(
           words(f.pick),
-          panelRoom(),
-          EDITOR_THEME.selectList,
+          value,
+          (v) => {
+            if (!TYPE_IT.has(v)) return done(v);
+            now = field("", done);
+            tui.requestRender();
+          },
+          () => done(),
         );
-        const at = f.pick.indexOf(value);
-        if (at > 0) list.setSelectedIndex(at);
-        list.onCancel = () => done();
-        list.onSelect = ({ value: v }) => {
-          if (!TYPE_IT.has(v)) return done(v);
-          now = field("", done);
-          tui.requestRender();
-        };
-        now = list;
         return {
           render: (w) => now.render(w),
           handleInput: (k) => now.handleInput?.(k),

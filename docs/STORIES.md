@@ -3202,6 +3202,11 @@ each room, because the sidebar can be hidden. Esc first clears the filter, then 
 `ctrl+o` stays the key: `ctrl+p` moves the row cursor (M4-2).
 *Done when* tests cover the filter narrowing the rows, Enter running the top row, the Esc
 order, and the slash command on each row.
+**Decided at pickup 2026-10-29 (#248):** every pick list in the pop-up filters, with
+`fuzzyFilter` over the label and the command. `setFilter` matches only the start of a
+row's hidden value, so it is not used. The `open` rows mirror the sidebar, without the
+view the person is on. An agent's rows show `/mode`, not `@name /mode`: in a
+40-column box a long name pushed the command out (decided 2026-10-29).
 
 **M7-6 · Plain transcript scrollbar · XS · needs nothing**
 **Added 2026-10-21.** The transcript's `ScrollView` hides its built-in scrollbar today.
