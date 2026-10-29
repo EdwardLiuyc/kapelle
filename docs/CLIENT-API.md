@@ -7,13 +7,13 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.15** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.16** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
 added replies and copies, `PATCH /rooms/:id`, which renames a room, M8-3, #267,
-which added the `reviewer` role and a participant's `turnFrom`, and #352, which added
-the delete preview).
+which added the `reviewer` role and a participant's `turnFrom`, #352, which added
+the delete preview, and M9-5, #300, which added an agent's `model`).
 
 ## Contents
 
@@ -1172,6 +1172,13 @@ An agent takes:
   only participant when the room has one and no orchestrator: see
   [Addressing](#addressing).
 - `mode`: optional. `ask`, `safe` or `auto`. The default is `auto`. See [Modes](#modes).
+- `model`: optional, since 1.16. A model id, such as one from the agent's `models` in
+  [`GET /harnesses`](#get-harnesses). The daemon does not check it against that list; the
+  harness does. The daemon sets it after each start of the harness, a revive too, before
+  the first turn. When the harness refuses it, does not answer, answers with another
+  model, or lists no models, the agent still joins, on the model the harness chose, and a
+  notice says so. A failed set is tried again at the next revive, not before. Without
+  `model`, the harness chooses.
 - `base`: optional. The git ref the participant's branch starts from. It can be another
   participant's `branch`, so a reviewer starts from the developer's commits. The default
   is the repository's `HEAD`. Only committed work is on a branch. The participant's
@@ -1214,6 +1221,7 @@ The reply comes when every harness is ready. This can take some seconds.
       "branch": "kapelle/room-20260922-101500-a1b2/p-0k3x9a2b",
       "baseSha": "3f2a…",
       "sessionId": "ses_…",
+      "model": "deepseek/deepseek-chat",
       "status": "idle",
       "notices": [{ "text": "…", "kind": "containment" }]
     }
@@ -1236,6 +1244,11 @@ warning that a loaded participant's memory may be behind its files is on the str
 as `memoryMayBeBehind` on `_client_participant_revived`. A client that only polls this
 reply never sees it.
 
+`model` (since 1.16) is the model the harness runs on, as the harness last said. It is
+missing when the harness lists no models, and for a restored participant until its first
+revive. It may differ from the `model` that was asked for: then a notice names the
+refusal. The asked one is kept, and sent again at the next revive.
+
 `seq` is the size of the room's log when the daemon answered. The reply counts every line
 up to that `seq`, and a line above it is newer than the reply.
 
@@ -1252,14 +1265,13 @@ turn ends. A client that shows the whole-branch diff needs no extra step:
 
 **Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
-bad `title`, a bad or missing harness, a bad `name`, `role`, `mode` or `settings`, or an
-unknown agent field; `409` `name_taken` or `orchestrator_exists` when two agents in the
-list clash; `400` `invalid_config` when the repository's `.kapelle/config.json` is not
-valid, because the room reads its watchdog limits and `linkPaths` from it; `400`
-`invalid_request` for a
-bad `base`; `503` `shutting_down` when the
-daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example its
-binary is not installed).
+bad `title`, a bad or missing harness, a bad `name`, `role`, `mode`, `model` or
+`settings`, or an unknown agent field; `409` `name_taken` or `orchestrator_exists` when
+two agents in the list clash; `400` `invalid_config` when the repository's
+`.kapelle/config.json` is not valid, because the room reads its watchdog limits and
+`linkPaths` from it; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when
+the daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example
+its binary is not installed).
 
 A `base` is bad when it is not a commit, or when its commit has no copy of the folder
 `cwd` names inside the repository. That folder must be in the commit even when no `base`

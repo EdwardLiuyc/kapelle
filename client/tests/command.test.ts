@@ -54,6 +54,7 @@ test("/add takes a harness or --cmd, and quotes keep spaces", () => {
         name: "carol",
         role: "tester",
         mode: "ask",
+        model: undefined,
         base: "@alice",
       },
     },
@@ -67,9 +68,14 @@ test("/add takes a harness or --cmd, and quotes keep spaces", () => {
       name: undefined,
       role: undefined,
       mode: undefined,
+      model: undefined,
       base: undefined,
     },
   });
+  // M9-5: sent as typed; the harness checks it.
+  const model = parse("/add claude --model opus");
+  assert.ok(model && "agent" in model);
+  assert.equal(model.agent.model, "opus");
   const bad = parse("/add claude --colour red");
   assert.ok(bad && "error" in bad && /colour/.test(bad.error), String(bad));
   const two = parse("/add claude pi");
@@ -82,9 +88,22 @@ test("/new makes its harness a developer, and resolves --cwd", () => {
     body: {
       cwd: resolve("sub"),
       title: "fix",
-      agents: [{ agent: "pi", cmd: undefined, name: "ann", role: "developer" }],
+      agents: [
+        {
+          agent: "pi",
+          cmd: undefined,
+          name: "ann",
+          model: undefined,
+          role: "developer",
+        },
+      ],
     },
   });
+  const model = parse("/new pi --model deepseek/chat");
+  assert.ok(model && "body" in model);
+  assert.equal(model.body.agents?.[0]?.model, "deepseek/chat");
+  const alone = parse("/new --model x");
+  assert.ok(alone && "error" in alone && /--model needs/.test(alone.error));
   const empty = parse("/new --title x");
   assert.ok(empty && "body" in empty);
   assert.deepEqual(empty.body.agents, []);

@@ -23,6 +23,7 @@ import type {
   SessionId,
   SessionModeId,
   SessionUpdate,
+  SetSessionConfigOptionResponse,
   SetSessionModeResponse,
   ToolCallContent,
   ToolCallId,
@@ -52,6 +53,7 @@ const TIMED_METHODS = new Set([
   "session/close",
   "session/delete",
   "session/set_mode",
+  "session/set_config_option",
 ]);
 
 // M0-1 measured the slowest handshake step at 3.0s (copilot's session/new),
@@ -608,6 +610,25 @@ export class AcpAgent {
       sessionId: this.sessionId,
       modeId,
     });
+  }
+
+  /**
+   * Set one of the session's options, such as the model (M9-5). `configId`
+   * is the option's `id` from `configOptions`. A value the harness refuses
+   * is a throw: pi and claude answer only `Internal error` (§Models and
+   * login), so the caller words the message. `configOptions` here stays as
+   * the session sent it: the reply may leave an option out.
+   */
+  async setConfigOption(
+    configId: string,
+    value: string,
+  ): Promise<SetSessionConfigOptionResponse> {
+    if (!this.sessionId)
+      throw new Error("no session — call newSession() first");
+    return this.request<SetSessionConfigOptionResponse>(
+      "session/set_config_option",
+      { sessionId: this.sessionId, configId, value },
+    );
   }
 
   /**

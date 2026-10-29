@@ -46,7 +46,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 15 } as const;
+export const API_VERSION = { major: 1, minor: 16 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -389,6 +389,11 @@ export interface ParticipantDto {
   /** The id of the participant whose message the live turn runs. Absent
    *  when the person sent it, or when no turn runs. Since 1.14 (M8-3). */
   turnFrom?: string;
+  /** The model the harness runs on, as it last said. Absent when it lists
+   *  no models, and before a restored participant's first revive. It may
+   *  not be the one asked for: a refusal leaves a notice. Since 1.16
+   *  (M9-5). */
+  model?: string;
   notices: Notice[];
 }
 

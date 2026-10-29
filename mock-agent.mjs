@@ -5,7 +5,8 @@
  * Lets you exercise the client with no harness installed:
  *   node cli.ts "hello" --cmd "node mock-agent.mjs" --mode safe
  *
- * It answers initialize / session/new / session/set_mode / session/prompt,
+ * It answers initialize / session/new / session/set_mode / session/prompt
+ * (and `session/set_config_option` under `--scenario models`),
  * streams a message, calls back into the client's fs/read_text_file, and asks
  * permission for a write — enough to prove every path in the client works.
  *
@@ -75,7 +76,7 @@ const SCENARIOS = {
   half: "a note and a tool call, then waits for a cancel, like stall, and answers it end_turn, as copilot does (§M0-4)",
   "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
   models:
-    "session/new and session/load list two models in a group; the handshake offers session/delete, which drops the session's --store file",
+    "session/new and session/load list two models in a group, both starting on mock/fast; session/set_config_option takes a listed model and refuses any other with -32603, as pi and claude do; --model-current makes its reply name another model, and --model-exit makes the harness exit instead of answering; the handshake offers session/delete, which drops the session's --store file",
   "auth-required":
     "session/new fails with -32000 Authentication required, as pi does logged out",
   "auth-none":
@@ -97,6 +98,10 @@ const barrierDir = barrierAt === -1 ? null : process.argv[barrierAt + 1];
 const barrierCountAt = process.argv.indexOf("--barrier-count");
 const barrierCount =
   barrierCountAt === -1 ? 0 : Number(process.argv[barrierCountAt + 1]);
+const modelCurrentAt = process.argv.indexOf("--model-current");
+const modelCurrent =
+  modelCurrentAt === -1 ? null : process.argv[modelCurrentAt + 1];
+const modelExit = process.argv.includes("--model-exit");
 const authHoldAt = process.argv.indexOf("--auth-hold");
 const authHoldFile = authHoldAt === -1 ? null : process.argv[authHoldAt + 1];
 const lockCwd = process.argv.includes("--lock-cwd");
@@ -264,9 +269,16 @@ const sessions = new Set();
  *  by the session, not the process, so a fresh session remembers nothing. */
 const lastPrompt = new Map();
 
-/** `--store`'s file for one session: every prompt it saw, in order. */
+/** `--store`'s file for one session: every prompt it saw, in order. A
+ *  missing or broken file is no session; a prompt then starts a new list. */
 const storeFile = (sid) => join(store, `${sid}.json`);
-const stored = (sid) => JSON.parse(readFileSync(storeFile(sid), "utf8"));
+const stored = (sid) => {
+  try {
+    return JSON.parse(readFileSync(storeFile(sid), "utf8"));
+  } catch {
+    return undefined;
+  }
+};
 const keep = (sid, prompts) =>
   store && writeFileSync(storeFile(sid), JSON.stringify(prompts));
 
@@ -284,17 +296,25 @@ function callClient(method, params) {
   });
 }
 
+/** `models`' model ids. A load starts on the first again: no harness was
+ *  measured to keep a set model across a load. */
+const MODELS = ["mock/fast", "mock/smart"];
+
+/** The option id is not `"model"` on purpose: the room finds it by category,
+ *  so the tests catch code that assumes the id. */
+const MODEL_OPTION_ID = "model-choice";
+
 /** `models`' model option, on `session/new` and `session/load` alike. */
-const modelOptions = () =>
+const modelOptions = (currentValue = MODELS[0]) =>
   scenario === "models"
     ? {
         configOptions: [
           {
-            id: "model",
+            id: MODEL_OPTION_ID,
             name: "Model",
             category: "model",
             type: "select",
-            currentValue: "mock/fast",
+            currentValue,
             options: [
               {
                 group: "mock",
@@ -457,6 +477,27 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     return;
   }
 
+  // `models` only: the other scenarios list no option to set.
+  if (msg.method === "session/set_config_option") {
+    const { configId, value } = msg.params;
+    if (scenario !== "models" || configId !== MODEL_OPTION_ID) {
+      fail(msg.id, `no option "${configId}"`);
+      return;
+    }
+    // No answer at all, as a harness that dies or hangs gives.
+    if (modelExit) process.exit(1);
+    if (!MODELS.includes(value)) {
+      send({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32603, message: "Internal error" },
+      });
+      return;
+    }
+    reply(msg.id, modelOptions(modelCurrent ?? value));
+    return;
+  }
+
   // Any id is accepted, and echoed as `current_mode_update`, so a test reads
   // from the event stream which harness-side id the client sent.
   if (msg.method === "session/set_mode") {
@@ -518,7 +559,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       const text = msg.params.prompt?.[0]?.text ?? "";
       const previous = lastPrompt.get(sid) ?? "(none)";
       lastPrompt.set(sid, text);
-      if (store) keep(sid, [...stored(sid), text]);
+      if (store) keep(sid, [...(stored(sid) ?? []), text]);
       if (scenario === "slow") {
         // Kept where `session/cancel` finds it, which answers `cancelled`.
         stalledPromptId = msg.id;

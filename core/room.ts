@@ -134,6 +134,14 @@
  * open decisions are denied as `cancel`; a mode that leaves `ask` answers
  * them as `mode_change`.
  *
+ * **A participant may ask for a model** (M9-5). The room sets the session's
+ * option with `category: "model"` after every start, a load too, right after
+ * the mode, so before the first turn. Whether a load keeps the model was not
+ * measured; sending it again makes that not matter (decided 2026-10-29). A
+ * refused model, or a harness with no model option, never fails the add or
+ * the revive: the harness stays on the model it had, and a notice says so
+ * (decided 2026-10-29). `model` on the participant is the one in use.
+ *
  * **MVP scope, deliberately.** The watchdog only warns, and only during a turn (R38):
  * a chat turn is never cut by a clock. No result preamble, no cross-check: a
  * chat turn is conversation, not a deliverable (R39). What stays is what makes a room
@@ -158,7 +166,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { AcpAgent, type Policy } from "../protocol/agent.ts";
+import { AcpAgent, type Policy, RpcError } from "../protocol/agent.ts";
 import {
   type ClientMode,
   type ResolvedAgent,
@@ -278,6 +286,8 @@ export interface AgentRequest {
   base?: string;
   mode: ClientMode;
   settings: Settings;
+  /** The model to set after each start; the harness's own when absent. */
+  model?: string;
 }
 
 /** What `PATCH` may change. A `null` role clears it. */
@@ -337,6 +347,9 @@ export interface Participant {
   readonly sessionId: string;
   /** How the last revive came back; absent before the first. */
   readonly resumed?: "loaded" | "fresh";
+  /** The model in use, as the harness last said; absent when it lists
+   *  none, or before its first start. */
+  readonly model?: string;
   /** The room's notices, then this participant's containment and worktree
    *  notices. #13's lines are never dropped, and a room has no terminal of
    *  its own, so the caller publishes them. */
@@ -397,6 +410,8 @@ interface ParticipantRecord {
   harness: string;
   mode: ClientMode;
   settings: Settings;
+  /** The model asked for, sent again at each revive; not the one in use. */
+  model?: string;
   worktree: string;
   /** The branch and base the checkout had at the last save. A restore
    *  reconciles both with the checkout again, in case a crash caught a
@@ -509,6 +524,7 @@ export const AGENT_FIELDS: readonly string[] = [
   "mode",
   "base",
   "settings",
+  "model",
 ];
 
 /** A name, or a throw naming what is wrong. `fallback` is the harness name
@@ -598,10 +614,8 @@ export function roomAgent(entry: unknown): AgentRequest {
       `unknown agent field "${extra}"; an agent takes ${AGENT_FIELDS.join(", ")}`,
     );
   }
-  const { agent, cmd, name, role, mode, base, settings } = entry as Record<
-    string,
-    unknown
-  >;
+  const { agent, cmd, name, role, mode, base, settings, model } =
+    entry as Record<string, unknown>;
   const spec = roomHarness(agent, cmd);
   const request: AgentRequest = {
     spec,
@@ -619,6 +633,13 @@ export function roomAgent(entry: unknown): AgentRequest {
       throw new Error('"base" must be a non-empty string');
     }
     request.base = base;
+  }
+  // Any id: the harness checks it, not a list of ours (D3).
+  if (model !== undefined) {
+    if (typeof model !== "string" || !model.trim()) {
+      throw new Error('"model" must be a non-empty string');
+    }
+    request.model = model;
   }
   return request;
 }
@@ -700,6 +721,8 @@ interface Member {
   participant: Participant;
   spec: ResolvedAgent;
   source: AgentRequest["source"];
+  /** The model the request asked for, which `room.json` keeps. */
+  asked?: string;
   /** Its own notices, which `room.json` keeps. */
   own: RoomNotice[];
   stop: () => Promise<void>;
@@ -806,6 +829,7 @@ export function readRoomRecord(path: string): RoomRecord {
       // string, is dropped, so it is never saved again.
       turns: Number.isInteger(p.turns) ? p.turns : undefined,
       orderedBy: typeof p.orderedBy === "string" ? p.orderedBy : undefined,
+      model: typeof p.model === "string" && p.model ? p.model : undefined,
     })),
   };
 }
@@ -990,6 +1014,7 @@ async function buildRoom(
       harness: p.harness,
       mode: p.mode,
       settings: { allowReadOutsideRoot: p.settings.allowReadOutsideRoot },
+      ...(m.asked && { model: m.asked }),
       worktree: p.worktree,
       ...(p.branch && { branch: p.branch }),
       ...(p.baseSha && { baseSha: p.baseSha }),
@@ -1263,6 +1288,7 @@ async function buildRoom(
       ...made,
       spec: request.spec,
       source: request.source,
+      ...(request.model && { asked: request.model }),
       own,
       onNotice,
     };
@@ -1493,6 +1519,7 @@ async function buildRoom(
       mode: saved.mode,
       settings: saved.settings,
       ...(saved.role && { role: saved.role }),
+      ...(saved.model && { model: saved.model }),
     };
     const info =
       saved.branch && saved.baseSha
@@ -1564,7 +1591,7 @@ function createParticipant({
   id,
   roomId,
   permissions,
-  request: { spec, name, role, settings, mode: initialMode },
+  request: { spec, name, role, settings, mode: initialMode, model: asked },
   worktree,
   info,
   bus,
@@ -1611,7 +1638,7 @@ function createParticipant({
   }) => void;
   /** Where what a session said goes (M9-4). */
   report?: (seen: Seen) => void;
-}): Omit<Member, "spec" | "source" | "own" | "onNotice"> {
+}): Omit<Member, "spec" | "source" | "asked" | "own" | "onNotice"> {
   /** The live harness; undefined before `launch` and once it has stopped. */
   let agent: AcpAgent | undefined;
   /** Why there is no harness, once there was one (R46). */
@@ -1689,6 +1716,51 @@ function createParticipant({
       return [{ text: modeLine(spec.name, mode, failure) }];
     }
     return [];
+  };
+
+  // The model in use, as the harness last said, and the line a refusal
+  // left. Both are worked out again at each start.
+  let model: string | undefined;
+  let modelLine: RoomNotice | undefined;
+  /** Sets the asked model on a harness that just started. A refusal leaves
+   *  it on its own model: pi and claude say only `Internal error`, so the
+   *  line is ours, with theirs after it. A time-out or an exit is no
+   *  refusal, and the harness may still apply it, so its line says less. A
+   *  failed set is not tried again in this process: the next start does,
+   *  and so may the person (M9-6). */
+  const syncModel = async (next: AcpAgent) => {
+    const option = next.configOptions.find((o) => o.category === "model");
+    const own = option?.type === "select" ? option.currentValue : undefined;
+    model = own;
+    modelLine = undefined;
+    if (!asked) return;
+    const on = own ? `the model "${own}"` : "its own model";
+    if (!option) {
+      modelLine = {
+        text: `${spec.name} lists no models, so the model "${asked}" was not set; it runs on ${on}`,
+      };
+      return;
+    }
+    try {
+      const res = await next.setConfigOption(option.id, asked);
+      const now = res?.configOptions?.find((o) => o.category === "model");
+      model = now?.type === "select" ? now.currentValue : asked;
+      // It took the set, yet names another model.
+      if (model !== asked) {
+        modelLine = {
+          text: `${spec.name} took the model "${asked}" but runs on "${model}"`,
+        };
+      }
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      modelLine = {
+        text:
+          err instanceof RpcError
+            ? `${spec.name} refused the model "${asked}" (${why}); it runs on ${on}`
+            : `${spec.name} did not confirm the model "${asked}" (${why}); ` +
+              `it may still run on ${on}`,
+      };
+    }
   };
 
   let turn: Promise<void> | undefined;
@@ -1812,7 +1884,9 @@ function createParticipant({
         throw err;
       });
       // A real session's models replace the saved ones (3A): a revive's
-      // load is a real session too, but it gives no login state.
+      // load is a real session too, but it gives no login state. Before
+      // `syncModel`, so `model` here is the one the session started with;
+      // `configOptions` does not follow a set (M9-6 must keep that order).
       if (spec.setup) {
         report?.(sessionSeen(spec.setup, next.configOptions, loaded));
       }
@@ -1831,6 +1905,8 @@ function createParticipant({
     sent = undefined;
     failure = undefined;
     await syncMode();
+    // Nor, maybe, its model: not measured, so it is sent again (M9-5).
+    await syncModel(next);
     return loaded;
   };
 
@@ -2135,8 +2211,16 @@ function createParticipant({
     get resumed() {
       return resumed;
     },
+    get model() {
+      return model;
+    },
     get notices() {
-      return [...notices(), ...modeLines, ...modeSend()];
+      return [
+        ...notices(),
+        ...modeLines,
+        ...modeSend(),
+        ...(modelLine ? [modelLine] : []),
+      ];
     },
     status: () => {
       if (dismissed()) return "dismissed";

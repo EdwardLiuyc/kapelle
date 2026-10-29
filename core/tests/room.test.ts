@@ -1931,7 +1931,11 @@ async function loadingMock(
 async function loading(
   t: TestContext,
   scenario: string,
-  { loads = true, pauseGraceMs = 2_000 } = {},
+  {
+    loads = true,
+    pauseGraceMs = 2_000,
+    model,
+  }: { loads?: boolean; pauseGraceMs?: number; model?: string } = {},
 ) {
   const agent = await loadingMock(t, scenario, { loads });
   const repo = await gitRepo(t);
@@ -1940,7 +1944,7 @@ async function loading(
   const room = await openRoom({
     roomId,
     cwd: repo,
-    agents: [roomAgent({ agent, name: "alice" })],
+    agents: [roomAgent({ agent, name: "alice", ...(model && { model }) })],
     setup: await openWorktrees(repo, roomId),
     bus,
     permissions: queue,
@@ -2581,4 +2585,146 @@ test("a revive's load saves the models, but no login state (M9-4)", async (t) =>
       model: "mock/fast",
     },
   ]);
+});
+
+// --- M9-5: the model a participant asks for -----------------------------
+
+/** A room whose `alice` runs the mock's `scenario` and asks for `model`.
+ *  `modelCurrent` makes the mock's set reply name that model instead.
+ *  `methods` lists each request her harness got, in order. */
+async function modelRoom(
+  t: TestContext,
+  model?: string,
+  scenario = "models",
+  modelCurrent?: string,
+  flags = "",
+) {
+  const repo = await gitRepo(t);
+  const record = join(await tempDir(t), "requests.jsonl");
+  const roomId = newRoomId();
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [
+      roomAgent({
+        cmd:
+          `node ${MOCK_AGENT} --scenario ${scenario} --record ${record}` +
+          `${modelCurrent ? ` --model-current ${modelCurrent}` : ""}${flags}`,
+        name: "alice",
+        ...(model && { model }),
+      }),
+    ],
+    setup: await openWorktrees(repo, roomId),
+    bus: createEventBus(),
+    permissions: queue,
+  });
+  t.after(() => room.dismiss());
+  const methods = async () =>
+    (await readFile(record, "utf8"))
+      .trim()
+      .split("\n")
+      .map((l) => (JSON.parse(l) as { method: string }).method);
+  const p = room.participants[0] as Participant;
+  return { room, p, methods, file: roomFile(repo, roomId) };
+}
+
+const modelLines = (p: Participant) =>
+  p.notices.filter((n) => n.text.includes("model")).map((n) => n.text);
+
+test("an asked model is set after session/new, before the first turn, and room.json keeps it (M9-5)", async (t) => {
+  const { p, methods, file } = await modelRoom(t, "mock/smart");
+  assert.equal(p.model, "mock/smart");
+  assert.deepEqual(modelLines(p), []);
+  await p.send("one");
+  const sent = await methods();
+  const set = sent.indexOf("session/set_config_option");
+  assert.ok(set > sent.indexOf("session/new"), sent.join(" "));
+  assert.ok(set < sent.indexOf("session/prompt"), sent.join(" "));
+  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
+});
+
+test("the model in use comes from the set reply, not the request (M9-5)", async (t) => {
+  const { p, file } = await modelRoom(t, "mock/smart", "models", "mock/fast");
+  assert.equal(p.model, "mock/fast", "the harness's reply");
+  // The room says so, as the /add line does.
+  assert.deepEqual(modelLines(p), [
+    'mock-agent took the model "mock/smart" but runs on "mock/fast"',
+  ]);
+  // The request is still what room.json keeps, for the next revive.
+  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
+});
+
+test("a set the harness never answers is no refusal: its notice says so (M9-5)", async (t) => {
+  const { p } = await modelRoom(
+    t,
+    "mock/smart",
+    "models",
+    undefined,
+    " --model-exit",
+  );
+  const [line] = modelLines(p);
+  assert.match(
+    line ?? "",
+    /^mock-agent did not confirm the model "mock\/smart" \(/,
+  );
+  assert.match(line ?? "", /; it may still run on the model "mock\/fast"$/);
+  assert.equal(p.model, "mock/fast");
+});
+
+test("with no model asked, nothing is sent and the harness's own model shows (M9-5)", async (t) => {
+  const { p, methods, file } = await modelRoom(t);
+  assert.equal(p.model, "mock/fast");
+  assert.ok(!(await methods()).includes("session/set_config_option"));
+  assert.equal(readRoomRecord(file).participants[0]?.model, undefined);
+});
+
+test("a refused model keeps the agent, on its own model, with kapelle's notice (M9-5)", async (t) => {
+  const { p, file } = await modelRoom(t, "mock/bogus");
+  assert.equal(p.model, "mock/fast", "the harness's own model");
+  assert.equal(p.status(), "idle");
+  assert.deepEqual(modelLines(p), [
+    'mock-agent refused the model "mock/bogus" (Internal error (code -32603)); ' +
+      'it runs on the model "mock/fast"',
+  ]);
+  // The ask is kept: a revive tries it again.
+  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/bogus");
+  await p.send("one");
+  assert.equal(p.status(), "idle", "it still takes turns");
+});
+
+test("a harness that lists no models gets a notice, and no send (M9-5)", async (t) => {
+  const { p, methods } = await modelRoom(t, "mock/smart", "remember");
+  assert.equal(p.model, undefined);
+  assert.deepEqual(modelLines(p), [
+    'mock-agent lists no models, so the model "mock/smart" was not set; it runs on its own model',
+  ]);
+  assert.ok(!(await methods()).includes("session/set_config_option"));
+});
+
+test("a revive sends the model again after the load (M9-5)", async (t) => {
+  const { repo, room, p, file } = await loading(t, "models", {
+    model: "mock/smart",
+  });
+  await p.send("one");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  // Not known until the harness starts again.
+  assert.equal(back.p.model, undefined);
+  await back.p.send("two");
+  assert.equal(back.p.resumed, "loaded");
+  // The mock's load starts on mock/fast again, as no harness was measured
+  // to keep a model, so only a new send gives mock/smart.
+  assert.equal(back.p.model, "mock/smart");
+  assert.deepEqual(modelLines(back.p), []);
+});
+
+test("an agent request takes a model as a non-empty string (M9-5)", () => {
+  assert.equal(mock("a", { model: "x/y" }).model, "x/y");
+  assert.equal(mock("a").model, undefined);
+  for (const model of [7, "", "  ", null]) {
+    assert.throws(
+      () => mock("a", { model }),
+      /"model" must be a non-empty string/,
+    );
+  }
 });

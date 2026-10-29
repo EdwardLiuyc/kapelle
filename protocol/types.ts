@@ -268,7 +268,8 @@ export interface SessionModeState extends Meta {
   availableModes: SessionMode[];
 }
 
-/** Copilot's model selection travels here; dropped silently today (M0-1). */
+/** Every harness lists its models under `model` (§Models and login): M9-4
+ *  saves the list, and M9-5 sets one with `session/set_config_option`. */
 export type SessionConfigOptionCategory =
   | "mode"
   | "model"
@@ -863,6 +864,22 @@ export interface SetSessionModeRequest extends Meta {
 
 /** Empty on the wire; `{}` rather than `null`, as with WriteTextFileResponse. */
 export interface SetSessionModeResponse extends Meta {}
+
+/** Sent by a room for the option with `category: "model"` (M9-5). `value`
+ *  is one of that option's `options`; the harness checks it, not us. */
+export interface SetSessionConfigOptionRequest extends Meta {
+  jsonrpc: "2.0";
+  id: number | string;
+  method: "session/set_config_option";
+  params: { sessionId: SessionId; configId: string; value: string } & Meta;
+}
+
+/** Every option, with the new `currentValue`. copilot's reply left out one
+ *  option its `session/new` sent (§Models and login), so it is not a full
+ *  list. */
+export interface SetSessionConfigOptionResponse extends Meta {
+  configOptions?: SessionConfigOption[];
+}
 
 /** Typed only — not sent; all three harnesses support close (M0 roll-up). */
 export interface CloseSessionRequest extends Meta {

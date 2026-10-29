@@ -585,6 +585,39 @@ test("reconcile says what happened, not a line", async (t) => {
   });
 });
 
+test("a revive reads the room again, for the model it set after the load (M9-5)", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.participants = [{ id: "p1", status: "idle" }];
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => set.rooms.get("r1")?.dto !== undefined);
+  const stream = daemon.streams.get("r1");
+  assert.ok(stream);
+  const line = (seq: number, update: object) =>
+    `id: ${seq}\ndata: ${JSON.stringify({ seq, roomId: "r1", participantId: "p1", update })}\n\n`;
+  // The added line gives the reducer the participant; its DTO read is done
+  // before the revive, so only the revive can take the model from the reply.
+  stream.write(
+    line(1, {
+      sessionUpdate: "_client_participant_added",
+      name: "ann",
+      harness: "mock",
+      mode: "safe",
+    }),
+  );
+  await until(() => set.rooms.get("r1")?.state.participants.has("p1") === true);
+  stream.write(
+    line(2, {
+      sessionUpdate: "_client_participant_revived",
+      resumed: "loaded",
+      sessionId: "s1",
+    }),
+  );
+  await until(() => said.reloads.includes("r1"));
+  assert.equal(daemon.reads.filter((id) => id === "r1").length, 2);
+});
+
 // --- across a daemon restart (M6-7d, #236) ---------------------------------
 
 const added = (seq: number, id: string, name: string): RoomEventLine => ({

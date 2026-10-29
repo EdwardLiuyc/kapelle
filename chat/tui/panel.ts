@@ -83,9 +83,10 @@ const MODES = ["auto", "ask", "safe"];
  *  text box, for a git ref or a harness the daemon did not list. */
 const OTHER_REF = "other ref…";
 const OTHER_HARNESS = "other…";
+const OTHER_MODEL = "other model…";
 /** The setup list's title (M9-3). */
 const SETUP = "agents";
-const TYPE_IT = new Set([OTHER_REF, OTHER_HARNESS]);
+const TYPE_IT = new Set([OTHER_REF, OTHER_HARNESS, OTHER_MODEL]);
 
 /**
  * The pop-up (M4-5): the ctrl+o menu, a pick list, a text box or a form, in
@@ -238,6 +239,8 @@ function panelParts({
    *  answers, and for good when this daemon has no such route or the ask
    *  failed: then the harness row is a text box. */
   let measured: string[] | undefined;
+  /** Each harness's saved model ids (M9-4), from the same answer. */
+  const models = new Map<string, string[]>();
   /** Asks `GET /harnesses` once, when the screen is up, and does not wait.
    *  Its answer fills `measured`, and opens the setup list when the person
    *  has not said "done" or no agent is ready (M9-3), unless a pop-up, a
@@ -246,7 +249,14 @@ function panelParts({
     const res = await readHarnesses(d).catch(() => undefined);
     if (!res?.ok) return;
     const ids: string[] = [];
-    for (const h of res.body.harnesses) if (h.measured) ids.push(h.id);
+    for (const h of res.body.harnesses) {
+      if (h.measured) ids.push(h.id);
+      if (h.models?.length)
+        models.set(
+          h.id,
+          h.models.map((m) => m.id),
+        );
+    }
     measured = ids.sort((a, b) => a.localeCompare(b));
     // A manual /setup, or its close, while this GET was pending is the
     // person's answer: the late startup reply must not reopen the list.
@@ -803,7 +813,9 @@ function panelParts({
       id: string;
       label: string;
       value: string;
-      pick?: string[];
+      /** A pick list, or one worked out from the form's values when the row
+       *  opens; none there makes the row a text box. */
+      pick?: string[] | ((v: Record<string, string>) => string[] | undefined);
       /** Tab completes a folder path. */
       folder?: true;
     }[],
@@ -856,12 +868,13 @@ function panelParts({
       currentValue: show(f.value),
       submenu: (_, done) => {
         const value = values[f.id] ?? "";
-        if (!f.pick)
+        const pick = typeof f.pick === "function" ? f.pick(values) : f.pick;
+        if (!pick)
           return f.folder ? folderField(value, done) : field(value, done);
         // The last pick can turn the list into a text box: a git ref.
         let now: Component;
         now = picker(
-          words(f.pick),
+          words(pick),
           value,
           (v) => {
             if (!TYPE_IT.has(v)) return done(v);
@@ -907,6 +920,19 @@ function panelParts({
     label: "harness",
     value: "",
     ...(measured && { pick: ["–", ...measured, OTHER_HARNESS] }),
+  });
+
+  /** The model row (M9-5): the chosen harness's saved models, then
+   *  `other model…` to type one. A text box when it has none saved, such as
+   *  a `command`. `–` is the harness's own model. */
+  const modelField = () => ({
+    id: "model",
+    label: "model",
+    value: "",
+    pick: (v: Record<string, string>) => {
+      const saved = v.cmd ? undefined : models.get(v.agent ?? "");
+      return saved && ["–", ...saved, OTHER_MODEL];
+    },
   });
 
   /**
@@ -979,6 +1005,7 @@ function panelParts({
           pick: ["none", ...ROLES],
         },
         { id: "mode", label: "mode", value: "auto", pick: MODES },
+        modelField(),
         {
           id: "base",
           label: "base",
@@ -995,6 +1022,7 @@ function panelParts({
           name: v.name,
           role: v.role === "none" ? undefined : v.role,
           mode: v.mode,
+          model: v.model || undefined,
           base: v.base === "HEAD" ? undefined : v.base,
         },
       }),
@@ -1016,11 +1044,17 @@ function panelParts({
         harnessField(),
         { id: "cmd", label: "command", value: "" },
         { id: "name", label: "name", value: "" },
+        modelField(),
       ],
       "open",
       (v) => {
         const cwd = absoluteFolder(v.cwd || ".");
         if (!cwd) return { error: FOLDER_GONE };
+        // As `/new --model` alone is refused: an empty room has no agent
+        // to set it on.
+        if (v.model && !v.agent && !v.cmd) {
+          return { error: "a model needs a harness or a command" };
+        }
         return {
           verb: "new",
           body: {
@@ -1033,6 +1067,7 @@ function panelParts({
                       agent: v.agent,
                       cmd: v.cmd,
                       name: v.name,
+                      model: v.model || undefined,
                       role: "developer",
                     },
                   ]

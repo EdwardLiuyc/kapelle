@@ -1450,6 +1450,81 @@ test("every typed room command reaches its route", async (t) => {
   assert.equal((await api(d, "GET", `/rooms/${roomId}`)).status, 404);
 });
 
+test("a model reaches both routes, typed or posted, and a refused one still adds the agent (M9-5)", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const MODELS = `node ${MOCK_AGENT} --scenario models`;
+  const opened = await typed(
+    d,
+    undefined,
+    `/new --cmd "${MODELS}" --name alice --model mock/smart --cwd ${cwd}`,
+  );
+  assert.ok(opened.ok && opened.room, JSON.stringify(opened));
+  assert.equal(only(opened.room).model, "mock/smart");
+  assert.equal(opened.line, `opened room ${opened.room.id}`);
+  const roomId = opened.room.id;
+  // `/new` says a refused model at once, as `/add` does.
+  const other = await typed(
+    d,
+    undefined,
+    `/new --cmd "${MODELS}" --model mock/bogus --title other --cwd ${cwd}`,
+  );
+  assert.ok(other.ok && other.room, JSON.stringify(other));
+  assert.equal(
+    other.line,
+    'opened room other; ! not confirmed on the model "mock/bogus"',
+  );
+  await api(d, "POST", `/rooms/${other.room.id}/dismiss`);
+
+  const bob = await typed(
+    d,
+    roomId,
+    `/add --cmd "${MODELS}" --name bob --model mock/bogus`,
+  );
+  assert.ok(bob.ok, JSON.stringify(bob));
+  assert.equal(
+    bob.line,
+    'added bob (mock-agent, auto, mock/fast); ! not confirmed on the model "mock/bogus"',
+  );
+  // A harness that never answers the set may still apply it, so the line
+  // claims no outcome: the room's notice says "did not confirm".
+  const eve = await typed(
+    d,
+    roomId,
+    `/add --cmd "${MODELS} --model-exit" --name eve --model mock/smart`,
+  );
+  assert.ok(eve.ok, JSON.stringify(eve));
+  assert.match(eve.line ?? "", /; ! not confirmed on the model "mock\/smart"$/);
+  const posted = await api<ParticipantDto>(
+    d,
+    "POST",
+    `/rooms/${roomId}/agents`,
+    { cmd: MODELS, name: "carol", model: "mock/smart" },
+  );
+  assert.equal(posted.status, 201);
+  assert.equal(posted.body.model, "mock/smart");
+
+  const room = await api<RoomReply>(d, "GET", `/rooms/${roomId}`);
+  const byName = new Map(room.body.participants.map((p) => [p.name, p]));
+  assert.equal(byName.get("bob")?.model, "mock/fast");
+  assert.ok(
+    byName
+      .get("bob")
+      ?.notices.some((n) => n.text.includes('refused the model "mock/bogus"')),
+    JSON.stringify(byName.get("bob")?.notices),
+  );
+
+  for (const [path, body] of [
+    [`/rooms/${roomId}/agents`, { cmd: MODELS, name: "dan", model: 7 }],
+    ["/rooms", { cwd, agents: [{ cmd: MODELS, model: "" }] }],
+  ] as const) {
+    const bad = await api<RoomReply>(d, "POST", path, body);
+    assert.equal(bad.status, 400, JSON.stringify(bad.body));
+    assert.equal(bad.body.error?.code, "invalid_request");
+    assert.match(bad.body.error?.message ?? "", /"model" must be/);
+  }
+});
+
 test("each room command shows the daemon's own message for each refusal its route documents", async (t) => {
   const d = await boot(t);
   const repo = await gitRepo(t);
