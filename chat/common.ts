@@ -83,8 +83,13 @@ const magenta = colour(35, 39);
 /** One of the 256 colours, as text and as background. */
 const fg = (n: number) => colour(`38;5;${n}`, 39);
 const bg = (n: number) => colour(`48;5;${n}`, 49);
-const bgRgb = (r: number, g: number, b: number) =>
-  colour(`48;2;${r};${g};${b}`, 49);
+/** An RGB background, with a 256-colour fallback outside truecolor terminals. */
+const bgRgb =
+  (r: number, g: number, b: number, fallback: number) =>
+  (s: string): string =>
+    /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? "")
+      ? colour(`48;2;${r};${g};${b}`, 49)(s)
+      : bg(fallback)(s);
 const plain = (s: string) => s;
 
 /** A rendered line without its padding: the trailing spaces and the style

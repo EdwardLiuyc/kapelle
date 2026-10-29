@@ -12,10 +12,11 @@
  *
  * **Tool runs fold** (M7-2). A tool call gets a status background and a
  * coloured empty row above and below it: neutral while open, green when
- * completed, red when failed. A failed call ends with `✗`, a live one gets
- * a spinner, and an edit shows `+a −d`. When the agent's next note comes,
- * or its turn ends, its tool calls since the last note
- * fold into one line at the run's first place; `chat/view.ts` says which.
+ * completed, red when failed. Completed and failed calls end with `✓` or
+ * `✗`, a live one gets a spinner, and an edit shows `+a −d`. Uncoloured
+ * empty rows separate calls and follow the last one. When the agent's next
+ * note comes, or its turn ends, its tool calls since the last note fold
+ * into one line at the run's first place; `chat/view.ts` says which.
  * A click on the line opens the run, and a second folds it. A fold above
  * the rows the person reads keeps them where they are. A question never
  * folds.
@@ -29,6 +30,8 @@
  * hide delay in `components/scroll-view.js`; `paintScrollbar()` in
  * `layout.js`, which picks the glyph and styles one cell per call; and
  * `handleScrollbarMouseEvent()` in `tui-alt-screen.js`, which sets hover.
+ * Tool rows also rely on `Text.setCustomBgFn()` in `components/text.js`
+ * invalidating the cached wrap when a call's status changes.
  */
 
 import {
@@ -169,9 +172,10 @@ const hhmm = (at: string) => {
  *  dark terminal. */
 const YOU_BAR = fg(244);
 const YOU_BG = bg(236);
-/** Tool calls: neutral while open, green or dark red when done. */
-const TOOL_ACTIVE_BG = bg(236);
-const TOOL_SUCCESS_BG = bgRgb(37, 65, 49);
+/** Active calls deliberately reuse the person's neutral background. */
+const TOOL_ACTIVE_BG = YOU_BG;
+/** Match pi's dark-theme success green, with its 256-colour fallback. */
+const TOOL_SUCCESS_BG = bgRgb(37, 65, 49, 23);
 const TOOL_FAILURE_BG = bg(52);
 
 /** The transcript: it keeps the width and the rows drawn last, to find a
@@ -225,8 +229,9 @@ function toolLines(e: Tool, live: boolean, now: number) {
       ? ""
       : ` ${green(`+${e.added}`)} ${red(`−${e.removed ?? 0}`)}`;
   let mark = "";
-  if (e.status === "failed") mark = red(" ✗");
-  else if (live && e.status !== "completed") mark = ` ${spin(now)}`;
+  if (e.status === "completed") mark = green(" ✓");
+  else if (e.status === "failed") mark = red(" ✗");
+  else if (live) mark = ` ${spin(now)}`;
   const under = (lines: string[]) => lines.map((l) => `  ${l}`);
   const [head = "", ...rest] = e.title.split("\n");
   const rows = [`${bold("$")} ${head}${counts}${mark}`, ...under(rest)];

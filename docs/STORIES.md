@@ -3126,6 +3126,11 @@ click opening and folding a run, and a fold above the view not moving it.
 **Decided 2026-10-09:** each run folds alone, so the agent's notes stay open and readable
 without a click. A failed call does not stay open under its fold: the fold line says so,
 in red.
+**Amended 2026-10-29 (#391):** an open tool call has a neutral background, a completed
+call pi's dark-green background and a failed call a dark-red background. Coloured empty
+rows pad each block; uncoloured rows separate blocks and follow the last one. A bold `$`
+starts every title, while `✓`, `✗` and the spinner keep status readable without colour.
+The success colour has a 256-colour fallback. The piped screen is unchanged.
 
 **M7-3 · Sidebar: harness, state mark, timer, changed files · M · needs M7-1**
 An agent's row shows its colour, a state mark (`◐` busy, `?` asks, `!` stall, `⏸`

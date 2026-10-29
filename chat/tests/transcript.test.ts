@@ -14,7 +14,7 @@ import {
 import type { RoomEventLine } from "../../client/contract.ts";
 import { applyLine, newRoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { inverse } from "../common.ts";
+import { bgRgb, inverse } from "../common.ts";
 import { settled, transcriptParts, unbar } from "../tui/transcript.ts";
 
 test("a copy loses each row's bar, and keeps a typed one", () => {
@@ -453,10 +453,17 @@ test("NO_COLOR: the transcript has no colour code, and inverse stays (M7-1)", (t
     else process.env.NO_COLOR = was;
   });
   process.env.NO_COLOR = "1";
-  const rows = look().join("");
+  const rows = look((line) =>
+    line({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+    }),
+  ).join("");
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   assert.doesNotMatch(rows, /\x1b\[(3[0-9]|4[0-9]|9[0-7]|10[0-7])[;m]/);
   assert.ok(rows.includes("\x1b[1m"), "bold stays");
+  assert.ok(rows.includes("Read File ✓"), "success survives without colour");
   assert.equal(inverse("x"), "\x1b[7mx\x1b[27m", "the history cursor stays");
 });
 
@@ -510,7 +517,13 @@ test("a tool call is one row that its updates change in place, with ✗ in red (
   );
 });
 
-test("a completed multi-line command has a background on every row (#351)", () => {
+test("a completed multi-line command has a background on every row (#351)", (t) => {
+  const colourTerm = process.env.COLORTERM;
+  t.after(() => {
+    if (colourTerm === undefined) delete process.env.COLORTERM;
+    else process.env.COLORTERM = colourTerm;
+  });
+  process.env.COLORTERM = "truecolor";
   const state = newRoomState();
   let seq = 0;
   const line = (update: Record<string, unknown>) =>
@@ -551,7 +564,7 @@ test("a completed multi-line command has a background on every row (#351)", () =
   );
   assert.deepEqual(plain.slice(-7, -1), [
     "▎",
-    "▎ $ shell",
+    "▎ $ shell ✓",
     "▎   cd /w;",
     "▎   ls;",
     "▎   pwd",
@@ -569,8 +582,14 @@ test("a completed multi-line command has a background on every row (#351)", () =
     rows.some((l) => l.includes("\x1b[1m$\x1b[22m")),
     "the tool marker is bold",
   );
+  process.env.COLORTERM = "256color";
+  assert.equal(
+    bgRgb(37, 65, 49, 23)("x"),
+    "\x1b[48;5;23mx\x1b[49m",
+    "truecolor has a 256-colour fallback",
+  );
   assert.ok(
-    !rows.at(-1)?.includes("\x1b[48;5;"),
+    !rows.at(-1)?.includes("\x1b[48;"),
     "an uncoloured row follows the last tool block",
   );
 });
@@ -638,6 +657,31 @@ function runRoom() {
   return { state, parts, send, note, tool, plain, click };
 }
 
+test("a pending to completed update redraws the text and background", (t) => {
+  const colourTerm = process.env.COLORTERM;
+  t.after(() => {
+    if (colourTerm === undefined) delete process.env.COLORTERM;
+    else process.env.COLORTERM = colourTerm;
+  });
+  process.env.COLORTERM = "truecolor";
+  const { tool, send, parts, plain } = runRoom();
+  tool("ann", "t1", { title: "Read a.ts", status: "pending" });
+  assert.ok(
+    parts.transcript.render(60).some((l) => l.includes("\x1b[48;5;236m")),
+    "pending starts with the active background and no spinner while idle",
+  );
+  send("ann", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    status: "completed",
+  });
+  assert.ok(plain().includes("▎ $ Read a.ts ✓"));
+  assert.ok(
+    parts.transcript.render(60).some((l) => l.includes("\x1b[48;2;37;65;49m")),
+    "the same row changes to the success background",
+  );
+});
+
 test("active calls have a neutral background and uncoloured gaps between and after them", () => {
   const { send, tool, parts, plain } = runRoom();
   send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
@@ -653,8 +697,8 @@ test("active calls have a neutral background and uncoloured gaps between and aft
   assert.ok(text[first + 4]?.includes("second"), text.join("\n"));
   assert.equal(text[first + 6], "▎", "the row after the last block");
   assert.ok(
-    !rows[first + 2]?.includes("\x1b[48;5;") &&
-      !rows[first + 6]?.includes("\x1b[48;5;"),
+    !rows[first + 2]?.includes("\x1b[48;") &&
+      !rows[first + 6]?.includes("\x1b[48;"),
     "the rows between and after blocks have no background",
   );
   assert.ok(
@@ -681,7 +725,7 @@ test("a run folds into one line when the agent's next note comes, with its faile
     ],
   });
   // The live run is open, with the edit's counts and failure mark.
-  assert.ok(plain().includes("▎ $ Read a.ts"), plain().join("\n"));
+  assert.ok(plain().includes("▎ $ Read a.ts ✓"), plain().join("\n"));
   assert.ok(plain().includes("▎ $ Edit a.ts +2 −1 ✗"));
   note("ann", "Done.");
   const folded = plain();
@@ -711,11 +755,11 @@ test("a run folds into one line when the agent's next note comes, with its faile
       .slice(at + 1)
       .filter((l) => l !== "▎")
       .slice(0, 3),
-    ["▎ $ Read a.ts", "▎ $ Read b.ts", "▎ $ Edit a.ts +2 −1 ✗"],
+    ["▎ $ Read a.ts ✓", "▎ $ Read b.ts ✓", "▎ $ Edit a.ts +2 −1 ✗"],
   );
   // It stays open after a redraw, as after a switch.
   parts.redraw();
-  assert.ok(plain().includes("▎ $ Read a.ts"), "open after a redraw");
+  assert.ok(plain().includes("▎ $ Read a.ts ✓"), "open after a redraw");
   // A second click folds it.
   click("▾ 3 tool calls");
   assert.ok(!plain().some((l) => l.includes("Read a.ts")));
@@ -847,7 +891,7 @@ test("a cut turn's run folds when the agent's next turn starts (M7-2)", () => {
   const { send, tool, plain } = runRoom();
   send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
   tool("ann", "t1", { title: "Read a.ts", kind: "read", status: "completed" });
-  assert.ok(plain().includes("▎ $ Read a.ts"), plain().join("\n"));
+  assert.ok(plain().includes("▎ $ Read a.ts ✓"), plain().join("\n"));
   // No turn end: the turn was cut. The next message starts the next turn.
   send("ann", {
     sessionUpdate: "_client_user_message",
