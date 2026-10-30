@@ -10,7 +10,13 @@ import { mkdtemp, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { deletePreviewLines, loopCommand, parseCommand } from "../command.ts";
+import {
+  deletePreviewLines,
+  loopCommand,
+  modelLines,
+  parseCommand,
+} from "../command.ts";
+import type { ParticipantDto } from "../contract.ts";
 import { FOLDER_GONE } from "../folder.ts";
 
 const roster = [
@@ -147,6 +153,60 @@ test("rename, role and mode are one PATCH each; role none clears it", () => {
     const r = parse(s);
     assert.ok(r && "error" in r && /^usage:/.test(r.error), s);
   }
+});
+
+test("@name /model <id> is a PATCH, and @name /model alone asks for the list (M9-6)", () => {
+  assert.deepEqual(parse("@bob /model mock/smart"), {
+    verb: "patch",
+    id: "p-b",
+    name: "Bob",
+    change: { model: "mock/smart" },
+  });
+  assert.deepEqual(parse("@bob /model"), {
+    verb: "models",
+    id: "p-b",
+    name: "Bob",
+  });
+  const r = parse("@bob /model a b");
+  assert.ok(r && "error" in r && r.error === "usage: @name /model [id]");
+  const bare = parse("/model x");
+  assert.ok(bare && "error" in bare && /@name \/model/.test(bare.error));
+});
+
+test("the model list marks the one in use, and says why there is none (M9-6)", () => {
+  const p = (over: Partial<ParticipantDto>): ParticipantDto => ({
+    id: "p-b",
+    name: "bob",
+    harness: "mock-agent",
+    mode: "auto",
+    settings: { allowReadOutsideRoot: false },
+    worktree: "/w",
+    sessionId: "s",
+    status: "idle",
+    notices: [],
+    ...over,
+  });
+  assert.deepEqual(
+    modelLines(
+      p({
+        model: "mock/fast",
+        models: [
+          { id: "mock/fast", name: "Fast" },
+          { id: "x", name: "x" },
+        ],
+      }),
+    ),
+    [
+      'bob runs on "mock/fast"',
+      "* mock/fast  Fast",
+      "  x",
+      "@bob /model <id> picks one",
+    ],
+  );
+  assert.deepEqual(modelLines(p({})), ["bob lists no models"]);
+  assert.deepEqual(modelLines(p({ status: "paused", model: "m" })), [
+    "bob has no harness running; its list shows after its next start",
+  ]);
 });
 
 test("/title takes the rest of the line, and ignores a mention", () => {

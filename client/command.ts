@@ -84,7 +84,12 @@ export type RouteCommand =
       verb: "patch";
       id: string;
       name: string;
-      change: { name?: string; role?: string | null; mode?: string };
+      change: {
+        name?: string;
+        role?: string | null;
+        mode?: string;
+        model?: string;
+      };
     };
 
 /** What a typed line is: a command, a form to open (a bare `/new` or
@@ -99,6 +104,7 @@ export type Command =
   | { verb: "setup"; done: boolean }
   | { verb: "form"; form: "new" | "add" }
   | { verb: "diff"; id: string; name: string; against: "head" | "base" }
+  | { verb: "models"; id: string; name: string }
   | {
       verb: "ff";
       id: string;
@@ -114,6 +120,7 @@ export const HELP = [
   "@name /rename <new name>",
   "@name /role <role|none>",
   "@name /mode <ask|safe|auto>",
+  "@name /model [id]",
   "@name /cancel",
   "@name /remove",
   "@name /diff [base]",
@@ -130,6 +137,7 @@ export const USAGE: Record<string, string> = {
   rename: "usage: @name /rename <new name>",
   role: "usage: @name /role <role|none>",
   mode: "usage: @name /mode <ask|safe|auto>",
+  model: "usage: @name /model [id]",
   cancel: "usage: @name /cancel",
   remove: "usage: @name /remove",
   diff: "usage: @name /diff [base]",
@@ -153,6 +161,7 @@ const AGENT_VERBS = new Set([
   "rename",
   "role",
   "mode",
+  "model",
   "cancel",
   "remove",
   "diff",
@@ -357,6 +366,8 @@ export function parseCommand(
   if (verb === "cancel" || verb === "remove") {
     return args.length ? { error: USAGE[verb] as string } : { verb, id, name };
   }
+  // The live list with no id (M9-6).
+  if (verb === "model" && !args.length) return { verb: "models", id, name };
   if (args.length !== 1) return { error: USAGE[verb] as string };
   const value = args[0] as string;
   const change =
@@ -364,7 +375,9 @@ export function parseCommand(
       ? { name: value }
       : verb === "role"
         ? { role: value === "none" ? null : value }
-        : { mode: value };
+        : verb === "model"
+          ? { model: value }
+          : { mode: value };
   return { verb: "patch", id, name, change };
 }
 
@@ -447,6 +460,60 @@ export const modelConfirmed = (
  *  notice says both, the one place that saw them. */
 const notOn = (asked: string | undefined, p: ParticipantDto | undefined) =>
   modelConfirmed(asked, p) ? "" : `; ! not confirmed on the model "${asked}"`;
+
+/** What `@name /model <id>` did (M9-6). An idle harness answered before
+ *  the reply; a busy one, or one with no harness, hears of it later. As
+ *  `notOn`, the line never says why a model is not in use: the room's
+ *  notice does. */
+function modelChanged(name: string, asked: string, p: ParticipantDto) {
+  if (asked === p.model) return `${name} now runs on the model "${asked}"`;
+  if (p.status === "busy") {
+    return `${name} gets the model "${asked}" before its next turn`;
+  }
+  if (p.status !== "idle") {
+    return `${name} gets the model "${asked}" when it starts again`;
+  }
+  return `! ${name} is not confirmed on the model "${asked}"`;
+}
+
+/** One participant as the daemon has it now: its live models for
+ *  `@name /model` (M9-6). A refusal is the daemon's own message. */
+export async function participantNow(
+  d: DaemonAddress,
+  roomId: string,
+  id: string,
+): Promise<{ ok: true; p: ParticipantDto } | { ok: false; message: string }> {
+  const r = await call<ParticipantDto>(d, `/rooms/${roomId}/agents/${id}`);
+  return r.ok
+    ? { ok: true, p: r.body }
+    : { ok: false, message: r.error.message };
+}
+
+/** `@name /model` as lines: the model in use, then the live list, the one
+ *  in use marked. A participant with no harness running has no list. */
+export function modelLines(p: ParticipantDto): string[] {
+  if (!p.models?.length) {
+    const on = p.model ? `; it runs on "${p.model}"` : "";
+    return [
+      printable(
+        p.status === "idle" || p.status === "busy"
+          ? `${p.name} lists no models${on}`
+          : `${p.name} has no harness running; its list shows after its next start`,
+      ),
+    ];
+  }
+  return [
+    printable(
+      p.model ? `${p.name} runs on "${p.model}"` : `${p.name}'s models`,
+    ),
+    ...p.models.map((m) =>
+      printable(
+        `${m.id === p.model ? "*" : " "} ${m.id}${m.name && m.name !== m.id ? `  ${m.name}` : ""}`,
+      ),
+    ),
+    `@${printable(p.name)} /model <id> picks one`,
+  ];
+}
 
 /**
  * Sends one command to its route. `roomId` is the room on screen; `/new`
@@ -599,7 +666,7 @@ export async function runCommand(
         body: c.change,
       });
       if (!r.ok) return refused(r.error.message, r.error.code);
-      const { name, role, mode } = c.change;
+      const { name, role, mode, model } = c.change;
       const line =
         name !== undefined
           ? `renamed ${c.name} to ${r.body.name}`
@@ -607,8 +674,10 @@ export async function runCommand(
             ? `${c.name} has no role`
             : role !== undefined
               ? `${c.name} is now ${r.body.role}`
-              : `${c.name} is now in ${mode} mode`;
-      return { ok: true, line };
+              : model !== undefined
+                ? modelChanged(c.name, model, r.body)
+                : `${c.name} is now in ${mode} mode`;
+      return { ok: true, line: printable(line), participant: r.body };
     }
   }
 }

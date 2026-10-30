@@ -623,12 +623,16 @@ export interface ClientParticipantAddedEvent extends Meta {
 }
 
 /** A participant was renamed, or its role or mode changed (M6-10). Only the
- *  fields that changed are present; a `null` role cleared it. */
+ *  fields that changed are present; a `null` role cleared it. `model` is the
+ *  model the harness runs on after the person asked for another (M9-6),
+ *  also after a refusal, which leaves the one it had; `null` when the
+ *  harness names none, such as one with no model option. */
 export interface ClientParticipantChangedEvent extends Meta {
   sessionUpdate: "_client_participant_changed";
   name?: string;
   role?: string | null;
   mode?: "ask" | "safe" | "auto";
+  model?: string | null;
 }
 
 /** A participant left the roster (M6-10). The last line it has: its

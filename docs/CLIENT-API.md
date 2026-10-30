@@ -7,13 +7,14 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.16** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.17** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
 added replies and copies, `PATCH /rooms/:id`, which renames a room, M8-3, #267,
 which added the `reviewer` role and a participant's `turnFrom`, #352, which added
-the delete preview, and M9-5, #300, which added an agent's `model`).
+the delete preview, M9-5, #300, which added an agent's `model`, and M9-6, #301, which
+changes the model during a chat and added an agent's `models`).
 
 ## Contents
 
@@ -343,7 +344,7 @@ the `GET` routes take none.
 | `POST /rooms/:id/agents` | Add a participant. |
 | `GET /rooms/:id/agents` | List a room's participants. |
 | `GET /rooms/:id/agents/:agentId` | One participant. |
-| `PATCH /rooms/:id/agents/:agentId` | Rename a participant, or change its mode or role. |
+| `PATCH /rooms/:id/agents/:agentId` | Rename a participant, or change its mode, role or model. |
 | `DELETE /rooms/:id/agents/:agentId` | Remove a participant. |
 | `POST /rooms/:id/agents/:agentId/messages` | Send a message to one participant. |
 | `GET /rooms/:id/agents/:agentId/events` | One participant's lines of the room's stream. |
@@ -358,7 +359,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 15 },
+  "apiVersion": { "major": 1, "minor": 17 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -965,7 +966,7 @@ with ACP names.
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
-| `_client_participant_changed` | `name?`, `role?`, `mode?` | A rename, or a new role or mode. Only the changed fields are present. `role: null` means the role was cleared. |
+| `_client_participant_changed` | `name?`, `role?`, `mode?`, `model?` | A rename, or a new role, mode or model. Only the changed fields are present. `role: null` means the role was cleared. `model` (since 1.17) is the model the harness runs on after a change of model, also after a refused one, or `null` when the harness names none. |
 | `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. A no-op move writes none. |
 | `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
 | `_client_participant_revived` | `resumed`, `sessionId`, `memoryMayBeBehind?` | A `paused`, `killed` or `exited` participant has a new harness in its own checkout. `resumed` is `loaded` (since 1.9): it loaded its old session and remembers the turns before. Or it is `fresh`: a new session, so it does not. `memoryMayBeBehind` is `true` only with `loaded`, when the participant stopped during a turn: what it remembers may be behind its files. It comes after the `_client_user_message` that revived it, and after the new `_client_harness_spawned`. |
@@ -1222,6 +1223,7 @@ The reply comes when every harness is ready. This can take some seconds.
       "baseSha": "3f2a…",
       "sessionId": "ses_…",
       "model": "deepseek/deepseek-chat",
+      "models": [{ "id": "deepseek/deepseek-chat", "name": "DeepSeek Chat" }],
       "status": "idle",
       "notices": [{ "text": "…", "kind": "containment" }]
     }
@@ -1248,6 +1250,11 @@ reply never sees it.
 missing when the harness lists no models, and for a restored participant until its first
 revive. It may differ from the `model` that was asked for: then a notice names the
 refusal. The asked one is kept, and sent again at the next revive.
+
+`models` (since 1.17) is the model list of the harness's live session, as `id` and
+`name`, as the session sent it. A change of model never changes it: copilot's answer to a
+change leaves an option out. It is missing when no harness runs, such as a restored
+participant before its first revive, and when the harness lists no models.
 
 `seq` is the size of the room's log when the daemon answered. The reply counts every line
 up to that `seq`, and a line above it is newer than the reply.
@@ -1460,10 +1467,25 @@ Changes one participant. Send one or more of:
   before its next turn, never during one. See [Modes](#modes).
 - `role`: a new role, or `null` to remove the role. To move the `orchestrator` role, first
   remove it from the participant that has it.
+- `model` (since 1.17): a model id, such as one from the participant's `models`. The
+  harness checks it, not the daemon. An idle harness gets it at once, and the reply shows
+  the model it runs on. A busy one gets it before its next turn, never during one, and one
+  with no harness running gets it when it starts again, also after a daemon restart; the
+  reply then shows the model it had. A harness that refuses the model does not refuse the
+  request: the harness keeps the model it had, and a notice says so. A pending change
+  refused at a start leaves the last model the harness took. Only a model the harness took
+  is sent again at a revive. The saved models of `GET /harnesses` do not change.
 
-The daemon checks every field before it changes any. The harness and its session stay
-as they are. The room's stream gets `_client_participant_changed`, with only the fields
-that changed, so every client sees the change.
+The daemon checks every field before it changes any. The model is applied last, and
+apart from the other fields: the daemon changes `name`, `mode` and `role` first, then
+sends the model. So a refusal at the model step, such as `409` `room_dismissed` when the
+room was dismissed between the two, leaves the earlier fields changed. No field restarts
+the harness or opens a new session. A model change updates the model option of the
+session that runs. The room's stream gets `_client_participant_changed`, with only the
+fields that changed, so every client sees the change. A change of model gets its own
+line once the harness answered, with `model`: the model in use, or `null` when the
+harness names none, such as one with no model option. Read the participant again for
+its notice.
 
 **Reply `200`:** the participant. **Refusals:** `404` `room_not_found` or
 `participant_not_found`; `400` `invalid_request` for a bad field or an empty body; `409`
@@ -1753,11 +1775,11 @@ message, and when no turn runs. A reply's turn names the worker that replied.
 
 `role` is one of `orchestrator`, `developer`, `tester`, `architect` or `reviewer` (since
 1.14), or missing. It is a
-label. It sends no text to the agent. A client changes `name`, `mode` or `role` with one
-route, `PATCH /rooms/:id/agents/:agentId`. A room has at most one `orchestrator`: adding or
-changing a participant to that role is refused with `409` `orchestrator_exists` while
-another one exists. More roles may come later, so a client shows a role it does not know
-as plain text.
+label. It sends no text to the agent. A client changes `name`, `mode`, `role` or
+`model` with one route, `PATCH /rooms/:id/agents/:agentId`. A room has at most one
+`orchestrator`: adding or changing a participant to that role is refused with `409`
+`orchestrator_exists` while another one exists. More roles may come later, so a client
+shows a role it does not know as plain text.
 
 ### Addressing
 

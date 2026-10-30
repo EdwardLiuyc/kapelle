@@ -1208,7 +1208,8 @@ test("chat.ts on a real terminal keeps a waiting question's keys when view chang
   await screen.press("\x0f", "agent …");
   await screen.press("\x1b[B\x1b[B\r", "pick an agent");
   await screen.press("\x1b[B\r", "view changes");
-  await screen.press(`${"\x1b[B".repeat(6)}\r`, "↑↓ pick");
+  // Two question rows, then cancel, mode, model, role and rename.
+  await screen.press(`${"\x1b[B".repeat(7)}\r`, "↑↓ pick");
   await screen.seen("bob · uncommitted");
 
   const before = screen.out().length;
@@ -1309,8 +1310,8 @@ test("chat.ts on a real terminal shows what an auto agent changed, from /diff an
   await screen.press("\x0f", "agent …");
   await screen.press("\r", "pick an agent");
   await screen.press("\r", "view changes");
-  // Below cancel, mode, role and rename; above remove.
-  await screen.press(`${"\x1b[B".repeat(4)}\r`, "bob · uncommitted");
+  // Below cancel, mode, model, role and rename; above remove.
+  await screen.press(`${"\x1b[B".repeat(5)}\r`, "bob · uncommitted");
   // ctrl+x hides the view and keeps what it shows.
   await screen.press("\x18", "ctrl+x view");
   await screen.press("\x18", "bob · uncommitted · README.md (1 of 3)");

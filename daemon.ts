@@ -1241,8 +1241,11 @@ function changeRefused(err: unknown) {
   return roomRefused(err) ?? err;
 }
 
-/** `PATCH /rooms/:id/agents/:agentId {name?, mode?, role?}` — the one route
- *  that changes a participant (R10, R44). `role: null` clears the role. */
+/** `PATCH /rooms/:id/agents/:agentId {name?, mode?, role?, model?}` — the
+ *  one route that changes a participant (R10, R44). `role: null` clears the
+ *  role. `model` goes last, after every other change is checked and made:
+ *  an idle harness answers before the reply, a busy one hears of it before
+ *  its next turn (M9-6). */
 async function patchAgent(
   id: string,
   agentId: string,
@@ -1250,19 +1253,27 @@ async function patchAgent(
   res: ServerResponse,
 ) {
   const entry = roomEntry(id);
-  const body = await readBody(req, ["name", "mode", "role"]);
+  const body = await readBody(req, ["name", "mode", "role", "model"]);
   let changes: ReturnType<typeof participantChanges>;
   try {
     changes = participantChanges(body);
   } catch (err) {
     throw refusal(400, "invalid_request", messageOf(err));
   }
-  let participant: ReturnType<Room["update"]>;
+  const { model, ...rest } = changes;
+  let participant: ReturnType<Room["update"]> | undefined;
   try {
-    participant = entry.room.update(agentId, changes);
+    if (Object.keys(rest).length)
+      participant = entry.room.update(agentId, rest);
+    if (model !== undefined) {
+      participant = await entry.room.setModel(agentId, model);
+    }
   } catch (err) {
     throw changeRefused(err);
   }
+  // `participantChanges` refuses a body with no change, so this is only a
+  // guard: a refusal, as every other one on this route.
+  if (!participant) throw refusal(400, "invalid_request", "no change to make");
   entry.room.touch();
   send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
 }

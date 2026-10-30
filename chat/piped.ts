@@ -16,6 +16,8 @@ import {
   deletePreview,
   deletePreviewLines,
   HELP,
+  modelLines,
+  participantNow,
   runCommand,
 } from "../client/command.ts";
 import type { MessageAccepted, RoomDto } from "../client/contract.ts";
@@ -374,6 +376,14 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     }
     if (c.verb === "form") {
       console.error(`! a form needs a terminal: ${COMMAND_USAGE[c.form]}`);
+      continue;
+    }
+    // A pipe has no pick list: the live models are printed (M9-6).
+    if (c.verb === "models") {
+      const r = await participantNow(d, room.id, c.id).catch(() => undefined);
+      if (!r) console.error(`! ${NO_DAEMON}`);
+      else if (!r.ok) console.error(`! ${r.message}`);
+      else for (const l of modelLines(r.p)) console.log(l);
       continue;
     }
     // A pipe has no pane: the diff is printed as it is (M4-6).

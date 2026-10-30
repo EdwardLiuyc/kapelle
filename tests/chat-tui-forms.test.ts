@@ -290,7 +290,7 @@ test("the target's ctrl+o menu previews a fast-forward from another participant"
   await press("\x0f", "agent …");
   await press("\r", "pick an agent");
   await press("\r", "mock-agent · mock-agent");
-  await press(`${DOWN.repeat(5)}\r`, "fast-forward mock-agent from");
+  await press(`${DOWN.repeat(6)}\r`, "fast-forward mock-agent from");
   await press("\r", "mock-agent ← reviewer · fast-forward");
   await press("\r", "moved mock-agent up to reviewer's commit");
   assert.equal(headAt(dev.worktree), revHead);
@@ -376,9 +376,9 @@ test("Esc in a second-level pop-up goes back to the menu", {
   // Each second-level list returns to the agent's menu on Esc.
   await press(`${DOWN}\r`, "mock-agent · mode");
   await press("\x1b", "role · developer");
-  await press(`${DOWN.repeat(2)}\r`, "mock-agent · role");
+  await press(`${DOWN.repeat(3)}\r`, "mock-agent · role");
   await press("\x1b", "rename …");
-  await press(`${DOWN.repeat(3)}\r`, "rename mock-agent");
+  await press(`${DOWN.repeat(4)}\r`, "rename mock-agent");
   await press("\x1b", "mode · auto");
   // The agent's menu came from `pick an agent`, so Esc returns to the room menu.
   await press("\x1b", "add agent …");
@@ -1172,6 +1172,57 @@ test("the status line shows the model the agent runs on (M9-5)", {
   assert.equal(await exited, 0, out());
 });
 
+test("@name /model lists, takes a pick and a typed id, and changes the status line (M9-6)", {
+  skip: noPty,
+}, async (t) => {
+  const MODELS = `node ${MOCK_AGENT} --scenario models`;
+  const { press, seen, exited, out } = await chatOnPty(t, MODELS);
+  await seen("auto · mock/fast");
+  await press("@mock-agent /model\r", "mock-agent · model");
+  await seen("other model…");
+  await press("smart\r", 'mock-agent now runs on the model "mock/smart"');
+  // The reply's line and the status line's model come from one redraw.
+  await seen("auto · mock/smart");
+  await press(
+    "@mock-agent /model mock/fast\r",
+    'mock-agent now runs on the model "mock/fast"',
+  );
+  await seen("auto · mock/fast");
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("a model change on a harness with no models draws its notice (M9-6, #398 review)", {
+  skip: noPty,
+}, async (t) => {
+  const { press, seen, exited, out } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  await press(
+    "@mock-agent /model x/y\r",
+    '! mock-agent is not confirmed on the model "x/y"',
+  );
+  await seen("mock-agent lists no models");
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("a refused model change draws the room's notice (M9-6)", {
+  skip: noPty,
+}, async (t) => {
+  const MODELS = `node ${MOCK_AGENT} --scenario models`;
+  const { press, seen, exited, out } = await chatOnPty(t, MODELS);
+  await seen("auto · mock/fast");
+  await press(
+    "@mock-agent /model mock/bogus\r",
+    '! mock-agent is not confirmed on the model "mock/bogus"',
+  );
+  // The room notice carries the harness's reason; it is drawn as a warning.
+  await seen('mock-agent refused the model "mock/bogus"');
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+  assert.match(scrollback(out()), /mock-agent refused the model "mock\/bogus"/);
+});
+
 test("chat in a removed folder: bare stops, attach opens and its /new form survives", {
   skip: noPty,
 }, async (t) => {
@@ -1220,11 +1271,11 @@ test("the room view's menu picks an agent, and a rename reaches its route", {
   const { press, seen, exited, out, d } = await chatOnPty(t);
   await seen("○ mock-agent");
   // The room's menu lists the agents first; the agent's menu then holds its
-  // own commands. Rename is the fourth: cancel, mode, role, rename.
+  // own commands. Rename is the fifth: cancel, mode, model, role, rename.
   await press("\x0f", "agent …");
   await press("\r", "pick an agent");
   await press("\r", "mock-agent · mock-agent");
-  await press(`${DOWN.repeat(3)}\r`, "rename mock-agent");
+  await press(`${DOWN.repeat(4)}\r`, "rename mock-agent");
   await press("\x15bob\r", "renamed mock-agent to bob");
   await seen("○ bob");
   const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);

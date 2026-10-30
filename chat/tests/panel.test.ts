@@ -10,7 +10,11 @@ import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { RouteCommand } from "../../client/command.ts";
-import type { HarnessesReply } from "../../client/contract.ts";
+import type {
+  HarnessesReply,
+  ParticipantDto,
+  RoomDto,
+} from "../../client/contract.ts";
 import type { DaemonAddress } from "../../client/daemon.ts";
 import { newRoomState, type RoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
@@ -96,6 +100,15 @@ async function fakeDaemon(
     holdDone = false,
     holdPost = false,
     holdInstall = false,
+    room,
+  }: {
+    holdGet?: boolean;
+    holdDone?: boolean;
+    holdPost?: boolean;
+    holdInstall?: boolean;
+    /** Whose `GET /rooms/r/agents/:id` answers, for `@name /model`
+     *  (M9-6). */
+    room?: RoomDto;
   } = {},
 ) {
   const getSeen = deferred();
@@ -109,6 +122,14 @@ async function fakeDaemon(
   let posts = 0;
   const server = createServer((req, res) => {
     void (async () => {
+      const agent = room?.participants.find(
+        (p) => req.url === `/rooms/r/agents/${p.id}`,
+      );
+      if (agent && req.method === "GET") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(agent));
+        return;
+      }
       if (req.method === "GET" && req.url === "/harnesses") {
         getSeen.resolve();
         if (holdGet) await getRelease.promise;
@@ -418,6 +439,7 @@ test("each menu row shows its slash command on the right (M7-5)", () => {
   for (const [label, command] of [
     ["cancel turn", "/cancel"],
     ["mode · safe", "/mode"],
+    ["model …", "/model"],
     ["role · none", "/role"],
     ["rename …", "/rename"],
     ["view changes", "/diff"],
@@ -598,4 +620,106 @@ test("Enter on a filter that matches nothing runs nothing and keeps the box (M7-
   assert.equal(box.panel?.title, "app");
   assert.deepEqual(ran, []);
   assert.deepEqual(opened, []);
+});
+
+/** Room `r` with ann on `model`, her live list `models`. */
+const annRoom = (
+  models: ParticipantDto["models"],
+  model?: string,
+): RoomDto => ({
+  id: "r",
+  cwd: "/w",
+  createdAt: "now",
+  updatedAt: "now",
+  status: "active",
+  seq: 0,
+  participants: [
+    {
+      id: "p-ann",
+      name: "ann",
+      harness: "mock-agent",
+      mode: "auto",
+      settings: { allowReadOutsideRoot: false },
+      worktree: "/w",
+      sessionId: "s",
+      status: "idle",
+      notices: [],
+      ...(model && { model }),
+      ...(models && { models }),
+    },
+  ],
+});
+
+test("@name /model lists the live models on the one in use, and a pick sends it (M9-6)", async (t) => {
+  const fake = await fakeDaemon(t, {
+    room: annRoom(
+      [
+        { id: "mock/fast", name: "Fast" },
+        { id: "mock/smart", name: "Smart" },
+      ],
+      "mock/fast",
+    ),
+  });
+  const ran: RouteCommand[] = [];
+  const box = makeBox(fake.d, {
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  await box.pickModel({ id: "p-ann", name: "ann" });
+  assert.equal(box.panel?.title, "ann · model");
+  const shown = shownOf(box);
+  assert.match(shown, /→ mock\/fast/, "the cursor on the model in use");
+  assert.match(shown, /mock\/smart/);
+  assert.match(shown, /other model…/);
+  type(box, "smart\r");
+  assert.deepEqual(ran, [
+    {
+      verb: "patch",
+      id: "p-ann",
+      name: "ann",
+      change: { model: "mock/smart" },
+    },
+  ]);
+});
+
+test("@name /model types an id when the list has none, or after other model… (M9-6)", async (t) => {
+  for (const models of [undefined, [{ id: "a/b", name: "B" }]]) {
+    const fake = await fakeDaemon(t, { room: annRoom(models) });
+    const ran: RouteCommand[] = [];
+    const box = makeBox(fake.d, {
+      run: async (c) => {
+        ran.push(c);
+        return true;
+      },
+    });
+    await box.pickModel({ id: "p-ann", name: "ann" });
+    if (models) type(box, "other\r");
+    assert.equal(box.panel?.title, "ann · model");
+    type(box, " x/y \r");
+    assert.deepEqual(
+      ran.map((c) => c.verb === "patch" && c.change),
+      [{ model: "x/y" }],
+    );
+  }
+});
+
+test("Enter on an empty model id goes back like Esc, and posts nothing (M9-6, #398 review)", async (t) => {
+  const fake = await fakeDaemon(t, {
+    room: annRoom([{ id: "a/b", name: "B" }], "a/b"),
+  });
+  const ran: RouteCommand[] = [];
+  const box = makeBox(fake.d, {
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  await box.pickModel({ id: "p-ann", name: "ann" });
+  type(box, "other\r");
+  assert.equal(box.panel?.title, "ann · model");
+  type(box, "  \r");
+  assert.deepEqual(ran, []);
+  assert.equal(box.panel, undefined, "closed, as Esc closes it");
 });
