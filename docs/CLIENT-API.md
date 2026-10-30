@@ -1472,8 +1472,8 @@ Changes one participant. Send one or more of:
   the model it runs on. A busy one gets it before its next turn, never during one, and one
   with no harness running gets it when it starts again; the reply then shows the model it
   had. A refusal is not a refusal of the request: the harness keeps the model it had, and
-  a notice says so. A deferred change leaves its result as a notice when the harness
-  answers. Only a model the harness took is sent again at a revive. The saved models of
+  a notice says so. A pending change refused at a start leaves the last model the harness
+  took. Only a model the harness took is sent again at a revive. The saved models of
   `GET /harnesses` do not change.
 
 The daemon checks every field before it changes any. The harness and its session stay

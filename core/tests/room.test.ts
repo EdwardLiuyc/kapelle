@@ -2808,9 +2808,8 @@ test("a busy harness gets a changed model before its next turn, never during one
     sent.join(" "),
   );
   assert.equal(p.model, "mock/smart");
-  assert.deepEqual(modelLines(p), [
-    'mock-agent now runs on the model "mock/smart"',
-  ]);
+  // A change the harness took is no warning: the status line shows it.
+  assert.deepEqual(modelLines(p), []);
 });
 
 test("a refused change keeps the model in use, and a revive does not ask for it (M9-6)", async (t) => {
@@ -2878,9 +2877,7 @@ test("one with no harness gets a pending model at its start (M9-6)", async (t) =
   await back.p.send("two");
   assert.equal(back.p.resumed, "loaded");
   assert.equal(back.p.model, "mock/smart");
-  assert.deepEqual(modelLines(back.p), [
-    `${back.p.harness} now runs on the model "mock/smart"`,
-  ]);
+  assert.deepEqual(modelLines(back.p), []);
   await back.room.pause();
   assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
 });
