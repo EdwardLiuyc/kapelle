@@ -51,6 +51,9 @@ export async function streamLog(
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
+    // A clean stop ends this stream after `server.close()`. Do not let the
+    // client reuse the socket for the reconcile that follows (#390).
+    connection: "close",
   });
   // Headers go out now, not on the first write: a reconnecting client whose
   // `Last-Event-ID` is already the tail has no history to replay, and without
