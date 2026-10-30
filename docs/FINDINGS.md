@@ -1429,7 +1429,7 @@ installed with claude-agent-acp; this repository does not depend on the SDK.
 | provider in the model id | yes | yes | no | no | no | yes |
 | logged-out signal | none; the free models work with no login | `session/new` fails with `-32000` `Authentication required`, and `data.authMethods` | `_auth/status_update` with `authStatus.kind: "none"`, label `Not logged in` | **none** | `session/new` fails with `-32000` `Authentication required` | `session/new` fails with `-32000` `Authentication required` |
 | a load needs a prompt first (2026-10-30) | no | yes: no session file without one | yes: `-32002` | yes: `-32002` | yes: `-32603` | no |
-| `session/load` logged in (2026-10-30) | works | works | works | works | works | works |
+| `session/load` logged in (2026-10-30) | works, 2 models | works, 374 models | works, 13 models | works, 31 models | works, 2 models | works, 2 models |
 | `session/load` logged out (2026-10-30) | works, 2 models | works, no model option | works, 5 aliases; `_auth/status_update` `kind: "none"` | works, 15 models | `-32000` `Authentication required`; `_auth/status_update` `kind: "none"` | `-32000` `Authentication required` |
 | `authMethods` on `initialize` | `opencode-login` | `pi_terminal_login` (`type: "terminal"`) | empty; `agentCapabilities.auth.logout` | `copilot-login` | `api-key`, `chat-gpt` | `login` (`type: "terminal"`) |
 | `sessionCapabilities.delete` | yes | yes | yes | no | yes | yes |
@@ -1463,10 +1463,11 @@ installed with claude-agent-acp; this repository does not depend on the SDK.
 - Each logged-in run left an empty session in the harness's own history, under a `/tmp`
   folder. copilot has no `session/delete` to remove it.
 
-**Coverage.** One machine, one run each way, four harnesses. Logged out was simulated with
-an empty home. A keyring the harness reaches on its own D-Bus path was not blocked; copilot's
-log shows it found no login. The 2026-10-30 probe below measured the login state a
-`session/load` gives. Still not measured: whether the model stays after `session/load`
+**Coverage.** One machine, one run each way: four harnesses on 2026-10-15, codex and kimi
+on 2026-10-21, and all six for `session/load` on 2026-10-30 (both below). Logged out was
+simulated with an empty home. A keyring the harness reaches on its own D-Bus path was not
+blocked; copilot's log shows it found no login. The 2026-10-30 probe below measured the
+login state a `session/load` gives. Still not measured: whether the model stays after `session/load`
 (the mode does not, §Mode after load), and what each harness does on the first prompt when
 logged out. M9-5 (#300) left the model unmeasured on purpose: a room sends the model
 again after every load, so nothing depends on it.
