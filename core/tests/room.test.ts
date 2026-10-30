@@ -2878,6 +2878,11 @@ test("one with no harness gets a pending model at its start (M9-6)", async (t) =
   assert.equal(back.p.resumed, "loaded");
   assert.equal(back.p.model, "mock/smart");
   assert.deepEqual(modelLines(back.p), []);
+  // The change was answered at the start, so clients hear the model it took.
+  assert.deepEqual(
+    back.of("_client_participant_changed").map((e) => e.update),
+    [{ sessionUpdate: "_client_participant_changed", model: "mock/smart" }],
+  );
   await back.room.pause();
   assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
 });
@@ -2900,6 +2905,12 @@ test("a refused pending model leaves the accepted one in use after a revive (M9-
     `${back.p.harness} refused the model "mock/bogus" (Internal error (code -32603)); ` +
       'it runs on the model "mock/smart"',
   ]);
+  // The refusal was answered at the start, so clients get both the model in
+  // use and the notice that came with it.
+  assert.deepEqual(
+    back.of("_client_participant_changed").map((e) => e.update),
+    [{ sessionUpdate: "_client_participant_changed", model: "mock/smart" }],
+  );
 });
 
 test("a PATCH body takes a model as a non-empty string, alone or with the rest (M9-6)", () => {

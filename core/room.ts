@@ -1823,6 +1823,15 @@ function createParticipant({
       };
     }
   };
+  /** Tells every client the model in use, and makes the room save `asked`.
+   *  A harness with no model option has none to name, so it gets no line. */
+  const announceModel = () => {
+    if (model === undefined) return;
+    bus.emit({
+      agent: id,
+      update: { sessionUpdate: "_client_participant_changed", model },
+    });
+  };
   /** A harness that just started: its own model, then the one asked for. */
   const syncModel = async (next: AcpAgent) => {
     const option = next.configOptions.find((o) => o.category === "model");
@@ -1842,20 +1851,17 @@ function createParticipant({
       await applyModel(next, asked);
     }
     if (target) await applyModel(next, target);
+    // A change made while there was no harness was answered here, so it gets
+    // the same line as one made against a live harness (M9-6).
+    if (pending !== undefined) announceModel();
   };
-  /** The change the live harness has not heard of, then a line that tells
-   *  every client the model in use, and makes the room save `asked`. A
-   *  harness with no model option changes nothing, so it gets no line. */
+  /** The change the live harness has not heard of, then its result. */
   const sendWanted = async () => {
     const target = wanted;
     wanted = undefined;
     if (!agent || !target) return;
     await applyModel(agent, target);
-    if (model === undefined) return;
-    bus.emit({
-      agent: id,
-      update: { sessionUpdate: "_client_participant_changed", model },
-    });
+    announceModel();
   };
 
   let turn: Promise<void> | undefined;
