@@ -151,7 +151,9 @@
  * again. A participant with no harness gets it at its next start. The reply
  * changes only the model in use: `models`, the live list, stays as the
  * session sent it, since copilot's reply leaves an option out (§Models and
- * login). `_client_participant_changed` then carries the model in use. A
+ * login). `_client_participant_changed` then carries the model in use, or
+ * `null` when the harness names none. `room.json` keeps a change not yet
+ * sent, so a pause or a restart does not drop it (#398 review). A
  * pending change refused at a start leaves the last model the harness took,
  * not the session's own: that one is set again first.
  *
@@ -436,6 +438,9 @@ interface ParticipantRecord {
   settings: Settings;
   /** The model asked for, sent again at each revive; not the one in use. */
   model?: string;
+  /** A change the harness has not heard of yet (M9-6): the next start
+   *  sends it, also after a pause or a daemon restart. */
+  pendingModel?: string;
   worktree: string;
   /** The branch and base the checkout had at the last save. A restore
    *  reconciles both with the checkout again, in case a crash caught a
@@ -764,6 +769,8 @@ interface Member {
   /** The model a revive asks for, which `room.json` keeps: the request's,
    *  or the last one the person changed to that the harness took. */
   asked: () => string | undefined;
+  /** A change not yet sent, which `room.json` keeps too. */
+  pending: () => string | undefined;
   /** Its own notices, which `room.json` keeps. */
   own: RoomNotice[];
   stop: () => Promise<void>;
@@ -872,6 +879,10 @@ export function readRoomRecord(path: string): RoomRecord {
       turns: Number.isInteger(p.turns) ? p.turns : undefined,
       orderedBy: typeof p.orderedBy === "string" ? p.orderedBy : undefined,
       model: typeof p.model === "string" && p.model ? p.model : undefined,
+      pendingModel:
+        typeof p.pendingModel === "string" && p.pendingModel
+          ? p.pendingModel
+          : undefined,
     })),
   };
 }
@@ -1049,6 +1060,7 @@ async function buildRoom(
   const recordOf = (m: Member): ParticipantRecord => {
     const p = m.participant;
     const asked = m.asked();
+    const pending = m.pending();
     return {
       id: p.id,
       name: p.name,
@@ -1058,6 +1070,7 @@ async function buildRoom(
       mode: p.mode,
       settings: { allowReadOutsideRoot: p.settings.allowReadOutsideRoot },
       ...(asked && { model: asked }),
+      ...(pending && { pendingModel: pending }),
       worktree: p.worktree,
       ...(p.branch && { branch: p.branch }),
       ...(p.baseSha && { baseSha: p.baseSha }),
@@ -1432,6 +1445,8 @@ async function buildRoom(
     if (ended()) throw dismissed();
     const found = member(id);
     await found.setModel(model);
+    // A deferred change sends no line yet, and must outlive a restart.
+    saveSoon();
     return found.participant;
   };
 
@@ -1785,7 +1800,8 @@ function createParticipant({
   // once the harness takes it (M9-6).
   let asked = initialModel;
   // A change the harness has not heard of yet: it was busy, or had none.
-  let wanted: string | undefined;
+  // `room.json` keeps it, so a pause or a restart does not drop it.
+  let wanted = saved?.pendingModel;
   /** Sets `target` on the live harness. A refusal leaves it on the model it
    *  had: pi and claude say only `Internal error`, so the line is ours, with
    *  theirs after it. A time-out or an exit is no refusal, and the harness
@@ -1823,13 +1839,16 @@ function createParticipant({
       };
     }
   };
-  /** Tells every client the model in use, and makes the room save `asked`.
-   *  A harness with no model option has none to name, so it gets no line. */
+  /** Tells every client the result of a change: the model in use, or
+   *  `null` when the harness names none, so each one reads the notice too.
+   *  It also makes the room save `asked` and drop `pendingModel`. */
   const announceModel = () => {
-    if (model === undefined) return;
     bus.emit({
       agent: id,
-      update: { sessionUpdate: "_client_participant_changed", model },
+      update: {
+        sessionUpdate: "_client_participant_changed",
+        model: model ?? null,
+      },
     });
   };
   /** A harness that just started: its own model, then the one asked for. */
@@ -2328,7 +2347,9 @@ function createParticipant({
       return model;
     },
     get models() {
-      return agent && modelsOf(agent.configOptions).models;
+      // An option that lists none gives none, as the contract says.
+      const list = agent && modelsOf(agent.configOptions).models;
+      return list?.length ? list : undefined;
     },
     get notices() {
       return [
@@ -2408,6 +2429,7 @@ function createParticipant({
     setMode,
     setModel,
     asked: () => asked,
+    pending: () => wanted,
     hold,
     renamed: () => branchRenamed,
     syncCheckout,

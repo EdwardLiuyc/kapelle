@@ -2913,6 +2913,70 @@ test("a refused pending model leaves the accepted one in use after a revive (M9-
   );
 });
 
+test("a pending model change outlives a pause and a restore (M9-6, #398 review)", async (t) => {
+  const { repo, room, p, file } = await loading(t, "models");
+  await p.send("one");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  // No harness: the change waits for the start, and room.json keeps it.
+  await back.room.setModel(back.p.id, "mock/smart");
+  await back.room.pause();
+  const kept = readRoomRecord(file);
+  assert.equal(kept.participants[0]?.pendingModel, "mock/smart");
+  // A hand edit that is not a model id is dropped.
+  const [only] = kept.participants as [RoomRecord["participants"][number]];
+  writeRoomRecord(file, {
+    ...kept,
+    participants: [{ ...only, pendingModel: 7 as unknown as string }],
+  });
+  assert.equal(readRoomRecord(file).participants[0]?.pendingModel, undefined);
+  writeRoomRecord(file, kept);
+  const again = await restored(t, repo, readRoomRecord(file));
+  await again.p.send("two");
+  assert.equal(again.p.resumed, "loaded");
+  assert.equal(again.p.model, "mock/smart");
+  await again.room.pause();
+  const record = readRoomRecord(file).participants[0];
+  assert.equal(record?.model, "mock/smart");
+  assert.equal(record?.pendingModel, undefined, "sent, so no longer pending");
+});
+
+test("a change on a harness with no model option is announced, live or at the start (M9-6, #398 review)", async (t) => {
+  const live = await modelRoom(t, undefined, "remember");
+  await live.room.setModel(live.p.id, "x/y");
+  const none = { sessionUpdate: "_client_participant_changed", model: null };
+  assert.deepEqual(
+    live.changed.map((e) => e.update),
+    [none],
+  );
+  assert.deepEqual(modelLines(live.p), [
+    'mock-agent lists no models, so the model "x/y" was not set; it runs on its own model',
+  ]);
+
+  const { repo, room, p, file } = await loading(t, "remember");
+  await p.send("one");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.room.setModel(back.p.id, "x/y");
+  await back.p.send("two");
+  assert.deepEqual(
+    back.of("_client_participant_changed").map((e) => e.update),
+    [none],
+  );
+});
+
+test("a model option that lists no models gives no models, as the contract says (M9-6, #398 review)", async (t) => {
+  const { p } = await modelRoom(
+    t,
+    undefined,
+    "models",
+    undefined,
+    " --model-empty",
+  );
+  assert.equal(p.model, "mock/fast");
+  assert.equal(p.models, undefined);
+});
+
 test("a PATCH body takes a model as a non-empty string, alone or with the rest (M9-6)", () => {
   assert.deepEqual(participantChanges({ model: "x/y" }), { model: "x/y" });
   assert.deepEqual(participantChanges({ mode: "safe", model: "x/y" }), {

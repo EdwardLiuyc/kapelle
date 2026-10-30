@@ -1192,6 +1192,20 @@ test("@name /model lists, takes a pick and a typed id, and changes the status li
   assert.equal(await exited, 0, out());
 });
 
+test("a model change on a harness with no models draws its notice (M9-6, #398 review)", {
+  skip: noPty,
+}, async (t) => {
+  const { press, seen, exited, out } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  await press(
+    "@mock-agent /model x/y\r",
+    '! mock-agent is not confirmed on the model "x/y"',
+  );
+  await seen("mock-agent lists no models");
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
 test("a refused model change draws the room's notice (M9-6)", {
   skip: noPty,
 }, async (t) => {

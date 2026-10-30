@@ -3800,8 +3800,9 @@ would already show a false notice at a join, and none did. codex and kimi were n
 measured on a set, at a join either. An idle harness gets the change at once, and the
 `PATCH` reply shows the model in use; a busy one gets it before its next turn. A change
 the harness took leaves no notice, since notices are warnings; the status line shows it.
-Only a model the harness took is sent again at a revive. The live list is the participant's `models`. No
-`kapelle room` verb changes a model.
+Only a model the harness took is sent again at a revive. `room.json` keeps a change not
+yet sent, so a pause or a restart does not drop it (#398 review). The live list is the
+participant's `models`. No `kapelle room` verb changes a model.
 
 **M9-7 · kapelle runs after an npm install · M · needs nothing**
 A person installs kapelle with `npm install -g kapelle` and types `kapelle`. The name is

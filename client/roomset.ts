@@ -351,7 +351,8 @@ export function roomSet(
     // reducer. A turn can rename the branch or rebase it, and a revive can
     // set the model, so read the room again when either ends. A change of
     // model (M9-6) can also add a refusal notice, so that read redraws the
-    // transcript; the others only need the header.
+    // transcript; the others only need the header. Its `model` is `null`
+    // when the harness names none, and that one has a notice too.
     if (
       update === "_client_participant_changed" &&
       line.update.model !== undefined

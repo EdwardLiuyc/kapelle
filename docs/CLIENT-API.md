@@ -966,7 +966,7 @@ with ACP names.
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
-| `_client_participant_changed` | `name?`, `role?`, `mode?`, `model?` | A rename, or a new role, mode or model. Only the changed fields are present. `role: null` means the role was cleared. `model` (since 1.17) is the model the harness runs on after a change of model, also after a refused one. |
+| `_client_participant_changed` | `name?`, `role?`, `mode?`, `model?` | A rename, or a new role, mode or model. Only the changed fields are present. `role: null` means the role was cleared. `model` (since 1.17) is the model the harness runs on after a change of model, also after a refused one, or `null` when the harness names none. |
 | `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. A no-op move writes none. |
 | `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
 | `_client_participant_revived` | `resumed`, `sessionId`, `memoryMayBeBehind?` | A `paused`, `killed` or `exited` participant has a new harness in its own checkout. `resumed` is `loaded` (since 1.9): it loaded its old session and remembers the turns before. Or it is `fresh`: a new session, so it does not. `memoryMayBeBehind` is `true` only with `loaded`, when the participant stopped during a turn: what it remembers may be behind its files. It comes after the `_client_user_message` that revived it, and after the new `_client_harness_spawned`. |
@@ -1470,8 +1470,8 @@ Changes one participant. Send one or more of:
 - `model` (since 1.17): a model id, such as one from the participant's `models`. The
   harness checks it, not the daemon. An idle harness gets it at once, and the reply shows
   the model it runs on. A busy one gets it before its next turn, never during one, and one
-  with no harness running gets it when it starts again; the reply then shows the model it
-  had. A refusal is not a refusal of the request: the harness keeps the model it had, and
+  with no harness running gets it when it starts again, also after a daemon restart; the
+  reply then shows the model it had. A refusal is not a refusal of the request: the harness keeps the model it had, and
   a notice says so. A pending change refused at a start leaves the last model the harness
   took. Only a model the harness took is sent again at a revive. The saved models of
   `GET /harnesses` do not change.
@@ -1479,7 +1479,8 @@ Changes one participant. Send one or more of:
 The daemon checks every field before it changes any. The harness and its session stay
 as they are. The room's stream gets `_client_participant_changed`, with only the fields
 that changed, so every client sees the change. A change of model gets its own line once
-the harness answered, with `model`.
+the harness answered, with `model`: the model in use, or `null` when the harness names
+none, such as one with no model option. Read the participant again for its notice.
 
 **Reply `200`:** the participant. **Refusals:** `404` `room_not_found` or
 `participant_not_found`; `400` `invalid_request` for a bad field or an empty body; `409`
