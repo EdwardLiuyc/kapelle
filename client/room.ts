@@ -447,7 +447,12 @@ export function commandLines(text: string) {
         open("comment");
         continue;
       }
-      if (c === ";" && frames.length === 0) push();
+      if (c === ";" && frames.length === 0) {
+        // A `case` ends a branch with `;;`, `;&` or `;;&`: one separator.
+        const sep = raw.slice(i).match(/^;(;&?|&)?/)?.[0] ?? ";";
+        take(sep.length - 1);
+        push();
+      }
     }
     push();
     if (segs.length > 0) out.push(segs);

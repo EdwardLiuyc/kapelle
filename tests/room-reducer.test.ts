@@ -1286,6 +1286,14 @@ test("a tool call's command breaks at a real newline and at a `;` that separates
     "then ls;",
     "fi",
   ]);
+  // A `case` branch ends with `;;`, `;&` or `;;&`: one separator, not two
+  // (#396 review).
+  assert.deepEqual(of("case x in a) foo;& b) bar;;& c) baz;; esac"), [
+    "case x in a) foo;&",
+    "b) bar;;&",
+    "c) baz;;",
+    "esac",
+  ]);
 });
 
 test("a tool row shows four lines at most, each cut at 200 characters (#351)", () => {
@@ -1294,10 +1302,13 @@ test("a tool row shows four lines at most, each cut at 200 characters (#351)", (
     const [row] = rows({ title: command, rawInput: { command } });
     return String(row?.[0]).split("\n");
   };
-  /** `n` commands of 50 characters, so no two share a row. */
-  const cmds = (n: number) =>
-    Array.from({ length: n }, (_, i) => "abcdef"[i]?.repeat(49)).join(";");
+  /** 50 characters with its `;`, so no two commands share a row. */
   const row = (c: string, end = ";") => `${c.repeat(49)}${end}`;
+  /** `n` such commands: `a…`, `b…` and on. */
+  const cmds = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      row(String.fromCharCode(97 + i), i < n - 1 ? ";" : ""),
+    ).join("");
   const four = [row("a"), row("b"), row("c"), row("d")];
   assert.deepEqual(of(cmds(6)), [...four, "… 2 more lines"]);
   assert.deepEqual(of(cmds(5)), [...four, "… 1 more line"]);
@@ -1351,6 +1362,10 @@ test("short commands of one line share a row, up to 80 characters", () => {
   assert.deepEqual(of(`${x}${"y".repeat(39)}`), [`${x} ${"y".repeat(39)}`]);
   assert.deepEqual(of(`${x}${"y".repeat(40)}`), [x, "y".repeat(40)]);
   // A real newline still starts a row, and a heredoc body is never packed.
+  // A command wider than 80 has its own row, and a short one after it does
+  // not join it.
+  assert.deepEqual(of(`${"x".repeat(90)};ls`), [`${"x".repeat(90)};`, "ls"]);
+  assert.deepEqual(of("case x in a) foo;; esac"), ["case x in a) foo;; esac"]);
   assert.deepEqual(of("a;\nb"), ["a;", "b"]);
   assert.deepEqual(of("cat <<E\na;\nb\nE"), ["cat <<E", "a;", "b", "E"]);
 });
