@@ -2574,8 +2574,8 @@ test("a revive's load saves the models, and no login for an agent that loads log
   );
   await back.p.send("two");
   assert.equal(back.p.resumed, "loaded");
-  // This entry has no `loadNeedsLogin`: a load that works logged out proves
-  // nothing about the login (§Models and login).
+  // This entry has no `loadNeedsLogin`: for such an agent, a load that works
+  // proves nothing about the login (§Models and login).
   assert.deepEqual(seen, [
     {
       models: [

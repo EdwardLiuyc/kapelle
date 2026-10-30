@@ -1467,10 +1467,10 @@ installed with claude-agent-acp; this repository does not depend on the SDK.
 on 2026-10-21, and all six for `session/load` on 2026-10-30 (both below). Logged out was
 simulated with an empty home. A keyring the harness reaches on its own D-Bus path was not
 blocked; copilot's log shows it found no login. The 2026-10-30 probe below measured the
-login state a `session/load` gives. Still not measured: whether the model stays after `session/load`
-(the mode does not, §Mode after load), and what each harness does on the first prompt when
-logged out. M9-5 (#300) left the model unmeasured on purpose: a room sends the model
-again after every load, so nothing depends on it.
+login state a `session/load` gives. Still not measured: whether the model stays after
+`session/load` (the mode does not, §Mode after load), and what each harness does on the
+first prompt when logged out. M9-5 (#300) left the model unmeasured on purpose: a room
+sends the model again after every load, so nothing depends on it.
 
 **Added 2026-10-21 (M9-1, #296):** the codex-acp and kimi columns. Same probe and the same
 logged-out method, but with the model switch and the bogus id taken out: the person had one
@@ -1487,7 +1487,9 @@ file was copied, and a full path to the real home in a copied text file was chan
 empty one. A new process loaded it logged in, then another loaded it logged out, with the
 logged-out method above. Where a load with no prompt failed logged in, the run was done
 again with one one-word prompt, logged in only. Each logged-out load that worked replayed the
-same messages as the logged-in one.
+same messages as the logged-in one. The model counts in the three rows come from this run
+only. Do not compare them with the 2026-10-15 model rows: pi's list is the person's own
+setup, and copilot's list changes over time.
 
 - **Only codex and kimi refuse a load when logged out**, with the same `-32000` as on
   `session/new`. For them a load that works means `ok` (`loadNeedsLogin` in the registry).

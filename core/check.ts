@@ -402,8 +402,9 @@ export function sessionSeen(
   loaded: boolean,
 ): Seen {
   // A working load is the ok signal when the harness refuses a logged-out
-  // one, unless the harness sends a notice: that notice comes during the
-  // load, and this report would overwrite it.
+  // one, unless the registry names the notice as its login signal: that
+  // notice comes during the load, and this report would overwrite it. codex
+  // sends a notice too, without that flag; its notice and its load agree.
   let login: Login | undefined;
   if (!loaded) login = fromSession(setup);
   else if (setup.loadNeedsLogin && setup.loginSignal !== "notice") login = "ok";
