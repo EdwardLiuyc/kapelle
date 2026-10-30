@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kapelle — a terminal workspace for a team of coding agents</title>
-<meta name="description" content="kapelle runs pi, Claude Code, Copilot, opencode and more side by side on one repository. Each agent works on its own branch. You direct.">
+<meta name="description" content="kapelle runs pi, Claude Code, Codex, Copilot, opencode and more side by side on one repository. A lead agent drives your loop. Each agent works on its own branch. You decide.">
 <meta property="og:title" content="kapelle — you are the Kapellmeister">
-<meta property="og:description" content="A terminal workspace for a team of coding agents. They play. You direct.">
+<meta property="og:description" content="A terminal workspace for a team of coding agents. A lead drives the loop. They play. You direct.">
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#efebe5" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0d1015" media="(prefers-color-scheme: dark)">
@@ -31,7 +31,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 </a>
 <nav class="nav" aria-label="Main">
 <a href="/guide/"><i>1</i>guide</a>
-<a href="#orchestrator"><i>2</i>orchestrator</a>
+<a href="#loop"><i>2</i>loop</a>
 <a href="#agents"><i>3</i>agents</a>
 <a href="/guide/#safety"><i>4</i>safety</a>
 </nav>
@@ -48,7 +48,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 
 <div class="hero-grid">
 <div>
-<p class="lede">kapelle is a terminal workspace for a team of coding agents. <strong>They play. You direct.</strong></p>
+<p class="lede">kapelle is a terminal workspace for a team of coding agents. Give your loop to a lead agent: it plans, hands out the work and stops for every choice. <strong>They play. You direct.</strong></p>
 
 <div class="install">
 <div class="tabs" role="tablist" aria-label="Install with">
@@ -79,7 +79,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 
 <div class="actions">
 <a class="btn" href="/guide/">[ Read the guide ]</a>
-<a class="btn quiet" href="#orchestrator">[ See the orchestrator ]</a>
+<a class="btn quiet" href="#loop">[ See the loop ]</a>
 </div>
 </div>
 
@@ -90,7 +90,8 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <div class="rule" aria-hidden="true">──────────────</div>
 <dl>
 <div><dt>role</dt><dd>the stage, not an agent</dd></div>
-<div><dt>agents</dt><dd>pi, claude, copilot, opencode, …</dd></div>
+<div><dt>agents</dt><dd>pi, claude, codex, copilot, …</dd></div>
+<div><dt>loop</dt><dd>a Markdown recipe</dd></div>
 <div><dt>protocol</dt><dd>ACP over stdio</dd></div>
 <div><dt>isolation</dt><dd>a worktree per agent</dd></div>
 <div><dt>keys</dt><dd>never touched</dd></div>
@@ -113,26 +114,26 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <div class="body">
 <div class="side">
 <div class="head"><span>rooms</span><span>«</span></div>
-<div class="row open"><span class="room-mark spin">◐</span><span class="room">issue-312</span></div>
+<div class="row open"><span class="room-mark spin">◐</span><span class="room">fix-issue-312</span></div>
 <div class="row agent"><span class="po spin">◐</span><span class="po">po</span><span class="h">claude</span><span class="r" data-clock="4">0:04</span></div>
 <div class="row agent"><span class="dev">●</span><span class="dev">dev</span><span class="h">claude</span><span class="r">3:10</span></div>
-<div class="row agent"><span class="rev spin">◐</span><span class="rev">rev</span><span class="h">pi</span><span class="r" data-clock="38">0:38</span></div>
+<div class="row agent"><span class="rev spin">◐</span><span class="rev">rev1</span><span class="h">pi</span><span class="r" data-clock="38">0:38</span></div>
 <div class="row"><span class="idle">○</span><span class="room">docs-pass</span></div>
 <div class="row agent"><span class="idle">○</span><span class="writer">writer</span><span class="h">pi</span></div>
-<div class="files">issue-312<br>3 agents</div>
+<div class="files">fix-issue-312<br>3 agents</div>
 </div>
 <div class="main">
 <div class="log">
 <div class="msg you" data-step><div><span class="who">you</span><span class="meta">  14:03</span><div class="text">go</div></div></div>
 <div class="msg po" data-step><div><span class="who">po → dev</span><span class="meta">  14:03</span><div class="text">Build #312 on your branch: add --json to kapelle ps, with a test for each status. Commit when the tests pass.</div></div></div>
 <div class="msg dev" data-step><div><span class="who">dev</span><span class="meta">  claude · 14:08</span><div class="tool">▸ 9 tool calls · Edit cli.ts +48 −6 · npm run test ✓</div><div class="text">Done. kapelle ps --json prints one object per run. 4 tests added, all pass. Committed a1f9c2e.</div></div></div>
-<div class="msg po" data-step><div><span class="who">po → rev</span><span class="meta">  14:09</span><div class="text">Review dev's branch against #312. Report findings only.</div></div></div>
+<div class="msg po" data-step><div><span class="who">po → rev1</span><span class="meta">  14:09</span><div class="text">Run review-local for #312 on your branch. Commit each fix.</div></div></div>
 </div>
-<div class="act" data-step><span class="rev">▎<span class="spin">◐</span></span><span class="rev"><b>rev</b></span><span class="dim">Read core/run.ts · <span data-clock="38">0:38</span></span></div>
+<div class="act" data-step><span class="rev">▎<span class="spin">◐</span></span><span class="rev"><b>rev1</b></span><span class="dim">Read core/run.ts · <span data-clock="38">0:38</span></span></div>
 <div class="act" data-step="same"><span class="po">▎<span class="spin">◐</span></span><span class="po"><b>po</b></span><span class="dim">thinking · <span data-clock="4">0:04</span></span></div>
 <div class="compose"><span class="dim">› </span><span class="cursor"> </span></div>
 <div class="where">~/src/kapelle</div>
-<div class="status"><span>issue-312 · timeline · po auto · ctx 14%</span><span class="end">ctrl+o menu · ctrl+t rooms · ctrl+x pane</span></div>
+<div class="status"><span>fix-issue-312 · timeline · po auto · ctx 14%</span><span class="end">ctrl+o menu · ctrl+t rooms · ctrl+x pane</span></div>
 </div>
 </div>
 </div>
@@ -144,7 +145,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <p class="kicker"><b>01</b> why kapelle</p>
 <h2 id="why">An ensemble,<br><em>not another agent.</em></h2>
 <p class="big">A <em>Kapelle</em> is the ensemble a <em>Kapellmeister</em> directs: the players, not the conductor. That is the right way round. kapelle is the stage. The agents are the players. The baton stays in your hand.</p>
-<p class="big muted">Run pi, Claude Code, Copilot, opencode and more side by side on one repository. Each one works in its own git worktree, on its own branch. You choose who plays what, answer what they ask, and merge when the work is right.</p>
+<p class="big muted">Run pi, Claude Code, Codex, Copilot, opencode and more side by side on one repository. Each one works in its own git worktree, on its own branch. You choose who plays what, answer what they ask, and merge when the work is right.</p>
 </section>
 <div class="wrap roles">
 <div class="pane you"><span class="title">[0] you</span><h3>You direct</h3><p>Pick who plays. Answer what they ask. Nothing lands in your checkout until you take it.</p></div>
@@ -152,42 +153,42 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <div class="pane part"><span class="title">[2] worktrees</span><h3>Each its own part</h3><p>One worktree and one branch per agent. Your own checkout stays yours.</p></div>
 </div>
 
-<section id="orchestrator" class="section-band" aria-labelledby="orch-title" data-sec="orchestrator">
+<section id="loop" class="section-band" aria-labelledby="loop-title" data-sec="loop">
 <div class="section narrow" style="padding-bottom: 48px;">
-<p class="kicker"><b>02</b> orchestrator <span class="soon">[ coming soon ]</span></p>
-<h2 id="orch-title">Hand the loop to a lead.<br><em>Keep every decision.</em></h2>
-<p class="big">Most issues run the same loop: plan, build, review, open the PR, answer the bot reviews, hand over. Give the loop to one agent. It hands the work to the others in the room, reads their reports, and stops each time a choice is yours.</p>
-<p class="big muted">You write the loop once, as a Markdown recipe in your repository. The same lead serves any project.</p>
+<p class="kicker"><b>02</b> loop</p>
+<h2 id="loop-title">Hand the loop to a lead.<br><em>Keep every decision.</em></h2>
+<p class="big">Most issues run the same loop: pick up, build, review, open the PR, answer the bot reviews, hand over. Give the loop to one agent, the orchestrator. It adds the others to the room when their step comes, gives them the work, reads their reports, and stops each time a choice is yours.</p>
+<p class="big muted">You write the loop once, as a Markdown recipe. kapelle ships the skill that drives any recipe, so the same lead serves any project.</p>
 </div>
 <div class="wrap">
 <figure>
 <div class="scroll-x">
-<div class="tui" role="img" aria-label="The kapelle chat screen. The lead agent po shows a three-step plan for issue 312 and waits for the person to say go.">
+<div class="tui" role="img" aria-label="The kapelle chat screen. The lead agent po shows the plan for issue 312 from the fix-issue recipe and waits for the person to say go.">
 <div class="bar">kapelle chat — ~/src/kapelle</div>
 <div class="body">
 <div class="side">
 <div class="head"><span>rooms</span><span>«</span></div>
-<div class="row open"><span class="room-mark">●</span><span class="room">issue-312</span></div>
+<div class="row open"><span class="room-mark">●</span><span class="room">fix-issue-312</span></div>
 <div class="row agent"><span class="po">●</span><span class="po">po</span><span class="h">claude</span><span class="r">1</span></div>
-<div class="row agent"><span class="idle">○</span><span class="dev">dev</span><span class="h">claude</span></div>
-<div class="row agent"><span class="idle">○</span><span class="rev">rev</span><span class="h">pi</span></div>
 <div class="row"><span class="idle">○</span><span class="room">docs-pass</span></div>
 <div class="row agent"><span class="idle">○</span><span class="writer">writer</span><span class="h">pi</span></div>
-<div class="files">issue-312<br>3 agents</div>
+<div class="files">fix-issue-312<br>1 agent</div>
 </div>
 <div class="main">
 <div class="log">
-<div class="msg you"><div><span class="who">you</span><span class="meta">  14:02</span><div class="text">kapelle loop 312 — add --json to kapelle ps</div></div></div>
-<div class="msg po"><div><span class="who">po</span><span class="meta">  claude · orchestrator · 14:02</span><div class="tool">▸ 4 tool calls · gh issue view 312 · Read cli.ts</div><div class="text">Plan for #312
-1. dev adds --json to kapelle ps, with a test for each status.
-2. rev reviews dev's branch. Findings only, no edits.
-3. dev opens the PR and answers the bot reviews.
-One choice may come up: the field names. I will ask you then.
+<div class="msg you"><div><span class="who">you</span><span class="meta">  14:02</span><div class="text">/loop fix-issue 312</div></div></div>
+<div class="msg po"><div><span class="who">po</span><span class="meta">  claude · orchestrator · 14:02</span><div class="tool">▸ 4 tool calls · gh issue view 312 --json · kapelle room info</div><div class="text">Plan for #312, from the fix-issue recipe
+1. dev (claude) picks up the issue. Its open choices go to you.
+2. After "go": dev builds it and commits when the gate passes.
+3. rev1 (pi) reviews dev's branch. I land its fixes.
+4. rev2 (pi) does a second, full review.
+5. dev opens the PR and answers the bot. 3 rounds at most.
+6. Hand-over: you read the PR and merge.
 Say "go" to start.</div></div></div>
 </div>
 <div class="compose"><span class="dim">› </span>go<span class="cursor"> </span></div>
 <div class="where">~/src/kapelle</div>
-<div class="status"><span>issue-312 · timeline · po auto · ctx 9%</span><span class="end">ctrl+o menu · ctrl+t rooms · ctrl+x pane</span></div>
+<div class="status"><span>fix-issue-312 · timeline · po auto · ctx 9%</span><span class="end">ctrl+o menu · ctrl+t rooms · ctrl+x pane</span></div>
 </div>
 </div>
 </div>
@@ -196,16 +197,37 @@ Say "go" to start.</div></div></div>
 </div>
 <div class="narrow" style="padding-bottom: 104px;">
 <dl class="points">
+<div><dt>The plan, then "go"</dt><dd>Its first turn joins the recipe, the task and your note into one plan. It does no work before you say go, so a wrong plan costs nothing.</dd></div>
 <div><dt>Every message in plain sight</dt><dd>The lead talks to the others only through kapelle, in your timeline: <span class="mono" style="color: var(--purple);">po</span> → <span class="mono" style="color: var(--amber);">dev</span>. It does none of the work itself.</dd></div>
-<div><dt>A fence around it</dt><dd>A stop button. A cap on the turns it may give out. A bell when it waits for you.</dd></div>
-<div><dt>A decision log</dt><dd>Every choice it put to you, and your answer, kept with the room.</dd></div>
+<div><dt>A reply to the sender</dt><dd>When a worker's turn ends, its answer goes back to the lead. When you talk to a worker yourself, the lead gets a copy, and goes on from there.</dd></div>
+<div><dt>A stop for every choice</dt><dd>The lead decides no choice alone. It ends its turn with the options and a recommendation, and waits for your answer.</dd></div>
+<div><dt>A hard limit on bot rounds</dt><dd>The recipe names the outside review and its most rounds, 3 if it does not say. At the limit, the lead hands over the open findings.</dd></div>
+<div><dt>Next <span class="soon">soon</span></dt><dd>A stop button, a cap on the turns it gives out, a bell when it waits for you, and a log of every decision.</dd></div>
 </dl>
 </div>
 </section>
 
+<section class="section wrap split" aria-labelledby="recipes" data-sec="recipes">
+<div>
+<p class="kicker"><b>03</b> recipes</p>
+<h2 id="recipes">Write the loop<br><em>in your own words.</em></h2>
+<p>A recipe is a Markdown file: the team and each one's agent, the steps, the outside review, the paths that need your yes, and rules for every worker. kapelle never reads it. Only the lead does. Keep it in <code>.kapelle/loops/</code> to share it with your team, or in <code>~/.config/kapelle/loops/</code> for every repository. A note changes one run and leaves the file alone.</p>
+</div>
+<figure>
+<div class="shell">
+<div class="shell-bar"><span>~/src/kapelle</span><span>zsh</span></div>
+<pre><span class="p">$ </span>kapelle loop list
+fix-issue  .kapelle/loops/fix-issue.md
+<span class="p">$ </span>kapelle loop fix-issue 312
+<span class="c"># or with a note for this run, and a pi lead</span>
+<span class="p">$ </span>kapelle loop fix-issue 312 "skip rev2" --agent pi</pre>
+</div>
+</figure>
+</section>
+
 <section class="section wrap split" aria-labelledby="parts" data-sec="worktrees">
 <div>
-<p class="kicker"><b>03</b> worktrees</p>
+<p class="kicker"><b>04</b> worktrees</p>
 <h2 id="parts">Every agent plays<br><em>its own role.</em></h2>
 <p>Each agent gets a git worktree and a branch. Parallel work never collides, and your uncommitted changes never reach an agent. Read each agent's diff in the side pane. Fast-forward one agent to another, or take the work into your checkout.</p>
 </div>
@@ -221,7 +243,7 @@ Say "go" to start.</div></div></div>
 </section>
 
 <section class="narrow" aria-labelledby="ask" data-sec="ask mode">
-<p class="kicker"><b>04</b> ask mode</p>
+<p class="kicker"><b>05</b> ask mode</p>
 <h2 id="ask" class="h2">You answer <em>what they ask.</em></h2>
 <p style="font-size: 19px; color: var(--muted);">In <code>ask</code> mode, an agent shows you the diff before it writes. Each answer has a number. A key only moves the cursor, and only Enter answers. Deny comes first, so a stray Enter says no. A question that waits off screen rings the bell and marks its room.</p>
 </section>
@@ -233,19 +255,19 @@ Say "go" to start.</div></div></div>
 <div class="body">
 <div class="side">
 <div class="head"><span>rooms</span><span>«</span></div>
-<div class="row open"><span class="ask">?</span><span class="room">issue-312</span></div>
+<div class="row open"><span class="ask">?</span><span class="room">fix-issue-312</span></div>
 <div class="row agent"><span class="idle">○</span><span class="po">po</span><span class="h">claude</span></div>
 <div class="row agent"><span class="ask">?</span><span class="dev">dev</span><span class="h">claude</span><span class="r">0:52</span></div>
-<div class="row agent"><span class="idle">○</span><span class="rev">rev</span><span class="h">pi</span></div>
+<div class="row agent"><span class="idle">○</span><span class="rev">rev1</span><span class="h">pi</span></div>
 <div class="row"><span class="idle">○</span><span class="room">docs-pass</span></div>
 <div class="row agent"><span class="idle">○</span><span class="writer">writer</span><span class="h">pi</span></div>
 <div class="files">dev changed<br><span style="color:#b4bbc4">cli.ts</span> <span class="add">+54</span> <span class="del">−7</span><br><span style="color:#b4bbc4">tests/cli.test.ts</span> <span class="add">+61</span></div>
 </div>
 <div class="main">
 <div class="log">
-<div class="msg rev"><div><span class="who">rev → po</span><span class="meta">  pi · 14:12</span><div class="tool">▸ 14 tool calls · Read cli.ts · Read core/run.ts</div><div class="text">1 finding: --json prints startedAt as local time. Use ISO 8601.</div></div></div>
-<div class="msg po"><div><span class="who">po → dev</span><span class="meta">  14:12</span><div class="text">Fix rev's finding: print startedAt as ISO 8601.</div></div></div>
-<div class="msg dev"><div><span class="who">dev</span><span class="meta">  claude · ask · 14:13</span><div class="text">Writing the fix to cli.ts.</div></div></div>
+<div class="msg rev"><div><span class="who">rev1 → po</span><span class="meta">  pi · 14:12</span><div class="tool">▸ 14 tool calls · Read cli.ts · Read core/run.ts</div><div class="text">1 finding: --json prints startedAt as local time. Fixed in b27e4d0. Commits reviewed: a1f9c2e.</div></div></div>
+<div class="msg po"><div><span class="who">po → dev</span><span class="meta">  14:12</span><div class="text">rev1's b27e4d0 is now on your branch (kapelle room ff). Judge the fix.</div></div></div>
+<div class="msg dev"><div><span class="who">dev</span><span class="meta">  claude · ask · 14:13</span><div class="text">The fix misses the --json path for an empty list. Writing it to cli.ts.</div></div></div>
 </div>
 <div class="q">
 <div><b class="ask">? </b><b class="dev">dev</b> asks to write cli.ts <span class="add">+6</span> <span class="del">−1</span></div>
@@ -258,8 +280,8 @@ Say "go" to start.</div></div></div>
 <div style="margin-top: 4px;"><span class="ask pick">› 1 deny</span>   <span>2 allow</span>   <span>3 view diff</span>   <span class="dim">· Enter answers</span></div>
 </div>
 <div class="compose"><span class="dim">› </span><span class="cursor"> </span></div>
-<div class="where">~/.local/state/kapelle/…/dev · kapelle/issue-312/dev</div>
-<div class="status"><span>issue-312 · dev ask · ctx 21%</span><span class="end">ctrl+o menu · ctrl+t rooms · ctrl+x pane</span></div>
+<div class="where">~/.local/state/kapelle/…/dev · kapelle/room-…-q8ac/p-myzvyp6p</div>
+<div class="status"><span>fix-issue-312 · dev ask · ctx 21%</span><span class="end">ctrl+o menu · ctrl+t rooms · ctrl+x pane</span></div>
 </div>
 </div>
 </div>
@@ -269,23 +291,41 @@ Say "go" to start.</div></div></div>
 
 <section class="section wrap split" aria-labelledby="keep" data-sec="daemon">
 <div>
-<p class="kicker"><b>05</b> daemon</p>
+<p class="kicker"><b>06</b> daemon</p>
 <h2 id="keep"><em>Rooms always stay.</em></h2>
-<p>One background daemon holds every room for all your repositories. Come back tomorrow: the agents, their branches and the whole history are still there.</p>
+<p>One background daemon holds every room for all your repositories. Type <code>kapelle</code>, and it starts the daemon when none runs. Close the terminal and come back tomorrow: the agents, their branches and the whole history are still there.</p>
 </div>
 <div class="shell">
 <div class="shell-bar"><span>~/src/kapelle</span><span>zsh</span></div>
-<pre><span class="p">$ </span>kapelle daemon start
+<pre><span class="p">$ </span>kapelle                  <span class="c"># the chat; starts the daemon</span>
 <span class="p">$ </span>kapelle daemon add .
-<span class="p">$ </span>kapelle chat new --agent pi
 <span class="c"># later, from any terminal</span>
-<span class="p">$ </span>kapelle chat attach &lt;roomId&gt;</pre>
+<span class="p">$ </span>kapelle chat attach &lt;roomId&gt;
+<span class="p">$ </span>kapelle daemon stop</pre>
+</div>
+</section>
+
+<section class="wrap split" style="padding-bottom: 104px;" aria-labelledby="setup" data-sec="setup">
+<div>
+<p class="kicker"><b>07</b> setup</p>
+<h2 id="setup" class="h2">It finds <em>your agents.</em></h2>
+<p>At the first start, kapelle lists the agents it finds, and what is missing. Check an agent whose ACP adapter is missing, and kapelle installs the pinned version for you. It checks each agent's login with no prompt, so it spends no tokens, and keeps each agent's models. Pick one with <code>--model</code> when an agent joins. kapelle never logs in for you.</p>
+</div>
+<div class="shell">
+<div class="shell-bar"><span>~/src/kapelle</span><span>zsh</span></div>
+<pre><span class="p">$ </span>kapelle setup
+pi      ready (pi 0.74.0, pi-acp 0.0.34)
+claude  ready (claude 2.1.3, claude-agent-acp 0.89.1)
+codex   codex 0.51.0; needs codex-acp:
+        npm i -g @agentclientprotocol/codex-acp@2.2.2
+<span class="c">kimi    not installed: no kimi on the daemon's PATH</span>
+<span class="c">After an install, run /setup in the chat, or kapelle setup.</span></pre>
 </div>
 </section>
 
 <section class="wrap split" style="padding-bottom: 104px;" aria-labelledby="runs" data-sec="runs">
 <div>
-<p class="kicker"><b>06</b> runs</p>
+<p class="kicker"><b>08</b> runs</p>
 <h2 id="runs" class="h2"><em>Many tasks at once.</em></h2>
 <p>A run hands out many tasks from one file. Each has its own prompt, agent and mode, and ends with a result. kapelle commits each task's work on its own branch. You merge when you are ready.</p>
 </div>
@@ -299,7 +339,7 @@ Say "go" to start.</div></div></div>
 
 <section id="agents" class="section-top" aria-labelledby="agents-title" data-sec="agents">
 <div class="section narrow">
-<p class="kicker"><b>07</b> agents</p>
+<p class="kicker"><b>09</b> agents</p>
 <h2 id="agents-title"><em>Agents speak ACP.</em></h2>
 <p class="big muted">ACP, the <a href="https://agentclientprotocol.com">Agent Client Protocol</a>, is one way to talk to every agent. Pick one with <code>--agent</code>, or bring your own with <code>--cmd</code>.</p>
 <div class="scroll-x">
@@ -310,8 +350,8 @@ Say "go" to start.</div></div></div>
 <tr><td>claude</td><td>Claude Code, through its ACP adapter</td><td class="yes">yes</td></tr>
 <tr><td>copilot</td><td>GitHub Copilot CLI</td><td class="yes">yes</td></tr>
 <tr><td>opencode</td><td>opencode</td><td class="yes">yes</td></tr>
-<tr><td>gemini</td><td>Gemini CLI</td><td class="no">not yet</td></tr>
-<tr><td>omp</td><td>oh-my-pi</td><td class="no">not yet</td></tr>
+<tr><td>codex</td><td>Codex CLI, through its ACP adapter</td><td class="yes">yes</td></tr>
+<tr><td>kimi</td><td>Kimi Code CLI</td><td class="yes">yes</td></tr>
 </tbody>
 </table>
 </div>
@@ -320,15 +360,15 @@ Say "go" to start.</div></div></div>
 
 <section class="section-band" aria-labelledby="limits" data-sec="limits">
 <div class="narrow" style="padding-top: 104px;">
-<p class="kicker"><b>08</b> limits</p>
+<p class="kicker"><b>10</b> limits</p>
 <h2 id="limits" class="h2">What kapelle <em>does not do.</em></h2>
 <p class="big muted" style="margin-top: 18px;">kapelle stays small on purpose. It is the stage, not another agent. Here is where its edges are.</p>
 </div>
 <div class="wrap">
 <div class="limits">
 <div><h3>No model of its own</h3><p>kapelle runs no model loop and edits no file itself. The agents do the work.</p></div>
-<div><h3>No sandbox</h3><p>A mode is a filter. An agent that edits through its own shell does not ask, and pi and opencode never ask. kapelle tells you so. Use a container if you need a wall.</p></div>
-<div><h3>No keys</h3><p>Each agent logs in by itself. kapelle never reads, stores or sends an API key.</p></div>
+<div><h3>No sandbox</h3><p>A mode is a filter. An agent that edits through its own shell does not ask. pi never asks, and opencode asks only for a write outside the workspace. kapelle tells you so. Use a container if you need a wall.</p></div>
+<div><h3>No keys</h3><p>Each agent logs in by itself. kapelle never reads, stores or sends an API key. It installs only an ACP adapter you check, and never logs in.</p></div>
 <div><h3>No back channel</h3><p>Agents never talk to each other directly. Every message goes through your timeline.</p></div>
 <div><h3>No merge behind your back</h3><p>Work stays on the agents' branches until you take it.</p></div>
 <div><h3>No cloud</h3><p>Local first. One person, one machine. Nothing goes into your repository.</p></div>
@@ -337,10 +377,10 @@ Say "go" to start.</div></div></div>
 </section>
 
 <section class="section wrap" aria-labelledby="involved" data-sec="get involved">
-<p class="kicker"><b>09</b> get involved</p>
+<p class="kicker"><b>11</b> get involved</p>
 <h2 id="involved" style="margin-bottom: 32px;"><em>Get involved.</em></h2>
 <div class="cards">
-<a class="card" href="/guide/"><span class="title">./guide</span><span class="text">Install, first room, and every command.</span></a>
+<a class="card" href="/guide/"><span class="title">./guide</span><span class="text">Install, first room, first loop, and every command.</span></a>
 <div class="card"><span class="title">./github <span class="soon">soon</span></span><span class="text">Source, issues and the plan, when the repository opens.</span></div>
 <div class="card"><span class="title">./changelog <span class="soon">soon</span></span><span class="text">What changed in each release.</span></div>
 </div>
