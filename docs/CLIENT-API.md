@@ -1479,12 +1479,13 @@ Changes one participant. Send one or more of:
 The daemon checks every field before it changes any. The model is applied last, and
 apart from the other fields: the daemon changes `name`, `mode` and `role` first, then
 sends the model. So a refusal at the model step, such as `409` `room_dismissed` when the
-room was dismissed between the two, leaves the earlier fields changed. The harness and
-its session stay as they are. The room's stream gets `_client_participant_changed`,
-with only the fields that changed, so every client sees the change. A change of model
-gets its own line once the harness answered, with `model`: the model in use, or `null`
-when the harness names none, such as one with no model option. Read the participant
-again for its notice.
+room was dismissed between the two, leaves the earlier fields changed. No field restarts
+the harness or opens a new session. A model change updates the model option of the
+session that runs. The room's stream gets `_client_participant_changed`, with only the
+fields that changed, so every client sees the change. A change of model gets its own
+line once the harness answered, with `model`: the model in use, or `null` when the
+harness names none, such as one with no model option. Read the participant again for
+its notice.
 
 **Reply `200`:** the participant. **Refusals:** `404` `room_not_found` or
 `participant_not_found`; `400` `invalid_request` for a bad field or an empty body; `409`
