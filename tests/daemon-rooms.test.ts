@@ -1335,7 +1335,13 @@ async function typed(
 ): Promise<Outcome> {
   const c = parseCommand(line, roster);
   assert.ok(c && "verb" in c, `not a command: ${line} → ${JSON.stringify(c)}`);
-  assert.ok(c.verb !== "leave" && c.verb !== "help" && c.verb !== "form", line);
+  assert.ok(
+    c.verb !== "leave" &&
+      c.verb !== "help" &&
+      c.verb !== "form" &&
+      c.verb !== "models",
+    line,
+  );
   if (c.verb === "ff") {
     // The screen turns the parsed command into its route call (M6-11a).
     return runCommand(addressOf(d), roomId, {

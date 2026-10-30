@@ -106,7 +106,8 @@ async function fakeDaemon(
     holdDone?: boolean;
     holdPost?: boolean;
     holdInstall?: boolean;
-    /** What `GET /rooms/r` answers, for `@name /model` (M9-6). */
+    /** Whose `GET /rooms/r/agents/:id` answers, for `@name /model`
+     *  (M9-6). */
     room?: RoomDto;
   } = {},
 ) {
@@ -121,9 +122,12 @@ async function fakeDaemon(
   let posts = 0;
   const server = createServer((req, res) => {
     void (async () => {
-      if (room && req.method === "GET" && req.url === "/rooms/r") {
+      const agent = room?.participants.find(
+        (p) => req.url === `/rooms/r/agents/${p.id}`,
+      );
+      if (agent && req.method === "GET") {
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(room));
+        res.end(JSON.stringify(agent));
         return;
       }
       if (req.method === "GET" && req.url === "/harnesses") {

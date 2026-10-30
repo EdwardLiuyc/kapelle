@@ -476,17 +476,17 @@ function modelChanged(name: string, asked: string, p: ParticipantDto) {
   return `! ${name} is not confirmed on the model "${asked}"`;
 }
 
-/** One participant as `GET /rooms/:id` has it now: its live models for
- *  `@name /model` (M9-6). */
+/** One participant as the daemon has it now: its live models for
+ *  `@name /model` (M9-6). A refusal is the daemon's own message. */
 export async function participantNow(
   d: DaemonAddress,
   roomId: string,
   id: string,
 ): Promise<{ ok: true; p: ParticipantDto } | { ok: false; message: string }> {
-  const r = await call<RoomDto>(d, `/rooms/${roomId}`);
-  if (!r.ok) return { ok: false, message: r.error.message };
-  const p = r.body.participants.find((q) => q.id === id);
-  return p ? { ok: true, p } : { ok: false, message: `no participant ${id}` };
+  const r = await call<ParticipantDto>(d, `/rooms/${roomId}/agents/${id}`);
+  return r.ok
+    ? { ok: true, p: r.body }
+    : { ok: false, message: r.error.message };
 }
 
 /** `@name /model` as lines: the model in use, then the live list, the one

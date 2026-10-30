@@ -1271,8 +1271,9 @@ async function patchAgent(
   } catch (err) {
     throw changeRefused(err);
   }
-  // `participantChanges` refuses a body with no change.
-  if (!participant) throw new Error("no change to make");
+  // `participantChanges` refuses a body with no change, so this is only a
+  // guard: a refusal, as every other one on this route.
+  if (!participant) throw refusal(400, "invalid_request", "no change to make");
   entry.room.touch();
   send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
 }
