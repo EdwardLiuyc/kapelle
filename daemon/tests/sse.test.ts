@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import {
+  Agent,
   createServer,
   get,
   type IncomingMessage,
@@ -30,6 +31,10 @@ async function serve(t: TestContext, pingMs: number) {
   });
   const served: { res?: ServerResponse } = {};
   const server = createServer((req, res) => {
+    if (req.url !== "/") {
+      res.end("served");
+      return;
+    }
     served.res = res;
     const gone = new AbortController();
     res.on("close", () => gone.abort());
@@ -39,14 +44,14 @@ async function serve(t: TestContext, pingMs: number) {
   t.after(async () => {
     await log.close();
     server.closeAllConnections();
-    server.close();
+    if (server.listening) server.close();
   });
   const { port } = server.address() as AddressInfo;
-  const open = () =>
+  const open = (agent?: Agent) =>
     new Promise<IncomingMessage>((ok, fail) => {
-      get({ port, host: "127.0.0.1" }, ok).on("error", fail);
+      get({ port, host: "127.0.0.1", agent }, ok).on("error", fail);
     });
-  return { log, served, open };
+  return { log, served, open, server, port };
 }
 
 const until = async (ok: () => boolean, what: string, ms = 5_000) => {
@@ -67,6 +72,34 @@ test("an idle stream gets a ping comment", async (t) => {
   });
   await until(() => text.includes(": ping\n\n"), "a ping");
   res.destroy();
+});
+
+test("a stopped server cannot answer on the socket its stream just ended", async (t) => {
+  const { log, open, server, port } = await serve(t, 60_000);
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  t.after(() => agent.destroy());
+  const res = await open(agent);
+  res.resume();
+  let reply: string | number | undefined;
+  server.close();
+  res.on("end", () => {
+    get({ port, host: "127.0.0.1", path: "/rooms/r1", agent }, (answer) => {
+      reply = answer.statusCode ?? 0;
+      answer.resume();
+    }).on("error", (err: NodeJS.ErrnoException) => {
+      reply = err.code ?? err.message;
+    });
+  });
+
+  // A clean stop ends the stream after closing the listener. The reconcile
+  // that follows must not ride the stream's keep-alive socket back in.
+  await log.close();
+  await until(() => reply !== undefined, "the reconcile answer");
+  assert.equal(
+    typeof reply,
+    "string",
+    `the old daemon answered the reconcile (HTTP ${reply})`,
+  );
 });
 
 test("a client that stops reading holds one socket buffer, then gets every event once", async (t) => {

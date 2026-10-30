@@ -777,11 +777,11 @@ export async function ptyScreen(
   child.stdout.setEncoding("utf8").on("data", (c: string) => {
     out += c;
   });
-  const seen = (text: string) =>
+  const seen = (text: string, ms = 20_000) =>
     new Promise<void>((ok, fail) => {
       const bail = setTimeout(
         () => fail(new Error(`never saw ${text}: ${out}`)),
-        20_000,
+        ms,
       );
       const check = () => {
         if (!out.includes(text)) return;

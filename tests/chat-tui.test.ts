@@ -488,6 +488,8 @@ test("with no room open, the screen exits when the daemon is gone, and says how 
 
 test("the TUI rides out a restart: it says so, marks the participant paused, and a message is answered", {
   skip: noPty,
+  // The screen waits 30 s for the daemon to come back (M6-7d).
+  timeout: 60_000,
 }, async (t) => {
   const { first, id, again, runtime, alice } = await roomToRestart(t, REMEMBER);
   // The sidebar is narrow: a short name leaves room for its `paused`.
@@ -504,7 +506,8 @@ test("the TUI rides out a restart: it says so, marks the participant paused, and
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
   const second = await again();
-  await screen.seen("the daemon restarted");
+  // Wait beyond the helper's 20 s default; the daemon gets 30 s (M6-7d).
+  await screen.seen("the daemon restarted", 30_000);
   await screen.seen("‖ al");
   await screen.press("hi\r", "previous: (none)");
   await roomIdle(second, id);

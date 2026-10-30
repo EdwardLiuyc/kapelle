@@ -2097,7 +2097,10 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`${signal}: cancelling ${inFlight.size} run(s), then exiting`);
   // Before the pause: a chat screen whose room stream ends must then find no
   // daemon, and wait for the next one (`readRoom` in `client/roomset.ts`).
+  // The SSE response closes its own socket (`daemon/sse.ts`); close idle
+  // pooled sockets too so the reconcile cannot ride one back in.
   server.close();
+  server.closeIdleConnections();
   stopNpmInstalls();
   const checksStopped = stopChecks();
   for (const canceller of cancels.values()) canceller.abort("cancel");
