@@ -704,3 +704,22 @@ test("@name /model types an id when the list has none, or after other model… (
     );
   }
 });
+
+test("Enter on an empty model id goes back like Esc, and posts nothing (M9-6, #398 review)", async (t) => {
+  const fake = await fakeDaemon(t, {
+    room: annRoom([{ id: "a/b", name: "B" }], "a/b"),
+  });
+  const ran: RouteCommand[] = [];
+  const box = makeBox(fake.d, {
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  await box.pickModel({ id: "p-ann", name: "ann" });
+  type(box, "other\r");
+  assert.equal(box.panel?.title, "ann · model");
+  type(box, "  \r");
+  assert.deepEqual(ran, []);
+  assert.equal(box.panel, undefined, "closed, as Esc closes it");
+});

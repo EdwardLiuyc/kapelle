@@ -431,7 +431,8 @@ function panelParts({
       void run({ verb: "patch", id, name, change: { model: model.trim() } });
     const type = () => {
       const input = textBox("");
-      input.onSubmit = set;
+      // Enter on nothing is Esc: an empty id is no model to ask for.
+      input.onSubmit = (model) => (model.trim() ? set(model) : back());
       input.onEscape = back;
       showPanel(title, input);
     };
