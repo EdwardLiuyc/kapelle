@@ -12,7 +12,8 @@
  * `thinking`, its last tool title or `working`, then a timer from the turn's
  * start, and the command that cancels the turn. A tool title can be several
  * lines (#351): the row shows the first, with `…` after it when there are
- * more. A busy agent whose question
+ * more. The title is cut to the room the timer and the cancel command
+ * leave, so a long first line never hides them. A busy agent whose question
  * is on screen waits for the person, not for its work: its row says what it
  * asks, with a magenta `?` after the bar in its own colour, and names no
  * cancel. A click on it opens the question, as on a wait row. The screen redraws once a
@@ -20,7 +21,11 @@
  * are, at most four, is `chat/view.ts`; with none, the part takes no rows.
  */
 
-import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { nameOf, questionOf } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { bold, dim, fg, magenta, yellow } from "../common.ts";
@@ -55,7 +60,7 @@ function bannerPart({
   question: (id: string) => void;
   now?: () => number;
 }): Component {
-  const line = (a: Activity) => {
+  const line = (a: Activity, width: number) => {
     const r = rooms.get(a.roomId);
     const name = r ? nameOf(r.state, a.participantId) : a.participantId;
     if (a.why !== "busy") {
@@ -82,12 +87,17 @@ function bannerPart({
     const colour = r ? colourOf(r.state, a.participantId) : undefined;
     const paint = colour === undefined ? dim : fg(colour);
     const mark = asked ? magenta("?") : paint(spin(now()));
-    return `${paint("▌")}${mark} ${bold(name)} ${doing}${dim(`${timer}${cancel}`)}`;
+    const head = `${paint("▌")}${mark} ${bold(name)} `;
+    const tail = `${timer}${cancel}`;
+    const room = width - visibleWidth(head) - visibleWidth(tail);
+    return `${head}${truncateToWidth(doing, Math.max(room, 1), "…")}${dim(tail)}`;
   };
   return {
     render(width) {
       const { rows, more } = activity(rooms, view());
-      const lines = rows.map((a) => truncateToWidth(line(a), width, "…"));
+      const lines = rows.map((a) =>
+        truncateToWidth(line(a, width), width, "…"),
+      );
       if (more) lines.push(dim(`  +${more} more`));
       return lines;
     },

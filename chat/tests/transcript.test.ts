@@ -544,7 +544,7 @@ test("a completed multi-line command has a background on every row (#351)", (t) 
     sessionUpdate: "tool_call",
     toolCallId: "t1",
     title: "shell",
-    rawInput: { command: "cd /w; ls; pwd" },
+    rawInput: { command: "cd /w;\nls;\npwd" },
     status: "completed",
   });
   const rooms = new Map([

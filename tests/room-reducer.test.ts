@@ -24,6 +24,7 @@ import {
   applyLine,
   applyStatus,
   cleanLines,
+  commandLines,
   type Entry,
   fromPerson,
   needsAttention,
@@ -1182,13 +1183,9 @@ test("a tool call's updates change its one entry: the title, the detail and the 
 });
 
 test("a tool call's command breaks at a real newline and at a `;` that separates (#351)", () => {
-  const { rows } = toolRoom();
-  /** The title's lines for one command. The command is the title, so
-   *  there is no detail. */
-  const of = (command: string) => {
-    const [row] = rows({ title: command, rawInput: { command } });
-    return String(row?.[0]).split("\n");
-  };
+  /** The commands, before short ones share a row again: a row would hide
+   *  where they broke. */
+  const of = (command: string) => commandLines(command).flat();
   assert.deepEqual(of("for n in 1 2; do echo $n; done"), [
     "for n in 1 2;",
     "do echo $n;",
@@ -1239,7 +1236,7 @@ test("a tool call's command breaks at a real newline and at a `;` that separates
     "a; b",
     "EOF",
     "ls;",
-    "… 1 more line",
+    "pwd",
   ]);
   assert.deepEqual(of("cat <<-END\nx; y\nEND\nz"), [
     "cat <<-END",
@@ -1253,7 +1250,7 @@ test("a tool call's command breaks at a real newline and at a `;` that separates
     "a; 1",
     "A",
     "b; 2",
-    "… 1 more line",
+    "B",
   ]);
   // `<<<` is a here-string, so its `;` still separates and it starts no
   // body on the next line.
@@ -1289,6 +1286,14 @@ test("a tool call's command breaks at a real newline and at a `;` that separates
     "then ls;",
     "fi",
   ]);
+  // A `case` branch ends with `;;`, `;&` or `;;&`: one separator, not two
+  // (#396 review).
+  assert.deepEqual(of("case x in a) foo;& b) bar;;& c) baz;; esac"), [
+    "case x in a) foo;&",
+    "b) bar;;&",
+    "c) baz;;",
+    "esac",
+  ]);
 });
 
 test("a tool row shows four lines at most, each cut at 200 characters (#351)", () => {
@@ -1297,30 +1302,29 @@ test("a tool row shows four lines at most, each cut at 200 characters (#351)", (
     const [row] = rows({ title: command, rawInput: { command } });
     return String(row?.[0]).split("\n");
   };
-  assert.deepEqual(of("a;b;c;d;e;f"), [
-    "a;",
-    "b;",
-    "c;",
-    "d;",
-    "… 2 more lines",
-  ]);
-  assert.deepEqual(of("a;b;c;d;e"), ["a;", "b;", "c;", "d;", "… 1 more line"]);
-  assert.deepEqual(of("a;b;c;d"), ["a;", "b;", "c;", "d"]);
+  /** 50 characters with its `;`, so no two commands share a row. */
+  const row = (c: string, end = ";") => `${c.repeat(49)}${end}`;
+  /** `n` such commands: `a…`, `b…` and on. */
+  const cmds = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      row(String.fromCharCode(97 + i), i < n - 1 ? ";" : ""),
+    ).join("");
+  const four = [row("a"), row("b"), row("c"), row("d")];
+  assert.deepEqual(of(cmds(6)), [...four, "… 2 more lines"]);
+  assert.deepEqual(of(cmds(5)), [...four, "… 1 more line"]);
+  assert.deepEqual(of(cmds(4)), [...four.slice(0, 3), row("d", "")]);
   // Each line keeps its own cut, at exactly 200 characters.
   assert.deepEqual(of("x".repeat(200)), ["x".repeat(200)]);
   assert.deepEqual(of("x".repeat(201)), [`${"x".repeat(199)}…`]);
   const long = `${"x".repeat(250)};${"y".repeat(250)}`;
   assert.deepEqual(of(long), [`${"x".repeat(199)}…`, `${"y".repeat(199)}…`]);
   // The detail follows the same rules. Here the title says none of it.
-  const [row] = rows({
+  const [terminal] = rows({
     title: "Terminal",
-    rawInput: { command: "a;b;c;d;e" },
+    rawInput: { command: cmds(5) },
   });
-  assert.deepEqual(String(row?.[1]).split("\n"), [
-    "a;",
-    "b;",
-    "c;",
-    "d;",
+  assert.deepEqual(String(terminal?.[1]).split("\n"), [
+    ...four,
     "… 1 more line",
   ]);
   // The slot budgets a separator a line, so a fifth full line is seen
@@ -1345,6 +1349,27 @@ test("a tool row shows four lines at most, each cut at 200 characters (#351)", (
   );
 });
 
+test("short commands of one line share a row, up to 80 characters", () => {
+  const { rows } = toolRoom();
+  const of = (command: string) => {
+    const [row] = rows({ title: command, rawInput: { command } });
+    return String(row?.[0]).split("\n");
+  };
+  assert.deepEqual(of("a;b;c;d;e;f"), ["a; b; c; d; e; f"]);
+  // Two commands that fill exactly 80 characters share a row; one more
+  // character breaks it.
+  const x = `${"x".repeat(39)};`;
+  assert.deepEqual(of(`${x}${"y".repeat(39)}`), [`${x} ${"y".repeat(39)}`]);
+  assert.deepEqual(of(`${x}${"y".repeat(40)}`), [x, "y".repeat(40)]);
+  // A real newline still starts a row, and a heredoc body is never packed.
+  // A command wider than 80 has its own row, and a short one after it does
+  // not join it.
+  assert.deepEqual(of(`${"x".repeat(90)};ls`), [`${"x".repeat(90)};`, "ls"]);
+  assert.deepEqual(of("case x in a) foo;; esac"), ["case x in a) foo;; esac"]);
+  assert.deepEqual(of("a;\nb"), ["a;", "b"]);
+  assert.deepEqual(of("cat <<E\na;\nb\nE"), ["cat <<E", "a;", "b", "E"]);
+});
+
 test("only a command is split at a `;`: a pattern, a path or a url is not (#361 review)", () => {
   const { rows } = toolRoom();
   const detail = (rawInput: Record<string, string>) => {
@@ -1360,8 +1385,9 @@ test("only a command is split at a `;`: a pattern, a path or a url is not (#361 
   assert.deepEqual(detail({ command: "str_replace", path: "/w/a;b.ts" }), [
     "str_replace /w/a;b.ts",
   ]);
-  // A command alone still splits.
-  assert.deepEqual(detail({ command: "cd /w; ls" }), ["cd /w;", "ls"]);
+  // A command alone still splits: its short commands share a row again,
+  // with a space after the `;`.
+  assert.deepEqual(detail({ command: "cd /w;ls" }), ["cd /w; ls"]);
   // A real newline still makes a line, whatever the key.
   assert.deepEqual(detail({ query: "one\ntwo" }), ["one", "two"]);
 });
@@ -1371,11 +1397,11 @@ test("a tool call's command shows no escape or control character (#229, #351)", 
   // An escape sequence, a right-to-left override and a carriage return.
   const command = "echo\x1b[2J a\u202eb\rc; ls";
   const [row] = rows({ title: command, rawInput: { command } });
-  assert.deepEqual(String(row?.[0]).split("\n"), ["echo [2J a b c;", "ls"]);
+  assert.deepEqual(String(row?.[0]).split("\n"), ["echo [2J a b c; ls"]);
   assert.equal(row?.[1], undefined, "the title says the command already");
   // The detail takes the same path when the title does not say it.
   const [detail] = rows({ title: "shell", rawInput: { command } });
-  assert.deepEqual(String(detail?.[1]).split("\n"), ["echo [2J a b c;", "ls"]);
+  assert.deepEqual(String(detail?.[1]).split("\n"), ["echo [2J a b c; ls"]);
   for (const text of [row?.[0], detail?.[1]]) {
     for (const bad of ["\x1b", "\u202e", "\r"]) {
       assert.ok(!String(text).includes(bad), "no control reaches the screen");
