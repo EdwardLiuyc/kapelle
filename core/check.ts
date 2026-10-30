@@ -14,14 +14,17 @@
  *
  * **The login state comes from each agent's own signal** (§Models and login,
  * `loginSignal` in the registry). `-32000` on `session/new` is "logged out"
- * for every agent: pi, codex and kimi send it. claude opens a session logged
- * out and says so in `_auth/status_update` with `kind: "none"`, so its check
- * waits for that notice. copilot never says: `unknown`. A check that fails
- * or runs out of time is `unknown` too.
+ * for every agent: pi, codex and kimi send it. A load is the same signal on
+ * codex and kimi (`loadNeedsLogin`): they refuse a logged-out load, so one
+ * that works is `ok`. claude opens a session logged out and says so in
+ * `_auth/status_update` with `kind: "none"`, so its check waits for that
+ * notice. copilot never says: `unknown`. A check that fails or runs out of
+ * time is `unknown` too.
  *
  * **A real room session keeps the file fresh at no cost** (decided
- * 2026-10-28): `noteSession` takes what its `session/new` and its notices
- * already said. Nothing waits for it.
+ * 2026-10-28): `noteSession` takes what its `session/new`, a successful
+ * `session/load` where measured, and its notices already said. Nothing
+ * waits for it.
  *
  * The file holds facts only, as `harnesses.json` does. The login hint comes
  * from today's registry when it is read. Never an account field: only the
@@ -397,8 +400,11 @@ export function sessionSeen(
   options: SessionConfigOption[],
   loaded: boolean,
 ): Seen {
-  const login =
-    loaded && !setup.loadNeedsLogin ? undefined : fromSession(setup);
+  // A working load is itself the ok signal when the harness refuses a
+  // logged-out one. Do not read loginSignal here: it describes `session/new`.
+  let login: Login | undefined;
+  if (!loaded) login = fromSession(setup);
+  else if (setup.loadNeedsLogin) login = "ok";
   return { ...modelsOf(options), ...(login && { login }) };
 }
 

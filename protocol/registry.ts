@@ -82,9 +82,9 @@ interface MeasuredLabels {
  * opens a session with its free models and no login, and it is `ok`.
  * `notice`: claude's `_auth/status_update`. `none`: copilot, which never
  * says. `loadNeedsLogin`: `session/load` fails with `-32000` too when logged
- * out, so a load that works says what a `session/new` that opens says
- * (§Models and login, 2026-10-30). Only codex and kimi: pi, opencode, claude
- * and copilot load a session logged out.
+ * out, so a load that works is `ok` (§Models and login, 2026-10-30). Only
+ * codex and kimi: pi, opencode, claude and copilot load a session logged
+ * out.
  */
 export interface SetupSpec {
   program: string;

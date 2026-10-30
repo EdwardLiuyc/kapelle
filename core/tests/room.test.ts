@@ -2560,7 +2560,7 @@ test("a room reports one auth notice per harness start, however many come (M9-4)
   assert.deepEqual(logins, [{ login: "logged_out" }]);
 });
 
-test("a revive's load saves the models, but no login state (M9-4)", async (t) => {
+test("a revive's load saves the models, but no login where a load proves nothing (M9-4)", async (t) => {
   const { repo, room, p, file, agent } = await loading(t, "models");
   await p.send("one");
   await room.pause();
@@ -2574,7 +2574,7 @@ test("a revive's load saves the models, but no login state (M9-4)", async (t) =>
   );
   await back.p.send("two");
   assert.equal(back.p.resumed, "loaded");
-  // Whether a load works logged out is not measured, so a load says
+  // This entry has no `loadNeedsLogin`: a load that works logged out proves
   // nothing about the login (§Models and login).
   assert.deepEqual(seen, [
     {
@@ -2583,6 +2583,36 @@ test("a revive's load saves the models, but no login state (M9-4)", async (t) =>
         { id: "mock/smart", name: "Smart" },
       ],
       model: "mock/fast",
+    },
+  ]);
+});
+
+test("a revive's load gives a login state where a load needs a login (M9-4b)", async (t) => {
+  const { repo, room, p, file, agent } = await loading(t, "models");
+  await p.send("one");
+  await room.pause();
+  // Now a registry agent kapelle checks, whose successful load is the proof.
+  const entry = AGENTS[agent];
+  assert.ok(entry);
+  entry.setup = {
+    program: "mock",
+    login: "mock login",
+    loadNeedsLogin: true,
+  };
+  const seen: Seen[] = [];
+  const back = await restored(t, repo, readRoomRecord(file), (_id, s) =>
+    seen.push(s),
+  );
+  await back.p.send("two");
+  assert.equal(back.p.resumed, "loaded");
+  assert.deepEqual(seen, [
+    {
+      models: [
+        { id: "mock/fast", name: "Fast" },
+        { id: "mock/smart", name: "Smart" },
+      ],
+      model: "mock/fast",
+      login: "ok",
     },
   ]);
 });

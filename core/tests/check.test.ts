@@ -393,13 +393,25 @@ test("stopping checks cancels them without saving an unknown result", async (t) 
 test("a load gives a login state only where a load needs a login (M9-4b)", () => {
   const needs = { ...setup(), loadNeedsLogin: true as const };
   assert.deepEqual(sessionSeen(needs, [], true), { login: "ok" });
+  // A load that needed a login is the proof; the session/new signal cannot
+  // turn that success into unknown or no answer.
+  assert.deepEqual(sessionSeen({ ...needs, loginSignal: "none" }, [], true), {
+    login: "ok",
+  });
+  assert.deepEqual(sessionSeen({ ...needs, loginSignal: "notice" }, [], true), {
+    login: "ok",
+  });
   assert.deepEqual(sessionSeen(setup(), [], true), {});
   assert.deepEqual(sessionSeen(setup(), [], false), { login: "ok" });
   // The registry marks the two agents measured to refuse a logged-out load.
-  const marked = Object.entries(AGENTS)
-    .filter(([, a]) => a.setup?.loadNeedsLogin)
-    .map(([id]) => id);
-  assert.deepEqual(marked.sort(), ["codex", "kimi"]);
+  const marked = Object.entries(AGENTS).filter(
+    ([, a]) => a.setup?.loadNeedsLogin,
+  );
+  assert.deepEqual(marked.map(([id]) => id).sort(), ["codex", "kimi"]);
+  for (const [id, a] of marked) {
+    assert.ok(a.setup, id);
+    assert.deepEqual(sessionSeen(a.setup, [], true), { login: "ok" }, id);
+  }
 });
 
 test("a logged-out or unknown agent with no model list settles; one logged in is due (M9-4)", () => {
