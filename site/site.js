@@ -284,20 +284,47 @@ window.addEventListener("resize", update);
 update();
 
 const behavior = still ? "auto" : "smooth";
+// The section a smooth jump still moves to. A key pressed before it gets
+// there counts from it: measured from mid-scroll, it would pick the same
+// section again, and the press would be lost.
+let aim = -1;
+let aimTimer = 0;
+const endAim = () => {
+  aim = -1;
+};
+window.addEventListener("scrollend", endAim);
 function jump(dir) {
   if (!sections.length) return;
-  // The section whose top sits just below the header counts as "here".
-  const tops = sections.map((s) => s.el.getBoundingClientRect().top - 80);
-  const target =
-    dir > 0
-      ? sections[tops.findIndex((t) => t > 4)]
-      : sections[tops.findLastIndex((t) => t < -4)];
-  if (target) target.el.scrollIntoView({ behavior, block: "start" });
-  else
+  let i = aim + dir;
+  if (aim < 0) {
+    // The section whose top sits just below the header counts as "here".
+    // scrollIntoView stops at the CSS scroll-padding-top, so measure from
+    // it: a guess larger than it leaves "here" above the line, and k jumps
+    // to it.
+    const pad =
+      parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) ||
+      0;
+    const tops = sections.map((s) => s.el.getBoundingClientRect().top - pad);
+    i =
+      dir > 0
+        ? tops.findIndex((t) => t > 4)
+        : tops.findLastIndex((t) => t < -4);
+  }
+  clearTimeout(aimTimer);
+  if (i >= 0 && i < sections.length) {
+    sections[i].el.scrollIntoView({ behavior, block: "start" });
+    // No scrollend comes when the page cannot move, such as at its end.
+    if (behavior === "smooth") {
+      aim = i;
+      aimTimer = setTimeout(endAim, 1000);
+    }
+  } else {
+    aim = -1;
     window.scrollTo({
       top: dir > 0 ? document.documentElement.scrollHeight : 0,
       behavior,
     });
+  }
 }
 
 let pending = "";
@@ -324,10 +351,12 @@ document.addEventListener("keydown", (e) => {
     jump(k === "j" ? 1 : -1);
     show(k);
   } else if (k === "G") {
+    endAim();
     window.scrollTo({ top: document.documentElement.scrollHeight, behavior });
     show("G");
   } else if (k === "g") {
     if (pending === "g") {
+      endAim();
       window.scrollTo({ top: 0, behavior });
       pending = "";
       show("gg");
