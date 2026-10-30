@@ -1170,6 +1170,10 @@ function chatTui(
         if (!(await changes(c, c.against).catch(gone))) giveBack();
         return;
       }
+      if (c.verb === "models") {
+        editor.addToHistory(text);
+        return box.pickModel({ id: c.id, name: c.name });
+      }
       if (c.verb !== "message") {
         editor.addToHistory(text);
         if (!(await run(c))) giveBack();

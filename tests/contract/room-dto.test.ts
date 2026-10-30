@@ -52,6 +52,7 @@ const PARTICIPANT_KEYS = new Set(
     resumed: 0,
     turnFrom: 0,
     model: 0,
+    models: 0,
     status: 0,
     notices: 0,
   } satisfies Record<keyof ParticipantDto, 0>),

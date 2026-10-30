@@ -3780,7 +3780,8 @@ nonzero, send the worker no work.
 refused one, a set with no answer, a swapped one, an agent with no model option, and a
 missing or empty value.
 **Decided 2026-10-30 (#392):** the CLI uses the same check as the screens (`notOn`); the
-next step names only `kapelle room remove`, until M9-6 lands.
+next step names only `kapelle room remove`. M9-6 adds no CLI verb to change a model
+(decided 2026-10-30, #301), so that stays the next step.
 
 **M9-6 · Change the model during a chat · S · needs M9-5**
 `PATCH /rooms/:id/agents/:agentId` takes `model`, as it takes `mode` today. `@name /model`
@@ -3788,13 +3789,18 @@ shows the running agent's live list and `@name /model <id>` picks one, in both s
 The room sends the change before the participant's next turn, never during a turn. The
 reply to `session/set_config_option` updates the saved current model only. It must not
 replace the saved options: copilot's reply left out one of the options its `session/new`
-sent (§Models and login). Nothing reads `config_option_update` yet (#387 review): a
-harness that answers the set with its old options and reports the switch there would
-show the old model and a false "runs on" notice, so check it on each harness first. The
-contract gets a minor version.
+sent (§Models and login). The contract gets a minor version.
 *Done when* tests cover the route, the command in both screens, a change while the agent
 is busy (sent before its next turn), a refused model, and a reply with fewer options that
 leaves the saved options as they were.
+**Decided 2026-10-30 (#301):** a change is the same `session/set_config_option` and the
+same reply as at a join (M9-5), so it needs no new measurement. The #387 review asked
+whether a harness reports the switch only in `config_option_update`; such a harness
+would already show a false notice at a join, and none did. codex and kimi were never
+measured on a set, at a join either. An idle harness gets the change at once, and the
+`PATCH` reply shows the model in use; a busy one gets it before its next turn. Only a
+model the harness took is sent again at a revive. The live list is the participant's
+`models`. No `kapelle room` verb changes a model.
 
 **M9-7 · kapelle runs after an npm install · M · needs nothing**
 A person installs kapelle with `npm install -g kapelle` and types `kapelle`. The name is

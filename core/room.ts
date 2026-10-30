@@ -143,6 +143,16 @@
  * the revive: the harness stays on the model it had, and a notice says so
  * (decided 2026-10-29). `model` on the participant is the one in use.
  *
+ * **The person may change the model during a chat** (M9-6). `setModel` sends
+ * it at once to an idle harness, and before the next turn to a busy one,
+ * never during a turn (decided 2026-10-30, #301). It is the same set and the
+ * same reply as at a start, so no new measurement backs it. Only a model the
+ * harness took becomes the one a revive asks for: a refused one is not sent
+ * again. A participant with no harness gets it at its next start. The reply
+ * changes only the model in use: `models`, the live list, stays as the
+ * session sent it, since copilot's reply leaves an option out (§Models and
+ * login). `_client_participant_changed` then carries the model in use.
+ *
  * **MVP scope, deliberately.** The watchdog only warns, and only during a turn (R38):
  * a chat turn is never cut by a clock. No result preamble, no cross-check: a
  * chat turn is conversation, not a deliverable (R39). What stays is what makes a room
@@ -177,7 +187,13 @@ import {
   warningsFor,
 } from "../protocol/registry.ts";
 import type { AgentEvent, MessageKind } from "../protocol/types.ts";
-import { failureSeen, noticeSeen, type Seen, sessionSeen } from "./check.ts";
+import {
+  failureSeen,
+  modelsOf,
+  noticeSeen,
+  type Seen,
+  sessionSeen,
+} from "./check.ts";
 import {
   createEventLog,
   type EventLog,
@@ -291,11 +307,13 @@ export interface AgentRequest {
   model?: string;
 }
 
-/** What `PATCH` may change. A `null` role clears it. */
+/** What `PATCH` may change. A `null` role clears it. `model` goes to
+ *  `Room.setModel`, the rest to `Room.update`. */
 export interface ParticipantChanges {
   name?: string;
   role?: Role | null;
   mode?: ClientMode;
+  model?: string;
 }
 
 /** Who sent a message, when a participant did (M8-1). */
@@ -351,6 +369,9 @@ export interface Participant {
   /** The model in use, as the harness last said; absent when it lists
    *  none, or before its first start. */
   readonly model?: string;
+  /** The live session's models (M9-6); absent with no harness, or when it
+   *  lists none. A set's reply never changes them. */
+  readonly models?: readonly { id: string; name: string }[];
   /** The room's notices, then this participant's containment and worktree
    *  notices. #13's lines are never dropped, and a room has no terminal of
    *  its own, so the caller publishes them. */
@@ -460,7 +481,11 @@ export interface Room {
   add(request: AgentRequest): Promise<Participant>;
   /** Renames a participant, or changes its role or mode. Checks every
    *  change before it applies any. */
-  update(id: string, changes: ParticipantChanges): Participant;
+  update(id: string, changes: Omit<ParticipantChanges, "model">): Participant;
+  /** Asks the participant's harness for another model (M9-6): now when it
+   *  is idle, and before its next turn when it is busy. Resolves once an
+   *  idle harness answered; a refusal is a notice, not a throw. */
+  setModel(id: string, model: string): Promise<Participant>;
   /** Gives the room a new title. `touch` saves it. The stream gets no
    *  line: a client reads the title from `GET /rooms`. */
   retitle(title: string): void;
@@ -668,14 +693,26 @@ export function roomAgents(raw: unknown): AgentRequest[] {
 export function participantChanges(
   body: Record<string, unknown>,
 ): ParticipantChanges {
-  const { name, mode, role } = body;
-  if (name === undefined && mode === undefined && role === undefined) {
-    throw new Error('send at least one of "name", "mode" or "role"');
+  const { name, mode, role, model } = body;
+  if (
+    name === undefined &&
+    mode === undefined &&
+    role === undefined &&
+    model === undefined
+  ) {
+    throw new Error('send at least one of "name", "mode", "role" or "model"');
   }
   const changes: ParticipantChanges = {};
   if (mode !== undefined) changes.mode = checkMode(mode);
   if (name !== undefined) changes.name = checkName(name);
   if (role !== undefined) changes.role = role === null ? null : checkRole(role);
+  // As at add: any id, which the harness checks (D3).
+  if (model !== undefined) {
+    if (typeof model !== "string" || !model.trim()) {
+      throw new Error('"model" must be a non-empty string');
+    }
+    changes.model = model;
+  }
   return changes;
 }
 
@@ -722,8 +759,9 @@ interface Member {
   participant: Participant;
   spec: ResolvedAgent;
   source: AgentRequest["source"];
-  /** The model the request asked for, which `room.json` keeps. */
-  asked?: string;
+  /** The model a revive asks for, which `room.json` keeps: the request's,
+   *  or the last one the person changed to that the harness took. */
+  asked: () => string | undefined;
   /** Its own notices, which `room.json` keeps. */
   own: RoomNotice[];
   stop: () => Promise<void>;
@@ -732,6 +770,7 @@ interface Member {
   turns: () => number;
   turnCancelled: () => boolean;
   setMode: (mode: ClientMode) => void;
+  setModel: (model: string) => Promise<void>;
   hold: <T>(work: Promise<T>) => Promise<T>;
   onNotice: Notify;
   /** True when `branch` is a name the harness renamed into, proven by the
@@ -1007,6 +1046,7 @@ async function buildRoom(
   let saveFailed = false;
   const recordOf = (m: Member): ParticipantRecord => {
     const p = m.participant;
+    const asked = m.asked();
     return {
       id: p.id,
       name: p.name,
@@ -1015,7 +1055,7 @@ async function buildRoom(
       harness: p.harness,
       mode: p.mode,
       settings: { allowReadOutsideRoot: p.settings.allowReadOutsideRoot },
-      ...(m.asked && { model: m.asked }),
+      ...(asked && { model: asked }),
       worktree: p.worktree,
       ...(p.branch && { branch: p.branch }),
       ...(p.baseSha && { baseSha: p.baseSha }),
@@ -1289,7 +1329,6 @@ async function buildRoom(
       ...made,
       spec: request.spec,
       source: request.source,
-      ...(request.model && { asked: request.model }),
       own,
       onNotice,
     };
@@ -1387,7 +1426,14 @@ async function buildRoom(
     return found;
   };
 
-  const update = (id: string, changes: ParticipantChanges) => {
+  const setModel = async (id: string, model: string) => {
+    if (ended()) throw dismissed();
+    const found = member(id);
+    await found.setModel(model);
+    return found.participant;
+  };
+
+  const update = (id: string, changes: Omit<ParticipantChanges, "model">) => {
     if (ended()) throw dismissed();
     const found = member(id);
     const p = found.participant;
@@ -1555,6 +1601,7 @@ async function buildRoom(
     status,
     add: (request) => track(start(request)),
     update,
+    setModel: (id, model) => track(setModel(id, model)),
     retitle(title) {
       if (ended()) throw dismissed();
       meta.title = title;
@@ -1592,7 +1639,14 @@ function createParticipant({
   id,
   roomId,
   permissions,
-  request: { spec, name, role, settings, mode: initialMode, model: asked },
+  request: {
+    spec,
+    name,
+    role,
+    settings,
+    mode: initialMode,
+    model: initialModel,
+  },
   worktree,
   info,
   bus,
@@ -1639,7 +1693,7 @@ function createParticipant({
   }) => void;
   /** Where what a session said goes (M9-4). */
   report?: (seen: Seen) => void;
-}): Omit<Member, "spec" | "source" | "asked" | "own" | "onNotice"> {
+}): Omit<Member, "spec" | "source" | "own" | "onNotice"> {
   /** The live harness; undefined before `launch` and once it has stopped. */
   let agent: AcpAgent | undefined;
   /** Why there is no harness, once there was one (R46). */
@@ -1723,45 +1777,70 @@ function createParticipant({
   // left. Both are worked out again at each start.
   let model: string | undefined;
   let modelLine: RoomNotice | undefined;
-  /** Sets the asked model on a harness that just started. A refusal leaves
-   *  it on its own model: pi and claude say only `Internal error`, so the
-   *  line is ours, with theirs after it. A time-out or an exit is no
-   *  refusal, and the harness may still apply it, so its line says less. A
-   *  failed set is not tried again in this process: the next start does,
-   *  and so may the person (M9-6). */
-  const syncModel = async (next: AcpAgent) => {
+  // The model a start asks for (M9-5). A change during a chat replaces it
+  // once the harness takes it (M9-6).
+  let asked = initialModel;
+  // A change the harness has not heard of yet: it was busy, or had none.
+  let wanted: string | undefined;
+  /** Sets `target` on the live harness. A refusal leaves it on the model it
+   *  had: pi and claude say only `Internal error`, so the line is ours, with
+   *  theirs after it. A time-out or an exit is no refusal, and the harness
+   *  may still apply it, so its line says less. Only a set the harness took
+   *  becomes `asked`. A failed set is not tried again in this process. */
+  const applyModel = async (next: AcpAgent, target: string) => {
     const option = next.configOptions.find((o) => o.category === "model");
-    const own = option?.type === "select" ? option.currentValue : undefined;
-    model = own;
-    modelLine = undefined;
-    if (!asked) return;
-    const on = own ? `the model "${own}"` : "its own model";
+    const on = model ? `the model "${model}"` : "its own model";
     if (!option) {
       modelLine = {
-        text: `${spec.name} lists no models, so the model "${asked}" was not set; it runs on ${on}`,
+        text: `${spec.name} lists no models, so the model "${target}" was not set; it runs on ${on}`,
       };
       return;
     }
     try {
-      const res = await next.setConfigOption(option.id, asked);
+      const res = await next.setConfigOption(option.id, target);
       const now = res?.configOptions?.find((o) => o.category === "model");
-      model = now?.type === "select" ? now.currentValue : asked;
+      model = now?.type === "select" ? now.currentValue : target;
+      asked = target;
       // It took the set, yet names another model.
-      if (model !== asked) {
-        modelLine = {
-          text: `${spec.name} took the model "${asked}" but runs on "${model}"`,
-        };
-      }
+      modelLine =
+        model === target
+          ? undefined
+          : {
+              text: `${spec.name} took the model "${target}" but runs on "${model}"`,
+            };
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       modelLine = {
         text:
           err instanceof RpcError
-            ? `${spec.name} refused the model "${asked}" (${why}); it runs on ${on}`
-            : `${spec.name} did not confirm the model "${asked}" (${why}); ` +
+            ? `${spec.name} refused the model "${target}" (${why}); it runs on ${on}`
+            : `${spec.name} did not confirm the model "${target}" (${why}); ` +
               `it may still run on ${on}`,
       };
     }
+  };
+  /** A harness that just started: its own model, then the one asked for. */
+  const syncModel = async (next: AcpAgent) => {
+    const option = next.configOptions.find((o) => o.category === "model");
+    model = option?.type === "select" ? option.currentValue : undefined;
+    modelLine = undefined;
+    const target = wanted ?? asked;
+    wanted = undefined;
+    if (target) await applyModel(next, target);
+  };
+  /** The change the live harness has not heard of, then a line that tells
+   *  every client the model in use, and makes the room save `asked`. A
+   *  harness with no model option changes nothing, so it gets no line. */
+  const sendWanted = async () => {
+    const target = wanted;
+    wanted = undefined;
+    if (!agent || !target) return;
+    await applyModel(agent, target);
+    if (model === undefined) return;
+    bus.emit({
+      agent: id,
+      update: { sessionUpdate: "_client_participant_changed", model },
+    });
   };
 
   let turn: Promise<void> | undefined;
@@ -1889,7 +1968,7 @@ function createParticipant({
       // load is a real session too. It gives a login state only on an agent
       // whose load needs one (`loadNeedsLogin`). Before `syncModel`, so
       // `model` here is the one the session started with; `configOptions`
-      // does not follow a set (M9-6 must keep that order).
+      // does not follow a set, so `models` stays the session's list (M9-6).
       if (spec.setup) {
         report?.(sessionSeen(spec.setup, next.configOptions, loaded));
       }
@@ -2018,7 +2097,8 @@ function createParticipant({
     };
     let ready: Promise<void> | undefined;
     if (!agent) ready = revive();
-    else if (unsent()) ready = syncMode();
+    else if (unsent()) ready = syncMode().then(sendWanted);
+    else if (wanted) ready = sendWanted();
     // **Before the turn's own end line**, so a client that reloads the diff
     // on `_client_turn_ended` already has the rebased `baseSha`, and one that
     // re-reads the room then sees the new branch.
@@ -2155,6 +2235,15 @@ function createParticipant({
     warn();
   };
 
+  // An idle harness hears of a new model at once, held, so a message sent
+  // meanwhile waits behind the set. A busy one hears of it before its next
+  // turn, and one with no harness at its next start (#301).
+  const setModel = async (next: string) => {
+    wanted = next;
+    if (!agent || turn || held || stopping) return;
+    await hold(sendWanted());
+  };
+
   /** What the harness did to its own checkout: renamed the branch, or moved
    *  the commit its work starts from with a rebase. A git read that fails
    *  leaves the identity already recorded; a bad base would be worse than a
@@ -2216,6 +2305,9 @@ function createParticipant({
     },
     get model() {
       return model;
+    },
+    get models() {
+      return agent && modelsOf(agent.configOptions).models;
     },
     get notices() {
       return [
@@ -2293,6 +2385,8 @@ function createParticipant({
     pause,
     launch,
     setMode,
+    setModel,
+    asked: () => asked,
     hold,
     renamed: () => branchRenamed,
     syncCheckout,

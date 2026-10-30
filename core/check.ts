@@ -97,8 +97,9 @@ const authRequired = (err: unknown) =>
   err instanceof RpcError && err.code === AUTH_REQUIRED;
 
 /** The model list and the current model, from `session/new`'s options. A
- *  grouped list is made flat. Nothing when there is no model option. */
-function modelsOf(options: SessionConfigOption[]): Seen {
+ *  grouped list is made flat. Nothing when there is no model option. A room
+ *  reads a participant's live list with it too (M9-6). */
+export function modelsOf(options: SessionConfigOption[]): Seen {
   const o = options.find((x) => x.category === "model");
   if (o?.type !== "select" || !Array.isArray(o.options)) return {};
   const models = o.options

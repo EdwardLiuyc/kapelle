@@ -761,6 +761,37 @@ test("piped chat.ts takes the room commands, and names the room /new or /loop op
   );
 });
 
+test("piped chat.ts lists an agent's live models, and changes its model (M9-6)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT} --scenario models`, name: "alice" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end(
+    "@alice /model\n@alice /model mock/smart\n@alice /model\n/leave\n",
+  );
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  const out = r.stdout;
+  const at = (line: string, from = 0) => {
+    const i = out.indexOf(line, from);
+    assert.notEqual(i, -1, `${line} not after ${from} in:\n${out}`);
+    return i;
+  };
+  const first = at('alice runs on "mock/fast"');
+  at("* mock/fast  Fast", first);
+  at("  mock/smart  Smart", first);
+  const set = at('alice now runs on the model "mock/smart"', first);
+  const again = at('alice runs on "mock/smart"', set);
+  at("* mock/smart  Smart", again);
+});
+
 // --- a room across a restart (M6-7a, #151) ----------------------------------
 
 test("chat.ts on a pipe rides out a restart: the participant reads paused, and a message is answered", async (t) => {

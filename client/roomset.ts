@@ -349,10 +349,13 @@ export function roomSet(
     const update = line.update.sessionUpdate;
     // The header's branch, base and model are in `GET /rooms/:id`, not the
     // reducer. A turn can rename the branch or rebase it, and a revive can
-    // set the model, so read the room again when either ends.
+    // set the model, so read the room again when either ends. So does a
+    // change of model (M9-6), whose notice is there too.
     if (
       update === "_client_turn_ended" ||
-      update === "_client_participant_revived"
+      update === "_client_participant_revived" ||
+      (update === "_client_participant_changed" &&
+        line.update.model !== undefined)
     ) {
       loadDto(r, "reloaded");
     } else if (

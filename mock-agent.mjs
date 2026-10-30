@@ -76,7 +76,7 @@ const SCENARIOS = {
   half: "a note and a tool call, then waits for a cancel, like stall, and answers it end_turn, as copilot does (§M0-4)",
   "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
   models:
-    "session/new and session/load list two models in a group, both starting on mock/fast; session/set_config_option takes a listed model and refuses any other with -32603, as pi and claude do; --model-current makes its reply name another model, and --model-exit makes the harness exit instead of answering; the handshake offers session/delete, which drops the session's --store file",
+    "session/new and session/load list two models in a group, both starting on mock/fast; session/set_config_option takes a listed model and refuses any other with -32603, as pi and claude do; --model-current makes its reply name another model, --model-few makes its reply list only the model it took, as copilot's reply left an option out, and --model-exit makes the harness exit instead of answering; the handshake offers session/delete, which drops the session's --store file",
   "auth-required":
     "session/new fails with -32000 Authentication required, as pi does logged out",
   "auth-none":
@@ -102,6 +102,7 @@ const modelCurrentAt = process.argv.indexOf("--model-current");
 const modelCurrent =
   modelCurrentAt === -1 ? null : process.argv[modelCurrentAt + 1];
 const modelExit = process.argv.includes("--model-exit");
+const modelFew = process.argv.includes("--model-few");
 const authHoldAt = process.argv.indexOf("--auth-hold");
 const authHoldFile = authHoldAt === -1 ? null : process.argv[authHoldAt + 1];
 const lockCwd = process.argv.includes("--lock-cwd");
@@ -494,7 +495,13 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       });
       return;
     }
-    reply(msg.id, modelOptions(modelCurrent ?? value));
+    const now = modelCurrent ?? value;
+    const options = modelOptions(now);
+    // Fewer options than `session/new` sent: only the one it runs on.
+    if (modelFew) {
+      options.configOptions[0].options = [{ value: now, name: now }];
+    }
+    reply(msg.id, options);
     return;
   }
 

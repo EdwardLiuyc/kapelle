@@ -220,6 +220,8 @@ export function toParticipantDto(p: Participant): ParticipantDto {
   if (p.resumed !== undefined) dto.resumed = p.resumed;
   if (p.turnFrom !== undefined) dto.turnFrom = p.turnFrom;
   if (p.model !== undefined) dto.model = p.model;
+  if (p.models !== undefined)
+    dto.models = p.models.map(({ id, name }) => ({ id, name }));
   return dto;
 }
 

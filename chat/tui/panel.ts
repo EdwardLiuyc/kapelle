@@ -33,7 +33,11 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { HELP, type RouteCommand } from "../../client/command.ts";
+import {
+  HELP,
+  participantNow,
+  type RouteCommand,
+} from "../../client/command.ts";
 import type { HarnessesReply, RepoAdded } from "../../client/contract.ts";
 import { call, type DaemonAddress } from "../../client/daemon.ts";
 import {
@@ -406,6 +410,49 @@ function panelParts({
     return input;
   };
 
+  /** `@name /model` (M9-6): the live session's models, the cursor on the
+   *  one in use, then `other model…` to type one; a text box when it lists
+   *  none. The change goes through `run`, as `/mode` does. */
+  const pickModel = async (
+    who: { id: string; name: string },
+    back: () => void = hidePanel,
+  ) => {
+    const roomId = view().roomId;
+    await fresh();
+    const r = await participantNow(d, roomId, who.id).catch(() => undefined);
+    if (!r?.ok) {
+      say(`! ${r ? r.message : NO_DAEMON}`);
+      setStatus();
+      return;
+    }
+    const title = `${who.name} · model`;
+    const { id, name } = who;
+    const set = (model: string) =>
+      void run({ verb: "patch", id, name, change: { model: model.trim() } });
+    const type = () => {
+      const input = textBox("");
+      input.onSubmit = set;
+      input.onEscape = back;
+      showPanel(title, input);
+    };
+    const { models, model } = r.p;
+    if (!models?.length) return type();
+    pickList(
+      title,
+      [
+        ...models.map((m) => ({
+          value: m.id,
+          label: printable(m.id),
+          ...(m.name && m.name !== m.id && { description: printable(m.name) }),
+        })),
+        { value: OTHER_MODEL, label: OTHER_MODEL },
+      ],
+      model,
+      (v) => (v === OTHER_MODEL ? type() : set(v)),
+      back,
+    );
+  };
+
   /** The commands, short, in the pop-up. Esc goes back; Enter closes. */
   const showHelp = (back: () => void = hidePanel) =>
     showPanel("commands", {
@@ -642,6 +689,7 @@ function panelParts({
         row("cancel", "cancel turn", "/cancel"),
         // The value is in the label: the right column holds the command.
         row("mode", `mode · ${p.mode}`, "/mode"),
+        row("model", "model …", "/model"),
         row("role", `role · ${p.role ?? "none"}`, "/role"),
         row("rename", "rename …", "/rename"),
         row("diff", "view changes", "/diff"),
@@ -775,6 +823,7 @@ function panelParts({
         self,
       );
     }
+    if (value === "model") return void pickModel(who, self);
     if (value === "role") {
       const roles = words(["none", ...ROLES]);
       return pickList(
@@ -1087,6 +1136,7 @@ function panelParts({
     focusPanel,
     words,
     menu,
+    pickModel,
     showHelp,
     showSetup,
     setupDone,

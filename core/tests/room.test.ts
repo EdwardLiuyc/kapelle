@@ -47,6 +47,7 @@ import {
   crashed,
   openRoom,
   type Participant,
+  participantChanges,
   QUEUE_BOUND,
   type Room,
   type RoomRecord,
@@ -2632,6 +2633,13 @@ async function modelRoom(
   const repo = await gitRepo(t);
   const record = join(await tempDir(t), "requests.jsonl");
   const roomId = newRoomId();
+  const bus = createEventBus();
+  const changed: AgentEventEnvelope[] = [];
+  bus.addListener((e) => {
+    if (e.update.sessionUpdate === "_client_participant_changed") {
+      changed.push(e);
+    }
+  });
   const room = await openRoom({
     roomId,
     cwd: repo,
@@ -2645,7 +2653,7 @@ async function modelRoom(
       }),
     ],
     setup: await openWorktrees(repo, roomId),
-    bus: createEventBus(),
+    bus,
     permissions: queue,
   });
   t.after(() => room.dismiss());
@@ -2655,7 +2663,7 @@ async function modelRoom(
       .split("\n")
       .map((l) => (JSON.parse(l) as { method: string }).method);
   const p = room.participants[0] as Participant;
-  return { room, p, methods, file: roomFile(repo, roomId) };
+  return { room, p, methods, changed, file: roomFile(repo, roomId) };
 }
 
 const modelLines = (p: Participant) =>
@@ -2754,6 +2762,118 @@ test("an agent request takes a model as a non-empty string (M9-5)", () => {
   for (const model of [7, "", "  ", null]) {
     assert.throws(
       () => mock("a", { model }),
+      /"model" must be a non-empty string/,
+    );
+  }
+});
+
+// --- M9-6: the person changes the model during a chat ----------------------
+
+/** One turn for `setImmediate`: the room saves `room.json` on the next one. */
+const saved = () => new Promise((done) => setImmediate(done));
+
+test("an idle harness gets a changed model at once, and room.json keeps it (M9-6)", async (t) => {
+  const { room, p, methods, changed, file } = await modelRoom(t);
+  assert.equal(p.model, "mock/fast");
+  const after = await room.setModel(p.id, "mock/smart");
+  // Answered before the call resolves: the reply shows the model in use.
+  assert.equal(after.model, "mock/smart");
+  assert.deepEqual(modelLines(p), []);
+  assert.ok((await methods()).includes("session/set_config_option"));
+  assert.deepEqual(
+    changed.map((e) => e.update),
+    [{ sessionUpdate: "_client_participant_changed", model: "mock/smart" }],
+  );
+  await saved();
+  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
+});
+
+test("a busy harness gets a changed model before its next turn, never during one (M9-6)", async (t) => {
+  const { room, p, methods } = await modelRoom(t);
+  const turn = p.send("one");
+  assert.equal(p.status(), "busy");
+  const after = await room.setModel(p.id, "mock/smart");
+  assert.equal(after.model, "mock/fast", "not sent yet");
+  await turn;
+  // The turn ended, and still nothing was sent: it waits for the next one.
+  assert.ok(!(await methods()).includes("session/set_config_option"));
+  assert.equal(p.model, "mock/fast");
+  await p.send("two");
+  const sent = await methods();
+  const set = sent.indexOf("session/set_config_option");
+  const prompts = sent.flatMap((m, i) => (m === "session/prompt" ? [i] : []));
+  assert.equal(prompts.length, 2, sent.join(" "));
+  assert.ok(
+    set > (prompts[0] ?? -1) && set < (prompts[1] ?? -1),
+    sent.join(" "),
+  );
+  assert.equal(p.model, "mock/smart");
+});
+
+test("a refused change keeps the model in use, and a revive does not ask for it (M9-6)", async (t) => {
+  const { room, p, changed, file } = await modelRoom(t, "mock/smart");
+  const after = await room.setModel(p.id, "mock/bogus");
+  assert.equal(after.model, "mock/smart", "the model it had");
+  assert.deepEqual(modelLines(p), [
+    'mock-agent refused the model "mock/bogus" (Internal error (code -32603)); ' +
+      'it runs on the model "mock/smart"',
+  ]);
+  // Every client hears the model in use, so it reads the notice too.
+  assert.deepEqual(
+    changed.map((e) => e.update),
+    [{ sessionUpdate: "_client_participant_changed", model: "mock/smart" }],
+  );
+  await saved();
+  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
+  await p.send("one");
+  assert.equal(p.status(), "idle", "it still takes turns");
+});
+
+test("a set reply with fewer options leaves the live list as the session sent it (M9-6)", async (t) => {
+  const { room, p } = await modelRoom(
+    t,
+    undefined,
+    "models",
+    undefined,
+    " --model-few",
+  );
+  const before = [
+    { id: "mock/fast", name: "Fast" },
+    { id: "mock/smart", name: "Smart" },
+  ];
+  assert.deepEqual(p.models, before);
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.model, "mock/smart");
+  assert.deepEqual(p.models, before);
+});
+
+test("a changed model comes back after a revive, and one with no harness gets it at its start (M9-6)", async (t) => {
+  const { repo, room, p, file } = await loading(t, "models");
+  await p.send("one");
+  await room.setModel(p.id, "mock/smart");
+  await room.pause();
+  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
+  const back = await restored(t, repo, readRoomRecord(file));
+  // No harness yet, so no list; the change waits for the start.
+  assert.equal(back.p.models, undefined);
+  await back.room.setModel(back.p.id, "mock/fast");
+  assert.equal(back.p.model, undefined);
+  await back.p.send("two");
+  assert.equal(back.p.resumed, "loaded");
+  assert.equal(back.p.model, "mock/fast");
+  await back.room.pause();
+  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/fast");
+});
+
+test("a PATCH body takes a model as a non-empty string, alone or with the rest (M9-6)", () => {
+  assert.deepEqual(participantChanges({ model: "x/y" }), { model: "x/y" });
+  assert.deepEqual(participantChanges({ mode: "safe", model: "x/y" }), {
+    mode: "safe",
+    model: "x/y",
+  });
+  for (const model of [7, "", "  ", null]) {
+    assert.throws(
+      () => participantChanges({ model }),
       /"model" must be a non-empty string/,
     );
   }

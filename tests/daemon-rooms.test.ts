@@ -1525,6 +1525,66 @@ test("a model reaches both routes, typed or posted, and a refused one still adds
   }
 });
 
+test("a typed or patched model change answers with the model in use, keeps a refused one off, and refuses a bad value (M9-6)", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const MODELS = `node ${MOCK_AGENT} --scenario models`;
+  const opened = await typed(
+    d,
+    undefined,
+    `/new --cmd "${MODELS}" --name alice --cwd ${cwd}`,
+  );
+  assert.ok(opened.ok && opened.room, JSON.stringify(opened));
+  const roomId = opened.room.id;
+  const alice = only(opened.room);
+  assert.deepEqual(alice.models, [
+    { id: "mock/fast", name: "Fast" },
+    { id: "mock/smart", name: "Smart" },
+  ]);
+  const roster = [{ id: alice.id, name: "alice" }];
+
+  const changed = await typed(d, roomId, "@alice /model mock/smart", roster);
+  assert.ok(changed.ok, JSON.stringify(changed));
+  assert.equal(changed.line, 'alice now runs on the model "mock/smart"');
+  assert.equal(changed.participant?.model, "mock/smart");
+
+  const base = `/rooms/${roomId}/agents/${alice.id}`;
+  const refused = await api<ParticipantDto>(d, "PATCH", base, {
+    model: "mock/bogus",
+  });
+  assert.equal(refused.status, 200);
+  assert.equal(refused.body.model, "mock/smart", "the model it had");
+  assert.ok(
+    refused.body.notices.some((n) =>
+      n.text.includes('refused the model "mock/bogus"'),
+    ),
+    JSON.stringify(refused.body.notices),
+  );
+  const line = await typed(d, roomId, "@alice /model mock/bogus", roster);
+  assert.ok(line.ok, JSON.stringify(line));
+  assert.equal(line.line, '! alice is not confirmed on the model "mock/bogus"');
+
+  // With the rest of a PATCH: every change is checked before any is made.
+  const both = await api<ParticipantDto>(d, "PATCH", base, {
+    mode: "safe",
+    model: "mock/fast",
+  });
+  assert.equal(both.status, 200);
+  assert.equal(both.body.mode, "safe");
+  assert.equal(both.body.model, "mock/fast");
+  for (const model of ["", 7, null]) {
+    const bad = await api<RoomReply>(d, "PATCH", base, { name: "x", model });
+    assert.equal(bad.status, 400, JSON.stringify(bad.body));
+    assert.equal(bad.body.error?.code, "invalid_request");
+  }
+  const kept = await api<RoomReply>(d, "GET", `/rooms/${roomId}`);
+  assert.equal(
+    only(kept.body).name,
+    "alice",
+    "a refused PATCH changed nothing",
+  );
+});
+
 test("each room command shows the daemon's own message for each refusal its route documents", async (t) => {
   const d = await boot(t);
   const repo = await gitRepo(t);
