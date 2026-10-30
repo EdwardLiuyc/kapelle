@@ -305,17 +305,22 @@ test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5
   assert.equal(ok.stdout.trim(), "added ok (mock-agent, auto, mock/smart)");
 
   // Refused, never answered, swapped, and no model option at all.
-  for (const [cmd, name, runs] of [
-    [MODELS, "refused", 'it runs on "mock/fast"'],
-    [`${MODELS} --model-exit`, "silent", 'it runs on "mock/fast"'],
+  for (const [cmd, name, asked, runs] of [
+    [MODELS, "refused", "mock/bogus", 'it runs on "mock/fast"'],
+    [
+      `${MODELS} --model-exit`,
+      "silent",
+      "mock/smart",
+      'it runs on "mock/fast"',
+    ],
     [
       `${MODELS} --model-current mock/other`,
       "swapped",
+      "mock/smart",
       'it runs on "mock/other"',
     ],
-    [`node ${MOCK_AGENT}`, "plain", "it has no model"],
+    [`node ${MOCK_AGENT}`, "plain", "mock/smart", "it has no model"],
   ] as const) {
-    const asked = name === "refused" ? "mock/bogus" : "mock/smart";
     const r = await add(cmd, name, ["--model", asked]);
     assert.equal(r.code, 1, `${name}: ${r.stdout}`);
     assert.equal(r.stdout, "", name);

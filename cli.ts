@@ -1365,9 +1365,7 @@ function notOnModel(
 ): string | undefined {
   if (!p || modelConfirmed(asked, p)) return undefined;
   const runs = p.model ? `it runs on "${p.model}"` : "it has no model";
-  return oneLine(
-    `error: ${p.name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${p.name}`,
-  );
+  return `${p.name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${p.name}`;
 }
 
 /**
@@ -1748,7 +1746,7 @@ async function runRoomCommand(): Promise<number> {
       ? notOnModel(command.agent.model, outcome.participant)
       : undefined;
   if (off) {
-    console.error(off);
+    printRefusal({ code: "", message: off });
     return 1;
   }
   console.log(outcome.line);
