@@ -40,8 +40,9 @@ start in. Read other folders by their path; do not `cd` into them. If
 `kapelle room info` shows a room or a team you did not expect, stop and ask.
 
 When `kapelle room add` exits nonzero, do not send that worker any work. It may still be
-in the room, on a model nobody picked. Tell the person, or remove the worker with
-`kapelle room remove <name>` and add it again.
+in the room, on a model nobody picked. Do not add it again with the same `--model`: the
+agent answers the same way, so the add fails again. Remove the worker with
+`kapelle room remove <name>` if it should not stay, and tell the person.
 
 Learn about the room and its workers only through `kapelle room`. Never read kapelle's
 own files, such as the folders `kapelle workspace` names: their format is private, and
