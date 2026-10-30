@@ -293,6 +293,62 @@ test("--role none adds a participant with no role", async (t) => {
   assert.equal(Object.hasOwn(plain, "role"), false, "the role is omitted");
 });
 
+test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5b)", async (t) => {
+  const f = await fixture(t);
+  const po = f.p("po").worktree;
+  const MODELS = `node ${MOCK_AGENT} --scenario models`;
+  const add = (cmd: string, name: string, model: string[]) =>
+    room(t, f.runtime, po, ["add", "--cmd", cmd, "--name", name, ...model]);
+
+  const ok = await add(MODELS, "ok", ["--model", "mock/smart"]);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(ok.stdout.trim(), "added ok (mock-agent, auto, mock/smart)");
+
+  // Refused, never answered, swapped, and no model option at all. The rule
+  // in `assets/orchestrator.md` keys on "joined, but is not confirmed on the
+  // model": change both together. No test reads it (AGENTS.md).
+  for (const [cmd, name, asked, runs] of [
+    [MODELS, "refused", "mock/bogus", 'it runs on "mock/fast"'],
+    [
+      `${MODELS} --model-exit`,
+      "silent",
+      "mock/smart",
+      'it runs on "mock/fast"',
+    ],
+    [
+      `${MODELS} --model-current mock/other`,
+      "swapped",
+      "mock/smart",
+      'it runs on "mock/other"',
+    ],
+    [`node ${MOCK_AGENT}`, "plain", "mock/smart", "it has no model"],
+  ] as const) {
+    const r = await add(cmd, name, ["--model", asked]);
+    assert.equal(r.code, 1, `${name}: ${r.stdout}`);
+    assert.equal(r.stdout, "", name);
+    assert.equal(
+      r.stderr,
+      `error: ${name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${name}\n`,
+    );
+  }
+
+  // A missing or empty value is a usage error, and adds no one.
+  for (const [name, model] of [
+    ["novalue", ["--model"]],
+    ["empty", ["--model", ""]],
+  ] as const) {
+    const r = await add(MODELS, name, [...model]);
+    assert.equal(r.code, 1, name);
+    assert.match(r.stderr, /--model needs a value/);
+  }
+
+  const roster = (await api<RoomDto>(f.d, "GET", `/rooms/${f.room.id}`)).body;
+  assert.deepEqual(
+    roster.participants.map((p) => p.name),
+    ["po", "dev", "rev", "ok", "refused", "silent", "swapped", "plain"],
+  );
+});
+
 test("a folder that is no checkout, or not the participant's own, is refused", async (t) => {
   const f = await fixture(t);
   const po = f.p("po");
@@ -461,6 +517,21 @@ test("the orchestrator adds a reviewer, moves a branch, reads a diff and removes
   );
 });
 
+test("room add checks --model before it looks for a daemon (M9-5b)", async (t) => {
+  const dir = await tempDir(t);
+  for (const model of [["--model"], ["--model", ""]] as const) {
+    const r = await room(t, await tempDir(t), dir, [
+      "add",
+      "--cmd",
+      "true",
+      ...model,
+    ]);
+    assert.equal(r.code, 1);
+    assert.equal(r.stdout, "");
+    assert.equal(r.stderr, "--model needs a value\n");
+  }
+});
+
 test("a verb it does not know, or a wrong shape, prints the usage", async (t) => {
   // Refused before any daemon is looked for.
   const dir = await tempDir(t);
@@ -478,6 +549,7 @@ test("a verb it does not know, or a wrong shape, prints the usage", async (t) =>
     assert.match(r.stderr, /^usage: kapelle room <verb>/, args.join(" "));
     // `info` says it shows each agent's branch (#358).
     assert.match(r.stderr, /^ {2}info .*branch/m, args.join(" "));
+    assert.match(r.stderr, /add <harness>.*\[--model id\]/, args.join(" "));
   }
 
   // An option the verb does not take is refused, not dropped from the text.

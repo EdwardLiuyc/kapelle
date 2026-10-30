@@ -3769,6 +3769,19 @@ so the answer does not matter. `kapelle room add` gets no `--model` here: a late
 adds it, and its CLI must fail loudly on a refused model, since an orchestrator may give
 the worker its work at once.
 
+**M9-5b · `kapelle room add --model` fails loudly · S · needs M9-5**
+`kapelle room add` takes `--model <id>` and sends it as `model`. When the participant in
+the reply is not on that model, for any reason, the CLI prints an error and exits 1. The
+agent stays in the room, as M9-5 decided. The error names the agent, the model asked for,
+the model in use or none, and `kapelle room remove <name>`. A `--model` with no value, or
+an empty one, is a usage error. `assets/orchestrator.md` says: when `room add` exits
+nonzero, send the worker no work.
+*Done when* tests through the real CLI against `mock-agent.mjs` cover an accepted model, a
+refused one, a set with no answer, a swapped one, an agent with no model option, and a
+missing or empty value.
+**Decided 2026-10-30 (#392):** the CLI uses the same check as the screens (`notOn`); the
+next step names only `kapelle room remove`, until M9-6 lands.
+
 **M9-6 · Change the model during a chat · S · needs M9-5**
 `PATCH /rooms/:id/agents/:agentId` takes `model`, as it takes `mode` today. `@name /model`
 shows the running agent's live list and `@name /model <id>` picks one, in both screens.
@@ -3968,10 +3981,10 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 **M9 (added 2026-10-15)** needs nothing that is open. More stories will join it.
 
 ```text
-M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─ M9-6
-M9-2 ─┘        └─ M9-3b
+M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b
+M9-2 ─┘        └─ M9-3b        └─ M9-6
 M9-7   (needs nothing)
-M9-1..M9-7, M9-3b ─ M9-8   (the first publish)
+M9-1..M9-7, M9-3b, M9-5b ─ M9-8   (the first publish)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:

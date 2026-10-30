@@ -37,6 +37,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { text } from "node:stream/consumers";
 import {
   loopCommand,
+  modelConfirmed,
   type RouteCommand,
   runCommand,
 } from "./client/command.ts";
@@ -1354,6 +1355,19 @@ function printRefusal({ code, message }: { code: string; message: string }) {
   console.error(`error: ${oneLine(message)}${code ? ` (${code})` : ""}`);
 }
 
+/** Why `room add --model` did not land (M9-5b, #392), else nothing; the
+ *  caller prints it as the error. The same check as the screens' `notOn`:
+ *  a screen only says it, since a person watches, but an orchestrator may
+ *  send work at once. The agent stays, and the room's notice says why. */
+function notOnModel(
+  asked: string | undefined,
+  p: ParticipantDto | undefined,
+): string | undefined {
+  if (!p || modelConfirmed(asked, p)) return undefined;
+  const runs = p.model ? `it runs on "${p.model}"` : "it has no model";
+  return `${p.name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${p.name}`;
+}
+
 /**
  * The room and the sender for `kapelle room` (M8-3), or why there are none.
  *
@@ -1548,7 +1562,8 @@ async function runRoomCommand(): Promise<number> {
     "  info                       the room, each agent's branch, and who sent",
     "                             each busy agent's work",
     "  send <name> [text]         a message; the text from stdin when none",
-    "  add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--base @name|ref]",
+    "  add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--model id]",
+    "      [--base @name|ref]     exits 1 when the agent is not on the model",
     "  ff <name> --from <name>    move <name>'s branch up to the other's commit",
     "  diff <name> [base]         what is not committed, or with base the branch;",
     "                             made safe for a terminal, so not a patch to apply",
@@ -1582,7 +1597,9 @@ async function runRoomCommand(): Promise<number> {
   // `use --force now` would lose `--force now` from the message unseen.
   const options = new Set(["room", "as", "cwd", "quiet", "verbose"]);
   if (verb === "add") {
-    for (const o of ["cmd", "name", "role", "mode", "base"]) options.add(o);
+    for (const o of ["cmd", "name", "role", "mode", "model", "base"]) {
+      options.add(o);
+    }
   }
   if (verb === "ff") options.add("from");
   const unknown = argv.find(
@@ -1600,6 +1617,9 @@ async function runRoomCommand(): Promise<number> {
     );
     return 1;
   }
+  // A usage error is the caller's, not the daemon's: catch a missing or empty
+  // model before any request (M9-5b, #392).
+  const model = verb === "add" ? flag("model") : undefined;
   const d = await findDaemon();
   if (!d) return 1;
   const found = await roomAndSender(d);
@@ -1695,6 +1715,7 @@ async function runRoomCommand(): Promise<number> {
         // `none` is no role, as in the screens' `/add` and `/role none`.
         role: role === "none" ? undefined : role,
         mode: flag("mode"),
+        model,
         base: flag("base"),
       },
     };
@@ -1718,6 +1739,14 @@ async function runRoomCommand(): Promise<number> {
   const outcome = await runCommand(d, room.id, command);
   if (!outcome.ok) {
     printRefusal(outcome);
+    return 1;
+  }
+  const off =
+    command.verb === "add"
+      ? notOnModel(command.agent.model, outcome.participant)
+      : undefined;
+  if (off) {
+    printRefusal({ code: "", message: off });
     return 1;
   }
   console.log(outcome.line);

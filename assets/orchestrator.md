@@ -26,7 +26,7 @@ the command as `kapelle`, even when the repository has its own way to start it:
 
 ```text
 kapelle room info                     the team, each worker's branch, and who gave each busy worker its work
-kapelle room add <harness> --name <name> --role <role> [--mode <mode>] [--base @<name>|<ref>]
+kapelle room add <harness> --name <name> --role <role> [--mode <mode>] [--model <id>] [--base @<name>|<ref>]
 kapelle room send <name> <<'EOF'
 the message
 EOF
@@ -38,6 +38,14 @@ kapelle room remove <name>
 `kapelle room` finds the room from the folder it runs in. Run it only in the folder you
 start in. Read other folders by their path; do not `cd` into them. If
 `kapelle room info` shows a room or a team you did not expect, stop and ask.
+
+When `kapelle room add` exits nonzero, do not send that worker any work. Read the error:
+
+- It says the worker **joined, but is not confirmed on the model**: the worker is in the
+  room, on a model nobody picked. Do not add it again with the same `--model`; a model
+  the agent refused or renamed fails the same way. Remove the worker with
+  `kapelle room remove <name>` if it should not stay, and tell the person.
+- Any other error: nobody joined. Fix what the error names, and add the worker again.
 
 Learn about the room and its workers only through `kapelle room`. Never read kapelle's
 own files, such as the folders `kapelle workspace` names: their format is private, and
