@@ -192,8 +192,8 @@ test("a busy row shows a multi-line tool title's first line only (#351)", () => 
   line({
     sessionUpdate: "tool_call",
     toolCallId: "t1",
-    title: "for n in 1 2; do echo $n; done",
-    rawInput: { command: "for n in 1 2; do echo $n; done" },
+    title: "for n in 1 2;\ndo echo $n;\ndone",
+    rawInput: { command: "for n in 1 2;\ndo echo $n;\ndone" },
   });
   assert.deepEqual(text(), ["▌◓ ann for n in 1 2;… · 1m 05s · @ann /cancel"]);
   assert.ok(!text().join("").includes("\n"), "one row stays one row");

@@ -90,8 +90,8 @@ test("a multi-line command lines up under the first line (#351)", (t) => {
   send({
     sessionUpdate: "tool_call",
     toolCallId: "t1",
-    title: "cd /w; ls",
-    rawInput: { command: "cd /w; ls" },
+    title: "cd /w;\nls",
+    rawInput: { command: "cd /w;\nls" },
     status: "failed",
   });
   // A label title with the command as its detail: the detail is indented
@@ -100,7 +100,7 @@ test("a multi-line command lines up under the first line (#351)", (t) => {
     sessionUpdate: "tool_call",
     toolCallId: "t2",
     title: "shell",
-    rawInput: { command: "a; b" },
+    rawInput: { command: "a;\nb" },
   });
   t.mock.restoreAll();
   assert.equal(
