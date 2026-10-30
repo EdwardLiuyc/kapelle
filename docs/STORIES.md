@@ -3979,7 +3979,7 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 
 ```text
 M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b
-M9-2 ─┘        └─ M9-3b          └─ M9-6
+M9-2 ─┘        └─ M9-3b        └─ M9-6
 M9-7   (needs nothing)
 M9-1..M9-7, M9-3b, M9-5b ─ M9-8   (the first publish)
 ```
