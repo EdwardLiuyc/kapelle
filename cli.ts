@@ -1355,8 +1355,8 @@ function printRefusal({ code, message }: { code: string; message: string }) {
   console.error(`error: ${oneLine(message)}${code ? ` (${code})` : ""}`);
 }
 
-/** The error when `room add --model` did not land (M9-5b, #392), else
- *  nothing. The same check as the screens' `notOn`: a screen only says it,
+/** Why `room add --model` did not land (M9-5b, #392), else nothing; the
+ *  caller prints it as the error. The same check as the screens' `notOn`: a screen only says it,
  *  since a person watches, but an orchestrator may send work at once. The
  *  agent stays, and the room's notice says why. */
 function notOnModel(

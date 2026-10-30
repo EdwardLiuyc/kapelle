@@ -39,10 +39,13 @@ kapelle room remove <name>
 start in. Read other folders by their path; do not `cd` into them. If
 `kapelle room info` shows a room or a team you did not expect, stop and ask.
 
-When `kapelle room add` exits nonzero, do not send that worker any work. It may still be
-in the room, on a model nobody picked. Do not add it again with the same `--model`: the
-agent answers the same way, so the add fails again. Remove the worker with
-`kapelle room remove <name>` if it should not stay, and tell the person.
+When `kapelle room add` exits nonzero, do not send that worker any work. Read the error:
+
+- It says the worker **joined, but is not confirmed on the model**: the worker is in the
+  room, on a model nobody picked. Do not add it again with the same `--model`; a model
+  the agent refused or renamed fails the same way. Remove the worker with
+  `kapelle room remove <name>` if it should not stay, and tell the person.
+- Any other error: nobody joined. Fix what the error names, and add the worker again.
 
 Learn about the room and its workers only through `kapelle room`. Never read kapelle's
 own files, such as the folders `kapelle workspace` names: their format is private, and

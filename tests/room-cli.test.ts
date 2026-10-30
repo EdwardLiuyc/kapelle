@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
@@ -304,7 +304,14 @@ test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5
   assert.equal(ok.code, 0, ok.stderr);
   assert.equal(ok.stdout.trim(), "added ok (mock-agent, auto, mock/smart)");
 
-  // Refused, never answered, swapped, and no model option at all.
+  // Refused, never answered, swapped, and no model option at all. The
+  // orchestrator's rule keys on these words, so its file must name them.
+  const joined = "joined, but is not confirmed on the model";
+  const rules = await readFile(
+    join(import.meta.dirname, "..", "assets", "orchestrator.md"),
+    "utf8",
+  );
+  assert.ok(rules.includes(joined), "assets/orchestrator.md");
   for (const [cmd, name, asked, runs] of [
     [MODELS, "refused", "mock/bogus", 'it runs on "mock/fast"'],
     [
@@ -326,7 +333,7 @@ test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5
     assert.equal(r.stdout, "", name);
     assert.equal(
       r.stderr,
-      `error: ${name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${name}\n`,
+      `error: ${name} ${joined} "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${name}\n`,
     );
   }
 
