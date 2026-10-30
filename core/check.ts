@@ -14,14 +14,17 @@
  *
  * **The login state comes from each agent's own signal** (§Models and login,
  * `loginSignal` in the registry). `-32000` on `session/new` is "logged out"
- * for every agent: pi, codex and kimi send it. claude opens a session logged
- * out and says so in `_auth/status_update` with `kind: "none"`, so its check
- * waits for that notice. copilot never says: `unknown`. A check that fails
- * or runs out of time is `unknown` too.
+ * for every agent: pi, codex and kimi send it. A load is the same signal on
+ * codex and kimi (`loadNeedsLogin`): they refuse a logged-out load, so one
+ * that works is `ok`. claude opens a session logged out and says so in
+ * `_auth/status_update` with `kind: "none"`, so its check waits for that
+ * notice. copilot never says: `unknown`. A check that fails or runs out of
+ * time is `unknown` too.
  *
  * **A real room session keeps the file fresh at no cost** (decided
- * 2026-10-28): `noteSession` takes what its `session/new` and its notices
- * already said. Nothing waits for it.
+ * 2026-10-28): `noteSession` takes what its `session/new`, a successful
+ * `session/load` where measured, and its notices already said. Nothing
+ * waits for it.
  *
  * The file holds facts only, as `harnesses.json` does. The login hint comes
  * from today's registry when it is read. Never an account field: only the
@@ -382,11 +385,13 @@ export function noteSession(id: string, seen: Seen): void {
 }
 
 /** What a room needs to report its session: the models in it, and the
- *  state an open session gives. Only for `session/new`: whether a
- *  `session/load` works logged out is not measured (§Models and login), so
- *  a `loaded` session gives no login state.
+ *  state an open session gives. A `loaded` session gives it only where the
+ *  registry says `loadNeedsLogin`, which is codex and kimi: they refuse a
+ *  load logged out, so one that works is `ok`. The other four, pi, opencode,
+ *  claude and copilot, load a session logged out (§Models and login,
+ *  2026-10-30), so for them a load that works proves nothing.
  *
- *  Its models are not measured after a load either, yet saving them is safe:
+ *  Its models after a load need no rule of their own; saving them is safe:
  *  a harness that sends no options on a load gives `{}`, and `noteSession`
  *  writes nothing, not even `checkedAt`; one that sends options answers for
  *  itself. claude's notice after a load is the same: the harness's own
@@ -396,7 +401,13 @@ export function sessionSeen(
   options: SessionConfigOption[],
   loaded: boolean,
 ): Seen {
-  const login = loaded ? undefined : fromSession(setup);
+  // A working load is the ok signal when the harness refuses a logged-out
+  // one, unless the registry names the notice as its login signal: that
+  // notice comes during the load, and this report would overwrite it. codex
+  // sends a notice too, without that flag; its notice and its load agree.
+  let login: Login | undefined;
+  if (!loaded) login = fromSession(setup);
+  else if (setup.loadNeedsLogin && setup.loginSignal !== "notice") login = "ok";
   return { ...modelsOf(options), ...(login && { login }) };
 }
 

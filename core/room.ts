@@ -10,8 +10,9 @@
  * refused, here as `busy` and below as `AcpAgent`'s in-flight guard (#62 R5).
  *
  * **A real session reports its models and login state** (M9-4) to
- * `noteSession`, from the `session/new` response and an auth notice. The room
- * never waits for the notice.
+ * `noteSession`, from the `session/new` or `session/load` response and an
+ * auth notice. A load gives a login state only for an agent whose load needs
+ * one (M9-4b). The room never waits for the notice.
  *
  * **A daemon shutdown is a pause, not a dismiss** (M6-7a, R42c). `pause`
  * cancels each live turn, waits `pauseGraceMs` (2 s, §M0-4) for it to end,
@@ -1874,7 +1875,8 @@ function createParticipant({
       warn();
       if (load && spec.measured?.loads && init.agentCapabilities?.loadSession) {
         // A load that fails falls back to fresh, which the revive reports.
-        // A harness that died in it fails `newSession` too.
+        // A harness that died in it fails `newSession` too. Its `-32000` is
+        // not read: on codex and kimi, `newSession` gives the same one.
         session = await next.loadSession(load).catch(() => undefined);
         loaded = session !== undefined;
       }
@@ -1884,9 +1886,10 @@ function createParticipant({
         throw err;
       });
       // A real session's models replace the saved ones (3A): a revive's
-      // load is a real session too, but it gives no login state. Before
-      // `syncModel`, so `model` here is the one the session started with;
-      // `configOptions` does not follow a set (M9-6 must keep that order).
+      // load is a real session too. It gives a login state only on an agent
+      // whose load needs one (`loadNeedsLogin`). Before `syncModel`, so
+      // `model` here is the one the session started with; `configOptions`
+      // does not follow a set (M9-6 must keep that order).
       if (spec.setup) {
         report?.(sessionSeen(spec.setup, next.configOptions, loaded));
       }

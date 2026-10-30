@@ -19,6 +19,7 @@ client commit and spike branch — they differ, and by enough to matter:
 | M0-9 | 2026-09-27 | `04d6ac9` (run 1), `457bfb5` (run 2); same `protocol/` and `core/policy.ts` | `spike/m0-9-load-probe` (`load-probe.mjs`) |
 | M6-7b | 2026-10-08 | `635a124` + the M6-7b working tree | `integration/daemon.itest.ts` |
 | Models and login | 2026-10-15 | none: no client code ran | `spike/m9-models-probe` (`models-probe.mjs`) |
+| Models and login: `session/load` logged out | 2026-10-30 | none: no client code ran | `spike/m9-4b-load-probe` (`load-logged-out-probe.mjs`) |
 | M9-1: Codex, Kimi Code, and the four again | 2026-10-21 | `80cac13` + launch-only `codex` and `kimi` entries | `spike/m9-1-measure` (`turn-probe.mjs`, with `load-probe-simple.mjs` and `models-probe.mjs` from the branches above) |
 
 Method throughout: each harness spawned behind a transparent stdio proxy that logged every
@@ -1427,6 +1428,9 @@ installed with claude-agent-acp; this repository does not depend on the SDK.
 | `providers/list` | `-32601` | `-32601` | **works**: one provider, `main`, `anthropic` / `bedrock` / `vertex` | `-32601` | **works**: one provider, `openai` | `-32601` |
 | provider in the model id | yes | yes | no | no | no | yes |
 | logged-out signal | none; the free models work with no login | `session/new` fails with `-32000` `Authentication required`, and `data.authMethods` | `_auth/status_update` with `authStatus.kind: "none"`, label `Not logged in` | **none** | `session/new` fails with `-32000` `Authentication required` | `session/new` fails with `-32000` `Authentication required` |
+| a load needs a prompt first (2026-10-30) | no | yes: no session file without one | yes: `-32002` | yes: `-32002` | yes: `-32603` | no |
+| `session/load` logged in (2026-10-30) | works, 2 models | works, 374 models | works, 13 models | works, 31 models | works, 2 models | works, 2 models |
+| `session/load` logged out (2026-10-30) | works, 2 models | works, no model option | works, 5 aliases; `_auth/status_update` `kind: "none"` | works, 15 models | `-32000` `Authentication required`; `_auth/status_update` `kind: "none"` | `-32000` `Authentication required` |
 | `authMethods` on `initialize` | `opencode-login` | `pi_terminal_login` (`type: "terminal"`) | empty; `agentCapabilities.auth.logout` | `copilot-login` | `api-key`, `chat-gpt` | `login` (`type: "terminal"`) |
 | `sessionCapabilities.delete` | yes | yes | yes | no | yes | yes |
 | `initialize` + `session/new`, logged in | 1.5 s | 2.4 s | 1.5 s | 3.5 s | 0.5 s | 1.4 s |
@@ -1459,12 +1463,14 @@ installed with claude-agent-acp; this repository does not depend on the SDK.
 - Each logged-in run left an empty session in the harness's own history, under a `/tmp`
   folder. copilot has no `session/delete` to remove it.
 
-**Coverage.** One machine, one run each way, four harnesses. Logged out was simulated with
-an empty home. A keyring the harness reaches on its own D-Bus path was not blocked; copilot's
-log shows it found no login. Not measured: whether the model stays after `session/load`
-(the mode does not, §Mode after load), and what each harness does on the first prompt when
-logged out. M9-5 (#300) left the first one unmeasured on purpose: a room sends
-the model again after every load, so nothing depends on it.
+**Coverage.** One machine, one run each way: four harnesses on 2026-10-15, codex and kimi
+on 2026-10-21, and all six for `session/load` on 2026-10-30 (both below). Logged out was
+simulated with an empty home. A keyring the harness reaches on its own D-Bus path was not
+blocked; copilot's log shows it found no login. The 2026-10-30 probe below measured the
+login state a `session/load` gives. Still not measured: whether the model stays after
+`session/load` (the mode does not, §Mode after load), and what each harness does on the
+first prompt when logged out. M9-5 (#300) left the model unmeasured on purpose: a room
+sends the model again after every load, so nothing depends on it.
 
 **Added 2026-10-21 (M9-1, #296):** the codex-acp and kimi columns. Same probe and the same
 logged-out method, but with the model switch and the bogus id taken out: the person had one
@@ -1472,6 +1478,28 @@ model set up on each, so the switch was not measured. The four old columns were 
 again; their versions are still the ones installed here. codex also sent
 `_auth/status_update` when logged in, with `authStatus.kind: "gateway"` and the label
 `Custom model gateway`, and nothing when logged out.
+
+**Added 2026-10-30 (M9-4b, #379):** the three `session/load` rows, for all six agents at the
+versions in the header. The probe is `load-logged-out-probe.mjs` on `spike/m9-4b-load-probe`.
+A session was opened logged in, in a new temporary folder. Then every file in the agent's own
+folder that names the session id was copied into an empty home, at the same path; no login
+file was copied, and a full path to the real home in a copied text file was changed to the
+empty one. A new process loaded it logged in, then another loaded it logged out, with the
+logged-out method above. Where a load with no prompt failed logged in, the run was done
+again with one one-word prompt, logged in only. Each logged-out load that worked replayed the
+same messages as the logged-in one. The model counts in the three rows come from this run
+only. Do not compare them with the 2026-10-15 model rows: pi's list is the person's own
+setup, and copilot's list changes over time.
+
+- **Only codex and kimi refuse a load when logged out**, with the same `-32000` as on
+  `session/new`. For them a load that works means `ok` (`loadNeedsLogin` in the registry).
+- **pi loads logged out, but sends no model option.** So a load that works proves nothing
+  for pi, nor for opencode, claude or copilot.
+- **codex sends `_auth/status_update` with `kind: "none"` on a logged-out load**, which it did
+  not do on `session/new`. kapelle waits for this notice only for claude; a room saves any
+  auth notice it receives.
+- The probe deleted each session where the agent can. copilot has no `session/delete`, so
+  two sessions stay under `~/.copilot/session-state/`.
 
 **Programs.** For M9-3: the main program, the ACP program and the install command.
 

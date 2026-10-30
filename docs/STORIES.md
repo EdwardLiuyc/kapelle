@@ -3741,6 +3741,9 @@ agent's saved list. The check runs in a temporary folder, so a project's own set
 and opencode read them) show only when a real session starts there.
 **Decided 2026-10-15:** copilot gives no login signal, so its state is `unknown`, with the
 hint `copilot login`.
+**M9-4b (#379, 2026-10-30):** a room's `session/load` gave no login state, because a load
+logged out was not measured. It is now (§Models and login): only codex and kimi refuse it,
+with `-32000`, so a load that works is `ok` for those two only (`loadNeedsLogin`).
 *Done when* tests with `mock-agent.mjs` scenarios cover a model list, a `-32000`, an auth
 status of `none` through the new `AcpAgent` path, a time-out, the delete, the saved file,
 each trigger, and the update from a real session.
