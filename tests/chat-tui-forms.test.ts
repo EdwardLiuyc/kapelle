@@ -1192,6 +1192,23 @@ test("@name /model lists, takes a pick and a typed id, and changes the status li
   assert.equal(await exited, 0, out());
 });
 
+test("a refused model change draws the room's notice (M9-6)", {
+  skip: noPty,
+}, async (t) => {
+  const MODELS = `node ${MOCK_AGENT} --scenario models`;
+  const { press, seen, exited, out } = await chatOnPty(t, MODELS);
+  await seen("auto · mock/fast");
+  await press(
+    "@mock-agent /model mock/bogus\r",
+    '! mock-agent is not confirmed on the model "mock/bogus"',
+  );
+  // The room notice carries the harness's reason; it is drawn as a warning.
+  await seen('mock-agent refused the model "mock/bogus"');
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+  assert.match(scrollback(out()), /mock-agent refused the model "mock\/bogus"/);
+});
+
 test("chat in a removed folder: bare stops, attach opens and its /new form survives", {
   skip: noPty,
 }, async (t) => {
