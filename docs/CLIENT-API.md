@@ -1471,16 +1471,20 @@ Changes one participant. Send one or more of:
   harness checks it, not the daemon. An idle harness gets it at once, and the reply shows
   the model it runs on. A busy one gets it before its next turn, never during one, and one
   with no harness running gets it when it starts again, also after a daemon restart; the
-  reply then shows the model it had. A refusal is not a refusal of the request: the harness keeps the model it had, and
-  a notice says so. A pending change refused at a start leaves the last model the harness
-  took. Only a model the harness took is sent again at a revive. The saved models of
-  `GET /harnesses` do not change.
+  reply then shows the model it had. A harness that refuses the model does not refuse the
+  request: the harness keeps the model it had, and a notice says so. A pending change
+  refused at a start leaves the last model the harness took. Only a model the harness took
+  is sent again at a revive. The saved models of `GET /harnesses` do not change.
 
-The daemon checks every field before it changes any. The harness and its session stay
-as they are. The room's stream gets `_client_participant_changed`, with only the fields
-that changed, so every client sees the change. A change of model gets its own line once
-the harness answered, with `model`: the model in use, or `null` when the harness names
-none, such as one with no model option. Read the participant again for its notice.
+The daemon checks every field before it changes any. The model is applied last, and
+apart from the other fields: the daemon changes `name`, `mode` and `role` first, then
+sends the model. So a refusal at the model step, such as `409` `room_dismissed` when the
+room was dismissed between the two, leaves the earlier fields changed. The harness and
+its session stay as they are. The room's stream gets `_client_participant_changed`,
+with only the fields that changed, so every client sees the change. A change of model
+gets its own line once the harness answered, with `model`: the model in use, or `null`
+when the harness names none, such as one with no model option. Read the participant
+again for its notice.
 
 **Reply `200`:** the participant. **Refusals:** `404` `room_not_found` or
 `participant_not_found`; `400` `invalid_request` for a bad field or an empty body; `409`
