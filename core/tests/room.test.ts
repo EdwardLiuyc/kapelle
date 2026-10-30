@@ -2560,7 +2560,7 @@ test("a room reports one auth notice per harness start, however many come (M9-4)
   assert.deepEqual(logins, [{ login: "logged_out" }]);
 });
 
-test("a revive's load saves the models, but no login where a load proves nothing (M9-4)", async (t) => {
+test("a revive's load saves the models, and no login for an agent that loads logged out (M9-4b)", async (t) => {
   const { repo, room, p, file, agent } = await loading(t, "models");
   await p.send("one");
   await room.pause();

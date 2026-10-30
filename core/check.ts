@@ -386,9 +386,10 @@ export function noteSession(id: string, seen: Seen): void {
 
 /** What a room needs to report its session: the models in it, and the
  *  state an open session gives. A `loaded` session gives it only where the
- *  registry says `loadNeedsLogin`: pi, opencode, claude and copilot load a
- *  session logged out (§Models and login, 2026-10-30), so for them a load
- *  that works proves nothing.
+ *  registry says `loadNeedsLogin`, which is codex and kimi: they refuse a
+ *  load logged out, so one that works is `ok`. The other four, pi, opencode,
+ *  claude and copilot, load a session logged out (§Models and login,
+ *  2026-10-30), so for them a load that works proves nothing.
  *
  *  Its models after a load need no rule of their own; saving them is safe:
  *  a harness that sends no options on a load gives `{}`, and `noteSession`
@@ -400,11 +401,12 @@ export function sessionSeen(
   options: SessionConfigOption[],
   loaded: boolean,
 ): Seen {
-  // A working load is itself the ok signal when the harness refuses a
-  // logged-out one. Do not read loginSignal here: it describes `session/new`.
+  // A working load is the ok signal when the harness refuses a logged-out
+  // one, unless the harness sends a notice: that notice comes during the
+  // load, and this report would overwrite it.
   let login: Login | undefined;
   if (!loaded) login = fromSession(setup);
-  else if (setup.loadNeedsLogin) login = "ok";
+  else if (setup.loadNeedsLogin && setup.loginSignal !== "notice") login = "ok";
   return { ...modelsOf(options), ...(login && { login }) };
 }
 
