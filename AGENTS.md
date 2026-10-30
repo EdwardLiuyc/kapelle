@@ -88,7 +88,7 @@ node cli.ts attach <runId> [--task <id>]       # replay then follow a detached r
 node cli.ts ps                                 # every run the daemon knows, with its tasks
 node cli.ts setup                              # the agents the daemon finds on its PATH, and what to install
 node cli.ts merge <runId> [--squash] [--cwd dir]
-node cli.ts room info | send | add | ff | diff | remove [--room id] [--as name]   # from a participant's checkout
+node cli.ts room info | send | add | ff | diff | remove [--room id] [--as name]   # from a participant's checkout; add takes --model id
 node cli.ts loop <recipe> <task> ["<note>"] [--agent id] [--cmd "<cmd>"] [--cwd dir]   # a room whose orchestrator drives the recipe
 node cli.ts loop list [--cwd dir]              # every recipe, its folder, and which one wins a name
 node cli.ts workspace [--cwd dir]              # where this repo's worktrees and records live

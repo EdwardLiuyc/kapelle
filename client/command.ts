@@ -370,7 +370,7 @@ export function parseCommand(
 
 /** What a route said: a line for the status bar, or the daemon's refusal. */
 export type Outcome =
-  | { ok: true; line: string; room?: RoomDto }
+  | { ok: true; line: string; room?: RoomDto; participant?: ParticipantDto }
   | { ok: false; code: string; message: string; room?: RoomDto };
 
 const refused = (message: string, code = "", room?: RoomDto): Outcome => ({
@@ -557,6 +557,7 @@ export async function runCommand(
         line: printable(
           `added ${p.name} (${p.harness}${role}, ${p.mode}${model})${off}`,
         ),
+        participant: p,
       };
     }
     case "remove": {

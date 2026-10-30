@@ -26,7 +26,7 @@ the command as `kapelle`, even when the repository has its own way to start it:
 
 ```text
 kapelle room info                     the team, each worker's branch, and who gave each busy worker its work
-kapelle room add <harness> --name <name> --role <role> [--mode <mode>] [--base @<name>|<ref>]
+kapelle room add <harness> --name <name> --role <role> [--mode <mode>] [--model <id>] [--base @<name>|<ref>]
 kapelle room send <name> <<'EOF'
 the message
 EOF
@@ -38,6 +38,10 @@ kapelle room remove <name>
 `kapelle room` finds the room from the folder it runs in. Run it only in the folder you
 start in. Read other folders by their path; do not `cd` into them. If
 `kapelle room info` shows a room or a team you did not expect, stop and ask.
+
+When `kapelle room add` exits nonzero, do not send that worker any work. It may still be
+in the room, on a model nobody picked. Tell the person, or remove the worker with
+`kapelle room remove <name>` and add it again.
 
 Learn about the room and its workers only through `kapelle room`. Never read kapelle's
 own files, such as the folders `kapelle workspace` names: their format is private, and

@@ -1548,7 +1548,8 @@ async function runRoomCommand(): Promise<number> {
     "  info                       the room, each agent's branch, and who sent",
     "                             each busy agent's work",
     "  send <name> [text]         a message; the text from stdin when none",
-    "  add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--base @name|ref]",
+    "  add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--model id]",
+    "      [--base @name|ref]     exits 1 when the agent is not on the model",
     "  ff <name> --from <name>    move <name>'s branch up to the other's commit",
     "  diff <name> [base]         what is not committed, or with base the branch;",
     "                             made safe for a terminal, so not a patch to apply",
@@ -1582,7 +1583,9 @@ async function runRoomCommand(): Promise<number> {
   // `use --force now` would lose `--force now` from the message unseen.
   const options = new Set(["room", "as", "cwd", "quiet", "verbose"]);
   if (verb === "add") {
-    for (const o of ["cmd", "name", "role", "mode", "base"]) options.add(o);
+    for (const o of ["cmd", "name", "role", "mode", "model", "base"]) {
+      options.add(o);
+    }
   }
   if (verb === "ff") options.add("from");
   const unknown = argv.find(
@@ -1695,6 +1698,7 @@ async function runRoomCommand(): Promise<number> {
         // `none` is no role, as in the screens' `/add` and `/role none`.
         role: role === "none" ? undefined : role,
         mode: flag("mode"),
+        model: flag("model"),
         base: flag("base"),
       },
     };
@@ -1718,6 +1722,20 @@ async function runRoomCommand(): Promise<number> {
   const outcome = await runCommand(d, room.id, command);
   if (!outcome.ok) {
     printRefusal(outcome);
+    return 1;
+  }
+  // The same check as the screens' `notOn` (M9-5b, #392). A screen only
+  // says it, since a person watches; an orchestrator may send work at once,
+  // so here it fails. The agent stays, and the room's notice says why.
+  const asked = command.verb === "add" ? command.agent.model : undefined;
+  const p = outcome.participant;
+  if (p && asked && asked !== p.model) {
+    const runs = p.model ? `it runs on "${p.model}"` : "it has no model";
+    console.error(
+      oneLine(
+        `error: ${p.name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${p.name}`,
+      ),
+    );
     return 1;
   }
   console.log(outcome.line);

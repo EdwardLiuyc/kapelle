@@ -293,6 +293,58 @@ test("--role none adds a participant with no role", async (t) => {
   assert.equal(Object.hasOwn(plain, "role"), false, "the role is omitted");
 });
 
+test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5b)", async (t) => {
+  const f = await fixture(t);
+  const po = f.p("po").worktree;
+  const MODELS = `node ${MOCK_AGENT} --scenario models`;
+  const add = (cmd: string, name: string, model: string[]) =>
+    room(t, f.runtime, po, ["add", "--cmd", cmd, "--name", name, ...model]);
+
+  const ok = await add(MODELS, "ok", ["--model", "mock/smart"]);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(ok.stdout.trim(), "added ok (mock-agent, auto, mock/smart)");
+
+  // Refused, never answered, swapped, and no model option at all.
+  for (const [cmd, name, runs] of [
+    [MODELS, "refused", 'it runs on "mock/fast"'],
+    [`${MODELS} --model-exit`, "silent", 'it runs on "mock/fast"'],
+    [
+      `${MODELS} --model-current mock/other`,
+      "swapped",
+      'it runs on "mock/other"',
+    ],
+    [`node ${MOCK_AGENT}`, "plain", "it has no model"],
+  ] as const) {
+    const asked = name === "refused" ? "mock/bogus" : "mock/smart";
+    const r = await add(cmd, name, ["--model", asked]);
+    assert.equal(r.code, 1, `${name}: ${r.stdout}`);
+    assert.equal(r.stdout, "", name);
+    assert.ok(
+      r.stderr.startsWith(
+        `error: ${name} joined, but is not confirmed on the model "${asked}"; ${runs}`,
+      ),
+      r.stderr,
+    );
+    assert.match(r.stderr, new RegExp(`kapelle room remove ${name}\\n$`));
+  }
+
+  // A missing or empty value is a usage error, and adds no one.
+  for (const [name, model] of [
+    ["novalue", ["--model"]],
+    ["empty", ["--model", ""]],
+  ] as const) {
+    const r = await add(MODELS, name, [...model]);
+    assert.equal(r.code, 1, name);
+    assert.match(r.stderr, /--model needs a value/);
+  }
+
+  const roster = (await api<RoomDto>(f.d, "GET", `/rooms/${f.room.id}`)).body;
+  assert.deepEqual(
+    roster.participants.map((p) => p.name),
+    ["po", "dev", "rev", "ok", "refused", "silent", "swapped", "plain"],
+  );
+});
+
 test("a folder that is no checkout, or not the participant's own, is refused", async (t) => {
   const f = await fixture(t);
   const po = f.p("po");
