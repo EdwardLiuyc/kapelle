@@ -1884,7 +1884,8 @@ function createParticipant({
         throw err;
       });
       // A real session's models replace the saved ones (3A): a revive's
-      // load is a real session too, but it gives no login state. Before
+      // load is a real session too. It gives a login state only on an agent
+      // whose load needs one (`loadNeedsLogin`). Before
       // `syncModel`, so `model` here is the one the session started with;
       // `configOptions` does not follow a set (M9-6 must keep that order).
       if (spec.setup) {

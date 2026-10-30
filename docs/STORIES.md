@@ -3744,6 +3744,9 @@ hint `copilot login`.
 *Done when* tests with `mock-agent.mjs` scenarios cover a model list, a `-32000`, an auth
 status of `none` through the new `AcpAgent` path, a time-out, the delete, the saved file,
 each trigger, and the update from a real session.
+**M9-4b (#379, 2026-10-30):** a room's `session/load` gave no login state, because a load
+logged out was not measured. It is now (§Models and login): only codex and kimi refuse it,
+with `-32000`, so a load that works is `ok` for those two only (`loadNeedsLogin`).
 
 **M9-5 · Pick the model when an agent joins · M · needs M9-4**
 `POST /rooms` and `POST /rooms/:id/agents` take an optional `model`. `/new` and `/add`

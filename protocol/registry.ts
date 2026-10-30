@@ -81,7 +81,10 @@ interface MeasuredLabels {
  * meaning, not "the person has an account" (decided 2026-10-28): opencode
  * opens a session with its free models and no login, and it is `ok`.
  * `notice`: claude's `_auth/status_update`. `none`: copilot, which never
- * says.
+ * says. `loadNeedsLogin`: `session/load` fails with `-32000` too when logged
+ * out, so a load that works says what a `session/new` that opens says
+ * (§Models and login, 2026-10-30). Only codex and kimi: pi, opencode, claude
+ * and copilot load a session logged out.
  */
 export interface SetupSpec {
   program: string;
@@ -90,6 +93,7 @@ export interface SetupSpec {
   versionFromPackage?: true;
   login: string;
   loginSignal?: "notice" | "none";
+  loadNeedsLogin?: true;
 }
 
 export interface AgentEntry {
@@ -280,6 +284,7 @@ export const AGENTS: Record<string, AgentEntry> = {
       program: "codex",
       npm: "@agentclientprotocol/codex-acp",
       login: "codex login",
+      loadNeedsLogin: true,
     },
     defaultMode: "ask",
     maxMode: "auto",
@@ -312,7 +317,7 @@ export const AGENTS: Record<string, AgentEntry> = {
   // own installer (§Models and login).
   kimi: {
     launch: { command: "kimi", args: ["acp"] },
-    setup: { program: "kimi", login: "kimi login" },
+    setup: { program: "kimi", login: "kimi login", loadNeedsLogin: true },
     defaultMode: "ask",
     maxMode: "auto",
     measured: {

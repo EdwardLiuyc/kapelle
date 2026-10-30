@@ -382,11 +382,12 @@ export function noteSession(id: string, seen: Seen): void {
 }
 
 /** What a room needs to report its session: the models in it, and the
- *  state an open session gives. Only for `session/new`: whether a
- *  `session/load` works logged out is not measured (§Models and login), so
- *  a `loaded` session gives no login state.
+ *  state an open session gives. A `loaded` session gives it only where the
+ *  registry says `loadNeedsLogin`: pi, opencode, claude and copilot load a
+ *  session logged out (§Models and login, 2026-10-30), so for them a load
+ *  that works proves nothing.
  *
- *  Its models are not measured after a load either, yet saving them is safe:
+ *  Its models after a load need no rule of their own; saving them is safe:
  *  a harness that sends no options on a load gives `{}`, and `noteSession`
  *  writes nothing, not even `checkedAt`; one that sends options answers for
  *  itself. claude's notice after a load is the same: the harness's own
@@ -396,7 +397,8 @@ export function sessionSeen(
   options: SessionConfigOption[],
   loaded: boolean,
 ): Seen {
-  const login = loaded ? undefined : fromSession(setup);
+  const login =
+    loaded && !setup.loadNeedsLogin ? undefined : fromSession(setup);
   return { ...modelsOf(options), ...(login && { login }) };
 }
 
