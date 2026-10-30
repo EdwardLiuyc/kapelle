@@ -3978,10 +3978,10 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 **M9 (added 2026-10-15)** needs nothing that is open. More stories will join it.
 
 ```text
-M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─ M9-6
-M9-2 ─┘        └─ M9-3b
+M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b
+M9-2 ─┘        └─ M9-3b          └─ M9-6
 M9-7   (needs nothing)
-M9-1..M9-7, M9-3b ─ M9-8   (the first publish)
+M9-1..M9-7, M9-3b, M9-5b ─ M9-8   (the first publish)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
