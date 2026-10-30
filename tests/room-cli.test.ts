@@ -510,6 +510,21 @@ test("the orchestrator adds a reviewer, moves a branch, reads a diff and removes
   );
 });
 
+test("room add checks --model before it looks for a daemon (M9-5b)", async (t) => {
+  const dir = await tempDir(t);
+  for (const model of [["--model"], ["--model", ""]] as const) {
+    const r = await room(t, await tempDir(t), dir, [
+      "add",
+      "--cmd",
+      "true",
+      ...model,
+    ]);
+    assert.equal(r.code, 1);
+    assert.equal(r.stdout, "");
+    assert.equal(r.stderr, "--model needs a value\n");
+  }
+});
+
 test("a verb it does not know, or a wrong shape, prints the usage", async (t) => {
   // Refused before any daemon is looked for.
   const dir = await tempDir(t);
@@ -527,6 +542,7 @@ test("a verb it does not know, or a wrong shape, prints the usage", async (t) =>
     assert.match(r.stderr, /^usage: kapelle room <verb>/, args.join(" "));
     // `info` says it shows each agent's branch (#358).
     assert.match(r.stderr, /^ {2}info .*branch/m, args.join(" "));
+    assert.match(r.stderr, /add <harness>.*\[--model id\]/, args.join(" "));
   }
 
   // An option the verb does not take is refused, not dropped from the text.

@@ -37,6 +37,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { text } from "node:stream/consumers";
 import {
   loopCommand,
+  modelConfirmed,
   type RouteCommand,
   runCommand,
 } from "./client/command.ts";
@@ -1362,7 +1363,7 @@ function notOnModel(
   asked: string | undefined,
   p: ParticipantDto | undefined,
 ): string | undefined {
-  if (!p || !asked || asked === p.model) return undefined;
+  if (!p || modelConfirmed(asked, p)) return undefined;
   const runs = p.model ? `it runs on "${p.model}"` : "it has no model";
   return oneLine(
     `error: ${p.name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${p.name}`,
@@ -1618,6 +1619,9 @@ async function runRoomCommand(): Promise<number> {
     );
     return 1;
   }
+  // A usage error is the caller's, not the daemon's: catch a missing or empty
+  // model before any request (M9-5b, #392).
+  const model = verb === "add" ? flag("model") : undefined;
   const d = await findDaemon();
   if (!d) return 1;
   const found = await roomAndSender(d);
@@ -1713,7 +1717,7 @@ async function runRoomCommand(): Promise<number> {
         // `none` is no role, as in the screens' `/add` and `/role none`.
         role: role === "none" ? undefined : role,
         mode: flag("mode"),
-        model: flag("model"),
+        model,
         base: flag("base"),
       },
     };

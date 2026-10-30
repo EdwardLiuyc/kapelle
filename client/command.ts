@@ -434,14 +434,19 @@ async function agentBody(
   return { body };
 }
 
+/** Whether the reply confirms the model asked for. Asking for none is
+ *  always confirmed; asking for one needs the participant's matching model. */
+export const modelConfirmed = (
+  asked: string | undefined,
+  p: ParticipantDto | undefined,
+): boolean => !asked || asked === p?.model;
+
 /** A model the reply does not confirm still adds the agent (M9-5): the
  *  line says so at once. It claims neither why nor what runs: a set that
  *  timed out may still apply, and a harness may rename the id. The room's
  *  notice says both, the one place that saw them. */
 const notOn = (asked: string | undefined, p: ParticipantDto | undefined) =>
-  asked && asked !== p?.model
-    ? `; ! not confirmed on the model "${asked}"`
-    : "";
+  modelConfirmed(asked, p) ? "" : `; ! not confirmed on the model "${asked}"`;
 
 /**
  * Sends one command to its route. `roomId` is the room on screen; `/new`
