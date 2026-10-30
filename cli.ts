@@ -1354,6 +1354,21 @@ function printRefusal({ code, message }: { code: string; message: string }) {
   console.error(`error: ${oneLine(message)}${code ? ` (${code})` : ""}`);
 }
 
+/** The error when `room add --model` did not land (M9-5b, #392), else
+ *  nothing. The same check as the screens' `notOn`: a screen only says it,
+ *  since a person watches, but an orchestrator may send work at once. The
+ *  agent stays, and the room's notice says why. */
+function notOnModel(
+  asked: string | undefined,
+  p: ParticipantDto | undefined,
+): string | undefined {
+  if (!p || !asked || asked === p.model) return undefined;
+  const runs = p.model ? `it runs on "${p.model}"` : "it has no model";
+  return oneLine(
+    `error: ${p.name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${p.name}`,
+  );
+}
+
 /**
  * The room and the sender for `kapelle room` (M8-3), or why there are none.
  *
@@ -1724,18 +1739,12 @@ async function runRoomCommand(): Promise<number> {
     printRefusal(outcome);
     return 1;
   }
-  // The same check as the screens' `notOn` (M9-5b, #392). A screen only
-  // says it, since a person watches; an orchestrator may send work at once,
-  // so here it fails. The agent stays, and the room's notice says why.
-  const asked = command.verb === "add" ? command.agent.model : undefined;
-  const p = outcome.participant;
-  if (p && asked && asked !== p.model) {
-    const runs = p.model ? `it runs on "${p.model}"` : "it has no model";
-    console.error(
-      oneLine(
-        `error: ${p.name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${p.name}`,
-      ),
-    );
+  const off =
+    command.verb === "add"
+      ? notOnModel(command.agent.model, outcome.participant)
+      : undefined;
+  if (off) {
+    console.error(off);
     return 1;
   }
   console.log(outcome.line);

@@ -319,13 +319,10 @@ test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5
     const r = await add(cmd, name, ["--model", asked]);
     assert.equal(r.code, 1, `${name}: ${r.stdout}`);
     assert.equal(r.stdout, "", name);
-    assert.ok(
-      r.stderr.startsWith(
-        `error: ${name} joined, but is not confirmed on the model "${asked}"; ${runs}`,
-      ),
+    assert.equal(
       r.stderr,
+      `error: ${name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${name}\n`,
     );
-    assert.match(r.stderr, new RegExp(`kapelle room remove ${name}\\n$`));
   }
 
   // A missing or empty value is a usage error, and adds no one.
