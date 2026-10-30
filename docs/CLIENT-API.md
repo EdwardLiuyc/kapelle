@@ -359,7 +359,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 15 },
+  "apiVersion": { "major": 1, "minor": 17 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -966,7 +966,7 @@ with ACP names.
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
-| `_client_participant_changed` | `name?`, `role?`, `mode?`, `model?` | A rename, or a new role or mode. Only the changed fields are present. `role: null` means the role was cleared. `model` (since 1.17) is the model the harness runs on after a change of model, also after a refused one. |
+| `_client_participant_changed` | `name?`, `role?`, `mode?`, `model?` | A rename, or a new role, mode or model. Only the changed fields are present. `role: null` means the role was cleared. `model` (since 1.17) is the model the harness runs on after a change of model, also after a refused one. |
 | `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. A no-op move writes none. |
 | `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
 | `_client_participant_revived` | `resumed`, `sessionId`, `memoryMayBeBehind?` | A `paused`, `killed` or `exited` participant has a new harness in its own checkout. `resumed` is `loaded` (since 1.9): it loaded its old session and remembers the turns before. Or it is `fresh`: a new session, so it does not. `memoryMayBeBehind` is `true` only with `loaded`, when the participant stopped during a turn: what it remembers may be behind its files. It comes after the `_client_user_message` that revived it, and after the new `_client_harness_spawned`. |
@@ -1471,9 +1471,10 @@ Changes one participant. Send one or more of:
   harness checks it, not the daemon. An idle harness gets it at once, and the reply shows
   the model it runs on. A busy one gets it before its next turn, never during one, and one
   with no harness running gets it when it starts again; the reply then shows the model it
-  had. A refused model is not a refusal of the request: the harness keeps the model it
-  had, and a notice says so. Only a model the harness took is sent again at a revive. The
-  saved models of `GET /harnesses` do not change.
+  had. A refusal is not a refusal of the request: the harness keeps the model it had, and
+  a notice says so. A deferred change leaves its result as a notice when the harness
+  answers. Only a model the harness took is sent again at a revive. The saved models of
+  `GET /harnesses` do not change.
 
 The daemon checks every field before it changes any. The harness and its session stay
 as they are. The room's stream gets `_client_participant_changed`, with only the fields
@@ -1768,11 +1769,11 @@ message, and when no turn runs. A reply's turn names the worker that replied.
 
 `role` is one of `orchestrator`, `developer`, `tester`, `architect` or `reviewer` (since
 1.14), or missing. It is a
-label. It sends no text to the agent. A client changes `name`, `mode` or `role` with one
-route, `PATCH /rooms/:id/agents/:agentId`. A room has at most one `orchestrator`: adding or
-changing a participant to that role is refused with `409` `orchestrator_exists` while
-another one exists. More roles may come later, so a client shows a role it does not know
-as plain text.
+label. It sends no text to the agent. A client changes `name`, `mode`, `role` or
+`model` with one route, `PATCH /rooms/:id/agents/:agentId`. A room has at most one
+`orchestrator`: adding or changing a participant to that role is refused with `409`
+`orchestrator_exists` while another one exists. More roles may come later, so a client
+shows a role it does not know as plain text.
 
 ### Addressing
 

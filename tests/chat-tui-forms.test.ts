@@ -1172,7 +1172,7 @@ test("the status line shows the model the agent runs on (M9-5)", {
   assert.equal(await exited, 0, out());
 });
 
-test("@name /model opens the live list, and a pick changes the model on the status line (M9-6)", {
+test("@name /model lists, takes a pick and a typed id, and changes the status line (M9-6)", {
   skip: noPty,
 }, async (t) => {
   const MODELS = `node ${MOCK_AGENT} --scenario models`;
@@ -1183,6 +1183,11 @@ test("@name /model opens the live list, and a pick changes the model on the stat
   await press("smart\r", 'mock-agent now runs on the model "mock/smart"');
   // The reply's line and the status line's model come from one redraw.
   await seen("auto · mock/smart");
+  await press(
+    "@mock-agent /model mock/fast\r",
+    'mock-agent now runs on the model "mock/fast"',
+  );
+  await seen("auto · mock/fast");
   await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
 });

@@ -151,7 +151,8 @@
  * again. A participant with no harness gets it at its next start. The reply
  * changes only the model in use: `models`, the live list, stays as the
  * session sent it, since copilot's reply leaves an option out (§Models and
- * login). `_client_participant_changed` then carries the model in use.
+ * login). A deferred change leaves its result as a notice.
+ * `_client_participant_changed` then carries the model in use.
  *
  * **MVP scope, deliberately.** The watchdog only warns, and only during a turn (R38):
  * a chat turn is never cut by a clock. No result preamble, no cross-check: a
@@ -1773,8 +1774,9 @@ function createParticipant({
     return [];
   };
 
-  // The model in use, as the harness last said, and the line a refusal
-  // left. Both are worked out again at each start.
+  // The model in use, as the harness last said, and the notice the last
+  // model change left: its result, or why it could not be used. Both are
+  // worked out again at each start.
   let model: string | undefined;
   let modelLine: RoomNotice | undefined;
   // The model a start asks for (M9-5). A change during a chat replaces it
@@ -1782,19 +1784,25 @@ function createParticipant({
   let asked = initialModel;
   // A change the harness has not heard of yet: it was busy, or had none.
   let wanted: string | undefined;
+  // A deferred change owes the person a notice when the harness answers.
+  let announce = false;
   /** Sets `target` on the live harness. A refusal leaves it on the model it
    *  had: pi and claude say only `Internal error`, so the line is ours, with
    *  theirs after it. A time-out or an exit is no refusal, and the harness
    *  may still apply it, so its line says less. Only a set the harness took
-   *  becomes `asked`. A failed set is not tried again in this process. */
-  const applyModel = async (next: AcpAgent, target: string) => {
+   *  becomes `asked`. A failed set is not tried again in this process.
+   *  Returns whether the harness took it. */
+  const applyModel = async (
+    next: AcpAgent,
+    target: string,
+  ): Promise<boolean> => {
     const option = next.configOptions.find((o) => o.category === "model");
     const on = model ? `the model "${model}"` : "its own model";
     if (!option) {
       modelLine = {
         text: `${spec.name} lists no models, so the model "${target}" was not set; it runs on ${on}`,
       };
-      return;
+      return false;
     }
     try {
       const res = await next.setConfigOption(option.id, target);
@@ -1808,6 +1816,7 @@ function createParticipant({
           : {
               text: `${spec.name} took the model "${target}" but runs on "${model}"`,
             };
+      return true;
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       modelLine = {
@@ -1817,6 +1826,7 @@ function createParticipant({
             : `${spec.name} did not confirm the model "${target}" (${why}); ` +
               `it may still run on ${on}`,
       };
+      return false;
     }
   };
   /** A harness that just started: its own model, then the one asked for. */
@@ -1824,18 +1834,44 @@ function createParticipant({
     const option = next.configOptions.find((o) => o.category === "model");
     model = option?.type === "select" ? option.currentValue : undefined;
     modelLine = undefined;
-    const target = wanted ?? asked;
+    const pending = wanted;
+    const notify = announce;
+    const target = pending ?? asked;
     wanted = undefined;
-    if (target) await applyModel(next, target);
+    announce = false;
+    // Put back the accepted model first. If the pending change is refused,
+    // the participant stays on that model, not the one the session chose.
+    if (
+      pending !== undefined &&
+      asked !== undefined &&
+      asked !== pending &&
+      model !== asked
+    ) {
+      await applyModel(next, asked);
+    }
+    if (!target) return;
+    const took = await applyModel(next, target);
+    if (notify && took && model === target && modelLine === undefined) {
+      modelLine = {
+        text: `${spec.name} now runs on the model "${target}"`,
+      };
+    }
   };
   /** The change the live harness has not heard of, then a line that tells
    *  every client the model in use, and makes the room save `asked`. A
    *  harness with no model option changes nothing, so it gets no line. */
   const sendWanted = async () => {
     const target = wanted;
+    const notify = announce;
     wanted = undefined;
+    announce = false;
     if (!agent || !target) return;
-    await applyModel(agent, target);
+    const took = await applyModel(agent, target);
+    if (notify && took && model === target && modelLine === undefined) {
+      modelLine = {
+        text: `${spec.name} now runs on the model "${target}"`,
+      };
+    }
     if (model === undefined) return;
     bus.emit({
       agent: id,
@@ -2237,10 +2273,15 @@ function createParticipant({
 
   // An idle harness hears of a new model at once, held, so a message sent
   // meanwhile waits behind the set. A busy one hears of it before its next
-  // turn, and one with no harness at its next start (#301).
+  // turn, and one with no harness at its next start (#301). Those two leave
+  // the result as a notice when the harness answers.
   const setModel = async (next: string) => {
     wanted = next;
-    if (!agent || turn || held || stopping) return;
+    if (!agent || turn || held || stopping) {
+      announce = true;
+      return;
+    }
+    announce = false;
     await hold(sendWanted());
   };
 

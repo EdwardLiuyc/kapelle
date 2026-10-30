@@ -3798,9 +3798,10 @@ same reply as at a join (M9-5), so it needs no new measurement. The #387 review 
 whether a harness reports the switch only in `config_option_update`; such a harness
 would already show a false notice at a join, and none did. codex and kimi were never
 measured on a set, at a join either. An idle harness gets the change at once, and the
-`PATCH` reply shows the model in use; a busy one gets it before its next turn. Only a
-model the harness took is sent again at a revive. The live list is the participant's
-`models`. No `kapelle room` verb changes a model.
+`PATCH` reply shows the model in use; a busy one gets it before its next turn. A deferred
+change leaves its result as a notice when the harness answers. Only a model the harness
+took is sent again at a revive. The live list is the participant's `models`. No
+`kapelle room` verb changes a model.
 
 **M9-7 · kapelle runs after an npm install · M · needs nothing**
 A person installs kapelle with `npm install -g kapelle` and types `kapelle`. The name is

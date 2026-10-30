@@ -2663,7 +2663,7 @@ async function modelRoom(
       .split("\n")
       .map((l) => (JSON.parse(l) as { method: string }).method);
   const p = room.participants[0] as Participant;
-  return { room, p, methods, changed, file: roomFile(repo, roomId) };
+  return { repo, room, p, methods, changed, file: roomFile(repo, roomId) };
 }
 
 const modelLines = (p: Participant) =>
@@ -2808,10 +2808,13 @@ test("a busy harness gets a changed model before its next turn, never during one
     sent.join(" "),
   );
   assert.equal(p.model, "mock/smart");
+  assert.deepEqual(modelLines(p), [
+    'mock-agent now runs on the model "mock/smart"',
+  ]);
 });
 
 test("a refused change keeps the model in use, and a revive does not ask for it (M9-6)", async (t) => {
-  const { room, p, changed, file } = await modelRoom(t, "mock/smart");
+  const { repo, room, p, changed, file } = await modelRoom(t, "mock/smart");
   const after = await room.setModel(p.id, "mock/bogus");
   assert.equal(after.model, "mock/smart", "the model it had");
   assert.deepEqual(modelLines(p), [
@@ -2825,8 +2828,11 @@ test("a refused change keeps the model in use, and a revive does not ask for it 
   );
   await saved();
   assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
-  await p.send("one");
-  assert.equal(p.status(), "idle", "it still takes turns");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("one");
+  assert.equal(back.p.model, "mock/smart", "the refused model was not sent");
+  assert.deepEqual(modelLines(back.p), []);
 });
 
 test("a set reply with fewer options leaves the live list as the session sent it (M9-6)", async (t) => {
@@ -2847,22 +2853,56 @@ test("a set reply with fewer options leaves the live list as the session sent it
   assert.deepEqual(p.models, before);
 });
 
-test("a changed model comes back after a revive, and one with no harness gets it at its start (M9-6)", async (t) => {
+test("a changed model comes back after a revive (M9-6)", async (t) => {
   const { repo, room, p, file } = await loading(t, "models");
   await p.send("one");
   await room.setModel(p.id, "mock/smart");
   await room.pause();
   assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
   const back = await restored(t, repo, readRoomRecord(file));
-  // No harness yet, so no list; the change waits for the start.
+  // No harness yet, so no list; the accepted model is sent at the start.
   assert.equal(back.p.models, undefined);
-  await back.room.setModel(back.p.id, "mock/fast");
+  await back.p.send("two");
+  assert.equal(back.p.resumed, "loaded");
+  assert.equal(back.p.model, "mock/smart");
+});
+
+test("one with no harness gets a pending model at its start (M9-6)", async (t) => {
+  const { repo, room, p, file } = await loading(t, "models");
+  await p.send("one");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  assert.equal(back.p.models, undefined);
+  await back.room.setModel(back.p.id, "mock/smart");
   assert.equal(back.p.model, undefined);
   await back.p.send("two");
   assert.equal(back.p.resumed, "loaded");
-  assert.equal(back.p.model, "mock/fast");
+  assert.equal(back.p.model, "mock/smart");
+  assert.deepEqual(modelLines(back.p), [
+    `${back.p.harness} now runs on the model "mock/smart"`,
+  ]);
   await back.room.pause();
-  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/fast");
+  assert.equal(readRoomRecord(file).participants[0]?.model, "mock/smart");
+});
+
+test("a refused pending model leaves the accepted one in use after a revive (M9-6)", async (t) => {
+  const { repo, room, p, file } = await loading(t, "models");
+  await p.send("one");
+  await room.setModel(p.id, "mock/smart");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.room.setModel(back.p.id, "mock/bogus");
+  assert.equal(back.p.model, undefined);
+  await back.p.send("two");
+  assert.equal(
+    back.p.model,
+    "mock/smart",
+    "the accepted model is still in use",
+  );
+  assert.deepEqual(modelLines(back.p), [
+    `${back.p.harness} refused the model "mock/bogus" (Internal error (code -32603)); ` +
+      'it runs on the model "mock/smart"',
+  ]);
 });
 
 test("a PATCH body takes a model as a non-empty string, alone or with the rest (M9-6)", () => {
