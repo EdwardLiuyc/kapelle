@@ -116,9 +116,10 @@ export function followDaemon(
  * when one refuses the stream or its version.
  *
  * **This rests on the shutdown order** (`daemon.ts`, `shutdown`): the
- * listener closes before the rooms pause, so the reconcile after a clean
- * stop finds no daemon. A daemon that still answered would say `paused`, and
- * the screen would end instead of waiting.
+ * listener closes before the rooms pause. The SSE response closes its own
+ * socket (`daemon/sse.ts`), and shutdown closes idle pooled sockets, so the
+ * reconcile after a clean stop finds no old daemon. A daemon that still
+ * answered would say `paused`, and the screen would end instead of waiting.
  */
 export async function readRoom(
   address: ReadAddress,

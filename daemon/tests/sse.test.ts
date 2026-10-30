@@ -80,24 +80,21 @@ test("a stopped server cannot answer on the socket its stream just ended", async
   t.after(() => agent.destroy());
   const res = await open(agent);
   res.resume();
-  const closed = new Promise<void>((ok) => server.close(() => ok()));
-  const answer = new Promise<string | number>((ok) => {
-    res.on("end", () => {
-      get({ port, host: "127.0.0.1", path: "/rooms/r1", agent }, (reply) => {
-        reply.resume();
-        ok(reply.statusCode ?? 0);
-      }).on("error", (err: NodeJS.ErrnoException) =>
-        ok(err.code ?? err.message),
-      );
+  let reply: string | number | undefined;
+  server.close();
+  res.on("end", () => {
+    get({ port, host: "127.0.0.1", path: "/rooms/r1", agent }, (answer) => {
+      reply = answer.statusCode ?? 0;
+      answer.resume();
+    }).on("error", (err: NodeJS.ErrnoException) => {
+      reply = err.code ?? err.message;
     });
   });
 
   // A clean stop ends the stream after closing the listener. The reconcile
   // that follows must not ride the stream's keep-alive socket back in.
   await log.close();
-  const reply = await answer;
-  agent.destroy();
-  await closed;
+  await until(() => reply !== undefined, "the reconcile answer");
   assert.equal(
     typeof reply,
     "string",

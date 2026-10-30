@@ -506,7 +506,7 @@ test("the TUI rides out a restart: it says so, marks the participant paused, and
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
   const second = await again();
-  // Do not give up before the screen's 30 s wait does (M6-7d).
+  // Wait beyond the helper's 20 s default; the daemon gets 30 s (M6-7d).
   await screen.seen("the daemon restarted", 30_000);
   await screen.seen("‖ al");
   await screen.press("hi\r", "previous: (none)");
