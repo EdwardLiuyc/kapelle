@@ -6,6 +6,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { RoomEventLine } from "../../client/contract.ts";
 import { applyLine, newRoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
@@ -200,6 +201,24 @@ test("a busy row shows a multi-line tool title's first line only (#351)", () => 
   // A title that is one line already gets no `…`.
   line({ sessionUpdate: "tool_call_update", toolCallId: "t1", title: "ls" });
   assert.deepEqual(text(), ["▌◓ ann ls · 1m 05s · @ann /cancel"]);
+});
+
+test("a long tool title is cut before the timer and the cancel command (#396 review)", () => {
+  const { line, part } = busySetup();
+  // Short commands share one row (#396), so a first row is often long.
+  const command =
+    "cd src; ls; git status; npm test; npm run build; npm run fmt";
+  line({
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: command,
+    rawInput: { command },
+  });
+  const [row] = part.render(60);
+  assert.ok(visibleWidth(row ?? "") <= 60, "the row fits");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const plain = (row ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(plain, /^▌◓ ann cd src; ls; .*… · 1m 05s · @ann \/cancel$/);
 });
 
 test("NO_COLOR: the activity rows lose their colours (M7-1)", (t) => {
