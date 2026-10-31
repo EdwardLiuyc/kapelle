@@ -842,11 +842,12 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   assert.equal(await exited, 0, out());
 });
 
-test("the new-room form leaves out a harness the daemon says is not measured", {
+test("the new-room form lists only the measured harnesses the daemon found ready (#367)", {
   skip: noPty,
 }, async (t) => {
   // The registry has no unmeasured entry today (M9 D2), so a fake daemon
-  // sends one: the filter is the only thing that keeps it out.
+  // sends one: the filter is the only thing that keeps it out. An agent
+  // that is not ready, or has no state, cannot run, so it is left out too.
   const runtime = await tempDir(t);
   await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
   const fake = createServer((req, res) => {
@@ -855,8 +856,11 @@ test("the new-room form leaves out a harness the daemon says is not measured", {
         ? { apiVersion: API_VERSION }
         : req.url === "/harnesses"
           ? [
-              { id: "lab-ok", measured: true },
-              { id: "lab-none", measured: false },
+              { id: "lab-ok", measured: true, state: "ready" },
+              { id: "lab-none", measured: false, state: "ready" },
+              { id: "lab-main", measured: true, state: "main_only" },
+              { id: "lab-gone", measured: true, state: "not_installed" },
+              { id: "lab-old", measured: true },
             ]
           : req.url === "/rooms"
             ? []
@@ -916,10 +920,11 @@ test("the new-room form's model row lists the harness's saved models, or is a te
           ? { apiVersion: API_VERSION }
           : req.url === "/harnesses"
             ? [
-                { id: "lab-bare", measured: true },
+                { id: "lab-bare", measured: true, state: "ready" },
                 {
                   id: "lab-ok",
                   measured: true,
+                  state: "ready",
                   models: [
                     { id: "m-1", name: "One" },
                     { id: "m-2", name: "Two" },
