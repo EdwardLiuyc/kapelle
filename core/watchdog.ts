@@ -139,8 +139,9 @@ interface Operation {
  *  calls from growing this. A dropped call is never counted, so a drop
  *  restarts the count: the calls around a hole are not a run. It keeps the
  *  last operation, so the next call is judged against it as usual. If 64
- *  calls never end, every new call drops one and resets the count, so the
- *  repeat warning stays off for the rest of the turn. */
+ *  calls never end, every new call drops one and resets the count, so a
+ *  repeat then counts only calls that complete with no new call between
+ *  them. */
 // ponytail: ten times the measured peak; raise it if a harness batches more.
 const MAX_PENDING = 64;
 

@@ -502,7 +502,9 @@ avoid.
 `tool_call_update` then carries the command as the title and as `rawInput.command`, as
 claude-agent-acp's does. So opencode's `argvChannel` is `notification` (late), not
 `none`. It still never asks permission, so the policy still cannot gate it. The 1.18.18
-measurement above stays as it was.
+measurement above stays as it was. On 2.0.18 the last update of a call carries only
+`status: completed`, with no title, input or location (measured 2026-10-31, see
+[§Repeat by tool title](#repeat-by-tool-title--room-logs--measured-2026-10-31-354)).
 
 ### Why nothing called it — checked, not assumed
 
@@ -1684,11 +1686,13 @@ when the status is `completed` or `failed`.
   edits of one file, each a different edit.
 - claude's `description` came on a later update in all 5,015 calls that had one, so only
   the count at completion includes it.
-- So the title-only rule gave 195 warnings. Counted at completion, none of the 195 runs
-  repeated one operation 8 times, and still none with `description` left out of the
-  identity (0), so keeping `description` hides no run in these logs. This does not say
-  whether an agent was stuck: the logs hold no run of one operation, so they cannot show
-  how many loops the operation rule catches.
+- So the title-only rule gave 195 warnings. The two operation counts above group calls in
+  start order, inside the same-title runs. The watchdog counts in completion order, so the
+  script also grouped every completed call in completion order, with no same-title filter:
+  0 runs of one operation 8 times, and 0 with `description` left out of the identity. So
+  keeping `description` hides no run in these logs. This does not say whether an agent was
+  stuck: the logs hold no run of one operation, so they cannot show how many loops the
+  operation rule catches.
 
 **opencode, one run (2026-10-31).** opencode is in none of the logs, so one short task was
 run: opencode v2.0.18, a temporary git folder, mode `auto`, 3 shell calls and 1 read,

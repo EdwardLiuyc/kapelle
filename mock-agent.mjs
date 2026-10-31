@@ -681,9 +681,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     // The busy loop idle time structurally cannot see: one command, over and
     // over, then a normal end of turn — repeat warns and must not cancel.
     // opencode 2.0.18's measured shape (§Repeat by tool title): a bare
-    // `shell` call, the command as the title and the input on an
-    // `in_progress` update, then a last update with only `completed`.
+    // `shell` call with `{cwd}`, two `in_progress` updates with the command
+    // as the title and `{command, cwd}`, then a last update with only
+    // `completed`.
     if (scenario === "repeat") {
+      const cwd = process.cwd();
       const shell = (id, command) => {
         update(sid, {
           sessionUpdate: "tool_call",
@@ -691,16 +693,18 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
           title: "shell",
           kind: "execute",
           status: "pending",
-          rawInput: {},
+          rawInput: { cwd },
         });
-        update(sid, {
-          sessionUpdate: "tool_call_update",
-          toolCallId: id,
-          title: command,
-          kind: "execute",
-          status: "in_progress",
-          rawInput: { command },
-        });
+        for (let i = 0; i < 2; i++) {
+          update(sid, {
+            sessionUpdate: "tool_call_update",
+            toolCallId: id,
+            title: command,
+            kind: "execute",
+            status: "in_progress",
+            rawInput: { command, cwd },
+          });
+        }
         update(sid, {
           sessionUpdate: "tool_call_update",
           toolCallId: id,

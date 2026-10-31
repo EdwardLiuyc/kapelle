@@ -1358,7 +1358,8 @@ a per-harness trust flag, not in the vendor-neutral core.
 
 **M1c-2 · `mock-agent` stall and repeat modes · XS · needs M1c-1**
 Stall: accepts the prompt, emits nothing, never returns. Repeat: the same command on a
-loop, sent late on each call's first update, as opencode does (#354). One per watchdog signal.
+loop, in opencode's measured shape: the command on `in_progress` updates, then a bare
+`completed`, which is when the watchdog counts the call (#354). One per watchdog signal.
 *Done when* stall produces a warning then a cancel at TTL with the branch intact, and repeat
 produces a warning and is **not** cancelled.
 **Amended 2026-09-09 (#26).** Stall writes one file **at startup**, before the handshake. A

@@ -1512,8 +1512,9 @@ test("a stalled task warns, times out at the TTL, and keeps its branch", async (
 });
 
 test("a repeated command warns, and the task is never cancelled", async (t) => {
-  // The mock sends each command late, on the call's first update, as
-  // opencode and claude do (#354): the warning names the command.
+  // The mock sends opencode's measured shape (#354): the command on
+  // `in_progress` updates, then a bare `completed`, which is when the call
+  // counts. The warning names the command.
   const cwd = await tempDir(t);
   const file = await runFile(
     t,
