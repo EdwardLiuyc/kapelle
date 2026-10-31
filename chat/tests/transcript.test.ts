@@ -128,6 +128,12 @@ test("a jump puts the person's message at the top of the transcript", () => {
   });
   line(4, { sessionUpdate: "_client_turn_ended", stopReason: "end_turn" });
   line(5, { sessionUpdate: "_client_user_message", text: "beta", turn: 2 });
+  for (let i = 0; i < 30; i++)
+    line(6 + i, {
+      sessionUpdate: "_client_user_message",
+      text: `later ${i}`,
+      turn: 3 + i,
+    });
   assert.ok(alpha);
   const rooms = new Map([
     ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
@@ -143,14 +149,20 @@ test("a jump puts the person's message at the top of the transcript", () => {
     rooms,
     view: () => ({ roomId: "r1" }),
     setStatus() {},
+    viewportRows: () => 5,
   });
   redraw();
-  const lines = transcript.render(40).map((l) => l.trim());
-  scroll.updateLayout(lines.length, 3, () => {});
+  let lines = transcript.render(40);
+  scroll.updateLayout(lines.length, 5, () => {});
   // At the end, as a long transcript is: the jump goes back up.
   scroll.scrollToEnd();
   const model = currentModel();
   assert.ok(model);
+  assert.equal(
+    model.byEntry.get(alpha)?.parts,
+    undefined,
+    "alpha is not drawn",
+  );
   const top = model.topOf(alpha);
   assert.equal(typeof top, "number");
   assert.equal(model.entryAt(top as number), alpha);
@@ -159,6 +171,8 @@ test("a jump puts the person's message at the top of the transcript", () => {
   jump(alpha);
   assert.equal(model.stats.partsCreated, created, "jump creates no parts");
   assert.equal(model.stats.entriesVisited, visited, "jump visits no items");
+  lines = transcript.render(40);
+  scroll.updateLayout(lines.length, 5, () => {});
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   const plain = (l?: string) => l?.replace(/\x1b\[[0-9;]*m/g, "").trim();
   assert.equal(plain(lines[scroll.scrollTop]), "▎ you → ann");
@@ -678,6 +692,24 @@ function runRoom() {
   return { state, parts, send, note, tool, plain, click };
 }
 
+test("an unchanged frame keeps a streamed answer's markdown cache", () => {
+  const { note, parts } = runRoom();
+  note("ann", "```ts\nconst a = 1;\n");
+  parts.transcript.render(60);
+  const invalidate = Markdown.prototype.invalidate;
+  let invalidated = 0;
+  Markdown.prototype.invalidate = function (this: Markdown) {
+    invalidated += 1;
+    return invalidate.call(this);
+  };
+  try {
+    parts.transcript.render(60);
+  } finally {
+    Markdown.prototype.invalidate = invalidate;
+  }
+  assert.equal(invalidated, 0, "an unchanged answer is not parsed again");
+});
+
 test("a pending to completed update redraws the text and background", (t) => {
   const colourTerm = process.env.COLORTERM;
   t.after(() => {
@@ -986,6 +1018,102 @@ test("a click on any row of a wrapped fold line opens the run (M7-2)", () => {
   );
 });
 
+test("a failed update after a fold rewraps its summary and moves later entries", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const add = (participantId: string, update: Record<string, unknown>) => {
+    const e = applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-31T00:00:00Z",
+      roomId: "r1",
+      participantId,
+      update: update as unknown as RoomEventLine["update"],
+    });
+    assert.ok(e);
+    return e;
+  };
+  for (const [id, name] of [
+    ["p-ann", "ann"],
+    ["p-bob", "bob"],
+  ]) {
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-31T00:00:00Z",
+      roomId: "r1",
+      participantId: id,
+      update: {
+        sessionUpdate: "_client_participant_added",
+        name,
+        harness: "mock",
+        mode: "auto",
+      } as unknown as RoomEventLine["update"],
+    });
+  }
+  add("p-ann", {
+    sessionUpdate: "_client_user_message",
+    text: "go",
+    turn: 1,
+  });
+  const first = add("p-ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t1",
+    title: "Read a",
+    kind: "read",
+    status: "completed",
+  });
+  add("p-ann", {
+    sessionUpdate: "tool_call",
+    toolCallId: "t2",
+    title: "Read b",
+    kind: "read",
+    status: "completed",
+  });
+  add("p-ann", {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "Done" },
+  });
+  const target = add("p-bob", {
+    sessionUpdate: "_client_user_message",
+    text: "TARGET",
+    turn: 1,
+  });
+  for (let i = 0; i < 40; i++)
+    add("p-bob", {
+      sessionUpdate: "_client_stall_warning",
+      kind: "idle",
+      text: `later ${i}`,
+    });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 10,
+  });
+  parts.redraw();
+  const rows = parts.transcript.render(30);
+  parts.scroll.updateLayout(rows.length, 10, () => {});
+  const model = parts.model();
+  assert.ok(model);
+  const summary = model.byEntry.get(first);
+  assert.ok(summary);
+  assert.equal(summary.measured, false, "the summary is above the window");
+  const height = summary.height;
+  const top = model.topOf(target);
+  assert.equal(typeof top, "number");
+  const update = add("p-ann", {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t2",
+    status: "failed",
+  });
+  parts.draw(state, update);
+  assert.ok(summary.height > height, "the failed count wraps the summary");
+  assert.equal(model.topOf(target), (top as number) + 1, "the offset moves");
+});
+
 /** Draws every item at one width, as the full-window tests do. */
 function layoutAll(parts: ReturnType<typeof transcriptParts>, width: number) {
   const rows = parts.transcript.render(width);
@@ -1156,6 +1284,150 @@ test("width changes update the model's entry offsets", () => {
   );
 });
 
+test("a growing answer above a near-end view keeps its anchor", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const add = (participantId: string, update: Record<string, unknown>) => {
+    const e = applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-31T00:00:00Z",
+      roomId: "r1",
+      participantId,
+      update: update as unknown as RoomEventLine["update"],
+    });
+    assert.ok(e);
+    return e;
+  };
+  for (const [id, name] of [
+    ["p-ann", "ann"],
+    ["p-bob", "bob"],
+  ]) {
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-31T00:00:00Z",
+      roomId: "r1",
+      participantId: id,
+      update: {
+        sessionUpdate: "_client_participant_added",
+        name,
+        harness: "mock",
+        mode: "auto",
+      } as unknown as RoomEventLine["update"],
+    });
+  }
+  add("p-ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  const answer = add("p-ann", {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "first paragraph" },
+  });
+  for (let i = 0; i < 80; i++)
+    add("p-bob", {
+      sessionUpdate: "_client_stall_warning",
+      kind: "idle",
+      text: `line ${i}`,
+    });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 10,
+  });
+  parts.redraw();
+  let rows = parts.transcript.render(40);
+  parts.scroll.updateLayout(rows.length, 10, () => {});
+  parts.scroll.scrollTo(parts.scroll.scrollTop - 5, { disableFollow: true });
+  const model = parts.model();
+  assert.ok(model);
+  const before = model.anchorAt(parts.scroll.scrollTop);
+  assert.ok(before);
+  const chunk = add("p-ann", {
+    sessionUpdate: "agent_message_chunk",
+    content: {
+      type: "text",
+      text: `\n\n${Array.from({ length: 30 }, (_, i) => `new paragraph ${i}`).join("\n\n")}`,
+    },
+  });
+  assert.equal(chunk, answer, "the chunk grows the same answer");
+  parts.draw(state, chunk);
+  assert.equal(
+    parts.scroll.scrollTop,
+    model.rowAt(before),
+    "anchor row follows",
+  );
+  rows = parts.transcript.render(40);
+  parts.scroll.updateLayout(rows.length, 10, () => {});
+  const after = model.anchorAt(parts.scroll.scrollTop);
+  assert.equal(after?.item, before.item, "the same item stays at the top");
+  assert.equal(after?.offset, before.offset, "at the same row in it");
+});
+
+test("a width change near the end keeps the anchor item", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const add = (participantId: string, update: Record<string, unknown>) => {
+    const e = applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-31T00:00:00Z",
+      roomId: "r1",
+      participantId,
+      update: update as unknown as RoomEventLine["update"],
+    });
+    assert.ok(e);
+    return e;
+  };
+  for (const [id, name] of [
+    ["p-ann", "ann"],
+    ["p-bob", "bob"],
+  ]) {
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-31T00:00:00Z",
+      roomId: "r1",
+      participantId: id,
+      update: {
+        sessionUpdate: "_client_participant_added",
+        name,
+        harness: "mock",
+        mode: "auto",
+      } as unknown as RoomEventLine["update"],
+    });
+  }
+  add("p-ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
+  for (let i = 0; i < 80; i++)
+    add("p-bob", {
+      sessionUpdate: "_client_stall_warning",
+      kind: "idle",
+      text: `line ${i} with enough words to wrap at a narrow width`,
+    });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 10,
+  });
+  parts.redraw();
+  let rows = parts.transcript.render(40);
+  parts.scroll.updateLayout(rows.length, 10, () => {});
+  parts.scroll.scrollTo(parts.scroll.scrollTop - 5, { disableFollow: true });
+  const model = parts.model();
+  assert.ok(model);
+  const before = model.anchorAt(parts.scroll.scrollTop);
+  assert.ok(before);
+  rows = parts.transcript.render(20);
+  parts.scroll.updateLayout(rows.length, 10, () => {});
+  const after = model.anchorAt(parts.scroll.scrollTop);
+  assert.equal(after?.item, before.item, "the same item stays at the top");
+  assert.equal(after?.offset, before.offset, "at the same row in it");
+});
+
 /** A room with `count` simple user messages, ready for the window test. */
 function largeTranscript(count: number) {
   const state = newRoomState();
@@ -1204,4 +1476,129 @@ test("10k and 50k entries render the same bounded window and visit the same numb
   assert.ok(ten.stats.partsRendered < 200, "only the window renders");
   assert.ok(ten.rows.length > 0);
   assert.ok(fifty.rows.length > 0);
+});
+
+/** A room whose only content is one folded run of `count` tool calls. */
+function largeFoldedRun(count: number) {
+  const state = newRoomState();
+  const tools: Entry[] = Array.from({ length: count }, (_, i) => ({
+    seq: i + 1,
+    at: "2026-10-31T00:00:00Z",
+    participantId: "p-ann",
+    type: "tool",
+    toolCallId: `t${i}`,
+    title: `Tool ${i}`,
+    kind: "read",
+    status: "completed",
+  }));
+  const answer: Entry = {
+    seq: count + 1,
+    at: "2026-10-31T00:00:01Z",
+    participantId: "p-ann",
+    type: "answer",
+    text: "done",
+  };
+  state.timeline = [...tools, answer];
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 20,
+  });
+  parts.redraw();
+  const model = parts.model();
+  assert.ok(model);
+  model.resetStats();
+  const rows = parts.transcript.render(80);
+  return {
+    rows,
+    partStats: {
+      entriesVisited: model.stats.entriesVisited,
+      partsCreated: model.stats.partsCreated,
+      partsRendered: model.stats.partsRendered,
+    },
+    built: model.stats.entriesBuilt,
+  };
+}
+
+test("10k and 50k folded calls render only the run's summary", () => {
+  const ten = largeFoldedRun(10_000);
+  const fifty = largeFoldedRun(50_000);
+  assert.equal(ten.built, 10_001);
+  assert.equal(fifty.built, 50_001);
+  for (const stats of [ten.partStats, fifty.partStats]) {
+    assert.ok(stats.entriesVisited < 100, "only the window is visited");
+    assert.ok(stats.partsCreated < 200, "only the window is created");
+    assert.ok(stats.partsRendered < 200, "only the window renders");
+  }
+  assert.ok(ten.rows.length > 0);
+  assert.ok(fifty.rows.length > 0);
+});
+
+test("folding and opening a long run builds only its summary and window", () => {
+  const state = newRoomState();
+  state.timeline = Array.from({ length: 10_000 }, (_, i) => ({
+    seq: i + 1,
+    at: "2026-10-31T00:00:00Z",
+    participantId: "p-ann",
+    type: "tool",
+    toolCallId: `t${i}`,
+    title: `Tool ${i}`,
+    kind: "read",
+    status: "completed",
+  })) as Entry[];
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 20,
+  });
+  parts.redraw();
+  const model = parts.model();
+  assert.ok(model);
+  model.resetStats();
+  const answer: Entry = {
+    seq: 10_001,
+    at: "2026-10-31T00:00:01Z",
+    participantId: "p-ann",
+    type: "answer",
+    text: "done",
+  };
+  state.timeline.push(answer);
+  parts.draw(state, answer);
+  assert.ok(model.stats.partsCreated < 100, "a fold creates only its summary");
+  assert.ok(model.stats.partsRendered < 100, "a fold renders only its summary");
+  let rows = parts.transcript.render(80);
+  parts.scroll.updateLayout(rows.length, 20, () => {});
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const plain = rows.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  const y = plain.findIndex((l) => l.includes("▸ 10000 tool calls"));
+  assert.ok(y >= 0, plain.join("\n"));
+  model.resetStats();
+  assert.equal(
+    parts.transcript.handleMouse({
+      type: "click",
+      button: "left",
+      x: 4,
+      y,
+      width: 80,
+      height: rows.length,
+    } as never)?.handled,
+    true,
+  );
+  assert.ok(model.stats.partsCreated < 100, "opening creates only the window");
+  assert.ok(model.stats.partsRendered < 100, "opening renders only the window");
+  model.resetStats();
+  rows = parts.transcript.render(80);
+  assert.ok(model.stats.partsCreated < 100, "the open window stays bounded");
+  assert.ok(model.stats.partsRendered < 100, "the open window renders bounded");
+  assert.ok(rows.length > 0);
 });

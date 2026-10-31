@@ -465,32 +465,34 @@ class VirtualTranscriptModel {
     return this.prefix(anchor.item.index) + anchor.offset;
   }
 
-  /** The items that cover the viewport and its row margin. */
+  /** The items that cover the viewport and its row margin. A folded run
+   *  has one item per hidden tool but only its first has any rows; the row
+   *  probes skip those zero-height items instead of walking all of them. */
   window(top: number, viewport: number) {
     const count = this.items.length;
-    if (count === 0) return { first: 0, last: -1 };
+    if (count === 0) return { indices: [] as number[] };
     if (!Number.isFinite(viewport)) {
       this.stats.entriesVisited += count;
-      return { first: 0, last: count - 1 };
+      return { indices: this.items.map((_, index) => index) };
     }
     const rows = Math.max(1, Math.floor(viewport));
     const total = this.total;
-    const start = Math.max(
-      0,
-      Math.min(total - 1, Math.floor(top) - WINDOW_MARGIN),
-    );
+    const start = Math.max(0, Math.min(total, Math.floor(top) - WINDOW_MARGIN));
     const end = Math.max(
-      1,
+      0,
       Math.min(total, Math.floor(top) + rows + WINDOW_MARGIN),
     );
-    let first = this.heights.at(start);
-    let last = this.heights.at(end - 1);
-    if (first < 0) first = count - 1;
-    if (last < 0) last = count - 1;
-    first = Math.max(0, first - 1);
-    last = Math.min(count - 1, last + 1);
-    this.stats.entriesVisited += last - first + 1;
-    return { first, last };
+    const indices: number[] = [];
+    let previous = -1;
+    for (let row = start; row < end; row++) {
+      const index = this.heights.at(row);
+      if (index >= 0 && index !== previous) {
+        indices.push(index);
+        previous = index;
+      }
+    }
+    this.stats.entriesVisited += indices.length;
+    return { indices };
   }
 
   resetStats() {
@@ -538,6 +540,17 @@ class Transcript extends Container {
   setModel(model: VirtualTranscriptModel) {
     this.releaseAll();
     this.model = model;
+  }
+
+  /** Bring the scroll view's height up to the model before it clamps a new
+   *  row. The next layout replaces this with the exact drawn height. */
+  syncScroll() {
+    const model = this.model;
+    const scroll = this.scroll;
+    if (!model || !scroll) return;
+    scroll.updateLayout(model.total, scroll.viewportHeight, () =>
+      this.requestRender(),
+    );
   }
 
   private release(item: Item) {
@@ -592,14 +605,14 @@ class Transcript extends Container {
     if (!all && Number.isFinite(viewport)) rows = Math.max(1, viewport);
     const maxTop = Number.isFinite(rows) ? Math.max(0, model.total - rows) : 0;
     const top = all || following ? maxTop : Math.min(scroll.scrollTop, maxTop);
-    const { first, last } = model.window(top, rows);
+    const { indices } = model.window(top, rows);
     const visible: Item[] = [];
     const output: string[] = [];
     const mouseChildren: { component: Component; height: number }[] = [];
     let measured = false;
 
-    for (let i = first; i <= last; i++) {
-      const item = model.items[i];
+    for (const index of indices) {
+      const item = model.items[index];
       if (!item) continue;
       visible.push(item);
       const parts = this.ensure(item);
@@ -618,9 +631,11 @@ class Transcript extends Container {
     for (const old of this.mounted) if (!next.has(old)) this.release(old);
     this.mounted = next;
 
-    const before = first <= last ? model.prefix(first) : 0;
+    const first = indices[0];
+    const last = indices.at(-1);
+    const before = first === undefined ? 0 : model.prefix(first);
     const after =
-      first <= last ? model.total - model.prefix(last + 1) : model.total;
+      last === undefined ? model.total : model.total - model.prefix(last + 1);
     this.topBlank.height = before;
     this.bottomBlank.height = after;
     const visibleParts = visible.flatMap((item) => item.parts ?? []);
@@ -643,8 +658,11 @@ class Transcript extends Container {
 
     if (anchor) {
       const row = model.rowAt(anchor);
-      if (row !== scroll.scrollTop)
+      if (row !== scroll.scrollTop) {
+        // A new width can make the row past what the scroll view last held.
+        this.syncScroll();
         scroll.scrollTo(row, { disableFollow: true });
+      }
     }
     if (measured) this.requestRender();
     return out;
@@ -797,8 +815,16 @@ function transcriptParts({
     const anchor = scroll.isFollowingEnd
       ? undefined
       : current.anchorAt(scroll.scrollTop);
-    for (const item of current.byRun.get(run) ?? []) measureItem(item);
-    if (anchor) scroll.scrollTo(current.rowAt(anchor), { disableFollow: true });
+    const items = current.byRun.get(run) ?? [];
+    for (const item of items) current.invalidate(item);
+    // The run's first item holds the line that was clicked. Opening or
+    // shutting the rest changes no row above that line.
+    const first = items[0];
+    if (first) transcript.measure(first);
+    if (anchor) {
+      transcript.syncScroll();
+      scroll.scrollTo(current.rowAt(anchor), { disableFollow: true });
+    }
     tui.requestRender();
   };
   const foldRuns = (done: Run[], live: boolean) => {
@@ -807,10 +833,12 @@ function transcriptParts({
     if (!current) return;
     for (const run of done) {
       run.folded = true;
-      for (const item of current.byRun.get(run) ?? []) {
-        current.invalidate(item);
-        if (live) transcript.measure(item);
-      }
+      const items = current.byRun.get(run) ?? [];
+      for (const item of items) current.invalidate(item);
+      // A shut run draws only on its first item. Measure that summary, not
+      // every call hidden inside it.
+      const first = items[0];
+      if (live && first) transcript.measure(first);
     }
   };
 
@@ -857,6 +885,7 @@ function transcriptParts({
         box.addChild(rest);
         parts.push(barred(box, paint(state, e)));
         let shown = blocks.length;
+        let shownRest = "";
         return {
           parts,
           update() {
@@ -866,7 +895,11 @@ function transcriptParts({
               box.addChild(rest);
               shown += 1;
             }
-            rest.setText(e.text.slice(done));
+            const text = e.text.slice(done);
+            if (text !== shownRest) {
+              shownRest = text;
+              rest.setText(text);
+            }
           },
         };
       },
@@ -934,9 +967,16 @@ function transcriptParts({
     return {
       make: () => {
         const line = new Text("", 1, 0);
+        let shown = "";
         return {
           parts: [line],
-          update: () => line.setText(magenta(text())),
+          update: () => {
+            const next = magenta(text());
+            if (next !== shown) {
+              shown = next;
+              line.setText(next);
+            }
+          },
         };
       },
       estimate: (width) => estimateRows(text(), Math.max(1, width - 2)),
@@ -1085,12 +1125,23 @@ function transcriptParts({
     const item = current.byEntry.get(e);
     if (item) {
       item.advance?.();
-      if (item.parts) measureItem(item);
+      // A shut run draws its one summary line on the first item, whatever
+      // later call changed. Measure that line so its new wrap is in the model.
+      const summary =
+        item.run?.folded === true
+          ? current.byRun.get(item.run)?.[0]
+          : undefined;
+      if (item.parts || summary === item) measureItem(item);
       else current.invalidate(item);
+      if (summary && summary !== item) measureItem(summary);
     } else {
       addEntry(state, e, true);
     }
-    if (anchor) scroll.scrollTo(current.rowAt(anchor), { disableFollow: true });
+    if (anchor) {
+      // The new row can be past what the scroll view last laid out.
+      transcript.syncScroll();
+      scroll.scrollTo(current.rowAt(anchor), { disableFollow: true });
+    }
     tui.requestRender();
   };
 
