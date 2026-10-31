@@ -7,14 +7,15 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.17** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.18** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
 added replies and copies, `PATCH /rooms/:id`, which renames a room, M8-3, #267,
 which added the `reviewer` role and a participant's `turnFrom`, #352, which added
-the delete preview, M9-5, #300, which added an agent's `model`, and M9-6, #301, which
-changes the model during a chat and added an agent's `models`).
+the delete preview, M9-5, #300, which added an agent's `model`, M9-6, #301, which
+changes the model during a chat and added an agent's `models`, and #354, which
+added `_client_repeat_resolved`).
 
 ## Contents
 
@@ -359,7 +360,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 17 },
+  "apiVersion": { "major": 1, "minor": 18 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
