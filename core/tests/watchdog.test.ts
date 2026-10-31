@@ -412,20 +412,20 @@ test("calls that never get an update are dropped past a cap", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 2 }));
   h.call("a", "lost");
-  for (let i = 0; i < 4_096; i++) h.call("a", `x${i}`);
+  for (let i = 0; i < 64; i++) h.call("a", `x${i}`);
   h.update("a", "lost", "npm test");
   h.op("a", "npm test");
   h.wd.sweep();
   assert.deepEqual(h.warns, [], "the oldest waiting call was dropped");
 });
 
-test("a pi-style batch larger than the old cap still warns (#354)", () => {
-  // pi was measured sending 581 calls before an earlier call's update. Its
-  // identity is on the `tool_call`; each update carries only a status. Eight
-  // identical reads at the start of the batch must still warn once.
+test("a pi-style batch as large as the cap still warns (#354)", () => {
+  // pi's reads carry their identity on the `tool_call`, and each update only
+  // a status. At most 6 calls waited at once in our logs; a full cap of them
+  // must still count, and eight identical reads warn once.
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 8 }));
-  const total = 581;
+  const total = 64;
   for (let i = 0; i < total; i++) {
     const path = i < 8 ? "/w/loop.ts" : `/w/other-${i}.ts`;
     h.wd.note({

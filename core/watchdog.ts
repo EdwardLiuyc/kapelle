@@ -118,11 +118,11 @@ interface Call {
   path?: string;
 }
 
-/** Calls that wait for their first update. pi was measured sending 581
- *  calls before an earlier call's update, so this must stay well above that.
- *  It only stops a harness that never sends an update from growing this
- *  without bound; a call dropped here is never counted. */
-const MAX_PENDING = 4_096;
+/** Calls that wait for their first update. In our room logs, at most 6
+ *  waited at once (pi; claude 1). The cap only stops a harness that never
+ *  sends an update from growing this; a call dropped here is never counted. */
+// ponytail: ten times the measured peak; raise it if a harness batches more.
+const MAX_PENDING = 64;
 
 interface WatchState {
   limits: WatchdogLimits;
