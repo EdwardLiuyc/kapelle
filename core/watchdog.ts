@@ -118,11 +118,11 @@ interface Call {
   path?: string;
 }
 
-/** Calls that wait for their first update. Every call in our room logs got
- *  one; the cap only stops a harness that never sends it from growing this. */
-// ponytail: drop the oldest past 64; a harness that skips updates then never
-// warns on repeat, so count at `completed` too if one is ever measured.
-const MAX_PENDING = 64;
+/** Calls that wait for their first update. pi was measured sending 581
+ *  calls before an earlier call's update, so this must stay well above that.
+ *  It only stops a harness that never sends an update from growing this
+ *  without bound; a call dropped here is never counted. */
+const MAX_PENDING = 4_096;
 
 interface WatchState {
   limits: WatchdogLimits;

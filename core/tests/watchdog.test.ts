@@ -412,11 +412,46 @@ test("calls that never get an update are dropped past a cap", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 2 }));
   h.call("a", "lost");
-  for (let i = 0; i < 64; i++) h.call("a", `x${i}`);
+  for (let i = 0; i < 4_096; i++) h.call("a", `x${i}`);
   h.update("a", "lost", "npm test");
   h.op("a", "npm test");
   h.wd.sweep();
   assert.deepEqual(h.warns, [], "the oldest waiting call was dropped");
+});
+
+test("a pi-style batch larger than the old cap still warns (#354)", () => {
+  // pi was measured sending 581 calls before an earlier call's update. Its
+  // identity is on the `tool_call`; each update carries only a status. Eight
+  // identical reads at the start of the batch must still warn once.
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 8 }));
+  const total = 581;
+  for (let i = 0; i < total; i++) {
+    const path = i < 8 ? "/w/loop.ts" : `/w/other-${i}.ts`;
+    h.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: `p${i}`,
+        title: "read",
+        kind: "read",
+        rawInput: { path },
+        locations: [{ path }],
+      },
+    });
+  }
+  for (let i = 0; i < total; i++) {
+    h.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: `p${i}`,
+        status: "completed",
+      },
+    });
+    h.wd.sweep();
+  }
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
 });
 
 // --- ttl -------------------------------------------------------------------
