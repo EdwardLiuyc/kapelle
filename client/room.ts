@@ -577,8 +577,6 @@ interface Stall {
   /** The person looked. Unlike a resolve, `seen` keeps it for the bell
    *  (M4-4): it rings for a person who looks somewhere else. */
   seen: boolean;
-  /** For `repeat`, the `tool_call` title it warned about. */
-  title?: string;
 }
 
 interface ParticipantState {
@@ -605,8 +603,10 @@ interface ParticipantState {
   /** Timeline entries not from the person, since the last `seen`. */
   unread: number;
   /** The live stall warning, until it is resolved or its turn ends. An
-   *  idle one is resolved by its harness's next line; a repeat one by a
-   *  `tool_call` with another title. */
+   *  idle one is resolved by its harness's next line; a repeat one by the
+   *  watchdog's `_client_repeat_resolved` (#354). A daemon before 1.18, or a
+   *  log written before it, never sends that line: there the repeat mark
+   *  stays until the turn ends. */
   stall?: Stall;
   /** The line that resolved an idle warning, so `quiet` keeps its frame. */
   stallResolvedAt?: number;
@@ -619,8 +619,6 @@ interface ParticipantState {
   /** The live turn's last tool call (M7-1). The entry, not its title:
    *  its updates set the title in place (#240). */
   tool?: Tool;
-  /** The live turn's last `tool_call` title, as the watchdog compares it. */
-  callTitle?: string;
   /** The last `usage_update`. The cost in it is a running total for the
    *  session (§M0-5): never add two of them up. */
   usage?: UsageUpdate;
@@ -689,7 +687,7 @@ export function applyLine(
   state.seq = seq;
   const p = state.participants.get(participantId);
   // Its harness's traffic ends an idle spell, as in `core/watchdog.ts`. A
-  // busy loop is traffic too, so a repeat warning waits for a new title.
+  // busy loop is traffic too, so a repeat warning waits for the watchdog.
   if (p?.stall?.kind === "idle" && fromHarness(u.sessionUpdate)) {
     p.stall = undefined;
     p.stallResolvedAt = seq;
@@ -767,7 +765,6 @@ export function applyLine(
         // A cut turn ends here.
         p.thinking = undefined;
         p.tool = undefined;
-        p.callTitle = undefined;
         p.turns.push({
           ...(u.turn !== undefined && { number: u.turn }),
           text,
@@ -852,14 +849,6 @@ export function applyLine(
       if (p) {
         p.thinking = undefined;
         p.tool = slot.entry;
-        p.callTitle = slot.title;
-        if (
-          p.stall?.kind === "repeat" &&
-          p.stall.title !== undefined &&
-          p.stall.title !== slot.title
-        ) {
-          p.stall = undefined;
-        }
       }
       return slot.entry;
     }
@@ -917,7 +906,6 @@ export function applyLine(
         p.stall = undefined;
         p.thinking = undefined;
         p.tool = undefined;
-        p.callTitle = undefined;
       }
       return add({
         ...at,
@@ -955,14 +943,14 @@ export function applyLine(
     case "_client_stall_warning": {
       // A repeat warning quotes the harness's tool title.
       const text = printable(u.text);
-      if (p) {
-        p.stall = { kind: u.kind, text, seq, seen: false };
-        if (u.kind === "repeat" && p.callTitle !== undefined) {
-          p.stall.title = p.callTitle;
-        }
-      }
+      if (p) p.stall = { kind: u.kind, text, seq, seen: false };
       return add({ ...at, type: "stall", kind: u.kind, text });
     }
+    case "_client_repeat_resolved":
+      // Only the watchdog knows two calls are one operation. The warning's
+      // line stays in the timeline as history.
+      if (p?.stall?.kind === "repeat") p.stall = undefined;
+      return undefined;
     case "_client_permission_queued": {
       const number = openTurn()?.number;
       const question = add({

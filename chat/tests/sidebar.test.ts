@@ -233,9 +233,9 @@ test("a seen or resolved stall leaves the stall mark (#348)", () => {
   assert.notEqual(roomMark(state).glyph, "!", "an idle stall resolved");
   call("p-ann", "Terminal");
   warn("repeat");
-  call("p-ann", "Terminal");
-  assert.equal(roomMark(state).glyph, "!", "the same title");
   call("p-ann", "Read");
+  assert.equal(roomMark(state).glyph, "!", "only the watchdog resolves it");
+  line("p-ann", { sessionUpdate: "_client_repeat_resolved" });
   assert.notEqual(roomMark(state).glyph, "!", "a repeat stall resolved");
 });
 

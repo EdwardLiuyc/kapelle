@@ -805,6 +805,36 @@ test("the watchdog warns about a silent turn and never cancels it (R38)", async 
   await turn;
 });
 
+test("a repeat warning resolves after the operation that ends the loop (#354)", async (t) => {
+  const { p, events, of } = await roomOn(t, "repeat", {
+    stallIdleMs: 1_000,
+    stallRepeatCount: 5,
+  });
+
+  await p.send("loop");
+
+  const [warning] = of("_client_stall_warning");
+  assert.ok(warning, "no repeat warning");
+  assert.equal((warning.update as { kind: string }).kind, "repeat");
+  const resolves = of("_client_repeat_resolved");
+  assert.equal(resolves.length, 1, "the loop resolved once");
+  assert.equal(resolves[0]?.agent, p.id);
+
+  // The different operation counts when it completes.
+  const cause = events.findIndex(
+    (e) =>
+      e.update.sessionUpdate === "tool_call_update" &&
+      e.update.toolCallId === "after-loop" &&
+      e.update.status === "completed",
+  );
+  assert.ok(cause >= 0, "the different operation is missing");
+  assert.equal(
+    events[cause + 1]?.update.sessionUpdate,
+    "_client_repeat_resolved",
+    "the resolve follows the line that caused it",
+  );
+});
+
 test("removing a participant drops its queue and reports it", async (t) => {
   const { room, p, of } = await roomOn(t, "stall");
   const live = p.send("live");

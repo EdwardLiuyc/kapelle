@@ -7,14 +7,15 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.17** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.18** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
 added replies and copies, `PATCH /rooms/:id`, which renames a room, M8-3, #267,
 which added the `reviewer` role and a participant's `turnFrom`, #352, which added
-the delete preview, M9-5, #300, which added an agent's `model`, and M9-6, #301, which
-changes the model during a chat and added an agent's `models`).
+the delete preview, M9-5, #300, which added an agent's `model`, M9-6, #301, which
+changes the model during a chat and added an agent's `models`, and #354, which
+added `_client_repeat_resolved`).
 
 ## Contents
 
@@ -359,7 +360,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 17 },
+  "apiVersion": { "major": 1, "minor": 18 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -948,7 +949,8 @@ with ACP names.
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
 | `_client_result_warning` | `kind`, `text` | The task's report and its changes do not agree. `kind` is `noResultBlock`, `filesNotInDiff`, `filesUnclaimed` or `policyNeverFired`. |
-| `_client_stall_warning` | `kind`, `text` | The task, or a room participant's turn, looks stuck. `kind` is `idle` (quiet too long) or `repeat` (same tool again and again). It keeps running: in a room, only a cancel ends a turn. |
+| `_client_stall_warning` | `kind`, `text` | The task, or a room participant's turn, looks stuck. `kind` is `idle` (quiet too long) or `repeat` (the same operation again and again: same title, kind, input and first location (path and line), read when the call completes or fails; a call that never ends is never counted). It keeps running: in a room, only a cancel ends a turn. |
+| `_client_repeat_resolved` | — | Since 1.18. Rooms only. The loop a `repeat` warning named is over: the participant ran another operation. The warning's line stays as history. |
 
 **Harness process:**
 

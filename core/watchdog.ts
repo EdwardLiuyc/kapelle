@@ -12,8 +12,31 @@
  *
  * - **idle** — nothing on this task's bus for `stallIdleMs`, and no question
  *   waiting for a person.
- * - **repeat** — the same `tool_call` title `stallRepeatCount` times running,
- *   which is the busy-loop case idle time structurally cannot see.
+ * - **repeat** — the same operation `stallRepeatCount` times running, which
+ *   is the busy-loop case idle time structurally cannot see.
+ *
+ * **An operation is more than its title (#354).** claude names every shell
+ * call `Terminal`, and pi names every read `read`: in our room logs, none of
+ * the 195 same-title runs of 8 or more was one operation repeated
+ * (`docs/FINDINGS.md` §Repeat by tool title). So two calls are the same when
+ * their title, kind, whole `rawInput` and first location all match.
+ *
+ * **A call counts when it completes or fails (decided 2026-10-31 on #399).**
+ * Its input comes in pieces: claude sends a shell command on the first
+ * `tool_call_update`, and an `Edit`'s file first, its old and new text later.
+ * Counted at the first update, eight edits of one file looked the same. So
+ * every update is merged until the status is `completed` or `failed`. A call
+ * that never gets there is never counted, so it can neither make a repeat nor
+ * resolve one.
+ *
+ * **The whole input counts, prose included (decided 2026-10-31 on #399).**
+ * claude's `description` is in the final input, so it is part of the
+ * operation. A note that changes ("run 3 of 10") is more often planned work
+ * than a stuck loop, and a false warning is the worse mistake.
+ *
+ * When a different operation follows a repeat warning, `onResolve` says the
+ * loop is over. Only this module decides that; the chat reducer keeps no copy
+ * of the rule.
  *
  * Both warn and the task keeps running. Only the longer `ttlMs` acts, and all
  * it does is ask the caller to cancel: ACP gives no way to nudge a turn in
@@ -27,6 +50,8 @@
  * which is what lets an hour-long TTL be tested by moving a number.
  */
 
+import { isDeepStrictEqual } from "node:util";
+
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
 
 /** The two things a stalled task can look like. */
@@ -35,7 +60,7 @@ export type StallKind = "idle" | "repeat";
 export interface WatchdogLimits {
   /** No events for this long → warn. `0` disables. */
   stallIdleMs: number;
-  /** This many identical tool titles in a row → warn. `0` disables. */
+  /** This many identical operations in a row → warn. `0` disables. */
   stallRepeatCount: number;
   /** Wall time for the whole task → cancel. `0` disables. */
   ttlMs: number;
@@ -74,6 +99,8 @@ export function sweepIntervalMs(limits: readonly WatchdogLimits[]): number {
 export interface WatchdogHooks {
   /** A stall was detected. Advisory: the task keeps running. */
   onWarn: (taskId: string, kind: StallKind, text: string) => void;
+  /** A different operation followed the one a repeat warning named. */
+  onResolve?: (taskId: string) => void;
   /** The TTL expired. The caller cancels; the watchdog never touches an agent. */
   onTimeout: (taskId: string) => void;
   /** Injected so a test can reach an hour-long TTL without waiting. */
@@ -96,16 +123,42 @@ export interface Watchdog {
   sweep: () => void;
 }
 
+/** What makes two calls one operation. Held from `tool_call` until the call
+ *  completes or fails. */
+interface Operation {
+  title: string;
+  kind?: string;
+  // Free-form by protocol design (see `ToolCall.rawInput`).
+  // pi-lens-ignore: no-unsafe-dictionary-unknown
+  input: Record<string, unknown>;
+  location?: { path: string; line?: number };
+}
+
+/** Calls that have not completed or failed. In our room logs, at most 6 ran
+ *  at once (pi; claude 4). The cap only stops a harness that never ends its
+ *  calls from growing this. A dropped call is never counted, so a drop
+ *  restarts the count: the calls around a hole are not a run. It keeps the
+ *  last operation, so the next call is judged against it as usual. If 64
+ *  calls never end, every new call drops one and resets the count, so a
+ *  repeat then counts only calls that complete with no new call between
+ *  them. */
+// ponytail: ten times the measured peak; raise it if a harness batches more.
+const MAX_PENDING = 64;
+
 interface WatchState {
   limits: WatchdogLimits;
   startedAt: number;
   lastEventAt: number;
-  lastTitle?: string;
+  pending: Map<string, Operation>;
+  /** The last counted operation. Its title goes in the warning. Once set, it
+   *  is never cleared, so `repeatCount > 0` means it is set. */
+  lastOperation?: Operation;
   repeatCount: number;
+  /** A repeat warning is live: the next different operation resolves it. */
+  repeatWarned: boolean;
   /** Questions asked and not yet answered. Idle does not count while one waits. */
   asking: number;
   idleWarned: boolean;
-  repeatWarned: boolean;
   timedOut: boolean;
 }
 
@@ -129,16 +182,56 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
       state.asking = Math.max(0, state.asking - 1);
     }
 
-    // Only a *new* call counts. `tool_call_update` is progress on one already
-    // counted, and counting it would make a single slow tool look like a loop.
-    if (event.update.sessionUpdate !== "tool_call") return;
-    const title = event.update.title;
-    if (title === state.lastTitle) {
+    if (state.limits.stallRepeatCount === 0) return;
+    const u = event.update;
+    if (
+      u.sessionUpdate !== "tool_call" &&
+      u.sessionUpdate !== "tool_call_update"
+    ) {
+      return;
+    }
+    let operation = state.pending.get(u.toolCallId);
+    if (u.sessionUpdate === "tool_call") {
+      operation = { title: u.title, input: {} };
+      state.pending.set(u.toolCallId, operation);
+      if (state.pending.size > MAX_PENDING) {
+        const [oldest] = state.pending.keys();
+        state.pending.delete(oldest);
+        state.repeatCount = 0;
+      }
+    }
+    if (!operation) return;
+    // Merged key by key: a later value replaces an earlier one, and a key a
+    // later message leaves out stays. `AcpAgent` keeps the last `rawInput`
+    // whole instead. The measured shapes agree on both: claude resends a
+    // growing input, and opencode's last update carries none.
+    if (u.title !== undefined) operation.title = u.title;
+    if (u.kind !== undefined) operation.kind = u.kind;
+    Object.assign(operation.input, u.rawInput);
+    const location = u.locations?.[0];
+    if (location) {
+      operation.location = {
+        path: location.path,
+        ...(location.line !== undefined && { line: location.line }),
+      };
+    }
+    // A call counts once, when it ends. Updates before are its input
+    // arriving, and updates after are dropped with it.
+    if (u.status !== "completed" && u.status !== "failed") return;
+    state.pending.delete(u.toolCallId);
+
+    if (
+      state.lastOperation &&
+      isDeepStrictEqual(operation, state.lastOperation)
+    ) {
       state.repeatCount += 1;
-    } else {
-      state.lastTitle = title;
-      state.repeatCount = 1;
+      return;
+    }
+    state.lastOperation = operation;
+    state.repeatCount = 1;
+    if (state.repeatWarned) {
       state.repeatWarned = false;
+      hooks.onResolve?.(event.agent);
     }
   };
 
@@ -149,10 +242,11 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
         limits,
         startedAt: started,
         lastEventAt: started,
+        pending: new Map(),
         repeatCount: 0,
+        repeatWarned: false,
         asking: 0,
         idleWarned: false,
-        repeatWarned: false,
         timedOut: false,
       });
       return {
@@ -203,8 +297,10 @@ function check(
     );
   }
 
+  const last = state.lastOperation;
   if (
     stallRepeatCount > 0 &&
+    last &&
     !state.repeatWarned &&
     state.repeatCount >= stallRepeatCount
   ) {
@@ -212,7 +308,7 @@ function check(
     hooks.onWarn(
       taskId,
       "repeat",
-      `${state.repeatCount}× "${state.lastTitle}" in a row — ` +
+      `${state.repeatCount}× "${last.title}" in a row — ` +
         `possible loop, still running`,
     );
   }

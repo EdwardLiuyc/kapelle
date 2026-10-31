@@ -497,6 +497,12 @@ export interface ClientStallWarningEvent extends Meta {
   text: string;
 }
 
+/** The loop a repeat warning named is over: the watchdog counted another
+ *  operation (#354). Only a room emits it; the warning line stays as history. */
+export interface ClientRepeatResolvedEvent extends Meta {
+  sessionUpdate: "_client_repeat_resolved";
+}
+
 /** A task left the queue and is about to acquire its worktree (M2-2, #32).
  *  The first of the three supervisor variants M1a-6's 2026-09-06 amendment
  *  left for the persisted log to widen: a replay has no other way to tell
@@ -678,6 +684,7 @@ export type AgentEvent =
   | ClientCancelRequestedEvent
   | ClientResultWarningEvent
   | ClientStallWarningEvent
+  | ClientRepeatResolvedEvent
   | ClientTaskStartedEvent
   | ClientWorktreeCreatedEvent
   | ClientTaskFinishedEvent
@@ -996,6 +1003,7 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_cancel_requested"
         | "_client_result_warning"
         | "_client_stall_warning"
+        | "_client_repeat_resolved"
         | "_client_task_started"
         | "_client_worktree_created"
         | "_client_task_finished"

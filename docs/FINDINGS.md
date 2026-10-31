@@ -502,7 +502,9 @@ avoid.
 `tool_call_update` then carries the command as the title and as `rawInput.command`, as
 claude-agent-acp's does. So opencode's `argvChannel` is `notification` (late), not
 `none`. It still never asks permission, so the policy still cannot gate it. The 1.18.18
-measurement above stays as it was.
+measurement above stays as it was. On 2.0.18 the last update of a call carries only
+`status: completed`, with no title, input or location (measured 2026-10-31, see
+[§Repeat by tool title](#repeat-by-tool-title--room-logs--measured-2026-10-31-354)).
 
 ### Why nothing called it — checked, not assumed
 
@@ -1648,6 +1650,57 @@ missing and a valid sidecar. Timing is diagnostic, not a wall-clock CI assertion
 
 The original 26-room / 324 MB workspace was not rerun. The 1 M-line test stays in the
 default suite because #321 explicitly requires it; temporary files are removed after it.
+
+## Repeat by tool title · room logs — measured 2026-10-31 (#354)
+
+No harness was run. A script read the 67 `events.jsonl` files under this repository's
+`rooms/` state folder on one machine, in one snapshot: claude calls tools in 56 of them,
+pi in 28, opencode in none (its shape is §M0-3, #240). A **same-title run** is 8 or more
+`tool_call`s in a row from one participant with the same `title`, the old repeat rule at
+its default. An **operation** is a call's title, kind, `rawInput` and first location, with
+its updates merged in. The study counted it two ways: at the first `tool_call_update`, and
+when the status is `completed` or `failed`.
+
+| measure | claude | pi |
+| --- | --- | --- |
+| tool calls | 5,736 | 4,719 |
+| `tool_call` with an empty `rawInput` | 5,736 | 4,106 |
+| input on the `tool_call` and on the first update | 0 | 613 |
+| input on the first update only | 5,736 | 0 |
+| location on the `tool_call` and on the first update | 0 | 422 |
+| location on the first update only | 1,400 | 0 |
+| no location at all | 4,336 | 4,297 |
+| first update sets the title | 5,720 | 4,105 |
+| calls that never completed or failed | 2 | 0 |
+| most calls running at once in a turn | 4 | 6 |
+| same-title runs of 8 or more | 193 | 2 |
+| of those, one operation 8 times, counted at the first update | 10 | 0 |
+| of those, one operation 8 times, counted at completion | **0** | **0** |
+
+- pi's two input rows are the same 613 calls: a read or an edit sends its input on the
+  `tool_call` and again on the first update. Its other 4,106 calls (shell) send no input
+  at all; the first update sets the command as the title.
+- claude's first update carries only the start of the input. A shell call has its
+  `{command}` there. An `Edit` has only `{file_path}`, then `old_string`, then
+  `new_string` on later updates. That is why the first-update count left 10 runs: 8 to 10
+  edits of one file, each a different edit.
+- claude's `description` came on a later update in all 5,015 calls that had one, so only
+  the count at completion includes it.
+- So the title-only rule gave 195 warnings. The two operation counts above group calls in
+  start order, inside the same-title runs. The watchdog counts in completion order, so the
+  script also grouped every completed call in completion order, with no same-title filter:
+  0 runs of one operation 8 times, and 0 with `description` left out of the identity. So
+  keeping `description` hides no run in these logs. This does not say whether an agent was
+  stuck: the logs hold no run of one operation, so they cannot show how many loops the
+  operation rule catches.
+
+**opencode, one run (2026-10-31).** opencode is in none of the logs, so one short task was
+run: opencode v2.0.18, a temporary git folder, mode `auto`, 3 shell calls and 1 read,
+8 seconds, 8,992 tokens. Every call sent a `tool_call` (`shell` or `read`, input
+`{cwd}` or none), then `in_progress` updates with the real title and the input
+(`{command, cwd}`, or `{path}`), then one last update with only `status: completed`: no
+title, input or location. All 4 calls ended with `completed`, and each call's identity
+was whole before it completed. `failed` was not measured: no call failed.
 
 ## What this note does not cover
 
