@@ -138,7 +138,9 @@ interface Operation {
  *  at once (pi; claude 4). The cap only stops a harness that never ends its
  *  calls from growing this. A dropped call is never counted, so a drop
  *  restarts the count: the calls around a hole are not a run. It keeps the
- *  last operation, so the next call is judged against it as usual. */
+ *  last operation, so the next call is judged against it as usual. If 64
+ *  calls never end, every new call drops one and resets the count, so the
+ *  repeat warning stays off for the rest of the turn. */
 // ponytail: ten times the measured peak; raise it if a harness batches more.
 const MAX_PENDING = 64;
 
@@ -198,7 +200,10 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
       }
     }
     if (!operation) return;
-    // Merged: each message sends only what changed.
+    // Merged key by key: a later value replaces an earlier one, and a key a
+    // later message leaves out stays. `AcpAgent` keeps the last `rawInput`
+    // whole instead. The measured shapes agree on both: claude resends a
+    // growing input, and opencode's last update carries none.
     if (u.title !== undefined) operation.title = u.title;
     if (u.kind !== undefined) operation.kind = u.kind;
     Object.assign(operation.input, u.rawInput);

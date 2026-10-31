@@ -400,6 +400,65 @@ test("a call counts once, when it completes or fails (#354)", () => {
   assert.deepEqual(h.warns, [["a", "repeat"]]);
 });
 
+test("opencode's shape: identity from in_progress, counted at a bare completed (#354)", () => {
+  // Measured on opencode 2.0.18 (§Repeat by tool title): the command arrives
+  // on an `in_progress` update, and the last update has only `completed`.
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+  const shell = (id: string, command: string, cwd: string) => {
+    h.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: id,
+        title: "shell",
+        kind: "execute",
+        status: "pending",
+        rawInput: { cwd },
+      },
+    });
+    for (let i = 0; i < 2; i++) {
+      h.wd.note({
+        agent: "a",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: id,
+          title: command,
+          kind: "execute",
+          status: "in_progress",
+          rawInput: { command, cwd },
+        },
+      });
+    }
+  };
+  const done = (id: string) =>
+    h.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: id,
+        status: "completed",
+      },
+    });
+
+  // One command in three folders: the input from `in_progress` tells them
+  // apart, though the last update carries none.
+  for (const [i, cwd] of ["/w/a", "/w/b", "/w/c"].entries()) {
+    shell(`d${i}`, "npm test", cwd);
+    done(`d${i}`);
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "three folders, three operations");
+
+  for (let i = 0; i < 3; i++) shell(`s${i}`, "npm test", "/w/a");
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "nothing counts before `completed`");
+  for (let i = 0; i < 3; i++) done(`s${i}`);
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
+  assert.match(h.texts[0], /"npm test"/);
+});
+
 test("eight edits of one file, sent in pieces, do not warn (#354)", () => {
   // claude's `Edit`: the file on the first update, its old and new text on
   // later ones (§Repeat by tool title). Counted at the first update, all

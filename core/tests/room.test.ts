@@ -820,10 +820,12 @@ test("a repeat warning resolves after the operation that ends the loop (#354)", 
   assert.equal(resolves.length, 1, "the loop resolved once");
   assert.equal(resolves[0]?.agent, p.id);
 
+  // The different operation counts when it completes.
   const cause = events.findIndex(
     (e) =>
       e.update.sessionUpdate === "tool_call_update" &&
-      e.update.toolCallId === "after-loop",
+      e.update.toolCallId === "after-loop" &&
+      e.update.status === "completed",
   );
   assert.ok(cause >= 0, "the different operation is missing");
   assert.equal(

@@ -1684,8 +1684,19 @@ when the status is `completed` or `failed`.
   edits of one file, each a different edit.
 - claude's `description` came on a later update in all 5,015 calls that had one, so only
   the count at completion includes it.
-- So the title-only rule gave 195 warnings, and none of them was a loop. The logs hold no
-  true loop, so this does not measure how many loops the operation rule catches.
+- So the title-only rule gave 195 warnings. Counted at completion, none of the 195 runs
+  repeated one operation 8 times, and still none with `description` left out of the
+  identity (0), so keeping `description` hides no run in these logs. This does not say
+  whether an agent was stuck: the logs hold no run of one operation, so they cannot show
+  how many loops the operation rule catches.
+
+**opencode, one run (2026-10-31).** opencode is in none of the logs, so one short task was
+run: opencode v2.0.18, a temporary git folder, mode `auto`, 3 shell calls and 1 read,
+8 seconds, 8,992 tokens. Every call sent a `tool_call` (`shell` or `read`, input
+`{cwd}` or none), then `in_progress` updates with the real title and the input
+(`{command, cwd}`, or `{path}`), then one last update with only `status: completed`: no
+title, input or location. All 4 calls ended with `completed`, and each call's identity
+was whole before it completed. `failed` was not measured: no call failed.
 
 ## What this note does not cover
 

@@ -680,13 +680,14 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
 
     // The busy loop idle time structurally cannot see: one command, over and
     // over, then a normal end of turn — repeat warns and must not cancel.
-    // opencode's shape (§M0-3, #240): a bare `shell` call, then the command
-    // as the title and the input on its first update.
+    // opencode 2.0.18's measured shape (§Repeat by tool title): a bare
+    // `shell` call, the command as the title and the input on an
+    // `in_progress` update, then a last update with only `completed`.
     if (scenario === "repeat") {
-      for (let i = 0; i < REPEATS; i++) {
+      const shell = (id, command) => {
         update(sid, {
           sessionUpdate: "tool_call",
-          toolCallId: `loop${i}`,
+          toolCallId: id,
           title: "shell",
           kind: "execute",
           status: "pending",
@@ -694,30 +695,25 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         });
         update(sid, {
           sessionUpdate: "tool_call_update",
-          toolCallId: `loop${i}`,
-          title: REPEAT_COMMAND,
-          status: "completed",
-          rawInput: { command: REPEAT_COMMAND },
+          toolCallId: id,
+          title: command,
+          kind: "execute",
+          status: "in_progress",
+          rawInput: { command },
         });
+        update(sid, {
+          sessionUpdate: "tool_call_update",
+          toolCallId: id,
+          status: "completed",
+        });
+      };
+      for (let i = 0; i < REPEATS; i++) {
+        shell(`loop${i}`, REPEAT_COMMAND);
         await sleep(REPEAT_GAP_MS);
       }
-      // The room's watchdog resolves the repeat warning on this different
-      // operation, after the event that caused it (#354).
-      update(sid, {
-        sessionUpdate: "tool_call",
-        toolCallId: "after-loop",
-        title: "shell",
-        kind: "execute",
-        status: "pending",
-        rawInput: {},
-      });
-      update(sid, {
-        sessionUpdate: "tool_call_update",
-        toolCallId: "after-loop",
-        title: "git status --short",
-        status: "completed",
-        rawInput: { command: "git status --short" },
-      });
+      // The room's watchdog resolves the repeat warning when this different
+      // operation completes, after the event that caused it (#354).
+      shell("after-loop", "git status --short");
       update(sid, {
         sessionUpdate: "agent_message_chunk",
         content: {
