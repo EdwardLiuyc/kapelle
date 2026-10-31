@@ -246,11 +246,19 @@ function panelParts({
   let ready: string[] | undefined;
   /** Each harness's saved model ids (M9-4), from the same reply. */
   const models = new Map<string, string[]>();
-  /** Takes the harness row and the models from a harnesses reply: the one
-   *  at start, a new find, or an install's. So an agent installed from
-   *  `/setup` shows in the forms with no restart. An entry with no `state`
-   *  is left out: there is no fallback for a daemon older than M9-3. */
-  const learn = (r: HarnessesReply) => {
+  /** Replies can take seconds while the daemon checks agents, so one asked
+   *  for earlier can land after a newer find or install. Remember the order,
+   *  and never let an older reply put the row back. */
+  let harnessAsked = 0;
+  let harnessLearned = 0;
+  /** Takes the harness row and the models from a harnesses reply, if it is
+   *  at least as new as the last one learned: the one at start, a new find,
+   *  or an install's. So an agent installed from `/setup` shows in the forms
+   *  with no restart. An entry with no `state` is left out: there is no
+   *  fallback for a daemon older than M9-3. */
+  const learn = (r: HarnessesReply, order: number) => {
+    if (order < harnessLearned) return;
+    harnessLearned = order;
     const ids: string[] = [];
     models.clear();
     for (const h of r.harnesses) {
@@ -268,9 +276,10 @@ function panelParts({
    *  has not said "done" or no agent is ready (M9-3), unless a pop-up, a
    *  question or `busy` (the side view) came first. */
   const atStart = async (busy: () => boolean = () => false) => {
+    const order = ++harnessAsked;
     const res = await readHarnesses(d).catch(() => undefined);
     if (!res?.ok) return;
-    learn(res.body);
+    learn(res.body, order);
     // A manual /setup, or its close, while this GET was pending is the
     // person's answer: the late startup reply must not reopen the list.
     // The side view too: a list over the shell the person just opened
@@ -572,8 +581,9 @@ function panelParts({
     const focus: { id?: string } = {};
     showPanel(SETUP, setupList(inHand, [], checked, focus), generation);
     await fresh();
+    const order = ++harnessAsked;
     const r = await findAgain(d).catch(() => undefined);
-    if (r?.ok) learn(r.body);
+    if (r?.ok) learn(r.body, order);
     // Closed, or replaced, while the daemon looked.
     if (panel?.setup !== generation) return;
     if (r?.ok)
@@ -639,7 +649,7 @@ function panelParts({
       return tui.requestRender();
     }
     const { failed, setup } = r.body;
-    learn(setup);
+    learn(setup, ++harnessAsked);
     if (!ours) {
       say(
         failed.length
@@ -980,7 +990,9 @@ function panelParts({
     id: "agent",
     label: "harness",
     value: "",
-    ...(ready && { pick: ["–", ...ready, OTHER_HARNESS] }),
+    // Read when the row opens, not when the form opens: a find or install
+    // can land while the form is already on screen (#367).
+    pick: () => ready && ["–", ...ready, OTHER_HARNESS],
   });
 
   /** The model row (M9-5): the chosen harness's saved models, then

@@ -800,3 +800,62 @@ test("a new find and an install refresh the harness row, with no restart (#367)"
   assert.match(rows, /claude/);
   assert.doesNotMatch(rows, /kimi|pi\b/);
 });
+
+test("a late startup reply does not undo a newer find's harnesses (#367)", async (t) => {
+  const before = reply();
+  const after = {
+    ...before,
+    harnesses: [
+      ...before.harnesses,
+      { id: "kimi", measured: true, state: "ready" as const },
+    ],
+  };
+  const fake = await fakeDaemon(t, {
+    holdGet: true,
+    got: { ...before, done: true },
+    found: { ...after, done: true },
+  });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  const starting = box.atStart();
+  await fake.getSeen.promise;
+
+  // The person finds again while the startup GET is still held.
+  await box.showSetup();
+  box.hidePanel();
+  assert.match(
+    harnessPicks(box, () => box.addForm(), 0),
+    /kimi/,
+  );
+
+  // Its older reply must not put the harness row back.
+  fake.getRelease.resolve();
+  await starting;
+  assert.match(
+    harnessPicks(box, () => box.addForm(), 0),
+    /kimi/,
+    "a late startup GET must not undo a newer find",
+  );
+});
+
+test("a form opened before the harness reply shows its pick list when it lands (#367)", async (t) => {
+  const fake = await fakeDaemon(t, { holdGet: true });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  const starting = box.atStart();
+  await fake.getSeen.promise;
+
+  box.addForm();
+  box.panel?.body.handleInput?.("\r");
+  assert.doesNotMatch(
+    shownOf(box),
+    /other…/,
+    "a text box while the reply is pending",
+  );
+  fake.getRelease.resolve();
+  await starting;
+
+  // Back from the text box to the form, then open the harness row again.
+  box.panel?.body.handleInput?.("\x1b");
+  box.panel?.body.handleInput?.("\r");
+  assert.match(shownOf(box), /pi[\s\S]*other…/);
+  box.hidePanel();
+});
