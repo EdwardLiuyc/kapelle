@@ -770,6 +770,28 @@ test("both forms offer only the measured agents found ready, then other… (#367
   }
 });
 
+test("both forms still offer other… when no harness is ready (#367)", async (t) => {
+  const noneReady: HarnessesReply = {
+    checkedAt: "now",
+    done: true,
+    harnesses: [
+      { id: "claude", measured: true, state: "main_only" },
+      { id: "codex", measured: true, state: "not_installed" },
+      { id: "old", measured: true },
+    ],
+  };
+  const fake = await fakeDaemon(t, { got: noneReady, found: noneReady });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  await box.atStart();
+  for (const rows of [
+    harnessPicks(box, () => box.addForm(), 0),
+    harnessPicks(box, () => box.newForm(), 2),
+  ]) {
+    assert.match(rows, /–[\s\S]*other…/);
+    assert.doesNotMatch(rows, /claude|codex|old/);
+  }
+});
+
 test("a new find and an install refresh the harness row, with no restart (#367)", async (t) => {
   const piReady = reply();
   const fake = await fakeDaemon(t, {
