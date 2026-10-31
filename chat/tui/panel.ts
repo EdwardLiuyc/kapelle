@@ -11,6 +11,11 @@
  * command on the right, and the menu has an `open` row for each room and
  * agent, because the sidebar can be hidden.
  *
+ * The forms' harness row lists only the measured agents the daemon found
+ * ready (#367), and their model rows the saved models. Each harnesses reply
+ * replaces both: the one at start, each `/setup` find and each install. A
+ * reply older than the last one used is dropped.
+ *
  * The box has a thick border, yellow for a question and cyan for the rest,
  * with the title as a chip. `Screen` in `chat/tui.ts` dims what is behind.
  */
@@ -239,29 +244,47 @@ function panelParts({
     if (!away) offer();
   };
 
-  /** The measured harnesses, from `GET /harnesses`. Unset until it
-   *  answers, and for good when this daemon has no such route or the ask
-   *  failed: then the harness row is a text box. */
-  let measured: string[] | undefined;
-  /** Each harness's saved model ids (M9-4), from the same answer. */
+  /** The measured harnesses the daemon found ready (#367), from the last
+   *  harnesses reply. Unset until `GET /harnesses` answers, and for good
+   *  when this daemon has no such route or the ask failed: then the harness
+   *  row is a text box. */
+  let ready: string[] | undefined;
+  /** Each harness's saved model ids (M9-4), from the same reply. */
   const models = new Map<string, string[]>();
-  /** Asks `GET /harnesses` once, when the screen is up, and does not wait.
-   *  Its answer fills `measured`, and opens the setup list when the person
-   *  has not said "done" or no agent is ready (M9-3), unless a pop-up, a
-   *  question or `busy` (the side view) came first. */
-  const atStart = async (busy: () => boolean = () => false) => {
-    const res = await readHarnesses(d).catch(() => undefined);
-    if (!res?.ok) return;
+  /** Replies can take seconds while the daemon checks agents, so one asked
+   *  for earlier can land after a newer find or install. Remember the order,
+   *  and never let an older reply put the row back. */
+  let harnessAsked = 0;
+  let harnessLearned = 0;
+  /** Takes the harness row and the models from a harnesses reply, if it is
+   *  at least as new as the last one learned: the one at start, a new find,
+   *  or an install's. So an agent installed from `/setup` shows in the forms
+   *  with no restart. An entry with no `state` is left out: there is no
+   *  fallback for a daemon older than M9-3. */
+  const learn = (r: HarnessesReply, order: number) => {
+    if (order < harnessLearned) return;
+    harnessLearned = order;
     const ids: string[] = [];
-    for (const h of res.body.harnesses) {
-      if (h.measured) ids.push(h.id);
+    models.clear();
+    for (const h of r.harnesses) {
+      if (h.measured && h.state === "ready") ids.push(h.id);
       if (h.models?.length)
         models.set(
           h.id,
           h.models.map((m) => m.id),
         );
     }
-    measured = ids.sort((a, b) => a.localeCompare(b));
+    ready = ids.sort((a, b) => a.localeCompare(b));
+  };
+  /** Asks `GET /harnesses` once, when the screen is up, and does not wait.
+   *  Its answer fills `ready`, and opens the setup list when the person
+   *  has not said "done" or no agent is ready (M9-3), unless a pop-up, a
+   *  question or `busy` (the side view) came first. */
+  const atStart = async (busy: () => boolean = () => false) => {
+    const order = ++harnessAsked;
+    const res = await readHarnesses(d).catch(() => undefined);
+    if (!res?.ok) return;
+    learn(res.body, order);
     // A manual /setup, or its close, while this GET was pending is the
     // person's answer: the late startup reply must not reopen the list.
     // The side view too: a list over the shell the person just opened
@@ -563,7 +586,9 @@ function panelParts({
     const focus: { id?: string } = {};
     showPanel(SETUP, setupList(inHand, [], checked, focus), generation);
     await fresh();
+    const order = ++harnessAsked;
     const r = await findAgain(d).catch(() => undefined);
+    if (r?.ok) learn(r.body, order);
     // Closed, or replaced, while the daemon looked.
     if (panel?.setup !== generation) return;
     if (r?.ok)
@@ -629,6 +654,7 @@ function panelParts({
       return tui.requestRender();
     }
     const { failed, setup } = r.body;
+    learn(setup, ++harnessAsked);
     if (!ours) {
       say(
         failed.length
@@ -961,15 +987,17 @@ function panelParts({
     showPanel(title, list);
   };
 
-  /** The harness row: a pick list of the measured harnesses the daemon
-   *  sent, then `other…` to type a name. A text box while `measured` is
-   *  unset: the daemon has no `GET /harnesses`, or it has not answered.
-   *  `–` is no harness: an empty room, or `command` instead. */
+  /** The harness row: a pick list of the ready harnesses (#367), then
+   *  `other…` to type a name. A text box while `ready` is unset: the daemon
+   *  has no `GET /harnesses`, or it has not answered. `–` is no harness: an
+   *  empty room, or `command` instead. */
   const harnessField = () => ({
     id: "agent",
     label: "harness",
     value: "",
-    ...(measured && { pick: ["–", ...measured, OTHER_HARNESS] }),
+    // Read when the row opens, not when the form opens: a find or install
+    // can land while the form is already on screen (#367).
+    pick: () => ready && ["–", ...ready, OTHER_HARNESS],
   });
 
   /** The model row (M9-5): the chosen harness's saved models, then

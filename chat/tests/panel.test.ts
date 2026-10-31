@@ -1,7 +1,8 @@
 /**
  * The pop-up's top border — `chat/tui/panel.ts`, story M7-4 (#247) — and
  * the setup race guards (M9-3, #298), and the ctrl+o menu's filter, slash
- * commands and `open` rows (M7-5, #248).
+ * commands and `open` rows (M7-5, #248), and the forms' harness row:
+ * ready agents only, and refreshed by each find and install (#367).
  */
 
 import assert from "node:assert/strict";
@@ -100,12 +101,20 @@ async function fakeDaemon(
     holdDone = false,
     holdPost = false,
     holdInstall = false,
+    got = reply(),
+    found = reply(),
+    installed = installedReply(),
     room,
   }: {
     holdGet?: boolean;
     holdDone?: boolean;
     holdPost?: boolean;
     holdInstall?: boolean;
+    /** What `GET /harnesses` and `POST /harnesses` (a new find) answer. */
+    got?: HarnessesReply;
+    found?: HarnessesReply;
+    /** The find at the end of `POST /harnesses/install`. */
+    installed?: HarnessesReply;
     /** Whose `GET /rooms/r/agents/:id` answers, for `@name /model`
      *  (M9-6). */
     room?: RoomDto;
@@ -134,14 +143,14 @@ async function fakeDaemon(
         getSeen.resolve();
         if (holdGet) await getRelease.promise;
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(reply()));
+        res.end(JSON.stringify(got));
         return;
       }
       if (req.method === "POST" && req.url === "/harnesses") {
         posts++;
         if (holdPost) await postRelease.promise;
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(reply()));
+        res.end(JSON.stringify(found));
         return;
       }
       if (req.method === "POST" && req.url === "/harnesses/done") {
@@ -161,7 +170,7 @@ async function fakeDaemon(
         res.write(
           `${JSON.stringify({ id: "claude", command: "npm i -g x@1" })}\n`,
         );
-        res.end(`${JSON.stringify({ failed: [], setup: installedReply() })}\n`);
+        res.end(`${JSON.stringify({ failed: [], setup: installed })}\n`);
         return;
       }
       res.writeHead(404, { "content-type": "application/json" });
@@ -722,4 +731,207 @@ test("Enter on an empty model id goes back like Esc, and posts nothing (M9-6, #3
   type(box, "  \r");
   assert.deepEqual(ran, []);
   assert.equal(box.panel, undefined, "closed, as Esc closes it");
+});
+
+/** The harness row's pick list in `form` (the add or new form), one name
+ *  per row, after `down` presses to reach it. Closes the form. */
+const harnessPicks = (
+  box: ReturnType<typeof makeBox>,
+  form: () => void,
+  down: number,
+) => {
+  form();
+  for (let i = 0; i < down; i++) box.panel?.body.handleInput?.("\x1b[B");
+  box.panel?.body.handleInput?.("\r");
+  const rows = shownOf(box);
+  box.hidePanel();
+  return rows;
+};
+
+test("both forms offer only the measured agents found ready, then other… (#367)", async (t) => {
+  const fake = await fakeDaemon(t, {
+    got: {
+      checkedAt: "now",
+      done: true,
+      harnesses: [
+        { id: "pi", measured: true, state: "ready" },
+        { id: "claude", measured: true, state: "main_only" },
+        { id: "codex", measured: true, state: "not_installed" },
+        { id: "kimi", measured: true },
+        { id: "lab", measured: false, state: "ready" },
+      ],
+    },
+  });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  await box.atStart();
+  for (const rows of [
+    harnessPicks(box, () => box.addForm(), 0),
+    harnessPicks(box, () => box.newForm(), 2),
+  ]) {
+    assert.match(rows, /–[\s\S]*pi[\s\S]*other…/);
+    assert.doesNotMatch(rows, /claude|codex|kimi|lab/);
+  }
+});
+
+test("both forms still offer other… when no harness is ready (#367)", async (t) => {
+  const noneReady: HarnessesReply = {
+    checkedAt: "now",
+    done: true,
+    harnesses: [
+      { id: "claude", measured: true, state: "main_only" },
+      { id: "codex", measured: true, state: "not_installed" },
+      { id: "old", measured: true },
+    ],
+  };
+  const fake = await fakeDaemon(t, { got: noneReady, found: noneReady });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  await box.atStart();
+  for (const rows of [
+    harnessPicks(box, () => box.addForm(), 0),
+    harnessPicks(box, () => box.newForm(), 2),
+  ]) {
+    assert.match(rows, /–[\s\S]*other…/);
+    assert.doesNotMatch(rows, /claude|codex|old/);
+  }
+});
+
+test("a new find and an install refresh the harness row, with no restart (#367)", async (t) => {
+  const piReady = reply();
+  const fake = await fakeDaemon(t, {
+    got: { ...piReady, done: true },
+    found: {
+      ...piReady,
+      harnesses: [
+        ...piReady.harnesses,
+        { id: "kimi", measured: true, state: "ready" },
+      ],
+    },
+  });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  const picks = () => harnessPicks(box, () => box.addForm(), 0);
+  await box.atStart();
+  assert.doesNotMatch(picks(), /kimi|claude/);
+
+  // /setup finds again: kimi is ready now.
+  await box.showSetup();
+  assert.match(picks(), /kimi/);
+
+  // The setup button installs claude; the install's find has it ready.
+  await box.showSetup();
+  box.panel?.body.handleInput?.(" ");
+  box.panel?.body.handleInput?.("\r");
+  await until("the install's find", () => /claude +ready/.test(shownOf(box)));
+  // The fake's install find lists claude alone, so pi and kimi go: each
+  // reply replaces the row, and is never merged with the one before.
+  const rows = picks();
+  assert.match(rows, /claude/);
+  assert.doesNotMatch(rows, /kimi|pi\b/);
+});
+
+test("a new find and an install refresh the model row too (#367)", async (t) => {
+  const withModels = (id: string): HarnessesReply["harnesses"][number] => ({
+    id: "pi",
+    measured: true,
+    state: "ready",
+    models: [{ id, name: id }],
+  });
+  const claudeMain = reply().harnesses[1];
+  assert.ok(claudeMain);
+  const fake = await fakeDaemon(t, {
+    got: { ...reply(true), harnesses: [withModels("m-start"), claudeMain] },
+    found: { ...reply(true), harnesses: [withModels("m-found"), claudeMain] },
+    installed: {
+      ...installedReply(),
+      harnesses: installedReply().harnesses.map((h) => ({
+        ...h,
+        models: [{ id: "m-installed", name: "Installed" }],
+      })),
+    },
+  });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  /** The add form's model row once `agent` is the harness. Closes it. */
+  const modelPicks = (agent: string) => {
+    box.addForm();
+    box.panel?.body.handleInput?.("\r");
+    type(box, `${agent}\r`);
+    for (let i = 0; i < 5; i++) box.panel?.body.handleInput?.("\x1b[B");
+    box.panel?.body.handleInput?.("\r");
+    const rows = shownOf(box);
+    box.hidePanel();
+    return rows;
+  };
+  await box.atStart();
+  assert.match(modelPicks("pi"), /m-start/);
+
+  await box.showSetup();
+  const found = modelPicks("pi");
+  assert.match(found, /m-found/);
+  assert.doesNotMatch(found, /m-start/);
+
+  // The daemon checks a new agent before its install reply, so claude's
+  // models come with it.
+  await box.showSetup();
+  box.panel?.body.handleInput?.(" ");
+  box.panel?.body.handleInput?.("\r");
+  await until("the install's find", () => /claude +ready/.test(shownOf(box)));
+  assert.match(modelPicks("claude"), /m-installed/);
+});
+
+test("a late startup reply does not undo a newer find's harnesses (#367)", async (t) => {
+  const before = reply();
+  const after = {
+    ...before,
+    harnesses: [
+      ...before.harnesses,
+      { id: "kimi", measured: true, state: "ready" as const },
+    ],
+  };
+  const fake = await fakeDaemon(t, {
+    holdGet: true,
+    got: { ...before, done: true },
+    found: { ...after, done: true },
+  });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  const starting = box.atStart();
+  await fake.getSeen.promise;
+
+  // The person finds again while the startup GET is still held.
+  await box.showSetup();
+  box.hidePanel();
+  assert.match(
+    harnessPicks(box, () => box.addForm(), 0),
+    /kimi/,
+  );
+
+  // Its older reply must not put the harness row back.
+  fake.getRelease.resolve();
+  await starting;
+  assert.match(
+    harnessPicks(box, () => box.addForm(), 0),
+    /kimi/,
+    "a late startup GET must not undo a newer find",
+  );
+});
+
+test("a form opened before the harness reply shows its pick list when it lands (#367)", async (t) => {
+  const fake = await fakeDaemon(t, { holdGet: true });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  const starting = box.atStart();
+  await fake.getSeen.promise;
+
+  box.addForm();
+  box.panel?.body.handleInput?.("\r");
+  assert.doesNotMatch(
+    shownOf(box),
+    /other…/,
+    "a text box while the reply is pending",
+  );
+  fake.getRelease.resolve();
+  await starting;
+
+  // Back from the text box to the form, then open the harness row again.
+  box.panel?.body.handleInput?.("\x1b");
+  box.panel?.body.handleInput?.("\r");
+  assert.match(shownOf(box), /pi[\s\S]*other…/);
+  box.hidePanel();
 });
