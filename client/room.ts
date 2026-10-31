@@ -604,7 +604,9 @@ interface ParticipantState {
   unread: number;
   /** The live stall warning, until it is resolved or its turn ends. An
    *  idle one is resolved by its harness's next line; a repeat one by the
-   *  watchdog's `_client_repeat_resolved` (#354). */
+   *  watchdog's `_client_repeat_resolved` (#354). A daemon before 1.18, or a
+   *  log written before it, never sends that line: there the repeat mark
+   *  stays until the turn ends. */
   stall?: Stall;
   /** The line that resolved an idle warning, so `quiet` keeps its frame. */
   stallResolvedAt?: number;

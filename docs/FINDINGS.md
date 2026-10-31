@@ -1649,6 +1649,33 @@ missing and a valid sidecar. Timing is diagnostic, not a wall-clock CI assertion
 The original 26-room / 324 MB workspace was not rerun. The 1 M-line test stays in the
 default suite because #321 explicitly requires it; temporary files are removed after it.
 
+## Repeat by tool title · room logs — measured 2026-10-31 (#354)
+
+No harness was run. A script read the 66 `events.jsonl` files under this repository's
+`rooms/` state folder on one machine: claude in 57 of them, pi in 29, opencode in none
+(its shape is §M0-3, #240). A **same-title run** is 8 or more `tool_call`s in a row from
+one participant with the same `title`, the old repeat rule at its default. For each call
+the script then merged its updates into an **operation**: final title, kind, `rawInput`
+and first location.
+
+| measure | claude | pi |
+| --- | --- | --- |
+| tool calls | 5,541 | 4,332 |
+| `tool_call` with an empty `rawInput` | 5,541 | 3,742 |
+| first `tool_call_update` sets the title | 5,525 | 3,741 |
+| first `tool_call_update` carries the input | 5,541 | 590 |
+| most calls waiting for a first update at once | 1 | 6 |
+| same-title runs of 8 or more | 185 | 1 |
+| of those, the same operation 8 times in a row | **0** | **0** |
+
+- claude's same-title runs were `Terminal` with different commands. pi's one run was
+  `read` on eight files: the title stays `read` and the path is in `rawInput`.
+- claude's shell `rawInput` on the first update is `{command}` only. Its `description`
+  came on a later update in all 4,922 calls that had one, so it is not in the operation
+  the watchdog counts. A re-sent `tool_call` and an update with no call never occurred.
+- So the title-only rule gave 186 warnings and none of them was a loop. The logs hold no
+  true loop, so this does not measure how many loops the operation rule catches.
+
 ## What this note does not cover
 
 M0's questions are answered; these are the edges, collected so that no downstream story

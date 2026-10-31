@@ -453,6 +453,19 @@ test("calls that never get an update are dropped past a cap", () => {
   assert.deepEqual(h.warns, [], "the oldest waiting call was dropped");
 });
 
+test("a dropped call restarts the streak, so a hole cannot make a loop (#354)", () => {
+  // Counted `npm test`, then a different call that is dropped before its
+  // update: the two `npm test` runs were not in a row.
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 2 }));
+  h.op("a", "npm test");
+  h.call("a", "dropped");
+  for (let i = 0; i < 64; i++) h.call("a", `x${i}`);
+  h.op("a", "npm test");
+  h.wd.sweep();
+  assert.deepEqual(h.warns, []);
+});
+
 test("a pi-style batch as large as the cap still warns (#354)", () => {
   // pi's reads carry their identity on the `tool_call`, and each update only
   // a status. At most 6 calls waited at once in our logs; a full cap of them

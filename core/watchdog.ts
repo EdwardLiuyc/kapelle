@@ -21,9 +21,16 @@
  * same when their title, kind, whole `rawInput` and first location all match. A
  * call counts at its first `tool_call_update`, not at `tool_call`: claude,
  * opencode and pi send the command and the real title there (§M0-3, #240).
- * When the next operation differs from the one a repeat warning named,
- * `onResolve` says the loop is over. Only this module decides that; the chat
- * reducer keeps no copy of the rule.
+ * A call that never gets an update is never counted, so a harness that sends
+ * none has no repeat signal. When a different operation follows a repeat
+ * warning, `onResolve` says the loop is over. Only this module decides that;
+ * the chat reducer keeps no copy of the rule.
+ *
+ * **The whole input counts, prose included (decided 2026-10-31 on #399).** A
+ * `description` the model writes is part of the operation when the first
+ * update carries it. Today claude sends it only on a later update, so it does
+ * not count. If it ever does, a note that changes ("run 3 of 10") is more often
+ * planned work than a stuck loop, and a false warning is the worse mistake.
  *
  * Both warn and the task keeps running. Only the longer `ttlMs` acts, and all
  * it does is ask the caller to cancel: ACP gives no way to nudge a turn in
@@ -123,7 +130,8 @@ interface Operation {
 
 /** Calls that wait for their first update. In our room logs, at most 6
  *  waited at once (pi; claude 1). The cap only stops a harness that never
- *  sends an update from growing this; a call dropped here is never counted. */
+ *  sends an update from growing this. A dropped call is never counted, so a
+ *  drop also restarts the streak: the calls around a hole are not a run. */
 // ponytail: ten times the measured peak; raise it if a harness batches more.
 const MAX_PENDING = 64;
 
@@ -132,12 +140,11 @@ interface WatchState {
   startedAt: number;
   lastEventAt: number;
   pending: Map<string, Operation>;
-  /** The last counted operation, and its title for the warning. */
+  /** The last counted operation. Its title goes in the warning. */
   lastOperation?: Operation;
-  lastTitle?: string;
   repeatCount: number;
-  /** The operation the live repeat warning named. */
-  warnedOperation?: Operation;
+  /** A repeat warning is live: the next different operation resolves it. */
+  repeatWarned: boolean;
   /** Questions asked and not yet answered. Idle does not count while one waits. */
   asking: number;
   idleWarned: boolean;
@@ -182,6 +189,8 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
       if (state.pending.size > MAX_PENDING) {
         const [oldest] = state.pending.keys();
         state.pending.delete(oldest);
+        state.lastOperation = undefined;
+        state.repeatCount = 0;
       }
       return;
     }
@@ -211,10 +220,9 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
       return;
     }
     state.lastOperation = operation;
-    state.lastTitle = operation.title;
     state.repeatCount = 1;
-    if (state.warnedOperation !== undefined) {
-      state.warnedOperation = undefined;
+    if (state.repeatWarned) {
+      state.repeatWarned = false;
       hooks.onResolve?.(event.agent);
     }
   };
@@ -228,6 +236,7 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
         lastEventAt: started,
         pending: new Map(),
         repeatCount: 0,
+        repeatWarned: false,
         asking: 0,
         idleWarned: false,
         timedOut: false,
@@ -282,14 +291,14 @@ function check(
 
   if (
     stallRepeatCount > 0 &&
-    state.warnedOperation === undefined &&
+    !state.repeatWarned &&
     state.repeatCount >= stallRepeatCount
   ) {
-    state.warnedOperation = state.lastOperation;
+    state.repeatWarned = true;
     hooks.onWarn(
       taskId,
       "repeat",
-      `${state.repeatCount}× "${state.lastTitle}" in a row — ` +
+      `${state.repeatCount}× "${state.lastOperation?.title}" in a row — ` +
         `possible loop, still running`,
     );
   }
