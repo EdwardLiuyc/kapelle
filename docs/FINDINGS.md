@@ -1651,29 +1651,40 @@ default suite because #321 explicitly requires it; temporary files are removed a
 
 ## Repeat by tool title · room logs — measured 2026-10-31 (#354)
 
-No harness was run. A script read the 66 `events.jsonl` files under this repository's
-`rooms/` state folder on one machine: claude in 57 of them, pi in 29, opencode in none
-(its shape is §M0-3, #240). A **same-title run** is 8 or more `tool_call`s in a row from
-one participant with the same `title`, the old repeat rule at its default. For each call
-the script then merged its updates into an **operation**: final title, kind, `rawInput`
-and first location.
+No harness was run. A script read the 67 `events.jsonl` files under this repository's
+`rooms/` state folder on one machine, in one snapshot: claude calls tools in 56 of them,
+pi in 28, opencode in none (its shape is §M0-3, #240). A **same-title run** is 8 or more
+`tool_call`s in a row from one participant with the same `title`, the old repeat rule at
+its default. An **operation** is a call's title, kind, `rawInput` and first location, with
+its updates merged in. The study counted it two ways: at the first `tool_call_update`, and
+when the status is `completed` or `failed`.
 
 | measure | claude | pi |
 | --- | --- | --- |
-| tool calls | 5,541 | 4,332 |
-| `tool_call` with an empty `rawInput` | 5,541 | 3,742 |
-| first `tool_call_update` sets the title | 5,525 | 3,741 |
-| first `tool_call_update` carries the input | 5,541 | 590 |
-| most calls waiting for a first update at once | 1 | 6 |
-| same-title runs of 8 or more | 185 | 1 |
-| of those, the same operation 8 times in a row | **0** | **0** |
+| tool calls | 5,736 | 4,719 |
+| `tool_call` with an empty `rawInput` | 5,736 | 4,106 |
+| input on the `tool_call` and on the first update | 0 | 613 |
+| input on the first update only | 5,736 | 0 |
+| location on the `tool_call` and on the first update | 0 | 422 |
+| location on the first update only | 1,400 | 0 |
+| no location at all | 4,336 | 4,297 |
+| first update sets the title | 5,720 | 4,105 |
+| calls that never completed or failed | 2 | 0 |
+| most calls running at once in a turn | 4 | 6 |
+| same-title runs of 8 or more | 193 | 2 |
+| of those, one operation 8 times, counted at the first update | 10 | 0 |
+| of those, one operation 8 times, counted at completion | **0** | **0** |
 
-- claude's same-title runs were `Terminal` with different commands. pi's one run was
-  `read` on eight files: the title stays `read` and the path is in `rawInput`.
-- claude's shell `rawInput` on the first update is `{command}` only. Its `description`
-  came on a later update in all 4,922 calls that had one, so it is not in the operation
-  the watchdog counts. A re-sent `tool_call` and an update with no call never occurred.
-- So the title-only rule gave 186 warnings and none of them was a loop. The logs hold no
+- pi's two input rows are the same 613 calls: a read or an edit sends its input on the
+  `tool_call` and again on the first update. Its other 4,106 calls (shell) send no input
+  at all; the first update sets the command as the title.
+- claude's first update carries only the start of the input. A shell call has its
+  `{command}` there. An `Edit` has only `{file_path}`, then `old_string`, then
+  `new_string` on later updates. That is why the first-update count left 10 runs: 8 to 10
+  edits of one file, each a different edit.
+- claude's `description` came on a later update in all 5,015 calls that had one, so only
+  the count at completion includes it.
+- So the title-only rule gave 195 warnings, and none of them was a loop. The logs hold no
   true loop, so this does not measure how many loops the operation rule catches.
 
 ## What this note does not cover

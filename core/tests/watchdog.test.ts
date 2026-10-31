@@ -59,8 +59,14 @@ function harness() {
         rawInput: {},
       },
     });
-  /** Its first update, with the command as the title and the input. */
-  const update = (agent: string, id: string, command: string) =>
+  /** An update with the command as the title and the input. By default it
+   *  also ends the call, which is when a call counts. */
+  const update = (
+    agent: string,
+    id: string,
+    command: string,
+    status: "in_progress" | "completed" | "failed" = "completed",
+  ) =>
     wd.note({
       agent,
       update: {
@@ -68,10 +74,11 @@ function harness() {
         toolCallId: id,
         title: command,
         rawInput: { command },
+        status,
       },
     });
   let ids = 0;
-  /** One whole operation: the call, then its first update. */
+  /** One whole operation: the call, then the update that ends it. */
   const op = (agent: string, command: string) => {
     ids += 1;
     call(agent, `call-${ids}`);
@@ -295,6 +302,7 @@ test("the same command with another kind, location or line is another operation"
         title: "x",
         rawInput: { command: "x" },
         locations: [{ path: "/w/a", line }],
+        status: "completed",
       },
     });
   };
@@ -325,6 +333,7 @@ test("the whole rawInput is compared by value, not by key order (#354)", () => {
         toolCallId: id,
         title: "shell",
         rawInput,
+        status: "completed",
       },
     });
   };
@@ -367,26 +376,75 @@ test("a reset also re-arms the repeat warning for the next streak", () => {
   ]);
 });
 
-test("a call counts once, at its first update", () => {
+test("a call counts once, when it completes or fails (#354)", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 2 }));
 
-  // A `tool_call` alone has no identity yet, so it does not count.
+  // Neither a `tool_call` nor an update that leaves it running counts.
   h.call("a", "c1");
   h.call("a", "c2");
+  h.update("a", "c1", "npm test", "in_progress");
+  h.update("a", "c2", "npm test", "in_progress");
   h.wd.sweep();
   assert.deepEqual(h.warns, []);
 
-  // Later updates are progress on a call already counted.
+  // An update after the end is not a second count.
   h.update("a", "c1", "npm test");
   h.update("a", "c1", "npm test");
   h.wd.note(chunk("a"));
   h.wd.sweep();
   assert.deepEqual(h.warns, []);
 
-  h.update("a", "c2", "npm test");
+  h.update("a", "c2", "npm test", "failed");
   h.wd.sweep();
   assert.deepEqual(h.warns, [["a", "repeat"]]);
+});
+
+test("eight edits of one file, sent in pieces, do not warn (#354)", () => {
+  // claude's `Edit`: the file on the first update, its old and new text on
+  // later ones (§Repeat by tool title). Counted at the first update, all
+  // eight looked the same.
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+  const edit = (id: string, oldText: string, newText: string) => {
+    const path = "/w/core/room.ts";
+    const send = (update: Record<string, unknown>) =>
+      h.wd.note({
+        agent: "a",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: id,
+          ...update,
+        },
+      });
+    h.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: id,
+        title: "Edit",
+        kind: "edit",
+        rawInput: {},
+      },
+    });
+    send({
+      title: "Edit core/room.ts",
+      rawInput: { file_path: path },
+      locations: [{ path }],
+    });
+    send({ rawInput: { file_path: path, old_string: oldText } });
+    send({
+      rawInput: { file_path: path, old_string: oldText, new_string: newText },
+      status: "completed",
+    });
+  };
+  for (let i = 0; i < 8; i++) edit(`e${i}`, `old ${i}`, `new ${i}`);
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "eight different edits");
+
+  for (let i = 0; i < 3; i++) edit(`same${i}`, "old", "new");
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]], "one edit made three times");
 });
 
 test("a batch of calls before their updates warns once for one loop (#354)", () => {
@@ -442,7 +500,7 @@ test("stallRepeatCount 0 disables the repeat signal", () => {
   assert.deepEqual(h.warns, []);
 });
 
-test("calls that never get an update are dropped past a cap", () => {
+test("calls that never end are dropped past a cap", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 2 }));
   h.call("a", "lost");
@@ -466,10 +524,27 @@ test("a dropped call restarts the streak, so a hole cannot make a loop (#354)", 
   assert.deepEqual(h.warns, []);
 });
 
+test("a drop keeps the last operation, so it cannot resolve the same loop (#354)", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 2 }));
+  h.op("a", "npm test");
+  h.op("a", "npm test");
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
+  h.call("a", "dropped");
+  for (let i = 0; i < 64; i++) h.call("a", `x${i}`);
+  h.op("a", "npm test");
+  assert.deepEqual(h.resolves, [], "still the operation the warning named");
+  h.op("a", "biome");
+  assert.deepEqual(h.resolves, ["a"]);
+});
+
 test("a pi-style batch as large as the cap still warns (#354)", () => {
-  // pi's reads carry their identity on the `tool_call`, and each update only
-  // a status. At most 6 calls waited at once in our logs; a full cap of them
-  // must still count, and eight identical reads warn once.
+  // pi sends a read's input on the `tool_call` and again on its update
+  // (§Repeat by tool title). Here the update carries only the status, so the
+  // identity must come from the call. At most 6 calls ran at once in our
+  // logs; a full cap of them must still count, and eight identical reads
+  // warn once.
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 8 }));
   const total = 64;

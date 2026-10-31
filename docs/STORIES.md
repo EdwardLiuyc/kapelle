@@ -1326,10 +1326,10 @@ One interval timer over all running tasks (default 60s). Two signals, both chose
 they port across vendors: **idle** — no events for `stallIdleMs`; and **repeat** — the same
 operation firing `stallRepeatCount` times consecutively (default ~8), the busy-loop case
 idle time structurally cannot see. **Amended 2026-10-31 (#354):** an operation is the
-title, kind, whole `rawInput` and first location (path and line), read at the call's first
-`tool_call_update`. The title alone was a false-positive source: claude names every shell
-call `Terminal`, and 185 of 185 same-title runs of 8 or more in our room logs were
-different commands. Both signals warn and the task keeps running; the separate, longer
+title, kind, whole `rawInput` and first location (path and line), read when the call
+completes or fails. The title alone was a false-positive source: claude names every shell
+call `Terminal`, and none of the 195 same-title runs of 8 or more in our room logs was one
+operation repeated (`docs/FINDINGS.md` §Repeat by tool title). Both signals warn and the task keeps running; the separate, longer
 `ttlMs` calls `session/cancel`, preserves the branch and marks the task `timed_out`.
 Every knob disabled at `0`. Best-effort throughout — one task's failure must never halt
 the sweep.

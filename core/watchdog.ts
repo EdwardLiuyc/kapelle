@@ -16,21 +16,27 @@
  *   is the busy-loop case idle time structurally cannot see.
  *
  * **An operation is more than its title (#354).** claude names every shell
- * call `Terminal`, and pi names every read `read`: 185 of 185 same-title runs
- * of 8 or more in our room logs were different commands. So two calls are the
- * same when their title, kind, whole `rawInput` and first location all match. A
- * call counts at its first `tool_call_update`, not at `tool_call`: claude,
- * opencode and pi send the command and the real title there (§M0-3, #240).
- * A call that never gets an update is never counted, so a harness that sends
- * none has no repeat signal. When a different operation follows a repeat
- * warning, `onResolve` says the loop is over. Only this module decides that;
- * the chat reducer keeps no copy of the rule.
+ * call `Terminal`, and pi names every read `read`: in our room logs, none of
+ * the 195 same-title runs of 8 or more was one operation repeated
+ * (`docs/FINDINGS.md` §Repeat by tool title). So two calls are the same when
+ * their title, kind, whole `rawInput` and first location all match.
  *
- * **The whole input counts, prose included (decided 2026-10-31 on #399).** A
- * `description` the model writes is part of the operation when the first
- * update carries it. Today claude sends it only on a later update, so it does
- * not count. If it ever does, a note that changes ("run 3 of 10") is more often
- * planned work than a stuck loop, and a false warning is the worse mistake.
+ * **A call counts when it completes or fails (decided 2026-10-31 on #399).**
+ * Its input comes in pieces: claude sends a shell command on the first
+ * `tool_call_update`, and an `Edit`'s file first, its old and new text later.
+ * Counted at the first update, eight edits of one file looked the same. So
+ * every update is merged until the status is `completed` or `failed`. A call
+ * that never gets there is never counted, so it can neither make a repeat nor
+ * resolve one.
+ *
+ * **The whole input counts, prose included (decided 2026-10-31 on #399).**
+ * claude's `description` is in the final input, so it is part of the
+ * operation. A note that changes ("run 3 of 10") is more often planned work
+ * than a stuck loop, and a false warning is the worse mistake.
+ *
+ * When a different operation follows a repeat warning, `onResolve` says the
+ * loop is over. Only this module decides that; the chat reducer keeps no copy
+ * of the rule.
  *
  * Both warn and the task keeps running. Only the longer `ttlMs` acts, and all
  * it does is ask the caller to cancel: ACP gives no way to nudge a turn in
@@ -93,7 +99,7 @@ export function sweepIntervalMs(limits: readonly WatchdogLimits[]): number {
 export interface WatchdogHooks {
   /** A stall was detected. Advisory: the task keeps running. */
   onWarn: (taskId: string, kind: StallKind, text: string) => void;
-  /** The operation a repeat warning named was followed by another one. */
+  /** A different operation followed the one a repeat warning named. */
   onResolve?: (taskId: string) => void;
   /** The TTL expired. The caller cancels; the watchdog never touches an agent. */
   onTimeout: (taskId: string) => void;
@@ -117,8 +123,8 @@ export interface Watchdog {
   sweep: () => void;
 }
 
-/** What makes two calls one operation. Held from `tool_call` until the
- *  update that counts it. */
+/** What makes two calls one operation. Held from `tool_call` until the call
+ *  completes or fails. */
 interface Operation {
   title: string;
   kind?: string;
@@ -128,10 +134,11 @@ interface Operation {
   location?: { path: string; line?: number };
 }
 
-/** Calls that wait for their first update. In our room logs, at most 6
- *  waited at once (pi; claude 1). The cap only stops a harness that never
- *  sends an update from growing this. A dropped call is never counted, so a
- *  drop also restarts the streak: the calls around a hole are not a run. */
+/** Calls that have not completed or failed. In our room logs, at most 6 ran
+ *  at once (pi; claude 4). The cap only stops a harness that never ends its
+ *  calls from growing this. A dropped call is never counted, so a drop
+ *  restarts the count: the calls around a hole are not a run. It keeps the
+ *  last operation, so the next call is judged against it as usual. */
 // ponytail: ten times the measured peak; raise it if a harness batches more.
 const MAX_PENDING = 64;
 
@@ -140,7 +147,8 @@ interface WatchState {
   startedAt: number;
   lastEventAt: number;
   pending: Map<string, Operation>;
-  /** The last counted operation. Its title goes in the warning. */
+  /** The last counted operation. Its title goes in the warning. Once set, it
+   *  is never cleared, so `repeatCount > 0` means it is set. */
   lastOperation?: Operation;
   repeatCount: number;
   /** A repeat warning is live: the next different operation resolves it. */
@@ -173,36 +181,26 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
 
     if (state.limits.stallRepeatCount === 0) return;
     const u = event.update;
+    if (
+      u.sessionUpdate !== "tool_call" &&
+      u.sessionUpdate !== "tool_call_update"
+    ) {
+      return;
+    }
+    let operation = state.pending.get(u.toolCallId);
     if (u.sessionUpdate === "tool_call") {
-      const location = u.locations?.[0];
-      state.pending.set(u.toolCallId, {
-        title: u.title,
-        ...(u.kind !== undefined && { kind: u.kind }),
-        input: { ...u.rawInput },
-        ...(location && {
-          location: {
-            path: location.path,
-            ...(location.line !== undefined && { line: location.line }),
-          },
-        }),
-      });
+      operation = { title: u.title, input: {} };
+      state.pending.set(u.toolCallId, operation);
       if (state.pending.size > MAX_PENDING) {
         const [oldest] = state.pending.keys();
         state.pending.delete(oldest);
-        state.lastOperation = undefined;
         state.repeatCount = 0;
       }
-      return;
     }
-    // A call counts once, at its first update. Later ones are progress on it,
-    // and counting them would make one slow tool look like a loop.
-    if (u.sessionUpdate !== "tool_call_update") return;
-    const operation = state.pending.get(u.toolCallId);
     if (!operation) return;
-    state.pending.delete(u.toolCallId);
+    // Merged: each message sends only what changed.
     if (u.title !== undefined) operation.title = u.title;
     if (u.kind !== undefined) operation.kind = u.kind;
-    // Merged: an update sends only what changed.
     Object.assign(operation.input, u.rawInput);
     const location = u.locations?.[0];
     if (location) {
@@ -211,6 +209,10 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
         ...(location.line !== undefined && { line: location.line }),
       };
     }
+    // A call counts once, when it ends. Updates before are its input
+    // arriving, and updates after are dropped with it.
+    if (u.status !== "completed" && u.status !== "failed") return;
+    state.pending.delete(u.toolCallId);
 
     if (
       state.lastOperation &&
@@ -289,8 +291,10 @@ function check(
     );
   }
 
+  const last = state.lastOperation;
   if (
     stallRepeatCount > 0 &&
+    last &&
     !state.repeatWarned &&
     state.repeatCount >= stallRepeatCount
   ) {
@@ -298,7 +302,7 @@ function check(
     hooks.onWarn(
       taskId,
       "repeat",
-      `${state.repeatCount}× "${state.lastOperation?.title}" in a row — ` +
+      `${state.repeatCount}× "${last.title}" in a row — ` +
         `possible loop, still running`,
     );
   }
