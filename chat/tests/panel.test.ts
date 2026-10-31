@@ -103,6 +103,7 @@ async function fakeDaemon(
     holdInstall = false,
     got = reply(),
     found = reply(),
+    installed = installedReply(),
     room,
   }: {
     holdGet?: boolean;
@@ -112,6 +113,8 @@ async function fakeDaemon(
     /** What `GET /harnesses` and `POST /harnesses` (a new find) answer. */
     got?: HarnessesReply;
     found?: HarnessesReply;
+    /** The find at the end of `POST /harnesses/install`. */
+    installed?: HarnessesReply;
     /** Whose `GET /rooms/r/agents/:id` answers, for `@name /model`
      *  (M9-6). */
     room?: RoomDto;
@@ -167,7 +170,7 @@ async function fakeDaemon(
         res.write(
           `${JSON.stringify({ id: "claude", command: "npm i -g x@1" })}\n`,
         );
-        res.end(`${JSON.stringify({ failed: [], setup: installedReply() })}\n`);
+        res.end(`${JSON.stringify({ failed: [], setup: installed })}\n`);
         return;
       }
       res.writeHead(404, { "content-type": "application/json" });
@@ -818,9 +821,60 @@ test("a new find and an install refresh the harness row, with no restart (#367)"
   box.panel?.body.handleInput?.(" ");
   box.panel?.body.handleInput?.("\r");
   await until("the install's find", () => /claude +ready/.test(shownOf(box)));
+  // The fake's install find lists claude alone, so pi and kimi go: each
+  // reply replaces the row, and is never merged with the one before.
   const rows = picks();
   assert.match(rows, /claude/);
   assert.doesNotMatch(rows, /kimi|pi\b/);
+});
+
+test("a new find and an install refresh the model row too (#367)", async (t) => {
+  const withModels = (id: string): HarnessesReply["harnesses"][number] => ({
+    id: "pi",
+    measured: true,
+    state: "ready",
+    models: [{ id, name: id }],
+  });
+  const claudeMain = reply().harnesses[1];
+  assert.ok(claudeMain);
+  const fake = await fakeDaemon(t, {
+    got: { ...reply(true), harnesses: [withModels("m-start"), claudeMain] },
+    found: { ...reply(true), harnesses: [withModels("m-found"), claudeMain] },
+    installed: {
+      ...installedReply(),
+      harnesses: installedReply().harnesses.map((h) => ({
+        ...h,
+        models: [{ id: "m-installed", name: "Installed" }],
+      })),
+    },
+  });
+  const box = makeBox(fake.d, { rooms: twoRooms(), view: { roomId: "r1" } });
+  /** The add form's model row once `agent` is the harness. Closes it. */
+  const modelPicks = (agent: string) => {
+    box.addForm();
+    box.panel?.body.handleInput?.("\r");
+    type(box, `${agent}\r`);
+    for (let i = 0; i < 5; i++) box.panel?.body.handleInput?.("\x1b[B");
+    box.panel?.body.handleInput?.("\r");
+    const rows = shownOf(box);
+    box.hidePanel();
+    return rows;
+  };
+  await box.atStart();
+  assert.match(modelPicks("pi"), /m-start/);
+
+  await box.showSetup();
+  const found = modelPicks("pi");
+  assert.match(found, /m-found/);
+  assert.doesNotMatch(found, /m-start/);
+
+  // The daemon checks a new agent before its install reply, so claude's
+  // models come with it.
+  await box.showSetup();
+  box.panel?.body.handleInput?.(" ");
+  box.panel?.body.handleInput?.("\r");
+  await until("the install's find", () => /claude +ready/.test(shownOf(box)));
+  assert.match(modelPicks("claude"), /m-installed/);
 });
 
 test("a late startup reply does not undo a newer find's harnesses (#367)", async (t) => {

@@ -11,6 +11,11 @@
  * command on the right, and the menu has an `open` row for each room and
  * agent, because the sidebar can be hidden.
  *
+ * The forms' harness row lists only the measured agents the daemon found
+ * ready (#367), and their model rows the saved models. Each harnesses reply
+ * replaces both: the one at start, each `/setup` find and each install. A
+ * reply older than the last one used is dropped.
+ *
  * The box has a thick border, yellow for a question and cyan for the rest,
  * with the title as a chip. `Screen` in `chat/tui.ts` dims what is behind.
  */
