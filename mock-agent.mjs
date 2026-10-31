@@ -56,7 +56,7 @@ const SCENARIOS = {
   stubborn:
     "like stall, but ignores SIGTERM and stays alive after its stdin closes",
   repeat:
-    "the same command on a loop, sent late as opencode does, then ends the turn itself",
+    "the same command on a loop, sent late as opencode does, then a different call and the end of the turn",
   remember: "answers each turn with the previous turn's prompt, per session",
   "no-load":
     "like remember, but the handshake says loadSession: false, even with --store",
@@ -701,13 +701,30 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         });
         await sleep(REPEAT_GAP_MS);
       }
+      // The room's watchdog resolves the repeat warning on this different
+      // operation, after the event that caused it (#354).
+      update(sid, {
+        sessionUpdate: "tool_call",
+        toolCallId: "after-loop",
+        title: "shell",
+        kind: "execute",
+        status: "pending",
+        rawInput: {},
+      });
+      update(sid, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "after-loop",
+        title: "git status --short",
+        status: "completed",
+        rawInput: { command: "git status --short" },
+      });
       update(sid, {
         sessionUpdate: "agent_message_chunk",
         content: {
           type: "text",
           text: result(
             "partial",
-            "Ran the same search over and over.",
+            "Ran the same command over and over.",
             `Ran "${REPEAT_COMMAND}" ${REPEATS} times, then gave up.`,
           ),
         },

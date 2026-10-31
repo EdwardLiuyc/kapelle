@@ -18,7 +18,7 @@
  * **An operation is more than its title (#354).** claude names every shell
  * call `Terminal`, and pi names every read `read`: 185 of 185 same-title runs
  * of 8 or more in our room logs were different commands. So two calls are the
- * same when their title, kind, whole `rawInput` and first path all match. A
+ * same when their title, kind, whole `rawInput` and first location all match. A
  * call counts at its first `tool_call_update`, not at `tool_call`: claude,
  * opencode and pi send the command and the real title there (§M0-3, #240).
  * When the next operation differs from the one a repeat warning named,
@@ -36,6 +36,8 @@
  * **This module owns no timer.** `sweep()` is called by the caller's interval,
  * which is what lets an hour-long TTL be tested by moving a number.
  */
+
+import { isDeepStrictEqual } from "node:util";
 
 import type { AgentEventEnvelope } from "../protocol/agent.ts";
 
@@ -108,14 +110,15 @@ export interface Watchdog {
   sweep: () => void;
 }
 
-/** A call announced by `tool_call` and not counted yet. */
-interface Call {
+/** What makes two calls one operation. Held from `tool_call` until the
+ *  update that counts it. */
+interface Operation {
   title: string;
   kind?: string;
   // Free-form by protocol design (see `ToolCall.rawInput`).
   // pi-lens-ignore: no-unsafe-dictionary-unknown
   input: Record<string, unknown>;
-  path?: string;
+  location?: { path: string; line?: number };
 }
 
 /** Calls that wait for their first update. In our room logs, at most 6
@@ -128,22 +131,18 @@ interface WatchState {
   limits: WatchdogLimits;
   startedAt: number;
   lastEventAt: number;
-  pending: Map<string, Call>;
-  /** The last counted operation, as `identity` writes it, and its title. */
-  lastOperation?: string;
+  pending: Map<string, Operation>;
+  /** The last counted operation, and its title for the warning. */
+  lastOperation?: Operation;
   lastTitle?: string;
   repeatCount: number;
   /** The operation the live repeat warning named. */
-  warnedOperation?: string;
+  warnedOperation?: Operation;
   /** Questions asked and not yet answered. Idle does not count while one waits. */
   asking: number;
   idleWarned: boolean;
   timedOut: boolean;
 }
-
-/** Two calls are one operation when these all match. */
-const identity = (call: Call): string =>
-  JSON.stringify([call.title, call.kind, call.input, call.path]);
 
 export function createWatchdog(hooks: WatchdogHooks): Watchdog {
   const now = hooks.now ?? Date.now;
@@ -168,11 +167,17 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
     if (state.limits.stallRepeatCount === 0) return;
     const u = event.update;
     if (u.sessionUpdate === "tool_call") {
+      const location = u.locations?.[0];
       state.pending.set(u.toolCallId, {
         title: u.title,
         ...(u.kind !== undefined && { kind: u.kind }),
         input: { ...u.rawInput },
-        ...(u.locations?.[0] && { path: u.locations[0].path }),
+        ...(location && {
+          location: {
+            path: location.path,
+            ...(location.line !== undefined && { line: location.line }),
+          },
+        }),
       });
       if (state.pending.size > MAX_PENDING) {
         const [oldest] = state.pending.keys();
@@ -183,22 +188,30 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
     // A call counts once, at its first update. Later ones are progress on it,
     // and counting them would make one slow tool look like a loop.
     if (u.sessionUpdate !== "tool_call_update") return;
-    const call = state.pending.get(u.toolCallId);
-    if (!call) return;
+    const operation = state.pending.get(u.toolCallId);
+    if (!operation) return;
     state.pending.delete(u.toolCallId);
-    if (u.title !== undefined) call.title = u.title;
-    if (u.kind !== undefined) call.kind = u.kind;
+    if (u.title !== undefined) operation.title = u.title;
+    if (u.kind !== undefined) operation.kind = u.kind;
     // Merged: an update sends only what changed.
-    Object.assign(call.input, u.rawInput);
-    if (u.locations?.[0]) call.path = u.locations[0].path;
+    Object.assign(operation.input, u.rawInput);
+    const location = u.locations?.[0];
+    if (location) {
+      operation.location = {
+        path: location.path,
+        ...(location.line !== undefined && { line: location.line }),
+      };
+    }
 
-    const operation = identity(call);
-    if (operation === state.lastOperation) {
+    if (
+      state.lastOperation &&
+      isDeepStrictEqual(operation, state.lastOperation)
+    ) {
       state.repeatCount += 1;
       return;
     }
     state.lastOperation = operation;
-    state.lastTitle = call.title;
+    state.lastTitle = operation.title;
     state.repeatCount = 1;
     if (state.warnedOperation !== undefined) {
       state.warnedOperation = undefined;

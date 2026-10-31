@@ -1326,11 +1326,13 @@ One interval timer over all running tasks (default 60s). Two signals, both chose
 they port across vendors: **idle** — no events for `stallIdleMs`; and **repeat** — the same
 operation firing `stallRepeatCount` times consecutively (default ~8), the busy-loop case
 idle time structurally cannot see. **Amended 2026-10-31 (#354):** an operation is the
-title, kind, whole `rawInput` and first path, read at the call's first `tool_call_update`.
-The title alone was a false-positive source: claude names every shell call `Terminal`, and
-185 of 185 same-title runs of 8 or more in our room logs were different commands. Both signals warn and the task keeps running; the separate, longer `ttlMs` calls
-`session/cancel`, preserves the branch and marks the task `timed_out`. Every knob disabled
-at `0`. Best-effort throughout — one task's failure must never halt the sweep.
+title, kind, whole `rawInput` and first location (path and line), read at the call's first
+`tool_call_update`. The title alone was a false-positive source: claude names every shell
+call `Terminal`, and 185 of 185 same-title runs of 8 or more in our room logs were
+different commands. Both signals warn and the task keeps running; the separate, longer
+`ttlMs` calls `session/cancel`, preserves the branch and marks the task `timed_out`.
+Every knob disabled at `0`. Best-effort throughout — one task's failure must never halt
+the sweep.
 **M0-4 fills in the TTL rung** (`docs/FINDINGS.md` §M0-4): every harness ended its turn
 within 64 ms of `session/cancel`, sent nothing afterwards, and accepted a further prompt — so
 **wait 2 s after cancelling, then force-kill**, and expect never to reach it. Mark

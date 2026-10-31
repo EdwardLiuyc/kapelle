@@ -273,7 +273,7 @@ test("eight reads of different files do not warn (#354)", () => {
   assert.deepEqual(h.warns, []);
 });
 
-test("the same command with another kind or path is another operation", () => {
+test("the same command with another kind, location or line is another operation", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 2 }));
   h.op("a", "x");
@@ -285,19 +285,53 @@ test("the same command with another kind or path is another operation", () => {
   h.wd.sweep();
   assert.deepEqual(h.warns, [], "a call with no kind differs from `execute`");
 
-  h.call("a", "l1");
-  h.wd.note({
-    agent: "a",
-    update: {
-      sessionUpdate: "tool_call_update",
-      toolCallId: "l1",
-      title: "x",
-      rawInput: { command: "x" },
-      locations: [{ path: "/w/a" }],
-    },
-  });
+  const located = (id: string, line: number) => {
+    h.call("a", id);
+    h.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: id,
+        title: "x",
+        rawInput: { command: "x" },
+        locations: [{ path: "/w/a", line }],
+      },
+    });
+  };
+  located("l1", 1);
   h.wd.sweep();
-  assert.deepEqual(h.warns, [], "a path makes it another operation");
+  assert.deepEqual(h.warns, [], "a location makes it another operation");
+  located("l2", 2);
+  h.wd.sweep();
+  assert.deepEqual(
+    h.warns,
+    [],
+    "the same path at another line is another operation",
+  );
+  located("l3", 2);
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
+});
+
+test("the whole rawInput is compared by value, not by key order (#354)", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 2 }));
+  const supplied = (id: string, rawInput: Record<string, unknown>) => {
+    h.call("a", id);
+    h.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: id,
+        title: "shell",
+        rawInput,
+      },
+    });
+  };
+  supplied("o1", { command: "npm test", cwd: "/w" });
+  supplied("o2", { cwd: "/w", command: "npm test" });
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
 });
 
 test("a different operation resets the repeat counter", () => {

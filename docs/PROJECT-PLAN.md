@@ -393,10 +393,10 @@ driven from a run file, fully verifiable offline.
   signals, both chosen because they port across vendors: **idle**, no events for
   `stallIdleMs`; and **repeat**, the same operation firing `stallRepeatCount` times
   consecutively (default ~8) — the busy-loop case idle time structurally cannot see. An
-  operation is the title, kind, whole `rawInput` and first path, read at the call's first
-  `tool_call_update`, so a generic title such as `Terminal` is not a loop (#354). Both
-  signals emit a warning and
-  the task keeps running; the separate, longer `ttlMs` calls `session/cancel`, preserves the
+  operation is the title, kind, whole `rawInput` and first location (path and line), read
+  at the call's first `tool_call_update`, so a generic title such as `Terminal` is not a
+  loop (#354). Both signals emit a warning and the task keeps running; the separate,
+  longer `ttlMs` calls `session/cancel`, preserves the
   branch and marks the task `timed_out`. **M0-4 supplies the missing number: wait 2 s after
   the cancel before force-killing** — thirty times the slowest cancel measured, and the same
   grace `run.mjs` already uses — and expect never to reach it. `timed_out` is set from the
