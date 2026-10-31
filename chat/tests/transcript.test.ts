@@ -6,13 +6,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  type Container,
+  Container,
   Markdown,
   Text,
   type TuiAltScreen,
 } from "@earendil-works/pi-tui";
 import type { RoomEventLine } from "../../client/contract.ts";
-import { applyLine, newRoomState } from "../../client/room.ts";
+import { applyLine, type Entry, newRoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { bgRgb, inverse } from "../common.ts";
 import { settled, transcriptParts, unbar } from "../tui/transcript.ts";
@@ -132,7 +132,13 @@ test("a jump puts the person's message at the top of the transcript", () => {
   const rooms = new Map([
     ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
   ]);
-  const { transcript, scroll, redraw, jump } = transcriptParts({
+  const {
+    transcript,
+    scroll,
+    redraw,
+    jump,
+    model: currentModel,
+  } = transcriptParts({
     tui: { requestRender() {} } as unknown as TuiAltScreen,
     rooms,
     view: () => ({ roomId: "r1" }),
@@ -143,7 +149,16 @@ test("a jump puts the person's message at the top of the transcript", () => {
   scroll.updateLayout(lines.length, 3, () => {});
   // At the end, as a long transcript is: the jump goes back up.
   scroll.scrollToEnd();
+  const model = currentModel();
+  assert.ok(model);
+  const top = model.topOf(alpha);
+  assert.equal(typeof top, "number");
+  assert.equal(model.entryAt(top as number), alpha);
+  const created = model.stats.partsCreated;
+  const visited = model.stats.entriesVisited;
   jump(alpha);
+  assert.equal(model.stats.partsCreated, created, "jump creates no parts");
+  assert.equal(model.stats.entriesVisited, visited, "jump visits no items");
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   const plain = (l?: string) => l?.replace(/\x1b\[[0-9;]*m/g, "").trim();
   assert.equal(plain(lines[scroll.scrollTop]), "▎ you → ann");
@@ -196,7 +211,9 @@ test("an answer streamed through draw, chunk by chunk, draws as its whole text",
   );
   const drawn = plain(parts.transcript.render(40));
   assert.deepEqual(drawn.slice(-whole.length), whole);
-  const bar = parts.transcript.children.at(-1) as Container;
+  const bar = parts.transcript.children.findLast(
+    (c) => c instanceof Container && c.children[0] instanceof Container,
+  ) as Container;
   const box = bar.children[0] as Container;
   assert.ok(box.children.length > 5, "the finished blocks were cut off");
 });
@@ -714,6 +731,8 @@ test("active calls have a neutral background and uncoloured gaps between and aft
   );
 });
 
+// This component test checks folding, clicking, and redraw as one flow.
+// pi-lens-ignore: high-fan-out
 test("a run folds into one line when the agent's next note comes, with its failed count in red; a click opens it and a second folds it (M7-2)", () => {
   const { send, note, tool, plain, click, parts } = runRoom();
   send("ann", { sessionUpdate: "_client_user_message", text: "go", turn: 1 });
@@ -965,4 +984,224 @@ test("a click on any row of a wrapped fold line opens the run (M7-2)", () => {
     parts.transcript.render(width).some((l) => l.includes("T0")),
     "the run opened",
   );
+});
+
+/** Draws every item at one width, as the full-window tests do. */
+function layoutAll(parts: ReturnType<typeof transcriptParts>, width: number) {
+  const rows = parts.transcript.render(width);
+  parts.scroll.updateLayout(rows.length, Number.MAX_SAFE_INTEGER, () => {});
+  return rows;
+}
+
+test("the model's tops follow a growing answer and a folded tool run", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const send = (participantId: string, update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-31T00:00:00Z",
+      roomId: "r1",
+      participantId,
+      update: update as unknown as RoomEventLine["update"],
+    });
+  const line = (participantId: string, update: Record<string, unknown>) => {
+    const e = send(participantId, update);
+    assert.ok(e);
+    return e;
+  };
+  send("p-ann", {
+    sessionUpdate: "_client_participant_added",
+    name: "ann",
+    harness: "mock",
+    mode: "auto",
+  });
+  line("p-ann", {
+    sessionUpdate: "_client_user_message",
+    text: "go",
+    turn: 1,
+  });
+  const answer = line("p-ann", {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "first paragraph\n\nsecond" },
+  });
+  const afterAnswer = line("p-bob", {
+    sessionUpdate: "_client_stall_warning",
+    kind: "idle",
+    text: "marker",
+  });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 1000,
+  });
+  parts.redraw();
+  layoutAll(parts, 80);
+  const model = parts.model();
+  assert.ok(model);
+  const before = model.topOf(afterAnswer);
+  assert.equal(typeof before, "number");
+
+  line("p-ann", {
+    sessionUpdate: "agent_message_chunk",
+    content: {
+      type: "text",
+      text: "\n\nthird paragraph with enough words to wrap at this width",
+    },
+  });
+  parts.draw(state, answer);
+  layoutAll(parts, 80);
+  const grown = model.topOf(afterAnswer);
+  assert.ok(grown !== undefined && grown > (before as number), "answer grew");
+
+  for (let i = 0; i < 4; i++) {
+    const tool = line("p-ann", {
+      sessionUpdate: "tool_call",
+      toolCallId: `t${i}`,
+      title: `Read file ${i}.ts`,
+      kind: "read",
+      status: "completed",
+    });
+    parts.draw(state, tool);
+  }
+  const afterTools = line("p-bob", {
+    sessionUpdate: "_client_stall_warning",
+    kind: "idle",
+    text: "after tools",
+  });
+  parts.draw(state, afterTools);
+  layoutAll(parts, 80);
+  const open = model.topOf(afterTools);
+  assert.equal(typeof open, "number");
+
+  const done = line("p-ann", {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "Done." },
+  });
+  parts.draw(state, done);
+  layoutAll(parts, 80);
+  const folded = model.topOf(afterTools);
+  assert.ok(
+    folded !== undefined && folded < (open as number),
+    "the folded run takes fewer rows",
+  );
+});
+
+test("width changes update the model's entry offsets", () => {
+  const state = newRoomState();
+  let seq = 0;
+  const send = (participantId: string, update: Record<string, unknown>) =>
+    applyLine(state, {
+      seq: ++seq,
+      at: "2026-10-31T00:00:00Z",
+      roomId: "r1",
+      participantId,
+      update: update as unknown as RoomEventLine["update"],
+    });
+  const line = (participantId: string, update: Record<string, unknown>) => {
+    const e = send(participantId, update);
+    assert.ok(e);
+    return e;
+  };
+  send("p-ann", {
+    sessionUpdate: "_client_participant_added",
+    name: "ann",
+    harness: "mock",
+    mode: "auto",
+  });
+  line("p-ann", {
+    sessionUpdate: "_client_user_message",
+    text: "go",
+    turn: 1,
+  });
+  line("p-ann", {
+    sessionUpdate: "agent_message_chunk",
+    content: {
+      type: "text",
+      text: "One long paragraph that has to wrap at the narrower width ".repeat(
+        4,
+      ),
+    },
+  });
+  const sentinel = line("p-bob", {
+    sessionUpdate: "_client_stall_warning",
+    kind: "idle",
+    text: "marker",
+  });
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 1000,
+  });
+  parts.redraw();
+  layoutAll(parts, 80);
+  const model = parts.model();
+  assert.ok(model);
+  const wide = model.topOf(sentinel);
+  assert.equal(typeof wide, "number");
+  layoutAll(parts, 30);
+  const narrow = model.topOf(sentinel);
+  assert.ok(
+    narrow !== undefined && narrow > (wide as number),
+    "the long answer wraps to more rows",
+  );
+});
+
+/** A room with `count` simple user messages, ready for the window test. */
+function largeTranscript(count: number) {
+  const state = newRoomState();
+  state.timeline = Array.from({ length: count }, (_, i) => ({
+    seq: i + 1,
+    at: "2026-10-31T00:00:00Z",
+    participantId: "p-ann",
+    type: "user",
+    text: `message ${i}`,
+    turn: i + 1,
+  })) as Entry[];
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 20,
+  });
+  parts.redraw();
+  const model = parts.model();
+  assert.ok(model);
+  model.resetStats();
+  const rows = parts.transcript.render(80);
+  return {
+    rows,
+    stats: {
+      entriesVisited: model.stats.entriesVisited,
+      partsCreated: model.stats.partsCreated,
+      partsRendered: model.stats.partsRendered,
+    },
+    built: model.stats.entriesBuilt,
+  };
+}
+
+test("10k and 50k entries render the same bounded window and visit the same number of entries", () => {
+  const ten = largeTranscript(10_000);
+  const fifty = largeTranscript(50_000);
+  assert.equal(ten.built, 10_000);
+  assert.equal(fifty.built, 50_000);
+  assert.deepEqual(fifty.stats, ten.stats);
+  assert.ok(ten.stats.entriesVisited < 100, "only the window is visited");
+  assert.ok(ten.stats.partsCreated < 200, "only the window is created");
+  assert.ok(ten.stats.partsRendered < 200, "only the window renders");
+  assert.ok(ten.rows.length > 0);
+  assert.ok(fifty.rows.length > 0);
 });

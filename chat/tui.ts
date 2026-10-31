@@ -501,6 +501,7 @@ function chatTui(
     rooms,
     view: () => view,
     setStatus: () => setStatus(),
+    viewportRows: () => sidebarRows(),
   });
   const side = paneParts({
     tui,
@@ -979,7 +980,7 @@ function chatTui(
       process.off("unhandledRejection", crash);
       let lines: string[] = [];
       try {
-        lines = transcript.render(process.stdout.columns || 80);
+        lines = transcript.render(process.stdout.columns || 80, true);
       } catch {
         // The transcript is what failed to draw: leave the screen without
         // it. `attach` replays the conversation.
