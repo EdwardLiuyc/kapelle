@@ -47,7 +47,8 @@ cannot ask, treat it as a question and change nothing.
 ## What this is
 
 `kapelle` is a minimal [Agent Client Protocol](https://agentclientprotocol.com)
-**client**, in TypeScript with ES modules. Node ≥24, `"type": "module"`, no build step.
+**client**, in TypeScript with ES modules. Node ≥24, `"type": "module"`, and no
+build step in a checkout. `prepack` builds `dist/` only when the npm package is made.
 It has three runtime dependencies, all for presentation only: `marked`
 (`core/markdown.ts`), `@earendil-works/pi-tui` (the `chat/tui.ts` screen) and
 `@xterm/headless` (the shell's screen, `chat/tui/term.ts`). All are pinned exactly, and an
@@ -79,6 +80,7 @@ npm run fmt            # biome format + lint, with fixes
 npm run fmt:check      # biome format + lint, check only
 npm run test           # node:test: pure functions and wire behaviour; no harness needed
 npm run knip           # unused files and exports
+npm pack --dry-run     # prepack builds dist/, then show the package file list
 npm run selftest       # end to end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
 npm run test:harness   # the real harnesses; local only, needs credentials, spends tokens
 node cli.ts                                     # on a terminal: the chat, starting the daemon if none runs; a pipe prints chat usage and exits 1
@@ -209,7 +211,7 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   `default`, so an unknown event is dropped rather than drawn wrong.
 - **A missing `measured` half means "not verified".** Do not add a second flag for it.
 - **Do not rename the package to `agent-team`.** That npm name and `bin` belong to an
-  unrelated live package. `private: true` stays; it blocks `npm publish` only.
+  unrelated live package.
 
 ## Tests
 

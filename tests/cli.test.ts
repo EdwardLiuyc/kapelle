@@ -43,6 +43,7 @@ import {
   gitRepo,
   HOSTILE_AGENT,
   MOCK_AGENT,
+  REPO,
   runCli,
   spawnCli,
   tempDir,
@@ -102,6 +103,16 @@ test("bare kapelle hands off to the chat; --help is the help", async (t) => {
     help.stdout,
     /starting the daemon\n.*if none runs; a pipe prints chat usage and exits 1/,
   );
+});
+
+test("--version prints the package version", async (t) => {
+  const r = await runCli(t, ["--version"]);
+  const pkg = JSON.parse(
+    await readFile(join(REPO, "package.json"), "utf8"),
+  ) as { version: string };
+
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), pkg.version);
 });
 
 test("merge without a run id is a usage error, not a prompt", async (t) => {

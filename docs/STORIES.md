@@ -1454,6 +1454,11 @@ stay M2-9's surface. `"os": ["darwin", "linux"]` is the whole of the Windows blo
 fails `EBADPLATFORM` and installs nothing; `npm install --force` and running `node cli.ts` on
 a populated checkout still bypass it, and both were left open rather than paying for a
 `win32` guard no report has asked for. WSL is Linux.
+
+**Amended 2026-10-31 (M9-7, #306):** the `private: true` decision above is
+superseded. The package is prepared for publication with `prepack`, and M9-8
+performs the publish.
+
 **Added 2026-09-06 — this story also renames the front-end file, and is the only cheap
 moment to do it.** `run.ts` (the CLI) and `core/run.ts` (the engine) share a name and differ
 only by a directory. M1b-2 made that collision live rather than theoretical: `run.ts
@@ -3844,13 +3849,13 @@ The bundler then replaces `tsc` in `prepack`.
 **Decided 2026-10-15: the build goes to `dist/`, not beside the sources.** One named line
 in `.gitignore` (`dist/`), as that file's comment asks, and no glob that could hide a
 real `.js` file. `bin` becomes `./dist/cli.js`.
-**Open, for the pickup: the checkout's own install.** `README.md` says `npm install`,
-then `npm link`. npm runs `prepack` on `npm pack` and `npm publish` only, not on `npm
-install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts a
+**The checkout's own install** (decided at pickup, 2026-10-31: A). Before this
+change, `README.md` said `npm install`, then `npm link`. npm runs `prepack` on `npm pack`
+and `npm publish` only, not on `npm install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts a
 `kapelle` on `PATH` that points at a file that does not exist. Three answers:
 
 - A. `README.md` drops `npm link` for `node cli.ts`, with a shell alias for the short
-  name. No build step, and the live code runs. Recommended 2026-10-16.
+  name. No build step, and the live code runs. **Chosen 2026-10-31.**
 - B. A `build` script, and `README.md` says `npm install && npm run build && npm link`.
   The linked `kapelle` then runs `dist/`, which is out of date after each edit until the
   next build. `AGENTS.md`'s commands get `npm run build`.
@@ -3871,8 +3876,11 @@ install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts
    `repository` and the `prepack` script.
    **`files` wins over `.gitignore` when npm packs.** That is why the ignored `dist/` is
    in the package. It is also why a wrong `files` list ships the wrong files with no
-   warning, so the test below checks the list.
-3. `.gitignore` gets `dist/`. `biome.json`'s `files.includes` gets `!dist`: biome does
+   warning, so the test below checks the list. `prepack` also copies
+   `assets/orchestrator.md` to `dist/assets/`, where the compiled loop code reads it.
+3. `.gitignore` gets `dist/`. `cli.ts` also chooses `daemon.js` when it runs from
+   `dist/`; the bare command starts that file, while a checkout still starts `daemon.ts`.
+   `biome.json`'s `files.includes` gets `!dist`: biome does
    not read `.gitignore` here (no `vcs` block), so without it `npx biome check --write .`
    formats and lints the build. Measured 2026-10-16: with `!dist`, a badly formatted
    `dist/bad.js` gives no finding, and biome names `!dist` as its own form for a folder
@@ -3895,10 +3903,12 @@ install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts
 *Done when* a test, with no network and no global install: runs `npm pack
 --pack-destination <tmp>`; unpacks the `.tgz` into `<tmp>/node_modules/kapelle`; links
 the checkout's `node_modules` for the three runtime dependencies; runs `node
-<tmp>/node_modules/kapelle/dist/cli.js --help` and checks the help text (today `--help`
-alone exits 1, `cli.ts:204`, so the test does not check the exit code); runs
-`--version`; imports `dist/chat/tui.js` and `dist/chat/tui/term.js`, so pi-tui and
-`@xterm/headless` load too (`--help` loads only `marked`); and checks from `npm pack
+<tmp>/node_modules/kapelle/dist/cli.js --help` and checks the help text (M9-2 has
+since made `--help` exit 0, but the test does not check the exit code); runs
+`--version`; starts bare `dist/cli.js` on a terminal and checks that it reaches
+the chat from `dist/daemon.js`; imports `dist/chat/tui.js` and
+`dist/chat/tui/term.js`, so pi-tui and `@xterm/headless` load too (`--help` loads
+only `marked`); and checks from `npm pack
 --dry-run --json` that the file list holds only `dist/`, `README.md`, `LICENSE` and
 `package.json`, with no test file. `npm pack` runs `prepack`, which writes `dist/` into
 the checkout; the test removes `dist/` at the end. Measured 2026-10-16: the packed

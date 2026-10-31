@@ -137,6 +137,27 @@ const has = (name: string) => argv.includes(`--${name}`);
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
+/** The package version: beside `cli.ts` in a checkout, one folder up from
+ *  `dist/cli.js` in the package. */
+async function packageVersion(): Promise<string> {
+  for (const file of [
+    join(import.meta.dirname, "package.json"),
+    join(import.meta.dirname, "..", "package.json"),
+  ]) {
+    try {
+      const pkg = JSON.parse(await readFile(file, "utf8")) as {
+        version?: unknown;
+      };
+      // package.json is an external file, so its shape is checked here.
+      // pi-lens-ignore: no-runtime-typeof
+      if (typeof pkg.version === "string" && pkg.version) return pkg.version;
+    } catch {
+      // Missing or unreadable; try the next place.
+    }
+  }
+  throw new Error("cannot read the kapelle version from package.json");
+}
+
 /**
  * Flags that take no value. The token after one stays positional, not its
  * value: `kapelle run --file f --detach "and also do X"` must still see the
@@ -148,6 +169,7 @@ const BOOLEAN_FLAGS = new Set([
   "--quiet",
   "--detach",
   "--help",
+  "--version",
   "--rebase",
   "--squash",
 ]);
@@ -189,6 +211,16 @@ const DEFAULT_AGENT = "pi";
 // `kapelle chat` is `chat.ts` (S7a), with its own usage and its own flags.
 const chatVerb = positional[0] === "chat";
 
+if (!chatVerb && has("version")) {
+  try {
+    process.stdout.write(`${await packageVersion()}\n`);
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write(`${messageOf(err)}\n`);
+    process.exit(1);
+  }
+}
+
 if (
   !chatVerb &&
   argv.length !== 0 &&
@@ -199,6 +231,7 @@ kapelle — a minimal Agent Client Protocol client
 
   kapelle                            the chat on a terminal, starting the daemon
                                      if none runs; a pipe prints chat usage and exits 1
+  kapelle --version                  print the version
   kapelle "<prompt>" [options]
   kapelle run --file <run.json> [--cwd dir] [--verbose] [--quiet]
   kapelle run --file <run.json> --detach   hands the run to the daemon
@@ -303,7 +336,11 @@ if (chatVerb) {
       await ensureDaemon({
         file: daemonFile(),
         log: join(stateDir(), "daemon.log"),
-        script: join(import.meta.dirname, "daemon.ts"),
+        // A plain path, so tsc cannot rewrite it with the imports.
+        script: join(
+          import.meta.dirname,
+          import.meta.filename.endsWith(".js") ? "daemon.js" : "daemon.ts",
+        ),
         cwd: import.meta.dirname,
       });
     } catch (err) {

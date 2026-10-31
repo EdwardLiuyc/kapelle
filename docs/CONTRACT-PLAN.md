@@ -1055,7 +1055,7 @@ from dismiss in three places:
 | M3 | Browser visual checks in CI | (a) no (b) yes headless | (a) |
 | M4 | M5 done-when | a client written from the doc alone passes the suite | confirm |
 | M5 | Docs to update | README, AGENTS.md, PROJECT-PLAN, STORIES, CONFIG, this file | confirm the list |
-| M6 | Shared module visibility | (a) internal module (b) exported package | (a), `private: true` stays |
+| M6 | Shared module visibility | (a) internal module (b) exported package | (a), `private: true` stays until M9-7 prepares publication |
 
 ## What this plan deliberately leaves alone
 
