@@ -1037,6 +1037,11 @@ async function buildRoom(
         agent: id,
         update: { sessionUpdate: "_client_stall_warning", kind, text },
       }),
+    onResolve: (id) =>
+      bus.emit({
+        agent: id,
+        update: { sessionUpdate: "_client_repeat_resolved" },
+      }),
     onTimeout: () => {},
   });
   const sweep = setInterval(
@@ -1980,10 +1985,11 @@ function createParticipant({
         }
         if (agent === next) keep(update);
         // Named by id, not by harness name (S10). Only the harness's own
-        // events feed the watchdog, so its warning never resets it.
+        // events feed the watchdog, so its warning never resets it. After
+        // the emit, so a resolve follows the line that caused it.
         const event = { agent: id, update };
-        watchdog.note(event);
         bus.emit(event);
+        watchdog.note(event);
       },
     });
     let session: string | undefined;

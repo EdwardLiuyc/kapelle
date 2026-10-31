@@ -1324,10 +1324,11 @@ instead of the retired script.
 **M1c-1 · `core/watchdog.ts` · M · needs M1b-2, M0-4**
 One interval timer over all running tasks (default 60s). Two signals, both chosen because
 they port across vendors: **idle** — no events for `stallIdleMs`; and **repeat** — the same
-tool title firing `stallRepeatCount` times consecutively (default ~8), the busy-loop case
-idle time structurally cannot see. Repeat reuses the `toolCallId → {title, kind, rawInput}` map
-already maintained as a protocol invariant, so it needs only a per-task last-title and
-count. Both signals warn and the task keeps running; the separate, longer `ttlMs` calls
+operation firing `stallRepeatCount` times consecutively (default ~8), the busy-loop case
+idle time structurally cannot see. **Amended 2026-10-31 (#354):** an operation is the
+title, kind, whole `rawInput` and first path, read at the call's first `tool_call_update`.
+The title alone was a false-positive source: claude names every shell call `Terminal`, and
+185 of 185 same-title runs of 8 or more in our room logs were different commands. Both signals warn and the task keeps running; the separate, longer `ttlMs` calls
 `session/cancel`, preserves the branch and marks the task `timed_out`. Every knob disabled
 at `0`. Best-effort throughout — one task's failure must never halt the sweep.
 **M0-4 fills in the TTL rung** (`docs/FINDINGS.md` §M0-4): every harness ended its turn
@@ -1354,8 +1355,8 @@ on the harness where turns run longest. If a context signal is ever wanted, it b
 a per-harness trust flag, not in the vendor-neutral core.
 
 **M1c-2 · `mock-agent` stall and repeat modes · XS · needs M1c-1**
-Stall: accepts the prompt, emits nothing, never returns. Repeat: the same tool title on a
-loop. One per watchdog signal.
+Stall: accepts the prompt, emits nothing, never returns. Repeat: the same command on a
+loop, sent late on each call's first update, as opencode does (#354). One per watchdog signal.
 *Done when* stall produces a warning then a cancel at TTL with the branch intact, and repeat
 produces a warning and is **not** cancelled.
 **Amended 2026-09-09 (#26).** Stall writes one file **at startup**, before the handshake. A

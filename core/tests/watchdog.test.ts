@@ -22,11 +22,6 @@ const limits = (over: Partial<WatchdogLimits> = {}): WatchdogLimits => ({
   ...over,
 });
 
-const toolCall = (id: string, title: string): AgentEventEnvelope => ({
-  agent: id,
-  update: { sessionUpdate: "tool_call", toolCallId: `${title}-1`, title },
-});
-
 const chunk = (id: string): AgentEventEnvelope => ({
   agent: id,
   update: {
@@ -39,16 +34,58 @@ const chunk = (id: string): AgentEventEnvelope => ({
 function harness() {
   let clock = 1_000;
   const warns: Array<[string, StallKind]> = [];
+  const texts: string[] = [];
+  const resolves: string[] = [];
   const timeouts: string[] = [];
   const wd = createWatchdog({
     now: () => clock,
-    onWarn: (id, kind) => warns.push([id, kind]),
+    onWarn: (id, kind, text) => {
+      warns.push([id, kind]);
+      texts.push(text);
+    },
+    onResolve: (id) => resolves.push(id),
     onTimeout: (id) => timeouts.push(id),
   });
+  /** A call's `tool_call`, as claude and opencode send it: a generic title
+   *  and no input (§M0-3, #240). */
+  const call = (agent: string, id: string, title = "Terminal") =>
+    wd.note({
+      agent,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: id,
+        title,
+        kind: "execute",
+        rawInput: {},
+      },
+    });
+  /** Its first update, with the command as the title and the input. */
+  const update = (agent: string, id: string, command: string) =>
+    wd.note({
+      agent,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: id,
+        title: command,
+        rawInput: { command },
+      },
+    });
+  let ids = 0;
+  /** One whole operation: the call, then its first update. */
+  const op = (agent: string, command: string) => {
+    ids += 1;
+    call(agent, `call-${ids}`);
+    update(agent, `call-${ids}`, command);
+  };
   return {
     wd,
     warns,
+    texts,
+    resolves,
     timeouts,
+    call,
+    update,
+    op,
     advance: (ms: number) => {
       clock += ms;
     },
@@ -175,37 +212,107 @@ test("stallIdleMs 0 disables the idle signal", () => {
 
 // --- repeat ----------------------------------------------------------------
 
-test("the same tool title stallRepeatCount times in a row warns once", () => {
+test("the same operation stallRepeatCount times in a row warns once", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 3 }));
 
-  h.wd.note(toolCall("a", "grep"));
-  h.wd.note(toolCall("a", "grep"));
+  h.op("a", "npm test");
+  h.op("a", "npm test");
   h.wd.sweep();
   assert.deepEqual(h.warns, [], "two is under the threshold");
 
-  h.wd.note(toolCall("a", "grep"));
+  h.op("a", "npm test");
   h.wd.sweep();
   assert.deepEqual(h.warns, [["a", "repeat"]]);
+  // It names the real command, not the generic first title.
+  assert.match(h.texts[0], /^3× "npm test" in a row/);
 
-  h.wd.note(toolCall("a", "grep"));
+  h.op("a", "npm test");
   h.wd.sweep();
   assert.deepEqual(h.warns, [["a", "repeat"]], "still the same streak");
 });
 
-test("a different tool title resets the repeat counter", () => {
+test("eight distinct commands under one generic title do not warn (#354)", () => {
+  // claude's shape: every shell call is `Terminal` until its update.
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+  for (const c of ["ls", "grep x", "sed -n 1p f", "npm test", "biome", "tsc"]) {
+    h.op("a", c);
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, []);
+});
+
+test("eight reads of different files do not warn (#354)", () => {
+  // pi's shape: the title stays `read`; the path tells the reads apart.
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+  for (let i = 0; i < 8; i++) {
+    const path = `/w/file${i}.ts`;
+    h.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: `r${i}`,
+        title: "read",
+        kind: "read",
+        rawInput: { path },
+        locations: [{ path }],
+      },
+    });
+    h.wd.note({
+      agent: "a",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: `r${i}`,
+        status: "completed",
+      },
+    });
+  }
+  h.wd.sweep();
+  assert.deepEqual(h.warns, []);
+});
+
+test("the same command with another kind or path is another operation", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 2 }));
+  h.op("a", "x");
+  h.wd.note({
+    agent: "a",
+    update: { sessionUpdate: "tool_call", toolCallId: "k", title: "x" },
+  });
+  h.update("a", "k", "x");
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "a call with no kind differs from `execute`");
+
+  h.call("a", "l1");
+  h.wd.note({
+    agent: "a",
+    update: {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "l1",
+      title: "x",
+      rawInput: { command: "x" },
+      locations: [{ path: "/w/a" }],
+    },
+  });
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "a path makes it another operation");
+});
+
+test("a different operation resets the repeat counter", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 3 }));
 
-  h.wd.note(toolCall("a", "grep"));
-  h.wd.note(toolCall("a", "grep"));
-  h.wd.note(toolCall("a", "read"));
-  h.wd.note(toolCall("a", "grep"));
-  h.wd.note(toolCall("a", "grep"));
+  h.op("a", "grep");
+  h.op("a", "grep");
+  h.op("a", "read");
+  h.op("a", "grep");
+  h.op("a", "grep");
   h.wd.sweep();
   assert.deepEqual(h.warns, [], "the streak restarted at `read`");
 
-  h.wd.note(toolCall("a", "grep"));
+  h.op("a", "grep");
   h.wd.sweep();
   assert.deepEqual(h.warns, [["a", "repeat"]]);
 });
@@ -214,11 +321,11 @@ test("a reset also re-arms the repeat warning for the next streak", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 2 }));
 
-  h.wd.note(toolCall("a", "grep"));
-  h.wd.note(toolCall("a", "grep"));
+  h.op("a", "grep");
+  h.op("a", "grep");
   h.wd.sweep();
-  h.wd.note(toolCall("a", "read"));
-  h.wd.note(toolCall("a", "read"));
+  h.op("a", "read");
+  h.op("a", "read");
   h.wd.sweep();
   assert.deepEqual(h.warns, [
     ["a", "repeat"],
@@ -226,27 +333,90 @@ test("a reset also re-arms the repeat warning for the next streak", () => {
   ]);
 });
 
-test("only tool_call counts toward a repeat streak", () => {
+test("a call counts once, at its first update", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 2 }));
 
-  // `tool_call_update` is progress on a call already counted, not a new one.
-  h.wd.note(toolCall("a", "grep"));
-  h.wd.note({
-    agent: "a",
-    update: { sessionUpdate: "tool_call_update", toolCallId: "grep-1" },
-  });
+  // A `tool_call` alone has no identity yet, so it does not count.
+  h.call("a", "c1");
+  h.call("a", "c2");
+  h.wd.sweep();
+  assert.deepEqual(h.warns, []);
+
+  // Later updates are progress on a call already counted.
+  h.update("a", "c1", "npm test");
+  h.update("a", "c1", "npm test");
   h.wd.note(chunk("a"));
   h.wd.sweep();
   assert.deepEqual(h.warns, []);
+
+  h.update("a", "c2", "npm test");
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
+});
+
+test("a batch of calls before their updates warns once for one loop (#354)", () => {
+  // pi's shape: several calls, then their updates.
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+  for (let i = 0; i < 6; i++) h.call("a", `b${i}`);
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "nothing counted before an update");
+  for (let i = 0; i < 6; i++) {
+    h.update("a", `b${i}`, "npm test");
+    h.wd.sweep();
+  }
+  assert.deepEqual(h.warns, [["a", "repeat"]]);
+});
+
+test("a batch of distinct calls does not warn (#354)", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 3 }));
+  for (let i = 0; i < 6; i++) h.call("a", `b${i}`);
+  for (let i = 0; i < 6; i++) h.update("a", `b${i}`, `step ${i}`);
+  h.wd.sweep();
+  assert.deepEqual(h.warns, []);
+});
+
+test("another operation after a repeat warning resolves it, once (#354)", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 2 }));
+  h.wd.watch("b", limits({ stallRepeatCount: 2 }));
+
+  h.op("a", "lint");
+  assert.deepEqual(h.resolves, [], "no warning, nothing to resolve");
+  h.op("a", "npm test");
+  h.op("a", "npm test");
+  h.wd.sweep();
+  h.op("a", "npm test");
+  // A generic `tool_call` is not yet another operation.
+  h.call("a", "next");
+  h.op("b", "other");
+  assert.deepEqual(h.resolves, [], "the loop and another task go on");
+
+  h.update("a", "next", "biome");
+  assert.deepEqual(h.resolves, ["a"]);
+  h.op("a", "tsc");
+  assert.deepEqual(h.resolves, ["a"], "resolved once");
 });
 
 test("stallRepeatCount 0 disables the repeat signal", () => {
   const h = harness();
   h.wd.watch("a", limits({ stallRepeatCount: 0 }));
-  for (let i = 0; i < 50; i++) h.wd.note(toolCall("a", "grep"));
+  for (let i = 0; i < 50; i++) h.op("a", "grep");
   h.wd.sweep();
   assert.deepEqual(h.warns, []);
+});
+
+test("calls that never get an update are dropped past a cap", () => {
+  const h = harness();
+  h.wd.watch("a", limits({ stallRepeatCount: 2 }));
+  h.call("a", "lost");
+  for (let i = 0; i < 64; i++) h.call("a", `x${i}`);
+  h.update("a", "lost", "npm test");
+  h.op("a", "npm test");
+  h.wd.sweep();
+  assert.deepEqual(h.warns, [], "the oldest waiting call was dropped");
 });
 
 // --- ttl -------------------------------------------------------------------

@@ -55,7 +55,8 @@ const SCENARIOS = {
   deaf: "never ends a turn and ignores session/cancel; exits when stdin closes",
   stubborn:
     "like stall, but ignores SIGTERM and stays alive after its stdin closes",
-  repeat: "the same tool title on a loop, then ends the turn itself",
+  repeat:
+    "the same command on a loop, sent late as opencode does, then ends the turn itself",
   remember: "answers each turn with the previous turn's prompt, per session",
   "no-load":
     "like remember, but the handshake says loadSession: false, even with --store",
@@ -223,7 +224,7 @@ const USAGE = {
  *  once a second (`core/watchdog.ts`), so a tighter loop would finish before
  *  the watchdog ever looked at it. */
 const REPEATS = 12;
-const REPEAT_TITLE = "Search for the same thing again";
+const REPEAT_COMMAND = "npm test -- --grep same";
 const REPEAT_GAP_MS = 150;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -677,16 +678,26 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       return;
     }
 
-    // The busy loop idle time structurally cannot see: one title, over and
+    // The busy loop idle time structurally cannot see: one command, over and
     // over, then a normal end of turn — repeat warns and must not cancel.
+    // opencode's shape (§M0-3, #240): a bare `shell` call, then the command
+    // as the title and the input on its first update.
     if (scenario === "repeat") {
       for (let i = 0; i < REPEATS; i++) {
         update(sid, {
           sessionUpdate: "tool_call",
           toolCallId: `loop${i}`,
-          title: REPEAT_TITLE,
-          kind: "search",
+          title: "shell",
+          kind: "execute",
           status: "pending",
+          rawInput: {},
+        });
+        update(sid, {
+          sessionUpdate: "tool_call_update",
+          toolCallId: `loop${i}`,
+          title: REPEAT_COMMAND,
+          status: "completed",
+          rawInput: { command: REPEAT_COMMAND },
         });
         await sleep(REPEAT_GAP_MS);
       }
@@ -697,7 +708,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
           text: result(
             "partial",
             "Ran the same search over and over.",
-            `Repeated "${REPEAT_TITLE}" ${REPEATS} times, then gave up.`,
+            `Ran "${REPEAT_COMMAND}" ${REPEATS} times, then gave up.`,
           ),
         },
       });

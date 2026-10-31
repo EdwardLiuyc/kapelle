@@ -948,7 +948,8 @@ with ACP names.
 | `sessionUpdate` | Fields | Meaning |
 | --- | --- | --- |
 | `_client_result_warning` | `kind`, `text` | The task's report and its changes do not agree. `kind` is `noResultBlock`, `filesNotInDiff`, `filesUnclaimed` or `policyNeverFired`. |
-| `_client_stall_warning` | `kind`, `text` | The task, or a room participant's turn, looks stuck. `kind` is `idle` (quiet too long) or `repeat` (same tool again and again). It keeps running: in a room, only a cancel ends a turn. |
+| `_client_stall_warning` | `kind`, `text` | The task, or a room participant's turn, looks stuck. `kind` is `idle` (quiet too long) or `repeat` (the same operation again and again: same title, kind, input and path). It keeps running: in a room, only a cancel ends a turn. |
+| `_client_repeat_resolved` | — | Rooms only. The loop a `repeat` warning named is over: the participant ran another operation. The warning's line stays as history. |
 
 **Harness process:**
 

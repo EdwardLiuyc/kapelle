@@ -391,10 +391,11 @@ driven from a run file, fully verifiable offline.
   make this check possible. Warnings publish on the bus and never fail the task.
 - **`core/watchdog.ts`** — one interval timer over all running tasks (default 60s). Two
   signals, both chosen because they port across vendors: **idle**, no events for
-  `stallIdleMs`; and **repeat**, the same tool title firing `stallRepeatCount` times
-  consecutively (default ~8) — the busy-loop case idle time structurally cannot see. Repeat
-  reuses the `toolCallId → {title, kind, rawInput}` map already maintained as a protocol invariant, so
-  it needs only a per-task "last title + consecutive count". Both signals emit a warning and
+  `stallIdleMs`; and **repeat**, the same operation firing `stallRepeatCount` times
+  consecutively (default ~8) — the busy-loop case idle time structurally cannot see. An
+  operation is the title, kind, whole `rawInput` and first path, read at the call's first
+  `tool_call_update`, so a generic title such as `Terminal` is not a loop (#354). Both
+  signals emit a warning and
   the task keeps running; the separate, longer `ttlMs` calls `session/cancel`, preserves the
   branch and marks the task `timed_out`. **M0-4 supplies the missing number: wait 2 s after
   the cancel before force-killing** — thirty times the slowest cancel measured, and the same
@@ -433,7 +434,7 @@ driven from a run file, fully verifiable offline.
   `kapelle` — not a filename — the thing people type.
 - **Testing** — extend `mock-agent` with multiple sessions, a permission timeout, a
   malformed `<task-result>`, a **stall mode** (accepts the prompt, emits nothing, never
-  returns), and a **repeat mode** (the same tool title on a loop) — one per watchdog signal.
+  returns), and a **repeat mode** (the same command on a loop) — one per watchdog signal.
   Add fixtures that trip each cross-check warning, and a run file that violates a `maxMode`
   ceiling and must be rejected before anything spawns. Add `hostile-agent`: path escape,
   mutation without asking, protocol violation. **Landed 2026-09-08 (#22)** as

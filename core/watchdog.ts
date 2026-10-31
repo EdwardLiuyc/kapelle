@@ -12,8 +12,18 @@
  *
  * - **idle** — nothing on this task's bus for `stallIdleMs`, and no question
  *   waiting for a person.
- * - **repeat** — the same `tool_call` title `stallRepeatCount` times running,
- *   which is the busy-loop case idle time structurally cannot see.
+ * - **repeat** — the same operation `stallRepeatCount` times running, which
+ *   is the busy-loop case idle time structurally cannot see.
+ *
+ * **An operation is more than its title (#354).** claude names every shell
+ * call `Terminal`, and pi names every read `read`: 185 of 185 same-title runs
+ * of 8 or more in our room logs were different commands. So two calls are the
+ * same when their title, kind, whole `rawInput` and first path all match. A
+ * call counts at its first `tool_call_update`, not at `tool_call`: claude,
+ * opencode and pi send the command and the real title there (§M0-3, #240).
+ * When the next operation differs from the one a repeat warning named,
+ * `onResolve` says the loop is over. Only this module decides that; the chat
+ * reducer keeps no copy of the rule.
  *
  * Both warn and the task keeps running. Only the longer `ttlMs` acts, and all
  * it does is ask the caller to cancel: ACP gives no way to nudge a turn in
@@ -35,7 +45,7 @@ export type StallKind = "idle" | "repeat";
 export interface WatchdogLimits {
   /** No events for this long → warn. `0` disables. */
   stallIdleMs: number;
-  /** This many identical tool titles in a row → warn. `0` disables. */
+  /** This many identical operations in a row → warn. `0` disables. */
   stallRepeatCount: number;
   /** Wall time for the whole task → cancel. `0` disables. */
   ttlMs: number;
@@ -74,6 +84,8 @@ export function sweepIntervalMs(limits: readonly WatchdogLimits[]): number {
 export interface WatchdogHooks {
   /** A stall was detected. Advisory: the task keeps running. */
   onWarn: (taskId: string, kind: StallKind, text: string) => void;
+  /** The operation a repeat warning named was followed by another one. */
+  onResolve?: (taskId: string) => void;
   /** The TTL expired. The caller cancels; the watchdog never touches an agent. */
   onTimeout: (taskId: string) => void;
   /** Injected so a test can reach an hour-long TTL without waiting. */
@@ -96,18 +108,42 @@ export interface Watchdog {
   sweep: () => void;
 }
 
+/** A call announced by `tool_call` and not counted yet. */
+interface Call {
+  title: string;
+  kind?: string;
+  // Free-form by protocol design (see `ToolCall.rawInput`).
+  // pi-lens-ignore: no-unsafe-dictionary-unknown
+  input: Record<string, unknown>;
+  path?: string;
+}
+
+/** Calls that wait for their first update. Every call in our room logs got
+ *  one; the cap only stops a harness that never sends it from growing this. */
+// ponytail: drop the oldest past 64; a harness that skips updates then never
+// warns on repeat, so count at `completed` too if one is ever measured.
+const MAX_PENDING = 64;
+
 interface WatchState {
   limits: WatchdogLimits;
   startedAt: number;
   lastEventAt: number;
+  pending: Map<string, Call>;
+  /** The last counted operation, as `identity` writes it, and its title. */
+  lastOperation?: string;
   lastTitle?: string;
   repeatCount: number;
+  /** The operation the live repeat warning named. */
+  warnedOperation?: string;
   /** Questions asked and not yet answered. Idle does not count while one waits. */
   asking: number;
   idleWarned: boolean;
-  repeatWarned: boolean;
   timedOut: boolean;
 }
+
+/** Two calls are one operation when these all match. */
+const identity = (call: Call): string =>
+  JSON.stringify([call.title, call.kind, call.input, call.path]);
 
 export function createWatchdog(hooks: WatchdogHooks): Watchdog {
   const now = hooks.now ?? Date.now;
@@ -129,16 +165,44 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
       state.asking = Math.max(0, state.asking - 1);
     }
 
-    // Only a *new* call counts. `tool_call_update` is progress on one already
-    // counted, and counting it would make a single slow tool look like a loop.
-    if (event.update.sessionUpdate !== "tool_call") return;
-    const title = event.update.title;
-    if (title === state.lastTitle) {
+    if (state.limits.stallRepeatCount === 0) return;
+    const u = event.update;
+    if (u.sessionUpdate === "tool_call") {
+      state.pending.set(u.toolCallId, {
+        title: u.title,
+        ...(u.kind !== undefined && { kind: u.kind }),
+        input: { ...u.rawInput },
+        ...(u.locations?.[0] && { path: u.locations[0].path }),
+      });
+      if (state.pending.size > MAX_PENDING) {
+        const [oldest] = state.pending.keys();
+        state.pending.delete(oldest);
+      }
+      return;
+    }
+    // A call counts once, at its first update. Later ones are progress on it,
+    // and counting them would make one slow tool look like a loop.
+    if (u.sessionUpdate !== "tool_call_update") return;
+    const call = state.pending.get(u.toolCallId);
+    if (!call) return;
+    state.pending.delete(u.toolCallId);
+    if (u.title !== undefined) call.title = u.title;
+    if (u.kind !== undefined) call.kind = u.kind;
+    // Merged: an update sends only what changed.
+    Object.assign(call.input, u.rawInput);
+    if (u.locations?.[0]) call.path = u.locations[0].path;
+
+    const operation = identity(call);
+    if (operation === state.lastOperation) {
       state.repeatCount += 1;
-    } else {
-      state.lastTitle = title;
-      state.repeatCount = 1;
-      state.repeatWarned = false;
+      return;
+    }
+    state.lastOperation = operation;
+    state.lastTitle = call.title;
+    state.repeatCount = 1;
+    if (state.warnedOperation !== undefined) {
+      state.warnedOperation = undefined;
+      hooks.onResolve?.(event.agent);
     }
   };
 
@@ -149,10 +213,10 @@ export function createWatchdog(hooks: WatchdogHooks): Watchdog {
         limits,
         startedAt: started,
         lastEventAt: started,
+        pending: new Map(),
         repeatCount: 0,
         asking: 0,
         idleWarned: false,
-        repeatWarned: false,
         timedOut: false,
       });
       return {
@@ -205,10 +269,10 @@ function check(
 
   if (
     stallRepeatCount > 0 &&
-    !state.repeatWarned &&
+    state.warnedOperation === undefined &&
     state.repeatCount >= stallRepeatCount
   ) {
-    state.repeatWarned = true;
+    state.warnedOperation = state.lastOperation;
     hooks.onWarn(
       taskId,
       "repeat",

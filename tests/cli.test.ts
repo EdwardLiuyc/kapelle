@@ -1511,7 +1511,9 @@ test("a stalled task warns, times out at the TTL, and keeps its branch", async (
   assert.equal(timedOut?.update.status, "timed_out");
 });
 
-test("a repeated tool title warns, and the task is never cancelled", async (t) => {
+test("a repeated command warns, and the task is never cancelled", async (t) => {
+  // The mock sends each command late, on the call's first update, as
+  // opencode and claude do (#354): the warning names the command.
   const cwd = await tempDir(t);
   const file = await runFile(
     t,
@@ -1534,10 +1536,7 @@ test("a repeated tool title warns, and the task is never cancelled", async (t) =
   const r = await runCli(t, ["run", "--file", file, "--cwd", cwd]);
 
   assert.equal(r.code, 0, r.stderr);
-  assert.match(
-    r.stderr,
-    /! \[loop\] \d+× "Search for the same thing again" in a row/,
-  );
+  assert.match(r.stderr, /! \[loop\] \d+× "npm test -- --grep same" in a row/);
   assert.match(r.stdout, /▸ loop \(mock-agent\) done/);
   assert.doesNotMatch(r.stdout, /timed_out|cancelled/);
 });

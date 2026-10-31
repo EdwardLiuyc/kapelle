@@ -487,12 +487,12 @@ test("an idle warning outlives the room's own lines: the watchdog never sees the
   assert.equal(who(state, "alice").stall?.kind, "idle");
 });
 
-test("a repeat warning is resolved only by a tool call of another title (#348)", () => {
+test("a repeat warning is resolved only by the watchdog's resolve line (#354)", () => {
   const { state, line, warn, call } = stallRoom();
   call("alice", "t1", "Terminal");
   warn("alice", "repeat");
-  assert.equal(who(state, "alice").stall?.title, "Terminal");
-  // A busy loop is traffic too: none of it resolves a repeat.
+  // A busy loop is traffic too, and the reducer does not judge whether a
+  // call is the same operation: none of this resolves a repeat.
   line("alice", {
     sessionUpdate: "agent_message_chunk",
     content: { type: "text", text: "still" },
@@ -504,15 +504,23 @@ test("a repeat warning is resolved only by a tool call of another title (#348)",
     rawInput: { command: "other" },
     status: "completed",
   });
-  // Same title, other input: still the same title, as the watchdog sees it.
-  call("alice", "t2", "Terminal");
+  call("alice", "t2", "Read");
   assert.equal(needsAttention(state, "alice"), true);
-  // Another participant's new title is not alice's.
-  call("bob", "t3", "Read");
+  // Another participant's resolve is not alice's.
+  line("bob", { sessionUpdate: "_client_repeat_resolved" });
   assert.equal(needsAttention(state, "alice"), true);
-  call("alice", "t4", "Read");
+  line("alice", { sessionUpdate: "_client_repeat_resolved" });
   assert.equal(needsAttention(state, "alice"), false);
   assert.equal(who(state, "alice").stall, undefined);
+  // History stays.
+  assert.equal(state.timeline.filter((e) => e.type === "stall").length, 1);
+});
+
+test("a repeat resolve leaves an idle warning alone (#354)", () => {
+  const { state, line, warn } = stallRoom();
+  warn("alice", "idle");
+  line("alice", { sessionUpdate: "_client_repeat_resolved" });
+  assert.equal(who(state, "alice").stall?.kind, "idle");
 });
 
 test("a later warning replaces the live one with its own seq; a turn end clears it", () => {
