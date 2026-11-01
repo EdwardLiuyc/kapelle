@@ -737,7 +737,7 @@ function runRoom() {
     send(who, { sessionUpdate: "tool_call", toolCallId: id, ...more });
   const plain = (width = 60) =>
     parts.transcript
-      .render(width)
+      .render(width, true)
       // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
       .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
   /** A left click on the first row that has `text`. */
@@ -1264,7 +1264,7 @@ function layoutAll(parts: ReturnType<typeof transcriptParts>, width: number) {
   return rows;
 }
 
-test("a new call repairs the open run's last-row height", () => {
+test("a redraw repairs the open run's last-row height estimate", () => {
   const state = newRoomState();
   state.timeline = Array.from({ length: 3 }, (_, i) => ({
     seq: i + 1,
@@ -1542,7 +1542,7 @@ test("a growing answer above a near-end view keeps its anchor", () => {
   assert.equal(after?.offset, before.offset, "at the same row in it");
 });
 
-test("a width change near the end keeps the anchor item", () => {
+test("a width change near the end keeps the anchor item and requests the next frame", () => {
   const state = newRoomState();
   let seq = 0;
   const add = (participantId: string, update: Record<string, unknown>) => {
@@ -1583,8 +1583,13 @@ test("a width change near the end keeps the anchor item", () => {
   const rooms = new Map([
     ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
   ]);
+  let renders = 0;
   const parts = transcriptParts({
-    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    tui: {
+      requestRender() {
+        renders += 1;
+      },
+    } as unknown as TuiAltScreen,
     rooms,
     view: () => ({ roomId: "r1" }),
     setStatus() {},
@@ -1598,7 +1603,18 @@ test("a width change near the end keeps the anchor item", () => {
   assert.ok(model);
   const before = model.anchorAt(parts.scroll.scrollTop);
   assert.ok(before);
+  const beforeRow = parts.scroll.scrollTop;
+  // Return false even when the measurement lands, so only the anchor's own
+  // request can schedule the next frame.
+  const measure = model.measure.bind(model);
+  model.measure = (item, height) => {
+    measure(item, height);
+    return false;
+  };
+  renders = 0;
   rows = parts.transcript.render(20);
+  assert.notEqual(parts.scroll.scrollTop, beforeRow, "the anchor row moved");
+  assert.ok(renders > 0, "the moved anchor requests a redraw");
   parts.scroll.updateLayout(rows.length, 10, () => {});
   const after = model.anchorAt(parts.scroll.scrollTop);
   assert.equal(after?.item, before.item, "the same item stays at the top");

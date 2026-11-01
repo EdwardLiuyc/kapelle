@@ -30,6 +30,8 @@
  * hide delay in `components/scroll-view.js`; `paintScrollbar()` in
  * `layout.js`, which picks the glyph and styles one cell per call; and
  * `handleScrollbarMouseEvent()` in `tui-alt-screen.js`, which sets hover.
+ * The transcript also writes `Container`'s private `mouseLayout` in
+ * `tui.js`; a shape change there silently stops every transcript click.
  * A status's mark changes with its background, so `setText` invalidates the
  * wrap. If those marks ever go, `line()` also relies on
  * `Text.setCustomBgFn()` in `components/text.js` invalidating it.
@@ -37,10 +39,11 @@
  * **The transcript is virtual** (#323). `VirtualTranscriptModel` keeps one
  * item per drawn entry and a Fenwick tree of heights. Only the viewport and
  * its row margin get pi-tui parts; blank rows keep the `ScrollView`'s full
- * content height. `jump` and the history list use `topOf`/`entryAt`, not a
- * render of every earlier child. The reducer timeline still owns the data,
- * so process memory still grows with it. On exit `render(..., true)` walks
- * every item once to print the conversation to scrollback.
+ * content height. `jump` and the history list use the model's top offset;
+ * `entryAt` is its reverse row query. An answer outside the window is only
+ * invalidated, never re-rendered, so a streamed chunk cannot re-parse it.
+ * The reducer timeline still owns the data, so process memory still grows
+ * with it. On exit `render(..., true)` walks every item once for scrollback.
  */
 
 import {
@@ -612,7 +615,10 @@ class Transcript extends Container {
     const following = scroll.isFollowingEnd;
     const anchor = following ? undefined : model.anchorAt(scroll.scrollTop);
     model.setWidth(width);
-    const viewport = Math.max(0, Math.floor(this.viewportRows()));
+    const viewport = Math.max(
+      0,
+      Math.floor(scroll.viewportHeight || this.viewportRows()),
+    );
     let rows = Infinity;
     if (!all && Number.isFinite(viewport)) rows = Math.max(1, viewport);
     const maxTop = Number.isFinite(rows) ? Math.max(0, model.total - rows) : 0;
@@ -651,6 +657,8 @@ class Transcript extends Container {
     this.topBlank.height = before;
     this.bottomBlank.height = after;
     const visibleParts = visible.flatMap((item) => item.parts ?? []);
+    // `children` is only the visible parts; mouseLayout below is the map
+    // Container.handleMouse dispatches through.
     this.children = [this.topBlank, ...visibleParts, this.bottomBlank];
     const rowsBefore: { component: Component; height: number }[] = [
       { component: this.topBlank, height: before },
@@ -674,6 +682,7 @@ class Transcript extends Container {
         // A new width can make the row past what the scroll view last held.
         this.syncScroll();
         scroll.scrollTo(row, { disableFollow: true });
+        this.requestRender();
       }
     }
     if (measured) this.requestRender();
@@ -955,7 +964,7 @@ function transcriptParts({
         if (shut()) return headRows + summaryRows;
         const own =
           estimateRows(
-            toolLines(e, false, Date.now()).join("\n"),
+            toolLines(e, false, 0).join("\n"),
             Math.max(1, width - 3),
           ) + 2;
         return (
@@ -1185,8 +1194,8 @@ function transcriptParts({
     draw,
     redraw,
     jump,
+    /** Test seam for the height/offset model assertions. */
     model: () => model,
-    entryAt: (row: number) => model?.entryAt(row),
   };
 }
 

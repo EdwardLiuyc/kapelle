@@ -585,7 +585,7 @@ function chatTui(
    *  under the row — the banner, asked for its drawn height; the Spacer(1)
    *  and the one-line status (the `2`); the editor; and the where bar. The
    *  two `render` calls must stay side-effect-free: this runs inside the
-   *  sidebar's own render. */
+   *  sidebar's and the transcript's render. */
   const sidebarRows = () => {
     const width = process.stdout.columns || 80;
     const rows = process.stdout.rows || 24;
