@@ -46,13 +46,13 @@ alias kapelle='node /path/to/kapelle/cli.ts'
 
 ## Quick start
 
-First, check that kapelle works. This needs no agent and no account. It uses a fake agent that ships with the repository:
+First, check that kapelle works. In a source checkout, this needs no agent and no account. It uses a fake agent that ships with the repository:
 
 ```bash
 npm run selftest
 ```
 
-You should see `✓ allowed Write ACP_TEST.md`. Delete `ACP_TEST.md` when you are done.
+You should see `✓ allowed Write ACP_TEST.md`. Delete `ACP_TEST.md` when you are done. An npm install needs no further check: `kapelle --help` above already proved it starts.
 
 Next, use a real agent. pi is the default. Install pi and its ACP adapter, then log in to pi once:
 

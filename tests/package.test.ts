@@ -19,7 +19,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -63,6 +63,9 @@ const childEnv = (overrides: Record<string, string>): NodeJS.ProcessEnv => {
 test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   await rm(DIST, { recursive: true, force: true });
   t.after(() => rm(DIST, { recursive: true, force: true }));
+  // A stale build file must not survive prepack and reach the tarball.
+  await mkdir(DIST, { recursive: true });
+  await writeFile(join(DIST, "stale.js"), "stale\n");
 
   const packDir = await tempDir(t);
   const packed = await pack(["--pack-destination", packDir], REPO);
@@ -73,6 +76,7 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     : join(packDir, result.filename);
 
   const emitted = await readdir(DIST, { recursive: true });
+  assert.ok(!emitted.includes("stale.js"), "prepack removes a stale build");
   assert.ok(emitted.includes("cli.js"));
   assert.ok(emitted.includes("daemon.js"));
   assert.ok(emitted.includes(join("assets", "orchestrator.md")));
@@ -80,6 +84,11 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     emitted.filter((file) => file.endsWith(".test.js")),
     [],
     "tests stay out of dist",
+  );
+  assert.deepEqual(
+    emitted.filter((file) => file.startsWith("integration/")),
+    [],
+    "integration stays out of dist",
   );
   assert.match(
     await readFile(join(DIST, "cli.js"), "utf8"),
@@ -95,8 +104,6 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     packageDir,
     "--strip-components=1",
   ]);
-  await symlink(join(REPO, "node_modules"), join(packageDir, "node_modules"));
-
   const pkg = JSON.parse(
     await readFile(join(packageDir, "package.json"), "utf8"),
   ) as {
@@ -105,11 +112,21 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     bin: { kapelle: string };
     files: string[];
     scripts: { prepack: string };
+    dependencies: Record<string, string>;
   };
   assert.equal(pkg.private, undefined);
   assert.equal(pkg.bin.kapelle, "./dist/cli.js");
   assert.deepEqual(pkg.files, ["dist"]);
   assert.match(pkg.scripts.prepack, /tsc -p tsconfig\.build\.json/);
+
+  // Link only the runtime dependencies the package declares, not the
+  // checkout's devDependencies: a missing declaration must fail here.
+  await mkdir(join(packageDir, "node_modules"), { recursive: true });
+  for (const name of Object.keys(pkg.dependencies)) {
+    const dest = join(packageDir, "node_modules", name);
+    await mkdir(dirname(dest), { recursive: true });
+    await symlink(join(REPO, "node_modules", name), dest);
+  }
 
   const cli = join(packageDir, "dist", "cli.js");
   const env = childEnv({});

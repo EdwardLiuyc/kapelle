@@ -24,7 +24,7 @@
   },
   "scripts": {
     "start": "node cli.ts",
-    "prepack": "tsc -p tsconfig.build.json && mkdir -p dist/assets && cp assets/orchestrator.md dist/assets/orchestrator.md",
+    "prepack": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/assets && cp assets/orchestrator.md dist/assets/orchestrator.md",
     "fmt": "biome check --write .",
     "fmt:check": "biome check .",
     "selftest": "node cli.ts \"self test\" --cmd \"node mock-agent.mjs\" --mode auto",
