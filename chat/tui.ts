@@ -314,9 +314,15 @@ function chatTui(
   let quit = (_why: End) => {};
   /** The line `away` put on the status line, so the poll can take it back. */
   let awayLine = "";
+  /** The log's size when each room's first `GET /rooms/:id` answered: a
+   *  cap event at or below it is replay, not news. */
+  const attachedAt = new Map<string, number>();
   const set = roomSet(d, address, {
     line: (roomId, line, e) => onLine(roomId, line, e),
     loaded: (roomId) => {
+      if (!attachedAt.has(roomId)) {
+        attachedAt.set(roomId, set.rooms.get(roomId)?.dto?.seq ?? 0);
+      }
       if (view.roomId === roomId) redraw();
     },
     // A turn read the room again for a branch or base that moved. Only the
@@ -545,10 +551,11 @@ function chatTui(
   let waited = new Set<string>();
   let ringing = false;
   let capRinging = false;
-  /** Rings once a participant starts to wait, or its room reaches the
-   *  orchestrator's turn cap. After this chunk of lines, as a question box
-   *  opens: a replay rings only for what is still open at its end. A chunk
-   *  that splits a question from its close still rings: cosmetic. */
+  /** Rings once a participant starts to wait, or a cap event arrives after
+   *  its room's first `GET /rooms/:id`. After this chunk of lines, as a
+   *  question box opens: a replay rings only for what is still open at its
+   *  end, and a cap event from that replay stays silent. A chunk that splits
+   *  a question from its close still rings: cosmetic. */
   const ring = (capReached = false) => {
     capRinging ||= capReached;
     if (ringing) return;
@@ -985,7 +992,16 @@ function chatTui(
     if (!r || quiet(r.state, line)) return;
     const u = line.update;
     const kind = u.sessionUpdate;
-    ring(kind === "_client_turn_cap_reached");
+    const attached = attachedAt.get(roomId);
+    // A cap event from the initial replay is history: ring only for one
+    // that arrived after the room's first `GET /rooms/:id` answered. The
+    // call stays for every line: `ring` defers the question bell to the end
+    // of the chunk.
+    ring(
+      kind === "_client_turn_cap_reached" &&
+        attached !== undefined &&
+        line.seq > attached,
+    );
     // After this chunk of lines: a replay can close a question in a later
     // line, and its box should not flash open first. A chunk that splits
     // the two lines still flashes it, then closes it: cosmetic.

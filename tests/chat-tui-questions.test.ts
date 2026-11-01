@@ -27,6 +27,7 @@ import {
   MOCK_AGENT,
   noPty,
   only,
+  participantIdle,
   pendingOne,
   plainText,
   ptyScreen,
@@ -204,6 +205,60 @@ test("chat.ts on a real terminal rings the bell when the orchestrator reaches it
     await new Promise((ok) => setTimeout(ok, 50));
   }
   assert.equal(bells(), before + 1);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal ignores a cap event replayed from before attach", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime, [], undefined, {
+    KAPELLE_ORCHESTRATOR_TURN_CAP: "1",
+  });
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "po", role: "orchestrator" },
+      { cmd: REMEMBER, name: "dev" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const [po, dev] = open.body.participants;
+  assert.ok(po && dev);
+  const say = (text: string) =>
+    api(d, "POST", `/rooms/${id}/agents/${dev.id}/messages`, {
+      text,
+      from: po.id,
+    });
+  assert.equal((await say("one")).status, 202);
+  await participantIdle(d, id, dev.id);
+  const capped = await say("two");
+  assert.equal(capped.status, 429);
+  assert.equal(capped.body.error.code, "turn_cap");
+  // Raising the cap makes the event in the log history; a screen attaching
+  // now must not ring for it.
+  const raised = await api<RoomReply>(d, "PATCH", `/rooms/${id}`, {
+    turnCap: 2,
+  });
+  assert.equal(raised.status, 200, raised.body.error?.message);
+  // A later accepted message makes a visible marker after the cap event, so
+  // seeing it proves the replay passed the cap line.
+  assert.equal((await say("three")).status, 202);
+  await participantIdle(d, id, dev.id);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${id}`,
+    { XDG_RUNTIME_DIR: runtime },
+    "dev",
+  );
+  await screen.seen("one");
+  await screen.seen("three");
+  const bells = plainText(screen.out()).split("\x07").length - 1;
+  assert.equal(bells, 0, `a stale cap event rang: ${screen.out()}`);
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

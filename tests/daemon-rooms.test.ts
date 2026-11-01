@@ -579,6 +579,21 @@ test("the orchestrator turn cap counts accepted messages, survives a restart, an
   await participantIdle(second, id, dev.id);
   assert.equal((await saved()).turnCount, 2);
 
+  // The person's message after po's order makes dev send po a copy. A copy
+  // is not an orchestrator worker message, so it must not use the cap.
+  const copied = await say(second, "person to dev");
+  assert.equal(copied.status, 202, copied.body.error?.message);
+  await participantIdle(second, id, dev.id);
+  await until("the copy", async () =>
+    (await roomLog(cwd, id)).some(
+      (line) =>
+        line.update.sessionUpdate === "_client_user_message" &&
+        typeof line.update.text === "string" &&
+        line.update.text.startsWith("[copy]"),
+    ),
+  );
+  assert.equal((await saved()).turnCount, 2, "a copy does not count");
+
   const lines = await roomLog(cwd, id);
   assert.equal(
     lines.filter(
