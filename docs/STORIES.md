@@ -3892,6 +3892,10 @@ and `npm publish` only, not on `npm install`. So after this story, a fresh clone
    `cli.ts` in a checkout, `../package.json` from `dist/cli.js`. **Decided 2026-10-16:**
    read `package.json` beside the running file, and if it is not there, one folder up.
    npm always packs `package.json`, so the second path is there in the package.
+   **Amended 2026-11-01 (review, #306):** `--version` prints only when there is no
+   prompt, verb, or `--file`. A version token beside a prompt or verb is a usage
+   error, so a stray token cannot start a harness. A version token after a
+   value-taking flag is that flag's missing-value error.
 5. Docs. `AGENTS.md`: the "no build step" lines get "except when the package is made";
    the "do not rename to `agent-team`" rule loses its `private: true stays` half.
    `docs/PROJECT-PLAN.md`: the same "no build step" line. M1c-5 in this file: its
@@ -3925,12 +3929,17 @@ The first release. The person does steps 1 and 2 by hand.
 3. Set the version with `npm version <patch|minor>`. It makes the commit and the tag.
 4. A GitHub Actions job publishes when a tag is pushed, with npm trusted publishing: no
    npm token is stored. The job runs `npm ci` first, because `prepack` needs `tsc`, then
-   `npm publish`. It needs `id-token: write`. If npm needs the package to exist before a
-   trusted publisher can be added, the first publish is `npm publish` by hand.
+   the full gate from `AGENTS.md`, then `npm publish`. It needs `id-token: write`. If npm
+   needs the package to exist before a trusted publisher can be added, the first publish
+   is `npm publish` by hand. **Decided 2026-11-01 (M9-7, #306): option B.** M9-7 adds no
+   `prepublishOnly` guard. `private: true` was the only mechanical guard and is gone, so
+   this job's gate is its replacement.
 5. Write the release notes on GitHub for the tag. They say Linux and macOS only.
 6. **Added 2026-10-22 (#298):** before the publish, make the `/harnesses` routes stable in
    `docs/CLIENT-API.md`, with one minor version. M9-3, M9-3b and M9-4 change them, so
    they stay experimental until then.
+7. **Added 2026-11-01 (#306):** remove the "not published yet" note from `README.md`,
+   so the npm page starts with the real install block.
 
 The npm page shows `README.md`. Its logo (`src="assets/icon.svg"`) is a relative link,
 and npm points relative links at the repository. So the logo shows only once the
