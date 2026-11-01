@@ -1622,9 +1622,12 @@ this is how a person sees its work before they ask it to commit.
   `HEAD` and the base ref configured when it was added. The branch's own commits are in
   it too, but commits that came only from the base are not. A movable base ref follows
   its current target, including after a rebase, merge, fast-forward, reset or branch
-  switch. A pinned SHA stays fixed. The default repository `HEAD` keeps its branch ref,
-  or its SHA when detached. If the configured ref was deleted, or an old room record has
-  no ref, the saved `baseSha` is the fallback.
+  switch. If that ref rewinds while the saved `baseSha` remains on the participant's
+  `HEAD`, the saved SHA stays the comparison base; a participant reset behind that SHA
+  still uses the current merge base. A pinned SHA does not follow a branch, but its merge
+  base with `HEAD` can be older when `HEAD` leaves its history. The default repository
+  `HEAD` keeps its branch ref, or its SHA when detached. If the configured ref was deleted,
+  or an old room record has no ref, the saved `baseSha` is the fallback.
 
 New files that git does not track are in both, as new files. Ignored files are not. The
 daemon reads the checkout and changes nothing in it, not even git's index. Each request is

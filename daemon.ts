@@ -94,7 +94,7 @@ import {
   resolveRunDefaults,
   warnUnknownConfigEnv,
 } from "./core/config.ts";
-import { checkoutDiff, mergeBase, rangeDiff } from "./core/diff.ts";
+import { checkoutDiff, isAncestor, mergeBase, rangeDiff } from "./core/diff.ts";
 import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import {
@@ -1448,7 +1448,16 @@ async function agentDiff(
   let diff: Diff;
   try {
     if (against === "base" && p.baseRef) {
-      ref = (await mergeBase(p.worktree, p.baseRef, "HEAD")) ?? ref;
+      const candidate = await mergeBase(p.worktree, p.baseRef, "HEAD");
+      if (candidate !== undefined) {
+        // A rewound base must not claim a saved base commit still on HEAD.
+        // If the participant reset off that SHA, the current merge base wins.
+        const keepSaved =
+          candidate !== ref &&
+          (await isAncestor(p.worktree, ref, "HEAD")) &&
+          !(await isAncestor(p.worktree, ref, candidate));
+        if (!keepSaved) ref = candidate;
+      }
     }
     diff = await checkoutDiff(p.worktree, ref);
   } catch (err) {

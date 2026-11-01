@@ -1033,8 +1033,9 @@ export async function openWorktrees(
         }
 
         // A room re-resolves a ref for diffs, in the participant checkout.
-        // Keep its full name so HEAD means the repository's branch. A detached
-        // HEAD or a revision such as HEAD~1 stays pinned to the SHA above.
+        // Keep its full name so HEAD means the repository's branch. Detached
+        // HEAD prints HEAD; a revision such as HEAD~1 prints nothing. Both
+        // stay pinned to the SHA above.
         const symbolic = await tryGit(root, [
           "rev-parse",
           "--verify",

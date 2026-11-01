@@ -183,6 +183,21 @@ export async function editDiff(
   }
 }
 
+/** Whether `ancestor` is an ancestor of `ref`. Exit 1 means false. */
+export async function isAncestor(
+  dir: string,
+  ancestor: string,
+  ref: string,
+): Promise<boolean> {
+  try {
+    await git(dir, ["merge-base", "--is-ancestor", ancestor, ref]);
+    return true;
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 1) return false;
+    throw err;
+  }
+}
+
 /**
  * The merge base of a configured base ref and another ref. Undefined when
  * the base ref no longer resolves, so a room can use its saved SHA. Other

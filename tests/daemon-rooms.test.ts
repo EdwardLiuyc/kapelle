@@ -1992,6 +1992,67 @@ for (const operation of [
   });
 }
 
+test("a base ref that rewinds does not claim the old base as agent work", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const first = headAt(cwd);
+  await commitAt(cwd, "base.txt");
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const p = only(open.body);
+  await commitAt(p.worktree, "agent.txt");
+  const rewind = spawnSync("git", ["reset", "--hard", first], {
+    cwd,
+    encoding: "utf8",
+  });
+  assert.equal(rewind.status, 0, rewind.stderr);
+
+  const diff = await api<Diff>(
+    d,
+    "GET",
+    `/rooms/${open.body.id}/agents/${p.id}/diff?against=base`,
+  );
+  assert.equal(diff.status, 200);
+  assert.match(diff.body.text, /agent\.txt/);
+  assert.doesNotMatch(diff.body.text, /base\.txt/);
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+});
+
+test("a participant reset behind its saved base keeps the current merge base", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const first = headAt(cwd);
+  await commitAt(cwd, "base.txt");
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const p = only(open.body);
+  await commitAt(p.worktree, "agent.txt");
+  const reset = spawnSync("git", ["reset", "--hard", first], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(reset.status, 0, reset.stderr);
+
+  const diff = await api<Diff>(
+    d,
+    "GET",
+    `/rooms/${open.body.id}/agents/${p.id}/diff?against=base`,
+  );
+  assert.equal(diff.status, 200);
+  assert.deepEqual(diff.body, { text: "", files: 0, added: 0, removed: 0 });
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+});
+
 test("the configured base ref survives restart; an old record uses its saved SHA", async (t) => {
   const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
   const originalBase = alice.baseSha;
