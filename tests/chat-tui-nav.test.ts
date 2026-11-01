@@ -345,6 +345,30 @@ test("chat.ts on a real terminal clicks a history-rail mark and moves the active
     )?.[0];
   const activeBefore = activeRow();
   assert.ok(activeBefore !== undefined, "the rail has an active mark");
+  // A row change is not a reliable identity test: the window can slide under
+  // the active mark and leave it on the same screen row. Hover the active pip
+  // instead and read the history row its card names.
+  const hovered = async (at: number) => {
+    const start = screen.out().length;
+    screen.child.stdin.write(`\x1b[<35;130;${at}M`);
+    for (const until = Date.now() + 5_000; ; ) {
+      const card = /you → mock-agent: m\d+/.exec(
+        plainText(screen.out().slice(start)),
+      )?.[0];
+      if (card) return card;
+      assert.ok(
+        Date.now() < until,
+        `no card at rail row ${at}: ${screen.out()}`,
+      );
+      await new Promise((ok) => setTimeout(ok, 50));
+    }
+  };
+  const beforeText = await hovered(activeBefore);
+  assert.notEqual(
+    beforeText,
+    `you → mock-agent: m${first}`,
+    "the clicked mark was not already active",
+  );
   const from = screen.out().length;
   // At 130 columns the sidebar is shown, and the rail is the last two cells
   // of the row. Row 2 is its first mark.
@@ -358,10 +382,15 @@ test("chat.ts on a real terminal clicks a history-rail mark and moves the active
   );
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   assert.match(drawn, /\x1b\[7m●/, "the active mark was redrawn");
+  await new Promise((ok) => setTimeout(ok, 100));
   const activeAfter = activeRow();
-  assert.ok(
-    activeAfter !== undefined && activeAfter !== activeBefore,
-    `the active mark moved: ${activeBefore} -> ${activeAfter}`,
+  assert.ok(activeAfter !== undefined, "the rail still has an active mark");
+  const afterText = await hovered(activeAfter);
+  assert.notEqual(afterText, beforeText, "the active mark moved");
+  assert.equal(
+    afterText,
+    `you → mock-agent: m${first}`,
+    "the active mark is the clicked message",
   );
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");

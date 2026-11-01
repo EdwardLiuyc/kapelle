@@ -836,7 +836,8 @@ export const plainText = (out: string) =>
   out.replace(ESCAPES, "").replace(/\r/g, "");
 
 /** The screen now, by row. pi-tui writes a row as CSI row;1H, CSI 2K, so
- *  the last text written to each row is what it shows. */
+ *  the last text written to each row is what it shows. `raw` keeps its SGR
+ *  codes, for a test that checks styling. */
 export function screenRows(out: string, raw = false) {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
   const parts = out.split(/\x1b\[(\d+);1H\x1b\[2K/);
@@ -876,10 +877,14 @@ export async function roomLog(
     join(stateDirFor(root), "rooms", id, "events.jsonl"),
     "utf8",
   );
-  return text
-    .split("\n")
-    .filter(Boolean)
-    .map((l) => JSON.parse(l));
+  return (
+    text
+      .split("\n")
+      .filter(Boolean)
+      // A malformed event log is a test failure, not something to swallow.
+      // pi-lens-ignore: unchecked-throwing-call-js
+      .map((l) => JSON.parse(l))
+  );
 }
 
 /** The answers in `lines`, in order. */
