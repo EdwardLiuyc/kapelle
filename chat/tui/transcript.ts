@@ -613,7 +613,8 @@ class Transcript extends Container {
     if (!model || !scroll) return [];
 
     const following = scroll.isFollowingEnd;
-    const anchor = following ? undefined : model.anchorAt(scroll.scrollTop);
+    const anchor =
+      all || following ? undefined : model.anchorAt(scroll.scrollTop);
     model.setWidth(width);
     const viewport = Math.max(
       0,
@@ -705,14 +706,14 @@ function transcriptParts({
   rooms,
   view,
   setStatus,
-  viewportRows = () => Number.POSITIVE_INFINITY,
+  viewportRows,
 }: {
   tui: TuiAltScreen;
   rooms: ReadonlyMap<string, Followed>;
   view: () => View;
   setStatus: () => void;
-  /** Rows the screen gives the transcript before pi-tui lays it out. */
-  viewportRows?: () => number;
+  /** Live row count, or an explicit full-window sentinel in tests. */
+  viewportRows: () => number;
 }) {
   let scroll: ScrollView;
   const transcript = new Transcript(viewportRows, () => tui.requestRender());

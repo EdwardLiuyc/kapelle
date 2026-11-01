@@ -23,6 +23,7 @@ test("a copy loses each row's bar, and keeps a typed one", () => {
 });
 
 const id = (s: string) => s;
+const FULL_TRANSCRIPT = () => Number.POSITIVE_INFINITY;
 const THEME = {
   heading: id,
   link: id,
@@ -269,6 +270,7 @@ test("an answer streamed through draw, chunk by chunk, draws as its whole text",
     rooms,
     view: () => ({ roomId: "r1" }),
     setStatus() {},
+    viewportRows: FULL_TRANSCRIPT,
   });
   parts.redraw();
   for (let at = 0; at < ANSWER.length; at += 7) {
@@ -333,6 +335,7 @@ test("a fast-forward draws a line naming both participants", () => {
     rooms,
     view: () => ({ roomId: "r1" }),
     setStatus() {},
+    viewportRows: FULL_TRANSCRIPT,
   });
   parts.redraw();
   const plain = (rows: string[]) =>
@@ -374,6 +377,7 @@ function afterRevive(revived: RoomEventLine["update"]): string {
     rooms,
     view: () => ({ roomId: "r1" }),
     setStatus() {},
+    viewportRows: FULL_TRANSCRIPT,
   });
   parts.redraw();
   return (
@@ -474,6 +478,7 @@ function look(more?: (line: Line) => void) {
     rooms,
     view: () => ({ roomId: "r1" }),
     setStatus() {},
+    viewportRows: FULL_TRANSCRIPT,
   });
   parts.redraw();
   return parts.transcript.render(80);
@@ -588,6 +593,7 @@ test("a tool call is one row that its updates change in place, with ✗ in red (
     rooms,
     view: () => ({ roomId: "r1" }),
     setStatus() {},
+    viewportRows: FULL_TRANSCRIPT,
   });
   parts.redraw();
   const children = parts.transcript.children.length;
@@ -650,6 +656,7 @@ test("a completed multi-line command has a background on every row (#351)", (t) 
     rooms,
     view: () => ({ roomId: "r1" }),
     setStatus() {},
+    viewportRows: FULL_TRANSCRIPT,
   });
   parts.redraw();
   const rows = parts.transcript.render(40);
@@ -707,6 +714,7 @@ function runRoom() {
     rooms,
     view: () => ({ roomId: "r1" }),
     setStatus() {},
+    viewportRows: FULL_TRANSCRIPT,
   });
   const send = (who: string, update: Record<string, unknown>) => {
     const e = applyLine(state, {
@@ -1304,9 +1312,9 @@ test("a rows-only viewport growth mounts the whole new viewport", () => {
     seq: i + 1,
     at: "2026-10-31T00:00:00Z",
     participantId: "p-ann",
-    type: "user",
-    text: `message ${i}`,
-    turn: i + 1,
+    type: "stall",
+    kind: "idle",
+    text: `line ${i}`,
   })) as Entry[];
   const rooms = new Map([
     ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
@@ -1320,15 +1328,67 @@ test("a rows-only viewport growth mounts the whole new viewport", () => {
     viewportRows: () => viewport,
   });
   parts.redraw();
-  let rows = parts.transcript.render(80);
+  const rows = parts.transcript.render(80);
   parts.scroll.updateLayout(rows.length, viewport, () => {});
   const model = parts.model();
   assert.ok(model);
   viewport = 30;
-  rows = parts.transcript.render(80);
-  const probe = model.at(model.total - 25);
-  assert.ok(probe, "the probe row is inside the transcript");
-  assert.ok(probe.parts, "the new viewport height is mounted");
+  parts.transcript.render(80);
+  const top = model.total - 30;
+  // One-row notices make the private 8-row margin exact. A change to the
+  // margin moves one of these two boundaries and fails the test.
+  const start = top - 8;
+  assert.ok(model.at(top)?.parts, "the new viewport is covered");
+  assert.ok(model.at(start)?.parts, "the lower margin is mounted");
+  assert.equal(
+    model.at(start - 1)?.parts,
+    undefined,
+    "the window stays bounded",
+  );
+});
+
+test("the exit render does not restore a reading anchor", () => {
+  const state = newRoomState();
+  state.timeline = Array.from({ length: 100 }, (_, i) => ({
+    seq: i + 1,
+    at: "2026-10-31T00:00:00Z",
+    participantId: "p-ann",
+    type: "stall",
+    kind: "idle",
+    text: `line ${i}`,
+  })) as Entry[];
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 10,
+  });
+  parts.redraw();
+  const rows = parts.transcript.render(80);
+  parts.scroll.updateLayout(rows.length, 10, () => {});
+  const model = parts.model();
+  assert.ok(model);
+  // Make one item above the anchor differ from its last measurement.
+  const drifted = model.at(1);
+  assert.ok(drifted);
+  model.measure(drifted, drifted.height + 1);
+  parts.scroll.scrollTo(5, { disableFollow: true });
+  assert.equal(parts.scroll.isFollowingEnd, false);
+  let synced = 0;
+  let scrolled = 0;
+  parts.transcript.syncScroll = () => {
+    synced += 1;
+  };
+  parts.scroll.scrollTo = () => {
+    scrolled += 1;
+  };
+  parts.transcript.render(80, true);
+  assert.equal(synced, 0, "exit does not sync the viewport");
+  assert.equal(scrolled, 0, "exit does not move the scroll anchor");
 });
 
 test("the model's tops follow a growing answer and a folded tool run", () => {
@@ -1629,7 +1689,7 @@ test("an anchor row move requests the next frame without a measurement change", 
     viewportRows: () => 10,
   });
   parts.redraw();
-  let rows = parts.transcript.render(20);
+  const rows = parts.transcript.render(20);
   parts.scroll.updateLayout(rows.length, 10, () => {});
   parts.scroll.scrollTo(parts.scroll.scrollTop - 5, { disableFollow: true });
   const model = parts.model();
@@ -1646,9 +1706,44 @@ test("an anchor row move requests the next frame without a measurement change", 
   };
   parts.transcript.syncScroll = () => {};
   renders = 0;
-  rows = parts.transcript.render(40);
+  parts.transcript.render(40);
   assert.notEqual(parts.scroll.scrollTop, beforeRow, "the anchor row moved");
   assert.ok(renders > 0, "the moved anchor requests a redraw");
+});
+
+test("a width change keeps the same anchor item and offset", () => {
+  const state = newRoomState();
+  state.timeline = Array.from({ length: 80 }, (_, i) => ({
+    seq: i + 1,
+    at: "2026-10-31T00:00:00Z",
+    participantId: "p-ann",
+    type: "stall",
+    kind: "idle",
+    text: `line ${i} with enough words to wrap at a narrow width`,
+  })) as Entry[];
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 10,
+  });
+  parts.redraw();
+  let rows = parts.transcript.render(40);
+  parts.scroll.updateLayout(rows.length, 10, () => {});
+  parts.scroll.scrollTo(parts.scroll.scrollTop - 5, { disableFollow: true });
+  const model = parts.model();
+  assert.ok(model);
+  const before = model.anchorAt(parts.scroll.scrollTop);
+  assert.ok(before);
+  rows = parts.transcript.render(20);
+  parts.scroll.updateLayout(rows.length, 10, () => {});
+  const after = model.anchorAt(parts.scroll.scrollTop);
+  assert.equal(after?.item, before.item, "the same item stays at the top");
+  assert.equal(after?.offset, before.offset, "at the same row in it");
 });
 
 /** A room with `count` simple user messages, ready for the window test. */
