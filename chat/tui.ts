@@ -167,6 +167,8 @@ const NO_AGENTS = "no agents: ctrl+o → add agent";
 /** What the first ctrl+c says, and how long a second one leaves. */
 const AGAIN = "press ctrl+c again to leave";
 const AGAIN_MS = 1500;
+/** How long in-turn changed-file signals settle before one diff read (M7-3). */
+const CHANGE_REFRESH_MS = 250;
 
 /**
  * Where the screen's parts go (#242). One `HStack`, `row`: the sidebar or
@@ -411,9 +413,10 @@ function chatTui(
   };
 
   /** Loads a thread's changed-files block (M7-3): one request, on the
-   *  thread's open and on each of its turns' end. A failure, `409 no_diff`
-   *  included, leaves no block; only the newest reply for the open thread
-   *  wins, so two loads cannot land out of order. */
+   *  thread's open, after its in-turn file signals settle, and at each turn's
+   *  end or exit. A failure, `409 no_diff` included, leaves no block; only the
+   *  newest reply for the open thread wins, so two loads cannot land out of
+   *  order. */
   let changeSeq = 0;
   const loadChanges = async (roomId: string, participantId: string) => {
     const key = changeKey(roomId, participantId);
@@ -430,6 +433,60 @@ function chatTui(
     }
     tui.requestRender();
   };
+
+  /** The open thread's tool calls that named something file-related (M7-3).
+   *  A call's later completion often carries only its status. */
+  const fileCalls = new Set<string>();
+  const fileRelated = (u: {
+    kind?: string;
+    content?: readonly { type: string }[];
+    locations?: readonly unknown[];
+  }) =>
+    u.kind === "edit" ||
+    u.kind === "delete" ||
+    u.kind === "move" ||
+    (u.content?.some((c) => c.type === "diff") ?? false) ||
+    (u.locations?.length ?? 0) > 0;
+
+  /** At most one in-turn diff request runs; later signals wait for one more. */
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let refreshRunning = false;
+  let refreshQueued: { roomId: string; participantId: string } | undefined;
+  const cancelRefresh = () => {
+    clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+    refreshQueued = undefined;
+  };
+  const refreshChanges = async (roomId: string, participantId: string) => {
+    if (changeKey(roomId, participantId) !== openChangeKey()) return;
+    if (refreshRunning) {
+      refreshQueued = { roomId, participantId };
+      return;
+    }
+    refreshRunning = true;
+    try {
+      await loadChanges(roomId, participantId);
+    } finally {
+      refreshRunning = false;
+      const next = refreshQueued;
+      refreshQueued = undefined;
+      if (
+        next &&
+        changeKey(next.roomId, next.participantId) === openChangeKey()
+      ) {
+        void refreshChanges(next.roomId, next.participantId);
+      }
+    }
+  };
+  const refreshChangesSoon = (roomId: string, participantId: string) => {
+    if (changeKey(roomId, participantId) !== openChangeKey()) return;
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      refreshTimer = undefined;
+      void refreshChanges(roomId, participantId);
+    }, CHANGE_REFRESH_MS);
+  };
+
   /** The one-line bar under the composer (M6-11a, 4a). Empty until the
    *  room set has something to show; `setWhere` fills it. */
   let whereText = "";
@@ -887,6 +944,8 @@ function chatTui(
 
   const open = (next: View) => {
     closeRail();
+    cancelRefresh();
+    fileCalls.clear();
     // A pop-up belongs to the view it opened on.
     if (box.panel) hidePanel();
     const from = view.roomId;
@@ -964,6 +1023,23 @@ function chatTui(
       setStatus();
       return;
     }
+    const openThread =
+      roomId === view.roomId && line.participantId === view.participantId;
+    if (openThread && u.sessionUpdate === "_client_wrote_file") {
+      refreshChangesSoon(roomId, line.participantId);
+    } else if (
+      openThread &&
+      (u.sessionUpdate === "tool_call" ||
+        u.sessionUpdate === "tool_call_update")
+    ) {
+      if (fileRelated(u)) fileCalls.add(u.toolCallId);
+      if (
+        (u.status === "completed" || u.status === "failed") &&
+        fileCalls.delete(u.toolCallId)
+      ) {
+        refreshChangesSoon(roomId, line.participantId);
+      }
+    }
     const onScreen = shows(view, roomId, line.participantId);
     if (onScreen) seen(r.state, line.participantId);
     // A thread also shows the messages its participant sent. Their line
@@ -980,13 +1056,16 @@ function chatTui(
       draw(r.state, e);
     }
     // The open thread's files reload when its turn ends (M7-3). An exit
-    // ends the work too, and R46 is why its files matter.
+    // ends the work too, and R46 is why its files matter. Either replaces a
+    // refresh still waiting on its debounce.
     if (
       e &&
       e.participantId === view.participantId &&
       roomId === view.roomId &&
       (e.type === "turn_ended" || e.type === "exited")
     ) {
+      cancelRefresh();
+      fileCalls.clear();
       void loadChanges(roomId, e.participantId);
     }
     // A rename moves an untouched thread pre-fill to the new name.
@@ -1025,6 +1104,7 @@ function chatTui(
       shell?.kill();
       clearInterval(timer);
       clearTimeout(leaving);
+      cancelRefresh();
       // The screen is going: a later throw gets Node's default again, a
       // stack and a non-zero exit, instead of being swallowed here.
       process.off("uncaughtException", crash);
