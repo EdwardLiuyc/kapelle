@@ -12,7 +12,8 @@
  * - **An agent's checkout.** `checkoutDiff` is the checkout against a ref:
  *   `HEAD` for what is not committed, or the base for the whole branch. New
  *   files git does not track yet are in it too: `git add -N` marks them in a
- *   copy of the index, so the agent's own index never changes.
+ *   copy of the index, so the agent's own index never changes. A room uses
+ *   `mergeBase` to find that base from the configured ref and live `HEAD`.
  * - **A fast-forward preview.** `rangeDiff` diffs `from...to`, so it starts at
  *   the two refs' merge base: a target's own commits are not shown as
  *   deletions, and the source's additions are (M6-11a).
@@ -180,6 +181,25 @@ export async function editDiff(
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
+}
+
+/**
+ * The merge base of a configured base ref and another ref. Undefined when
+ * the base ref no longer resolves, so a room can use its saved SHA. Other
+ * git failures stay errors.
+ */
+export async function mergeBase(
+  dir: string,
+  baseRef: string,
+  ref: string,
+): Promise<string | undefined> {
+  let base: string;
+  try {
+    base = await git(dir, ["rev-parse", "--verify", `${baseRef}^{commit}`]);
+  } catch {
+    return undefined;
+  }
+  return (await git(dir, ["merge-base", base.trim(), ref])).trim();
 }
 
 /**

@@ -1883,6 +1883,16 @@ test("a branch renamed and rebased in a turn reaches the room reply, room.json a
   });
   assert.equal(rebase.status, 0, rebase.stderr);
 
+  // The route derives the new base itself, before a turn can update baseSha.
+  const beforeTurn = await api<Diff>(
+    d,
+    "GET",
+    `/rooms/${open.body.id}/agents/${p.id}/diff?against=base`,
+  );
+  assert.equal(beforeTurn.status, 200);
+  assert.match(beforeTurn.body.text, /diff --git a\/agent\.txt b\/agent\.txt/);
+  assert.doesNotMatch(beforeTurn.body.text, /base\.txt/);
+
   const sent = await api<RoomReply>(
     d,
     "POST",
@@ -1925,6 +1935,177 @@ test("a branch renamed and rebased in a turn reaches the room reply, room.json a
     if (Date.now() > end) assert.fail("room.json never showed the rename");
     await new Promise((ok) => setTimeout(ok, 25));
   }
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+});
+
+for (const operation of [
+  "advance",
+  "merge",
+  "fast-forward",
+  "reset",
+] as const) {
+  test(`the base diff follows current topology after base ${operation}`, async (t) => {
+    const d = await boot(t);
+    const cwd = await added(d, await gitRepo(t));
+    const open = await api<RoomReply>(
+      d,
+      "POST",
+      "/rooms",
+      withAgent(cwd, REMEMBER),
+    );
+    assert.equal(open.status, 201, open.body.error?.message);
+    const p = only(open.body);
+    const git = (...args: string[]) =>
+      spawnSync("git", args, { cwd: p.worktree, encoding: "utf8" });
+
+    // A real merge needs the participant and base to have diverged.
+    if (operation === "merge") await commitAt(p.worktree, "agent.txt");
+    await commitAt(cwd, "base.txt");
+    const moved =
+      operation === "merge"
+        ? git("merge", "--no-edit", "main")
+        : operation === "fast-forward"
+          ? git("merge", "--ff-only", "main")
+          : operation === "reset"
+            ? git("reset", "--hard", "main")
+            : undefined;
+    if (moved) assert.equal(moved.status, 0, moved.stderr);
+    if (operation !== "merge") await commitAt(p.worktree, "agent.txt");
+
+    // The merge-base SHA still goes through checkoutDiff's copied index.
+    await writeFile(join(p.worktree, "README.md"), "dirty\n");
+    await writeFile(join(p.worktree, "new.txt"), "new\n");
+    const before = git("status", "--porcelain").stdout;
+    const diff = await api<Diff & { error: { message: string } }>(
+      d,
+      "GET",
+      `/rooms/${open.body.id}/agents/${p.id}/diff?against=base`,
+    );
+    assert.equal(diff.status, 200, diff.body.error?.message);
+    assert.equal(diff.body.files, 3, diff.body.text);
+    assert.match(diff.body.text, /diff --git a\/agent\.txt b\/agent\.txt/);
+    assert.match(diff.body.text, /diff --git a\/README\.md b\/README\.md/);
+    assert.match(diff.body.text, /diff --git a\/new\.txt b\/new\.txt/);
+    assert.doesNotMatch(diff.body.text, /base\.txt/);
+    assert.equal(git("status", "--porcelain").stdout, before);
+    await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+  });
+}
+
+test("the configured base ref survives restart; an old record uses its saved SHA", async (t) => {
+  const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
+  const originalBase = alice.baseSha;
+  await commitAt(cwd, "base.txt");
+  const switched = spawnSync("git", ["switch", "-c", "switched", "main"], {
+    cwd: alice.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(switched.status, 0, switched.stderr);
+  await commitAt(alice.worktree, "agent.txt");
+
+  const route = `/rooms/${id}/agents/${alice.id}/diff?against=base`;
+  const before = await api<Diff>(first, "GET", route);
+  assert.equal(before.status, 200);
+  assert.match(before.body.text, /agent\.txt/);
+  assert.doesNotMatch(before.body.text, /base\.txt/);
+
+  const file = join(stateDirFor(cwd), "rooms", id, "room.json");
+  const saved = JSON.parse(await readFile(file, "utf8")) as {
+    participants: { baseRef?: string }[];
+  };
+  assert.equal(saved.participants[0]?.baseRef, "refs/heads/main");
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const second = await again();
+  await writeFile(join(alice.worktree, "README.md"), "dirty\n");
+  await writeFile(join(alice.worktree, "new.txt"), "new\n");
+  const restored = await api<Diff>(second, "GET", route);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.files, 3, restored.body.text);
+  assert.doesNotMatch(restored.body.text, /base\.txt/);
+
+  // A record written before baseRef existed keeps the old, defined fallback.
+  process.kill(second.pid, "SIGTERM");
+  assert.equal((await second.done).code, 0);
+  const legacy = JSON.parse(await readFile(file, "utf8")) as {
+    participants: { baseRef?: string; baseSha?: string }[];
+  };
+  assert.equal(legacy.participants[0]?.baseSha, originalBase);
+  delete legacy.participants[0]?.baseRef;
+  await writeFile(file, `${JSON.stringify(legacy, null, 2)}\n`);
+  const third = await again();
+  const fallback = await api<Diff>(third, "GET", route);
+  assert.equal(fallback.status, 200);
+  assert.match(fallback.body.text, /agent\.txt/);
+  assert.match(fallback.body.text, /base\.txt/);
+});
+
+test("a pinned-SHA base stays pinned when the repository branch advances", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const base = headAt(cwd);
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, role: "orchestrator", base }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const p = only(open.body);
+  await commitAt(p.worktree, "agent.txt");
+  await commitAt(cwd, "base.txt");
+  const rebase = spawnSync("git", ["rebase", "main"], {
+    cwd: p.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(rebase.status, 0, rebase.stderr);
+
+  const diff = await api<Diff>(
+    d,
+    "GET",
+    `/rooms/${open.body.id}/agents/${p.id}/diff?against=base`,
+  );
+  assert.equal(diff.status, 200);
+  assert.match(diff.body.text, /agent\.txt/);
+  assert.match(
+    diff.body.text,
+    /base\.txt/,
+    "a newer main does not move an explicitly pinned base",
+  );
+  await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
+});
+
+test("a deleted explicit base ref falls back to the saved base SHA", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const topic = spawnSync("git", ["branch", "topic"], {
+    cwd,
+    encoding: "utf8",
+  });
+  assert.equal(topic.status, 0, topic.stderr);
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER, role: "orchestrator", base: "topic" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const p = only(open.body);
+  const git = (dir: string, ...args: string[]) => {
+    const r = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+  };
+  await commitAt(p.worktree, "agent.txt");
+  await commitAt(cwd, "base.txt");
+  git(cwd, "branch", "-f", "topic", "main");
+  git(p.worktree, "rebase", "topic");
+  const route = `/rooms/${open.body.id}/agents/${p.id}/diff?against=base`;
+
+  const movable = await api<Diff>(d, "GET", route);
+  assert.equal(movable.status, 200);
+  assert.doesNotMatch(movable.body.text, /base\.txt/);
+  git(cwd, "branch", "-D", "topic");
+  const fallback = await api<Diff>(d, "GET", route);
+  assert.equal(fallback.status, 200);
+  assert.match(fallback.body.text, /agent\.txt/);
+  assert.match(fallback.body.text, /base\.txt/);
   await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
 });
 
