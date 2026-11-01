@@ -714,28 +714,46 @@ export const only = (room: RoomDto): ParticipantDto => {
   return room.participants[0] as ParticipantDto;
 };
 
-/** Polls `GET /rooms/:id` until participant `participantId` is idle. */
-export async function participantIdle(
+/** Polls one room until `idle` answers true, then returns that room. */
+async function waitForRoom(
   d: Daemon,
   id: string,
-  participantId: string,
+  idle: (room: RoomReply) => boolean,
+  never: string,
 ): Promise<RoomReply> {
   for (const until = Date.now() + 20_000; Date.now() < until; ) {
     const r = await api<RoomReply>(d, "GET", `/rooms/${id}`);
     assert.equal(r.status, 200);
-    const p = r.body.participants.find((x) => x.id === participantId);
-    if (p && p.status !== "busy") return r.body;
+    if (idle(r.body)) return r.body;
     await new Promise((ok) => setTimeout(ok, 25));
   }
-  throw new Error(`participant ${participantId} in room ${id} never went idle`);
+  throw new Error(never);
 }
 
+/** Polls `GET /rooms/:id` until participant `participantId` is idle. */
+export const participantIdle = (
+  d: Daemon,
+  id: string,
+  participantId: string,
+): Promise<RoomReply> =>
+  waitForRoom(
+    d,
+    id,
+    (room) => {
+      const p = room.participants.find((x) => x.id === participantId);
+      return p !== undefined && p.status !== "busy";
+    },
+    `participant ${participantId} in room ${id} never went idle`,
+  );
+
 /** Polls `GET /rooms/:id` until its one participant is no longer `busy`. */
-export async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
-  const r = await api<RoomReply>(d, "GET", `/rooms/${id}`);
-  assert.equal(r.status, 200);
-  return participantIdle(d, id, only(r.body).id);
-}
+export const roomIdle = (d: Daemon, id: string): Promise<RoomReply> =>
+  waitForRoom(
+    d,
+    id,
+    (room) => only(room).status !== "busy",
+    `room ${id} never went idle`,
+  );
 
 /** Commits one file in a participant's checkout, as the agent itself would
  *  (R37: the supervisor never commits). */

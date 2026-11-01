@@ -355,9 +355,12 @@ test("chat.ts on a real terminal clicks a history-rail mark and moves the active
     row.trimEnd().endsWith("●"),
   ).length;
   assert.ok(marks > 0 && marks < 15, `the rail has a window: ${marks}`);
+  // unpad() strips a pip's trailing cell and space, so identify the active
+  // mark by its bold prefix rather than an exact styled cell.
+  const ACTIVE = "\x1b[1m●";
   const activeRow = () =>
     [...screenRows(screen.out(), true)].find(([, text]) =>
-      text.includes("\x1b[1m\x1b[38;5;255m●"),
+      text.includes(ACTIVE),
     )?.[0];
   const activeBefore = activeRow();
   assert.ok(activeBefore !== undefined, "the rail has an active mark");
@@ -408,10 +411,7 @@ test("chat.ts on a real terminal clicks a history-rail mark and moves the active
     await new Promise((ok) => setTimeout(ok, 50));
   }
   const drawn = screen.out().slice(from);
-  assert.ok(
-    drawn.includes("\x1b[1m\x1b[38;5;255m●"),
-    "the active mark was redrawn",
-  );
+  assert.ok(drawn.includes(ACTIVE), "the active mark was redrawn");
   const activeAfter = activeRow();
   assert.ok(activeAfter !== undefined, "the rail still has an active mark");
   const afterText = await hovered(activeAfter);

@@ -3250,8 +3250,9 @@ that message. The rail is not proportional; a long answer must not push a turn's
 out of place. With more messages than rows, the marks window around the active one, and
 at the bottom the window pins to the tail unless that would leave the active mark out.
 The active mark is the last message whose model top is at or above the viewport top, so
-it follows what the person is reading. It is a bold near-white `●`, while the other marks
-stay dim; there is no background highlight. M7-6's proportional bar stays.
+it follows what the person is reading. It is a bold `●` in the terminal's default
+foreground, while the other marks stay dim; there is no background highlight. M7-6's
+proportional bar stays.
 **The rows come from the virtual model.** `VirtualTranscriptModel` keeps the ordered
 message items and a Fenwick tree of their heights (#323). A rail query reads that index
 and `markTop()`; it does not build a `drawn` list, re-render children, sum rows per mark,
@@ -3279,9 +3280,10 @@ delivers `move` events to the side list's cursor (`chat/tui/pane.ts`), so a term
 sends none is a graceful fallback: no card, with the side history still available.
 *Done when* unit tests cover mark order (the virtual model), the active mark, the sliding
 window, tail preference with active-mark precedence when they conflict, the active mark's
-lighter style, hit mapping, the hide rules, the shared history text cut to two lines, the
-card's screen clamp, and reserving the two columns before content overflows; a component
-test shows a mark click and a chevron click calling the right jump target, and shows the
+bold-versus-dim style with and without `NO_COLOR`, hit mapping, the hide rules, the shared
+history text cut to two lines, the card's screen clamp, and reserving the two columns
+before content overflows; a component test shows a mark click and a chevron click calling
+the right jump target, and shows the
 preview only after the hover delay, replacing it on a mark change and hiding it on leave
 or scroll without taking focus; the #242 layout test shows a numeric `basis`, `shrink: 0`
 and a `visible` callback, and no nested `HStack`; and a pty test clicks a mark, sees that
@@ -3299,8 +3301,8 @@ and the list can never disagree. `historyPreview` wraps that row to two lines.
 `drawn`/`Transcript.rows` rail paragraph is replaced above; the rail must use the
 virtual model's ordered message items and top offsets.
 **Amended 2026-11-01:** the active mark wins when the tail-pinned window would omit it.
-The active pip is a bold near-white foreground dot; the other pips are dim. No inverse
-background is used.
+The active pip is bold in the terminal's default foreground; the other pips are dim.
+No inverse background is used.
 
 ## M8 — Orchestrator
 

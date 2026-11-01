@@ -143,17 +143,45 @@ test("a mark click jumps to it, and the chevrons move one mark", () => {
   assert.equal(jumps[2], entries[1], "up is the previous mark after active");
 });
 
-test("the active mark is a lighter dot, not an inverse block", () => {
+test("the active mark is bold, not an inverse block", () => {
   const { parts } = setup();
   const lines = parts.rail.render(2);
-  const active = lines.find((line) => line.includes("\x1b[1m\x1b[38;5;255m● "));
-  assert.ok(active, "the active mark is bold and near-white");
+  const active = lines.find((line) => line.includes("\x1b[1m● "));
+  assert.ok(active, "the active mark is bold");
   assert.ok(!active.includes("\x1b[7m"), "the active mark has no background");
+  assert.ok(!active.includes("\x1b[38;5;"), "it uses the default foreground");
   assert.equal(
     lines.filter((line) => line.includes("\x1b[2m● ")).length,
     5,
     "every other visible mark stays dim",
   );
+});
+
+test("the active mark stays bold and the others dim under NO_COLOR", () => {
+  const old = process.env.NO_COLOR;
+  process.env.NO_COLOR = "1";
+  try {
+    const { parts } = setup();
+    const lines = parts.rail.render(2);
+    assert.ok(
+      lines.some((line) => line.includes("\x1b[1m● ")),
+      "bold remains the active signal",
+    );
+    assert.equal(
+      lines.filter((line) => line.includes("\x1b[2m● ")).length,
+      5,
+      "dim remains on the other visible marks",
+    );
+    assert.ok(
+      lines.every(
+        (line) => !line.includes("\x1b[38;5;") && !line.includes("\x1b[48;5;"),
+      ),
+      "there is no colour code",
+    );
+  } finally {
+    if (old === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = old;
+  }
 });
 
 test("hover waits, replaces the card and closes when the rail is left", async () => {
