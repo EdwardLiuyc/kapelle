@@ -971,7 +971,7 @@ with ACP names.
 | `_client_participant_changed` | `name?`, `role?`, `mode?`, `model?` | A rename, or a new role, mode or model. Only the changed fields are present. `role: null` means the role was cleared. `model` (since 1.17) is the model the harness runs on after a change of model, also after a refused one, or `null` when the harness names none. |
 | `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. A no-op move writes none. |
 | `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
-| `_client_participant_revived` | `resumed`, `sessionId`, `memoryMayBeBehind?` | A `paused`, `killed` or `exited` participant has a new harness in its own checkout. `resumed` is `loaded` (since 1.9): it loaded its old session and remembers the turns before. Or it is `fresh`: a new session, so it does not. `memoryMayBeBehind` is `true` only with `loaded`, when the participant stopped during a turn: what it remembers may be behind its files. It comes after the `_client_user_message` that revived it, and after the new `_client_harness_spawned`. |
+| `_client_participant_revived` | `resumed`, `sessionId`, `memoryMayBeBehind?` | A `paused`, `killed` or `exited` participant has a new harness in its own checkout. `resumed` is `loaded` (since 1.9): it loaded its old session and remembers the turns before. Or it is `fresh`: a new session, so it does not. `memoryMayBeBehind` is `true` only with `loaded`, when the participant stopped while its prompt was live: what it remembers may be behind its files. It comes after the `_client_user_message` that revived it, and after the new `_client_harness_spawned`. |
 
 Build the roster from these three events. Then a replay shows the roster as it was at
 each `seq`, and a rename by another client shows too. `client/room.ts` does this for a
@@ -1592,16 +1592,23 @@ A removed participant has no stream: this route answers `404` for it. Its lines 
 
 ### `POST /rooms/:id/agents/:agentId/turns/current/cancel`
 
-Cancels the participant's live turn. First it drops the participant's queue; if it held any
-messages, the log gets `_client_queue_cleared`. Then it asks the harness to stop. The
+Cancels the participant's live prompt. A prompt is live from the start of its turn until
+the harness prompt settles. The checkout read after it can keep `status` at `busy`, but
+that read is not cancellable. First the route drops the participant's queue; if it held
+any messages, the log gets `_client_queue_cleared`. Then it asks the harness to stop. The
 session stays, so the participant remembers the turn, and the room stays `active`. To
 replace a message, cancel, then send the new one.
+
+A cancel after the prompt settled, but before its `_client_turn_ended`, is `409 no_turn`.
+It keeps the queue, sends no `session/cancel` and records no cut, so a later revive does
+not warn. The daemon still finishes the checkout read, so the turn's branch and base are
+current before `_client_turn_ended`.
 
 **Reply `202`:** the participant. The turn ends later, on the stream, with
 `_client_turn_ended`.
 
 **Refusals:** `404` `room_not_found` or `participant_not_found`; `409` `room_dismissed`;
-`409` `no_turn` when the participant has no live turn.
+`409` `no_turn` when the participant has no live prompt.
 
 ### `GET /rooms/:id/agents/:agentId/diff`
 
@@ -1737,10 +1744,12 @@ reads every record back:
 - The load replays the old conversation to the daemon. The daemon drops it, so it adds no
   line to the log. The mode is sent to the harness again before the message, because a
   load does not keep it.
-- A participant that stopped during a turn may remember less than its files show. That
-  is a `killed` one, or one with a turn cancelled since its last revive, by a person or
-  by the shutdown. Its loaded revive carries `memoryMayBeBehind: true`. Ask it to check
-  its files before it goes on.
+- A participant that stopped while its prompt was live may remember less than its files
+  show. That is a `killed` one, or one with a prompt cancelled before it settled since
+  its last revive, by a person or by the shutdown. A cancel after settlement, while only
+  the checkout read runs, records no cut and does not warn. A loaded revive for a real
+  cut carries `memoryMayBeBehind: true`. Ask the participant to check its files before it
+  goes on.
 - After a hard kill, claude has once reported a message nobody sent ("continue"). The
   replay does not carry it, so the daemon cannot filter it out.
 - A dismissed room comes back dismissed. Its stream ends once it has replayed. It never

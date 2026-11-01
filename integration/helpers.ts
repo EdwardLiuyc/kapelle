@@ -73,6 +73,42 @@ export async function tempDir(t: TestContext): Promise<string> {
   return dir;
 }
 
+/**
+ * A `git` wrapper that holds every git call while armed until released. It
+ * marks `entered` on the first held call, so a test can wait for the exact
+ * post-prompt checkout read rather than sleeping. Callers put `path` first on
+ * PATH. The wait is bounded so a failed test cannot strand a child forever.
+ */
+export async function gatedGit(t: TestContext) {
+  const dir = await tempDir(t);
+  const found = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" });
+  assert.equal(found.status, 0, found.stderr);
+  const real = found.stdout.trim();
+  const armed = join(dir, "armed");
+  const entered = join(dir, "entered");
+  const release = join(dir, "release");
+  await writeFile(
+    join(dir, "git"),
+    `#!/bin/sh\nif [ -e "${armed}" ]; then\n  : > "${entered}"\n  count=0\n  while [ ! -e "${release}" ] && [ "$count" -lt 200 ]; do\n    sleep 0.05\n    count=$((count + 1))\n  done\nfi\nexec "${real}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  // `tempDir`'s removal hook runs first, so an already-removed release path is
+  // cleanup noise, not a test failure.
+  t.after(async () => {
+    try {
+      await writeFile(release, "");
+    } catch {
+      // The temporary folder may already be gone.
+    }
+  });
+  return {
+    path: `${dir}:${process.env.PATH ?? ""}`,
+    entered,
+    arm: () => writeFile(armed, ""),
+    release: () => writeFile(release, ""),
+  };
+}
+
 /** A committed repository with **no `.gitignore`** — since #129 that is the
  *  shape a run must accept, so it is the shape the suites start from.
  *

@@ -43,6 +43,7 @@ import {
   bootDaemon as boot,
   commitAt,
   type Daemon,
+  gatedGit,
   gitRepo,
   HOSTILE_AGENT,
   hasBranch,
@@ -355,6 +356,61 @@ test("a busy participant queues 16 messages, refuses the seventeenth with 429, a
   );
   assert.equal(of("_client_turn_ended").length, 2, "dismiss ended the second");
   assert.equal(of("_client_harness_spawned").length, 1);
+});
+
+// The test drives the HTTP race, queue, log and record in one scenario: its
+// call count is the proof.
+// pi-lens-ignore: high-fan-out
+test("a cancel after the prompt settled, while the checkout is read, is no_turn and keeps the queue", async (t) => {
+  const gate = await gatedGit(t);
+  const d = await boot(t, undefined, [], undefined, { PATH: gate.path });
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const to = `/rooms/${id}/agents/${only(open.body).id}`;
+  const say = (text: string) =>
+    api<MessageReply>(d, "POST", `${to}/messages`, { text });
+
+  await gate.arm();
+  assert.equal((await say("one")).status, 202);
+  await until("the checkout read", () => existsSync(gate.entered));
+  const waiting = await say("two");
+  assert.equal(waiting.status, 202);
+  assert.equal(waiting.body.queued, 1);
+
+  const cancel = await api<RoomReply>(d, "POST", `${to}/turns/current/cancel`);
+  assert.equal(cancel.status, 409);
+  assert.equal(cancel.body.error.code, "no_turn");
+
+  await gate.release();
+  await roomIdle(d, id);
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+
+  const events = await roomEvents(d, id);
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  assert.deepEqual(
+    of("_client_user_message").map((e) => e.update.text),
+    ["one", "two"],
+    "the queued message still ran",
+  );
+  assert.equal(of("_client_queue_cleared").length, 0);
+  assert.equal(of("_client_cancel_requested").length, 0);
+  assert.deepEqual(
+    of("_client_turn_ended").map((e) => e.update.stopReason),
+    ["end_turn", "end_turn"],
+  );
+
+  const record = JSON.parse(
+    await readFile(join(stateDirFor(cwd), "rooms", id, "room.json"), "utf8"),
+  ) as { participants: { turnCancelled?: true }[] };
+  assert.equal(record.participants[0]?.turnCancelled, undefined);
 });
 
 test("messages to a busy participant are answered in order, and a cancel keeps its memory", async (t) => {
