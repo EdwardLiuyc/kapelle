@@ -91,6 +91,7 @@ import {
   readProjectConfig,
   readProjectLinkPaths,
   readUserConfig,
+  resolveOrchestratorTurnCap,
   resolveRunDefaults,
   warnUnknownConfigEnv,
 } from "./core/config.ts";
@@ -1046,11 +1047,13 @@ async function restoreRooms(): Promise<void> {
           throw new Error(`${record.cwd} is no longer inside ${root}`);
         }
         let limits: ReturnType<typeof roomLimits> | undefined;
+        let turnCap: number | undefined;
         try {
           limits = roomLimits(root);
+          turnCap = resolveOrchestratorTurnCap(root);
         } catch (err) {
           console.error(
-            `room ${id}: ${messageOf(err)}; using the default watchdog limits`,
+            `room ${id}: ${messageOf(err)}; using the default room limits`,
           );
         }
         const bus = createEventBus();
@@ -1062,6 +1065,7 @@ async function restoreRooms(): Promise<void> {
           permissions,
           noteSession,
           ...(limits && { limits }),
+          ...(turnCap !== undefined && { turnCap }),
           ...(roomNotice && { roomNotice }),
         });
         rooms.set(id, {
@@ -1086,7 +1090,7 @@ function roomRefused(err: unknown) {
       ? 400
       : err.code === "participant_not_found"
         ? 404
-        : err.code === "queue_full"
+        : err.code === "queue_full" || err.code === "turn_cap"
           ? 429
           : 409;
   return refusal(status, err.code, err.message);
@@ -1148,8 +1152,10 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
     throw err;
   }
   let limits: ReturnType<typeof roomLimits>;
+  let turnCap: number | undefined;
   try {
     limits = roomLimits(setup.root);
+    turnCap = resolveOrchestratorTurnCap(setup.root);
   } catch (err) {
     throw refusal(400, "invalid_config", messageOf(err));
   }
@@ -1173,6 +1179,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
       permissions,
       noteSession,
       limits,
+      turnCap,
     });
   } catch (err) {
     throw roomRefused(err) ?? refusal(500, "room_open_failed", messageOf(err));
@@ -1278,19 +1285,42 @@ async function patchAgent(
   send(res, 200, toParticipantDto(participant) satisfies ParticipantDto);
 }
 
-/** `PATCH /rooms/:id {title}` — a new title for the room. Answers the room. */
+/** `PATCH /rooms/:id {title?, turnCap?}` — a new title, or a higher
+ *  orchestrator turn cap. Answers the room. */
 async function patchRoom(
   id: string,
   req: IncomingMessage,
   res: ServerResponse,
 ) {
   const entry = roomEntry(id);
-  const body = await readBody(req, ["title"]);
-  if (typeof body.title !== "string" || !body.title.trim()) {
+  const body = await readBody(req, ["title", "turnCap"]);
+  const { title, turnCap } = body;
+  if (title === undefined && turnCap === undefined) {
+    throw refusal(400, "invalid_request", "no change to make");
+  }
+  if (title !== undefined && (typeof title !== "string" || !title.trim())) {
     throw refusal(400, "invalid_request", '"title" must be a non-empty string');
   }
+  if (
+    turnCap !== undefined &&
+    (typeof turnCap !== "number" || !Number.isInteger(turnCap) || turnCap < 1)
+  ) {
+    throw refusal(
+      400,
+      "invalid_request",
+      '"turnCap" must be a whole number 1 or greater',
+    );
+  }
+  if (turnCap !== undefined && turnCap <= entry.room.meta.turnCap) {
+    throw refusal(
+      400,
+      "invalid_request",
+      `"turnCap" must be greater than the room's current cap (${entry.room.meta.turnCap})`,
+    );
+  }
   try {
-    entry.room.retitle(body.title.trim());
+    if (title !== undefined) entry.room.retitle(title.trim());
+    if (turnCap !== undefined) entry.room.raiseTurnCap(turnCap);
   } catch (err) {
     throw changeRefused(err);
   }
@@ -1335,8 +1365,10 @@ function participantEntry(id: string, agentId: string) {
  * which sent the message (M8-1). No `from` means the person. One operator
  * and one token (K6), so `from` is trusted as the rest of the body is; only
  * a sender that is not the orchestrator, or the orchestrator to itself, is
- * `invalid_sender`. The room-wide route goes to the orchestrator, which
- * never sends to itself, so `from` stays an unknown field there.
+ * `invalid_sender`. Each accepted orchestrator message counts toward the
+ * room's cap; the next one at the cap is `429 turn_cap` (M8-7). The room-wide
+ * route goes to the orchestrator, which never sends to itself, so `from`
+ * stays an unknown field there.
  */
 async function postMessage(
   id: string,
@@ -1391,7 +1423,9 @@ async function postMessage(
   const queued = target.status() === "busy" ? target.queued + 1 : 0;
   let turn: Promise<void>;
   try {
-    turn = target.send(text, sender);
+    turn = sender
+      ? entry.room.send(target.id, text, sender)
+      : target.send(text);
   } catch (err) {
     throw roomRefused(err) ?? err;
   }

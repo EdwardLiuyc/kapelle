@@ -604,6 +604,12 @@ export interface ClientQueueClearedEvent extends Meta {
   count: number;
 }
 
+/** The orchestrator's next worker message reached the room's cap (M8-7).
+ *  The refused message has no queued or turn-start line. */
+export interface ClientTurnCapReachedEvent extends Meta {
+  sessionUpdate: "_client_turn_cap_reached";
+}
+
 /** A chat room's turn is over, and the room takes the next message.
  *  `stopReason` is the harness's own word; `error` is set instead when the
  *  prompt threw, which is what a harness that died mid-turn looks like. */
@@ -694,6 +700,7 @@ export type AgentEvent =
   | ClientUserMessageEvent
   | ClientMessageQueuedEvent
   | ClientQueueClearedEvent
+  | ClientTurnCapReachedEvent
   | ClientTurnEndedEvent
   | ClientParticipantAddedEvent
   | ClientParticipantChangedEvent
@@ -1013,6 +1020,7 @@ export function isSessionUpdate(u: AgentEvent): u is SessionUpdate {
         | "_client_user_message"
         | "_client_message_queued"
         | "_client_queue_cleared"
+        | "_client_turn_cap_reached"
         | "_client_turn_ended"
         | "_client_participant_added"
         | "_client_participant_changed"

@@ -132,6 +132,7 @@ const CLIENT_EVENTS: AgentEvent[] = [
   },
   { sessionUpdate: "_client_participant_changed", role: null },
   { sessionUpdate: "_client_participant_removed" },
+  { sessionUpdate: "_client_turn_cap_reached" },
 ];
 
 // --- the exhaustive switch ---------------------------------------------------

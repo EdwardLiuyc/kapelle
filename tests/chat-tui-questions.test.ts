@@ -27,6 +27,7 @@ import {
   MOCK_AGENT,
   noPty,
   only,
+  participantIdle,
   pendingOne,
   plainText,
   ptyScreen,
@@ -158,6 +159,254 @@ test("chat.ts on a real terminal draws a stall warning", {
   screen.child.stdin.write("go\r");
   await screen.seen("! stuck: no activity for");
   // The stalled harness never ends its turn, so ^C is the way out.
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal rings the bell when the orchestrator reaches its turn cap", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime, [], undefined, {
+    KAPELLE_ORCHESTRATOR_TURN_CAP: "1",
+  });
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "po", role: "orchestrator" },
+      { cmd: REMEMBER, name: "dev" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const [po, dev] = open.body.participants;
+  assert.ok(po && dev);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${id}`,
+    { XDG_RUNTIME_DIR: runtime },
+    "dev",
+  );
+  const bells = () => plainText(screen.out()).split("\x07").length - 1;
+  const before = bells();
+  const say = (text: string) =>
+    api(d, "POST", `/rooms/${id}/agents/${dev.id}/messages`, {
+      text,
+      from: po.id,
+    });
+  assert.equal((await say("one")).status, 202);
+  const capped = await say("two");
+  assert.equal(capped.status, 429);
+  assert.equal(capped.body.error.code, "turn_cap");
+  for (const until = Date.now() + 10_000; bells() === before; ) {
+    assert.ok(Date.now() < until, `no cap bell: ${screen.out()}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.equal(bells(), before + 1);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal ignores a cap event replayed from before attach", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime, [], undefined, {
+    KAPELLE_ORCHESTRATOR_TURN_CAP: "1",
+  });
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "po", role: "orchestrator" },
+      { cmd: REMEMBER, name: "dev" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const [po, dev] = open.body.participants;
+  assert.ok(po && dev);
+  const say = (text: string) =>
+    api(d, "POST", `/rooms/${id}/agents/${dev.id}/messages`, {
+      text,
+      from: po.id,
+    });
+  assert.equal((await say("one")).status, 202);
+  await participantIdle(d, id, dev.id);
+  const capped = await say("two");
+  assert.equal(capped.status, 429);
+  assert.equal(capped.body.error.code, "turn_cap");
+  // Raising the cap makes the event in the log history; a screen attaching
+  // now must not ring for it.
+  const raised = await api<RoomReply>(d, "PATCH", `/rooms/${id}`, {
+    turnCap: 2,
+  });
+  assert.equal(raised.status, 200, raised.body.error?.message);
+  // A later accepted message makes a visible marker after the cap event, so
+  // seeing it proves the replay passed the cap line.
+  assert.equal((await say("three")).status, 202);
+  await participantIdle(d, id, dev.id);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${id}`,
+    { XDG_RUNTIME_DIR: runtime },
+    "dev",
+  );
+  await screen.seen("one");
+  await screen.seen("three");
+  const bells = plainText(screen.out()).split("\x07").length - 1;
+  assert.equal(bells, 0, `a stale cap event rang: ${screen.out()}`);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal holds a new cap event until the first room reply", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const roomId = "room-cap-race";
+  const room = {
+    id: roomId,
+    cwd: process.cwd(),
+    status: "active",
+    updatedAt: new Date().toISOString(),
+    // The GET's snapshot predates the cap event, although its answer comes
+    // after it: this is a new event, not one from the initial replay.
+    seq: 1,
+    participants: [
+      {
+        id: "p1",
+        name: "dev",
+        harness: "mock-agent",
+        mode: "auto",
+        status: "idle",
+        notices: [],
+      },
+    ],
+  };
+  let releaseGet: (() => void) | undefined;
+  let releaseEvents: (() => void) | undefined;
+  let roomReads = 0;
+  const fake = createServer((req, res) => {
+    const path = req.url ?? "";
+    if (path === "/version") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ apiVersion: API_VERSION }));
+      return;
+    }
+    if (path === "/harnesses") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("[]");
+      return;
+    }
+    if (path === "/rooms") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify([room]));
+      return;
+    }
+    if (path === `/rooms/${roomId}/events`) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      releaseEvents = () => {
+        res.write(
+          `id: 1\ndata: ${JSON.stringify({
+            seq: 1,
+            roomId,
+            participantId: "p1",
+            update: {
+              sessionUpdate: "_client_participant_added",
+              name: "dev",
+              harness: "mock-agent",
+              mode: "auto",
+            },
+          })}\n\n`,
+        );
+        res.write(
+          `id: 2\ndata: ${JSON.stringify({
+            seq: 2,
+            roomId,
+            participantId: "p1",
+            update: { sessionUpdate: "_client_turn_cap_reached" },
+          })}\n\n`,
+        );
+        // This visible line follows the cap in the same stream. Seeing it
+        // proves the client processed the cap before the GET is released.
+        res.write(
+          `id: 3\ndata: ${JSON.stringify({
+            seq: 3,
+            roomId,
+            participantId: "p1",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "after-cap" },
+            },
+          })}\n\n`,
+        );
+      };
+      return;
+    }
+    if (path === `/rooms/${roomId}`) {
+      roomReads += 1;
+      if (roomReads > 1) {
+        releaseGet = () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(room));
+        };
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(room));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({ error: { code: "no_route", message: `no ${path}` } }),
+    );
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${roomId}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  for (const until = Date.now() + 10_000; !releaseGet || !releaseEvents; ) {
+    assert.ok(
+      Date.now() < until,
+      "the held room read or event stream never came",
+    );
+    await new Promise((ok) => setTimeout(ok, 25));
+  }
+  const send = releaseEvents;
+  assert.ok(send);
+  send();
+  await screen.seen("after-cap");
+  const bells = () => plainText(screen.out()).split("\x07").length - 1;
+  assert.equal(bells(), 0, "nothing rings before the snapshot arrives");
+  const answer = releaseGet;
+  assert.ok(answer);
+  answer();
+  for (const until = Date.now() + 10_000; bells() === 0; ) {
+    assert.ok(
+      Date.now() < until,
+      `new cap event stayed silent: ${screen.out()}`,
+    );
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.equal(bells(), 1);
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

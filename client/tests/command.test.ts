@@ -209,6 +209,16 @@ test("the model list marks the one in use, and says why there is none (M9-6)", (
   ]);
 });
 
+test("/cap takes one number and ignores a mention", () => {
+  assert.deepEqual(parse("/cap 41"), { verb: "cap", turnCap: 41 });
+  assert.deepEqual(parse("@bob /cap 12"), { verb: "cap", turnCap: 12 });
+  // The daemon checks the range and that the value raises the room's cap.
+  assert.deepEqual(parse("/cap 1.5"), { verb: "cap", turnCap: 1.5 });
+  for (const line of ["/cap", "/cap nope", "/cap 1 2"]) {
+    assert.deepEqual(parse(line), { error: "usage: /cap <n>" });
+  }
+});
+
 test("/title takes the rest of the line, and ignores a mention", () => {
   const title = (t: string) => ({ verb: "title", title: t });
   assert.deepEqual(parse("/title login bug"), title("login bug"));

@@ -154,6 +154,7 @@ export type ErrorCode =
   | "run_ended"
   | "already_decided"
   | "queue_full"
+  | "turn_cap"
   | "no_turn"
   | "agent_busy"
   | "not_fast_forward"

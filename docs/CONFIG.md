@@ -9,7 +9,8 @@ Three sources set the knobs that do not belong in a run file (M2-7, #37):
   repository's file.
 - **Project level** — `<repo>/.kapelle/config.json`. Holds the run defaults:
   `stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency` and
-  `retentionMs`, plus `linkPaths` for new worktrees. **Commit it if you want
+  `retentionMs`, plus `orchestratorTurnCap` for new rooms and `linkPaths` for
+  new worktrees. **Commit it if you want
   to** (#129). It used to be
   uncommittable, because `.kapelle/` also held worktrees and run records and
   `checkStateDir` refused a repository that tracked it; that state now lives
@@ -33,8 +34,8 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | Config | Read by | Not read by |
 | --- | --- | --- |
 | User file | the daemon's start, however it is reached: `kapelle daemon start` or bare `kapelle` starting one (M9-2) | in-process CLI, merge, sweep |
-| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits), `kapelle run --file`, `sweepBoot` per repository | plain `kapelle "prompt"`, `merge` |
-| `KAPELLE_*` env | the daemon's start (including bare `kapelle`), every run-default resolution, `kapelle run --file` | plain prompt, merge |
+| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository | plain `kapelle "prompt"`, `merge` |
+| `KAPELLE_*` env | the daemon's start (including bare `kapelle`), every run-default and room-cap resolution, `kapelle run --file` | plain prompt, merge |
 
 ## User file — `$XDG_CONFIG_HOME/kapelle/config.json`
 
@@ -61,8 +62,8 @@ refuses the daemon start (one line, exit 1), before the instance claim.
 
 ## Project file — `<repo>/.kapelle/config.json`
 
-Per-run defaults, retention, and the paths a new worktree links from the main
-checkout. A bad file surfaces per read site:
+Per-run defaults, retention, the orchestrator's turn cap, and the paths a new
+worktree links from the main checkout. A bad file surfaces per read site:
 `POST /repos` → 400; `POST /runs` → 400; `kapelle run --file` → exit 1; the
 boot sweep → `cannot sweep <root>: …` notice and only that repository is
 skipped. The daemon keeps booting and serving the rest.
@@ -75,15 +76,16 @@ skipped. The daemon keeps booting and serving the rest.
 | ✅ | TTL | `{"ttlMs": 60000}` | cancel at 60 s; `0` disables |
 | ✅ | concurrency | `{"maxConcurrency": 2}` | run-file default parallelism 2 (minimum 1) |
 | ✅ | retention | `{"retentionMs": 86400000}` | this repo's terminal runs and dismissed rooms reaped after 1 day; `0` = reap on next sweep |
+| ✅ | orchestrator cap | `{"orchestratorTurnCap": 12}` | new rooms allow 12 worker messages from the orchestrator (minimum 1; default 40) |
 | ✅ | linked paths | `{"linkPaths": ["node_modules"]}` | each new run-task and room-participant checkout mirrors the path from the main checkout; a missing path is skipped |
-| ✅ | all six | — | all applied (a run-file value still wins for the run knobs) |
-| ❌ | unknown key | `{"stallIdle": 1}` | `<path>: unknown key "stallIdle". Known: stallIdleMs, stallRepeatCount, ttlMs, maxConcurrency, retentionMs, linkPaths.` |
+| ✅ | all seven | — | all applied (a run-file value still wins for the run knobs) |
+| ❌ | unknown key | `{"stallIdle": 1}` | `<path>: unknown key "stallIdle". Known: stallIdleMs, stallRepeatCount, ttlMs, maxConcurrency, retentionMs, orchestratorTurnCap, linkPaths.` |
 | ❌ | wrong-layer key | `{"port": 5000}` | `<path>: "port" is daemon-wide; put it in <user-config-path>.` |
 | ❌ | wrong type | `{"ttlMs": "soon"}`, `{"maxConcurrency": 1.5}`, `{"linkPaths": "node_modules"}` | whole-number rule naming the key, or the `linkPaths` array rule |
 | ❌ | bad link path | `{"linkPaths": ["/x"]}`, `["../x"]`, `["a", "a/b"]`, `[".git"]`, `["sub/.git"]`, `42` | entry-specific rule naming the file and `linkPaths[i]` |
 | ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path whose real target leaves the checkout | refused when the repository is added, a run starts, or a room opens, as `invalid_config` |
 | ❌ | link git would see | an untracked path no ignore rule matches | refused when a checkout is made: the task fails, or the room's add is a 400 `invalid_config`; the links are removed again |
-| ❌ | out of range | negatives; `{"maxConcurrency": 0}` | `0 or greater` (watchdog/retention) or `1 or greater` (concurrency) |
+| ❌ | out of range | negatives; `{"maxConcurrency": 0}`, `{"orchestratorTurnCap": 0}` | `0 or greater` (watchdog/retention) or `1 or greater` (concurrency/cap) |
 | ❌ | invalid JSON / non-object / unreadable | — | the same three structural refusals as the user file |
 | ⚠ | — | — | files never warn |
 
@@ -128,6 +130,7 @@ Known name → knob → accepted values:
 | `KAPELLE_TTL_MS` | `ttlMs` | integer ≥ 0 |
 | `KAPELLE_MAX_CONCURRENCY` | `maxConcurrency` | integer ≥ 1 |
 | `KAPELLE_RETENTION_MS` | `retentionMs` | integer ≥ 0 |
+| `KAPELLE_ORCHESTRATOR_TURN_CAP` | `orchestratorTurnCap` | integer ≥ 1 |
 
 ## Precedence and built-in floors
 
@@ -136,6 +139,7 @@ Known name → knob → accepted values:
 | `stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency` | task value → run-file run-level → `KAPELLE_*` → project config → default | 300 000 ms / 8 / 3 600 000 ms / 4 |
 | `port`, `permissionTimeoutMs` | CLI flag → `KAPELLE_*` → user config → default | 4719 / 120 000 ms |
 | `retentionMs` | `sweepBoot` option (tests) → `KAPELLE_RETENTION_MS` → project config → default | 30 days |
+| `orchestratorTurnCap` | room PATCH → `KAPELLE_ORCHESTRATOR_TURN_CAP` → project config → default | 40 |
 | `linkPaths` | project config only (no env, no run-file field) | no links |
 
 Notes:
@@ -153,7 +157,7 @@ Notes:
 
 - `core/config.ts` — key sets, value rules, both file readers, the `KAPELLE_*`
   reader, `warnUnknownConfigEnv`, `resolveRunDefaults`, `resolveRetentionMs`,
-  `readProjectLinkPaths`.
+  `resolveOrchestratorTurnCap`, `readProjectLinkPaths`.
 - `core/worktree.ts` — `openWorktrees` plans and makes the `linkPaths` mirrors,
   and refuses a tracked, escaping, or still-visible link.
 - `daemon.ts` — `DEFAULT_PORT` / `DEFAULT_PERMISSION_TIMEOUT_S` and flag

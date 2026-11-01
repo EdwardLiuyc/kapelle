@@ -7,7 +7,8 @@
  *   (M2-1), so these cannot come from any one repository's file.
  * - **Project level** — `<root>/.kapelle/config.json`, for the run defaults
  *   (`stallIdleMs`, `stallRepeatCount`, `ttlMs`, `maxConcurrency`), the
- *   retention window and the paths a new worktree links.
+ *   retention window, the orchestrator's turn cap and the paths a new worktree
+ *   links.
  * - **`KAPELLE_*` environment** — above both files, below an explicit CLI flag
  *   or run-file value.
  *
@@ -42,14 +43,14 @@ interface ConfigValues {
   ttlMs?: number;
   maxConcurrency?: number;
   retentionMs?: number;
+  orchestratorTurnCap?: number;
   linkPaths?: string[];
 }
 
 /** A knob that is a number. `linkPaths` is the one project value that is not. */
 type NumericConfigKey = Exclude<keyof ConfigValues, "linkPaths">;
 
-/** The per-run defaults. `retentionMs` is the other repository-level knob;
- *  `PROJECT_KEYS` adds it just below. */
+/** The per-run defaults. The other repository-level knobs join `PROJECT_KEYS`. */
 const RUN_DEFAULT_KEYS = [
   "stallIdleMs",
   "stallRepeatCount",
@@ -58,7 +59,12 @@ const RUN_DEFAULT_KEYS = [
 ] as const satisfies readonly (keyof RunDefaults)[];
 
 const USER_KEYS = ["port", "permissionTimeoutMs"] as const;
-const PROJECT_KEYS = [...RUN_DEFAULT_KEYS, "retentionMs", "linkPaths"] as const;
+const PROJECT_KEYS = [
+  ...RUN_DEFAULT_KEYS,
+  "retentionMs",
+  "orchestratorTurnCap",
+  "linkPaths",
+] as const;
 
 /** The one place a `KAPELLE_*` name is given a meaning. Anything else under
  *  the prefix warns and stays out — it may be a secret. */
@@ -70,6 +76,7 @@ const ENV_KEYS = {
   KAPELLE_TTL_MS: "ttlMs",
   KAPELLE_MAX_CONCURRENCY: "maxConcurrency",
   KAPELLE_RETENTION_MS: "retentionMs",
+  KAPELLE_ORCHESTRATOR_TURN_CAP: "orchestratorTurnCap",
 } as const satisfies Record<string, keyof ConfigValues>;
 
 /**
@@ -135,6 +142,7 @@ function checkKnob(key: NumericConfigKey, value: unknown, where: string) {
     case "permissionTimeoutMs":
       return permissionTimeoutMs(value, where);
     case "maxConcurrency":
+    case "orchestratorTurnCap":
       return integerAtLeast(value, where, 1);
     default:
       return integerAtLeast(value, where, 0);
@@ -408,4 +416,14 @@ export function resolveRetentionMs(
   // repository's sweep (issue #37 AC4) just because the env named a window.
   const project = readProjectConfig(root);
   return readEnvConfig(env).retentionMs ?? project.retentionMs;
+}
+
+/** A new room's orchestrator turn cap: `env > project config`, or the
+ *  caller's default. A room's own later change is saved in `room.json`. */
+export function resolveOrchestratorTurnCap(
+  root: string,
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const project = readProjectConfig(root);
+  return readEnvConfig(env).orchestratorTurnCap ?? project.orchestratorTurnCap;
 }

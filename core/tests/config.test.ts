@@ -22,6 +22,7 @@ import {
   readProjectConfig,
   readProjectLinkPaths,
   readUserConfig,
+  resolveOrchestratorTurnCap,
   resolveRetentionMs,
   resolveRunDefaults,
   userConfigPath,
@@ -107,7 +108,7 @@ test("a wrong type in the user config is refused", async (t) => {
   );
 });
 
-test("a valid project config loads every per-run knob", async (t) => {
+test("a valid project config loads every numeric project knob", async (t) => {
   const root = await tempDir(t);
   await writeProject(root, {
     stallIdleMs: 1,
@@ -115,6 +116,7 @@ test("a valid project config loads every per-run knob", async (t) => {
     ttlMs: 3,
     maxConcurrency: 4,
     retentionMs: 5,
+    orchestratorTurnCap: 6,
   });
   assert.deepEqual(readProjectConfig(root), {
     stallIdleMs: 1,
@@ -122,6 +124,7 @@ test("a valid project config loads every per-run knob", async (t) => {
     ttlMs: 3,
     maxConcurrency: 4,
     retentionMs: 5,
+    orchestratorTurnCap: 6,
   });
 });
 
@@ -188,7 +191,7 @@ test("a daemon-wide key in the project config points at the user file", async (t
   assert.throws(() => readProjectConfig(root), /"port" is daemon-wide/);
 });
 
-test("an unknown project key is refused naming file and key", async (t) => {
+test("an unknown project key is refused naming file, key and the known keys", async (t) => {
   const root = await tempDir(t);
   await writeProject(root, { stallIdle: 1 });
   assert.throws(
@@ -196,7 +199,8 @@ test("an unknown project key is refused naming file and key", async (t) => {
     (err: unknown) =>
       err instanceof Error &&
       err.message.includes(join(root, ".kapelle", "config.json")) &&
-      err.message.includes('unknown key "stallIdle"'),
+      err.message.includes('unknown key "stallIdle"') &&
+      err.message.includes("orchestratorTurnCap"),
   );
 });
 
@@ -254,8 +258,12 @@ test("a config file anyone else can write, or a symlink, is refused", async (t) 
 
 test("env config parses known names and refuses bad values", () => {
   assert.deepEqual(
-    readEnvConfig({ KAPELLE_TTL_MS: "5", KAPELLE_MAX_CONCURRENCY: "3" }),
-    { ttlMs: 5, maxConcurrency: 3 },
+    readEnvConfig({
+      KAPELLE_TTL_MS: "5",
+      KAPELLE_MAX_CONCURRENCY: "3",
+      KAPELLE_ORCHESTRATOR_TURN_CAP: "12",
+    }),
+    { ttlMs: 5, maxConcurrency: 3, orchestratorTurnCap: 12 },
   );
   assert.throws(
     () => readEnvConfig({ KAPELLE_TTL_MS: "soon" }),
@@ -268,6 +276,10 @@ test("env config parses known names and refuses bad values", () => {
   assert.throws(
     () => readEnvConfig({ KAPELLE_MAX_CONCURRENCY: "0" }),
     /KAPELLE_MAX_CONCURRENCY must be a whole number 1 or greater/,
+  );
+  assert.throws(
+    () => readEnvConfig({ KAPELLE_ORCHESTRATOR_TURN_CAP: "0" }),
+    /KAPELLE_ORCHESTRATOR_TURN_CAP must be a whole number 1 or greater/,
   );
   assert.throws(
     () => readEnvConfig({ KAPELLE_TTL_MS: "  " }),
@@ -293,8 +305,22 @@ test("unknown KAPELLE_* names warn and are ignored, known ones do not", () => {
   );
 
   notices.length = 0;
-  warnUnknownConfigEnv({ KAPELLE_TTL_MS: "1" }, (text) => notices.push(text));
+  warnUnknownConfigEnv(
+    { KAPELLE_TTL_MS: "1", KAPELLE_ORCHESTRATOR_TURN_CAP: "12" },
+    (text) => notices.push(text),
+  );
   assert.deepEqual(notices, []);
+});
+
+test("the orchestrator turn cap resolves from env above project config", async (t) => {
+  const root = await tempDir(t);
+  assert.equal(resolveOrchestratorTurnCap(root, {}), undefined);
+  await writeProject(root, { orchestratorTurnCap: 12 });
+  assert.equal(resolveOrchestratorTurnCap(root, {}), 12);
+  assert.equal(
+    resolveOrchestratorTurnCap(root, { KAPELLE_ORCHESTRATOR_TURN_CAP: "13" }),
+    13,
+  );
 });
 
 test("run file > env > project config > built-in", async (t) => {

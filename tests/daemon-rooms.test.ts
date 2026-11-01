@@ -51,6 +51,7 @@ import {
   MOCK_AGENT,
   only,
   type Pending,
+  participantIdle,
   pendingOne,
   REMEMBER,
   type RoomReply,
@@ -575,6 +576,105 @@ test("a message from the orchestrator names it: on the log, and as the harness's
   );
 });
 
+test("the orchestrator turn cap counts accepted messages, survives a restart, and can be raised", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const root = await gitRepo(t);
+  await mkdir(join(root, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(root, ".kapelle", "config.json"),
+    JSON.stringify({ orchestratorTurnCap: 1 }),
+    { mode: 0o644 },
+  );
+  const cwd = await added(first, root);
+  const open = await api<RoomReply>(first, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "po", role: "orchestrator" },
+      { cmd: `node ${MOCK_AGENT} --scenario slow`, name: "dev" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const [po, dev] = open.body.participants;
+  assert.ok(po && dev);
+  const record = join(stateDirFor(cwd), "rooms", id, "room.json");
+  const saved = async () => JSON.parse(await readFile(record, "utf8"));
+  const say = (d: Daemon, text: string, from?: string) =>
+    api<MessageReply>(d, "POST", `/rooms/${id}/agents/${dev.id}/messages`, {
+      text,
+      ...(from && { from }),
+    });
+
+  assert.equal((await say(first, "person")).status, 202);
+  assert.equal((await saved()).turnCap, 1);
+  assert.equal((await saved()).turnCount, 0, "a person's message is free");
+  const queued = await say(first, "queued", po.id);
+  assert.equal(queued.status, 202, queued.body.error?.message);
+  assert.equal(queued.body.queued, 1);
+  assert.equal((await saved()).turnCount, 1);
+  const capped = await say(first, "capped", po.id);
+  assert.equal(capped.status, 429);
+  assert.equal(capped.body.error.code, "turn_cap");
+  assert.equal((await saved()).turnCount, 1);
+  await participantIdle(first, id, dev.id);
+
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const second = await boot(t, runtime, [], state);
+  const stillCapped = await say(second, "still capped", po.id);
+  assert.equal(stillCapped.status, 429);
+  assert.equal(stillCapped.body.error.code, "turn_cap");
+  assert.equal((await saved()).turnCount, 1);
+
+  const raised = await api<RoomReply>(second, "PATCH", `/rooms/${id}`, {
+    turnCap: 2,
+  });
+  assert.equal(raised.status, 200, raised.body.error?.message);
+  assert.equal((await saved()).turnCap, 2);
+  const admitted = await say(second, "after raise", po.id);
+  assert.equal(admitted.status, 202, admitted.body.error?.message);
+  await participantIdle(second, id, dev.id);
+  assert.equal((await saved()).turnCount, 2);
+
+  // The person's message after po's order makes dev send po a copy. A copy
+  // is not an orchestrator worker message, so it must not use the cap.
+  const copied = await say(second, "person to dev");
+  assert.equal(copied.status, 202, copied.body.error?.message);
+  await participantIdle(second, id, dev.id);
+  await until("the copy", async () =>
+    (await roomLog(cwd, id)).some(
+      (line) =>
+        line.update.sessionUpdate === "_client_user_message" &&
+        typeof line.update.text === "string" &&
+        line.update.text.startsWith("[copy]"),
+    ),
+  );
+  assert.equal((await saved()).turnCount, 2, "a copy does not count");
+
+  const lines = await roomLog(cwd, id);
+  assert.equal(
+    lines.filter(
+      (line) => line.update.sessionUpdate === "_client_turn_cap_reached",
+    ).length,
+    2,
+  );
+  const messages = lines
+    .filter(
+      (line) =>
+        line.update.sessionUpdate === "_client_user_message" ||
+        line.update.sessionUpdate === "_client_message_queued",
+    )
+    .map((line) => line.update.text);
+  for (const refused of ["capped", "still capped"]) {
+    assert.ok(
+      !messages.includes(refused),
+      `${refused} neither queued nor started`,
+    );
+  }
+});
+
 test("one room log names each line's room and participant, and a participant's stream is its own lines", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
@@ -889,7 +989,7 @@ test("participants are added, listed, changed and removed through the routes", a
   }
 });
 
-test("PATCH /rooms/:id renames the room, saves it, and refuses a bad title", async (t) => {
+test("PATCH /rooms/:id renames and raises the cap atomically, with validation", async (t) => {
   const d = await boot(t);
   const cwd = await added(d, await gitRepo(t));
   const open = await api<RoomReply>(d, "POST", "/rooms", { cwd, title: "a" });
@@ -905,12 +1005,25 @@ test("PATCH /rooms/:id renames the room, saves it, and refuses a bad title", asy
   const listed = await api<RoomListEntry[]>(d, "GET", "/rooms");
   assert.equal(listed.body[0]?.title, "login bug");
   const record = join(stateDirFor(cwd), "rooms", id, "room.json");
-  assert.equal(JSON.parse(await readFile(record, "utf8")).title, "login bug");
+  const saved = async () => JSON.parse(await readFile(record, "utf8"));
+  assert.equal((await saved()).title, "login bug");
+  assert.equal((await saved()).turnCap, 40, "the built-in cap");
+  assert.equal((await saved()).turnCount, 0);
 
   for (const [path, body, status, code] of [
     [`/rooms/${id}`, {}, 400, "invalid_request"],
     [`/rooms/${id}`, { title: " " }, 400, "invalid_request"],
     [`/rooms/${id}`, { title: 7 }, 400, "invalid_request"],
+    [`/rooms/${id}`, { turnCap: 0 }, 400, "invalid_request"],
+    [`/rooms/${id}`, { turnCap: 1.5 }, 400, "invalid_request"],
+    [`/rooms/${id}`, { turnCap: "41" }, 400, "invalid_request"],
+    [`/rooms/${id}`, { turnCap: 40 }, 400, "invalid_request"],
+    [
+      `/rooms/${id}`,
+      { title: "not applied", turnCap: 40 },
+      400,
+      "invalid_request",
+    ],
     [`/rooms/${id}`, { title: "x", cwd }, 400, "invalid_request"],
     ["/rooms/nope", { title: "x" }, 404, "room_not_found"],
   ] as const) {
@@ -919,6 +1032,16 @@ test("PATCH /rooms/:id renames the room, saves it, and refuses a bad title", asy
     assert.equal(r.status, status, label);
     assert.equal(r.body.error.code, code, label);
   }
+  assert.equal((await saved()).title, "login bug");
+  assert.equal((await saved()).turnCap, 40);
+
+  const raised = await api<RoomReply>(d, "PATCH", `/rooms/${id}`, {
+    title: "capped",
+    turnCap: 41,
+  });
+  assert.equal(raised.status, 200, raised.body.error?.message);
+  assert.equal(raised.body.title, "capped");
+  assert.equal((await saved()).turnCap, 41);
 
   assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
   const late = await api(d, "PATCH", `/rooms/${id}`, { title: "x" });
@@ -1478,6 +1601,13 @@ test("every typed room command reaches its route", async (t) => {
     beforeTitle.body.seq,
     "a rename writes no room line",
   );
+  const capped = await typed(d, roomId, "/cap 41", await roster());
+  assert.ok(capped.ok, JSON.stringify(capped));
+  assert.equal(capped.line, "raised the orchestrator turn cap to 41");
+  const notRaised = await typed(d, roomId, "/cap 41", await roster());
+  assert.ok(!notRaised.ok);
+  assert.equal(notRaised.code, "invalid_request");
+  assert.match(notRaised.message, /greater than .*41/);
 
   const said = await api(
     d,
