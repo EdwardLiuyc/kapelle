@@ -29,8 +29,9 @@
  * `screenLayout` before you move a part.
  *
  * **An open pop-up is in a spotlight**: the screen behind it loses its
- * colours and is drawn dim (`Screen`), and the box has a thick border in an
- * accent colour (`chat/tui/panel.ts`). A terminal cannot blur.
+ * colours and is drawn dim, but keeps its backgrounds in one gray
+ * (`chat/tui/backdrop.ts`, #407). The box has a thick border in an accent
+ * colour (`chat/tui/panel.ts`). A terminal cannot blur.
  *
  * **pi-tui is ratified under M1c-7's rule (M4-1).** It is presentation only,
  * so its worst failure is a broken screen, never a changed decision; it is
@@ -52,7 +53,6 @@ import {
   matchesKey,
   ProcessTerminal,
   Spacer,
-  stripTerminalSequences,
   Text,
   TuiAltScreen,
   truncateToWidth,
@@ -103,6 +103,7 @@ import {
   unpad,
   yellow,
 } from "./common.ts";
+import { backdropLines } from "./tui/backdrop.ts";
 import { bannerPart } from "./tui/banner.ts";
 import { copySelection } from "./tui/clipboard.ts";
 import { paneParts } from "./tui/pane.ts";
@@ -144,10 +145,10 @@ import {
 } from "./view.ts";
 
 /**
- * pi-tui's screen, with the lines behind an open pop-up dim and without
- * colour, so the box stands out. pi-tui draws the screen from its layout
- * tree, not from `root.render`, so the hook is the step that lays the
- * pop-up over the lines.
+ * pi-tui's screen, with the lines behind an open pop-up in the backdrop
+ * (`chat/tui/backdrop.ts`), so the box stands out. pi-tui draws the screen
+ * from its layout tree, not from `root.render`, so the hook is the step that
+ * lays the pop-up over the lines.
  */
 class Screen extends TuiAltScreen {
   protected override compositeOverlays(
@@ -155,9 +156,7 @@ class Screen extends TuiAltScreen {
     width: number,
     height: number,
   ) {
-    const behind = this.hasOverlay()
-      ? lines.map((l) => dim(stripTerminalSequences(l)))
-      : lines;
+    const behind = this.hasOverlay() ? backdropLines(lines) : lines;
     return super.compositeOverlays(behind, width, height);
   }
 }

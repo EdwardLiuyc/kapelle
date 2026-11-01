@@ -3140,6 +3140,9 @@ call pi's dark-green background and a failed call a dark-red background. Coloure
 rows pad each block; uncoloured rows separate blocks and follow the last one. A bold `$`
 starts every title, while `✓`, `✗` and the spinner keep status readable without colour.
 The success colour has a 256-colour fallback. The piped screen is unchanged.
+**Amended 2026-11-01 (#407):** behind an open pop-up, every background turns one dark
+gray, so a block keeps its shape. The rest loses its colour and is dim, as before. With
+`NO_COLOR` there is no background.
 
 **M7-3 · Sidebar: harness, state mark, timer, changed files · M · needs M7-1**
 An agent's row shows its colour, a state mark (`◐` busy, `?` asks, `!` stall, `⏸`
