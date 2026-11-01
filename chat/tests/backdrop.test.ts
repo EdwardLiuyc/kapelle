@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { bg, bgRgb, fg } from "../common.ts";
+import { bg, bgRgb, fg, inverse } from "../common.ts";
 import { backdropLines } from "../tui/backdrop.ts";
 
 const GRAY = "\x1b[48;5;235m";
@@ -68,6 +68,24 @@ test("only the span that had a background turns gray", (t) => {
   assert.equal(one("\x1b[48:5:52mx\x1b[49my"), dimmed(`${GRAY}x\x1b[49my`));
 });
 
+test("an inverse span is a filled block too, so it turns gray", (t) => {
+  env(t, { NO_COLOR: undefined });
+  // The history list's cursor row and the scrollbar's thumb.
+  assert.equal(one(`a${inverse("cur")}b`), dimmed(`a${GRAY}cur\x1b[49mb`));
+  assert.equal(one("\x1b[7mx\x1b[0my"), dimmed(`${GRAY}x\x1b[49my`));
+  // A background that ends inside an inverse span leaves the span filled.
+  assert.equal(
+    one("\x1b[7m\x1b[41mx\x1b[49my\x1b[27mz"),
+    dimmed(`${GRAY}xy\x1b[49mz`),
+  );
+});
+
+test("a bright background turns gray", (t) => {
+  env(t, { NO_COLOR: undefined });
+  assert.equal(one("\x1b[101mx\x1b[49my"), dimmed(`${GRAY}x\x1b[49my`));
+  assert.equal(one("\x1b[107mx\x1b[0my"), dimmed(`${GRAY}x\x1b[49my`));
+});
+
 test("a colour's numbers are not read as codes of their own", (t) => {
   env(t, { NO_COLOR: undefined });
   // 48 as a 256-colour index, and as a red value: neither is a background.
@@ -75,6 +93,9 @@ test("a colour's numbers are not read as codes of their own", (t) => {
   assert.equal(one("\x1b[38;2;48;0;0mx"), dimmed("x"));
   // 2 and 5 inside a background are not dim and blink.
   assert.equal(one("\x1b[48;5;2mx"), dimmed(`${GRAY}x\x1b[49m`));
+  // An underline colour's numbers are not a background or inverse either.
+  assert.equal(one("\x1b[58;5;41mx"), dimmed("x"));
+  assert.equal(one("\x1b[58;5;7mx"), dimmed("x"));
 });
 
 test("a background left open does not run past its line", (t) => {
