@@ -2028,18 +2028,22 @@ async function slowCheckout(
 test("a gated git releases when its gate folder is removed", async (t) => {
   const gate = await gatedGit(t);
   await gate.arm();
-  const held = new Promise<void>((done) => {
+  const held = new Promise<Error | null>((done) => {
     execFile(
       "git",
       ["--version"],
       { env: { ...process.env, PATH: gate.path }, timeout: 10_000 },
-      () => done(),
+      (err) => done(err),
     );
   });
   await until(() => existsSync(gate.entered), "the held git call");
 
   await rm(gate.dir, { recursive: true, force: true });
-  await held;
+  assert.equal(
+    await held,
+    null,
+    "removing the gate folder released the held call",
+  );
 });
 
 /** The revive event's fields, once there is one. */
