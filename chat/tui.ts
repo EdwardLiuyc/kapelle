@@ -16,9 +16,10 @@
  *
  * **A wait off screen shows under the timeline** (M4-4, #242): an activity
  * row per participant with a question or a stall (`chat/tui/banner.ts`),
- * and the terminal's bell when one starts to wait. No desktop pop-up: too
- * noisy (decided 2026-10-05, #50). A busy agent of the open room gets a row
- * too, and while one shows, the screen redraws once a second (M7-1); the
+ * and the terminal's bell when one starts to wait. The bell also rings when
+ * the orchestrator reaches its room's turn cap (M8-7). No desktop pop-up:
+ * too noisy (decided 2026-10-05, #50). A busy agent of the open room gets a
+ * row too, and while one shows, the screen redraws once a second (M7-1); the
  * sidebar's busy timers need the same tick, in any room (M7-3).
  *
  * **The status line** (M7-1): the target and its mode on the left, its
@@ -543,18 +544,21 @@ function chatTui(
   /** The participants that waited at the bell's last look (M4-4). */
   let waited = new Set<string>();
   let ringing = false;
-  /** Rings the terminal's bell once a participant starts to wait. After
-   *  this chunk of lines, as a question box opens: a replay rings only for
-   *  what is still open at its end. A chunk that splits a question from its
-   *  close still rings: cosmetic. */
-  const ring = () => {
+  let capRinging = false;
+  /** Rings once a participant starts to wait, or its room reaches the
+   *  orchestrator's turn cap. After this chunk of lines, as a question box
+   *  opens: a replay rings only for what is still open at its end. A chunk
+   *  that splits a question from its close still rings: cosmetic. */
+  const ring = (capReached = false) => {
+    capRinging ||= capReached;
     if (ringing) return;
     ringing = true;
     setImmediate(() => {
       ringing = false;
       const b = bell(waited, waiting(rooms));
       waited = b.keys;
-      if (b.ring && !done) process.stdout.write("\x07");
+      if ((b.ring || capRinging) && !done) process.stdout.write("\x07");
+      capRinging = false;
     });
   };
 
@@ -979,9 +983,9 @@ function chatTui(
   const onLine = (roomId: string, line: RoomEventLine, e?: Entry) => {
     const r = rooms.get(roomId);
     if (!r || quiet(r.state, line)) return;
-    ring();
     const u = line.update;
     const kind = u.sessionUpdate;
+    ring(kind === "_client_turn_cap_reached");
     // After this chunk of lines: a replay can close a question in a later
     // line, and its box should not flash open first. A chunk that splits
     // the two lines still flashes it, then closes it: cosmetic.

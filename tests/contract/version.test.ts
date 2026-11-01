@@ -62,11 +62,11 @@ test("GET /version answers the contract version and every capability", async (t)
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("content-type"), "application/json");
   assert.deepEqual(await res.json(), {
-    apiVersion: { major: 1, minor: 18 },
+    apiVersion: { major: 1, minor: 19 },
     capabilities: ["repos", "runs", "events", "permissions", "rooms"],
   });
   // The literal above is the promise; these keep the constants honest to it.
-  assert.deepEqual(API_VERSION, { major: 1, minor: 18 });
+  assert.deepEqual(API_VERSION, { major: 1, minor: 19 });
   assert.deepEqual(
     [...CAPABILITIES],
     ["repos", "runs", "events", "permissions", "rooms"],

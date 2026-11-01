@@ -10,8 +10,8 @@
  * **A participant command starts with `@name`**, as a message does (R43):
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
  * the orchestrator, so a bare `/remove` cannot drop it. Room commands
- * (`/new`, `/add`, `/loop`, `/title`, `/dismiss`, `/delete`, `/leave`,
- * `/help`, `/term`, `/setup`) ignore a mention, so they work after a thread's
+ * (`/new`, `/add`, `/loop`, `/title`, `/cap`, `/dismiss`, `/delete`,
+ * `/leave`, `/help`, `/term`, `/setup`) ignore a mention, so they work after a thread's
  * pre-filled `@name`.
  *
  * **`/loop` is `/new` with a start** (M8-5): a room titled
@@ -72,6 +72,7 @@ export type RouteCommand =
   | { verb: "dismiss" }
   | { verb: "delete" }
   | { verb: "title"; title: string }
+  | { verb: "cap"; turnCap: number }
   | { verb: "remove" | "cancel"; id: string; name: string }
   | {
       verb: "forward";
@@ -117,6 +118,7 @@ export const HELP = [
   "/add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--model id] [--base @name|ref]",
   '/loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--cwd dir]',
   "/title <new title>",
+  "/cap <n>",
   "@name /rename <new name>",
   "@name /role <role|none>",
   "@name /mode <ask|safe|auto>",
@@ -134,6 +136,7 @@ export const USAGE: Record<string, string> = {
   add: HELP[1] as string,
   loop: `usage: ${HELP[2]}`,
   title: "usage: /title <new title>",
+  cap: "usage: /cap <n>",
   rename: "usage: @name /rename <new name>",
   role: "usage: @name /role <role|none>",
   mode: "usage: @name /mode <ask|safe|auto>",
@@ -150,6 +153,7 @@ const ROOM_VERBS = new Set([
   "add",
   "loop",
   "title",
+  "cap",
   "dismiss",
   "delete",
   "leave",
@@ -280,6 +284,13 @@ export function parseCommand(
     const quoted = /^(["'])((?:(?!\1)[\s\S])*)\1$/.exec(raw);
     const title = (quoted?.[2] ?? raw).trim();
     return title ? { verb, title } : { error: USAGE.title as string };
+  }
+  if (verb === "cap") {
+    if (args.length !== 1) return { error: USAGE.cap as string };
+    const turnCap = Number(args[0]);
+    return Number.isFinite(turnCap)
+      ? { verb, turnCap }
+      : { error: USAGE.cap as string };
   }
   if (verb === "loop") {
     const o = options(args, ["agent", "cmd", "cwd"]);
@@ -609,6 +620,18 @@ export async function runCommand(
       return {
         ok: true,
         line: `renamed the room to ${printable(c.title)}`,
+        room: r.body,
+      };
+    }
+    case "cap": {
+      const r = await call<RoomDto>(d, room, {
+        method: "PATCH",
+        body: { turnCap: c.turnCap },
+      });
+      if (!r.ok) return refused(r.error.message, r.error.code);
+      return {
+        ok: true,
+        line: `raised the orchestrator turn cap to ${c.turnCap}`,
         room: r.body,
       };
     }

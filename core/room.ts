@@ -102,6 +102,13 @@
  * message may name the participant that sent it (M8-1); the harness then
  * reads `[from <name>]` first, and the log records the sender's id.
  *
+ * **The orchestrator has a room-scoped turn cap** (M8-7). Each accepted
+ * worker message from it counts, whether the message starts or queues. At the
+ * cap the next one is refused `turn_cap` and logs
+ * `_client_turn_cap_reached`; a person's messages and daemon replies do not
+ * count. `room.json` keeps the cap and count across a restart, and the person
+ * can only raise the cap.
+ *
  * **A turn's answer goes back to its sender** (M8-2). When a turn from a
  * participant's message ends, its sender gets a reply: `[reply from <name>]`,
  * how the turn ended and its tool calls, then the answer. When the person
@@ -229,6 +236,9 @@ import {
 /** How many messages may wait behind a participant's live turn (R41). */
 export const QUEUE_BOUND = 16;
 
+/** How many worker messages a room's orchestrator may send by default (M8-7). */
+const DEFAULT_ORCHESTRATOR_TURN_CAP = 40;
+
 /** A refusal the daemon answers with its own error code. Any other throw
  *  from `add`, `update` or `remove` is a failure, not a refusal. */
 export class RoomRefusal extends Error {
@@ -244,7 +254,8 @@ export class RoomRefusal extends Error {
     | "not_fast_forward"
     | "dirty_worktree"
     | "no_branch"
-    | "queue_full";
+    | "queue_full"
+    | "turn_cap";
   constructor(code: RoomRefusal["code"], message: string) {
     super(message);
     this.code = code;
@@ -423,6 +434,9 @@ export interface RoomMeta {
   /** Moves on a message, a dismiss, a roster change, or a rename
    *  (`Room.touch`). */
   updatedAt: string;
+  /** The room's worker-message limit, and how many the orchestrator sent. */
+  turnCap: number;
+  turnCount: number;
 }
 
 /** One participant in `room.json`. */
@@ -467,8 +481,11 @@ interface ParticipantRecord {
   turnCancelled?: true;
 }
 
-/** `room.json`: the room, its own notices and every participant. */
-export interface RoomRecord extends RoomMeta {
+/** `room.json`: the room, its own notices and every participant. Records
+ *  from before M8-7 have no cap fields; restore supplies their defaults. */
+export interface RoomRecord extends Omit<RoomMeta, "turnCap" | "turnCount"> {
+  turnCap?: number;
+  turnCount?: number;
   status: RoomStatus;
   notices: RoomNotice[];
   participants: ParticipantRecord[];
@@ -496,6 +513,11 @@ export interface Room {
   /** Gives the room a new title. `touch` saves it. The stream gets no
    *  line: a client reads the title from `GET /rooms`. */
   retitle(title: string): void;
+  /** Sends an orchestrator's worker message, or refuses it at the room cap.
+   *  An accepted message counts once, whether it starts or waits. */
+  send(id: string, text: string, from: Sender): Promise<void>;
+  /** Raises the room's cap. `touch` saves it. */
+  raiseTurnCap(turnCap: number): void;
   /** Cancels the participant's turn, stops its harness and releases its
    *  checkout without committing (R37). It leaves the roster at once. */
   remove(id: string): Promise<void>;
@@ -733,6 +755,8 @@ interface RoomDeps {
   /** The watchdog's warn limits; `WATCHDOG_DEFAULTS` when absent. There is
    *  no TTL in a room (R38). */
   limits?: Pick<WatchdogLimits, "stallIdleMs" | "stallRepeatCount">;
+  /** A new room's cap, or an old record's fallback. A saved cap wins. */
+  turnCap?: number;
   /** How long `pause` waits for a cancelled turn to end. */
   pauseGraceMs?: number;
   /** A line to put in the room's own notices, such as the restore fallback
@@ -867,6 +891,14 @@ export function readRoomRecord(path: string): RoomRecord {
   }
   return {
     ...(raw as RoomRecord),
+    turnCap:
+      Number.isInteger(r.turnCap) && (r.turnCap as number) >= 1
+        ? (r.turnCap as number)
+        : undefined,
+    turnCount:
+      Number.isInteger(r.turnCount) && (r.turnCount as number) >= 0
+        ? (r.turnCount as number)
+        : undefined,
     notices: Array.isArray(r.notices) ? (r.notices as RoomNotice[]) : [],
     participants: (r.participants as ParticipantRecord[]).map((p) => ({
       ...p,
@@ -921,10 +953,18 @@ export async function openRoom({
   cwd,
   title,
   agents,
+  turnCap,
   ...deps
 }: RoomOptions): Promise<Room> {
   const now = new Date().toISOString();
-  const meta: RoomMeta = { id: roomId, cwd, createdAt: now, updatedAt: now };
+  const meta: RoomMeta = {
+    id: roomId,
+    cwd,
+    createdAt: now,
+    updatedAt: now,
+    turnCap: turnCap ?? DEFAULT_ORCHESTRATOR_TURN_CAP,
+    turnCount: 0,
+  };
   if (title !== undefined) meta.title = title;
   const built = await buildRoom(deps, meta);
   for (const request of agents) {
@@ -948,6 +988,7 @@ export async function openRoom({
  */
 export async function restoreRoom({
   record,
+  turnCap,
   ...deps
 }: RoomDeps & { record: RoomRecord }): Promise<Room> {
   const from = crashed(record);
@@ -956,6 +997,8 @@ export async function restoreRoom({
     cwd: from.cwd,
     createdAt: from.createdAt,
     updatedAt: from.updatedAt,
+    turnCap: from.turnCap ?? turnCap ?? DEFAULT_ORCHESTRATOR_TURN_CAP,
+    turnCount: from.turnCount ?? 0,
   };
   if (from.title !== undefined) meta.title = from.title;
   const built = await buildRoom(deps, meta, from);
@@ -1627,6 +1670,43 @@ async function buildRoom(
     retitle(title) {
       if (ended()) throw dismissed();
       meta.title = title;
+    },
+    send(id, text, from) {
+      if (ended()) throw dismissed();
+      const target = participants.find((p) => p.id === id);
+      if (!target) {
+        throw new RoomRefusal("participant_not_found", `no participant ${id}`);
+      }
+      if (meta.turnCount >= meta.turnCap) {
+        bus.emit({
+          agent: id,
+          update: { sessionUpdate: "_client_turn_cap_reached" },
+        });
+        throw new RoomRefusal(
+          "turn_cap",
+          `the orchestrator reached this room's ${meta.turnCap}-turn cap; ` +
+            "raise it with /cap <n>",
+        );
+      }
+      const turn = target.send(text, from);
+      meta.turnCount += 1;
+      return turn;
+    },
+    raiseTurnCap(turnCap) {
+      if (ended()) throw dismissed();
+      if (!Number.isInteger(turnCap) || turnCap < 1) {
+        throw new RoomRefusal(
+          "invalid_request",
+          '"turnCap" must be a whole number 1 or greater',
+        );
+      }
+      if (turnCap <= meta.turnCap) {
+        throw new RoomRefusal(
+          "invalid_request",
+          `"turnCap" must be greater than the room's current cap (${meta.turnCap})`,
+        );
+      }
+      meta.turnCap = turnCap;
     },
     remove: (id) => track(remove(id)),
     fastForward: (targetId, fromId) => track(forward(targetId, fromId)),

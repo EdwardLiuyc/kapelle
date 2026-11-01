@@ -163,6 +163,52 @@ test("chat.ts on a real terminal draws a stall warning", {
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("chat.ts on a real terminal rings the bell when the orchestrator reaches its turn cap", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime, [], undefined, {
+    KAPELLE_ORCHESTRATOR_TURN_CAP: "1",
+  });
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: REMEMBER, name: "po", role: "orchestrator" },
+      { cmd: REMEMBER, name: "dev" },
+    ],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const [po, dev] = open.body.participants;
+  assert.ok(po && dev);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${id}`,
+    { XDG_RUNTIME_DIR: runtime },
+    "dev",
+  );
+  const bells = () => plainText(screen.out()).split("\x07").length - 1;
+  const before = bells();
+  const say = (text: string) =>
+    api(d, "POST", `/rooms/${id}/agents/${dev.id}/messages`, {
+      text,
+      from: po.id,
+    });
+  assert.equal((await say("one")).status, 202);
+  const capped = await say("two");
+  assert.equal(capped.status, 429);
+  assert.equal(capped.body.error.code, "turn_cap");
+  for (const until = Date.now() + 10_000; bells() === before; ) {
+    assert.ok(Date.now() < until, `no cap bell: ${screen.out()}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.equal(bells(), before + 1);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 test("chat.ts on a real terminal shows a question off screen in the banner, rings the bell once, and a click on the row opens it", {
   skip: noPty,
 }, async (t) => {

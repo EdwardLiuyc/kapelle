@@ -7,15 +7,16 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.18** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.19** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
 added replies and copies, `PATCH /rooms/:id`, which renames a room, M8-3, #267,
 which added the `reviewer` role and a participant's `turnFrom`, #352, which added
 the delete preview, M9-5, #300, which added an agent's `model`, M9-6, #301, which
-changes the model during a chat and added an agent's `models`, and #354, which
-added `_client_repeat_resolved`).
+changes the model during a chat and added an agent's `models`, #354, which
+added `_client_repeat_resolved`, and M8-7, #271, which added the orchestrator's
+turn cap).
 
 ## Contents
 
@@ -263,6 +264,7 @@ request that is not valid HTTP gets `400`.
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
 | `queue_full` | `429` | 16 messages already wait for this participant. | Wait for a `_client_turn_ended`, then send again. Or cancel its turn, which drops the queue. |
+| `turn_cap` | `429` | The orchestrator already sent the room's cap of worker messages. Since 1.19. | The person raises the cap with `PATCH /rooms/:id` or `/cap <n>`. |
 | `no_turn` | `409` | You cancelled a turn, but the participant has none. | Stop. Its turn already ended. |
 | `agent_busy` | `409` | A fast-forward target has a live turn. | Wait for its `_client_turn_ended`, then try again. |
 | `not_fast_forward` | `409` | The target branch is not an ancestor of the source branch, or the target checkout is not on its branch, so the move would be a merge or land somewhere else. | Nothing changed. Let a person merge by hand, or choose another source. |
@@ -336,7 +338,7 @@ the `GET` routes take none.
 | `POST /rooms` | Open a room. |
 | `GET /rooms` | List rooms. |
 | `GET /rooms/:id` | One room. |
-| `PATCH /rooms/:id` | Rename a room. |
+| `PATCH /rooms/:id` | Rename a room, or raise its orchestrator turn cap. |
 | `POST /rooms/:id/messages` | Send a message to the room's orchestrator. |
 | `GET /rooms/:id/events` | A room's event stream. |
 | `POST /rooms/:id/dismiss` | End a room. |
@@ -967,6 +969,7 @@ with ACP names.
 | `_client_user_message` | `text`, `turn`, `from?`, `kind?` | The participant's turn starts with this message. The line's `participantId` names who got it. `turn` counts that participant's turns from 1. It is absent on lines written before 1.5. `from` is the id of the participant that sent the message (since 1.11). No `from` means the person sent it. `kind` is `reply` or `copy` for a message the daemon sent (since 1.12): see [Replies and copies](#replies-and-copies). |
 | `_client_turn_ended` | `stopReason?`, `error?` | The harness finished its answer, and the next queued message starts. `error` means the turn failed. |
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
+| `_client_turn_cap_reached` | none | The orchestrator's next worker message was refused at the room's cap (since 1.19). The line's `participantId` names its target; the message gets no queued or turn-start line. The TUI rings its bell. |
 | `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
 | `_client_participant_changed` | `name?`, `role?`, `mode?`, `model?` | A rename, or a new role, mode or model. Only the changed fields are present. `role: null` means the role was cleared. `model` (since 1.17) is the model the harness runs on after a change of model, also after a refused one, or `null` when the harness names none. |
 | `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. A no-op move writes none. |
@@ -1277,8 +1280,8 @@ turn ends. A client that shows the whole-branch diff needs no extra step:
 bad `title`, a bad or missing harness, a bad `name`, `role`, `mode`, `model` or
 `settings`, or an unknown agent field; `409` `name_taken` or `orchestrator_exists` when
 two agents in the list clash; `400` `invalid_config` when the repository's
-`.kapelle/config.json` is not valid, because the room reads its watchdog limits and
-`linkPaths` from it; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when
+`.kapelle/config.json` is not valid, because the room reads its watchdog limits,
+turn cap and `linkPaths` from it; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when
 the daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example
 its binary is not installed).
 
@@ -1315,19 +1318,26 @@ unknown id.
 
 ### `PATCH /rooms/:id`
 
-Since 1.13. Gives the room a new title:
+Since 1.13. Gives the room a new title, or since 1.19 raises its orchestrator
+turn cap. Send one or both:
 
 ```json
-{ "title": "login bug" }
+{ "title": "login bug", "turnCap": 41 }
 ```
 
-The `id` does not change, and `updatedAt` moves. The room's stream gets no line for it,
-because the stream is the conversation and a title is not part of it. A client that wants
-the new title reads it from `GET /rooms` or `GET /rooms/:id`.
+`turnCap` is a whole number 1 or greater, and must be greater than the room's
+current cap. This route only raises the cap; `/cap <n>` in a chat screen sends
+the same change. The cap and the count of accepted orchestrator messages are
+saved with the room, so a restart keeps both.
+
+The `id` does not change, and `updatedAt` moves. The room's stream gets no line
+for either change. A client that wants the new title reads it from `GET /rooms`
+or `GET /rooms/:id`.
 
 **Reply `200`:** the room, as `GET /rooms/:id` gives it. **Refusals:** `404`
-`room_not_found`; `400` `invalid_request` when `title` is missing, empty or not a
-string; `409` `room_dismissed`; `503` `shutting_down`.
+`room_not_found`; `400` `invalid_request` when neither field is present, `title`
+is empty or not a string, or `turnCap` is invalid or not a raise; `409`
+`room_dismissed`; `503` `shutting_down`.
 
 ### `POST /rooms/:id/messages`
 
@@ -1532,6 +1542,12 @@ One message to one participant. The daemon never reads the text. A client turns 
 A participant keeps at most 16 messages waiting behind its live turn. They are in memory
 only: a daemon restart loses them.
 
+Since 1.19, every accepted message from the orchestrator counts toward the room's
+turn cap, whether it starts at once or waits. A person's messages and the daemon's
+replies and copies do not count. The cap is 40 by default; `orchestratorTurnCap`
+and `KAPELLE_ORCHESTRATOR_TURN_CAP` change it for new rooms. At the cap, the next
+orchestrator message is refused and writes `_client_turn_cap_reached`.
+
 A message to an `exited`, `killed` or `paused` participant revives it first: see
 [After a restart](#after-a-restart). The reply does not wait for the new harness. A
 harness that cannot start ends the turn with `_client_turn_ended` and `error`.
@@ -1540,7 +1556,7 @@ harness that cannot start ends the turn with `_client_turn_ended` and `error`.
 for empty text. `400` `invalid_sender` for a `from` that is not the orchestrator, or that
 is the target. `409` `room_dismissed` for a dismissed room. `409` `agent_exited` while the
 participant is being removed or the daemon shuts down. `429` `queue_full` when 16 messages
-already wait.
+already wait. `429` `turn_cap` when the orchestrator has used the room's cap.
 
 #### Replies and copies
 
