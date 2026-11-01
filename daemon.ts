@@ -1415,7 +1415,7 @@ function cancelTurn(id: string, agentId: string, res: ServerResponse) {
   }
   const p = participantEntry(id, agentId);
   if (!p.cancel()) {
-    throw refusal(409, "no_turn", `${p.name} has no turn to cancel`);
+    throw refusal(409, "no_turn", `${p.name} has no live prompt to cancel`);
   }
   send(res, 202, toParticipantDto(p) satisfies ParticipantDto);
 }

@@ -7,15 +7,15 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.18** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.19** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
 added replies and copies, `PATCH /rooms/:id`, which renames a room, M8-3, #267,
 which added the `reviewer` role and a participant's `turnFrom`, #352, which added
 the delete preview, M9-5, #300, which added an agent's `model`, M9-6, #301, which
-changes the model during a chat and added an agent's `models`, and #354, which
-added `_client_repeat_resolved`).
+changes the model during a chat and added an agent's `models`, #354, which
+added `_client_repeat_resolved`, and #318, which settled the cancel boundary).
 
 ## Contents
 
@@ -262,8 +262,8 @@ request that is not valid HTTP gets `400`.
 | `no_event_log` | `404` | The run or room exists, but it has no event log to stream. | Read `GET /runs/:id` for a run, or `GET /rooms/:id` for a room. |
 | `run_ended` | `409` | You cancelled a run that already ended. | Stop. Read its status. |
 | `already_decided` | `409` | The permission was already closed, for any of the reasons in [Why a question closed](#why-a-question-closed). | Stop. Your answer was not used. `GET /permissions/:id` gives the reason. |
-| `queue_full` | `429` | 16 messages already wait for this participant. | Wait for a `_client_turn_ended`, then send again. Or cancel its turn, which drops the queue. |
-| `no_turn` | `409` | You cancelled a turn, but the participant has none. | Stop. Its turn already ended. |
+| `queue_full` | `429` | 16 messages already wait for this participant. | Wait for a `_client_turn_ended`, then send again. Or cancel its live prompt, which drops the queue. |
+| `no_turn` | `409` | You cancelled a prompt that had already settled, or the participant has no live prompt. | Stop. There is nothing to cancel. |
 | `agent_busy` | `409` | A fast-forward target has a live turn. | Wait for its `_client_turn_ended`, then try again. |
 | `not_fast_forward` | `409` | The target branch is not an ancestor of the source branch, or the target checkout is not on its branch, so the move would be a merge or land somewhere else. | Nothing changed. Let a person merge by hand, or choose another source. |
 | `dirty_worktree` | `409` | The target checkout has tracked changes, or files the move would overwrite. | Commit or stash them first. Untracked files alone do not refuse. |
@@ -1603,6 +1603,8 @@ A cancel after the prompt settled, but before its `_client_turn_ended`, is `409 
 It keeps the queue, sends no `session/cancel` and records no cut, so a later revive does
 not warn. The daemon still finishes the checkout read, so the turn's branch and base are
 current before `_client_turn_ended`.
+
+**Changed in 1.19 (#318):** the settled-prompt window is a no-op instead of a cut.
 
 **Reply `202`:** the participant. The turn ends later, on the stream, with
 `_client_turn_ended`.

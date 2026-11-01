@@ -387,6 +387,7 @@ test("a cancel after the prompt settled, while the checkout is read, is no_turn 
   const cancel = await api<RoomReply>(d, "POST", `${to}/turns/current/cancel`);
   assert.equal(cancel.status, 409);
   assert.equal(cancel.body.error.code, "no_turn");
+  assert.match(cancel.body.error.message, /no live prompt/);
 
   await gate.release();
   await roomIdle(d, id);
@@ -420,7 +421,7 @@ test("messages to a busy participant are answered in order, and a cancel keeps i
     d,
     "POST",
     "/rooms",
-    withAgent(cwd, `node ${MOCK_AGENT} --scenario slow`),
+    withAgent(cwd, `node ${MOCK_AGENT} --scenario slow --stall-turn 4`),
   );
   assert.equal(open.status, 201, open.body.error?.message);
   const { id } = open.body;
@@ -428,7 +429,8 @@ test("messages to a busy participant are answered in order, and a cancel keeps i
   const say = async (text: string) =>
     (await api<MessageReply>(d, "POST", `${to}/messages`, { text })).body;
 
-  // Each `slow` turn lasts a second, so b and c arrive while a runs.
+  // The first three slow turns hold long enough to queue. The fourth stalls
+  // until cancelled, so the 202 cannot race the one-second answer.
   const queued = [];
   for (const text of ["a", "b", "c"]) queued.push((await say(text)).queued);
   assert.deepEqual(queued, [0, 1, 2]);

@@ -1892,8 +1892,9 @@ function createParticipant({
   };
 
   let turn: Promise<void> | undefined;
-  /** True once the live prompt resolves or rejects, though `turn` stays set
-   *  through the checkout read that follows it. */
+  /** True once the prompt phase is over: the prompt settled, or starting it
+   *  failed before it was sent. `turn` can stay set through the checkout read
+   *  that follows. */
   let promptSettled = false;
   /** A fast-forward of this checkout (M6-11a). It counts as busy, so a
    *  message queues behind it rather than start a turn on moving files. */
@@ -2260,14 +2261,14 @@ function createParticipant({
     stopping = true;
     drop();
     const before = stopped;
-    const promptLive = turn !== undefined && !promptSettled;
+    const live = promptSettled ? undefined : turn;
     let cut = false;
-    if (promptLive) {
+    if (live) {
       turnAbort.abort();
       agent?.cancel();
       let timer: NodeJS.Timeout | undefined;
       const ended = await Promise.race([
-        (turn as Promise<void>).then(() => true),
+        live.then(() => true),
         new Promise<boolean>((ok) => {
           timer = setTimeout(() => ok(false), graceMs);
         }),
@@ -2280,7 +2281,7 @@ function createParticipant({
     await held;
     stopped = cut ? "killed" : (before ?? "paused");
     // Ended by the cancel: `paused`, though its memory may be behind.
-    turnCancelled ||= promptLive && !cut;
+    turnCancelled ||= live !== undefined && !cut;
   };
 
   // The filter follows at once; the harness's own mode before the next turn.
@@ -2409,7 +2410,7 @@ function createParticipant({
         throw new RoomRefusal(
           "queue_full",
           `${QUEUE_BOUND} messages already wait for this agent; ` +
-            "wait for a turn to end, or cancel the turn to drop them",
+            "wait for them to run, or cancel its live prompt to drop them",
         );
       }
       bus.emit({

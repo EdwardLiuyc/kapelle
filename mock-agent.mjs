@@ -25,6 +25,8 @@
  * --barrier-count <n>` holds `initialize` until n agents start,
  * `--auth-hold <file>` holds claude's auth notice until that file exists, and
  * `--lock-cwd` makes `session/new` leave a folder the client cannot remove.
+ * `--stall-turn <n>` makes a remember-family scenario hold prompt n until
+ * `session/cancel`, so a cancel test does not race a timed answer.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -94,6 +96,9 @@ const storeAt = process.argv.indexOf("--store");
 const store = storeAt === -1 ? null : process.argv[storeAt + 1];
 const recordAt = process.argv.indexOf("--record");
 const recordFile = recordAt === -1 ? null : process.argv[recordAt + 1];
+const stallTurnAt = process.argv.indexOf("--stall-turn");
+const stallTurn =
+  stallTurnAt === -1 ? null : Number(process.argv[stallTurnAt + 1]);
 const barrierAt = process.argv.indexOf("--barrier");
 const barrierDir = barrierAt === -1 ? null : process.argv[barrierAt + 1];
 const barrierCountAt = process.argv.indexOf("--barrier-count");
@@ -256,6 +261,8 @@ const SLOW_MS = 1000;
  *  so answering is the realistic half; a harness that ignores the cancel is
  *  already covered by `tests/cli.test.ts`'s inline stubborn agent. */
 let stalledPromptId = null;
+/** Counts prompts in a remember-family scenario for `--stall-turn`. */
+let promptCount = 0;
 
 /** Whether `mode-refused-once` has refused its one `session/set_mode`. */
 let modeRefused = false;
@@ -571,6 +578,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       const previous = lastPrompt.get(sid) ?? "(none)";
       lastPrompt.set(sid, text);
       if (store) keep(sid, [...(stored(sid) ?? []), text]);
+      promptCount += 1;
+      if (promptCount === stallTurn) {
+        stalledPromptId = msg.id;
+        return;
+      }
       if (scenario === "slow") {
         // Kept where `session/cancel` finds it, which answers `cancelled`.
         stalledPromptId = msg.id;

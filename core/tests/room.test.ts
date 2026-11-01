@@ -694,7 +694,10 @@ test(`the queue holds ${QUEUE_BOUND}, and a cancel drops it and keeps the sessio
   assert.equal(p.queued, QUEUE_BOUND);
   assert.throws(
     () => p.send("one too many"),
-    (err) => err instanceof RoomRefusal && err.code === "queue_full",
+    (err) =>
+      err instanceof RoomRefusal &&
+      err.code === "queue_full" &&
+      /cancel its live prompt/.test(err.message),
   );
 
   assert.equal(p.cancel(), true);
@@ -2001,8 +2004,10 @@ async function loading(
 }
 
 /** Arms a git wrapper that holds the next checkout read until released. */
-async function slowCheckout(t: TestContext) {
-  const gate = await gatedGit(t);
+async function slowCheckout(
+  t: TestContext,
+  gate: Awaited<ReturnType<typeof gatedGit>>,
+) {
   const path = process.env.PATH;
   process.env.PATH = gate.path;
   t.after(() => {
@@ -2099,19 +2104,20 @@ test("a pause that cancels a live turn reads paused, and the load warns", async 
 });
 
 test("a pause after the prompt settled does not cut the turn or warn on revive", async (t) => {
+  const gate = await gatedGit(t);
   const { repo, room, p, file, of } = await loading(t, "remember");
-  const gate = await slowCheckout(t);
+  await slowCheckout(t, gate);
   const turn = p.send("hi");
   await until(() => existsSync(gate.entered), "the checkout read");
 
   const pausing = room.pause();
+  await gate.release();
+  await pausing;
   assert.equal(
     of("_client_cancel_requested").length,
     0,
     "no late cancel reached the harness",
   );
-  await gate.release();
-  await pausing;
   await turn;
 
   assert.equal(p.status(), "paused");
@@ -2542,8 +2548,9 @@ test("three queued messages from the orchestrator get three replies, in order", 
 });
 
 test("a cancel after the prompt settled, while the checkout is read, is a no-op", async (t) => {
+  const gate = await gatedGit(t);
   const { po, dev, of, told, settled, file } = await loopRoom(t, "remember");
-  const gate = await slowCheckout(t);
+  await slowCheckout(t, gate);
   const turn = dev.send("go", po);
   await until(() => existsSync(gate.entered), "the checkout read");
 
@@ -2586,8 +2593,9 @@ test("a cancel after the prompt settled, while the checkout is read, is a no-op"
 });
 
 test("a removal after the prompt settled, while the checkout is read, sends no late cancel", async (t) => {
+  const gate = await gatedGit(t);
   const { room, dev, of } = await loopRoom(t, "remember");
-  const gate = await slowCheckout(t);
+  await slowCheckout(t, gate);
   const turn = dev.send("go");
   await until(() => existsSync(gate.entered), "the checkout read");
 
