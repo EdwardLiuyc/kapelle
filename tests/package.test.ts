@@ -6,7 +6,8 @@
  * The last test is the whole installed command, not a module in isolation: a
  * bare `kapelle` on a pseudo-terminal must start `dist/daemon.js` and reach
  * the chat. `--help` reaches marked, and the two chat imports reach pi-tui and
- * @xterm/headless.
+ * @xterm/headless. The extracted package gets its own version, so the version
+ * test proves the CLI reads that file rather than printing a baked-in value.
  */
 
 import assert from "node:assert/strict";
@@ -25,6 +26,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   alive,
+  childEnv,
   noPty,
   ptyScreen,
   REPO,
@@ -52,20 +54,17 @@ const pack = async (args: string[], cwd: string): Promise<PackResult[]> => {
   return Array.isArray(parsed) ? parsed : Object.values(parsed);
 };
 
-const childEnv = (overrides: Record<string, string>): NodeJS.ProcessEnv => {
-  const env = { ...process.env };
-  for (const name of Object.keys(env)) {
-    if (name.startsWith("KAPELLE_")) delete env[name];
-  }
-  return { ...env, ...overrides };
-};
-
 test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   await rm(DIST, { recursive: true, force: true });
   t.after(() => rm(DIST, { recursive: true, force: true }));
   // A stale build file must not survive prepack and reach the tarball.
   await mkdir(DIST, { recursive: true });
   await writeFile(join(DIST, "stale.js"), "stale\n");
+  assert.equal(
+    spawnSync("git", ["check-ignore", "-q", "dist"], { cwd: REPO }).status,
+    0,
+    "dist/ stays ignored by git",
+  );
 
   const packDir = await tempDir(t);
   const packed = await pack(["--pack-destination", packDir], REPO);
@@ -104,20 +103,27 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     packageDir,
     "--strip-components=1",
   ]);
-  const pkg = JSON.parse(
-    await readFile(join(packageDir, "package.json"), "utf8"),
-  ) as {
+  const packageJsonPath = join(packageDir, "package.json");
+  const pkg = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
     version: string;
     private?: boolean;
     bin: { kapelle: string };
     files: string[];
     scripts: { prepack: string };
     dependencies: Record<string, string>;
+    [key: string]: unknown;
   };
   assert.equal(pkg.private, undefined);
   assert.equal(pkg.bin.kapelle, "./dist/cli.js");
   assert.deepEqual(pkg.files, ["dist"]);
   assert.match(pkg.scripts.prepack, /tsc -p tsconfig\.build\.json/);
+  // A real extraction keeps type: module and the other fields. The different
+  // version proves --version reads this package.json, not a baked-in value.
+  const packagedVersion = "9.8.7-review-2";
+  await writeFile(
+    packageJsonPath,
+    `${JSON.stringify({ ...pkg, version: packagedVersion }, null, 2)}\n`,
+  );
 
   // Link only the runtime dependencies the package declares, not the
   // checkout's devDependencies: a missing declaration must fail here.
@@ -129,7 +135,7 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   }
 
   const cli = join(packageDir, "dist", "cli.js");
-  const env = childEnv({});
+  const env = childEnv();
   const help = spawnSync(process.execPath, [cli, "--help"], {
     cwd: packageDir,
     env,
@@ -144,7 +150,7 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     encoding: "utf8",
   });
   assert.equal(version.status, 0, version.stderr);
-  assert.equal(version.stdout.trim(), pkg.version);
+  assert.equal(version.stdout.trim(), packagedVersion);
 
   const imports = [
     pathToFileURL(join(packageDir, "dist", "chat", "tui.js")).href,
@@ -175,6 +181,26 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   assert.ok("text" in loop, JSON.stringify(loop));
   assert.match(loop.text, /^\[the orchestrator skill\]\n# The orchestrator\n/);
 
+  // A valid package.json without a version reaches the refusal, rather than
+  // printing the parent package's version or exiting 0.
+  const withoutVersion: Record<string, unknown> = { ...pkg };
+  delete withoutVersion.version;
+  await writeFile(
+    packageJsonPath,
+    `${JSON.stringify(withoutVersion, null, 2)}\n`,
+  );
+  const noVersion = spawnSync(process.execPath, [cli, "--version"], {
+    cwd: packageDir,
+    env,
+    encoding: "utf8",
+  });
+  assert.equal(noVersion.status, 1, noVersion.stderr);
+  assert.equal(noVersion.stdout, "");
+  assert.match(
+    noVersion.stderr,
+    /cannot read the kapelle version from package\.json/,
+  );
+
   const dry = await pack(["--dry-run"], REPO);
   const files = (dry[0] as PackResult).files.map((file) => file.path);
   const rootFiles = new Set(["README.md", "LICENSE", "package.json"]);
@@ -184,8 +210,29 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
       `unexpected package file: ${file}`,
     );
   }
+  for (const file of rootFiles) {
+    assert.ok(files.includes(file), `missing package file: ${file}`);
+  }
   assert.ok(files.includes("dist/assets/orchestrator.md"));
   assert.ok(!files.some((file) => file.endsWith(".test.js")));
+  assert.ok(!files.some((file) => file.endsWith(".ts")));
+
+  // The ignore is what keeps a generated build out of biome's fixes. Copy the
+  // config so the probe cannot find an unrelated unformatted source file.
+  const biomeRoot = await tempDir(t);
+  await writeFile(
+    join(biomeRoot, "biome.json"),
+    await readFile(join(REPO, "biome.json"), "utf8"),
+  );
+  const notFormatted = join(biomeRoot, "dist", "not-formatted.js");
+  await mkdir(dirname(notFormatted), { recursive: true });
+  await writeFile(notFormatted, "export const answer=42\n");
+  const biome = spawnSync(
+    join(REPO, "node_modules", ".bin", "biome"),
+    ["check", "--max-diagnostics=1", "."],
+    { cwd: biomeRoot, encoding: "utf8" },
+  );
+  assert.equal(biome.status, 0, `${biome.stdout}${biome.stderr}`);
 
   if (noPty) {
     t.diagnostic(noPty);
