@@ -496,8 +496,9 @@ test("a pop-up keeps a tool call's block in one gray background (#407)", {
     "the tool call has its normal background before the pop-up",
   );
   await screen.press("\x0f", "delete room …");
+  const behind = toolRow();
   assert.ok(
-    toolRow().includes(BACKDROP_BG),
+    behind.includes(BACKDROP_BG) && !behind.includes(TOOL_BG),
     "the tool call keeps one gray background behind the pop-up",
   );
   await writeFile(join(ann.worktree, "runs.go"), "");
