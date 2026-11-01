@@ -51,6 +51,7 @@ test("no HStack in the chat screen holds another, and each of its parts has a se
     rooms,
     view,
     setStatus() {},
+    viewportRows: () => Number.POSITIVE_INFINITY,
   });
   // The real parts, so a stack added inside one is walked too.
   const { root } = screenLayout({
