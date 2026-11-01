@@ -290,8 +290,8 @@ test("chat.ts on a real terminal holds a new cap event until the first room repl
     ],
   };
   let releaseGet: (() => void) | undefined;
+  let releaseEvents: (() => void) | undefined;
   let roomReads = 0;
-  let capSent = false;
   const fake = createServer((req, res) => {
     const path = req.url ?? "";
     if (path === "/version") {
@@ -314,28 +314,42 @@ test("chat.ts on a real terminal holds a new cap event until the first room repl
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
       });
-      res.write(
-        `id: 1\ndata: ${JSON.stringify({
-          seq: 1,
-          roomId,
-          participantId: "p1",
-          update: {
-            sessionUpdate: "_client_participant_added",
-            name: "dev",
-            harness: "mock-agent",
-            mode: "auto",
-          },
-        })}\n\n`,
-      );
-      res.write(
-        `id: 2\ndata: ${JSON.stringify({
-          seq: 2,
-          roomId,
-          participantId: "p1",
-          update: { sessionUpdate: "_client_turn_cap_reached" },
-        })}\n\n`,
-      );
-      capSent = true;
+      releaseEvents = () => {
+        res.write(
+          `id: 1\ndata: ${JSON.stringify({
+            seq: 1,
+            roomId,
+            participantId: "p1",
+            update: {
+              sessionUpdate: "_client_participant_added",
+              name: "dev",
+              harness: "mock-agent",
+              mode: "auto",
+            },
+          })}\n\n`,
+        );
+        res.write(
+          `id: 2\ndata: ${JSON.stringify({
+            seq: 2,
+            roomId,
+            participantId: "p1",
+            update: { sessionUpdate: "_client_turn_cap_reached" },
+          })}\n\n`,
+        );
+        // This visible line follows the cap in the same stream. Seeing it
+        // proves the client processed the cap before the GET is released.
+        res.write(
+          `id: 3\ndata: ${JSON.stringify({
+            seq: 3,
+            roomId,
+            participantId: "p1",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "after-cap" },
+            },
+          })}\n\n`,
+        );
+      };
       return;
     }
     if (path === `/rooms/${roomId}`) {
@@ -366,17 +380,25 @@ test("chat.ts on a real terminal holds a new cap event until the first room repl
   );
   const screen = await ptyScreen(
     t,
-    `printf ready; stty cols 100 rows 30; node chat.ts attach ${roomId}`,
+    `stty cols 100 rows 30; node chat.ts attach ${roomId}`,
     { XDG_RUNTIME_DIR: runtime },
-    "ready",
   );
-  for (const until = Date.now() + 10_000; !capSent; ) {
-    assert.ok(Date.now() < until, "the cap event was not sent");
+  for (const until = Date.now() + 10_000; !releaseGet || !releaseEvents; ) {
+    assert.ok(
+      Date.now() < until,
+      "the held room read or event stream never came",
+    );
     await new Promise((ok) => setTimeout(ok, 25));
   }
+  const send = releaseEvents;
+  assert.ok(send);
+  send();
+  await screen.seen("after-cap");
   const bells = () => plainText(screen.out()).split("\x07").length - 1;
   assert.equal(bells(), 0, "nothing rings before the snapshot arrives");
-  releaseGet?.();
+  const answer = releaseGet;
+  assert.ok(answer);
+  answer();
   for (const until = Date.now() + 10_000; bells() === 0; ) {
     assert.ok(
       Date.now() < until,
