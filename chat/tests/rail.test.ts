@@ -231,6 +231,19 @@ test("a card closes when the rail window moves under it", async () => {
   assert.equal(first.hidden, true, "the stale card is hidden");
 });
 
+test("a pending card is cancelled when the rail window moves under it", async () => {
+  const { parts, overlays, mouse, scroll, setRows } = setup();
+  scroll.scrollTop = 58;
+  parts.rail.render(2);
+  parts.rail.handleMouse?.(mouse("move", 1));
+  // The hover delay has not elapsed when the first mark changes from message
+  // 2 to message 3 under the pointer.
+  setRows(7);
+  parts.rail.render(2);
+  await new Promise((ok) => setTimeout(ok, 15));
+  assert.equal(overlays.length, 0, "the pending card is gone");
+});
+
 test("a card closes when a scroll moves another mark under it", async () => {
   const { parts, overlays, mouse, scroll } = setup();
   parts.rail.render(2);
