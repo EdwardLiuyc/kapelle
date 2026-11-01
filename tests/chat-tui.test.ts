@@ -26,6 +26,7 @@ import {
   LEAVE,
   MOCK_AGENT,
   noPty,
+  participantIdle,
   plainText,
   ptyScreen,
   REMEMBER,
@@ -572,13 +573,7 @@ test("chat.ts on a real terminal folds a tool run at the next note without movin
   assert.equal(rowOf(screen.out(), /Read f0\.ts/), 0, "the run is above");
   // The next note folds the run, above the view.
   await writeFile(join(ann.worktree, "runs.go"), "");
-  for (const until = Date.now() + 20_000; ; ) {
-    const room = await api<RoomReply>(d, "GET", `/rooms/${open.body.id}`);
-    const live = room.body.participants.find((p) => p.id === ann.id);
-    if (live?.status !== "busy") break;
-    assert.ok(Date.now() < until, "ann never went idle");
-    await wait(25);
-  }
+  await participantIdle(d, open.body.id, ann.id);
   await wait(300);
   assert.equal(rowOf(screen.out(), q30), before, "the row in view moved");
   // Up to the top: the run is one line. A click opens it, a second folds it.

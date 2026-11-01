@@ -142,16 +142,19 @@ function railParts({
       if (e.type === "wheel" && e.wheelDelta) {
         scroll.scrollBy(e.wheelDelta);
         tui.requestRender();
-        return { handled: true };
       }
+      // A pi-tui overlay hit already stops the event here, even when a
+      // handler returns undefined, so the click cannot reach the transcript.
       return { handled: true };
     },
     invalidate() {},
   });
 
   const show = (at: number) => {
+    const want = pending;
     timer = undefined;
-    if (pending !== at || !shown()) return;
+    pending = undefined;
+    if (want !== at || !shown()) return;
     const current = model();
     const entry = current?.markEntry(at);
     const where = pointer;
@@ -172,18 +175,17 @@ function railParts({
   };
 
   const schedule = (at: number, e: TuiMouseEvent) => {
-    pointer = {
+    const next = {
       railLeft: e.screenX - e.x,
       screenY: e.screenY,
       row: e.y,
     };
-    if (preview?.at === at || pending === at) return;
+    if (preview?.at === at || pending === at) {
+      pointer = next;
+      return;
+    }
     close();
-    pointer = {
-      railLeft: e.screenX - e.x,
-      screenY: e.screenY,
-      row: e.y,
-    };
+    pointer = next;
     pending = at;
     timer = setTimeout(() => show(at), delay);
   };
@@ -220,6 +222,8 @@ function railParts({
           after?.kind !== "mark" ||
           before.at !== after.at
         )
+          // Remove it before this frame composites; close() would ask for
+          // another render from inside the current one.
           hide();
       }
       draw = next;

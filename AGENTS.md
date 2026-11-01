@@ -62,6 +62,8 @@ the screen, never the run: `core/markdown.ts` returns the raw text if `marked` t
 and `chat/tui.ts` leaves pi-tui's screen before it exits on a throw. One import has no
 fallback: `chat/tui/question.ts` reads pi-tui's `dist/keys.js`, a file outside its main
 exports. If a new pi-tui moves it, `chat.ts` fails at start, so check it at each bump.
+`chat/tui.ts` also replaces the root layout's `handleMouse` with an untaken-event hook;
+a bump must keep routing events through child parts first, then the root.
 **Amended 2026-10-13 (M4-13):** one subprocess is allowed, the shell the person starts
 with `/term` and types into. The screen package may send it bytes; it still never
 reaches a harness, the daemon, the policy or the path guard. No native code: a native

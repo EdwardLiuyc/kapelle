@@ -714,15 +714,27 @@ export const only = (room: RoomDto): ParticipantDto => {
   return room.participants[0] as ParticipantDto;
 };
 
-/** Polls `GET /rooms/:id` until its participant is no longer `busy`. */
-export async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
+/** Polls `GET /rooms/:id` until participant `participantId` is idle. */
+export async function participantIdle(
+  d: Daemon,
+  id: string,
+  participantId: string,
+): Promise<RoomReply> {
   for (const until = Date.now() + 20_000; Date.now() < until; ) {
     const r = await api<RoomReply>(d, "GET", `/rooms/${id}`);
     assert.equal(r.status, 200);
-    if (only(r.body).status !== "busy") return r.body;
+    const p = r.body.participants.find((x) => x.id === participantId);
+    if (p && p.status !== "busy") return r.body;
     await new Promise((ok) => setTimeout(ok, 25));
   }
-  throw new Error(`room ${id} never went idle`);
+  throw new Error(`participant ${participantId} in room ${id} never went idle`);
+}
+
+/** Polls `GET /rooms/:id` until its one participant is no longer `busy`. */
+export async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
+  const r = await api<RoomReply>(d, "GET", `/rooms/${id}`);
+  assert.equal(r.status, 200);
+  return participantIdle(d, id, only(r.body).id);
 }
 
 /** Commits one file in a participant's checkout, as the agent itself would

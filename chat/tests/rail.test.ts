@@ -257,6 +257,22 @@ test("a pending card is cancelled when the rail window moves under it", async ()
   assert.equal(overlays.length, 0, "the pending card is gone");
 });
 
+test("an early-returned hover does not wedge the same mark", async () => {
+  const { parts, overlays, mouse, setColumns } = setup();
+  parts.rail.render(2);
+  parts.rail.handleMouse?.(mouse("move", 3));
+  // The timer fires while the rail is hidden, so show() returns early.
+  setColumns(75);
+  await new Promise((ok) => setTimeout(ok, 15));
+  assert.equal(overlays.length, 0);
+
+  // With the rail back, hovering the same mark schedules it again.
+  setColumns(100);
+  parts.rail.handleMouse?.(mouse("move", 3));
+  await new Promise((ok) => setTimeout(ok, 15));
+  assert.equal(overlays.length, 1, "the same mark can open its card again");
+});
+
 test("a card closes when a scroll moves another mark under it", async () => {
   const { parts, overlays, mouse, scroll } = setup();
   parts.rail.render(2);
