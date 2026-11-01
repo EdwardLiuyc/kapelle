@@ -726,8 +726,8 @@ async function fakeChangesRoom(
   let stream: ServerResponse | undefined;
   const diffs: string[] = [];
   const held: (() => void)[] = [];
-  const event = (seq: number, update: object) =>
-    `id: ${seq}\ndata: ${JSON.stringify({ seq, roomId, participantId: "p1", update })}\n\n`;
+  const event = (seq: number, update: object, participantId = "p1") =>
+    `id: ${seq}\ndata: ${JSON.stringify({ seq, roomId, participantId, update })}\n\n`;
   const fake = createServer((req, res) => {
     const path = req.url ?? "";
     if (path === "/version") {
@@ -881,6 +881,8 @@ test("chat.ts on a real terminal loads the changed files once per turn end or ex
 
 test("chat.ts on a real terminal refreshes changed files during a turn and coalesces bursts", {
   skip: noPty,
+  // The test drives a whole pty session: its call count is the test.
+  // pi-lens-ignore: high-fan-out
 }, async (t) => {
   const { screen, diffs, event, write, release } = await fakeChangesRoom(
     t,
@@ -1003,6 +1005,82 @@ test("chat.ts on a real terminal refreshes changed files during a turn and coale
   await new Promise((ok) => setTimeout(ok, 400));
   assert.equal(diffs.length, 5, "the burst made more than one request");
   // No turn end or second click was needed.
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts loads changed files only on a completed file-related tool or a write", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write } = await fakeChangesRoom(t, "", {
+    files: 0,
+    later: { text: TWO_CHANGES_TEXT, files: 2 },
+  });
+  const until = async (done: () => boolean, why: string) => {
+    for (const end = Date.now() + 20_000; !done(); ) {
+      assert.ok(Date.now() < end, why);
+      await new Promise((ok) => setTimeout(ok, 50));
+    }
+  };
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  await until(() => diffs.length === 1, "no open diff call");
+  // None of these load: a completed non-file tool, a file tool that has
+  // only started, or another participant's write.
+  write(
+    event(2, {
+      sessionUpdate: "tool_call",
+      toolCallId: "run-1",
+      title: "Run",
+      kind: "execute",
+      status: "completed",
+    }),
+  );
+  write(
+    event(3, {
+      sessionUpdate: "tool_call",
+      toolCallId: "edit-1",
+      title: "Edit",
+      kind: "edit",
+      status: "in_progress",
+    }),
+  );
+  write(
+    event(
+      4,
+      {
+        sessionUpdate: "_client_participant_added",
+        name: "bob",
+        harness: "mock-agent",
+        mode: "ask",
+      },
+      "p2",
+    ),
+  );
+  await screen.seen("○ bob");
+  write(
+    event(5, { sessionUpdate: "_client_wrote_file", path: "/tmp/bob" }, "p2"),
+  );
+  await new Promise((ok) => setTimeout(ok, 500));
+  assert.equal(diffs.length, 1, "a non-trigger loaded the files");
+  // The file tool's completion does, even when the update carries only its
+  // status.
+  write(
+    event(6, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "edit-1",
+      status: "completed",
+    }),
+  );
+  await until(
+    () => diffs.length === 2,
+    "the completed file tool loaded nothing",
+  );
+  await screen.seen("A other.ts");
+  // ann's own write still refreshes the block, proving the fixture is live.
+  write(event(7, { sessionUpdate: "_client_wrote_file", path: "/tmp/ann" }));
+  await until(() => diffs.length === 3, "ann's write loaded nothing");
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

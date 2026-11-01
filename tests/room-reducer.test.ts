@@ -1777,6 +1777,15 @@ test("a tool call touches files by its kind, a diff or a location, from any of i
     "a location in the first event; the completion has only its status",
   );
   assert.equal(
+    call(
+      "u",
+      { title: "update patch" },
+      { locations: [{ path: "/w/c" }], status: "completed" },
+    ),
+    true,
+    "a location in an update; the completion has only the location",
+  );
+  assert.equal(
     call("s", { title: "ls", kind: "execute" }, { status: "completed" }),
     false,
   );
