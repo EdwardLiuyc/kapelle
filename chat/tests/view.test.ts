@@ -968,13 +968,27 @@ test("the rail active mark follows the viewport top and falls back to the first"
   assert.equal(activeMark(5, at, 100), 4);
 });
 
-test("the rail window centres, clamps and pins to the tail", () => {
+test("the rail window centres, clamps and prefers the tail", () => {
   assert.deepEqual(railWindow(10, 0, 6, false), { start: 0, end: 4 });
   assert.deepEqual(railWindow(10, 5, 6, false), { start: 3, end: 7 });
   assert.deepEqual(railWindow(10, 9, 6, false), { start: 6, end: 10 });
-  assert.deepEqual(railWindow(10, 2, 6, true), { start: 6, end: 10 });
   assert.deepEqual(railWindow(2, 1, 8, false), { start: 0, end: 2 });
   assert.deepEqual(railWindow(10, 5, 2, false), { start: 0, end: 0 });
+  assert.deepEqual(
+    railWindow(10, 8, 6, true),
+    { start: 6, end: 10 },
+    "the tail keeps an active mark that is already in its slots",
+  );
+  assert.deepEqual(
+    railWindow(10, 2, 6, true),
+    { start: 2, end: 6 },
+    "the active mark wins when the tail would omit it",
+  );
+  assert.deepEqual(
+    railWindow(20, 0, 21, true),
+    { start: 0, end: 19 },
+    "a short rail starts at the active mark",
+  );
 });
 
 test("rail rows map to the two chevrons and the marks in the window", () => {

@@ -143,6 +143,19 @@ test("a mark click jumps to it, and the chevrons move one mark", () => {
   assert.equal(jumps[2], entries[1], "up is the previous mark after active");
 });
 
+test("the active mark is a lighter dot, not an inverse block", () => {
+  const { parts } = setup();
+  const lines = parts.rail.render(2);
+  const active = lines.find((line) => line.includes("\x1b[1m\x1b[38;5;255m● "));
+  assert.ok(active, "the active mark is bold and near-white");
+  assert.ok(!active.includes("\x1b[7m"), "the active mark has no background");
+  assert.equal(
+    lines.filter((line) => line.includes("\x1b[2m● ")).length,
+    5,
+    "every other visible mark stays dim",
+  );
+});
+
 test("hover waits, replaces the card and closes when the rail is left", async () => {
   const { parts, overlays, mouse, focused } = setup();
   parts.rail.render(2);

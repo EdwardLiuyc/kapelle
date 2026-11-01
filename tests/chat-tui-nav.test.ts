@@ -357,8 +357,7 @@ test("chat.ts on a real terminal clicks a history-rail mark and moves the active
   assert.ok(marks > 0 && marks < 15, `the rail has a window: ${marks}`);
   const activeRow = () =>
     [...screenRows(screen.out(), true)].find(([, text]) =>
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
-      /\x1b\[7m●/.test(text),
+      text.includes("\x1b[1m\x1b[38;5;255m●"),
     )?.[0];
   const activeBefore = activeRow();
   assert.ok(activeBefore !== undefined, "the rail has an active mark");
@@ -409,8 +408,10 @@ test("chat.ts on a real terminal clicks a history-rail mark and moves the active
     await new Promise((ok) => setTimeout(ok, 50));
   }
   const drawn = screen.out().slice(from);
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
-  assert.match(drawn, /\x1b\[7m●/, "the active mark was redrawn");
+  assert.ok(
+    drawn.includes("\x1b[1m\x1b[38;5;255m●"),
+    "the active mark was redrawn",
+  );
   const activeAfter = activeRow();
   assert.ok(activeAfter !== undefined, "the rail still has an active mark");
   const afterText = await hovered(activeAfter);

@@ -4,9 +4,10 @@
  * The rail has one equally spaced `●` per history message, between `▲` and
  * `▼`. It is deliberately not proportional: a long answer changes no mark's
  * place. The active mark is the last one at or above the viewport top, and
- * the visible marks form a sliding window around it, pinned to the tail at
- * the end. Clicking a mark jumps the transcript to that entry. The chevrons
- * move to the previous or next mark from the active one.
+ * is a lighter dot than the dim marks around it. The visible marks form a
+ * sliding window around it, pinned to the tail at the end unless that would
+ * leave the active mark out. Clicking a mark jumps the transcript to that
+ * entry. The chevrons move to the previous or next mark from the active one.
  *
  * Hover is mouse only. After 150 ms on a mark, a non-capturing card to its
  * left shows up to two wrapped lines from the same `historyRow()` text as
@@ -28,7 +29,7 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import type { Entry } from "../../client/room.ts";
-import { dim, inverse } from "../common.ts";
+import { bold, dim, fg } from "../common.ts";
 import {
   activeMark,
   historyPreview,
@@ -224,7 +225,7 @@ function railParts({
       draw = next;
       const lines = [dim(UP)];
       for (let at = window.start; at < window.end; at++) {
-        lines.push(at === active ? inverse(MARK) : dim(MARK));
+        lines.push(at === active ? bold(fg(255)(MARK)) : dim(MARK));
       }
       while (lines.length < height - 1) lines.push("  ");
       lines.push(dim(DOWN));

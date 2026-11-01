@@ -173,7 +173,8 @@ export function activeMark(
 /**
  * The marks the rail shows. They are one row each, so a long answer changes
  * no mark's place. The window centres on the active mark and clamps at both
- * ends; at the transcript end it takes the tail.
+ * ends. At the transcript end it takes the tail unless that would leave the
+ * active mark outside the window; the active mark wins that conflict.
  */
 export function railWindow(
   count: number,
@@ -185,7 +186,8 @@ export function railWindow(
   if (slots === 0) return { start: 0, end: 0 };
   const last = Math.max(0, count - slots);
   const centred = active - Math.floor(slots / 2);
-  const start = Math.max(0, Math.min(last, atEnd ? last : centred));
+  const target = atEnd ? Math.min(last, active) : centred;
+  const start = Math.max(0, Math.min(last, target));
   return { start, end: Math.min(count, start + slots) };
 }
 
