@@ -3276,9 +3276,10 @@ leaving the rail, scrolling, switching views or hiding the rail closes it. The c
 takes focus or keys, and the rail still receives click and wheel events. pi-tui already
 delivers `move` events to the side list's cursor (`chat/tui/pane.ts`), so a terminal that
 sends none is a graceful fallback: no card, with the side history still available.
-*Done when* pure tests in `chat/view.ts` cover mark order, the active mark, the sliding
+*Done when* unit tests cover mark order (the virtual model), the active mark, the sliding
 window, the tail at the bottom, hit mapping, the hide rules, the shared history text cut
-to two lines, and reserving the two columns before content overflows; a component test
+to two lines, the card's screen clamp, and reserving the two columns before content
+overflows; a component test
 shows a mark click and a chevron click calling the right jump target, and shows the
 preview only after the hover delay, replacing it on a mark change and hiding it on leave
 or scroll without taking focus; the #242 layout test shows a numeric `basis`, `shrink: 0`

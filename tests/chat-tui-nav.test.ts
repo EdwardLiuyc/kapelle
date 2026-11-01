@@ -338,6 +338,13 @@ test("chat.ts on a real terminal clicks a history-rail mark and moves the active
   ).length;
   assert.ok(marks > 0 && marks < 15, `the rail has a window: ${marks}`);
   const first = 15 - marks + 1;
+  const activeRow = () =>
+    [...screenRows(screen.out(), true)].find(([, text]) =>
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+      /\x1b\[7m●/.test(text),
+    )?.[0];
+  const activeBefore = activeRow();
+  assert.ok(activeBefore !== undefined, "the rail has an active mark");
   const from = screen.out().length;
   // At 130 columns the sidebar is shown, and the rail is the last two cells
   // of the row. Row 2 is its first mark.
@@ -351,6 +358,11 @@ test("chat.ts on a real terminal clicks a history-rail mark and moves the active
   );
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   assert.match(drawn, /\x1b\[7m●/, "the active mark was redrawn");
+  const activeAfter = activeRow();
+  assert.ok(
+    activeAfter !== undefined && activeAfter !== activeBefore,
+    `the active mark moved: ${activeBefore} -> ${activeAfter}`,
+  );
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
@@ -441,6 +453,11 @@ test("chat.ts on a narrow real terminal sends the page keys with the composer to
 }, async (t) => {
   const screen = await fifteenSent(t, 100);
   await screen.press("\x12", "history · 1 of 15");
+  assert.equal(
+    [...screenRows(screen.out()).values()].some((row) => /[▲▼]/.test(row)),
+    false,
+    "the rail is absent when the side view takes the timeline's place",
+  );
   await screen.press("\x1d", "ctrl+] keys here");
   // A page is the view's height less one row. That height moves with the
   // rows under the composer, so the test asks only that the light left row 1.

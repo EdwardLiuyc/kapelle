@@ -182,7 +182,11 @@ test("hover closes on scrolling and when the rail hides", async () => {
   await new Promise((ok) => setTimeout(ok, 15));
   assert.equal(overlays.length, 1);
 
-  parts.miss(mouse("wheel", 3));
+  assert.equal(
+    parts.rail.handleMouse?.(mouse("wheel", 3)),
+    undefined,
+    "the rail leaves the wheel to the timeline",
+  );
   assert.equal(overlays[0]?.hidden, true);
 
   parts.rail.handleMouse?.(mouse("move", 3));
@@ -198,6 +202,24 @@ test("hover closes on scrolling and when the rail hides", async () => {
   assert.equal(parts.shown(), true, "two messages reserve the rail early");
   setCount(1);
   assert.equal(parts.shown(), false);
+
+  const tiny = setup({ rows: 2 });
+  assert.equal(tiny.parts.shown(), false, "under three rows hides the rail");
+});
+
+test("the hover card stays on the screen", async () => {
+  const { parts, overlays, mouse } = setup();
+  parts.rail.render(2);
+  parts.rail.handleMouse?.(mouse("move", 5, 29));
+  await new Promise((ok) => setTimeout(ok, 15));
+  const card = overlays[0];
+  assert.ok(card);
+  const row = card.options.row as number;
+  const height = card.options.maxHeight as number;
+  assert.ok(
+    row >= 0 && row + height <= 30,
+    `the card rows ${row}..${row + height} stay on the 30-row screen`,
+  );
 });
 
 test("the card itself closes on a move and still scrolls the wheel", async () => {

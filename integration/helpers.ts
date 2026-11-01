@@ -837,12 +837,13 @@ export const plainText = (out: string) =>
 
 /** The screen now, by row. pi-tui writes a row as CSI row;1H, CSI 2K, so
  *  the last text written to each row is what it shows. */
-export function screenRows(out: string) {
+export function screenRows(out: string, raw = false) {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
   const parts = out.split(/\x1b\[(\d+);1H\x1b\[2K/);
   const rows = new Map<number, string>();
   for (let i = 1; i < parts.length; i += 2) {
-    rows.set(Number(parts[i]), plainText(parts[i + 1] ?? ""));
+    const text = parts[i + 1] ?? "";
+    rows.set(Number(parts[i]), raw ? text : plainText(text));
   }
   return rows;
 }
