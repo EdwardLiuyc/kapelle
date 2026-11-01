@@ -108,6 +108,7 @@ import { copySelection } from "./tui/clipboard.ts";
 import { paneParts } from "./tui/pane.ts";
 import { EDITOR_THEME, panelParts } from "./tui/panel.ts";
 import { type Question, questionParts } from "./tui/question.ts";
+import { railParts } from "./tui/rail.ts";
 import {
   NARROW,
   roomMark,
@@ -169,8 +170,9 @@ const AGAIN_MS = 1500;
 
 /**
  * Where the screen's parts go (#242). One `HStack`, `row`: the sidebar or
- * its strip, the timeline and the side view. Under it, full width: the
- * banner, a gap, the status line, the composer and the bar under it.
+ * its strip, the timeline, the history rail and the side view. Under it,
+ * full width: the banner, a gap, the status line, the composer and the bar
+ * under it.
  *
  * **No `HStack` below another, and no `auto` size in one.** pi-tui gives a
  * scroll view only the rows it shows. But an `HStack` sizes each part with
@@ -185,6 +187,7 @@ export function screenLayout(p: {
   sidebar: Component;
   strip: Component;
   timeline: Component;
+  rail: Component;
   pane: Component;
   banner: Component;
   status: Component;
@@ -192,6 +195,7 @@ export function screenLayout(p: {
   whereBar: Component;
   sidebarShown: () => boolean;
   timelineShown: () => boolean;
+  railShown: () => boolean;
   paneShown: () => boolean;
   paneColumns: () => number;
 }) {
@@ -215,6 +219,12 @@ export function screenLayout(p: {
       shrink: 1,
       minSize: 1,
       visible: p.timelineShown,
+    },
+    {
+      component: p.rail,
+      basis: 2,
+      shrink: 0,
+      visible: p.railShown,
     },
   ]);
   /** Sets the side view's width: half of what the sidebar leaves, and on a
@@ -496,7 +506,17 @@ function chatTui(
 
   // The parts of the screen (M4-12). A part calls back through an arrow,
   // as what it calls is set further down.
-  const { transcript, scroll, warn, draw, redraw, jump } = transcriptParts({
+  let closeRail = () => {};
+  let syncRail = () => {};
+  const {
+    transcript,
+    scroll,
+    warn,
+    draw,
+    redraw,
+    jump,
+    model: transcriptModel,
+  } = transcriptParts({
     tui,
     rooms,
     view: () => view,
@@ -510,6 +530,8 @@ function chatTui(
     gutter: () => (shown ? SIDEBAR_WIDTH : 2),
     height: () => sidebarRows(),
     released: () => offer(),
+    changed: () => closeRail(),
+    mouse: () => closeRail(),
   });
   /** Puts a diff in the side pane (M4-6), with the keys that switch
    *  `against` and reload it. `at` jumps to a file's header line (M7-3).
@@ -593,6 +615,20 @@ function chatTui(
     const editorRows = editor.render(width).length;
     return Math.max(1, rows - banner - 2 - editorRows - (whereText ? 1 : 0));
   };
+  const rail = railParts({
+    tui,
+    scroll,
+    model: transcriptModel,
+    viewportRows: sidebarRows,
+    jump,
+    text: (entry) => {
+      const r = rooms.get(view.roomId);
+      return r ? historyRow(r.state, entry) : "";
+    },
+  });
+  closeRail = rail.close;
+  syncRail = rail.sync;
+
   const { sidebar, strip } = sidebarParts({
     rooms,
     view: () => view,
@@ -614,6 +650,7 @@ function chatTui(
     sidebar,
     strip,
     timeline: scroll,
+    rail: rail.rail,
     pane: side.pane,
     banner: attention,
     status,
@@ -621,10 +658,19 @@ function chatTui(
     whereBar,
     sidebarShown: () => shown,
     timelineShown: () => !side.shown || side.wide(),
+    railShown: () => (!side.shown || side.wide()) && rail.shown(),
     paneShown: () => side.shown,
     paneColumns: () => side.columns(),
   });
+  // The root sees a move or wheel no part took. Returning undefined leaves a
+  // click to the layout dispatcher and a wheel to pi-tui's primary scroll;
+  // calling Container.handleMouse again would dispatch the event twice.
+  layout.root.handleMouse = (event) => {
+    if (event.type === "move" || event.type === "wheel") rail.miss(event);
+    return undefined;
+  };
   const placeSide = () => {
+    closeRail();
     layout.placeSide();
     tui.requestRender();
   };
@@ -727,10 +773,12 @@ function chatTui(
       hints,
       right: right.map(dim).join(dim(" · ")),
     };
+    syncRail();
     tick();
     tui.requestRender();
   };
   const toggle = () => {
+    closeRail();
     shown = !shown;
     placeSide();
     setStatus();
@@ -801,8 +849,9 @@ function chatTui(
    *  scrolls the transcript to it; on a narrow screen the view hides first,
    *  so the transcript shows. It follows the view, and grows as messages
    *  are sent. */
-  const history = () =>
-    side.fill({
+  const history = () => {
+    closeRail();
+    return side.fill({
       title: "history",
       list: {
         rows: () => sent().map(({ r, e }) => historyRow(r.state, e)),
@@ -816,6 +865,7 @@ function chatTui(
       },
       keys: [],
     });
+  };
 
   /** Sets what `chat/view.ts` decided the composer holds. The pre-fill
    *  first: `setText` calls `onChange` at once. */
@@ -836,6 +886,7 @@ function chatTui(
   };
 
   const open = (next: View) => {
+    closeRail();
     // A pop-up belongs to the view it opened on.
     if (box.panel) hidePanel();
     const from = view.roomId;
@@ -969,6 +1020,7 @@ function chatTui(
     end = (code: number, ...last: string[]) => {
       if (done) return;
       done = true;
+      closeRail();
       set.stop();
       shell?.kill();
       clearInterval(timer);
@@ -1062,6 +1114,7 @@ function chatTui(
       // The side view (decided 2026-10-05): ctrl+x shows and hides it, and
       // ctrl+] moves the keys between it and the composer.
       if (matchesKey(data, Key.ctrl("x"))) {
+        closeRail();
         side.toggle();
         return { consume: true };
       }
@@ -1087,6 +1140,7 @@ function chatTui(
           ? 1
           : 0;
       if (page) {
+        closeRail();
         // A shell that does not have the keys scrolls its history: the key
         // is not for the program in it.
         const c = side.content;

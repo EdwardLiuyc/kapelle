@@ -20,7 +20,12 @@ import { SIDEBAR_WIDTH, sidebarParts } from "../tui/sidebar.ts";
 import { transcriptParts } from "../tui/transcript.ts";
 import { screenLayout } from "../tui.ts";
 
-type Part = { component: Component; basis?: number | "auto" };
+type Part = {
+  component: Component;
+  basis?: number | "auto";
+  shrink?: number;
+  visible?: () => boolean;
+};
 /** A stack's parts. pi-tui keeps them `protected`. */
 const partsOf = (c: Component) =>
   (c as unknown as { entries?: Part[] }).entries ?? [];
@@ -40,6 +45,7 @@ test("no HStack in the chat screen holds another, and each of its parts has a se
   const rooms = new Map<string, Followed>();
   const view = () => ({ roomId: "" });
   const editor = new Text("");
+  const rail = new Text("");
   const { sidebar, strip } = sidebarParts({
     rooms,
     view,
@@ -53,25 +59,28 @@ test("no HStack in the chat screen holds another, and each of its parts has a se
     setStatus() {},
     viewportRows: () => Number.POSITIVE_INFINITY,
   });
+  const pane = paneParts({
+    tui,
+    editor,
+    setStatus() {},
+    gutter: () => SIDEBAR_WIDTH,
+    height: () => 20,
+    released() {},
+  }).pane;
   // The real parts, so a stack added inside one is walked too.
   const { root } = screenLayout({
     sidebar,
     strip,
     timeline: scroll,
-    pane: paneParts({
-      tui,
-      editor,
-      setStatus() {},
-      gutter: () => SIDEBAR_WIDTH,
-      height: () => 20,
-      released() {},
-    }).pane,
+    rail,
+    pane,
     banner: bannerPart({ rooms, view, open() {}, question() {} }),
     status: new Text(""),
     editor,
     whereBar: new Text(""),
     sidebarShown: () => true,
     timelineShown: () => true,
+    railShown: () => true,
     paneShown: () => true,
     paneColumns: () => 40,
   });
@@ -81,6 +90,19 @@ test("no HStack in the chat screen holds another, and each of its parts has a se
   const rows = all.filter((c) => c instanceof HStack);
   assert.ok(rows.length > 0, "the walk finds the row");
   assert.ok(all.includes(transcript), "the walk goes into a scroll view");
+  const direct = partsOf(rows[0] as Component);
+  const railPart = direct.find((p) => p.component === rail);
+  assert.ok(railPart, "the rail is a direct part of the row");
+  assert.equal(railPart.basis, 2, "the rail owns two columns");
+  assert.equal(railPart.shrink, 0, "the rail never shrinks");
+  assert.equal(typeof railPart.visible, "function", "the rail has a show rule");
+  const railAt = direct.findIndex((p) => p.component === rail);
+  assert.equal(
+    direct.findIndex((p) => p.component === scroll) + 1,
+    railAt,
+    "the rail follows the timeline",
+  );
+  assert.equal(direct.at(-1)?.component, pane, "the pane stays last");
   for (const row of rows) {
     for (const p of partsOf(row)) {
       assert.equal(typeof p.basis, "number", "each part has a set width");

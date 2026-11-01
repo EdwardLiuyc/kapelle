@@ -325,6 +325,37 @@ async function fifteenSent(t: TestContext, cols: number) {
   return { ...screen, send };
 }
 
+test("chat.ts on a real terminal clicks a history-rail mark and moves the active mark", {
+  skip: noPty,
+}, async (t) => {
+  const screen = await fifteenSent(t, 130);
+  await screen.seen("▲");
+  await screen.seen("▼");
+  // The rail is pinned to the tail. Count its pips to know which message is
+  // the first mark, one row below the up chevron.
+  const marks = [...screenRows(screen.out()).values()].filter((row) =>
+    row.trimEnd().endsWith("●"),
+  ).length;
+  assert.ok(marks > 0 && marks < 15, `the rail has a window: ${marks}`);
+  const first = 15 - marks + 1;
+  const from = screen.out().length;
+  // At 130 columns the sidebar is shown, and the rail is the last two cells
+  // of the row. Row 2 is its first mark.
+  await screen.press("\x1b[<0;130;2M\x1b[<0;130;2m", `m${first}`);
+  const drawn = screen.out().slice(from);
+  const rows = screenRows(screen.out());
+  const row = [...rows].find(([, text]) => text.includes(`▎ m${first}`))?.[0];
+  assert.ok(
+    row !== undefined && row <= 2,
+    `the message reached the top: ${row}`,
+  );
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  assert.match(drawn, /\x1b\[7m●/, "the active mark was redrawn");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 /**
  * Writes `keys`, and waits for the history title to name a row other than
  * `was` in what is drawn after them. Checks that the lit row is the one the
@@ -396,8 +427,8 @@ test("chat.ts on a real terminal keeps the wheel over the side view out of the t
   // to the notice on its first lines, and down to its end, where it
   // follows again.
   await screen.press("\x1d", "ctrl+] keys here");
-  await screen.press("\x1b[5~".repeat(20), "no measured labels");
-  await screen.press("\x1b[6~".repeat(20), "previous: m16");
+  await screen.press("\x1b[5~".repeat(50), "no measured labels");
+  await screen.press("\x1b[6~".repeat(50), "previous: m16");
   await send("m18");
   await screen.seen("previous: m17");
   screen.child.stdin.write(LEAVE);

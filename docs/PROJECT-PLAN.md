@@ -700,9 +700,9 @@ piped screen does not change. M7 runs beside M6.
   proportional bar with hover, thumb dragging and track-click jumping. It shows while the
   person scrolls, then hides, and does not rewrap the transcript.
 - **M7-7 — a history rail with hover preview** (added 2026-10-21): a two-column gutter
-  beside the transcript, with one clickable mark per person message, a short preview on
-  hover, and a window around the active turn. Needs M7-6, whose bar keeps the
-  proportional position.
+  beside the transcript, with one clickable mark per history message, a short preview on
+  hover, and a window around the active message. Needs M7-6, whose bar keeps the
+  proportional position, and #323's virtual transcript for the mark offsets.
 
 ---
 

@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type {
   ParticipantDto,
   RoomDto,
@@ -18,6 +19,7 @@ import {
   seen,
 } from "../../client/room.ts";
 import {
+  activeMark,
   activity,
   anyBusy,
   banner,
@@ -28,6 +30,7 @@ import {
   dismissed,
   edited,
   footer,
+  historyPreview,
   historyRow,
   messages,
   moved,
@@ -36,6 +39,9 @@ import {
   participantLeft,
   pickRow,
   quiet,
+  railHit,
+  railNeighbour,
+  railWindow,
   renamed,
   rows,
   runs,
@@ -946,4 +952,55 @@ test("the history lists the messages someone meant to send, both ends named (#36
     messages(all).map((e) => historyRow(state, e)),
     ["you → po: ask ana to fix the login bug", "po → ana: fix the login bug"],
   );
+});
+
+test("the rail active mark follows the viewport top and falls back to the first", () => {
+  const tops = [4, 12, 20, 28, 36];
+  const at = (i: number) => tops[i] as number;
+  assert.equal(activeMark(0, at, 100), undefined);
+  assert.equal(activeMark(5, at, 0), 0, "before the first message");
+  assert.equal(activeMark(5, at, 19), 1);
+  assert.equal(
+    activeMark(5, at, 20),
+    2,
+    "a top on the viewport edge is active",
+  );
+  assert.equal(activeMark(5, at, 100), 4);
+});
+
+test("the rail window centres, clamps and pins to the tail", () => {
+  assert.deepEqual(railWindow(10, 0, 6, false), { start: 0, end: 4 });
+  assert.deepEqual(railWindow(10, 5, 6, false), { start: 3, end: 7 });
+  assert.deepEqual(railWindow(10, 9, 6, false), { start: 6, end: 10 });
+  assert.deepEqual(railWindow(10, 2, 6, true), { start: 6, end: 10 });
+  assert.deepEqual(railWindow(2, 1, 8, false), { start: 0, end: 2 });
+  assert.deepEqual(railWindow(10, 5, 2, false), { start: 0, end: 0 });
+});
+
+test("rail rows map to the two chevrons and the marks in the window", () => {
+  const window = { start: 3, end: 7 };
+  assert.deepEqual(railHit(window, 6, 0), { kind: "up" });
+  assert.deepEqual(railHit(window, 6, 1), { kind: "mark", at: 3 });
+  assert.deepEqual(railHit(window, 6, 4), { kind: "mark", at: 6 });
+  assert.deepEqual(railHit(window, 6, 5), { kind: "down" });
+  assert.equal(railHit(window, 6, 6), undefined);
+  assert.equal(railHit({ start: 0, end: 2 }, 6, 4), undefined);
+});
+
+test("the chevrons pick the previous and next mark, with no wrap", () => {
+  assert.equal(railNeighbour(5, 2, true), 1);
+  assert.equal(railNeighbour(5, 2, false), 3);
+  assert.equal(railNeighbour(5, 0, true), undefined);
+  assert.equal(railNeighbour(5, 4, false), undefined);
+});
+
+test("the preview shares the history row and cuts its second line", () => {
+  const row =
+    "po → ana: fix the login bug in the session refresh path before the release";
+  const lines = historyPreview(row, 24);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], "po → ana: fix the login");
+  assert.ok(lines[1]?.endsWith("…"));
+  assert.ok(lines.every((line) => visibleWidth(line) <= 24));
+  assert.deepEqual(historyPreview("short", 24), ["short"]);
 });
