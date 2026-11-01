@@ -686,7 +686,8 @@ class Transcript extends Container {
         this.requestRender();
       }
     }
-    if (measured) this.requestRender();
+    // The exit scrollback render has no viewport to update.
+    if (measured && !all) this.requestRender();
     return out;
   }
 

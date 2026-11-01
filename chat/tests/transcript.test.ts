@@ -1391,6 +1391,50 @@ test("the exit render does not restore a reading anchor", () => {
   assert.equal(scrolled, 0, "exit does not move the scroll anchor");
 });
 
+test("a measurement change requests a frame only for a windowed render", () => {
+  const state = newRoomState();
+  state.timeline = [
+    {
+      seq: 1,
+      at: "2026-10-31T00:00:00Z",
+      participantId: "p-ann",
+      type: "stall",
+      kind: "idle",
+      text: "line",
+    },
+  ] as Entry[];
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  let renders = 0;
+  const parts = transcriptParts({
+    tui: {
+      requestRender() {
+        renders += 1;
+      },
+    } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 10,
+  });
+  parts.redraw();
+  const rows = parts.transcript.render(80);
+  parts.scroll.updateLayout(rows.length, 10, () => {});
+  const model = parts.model();
+  assert.ok(model);
+  const item = model.items.at(-1);
+  assert.ok(item);
+  model.measure(item, item.height + 1);
+  renders = 0;
+  parts.transcript.render(80, true);
+  assert.equal(renders, 0, "exit render requests no frame");
+  model.measure(item, item.height + 1);
+  renders = 0;
+  parts.transcript.render(80);
+  assert.equal(renders, 1, "windowed render requests the next frame");
+});
+
 test("the model's tops follow a growing answer and a folded tool run", () => {
   const state = newRoomState();
   let seq = 0;
