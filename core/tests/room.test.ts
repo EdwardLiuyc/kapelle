@@ -20,7 +20,14 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
@@ -2016,6 +2023,19 @@ async function slowCheckout(
   await gate.arm();
   return gate;
 }
+
+test("a gated git releases when its gate folder is removed", async (t) => {
+  const gate = await gatedGit(t);
+  await gate.arm();
+  const held = run("git", ["--version"], {
+    env: { ...process.env, PATH: gate.path },
+    timeout: 2_000,
+  });
+  await until(() => existsSync(gate.entered), "the held git call");
+
+  await rm(gate.dir, { recursive: true, force: true });
+  await held;
+});
 
 /** The revive event's fields, once there is one. */
 const revivedOf = (of: (kind: string) => AgentEventEnvelope[]) =>

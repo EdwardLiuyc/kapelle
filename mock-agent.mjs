@@ -26,7 +26,9 @@
  * `--auth-hold <file>` holds claude's auth notice until that file exists, and
  * `--lock-cwd` makes `session/new` leave a folder the client cannot remove.
  * `--stall-turn <n>` makes a remember-family scenario hold prompt n until
- * `session/cancel`, so a cancel test does not race a timed answer.
+ * `session/cancel`, so a cancel test does not race a timed answer. A held
+ * prompt with no cancel ends only when the test times out; it is a cancel
+ * fixture, not a normal turn.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -261,8 +263,8 @@ const SLOW_MS = 1000;
  *  so answering is the realistic half; a harness that ignores the cancel is
  *  already covered by `tests/cli.test.ts`'s inline stubborn agent. */
 let stalledPromptId = null;
-/** Counts prompts in a remember-family scenario for `--stall-turn`. */
-let promptCount = 0;
+/** Counts prompts per session for `--stall-turn`. */
+const promptCount = new Map();
 
 /** Whether `mode-refused-once` has refused its one `session/set_mode`. */
 let modeRefused = false;
@@ -451,6 +453,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (msg.method === "session/delete") {
     const { sessionId: sid } = msg.params;
     sessions.delete(sid);
+    promptCount.delete(sid);
     if (store) rmSync(storeFile(sid), { force: true });
     reply(msg.id, {});
     return;
@@ -578,8 +581,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       const previous = lastPrompt.get(sid) ?? "(none)";
       lastPrompt.set(sid, text);
       if (store) keep(sid, [...(stored(sid) ?? []), text]);
-      promptCount += 1;
-      if (promptCount === stallTurn) {
+      const count = (promptCount.get(sid) ?? 0) + 1;
+      promptCount.set(sid, count);
+      if (count === stallTurn) {
         stalledPromptId = msg.id;
         return;
       }

@@ -79,8 +79,9 @@ export async function tempDir(t: TestContext): Promise<string> {
  * post-prompt checkout read rather than sleeping. Callers put `path` first on
  * PATH. The room calls git only through `syncCheckout` during a turn, so this
  * gate is specific today; a new mid-turn caller would mark `entered` early and
- * fail loudly. Tests release it explicitly. The 60 s fallback is only a
- * backstop against stranding a child after a failed assertion.
+ * fail loudly. Tests release it explicitly; removing the gate folder also
+ * releases the wait, so a failed test's cleanup cannot strand a child. The
+ * 60 s fallback is only a last resort.
  */
 export async function gatedGit(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), "acp-git-"));
@@ -92,11 +93,12 @@ export async function gatedGit(t: TestContext) {
   const release = join(dir, "release");
   await writeFile(
     join(dir, "git"),
-    `#!/bin/sh\nif [ -e "${armed}" ]; then\n  : > "${entered}"\n  count=0\n  while [ ! -e "${release}" ] && [ "$count" -lt 1200 ]; do\n    sleep 0.05\n    count=$((count + 1))\n  done\nfi\nexec "${real}" "$@"\n`,
+    `#!/bin/sh\nif [ -e "${armed}" ]; then\n  : > "${entered}"\n  count=0\n  while [ ! -e "${release}" ] && [ -e "${armed}" ] && [ "$count" -lt 1200 ]; do\n    sleep 0.05\n    count=$((count + 1))\n  done\nfi\nexec "${real}" "$@"\n`,
     { mode: 0o755 },
   );
   // Release before removing this gate's folder. Tests create the gate before
   // their room, so this cleanup also runs before room shutdown when it fails.
+  // The wrapper also treats the folder's removal as a release.
   t.after(async () => {
     try {
       await writeFile(release, "");
@@ -111,6 +113,7 @@ export async function gatedGit(t: TestContext) {
     });
   });
   return {
+    dir,
     path: `${dir}:${process.env.PATH ?? ""}`,
     entered,
     arm: () => writeFile(armed, ""),

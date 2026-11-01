@@ -430,7 +430,8 @@ test("messages to a busy participant are answered in order, and a cancel keeps i
     (await api<MessageReply>(d, "POST", `${to}/messages`, { text })).body;
 
   // The first three slow turns hold long enough to queue. The fourth stalls
-  // until cancelled, so the 202 cannot race the one-second answer.
+  // until cancelled, so the 202 cannot race the one-second answer; a test that
+  // never reaches the cancel fails by timeout.
   const queued = [];
   for (const text of ["a", "b", "c"]) queued.push((await say(text)).queued);
   assert.deepEqual(queued, [0, 1, 2]);
