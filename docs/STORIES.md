@@ -3944,34 +3944,45 @@ the checkout; the test removes `dist/` at the end. Measured 2026-10-16: the pack
 `--help` prints the help, and both chat modules load. The person also runs `npm install
 -g ./kapelle-<version>.tgz` once by hand and types `kapelle`.
 
-**M9-8a · Release readiness · S · needs M9-7**
-Added 2026-11-01. M9-8 makes the repository public and publishes the package. Before
-that, make the public edge safe to expose and the release repeatable. The publish job,
-the README install block and the release notes stay in M9-8.
+**M9-8a · Release readiness · M · needs M9-7**
+Added 2026-11-01. This is a separate predecessor to M9-8, not a split of it. M9-8 makes
+the repository public and publishes the package. Before that, make the public edge
+safe to expose and the release repeatable. The package metadata and macOS package
+check build on M9-7, so this story runs after it. The publish job, the README install
+block and the release notes stay in M9-8.
 
-- **Expose no credential.** Scan the full Git history for credentials, not only the
-  current tree. Rotate anything found; rewriting history is not a substitute.
+- **Expose no credential.** Run gitleaks over the full Git history, not only the
+  current tree, and record the tool version, commit range, date and result in
+  `docs/RELEASING.md`. Rotate anything found; rewriting history is not a substitute.
 - **Give the repository a public face.** Add `SECURITY.md` that sends reports to
-  GitHub's private vulnerability reporting, and turn that feature on. Fill the
-  repository description, homepage and topics. Add `homepage`, `bugs` and `keywords` to
-  `package.json`; `repository` is already there.
+  GitHub's private vulnerability reporting. Fill the repository description, homepage
+  and topics, and add `homepage`, `bugs` and `keywords` to `package.json`; `repository`
+  is already there. Record the public-only GitHub settings in `docs/RELEASING.md`;
+  M9-8 turns them on after the flip.
 - **Write the release down.** Add `docs/RELEASING.md`: the version and tag, the first
   publish and trusted-publisher setup, the gate, the clean-machine check, and what to do
-  when a publish fails. It names M9-8 as the owner of the workflow.
-- **Test the claimed platform.** Add one macOS job that runs `npm ci`, builds the
-  package and runs the packed CLI's `--version` and `--help`. Ubuntu already runs the
-  full suite; this closes only the packaging gap on the other supported system.
-*Done when* the history scan is clean or every hit is rotated, `SECURITY.md` and private
-reporting are on, the repository and package metadata are filled, `docs/RELEASING.md`
-is present, and the macOS packaged CLI check passes.
+  when a publish fails. It names M9-8 as the owner of the workflow. Add the file to the
+  docs list in `AGENTS.md`.
+- **Test the claimed platform.** Add a `macos-latest` job that runs `npm ci` and
+  `node --test tests/package.test.ts`; do not use `vars.RUNNER`, which points the Linux
+  job at a self-hosted machine. The test's bare-command subtest self-skips outside
+  Linux, and `chat/tui/term.ts`'s macOS `script` branch stays out of scope. The job runs
+  on the same triggers as Code Checks; accept the 10× private-repo minutes for one small
+  job.
+
+*Done when* the gitleaks record shows a clean range or every hit is rotated,
+`SECURITY.md` and the repository and package metadata are in place, `docs/RELEASING.md`
+and its `AGENTS.md` entry are present, and the macOS package test passes.
 
 **M9-8 · Publish to npm · S · needs M9-1..M9-7, M9-3b, M9-5b and M9-8a**
 The first release. The person does steps 1 and 2 by hand.
 
 1. Make an npm account and turn on 2FA.
 2. **Make the repository public, or publish without provenance.** M9-8a clears the
-   public edge first. npm adds provenance (a proof of which repository and job built the
-   package) only for a public repository. This one is private today (2026-10-15).
+   public edge first. After the flip, turn on private vulnerability reporting, secret
+   scanning and push protection, as `docs/RELEASING.md` records. npm adds provenance (a
+   proof of which repository and job built the package) only for a public repository.
+   This one is private today (2026-10-15).
 3. Choose the first version and tag it. `package.json` is already `0.1.0`, so tag that
    version rather than bumping it by habit. When the version changes, `npm version
    <version>` makes the commit and the tag.
