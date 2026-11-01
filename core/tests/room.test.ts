@@ -14,17 +14,26 @@
  * message revives a participant with a fresh session (M6-7a), or loads its
  * old one where the harness can (M6-7b).
  * `mock-agent.mjs`'s default turn writes `ACP_TEST.md` through the client,
- * which is the file each test looks for.
+ * which is the file each test looks for. A gated git helper also holds the
+ * post-prompt checkout reads these tests need.
  */
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import {
+  gatedGit,
   gitRepo,
   HOSTILE_AGENT,
   isolateStateHome,
@@ -693,7 +702,10 @@ test(`the queue holds ${QUEUE_BOUND}, and a cancel drops it and keeps the sessio
   assert.equal(p.queued, QUEUE_BOUND);
   assert.throws(
     () => p.send("one too many"),
-    (err) => err instanceof RoomRefusal && err.code === "queue_full",
+    (err) =>
+      err instanceof RoomRefusal &&
+      err.code === "queue_full" &&
+      /cancel its live prompt/.test(err.message),
   );
 
   assert.equal(p.cancel(), true);
@@ -1972,6 +1984,8 @@ async function loading(
   const repo = await gitRepo(t);
   const roomId = newRoomId();
   const bus = createEventBus();
+  const events: AgentEventEnvelope[] = [];
+  bus.addListener((e) => events.push(e));
   const room = await openRoom({
     roomId,
     cwd: repo,
@@ -1983,8 +1997,54 @@ async function loading(
   });
   t.after(() => room.dismiss());
   const p = room.participants[0] as Participant;
-  return { repo, roomId, room, p, file: roomFile(repo, roomId), agent };
+  const of = (kind: string) =>
+    events.filter((e) => e.update.sessionUpdate === kind);
+  return {
+    repo,
+    roomId,
+    room,
+    p,
+    file: roomFile(repo, roomId),
+    agent,
+    events,
+    of,
+  };
 }
+
+/** Arms a git wrapper that holds the next checkout read until released. */
+async function slowCheckout(
+  t: TestContext,
+  gate: Awaited<ReturnType<typeof gatedGit>>,
+) {
+  const path = process.env.PATH;
+  process.env.PATH = gate.path;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+  await gate.arm();
+  return gate;
+}
+
+test("a gated git releases when its gate folder is removed", async (t) => {
+  const gate = await gatedGit(t);
+  await gate.arm();
+  const held = new Promise<Error | null>((done) => {
+    execFile(
+      "git",
+      ["--version"],
+      { env: { ...process.env, PATH: gate.path }, timeout: 10_000 },
+      (err) => done(err),
+    );
+  });
+  await until(() => existsSync(gate.entered), "the held git call");
+
+  await rm(gate.dir, { recursive: true, force: true });
+  assert.equal(
+    await held,
+    null,
+    "removing the gate folder released the held call",
+  );
+});
 
 /** The revive event's fields, once there is one. */
 const revivedOf = (of: (kind: string) => AgentEventEnvelope[]) =>
@@ -2070,6 +2130,34 @@ test("a pause that cancels a live turn reads paused, and the load warns", async 
     () => readRoomRecord(file).participants[0]?.turnCancelled === undefined,
     "the revive never cleared the flag",
   );
+});
+
+test("a pause after the prompt settled does not cut the turn or warn on revive", async (t) => {
+  const gate = await gatedGit(t);
+  const { repo, room, p, file, of } = await loading(t, "remember");
+  await slowCheckout(t, gate);
+  const turn = p.send("hi");
+  await until(() => existsSync(gate.entered), "the checkout read");
+
+  const pausing = room.pause();
+  await gate.release();
+  await pausing;
+  assert.equal(
+    of("_client_cancel_requested").length,
+    0,
+    "no late cancel reached the harness",
+  );
+  await turn;
+
+  assert.equal(p.status(), "paused");
+  const saved = readRoomRecord(file).participants[0];
+  assert.equal(saved?.status, "paused");
+  assert.equal(saved?.turnCancelled, undefined);
+
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("again");
+  assert.equal(revivedOf(back.of)?.resumed, "loaded");
+  assert.equal(revivedOf(back.of)?.memoryMayBeBehind, undefined);
 });
 
 test("a person's cancel during a turn makes the next load warn, after an idle pause (#238)", async (t) => {
@@ -2488,37 +2576,67 @@ test("three queued messages from the orchestrator get three replies, in order", 
   );
 });
 
-test("a cancel after the harness answered, while the checkout is read, still replies with the answer", async (t) => {
-  const { po, dev, of, told, settled } = await loopRoom(t, "remember");
-  // A `git` that waits while `slow` exists holds the turn in its end step,
-  // after the harness answered and before the turn's end line.
-  const dir = await tempDir(t);
-  const slow = join(dir, "slow");
-  const real = (await run("sh", ["-c", "command -v git"])).stdout.trim();
-  await writeFile(
-    join(dir, "git"),
-    `#!/bin/sh\n[ -e "${slow}" ] && sleep 0.5\nexec "${real}" "$@"\n`,
-    { mode: 0o755 },
-  );
-  const path = process.env.PATH;
-  process.env.PATH = `${dir}:${path}`;
-  t.after(() => {
-    process.env.PATH = path;
-  });
-  await writeFile(slow, "");
+test("a cancel after the prompt settled, while the checkout is read, is a no-op", async (t) => {
+  const gate = await gatedGit(t);
+  const { po, dev, of, told, settled, file } = await loopRoom(t, "remember");
+  await slowCheckout(t, gate);
   const turn = dev.send("go", po);
-  await until(() => of(dev, "agent_message_chunk").length > 0, "the answer");
-  await new Promise((ok) => setTimeout(ok, 100));
-  assert.equal(dev.cancel(), true, "the turn is still live");
+  await until(() => existsSync(gate.entered), "the checkout read");
+
+  const queued = dev.send("next", po);
+  assert.equal(dev.queued, 1);
+  assert.equal(dev.cancel(), false, "the prompt has settled");
+  assert.equal(dev.queued, 1, "the queue was not dropped");
+  assert.equal(of(dev, "_client_queue_cleared").length, 0);
+  assert.equal(
+    of(dev, "_client_cancel_requested").length,
+    0,
+    "no late cancel reached the harness",
+  );
+
+  await gate.release();
   await turn;
+  await queued;
   await settled();
-  assert.deepEqual(told(po), [
-    [
-      "[reply from dev] end_turn, 0 tool calls\nprevious: (none)",
-      dev.id,
-      "reply",
-    ],
+
+  assert.deepEqual(told(po)[0], [
+    "[reply from dev] end_turn, 0 tool calls\nprevious: (none)",
+    dev.id,
+    "reply",
   ]);
+  const ended = of(dev, "_client_turn_ended")[0]?.update as
+    | { stopReason?: string }
+    | undefined;
+  assert.equal(ended?.stopReason, "end_turn");
+  await until(() => {
+    const saved = readRoomRecord(file).participants.find(
+      (p) => p.id === dev.id,
+    );
+    return saved?.status === "idle" && saved.turns === 2;
+  }, "both turns saved");
+  assert.equal(
+    readRoomRecord(file).participants.find((p) => p.id === dev.id)
+      ?.turnCancelled,
+    undefined,
+  );
+});
+
+test("a removal after the prompt settled, while the checkout is read, sends no late cancel", async (t) => {
+  const gate = await gatedGit(t);
+  const { room, dev, of } = await loopRoom(t, "remember");
+  await slowCheckout(t, gate);
+  const turn = dev.send("go");
+  await until(() => existsSync(gate.entered), "the checkout read");
+
+  const removing = room.remove(dev.id);
+  assert.equal(
+    of(dev, "_client_cancel_requested").length,
+    0,
+    "no late cancel reached the harness",
+  );
+  await gate.release();
+  await removing;
+  await turn;
 });
 
 test("a turn that ends while the room pauses sends nothing", async (t) => {

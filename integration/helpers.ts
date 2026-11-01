@@ -73,6 +73,54 @@ export async function tempDir(t: TestContext): Promise<string> {
   return dir;
 }
 
+/**
+ * A `git` wrapper that holds every git call while armed until released. It
+ * marks `entered` on the first held call, so a test can wait for the exact
+ * post-prompt checkout read rather than sleeping. Callers put `path` first on
+ * PATH. The room calls git only through `syncCheckout` during a turn, so this
+ * gate is specific today; a new mid-turn caller would mark `entered` early and
+ * fail loudly. Tests release it explicitly; removing the gate folder also
+ * releases the wait, so a failed test's cleanup cannot strand a child. The
+ * 60 s fallback is only a last resort.
+ */
+export async function gatedGit(t: TestContext) {
+  const dir = await mkdtemp(join(tmpdir(), "acp-git-"));
+  const found = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" });
+  assert.equal(found.status, 0, found.stderr);
+  const real = found.stdout.trim();
+  const armed = join(dir, "armed");
+  const entered = join(dir, "entered");
+  const release = join(dir, "release");
+  await writeFile(
+    join(dir, "git"),
+    `#!/bin/sh\nif [ -e "${armed}" ]; then\n  : > "${entered}"\n  count=0\n  while [ ! -e "${release}" ] && [ -e "${armed}" ] && [ "$count" -lt 1200 ]; do\n    sleep 0.05\n    count=$((count + 1))\n  done\nfi\nexec "${real}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  // Release before removing this gate's folder. Tests create the gate before
+  // their room, so this cleanup also runs before room shutdown when it fails.
+  // The wrapper also treats the folder's removal as a release.
+  t.after(async () => {
+    try {
+      await writeFile(release, "");
+    } catch {
+      // The gate folder is still ours; this is only a failed cleanup guard.
+    }
+    await rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
+  });
+  return {
+    dir,
+    path: `${dir}:${process.env.PATH ?? ""}`,
+    entered,
+    arm: () => writeFile(armed, ""),
+    release: () => writeFile(release, ""),
+  };
+}
+
 /** A committed repository with **no `.gitignore`** — since #129 that is the
  *  shape a run must accept, so it is the shape the suites start from.
  *
