@@ -1594,10 +1594,10 @@ A removed participant has no stream: this route answers `404` for it. Its lines 
 
 Cancels the participant's live prompt. A prompt is live from the start of its turn until
 the harness prompt settles. The checkout read after it can keep `status` at `busy`, but
-that read is not cancellable. First the route drops the participant's queue; if it held
-any messages, the log gets `_client_queue_cleared`. Then it asks the harness to stop. The
-session stays, so the participant remembers the turn, and the room stays `active`. To
-replace a message, cancel, then send the new one.
+that read is not cancellable. When a prompt is live, the route first drops the
+participant's queue; if it held any messages, the log gets `_client_queue_cleared`. Then
+it asks the harness to stop. The session stays, so the participant remembers the turn,
+and the room stays `active`. To replace a message, cancel, then send the new one.
 
 A cancel after the prompt settled, but before its `_client_turn_ended`, is `409 no_turn`.
 It keeps the queue, sends no `session/cancel` and records no cut, so a later revive does

@@ -2240,7 +2240,9 @@ function createParticipant({
   const stop = async () => {
     stopping = true;
     drop();
-    if (turn) {
+    // A settled prompt is over: only its checkout read runs. A late
+    // session/cancel can abort background work, and no turn is live.
+    if (turn && !promptSettled) {
       turnAbort.abort();
       agent?.cancel();
     }

@@ -2585,6 +2585,23 @@ test("a cancel after the prompt settled, while the checkout is read, is a no-op"
   );
 });
 
+test("a removal after the prompt settled, while the checkout is read, sends no late cancel", async (t) => {
+  const { room, dev, of } = await loopRoom(t, "remember");
+  const gate = await slowCheckout(t);
+  const turn = dev.send("go");
+  await until(() => existsSync(gate.entered), "the checkout read");
+
+  const removing = room.remove(dev.id);
+  assert.equal(
+    of(dev, "_client_cancel_requested").length,
+    0,
+    "no late cancel reached the harness",
+  );
+  await gate.release();
+  await removing;
+  await turn;
+});
+
 test("a turn that ends while the room pauses sends nothing", async (t) => {
   const { room, po, dev, told } = await loopRoom(t, "slow");
   // A harness that ignores SIGTERM keeps its remove in flight for the stop's
