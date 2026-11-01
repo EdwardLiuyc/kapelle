@@ -218,9 +218,20 @@ function toolLines(e: Tool, live: boolean, now: number) {
   return rows;
 }
 
-/** A run's line (M7-2): `▸` folded, `▾` open, and its failed count in red. */
+/** A run summary's counts, rebuilt only when its calls change: `runText`
+ *  walks every call, and the summary is drawn on every frame. */
+const runSummaries = new WeakMap<Run, { text: string; failed: number }>();
+const runSummary = (run: Run) => {
+  let summary = runSummaries.get(run);
+  if (!summary) {
+    const { text, failed } = runText(run.tools);
+    summary = { text, failed };
+    runSummaries.set(run, summary);
+  }
+  return summary;
+};
 function runLine(run: Run, open: boolean) {
-  const { text, failed } = runText(run.tools);
+  const { text, failed } = runSummary(run);
   return `${dim(`${open ? "▾" : "▸"} ${text}`)}${failed ? red(` · ${failed} failed`) : ""}`;
 }
 
@@ -466,8 +477,9 @@ class VirtualTranscriptModel {
   }
 
   /** The items that cover the viewport and its row margin. A folded run
-   *  has one item per hidden tool but only its first has any rows; the row
-   *  probes skip those zero-height items instead of walking all of them. */
+   *  keeps the first call's summary and any later call's heading; its other
+   *  hidden calls have no rows. The row probes skip those zero-height items
+   *  instead of walking all of them. */
   window(top: number, viewport: number) {
     const count = this.items.length;
     if (count === 0) return { indices: [] as number[] };
@@ -751,8 +763,8 @@ function transcriptParts({
 
   /** A tool call's row in its run. The run's first call draws the run's
    *  line above its own row once the run folded, and only that line while
-   *  it is shut; the others draw nothing then. Plain empty rows separate
-   *  the coloured blocks and follow the last one. */
+   *  it is shut; another call draws only its heading then. Plain empty rows
+   *  separate the coloured blocks and follow the last one. */
   // The row's fold, live state, hit box, and wrapping share one component.
   // pi-lens-ignore: high-complexity
   const toolRow = (state: RoomState, e: Tool, run: Run): Component => {
@@ -835,8 +847,8 @@ function transcriptParts({
       run.folded = true;
       const items = current.byRun.get(run) ?? [];
       for (const item of items) current.invalidate(item);
-      // A shut run draws only on its first item. Measure that summary, not
-      // every call hidden inside it.
+      // A shut run draws its summary on the first item and later headings
+      // at their places. Measure the summary; headings wait for the window.
       const first = items[0];
       if (live && first) transcript.measure(first);
     }
@@ -936,18 +948,19 @@ function transcriptParts({
       }),
       estimate: (width) => {
         const headRows = head ? headingRows(head.text, width) : 0;
-        if (shut()) {
-          return first()
-            ? headRows +
-                estimateRows(runLine(run, false), Math.max(1, width - 1))
+        const summaryRows =
+          first() && run.folded
+            ? estimateRows(runLine(run, !shut()), Math.max(1, width - 3))
             : 0;
-        }
+        if (shut()) return headRows + summaryRows;
         const own =
           estimateRows(
             toolLines(e, false, Date.now()).join("\n"),
             Math.max(1, width - 3),
           ) + 2;
-        return headRows + (first() ? 0 : 1) + own + (last() ? 1 : 0);
+        return (
+          headRows + summaryRows + (first() ? 0 : 1) + own + (last() ? 1 : 0)
+        );
       },
     };
   };
@@ -1024,10 +1037,18 @@ function transcriptParts({
         return;
       }
       case "tool": {
-        const { run } = see(e);
+        const run = see(e).run as Run;
+        runSummaries.delete(run);
+        // The call before this one loses its trailing gap when it is no
+        // longer the run's last.
+        const previous = current.byRun.get(run)?.at(-1);
+        if (previous) {
+          current.invalidate(previous);
+          if (live && previous.parts) transcript.measure(previous);
+        }
         const heading = speaker !== e.participantId;
         speaker = e.participantId;
-        current.add(e, toolSpec({ state, e, name, heading, run: run as Run }));
+        current.add(e, toolSpec({ state, e, name, heading, run }));
         return;
       }
       case "turn_ended": {
@@ -1124,6 +1145,7 @@ function transcriptParts({
       : current.anchorAt(scroll.scrollTop);
     const item = current.byEntry.get(e);
     if (item) {
+      if (item.run) runSummaries.delete(item.run);
       item.advance?.();
       // A shut run draws its one summary line on the first item, whatever
       // later call changed. Measure that line so its new wrap is in the model.
@@ -1150,6 +1172,8 @@ function transcriptParts({
   const jump = (e: Entry) => {
     const row = model?.topOf(e);
     if (row === undefined) return;
+    // New entries can make the model taller than the last drawn layout.
+    transcript.syncScroll();
     scroll.scrollTo(row, { disableFollow: true });
     tui.requestRender();
   };
