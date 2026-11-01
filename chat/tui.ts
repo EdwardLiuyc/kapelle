@@ -317,11 +317,18 @@ function chatTui(
   /** The log's size when each room's first `GET /rooms/:id` answered: a
    *  cap event at or below it is replay, not news. */
   const attachedAt = new Map<string, number>();
+  /** Cap events that beat that answer. The snapshot tells a new one from a
+   *  replayed one, so none is judged before it arrives. */
+  const pendingCaps = new Map<string, RoomEventLine[]>();
   const set = roomSet(d, address, {
     line: (roomId, line, e) => onLine(roomId, line, e),
     loaded: (roomId) => {
       if (!attachedAt.has(roomId)) {
-        attachedAt.set(roomId, set.rooms.get(roomId)?.dto?.seq ?? 0);
+        const attached = set.rooms.get(roomId)?.dto?.seq ?? 0;
+        attachedAt.set(roomId, attached);
+        const pending = pendingCaps.get(roomId) ?? [];
+        pendingCaps.delete(roomId);
+        if (pending.some((line) => line.seq > attached)) ring(true);
       }
       if (view.roomId === roomId) redraw();
     },
@@ -993,10 +1000,15 @@ function chatTui(
     const u = line.update;
     const kind = u.sessionUpdate;
     const attached = attachedAt.get(roomId);
+    if (kind === "_client_turn_cap_reached" && attached === undefined) {
+      const pending = pendingCaps.get(roomId) ?? [];
+      pending.push(line);
+      pendingCaps.set(roomId, pending);
+    }
     // A cap event from the initial replay is history: ring only for one
-    // that arrived after the room's first `GET /rooms/:id` answered. The
-    // call stays for every line: `ring` defers the question bell to the end
-    // of the chunk.
+    // that arrived after the room's first `GET /rooms/:id` answered. An
+    // earlier one waits for that answer above. The call stays for every
+    // line: `ring` defers the question bell to the end of the chunk.
     ring(
       kind === "_client_turn_cap_reached" &&
         attached !== undefined &&

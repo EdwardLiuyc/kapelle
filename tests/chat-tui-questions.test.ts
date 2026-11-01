@@ -264,6 +264,132 @@ test("chat.ts on a real terminal ignores a cap event replayed from before attach
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("chat.ts on a real terminal holds a new cap event until the first room reply", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const roomId = "room-cap-race";
+  const room = {
+    id: roomId,
+    cwd: process.cwd(),
+    status: "active",
+    updatedAt: new Date().toISOString(),
+    // The GET's snapshot predates the cap event, although its answer comes
+    // after it: this is a new event, not one from the initial replay.
+    seq: 1,
+    participants: [
+      {
+        id: "p1",
+        name: "dev",
+        harness: "mock-agent",
+        mode: "auto",
+        status: "idle",
+        notices: [],
+      },
+    ],
+  };
+  let releaseGet: (() => void) | undefined;
+  let roomReads = 0;
+  let capSent = false;
+  const fake = createServer((req, res) => {
+    const path = req.url ?? "";
+    if (path === "/version") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ apiVersion: API_VERSION }));
+      return;
+    }
+    if (path === "/harnesses") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("[]");
+      return;
+    }
+    if (path === "/rooms") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify([room]));
+      return;
+    }
+    if (path === `/rooms/${roomId}/events`) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      res.write(
+        `id: 1\ndata: ${JSON.stringify({
+          seq: 1,
+          roomId,
+          participantId: "p1",
+          update: {
+            sessionUpdate: "_client_participant_added",
+            name: "dev",
+            harness: "mock-agent",
+            mode: "auto",
+          },
+        })}\n\n`,
+      );
+      res.write(
+        `id: 2\ndata: ${JSON.stringify({
+          seq: 2,
+          roomId,
+          participantId: "p1",
+          update: { sessionUpdate: "_client_turn_cap_reached" },
+        })}\n\n`,
+      );
+      capSent = true;
+      return;
+    }
+    if (path === `/rooms/${roomId}`) {
+      roomReads += 1;
+      if (roomReads > 1) {
+        releaseGet = () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(room));
+        };
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(room));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({ error: { code: "no_route", message: `no ${path}` } }),
+    );
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  const screen = await ptyScreen(
+    t,
+    `printf ready; stty cols 100 rows 30; node chat.ts attach ${roomId}`,
+    { XDG_RUNTIME_DIR: runtime },
+    "ready",
+  );
+  for (const until = Date.now() + 10_000; !capSent; ) {
+    assert.ok(Date.now() < until, "the cap event was not sent");
+    await new Promise((ok) => setTimeout(ok, 25));
+  }
+  const bells = () => plainText(screen.out()).split("\x07").length - 1;
+  assert.equal(bells(), 0, "nothing rings before the snapshot arrives");
+  releaseGet?.();
+  for (const until = Date.now() + 10_000; bells() === 0; ) {
+    assert.ok(
+      Date.now() < until,
+      `new cap event stayed silent: ${screen.out()}`,
+    );
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  assert.equal(bells(), 1);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 test("chat.ts on a real terminal shows a question off screen in the banner, rings the bell once, and a click on the row opens it", {
   skip: noPty,
 }, async (t) => {
