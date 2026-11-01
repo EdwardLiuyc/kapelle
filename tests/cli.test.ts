@@ -115,14 +115,35 @@ test("--version prints the package version", async (t) => {
   assert.equal(r.stdout.trim(), pkg.version);
 });
 
-test("--version does not override a verb", async (t) => {
+test("--version beside a run is a usage error, not a run", async (t) => {
   const cwd = await tempDir(t);
   const file = await runFile(t, mockRun([{ id: "one", prompt: "run me" }]));
 
   const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--version"]);
 
-  assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /▸ one \(mock-agent\) done/);
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /--version takes no other arguments/);
+});
+
+test("--version beside a prompt is a usage error, not a harness run", async (t) => {
+  const bin = await tempDir(t);
+  const marker = join(bin, "pi-started");
+  await writeFile(
+    join(bin, "pi-acp"),
+    '#!/bin/sh\nprintf spawned > "$PI_MARKER"\nexit 1\n',
+    { mode: 0o755 },
+  );
+
+  const r = await spawnCli(t, ["summarise this", "--version"], "cli.ts", {
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    PI_MARKER: marker,
+  }).done;
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /--version takes no other arguments/);
+  await assert.rejects(readFile(marker), "the harness did not start");
 });
 
 test("--version is not a value for a missing flag", async (t) => {

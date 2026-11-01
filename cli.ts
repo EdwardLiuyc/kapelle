@@ -108,6 +108,12 @@ import { flushStream, render } from "./render.ts";
 
 const argv = process.argv.slice(2);
 
+/** One line for a value-taking flag with no value. */
+function missingValue(name: string): never {
+  console.error(`--${name} needs a value`);
+  process.exit(1);
+}
+
 /**
  * Value of `--name`, or `fallback` when the flag is absent.
  *
@@ -124,10 +130,7 @@ function flag(name: string, fallback?: string): string | undefined {
   const i = argv.indexOf(`--${name}`);
   if (i === -1) return fallback;
   const next = argv[i + 1];
-  if (!next || next.startsWith("--")) {
-    console.error(`--${name} needs a value`);
-    process.exit(1);
-  }
+  if (!next || next.startsWith("--")) missingValue(name);
   return next;
 }
 
@@ -212,16 +215,15 @@ const DEFAULT_AGENT = "pi";
 const chatVerb = positional[0] === "chat";
 
 const versionAt = argv.indexOf("--version");
-const versionAsValue =
-  versionAt > 0 &&
-  argv[versionAt - 1]?.startsWith("--") &&
-  !BOOLEAN_FLAGS.has(argv[versionAt - 1] as string);
-if (versionAsValue) {
-  console.error(`${argv[versionAt - 1]} needs a value`);
+const previous = versionAt > 0 ? (argv[versionAt - 1] ?? "") : "";
+if (previous.startsWith("--") && !BOOLEAN_FLAGS.has(previous)) {
+  missingValue(previous.slice(2));
+}
+if (versionAt !== -1 && (positional.length > 0 || runFilePath)) {
+  console.error("--version takes no other arguments");
   process.exit(1);
 }
-
-if (positional.length === 0 && !runFilePath && versionAt !== -1) {
+if (versionAt !== -1) {
   try {
     process.stdout.write(`${await packageVersion()}\n`);
     process.exit(0);
