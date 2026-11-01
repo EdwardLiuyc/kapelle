@@ -43,8 +43,10 @@
  * **A load can remember less than the files show** (§M0-9). That happened
  * only to a harness stopped during a turn, cancelled or cut: the cut turn
  * stays in the history it replays. So a load after `killed`, or after any
- * cancel of a live turn since the last revive (a person's, or a pause's),
- * says so with `memoryMayBeBehind`. Such a participant can read `idle` or
+ * cancel before its prompt settled since the last revive (a person's, or a
+ * pause's), says so with `memoryMayBeBehind`. A settled prompt whose checkout
+ * read is still running is not a live harness turn, so a cancel or pause in
+ * that window records no cut. Such a participant can read `idle` or
  * `paused`; `room.json` keeps the cancel as `turnCancelled`, which only the
  * next revive reads and clears (decided 2026-10-08, #179; the person's
  * cancel added in #238). So the flag is about the last revive, not about
@@ -408,8 +410,9 @@ export interface Participant {
    * the `[from <name>]` line, and `QUEUE_BOUND` does not apply to it.
    */
   send(text: string, from?: Sender, kind?: MessageKind): Promise<void>;
-  /** Drops the queue, then asks the harness to end the live turn. The
-   *  session stays (S5a). False when no turn is live. */
+  /** Drops the queue, then asks the harness to end the live prompt. The
+   *  session stays (S5a). False when no prompt is live: before it starts, or
+   *  after it has settled even if the checkout read still runs. */
   cancel(): boolean;
 }
 
@@ -1889,6 +1892,10 @@ function createParticipant({
   };
 
   let turn: Promise<void> | undefined;
+  /** True once the prompt phase is over: the prompt settled, or starting it
+   *  failed before it was sent. `turn` can stay set through the checkout read
+   *  that follows. */
+  let promptSettled = false;
   /** A fast-forward of this checkout (M6-11a). It counts as busy, so a
    *  message queues behind it rather than start a turn on moving files. */
   let held: Promise<unknown> | undefined;
@@ -2077,6 +2084,7 @@ function createParticipant({
     turns += 1;
     const controller = new AbortController();
     turnAbort = controller;
+    promptSettled = false;
     turnFrom = from?.id;
     // Before the line below, whose save keeps it.
     if (from && !kind) orderedBy = from.id;
@@ -2161,6 +2169,7 @@ function createParticipant({
     turn = (ready ? ready.then(prompt) : Promise.resolve(prompt()))
       .then(
         async ({ stopReason }) => {
+          promptSettled = true;
           // Our own record, not `stopReason`: copilot answers `end_turn` for
           // a turn it cancelled (§M0-4). The abort's reason says who cut it
           // (#377): `cancel()` gives `person`.
@@ -2180,6 +2189,7 @@ function createParticipant({
           finish(answer);
         },
         async (err) => {
+          promptSettled = true;
           const error = err instanceof Error ? err.message : String(err);
           const answer = take("error", error);
           await after();
@@ -2231,7 +2241,9 @@ function createParticipant({
   const stop = async () => {
     stopping = true;
     drop();
-    if (turn) {
+    // A settled prompt is over: only its checkout read runs. A late
+    // session/cancel can abort background work, and no turn is live.
+    if (turn && !promptSettled) {
       turnAbort.abort();
       agent?.cancel();
     }
@@ -2240,22 +2252,23 @@ function createParticipant({
     await held;
   };
 
-  // A shutdown leaves a participant as a cancel does (R42): the live turn is
+  // A shutdown leaves a participant as a cancel does (R42): a live prompt is
   // cancelled and gets its `_client_turn_ended` before the harness stops. A
-  // turn still live after the grace is cut, so it reads `killed`.
+  // prompt still live after the grace is cut, so it reads `killed`. Once the
+  // prompt has settled, only its checkout read remains: send no late cancel and
+  // record no cut.
   const pause = async (graceMs: number) => {
     stopping = true;
     drop();
     const before = stopped;
-    const live = turn !== undefined;
+    const live = promptSettled ? undefined : turn;
     let cut = false;
-    if (turn) {
+    if (live) {
       turnAbort.abort();
       agent?.cancel();
-      const current = turn;
       let timer: NodeJS.Timeout | undefined;
       const ended = await Promise.race([
-        current.then(() => true),
+        live.then(() => true),
         new Promise<boolean>((ok) => {
           timer = setTimeout(() => ok(false), graceMs);
         }),
@@ -2268,7 +2281,7 @@ function createParticipant({
     await held;
     stopped = cut ? "killed" : (before ?? "paused");
     // Ended by the cancel: `paused`, though its memory may be behind.
-    turnCancelled ||= live && !cut;
+    turnCancelled ||= live !== undefined && !cut;
   };
 
   // The filter follows at once; the harness's own mode before the next turn.
@@ -2397,7 +2410,7 @@ function createParticipant({
         throw new RoomRefusal(
           "queue_full",
           `${QUEUE_BOUND} messages already wait for this agent; ` +
-            "wait for a turn to end, or cancel the turn to drop them",
+            "wait for them to run, or cancel its live prompt to drop them",
         );
       }
       bus.emit({
@@ -2414,16 +2427,16 @@ function createParticipant({
       );
     },
     cancel() {
-      if (!turn) return false;
+      if (!turn || promptSettled) return false;
       drop();
       kept = undefined;
+      // The history now holds a cut turn, as after a pause's cancel (§M0-9).
+      turnCancelled = true;
       // Before the harness hears of the cancel, so the request it waits on
       // is answered at once. Only the person's route calls this: the reason
       // makes the reply say `cancelled by the person` (#377).
       turnAbort.abort("person");
       agent?.cancel();
-      // The history now holds a cut turn, as after a pause's cancel (§M0-9).
-      turnCancelled = true;
       return true;
     },
   };

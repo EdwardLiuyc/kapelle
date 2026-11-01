@@ -1402,10 +1402,11 @@ async function postMessage(
 }
 
 /**
- * `POST /rooms/:id/agents/:agentId/turns/current/cancel` — drops the
- * participant's queue and asks its harness to end the live turn. The
- * session and the room stay (S5a). 202, as a run's cancel: the turn ends on
- * the stream with `_client_turn_ended`.
+ * `POST /rooms/:id/agents/:agentId/turns/current/cancel` — for a live
+ * prompt, drops the participant's queue and asks its harness to end the
+ * turn. The session and the room stay (S5a). 202, as a run's cancel: the
+ * turn ends on the stream with `_client_turn_ended`. Once the prompt has
+ * settled, there is no live turn: 409 `no_turn`, nothing dropped or sent.
  */
 function cancelTurn(id: string, agentId: string, res: ServerResponse) {
   const entry = roomEntry(id);
@@ -1414,7 +1415,7 @@ function cancelTurn(id: string, agentId: string, res: ServerResponse) {
   }
   const p = participantEntry(id, agentId);
   if (!p.cancel()) {
-    throw refusal(409, "no_turn", `${p.name} has no turn to cancel`);
+    throw refusal(409, "no_turn", `${p.name} has no live prompt to cancel`);
   }
   send(res, 202, toParticipantDto(p) satisfies ParticipantDto);
 }
