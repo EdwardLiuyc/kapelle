@@ -1403,6 +1403,42 @@ of the open view only; rooms off screen cost nothing to draw.
 
 ---
 
+## Virtual transcript — measured 2026-11-01 (#323)
+
+**Question.** The flat layout made each frame cheap per row, but every timeline entry still
+kept a component. What does a long room cost when only the viewport is mounted?
+
+**Method.** A scratch script replayed synthetic user messages through `transcriptParts`
+at 80 columns with a 20-row viewport. It compared `63b8792` (before virtualization) with
+the #323 branch. Each figure is the median of three fresh processes. "Start" is `redraw()`
+plus the first render; "frame" is the next render after layout; "width" changes
+80 columns to 60; "exit" calls `render(..., true)` for the scrollback copy.
+
+| phase | 1k base | 1k virtual | 10k base | 10k virtual | 50k base | 50k virtual |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| start, ms | 20.2 | 9.0 | 147.8 | 34.3 | 609.0 | 166.2 |
+| steady frame, ms | 2.7 | 0.19 | 19.6 | 0.35 | 161.3 | 1.16 |
+| width 80 → 60, ms | 10.8 | 1.5 | 97.9 | 16.6 | 413.7 | 37.5 |
+| exit after resize, ms | 10.0 | 17.7 | 79.0 | 121.2 | 399.2 | 557.9 |
+
+**Consequences.**
+
+- **Rendering is bounded by the window.** At 50k entries the steady frame fell from
+  161 ms to 1.2 ms. The model still visits every entry when a view is built, but it
+  creates pi-tui parts only for the viewport and its 8-row margin.
+- **Some work remains proportional to the timeline.** A width change re-estimates every
+  item (37 ms at 50k), and every frame still allocates one blank row per content row so
+  `ScrollView` keeps the full height.
+- **Exit is a one-time mount.** It took 558 ms at 50k, against 399 ms when the components
+  were already alive. The full scrollback render remains, so a very large room trades a
+  cheaper session for a larger exit spike.
+
+**Coverage.** One machine, synthetic one-line messages, three runs per value. The
+structural tests assert component creation, render calls and entry visits at 10k and 50k;
+they do not assert wall-clock time.
+
+---
+
 ## Models and login — measured 2026-10-15 (M9)
 
 **Question.** Can kapelle learn each harness's model list, change the model, and tell
