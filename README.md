@@ -19,30 +19,42 @@ One background daemon holds all the work. Close the terminal and come back later
 
 You need Node 24 or newer, git, and macOS or Linux. WSL counts as Linux. Windows is not supported.
 
+### Install from npm
+
+The package is not published yet. Until it is, use [Run from a source checkout](#run-from-a-source-checkout) below. Once published, install it with:
+
 ```bash
-git clone https://github.com/EdwardLiuyc/kapelle.git && cd kapelle
-npm install
-npm link       # puts `kapelle` on your PATH; `npm unlink -g kapelle` undoes it
+npm install -g kapelle
 kapelle --help
 ```
 
-If `npm link` fails with `EACCES`, npm's global folder belongs to root. Use a folder you own instead of `sudo`:
+The package supports macOS and Linux, so npm refuses a global install on Windows with `EBADPLATFORM`.
+
+### Run from a source checkout
 
 ```bash
-npm config set prefix ~/.local        # then add ~/.local/bin to PATH
+git clone https://github.com/EdwardLiuyc/kapelle.git && cd kapelle
+npm install
+node cli.ts --help
 ```
 
-Without `npm link`, type `node cli.ts` wherever this page says `kapelle`.
+The checkout runs TypeScript directly and needs no build. To use the short command, add an alias:
+
+```bash
+alias kapelle='node /path/to/kapelle/cli.ts'
+```
+
+`npm pack` and `npm publish` run `prepack`, which builds the JavaScript package in `dist/`.
 
 ## Quick start
 
-First, check that kapelle works. This needs no agent and no account. It uses a fake agent that ships with the repository:
+First, check that kapelle works. In a source checkout, this needs no agent and no account. It uses a fake agent that ships with the repository:
 
 ```bash
 npm run selftest
 ```
 
-You should see `✓ allowed Write ACP_TEST.md`. Delete `ACP_TEST.md` when you are done.
+You should see `✓ allowed Write ACP_TEST.md`. Delete `ACP_TEST.md` when you are done. An npm install needs no further check: `kapelle --help` above already proved it starts.
 
 Next, use a real agent. pi is the default. Install pi and its ACP adapter, then log in to pi once:
 

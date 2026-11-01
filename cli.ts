@@ -108,6 +108,12 @@ import { flushStream, render } from "./render.ts";
 
 const argv = process.argv.slice(2);
 
+/** One line for a value-taking flag with no value. */
+function missingValue(name: string): never {
+  console.error(`--${name} needs a value`);
+  process.exit(1);
+}
+
 /**
  * Value of `--name`, or `fallback` when the flag is absent.
  *
@@ -124,10 +130,7 @@ function flag(name: string, fallback?: string): string | undefined {
   const i = argv.indexOf(`--${name}`);
   if (i === -1) return fallback;
   const next = argv[i + 1];
-  if (!next || next.startsWith("--")) {
-    console.error(`--${name} needs a value`);
-    process.exit(1);
-  }
+  if (!next || next.startsWith("--")) missingValue(name);
   return next;
 }
 
@@ -136,6 +139,27 @@ const has = (name: string) => argv.includes(`--${name}`);
 /** `catch` binds `unknown`; a harness can reject with anything. */
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
+
+/** The package version: beside `cli.ts` in a checkout, one folder up from
+ *  `dist/cli.js` in the package. */
+async function packageVersion(): Promise<string> {
+  for (const file of [
+    join(import.meta.dirname, "package.json"),
+    join(import.meta.dirname, "..", "package.json"),
+  ]) {
+    try {
+      const pkg = JSON.parse(await readFile(file, "utf8")) as {
+        version?: unknown;
+      };
+      // package.json is an external file, so its shape is checked here.
+      // pi-lens-ignore: no-runtime-typeof
+      if (typeof pkg.version === "string" && pkg.version) return pkg.version;
+    } catch {
+      // Missing or unreadable; try the next place.
+    }
+  }
+  throw new Error("cannot read the kapelle version from package.json");
+}
 
 /**
  * Flags that take no value. The token after one stays positional, not its
@@ -148,6 +172,7 @@ const BOOLEAN_FLAGS = new Set([
   "--quiet",
   "--detach",
   "--help",
+  "--version",
   "--rebase",
   "--squash",
 ]);
@@ -189,6 +214,25 @@ const DEFAULT_AGENT = "pi";
 // `kapelle chat` is `chat.ts` (S7a), with its own usage and its own flags.
 const chatVerb = positional[0] === "chat";
 
+const versionAt = argv.indexOf("--version");
+const previous = versionAt > 0 ? (argv[versionAt - 1] ?? "") : "";
+if (previous.startsWith("--") && !BOOLEAN_FLAGS.has(previous)) {
+  missingValue(previous.slice(2));
+}
+if (versionAt !== -1 && (positional.length > 0 || runFilePath)) {
+  console.error("--version takes no other arguments");
+  process.exit(1);
+}
+if (versionAt !== -1) {
+  try {
+    process.stdout.write(`${await packageVersion()}\n`);
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write(`${messageOf(err)}\n`);
+    process.exit(1);
+  }
+}
+
 if (
   !chatVerb &&
   argv.length !== 0 &&
@@ -199,6 +243,7 @@ kapelle — a minimal Agent Client Protocol client
 
   kapelle                            the chat on a terminal, starting the daemon
                                      if none runs; a pipe prints chat usage and exits 1
+  kapelle --version                  print the version
   kapelle "<prompt>" [options]
   kapelle run --file <run.json> [--cwd dir] [--verbose] [--quiet]
   kapelle run --file <run.json> --detach   hands the run to the daemon
@@ -303,7 +348,11 @@ if (chatVerb) {
       await ensureDaemon({
         file: daemonFile(),
         log: join(stateDir(), "daemon.log"),
-        script: join(import.meta.dirname, "daemon.ts"),
+        // A plain path, so tsc cannot rewrite it with the imports.
+        script: join(
+          import.meta.dirname,
+          import.meta.filename.endsWith(".js") ? "daemon.js" : "daemon.ts",
+        ),
         cwd: import.meta.dirname,
       });
     } catch (err) {

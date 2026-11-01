@@ -1,14 +1,20 @@
 {
   "name": "kapelle",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "A minimal Agent Client Protocol client — supervise coding agents from Node",
   "license": "MIT",
   "author": "Yongchuan Liu",
-  "bin": {
-    "kapelle": "./cli.ts"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EdwardLiuyc/kapelle.git"
   },
+  "bin": {
+    "kapelle": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
   "os": [
     "darwin",
     "linux"
@@ -18,6 +24,7 @@
   },
   "scripts": {
     "start": "node cli.ts",
+    "prepack": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/assets && cp assets/orchestrator.md dist/assets/orchestrator.md",
     "fmt": "biome check --write .",
     "fmt:check": "biome check .",
     "selftest": "node cli.ts \"self test\" --cmd \"node mock-agent.mjs\" --mode auto",

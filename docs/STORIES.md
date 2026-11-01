@@ -1454,6 +1454,11 @@ stay M2-9's surface. `"os": ["darwin", "linux"]` is the whole of the Windows blo
 fails `EBADPLATFORM` and installs nothing; `npm install --force` and running `node cli.ts` on
 a populated checkout still bypass it, and both were left open rather than paying for a
 `win32` guard no report has asked for. WSL is Linux.
+
+**Amended 2026-10-31 (M9-7, #306):** the `private: true` decision above is
+superseded. The package is prepared for publication with `prepack`, and M9-8
+performs the publish.
+
 **Added 2026-09-06 — this story also renames the front-end file, and is the only cheap
 moment to do it.** `run.ts` (the CLI) and `core/run.ts` (the engine) share a name and differ
 only by a directory. M1b-2 made that collision live rather than theoretical: `run.ts
@@ -3844,13 +3849,13 @@ The bundler then replaces `tsc` in `prepack`.
 **Decided 2026-10-15: the build goes to `dist/`, not beside the sources.** One named line
 in `.gitignore` (`dist/`), as that file's comment asks, and no glob that could hide a
 real `.js` file. `bin` becomes `./dist/cli.js`.
-**Open, for the pickup: the checkout's own install.** `README.md` says `npm install`,
-then `npm link`. npm runs `prepack` on `npm pack` and `npm publish` only, not on `npm
-install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts a
+**The checkout's own install** (decided at pickup, 2026-10-31: A). Before this
+change, `README.md` said `npm install`, then `npm link`. npm runs `prepack` on `npm pack`
+and `npm publish` only, not on `npm install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts a
 `kapelle` on `PATH` that points at a file that does not exist. Three answers:
 
 - A. `README.md` drops `npm link` for `node cli.ts`, with a shell alias for the short
-  name. No build step, and the live code runs. Recommended 2026-10-16.
+  name. No build step, and the live code runs. **Chosen 2026-10-31.**
 - B. A `build` script, and `README.md` says `npm install && npm run build && npm link`.
   The linked `kapelle` then runs `dist/`, which is out of date after each edit until the
   next build. `AGENTS.md`'s commands get `npm run build`.
@@ -3871,8 +3876,11 @@ install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts
    `repository` and the `prepack` script.
    **`files` wins over `.gitignore` when npm packs.** That is why the ignored `dist/` is
    in the package. It is also why a wrong `files` list ships the wrong files with no
-   warning, so the test below checks the list.
-3. `.gitignore` gets `dist/`. `biome.json`'s `files.includes` gets `!dist`: biome does
+   warning, so the test below checks the list. `prepack` also copies
+   `assets/orchestrator.md` to `dist/assets/`, where the compiled loop code reads it.
+3. `.gitignore` gets `dist/`. `cli.ts` also chooses `daemon.js` when it runs from
+   `dist/`; the bare command starts that file, while a checkout still starts `daemon.ts`.
+   `biome.json`'s `files.includes` gets `!dist`: biome does
    not read `.gitignore` here (no `vcs` block), so without it `npx biome check --write .`
    formats and lints the build. Measured 2026-10-16: with `!dist`, a badly formatted
    `dist/bad.js` gives no finding, and biome names `!dist` as its own form for a folder
@@ -3884,6 +3892,10 @@ install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts
    `cli.ts` in a checkout, `../package.json` from `dist/cli.js`. **Decided 2026-10-16:**
    read `package.json` beside the running file, and if it is not there, one folder up.
    npm always packs `package.json`, so the second path is there in the package.
+   **Amended 2026-11-01 (review, #306):** `--version` prints only when there is no
+   prompt, verb, or `--file`. A version token beside a prompt or verb is a usage
+   error, so a stray token cannot start a harness. A version token after a
+   value-taking flag is that flag's missing-value error.
 5. Docs. `AGENTS.md`: the "no build step" lines get "except when the package is made";
    the "do not rename to `agent-team`" rule loses its `private: true stays` half.
    `docs/PROJECT-PLAN.md`: the same "no build step" line. M1c-5 in this file: its
@@ -3895,10 +3907,12 @@ install`. So after this story, a fresh clone has no `dist/`, and `npm link` puts
 *Done when* a test, with no network and no global install: runs `npm pack
 --pack-destination <tmp>`; unpacks the `.tgz` into `<tmp>/node_modules/kapelle`; links
 the checkout's `node_modules` for the three runtime dependencies; runs `node
-<tmp>/node_modules/kapelle/dist/cli.js --help` and checks the help text (today `--help`
-alone exits 1, `cli.ts:204`, so the test does not check the exit code); runs
-`--version`; imports `dist/chat/tui.js` and `dist/chat/tui/term.js`, so pi-tui and
-`@xterm/headless` load too (`--help` loads only `marked`); and checks from `npm pack
+<tmp>/node_modules/kapelle/dist/cli.js --help` and checks the help text (M9-2 has
+since made `--help` exit 0, but the test does not check the exit code); runs
+`--version`; starts bare `dist/cli.js` on a terminal and checks that it reaches
+the chat from `dist/daemon.js`; imports `dist/chat/tui.js` and
+`dist/chat/tui/term.js`, so pi-tui and `@xterm/headless` load too (`--help` loads
+only `marked`); and checks from `npm pack
 --dry-run --json` that the file list holds only `dist/`, `README.md`, `LICENSE` and
 `package.json`, with no test file. `npm pack` runs `prepack`, which writes `dist/` into
 the checkout; the test removes `dist/` at the end. Measured 2026-10-16: the packed
@@ -3915,12 +3929,17 @@ The first release. The person does steps 1 and 2 by hand.
 3. Set the version with `npm version <patch|minor>`. It makes the commit and the tag.
 4. A GitHub Actions job publishes when a tag is pushed, with npm trusted publishing: no
    npm token is stored. The job runs `npm ci` first, because `prepack` needs `tsc`, then
-   `npm publish`. It needs `id-token: write`. If npm needs the package to exist before a
-   trusted publisher can be added, the first publish is `npm publish` by hand.
+   the full gate from `AGENTS.md`, then `npm publish`. It needs `id-token: write`. If npm
+   needs the package to exist before a trusted publisher can be added, the first publish
+   is `npm publish` by hand. **Decided 2026-11-01 (M9-7, #306): option B.** M9-7 adds no
+   `prepublishOnly` guard. `private: true` was the only mechanical guard and is gone, so
+   this job's gate is its replacement.
 5. Write the release notes on GitHub for the tag. They say Linux and macOS only.
 6. **Added 2026-10-22 (#298):** before the publish, make the `/harnesses` routes stable in
    `docs/CLIENT-API.md`, with one minor version. M9-3, M9-3b and M9-4 change them, so
    they stay experimental until then.
+7. **Added 2026-11-01 (#306):** remove the "not published yet" note from `README.md`,
+   so the npm page starts with the real install block.
 
 The npm page shows `README.md`. Its logo (`src="assets/icon.svg"`) is a relative link,
 and npm points relative links at the repository. So the logo shows only once the

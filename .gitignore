@@ -1,5 +1,6 @@
 ACP_TEST.md
 node_modules/
+dist/
 .pi-lens-probe-home/
 
 # Rendered diagrams for the contract and room-model interviews: HTML, JSON and

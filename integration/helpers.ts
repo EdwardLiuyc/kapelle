@@ -162,7 +162,7 @@ export function isolateStateHome(): void {
  * what these tests measure; a caller that means to set one passes it in
  * `env`, which still wins.
  */
-function childEnv(env?: Record<string, string>): NodeJS.ProcessEnv {
+export function childEnv(env?: Record<string, string>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.keys(base)) {
     if (name.startsWith("KAPELLE_")) delete base[name];

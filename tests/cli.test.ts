@@ -43,6 +43,7 @@ import {
   gitRepo,
   HOSTILE_AGENT,
   MOCK_AGENT,
+  REPO,
   runCli,
   spawnCli,
   tempDir,
@@ -102,6 +103,55 @@ test("bare kapelle hands off to the chat; --help is the help", async (t) => {
     help.stdout,
     /starting the daemon\n.*if none runs; a pipe prints chat usage and exits 1/,
   );
+});
+
+test("--version prints the package version", async (t) => {
+  const r = await runCli(t, ["--version"]);
+  const pkg = JSON.parse(
+    await readFile(join(REPO, "package.json"), "utf8"),
+  ) as { version: string };
+
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), pkg.version);
+});
+
+test("--version beside a run is a usage error, not a run", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "run me" }]));
+
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--version"]);
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /--version takes no other arguments/);
+});
+
+test("--version beside a prompt is a usage error, not a harness run", async (t) => {
+  const bin = await tempDir(t);
+  const marker = join(bin, "pi-started");
+  await writeFile(
+    join(bin, "pi-acp"),
+    '#!/bin/sh\nprintf spawned > "$PI_MARKER"\nexit 1\n',
+    { mode: 0o755 },
+  );
+
+  const r = await spawnCli(t, ["summarise this", "--version"], "cli.ts", {
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    PI_MARKER: marker,
+  }).done;
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /--version takes no other arguments/);
+  await assert.rejects(readFile(marker), "the harness did not start");
+});
+
+test("--version is not a value for a missing flag", async (t) => {
+  const r = await runCli(t, ["--cwd", "--version"]);
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /--cwd needs a value/);
 });
 
 test("merge without a run id is a usage error, not a prompt", async (t) => {
