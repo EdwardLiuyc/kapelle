@@ -3948,14 +3948,56 @@ the checkout; the test removes `dist/` at the end. Measured 2026-10-16: the pack
 `--help` prints the help, and both chat modules load. The person also runs `npm install
 -g ./kapelle-<version>.tgz` once by hand and types `kapelle`.
 
-**M9-8 · Publish to npm · S · needs the other M9 stories**
+**M9-8a · Release readiness · M · needs M9-7**
+Added 2026-11-01. This is a separate predecessor to M9-8, not a split of it. M9-8 makes
+the repository public and publishes the package. Before that, make the public edge
+safe to expose and the release repeatable. The package metadata and macOS package
+check build on M9-7, so this story runs after it. The publish job, the README install
+block and the release notes stay in M9-8.
+
+- **Expose no credential.** Run gitleaks over the full Git history, not only the
+  current tree, and record the tool version, commit range, date and result in the
+  release-readiness section of `docs/RELEASING.md`. It is a release check, not a
+  harness measurement. Rotate anything found; rewriting history is not a substitute.
+- **Give the repository a public face.** Add `SECURITY.md` that sends reports to
+  GitHub's private vulnerability reporting. The link goes live in M9-8 step 2, which
+  turns the feature on immediately after the flip and before the publish. Fill the
+  repository description, homepage and topics, and add `homepage`, `bugs` and
+  `keywords` to `package.json`; `repository` is already there. Record the public-only
+  GitHub settings in `docs/RELEASING.md`.
+- **Write the release down.** Add `docs/RELEASING.md`: the version and tag, the first
+  publish and trusted-publisher setup, the gate, the clean-machine check, and what to do
+  when a publish fails. It names M9-8 as the owner of the workflow. Add the file to the
+  docs list in `AGENTS.md`.
+- **Test the claimed platform.** Add a second job to `code_checks.yml`, pinned to
+  `macos-latest` and not `vars.RUNNER`, which can point the Linux job at a self-hosted
+  machine. It runs `npm ci` and `node --test tests/package.test.ts`, inherits the file's
+  triggers and concurrency, and gets its own `timeout-minutes`. On macOS the test reports
+  a pass after an early return at its pty block; it still covers pack/prepack, the stale
+  build, the tarball list, `--help`, `--version`, the missing-version refusal, the loop
+  skill, the biome probe and the runtime imports. The pty block and
+  `chat/tui/term.ts`'s macOS `script` branch stay out of scope. Accept the 10×
+  private-repo minutes for one small job.
+
+*Done when* the gitleaks record shows a clean range through the story's final HEAD or
+every hit is rotated, `SECURITY.md` and the repository and package metadata are in place,
+`docs/RELEASING.md` and its `AGENTS.md` entry are present, and the macOS package test
+passes.
+
+**M9-8 · Publish to npm · S · needs M9-1..M9-7, M9-3b, M9-5b and M9-8a**
 The first release. The person does steps 1 and 2 by hand.
 
 1. Make an npm account and turn on 2FA.
-2. **Make the repository public, or publish without provenance.** npm adds provenance (a
-   proof of which repository and job built the package) only for a public repository.
-   This one is private today (2026-10-15).
-3. Set the version with `npm version <patch|minor>`. It makes the commit and the tag.
+2. **Make the repository public, or publish without provenance.** M9-8a clears the
+   public edge first. Re-run gitleaks if `master` moved after its record; the scan must
+   be clean through the commit being published. After the flip, turn on private
+   vulnerability reporting, secret scanning and push protection, as
+   `docs/RELEASING.md` records, before the publish. npm adds provenance (a proof of
+   which repository and job built the package) only for a public repository. This one
+   is private today (2026-10-15).
+3. Choose the first version and tag it. `package.json` is already `0.1.0`, so tag that
+   version rather than bumping it by habit. When the version changes, `npm version
+   <version>` makes the commit and the tag.
 4. A GitHub Actions job publishes when a tag is pushed, with npm trusted publishing: no
    npm token is stored. The job runs `npm ci` first, because `prepack` needs `tsc`, then
    the full gate from `AGENTS.md`, then `npm publish`. It needs `id-token: write`. If npm
@@ -3974,8 +4016,10 @@ The npm page shows `README.md`. Its logo (`src="assets/icon.svg"`) is a relative
 and npm points relative links at the repository. So the logo shows only once the
 repository is public (step 2), or if the link becomes a full URL.
 
-*Done when* the publish job exists, `kapelle` is on npm, and `npm install -g kapelle`
-then `kapelle --version` works on a clean machine.
+*Done when* the final pre-flip gitleaks record is clean through the published commit,
+private reporting, secret scanning and push protection are on, the publish job exists,
+`kapelle` is on npm, and `npm install -g kapelle` then `kapelle --version` works on a
+clean machine.
 
 ---
 
@@ -4043,8 +4087,8 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 ```text
 M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b
 M9-2 ─┘        └─ M9-3b        └─ M9-6
-M9-7   (needs nothing)
-M9-1..M9-7, M9-3b, M9-5b ─ M9-8   (the first publish)
+M9-7 ─ M9-8a
+M9-1..M9-7, M9-3b, M9-5b, M9-8a ─ M9-8   (the first publish)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
