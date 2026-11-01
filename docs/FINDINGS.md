@@ -1413,6 +1413,7 @@ at 80 columns with a 20-row viewport. It compared `63b8792` (before virtualizati
 the #323 branch. Each figure is the median of three fresh processes. "Start" is `redraw()`
 plus the first render; "frame" is the next render after layout; "width" changes
 80 columns to 60; "exit" calls `render(..., true)` for the scrollback copy.
+These figures are not comparable with the 200×50 real-log table above.
 
 | phase | 1k base | 1k virtual | 10k base | 10k virtual | 50k base | 50k virtual |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

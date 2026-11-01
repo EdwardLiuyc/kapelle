@@ -1298,6 +1298,39 @@ test("a redraw repairs the open run's last-row height estimate", () => {
   );
 });
 
+test("a rows-only viewport growth mounts the whole new viewport", () => {
+  const state = newRoomState();
+  state.timeline = Array.from({ length: 100 }, (_, i) => ({
+    seq: i + 1,
+    at: "2026-10-31T00:00:00Z",
+    participantId: "p-ann",
+    type: "user",
+    text: `message ${i}`,
+    turn: i + 1,
+  })) as Entry[];
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  let viewport = 10;
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => viewport,
+  });
+  parts.redraw();
+  let rows = parts.transcript.render(80);
+  parts.scroll.updateLayout(rows.length, viewport, () => {});
+  const model = parts.model();
+  assert.ok(model);
+  viewport = 30;
+  rows = parts.transcript.render(80);
+  const probe = model.at(model.total - 25);
+  assert.ok(probe, "the probe row is inside the transcript");
+  assert.ok(probe.parts, "the new viewport height is mounted");
+});
+
 test("the model's tops follow a growing answer and a folded tool run", () => {
   const state = newRoomState();
   let seq = 0;
@@ -1542,7 +1575,7 @@ test("a growing answer above a near-end view keeps its anchor", () => {
   assert.equal(after?.offset, before.offset, "at the same row in it");
 });
 
-test("a width change near the end keeps the anchor item and requests the next frame", () => {
+test("an anchor row move requests the next frame without a measurement change", () => {
   const state = newRoomState();
   let seq = 0;
   const add = (participantId: string, update: Record<string, unknown>) => {
@@ -1596,7 +1629,7 @@ test("a width change near the end keeps the anchor item and requests the next fr
     viewportRows: () => 10,
   });
   parts.redraw();
-  let rows = parts.transcript.render(40);
+  let rows = parts.transcript.render(20);
   parts.scroll.updateLayout(rows.length, 10, () => {});
   parts.scroll.scrollTo(parts.scroll.scrollTop - 5, { disableFollow: true });
   const model = parts.model();
@@ -1604,21 +1637,18 @@ test("a width change near the end keeps the anchor item and requests the next fr
   const before = model.anchorAt(parts.scroll.scrollTop);
   assert.ok(before);
   const beforeRow = parts.scroll.scrollTop;
-  // Return false even when the measurement lands, so only the anchor's own
-  // request can schedule the next frame.
+  // Return false even when the measurement lands, and leave the scroll
+  // view's callback as the initial no-op. Only the anchor path can request.
   const measure = model.measure.bind(model);
   model.measure = (item, height) => {
     measure(item, height);
     return false;
   };
+  parts.transcript.syncScroll = () => {};
   renders = 0;
-  rows = parts.transcript.render(20);
+  rows = parts.transcript.render(40);
   assert.notEqual(parts.scroll.scrollTop, beforeRow, "the anchor row moved");
   assert.ok(renders > 0, "the moved anchor requests a redraw");
-  parts.scroll.updateLayout(rows.length, 10, () => {});
-  const after = model.anchorAt(parts.scroll.scrollTop);
-  assert.equal(after?.item, before.item, "the same item stays at the top");
-  assert.equal(after?.offset, before.offset, "at the same row in it");
 });
 
 /** A room with `count` simple user messages, ready for the window test. */

@@ -617,7 +617,7 @@ class Transcript extends Container {
     model.setWidth(width);
     const viewport = Math.max(
       0,
-      Math.floor(scroll.viewportHeight || this.viewportRows()),
+      Math.floor(Math.max(scroll.viewportHeight || 0, this.viewportRows())),
     );
     let rows = Infinity;
     if (!all && Number.isFinite(viewport)) rows = Math.max(1, viewport);
