@@ -16,6 +16,7 @@ import { applyLine, type Entry, newRoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { bgRgb, inverse } from "../common.ts";
 import { settled, transcriptParts, unbar } from "../tui/transcript.ts";
+import { activeMark, messages } from "../view.ts";
 
 test("a copy loses each row's bar, and keeps a typed one", () => {
   assert.equal(unbar("▎ hello\n▎ ▎ kept\n  note"), "hello\n▎ kept\n  note");
@@ -1841,6 +1842,109 @@ test("10k and 50k entries render the same bounded window and visit the same numb
 });
 
 /** A room whose only content is one folded run of `count` tool calls. */
+test("the virtual model keeps the rail's messages and their offsets", () => {
+  const state = newRoomState();
+  const user = (seq: number, text: string): Entry => ({
+    seq,
+    at: "2026-11-01T00:00:00Z",
+    participantId: "p-ann",
+    type: "user",
+    text,
+  });
+  const first = user(1, "first");
+  const reply = { ...user(2, "reply"), kind: "reply" } as Entry;
+  const answer: Entry = {
+    seq: 3,
+    at: "2026-11-01T00:00:00Z",
+    participantId: "p-ann",
+    type: "answer",
+    text: "short",
+  };
+  const second = user(4, "second");
+  state.timeline = [first, reply, answer, second];
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 1000,
+  });
+  parts.redraw();
+  layoutAll(parts, 80);
+  const model = parts.model();
+  assert.ok(model);
+  assert.equal(model.markCount, 2, "a daemon reply is not a mark");
+  assert.deepEqual(
+    [model.markEntry(0), model.markEntry(1)],
+    messages(state.timeline),
+    "the mark index keeps message order and the history selector",
+  );
+  const before = model.markTop(1);
+  assert.equal(typeof before, "number");
+
+  (answer as Entry & { type: "answer" }).text =
+    "first paragraph\n\n" +
+    Array.from(
+      { length: 20 },
+      (_, i) =>
+        `Paragraph ${i} has enough words to wrap again beside a narrower transcript.`,
+    ).join("\n\n");
+  parts.draw(state, answer);
+  layoutAll(parts, 80);
+  const grown = model.markTop(1);
+  assert.ok(grown !== undefined && grown > (before as number), "answer grew");
+
+  layoutAll(parts, 30);
+  const narrow = model.markTop(1);
+  assert.ok(
+    narrow !== undefined && narrow > grown,
+    "the mark follows the width change",
+  );
+});
+
+test("a 10k-message rail finds its active mark without a timeline walk", () => {
+  const state = newRoomState();
+  state.timeline = Array.from({ length: 10_000 }, (_, i) => ({
+    seq: i + 1,
+    at: "2026-11-01T00:00:00Z",
+    participantId: "p-ann",
+    type: "user",
+    text: `message ${i}`,
+  })) as Entry[];
+  const rooms = new Map([
+    ["r1", { entry: { id: "r1", cwd: "/tmp" }, state } as unknown as Followed],
+  ]);
+  const parts = transcriptParts({
+    tui: { requestRender() {} } as unknown as TuiAltScreen,
+    rooms,
+    view: () => ({ roomId: "r1" }),
+    setStatus() {},
+    viewportRows: () => 20,
+  });
+  parts.redraw();
+  const rows = parts.transcript.render(80);
+  parts.scroll.updateLayout(rows.length, 20, () => {});
+  const model = parts.model();
+  assert.ok(model);
+  assert.equal(model.markCount, 10_000);
+  model.resetStats();
+  const active = activeMark(
+    10_000,
+    (i) => model.markTop(i) ?? 0,
+    parts.scroll.scrollTop,
+  );
+  assert.equal(typeof active, "number");
+  assert.ok(
+    model.stats.markTops < 50,
+    `the lookup touches ${model.stats.markTops} marks`,
+  );
+  assert.equal(model.markEntry(9_999)?.text, "message 9999");
+  assert.ok(model.stats.entriesVisited < 100);
+});
+
 function largeFoldedRun(count: number) {
   const state = newRoomState();
   let toolVisits = 0;

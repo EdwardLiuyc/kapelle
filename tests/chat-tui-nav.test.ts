@@ -26,6 +26,7 @@ import {
   ptyScreen,
   REMEMBER,
   type RoomReply,
+  roomIdle,
   roomLog,
   screenRows,
   scrollback,
@@ -322,8 +323,113 @@ async function fifteenSent(t: TestContext, cols: number) {
   };
   for (let i = 1; i <= 15; i++) await send(`m${i}`);
   await screen.seen("previous: m14");
-  return { ...screen, send };
+  return { ...screen, send, d, id: open.body.id };
 }
+
+test("chat.ts on a real terminal clicks a history-rail mark and moves the active mark", {
+  skip: noPty,
+  // The test drives a whole pty session: its call count is the test.
+  // pi-lens-ignore: high-fan-out
+}, async (t) => {
+  const screen = await fifteenSent(t, 130);
+  // A turn's end removes its busy row from the banner and gives the
+  // transcript a row back. Wait for both the room and the screen to be idle:
+  // otherwise the rail's window can slide between counting its pips and
+  // clicking one, and the click lands on a different message.
+  await roomIdle(screen.d, screen.id);
+  await until(
+    "the busy rows to clear",
+    () =>
+      ![...screenRows(screen.out()).values()].some(
+        (row) =>
+          row.includes("working") ||
+          row.includes("thinking") ||
+          row.includes("/cancel"),
+      ),
+  );
+  await screen.seen("▲");
+  await screen.seen("▼");
+  // The rail is pinned to the tail, so a window of pips is shorter than the
+  // 15 messages.
+  const marks = [...screenRows(screen.out()).values()].filter((row) =>
+    row.trimEnd().endsWith("●"),
+  ).length;
+  assert.ok(marks > 0 && marks < 15, `the rail has a window: ${marks}`);
+  // unpad() strips a pip's trailing cell and space, so identify the active
+  // mark by its bold prefix rather than an exact styled cell.
+  const ACTIVE = "\x1b[1m●";
+  const activeRow = () =>
+    [...screenRows(screen.out(), true)].find(([, text]) =>
+      text.includes(ACTIVE),
+    )?.[0];
+  const activeBefore = activeRow();
+  assert.ok(activeBefore !== undefined, "the rail has an active mark");
+  // A row change is not a reliable identity test: the window can slide under
+  // the active mark and leave it on the same screen row. Hover the active pip
+  // instead and read the history row its card names.
+  const hovered = async (at: number) => {
+    const start = screen.out().length;
+    screen.child.stdin.write(`\x1b[<35;130;${at}M`);
+    for (const until = Date.now() + 5_000; ; ) {
+      const card = /you → mock-agent: m\d+/.exec(
+        plainText(screen.out().slice(start)),
+      )?.[0];
+      if (card) return card;
+      assert.ok(
+        Date.now() < until,
+        `no card at rail row ${at}: ${screen.out()}`,
+      );
+      await new Promise((ok) => setTimeout(ok, 50));
+    }
+  };
+  const beforeText = await hovered(activeBefore);
+  // Read the first mark's identity from its own card. A pip count says
+  // nothing about which message the row holds once the window has moved.
+  const targetRow = activeBefore === 2 ? 3 : 2;
+  const targetText = await hovered(targetRow);
+  assert.notEqual(
+    beforeText,
+    targetText,
+    "the clicked mark was not already active",
+  );
+  const target = /m(\d+)$/.exec(targetText)?.[1];
+  assert.ok(target, `the card names a message: ${targetText}`);
+  const from = screen.out().length;
+  // At 130 columns the sidebar is shown, and the rail is the last two cells
+  // of the row. The press repaints before the click scrolls, and the message
+  // is on screen already, so wait for its row, not for its text.
+  screen.child.stdin.write(
+    `\x1b[<0;130;${targetRow}M\x1b[<0;130;${targetRow}m`,
+  );
+  let row: number | undefined;
+  for (const until = Date.now() + 20_000; ; ) {
+    row = [...screenRows(screen.out())].find(([, text]) =>
+      text.includes(`▎ m${target}`),
+    )?.[0];
+    if (row !== undefined && row <= 2) break;
+    assert.ok(Date.now() < until, `the message reached the top: ${row}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  const drawn = screen.out().slice(from);
+  assert.ok(drawn.includes(ACTIVE), "the active mark was redrawn");
+  const activeAfter = activeRow();
+  assert.ok(activeAfter !== undefined, "the rail still has an active mark");
+  const afterText = await hovered(activeAfter);
+  assert.notEqual(afterText, beforeText, "the active mark moved");
+  assert.equal(afterText, targetText, "the active mark is the clicked message");
+  // A view change closes the card the hover left open.
+  await screen.press("\x0e", "@mock-agent");
+  assert.equal(
+    [...screenRows(screen.out()).values()].some((row) =>
+      row.includes("│you → mock-agent: m"),
+    ),
+    false,
+    "the card closed with the view",
+  );
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
 
 /**
  * Writes `keys`, and waits for the history title to name a row other than
@@ -396,8 +502,8 @@ test("chat.ts on a real terminal keeps the wheel over the side view out of the t
   // to the notice on its first lines, and down to its end, where it
   // follows again.
   await screen.press("\x1d", "ctrl+] keys here");
-  await screen.press("\x1b[5~".repeat(20), "no measured labels");
-  await screen.press("\x1b[6~".repeat(20), "previous: m16");
+  await screen.press("\x1b[5~".repeat(50), "no measured labels");
+  await screen.press("\x1b[6~".repeat(50), "previous: m16");
   await send("m18");
   await screen.seen("previous: m17");
   screen.child.stdin.write(LEAVE);
@@ -410,6 +516,11 @@ test("chat.ts on a narrow real terminal sends the page keys with the composer to
 }, async (t) => {
   const screen = await fifteenSent(t, 100);
   await screen.press("\x12", "history · 1 of 15");
+  assert.equal(
+    [...screenRows(screen.out()).values()].some((row) => /[▲▼]/.test(row)),
+    false,
+    "the rail is absent when the side view takes the timeline's place",
+  );
   await screen.press("\x1d", "ctrl+] keys here");
   // A page is the view's height less one row. That height moves with the
   // rows under the composer, so the test asks only that the light left row 1.

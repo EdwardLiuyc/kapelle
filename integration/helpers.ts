@@ -714,16 +714,46 @@ export const only = (room: RoomDto): ParticipantDto => {
   return room.participants[0] as ParticipantDto;
 };
 
-/** Polls `GET /rooms/:id` until its participant is no longer `busy`. */
-export async function roomIdle(d: Daemon, id: string): Promise<RoomReply> {
+/** Polls one room until `idle` answers true, then returns that room. */
+async function waitForRoom(
+  d: Daemon,
+  id: string,
+  idle: (room: RoomReply) => boolean,
+  never: string,
+): Promise<RoomReply> {
   for (const until = Date.now() + 20_000; Date.now() < until; ) {
     const r = await api<RoomReply>(d, "GET", `/rooms/${id}`);
     assert.equal(r.status, 200);
-    if (only(r.body).status !== "busy") return r.body;
+    if (idle(r.body)) return r.body;
     await new Promise((ok) => setTimeout(ok, 25));
   }
-  throw new Error(`room ${id} never went idle`);
+  throw new Error(never);
 }
+
+/** Polls `GET /rooms/:id` until participant `participantId` is idle. */
+export const participantIdle = (
+  d: Daemon,
+  id: string,
+  participantId: string,
+): Promise<RoomReply> =>
+  waitForRoom(
+    d,
+    id,
+    (room) => {
+      const p = room.participants.find((x) => x.id === participantId);
+      return p !== undefined && p.status !== "busy";
+    },
+    `participant ${participantId} in room ${id} never went idle`,
+  );
+
+/** Polls `GET /rooms/:id` until its one participant is no longer `busy`. */
+export const roomIdle = (d: Daemon, id: string): Promise<RoomReply> =>
+  waitForRoom(
+    d,
+    id,
+    (room) => only(room).status !== "busy",
+    `room ${id} never went idle`,
+  );
 
 /** Commits one file in a participant's checkout, as the agent itself would
  *  (R37: the supervisor never commits). */
@@ -836,13 +866,15 @@ export const plainText = (out: string) =>
   out.replace(ESCAPES, "").replace(/\r/g, "");
 
 /** The screen now, by row. pi-tui writes a row as CSI row;1H, CSI 2K, so
- *  the last text written to each row is what it shows. */
-export function screenRows(out: string) {
+ *  the last text written to each row is what it shows. `raw` keeps its SGR
+ *  codes, for a test that checks styling. */
+export function screenRows(out: string, raw = false) {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape is the subject.
   const parts = out.split(/\x1b\[(\d+);1H\x1b\[2K/);
   const rows = new Map<number, string>();
   for (let i = 1; i < parts.length; i += 2) {
-    rows.set(Number(parts[i]), plainText(parts[i + 1] ?? ""));
+    const text = parts[i + 1] ?? "";
+    rows.set(Number(parts[i]), raw ? text : plainText(text));
   }
   return rows;
 }
@@ -875,10 +907,14 @@ export async function roomLog(
     join(stateDirFor(root), "rooms", id, "events.jsonl"),
     "utf8",
   );
-  return text
-    .split("\n")
-    .filter(Boolean)
-    .map((l) => JSON.parse(l));
+  return (
+    text
+      .split("\n")
+      .filter(Boolean)
+      // A malformed event log is a test failure, not something to swallow.
+      // pi-lens-ignore: unchecked-throwing-call-js
+      .map((l) => JSON.parse(l))
+  );
 }
 
 /** The answers in `lines`, in order. */

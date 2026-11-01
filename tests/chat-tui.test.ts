@@ -26,7 +26,7 @@ import {
   LEAVE,
   MOCK_AGENT,
   noPty,
-  only,
+  participantIdle,
   plainText,
   ptyScreen,
   REMEMBER,
@@ -523,22 +523,36 @@ test("chat.ts on a real terminal folds a tool run at the next note without movin
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
-  const open = await api<RoomReply>(
-    d,
-    "POST",
-    "/rooms",
-    withAgent(cwd, `node ${MOCK_AGENT} --scenario runs`),
-  );
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      { cmd: `node ${MOCK_AGENT} --scenario runs`, name: "ann" },
+      { cmd: REMEMBER, name: "bob" },
+    ],
+  });
   assert.equal(open.status, 201, open.body.error?.message);
-  const ann = only(open.body);
+  const ann = open.body.participants.find((p) => p.name === "ann");
+  const bob = open.body.participants.find((p) => p.name === "bob");
+  assert.ok(ann && bob);
   const screen = await ptyScreen(
     t,
     `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
     { XDG_RUNTIME_DIR: runtime },
+    "no orchestrator",
   );
   const wait = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
+  // A second history mark before the run, so the rail's two columns are
+  // already reserved when the fold changes the run's height.
+  const warm = await api(
+    d,
+    "POST",
+    `/rooms/${open.body.id}/agents/${bob.id}/messages`,
+    { text: "warm" },
+  );
+  assert.equal(warm.status, 202, warm.body.error?.message);
+  await screen.seen("you → bob");
   // The note, then the live run: open, and waiting for runs.go.
-  await screen.press("go\r", "Edit f5.ts");
+  await screen.press("@ann go\r", "Edit f5.ts");
   // A long message waits behind the turn: rows below the run.
   const lines = Array.from({ length: 40 }, (_, i) => `q${i + 10}`);
   const sent = await api(
@@ -553,13 +567,13 @@ test("chat.ts on a real terminal folds a tool run at the next note without movin
   await screen.press("\x1b[<64;50;10M", "q3");
   await wait(300);
   // The row can end with the scrollbar for a second after a scroll (M7-6).
-  const q30 = /│ q30\s*[│┃]?$/;
+  const q30 = /│ q30\s*(?:[│┃]\s*)?$/;
   const before = rowOf(screen.out(), q30);
   assert.ok(before > 0, `q30 in view: ${screen.out()}`);
   assert.equal(rowOf(screen.out(), /Read f0\.ts/), 0, "the run is above");
   // The next note folds the run, above the view.
   await writeFile(join(ann.worktree, "runs.go"), "");
-  await roomIdle(d, open.body.id);
+  await participantIdle(d, open.body.id, ann.id);
   await wait(300);
   assert.equal(rowOf(screen.out(), q30), before, "the row in view moved");
   // Up to the top: the run is one line. A click opens it, a second folds it.

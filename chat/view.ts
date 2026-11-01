@@ -25,6 +25,8 @@
  * - The question box's keys (M7-4): where a typed key moves its cursor.
  * - The history list (#362): which messages it lists, and a row's text.
  *   M7-7's rail reads the same two, so the two can never disagree.
+ * - The history rail (M7-7): its active mark, sliding window, hit rows and
+ *   two-line preview.
  *
  * **In `chat/`, not `client/`** (decided 2026-10-02): rows, the `@name`
  * pre-fill and seen marks are this screen's own rules.
@@ -35,6 +37,7 @@
  * `onChange` at once.
  */
 
+import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { RoomDto, RoomEventLine } from "../client/contract.ts";
 import {
   type Entry,
@@ -118,10 +121,11 @@ export type Message = Entry & { type: "user"; kind?: undefined };
  *  left out. Only a `user` entry counts, so a message that waited in a
  *  queue is listed once, when its turn starts. M7-7's rail reads the same
  *  list. */
+export const isMessage = (e: Entry): e is Message =>
+  e.type === "user" && e.kind === undefined;
+
 export const messages = (entries: readonly Entry[]): Message[] =>
-  entries.filter(
-    (e): e is Message => e.type === "user" && e.kind === undefined,
-  );
+  entries.filter(isMessage);
 
 /** One history row: both ends of the message, then its text on one line
  *  (#362). The person's own reads `you → ana`, an order `po → ana`. */
@@ -131,6 +135,100 @@ export const historyRow = (state: RoomState, e: Message) =>
   )
     .replace(/\s+/g, " ")
     .trim()}`;
+
+/** The rail's visible mark range: `start` is included, `end` is not. */
+export interface RailWindow {
+  start: number;
+  end: number;
+}
+
+/** A click row in the rail: either chevron, or one message mark. */
+export type RailHit =
+  | { kind: "up" }
+  | { kind: "down" }
+  | { kind: "mark"; at: number };
+
+/**
+ * The active mark: the last message whose top is at or above the viewport
+ * top. Before the first message, the first mark is active, so a visible rail
+ * always has one. `topAt` is monotonic in mark order, so this is a binary
+ * search and does not build a list of every mark.
+ */
+export function activeMark(
+  count: number,
+  topAt: (at: number) => number,
+  viewportTop: number,
+): number | undefined {
+  if (count <= 0) return undefined;
+  let lo = 0;
+  let hi = count;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (topAt(mid) <= viewportTop) lo = mid + 1;
+    else hi = mid;
+  }
+  return Math.max(0, lo - 1);
+}
+
+/**
+ * The marks the rail shows. They are one row each, so a long answer changes
+ * no mark's place. The window centres on the active mark and clamps at both
+ * ends. At the transcript end it takes the tail unless that would leave the
+ * active mark outside the window; the active mark wins that conflict.
+ */
+export function railWindow(
+  count: number,
+  active: number,
+  rows: number,
+  atEnd: boolean,
+): RailWindow {
+  const slots = Math.max(0, Math.floor(rows) - 2);
+  if (slots === 0) return { start: 0, end: 0 };
+  const last = Math.max(0, count - slots);
+  const centred = active - Math.floor(slots / 2);
+  const target = atEnd ? Math.min(last, active) : centred;
+  const start = Math.max(0, Math.min(last, target));
+  return { start, end: Math.min(count, start + slots) };
+}
+
+/** The previous or next mark from the active one (Q1=A). */
+export function railNeighbour(
+  count: number,
+  active: number,
+  up: boolean,
+): number | undefined {
+  const at = active + (up ? -1 : 1);
+  return at >= 0 && at < count ? at : undefined;
+}
+
+/** Which rail row `at` hits, if any. Row 0 and the last row are chevrons. */
+export function railHit(
+  window: RailWindow,
+  rows: number,
+  at: number,
+): RailHit | undefined {
+  if (at < 0 || at >= rows) return undefined;
+  if (at === 0) return { kind: "up" };
+  if (at === rows - 1) return { kind: "down" };
+  const index = window.start + at - 1;
+  return index < window.end ? { kind: "mark", at: index } : undefined;
+}
+
+/** The same history row, wrapped to at most two lines. A third line cuts the
+ *  second with `…`, so the preview never grows past two lines. */
+export function historyPreview(text: string, width: number): string[] {
+  const columns = Math.max(1, Math.floor(width));
+  const lines = wrapTextWithAnsi(text, columns);
+  if (lines.length <= 2) return lines;
+  const second = lines[1] ?? "";
+  const cut = truncateToWidth(
+    second,
+    Math.max(0, columns - 1),
+    "",
+    true,
+  ).trimEnd();
+  return [lines[0] ?? "", `${cut}…`];
+}
 
 /** The participants the person sees in `view`. The timeline marks every
  *  one, those off the roster too. */

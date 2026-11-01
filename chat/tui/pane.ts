@@ -103,6 +103,8 @@ function paneParts({
   gutter,
   height,
   released,
+  changed,
+  mouse,
 }: {
   tui: TuiAltScreen;
   editor: Component;
@@ -110,6 +112,10 @@ function paneParts({
   gutter: () => number;
   height: () => number;
   released: () => void;
+  /** The view was shown or hidden: a hover card belongs to the timeline. */
+  changed?: (shown: boolean) => void;
+  /** A mouse event reached the view, so it is no longer over the rail. */
+  mouse?: () => void;
 }) {
   const wide = () => (process.stdout.columns || 80) >= WIDE;
   /** The view's width in columns: half of what the sidebar leaves, or all
@@ -260,6 +266,7 @@ function paneParts({
      *  multiplexer sends no move (pi-tui asks it for none), so there only
      *  the keys move the light. */
     handleMouse(e) {
+      mouse?.();
       const list = listOf();
       if (!list || e.y >= list.rows().length) return undefined;
       if (e.type === "move") {
@@ -374,6 +381,7 @@ function paneParts({
     const had = shown && focused;
     shown = show;
     focused = show;
+    changed?.(show);
     if (had && !show) setImmediate(released);
     tui.setFocus(show ? body : editor);
     setStatus();

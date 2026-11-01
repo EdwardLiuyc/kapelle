@@ -43,7 +43,9 @@
  * `entryAt` is its reverse row query. An answer outside the window is only
  * invalidated, never re-rendered, so a streamed chunk cannot re-parse it.
  * The reducer timeline still owns the data, so process memory still grows
- * with it. On exit `render(..., true)` walks every item once for scrollback.
+ * with it. The model also keeps the ordered message items, so the M7-7 rail
+ * reads their tops without walking the timeline. On exit `render(..., true)`
+ * walks every item once for scrollback.
  */
 
 import {
@@ -85,7 +87,16 @@ import {
   underline,
   yellow,
 } from "../common.ts";
-import { colourOf, type Run, runs, runText, spin, type View } from "../view.ts";
+import {
+  colourOf,
+  isMessage,
+  type Message,
+  type Run,
+  runs,
+  runText,
+  spin,
+  type View,
+} from "../view.ts";
 
 const MARKDOWN_THEME: MarkdownTheme = {
   heading: (s) => bold(cyan(s)),
@@ -367,17 +378,27 @@ interface Anchor {
   offset: number;
 }
 
+/** What the rail may read from the virtual model. The ordered message index
+ *  is built with the items, so a rail frame does not walk the timeline. */
+export interface TranscriptRailModel {
+  readonly markCount: number;
+  markTop(at: number): number | undefined;
+  markEntry(at: number): Message | undefined;
+}
+
 /** The per-view height model. Items exist for every entry, but their pi-tui
  *  parts exist only for the current window. */
 // The model owns order, heights, runs and counters as one invariant.
 // pi-lens-ignore: large-class
-class VirtualTranscriptModel {
+class VirtualTranscriptModel implements TranscriptRailModel {
   readonly items: Item[] = [];
   readonly byEntry = new Map<Entry, Item>();
   readonly byRun = new Map<Run, Item[]>();
+  private readonly marks: Item[] = [];
   readonly stats = {
     entriesBuilt: 0,
     entriesVisited: 0,
+    markTops: 0,
     partsCreated: 0,
     partsRendered: 0,
   };
@@ -403,6 +424,7 @@ class VirtualTranscriptModel {
       items.push(item);
       this.byRun.set(spec.run, items);
     }
+    if (isMessage(entry)) this.marks.push(item);
     this.heights.push(item.height);
     this.stats.entriesBuilt += 1;
     return item;
@@ -470,6 +492,22 @@ class VirtualTranscriptModel {
     return item ? this.prefix(item.index) + (item.anchor ?? 0) : undefined;
   }
 
+  get markCount() {
+    return this.marks.length;
+  }
+
+  markTop(at: number) {
+    const item = this.marks[at];
+    if (!item) return undefined;
+    this.stats.markTops += 1;
+    return this.prefix(item.index) + (item.anchor ?? 0);
+  }
+
+  markEntry(at: number) {
+    const entry = this.marks[at]?.entry;
+    return entry && isMessage(entry) ? entry : undefined;
+  }
+
   anchorAt(row: number): Anchor | undefined {
     const item = this.at(row);
     return item ? { item, offset: row - this.prefix(item.index) } : undefined;
@@ -512,6 +550,7 @@ class VirtualTranscriptModel {
 
   resetStats() {
     this.stats.entriesVisited = 0;
+    this.stats.markTops = 0;
     this.stats.partsCreated = 0;
     this.stats.partsRendered = 0;
   }

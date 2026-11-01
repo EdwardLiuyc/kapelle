@@ -1114,12 +1114,7 @@ test("an ask participant asks through /permissions, and nobody answering denies 
   }
   assert.deepEqual([closed?.allow, closed?.reason], [false, "timeout"]);
 
-  const log = (
-    await readFile(join(stateDirFor(root), "rooms", id, "events.jsonl"), "utf8")
-  )
-    .trimEnd()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  const log = await roomLog(root, id);
   // Both permission events are in the room log, under the participant.
   assert.deepEqual(
     log
@@ -1130,9 +1125,18 @@ test("an ask participant asks through /permissions, and nobody answering denies 
       [alice.id, second.id],
     ],
   );
-  const answered = log.filter(
+  let answered = log.filter(
     (e) => e.update.sessionUpdate === "_client_permission_answered",
   );
+  // The timeout path writes its answered event after the decision becomes
+  // readable, so wait for the second event before asserting the pair.
+  for (const until = Date.now() + 10_000; answered.length < 2; ) {
+    assert.ok(Date.now() < until, "the timeout's answered event never came");
+    await new Promise((ok) => setTimeout(ok, 25));
+    answered = (await roomLog(root, id)).filter(
+      (e) => e.update.sessionUpdate === "_client_permission_answered",
+    );
+  }
   assert.deepEqual(
     answered.map((e) => [e.participantId, e.update.reason]),
     [

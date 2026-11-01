@@ -3243,56 +3243,66 @@ test still passes.
 **Decided 2026-10-21:** use pi-tui's bar as it is. A hand-drawn bar would duplicate
 hover, drag and track-click behaviour that the package already tests.
 
-**M7-7 · History rail with hover preview · M · needs M7-6**
-**Added 2026-10-21.** A two-column rail beside the timeline shows one mark per person
-message in the view: the same entries `ctrl+r` lists. Hovering a mark shows a short
-preview of that message. The rail is not proportional; a long answer must not push a
-turn's mark out of place. With more messages than rows, the marks window around the
-active one, and at the bottom the window pins to the tail. The active mark is the last
-person message whose measured top is at or above the viewport top, so it follows what
-the person is reading. M7-6's proportional bar stays.
-**The rows are known already.** `transcriptParts` keeps each message's component in
-`drawn`, but that is a `WeakMap` and cannot be iterated. A `marks(entries)` helper takes
-the ordered person entries from `sent()`, resolves each through `drawn.get()`, and sums
-`Transcript.rows` to get its top. `jump()` reads the same top and measures only when the
-row cache is missing, as after a width change or before the first draw. This keeps both
-paths on one model and avoids a full re-render on every scroll.
+**M7-7 · History rail with hover preview · M · needs M7-6, #323**
+**Added 2026-10-21.** A two-column rail beside the timeline shows one mark per message
+in the view: the same entries `ctrl+r` lists. Hovering a mark shows a short preview of
+that message. The rail is not proportional; a long answer must not push a turn's mark
+out of place. With more messages than rows, the marks window around the active one, and
+at the bottom the window pins to the tail unless that would leave the active mark out.
+The active mark is the last message whose model top is at or above the viewport top, so
+it follows what the person is reading. It is a bold `●` in the terminal's default
+foreground, while the other marks stay dim; there is no background highlight. M7-6's
+proportional bar stays.
+**The rows come from the virtual model.** `VirtualTranscriptModel` keeps the ordered
+message items and a Fenwick tree of their heights (#323). A rail query reads that index
+and `markTop()`; it does not build a `drawn` list, re-render children, sum rows per mark,
+or walk `sent()` every frame. `jump()` uses the same top offsets. The index grows as
+entries arrive, so a streamed answer or a width change moves the marks without a
+timeline walk.
 **Drawing and input.** Add the rail as a direct `HStack` sibling between the timeline and
 the side view. Give it `basis: 2`, `shrink: 0` and a `visible` callback; no nested stack
 and no `auto`. `placeSide()` keeps the pane last, so the order is sidebar/strip, timeline,
 rail, pane. Click a mark to call the existing `jump(entry)`, and click `▲` or `▼` to jump
-to the nearest person message above or below the viewport. The rail is mouse-only because
+to the nearest message above or below the viewport. The rail is mouse-only because
 `ctrl+r` already gives the same actions from the keyboard.
-**Width is stable.** The two columns are reserved as soon as the view has two person
+**Width is stable.** The two columns are reserved as soon as the view has two
 messages, not when content outgrows the viewport, so a growing answer never changes the
 transcript width. It is absent when the side view takes the timeline's place, when there
-are fewer than two person messages, below `NARROW` (76 columns, the repo's existing
+are fewer than two messages, below `NARROW` (76 columns, the repo's existing
 threshold), or under three viewport rows (two chevrons and one mark are the minimum).
 **Hover preview.** After about 150 ms of rest on a mark, show a non-capturing overlay
 card to the left of the rail, clamped to the screen: up to two wrapped lines of the same
-row the history list shows, with `…` when cut. One pure `historyText()` helper formats
-the row for the side list and the preview. Moving to another mark replaces the card;
+row the history list shows, with `…` when cut. `historyRow()` formats the row for both,
+and `historyPreview()` wraps and cuts the card. Moving to another mark replaces the card;
 leaving the rail, scrolling, switching views or hiding the rail closes it. The card never
 takes focus or keys, and the rail still receives click and wheel events. pi-tui already
 delivers `move` events to the side list's cursor (`chat/tui/pane.ts`), so a terminal that
 sends none is a graceful fallback: no card, with the side history still available.
-*Done when* pure tests in `chat/view.ts` cover mark order, the active mark, the sliding
-window, the tail at the bottom, hit mapping, the hide rules, the shared history text cut
-to two lines, and reserving the two columns before content overflows; a component test
-shows a mark click and a chevron click calling the right jump target, and shows the
+*Done when* unit tests cover mark order (the virtual model), the active mark, the sliding
+window, tail preference with active-mark precedence when they conflict, the active mark's
+bold-versus-dim style with and without `NO_COLOR`, hit mapping, the hide rules, the shared
+history text cut to two lines, the card's screen clamp, and reserving the two columns
+before content overflows; a component test shows a mark click and a chevron click calling
+the right jump target, and shows the
 preview only after the hover delay, replacing it on a mark change and hiding it on leave
 or scroll without taking focus; the #242 layout test shows a numeric `basis`, `shrink: 0`
 and a `visible` callback, and no nested `HStack`; and a pty test clicks a mark, sees that
 message at the top, and sees the active mark move.
-**Decided 2026-10-21:** marks are person messages, not every transcript row, because
+**Decided 2026-10-21:** marks are messages, not every transcript row, because
 `ctrl+r` already defines the history the person can pick and a mark stays put while an
 answer streams. The hover preview is part of this story, not a follow-up: a mark the
 person cannot identify is not useful enough to justify the rail. The side history list
 stays: it is the keyboard and narrow-screen route, and the rail is an overview.
-**Amended 2026-10-26 (#362):** "person message" above now reads "message", as the history
-does: the orchestrator's orders are in the list too. `messages(entries)` in `chat/view.ts`
-is the selector, and `historyRow` is the planned `historyText()` — the rail reuses both,
-so the rail and the list can never disagree.
+**Amended 2026-10-26 (#362):** marks are the history's messages, not only the person's
+own: the orchestrator's orders are in the list too. `messages(entries)` in `chat/view.ts`
+is the selector, and `historyRow` formats the row — the rail reuses both, so the rail
+and the list can never disagree. `historyPreview` wraps that row to two lines.
+**Amended 2026-11-01 (#323):** the virtual transcript landed in #401. The old
+`drawn`/`Transcript.rows` rail paragraph is replaced above; the rail must use the
+virtual model's ordered message items and top offsets.
+**Amended 2026-11-01:** the active mark wins when the tail-pinned window would omit it.
+The active pip is bold in the terminal's default foreground; the other pips are dim.
+No inverse background is used.
 
 ## M8 — Orchestrator
 
