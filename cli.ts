@@ -211,7 +211,17 @@ const DEFAULT_AGENT = "pi";
 // `kapelle chat` is `chat.ts` (S7a), with its own usage and its own flags.
 const chatVerb = positional[0] === "chat";
 
-if (!chatVerb && has("version")) {
+const versionAt = argv.indexOf("--version");
+const versionAsValue =
+  versionAt > 0 &&
+  argv[versionAt - 1]?.startsWith("--") &&
+  !BOOLEAN_FLAGS.has(argv[versionAt - 1] as string);
+if (versionAsValue) {
+  console.error(`${argv[versionAt - 1]} needs a value`);
+  process.exit(1);
+}
+
+if (positional.length === 0 && !runFilePath && versionAt !== -1) {
   try {
     process.stdout.write(`${await packageVersion()}\n`);
     process.exit(0);

@@ -115,6 +115,24 @@ test("--version prints the package version", async (t) => {
   assert.equal(r.stdout.trim(), pkg.version);
 });
 
+test("--version does not override a verb", async (t) => {
+  const cwd = await tempDir(t);
+  const file = await runFile(t, mockRun([{ id: "one", prompt: "run me" }]));
+
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--version"]);
+
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /▸ one \(mock-agent\) done/);
+});
+
+test("--version is not a value for a missing flag", async (t) => {
+  const r = await runCli(t, ["--cwd", "--version"]);
+
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /--cwd needs a value/);
+});
+
 test("merge without a run id is a usage error, not a prompt", async (t) => {
   const r = await runCli(t, ["merge"]);
 
