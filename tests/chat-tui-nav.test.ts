@@ -26,6 +26,7 @@ import {
   ptyScreen,
   REMEMBER,
   type RoomReply,
+  roomIdle,
   roomLog,
   screenRows,
   scrollback,
@@ -322,22 +323,38 @@ async function fifteenSent(t: TestContext, cols: number) {
   };
   for (let i = 1; i <= 15; i++) await send(`m${i}`);
   await screen.seen("previous: m14");
-  return { ...screen, send };
+  return { ...screen, send, d, id: open.body.id };
 }
 
 test("chat.ts on a real terminal clicks a history-rail mark and moves the active mark", {
   skip: noPty,
+  // The test drives a whole pty session: its call count is the test.
+  // pi-lens-ignore: high-fan-out
 }, async (t) => {
   const screen = await fifteenSent(t, 130);
+  // A turn's end removes its busy row from the banner and gives the
+  // transcript a row back. Wait for both the room and the screen to be idle:
+  // otherwise the rail's window can slide between counting its pips and
+  // clicking one, and the click lands on a different message.
+  await roomIdle(screen.d, screen.id);
+  await until(
+    "the busy rows to clear",
+    () =>
+      ![...screenRows(screen.out()).values()].some(
+        (row) =>
+          row.includes("working") ||
+          row.includes("thinking") ||
+          row.includes("/cancel"),
+      ),
+  );
   await screen.seen("▲");
   await screen.seen("▼");
-  // The rail is pinned to the tail. Count its pips to know which message is
-  // the first mark, one row below the up chevron.
+  // The rail is pinned to the tail, so a window of pips is shorter than the
+  // 15 messages.
   const marks = [...screenRows(screen.out()).values()].filter((row) =>
     row.trimEnd().endsWith("●"),
   ).length;
   assert.ok(marks > 0 && marks < 15, `the rail has a window: ${marks}`);
-  const first = 15 - marks + 1;
   const activeRow = () =>
     [...screenRows(screen.out(), true)].find(([, text]) =>
       // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
@@ -364,33 +381,49 @@ test("chat.ts on a real terminal clicks a history-rail mark and moves the active
     }
   };
   const beforeText = await hovered(activeBefore);
+  // Read the first mark's identity from its own card. A pip count says
+  // nothing about which message the row holds once the window has moved.
+  const targetRow = activeBefore === 2 ? 3 : 2;
+  const targetText = await hovered(targetRow);
   assert.notEqual(
     beforeText,
-    `you → mock-agent: m${first}`,
+    targetText,
     "the clicked mark was not already active",
   );
+  const target = /m(\d+)$/.exec(targetText)?.[1];
+  assert.ok(target, `the card names a message: ${targetText}`);
   const from = screen.out().length;
   // At 130 columns the sidebar is shown, and the rail is the last two cells
-  // of the row. Row 2 is its first mark.
-  await screen.press("\x1b[<0;130;2M\x1b[<0;130;2m", `m${first}`);
-  const drawn = screen.out().slice(from);
-  const rows = screenRows(screen.out());
-  const row = [...rows].find(([, text]) => text.includes(`▎ m${first}`))?.[0];
-  assert.ok(
-    row !== undefined && row <= 2,
-    `the message reached the top: ${row}`,
+  // of the row. The press repaints before the click scrolls, and the message
+  // is on screen already, so wait for its row, not for its text.
+  screen.child.stdin.write(
+    `\x1b[<0;130;${targetRow}M\x1b[<0;130;${targetRow}m`,
   );
+  let row: number | undefined;
+  for (const until = Date.now() + 20_000; ; ) {
+    row = [...screenRows(screen.out())].find(([, text]) =>
+      text.includes(`▎ m${target}`),
+    )?.[0];
+    if (row !== undefined && row <= 2) break;
+    assert.ok(Date.now() < until, `the message reached the top: ${row}`);
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  const drawn = screen.out().slice(from);
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
   assert.match(drawn, /\x1b\[7m●/, "the active mark was redrawn");
-  await new Promise((ok) => setTimeout(ok, 100));
   const activeAfter = activeRow();
   assert.ok(activeAfter !== undefined, "the rail still has an active mark");
   const afterText = await hovered(activeAfter);
   assert.notEqual(afterText, beforeText, "the active mark moved");
+  assert.equal(afterText, targetText, "the active mark is the clicked message");
+  // A view change closes the card the hover left open.
+  await screen.press("\x0e", "@mock-agent");
   assert.equal(
-    afterText,
-    `you → mock-agent: m${first}`,
-    "the active mark is the clicked message",
+    [...screenRows(screen.out()).values()].some((row) =>
+      row.includes("│you → mock-agent: m"),
+    ),
+    false,
+    "the card closed with the view",
   );
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");

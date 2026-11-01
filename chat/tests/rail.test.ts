@@ -38,6 +38,7 @@ function setup({
   const entries = Array.from({ length: count }, (_, i) => at(i));
   let shownCount = count;
   let columns = 100;
+  let shownRows = rows;
   const jumps: Entry[] = [];
   const overlays: {
     component: Component;
@@ -83,7 +84,7 @@ function setup({
     tui,
     scroll,
     model: () => model,
-    viewportRows: () => rows,
+    viewportRows: () => shownRows,
     jump: (entry) => jumps.push(entry),
     text: (entry) => `row: ${printable(entry.text)}`,
     terminal: () => ({ width: columns, height: 30 }),
@@ -120,6 +121,9 @@ function setup({
     },
     setColumns: (n: number) => {
       columns = n;
+    },
+    setRows: (n: number) => {
+      shownRows = n;
     },
   };
 }
@@ -205,6 +209,39 @@ test("hover closes on scrolling and when the rail hides", async () => {
 
   const tiny = setup({ rows: 2 });
   assert.equal(tiny.parts.shown(), false, "under three rows hides the rail");
+});
+
+test("a card closes when the rail window moves under it", async () => {
+  const { parts, overlays, mouse, scroll, setRows } = setup();
+  scroll.scrollTop = 58;
+  parts.rail.render(2);
+  parts.rail.handleMouse?.(mouse("move", 1));
+  await new Promise((ok) => setTimeout(ok, 15));
+  const first = overlays[0];
+  assert.ok(first);
+  assert.ok(
+    first.component
+      .render(first.options.width as number)
+      .some((line) => line.includes("row: message 2")),
+  );
+  // One fewer transcript row shifts the window's first mark from message 2
+  // to message 3, under the pointer.
+  setRows(7);
+  parts.rail.render(2);
+  assert.equal(first.hidden, true, "the stale card is hidden");
+});
+
+test("a card closes when a scroll moves another mark under it", async () => {
+  const { parts, overlays, mouse, scroll } = setup();
+  parts.rail.render(2);
+  parts.rail.handleMouse?.(mouse("move", 3));
+  await new Promise((ok) => setTimeout(ok, 15));
+  assert.equal(overlays.length, 1);
+  // A scrollbar drag or a global scroll key moves the view without a mouse
+  // event on the rail, so the window slides under the pointer.
+  scroll.scrollTop += 20;
+  parts.rail.render(2);
+  assert.equal(overlays[0]?.hidden, true);
 });
 
 test("the hover card stays on the screen", async () => {

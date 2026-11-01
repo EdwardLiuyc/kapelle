@@ -63,8 +63,12 @@ interface DrawFrame {
 interface Pointer {
   railLeft: number;
   screenY: number;
+  row: number;
 }
 
+// The render, hit test, hover timer, card and cleanup share one cursor and
+// overlay, so splitting them would scatter that state.
+// pi-lens-ignore: high-complexity, high-fan-out
 function railParts({
   tui,
   scroll,
@@ -106,7 +110,9 @@ function railParts({
     );
   };
 
-  const close = () => {
+  /** Hides the card and cancels a pending one. Returns whether anything
+   *  changed, so a caller outside a render can ask for a frame. */
+  const hide = () => {
     const had = pending !== undefined || timer !== undefined || preview;
     if (timer) clearTimeout(timer);
     timer = undefined;
@@ -114,7 +120,10 @@ function railParts({
     pointer = undefined;
     preview?.overlay.hide();
     preview = undefined;
-    if (had) tui.requestRender();
+    return Boolean(had);
+  };
+  const close = () => {
+    if (hide()) tui.requestRender();
   };
 
   const card = (lines: string[]): Component => ({
@@ -165,12 +174,14 @@ function railParts({
     pointer = {
       railLeft: e.screenX - e.x,
       screenY: e.screenY,
+      row: e.y,
     };
     if (preview?.at === at || pending === at) return;
     close();
     pointer = {
       railLeft: e.screenX - e.x,
       screenY: e.screenY,
+      row: e.y,
     };
     pending = at;
     timer = setTimeout(() => show(at), delay);
@@ -182,6 +193,7 @@ function railParts({
       const height = rows();
       if (!current || !shown()) {
         draw = undefined;
+        hide();
         return [];
       }
       const count = current.markCount;
@@ -195,7 +207,21 @@ function railParts({
         return [];
       }
       const window = railWindow(count, active, height, scroll.isFollowingEnd);
-      draw = { active, window, rows: height, count };
+      const next = { active, window, rows: height, count };
+      // A card names the mark under the pointer when it opened. If a new
+      // message, a banner row, a resize or a scroll moves another mark under
+      // that row, the card is stale: hide it until the pointer moves again.
+      if (draw && pointer) {
+        const before = railHit(draw.window, draw.rows, pointer.row);
+        const after = railHit(next.window, next.rows, pointer.row);
+        if (
+          before?.kind !== "mark" ||
+          after?.kind !== "mark" ||
+          before.at !== after.at
+        )
+          hide();
+      }
+      draw = next;
       const lines = [dim(UP)];
       for (let at = window.start; at < window.end; at++) {
         lines.push(at === active ? inverse(MARK) : dim(MARK));
