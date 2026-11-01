@@ -3944,14 +3944,37 @@ the checkout; the test removes `dist/` at the end. Measured 2026-10-16: the pack
 `--help` prints the help, and both chat modules load. The person also runs `npm install
 -g ./kapelle-<version>.tgz` once by hand and types `kapelle`.
 
-**M9-8 · Publish to npm · S · needs the other M9 stories**
+**M9-8a · Release readiness · S · needs M9-7**
+Added 2026-11-01. M9-8 makes the repository public and publishes the package. Before
+that, make the public edge safe to expose and the release repeatable. The publish job,
+the README install block and the release notes stay in M9-8.
+
+- **Expose no credential.** Scan the full Git history for credentials, not only the
+  current tree. Rotate anything found; rewriting history is not a substitute.
+- **Give the repository a public face.** Add `SECURITY.md` that sends reports to
+  GitHub's private vulnerability reporting, and turn that feature on. Fill the
+  repository description, homepage and topics. Add `homepage`, `bugs` and `keywords` to
+  `package.json`; `repository` is already there.
+- **Write the release down.** Add `docs/RELEASING.md`: the version and tag, the first
+  publish and trusted-publisher setup, the gate, the clean-machine check, and what to do
+  when a publish fails. It names M9-8 as the owner of the workflow.
+- **Test the claimed platform.** Add one macOS job that runs `npm ci`, builds the
+  package and runs the packed CLI's `--version` and `--help`. Ubuntu already runs the
+  full suite; this closes only the packaging gap on the other supported system.
+*Done when* the history scan is clean or every hit is rotated, `SECURITY.md` and private
+reporting are on, the repository and package metadata are filled, `docs/RELEASING.md`
+is present, and the macOS packaged CLI check passes.
+
+**M9-8 · Publish to npm · S · needs M9-1..M9-7, M9-3b, M9-5b and M9-8a**
 The first release. The person does steps 1 and 2 by hand.
 
 1. Make an npm account and turn on 2FA.
-2. **Make the repository public, or publish without provenance.** npm adds provenance (a
-   proof of which repository and job built the package) only for a public repository.
-   This one is private today (2026-10-15).
-3. Set the version with `npm version <patch|minor>`. It makes the commit and the tag.
+2. **Make the repository public, or publish without provenance.** M9-8a clears the
+   public edge first. npm adds provenance (a proof of which repository and job built the
+   package) only for a public repository. This one is private today (2026-10-15).
+3. Choose the first version and tag it. `package.json` is already `0.1.0`, so tag that
+   version rather than bumping it by habit. When the version changes, `npm version
+   <version>` makes the commit and the tag.
 4. A GitHub Actions job publishes when a tag is pushed, with npm trusted publishing: no
    npm token is stored. The job runs `npm ci` first, because `prepack` needs `tsc`, then
    the full gate from `AGENTS.md`, then `npm publish`. It needs `id-token: write`. If npm
@@ -4039,8 +4062,8 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 ```text
 M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b
 M9-2 ─┘        └─ M9-3b        └─ M9-6
-M9-7   (needs nothing)
-M9-1..M9-7, M9-3b, M9-5b ─ M9-8   (the first publish)
+M9-7 ─ M9-8a
+M9-1..M9-7, M9-3b, M9-5b, M9-8a ─ M9-8   (the first publish)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
