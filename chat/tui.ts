@@ -83,6 +83,7 @@ import {
   printable,
   seen,
   thread,
+  touchesFiles,
 } from "../client/room.ts";
 import {
   codeOf,
@@ -433,20 +434,6 @@ function chatTui(
     }
     tui.requestRender();
   };
-
-  /** The open thread's tool calls that named something file-related (M7-3).
-   *  A call's later completion often carries only its status. */
-  const fileCalls = new Set<string>();
-  const fileRelated = (u: {
-    kind?: string;
-    content?: readonly { type: string }[];
-    locations?: readonly unknown[];
-  }) =>
-    u.kind === "edit" ||
-    u.kind === "delete" ||
-    u.kind === "move" ||
-    (u.content?.some((c) => c.type === "diff") ?? false) ||
-    (u.locations?.length ?? 0) > 0;
 
   /** At most one in-turn diff request runs; later signals wait for one more. */
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -945,7 +932,6 @@ function chatTui(
   const open = (next: View) => {
     closeRail();
     cancelRefresh();
-    fileCalls.clear();
     // A pop-up belongs to the view it opened on.
     if (box.panel) hidePanel();
     const from = view.roomId;
@@ -1030,15 +1016,13 @@ function chatTui(
     } else if (
       openThread &&
       (u.sessionUpdate === "tool_call" ||
-        u.sessionUpdate === "tool_call_update")
+        u.sessionUpdate === "tool_call_update") &&
+      (u.status === "completed" || u.status === "failed") &&
+      touchesFiles(r.state, line.participantId, u.toolCallId)
     ) {
-      if (fileRelated(u)) fileCalls.add(u.toolCallId);
-      if (
-        (u.status === "completed" || u.status === "failed") &&
-        fileCalls.delete(u.toolCallId)
-      ) {
-        refreshChangesSoon(roomId, line.participantId);
-      }
+      // The reducer kept the call's facts, also from before the thread
+      // opened.
+      refreshChangesSoon(roomId, line.participantId);
     }
     const onScreen = shows(view, roomId, line.participantId);
     if (onScreen) seen(r.state, line.participantId);
@@ -1065,7 +1049,6 @@ function chatTui(
       (e.type === "turn_ended" || e.type === "exited")
     ) {
       cancelRefresh();
-      fileCalls.clear();
       void loadChanges(roomId, e.participantId);
     }
     // A rename moves an untouched thread pre-fill to the new name.

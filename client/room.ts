@@ -1043,6 +1043,26 @@ export const inThread = (e: Entry, id: string) =>
 export const thread = (state: RoomState, id: string) =>
   state.timeline.filter((e) => inThread(e, id));
 
+/** Whether a tool call named a file (#406): an `edit`, `delete` or `move`,
+ *  a diff, or a location, in its first event or any update. Its completion
+ *  often carries only its status, so the earlier events count too. */
+export function touchesFiles(
+  state: RoomState,
+  participantId: string,
+  toolCallId: string,
+) {
+  const slot = state.tools.get(`${participantId} ${toolCallId}`);
+  if (!slot) return false;
+  const { kind, added } = slot.entry;
+  return (
+    kind === "edit" ||
+    kind === "delete" ||
+    kind === "move" ||
+    added !== undefined ||
+    slot.location !== undefined
+  );
+}
+
 /** The participants still on the roster, in join order. */
 export const roster = (state: RoomState) =>
   [...state.participants.values()].filter((p) => !p.removed);

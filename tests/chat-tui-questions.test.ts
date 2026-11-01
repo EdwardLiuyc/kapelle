@@ -1008,6 +1008,45 @@ test("chat.ts on a real terminal refreshes changed files during a turn and coale
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("chat.ts on a real terminal refreshes changed files when a file call that started before the thread opened completes", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write } = await fakeChangesRoom(t, "", {
+    files: 0,
+    later: { text: TWO_CHANGES_TEXT, files: 2 },
+  });
+  await screen.seen("○ ann");
+  // The edit starts while the room timeline is shown.
+  write(
+    event(2, {
+      sessionUpdate: "tool_call",
+      toolCallId: "edit-early",
+      title: "Edit",
+      kind: "edit",
+      status: "in_progress",
+    }),
+  );
+  await screen.seen("Edit");
+  await screen.press("\x1b[1;3B", "@ann");
+  for (const end = Date.now() + 20_000; diffs.length < 1; ) {
+    assert.ok(Date.now() < end, "no open diff call");
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  // Its completion carries only its status.
+  write(
+    event(3, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "edit-early",
+      status: "completed",
+    }),
+  );
+  await screen.seen("A other.ts");
+  assert.equal(diffs.length, 2, diffs.join("\n"));
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 test("chat.ts keeps the newest changed files when a crash's two loads land out of order", {
   skip: noPty,
 }, async (t) => {
