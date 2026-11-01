@@ -1010,6 +1010,41 @@ test("chat.ts on a real terminal refreshes changed files during a turn and coale
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("chat.ts refreshes during a continuous file-signal burst instead of waiting for quiet", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write } = await fakeChangesRoom(t, "", {
+    files: 0,
+    later: { text: TWO_CHANGES_TEXT, files: 2 },
+  });
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  for (const end = Date.now() + 20_000; diffs.length < 1; ) {
+    assert.ok(Date.now() < end, "no open diff call");
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  // Keep the gaps below the 250 ms debounce for longer than its max wait.
+  let refreshed = false;
+  for (let i = 0; i < 14; i++) {
+    write(
+      event(2 + i, {
+        sessionUpdate: "_client_wrote_file",
+        path: `/tmp/continuous-${i}`,
+      }),
+    );
+    await new Promise((ok) => setTimeout(ok, 100));
+    if (diffs.length > 1) {
+      refreshed = true;
+      break;
+    }
+  }
+  assert.ok(refreshed, "the refresh waited for the burst to stop");
+  await screen.seen("A other.ts");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 test("chat.ts loads changed files only on a completed file-related tool or a write", {
   skip: noPty,
 }, async (t) => {

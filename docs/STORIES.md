@@ -3159,8 +3159,10 @@ whole diff, so **the counts per file are new work** in `client/diff.ts`: the sam
 `head` is only what is not committed, so the list would go empty when the agent commits.
 It loads when the thread opens, after a file-related tool call completes or
 `_client_wrote_file` arrives, and after each of that agent's turns ends or its harness
-exits. In-turn signals share a 250 ms trailing debounce, with one request in flight and
-at most one queued reload; message chunks never load it. Each line shows `M`, `A` or
+exits. In-turn signals share a 250 ms trailing debounce capped at 1 s from the first
+signal, with one request in flight and at most one queued reload; message chunks never
+load it. An agent that edits through its own shell with no file metadata produces no
+in-turn signal; its turn-end load remains the reconciliation. Each line shows `M`, `A` or
 `D`, the path and `+a −d`, and the block ends with
 `+n more` when the rows run out. The route cuts its text at 512 KB, so a large diff can
 lose files at its end; `n` comes from the route's `files` count, which is counted before
@@ -3169,17 +3171,18 @@ shows no counts, only its letter and path, because its counts would be too low. 
 side view (M4-6). A `409 no_diff` (no branch to compare with) shows no block.
 *Done when* unit tests cover the row text at 26 columns, `exited` apart from `killed`, a
 room row's mark and the strip's mark, the counts per file and the letter for each tag,
-and `+n more` from `files` and no counts for the cut file when the text was cut; a fake-daemon test shows an in-turn refresh from a file-related tool completion and
-from `_client_wrote_file`, a 250 ms burst makes one request, none comes per chunk, and
-`against=base`; and a pty test shows a click opening the file in the side view.
+and `+n more` from `files` and no counts for the cut file when the text was cut; a fake-daemon test shows one diff call per turn end, an in-turn refresh from a file-related
+tool completion and from `_client_wrote_file`, a 250 ms burst makes one request, a
+continuous burst refreshes within its 1 s cap, none comes per chunk, and `against=base`;
+and a pty test shows a click opening the file in the side view.
 **Decided 2026-10-09:** the list reuses the diff route, so the daemon and the contract do
 not change. A light route that returns only names and counts is the follow-up, if a large
 diff makes the list slow.
 **Decided at pickup 2026-11-01 (#406):** the in-turn trigger is a completed file-related
-tool call (`edit`, `delete` or `move`, or an update with a diff or location) plus
-`_client_wrote_file`. Both feed one 250 ms trailing debounce, with one diff request in
-flight and at most one queued reload. The open, turn-end and exit loads stay as final
-reconciliation.
+tool call (`edit`, `delete` or `move`, a diff, or a location on a call whose kind is
+unlabelled) plus `_client_wrote_file`. Both feed one 250 ms trailing debounce capped at
+1 s from the first signal, with one diff request in flight and at most one queued reload.
+The open, turn-end and exit loads stay as final reconciliation.
 **Amended 2026-10-22 (#332):** at 26 columns the harness on an agent's row was often cut,
 and only the orchestrator's role showed, as `★`. The sidebar is now 32 columns, and an
 agent takes two rows: the mark, name, `★` and timer, then `harness · role` dim under the

@@ -1786,6 +1786,24 @@ test("a tool call touches files by its kind, a diff or a location, from any of i
     "a location in an update; the completion has only the location",
   );
   assert.equal(
+    call(
+      "o",
+      { title: "Other", kind: "other", locations: [{ path: "/w/e" }] },
+      { status: "completed" },
+    ),
+    true,
+    "an unlabelled kind with a location",
+  );
+  assert.equal(
+    call(
+      "r",
+      { title: "Read", kind: "read", locations: [{ path: "/w/d" }] },
+      { status: "completed" },
+    ),
+    false,
+    "a labelled read with a location",
+  );
+  assert.equal(
     call("s", { title: "ls", kind: "execute" }, { status: "completed" }),
     false,
   );

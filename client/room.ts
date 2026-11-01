@@ -1043,9 +1043,11 @@ export const inThread = (e: Entry, id: string) =>
 export const thread = (state: RoomState, id: string) =>
   state.timeline.filter((e) => inThread(e, id));
 
-/** Whether a tool call named a file (#406): an `edit`, `delete` or `move`,
- *  a diff, or a location, in its first event or any update. Its completion
- *  often carries only its status, so the earlier events count too. */
+/** Whether a tool call named a file change (#406): an `edit`, `delete` or
+ *  `move`, a diff, or a location on a call with no more specific kind. Its
+ *  completion often carries only its status, so facts from earlier events
+ *  count too. `diffCount` assigns `added` and `removed` together, so `added`
+ *  also says the call had a diff. */
 export function touchesFiles(
   state: RoomState,
   participantId: string,
@@ -1054,12 +1056,13 @@ export function touchesFiles(
   const slot = state.tools.get(`${participantId} ${toolCallId}`);
   if (!slot) return false;
   const { kind, added } = slot.entry;
+  const unlabelled = kind === undefined || kind === "other";
   return (
     kind === "edit" ||
     kind === "delete" ||
     kind === "move" ||
     added !== undefined ||
-    slot.location !== undefined
+    (unlabelled && slot.location !== undefined)
   );
 }
 

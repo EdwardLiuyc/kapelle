@@ -170,6 +170,8 @@ const AGAIN = "press ctrl+c again to leave";
 const AGAIN_MS = 1500;
 /** How long in-turn changed-file signals settle before one diff read (M7-3). */
 const CHANGE_REFRESH_MS = 250;
+/** The longest a continuous signal burst may postpone that read (M7-3). */
+const CHANGE_REFRESH_MAX_MS = 1000;
 
 /**
  * Where the screen's parts go (#242). One `HStack`, `row`: the sidebar or
@@ -437,11 +439,13 @@ function chatTui(
 
   /** At most one in-turn diff request runs; later signals wait for one more. */
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let refreshDue: number | undefined;
   let refreshRunning = false;
   let refreshQueued: { roomId: string; participantId: string } | undefined;
   const cancelRefresh = () => {
     clearTimeout(refreshTimer);
     refreshTimer = undefined;
+    refreshDue = undefined;
     refreshQueued = undefined;
   };
   const refreshChanges = async (roomId: string, participantId: string) => {
@@ -467,11 +471,18 @@ function chatTui(
   };
   const refreshChangesSoon = (roomId: string, participantId: string) => {
     if (changeKey(roomId, participantId) !== openChangeKey()) return;
+    const now = Date.now();
+    if (refreshDue === undefined) refreshDue = now + CHANGE_REFRESH_MAX_MS;
+    const due = refreshDue;
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => {
-      refreshTimer = undefined;
-      void refreshChanges(roomId, participantId);
-    }, CHANGE_REFRESH_MS);
+    refreshTimer = setTimeout(
+      () => {
+        refreshTimer = undefined;
+        refreshDue = undefined;
+        void refreshChanges(roomId, participantId);
+      },
+      Math.max(0, Math.min(CHANGE_REFRESH_MS, due - now)),
+    );
   };
 
   /** The one-line bar under the composer (M6-11a, 4a). Empty until the
@@ -1011,18 +1022,19 @@ function chatTui(
     }
     const openThread =
       roomId === view.roomId && line.participantId === view.participantId;
-    if (openThread && u.sessionUpdate === "_client_wrote_file") {
-      refreshChangesSoon(roomId, line.participantId);
-    } else if (
-      openThread &&
-      (u.sessionUpdate === "tool_call" ||
-        u.sessionUpdate === "tool_call_update") &&
-      (u.status === "completed" || u.status === "failed") &&
-      touchesFiles(r.state, line.participantId, u.toolCallId)
-    ) {
-      // The reducer kept the call's facts, also from before the thread
-      // opened.
-      refreshChangesSoon(roomId, line.participantId);
+    if (openThread) {
+      if (u.sessionUpdate === "_client_wrote_file") {
+        refreshChangesSoon(roomId, line.participantId);
+      } else if (
+        (u.sessionUpdate === "tool_call" ||
+          u.sessionUpdate === "tool_call_update") &&
+        (u.status === "completed" || u.status === "failed") &&
+        touchesFiles(r.state, line.participantId, u.toolCallId)
+      ) {
+        // The reducer kept the call's facts, also from before the thread
+        // opened.
+        refreshChangesSoon(roomId, line.participantId);
+      }
     }
     const onScreen = shows(view, roomId, line.participantId);
     if (onScreen) seen(r.state, line.participantId);
