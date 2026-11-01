@@ -726,8 +726,8 @@ async function fakeChangesRoom(
   let stream: ServerResponse | undefined;
   const diffs: string[] = [];
   const held: (() => void)[] = [];
-  const event = (seq: number, update: object) =>
-    `id: ${seq}\ndata: ${JSON.stringify({ seq, roomId, participantId: "p1", update })}\n\n`;
+  const event = (seq: number, update: object, participantId = "p1") =>
+    `id: ${seq}\ndata: ${JSON.stringify({ seq, roomId, participantId, update })}\n\n`;
   const fake = createServer((req, res) => {
     const path = req.url ?? "";
     if (path === "/version") {
@@ -874,6 +874,287 @@ test("chat.ts on a real terminal loads the changed files once per turn end or ex
     await new Promise((ok) => setTimeout(ok, 50));
   }
   assert.match(diffs[2] ?? "", /against=base/);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal refreshes changed files during a turn and coalesces bursts", {
+  skip: noPty,
+  // The test drives a whole pty session: its call count is the test.
+  // pi-lens-ignore: high-fan-out
+}, async (t) => {
+  const { screen, diffs, event, write, release } = await fakeChangesRoom(
+    t,
+    "",
+    {
+      files: 0,
+      holdAt: 2,
+      later: { text: TWO_CHANGES_TEXT, files: 2 },
+    },
+  );
+  const until = async (done: () => boolean, why: string) => {
+    for (const end = Date.now() + 20_000; !done(); ) {
+      assert.ok(Date.now() < end, why);
+      await new Promise((ok) => setTimeout(ok, 50));
+    }
+  };
+  const shown = () => [...screenRows(screen.out()).values()].join("\n");
+  await screen.seen("○ ann");
+  // The room timeline ignores the signal.
+  write(
+    event(2, {
+      sessionUpdate: "_client_wrote_file",
+      path: "/tmp/ignored",
+    }),
+  );
+  await new Promise((ok) => setTimeout(ok, 500));
+  assert.equal(diffs.length, 0, diffs.join("\n"));
+  // Opening the thread loads an empty block. The write event starts the
+  // debounced request, which the fake daemon holds. This proves D fires.
+  await screen.press("\x1b[1;3B", "@ann");
+  await until(
+    () => diffs.length === 1,
+    `no open diff call: ${diffs.join("\n")}`,
+  );
+  assert.doesNotMatch(shown(), /changed files/);
+  write(
+    event(3, {
+      sessionUpdate: "_client_wrote_file",
+      path: "/tmp/again",
+    }),
+  );
+  await until(
+    () => diffs.length === 2,
+    `no write diff call: ${diffs.join("\n")}`,
+  );
+  // A tool completion during that request is queued once, not sent beside it.
+  write(
+    event(4, {
+      sessionUpdate: "tool_call",
+      toolCallId: "edit-1",
+      title: "Edit",
+      kind: "edit",
+      status: "completed",
+    }),
+  );
+  write(
+    event(5, {
+      sessionUpdate: "tool_call",
+      toolCallId: "delete-1",
+      title: "Delete",
+      kind: "delete",
+      status: "completed",
+    }),
+  );
+  await new Promise((ok) => setTimeout(ok, 400));
+  assert.equal(diffs.length, 2, "a second request ran beside the held one");
+  release();
+  await until(
+    () => diffs.length === 3,
+    `no trailing diff call: ${diffs.join("\n")}`,
+  );
+  await until(
+    () => shown().includes("A other.ts"),
+    "the new block never appeared",
+  );
+  await new Promise((ok) => setTimeout(ok, 300));
+  assert.equal(diffs.length, 3, "the queued reload ran more than once");
+  // A file tool completion alone also refreshes the block. The completion
+  // update carries only its status, so the call's earlier kind is enough.
+  write(
+    event(6, {
+      sessionUpdate: "tool_call",
+      toolCallId: "move-1",
+      title: "Move",
+      kind: "move",
+      status: "in_progress",
+    }),
+  );
+  write(
+    event(7, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "move-1",
+      status: "completed",
+    }),
+  );
+  await until(
+    () => diffs.length === 4,
+    `no tool diff call: ${diffs.join("\n")}`,
+  );
+  // Two signals in one burst share one request.
+  write(
+    event(8, {
+      sessionUpdate: "_client_wrote_file",
+      path: "/tmp/burst",
+    }),
+  );
+  write(
+    event(9, {
+      sessionUpdate: "tool_call",
+      toolCallId: "edit-2",
+      title: "Edit again",
+      kind: "edit",
+      status: "completed",
+    }),
+  );
+  await until(
+    () => diffs.length === 5,
+    `no burst diff call: ${diffs.join("\n")}`,
+  );
+  await new Promise((ok) => setTimeout(ok, 400));
+  assert.equal(diffs.length, 5, "the burst made more than one request");
+  // No turn end or second click was needed.
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts refreshes during a continuous file-signal burst instead of waiting for quiet", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write } = await fakeChangesRoom(t, "", {
+    files: 0,
+    later: { text: TWO_CHANGES_TEXT, files: 2 },
+  });
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  for (const end = Date.now() + 20_000; diffs.length < 1; ) {
+    assert.ok(Date.now() < end, "no open diff call");
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  // Keep the gaps below the 250 ms debounce for longer than its max wait.
+  let refreshed = false;
+  for (let i = 0; i < 14; i++) {
+    write(
+      event(2 + i, {
+        sessionUpdate: "_client_wrote_file",
+        path: `/tmp/continuous-${i}`,
+      }),
+    );
+    await new Promise((ok) => setTimeout(ok, 100));
+    if (diffs.length > 1) {
+      refreshed = true;
+      break;
+    }
+  }
+  assert.ok(refreshed, "the refresh waited for the burst to stop");
+  await screen.seen("A other.ts");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts loads changed files only on a completed file-related tool or a write", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write } = await fakeChangesRoom(t, "", {
+    files: 0,
+    later: { text: TWO_CHANGES_TEXT, files: 2 },
+  });
+  const until = async (done: () => boolean, why: string) => {
+    for (const end = Date.now() + 20_000; !done(); ) {
+      assert.ok(Date.now() < end, why);
+      await new Promise((ok) => setTimeout(ok, 50));
+    }
+  };
+  await screen.seen("○ ann");
+  await screen.press("\x1b[1;3B", "@ann");
+  await until(() => diffs.length === 1, "no open diff call");
+  // None of these load: a completed non-file tool, a file tool that has
+  // only started, or another participant's write.
+  write(
+    event(2, {
+      sessionUpdate: "tool_call",
+      toolCallId: "run-1",
+      title: "Run",
+      kind: "execute",
+      status: "completed",
+    }),
+  );
+  write(
+    event(3, {
+      sessionUpdate: "tool_call",
+      toolCallId: "edit-1",
+      title: "Edit",
+      kind: "edit",
+      status: "in_progress",
+    }),
+  );
+  write(
+    event(
+      4,
+      {
+        sessionUpdate: "_client_participant_added",
+        name: "bob",
+        harness: "mock-agent",
+        mode: "ask",
+      },
+      "p2",
+    ),
+  );
+  await screen.seen("○ bob");
+  write(
+    event(5, { sessionUpdate: "_client_wrote_file", path: "/tmp/bob" }, "p2"),
+  );
+  await new Promise((ok) => setTimeout(ok, 500));
+  assert.equal(diffs.length, 1, "a non-trigger loaded the files");
+  // The file tool's completion does, even when the update carries only its
+  // status.
+  write(
+    event(6, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "edit-1",
+      status: "completed",
+    }),
+  );
+  await until(
+    () => diffs.length === 2,
+    "the completed file tool loaded nothing",
+  );
+  await screen.seen("A other.ts");
+  // ann's own write still refreshes the block, proving the fixture is live.
+  write(event(7, { sessionUpdate: "_client_wrote_file", path: "/tmp/ann" }));
+  await until(() => diffs.length === 3, "ann's write loaded nothing");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal refreshes changed files when a file call that started before the thread opened completes", {
+  skip: noPty,
+}, async (t) => {
+  const { screen, diffs, event, write } = await fakeChangesRoom(t, "", {
+    files: 0,
+    later: { text: TWO_CHANGES_TEXT, files: 2 },
+  });
+  await screen.seen("○ ann");
+  // The edit starts while the room timeline is shown.
+  write(
+    event(2, {
+      sessionUpdate: "tool_call",
+      toolCallId: "edit-early",
+      title: "Edit",
+      kind: "edit",
+      status: "in_progress",
+    }),
+  );
+  await screen.seen("Edit");
+  await screen.press("\x1b[1;3B", "@ann");
+  for (const end = Date.now() + 20_000; diffs.length < 1; ) {
+    assert.ok(Date.now() < end, "no open diff call");
+    await new Promise((ok) => setTimeout(ok, 50));
+  }
+  // Its completion carries only its status.
+  write(
+    event(3, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "edit-early",
+      status: "completed",
+    }),
+  );
+  await screen.seen("A other.ts");
+  assert.equal(diffs.length, 2, diffs.join("\n"));
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());

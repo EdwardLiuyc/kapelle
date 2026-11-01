@@ -34,6 +34,7 @@ import {
   roster,
   seen,
   thread,
+  touchesFiles,
 } from "../client/room.ts";
 import { createEventBus } from "../core/events.ts";
 import { newRoomId } from "../core/ids.ts";
@@ -1740,4 +1741,72 @@ test("a message keeps its kind, and a thread holds the orders its participant se
     thread(state, ana).filter((e) => e.type === "user" || e.type === "queued"),
     [order, waited],
   );
+});
+
+test("a tool call touches files by its kind, a diff or a location, from any of its events (#406)", () => {
+  const { state, send } = toolRoom();
+  const call = (id: string, first: object, ...updates: object[]) => {
+    send("ann", { sessionUpdate: "tool_call", toolCallId: id, ...first });
+    for (const u of updates) {
+      send("ann", { sessionUpdate: "tool_call_update", toolCallId: id, ...u });
+    }
+    return touchesFiles(state, "ann", id);
+  };
+  assert.equal(call("e", { title: "Edit", kind: "edit" }), true);
+  assert.equal(call("d", { title: "rm", kind: "delete" }), true);
+  assert.equal(call("m", { title: "mv", kind: "move" }), true);
+  assert.equal(
+    call(
+      "x",
+      { title: "write" },
+      {
+        content: [{ type: "diff", path: "/w/a", oldText: "a", newText: "b" }],
+        status: "completed",
+      },
+    ),
+    true,
+    "a diff in an update",
+  );
+  assert.equal(
+    call(
+      "l",
+      { title: "patch", locations: [{ path: "/w/b" }] },
+      { status: "completed" },
+    ),
+    true,
+    "a location in the first event; the completion has only its status",
+  );
+  assert.equal(
+    call(
+      "u",
+      { title: "update patch" },
+      { locations: [{ path: "/w/c" }], status: "completed" },
+    ),
+    true,
+    "a location in an update; the completion has only the location",
+  );
+  assert.equal(
+    call(
+      "o",
+      { title: "Other", kind: "other", locations: [{ path: "/w/e" }] },
+      { status: "completed" },
+    ),
+    true,
+    "an unlabelled kind with a location",
+  );
+  assert.equal(
+    call(
+      "r",
+      { title: "Read", kind: "read", locations: [{ path: "/w/d" }] },
+      { status: "completed" },
+    ),
+    false,
+    "a labelled read with a location",
+  );
+  assert.equal(
+    call("s", { title: "ls", kind: "execute" }, { status: "completed" }),
+    false,
+  );
+  assert.equal(touchesFiles(state, "bob", "e"), false, "by participant");
+  assert.equal(touchesFiles(state, "ann", "nope"), false, "an unknown call");
 });
