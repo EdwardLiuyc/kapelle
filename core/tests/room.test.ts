@@ -14,7 +14,8 @@
  * message revives a participant with a fresh session (M6-7a), or loads its
  * old one where the harness can (M6-7b).
  * `mock-agent.mjs`'s default turn writes `ACP_TEST.md` through the client,
- * which is the file each test looks for.
+ * which is the file each test looks for. A gated git helper also holds the
+ * post-prompt checkout reads these tests need.
  */
 
 import assert from "node:assert/strict";
@@ -2027,9 +2028,13 @@ async function slowCheckout(
 test("a gated git releases when its gate folder is removed", async (t) => {
   const gate = await gatedGit(t);
   await gate.arm();
-  const held = run("git", ["--version"], {
-    env: { ...process.env, PATH: gate.path },
-    timeout: 2_000,
+  const held = new Promise<void>((done) => {
+    execFile(
+      "git",
+      ["--version"],
+      { env: { ...process.env, PATH: gate.path }, timeout: 10_000 },
+      () => done(),
+    );
   });
   await until(() => existsSync(gate.entered), "the held git call");
 

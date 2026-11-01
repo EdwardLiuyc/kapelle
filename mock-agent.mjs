@@ -258,11 +258,9 @@ const waitForAuth = async () => {
  *  reach the room while it runs, so they queue (M6-4). */
 const SLOW_MS = 1000;
 
-/** The prompt `stall` never answered, kept so `session/cancel` can end it.
- *  M0-4 measured every real harness ending its turn within 64 ms of a cancel,
- *  so answering is the realistic half; a harness that ignores the cancel is
- *  already covered by `tests/cli.test.ts`'s inline stubborn agent. */
-let stalledPromptId = null;
+/** The prompt each session's cancel can end, whether `stall`, `slow` or
+ *  `--stall-turn`. */
+const stalledPrompts = new Map();
 /** Counts prompts per session for `--stall-turn`. */
 const promptCount = new Map();
 
@@ -454,6 +452,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     const { sessionId: sid } = msg.params;
     sessions.delete(sid);
     promptCount.delete(sid);
+    stalledPrompts.delete(sid);
     if (store) rmSync(storeFile(sid), { force: true });
     reply(msg.id, {});
     return;
@@ -539,10 +538,12 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (msg.method === "session/cancel") {
     // `deaf` is the harness a shutdown's grace exists for (M6-7a): only its
     // stdin closing ends it.
-    if (stalledPromptId !== null && scenario !== "deaf") {
+    const sid = msg.params.sessionId;
+    const stalled = stalledPrompts.get(sid);
+    if (stalled !== undefined && scenario !== "deaf") {
       const stopReason = scenario === "half" ? "end_turn" : "cancelled";
-      reply(stalledPromptId, { stopReason, usage: USAGE });
-      stalledPromptId = null;
+      reply(stalled, { stopReason, usage: USAGE });
+      stalledPrompts.delete(sid);
     }
     return;
   }
@@ -584,15 +585,15 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       const count = (promptCount.get(sid) ?? 0) + 1;
       promptCount.set(sid, count);
       if (count === stallTurn) {
-        stalledPromptId = msg.id;
+        stalledPrompts.set(sid, msg.id);
         return;
       }
       if (scenario === "slow") {
         // Kept where `session/cancel` finds it, which answers `cancelled`.
-        stalledPromptId = msg.id;
+        stalledPrompts.set(sid, msg.id);
         await sleep(SLOW_MS);
-        if (stalledPromptId !== msg.id) return;
-        stalledPromptId = null;
+        if (stalledPrompts.get(sid) !== msg.id) return;
+        stalledPrompts.delete(sid);
       }
       const chunks =
         scenario === "split"
@@ -671,7 +672,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         call(3);
       }
       if (scenario === "half") {
-        stalledPromptId = msg.id;
+        stalledPrompts.set(sid, msg.id);
         return;
       }
       if (scenario === "prompt-error") {
@@ -690,7 +691,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       scenario === "stubborn" ||
       scenario === "deaf"
     ) {
-      stalledPromptId = msg.id;
+      stalledPrompts.set(sid, msg.id);
       return;
     }
 
