@@ -195,9 +195,17 @@ export async function mergeBase(
 ): Promise<string | undefined> {
   let base: string;
   try {
-    base = await git(dir, ["rev-parse", "--verify", `${baseRef}^{commit}`]);
-  } catch {
-    return undefined;
+    base = await git(dir, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `${baseRef}^{commit}`,
+    ]);
+  } catch (err) {
+    // Exit 1 is the answer for a ref that does not resolve: a room then uses
+    // its saved SHA. Any other failure must not look like a deleted ref.
+    if ((err as { code?: unknown }).code === 1) return undefined;
+    throw err;
   }
   return (await git(dir, ["merge-base", base.trim(), ref])).trim();
 }

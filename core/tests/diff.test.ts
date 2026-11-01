@@ -11,7 +11,13 @@ import test from "node:test";
 import { promisify } from "node:util";
 
 import { gitRepo, tempDir } from "../../integration/helpers.ts";
-import { capDiff, checkoutDiff, editDiff, rangeDiff } from "../diff.ts";
+import {
+  capDiff,
+  checkoutDiff,
+  editDiff,
+  mergeBase,
+  rangeDiff,
+} from "../diff.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   promisify(execFile)("git", args, { cwd }).then((r) => r.stdout.trim());
@@ -148,6 +154,31 @@ test("checkoutDiff throws outside a git checkout and for a ref that does not res
   const clean = await checkoutDiff(cwd, "HEAD");
   assert.deepEqual(clean, { text: "", files: 0, added: 0, removed: 0 });
   assert.equal(await readFile(join(cwd, "README.md"), "utf8"), "first\n");
+});
+
+test("mergeBase finds the fork point, returns undefined only for a missing ref, and reports git failures", async (t) => {
+  const cwd = await gitRepo(t);
+  const fork = await git(cwd, "rev-parse", "HEAD");
+  await git(cwd, "branch", "topic");
+  await writeFile(join(cwd, "README.md"), "second\n");
+  await git(cwd, "commit", "-qam", "second");
+
+  assert.equal(await mergeBase(cwd, "refs/heads/main", "topic"), fork);
+  assert.equal(await mergeBase(cwd, "refs/heads/missing", "topic"), undefined);
+
+  // No shared history is a merge-base failure, not a deleted ref: a room must
+  // return no_diff rather than fall back to a stale saved SHA.
+  await git(cwd, "checkout", "-q", "--orphan", "orphan");
+  await git(cwd, "rm", "-q", "-rf", ".");
+  await writeFile(join(cwd, "orphan.txt"), "orphan\n");
+  await git(cwd, "add", "orphan.txt");
+  await git(cwd, "commit", "-qm", "orphan");
+  await assert.rejects(mergeBase(cwd, "refs/heads/main", "orphan"));
+
+  // A folder that is not a repository is a git failure, not a deleted ref.
+  // Returning undefined would send a room down its saved-SHA fallback and
+  // hide why the current base could not be read.
+  await assert.rejects(mergeBase(await tempDir(t), "refs/heads/main", "HEAD"));
 });
 
 test("rangeDiff shows only what the source adds, not the target's own commits", async (t) => {
