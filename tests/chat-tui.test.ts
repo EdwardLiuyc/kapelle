@@ -461,6 +461,73 @@ test("chat.ts on a real terminal draws an agent's tool calls under its name, and
   assert.equal(lines.filter(isHeading).length, 1, lines.join("\n"));
 });
 
+// The test drives a whole pty session: its call count is the test.
+// pi-lens-ignore: high-fan-out
+test("a pop-up keeps a tool call's block in one gray background (#407)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT} --scenario runs`, name: "ann" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const ann = open.body.participants.find((p) => p.name === "ann");
+  assert.ok(ann);
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime, COLORTERM: "", NO_COLOR: "" },
+  );
+  await screen.press("@ann go\r", "Edit f5.ts");
+  const toolRow = () => {
+    const at = rowOf(screen.out(), /Read f0\.ts/);
+    assert.ok(at > 0, `Read f0.ts is on screen: ${screen.out()}`);
+    return (
+      [...screenRows(screen.out(), true)].find(([row]) => row === at)?.[1] ?? ""
+    );
+  };
+  const TOOL_BG = "\x1b[48;5;23m";
+  const BACKDROP_BG = "\x1b[48;5;235m";
+  assert.ok(
+    toolRow().includes(TOOL_BG),
+    "the tool call has its normal background before the pop-up",
+  );
+  await screen.press("\x0f", "delete room …");
+  const behind = toolRow();
+  assert.ok(
+    behind.includes(BACKDROP_BG) && !behind.includes(TOOL_BG),
+    "the tool call keeps one gray background behind the pop-up",
+  );
+  // A row the box splits: pi-tui puts a reset on each side of the box, so
+  // the row reads as the left of the backdrop, the box, then the right.
+  const split = (row: number) =>
+    ([...screenRows(screen.out(), true)].find(([r]) => r === row)?.[1] ?? "")
+      .split("\x1b[0m\x1b]8;;\x07")
+      .slice(0, 3);
+  // pi-tui opens the right side again with the codes joined: `2;48;5;235`.
+  const gray = /[[;]48;5;235m/;
+  const [left = "", box = "", right = ""] = split(
+    rowOf(screen.out(), /┃ +add agent/),
+  );
+  assert.ok(
+    gray.test(left) && gray.test(right),
+    `the gray shows on both sides of the box: ${JSON.stringify([left, right])}`,
+  );
+  assert.ok(
+    box.includes("add agent") && !gray.test(box),
+    `no gray inside the box: ${JSON.stringify(box)}`,
+  );
+  await writeFile(join(ann.worktree, "runs.go"), "");
+  await participantIdle(d, open.body.id, ann.id);
+  await screen.press("\x1b", "enter to send");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 // --- room commands (M4-5) -----------------------------------------------------
 
 test("with no room open, the screen exits when the daemon is gone, and says how to start again", {
