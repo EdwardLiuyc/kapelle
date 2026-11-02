@@ -1252,7 +1252,9 @@ export class AcpAgent {
  * file is, so a plain missing tail is resolved against the nearest ancestor
  * that does exist and re-appended. An unresolved symlink is refused instead:
  * rejoining its name would hide its target from the guard, and a later write
- * would follow it (#309). Links that resolve normally return above.
+ * would follow it (#309). Links that resolve normally return above. The
+ * blanket refusal is intentional: it includes in-root targets and cycles,
+ * without growing a second resolver for links no caller needs to follow.
  */
 async function realPathOrNearest(p: string): Promise<string> {
   try {

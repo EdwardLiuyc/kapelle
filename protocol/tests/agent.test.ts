@@ -696,6 +696,20 @@ test("an intermediate dangling symlink is refused by the guard", async (t) => {
   });
 });
 
+test("a dangling symlink is refused even when its target stays in-root", async (t) => {
+  // The review decision for #309: only links realpath resolves are followed.
+  // A missing target is refused even when its lexical destination is in-root.
+  const root = await tempDir(t, "acp-guard-");
+  const target = join(root, "new.txt");
+  await symlink(target, join(root, "alias.txt"));
+  const agent = await guardAgent(t, root);
+
+  const write = await probe(agent, "alias.txt", true);
+  assert.equal(write.refused, true);
+  assert.match(String(write.message), /unresolved symlink refused/);
+  await assert.rejects(readFile(target, "utf8"), { code: "ENOENT" });
+});
+
 test("a symlink that stays inside the root is still followed", async (t) => {
   // The other side of the same edit. Realpathing everything would be easy to
   // over-tighten into refusing ordinary in-root links, which no story asked
