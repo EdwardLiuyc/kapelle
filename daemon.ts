@@ -204,7 +204,7 @@ async function unrecordedDaemonPid(port: number): Promise<number | undefined> {
 
   const ss = {
     command: "ss",
-    args: ["-ltnpH", `sport = :${port}`],
+    args: ["-ltnpH", `src 127.0.0.1:${port}`],
     pattern: /\bpid=(\d+)\b/,
   };
   const lsof = {
@@ -248,10 +248,10 @@ interface DaemonRecord {
   token?: unknown;
 }
 
-/** `daemon.json`'s shape, or undefined when the file is not a JSON object. */
-function readDaemonRecord(file: string): DaemonRecord | undefined {
+/** Parse `daemon.json`'s shape; malformed JSON has no record. */
+function parseDaemonRecord(text: string): DaemonRecord | undefined {
   try {
-    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    const parsed: unknown = JSON.parse(text);
     if (
       // The file is external JSON; this is its decode boundary.
       // pi-lens-ignore: no-runtime-typeof
@@ -262,9 +262,18 @@ function readDaemonRecord(file: string): DaemonRecord | undefined {
       return parsed as DaemonRecord;
     }
   } catch {
-    // Missing, unreadable or malformed: callers treat it as no record.
+    // Malformed: callers treat it as no record.
   }
   return undefined;
+}
+
+/** Read a record for ownership checks, where every failure means no proof. */
+function readDaemonRecord(file: string): DaemonRecord | undefined {
+  try {
+    return parseDaemonRecord(readFileSync(file, "utf8"));
+  } catch {
+    return undefined;
+  }
 }
 
 /** Remove both files a live daemon owns. */
@@ -734,7 +743,9 @@ const childrenFile = join(dir, "children.json");
 //
 // A replacement daemon can claim the runtime while this one shuts down. Once
 // either record names another process, leave both files alone: they are the
-// replacement's recovery state, not this daemon's to rewrite or delete.
+// replacement's recovery state, not this daemon's to rewrite or delete. This
+// can leave our old children file behind; the boot sweep checks each pid's
+// start time before signalling, so a dead or recycled pid is left alone.
 function recordChildren(): void {
   try {
     const daemonRecord = readDaemonRecord(file);
@@ -2230,7 +2241,9 @@ let published: { port: number; token: string } | undefined;
 
 /**
  * SIGTERM, SIGINT or a lost record: cancel every run, pause every room, wait
- * for each to settle, then remove `daemon.json` and exit 0 (M2-4, #34). An install's npm
+ * for each to settle, then remove `daemon.json` and exit 0 (M2-4, #34). Record
+ * loss deliberately exits 0 too: this is a clean shutdown, not a crash, and a
+ * later client can start a fresh daemon. An install's npm
  * is killed rather than waited for, and a check's harness is stopped and its
  * temporary folder cleaned up, so a stop leaves neither running.
  *
@@ -2314,7 +2327,14 @@ server.listen(port, "127.0.0.1", () => {
   closeSync(fd);
   published = { port: bound, token };
   recordWatch = setInterval(() => {
-    const current = readDaemonRecord(file);
+    let current: DaemonRecord | undefined;
+    try {
+      current = parseDaemonRecord(readFileSync(file, "utf8"));
+    } catch (err) {
+      // Only absence is loss. EMFILE, EACCES and other read errors can be
+      // transient, and must not cancel every active run and room.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return;
+    }
     if (
       current?.pid === process.pid &&
       current.port === bound &&

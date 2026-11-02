@@ -382,6 +382,21 @@ for (const loss of [
   });
 }
 
+test("an unreadable daemon.json is not record loss", async (t) => {
+  const d = await boot(t);
+
+  await chmod(d.file, 0o000);
+  // Cross more than one record-watch tick. The file is still present, but a
+  // non-root daemon cannot read it until its mode is restored.
+  await new Promise((ok) => setTimeout(ok, 2_500));
+  assert.equal(alive(d.pid), true, "a read error cancelled the daemon");
+  assert.equal((await api(d, "GET", "/runs")).status, 200);
+
+  await chmod(d.file, 0o600);
+  process.kill(d.pid, "SIGTERM");
+  assert.equal((await d.done).code, 0);
+});
+
 test("a lost daemon.json runs the clean shutdown for a live harness", async (t) => {
   const holder = await tempDir(t);
   const runtime = join(holder, "runtime");
@@ -467,9 +482,31 @@ server.listen(0, "127.0.0.1", () => {
     port: number;
   };
   assert.ok(listener.child.pid !== undefined);
+  const listenerPid = listener.child.pid;
+  const bin = join(state, "bin");
+  await mkdir(bin);
+  // An unscoped query gets another address's pid first. A correctly scoped
+  // query gets only the loopback listener that answered the 401 probe.
+  await writeFile(
+    join(bin, "ss"),
+    `#!/bin/sh
+case "$*" in
+  *"src 127.0.0.1:${port}"*)
+    printf 'LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:* users:((listener,pid=${listenerPid},fd=1))\\n'
+    ;;
+  *)
+    printf 'LISTEN 0 511 0.0.0.0:${port} 0.0.0.0:* users:((other,pid=${process.pid},fd=2))\\nLISTEN 0 511 127.0.0.1:${port} 0.0.0.0:* users:((listener,pid=${listenerPid},fd=1))\\n'
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  );
 
   const attempted = await exitOf(
-    spawnCli(t, ["--port", String(port)], "daemon.ts", dirs(runtime, state)),
+    spawnCli(t, ["--port", String(port)], "daemon.ts", {
+      ...dirs(runtime, state),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    }),
   );
 
   assert.ok(attempted, "the second daemon kept running");
@@ -484,12 +521,40 @@ server.listen(0, "127.0.0.1", () => {
     attempted.stderr.includes(`kill -TERM ${listener.child.pid}`),
     attempted.stderr,
   );
+  assert.equal(
+    attempted.stderr.includes(`(pid ${process.pid})`),
+    false,
+    "an unscoped ss result named the non-loopback listener",
+  );
   assert.doesNotMatch(attempted.stderr, /no daemon/i);
   assert.equal(
     alive(listener.child.pid),
     true,
     "the failed start signalled the listener",
   );
+});
+
+test("a real daemon's unauthorized reply supports the listener diagnostic", async (t) => {
+  const first = await boot(t);
+  const port = Number(new URL(first.url).port);
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+
+  const attempted = await exitOf(
+    spawnCli(t, ["--port", String(port)], "daemon.ts", dirs(runtime, state)),
+  );
+
+  assert.ok(attempted, "the second daemon kept running");
+  assert.equal(attempted.code, 1);
+  assert.ok(
+    attempted.stderr.includes(`unrecorded Kapelle daemon (pid ${first.pid})`),
+    attempted.stderr,
+  );
+  assert.ok(attempted.stderr.includes(`kill -TERM ${first.pid}`));
+  assert.equal(alive(first.pid), true, "the failed start killed the listener");
+  assert.equal((await api(first, "GET", "/runs")).status, 200);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
 });
 
 /** Starts a run whose harness never ends its turn, and returns the pid the
