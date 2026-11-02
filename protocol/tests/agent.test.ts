@@ -668,6 +668,48 @@ test("a symlink out of the root is refused (closed by M1b-6)", async (t) => {
   assert.match(String(read.message), /path outside workspace root refused/);
 });
 
+test("a write through a dangling symlink cannot create its outside target", async (t) => {
+  const root = await tempDir(t, "acp-guard-");
+  const outside = await tempDir(t, "acp-outside-");
+  const target = join(outside, "owned.txt");
+  await symlink(target, join(root, "escape.txt"));
+  const agent = await guardAgent(t, root);
+
+  const write = await probe(agent, "escape.txt", true);
+  assert.equal(write.refused, true);
+  assert.match(String(write.message), /unresolved symlink refused/);
+  await assert.rejects(readFile(target, "utf8"), { code: "ENOENT" });
+});
+
+test("an intermediate dangling symlink is refused by the guard", async (t) => {
+  const root = await tempDir(t, "acp-guard-");
+  const outside = await tempDir(t, "acp-outside-");
+  const target = join(outside, "missing");
+  await symlink(target, join(root, "linkdir"));
+  const agent = await guardAgent(t, root);
+
+  const write = await probe(agent, "linkdir/file.txt", true);
+  assert.equal(write.refused, true);
+  assert.match(String(write.message), /unresolved symlink refused/);
+  await assert.rejects(readFile(join(target, "file.txt"), "utf8"), {
+    code: "ENOENT",
+  });
+});
+
+test("a dangling symlink is refused even when its target stays in-root", async (t) => {
+  // The review decision for #309: only links realpath resolves are followed.
+  // A missing target is refused even when its lexical destination is in-root.
+  const root = await tempDir(t, "acp-guard-");
+  const target = join(root, "new.txt");
+  await symlink(target, join(root, "alias.txt"));
+  const agent = await guardAgent(t, root);
+
+  const write = await probe(agent, "alias.txt", true);
+  assert.equal(write.refused, true);
+  assert.match(String(write.message), /unresolved symlink refused/);
+  await assert.rejects(readFile(target, "utf8"), { code: "ENOENT" });
+});
+
 test("a symlink that stays inside the root is still followed", async (t) => {
   // The other side of the same edit. Realpathing everything would be easy to
   // over-tighten into refusing ordinary in-root links, which no story asked

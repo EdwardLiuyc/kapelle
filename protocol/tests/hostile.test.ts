@@ -13,7 +13,7 @@
  */
 
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
+import { access, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { test } from "node:test";
@@ -134,6 +134,17 @@ test("a symlink pointing out of the root is refused", async (t) => {
   const run = await attack(t, "symlink-escape");
   assert.match(run.text, /OUTCOME=refused/);
   assert.match(run.text, /path outside workspace root refused/);
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("a dangling symlink cannot create an outside file", async (t) => {
+  const run = await attack(t, "dangling-symlink-escape");
+  const target = `${run.cwd}-dangling-target`;
+  t.after(() => rm(target, { force: true }));
+
+  assert.match(run.text, /OUTCOME=refused/);
+  assert.match(run.text, /unresolved symlink refused/);
+  assert.equal(await absent(target), true);
   assert.equal(run.stopReason, "end_turn");
 });
 

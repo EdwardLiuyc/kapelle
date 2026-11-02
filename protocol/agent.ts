@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -1249,9 +1249,12 @@ export class AcpAgent {
  * The real path of `p`, following symlinks as far as the filesystem goes.
  *
  * `realpath` throws on a path that does not exist, which every write to a new
- * file is, so the missing tail is resolved against the nearest ancestor that
- * does exist and re-appended. That is enough for containment: a link can only
- * be followed where a link actually exists.
+ * file is, so a plain missing tail is resolved against the nearest ancestor
+ * that does exist and re-appended. An unresolved symlink is refused instead:
+ * rejoining its name would hide its target from the guard, and a later write
+ * would follow it (#309). Links that resolve normally return above. The
+ * blanket refusal is intentional: it includes in-root targets and cycles,
+ * without growing a second resolver for links no caller needs to follow.
  */
 async function realPathOrNearest(p: string): Promise<string> {
   try {
@@ -1259,6 +1262,14 @@ async function realPathOrNearest(p: string): Promise<string> {
   } catch {
     const parent = dirname(p);
     if (parent === p) return p;
+    let isSymlink = false;
+    try {
+      const stats = await lstat(p);
+      isSymlink = stats.isSymbolicLink();
+    } catch {
+      // A plain missing tail is resolved through its parent below.
+    }
+    if (isSymlink) throw new Error(`unresolved symlink refused: ${p}`);
     return join(await realPathOrNearest(parent), basename(p));
   }
 }
