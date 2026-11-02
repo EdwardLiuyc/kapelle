@@ -8,7 +8,6 @@ import {
   mkdir,
   readFile,
   rm,
-  stat,
   symlink,
   utimes,
   writeFile,
@@ -157,19 +156,23 @@ test("checkoutDiff shows uncommitted edits and untracked files, leaves the index
 
 test("checkoutDiff preserves racy-index checks for a same-size edit", async (t) => {
   const cwd = await gitRepo(t);
+  // Isolate the mtime rule; an edit also changes ctime, which would otherwise
+  // make this test depend on update-index and write landing in one second.
+  await git(cwd, "config", "core.trustctime", "false");
   const file = join(cwd, "README.md");
-  await writeFile(file, "dirty\n");
   const index = join(cwd, ".git", "index");
-  const times = await stat(index);
-  // Match the cached stat at Git's default second granularity. The original
-  // index treats the entry as racy and must compare its contents.
-  await utimes(file, times.atime, times.mtime);
+  const past = new Date(Date.now() - 10_000);
+  await utimes(file, past, past);
+  await git(cwd, "update-index", "--refresh");
+  await utimes(index, past, past);
+  await writeFile(file, "dirty\n");
+  await utimes(file, past, past);
+  // The cached stat now matches, and the original index must still treat the
+  // entry as racy and compare its contents.
   assert.equal(
     await git(cwd, "diff", "--name-only", "--", "README.md"),
     "README.md",
   );
-  // A fresh copy in the next second would otherwise trust that cached stat.
-  await new Promise((ok) => setTimeout(ok, 1_050));
 
   const diff = await checkoutDiff(cwd, "HEAD");
   assert.match(diff.text, /-first\n\+dirty/);

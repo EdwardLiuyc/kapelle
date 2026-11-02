@@ -130,7 +130,7 @@ arrow that points back.
 | `core/watchdog.ts` | Stall detection: idle, repeat, TTL. |
 | `core/notify.ts` | Bell and desktop notification for the two attention events. |
 | `core/permissions.ts` | The daemon's queue of pending `ask` decisions. |
-| `core/diff.ts` | `git diff` text for a person (M4-6), and the shared ancestry check used by worktree fast-forward and rebase detection. |
+| `core/diff.ts` | `git diff` text for a person (M4-6): a question's edit and an agent's checkout, and the shared ancestry check used by worktree fast-forward and rebase detection. |
 | `core/eventlog.ts` | `events.jsonl` and its `events.idx` cache: write, replay and follow. |
 | `core/sweep.ts` | The daemon's boot sweep. |
 | `core/config.ts` | The config files and `KAPELLE_*` variables. |

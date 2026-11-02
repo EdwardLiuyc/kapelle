@@ -12,7 +12,9 @@
  * - **An agent's checkout.** `checkoutDiff` is the checkout against a ref:
  *   `HEAD` for what is not committed, or the base for the whole branch. New
  *   files git does not track yet are in it too: `git add -N` marks them in a
- *   copy of the index, so the agent's own index never changes. A room uses
+ *   copy of the index, so the agent's own index never changes. Preserving the
+ *   source index mtime keeps racy-entry content checks; the extra hashing of
+ *   recently touched files is the accepted correctness cost. A room uses
  *   `mergeBase` to find that base from the configured ref and live `HEAD`.
  * - **A fast-forward preview.** `rangeDiff` diffs `from...to`, so it starts at
  *   the two refs' merge base: a target's own commits are not shown as
@@ -261,18 +263,17 @@ export async function checkoutDiff(
   const tmp = await mkdtemp(join(tmpdir(), "kapelle-index-"));
   try {
     const copy = join(tmp, "index");
-    // A checkout with no commit yet has no index: start from none.
-    let copied = true;
     try {
+      // Read first: a newer source mtime could hide the copy's racy entries.
+      const times = await stat(index);
       await copyFile(index, copy);
-    } catch {
-      copied = false;
-    }
-    if (copied) {
       // copyFile gives the copy a fresh mtime, which would hide racy entries.
       // Preserve the source times so same-size, same-second edits still read.
-      const times = await stat(index);
       await utimes(copy, times.atime, times.mtime);
+    } catch {
+      // Metadata is best effort: continue with a fresh copy, or no index in an
+      // unborn checkout, rather than losing the whole diff.
+      await copyFile(index, copy).catch(() => {});
     }
     const env = { ...process.env, GIT_INDEX_FILE: copy };
     await git(top, ["add", "--intent-to-add", "--", "."], env);
