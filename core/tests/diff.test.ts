@@ -4,7 +4,15 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
@@ -145,6 +153,26 @@ test("checkoutDiff shows uncommitted edits and untracked files, leaves the index
 
   const whole = await checkoutDiff(cwd, base);
   assert.match(whole.text, /-first\n\+third/);
+});
+
+test("checkoutDiff preserves racy-index checks for a same-size edit", async (t) => {
+  const cwd = await gitRepo(t);
+  const file = join(cwd, "README.md");
+  await writeFile(file, "dirty\n");
+  const index = join(cwd, ".git", "index");
+  const times = await stat(index);
+  // Match the cached stat at Git's default second granularity. The original
+  // index treats the entry as racy and must compare its contents.
+  await utimes(file, times.atime, times.mtime);
+  assert.equal(
+    await git(cwd, "diff", "--name-only", "--", "README.md"),
+    "README.md",
+  );
+  // A fresh copy in the next second would otherwise trust that cached stat.
+  await new Promise((ok) => setTimeout(ok, 1_050));
+
+  const diff = await checkoutDiff(cwd, "HEAD");
+  assert.match(diff.text, /-first\n\+dirty/);
 });
 
 test("checkoutDiff throws outside a git checkout and for a ref that does not resolve", async (t) => {

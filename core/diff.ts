@@ -18,6 +18,12 @@
  *   the two refs' merge base: a target's own commits are not shown as
  *   deletions, and the source's additions are (M6-11a).
  *
+ * **Shared ancestry.** `isAncestor` also serves `core/worktree.ts`'s
+ * fast-forward guard and rebase-base walk. An unresolved ancestor is false for
+ * a stale room base; an unresolved descendant stays an error so the reflog
+ * walk cannot invent a base. The short worktree walk accepts one extra
+ * `rev-parse` per check to keep those semantics in one place.
+ *
  * **The cap** (decided 2026-10-05, #204): a question's diff is kept for the
  * daemon's life, so it is cut at 32 KB; the route's is not kept, so 512 KB.
  * Both cut at a line end and add `… N more lines`. The counts are taken
@@ -38,6 +44,8 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -254,7 +262,18 @@ export async function checkoutDiff(
   try {
     const copy = join(tmp, "index");
     // A checkout with no commit yet has no index: start from none.
-    await copyFile(index, copy).catch(() => {});
+    let copied = true;
+    try {
+      await copyFile(index, copy);
+    } catch {
+      copied = false;
+    }
+    if (copied) {
+      // copyFile gives the copy a fresh mtime, which would hide racy entries.
+      // Preserve the source times so same-size, same-second edits still read.
+      const times = await stat(index);
+      await utimes(copy, times.atime, times.mtime);
+    }
     const env = { ...process.env, GIT_INDEX_FILE: copy };
     await git(top, ["add", "--intent-to-add", "--", "."], env);
     const text = await git(
