@@ -401,6 +401,42 @@ test("a lost daemon.json runs the clean shutdown for a live harness", async (t) 
   );
 });
 
+test("a lost daemon.json keeps a replacement daemon's children record", async (t) => {
+  const holder = await tempDir(t);
+  const runtime = join(holder, "runtime");
+  const state = join(holder, "state");
+  await mkdir(runtime, { mode: 0o700 });
+  const d = await boot(t, runtime, [], state);
+  const harness = await stalledHarness(t, d);
+  const childrenFile = join(d.file, "..", "children.json");
+  await until("the harness identity is recorded", async () => {
+    let record: { children?: { startedAt?: unknown }[] };
+    try {
+      record = JSON.parse(await readFile(childrenFile, "utf8")) as {
+        children?: { startedAt?: unknown }[];
+      };
+    } catch {
+      return false;
+    }
+    return typeof record.children?.[0]?.startedAt === "string";
+  });
+
+  // Another daemon can claim the runtime while this one stops. Its harness
+  // record must survive this daemon's exit, or a later crash loses the pids.
+  const replacement = `${JSON.stringify({ pid: process.pid, children: [] })}\n`;
+  await writeFile(childrenFile, replacement, { mode: 0o600 });
+  await rm(d.file);
+
+  const exit = await d.done;
+  assert.equal(exit.code, 0, exit.stderr);
+  assert.equal(await gone(harness), true, "the harness outlived the daemon");
+  assert.equal(
+    await readFile(childrenFile, "utf8"),
+    replacement,
+    "shutdown deleted the replacement daemon's children record",
+  );
+});
+
 test("an unrecorded Kapelle listener gets a manual-stop diagnostic", async (t) => {
   const runtime = await tempDir(t);
   const state = await tempDir(t);
@@ -415,7 +451,7 @@ const [ready] = process.argv.slice(2);
 const server = createServer((_req, res) => {
   res.writeHead(401, { "content-type": "application/json" });
   res.end(JSON.stringify({
-    error: { code: "unauthorized", message: "missing or wrong token" },
+    error: { code: "unauthorized", message: "token required" },
   }));
 });
 server.listen(0, "127.0.0.1", () => {

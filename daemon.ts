@@ -195,14 +195,9 @@ async function unrecordedDaemonPid(port: number): Promise<number | undefined> {
       return undefined;
     }
     const body = (await response.json()) as {
-      error?: { code?: unknown; message?: unknown };
+      error?: { code?: unknown };
     } | null;
-    if (
-      body?.error?.code !== "unauthorized" ||
-      body.error.message !== "missing or wrong token"
-    ) {
-      return undefined;
-    }
+    if (body?.error?.code !== "unauthorized") return undefined;
   } catch {
     return undefined;
   }
@@ -736,8 +731,18 @@ const childrenFile = join(dir, "children.json");
 
 // Each entry carries the process's start time (M2-5): the sweep signals a pid
 // only when `ps` still reports the same start, so a reused pid is left alone.
+//
+// A replacement daemon can claim the runtime while this one shuts down. Once
+// either record names another process, leave both files alone: they are the
+// replacement's recovery state, not this daemon's to rewrite or delete.
 function recordChildren(): void {
   try {
+    const daemonRecord = readDaemonRecord(file);
+    if (daemonRecord !== undefined && daemonRecord.pid !== process.pid) return;
+    const childrenRecord = readDaemonRecord(childrenFile);
+    if (childrenRecord !== undefined && childrenRecord.pid !== process.pid) {
+      return;
+    }
     if (children.size === 0) {
       rmSync(childrenFile, { force: true });
       return;
