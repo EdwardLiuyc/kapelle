@@ -183,14 +183,34 @@ export async function editDiff(
   }
 }
 
-/** Whether `ancestor` is an ancestor of `ref`. Exit 1 means false. */
+/** A resolved commit, or undefined only for an unresolved ref (exit 1). */
+async function resolveCommit(
+  dir: string,
+  ref: string,
+): Promise<string | undefined> {
+  try {
+    return (
+      await git(dir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])
+    ).trim();
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 1) return undefined;
+    throw err;
+  }
+}
+
+/**
+ * Whether `ancestor` is an ancestor of `ref`. An unresolvable ancestor is
+ * false; other git failures stay errors.
+ */
 export async function isAncestor(
   dir: string,
   ancestor: string,
   ref: string,
 ): Promise<boolean> {
+  const commit = await resolveCommit(dir, ancestor);
+  if (commit === undefined) return false;
   try {
-    await git(dir, ["merge-base", "--is-ancestor", ancestor, ref]);
+    await git(dir, ["merge-base", "--is-ancestor", commit, ref]);
     return true;
   } catch (err) {
     if ((err as { code?: unknown }).code === 1) return false;
@@ -201,28 +221,17 @@ export async function isAncestor(
 /**
  * The merge base of a configured base ref and another ref. Undefined when
  * the base ref no longer resolves, so a room can use its saved SHA. Other
- * git failures stay errors.
+ * git failures stay errors. No common ancestor also stays an error rather
+ * than guessing from a saved SHA across unrelated history.
  */
 export async function mergeBase(
   dir: string,
   baseRef: string,
   ref: string,
 ): Promise<string | undefined> {
-  let base: string;
-  try {
-    base = await git(dir, [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      `${baseRef}^{commit}`,
-    ]);
-  } catch (err) {
-    // Exit 1 is the answer for a ref that does not resolve: a room then uses
-    // its saved SHA. Any other failure must not look like a deleted ref.
-    if ((err as { code?: unknown }).code === 1) return undefined;
-    throw err;
-  }
-  return (await git(dir, ["merge-base", base.trim(), ref])).trim();
+  const base = await resolveCommit(dir, baseRef);
+  if (base === undefined) return undefined;
+  return (await git(dir, ["merge-base", base, ref])).trim();
 }
 
 /**

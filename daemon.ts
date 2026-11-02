@@ -1454,8 +1454,8 @@ async function agentDiff(
         // If the participant reset off that SHA, the current merge base wins.
         const keepSaved =
           candidate !== ref &&
-          (await isAncestor(p.worktree, ref, "HEAD")) &&
-          !(await isAncestor(p.worktree, ref, candidate));
+          !(await isAncestor(p.worktree, ref, candidate)) &&
+          (await isAncestor(p.worktree, ref, "HEAD"));
         if (!keepSaved) ref = candidate;
       }
     }

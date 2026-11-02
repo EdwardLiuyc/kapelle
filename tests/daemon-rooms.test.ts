@@ -2053,6 +2053,38 @@ test("a participant reset behind its saved base keeps the current merge base", a
   await api(d, "POST", `/rooms/${open.body.id}/dismiss`);
 });
 
+test("an unresolvable saved base does not hide a valid current merge base", async (t) => {
+  const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
+  await commitAt(cwd, "base.txt");
+  const switched = spawnSync("git", ["switch", "-c", "switched", "main"], {
+    cwd: alice.worktree,
+    encoding: "utf8",
+  });
+  assert.equal(switched.status, 0, switched.stderr);
+  await commitAt(alice.worktree, "agent.txt");
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const file = join(stateDirFor(cwd), "rooms", id, "room.json");
+  const saved = JSON.parse(await readFile(file, "utf8")) as {
+    participants: { baseSha?: string }[];
+  };
+  const participant = saved.participants[0];
+  assert.ok(participant);
+  participant.baseSha = "0".repeat(40);
+  await writeFile(file, `${JSON.stringify(saved, null, 2)}\n`);
+  const second = await again();
+  const diff = await api<Diff & { error: { message: string } }>(
+    second,
+    "GET",
+    `/rooms/${id}/agents/${alice.id}/diff?against=base`,
+  );
+  assert.equal(diff.status, 200, diff.body.error?.message);
+  assert.match(diff.body.text, /agent\.txt/);
+  assert.doesNotMatch(diff.body.text, /base\.txt/);
+  await api(second, "POST", `/rooms/${id}/dismiss`);
+});
+
 test("the configured base ref survives restart; an old record uses its saved SHA", async (t) => {
   const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
   const originalBase = alice.baseSha;
@@ -2079,7 +2111,7 @@ test("the configured base ref survives restart; an old record uses its saved SHA
   assert.equal((await first.done).code, 0);
 
   const second = await again();
-  await writeFile(join(alice.worktree, "README.md"), "dirty\n");
+  await writeFile(join(alice.worktree, "README.md"), "dirty README\n");
   await writeFile(join(alice.worktree, "new.txt"), "new\n");
   const restored = await api<Diff>(second, "GET", route);
   assert.equal(restored.status, 200);

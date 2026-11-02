@@ -15,6 +15,7 @@ import {
   capDiff,
   checkoutDiff,
   editDiff,
+  isAncestor,
   mergeBase,
   rangeDiff,
 } from "../diff.ts";
@@ -179,6 +180,18 @@ test("mergeBase finds the fork point, returns undefined only for a missing ref, 
   // Returning undefined would send a room down its saved-SHA fallback and
   // hide why the current base could not be read.
   await assert.rejects(mergeBase(await tempDir(t), "refs/heads/main", "HEAD"));
+});
+
+test("isAncestor distinguishes true, false, an unresolvable ancestor and git failures", async (t) => {
+  const cwd = await gitRepo(t);
+  const first = await git(cwd, "rev-parse", "HEAD");
+  await writeFile(join(cwd, "README.md"), "second\n");
+  await git(cwd, "commit", "-qam", "second");
+
+  assert.equal(await isAncestor(cwd, first, "HEAD"), true);
+  assert.equal(await isAncestor(cwd, "HEAD", first), false);
+  assert.equal(await isAncestor(cwd, "0".repeat(40), "HEAD"), false);
+  await assert.rejects(isAncestor(await tempDir(t), "HEAD", "HEAD"));
 });
 
 test("rangeDiff shows only what the source adds, not the target's own commits", async (t) => {
