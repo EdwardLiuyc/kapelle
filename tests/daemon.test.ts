@@ -312,8 +312,15 @@ for (const stale of ["null", "[]", "42"]) {
 
 // --- lifecycle (M2-4) --------------------------------------------------------------
 
-for (const loss of ["removed", "covered", "replaced"] as const) {
-  test(`a ${loss} daemon.json shuts down cleanly and frees the port`, async (t) => {
+for (const loss of [
+  "removed",
+  "covered",
+  "replaced with another pid",
+  "replaced with another token",
+] as const) {
+  // node:test reports a rejected test promise as a failure.
+  // pi-lens-ignore: unsafe-boundary
+  test(`a daemon.json ${loss} shuts down cleanly and frees the port`, async (t) => {
     const holder = await tempDir(t);
     const runtime = join(holder, "runtime");
     const state = join(holder, "state");
@@ -322,19 +329,31 @@ for (const loss of ["removed", "covered", "replaced"] as const) {
     const port = Number(new URL(d.url).port);
     let replacement: string | undefined;
 
-    if (loss === "removed") {
-      await rm(d.file);
-    } else if (loss === "covered") {
-      await rename(runtime, `${runtime}.hidden`);
-      await mkdir(runtime, { mode: 0o700 });
-    } else {
-      // A live pid outside the daemon makes this unmistakably not its record.
-      replacement = JSON.stringify({
-        pid: process.pid,
-        port,
-        token: "replacement",
-      });
-      await writeFile(d.file, replacement, { mode: 0o600 });
+    switch (loss) {
+      case "removed":
+        await rm(d.file);
+        break;
+      case "covered":
+        await rename(runtime, `${runtime}.hidden`);
+        await mkdir(runtime, { mode: 0o700 });
+        break;
+      case "replaced with another pid":
+        // A live pid outside the daemon makes this unmistakably not its record.
+        replacement = JSON.stringify({
+          pid: process.pid,
+          port,
+          token: "replacement",
+        });
+        await writeFile(d.file, replacement, { mode: 0o600 });
+        break;
+      case "replaced with another token":
+        replacement = JSON.stringify({
+          pid: d.pid,
+          port,
+          token: "replacement",
+        });
+        await writeFile(d.file, replacement, { mode: 0o600 });
+        break;
     }
 
     const started = Date.now();
@@ -342,6 +361,10 @@ for (const loss of ["removed", "covered", "replaced"] as const) {
     assert.equal(exit.code, 0, exit.stderr);
     assert.ok(Date.now() - started < 10_000, "record loss was not bounded");
     assert.match(exit.stdout, /daemon\.json lost: cancelling/);
+    await assert.rejects(
+      readFile(`${d.file}.identity`),
+      "shutdown left this daemon's identity behind",
+    );
     if (replacement !== undefined) {
       assert.equal(
         await readFile(d.file, "utf8"),
@@ -358,6 +381,25 @@ for (const loss of ["removed", "covered", "replaced"] as const) {
     await new Promise<void>((ok) => probe.close(() => ok()));
   });
 }
+
+test("a lost daemon.json runs the clean shutdown for a live harness", async (t) => {
+  const holder = await tempDir(t);
+  const runtime = join(holder, "runtime");
+  const state = join(holder, "state");
+  await mkdir(runtime, { mode: 0o700 });
+  const d = await boot(t, runtime, [], state);
+  const harness = await stalledHarness(t, d);
+
+  await rm(d.file);
+  const exit = await d.done;
+  assert.equal(exit.code, 0, exit.stderr);
+  assert.match(exit.stdout, /daemon\.json lost: cancelling 1 run\(s\)/);
+  assert.equal(await gone(harness), true, "the harness outlived the daemon");
+  await assert.rejects(
+    readFile(join(d.file, "..", "children.json")),
+    "children.json is removed once the shut-down run has no live harness",
+  );
+});
 
 test("an unrecorded Kapelle listener gets a manual-stop diagnostic", async (t) => {
   const runtime = await tempDir(t);

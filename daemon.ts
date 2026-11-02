@@ -247,25 +247,59 @@ function identityPath(file: string): string {
   return `${file}.identity`;
 }
 
+interface DaemonRecord {
+  pid?: unknown;
+  port?: unknown;
+  token?: unknown;
+}
+
+/** `daemon.json`'s shape, or undefined when the file is not a JSON object. */
+function readDaemonRecord(file: string): DaemonRecord | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (
+      // The file is external JSON; this is its decode boundary.
+      // pi-lens-ignore: no-runtime-typeof
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as DaemonRecord;
+    }
+  } catch {
+    // Missing, unreadable or malformed: callers treat it as no record.
+  }
+  return undefined;
+}
+
 /** Remove both files a live daemon owns. */
 function removeDaemonFiles(file: string): void {
   rmSync(file, { force: true });
   rmSync(identityPath(file), { force: true });
 }
 
+/** Remove the identity sidecar only while it still names this process. */
+function removeIdentityIfMine(file: string): void {
+  const pid = readDaemonRecord(identityPath(file))?.pid;
+  if (pid !== undefined && pid !== process.pid) return;
+  rmSync(identityPath(file), { force: true });
+}
+
 /** A replacement record can belong to the daemon taking over as this one
- *  closes its port. Only remove the record that still names this process. */
-function removeDaemonFilesIfMine(file: string): void {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
-    if (typeof parsed === "object" && parsed !== null) {
-      const { pid } = parsed as { pid?: unknown };
-      if (typeof pid === "number" && pid !== process.pid) return;
-    }
-  } catch {
-    // Missing or malformed: neither can name a replacement process.
-  }
-  removeDaemonFiles(file);
+ *  closes its port. Remove the record only while it still names this daemon,
+ *  and remove our sidecar only while it still names this process. */
+function removeDaemonFilesIfMine(
+  file: string,
+  published: { port: number; token: string } | undefined,
+): void {
+  const record = readDaemonRecord(file);
+  const mine =
+    record === undefined ||
+    (record.pid === process.pid &&
+      (published === undefined ||
+        (record.port === published.port && record.token === published.token)));
+  if (mine) rmSync(file, { force: true });
+  removeIdentityIfMine(file);
 }
 
 /**
@@ -2187,6 +2221,7 @@ const server = createServer(
 );
 
 let recordWatch: NodeJS.Timeout | undefined;
+let published: { port: number; token: string } | undefined;
 
 /**
  * SIGTERM, SIGINT or a lost record: cancel every run, pause every room, wait
@@ -2226,7 +2261,7 @@ async function shutdown(signal: string): Promise<void> {
     ...[...rooms.values()].map(({ room }) => room.pause()),
     checksStopped,
   ]);
-  removeDaemonFilesIfMine(file);
+  removeDaemonFilesIfMine(file, published);
   process.exit(0);
 }
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -2272,16 +2307,11 @@ server.listen(port, "127.0.0.1", () => {
   });
   renameSync(tmp, file);
   closeSync(fd);
+  published = { port: bound, token };
   recordWatch = setInterval(() => {
-    let current: { pid?: unknown; port?: unknown; token?: unknown } = {};
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
-      if (typeof parsed === "object" && parsed !== null) current = parsed;
-    } catch {
-      // Missing, covered or malformed records all lose this daemon's lock.
-    }
+    const current = readDaemonRecord(file);
     if (
-      current.pid === process.pid &&
+      current?.pid === process.pid &&
       current.port === bound &&
       current.token === token
     ) {
