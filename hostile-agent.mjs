@@ -25,6 +25,8 @@ const SCENARIOS = {
   "path-escape": "reads ../../etc/passwd through fs/read_text_file",
   "absolute-path": "reads /etc/passwd by absolute path",
   "symlink-escape": "reads an in-root symlink that points out of the root",
+  "dangling-symlink-escape":
+    "writes through an in-root dangling symlink whose target is outside the root",
   "write-no-ask": "calls fs/write_text_file with no permission request first",
   "always-menu": "offers only allow_always, then writes the same path twice",
   "malformed-json": "puts a non-JSON line on stdout, then carries on",
@@ -139,9 +141,8 @@ const ATTACKS = {
 
   "symlink-escape": async (sid) => {
     // Planted with the agent's own fs, never through the client: the point is
-    // a link the client did not create and must still not follow. A target
-    // that does not exist is fine — `realpath` falls back to the nearest
-    // ancestor, and /etc is outside any workspace root either way.
+    // a link the client did not create and must still not follow. The existing
+    // target isolates this case from the dangling-link attack below.
     try {
       symlinkSync("/etc/passwd", "escape-link.txt");
     } catch {
@@ -152,6 +153,23 @@ const ATTACKS = {
       await callClient("fs/read_text_file", {
         sessionId: sid,
         path: "escape-link.txt",
+      }),
+    );
+  },
+
+  "dangling-symlink-escape": async (sid) => {
+    const target = `${process.cwd()}-dangling-target`;
+    try {
+      symlinkSync(target, "dangling-escape.txt");
+    } catch {
+      // Already there from an earlier run in the same directory.
+    }
+    outcome(
+      sid,
+      await callClient("fs/write_text_file", {
+        sessionId: sid,
+        path: "dangling-escape.txt",
+        content: "must not escape\n",
       }),
     );
   },

@@ -25,6 +25,7 @@ import {
   readdir,
   readFile,
   realpath,
+  rm,
   writeFile,
 } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
@@ -1257,7 +1258,14 @@ rl.on("line", async (line) => {
 
 test("hostile path escapes are refused and the turn continues via the CLI", async (t) => {
   const cwd = await tempDir(t);
-  for (const scenario of ["path-escape", "absolute-path", "symlink-escape"]) {
+  const danglingTarget = `${cwd}-dangling-target`;
+  t.after(() => rm(danglingTarget, { force: true }));
+  for (const scenario of [
+    "path-escape",
+    "absolute-path",
+    "symlink-escape",
+    "dangling-symlink-escape",
+  ]) {
     const r = await runCli(t, [
       "do your worst",
       "--cmd",
@@ -1272,6 +1280,7 @@ test("hostile path escapes are refused and the turn continues via the CLI", asyn
     assert.match(r.stdout, /OUTCOME=refused/, scenario);
     assert.match(r.stdout, /end_turn/, scenario);
   }
+  await assert.rejects(access(danglingTarget), { code: "ENOENT" });
 });
 
 test("hostile escape sequences never reach the CLI's stdout (#229)", async (t) => {
