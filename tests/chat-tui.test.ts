@@ -297,10 +297,11 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   await press("\x1d", "ctrl+] keys here");
   await press("\x14", "»");
   await press("\x1d", "ctrl+] keys back");
-  // The shell resizes after the frame, so wait for its own size to change.
+  // The shell resizes after the frame, so wait for its exact new width.
   let after = before;
-  for (const until = Date.now() + 20_000; after.cols === before.cols; ) {
+  for (const until = Date.now() + 10_000; ; ) {
     after = await size();
+    if (after.cols === 96) break;
     assert.ok(Date.now() < until, `the shell kept ${after.cols} columns`);
   }
   assert.equal(after.rows, before.rows);
