@@ -154,10 +154,12 @@ and the token.
 
 **Where it is:**
 
-- `$XDG_RUNTIME_DIR/kapelle/daemon.json`, when `XDG_RUNTIME_DIR` is set to an absolute path.
-  The base directory must already exist. Kapelle creates only its `kapelle` child; a missing
-  base is an error for every Kapelle process that needs the daemon record, not only for daemon
-  startup. A relative or empty value is treated as unset, like the daemon does.
+- `$XDG_RUNTIME_DIR/kapelle/daemon.json`, when `XDG_RUNTIME_DIR` is set to an
+  absolute path. The base directory must already exist. Kapelle creates only its
+  `kapelle` child; a missing base is an error for every Kapelle process that needs the
+  daemon record, not
+  only for daemon startup. A relative or empty value is treated as unset, like the daemon
+  does.
 - Otherwise `<temp dir>/kapelle-<your uid>/daemon.json`. The temp dir is the operating
   system's (`os.tmpdir()`: `$TMPDIR`, `$TMP` or `$TEMP`, else `/tmp`). On macOS, this is
   the usual case.
@@ -176,15 +178,17 @@ and the token.
 
 **Rules:**
 
-- While the daemon starts, the file can exist with only `pid`; `port` and `token` are added
-  once the port is open. Require both before you use the file.
-- Once the port is open, the file exists until the daemon stops. The daemon checks it every
-  two seconds. If the file is gone or no longer names the same pid, port and token, the daemon
-  begins its clean shutdown and closes the port. A missing or replaced file can therefore briefly
-  coexist with a daemon in that shutdown interval. A present file that cannot be read is left
-  alone rather than treated as loss. A client then cannot discover that live daemon; starting one
-  reports the unrecorded listener. When host tools can identify its pid, the diagnostic includes it
-  and a manual stop command.
+- While the daemon starts, the file can exist with only `pid`; `port` and `token` are
+  added once the port is open. Require both before you use the file.
+- Once the port is open, the file exists until the daemon stops. The daemon checks it
+  every two seconds. If the file is gone or no longer names the same pid, port and token,
+  the daemon begins its clean shutdown and closes the port. A missing or replaced file can
+  therefore briefly coexist with a daemon in that shutdown interval. A present file that
+  cannot be read is not itself treated as loss, but clients cannot discover that daemon. A
+  start attempt claims the unreadable record and reports the unrecorded listener; the old
+  daemon then sees a replacement and stops cleanly, so a following start can use the freed
+  port. When host tools can identify the listener's pid, the diagnostic includes it and a
+  manual stop command.
 - If the daemon crashed, the file can stay. The port then refuses your connection. Restart
   the daemon first.
 - A new daemon makes a new token. Read the file again after a restart to retrieve the new

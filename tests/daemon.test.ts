@@ -399,6 +399,25 @@ test("an unreadable daemon.json is not record loss", {
   assert.equal((await d.done).code, 0);
 });
 
+test("shutdown does not delete an unreadable daemon.json", {
+  skip: process.getuid?.() === 0 && "root reads any mode",
+}, async (t) => {
+  const d = await boot(t);
+  const before = await readFile(d.file, "utf8");
+  await chmod(d.file, 0o000);
+
+  process.kill(d.pid, "SIGTERM");
+  const exit = await d.done;
+  assert.equal(exit.code, 0, exit.stderr);
+
+  await chmod(d.file, 0o600);
+  assert.equal(
+    await readFile(d.file, "utf8"),
+    before,
+    "shutdown removed a record whose ownership was unknown",
+  );
+});
+
 test("a lost daemon.json runs the clean shutdown for a live harness", async (t) => {
   const holder = await tempDir(t);
   const runtime = join(holder, "runtime");

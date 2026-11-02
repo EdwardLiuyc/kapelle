@@ -183,8 +183,8 @@ const messageOf = (err: unknown) =>
 const execFileAsync = promisify(execFile);
 
 /** Proof of an unrecorded Kapelle daemon, with its pid when the host's tools
- *  can identify it. `undefined` is another listener. No token is needed and
- *  the listener is never signalled here. */
+ *  can identify it. `undefined` is another listener, or none that answered.
+ *  No token is needed and the listener is never signalled here. */
 async function unrecordedDaemon(
   port: number,
 ): Promise<{ pid?: number } | undefined> {
@@ -298,7 +298,14 @@ function removeDaemonFilesIfMine(
   file: string,
   published: { port: number; token: string } | undefined,
 ): void {
-  const record = readDaemonRecord(file);
+  let record: DaemonRecord | undefined;
+  try {
+    record = parseDaemonRecord(readFileSync(file, "utf8"));
+  } catch (err) {
+    // Missing is safe to clean up; any other error leaves ownership unknown,
+    // so deleting the record could destroy a replacement daemon's state.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return;
+  }
   const mine =
     record === undefined ||
     (record.pid === process.pid &&
