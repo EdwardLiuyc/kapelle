@@ -154,7 +154,8 @@ and the token.
 **Where it is:**
 
 - `$XDG_RUNTIME_DIR/kapelle/daemon.json`, when `XDG_RUNTIME_DIR` is set to an absolute path.
-  A relative or empty value is treated as unset, like the daemon does.
+  The base directory must already exist. Kapelle creates only its `kapelle` child; a missing
+  base is a startup error. A relative or empty value is treated as unset, like the daemon does.
 - Otherwise `<temp dir>/kapelle-<your uid>/daemon.json`. The temp dir is the operating
   system's (`os.tmpdir()`: `$TMPDIR`, `$TMP` or `$TEMP`, else `/tmp`). On macOS, this is
   the usual case.
@@ -175,7 +176,10 @@ and the token.
 
 - While the daemon starts, the file can exist with only `pid`; `port` and `token` are added
   once the port is open. Require both before you use the file.
-- Once the port is open, the file exists until the daemon stops. No file means no daemon.
+- Once the port is open, the file exists until the daemon stops. The daemon checks it every
+  two seconds. If the file disappears or no longer names the same pid and token, the daemon
+  begins its clean shutdown and closes the port. A missing file can therefore briefly coexist
+  with a daemon in that shutdown interval, but no daemon keeps running without its record.
 - If the daemon crashed, the file can stay. The port then refuses your connection. Restart
   the daemon first.
 - A new daemon makes a new token. Read the file again after a restart to retrieve the new

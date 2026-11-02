@@ -40,11 +40,23 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 export function runtimeDir(): string {
   const { uid } = userInfo();
   const base = process.env.XDG_RUNTIME_DIR;
-  const dir =
-    base && isAbsolute(base)
-      ? join(base, "kapelle")
-      : join(tmpdir(), `kapelle-${uid}`);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const absolute = base !== undefined && isAbsolute(base);
+  const dir = absolute
+    ? join(base, "kapelle")
+    : join(tmpdir(), `kapelle-${uid}`);
+  try {
+    // Never create an absolute base: logind may mount its real tmpfs there
+    // later, hiding this daemon's record while the process keeps its port.
+    mkdirSync(dir, { recursive: !absolute, mode: 0o700 });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (absolute && (code === "ENOENT" || code === "ENOTDIR")) {
+      throw new Error(
+        `XDG_RUNTIME_DIR must name an existing directory: ${base}`,
+      );
+    }
+    if (code !== "EEXIST") throw err;
+  }
   return ours(dir);
 }
 

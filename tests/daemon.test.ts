@@ -28,11 +28,12 @@ import {
   mkdir,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -44,6 +45,7 @@ import type {
 } from "../client/contract.ts";
 import {
   addRepo as added,
+  alive,
   api,
   bootDaemon as boot,
   bootFinding,
@@ -256,6 +258,25 @@ test("a runtime directory other users can enter is refused", async (t) => {
   await assert.rejects(readFile(join(dir, "daemon.json")));
 });
 
+test("a missing absolute XDG_RUNTIME_DIR is refused before bind", async (t) => {
+  const holder = await tempDir(t);
+  const runtime = join(holder, "missing");
+  const state = await tempDir(t);
+
+  const r = await exitOf(
+    spawnCli(t, ["--port", "0"], "daemon.ts", dirs(runtime, state)),
+  );
+
+  assert.ok(r, "the daemon started anyway");
+  assert.equal(r.code, 1);
+  assert.match(
+    r.stderr,
+    /XDG_RUNTIME_DIR must name an existing directory: .*missing/,
+  );
+  assert.equal(r.stderr.trim().split("\n").length, 1, "one clear error line");
+  assert.equal(existsSync(runtime), false, "the base was not created");
+});
+
 test("a state directory other users can enter is refused", async (t) => {
   const runtime = await tempDir(t);
   const state = await tempDir(t);
@@ -290,6 +311,108 @@ for (const stale of ["null", "[]", "42"]) {
 }
 
 // --- lifecycle (M2-4) --------------------------------------------------------------
+
+for (const loss of ["removed", "covered", "replaced"] as const) {
+  test(`a ${loss} daemon.json shuts down cleanly and frees the port`, async (t) => {
+    const holder = await tempDir(t);
+    const runtime = join(holder, "runtime");
+    const state = join(holder, "state");
+    await mkdir(runtime, { mode: 0o700 });
+    const d = await boot(t, runtime, [], state);
+    const port = Number(new URL(d.url).port);
+    let replacement: string | undefined;
+
+    if (loss === "removed") {
+      await rm(d.file);
+    } else if (loss === "covered") {
+      await rename(runtime, `${runtime}.hidden`);
+      await mkdir(runtime, { mode: 0o700 });
+    } else {
+      // A live pid outside the daemon makes this unmistakably not its record.
+      replacement = JSON.stringify({
+        pid: process.pid,
+        port,
+        token: "replacement",
+      });
+      await writeFile(d.file, replacement, { mode: 0o600 });
+    }
+
+    const started = Date.now();
+    const exit = await d.done;
+    assert.equal(exit.code, 0, exit.stderr);
+    assert.ok(Date.now() - started < 10_000, "record loss was not bounded");
+    assert.match(exit.stdout, /daemon\.json lost: cancelling/);
+    if (replacement !== undefined) {
+      assert.equal(
+        await readFile(d.file, "utf8"),
+        replacement,
+        "shutdown did not delete the replacement record",
+      );
+    }
+
+    const probe = createServer();
+    await new Promise<void>((ok, fail) => {
+      probe.once("error", fail);
+      probe.listen(port, "127.0.0.1", ok);
+    });
+    await new Promise<void>((ok) => probe.close(() => ok()));
+  });
+}
+
+test("an unrecorded Kapelle listener gets a manual-stop diagnostic", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const ready = join(state, "listener-ready.json");
+  const script = join(state, "unrecorded-listener.mjs");
+  await writeFile(
+    script,
+    `
+import { createServer } from "node:http";
+import { writeFileSync } from "node:fs";
+const [ready] = process.argv.slice(2);
+const server = createServer((_req, res) => {
+  res.writeHead(401, { "content-type": "application/json" });
+  res.end(JSON.stringify({
+    error: { code: "unauthorized", message: "missing or wrong token" },
+  }));
+});
+server.listen(0, "127.0.0.1", () => {
+  writeFileSync(ready, JSON.stringify({ port: server.address().port }));
+  console.log("ready");
+});
+`,
+    { mode: 0o600 },
+  );
+  const listener = spawnCli(t, [ready], script);
+  await listener.waitFor("ready");
+  const { port } = JSON.parse(await readFile(ready, "utf8")) as {
+    port: number;
+  };
+  assert.ok(listener.child.pid !== undefined);
+
+  const attempted = await exitOf(
+    spawnCli(t, ["--port", String(port)], "daemon.ts", dirs(runtime, state)),
+  );
+
+  assert.ok(attempted, "the second daemon kept running");
+  assert.equal(attempted.code, 1);
+  assert.ok(
+    attempted.stderr.includes(
+      `unrecorded Kapelle daemon (pid ${listener.child.pid})`,
+    ),
+    attempted.stderr,
+  );
+  assert.ok(
+    attempted.stderr.includes(`kill -TERM ${listener.child.pid}`),
+    attempted.stderr,
+  );
+  assert.doesNotMatch(attempted.stderr, /no daemon/i);
+  assert.equal(
+    alive(listener.child.pid),
+    true,
+    "the failed start signalled the listener",
+  );
+});
 
 /** Starts a run whose harness never ends its turn, and returns the pid the
  *  daemon recorded for it in `children.json`. */

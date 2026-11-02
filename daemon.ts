@@ -32,6 +32,7 @@
  * endpoint, is retired with the browser dashboard (A3): no story serves a page.
  */
 
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -54,7 +55,7 @@ import {
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import {
   API_VERSION,
   CAPABILITIES,
@@ -179,6 +180,57 @@ const DEFAULT_PORT = 4719;
 
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
+const execFileAsync = promisify(execFile);
+
+/** The pid of an unrecorded Kapelle daemon listening on `port`, if the host's
+ *  process tools can identify it. The unauthorized reply is Kapelle's public
+ *  proof; no token is needed and the listener is never signalled here. */
+async function unrecordedDaemonPid(port: number): Promise<number | undefined> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/version`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (response.status !== 401) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const body = (await response.json()) as {
+      error?: { code?: unknown; message?: unknown };
+    } | null;
+    if (
+      body?.error?.code !== "unauthorized" ||
+      body.error.message !== "missing or wrong token"
+    ) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+
+  const ss = {
+    command: "ss",
+    args: ["-ltnpH", `sport = :${port}`],
+    pattern: /\bpid=(\d+)\b/,
+  };
+  const lsof = {
+    command: "lsof",
+    args: ["-nP", `-iTCP@127.0.0.1:${port}`, "-sTCP:LISTEN", "-Fp"],
+    pattern: /^p(\d+)$/m,
+  };
+  for (const probe of process.platform === "darwin" ? [lsof] : [ss, lsof]) {
+    try {
+      const { stdout } = await execFileAsync(probe.command, probe.args, {
+        encoding: "utf8",
+        timeout: 2_000,
+      });
+      const pid = Number(probe.pattern.exec(stdout)?.[1]);
+      if (Number.isInteger(pid) && pid > 0) return pid;
+    } catch {
+      // Try the other system tool; a diagnostic must not hide the bind error.
+    }
+  }
+  return undefined;
+}
 
 /** A startup refusal is one line and exit 1, never a stack trace. */
 function orExit<T>(f: () => T): T {
@@ -199,6 +251,21 @@ function identityPath(file: string): string {
 function removeDaemonFiles(file: string): void {
   rmSync(file, { force: true });
   rmSync(identityPath(file), { force: true });
+}
+
+/** A replacement record can belong to the daemon taking over as this one
+ *  closes its port. Only remove the record that still names this process. */
+function removeDaemonFilesIfMine(file: string): void {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (typeof parsed === "object" && parsed !== null) {
+      const { pid } = parsed as { pid?: unknown };
+      if (typeof pid === "number" && pid !== process.pid) return;
+    }
+  } catch {
+    // Missing or malformed: neither can name a replacement process.
+  }
+  removeDaemonFiles(file);
 }
 
 /**
@@ -2119,9 +2186,11 @@ const server = createServer(
   },
 );
 
+let recordWatch: NodeJS.Timeout | undefined;
+
 /**
- * SIGTERM or SIGINT: cancel every run, pause every room, wait for each to
- * settle, then remove `daemon.json` and exit 0 (M2-4, #34). An install's npm
+ * SIGTERM, SIGINT or a lost record: cancel every run, pause every room, wait
+ * for each to settle, then remove `daemon.json` and exit 0 (M2-4, #34). An install's npm
  * is killed rather than waited for, and a check's harness is stopped and its
  * temporary folder cleaned up, so a stop leaves neither running.
  *
@@ -2140,6 +2209,7 @@ const server = createServer(
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
+  if (recordWatch !== undefined) clearInterval(recordWatch);
   console.log(`${signal}: cancelling ${inFlight.size} run(s), then exiting`);
   // Before the pause: a chat screen whose room stream ends must then find no
   // daemon, and wait for the next one (`readRoom` in `client/roomset.ts`).
@@ -2156,7 +2226,7 @@ async function shutdown(signal: string): Promise<void> {
     ...[...rooms.values()].map(({ room }) => room.pause()),
     checksStopped,
   ]);
-  removeDaemonFiles(file);
+  removeDaemonFilesIfMine(file);
   process.exit(0);
 }
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -2172,7 +2242,17 @@ await restoreRooms();
 server.on("error", (err) => {
   removeDaemonFiles(file);
   console.error(`cannot listen on 127.0.0.1:${port}: ${messageOf(err)}`);
-  process.exit(1);
+  if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") process.exit(1);
+  void unrecordedDaemonPid(port)
+    .then((pid) => {
+      if (pid !== undefined) {
+        console.error(
+          `the port is owned by an unrecorded Kapelle daemon (pid ${pid}); ` +
+            `stop it manually with: kill -TERM ${pid}`,
+        );
+      }
+    })
+    .finally(() => process.exit(1));
 });
 
 // The token is published only once the port is open, so a client never reads
@@ -2192,5 +2272,23 @@ server.listen(port, "127.0.0.1", () => {
   });
   renameSync(tmp, file);
   closeSync(fd);
+  recordWatch = setInterval(() => {
+    let current: { pid?: unknown; port?: unknown; token?: unknown } = {};
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+      if (typeof parsed === "object" && parsed !== null) current = parsed;
+    } catch {
+      // Missing, covered or malformed records all lose this daemon's lock.
+    }
+    if (
+      current.pid === process.pid &&
+      current.port === bound &&
+      current.token === token
+    ) {
+      return;
+    }
+    void shutdown("daemon.json lost");
+  }, 2_000);
+  recordWatch.unref();
   console.log(`listening on http://127.0.0.1:${bound} (token in ${file})`);
 });
