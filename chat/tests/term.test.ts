@@ -234,12 +234,15 @@ test("after a burst of resizes the pty has the last size (PR #286)", {
   await shows(shell, "$");
   // One stty runs at a time; the sizes asked meanwhile end in the last one.
   for (const cols of [30, 31, 32, 33, 34, 35]) shell.rows(cols, 5, false);
-  await new Promise((ok) => setTimeout(ok, 500));
-  shell.key('echo "size=$(stty size)"\r');
+  // Ask again until the shell reports the last size: one stty may still be
+  // running, and a single early answer would stay wrong on screen.
   for (const until = Date.now() + 5000; ; ) {
-    const screen = shell.rows(35, 5, false).join("\n");
-    if (screen.includes("size=5 35")) break;
-    assert.ok(Date.now() < until, screen);
-    await new Promise((ok) => setTimeout(ok, 20));
+    shell.key('echo "size=$(stty size)"\r');
+    for (const next = Date.now() + 100; Date.now() < next; ) {
+      const screen = shell.rows(35, 5, false).join("\n");
+      if (screen.includes("size=5 35")) return;
+      await new Promise((ok) => setTimeout(ok, 20));
+    }
+    assert.ok(Date.now() < until, "the pty never reported 5 35");
   }
 });
