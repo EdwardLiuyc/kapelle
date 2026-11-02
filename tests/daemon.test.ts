@@ -382,7 +382,9 @@ for (const loss of [
   });
 }
 
-test("an unreadable daemon.json is not record loss", async (t) => {
+test("an unreadable daemon.json is not record loss", {
+  skip: process.getuid?.() === 0 && "root reads any mode",
+}, async (t) => {
   const d = await boot(t);
 
   await chmod(d.file, 0o000);
@@ -534,23 +536,37 @@ esac
   );
 });
 
-test("a real daemon's unauthorized reply supports the listener diagnostic", async (t) => {
+test("a real daemon's unauthorized reply needs no host pid tools", async (t) => {
   const first = await boot(t);
   const port = Number(new URL(first.url).port);
   const runtime = await tempDir(t);
   const state = await tempDir(t);
+  const bin = join(state, "bin");
+  await mkdir(bin);
+  for (const tool of ["ss", "lsof"]) {
+    await writeFile(join(bin, tool), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  }
 
   const attempted = await exitOf(
-    spawnCli(t, ["--port", String(port)], "daemon.ts", dirs(runtime, state)),
+    spawnCli(t, ["--port", String(port)], "daemon.ts", {
+      ...dirs(runtime, state),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    }),
   );
 
   assert.ok(attempted, "the second daemon kept running");
   assert.equal(attempted.code, 1);
   assert.ok(
-    attempted.stderr.includes(`unrecorded Kapelle daemon (pid ${first.pid})`),
+    attempted.stderr.includes(
+      "the port is owned by an unrecorded Kapelle daemon",
+    ),
     attempted.stderr,
   );
-  assert.ok(attempted.stderr.includes(`kill -TERM ${first.pid}`));
+  assert.ok(
+    attempted.stderr.includes("pid could not be identified"),
+    attempted.stderr,
+  );
+  assert.doesNotMatch(attempted.stderr, /kill -TERM/);
   assert.equal(alive(first.pid), true, "the failed start killed the listener");
   assert.equal((await api(first, "GET", "/runs")).status, 200);
   process.kill(first.pid, "SIGTERM");

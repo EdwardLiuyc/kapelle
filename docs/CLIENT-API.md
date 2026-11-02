@@ -179,9 +179,12 @@ and the token.
 - While the daemon starts, the file can exist with only `pid`; `port` and `token` are added
   once the port is open. Require both before you use the file.
 - Once the port is open, the file exists until the daemon stops. The daemon checks it every
-  two seconds. If the file disappears or no longer names the same pid, port and token, the
-  daemon begins its clean shutdown and closes the port. A missing file can therefore briefly coexist
-  with a daemon in that shutdown interval, but no daemon keeps running without its record.
+  two seconds. If the file is gone or no longer names the same pid, port and token, the daemon
+  begins its clean shutdown and closes the port. A missing or replaced file can therefore briefly
+  coexist with a daemon in that shutdown interval. A present file that cannot be read is left
+  alone rather than treated as loss. A client then cannot discover that live daemon; starting one
+  reports the unrecorded listener. When host tools can identify its pid, the diagnostic includes it
+  and a manual stop command.
 - If the daemon crashed, the file can stay. The port then refuses your connection. Restart
   the daemon first.
 - A new daemon makes a new token. Read the file again after a restart to retrieve the new

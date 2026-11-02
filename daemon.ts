@@ -182,10 +182,12 @@ const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 const execFileAsync = promisify(execFile);
 
-/** The pid of an unrecorded Kapelle daemon listening on `port`, if the host's
- *  process tools can identify it. The unauthorized reply is Kapelle's public
- *  proof; no token is needed and the listener is never signalled here. */
-async function unrecordedDaemonPid(port: number): Promise<number | undefined> {
+/** Proof of an unrecorded Kapelle daemon, with its pid when the host's tools
+ *  can identify it. `undefined` is another listener. No token is needed and
+ *  the listener is never signalled here. */
+async function unrecordedDaemon(
+  port: number,
+): Promise<{ pid?: number } | undefined> {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/version`, {
       signal: AbortSignal.timeout(2_000),
@@ -219,12 +221,12 @@ async function unrecordedDaemonPid(port: number): Promise<number | undefined> {
         timeout: 2_000,
       });
       const pid = Number(probe.pattern.exec(stdout)?.[1]);
-      if (Number.isInteger(pid) && pid > 0) return pid;
+      if (Number.isInteger(pid) && pid > 0) return { pid };
     } catch {
       // Try the other system tool; a diagnostic must not hide the bind error.
     }
   }
-  return undefined;
+  return {};
 }
 
 /** A startup refusal is one line and exit 1, never a stack trace. */
@@ -2296,14 +2298,17 @@ server.on("error", (err) => {
   removeDaemonFiles(file);
   console.error(`cannot listen on 127.0.0.1:${port}: ${messageOf(err)}`);
   if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") process.exit(1);
-  void unrecordedDaemonPid(port)
-    .then((pid) => {
-      if (pid !== undefined) {
-        console.error(
-          `the port is owned by an unrecorded Kapelle daemon (pid ${pid}); ` +
-            `stop it manually with: kill -TERM ${pid}`,
-        );
-      }
+  void unrecordedDaemon(port)
+    .then((daemon) => {
+      if (daemon === undefined) return;
+      const { pid } = daemon;
+      console.error(
+        pid === undefined
+          ? "the port is owned by an unrecorded Kapelle daemon; its pid " +
+              "could not be identified"
+          : `the port is owned by an unrecorded Kapelle daemon (pid ${pid}); ` +
+              `stop it manually with: kill -TERM ${pid}`,
+      );
     })
     .finally(() => process.exit(1));
 });
@@ -2331,8 +2336,8 @@ server.listen(port, "127.0.0.1", () => {
     try {
       current = parseDaemonRecord(readFileSync(file, "utf8"));
     } catch (err) {
-      // Only absence is loss. EMFILE, EACCES and other read errors can be
-      // transient, and must not cancel every active run and room.
+      // Only absence or a replaced record is loss. EMFILE, EACCES and other
+      // read errors can be transient, and must not cancel active runs and rooms.
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") return;
     }
     if (
