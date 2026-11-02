@@ -269,13 +269,27 @@ function parseDaemonRecord(text: string): DaemonRecord | undefined {
   return undefined;
 }
 
-/** Read a record for ownership checks, where every failure means no proof. */
-function readDaemonRecord(file: string): DaemonRecord | undefined {
+type DaemonRecordRead =
+  | { state: "readable"; record: DaemonRecord }
+  | { state: "missing" | "malformed" | "unreadable" };
+
+/** Read and classify a record without treating an I/O failure as absence. */
+function readDaemonRecord(file: string): DaemonRecordRead {
+  let text: string;
   try {
-    return parseDaemonRecord(readFileSync(file, "utf8"));
-  } catch {
-    return undefined;
+    text = readFileSync(file, "utf8");
+  } catch (err) {
+    return {
+      state:
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+          ? "missing"
+          : "unreadable",
+    };
   }
+  const record = parseDaemonRecord(text);
+  return record === undefined
+    ? { state: "malformed" }
+    : { state: "readable", record };
 }
 
 /** Remove both files a live daemon owns. */
@@ -286,9 +300,12 @@ function removeDaemonFiles(file: string): void {
 
 /** Remove the identity sidecar only while it still names this process. */
 function removeIdentityIfMine(file: string): void {
-  const pid = readDaemonRecord(identityPath(file))?.pid;
+  const path = identityPath(file);
+  const identity = readDaemonRecord(path);
+  if (identity.state === "unreadable") return;
+  const pid = identity.state === "readable" ? identity.record.pid : undefined;
   if (pid !== undefined && pid !== process.pid) return;
-  rmSync(identityPath(file), { force: true });
+  rmSync(path, { force: true });
 }
 
 /** A replacement record can belong to the daemon taking over as this one
@@ -298,14 +315,13 @@ function removeDaemonFilesIfMine(
   file: string,
   published: { port: number; token: string } | undefined,
 ): void {
-  let record: DaemonRecord | undefined;
-  try {
-    record = parseDaemonRecord(readFileSync(file, "utf8"));
-  } catch (err) {
-    // Missing is safe to clean up; any other error leaves ownership unknown,
-    // so deleting the record could destroy a replacement daemon's state.
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return;
+  const read = readDaemonRecord(file);
+  if (read.state === "unreadable") {
+    // The sidecar has its own ownership check and does not need this record.
+    removeIdentityIfMine(file);
+    return;
   }
+  const record = read.state === "readable" ? read.record : undefined;
   const mine =
     record === undefined ||
     (record.pid === process.pid &&
@@ -758,9 +774,17 @@ const childrenFile = join(dir, "children.json");
 function recordChildren(): void {
   try {
     const daemonRecord = readDaemonRecord(file);
-    if (daemonRecord !== undefined && daemonRecord.pid !== process.pid) return;
+    if (
+      daemonRecord.state === "readable" &&
+      daemonRecord.record.pid !== process.pid
+    ) {
+      return;
+    }
     const childrenRecord = readDaemonRecord(childrenFile);
-    if (childrenRecord !== undefined && childrenRecord.pid !== process.pid) {
+    if (
+      childrenRecord.state === "readable" &&
+      childrenRecord.record.pid !== process.pid
+    ) {
       return;
     }
     if (children.size === 0) {
@@ -2339,18 +2363,15 @@ server.listen(port, "127.0.0.1", () => {
   closeSync(fd);
   published = { port: bound, token };
   recordWatch = setInterval(() => {
-    let current: DaemonRecord | undefined;
-    try {
-      current = parseDaemonRecord(readFileSync(file, "utf8"));
-    } catch (err) {
-      // Only absence or a replaced record is loss. EMFILE, EACCES and other
-      // read errors can be transient, and must not cancel active runs and rooms.
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return;
-    }
+    const current = readDaemonRecord(file);
+    // EMFILE, EACCES and other read errors can be transient, and must not
+    // cancel active runs and rooms. Only absence or a replaced record is loss.
+    if (current.state === "unreadable") return;
+    const record = current.state === "readable" ? current.record : undefined;
     if (
-      current?.pid === process.pid &&
-      current.port === bound &&
-      current.token === token
+      record?.pid === process.pid &&
+      record.port === bound &&
+      record.token === token
     ) {
       return;
     }

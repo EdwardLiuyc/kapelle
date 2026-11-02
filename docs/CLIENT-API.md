@@ -156,10 +156,9 @@ and the token.
 
 - `$XDG_RUNTIME_DIR/kapelle/daemon.json`, when `XDG_RUNTIME_DIR` is set to an
   absolute path. The base directory must already exist. Kapelle creates only its
-  `kapelle` child; a missing base is an error for every Kapelle process that needs the
-  daemon record, not
-  only for daemon startup. A relative or empty value is treated as unset, like the daemon
-  does.
+  `kapelle` child; a missing base is an error for every Kapelle process that
+  needs the daemon record, not only for daemon startup. A relative or empty
+  value is treated as unset, like the daemon does.
 - Otherwise `<temp dir>/kapelle-<your uid>/daemon.json`. The temp dir is the operating
   system's (`os.tmpdir()`: `$TMPDIR`, `$TMP` or `$TEMP`, else `/tmp`). On macOS, this is
   the usual case.

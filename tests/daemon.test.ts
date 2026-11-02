@@ -416,6 +416,30 @@ test("shutdown does not delete an unreadable daemon.json", {
     before,
     "shutdown removed a record whose ownership was unknown",
   );
+  await assert.rejects(
+    readFile(`${d.file}.identity`),
+    "a readable identity owned by this daemon was not removed",
+  );
+});
+
+test("shutdown does not delete an unreadable identity", {
+  skip: process.getuid?.() === 0 && "root reads any mode",
+}, async (t) => {
+  const d = await boot(t);
+  const identity = `${d.file}.identity`;
+  const before = await readFile(identity, "utf8");
+  await chmod(identity, 0o000);
+
+  process.kill(d.pid, "SIGTERM");
+  const exit = await d.done;
+  assert.equal(exit.code, 0, exit.stderr);
+
+  await chmod(identity, 0o600);
+  assert.equal(
+    await readFile(identity, "utf8"),
+    before,
+    "shutdown removed an identity whose ownership was unknown",
+  );
 });
 
 test("a lost daemon.json runs the clean shutdown for a live harness", async (t) => {
