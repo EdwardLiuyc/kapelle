@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -168,6 +168,63 @@ test("a script that refuses to start says why (PR #286)", async (t) => {
     await ended(),
     "exited (code 1): script:  [2Jinvalid option -- q",
   );
+});
+
+test("a failed stty resize is retried at the same size (#423)", {
+  skip: noScript,
+}, async (t) => {
+  const bin = await mkdtemp(join(tmpdir(), "bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  const failed = join(bin, "failed");
+  const resized = join(bin, "resized");
+  const real = spawnSync("sh", ["-c", "command -v stty"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  assert.ok(real, "stty is installed");
+  await writeFile(
+    join(bin, "stty"),
+    `#!/bin/sh
+case " $* " in
+  *" -F "*)
+    if [ ! -e '${failed}' ]; then
+      : > '${failed}'
+      exit 1
+    fi
+    '${real}' "$@" || exit $?
+    : > '${resized}'
+    exit 0
+    ;;
+esac
+exec '${real}' "$@"
+`,
+  );
+  await chmod(join(bin, "stty"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+  const { shell } = await shellIn(t);
+  await shows(shell, "$");
+  shell.rows(35, 5, false);
+  for (const until = Date.now() + 5000; ; ) {
+    if (
+      await access(resized).then(
+        () => true,
+        () => false,
+      )
+    )
+      break;
+    assert.ok(Date.now() < until, "stty was not retried");
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+  shell.key('echo "size=$(stty size)"\r');
+  for (const until = Date.now() + 5000; ; ) {
+    const screen = shell.rows(35, 5, false).join("\n");
+    if (screen.includes("size=5 35")) break;
+    assert.ok(Date.now() < until, screen);
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
 });
 
 test("after a burst of resizes the pty has the last size (PR #286)", {

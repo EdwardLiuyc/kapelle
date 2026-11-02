@@ -38,6 +38,9 @@ import xterm from "@xterm/headless";
 import { printable } from "../../client/room.ts";
 
 const MAC = process.platform === "darwin";
+/** A failed `stty` is retried before it is recorded as the pty's size. */
+const RESIZE_TRIES = 3;
+const RESIZE_RETRY_MS = 50;
 
 /** The legacy bytes of a key with no modifier. */
 const SPECIAL: Record<string, string> = {
@@ -159,7 +162,7 @@ function sgrOf(c: Cell, cursor: boolean) {
   if (c.isDim()) s += ";2";
   if (c.isItalic()) s += ";3";
   if (c.isUnderline()) s += ";4";
-  if (!!c.isInverse() !== cursor) s += ";7";
+  if (Boolean(c.isInverse()) !== cursor) s += ";7";
   if (c.isInvisible()) s += ";8";
   if (c.isStrikethrough()) s += ";9";
   s += colour(30, c.isFgPalette(), c.isFgRGB(), c.getFgColor());
@@ -262,7 +265,7 @@ export function startShell(
     stdio: ["pipe", "pipe", "pipe", "pipe"],
     env: { ...process.env, SHELL: "/bin/sh", TERM: "xterm-256color" },
   });
-  // All four are pipes, as `stdio` asks: Node types them as maybe null.
+  // SAFETY: stdio asks for four pipes; Node types them as maybe null.
   const [stdin, stdout, stderr, told] = child.stdio as unknown as [
     Writable,
     Readable,
@@ -315,18 +318,41 @@ export function startShell(
   let applied = `${rows} ${cols}`;
   /** One `stty` at a time: two run as two processes, and the older could
    *  land last and leave the pty at its size. The size is read again when
-   *  one ends. */
+   *  one ends. A transient failure is retried at the same size. */
   let resizing = false;
+  let tries = 0;
+  let failed = "";
   const sync = () => {
-    const want = `${rows} ${cols}`;
-    if (!pts || resizing || want === applied) return;
-    applied = want;
+    const r = rows;
+    const c = cols;
+    const want = `${r} ${c}`;
+    if (how !== undefined || !pts || resizing || want === applied) return;
+    if (want === failed) return;
     resizing = true;
     const flag = MAC ? "-f" : "-F";
-    // A failed resize leaves the old size: cosmetic.
-    execFile("stty", [flag, pts, "rows", `${rows}`, "cols", `${cols}`], () => {
+    execFile("stty", [flag, pts, "rows", `${r}`, "cols", `${c}`], (err) => {
       resizing = false;
-      sync();
+      if (!err) {
+        applied = want;
+        tries = 0;
+        failed = "";
+        sync();
+        return;
+      }
+      if (how !== undefined) return;
+      // A frame may have asked for another size while stty ran.
+      if (`${rows} ${cols}` !== want) {
+        tries = 0;
+        sync();
+        return;
+      }
+      tries += 1;
+      if (tries >= RESIZE_TRIES) {
+        tries = 0;
+        failed = want;
+        return;
+      }
+      setTimeout(sync, RESIZE_RETRY_MS);
     });
   };
   let path = "";
@@ -352,6 +378,8 @@ export function startShell(
         if (c !== cols || r !== rows) {
           cols = c;
           rows = r;
+          tries = 0;
+          failed = "";
           term.resize(cols, rows);
           sync();
         }
