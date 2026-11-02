@@ -1973,7 +1973,7 @@ for (const operation of [
     if (operation !== "merge") await commitAt(p.worktree, "agent.txt");
 
     // The merge-base SHA still goes through checkoutDiff's copied index.
-    await writeFile(join(p.worktree, "README.md"), "dirty\n");
+    await writeFile(join(p.worktree, "README.md"), "dirty README\n");
     await writeFile(join(p.worktree, "new.txt"), "new\n");
     const before = git("status", "--porcelain").stdout;
     const diff = await api<Diff & { error: { message: string } }>(

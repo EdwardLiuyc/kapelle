@@ -69,6 +69,7 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { isAncestor } from "./diff.ts";
 import { branchName } from "./ids.ts";
 import { stateDirFor } from "./runtime.ts";
 
@@ -356,24 +357,6 @@ export async function fastForwardCheckout(
   }
   const sha = await git(cwd, ["rev-parse", "HEAD"]);
   return { sha, moved: sha !== before };
-}
-
-/** `git merge-base --is-ancestor`: exit 1 is false, anything else is a real
- *  failure. The plain `git` helper would read both as `null`. */
-async function isAncestor(
-  cwd: string,
-  ancestor: string,
-  descendant: string,
-): Promise<boolean> {
-  try {
-    await run("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
-      cwd,
-    });
-    return true;
-  } catch (err) {
-    if ((err as { code?: unknown }).code === 1) return false;
-    throw err;
-  }
 }
 
 /** What a checkout's branch says about itself (M6-6a, M7-3). */

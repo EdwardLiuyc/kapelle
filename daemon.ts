@@ -1452,6 +1452,7 @@ async function agentDiff(
       if (candidate !== undefined) {
         // A rewound base must not claim a saved base commit still on HEAD.
         // If the participant reset off that SHA, the current merge base wins.
+        // An unresolvable saved SHA fails both checks, so the candidate wins.
         const keepSaved =
           candidate !== ref &&
           !(await isAncestor(p.worktree, ref, candidate)) &&
