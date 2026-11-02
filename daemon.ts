@@ -95,7 +95,7 @@ import {
   resolveRunDefaults,
   warnUnknownConfigEnv,
 } from "./core/config.ts";
-import { checkoutDiff, rangeDiff } from "./core/diff.ts";
+import { checkoutDiff, isAncestor, mergeBase, rangeDiff } from "./core/diff.ts";
 import { type EventLog, openEventLog } from "./core/eventlog.ts";
 import { createEventBus } from "./core/events.ts";
 import {
@@ -1457,8 +1457,9 @@ function cancelTurn(id: string, agentId: string, res: ServerResponse) {
 /**
  * `GET /rooms/:id/agents/:agentId/diff?against=head|base` — what the
  * participant changed in its checkout (M4-6), in any mode: `head` (the
- * default) is what is not committed, `base` the whole branch. New files git
- * does not track are in it. A snapshot: nothing is kept.
+ * default) is what is not committed, `base` the whole branch from its current
+ * merge base with the configured base ref. New files git does not track are
+ * in it. A snapshot: nothing is kept.
  */
 async function agentDiff(
   id: string,
@@ -1474,12 +1475,25 @@ async function agentDiff(
       `"against" must be head or base; got ${against}`,
     );
   }
-  const ref = against === "base" ? p.baseSha : "HEAD";
+  let ref = against === "base" ? p.baseSha : "HEAD";
   if (!ref) {
     throw refusal(409, "no_diff", `${p.name} has no branch to compare with`);
   }
   let diff: Diff;
   try {
+    if (against === "base" && p.baseRef) {
+      const candidate = await mergeBase(p.worktree, p.baseRef, "HEAD");
+      if (candidate !== undefined) {
+        // A rewound base must not claim a saved base commit still on HEAD.
+        // If the participant reset off that SHA, the current merge base wins.
+        // For an unresolvable saved SHA, HEAD ancestry is false and clears keepSaved.
+        const keepSaved =
+          candidate !== ref &&
+          !(await isAncestor(p.worktree, ref, candidate)) &&
+          (await isAncestor(p.worktree, ref, "HEAD"));
+        if (!keepSaved) ref = candidate;
+      }
+    }
     diff = await checkoutDiff(p.worktree, ref);
   } catch (err) {
     throw refusal(

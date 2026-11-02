@@ -90,10 +90,11 @@
  * names, and the commit the branch's own reflog says its latest rebase moved
  * it onto. A rename updates the participant, the held checkout and
  * `room.json`; a client that shows the branch reads the room again when the
- * turn ends. A rebase moves the participant's `baseSha`, so the diff that
- * shows the whole branch starts at the new base and does not list the base's
- * own commits as the harness's work. A restore reads the checkout once too,
- * because a crash can leave `room.json` older than the branch.
+ * turn ends. A rebase also moves the participant's saved `baseSha`. The
+ * whole-branch diff independently finds the current merge base from the
+ * configured base ref, so it does not depend on this reflog read. A restore
+ * reads the checkout once too, because a crash can leave `room.json` older
+ * than the branch.
  *
  * **A message names its participant, and a busy one queues it** (M6-4).
  * `send` starts a turn, or puts the message in a FIFO queue behind the live
@@ -379,6 +380,9 @@ export interface Participant {
   /** The commit the branch's work starts from. A rebase moves it: the room
    *  reads the branch's own reflog after a turn. */
   readonly baseSha?: string;
+  /** The configured ref the whole-branch diff re-resolves. Absent on an old
+   *  record, whose saved SHA is the fallback. Never part of the public DTO. */
+  readonly baseRef?: string;
   /** The session a revive loads (R17). A fresh revive changes it. */
   readonly sessionId: string;
   /** How the last revive came back; absent before the first. */
@@ -464,6 +468,8 @@ interface ParticipantRecord {
    *  rename or a rebase mid-turn. */
   branch?: string;
   baseSha?: string;
+  /** The configured base ref, kept for topology-derived diffs after restart. */
+  baseRef?: string;
   /** True when `branch` is a name the harness renamed into, proven by the
    *  branch's own reflog. Absent means a switch to a name this room did not
    *  create, so a delete leaves it alone. */
@@ -1125,6 +1131,7 @@ async function buildRoom(
       worktree: p.worktree,
       ...(p.branch && { branch: p.branch }),
       ...(p.baseSha && { baseSha: p.baseSha }),
+      ...(p.baseRef && { baseRef: p.baseRef }),
       ...(m.renamed() && { branchRenamed: true }),
       sessionId: p.sessionId,
       turns: m.turns(),
@@ -1358,7 +1365,7 @@ async function buildRoom(
     request: AgentRequest,
     id: string,
     worktree: string,
-    info: { branch: string; baseSha: string } | undefined,
+    info: { branch: string; baseSha: string; baseRef?: string } | undefined,
     own: RoomNotice[],
     saved?: ParticipantRecord,
   ): Member => {
@@ -1638,7 +1645,11 @@ async function buildRoom(
     };
     const info =
       saved.branch && saved.baseSha
-        ? { branch: saved.branch, baseSha: saved.baseSha }
+        ? {
+            branch: saved.branch,
+            baseSha: saved.baseSha,
+            ...(saved.baseRef && { baseRef: saved.baseRef }),
+          }
         : undefined;
     if (info) {
       worktrees?.adopt(saved.id, {
@@ -1772,7 +1783,7 @@ function createParticipant({
   request: AgentRequest;
   /** Its own checkout, or the cwd when there are no worktrees. */
   worktree: string;
-  info: { branch: string; baseSha: string } | undefined;
+  info: { branch: string; baseSha: string; baseRef?: string } | undefined;
   bus: EventBus;
   /** The room's and the checkout's notices; the participant adds the lines
    *  that depend on its mode. */
@@ -1813,6 +1824,7 @@ function createParticipant({
   // Read from the checkout after each turn; restored from `info` first.
   let branch = info?.branch;
   let baseSha = info?.baseSha;
+  const baseRef = info?.baseRef;
   // True only when this name was renamed into from the one we held.
   let branchRenamed = saved?.branchRenamed === true;
   // Counts this participant's turns from 1 (S12's `turn`), and the live
@@ -2435,6 +2447,9 @@ function createParticipant({
     },
     get baseSha() {
       return baseSha;
+    },
+    get baseRef() {
+      return baseRef;
     },
     get sessionId() {
       return sessionId;

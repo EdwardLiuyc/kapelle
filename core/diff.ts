@@ -12,10 +12,19 @@
  * - **An agent's checkout.** `checkoutDiff` is the checkout against a ref:
  *   `HEAD` for what is not committed, or the base for the whole branch. New
  *   files git does not track yet are in it too: `git add -N` marks them in a
- *   copy of the index, so the agent's own index never changes.
+ *   copy of the index, so the agent's own index never changes. Preserving the
+ *   source index mtime keeps racy-entry content checks; the extra hashing of
+ *   recently touched files is the accepted correctness cost. A room uses
+ *   `mergeBase` to find that base from the configured ref and live `HEAD`.
  * - **A fast-forward preview.** `rangeDiff` diffs `from...to`, so it starts at
  *   the two refs' merge base: a target's own commits are not shown as
  *   deletions, and the source's additions are (M6-11a).
+ *
+ * **Shared ancestry.** `isAncestor` also serves `core/worktree.ts`'s
+ * fast-forward guard and rebase-base walk. An unresolved ancestor is false for
+ * a stale room base; an unresolved descendant stays an error so the reflog
+ * walk cannot invent a base. The short worktree walk accepts one extra
+ * `rev-parse` per check to keep those semantics in one place.
  *
  * **The cap** (decided 2026-10-05, #204): a question's diff is kept for the
  * daemon's life, so it is cut at 32 KB; the route's is not kept, so 512 KB.
@@ -37,6 +46,8 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -182,6 +193,57 @@ export async function editDiff(
   }
 }
 
+/** A resolved commit, or undefined only for an unresolved ref (exit 1). */
+async function resolveCommit(
+  dir: string,
+  ref: string,
+): Promise<string | undefined> {
+  try {
+    return (
+      await git(dir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])
+    ).trim();
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 1) return undefined;
+    throw err;
+  }
+}
+
+/**
+ * Whether `ancestor` is an ancestor of `ref`. An unresolvable ancestor is
+ * false; other git failures stay errors.
+ */
+export async function isAncestor(
+  dir: string,
+  ancestor: string,
+  ref: string,
+): Promise<boolean> {
+  const commit = await resolveCommit(dir, ancestor);
+  if (commit === undefined) return false;
+  try {
+    await git(dir, ["merge-base", "--is-ancestor", commit, ref]);
+    return true;
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 1) return false;
+    throw err;
+  }
+}
+
+/**
+ * The merge base of a configured base ref and another ref. Undefined when
+ * the base ref no longer resolves, so a room can use its saved SHA. Other
+ * git failures stay errors. No common ancestor also stays an error rather
+ * than guessing from a saved SHA across unrelated history.
+ */
+export async function mergeBase(
+  dir: string,
+  baseRef: string,
+  ref: string,
+): Promise<string | undefined> {
+  const base = await resolveCommit(dir, baseRef);
+  if (base === undefined) return undefined;
+  return (await git(dir, ["merge-base", base, ref])).trim();
+}
+
 /**
  * An agent's checkout against `ref`: `HEAD` for what is not committed, or
  * the base for the whole branch. The new files git does not track are in it
@@ -201,8 +263,18 @@ export async function checkoutDiff(
   const tmp = await mkdtemp(join(tmpdir(), "kapelle-index-"));
   try {
     const copy = join(tmp, "index");
-    // A checkout with no commit yet has no index: start from none.
-    await copyFile(index, copy).catch(() => {});
+    try {
+      // Read first: a newer source mtime could hide the copy's racy entries.
+      const times = await stat(index);
+      await copyFile(index, copy);
+      // copyFile gives the copy a fresh mtime, which would hide racy entries.
+      // Preserve the source times so same-size, same-second edits still read.
+      await utimes(copy, times.atime, times.mtime);
+    } catch {
+      // Metadata is best effort: continue with a fresh copy, or no index in an
+      // unborn checkout, rather than losing the whole diff.
+      await copyFile(index, copy).catch(() => {});
+    }
     const env = { ...process.env, GIT_INDEX_FILE: copy };
     await git(top, ["add", "--intent-to-add", "--", "."], env);
     const text = await git(

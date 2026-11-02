@@ -4,14 +4,28 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
 import { gitRepo, tempDir } from "../../integration/helpers.ts";
-import { capDiff, checkoutDiff, editDiff, rangeDiff } from "../diff.ts";
+import {
+  capDiff,
+  checkoutDiff,
+  editDiff,
+  isAncestor,
+  mergeBase,
+  rangeDiff,
+} from "../diff.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   promisify(execFile)("git", args, { cwd }).then((r) => r.stdout.trim());
@@ -140,6 +154,30 @@ test("checkoutDiff shows uncommitted edits and untracked files, leaves the index
   assert.match(whole.text, /-first\n\+third/);
 });
 
+test("checkoutDiff preserves racy-index checks for a same-size edit", async (t) => {
+  const cwd = await gitRepo(t);
+  // Isolate the mtime rule; an edit also changes ctime, which would otherwise
+  // make this test depend on update-index and write landing in one second.
+  await git(cwd, "config", "core.trustctime", "false");
+  const file = join(cwd, "README.md");
+  const index = join(cwd, ".git", "index");
+  const past = new Date(Date.now() - 10_000);
+  await utimes(file, past, past);
+  await git(cwd, "update-index", "--refresh");
+  await utimes(index, past, past);
+  await writeFile(file, "dirty\n");
+  await utimes(file, past, past);
+  // The cached stat now matches, and the original index must still treat the
+  // entry as racy and compare its contents.
+  assert.equal(
+    await git(cwd, "diff", "--name-only", "--", "README.md"),
+    "README.md",
+  );
+
+  const diff = await checkoutDiff(cwd, "HEAD");
+  assert.match(diff.text, /-first\n\+dirty/);
+});
+
 test("checkoutDiff throws outside a git checkout and for a ref that does not resolve", async (t) => {
   await assert.rejects(checkoutDiff(await tempDir(t), "HEAD"));
   const cwd = await gitRepo(t);
@@ -148,6 +186,43 @@ test("checkoutDiff throws outside a git checkout and for a ref that does not res
   const clean = await checkoutDiff(cwd, "HEAD");
   assert.deepEqual(clean, { text: "", files: 0, added: 0, removed: 0 });
   assert.equal(await readFile(join(cwd, "README.md"), "utf8"), "first\n");
+});
+
+test("mergeBase finds the fork point, returns undefined only for a missing ref, and reports git failures", async (t) => {
+  const cwd = await gitRepo(t);
+  const fork = await git(cwd, "rev-parse", "HEAD");
+  await git(cwd, "branch", "topic");
+  await writeFile(join(cwd, "README.md"), "second\n");
+  await git(cwd, "commit", "-qam", "second");
+
+  assert.equal(await mergeBase(cwd, "refs/heads/main", "topic"), fork);
+  assert.equal(await mergeBase(cwd, "refs/heads/missing", "topic"), undefined);
+
+  // No shared history is a merge-base failure, not a deleted ref: a room must
+  // return no_diff rather than fall back to a stale saved SHA.
+  await git(cwd, "checkout", "-q", "--orphan", "orphan");
+  await git(cwd, "rm", "-q", "-rf", ".");
+  await writeFile(join(cwd, "orphan.txt"), "orphan\n");
+  await git(cwd, "add", "orphan.txt");
+  await git(cwd, "commit", "-qm", "orphan");
+  await assert.rejects(mergeBase(cwd, "refs/heads/main", "orphan"));
+
+  // A folder that is not a repository is a git failure, not a deleted ref.
+  // Returning undefined would send a room down its saved-SHA fallback and
+  // hide why the current base could not be read.
+  await assert.rejects(mergeBase(await tempDir(t), "refs/heads/main", "HEAD"));
+});
+
+test("isAncestor distinguishes true, false, an unresolvable ancestor and git failures", async (t) => {
+  const cwd = await gitRepo(t);
+  const first = await git(cwd, "rev-parse", "HEAD");
+  await writeFile(join(cwd, "README.md"), "second\n");
+  await git(cwd, "commit", "-qam", "second");
+
+  assert.equal(await isAncestor(cwd, first, "HEAD"), true);
+  assert.equal(await isAncestor(cwd, "HEAD", first), false);
+  assert.equal(await isAncestor(cwd, "0".repeat(40), "HEAD"), false);
+  await assert.rejects(isAncestor(await tempDir(t), "HEAD", "HEAD"));
 });
 
 test("rangeDiff shows only what the source adds, not the target's own commits", async (t) => {

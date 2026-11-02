@@ -43,8 +43,8 @@
  *
  * **A room's checkout is read here too** (M6-6a): `checkoutIdentity` answers
  * which branch `HEAD` is really on, and the base a rebase moved its work
- * onto, so a harness rename or rebase does not leave the room's record and
- * whole-branch diff pointing at the old ref.
+ * onto, so a harness rename or rebase does not leave the room's record stale.
+ * The configured base ref is kept as well as its SHA for the whole-branch diff.
  *
  * **A project's `linkPaths` are mirrored into each new checkout** (#274). A
  * listed directory becomes a real directory with one symlink per top-level
@@ -69,6 +69,7 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { isAncestor } from "./diff.ts";
 import { branchName } from "./ids.ts";
 import { stateDirFor } from "./runtime.ts";
 
@@ -358,24 +359,6 @@ export async function fastForwardCheckout(
   return { sha, moved: sha !== before };
 }
 
-/** `git merge-base --is-ancestor`: exit 1 is false, anything else is a real
- *  failure. The plain `git` helper would read both as `null`. */
-async function isAncestor(
-  cwd: string,
-  ancestor: string,
-  descendant: string,
-): Promise<boolean> {
-  try {
-    await run("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
-      cwd,
-    });
-    return true;
-  } catch (err) {
-    if ((err as { code?: unknown }).code === 1) return false;
-    throw err;
-  }
-}
-
 /** What a checkout's branch says about itself (M6-6a, M7-3). */
 export interface CheckoutIdentity {
   /** The branch `HEAD` names. A harness that renamed its branch reads here. */
@@ -519,6 +502,8 @@ interface Held {
   /** The commit the branch started at. `release` compares against it to tell
    *  a task that did nothing from one that failed with work worth keeping. */
   baseSha: string;
+  /** The configured ref a room re-resolves for its whole-branch diff. */
+  baseRef?: string;
   /** True when the branch is a name the harness renamed into, proven by the
    *  branch's own reflog. Absent for a switch to a branch this run did not
    *  create, and for an ordinary acquired task. */
@@ -535,9 +520,11 @@ export interface Worktrees {
    *  Returns a warning to print when it kept a checkout it meant to remove,
    *  and `null` when retention went as planned. */
   release(taskId: string, action: ReleaseAction): Promise<string | null>;
-  /** The branch and base SHA for an acquired task, or undefined when the task
-   *  never acquired a worktree. Used to write the run record merge reads. */
-  info(taskId: string): { branch: string; baseSha: string } | undefined;
+  /** The branch, base SHA and configured ref for an acquired task, or
+   *  undefined when it never acquired a worktree. Runs use the first two. */
+  info(
+    taskId: string,
+  ): { branch: string; baseSha: string; baseRef?: string } | undefined;
   /** Follows a checkout the harness changed in place: a renamed branch, or a
    *  rebase that moved the commit its work starts from (`checkoutIdentity`).
    *  `release` and `info` read this record, so a room releases the branch the
@@ -551,7 +538,12 @@ export interface Worktrees {
    *  creates nothing. */
   adopt(
     taskId: string,
-    info: { branch: string; baseSha: string; renamed?: boolean },
+    info: {
+      branch: string;
+      baseSha: string;
+      baseRef?: string;
+      renamed?: boolean;
+    },
   ): void;
 }
 
@@ -1023,11 +1015,24 @@ export async function openWorktrees(
           );
         }
 
+        // A room re-resolves a ref for diffs, in the participant checkout.
+        // Keep its full name so HEAD means the repository's branch. Detached
+        // HEAD prints HEAD; a revision such as HEAD~1 prints nothing. Both
+        // stay pinned to the SHA above.
+        const symbolic = await tryGit(root, [
+          "rev-parse",
+          "--verify",
+          "--symbolic-full-name",
+          baseRef,
+        ]);
+        const configuredRef =
+          symbolic && symbolic !== "HEAD" ? symbolic : baseSha;
+
         const path = join(stateDirFor(root), "wt", runId, taskId);
         await mutateWorktrees(() =>
           git(root, ["worktree", "add", "-b", branch, path, baseSha]),
         );
-        held.set(taskId, { path, branch, baseSha });
+        held.set(taskId, { path, branch, baseSha, baseRef: configuredRef });
 
         // **The workspace root keeps its shape.** `--cwd packages/app` in a
         // monorepo asks for that subtree and nothing else, and `#guardPath`
@@ -1070,7 +1075,13 @@ export async function openWorktrees(
         // spread what they get, and `Held.path` is the checkout root — not the
         // workspace `acquire` returned when `--cwd` named a subdirectory.
         const task = held.get(taskId);
-        return task && { branch: task.branch, baseSha: task.baseSha };
+        return (
+          task && {
+            branch: task.branch,
+            baseSha: task.baseSha,
+            ...(task.baseRef && { baseRef: task.baseRef }),
+          }
+        );
       },
 
       update(taskId, changes) {
@@ -1087,12 +1098,13 @@ export async function openWorktrees(
         if (changes.baseSha !== undefined) task.baseSha = changes.baseSha;
       },
 
-      adopt(taskId, { branch, baseSha, renamed }) {
+      adopt(taskId, { branch, baseSha, baseRef, renamed }) {
         const path = join(stateDirFor(root), "wt", runId, taskId);
         held.set(taskId, {
           path,
           branch,
           baseSha,
+          ...(baseRef && { baseRef }),
           ...(renamed === true && { renamed: true }),
         });
       },

@@ -209,6 +209,28 @@ test("acquire checks out the branch at the base ref's commit", async (t) => {
     await git(path, "rev-parse", "--abbrev-ref", "HEAD"),
     branchOf("plan"),
   );
+  assert.equal(worktrees.info("plan")?.baseRef, "refs/heads/main");
+});
+
+test("acquire keeps full refs and pins detached or relative bases", async (t) => {
+  const root = await repo(t);
+  const first = await git(root, "rev-parse", "HEAD");
+  const { worktrees } = await openWorktrees(root, RUN_ID);
+  assert.ok(worktrees);
+
+  await worktrees.acquire("explicit", "main");
+  assert.equal(worktrees.info("explicit")?.baseRef, "refs/heads/main");
+  await worktrees.acquire("pinned", first);
+  assert.equal(worktrees.info("pinned")?.baseRef, first);
+  await writeFile(join(root, "README.md"), "second\n");
+  await git(root, "commit", "-qam", "second");
+  const second = await git(root, "rev-parse", "HEAD");
+  await worktrees.acquire("relative", "HEAD~1");
+  assert.equal(worktrees.info("relative")?.baseRef, first);
+  assert.equal(worktrees.info("relative")?.baseSha, first);
+  await git(root, "checkout", "--detach", "HEAD");
+  await worktrees.acquire("detached");
+  assert.equal(worktrees.info("detached")?.baseRef, second);
 });
 
 test("a base ref that does not resolve throws naming the ref", async (t) => {
