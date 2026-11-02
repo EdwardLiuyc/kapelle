@@ -32,6 +32,7 @@
  * endpoint, is retired with the browser dashboard (A3): no story serves a page.
  */
 
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -54,7 +55,7 @@ import {
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import {
   API_VERSION,
   CAPABILITIES,
@@ -179,6 +180,54 @@ const DEFAULT_PORT = 4719;
 
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
+const execFileAsync = promisify(execFile);
+
+/** Proof of an unrecorded Kapelle daemon, with its pid when the host's tools
+ *  can identify it. `undefined` is another listener, or none that answered.
+ *  No token is needed and the listener is never signalled here. */
+async function unrecordedDaemon(
+  port: number,
+): Promise<{ pid?: number } | undefined> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/version`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (response.status !== 401) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const body = (await response.json()) as {
+      error?: { code?: unknown };
+    } | null;
+    if (body?.error?.code !== "unauthorized") return undefined;
+  } catch {
+    return undefined;
+  }
+
+  const ss = {
+    command: "ss",
+    args: ["-ltnpH", `src 127.0.0.1:${port}`],
+    pattern: /\bpid=(\d+)\b/,
+  };
+  const lsof = {
+    command: "lsof",
+    args: ["-nP", `-iTCP@127.0.0.1:${port}`, "-sTCP:LISTEN", "-Fp"],
+    pattern: /^p(\d+)$/m,
+  };
+  for (const probe of process.platform === "darwin" ? [lsof] : [ss, lsof]) {
+    try {
+      const { stdout } = await execFileAsync(probe.command, probe.args, {
+        encoding: "utf8",
+        timeout: 2_000,
+      });
+      const pid = Number(probe.pattern.exec(stdout)?.[1]);
+      if (Number.isInteger(pid) && pid > 0) return { pid };
+    } catch {
+      // Try the other system tool; a diagnostic must not hide the bind error.
+    }
+  }
+  return {};
+}
 
 /** A startup refusal is one line and exit 1, never a stack trace. */
 function orExit<T>(f: () => T): T {
@@ -195,10 +244,91 @@ function identityPath(file: string): string {
   return `${file}.identity`;
 }
 
+interface DaemonRecord {
+  pid?: unknown;
+  port?: unknown;
+  token?: unknown;
+}
+
+/** Parse `daemon.json`'s shape; malformed JSON has no record. */
+function parseDaemonRecord(text: string): DaemonRecord | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (
+      // The file is external JSON; this is its decode boundary.
+      // pi-lens-ignore: no-runtime-typeof
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as DaemonRecord;
+    }
+  } catch {
+    // Malformed: callers treat it as no record.
+  }
+  return undefined;
+}
+
+type DaemonRecordRead =
+  | { state: "readable"; record: DaemonRecord }
+  | { state: "missing" | "malformed" | "unreadable" };
+
+/** Read and classify a record without treating an I/O failure as absence. */
+function readDaemonRecord(file: string): DaemonRecordRead {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (err) {
+    return {
+      state:
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+          ? "missing"
+          : "unreadable",
+    };
+  }
+  const record = parseDaemonRecord(text);
+  return record === undefined
+    ? { state: "malformed" }
+    : { state: "readable", record };
+}
+
 /** Remove both files a live daemon owns. */
 function removeDaemonFiles(file: string): void {
   rmSync(file, { force: true });
   rmSync(identityPath(file), { force: true });
+}
+
+/** Remove the identity sidecar only while it still names this process. */
+function removeIdentityIfMine(file: string): void {
+  const path = identityPath(file);
+  const identity = readDaemonRecord(path);
+  if (identity.state === "unreadable") return;
+  const pid = identity.state === "readable" ? identity.record.pid : undefined;
+  if (pid !== undefined && pid !== process.pid) return;
+  rmSync(path, { force: true });
+}
+
+/** A replacement record can belong to the daemon taking over as this one
+ *  closes its port. Remove the record only while it still names this daemon,
+ *  and remove our sidecar only while it still names this process. */
+function removeDaemonFilesIfMine(
+  file: string,
+  published: { port: number; token: string } | undefined,
+): void {
+  const read = readDaemonRecord(file);
+  if (read.state === "unreadable") {
+    // The sidecar has its own ownership check and does not need this record.
+    removeIdentityIfMine(file);
+    return;
+  }
+  const record = read.state === "readable" ? read.record : undefined;
+  const mine =
+    record === undefined ||
+    (record.pid === process.pid &&
+      (published === undefined ||
+        (record.port === published.port && record.token === published.token)));
+  if (mine) rmSync(file, { force: true });
+  removeIdentityIfMine(file);
 }
 
 /**
@@ -635,8 +765,28 @@ const childrenFile = join(dir, "children.json");
 
 // Each entry carries the process's start time (M2-5): the sweep signals a pid
 // only when `ps` still reports the same start, so a reused pid is left alone.
+//
+// A replacement daemon can claim the runtime while this one shuts down. Once
+// either record names another process, leave both files alone: they are the
+// replacement's recovery state, not this daemon's to rewrite or delete. This
+// can leave our old children file behind; the boot sweep checks each pid's
+// start time before signalling, so a dead or recycled pid is left alone.
 function recordChildren(): void {
   try {
+    const daemonRecord = readDaemonRecord(file);
+    if (
+      daemonRecord.state === "readable" &&
+      daemonRecord.record.pid !== process.pid
+    ) {
+      return;
+    }
+    const childrenRecord = readDaemonRecord(childrenFile);
+    if (
+      childrenRecord.state === "readable" &&
+      childrenRecord.record.pid !== process.pid
+    ) {
+      return;
+    }
     if (children.size === 0) {
       rmSync(childrenFile, { force: true });
       return;
@@ -2133,9 +2283,14 @@ const server = createServer(
   },
 );
 
+let recordWatch: NodeJS.Timeout | undefined;
+let published: { port: number; token: string } | undefined;
+
 /**
- * SIGTERM or SIGINT: cancel every run, pause every room, wait for each to
- * settle, then remove `daemon.json` and exit 0 (M2-4, #34). An install's npm
+ * SIGTERM, SIGINT or a lost record: cancel every run, pause every room, wait
+ * for each to settle, then remove `daemon.json` and exit 0 (M2-4, #34). Record
+ * loss deliberately exits 0 too: this is a clean shutdown, not a crash, and a
+ * later client can start a fresh daemon. An install's npm
  * is killed rather than waited for, and a check's harness is stopped and its
  * temporary folder cleaned up, so a stop leaves neither running.
  *
@@ -2154,6 +2309,7 @@ const server = createServer(
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
+  if (recordWatch !== undefined) clearInterval(recordWatch);
   console.log(`${signal}: cancelling ${inFlight.size} run(s), then exiting`);
   // Before the pause: a chat screen whose room stream ends must then find no
   // daemon, and wait for the next one (`readRoom` in `client/roomset.ts`).
@@ -2170,7 +2326,7 @@ async function shutdown(signal: string): Promise<void> {
     ...[...rooms.values()].map(({ room }) => room.pause()),
     checksStopped,
   ]);
-  removeDaemonFiles(file);
+  removeDaemonFilesIfMine(file, published);
   process.exit(0);
 }
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -2186,7 +2342,20 @@ await restoreRooms();
 server.on("error", (err) => {
   removeDaemonFiles(file);
   console.error(`cannot listen on 127.0.0.1:${port}: ${messageOf(err)}`);
-  process.exit(1);
+  if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") process.exit(1);
+  void unrecordedDaemon(port)
+    .then((daemon) => {
+      if (daemon === undefined) return;
+      const { pid } = daemon;
+      console.error(
+        pid === undefined
+          ? "the port is owned by an unrecorded Kapelle daemon; its pid " +
+              "could not be identified"
+          : `the port is owned by an unrecorded Kapelle daemon (pid ${pid}); ` +
+              `stop it manually with: kill -TERM ${pid}`,
+      );
+    })
+    .finally(() => process.exit(1));
 });
 
 // The token is published only once the port is open, so a client never reads
@@ -2206,5 +2375,22 @@ server.listen(port, "127.0.0.1", () => {
   });
   renameSync(tmp, file);
   closeSync(fd);
+  published = { port: bound, token };
+  recordWatch = setInterval(() => {
+    const current = readDaemonRecord(file);
+    // EMFILE, EACCES and other read errors can be transient, and must not
+    // cancel active runs and rooms. Only absence or a replaced record is loss.
+    if (current.state === "unreadable") return;
+    const record = current.state === "readable" ? current.record : undefined;
+    if (
+      record?.pid === process.pid &&
+      record.port === bound &&
+      record.token === token
+    ) {
+      return;
+    }
+    void shutdown("daemon.json lost");
+  }, 2_000);
+  recordWatch.unref();
   console.log(`listening on http://127.0.0.1:${bound} (token in ${file})`);
 });

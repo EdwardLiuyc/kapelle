@@ -28,11 +28,12 @@ import {
   mkdir,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -44,6 +45,7 @@ import type {
 } from "../client/contract.ts";
 import {
   addRepo as added,
+  alive,
   api,
   bootDaemon as boot,
   bootFinding,
@@ -256,6 +258,25 @@ test("a runtime directory other users can enter is refused", async (t) => {
   await assert.rejects(readFile(join(dir, "daemon.json")));
 });
 
+test("a missing absolute XDG_RUNTIME_DIR is refused before bind", async (t) => {
+  const holder = await tempDir(t);
+  const runtime = join(holder, "missing");
+  const state = await tempDir(t);
+
+  const r = await exitOf(
+    spawnCli(t, ["--port", "0"], "daemon.ts", dirs(runtime, state)),
+  );
+
+  assert.ok(r, "the daemon started anyway");
+  assert.equal(r.code, 1);
+  assert.match(
+    r.stderr,
+    /XDG_RUNTIME_DIR must name an existing directory: .*missing/,
+  );
+  assert.equal(r.stderr.trim().split("\n").length, 1, "one clear error line");
+  assert.equal(existsSync(runtime), false, "the base was not created");
+});
+
 test("a state directory other users can enter is refused", async (t) => {
   const runtime = await tempDir(t);
   const state = await tempDir(t);
@@ -290,6 +311,310 @@ for (const stale of ["null", "[]", "42"]) {
 }
 
 // --- lifecycle (M2-4) --------------------------------------------------------------
+
+for (const loss of [
+  "removed",
+  "covered",
+  "replaced with another pid",
+  "replaced with another token",
+] as const) {
+  // node:test reports a rejected test promise as a failure.
+  // pi-lens-ignore: unsafe-boundary
+  test(`a daemon.json ${loss} shuts down cleanly and frees the port`, async (t) => {
+    const holder = await tempDir(t);
+    const runtime = join(holder, "runtime");
+    const state = join(holder, "state");
+    await mkdir(runtime, { mode: 0o700 });
+    const d = await boot(t, runtime, [], state);
+    const port = Number(new URL(d.url).port);
+    let replacement: string | undefined;
+
+    switch (loss) {
+      case "removed":
+        await rm(d.file);
+        break;
+      case "covered":
+        await rename(runtime, `${runtime}.hidden`);
+        await mkdir(runtime, { mode: 0o700 });
+        break;
+      case "replaced with another pid":
+        // A live pid outside the daemon makes this unmistakably not its record.
+        replacement = JSON.stringify({
+          pid: process.pid,
+          port,
+          token: "replacement",
+        });
+        await writeFile(d.file, replacement, { mode: 0o600 });
+        break;
+      case "replaced with another token":
+        replacement = JSON.stringify({
+          pid: d.pid,
+          port,
+          token: "replacement",
+        });
+        await writeFile(d.file, replacement, { mode: 0o600 });
+        break;
+    }
+
+    const started = Date.now();
+    const exit = await d.done;
+    assert.equal(exit.code, 0, exit.stderr);
+    assert.ok(Date.now() - started < 10_000, "record loss was not bounded");
+    assert.match(exit.stdout, /daemon\.json lost: cancelling/);
+    await assert.rejects(
+      readFile(`${d.file}.identity`),
+      "shutdown left this daemon's identity behind",
+    );
+    if (replacement !== undefined) {
+      assert.equal(
+        await readFile(d.file, "utf8"),
+        replacement,
+        "shutdown did not delete the replacement record",
+      );
+    }
+
+    const probe = createServer();
+    await new Promise<void>((ok, fail) => {
+      probe.once("error", fail);
+      probe.listen(port, "127.0.0.1", ok);
+    });
+    await new Promise<void>((ok) => probe.close(() => ok()));
+  });
+}
+
+test("an unreadable daemon.json is not record loss", {
+  skip: process.getuid?.() === 0 && "root reads any mode",
+}, async (t) => {
+  const d = await boot(t);
+
+  await chmod(d.file, 0o000);
+  // Cross more than one record-watch tick. The file is still present, but a
+  // non-root daemon cannot read it until its mode is restored.
+  await new Promise((ok) => setTimeout(ok, 2_500));
+  assert.equal(alive(d.pid), true, "a read error cancelled the daemon");
+  assert.equal((await api(d, "GET", "/runs")).status, 200);
+
+  await chmod(d.file, 0o600);
+  process.kill(d.pid, "SIGTERM");
+  assert.equal((await d.done).code, 0);
+});
+
+test("shutdown does not delete an unreadable daemon.json", {
+  skip: process.getuid?.() === 0 && "root reads any mode",
+}, async (t) => {
+  const d = await boot(t);
+  const before = await readFile(d.file, "utf8");
+  await chmod(d.file, 0o000);
+
+  process.kill(d.pid, "SIGTERM");
+  const exit = await d.done;
+  assert.equal(exit.code, 0, exit.stderr);
+
+  await chmod(d.file, 0o600);
+  assert.equal(
+    await readFile(d.file, "utf8"),
+    before,
+    "shutdown removed a record whose ownership was unknown",
+  );
+  await assert.rejects(
+    readFile(`${d.file}.identity`),
+    "a readable identity owned by this daemon was not removed",
+  );
+});
+
+test("shutdown does not delete an unreadable identity", {
+  skip: process.getuid?.() === 0 && "root reads any mode",
+}, async (t) => {
+  const d = await boot(t);
+  const identity = `${d.file}.identity`;
+  const before = await readFile(identity, "utf8");
+  await chmod(identity, 0o000);
+
+  process.kill(d.pid, "SIGTERM");
+  const exit = await d.done;
+  assert.equal(exit.code, 0, exit.stderr);
+
+  await chmod(identity, 0o600);
+  assert.equal(
+    await readFile(identity, "utf8"),
+    before,
+    "shutdown removed an identity whose ownership was unknown",
+  );
+});
+
+test("a lost daemon.json runs the clean shutdown for a live harness", async (t) => {
+  const holder = await tempDir(t);
+  const runtime = join(holder, "runtime");
+  const state = join(holder, "state");
+  await mkdir(runtime, { mode: 0o700 });
+  const d = await boot(t, runtime, [], state);
+  const harness = await stalledHarness(t, d);
+
+  await rm(d.file);
+  const exit = await d.done;
+  assert.equal(exit.code, 0, exit.stderr);
+  assert.match(exit.stdout, /daemon\.json lost: cancelling 1 run\(s\)/);
+  assert.equal(await gone(harness), true, "the harness outlived the daemon");
+  await assert.rejects(
+    readFile(join(d.file, "..", "children.json")),
+    "children.json is removed once the shut-down run has no live harness",
+  );
+});
+
+test("a lost daemon.json keeps a replacement daemon's children record", async (t) => {
+  const holder = await tempDir(t);
+  const runtime = join(holder, "runtime");
+  const state = join(holder, "state");
+  await mkdir(runtime, { mode: 0o700 });
+  const d = await boot(t, runtime, [], state);
+  const harness = await stalledHarness(t, d);
+  const childrenFile = join(d.file, "..", "children.json");
+  await until("the harness identity is recorded", async () => {
+    let record: { children?: { startedAt?: unknown }[] };
+    try {
+      record = JSON.parse(await readFile(childrenFile, "utf8")) as {
+        children?: { startedAt?: unknown }[];
+      };
+    } catch {
+      return false;
+    }
+    return typeof record.children?.[0]?.startedAt === "string";
+  });
+
+  // Another daemon can claim the runtime while this one stops. Its harness
+  // record must survive this daemon's exit, or a later crash loses the pids.
+  const replacement = `${JSON.stringify({ pid: process.pid, children: [] })}\n`;
+  await writeFile(childrenFile, replacement, { mode: 0o600 });
+  await rm(d.file);
+
+  const exit = await d.done;
+  assert.equal(exit.code, 0, exit.stderr);
+  assert.equal(await gone(harness), true, "the harness outlived the daemon");
+  assert.equal(
+    await readFile(childrenFile, "utf8"),
+    replacement,
+    "shutdown deleted the replacement daemon's children record",
+  );
+});
+
+test("an unrecorded Kapelle listener gets a manual-stop diagnostic", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const ready = join(state, "listener-ready.json");
+  const script = join(state, "unrecorded-listener.mjs");
+  await writeFile(
+    script,
+    `
+import { createServer } from "node:http";
+import { writeFileSync } from "node:fs";
+const [ready] = process.argv.slice(2);
+const server = createServer((_req, res) => {
+  res.writeHead(401, { "content-type": "application/json" });
+  res.end(JSON.stringify({
+    error: { code: "unauthorized", message: "token required" },
+  }));
+});
+server.listen(0, "127.0.0.1", () => {
+  writeFileSync(ready, JSON.stringify({ port: server.address().port }));
+  console.log("ready");
+});
+`,
+    { mode: 0o600 },
+  );
+  const listener = spawnCli(t, [ready], script);
+  await listener.waitFor("ready");
+  const { port } = JSON.parse(await readFile(ready, "utf8")) as {
+    port: number;
+  };
+  assert.ok(listener.child.pid !== undefined);
+  const listenerPid = listener.child.pid;
+  const bin = join(state, "bin");
+  await mkdir(bin);
+  // An unscoped query gets another address's pid first. A correctly scoped
+  // query gets only the loopback listener that answered the 401 probe.
+  await writeFile(
+    join(bin, "ss"),
+    `#!/bin/sh
+case "$*" in
+  *"src 127.0.0.1:${port}"*)
+    printf 'LISTEN 0 511 127.0.0.1:${port} 0.0.0.0:* users:((listener,pid=${listenerPid},fd=1))\\n'
+    ;;
+  *)
+    printf 'LISTEN 0 511 0.0.0.0:${port} 0.0.0.0:* users:((other,pid=${process.pid},fd=2))\\nLISTEN 0 511 127.0.0.1:${port} 0.0.0.0:* users:((listener,pid=${listenerPid},fd=1))\\n'
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+
+  const attempted = await exitOf(
+    spawnCli(t, ["--port", String(port)], "daemon.ts", {
+      ...dirs(runtime, state),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    }),
+  );
+
+  assert.ok(attempted, "the second daemon kept running");
+  assert.equal(attempted.code, 1);
+  assert.ok(
+    attempted.stderr.includes(
+      `unrecorded Kapelle daemon (pid ${listener.child.pid})`,
+    ),
+    attempted.stderr,
+  );
+  assert.ok(
+    attempted.stderr.includes(`kill -TERM ${listener.child.pid}`),
+    attempted.stderr,
+  );
+  assert.equal(
+    attempted.stderr.includes(`(pid ${process.pid})`),
+    false,
+    "an unscoped ss result named the non-loopback listener",
+  );
+  assert.doesNotMatch(attempted.stderr, /no daemon/i);
+  assert.equal(
+    alive(listener.child.pid),
+    true,
+    "the failed start signalled the listener",
+  );
+});
+
+test("a real daemon's unauthorized reply needs no host pid tools", async (t) => {
+  const first = await boot(t);
+  const port = Number(new URL(first.url).port);
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const bin = join(state, "bin");
+  await mkdir(bin);
+  for (const tool of ["ss", "lsof"]) {
+    await writeFile(join(bin, tool), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  }
+
+  const attempted = await exitOf(
+    spawnCli(t, ["--port", String(port)], "daemon.ts", {
+      ...dirs(runtime, state),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    }),
+  );
+
+  assert.ok(attempted, "the second daemon kept running");
+  assert.equal(attempted.code, 1);
+  assert.ok(
+    attempted.stderr.includes(
+      "the port is owned by an unrecorded Kapelle daemon",
+    ),
+    attempted.stderr,
+  );
+  assert.ok(
+    attempted.stderr.includes("pid could not be identified"),
+    attempted.stderr,
+  );
+  assert.doesNotMatch(attempted.stderr, /kill -TERM/);
+  assert.equal(alive(first.pid), true, "the failed start killed the listener");
+  assert.equal((await api(first, "GET", "/runs")).status, 200);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+});
 
 /** Starts a run whose harness never ends its turn, and returns the pid the
  *  daemon recorded for it in `children.json`. */
