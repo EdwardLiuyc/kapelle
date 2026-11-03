@@ -279,7 +279,7 @@ does not read it.
 ## Review triage
 
 Sort every review finding by its impact, whoever wrote it: a person, the review bot or
-`review-local`.
+`review-local`. There are two levels, `blocker` and `nit`. A stale doc is neither.
 
 - **Blocker.** The code and its owner doc disagree (a contract mismatch), a contract
   statement is missing, a bug, or a changed behaviour with no test. Fix it in this PR.

@@ -91,10 +91,9 @@ round:
   `gh pr checks <pr> --watch`.
 - **Any code that runs differently**, a nit included: add `rev3` from `dev`'s branch. It
   runs the `review-local` skill for the issue, as developer and tester, with `--base X`:
-  "The change is only the
-  commits after X." Its report names the commits it covered. Check them: they run from
-  just after `X` to `dev`'s last commit. If not, send `rev3` back once. Land it as the
-  orchestrator skill says. Then `dev` pushes and reads CI green with
+  "The change is only the commits after X." Its report names the commits it covered.
+  Check them: they run from just after `X` to `dev`'s last commit. If not, send `rev3`
+  back once. Land it as the orchestrator skill says. Then `dev` pushes and reads CI green with
   `gh pr checks <pr> --watch`. Nothing checks after `rev3`, except CI.
 
 ## Protected paths
