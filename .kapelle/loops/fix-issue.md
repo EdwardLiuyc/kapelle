@@ -46,7 +46,8 @@ A skill starts with `/<name>` in claude and with `/skill:<name>` in pi. For exam
 8. **Outside review.** Below.
 9. **Last check.** Below.
 10. **Hand over.** The person reads the PR and runs `merge-close` with `dev`. With more
-    than one commit, recommend a squash merge.
+    than one commit, recommend a squash merge. The report lists every nit marked
+    "separate issue"; the person picks which ones become issues.
 
 ## The outside review
 

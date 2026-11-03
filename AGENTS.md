@@ -286,8 +286,8 @@ Sort every review finding by its impact, whoever wrote it: a person, the review 
 - **Not a blocker (a nit).** Wording, the direction of a comment, a duplicate, an
   optional refactor. Fix the nits together in one commit, or reply why not.
 - **A stale doc the change did not touch** is a `nit` marked "separate issue". It is
-  not fixed in this PR. Whoever can post to the forge opens the issue; a local review
-  only reports it.
+  not fixed in this PR, and no agent opens an issue for it. The reply and the
+  hand-over report list it; the person picks which ones become issues.
 
 A round whose fixes are docs-only or nits only gets no new full review. Check it by
 reading its diff, with the focused tests and CI.

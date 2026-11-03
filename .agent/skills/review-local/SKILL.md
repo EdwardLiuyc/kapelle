@@ -257,7 +257,7 @@ Do not stage, do not commit, do not branch, do not push (S2).
   fix as a suggested diff instead.
 - A `plausible` finding is a question, so it has no fix. Leave it unfixed.
 - A finding the triage rule (S8) sends to a separate issue stays unfixed:
-  `not applied: separate issue`. Do not open the issue (S2).
+  `not applied: separate issue`. Do not open an issue (S2).
 - A gate failure is fixed too, when the fix is clear.
 - The operator may have edited the files since step 3. If an edit does not match, skip that
   fix, and report it as "not applied: the file moved on".

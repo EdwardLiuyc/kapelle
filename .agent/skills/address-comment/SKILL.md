@@ -88,8 +88,9 @@ What to watch for, each of which has bitten this repo:
 silence a report you did not verify is how a stale finding becomes a real defect.
 
 Then sort each valid finding by impact, as `AGENTS.md`, "Review triage", says: a blocker
-or a nit. Open an issue for a nit marked "separate issue". Fix the other nits together
-in one commit.
+or a nit. A nit marked "separate issue" is not fixed and gets no issue: list it in the
+reply and in the step 5 report, for the person. Fix the other nits together in one
+commit.
 
 ### 3. Fix, self-check, gate, push, and read CI
 
