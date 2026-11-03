@@ -558,6 +558,8 @@ test("^C at attach's y/N prompt exits 130 and leaves the run running", {
 });
 
 test("an answer typed after the timeout decided is the daemon's 409, printed, and attach carries on", {
+  // One scenario drives the daemon, PTY and permission API together.
+  // pi-lens-ignore: high-fan-out
   skip: noScript,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -565,6 +567,7 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
   const d = await boot(t, runtime, ["--permission-timeout", "3"]);
   const cwd = await added(d, await tempDir(t));
   const id = await detach(t, env, cwd, askRun(cwd).run);
+  const permission = await pendingOne(d);
 
   const child = spawn(
     "script",
@@ -572,25 +575,30 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
     { cwd: REPO, env: { ...process.env, ...env } },
   );
   t.after(() => void child.kill("SIGKILL"));
+  const closed = new Promise<number | null>((ok) => child.on("close", ok));
   let out = "";
   let asked = 0;
   child.stdout.setEncoding("utf8").on("data", (text: string) => {
     out += text;
-    const now = out.split("allow? [y/N]").length - 1;
-    // The edit is answered 4 s after it is asked: past its 3 s timeout, and
-    // inside the delete's, which is queued only once the edit is denied. So
-    // the run is still live when the late answer lands, and the delete is
-    // answered at once.
-    for (; asked < now; asked++) {
-      const late = asked === 0;
-      setTimeout(
-        () => child.stdin.write(late ? "y\n" : "n\n"),
-        late ? 4000 : 0,
-      );
-    }
+    asked = out.split("allow? [y/N]").length - 1;
   });
 
-  assert.equal(await new Promise((ok) => child.on("close", ok)), 0, out);
+  await until("the edit prompt", () => asked >= 1);
+  // A slow daemon can settle its timer after a fixed-delay answer. Wait for
+  // the recorded timeout so the late answer must get the daemon's 409.
+  await until("the edit permission to time out", async () => {
+    const r = await api<{ reason?: string }>(
+      d,
+      "GET",
+      `/permissions/${permission.id}`,
+    );
+    return r.body.reason === "timeout";
+  });
+  child.stdin.write("y\n");
+  await until("the delete prompt", () => asked >= 2);
+  child.stdin.write("n\n");
+
+  assert.equal(await closed, 0, out);
   assert.match(out, /error: permission \S+ was already decided/);
   assert.match(out, /done — 1 task/);
   // The timeout's deny stands: the late "y" wrote nothing.
