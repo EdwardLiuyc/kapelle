@@ -87,8 +87,9 @@ What to watch for, each of which has bitten this repo:
 **Never change code to satisfy a finding you have not reproduced.** A change made to
 silence a report you did not verify is how a stale finding becomes a real defect.
 
-Then sort each valid finding by impact, as `AGENTS.md`, "Review triage", says: a blocker,
-a nit, or a stale doc for a separate issue. Fix the nits together in one commit.
+Then sort each valid finding by impact, as `AGENTS.md`, "Review triage", says: a blocker
+or a nit. Open an issue for a nit marked "separate issue". Fix the other nits together
+in one commit.
 
 ### 3. Fix, self-check, gate, push, and read CI
 
@@ -99,7 +100,8 @@ found a bug that the last round's fix made (#422). These checks find it first:
   Then put the fix back. Say in the reply that you saw it fail. A fix with no test, such
   as a doc fix, says so instead.
 - **The opposite case.** Test the case the reviewer did not trace: the reverse order,
-  the other branch, the failure path, and a root user where a file mode matters.
+  the other branch, the failure path, and the environment the test assumed (for
+  example, a root user where a file mode matters).
 - **The siblings.** `grep` for the same name, literal or pattern. Fix every copy, or say
   in the reply why one stays.
 
@@ -116,7 +118,8 @@ gate.
 Then commit and push:
 
 - One commit per distinct concern. A review round that touches one area is one commit; a
-  bug in a different file, found while fixing, is its own.
+  bug in a different file, found while fixing, is its own. Nits are the exception: one
+  commit for all of them, in any number of files.
 - The message says which findings it closes, which were rejected, and why — that reasoning
   is the part that survives into the log.
 - **Amend only a commit that has never been pushed.** Once it is on the remote, a follow-up

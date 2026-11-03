@@ -68,15 +68,17 @@ round does not chase the last round's fix.
   `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | last | .url, .body'`.
 - **Sorting:** each finding is a blocker or not, as `AGENTS.md`, "Review triage", says.
   From round 2, the bot marks each point; `dev` takes the mark as a first guess and
-  checks it against the code. A nit is "not a blocker".
+  checks it against the code. A nit is "not a blocker". In the orchestrator skill's
+  words, `real` is a blocker and `nit` is a nit; a `choice` stops the loop whatever its
+  level.
 - **Answer:** `dev` runs the `address-comment` skill for the PR, on the latest comment,
   with its self-checks before each push. When the order says the next round is the last
   one, `dev` first reads the findings of every round together and looks for a shared
   cause. It proves each fix: a test that fails before the fix and passes after it, or a
   reason from the code. No fix is a guess.
-- **No next round** when no point is a blocker, or when the round's fixes are docs-only
-  or nits only. `dev` still fixes the small points and pushes them; the last check reads
-  them.
+- **No next round** when no point is a blocker, or when `AGENTS.md`, "Review triage",
+  says the round's fixes need none. `dev` still fixes the small points and pushes them;
+  the last check reads them.
 - **Rounds:** at most 3.
 
 ## The last check
@@ -91,10 +93,11 @@ round:
   `gh pr checks <pr> --watch`.
 - **Any code that runs differently**, a nit included: add `rev3` from `dev`'s branch. It
   runs the `review-local` skill for the issue, as developer and tester, with `--base X`:
-  "The change is only the commits after X." Its report names the commits it covered.
-  Check them: they run from just after `X` to `dev`'s last commit. If not, send `rev3`
-  back once. Land it as the orchestrator skill says. Then `dev` pushes and reads CI green with
-  `gh pr checks <pr> --watch`. Nothing checks after `rev3`, except CI.
+  "The change is only the commits after X." Its report's `commits:` line names the
+  commits it covered. Check them: they run from just after `X` to `dev`'s last commit.
+  If not, send `rev3` back once. Land it as the orchestrator skill says. Then `dev`
+  pushes and reads CI green with `gh pr checks <pr> --watch`. Nothing checks after
+  `rev3`, except CI.
 
 ## Protected paths
 

@@ -162,8 +162,8 @@ round's fix. Each round:
    If a finding is a choice, stop for it. If the review finished and every finding is
    a nit, the review loop ends. A worker fixes the nits only if the recipe says so, and
    no round follows.
-3. Otherwise a worker answers it. If its fixes change only docs or nits, the review
-   loop ends there. If not, it triggers the next round. When the next round is the last
+3. Otherwise a worker answers it. If its fixes change only docs, or answer only nits,
+   the review loop ends there. If not, it triggers the next round. When the next round is the last
    one, say so in the order.
 
 The limit is hard. Never start more rounds than the limit, and at the limit never

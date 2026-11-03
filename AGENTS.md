@@ -279,14 +279,15 @@ does not read it.
 ## Review triage
 
 Sort every review finding by its impact, whoever wrote it: a person, the review bot or
-`review-local`. There are two levels, `blocker` and `nit`. A stale doc is neither.
+`review-local`. There are two levels, `blocker` and `nit`.
 
 - **Blocker.** The code and its owner doc disagree (a contract mismatch), a contract
   statement is missing, a bug, or a changed behaviour with no test. Fix it in this PR.
 - **Not a blocker (a nit).** Wording, the direction of a comment, a duplicate, an
   optional refactor. Fix the nits together in one commit, or reply why not.
-- **A stale doc the change did not touch.** Open a separate issue. It is not part of
-  this PR.
+- **A stale doc the change did not touch** is a `nit` marked "separate issue". It is
+  not fixed in this PR. Whoever can post to the forge opens the issue; a local review
+  only reports it.
 
 A round whose fixes are docs-only or nits only gets no new full review. Check it by
 reading its diff, with the focused tests and CI.
