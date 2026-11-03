@@ -292,17 +292,25 @@ test("chat.ts on a real terminal: /term runs a shell in the room's folder that r
   await run(`[ "$(pwd)" = '${cwd}' ] && echo "here=$((1))"`, /here=1/);
   await run('echo $$ > shell.pid; echo "saved=$((1))"', /saved=1/);
   const before = await size();
+  assert.equal(before.cols, 66, "the shell starts inside the sidebar");
   // ctrl+] gives the keys back; ctrl+t hides the sidebar, so the pane widens.
   await press("\x1d", "ctrl+] keys here");
-  child.stdin.write("\x14");
+  await press("\x14", "»");
   await press("\x1d", "ctrl+] keys back");
-  const after = await size();
+  // The shell resizes after the frame, so wait for its exact new width.
+  let after = before;
+  for (const until = Date.now() + 10_000; ; ) {
+    after = await size();
+    if (after.cols === 96) break;
+    assert.ok(Date.now() < until, `the shell kept ${after.cols} columns`);
+  }
   assert.equal(after.rows, before.rows);
   assert.equal(
     after.cols,
     before.cols + 30,
     "the sidebar's 32 less the strip's 2",
   );
+  assert.equal(after.cols, 96, "the shell reaches the wider pane");
   // A shorter screen gives the shell fewer rows. The resize reaches the
   // shell after a redraw, so ask until it shows.
   const tty = (await readFile(outer, "utf8")).trim();

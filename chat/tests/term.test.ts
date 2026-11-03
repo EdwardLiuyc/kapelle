@@ -6,7 +6,14 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -126,6 +133,115 @@ async function shows(shell: Shell, text: string) {
   }
 }
 
+/** Whether `path` exists. */
+async function exists(path: string) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Waits for `ready`, failing with `why` at the deadline. */
+async function waitFor(
+  ready: () => boolean | Promise<boolean>,
+  why: string,
+  ms = 5000,
+) {
+  for (const until = Date.now() + ms; ; ) {
+    if (await ready()) return;
+    assert.ok(Date.now() < until, why);
+    await new Promise((ok) => setTimeout(ok, 20));
+  }
+}
+
+/** Non-empty lines in `path`; zero until the file exists. */
+async function countLines(path: string) {
+  try {
+    const text = await readFile(path, "utf8");
+    return text ? text.trimEnd().split("\n").length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** The pty's reported size, once `shell` shows it. */
+async function showsPtySize(shell: Shell, cols: number, size: string) {
+  shell.key('echo "size=$(stty size)"\r');
+  await waitFor(
+    () => shell.rows(cols, 5, false).join("\n").includes(`size=${size}`),
+    `the pty never reported ${size}`,
+  );
+}
+
+/**
+ * A `stty` on `PATH`: external `-F` calls run `external`, while the shell's
+ * own calls reach the real one. PATH must stay changed until after
+ * `startShell`, so this cannot use `shellIn`'s temporary `env`.
+ */
+async function fakeStty(
+  t: test.TestContext,
+  external: (p: { bin: string; real: string }) => string,
+) {
+  const bin = await mkdtemp(join(tmpdir(), "bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  const real = spawnSync("sh", ["-c", "command -v stty"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  assert.ok(real, "stty is installed");
+  await writeFile(
+    join(bin, "stty"),
+    `#!/bin/sh
+case " $* " in
+  *" -F "*) ${external({ bin, real })}
+    ;;
+esac
+exec '${real}' "$@"
+`,
+  );
+  await chmod(join(bin, "stty"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+  return bin;
+}
+
+/** A `tty` that prints its path without a newline, as Ubuntu 26.04's. */
+async function fakeTtyWithoutNewline(t: test.TestContext) {
+  const bin = await mkdtemp(join(tmpdir(), "bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  const real = spawnSync("sh", ["-c", "command -v tty"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  assert.ok(real, "tty is installed");
+  await writeFile(
+    join(bin, "tty"),
+    `#!/bin/sh
+path=$('${real}') || exit $?
+printf %s "$path"
+`,
+  );
+  await chmod(join(bin, "tty"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+}
+
+test("a pty path without a newline still resizes (#423 review)", {
+  skip: noScript,
+}, async (t) => {
+  await fakeTtyWithoutNewline(t);
+  const { shell } = await shellIn(t);
+  await shows(shell, "$");
+  shell.rows(35, 5, false);
+  await showsPtySize(shell, 35, "5 35");
+});
+
 test("a start size under one is one, so stty takes it (PR #286)", {
   skip: noScript,
 }, async (t) => {
@@ -170,6 +286,109 @@ test("a script that refuses to start says why (PR #286)", async (t) => {
   );
 });
 
+test("a failed stty resize is retried at the same size (#423)", {
+  skip: noScript,
+}, async (t) => {
+  const bin = await fakeStty(
+    t,
+    ({ bin: dir, real }) => `
+if [ ! -e '${dir}/failed' ]; then
+  : > '${dir}/failed'
+  exit 1
+fi
+'${real}' "$@" || exit $?
+: > '${dir}/resized'
+exit 0
+`,
+  );
+  const { shell } = await shellIn(t);
+  await shows(shell, "$");
+  shell.rows(35, 5, false);
+  await waitFor(() => exists(join(bin, "resized")), "stty was not retried");
+  await showsPtySize(shell, 35, "5 35");
+});
+
+test("a hung stty resize is timed out and retried (#423 review)", {
+  skip: noScript,
+}, async (t) => {
+  const bin = await fakeStty(
+    t,
+    ({ bin: dir, real }) => `
+if [ ! -e '${dir}/hung' ]; then
+  : > '${dir}/hung'
+  exec sleep 7
+fi
+'${real}' "$@" || exit $?
+: > '${dir}/resized'
+exit 0
+`,
+  );
+  const { shell } = await shellIn(t);
+  await shows(shell, "$");
+  shell.rows(35, 5, false);
+  await waitFor(
+    () => exists(join(bin, "resized")),
+    "stty was not retried after hanging",
+  );
+  await showsPtySize(shell, 35, "5 35");
+});
+
+test("a failed resize stops after three stty tries (#423 review)", {
+  skip: noScript,
+}, async (t) => {
+  const bin = await fakeStty(
+    t,
+    ({ bin: dir }) => `
+printf 'x\\n' >> '${dir}/calls'
+exit 1
+`,
+  );
+  const calls = join(bin, "calls");
+  const { shell } = await shellIn(t);
+  await shows(shell, "$");
+  shell.rows(35, 5, false);
+  await waitFor(
+    async () => (await countLines(calls)) >= 3,
+    "stty was not tried three times",
+  );
+  await new Promise((ok) => setTimeout(ok, 300));
+  assert.equal(await countLines(calls), 3);
+  await showsPtySize(shell, 40, "5 40");
+});
+
+test("a failed older size keeps the newer size's retries (#423 review)", {
+  skip: noScript,
+}, async (t) => {
+  const bin = await fakeStty(
+    t,
+    ({ bin: dir, real }) => `
+printf 'x\\n' >> '${dir}/calls'
+calls=$(wc -l < '${dir}/calls')
+if [ "$calls" -le 4 ]; then
+  sleep 0.1
+  exit 1
+fi
+'${real}' "$@" || exit $?
+: > '${dir}/resized'
+exit 0
+`,
+  );
+  const calls = join(bin, "calls");
+  const { shell } = await shellIn(t);
+  await shows(shell, "$");
+  shell.rows(30, 5, false);
+  await waitFor(
+    async () => (await countLines(calls)) >= 2,
+    "the first size did not reach its retry",
+  );
+  shell.rows(35, 5, false);
+  await waitFor(
+    () => exists(join(bin, "resized")),
+    "the newer size lost its retries",
+  );
+  await showsPtySize(shell, 35, "5 35");
+});
+
 test("after a burst of resizes the pty has the last size (PR #286)", {
   skip: noScript,
 }, async (t) => {
@@ -177,12 +396,15 @@ test("after a burst of resizes the pty has the last size (PR #286)", {
   await shows(shell, "$");
   // One stty runs at a time; the sizes asked meanwhile end in the last one.
   for (const cols of [30, 31, 32, 33, 34, 35]) shell.rows(cols, 5, false);
-  await new Promise((ok) => setTimeout(ok, 500));
-  shell.key('echo "size=$(stty size)"\r');
+  // Ask again until the shell reports the last size: one stty may still be
+  // running, and a single early answer would stay wrong on screen.
   for (const until = Date.now() + 5000; ; ) {
-    const screen = shell.rows(35, 5, false).join("\n");
-    if (screen.includes("size=5 35")) break;
-    assert.ok(Date.now() < until, screen);
-    await new Promise((ok) => setTimeout(ok, 20));
+    shell.key('echo "size=$(stty size)"\r');
+    for (const next = Date.now() + 100; Date.now() < next; ) {
+      const screen = shell.rows(35, 5, false).join("\n");
+      if (screen.includes("size=5 35")) return;
+      await new Promise((ok) => setTimeout(ok, 20));
+    }
+    assert.ok(Date.now() < until, "the pty never reported 5 35");
   }
 });

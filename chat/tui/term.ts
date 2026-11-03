@@ -13,8 +13,10 @@
  * failure is a shell that ends. We talk to it over pipes. The inner command
  * writes the pty's path to fd 3 first, and a resize is `stty rows r cols c`
  * on that path from outside: the kernel then sends the shell SIGWINCH
- * (measured 2026-10-13). macOS takes other flags (`script -q /dev/null
- * cmd`, `stty -f`), and they are not measured yet.
+ * (measured 2026-10-13). A failed or hung resize is retried at the same
+ * size; after three tries that geometry is left until the pane changes.
+ * macOS takes other flags (`script -q /dev/null cmd`, `stty -f`), and they
+ * are not measured yet.
  *
  * **The screen is `@xterm/headless`**, pinned, under M1c-7's rule as amended
  * here: it is pure JS with no dependency, it only turns the shell's bytes
@@ -38,6 +40,11 @@ import xterm from "@xterm/headless";
 import { printable } from "../../client/room.ts";
 
 const MAC = process.platform === "darwin";
+/** A failed or timed-out `stty` gets three tries, this far apart, before
+ *  that geometry waits for the pane to change. */
+const RESIZE_TRIES = 3;
+const RESIZE_RETRY_MS = 50;
+const RESIZE_TIMEOUT_MS = 1000;
 
 /** The legacy bytes of a key with no modifier. */
 const SPECIAL: Record<string, string> = {
@@ -159,7 +166,7 @@ function sgrOf(c: Cell, cursor: boolean) {
   if (c.isDim()) s += ";2";
   if (c.isItalic()) s += ";3";
   if (c.isUnderline()) s += ";4";
-  if (!!c.isInverse() !== cursor) s += ";7";
+  if (Boolean(c.isInverse()) !== cursor) s += ";7";
   if (c.isInvisible()) s += ";8";
   if (c.isStrikethrough()) s += ";9";
   s += colour(30, c.isFgPalette(), c.isFgRGB(), c.getFgColor());
@@ -262,7 +269,7 @@ export function startShell(
     stdio: ["pipe", "pipe", "pipe", "pipe"],
     env: { ...process.env, SHELL: "/bin/sh", TERM: "xterm-256color" },
   });
-  // All four are pipes, as `stdio` asks: Node types them as maybe null.
+  // SAFETY: stdio asks for four pipes; Node types them as maybe null.
   const [stdin, stdout, stderr, told] = child.stdio as unknown as [
     Writable,
     Readable,
@@ -315,27 +322,53 @@ export function startShell(
   let applied = `${rows} ${cols}`;
   /** One `stty` at a time: two run as two processes, and the older could
    *  land last and leave the pty at its size. The size is read again when
-   *  one ends. */
+   *  one ends. A failure is retried at the same size; a hung one is timed
+   *  out first. After three tries, that geometry waits for the pane. */
   let resizing = false;
+  let tries = 0;
+  let failed = "";
   const sync = () => {
-    const want = `${rows} ${cols}`;
-    if (!pts || resizing || want === applied) return;
-    applied = want;
+    const r = rows;
+    const c = cols;
+    const want = `${r} ${c}`;
+    if (how !== undefined || !pts || resizing || want === applied) return;
+    if (want === failed) return;
     resizing = true;
     const flag = MAC ? "-f" : "-F";
-    // A failed resize leaves the old size: cosmetic.
-    execFile("stty", [flag, pts, "rows", `${rows}`, "cols", `${cols}`], () => {
-      resizing = false;
-      sync();
-    });
+    execFile(
+      "stty",
+      [flag, pts, "rows", `${r}`, "cols", `${c}`],
+      { timeout: RESIZE_TIMEOUT_MS },
+      (err) => {
+        resizing = false;
+        if (!err) {
+          applied = want;
+          tries = 0;
+          failed = "";
+          sync();
+          return;
+        }
+        if (how !== undefined) return;
+        // A frame may have asked for another size while stty ran.
+        if (`${rows} ${cols}` !== want) {
+          tries = 0;
+          sync();
+          return;
+        }
+        tries += 1;
+        if (tries >= RESIZE_TRIES) {
+          tries = 0;
+          failed = want;
+          return;
+        }
+        setTimeout(sync, RESIZE_RETRY_MS).unref();
+      },
+    );
   };
-  let path = "";
-  told.on("data", (b: Buffer) => {
-    path += b.toString();
-    if (path.endsWith("\n")) {
-      pts = path.trim();
-      sync();
-    }
+  // Ubuntu 26.04's uutils `tty` writes the short path without a newline.
+  told.once("data", (b: Buffer) => {
+    pts = b.toString().trim();
+    sync();
   });
 
   return {
@@ -352,6 +385,8 @@ export function startShell(
         if (c !== cols || r !== rows) {
           cols = c;
           rows = r;
+          tries = 0;
+          failed = "";
           term.resize(cols, rows);
           sync();
         }
