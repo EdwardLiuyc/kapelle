@@ -20,7 +20,6 @@ do not restate it. A restated fact goes stale in one place and stays right in th
 | the config keys | `docs/CONFIG.md` |
 | what each harness was measured to do | `docs/FINDINGS.md`. A section such as `§M0-4` or `§Multi-turn`, named in this file or a source comment, is a section there. |
 | the work breakdown, and the reason for each decision | `docs/STORIES.md` |
-| the offline coverage workflow and baseline | `docs/COVERAGE.md` |
 | what three runs of an orchestrator agent showed, the evidence for M8 | `docs/ORCHESTRATOR-SPIKES.md` |
 | why, what in what order, and the decision register for M4–M6 | `docs/PROJECT-BRIEF.md`, `docs/PROJECT-PLAN.md`, `docs/CONTRACT-PLAN.md` |
 | how a loop, a skill or the orchestrator works | its own file: `.kapelle/loops/<name>.md`, `.agent/skills/<name>/SKILL.md`, `assets/orchestrator.md` |
@@ -90,7 +89,7 @@ npm run fmt            # biome format + lint, with fixes
 npm run fmt:check      # biome format + lint, check only
 npm run test           # node:test: pure functions and wire behaviour; no harness needed
 npm run test:adaptive  # default concurrency (cores - 1); GitHub's runners use it
-npm run test:coverage  # offline production-only coverage; see docs/COVERAGE.md
+npm run test:coverage  # offline production-only coverage (#428)
 npm run knip           # unused files and exports
 npm pack --dry-run     # prepack builds dist/, then show the package file list
 npm run selftest       # end to end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
@@ -229,6 +228,9 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 
 - Suites live in a `tests/` folder beside their sources. `npm run test` needs no harness,
   so CI needs no credentials.
+- Coverage includes `**/*.ts`, excludes `**/tests/**`, `integration/**`, `dist/**` and
+  `node_modules/**`, and uses concurrency 2 (4 exposed an upload-test flake). Intentional
+  `SIGKILL`s stay: killed processes cannot flush V8 data. Baseline: #428.
 - `mock-agent.mjs` is the offline, well-behaved harness. **Check a change to
   `protocol/agent.ts` against it before a real harness.** When you add a client
   capability, add a path to it. Scenarios are picked with `--scenario <name>` on argv,
