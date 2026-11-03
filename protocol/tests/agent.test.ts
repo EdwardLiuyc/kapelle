@@ -9,8 +9,9 @@
  * (#62 R5), the whole `PromptResponse` (#62 B3), the cancel-intent event
  * (#62 R4), stderr capture on death, `#guardPath` containment, `#guardWrite`'s
  * no-ask refusal and its reuse of an approved edit decision, the
- * toolCall-id lookup's parity with the pre-port client, and a finished call
- * that keeps its title and kind but not its input (#163).
+ * toolCall-id lookup's parity with the pre-port client, a finished call
+ * that keeps its title and kind but not its input (#163), the handshake's
+ * version/auth handling, and exact read ranges.
  */
 
 import assert from "node:assert/strict";
@@ -131,6 +132,24 @@ const INITIALIZE_PROBE = [
   "});",
 ].join("\n");
 
+/** Answers only `initialize`, with the JSON result supplied in argv[1]. */
+const HANDSHAKE_REPLY = [
+  'let buf = "";',
+  'const write = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  "  buf += chunk;",
+  "  let nl;",
+  '  while ((nl = buf.indexOf("\\n")) >= 0) {',
+  "    const line = buf.slice(0, nl);",
+  "    buf = buf.slice(nl + 1);",
+  "    if (!line.trim()) continue;",
+  "    const msg = JSON.parse(line);",
+  '    if (msg.method === "initialize")',
+  '      write({ jsonrpc: "2.0", id: msg.id, result: JSON.parse(process.argv[1]) });',
+  "  }",
+  "});",
+].join("\n");
+
 /**
  * Accepts the pipe, explains itself on stderr, then dies during the handshake.
  *
@@ -218,7 +237,12 @@ const FS_PROBE = [
   '    else if (msg.method === "debug/fs") {',
   "      const rid = nextId++;",
   "      pending.set(rid, msg.id);",
-  '      const params = { sessionId: "s1", path: msg.params.path };',
+  "      const params = {",
+  '        sessionId: "s1",',
+  "        path: msg.params.path,",
+  "        line: msg.params.line,",
+  "        limit: msg.params.limit,",
+  "      };",
   '      if (msg.params.write) params.content = "written by the agent";',
   "      write({",
   '        jsonrpc: "2.0",',
@@ -272,8 +296,13 @@ async function guardAgent(
   return agent;
 }
 
-function probe(agent: AcpAgent, path: string, write = false): Promise<FsProbe> {
-  return agent.request<FsProbe>("debug/fs", { path, write });
+function probe(
+  agent: AcpAgent,
+  path: string,
+  write = false,
+  range: { line?: number; limit?: number } = {},
+): Promise<FsProbe> {
+  return agent.request<FsProbe>("debug/fs", { path, write, ...range });
 }
 
 /**
@@ -724,6 +753,25 @@ test("a symlink that stays inside the root is still followed", async (t) => {
   assert.equal(read.content, "in-root content");
 });
 
+test("read ranges return exact lines, including empty and truncated ranges", async (t) => {
+  const root = await tempDir(t, "acp-guard-");
+  await writeFile(join(root, "lines.txt"), "one\ntwo\nthree\nfour", "utf8");
+  const agent = await guardAgent(t, root);
+
+  for (const { range, expected } of [
+    { range: { line: 2 }, expected: "two\nthree\nfour" },
+    { range: { limit: 2 }, expected: "one\ntwo" },
+    { range: { line: 2, limit: 2 }, expected: "two\nthree" },
+    { range: { limit: 0 }, expected: "" },
+    { range: { line: 8 }, expected: "" },
+    { range: { line: 3, limit: 10 }, expected: "three\nfour" },
+  ]) {
+    const read = await probe(agent, "lines.txt", false, range);
+    assert.equal(read.refused, false);
+    assert.equal(read.content, expected, `range ${JSON.stringify(range)}`);
+  }
+});
+
 // --- a second turn after end_turn ------------------------------------------
 
 test("a second prompt after end_turn runs on the same live session", async (t) => {
@@ -1159,6 +1207,51 @@ test("initialize carries the kapelle clientInfo, not the old package name", asyn
 
   assert.equal(info.clientInfo?.name, "kapelle");
   assert.equal(info.clientInfo?.title, "Kapelle");
+});
+
+test("a protocol mismatch rejects start and stop reaps the harness", async (t) => {
+  const events: CapturedEvent[] = [];
+  const agent = new AcpAgent({
+    name: "wrong-version",
+    command: process.execPath,
+    args: ["-e", HANDSHAKE_REPLY, JSON.stringify({ protocolVersion: 2 })],
+    onEvent: (event) => events.push(event),
+  });
+  t.after(() => agent.stop());
+
+  await assert.rejects(agent.start(), {
+    message: 'protocol mismatch: we speak v1, "wrong-version" answered v2',
+  });
+  await agent.stop();
+  assert.deepEqual(
+    events.map((event) => event.update.sessionUpdate),
+    ["_client_harness_spawned", "_client_harness_exited"],
+  );
+});
+
+test("authentication methods produce the existing one-line login hint", async (t) => {
+  const stderr = t.mock.method(process.stderr, "write", () => true);
+  const agent = new AcpAgent({
+    name: "auth-hint",
+    command: process.execPath,
+    args: [
+      "-e",
+      HANDSHAKE_REPLY,
+      JSON.stringify({
+        protocolVersion: 1,
+        authMethods: [{ id: "oauth" }, { name: "legacy" }],
+      }),
+    ],
+    verbose: true,
+  });
+  t.after(() => agent.stop());
+
+  await agent.start();
+  assert.equal(stderr.mock.callCount(), 1);
+  assert.equal(
+    stderr.mock.calls[0]?.arguments[0],
+    "[auth-hint] note: agent offers auth methods [oauth, legacy]. If prompts fail, log in via the agent's own CLI first.\n",
+  );
 });
 
 test("a harness that never answers initialize fails on the deadline", async (t) => {

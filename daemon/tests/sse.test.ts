@@ -74,6 +74,23 @@ test("an idle stream gets a ping comment", async (t) => {
   res.destroy();
 });
 
+test("a follow failure after headers destroys the response and clears the ping", async (t) => {
+  const { log, served, open } = await serve(t, 20);
+  const clear = t.mock.method(globalThis, "clearInterval");
+  let headersSent = false;
+  t.mock.method(log, "follow", async () => {
+    headersSent = served.res?.headersSent ?? false;
+    throw new Error("follow failed");
+  });
+
+  const res = await open();
+  res.on("error", () => {});
+  res.resume();
+  await until(() => served.res?.destroyed === true, "the destroyed response");
+  assert.equal(headersSent, true, "follow failed after the headers");
+  assert.equal(clear.mock.callCount(), 1, "the ping interval was cleared");
+});
+
 test("a stopped server cannot answer on the socket its stream just ended", async (t) => {
   const { log, open, server, port } = await serve(t, 60_000);
   const agent = new Agent({ keepAlive: true, maxSockets: 1 });
@@ -102,6 +119,8 @@ test("a stopped server cannot answer on the socket its stream just ended", async
   );
 });
 
+// One socket exercises the pause, buffer bound, replay and drain in sequence.
+// pi-lens-ignore: high-fan-out
 test("a client that stops reading holds one socket buffer, then gets every event once", async (t) => {
   const { log, served, open } = await serve(t, 60_000);
   const res = await open();
