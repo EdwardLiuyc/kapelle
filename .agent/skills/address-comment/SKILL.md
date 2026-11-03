@@ -87,7 +87,21 @@ What to watch for, each of which has bitten this repo:
 **Never change code to satisfy a finding you have not reproduced.** A change made to
 silence a report you did not verify is how a stale finding becomes a real defect.
 
-### 3. Fix, gate, push, and read CI
+Then sort each valid finding by impact, as `AGENTS.md`, "Review triage", says: a blocker,
+a nit, or a stale doc for a separate issue. Fix the nits together in one commit.
+
+### 3. Fix, self-check, gate, push, and read CI
+
+**Check each fix three ways before you push.** In this repo, most late review rounds
+found a bug that the last round's fix made (#422). These checks find it first:
+
+- **Revert and fail.** Undo the fix, keep its new test, and run that test. It must fail.
+  Then put the fix back. Say in the reply that you saw it fail. A fix with no test, such
+  as a doc fix, says so instead.
+- **The opposite case.** Test the case the reviewer did not trace: the reverse order,
+  the other branch, the failure path, and a root user where a file mode matters.
+- **The siblings.** `grep` for the same name, literal or pattern. Fix every copy, or say
+  in the reply why one stays.
 
 Run the repo's gate before committing — not the one suite you think you touched.
 Find the commands in `package.json`, `Makefile`, or the contributor docs. In this repo:

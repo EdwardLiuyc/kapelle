@@ -25,8 +25,10 @@ Arguments the procedure understands, however they arrive:
 
 - the **issue number** (required; if it is missing, stop and ask for it);
 - `--role a,b` picks roles by file name in `roles/` (default: every role);
-- `--base <branch>` is the branch the work started from (default: the repo's default
-  branch);
+- `--base <branch or commit>` is where the work started (default: the repo's default
+  branch). A commit limits the review to the commits after it: a loop uses this to
+  check the fixes no outside review has read. For a commit, step 3's fetch can fail;
+  the commit still resolves locally, and the header says `fetch failed`;
 - any other text is the **focus**: what the operator wants looked at first.
 
 ## Roles
@@ -76,7 +78,8 @@ These apply to every role.
 - **S7.** Do not run a command that `AGENTS.md` marks as needing credentials or spending
   tokens. For proofs, use only the offline test harnesses that `AGENTS.md` names.
 - **S8.** There are three levels: `blocker`, `should fix`, `nit`. "No findings" is a valid
-  result. Never add a finding to fill a section.
+  result. Never add a finding to fill a section. If `AGENTS.md` has a review-triage rule,
+  it says what a blocker and a nit are.
 - **S9.** The report goes to the terminal only. The fixes go in the working tree,
   uncommitted (step 8), so the operator reads them with `git diff` and keeps or drops them.
 - **S10.** Repo facts come from `AGENTS.md`, not from this skill. If the review needs a repo
