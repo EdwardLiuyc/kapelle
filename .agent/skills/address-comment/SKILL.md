@@ -110,7 +110,8 @@ Find the commands in `package.json`, `Makefile`, or the contributor docs. In thi
 npm test && npm run check && npm run fmt:check && npm run knip && npm run selftest
 ```
 
-If every changed file is Markdown, run only the Markdown lint that `AGENTS.md` names.
+If every changed file is Markdown, `AGENTS.md` decides between Markdown lint and the full
+gate.
 
 Then commit and push:
 

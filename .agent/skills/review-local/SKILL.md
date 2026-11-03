@@ -77,9 +77,9 @@ These apply to every role.
   report a gate failure again as a finding.
 - **S7.** Do not run a command that `AGENTS.md` marks as needing credentials or spending
   tokens. For proofs, use only the offline test harnesses that `AGENTS.md` names.
-- **S8.** There are three levels: `blocker`, `should fix`, `nit`. "No findings" is a valid
-  result. Never add a finding to fill a section. If `AGENTS.md` has a review-triage rule,
-  it says what a blocker and a nit are.
+- **S8.** If `AGENTS.md` has a review-triage rule, use its levels. Otherwise they are
+  `blocker`, `should fix`, `nit`. "No findings" is a valid result. Never add a finding to
+  fill a section.
 - **S9.** The report goes to the terminal only. The fixes go in the working tree,
   uncommitted (step 8), so the operator reads them with `git diff` and keeps or drops them.
 - **S10.** Repo facts come from `AGENTS.md`, not from this skill. If the review needs a repo
@@ -300,7 +300,7 @@ Rules for the list:
   the working tree; `git diff` shows it.
 - A finding that was not fixed says why, in place of the fix: `not applied: <why>`, or the
   suggested diff below the line when there is one.
-- Keep the level word (`blocker`, `should fix`, `nit`) and sort by it, worst first.
+- Keep the level word chosen under S8 and sort by it, worst first.
 
 A role may add its own table when its `## Checks` section asks for one.
 
