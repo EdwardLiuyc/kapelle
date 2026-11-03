@@ -7,7 +7,8 @@ import type { RunState } from "./dto.ts";
 import { refusal } from "./http.ts";
 
 /** Cancel a live run and return the state for the 202 reply. The public
- *  status decides whether it ended; final cleanup may retain the controller. */
+ *  status decides whether it ended; final cleanup may retain the controller.
+ *  `RunStatus` has `running` as its only non-terminal value. */
 export function cancelRun(
   id: string,
   state: RunState | undefined,
@@ -16,8 +17,11 @@ export function cancelRun(
   if (!state) {
     throw refusal(404, "run_not_found", `no run ${id}`);
   }
-  if (state.status !== "running" || !canceller) {
+  if (state.status !== "running") {
     throw refusal(409, "run_ended", `run ${id} already ended: ${state.status}`);
+  }
+  if (!canceller) {
+    throw refusal(409, "run_ended", `run ${id} is not cancellable`);
   }
   canceller.abort("cancel");
   state.cancelRequested = true;

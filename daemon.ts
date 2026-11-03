@@ -1072,7 +1072,8 @@ async function startRun(body: Record<string, unknown>): Promise<string> {
     },
     // Before `_client_run_finished` is appended (M5-5), so a client that
     // reads it and then asks `GET /runs/:id` sees this status, and the same
-    // `endedAt` the record carries.
+    // `endedAt` the record carries. `DELETE` relies on this publication
+    // preceding final cleanup.
     onFinished: (report, endedAt) => {
       state.status = report.status;
       state.report = report;
