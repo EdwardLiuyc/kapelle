@@ -167,6 +167,7 @@ import {
   refusal,
   send,
 } from "./daemon/http.ts";
+import { cancelRun } from "./daemon/run.ts";
 import { streamLog } from "./daemon/sse.ts";
 import { AGENTS } from "./protocol/registry.ts";
 
@@ -1071,7 +1072,8 @@ async function startRun(body: Record<string, unknown>): Promise<string> {
     },
     // Before `_client_run_finished` is appended (M5-5), so a client that
     // reads it and then asks `GET /runs/:id` sees this status, and the same
-    // `endedAt` the record carries.
+    // `endedAt` the record carries. `DELETE` relies on this publication
+    // preceding final cleanup.
     onFinished: (report, endedAt) => {
       state.status = report.status;
       state.report = report;
@@ -2227,21 +2229,8 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     // acknowledgement and `GET` reports the verdict. `core/run.ts` stops a
     // harness 2 s after the abort, so no timer is needed here.
     const id = one[1] as string;
-    const state = runs.get(id);
-    const canceller = cancels.get(id);
-    if (!state) {
-      throw refusal(404, "run_not_found", `no run ${id}`);
-    } else if (!canceller) {
-      throw refusal(
-        409,
-        "run_ended",
-        `run ${id} already ended: ${state.status}`,
-      );
-    } else {
-      canceller.abort("cancel");
-      state.cancelRequested = true;
-      send(res, 202, toRunDto(state) satisfies RunDto);
-    }
+    const state = cancelRun(id, runs.get(id), cancels.get(id));
+    send(res, 202, toRunDto(state) satisfies RunDto);
   } else {
     throw refusal(404, "no_route", `no route for ${req.method} ${pathname}`);
   }
