@@ -564,12 +564,14 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
 }, async (t) => {
   const runtime = await tempDir(t);
   const env = dirs(runtime);
-  // Leave enough room for the PTY and attach to open a prompt on a loaded
-  // suite. The late answer still waits for the recorded timeout below.
+  // The edit timer starts before attach. Leave room for the PTY and attach
+  // to open its prompt on a loaded suite; the late answer still waits for the
+  // recorded timeout below.
   const d = await boot(t, runtime, ["--permission-timeout", "10"]);
   const cwd = await added(d, await tempDir(t));
   const id = await detach(t, env, cwd, askRun(cwd).run);
   const permission = await pendingOne(d);
+  assert.equal(permission.kind, "edit");
 
   const child = spawn(
     "script",
@@ -596,6 +598,7 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
   });
   child.stdin.write("y\n");
   const next = await pendingOne(d);
+  assert.equal(next.kind, "delete");
   await until("the delete prompt", () => out.includes("wants to run [delete]"));
   child.stdin.write("n\n");
   await until("the delete permission to be answered", async () => {
