@@ -223,9 +223,9 @@ export function childEnv(env?: Record<string, string>): NodeJS.ProcessEnv {
  * Run `cli.ts` as a real subprocess and collect everything it printed.
  *
  * No TTY is attached, so `--mode ask` resolves to `safe` here exactly as it
- * does in CI or a pipe. The kill in `t.after` matters: when the test runner's
- * timeout fires it does not reap our children, and a stranded harness holds a
- * session open.
+ * does in CI or a pipe. Cleanup is SIGTERM, a bounded wait, then SIGKILL: a
+ * clean exit lets Node flush V8 coverage, and the fallback still reaps a
+ * stranded child when the test runner's timeout does not.
  */
 export function spawnCli(
   t: TestContext,
@@ -238,7 +238,6 @@ export function spawnCli(
     cwd: REPO,
     env: childEnv(env),
   });
-  t.after(() => void child.kill("SIGKILL"));
 
   let stdout = "";
   let stderr = "";
@@ -252,6 +251,23 @@ export function spawnCli(
   const done = new Promise<CliResult>((resolve, reject) => {
     child.on("error", reject);
     child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+  t.after(async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    child.kill("SIGTERM");
+    let timer: NodeJS.Timeout | undefined;
+    const forced = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        resolve();
+      }, 5_000);
+    });
+    try {
+      await Promise.race([done, forced]);
+      await done;
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   /** Resolves once `stdout` contains `text`. For tests that signal mid-turn. */

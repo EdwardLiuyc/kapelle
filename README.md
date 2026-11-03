@@ -197,6 +197,7 @@ Every key, its range and its order of precedence: [`docs/CONFIG.md`](docs/CONFIG
 
 - [`docs/CONFIG.md`](docs/CONFIG.md): every config key.
 - [`docs/CLIENT-API.md`](docs/CLIENT-API.md): the daemon's HTTP API, to write your own client.
+- [`docs/COVERAGE.md`](docs/COVERAGE.md): the offline coverage command, exclusions and baseline.
 - [`docs/FINDINGS.md`](docs/FINDINGS.md): what each agent was measured to do.
 - [`docs/PROJECT-BRIEF.md`](docs/PROJECT-BRIEF.md): why this project exists.
 
