@@ -559,12 +559,19 @@ test("^C at attach's y/N prompt exits 130 and leaves the run running", {
 
 test("an answer typed after the timeout decided is the daemon's 409, printed, and attach carries on", {
   skip: noScript,
+  // One scenario drives the daemon, PTY and permission API together.
+  // pi-lens-ignore: high-fan-out
 }, async (t) => {
   const runtime = await tempDir(t);
   const env = dirs(runtime);
-  const d = await boot(t, runtime, ["--permission-timeout", "3"]);
+  // The edit timer starts before attach. Leave room for the PTY and attach
+  // to open its prompt on a loaded suite; the late answer still waits for the
+  // recorded timeout below.
+  const d = await boot(t, runtime, ["--permission-timeout", "10"]);
   const cwd = await added(d, await tempDir(t));
   const id = await detach(t, env, cwd, askRun(cwd).run);
+  const permission = await pendingOne(d);
+  assert.equal(permission.kind, "edit");
 
   const child = spawn(
     "script",
@@ -572,25 +579,41 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
     { cwd: REPO, env: { ...process.env, ...env } },
   );
   t.after(() => void child.kill("SIGKILL"));
+  const closed = new Promise<number | null>((ok) => child.on("close", ok));
   let out = "";
-  let asked = 0;
   child.stdout.setEncoding("utf8").on("data", (text: string) => {
     out += text;
-    const now = out.split("allow? [y/N]").length - 1;
-    // The edit is answered 4 s after it is asked: past its 3 s timeout, and
-    // inside the delete's, which is queued only once the edit is denied. So
-    // the run is still live when the late answer lands, and the delete is
-    // answered at once.
-    for (; asked < now; asked++) {
-      const late = asked === 0;
-      setTimeout(
-        () => child.stdin.write(late ? "y\n" : "n\n"),
-        late ? 4000 : 0,
-      );
-    }
   });
 
-  assert.equal(await new Promise((ok) => child.on("close", ok)), 0, out);
+  await until("the edit prompt", () => out.includes("wants to run [edit]"));
+  // A slow daemon can settle its timer after a fixed-delay answer. Wait for
+  // the recorded timeout so the late answer must get the daemon's 409.
+  await until("the edit permission to time out", async () => {
+    const r = await api<{ reason?: string }>(
+      d,
+      "GET",
+      `/permissions/${permission.id}`,
+    );
+    return r.body.reason === "timeout";
+  });
+  child.stdin.write("y\n");
+  const next = await pendingOne(d);
+  assert.equal(next.kind, "delete");
+  await until("the delete prompt", () => out.includes("wants to run [delete]"));
+  child.stdin.write("n\n");
+  await until("the delete permission to be answered", async () => {
+    const decision = await api<{ allow?: boolean; reason?: string }>(
+      d,
+      "GET",
+      `/permissions/${next.id}`,
+    );
+    if (decision.body.reason === undefined) return false;
+    assert.equal(decision.body.allow, false);
+    assert.equal(decision.body.reason, "client");
+    return true;
+  });
+
+  assert.equal(await closed, 0, out);
   assert.match(out, /error: permission \S+ was already decided/);
   assert.match(out, /done — 1 task/);
   // The timeout's deny stands: the late "y" wrote nothing.
