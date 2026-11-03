@@ -33,6 +33,8 @@ jobs:
             - run: npm ci
             - run: npm run fmt:check
             - run: npm run check
-            - run: npm run test
+            # Ternary on RUNNER (see runs-on): set means `test` (test-file concurrency
+            # pinned at 4, tuned for our own machine); unset means `test:adaptive`.
+            - run: npm run ${{ vars.RUNNER && 'test' || 'test:adaptive' }}
             - run: npm run selftest
             - run: npm run knip

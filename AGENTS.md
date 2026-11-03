@@ -88,6 +88,7 @@ npm run check          # tsc --noEmit
 npm run fmt            # biome format + lint, with fixes
 npm run fmt:check      # biome format + lint, check only
 npm run test           # node:test: pure functions and wire behaviour; no harness needed
+npm run test:adaptive  # default concurrency (cores - 1); GitHub's runners use it
 npm run knip           # unused files and exports
 npm pack --dry-run     # prepack builds dist/, then show the package file list
 npm run selftest       # end to end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
