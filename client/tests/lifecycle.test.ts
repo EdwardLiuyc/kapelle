@@ -437,7 +437,7 @@ test("the previous log is kept beside the new one", async (t) => {
   await ensureDaemon(opts);
   await until(
     async () => /listening on /.test(await readFile(opts.log, "utf8")),
-    `the daemon did not log "listening on" to ${opts.log}`,
+    `the first start did not log "listening on" to ${opts.log}`,
   );
   assert.equal(typeof (await stopDaemon(opts.file, 10_000)), "number");
   // Read after the stop: shutdown's own line belongs to the first log too.
@@ -447,7 +447,7 @@ test("the previous log is kept beside the new one", async (t) => {
   await ensureDaemon(opts);
   await until(
     async () => /listening on /.test(await readFile(opts.log, "utf8")),
-    `the daemon did not log "listening on" to ${opts.log}`,
+    `the start after rotation did not log "listening on" to ${opts.log}`,
   );
 
   assert.equal(await readFile(`${opts.log}.1`, "utf8"), first);
