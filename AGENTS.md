@@ -81,7 +81,7 @@ npm run check          # tsc --noEmit
 npm run fmt            # biome format + lint, with fixes
 npm run fmt:check      # biome format + lint, check only
 npm run test           # node:test: pure functions and wire behaviour; no harness needed
-npm run test:adaptive  # CI-only: test without the pinned concurrency (cores - 1)
+npm run test:adaptive  # default concurrency (cores - 1); GitHub's runners use it
 npm run knip           # unused files and exports
 npm pack --dry-run     # prepack builds dist/, then show the package file list
 npm run selftest       # end to end against mock-agent.mjs, --mode auto (writes ACP_TEST.md)
@@ -219,8 +219,7 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 ## Tests
 
 - Suites live in a `tests/` folder beside their sources. `npm run test` needs no harness,
-  so CI needs no credentials. `test` pins test-file concurrency at 4; GitHub's runners
-  run `test:adaptive`, which leaves Node's default (cores - 1).
+  so CI needs no credentials.
 - `mock-agent.mjs` is the offline, well-behaved harness. **Check a change to
   `protocol/agent.ts` against it before a real harness.** When you add a client
   capability, add a path to it. Scenarios are picked with `--scenario <name>` on argv,
