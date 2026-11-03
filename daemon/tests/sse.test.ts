@@ -76,6 +76,7 @@ test("an idle stream gets a ping comment", async (t) => {
 
 test("a follow failure after headers destroys the response and clears the ping", async (t) => {
   const { log, served, open } = await serve(t, 20);
+  const interval = t.mock.method(globalThis, "setInterval");
   const clear = t.mock.method(globalThis, "clearInterval");
   let headersSent = false;
   t.mock.method(log, "follow", async () => {
@@ -84,11 +85,20 @@ test("a follow failure after headers destroys the response and clears the ping",
   });
 
   const res = await open();
-  res.on("error", () => {});
+  const cut = new Promise<string>((ok) => {
+    res.on("error", (err: NodeJS.ErrnoException) => ok(err.code ?? "error"));
+    res.on("aborted", () => ok("aborted"));
+    res.on("end", () => ok("end"));
+  });
   res.resume();
   await until(() => served.res?.destroyed === true, "the destroyed response");
   assert.equal(headersSent, true, "follow failed after the headers");
+  assert.notEqual(await cut, "end", "the stream was cut, not ended");
+  assert.equal(interval.mock.callCount(), 1);
+  const ping = interval.mock.calls[0]?.result;
+  assert.ok(ping, "the ping interval was created");
   assert.equal(clear.mock.callCount(), 1, "the ping interval was cleared");
+  assert.equal(clear.mock.calls[0]?.arguments[0], ping);
 });
 
 test("a stopped server cannot answer on the socket its stream just ended", async (t) => {
