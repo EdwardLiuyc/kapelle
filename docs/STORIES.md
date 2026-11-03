@@ -3559,7 +3559,7 @@ and it raises a point as a choice only when the person must decide. The skill ca
 `dev` "the main developer", because the recipe names it.
 **Decided 2026-10-25 (#268):** the first run passes when the orchestrator stops only for a
 real choice. An outside review can raise a choice in any task, so no task can promise
-none (`docs/ORCHESTRATOR-SPIKES.md`, run 1). No test checks the skill's words: a grep
+none (`docs/ORCHESTRATOR-SPIKES.md`, run 1). No test checks the skill's prose: a grep
 for a list of names cannot show that the skill is generic. **Amended 2026-11-03
 (#422):** two tests do read the file, `tests/package.test.ts` and
 `tests/loop-cli.test.ts`, so `AGENTS.md` runs the full gate for a change to it. The review of the skill checks that it names nothing from this

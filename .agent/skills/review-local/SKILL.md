@@ -277,7 +277,7 @@ One line per finding: the comment, then the fix. Nothing else.
 
 ```text
 review-local #<N> on <branch> at <short snapshot>, base <baseRef> (fetch <ok|failed>)
-commits: <oldest short sha>..<newest short sha> (<count>), or "none, uncommitted only"
+commits: <oldest short sha..newest short sha (count) | none, uncommitted only>
 roles: <roles>
 
 ## gate
