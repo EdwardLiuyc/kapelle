@@ -365,13 +365,10 @@ export function startShell(
       },
     );
   };
-  let path = "";
-  told.on("data", (b: Buffer) => {
-    path += b.toString();
-    if (path.endsWith("\n")) {
-      pts = path.trim();
-      sync();
-    }
+  // Ubuntu 26.04's uutils `tty` writes the short path without a newline.
+  told.once("data", (b: Buffer) => {
+    pts = b.toString().trim();
+    sync();
   });
 
   return {

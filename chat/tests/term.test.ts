@@ -209,6 +209,39 @@ exec '${real}' "$@"
   return bin;
 }
 
+/** A `tty` that prints its path without a newline, as Ubuntu 26.04's. */
+async function fakeTtyWithoutNewline(t: test.TestContext) {
+  const bin = await mkdtemp(join(tmpdir(), "bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  const real = spawnSync("sh", ["-c", "command -v tty"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  assert.ok(real, "tty is installed");
+  await writeFile(
+    join(bin, "tty"),
+    `#!/bin/sh
+path=$('${real}') || exit $?
+printf %s "$path"
+`,
+  );
+  await chmod(join(bin, "tty"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  t.after(() => {
+    process.env.PATH = path;
+  });
+}
+
+test("a pty path without a newline still resizes (#423 review)", {
+  skip: noScript,
+}, async (t) => {
+  await fakeTtyWithoutNewline(t);
+  const { shell } = await shellIn(t);
+  await shows(shell, "$");
+  shell.rows(35, 5, false);
+  await showsPtySize(shell, 35, "5 35");
+});
+
 test("a start size under one is one, so stty takes it (PR #286)", {
   skip: noScript,
 }, async (t) => {
