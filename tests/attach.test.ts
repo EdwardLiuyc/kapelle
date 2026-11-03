@@ -558,13 +558,15 @@ test("^C at attach's y/N prompt exits 130 and leaves the run running", {
 });
 
 test("an answer typed after the timeout decided is the daemon's 409, printed, and attach carries on", {
+  skip: noScript,
   // One scenario drives the daemon, PTY and permission API together.
   // pi-lens-ignore: high-fan-out
-  skip: noScript,
 }, async (t) => {
   const runtime = await tempDir(t);
   const env = dirs(runtime);
-  const d = await boot(t, runtime, ["--permission-timeout", "3"]);
+  // Leave enough room for the PTY and attach to open a prompt on a loaded
+  // suite. The late answer still waits for the recorded timeout below.
+  const d = await boot(t, runtime, ["--permission-timeout", "10"]);
   const cwd = await added(d, await tempDir(t));
   const id = await detach(t, env, cwd, askRun(cwd).run);
   const permission = await pendingOne(d);
@@ -577,13 +579,11 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
   t.after(() => void child.kill("SIGKILL"));
   const closed = new Promise<number | null>((ok) => child.on("close", ok));
   let out = "";
-  let asked = 0;
   child.stdout.setEncoding("utf8").on("data", (text: string) => {
     out += text;
-    asked = out.split("allow? [y/N]").length - 1;
   });
 
-  await until("the edit prompt", () => asked >= 1);
+  await until("the edit prompt", () => out.includes("wants to run [edit]"));
   // A slow daemon can settle its timer after a fixed-delay answer. Wait for
   // the recorded timeout so the late answer must get the daemon's 409.
   await until("the edit permission to time out", async () => {
@@ -595,7 +595,7 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
     return r.body.reason === "timeout";
   });
   child.stdin.write("y\n");
-  await until("the delete prompt", () => asked >= 2);
+  await until("the delete prompt", () => out.includes("wants to run [delete]"));
   child.stdin.write("n\n");
 
   assert.equal(await closed, 0, out);
