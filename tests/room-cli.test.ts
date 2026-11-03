@@ -306,7 +306,7 @@ test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5
 
   // Refused, never answered, swapped, and no model option at all. The rule
   // in `assets/orchestrator.md` keys on "joined, but is not confirmed on the
-  // model": change both together. No test reads it (AGENTS.md).
+  // model": change both together. No test checks those words.
   for (const [cmd, name, asked, runs] of [
     [MODELS, "refused", "mock/bogus", 'it runs on "mock/fast"'],
     [

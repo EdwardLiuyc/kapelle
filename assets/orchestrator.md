@@ -143,13 +143,16 @@ A reviewer that found something fixes it on its own branch and commits. Then:
 ## The outside review
 
 Only if the recipe has one. The recipe names its trigger, the words or skill that answer
-it, and the limit on rounds. With no number, the limit is **3**. Each round:
+it, and the limit on rounds. With no number, the limit is **3**. Make every round count:
+each fix is checked before it is pushed, and each round also reads the previous
+round's fixes. Each round:
 
 1. A worker triggers the review and waits for it inside its own turn. Then it reads the
    review and sorts each finding, because it knows the code. Give it this rule in the
    order: a nit is style, wording, an idea, or "no change needed", and an item the
-   reviewer itself marks optional is a nit; a bug, a missing test or a wrong doc is
-   real; a finding only the person can decide is a choice. Tell it to report only:
+   reviewer itself marks optional or "not blocker" is a nit; a bug, a missing test or a
+   wrong doc is real; a finding only the person can decide is a choice. A reviewer's
+   mark is a first guess: the worker checks it against the code. Tell it to report only:
    whether the review finished or timed out, the link to the review, and one line for
    each finding with its verdict (real, nit or choice) beside the reviewer's own label
    (such as its severity or "optional", or "none"); for a choice, also its options and
@@ -157,14 +160,20 @@ it, and the limit on rounds. With no number, the limit is **3**. Each round:
 2. Decide from that list. The reviewer's labels let you check the verdicts; when one
    looks wrong, open the link. If the review timed out, stop, as "When you stop" says.
    If a finding is a choice, stop for it. If the review finished and every finding is
-   a nit, the review loop ends, with no answer.
-3. Otherwise a worker answers it, then triggers the next round. When the next round is
-   the last one, say so in the order.
+   a nit, the review loop ends. A worker fixes the nits only if the recipe says so, and
+   no round follows.
+3. Otherwise a worker answers it. If its fixes change only docs, or answer only nits,
+   the review loop ends there. If not, it triggers the next round. When the next round
+   is the final one, say so in the order.
 
 The limit is hard. Never start more rounds than the limit, and at the limit never
-recommend another round. A finding still open after the last round goes in the final
-report, with three offers: hand over as it is, fix it without another review, or split
-it into a new task.
+recommend another round.
+
+No review reads the fixes made after the final round. The recipe may name a check for
+them, such as a local review of only those commits. Run it before the hand-over. With
+no check named, the worker runs the tests and reads CI for them. A finding still open
+after the final round goes in the final report, with three offers: hand over as it is,
+fix it and check the fix the same way, or split it into a new task.
 
 ## When you stop
 

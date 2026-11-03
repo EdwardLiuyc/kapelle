@@ -87,7 +87,25 @@ What to watch for, each of which has bitten this repo:
 **Never change code to satisfy a finding you have not reproduced.** A change made to
 silence a report you did not verify is how a stale finding becomes a real defect.
 
-### 3. Fix, gate, push, and read CI
+Then sort each valid finding by impact, as `AGENTS.md`, "Review triage", says: a blocker
+or a nit. A nit marked "separate issue" is not fixed and gets no issue: list it in the
+reply and in the step 5 report, for the person. Fix the other nits together in one
+commit.
+
+### 3. Fix, self-check, gate, push, and read CI
+
+**Check each fix three ways before you push.** In this repo, most late review rounds
+found a bug that the previous round's fix made (#422). These checks look for it before
+the push:
+
+- **Revert and fail.** Undo the fix, keep its new test, and run that test. It must fail.
+  Then put the fix back. Say in the reply that you saw it fail. A fix with no test, such
+  as a doc fix, says so instead.
+- **The opposite case.** Test the case the reviewer did not trace: the reverse order,
+  the other branch, the failure path, and the environment the test assumed (for
+  example, a root user where a file mode matters).
+- **The siblings.** `grep` for the same name, literal or pattern. Fix every copy, or say
+  in the reply why one stays.
 
 Run the repo's gate before committing — not the one suite you think you touched.
 Find the commands in `package.json`, `Makefile`, or the contributor docs. In this repo:
@@ -96,12 +114,14 @@ Find the commands in `package.json`, `Makefile`, or the contributor docs. In thi
 npm test && npm run check && npm run fmt:check && npm run knip && npm run selftest
 ```
 
-If every changed file is Markdown, run only the Markdown lint that `AGENTS.md` names.
+If every changed file is Markdown, `AGENTS.md` decides between Markdown lint and the full
+gate.
 
 Then commit and push:
 
 - One commit per distinct concern. A review round that touches one area is one commit; a
-  bug in a different file, found while fixing, is its own.
+  bug in a different file, found while fixing, is its own. Nits are the exception: one
+  commit for all of them, in any number of files.
 - The message says which findings it closes, which were rejected, and why — that reasoning
   is the part that survives into the log.
 - **Amend only a commit that has never been pushed.** Once it is on the remote, a follow-up

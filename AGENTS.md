@@ -6,20 +6,27 @@ repo drives several harnesses, so a procedure only one of them can follow is a b
 
 Use plain language and short sentences in code comments and docs.
 
-This file holds only what an agent cannot learn by reading the code. **The detail lives
-at the top of each source file** — read that comment before you change the file. The
-history and the measurements live in `docs/`:
+This file holds only what an agent cannot learn by reading the code.
 
-- `docs/FINDINGS.md` — what each harness was measured to do. When this file or a source
-  comment names a section such as `§M0-4` or `§Multi-turn`, it is a section of
-  `docs/FINDINGS.md`.
-- `docs/ORCHESTRATOR-SPIKES.md` — what three runs of an orchestrator agent showed, the
-  evidence for M8.
-- `docs/STORIES.md` — the work breakdown, with the reason for each decision.
-- `docs/CLIENT-API.md` — the daemon's API, for client authors. `docs/CONFIG.md` — the
-  config keys.
-- `docs/PROJECT-BRIEF.md` (why), `docs/PROJECT-PLAN.md` (what, in what order),
-  `docs/CONTRACT-PLAN.md` (the decision register for M4–M6).
+## Who owns a fact
+
+Each fact has one owner, and it is stated only there. Anywhere else, link to the owner;
+do not restate it. A restated fact goes stale in one place and stays right in the other.
+
+| A fact about | Its owner |
+| --- | --- |
+| a module: what it does, its invariants and why | the comment at the top of its file. Read it before you change the file. |
+| the daemon's API, for client authors | `docs/CLIENT-API.md` |
+| the config keys | `docs/CONFIG.md` |
+| what each harness was measured to do | `docs/FINDINGS.md`. A section such as `§M0-4` or `§Multi-turn`, named in this file or a source comment, is a section there. |
+| the work breakdown, and the reason for each decision | `docs/STORIES.md` |
+| what three runs of an orchestrator agent showed, the evidence for M8 | `docs/ORCHESTRATOR-SPIKES.md` |
+| why, what in what order, and the decision register for M4–M6 | `docs/PROJECT-BRIEF.md`, `docs/PROJECT-PLAN.md`, `docs/CONTRACT-PLAN.md` |
+| how a loop, a skill or the orchestrator works | its own file: `.kapelle/loops/<name>.md`, `.agent/skills/<name>/SKILL.md`, `assets/orchestrator.md` |
+| the workflow, the rules that cross files, and this map | `AGENTS.md` |
+
+When a behaviour changes, its owner changes in the same commit. Not every code change
+needs a doc edit: the PR template asks which owner changed, or why none did.
 
 **Do not read `docs/archive/`.** It holds recaps for people, such as a milestone summary.
 They are snapshots, and they go out of date. The code and the files above are the
@@ -266,7 +273,24 @@ line. Add no `Co-Authored-By:` line or any other trailer.
 
 **Pull requests.** Never write that an agent or a tool made the PR. No "Generated with
 Claude Code" line, no agent name, no robot emoji — not in the title, the body or a
-comment.
+comment. Fill the body from `.github/pull_request_template.md`: `gh pr create --body`
+does not read it.
+
+## Review triage
+
+Sort every review finding by its impact, whoever wrote it: a person, the review bot or
+`review-local`. There are two levels, `blocker` and `nit`.
+
+- **Blocker.** The code and its owner doc disagree (a contract mismatch), a contract
+  statement is missing, a bug, or a changed behaviour with no test. Fix it in this PR.
+- **Not a blocker (a nit).** Wording, the direction of a comment, a duplicate, an
+  optional refactor. Fix the nits together in one commit, or reply why not.
+- **A stale doc the change did not touch** is a `nit` marked "separate issue". It is
+  not fixed in this PR, and no agent opens an issue for it. The reply and the
+  hand-over report list it; the person picks which ones become issues.
+
+A round whose fixes are docs-only or nits only gets no new full review. Check it by
+reading its diff, with the focused tests and CI.
 
 ## Markdown lint
 
@@ -280,8 +304,10 @@ npx -y markdownlint-cli2 --config .markdownlint.json $(git ls-files '*.md')
 Fix findings before finishing. An inline `<!-- markdownlint-disable MD0xx -->` is allowed
 only with a comment saying why.
 
-If every changed file is a `.md` file, this is the only check to run. No test reads a
-tracked `.md` file.
+If every changed file is a `.md` file, this is the only check to run, with one
+exception: `assets/orchestrator.md`. It ships in the package, and `kapelle loop` pastes
+it, so `tests/package.test.ts` and `tests/loop-cli.test.ts` read it. A change to it runs
+the full gate. No test reads any other tracked `.md` file.
 
 ## Format and lint (TS/JS)
 
