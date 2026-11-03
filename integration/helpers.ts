@@ -220,6 +220,7 @@ export function childEnv(env?: Record<string, string>): NodeJS.ProcessEnv {
 }
 
 const STOP_GRACE_MS = 5_000;
+const STDIO_DRAIN_MS = 250;
 
 /**
  * Stop a subprocess by pid: SIGTERM, a bounded wait, then SIGKILL. A clean
@@ -279,9 +280,22 @@ export function spawnCli(
     stderr += d;
   });
 
+  let drainTimer: NodeJS.Timeout | undefined;
+  // A descendant can inherit stdio and keep `close` pending after the child
+  // exits. Drain briefly, then close our ends so teardown cannot wait forever.
+  child.once("exit", () => {
+    drainTimer = setTimeout(() => {
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }, STDIO_DRAIN_MS);
+  });
   const done = new Promise<CliResult>((resolve, reject) => {
     child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("close", (code) => {
+      clearTimeout(drainTimer);
+      resolve({ code, stdout, stderr });
+    });
   });
   t.after(async () => {
     if (child.exitCode !== null || child.signalCode !== null) return;

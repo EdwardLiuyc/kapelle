@@ -17,6 +17,7 @@ import {
   MOCK_AGENT,
   roomLog,
   spawnCli,
+  stopProcess,
   tempDir,
   until,
 } from "../integration/helpers.ts";
@@ -85,6 +86,46 @@ test("spawnCli cleanup ends a room harness waiting for its test file", async (t)
   });
 
   assert.equal(await gone(harness), true, "the harness outlived its daemon");
+});
+
+test("spawnCli cleanup bounds a descendant's inherited stdio drain", async (t) => {
+  const dir = await tempDir(t);
+  const script = join(dir, "pipe-holder.mjs");
+  const pidFile = join(dir, "descendant.pid");
+  await writeFile(
+    script,
+    `import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] });
+writeFileSync(process.argv[2], String(child.pid));
+console.log("ready");
+setInterval(() => {}, 1000);
+`,
+  );
+  let descendant = 0;
+  let spawned: ReturnType<typeof spawnCli> | undefined;
+  t.after(async () => {
+    if (descendant > 0) await stopProcess(descendant);
+  });
+
+  await t.test(
+    "a descendant keeps both output pipes open",
+    { timeout: 5_000 },
+    async (t) => {
+      spawned = spawnCli(t, [pidFile], script);
+      await spawned.waitFor("ready");
+      descendant = Number(await readFile(pidFile, "utf8"));
+      assert.ok(descendant > 0);
+    },
+  );
+
+  assert.ok(spawned);
+  assert.equal(spawned.child.signalCode, "SIGTERM");
+  assert.equal(
+    alive(descendant),
+    true,
+    "the descendant outlived its parent with the inherited pipes",
+  );
 });
 
 test("spawnCli cleanup SIGKILLs a child that ignores SIGTERM", async (t) => {
