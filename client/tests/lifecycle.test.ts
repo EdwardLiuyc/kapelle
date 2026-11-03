@@ -435,15 +435,22 @@ test("the previous log is kept beside the new one", async (t) => {
   const opts = options(d);
 
   await ensureDaemon(opts);
-  assert.match(await readFile(opts.log, "utf8"), /listening on /);
+  await until(
+    async () => /listening on /.test(await readFile(opts.log, "utf8")),
+    `the daemon did not log "listening on" to ${opts.log}`,
+  );
   assert.equal(typeof (await stopDaemon(opts.file, 10_000)), "number");
   // Read after the stop: shutdown's own line belongs to the first log too.
   const first = await readFile(opts.log, "utf8");
+  assert.match(first, /SIGTERM: cancelling .* then exiting/);
 
   await ensureDaemon(opts);
+  await until(
+    async () => /listening on /.test(await readFile(opts.log, "utf8")),
+    `the daemon did not log "listening on" to ${opts.log}`,
+  );
 
   assert.equal(await readFile(`${opts.log}.1`, "utf8"), first);
-  assert.match(await readFile(opts.log, "utf8"), /listening on /);
 });
 
 test("stopDaemon sends SIGTERM, waits for the pid and removes the record", async (t) => {
