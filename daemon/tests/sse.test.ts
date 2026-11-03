@@ -94,7 +94,11 @@ test("a follow failure after headers destroys the response and clears the ping",
   await until(() => served.res?.destroyed === true, "the destroyed response");
   assert.equal(headersSent, true, "follow failed after the headers");
   assert.notEqual(await cut, "end", "the stream was cut, not ended");
-  assert.equal(interval.mock.callCount(), 1);
+  assert.equal(
+    interval.mock.callCount(),
+    1,
+    "only the ping interval was created",
+  );
   const ping = interval.mock.calls[0]?.result;
   assert.ok(ping, "the ping interval was created");
   assert.equal(clear.mock.callCount(), 1, "the ping interval was cleared");
