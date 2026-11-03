@@ -95,7 +95,8 @@ commit.
 ### 3. Fix, self-check, gate, push, and read CI
 
 **Check each fix three ways before you push.** In this repo, most late review rounds
-found a bug that the last round's fix made (#422). These checks find it first:
+found a bug that the previous round's fix made (#422). These checks look for it before
+the push:
 
 - **Revert and fail.** Undo the fix, keep its new test, and run that test. It must fail.
   Then put the fix back. Say in the reply that you saw it fail. A fix with no test, such

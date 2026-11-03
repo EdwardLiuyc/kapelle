@@ -144,8 +144,8 @@ A reviewer that found something fixes it on its own branch and commits. Then:
 
 Only if the recipe has one. The recipe names its trigger, the words or skill that answer
 it, and the limit on rounds. With no number, the limit is **3**. Make every round count:
-a round finds the real problems once, and the next round does not chase the last
-round's fix. Each round:
+each fix is checked before it is pushed, and each round also reads the previous
+round's fixes. Each round:
 
 1. A worker triggers the review and waits for it inside its own turn. Then it reads the
    review and sorts each finding, because it knows the code. Give it this rule in the
@@ -164,15 +164,15 @@ round's fix. Each round:
    no round follows.
 3. Otherwise a worker answers it. If its fixes change only docs, or answer only nits,
    the review loop ends there. If not, it triggers the next round. When the next round
-   is the last one, say so in the order.
+   is the final one, say so in the order.
 
 The limit is hard. Never start more rounds than the limit, and at the limit never
 recommend another round.
 
-No review reads the fixes made after the last round. The recipe may name a check for
+No review reads the fixes made after the final round. The recipe may name a check for
 them, such as a local review of only those commits. Run it before the hand-over. With
 no check named, the worker runs the tests and reads CI for them. A finding still open
-after the last round goes in the final report, with three offers: hand over as it is,
+after the final round goes in the final report, with three offers: hand over as it is,
 fix it and check the fix the same way, or split it into a new task.
 
 ## When you stop
