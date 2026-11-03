@@ -595,8 +595,20 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
     return r.body.reason === "timeout";
   });
   child.stdin.write("y\n");
+  const next = await pendingOne(d);
   await until("the delete prompt", () => out.includes("wants to run [delete]"));
   child.stdin.write("n\n");
+  await until("the delete permission to be answered", async () => {
+    const decision = await api<{ allow?: boolean; reason?: string }>(
+      d,
+      "GET",
+      `/permissions/${next.id}`,
+    );
+    if (decision.body.reason === undefined) return false;
+    assert.equal(decision.body.allow, false);
+    assert.equal(decision.body.reason, "client");
+    return true;
+  });
 
   assert.equal(await closed, 0, out);
   assert.match(out, /error: permission \S+ was already decided/);
