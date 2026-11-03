@@ -24,7 +24,9 @@ test("spawnCli cleanup stops a daemon gracefully", async (t) => {
   });
 
   assert.ok(d);
-  assert.equal((await d.done).code, 0);
+  const exit = await d.done;
+  assert.equal(exit.code, 0);
+  assert.match(exit.stdout, /SIGTERM: cancelling/);
   assert.equal(await gone(d.pid), true);
   await assert.rejects(
     readFile(d.file),

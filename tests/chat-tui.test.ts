@@ -37,6 +37,7 @@ import {
   savedSetup,
   screenRows,
   scrollback,
+  stopProcess,
   tempDir,
   withAgent,
 } from "../integration/helpers.ts";
@@ -74,13 +75,7 @@ test("kapelle alone starts a daemon, opens the chat, and /leave leaves it runnin
   await assert.rejects(readFile(marker), "bare kapelle started a harness");
   const file = join(runtime, "kapelle", "daemon.json");
   const { pid, port, token } = JSON.parse(await readFile(file, "utf8"));
-  t.after(() => {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Already stopped.
-    }
-  });
+  t.after(() => stopProcess(pid));
   assert.equal(alive(pid), true);
   assert.match(
     await readFile(join(state, "kapelle", "daemon.log"), "utf8"),
@@ -133,13 +128,7 @@ test("two kapelle at once leave one daemon, and either key ends only the chat", 
   ]);
   const file = join(runtime, "kapelle", "daemon.json");
   const { pid, port, token } = JSON.parse(await readFile(file, "utf8"));
-  t.after(() => {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Already stopped.
-    }
-  });
+  t.after(() => stopProcess(pid));
   assert.equal(alive(pid), true);
   // Only one daemon ever listened. The loser's refusal is in the same log,
   // or in the one rotation moved aside, and never reached a CLI.

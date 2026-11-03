@@ -31,6 +31,7 @@ import {
   ptyScreen,
   REPO,
   savedSetup,
+  stopProcess,
   tempDir,
 } from "../integration/helpers.ts";
 
@@ -255,13 +256,7 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   const daemon = JSON.parse(
     await readFile(join(runtime, "kapelle", "daemon.json"), "utf8"),
   ) as { pid: number };
-  t.after(() => {
-    try {
-      process.kill(daemon.pid, "SIGKILL");
-    } catch {
-      // Already stopped.
-    }
-  });
+  t.after(() => stopProcess(daemon.pid));
   assert.equal(alive(daemon.pid), true);
   assert.match(
     await readFile(join(state, "kapelle", "daemon.log"), "utf8"),
