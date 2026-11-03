@@ -146,6 +146,13 @@ if (scenario === "eof-write") {
   });
 }
 
+// A client that has gone closes stdin. Every fixture ends at that point, so a
+// failed test cannot leave a wait loop running; `stubborn` is the deliberate
+// exception that proves the daemon's SIGKILL sweep.
+if (scenario !== "stubborn") {
+  process.stdin.once("end", () => process.exit(0));
+}
+
 // M2-5's crash-recovery test: a harness the daemon's graceful stop cannot end.
 // `stall` leaves the event loop with nothing to do once the client closes its
 // stdin; this fixture must not, and it must shrug off the sweep's SIGTERM so
