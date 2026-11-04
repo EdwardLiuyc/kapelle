@@ -8,8 +8,9 @@
  * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
  * (#62 R5), the whole `PromptResponse` (#62 B3), the cancel-intent event
  * (#62 R4), stderr capture on death, `#guardPath` containment, `#guardWrite`'s
- * no-ask refusal and its reuse of an approved edit decision, the
- * toolCall-id lookup's parity with the pre-port client, a finished call
+ * no-ask refusal and its reuse of an approved edit decision bound to that
+ * decision's shown text (#310), the toolCall-id lookup's parity with the
+ * pre-port client, a finished call
  * that keeps its title and kind but not its input (#163), the handshake's
  * version/auth handling, and exact read ranges.
  */

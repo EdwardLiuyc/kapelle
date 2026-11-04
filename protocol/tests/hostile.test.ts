@@ -1,5 +1,5 @@
 /**
- * M1b-6 acceptance tests — issue #22.
+ * M1b-6 acceptance tests — issue #22 — plus #310's approval-binding attacks.
  *
  * Every case drives the real `hostile-agent.mjs` over real stdio, because the
  * subject is the wire: what a client does with a message no well-behaved
@@ -13,7 +13,7 @@
  */
 
 import assert from "node:assert/strict";
-import { access, rm } from "node:fs/promises";
+import { access, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { test } from "node:test";
@@ -206,6 +206,20 @@ test("an allow-only menu grants one write, not the whole session", async (t) => 
 const ASKED_ONLY: Policy = ({ toolCall }) =>
   !toolCall.title.startsWith("fs/write_text_file");
 
+test("different bytes land after the second approval", async (t) => {
+  // D2: a mismatch asks about the bytes that will land; it is not a hard
+  // refusal. This is the allow half of `swap-bytes`.
+  const run = await attack(t, "swap-bytes", ALLOW_ALL);
+  assert.equal(run.decisions.length, 2, "the swapped bytes are asked about");
+  assert.match(
+    run.decisions[1] ?? "",
+    /^edit:fs\/write_text_file .*notes\.md$/,
+  );
+  assert.match(run.text, /OUTCOME=allowed DETAIL=allowed/);
+  assert.equal(await readFile(join(run.cwd, "notes.md"), "utf8"), "swapped\n");
+  assert.equal(run.stopReason, "end_turn");
+});
+
 test("an approved diff does not approve other bytes for its file", async (t) => {
   // #310: the person approved the text they saw. Other bytes are a new
   // decision about those bytes, so a policy that refuses unasked writes
@@ -225,6 +239,55 @@ test("an approved diff does not approve other bytes for its file", async (t) => 
   assert.equal(run.stopReason, "end_turn");
 });
 
+test("an approved diff covers one write, not every write with those bytes", async (t) => {
+  const run = await attack(t, "same-diff-twice", ASKED_ONLY);
+  assert.equal(
+    run.decisions.length,
+    2,
+    "the approved bytes are spent by the first write",
+  );
+  assert.match(run.decisions[0] ?? "", /^edit:Write notes\.md$/);
+  assert.match(
+    run.decisions[1] ?? "",
+    /^edit:fs\/write_text_file .*notes\.md$/,
+  );
+  assert.equal(run.text.match(/OUTCOME=allowed/g)?.length, 1);
+  assert.equal(run.text.match(/OUTCOME=refused/g)?.length, 1);
+  assert.equal(
+    await readFile(join(run.cwd, "notes.md"), "utf8"),
+    "same\n",
+    "the first write landed and the second did not",
+  );
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("an approved request binds every file in its diffs", async (t) => {
+  const run = await attack(t, "two-diffs", ASKED_ONLY);
+  assert.equal(
+    run.decisions.length,
+    1,
+    "both matching writes reuse the one permission decision",
+  );
+  assert.deepEqual(run.edits[0], [
+    {
+      abs: join(run.cwd, "one.md"),
+      path: "one.md",
+      oldText: null,
+      newText: "one\n",
+    },
+    {
+      abs: join(run.cwd, "two.md"),
+      path: "two.md",
+      oldText: null,
+      newText: "two\n",
+    },
+  ]);
+  assert.equal(run.text.match(/OUTCOME=allowed/g)?.length, 2);
+  assert.equal(await readFile(join(run.cwd, "one.md"), "utf8"), "one\n");
+  assert.equal(await readFile(join(run.cwd, "two.md"), "utf8"), "two\n");
+  assert.equal(run.stopReason, "end_turn");
+});
+
 test("an approved diff for one file does not approve rawInput.path's file", async (t) => {
   const run = await attack(t, "swap-path", ASKED_ONLY);
   assert.equal(run.decisions.length, 2, "the unseen file is asked about");
@@ -232,7 +295,31 @@ test("an approved diff for one file does not approve rawInput.path's file", asyn
     run.decisions[1] ?? "",
     /^edit:fs\/write_text_file .*other\.md$/,
   );
+  assert.deepEqual(run.edits[1], [
+    {
+      abs: join(run.cwd, "other.md"),
+      path: "other.md",
+      newText: "shown\n",
+    },
+  ]);
   assert.match(run.text, /OUTCOME=refused DETAIL=write refused by policy/);
+  assert.equal(await absent(join(run.cwd, "other.md")), true);
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("a denied diff keeps every path it named sticky", async (t) => {
+  const run = await attack(t, "deny-diff-paths", () => false);
+  assert.equal(
+    run.decisions.length,
+    1,
+    "the initial denial covers both the diff and rawInput.path",
+  );
+  assert.equal(
+    run.text.match(/OUTCOME=refused/g)?.length,
+    2,
+    "both follow-up writes are refused",
+  );
+  assert.equal(await absent(join(run.cwd, "shown.md")), true);
   assert.equal(await absent(join(run.cwd, "other.md")), true);
   assert.equal(run.stopReason, "end_turn");
 });
