@@ -105,7 +105,19 @@ test("a renderer failure costs the screen, not the run", () => {
 });
 
 test("a blockquote, a rule and an HTML block keep their text", () => {
-  assert.equal(toAnsi("> q\n"), `${dim("│ ")}q\n`);
+  // Every line of a quote gets the mark, the blank one between blocks too.
+  assert.equal(
+    toAnsi("> a\n>\n> b\n"),
+    `${dim("│ ")}a\n${dim("│ ")}\n${dim("│ ")}b\n`,
+  );
+  // A quote takes two columns from what it holds.
+  assert.equal(
+    toAnsi("> ---\n", { width: 10 }),
+    `${dim("│ ")}${dim("─".repeat(8))}\n`,
+  );
+  // Narrower than its mark, a rule still draws one column: `repeat` would
+  // throw on a negative count, and the fallback would hide it as raw text.
+  assert.equal(toAnsi("> ---\n", { width: 1 }), `${dim("│ ")}${dim("─")}\n`);
   assert.equal(toAnsi("---\n", { width: 10 }), `${dim("─".repeat(10))}\n`);
   assert.equal(
     toAnsi("---\n", { width: 200 }),

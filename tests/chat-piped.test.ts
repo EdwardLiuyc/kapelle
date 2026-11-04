@@ -1,7 +1,7 @@
 /**
  * `chat.ts` with no terminal: one room as plain lines (`chat/piped.ts`),
- * `kapelle chat` handing over to `chat.ts`, and the rule that the chat reaches
- * the daemon over HTTP only. Most tests drive a real `daemon.ts`; a few stand
+ * the `list` and `dismiss` verbs, `kapelle chat` handing over to `chat.ts`,
+ * and the rule that the chat reaches the daemon over HTTP only. Most tests drive a real `daemon.ts`; a few stand
  * up a fake one to send a reply the real one never sends.
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
@@ -217,9 +217,9 @@ test("chat.ts list prints each room's id, status, names and cwd (#431)", async (
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
   const otherCwd = await added(d, await gitRepo(t));
-  const empty = await api<RoomListEntry>(d, "POST", "/rooms", { cwd });
+  const empty = await api<RoomDto>(d, "POST", "/rooms", { cwd });
   assert.equal(empty.status, 201, JSON.stringify(empty.body));
-  const pair = await api<RoomListEntry>(d, "POST", "/rooms", {
+  const pair = await api<RoomDto>(d, "POST", "/rooms", {
     cwd: otherCwd,
     agents: [
       { cmd: REMEMBER, name: "alice" },
@@ -238,7 +238,8 @@ test("chat.ts list prints each room's id, status, names and cwd (#431)", async (
     XDG_RUNTIME_DIR: runtime,
   }).done;
   assert.equal(r.code, 0, r.stderr);
-  // A room with no participant prints "-" in the names column.
+  // A room with no participant prints "-" in the names column. Both sides
+  // are sorted because `docs/CLIENT-API.md` promises no order for `GET /rooms`.
   assert.deepEqual(
     r.stdout.trimEnd().split("\n").sort(),
     [
@@ -285,7 +286,7 @@ test("chat.ts dismiss stops a room, and prints the daemon's refusal or the usage
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
-  const room = await api<RoomListEntry>(d, "POST", "/rooms", {
+  const room = await api<RoomDto>(d, "POST", "/rooms", {
     cwd,
     agents: [{ cmd: REMEMBER }],
   });
@@ -297,7 +298,7 @@ test("chat.ts dismiss stops a room, and prints the daemon's refusal or the usage
   const ok = await chat("dismiss", id);
   assert.equal(ok.code, 0, ok.stderr);
   assert.equal(ok.stdout, `dismissed ${id}\n`);
-  const gone = await api<RoomListEntry>(d, "GET", `/rooms/${id}`);
+  const gone = await api<RoomDto>(d, "GET", `/rooms/${id}`);
   assert.equal(gone.body.status, "dismissed");
 
   const again = await chat("dismiss", id);
