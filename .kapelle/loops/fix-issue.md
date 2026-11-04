@@ -56,7 +56,8 @@ The task note selects the bot. The default is Claude.
 - `bot: claude` selects Claude.
 - `bot: copilot; effort: balanced` selects Copilot.
 - Copilot effort defaults to `BALANCED`; lower-case `lite`, `balanced`, `max` and
-  `auto` map to the GraphQL enum. An unknown bot or effort stops the run.
+  `auto` map to the GraphQL enum. An unknown bot or effort makes the orchestrator stop
+  and ask the person.
 
 The orchestrator states the selected bot and effort in the plan.
 
@@ -71,17 +72,15 @@ also reads the previous round's fixes.
 - **Waiting:** `dev` waits inside its own turn, in the foreground, checking once and then
   every 60 seconds for up to 20 minutes. A timeout must say "timed out"; the turn must
   not end before the wait ends.
-- **Reading:** `dev` reads the new bot review and its link. It reports only whether the
-  review finished or timed out, the link, and one line per finding with its verdict and
-  the bot's own label. It never pastes the review text.
+- **Reading:** `dev` reads the new bot review and its link; reporting follows the
+  orchestrator skill.
 - **Sorting:** each finding is `real` (blocker), `nit` or `choice` as the orchestrator
   skill says. The bot's severity or approval label is a first guess; `dev` checks it
   against the code. "Approval recommended" does not mean there are no inline comments.
 - **Answer:** `dev` runs the `address-comment` skill on the latest bot item named by the
-  selected adapter, replies to every thread, and proves each fix with a test that fails
-  before and passes after, or a reason from the code. No fix is a guess. When the order
-  says the next round is final, it first reads every round's findings together and looks
-  for a shared cause.
+  selected bot's section and proves each fix with a test that fails before and passes
+  after, or a reason from the code. No fix is a guess. When the order says the next round
+  is final, it first reads every round's findings together and looks for a shared cause.
 - **No next round** when no point is a blocker, or when `AGENTS.md`, "Review triage",
   says the round's fixes need none. `dev` still fixes the nits and pushes them; the final
   check reads them.
@@ -94,12 +93,12 @@ This is the default when the note names no bot.
 - **Trigger:** `dev` comments `@claude review` on the PR. From the second round:
   `@claude review the update. Verify each earlier finding. Check only the new commits for regressions. Mark each point blocker or not blocker.`
 - **Waiting:** before the trigger, count Claude's comments:
-  `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | length'`.
+  `gh pr view <pr> --json comments --jq '[.comments[] | select((.author.login | ascii_downcase) == "claude")] | length'`.
   Call that N. After the trigger, poll until comment N + 1 exists and its body starts
   with `**Claude finished`.
 - **Reading:** read the latest Claude comment:
-  `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | last | .url, .body'`.
-- **Answer target:** the latest Claude comment.
+  `gh pr view <pr> --json comments --jq '[.comments[] | select((.author.login | ascii_downcase) == "claude")] | last | .url, .body'`.
+- **Answer target:** the latest Claude comment; answer it in the PR conversation.
 
 ### Copilot
 
@@ -112,20 +111,23 @@ Selected by `bot: copilot` in the note.
   gh api graphql -f query='mutation($id: ID!) { requestCopilotCodeReview(input: {pullRequestId: $id, reviewEffort: <EFFORT>}) { success failureReason } }' -f id="<PR_NODE_ID>"
   ```
 
-  `<EFFORT>` is the selected value converted to uppercase (`LITE`, `BALANCED`, `MAX`
-  or `AUTO`), with `BALANCED` as the default.
+  `<EFFORT>` is the selected effort, uppercased.
   `REQUEST_CONFLICT` means a request is already pending; keep waiting. Any other
   `failureReason` is a permissions or eligibility stop. Copilot accepts no custom
   prompt. On later rounds, `dev` independently verifies the previous round's findings;
   it cannot ask the bot to do that.
 - **Waiting:** before the trigger, count completed Copilot reviews, matching the author
   case-insensitively as `copilot` or `copilot-pull-request-reviewer`, and call that N.
-  After the trigger, poll until review N + 1 exists with a submission time at or after
-  the trigger. Do not use issue comments or an exact `Copilot` login.
+  After the trigger, poll for a completed review beyond the N already counted, with a
+  submission time at or after the trigger and a reviewed commit equal to the recorded
+  head. A commit mismatch means keep waiting. Do not use issue comments or an exact
+  `Copilot` login.
 - **Reading:** read the latest review body and its inline comments:
   `gh api repos/<owner>/<repo>/pulls/<pr>/reviews` and
-  `gh api repos/<owner>/<repo>/pulls/<pr>/comments`. Use the review's `html_url`.
-- **Answer target:** the latest Copilot review and its inline discussion threads.
+  `gh api repos/<owner>/<repo>/pulls/<pr>/comments`. Keep only comments whose
+  `pull_request_review_id` is that review's id, and use the review's `html_url`.
+- **Answer target:** the latest Copilot review and its inline discussion threads; answer
+  summary-only findings on the PR and reply on every inline thread.
 
 ## The final check
 
