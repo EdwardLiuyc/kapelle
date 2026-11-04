@@ -422,9 +422,10 @@ test("attach --task asks only that task, never its sibling", {
 }, async (t) => {
   const runtime = await tempDir(t);
   const env = dirs(runtime);
-  // The sibling's unanswered asks deny at the timeout, so the run ends;
-  // the selected task's asks are answered at once.
-  const d = await boot(t, runtime, ["--permission-timeout", "2"]);
+  // No short timeout: attach can take seconds to start on a loaded suite,
+  // and a timer would deny `one`'s edit before its prompt (#436). The test
+  // denies the sibling's asks itself, below.
+  const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
   const id = await detach(t, env, cwd, {
     cmd: `node ${MOCK_AGENT}`,
@@ -456,9 +457,26 @@ test("attach --task asks only that task, never its sibling", {
       answered++;
     }
   });
+  const closed = new Promise<number | null>((ok) => child.on("close", ok));
+
+  // Attach is live once it shows `one`'s first prompt. Only then deny
+  // `two`'s edit and delete, so they are open while attach runs.
+  await until("one's first prompt", () =>
+    out.includes("one wants to run [edit]"),
+  );
+  let denied = 0;
+  await until("two's two asks to be denied", async () => {
+    const open = await api<Pending[]>(d, "GET", "/permissions");
+    for (const p of open.body.filter((p) => p.taskId === "two")) {
+      const r = await api(d, "POST", `/permissions/${p.id}`, { allow: false });
+      assert.equal(r.status, 200);
+      denied++;
+    }
+    return denied === 2;
+  });
 
   const code = await Promise.race([
-    new Promise<number | null>((ok) => child.on("close", ok)),
+    closed,
     new Promise<string>((ok) => setTimeout(() => ok("hung"), 20_000).unref()),
   ]);
   assert.equal(code, 0, out);
