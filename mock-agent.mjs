@@ -69,6 +69,8 @@ const SCENARIOS = {
   "mode-refused-once": "refuses the first session/set_mode, then accepts",
   "diff-first":
     "the default path, with the write's diff block sent before the ask",
+  "diff-only":
+    "like diff-first, but rawInput names no path: only the diff block does",
   "file-text": "the default path, asking with copilot's rawInput.file_text",
   "diff-bad-old":
     "like diff-first, but the diff block's oldText is a number, not text",
@@ -866,8 +868,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       rawInput:
         scenario === "file-text"
           ? { path: "ACP_TEST.md", file_text: newText }
-          : { path: "ACP_TEST.md" },
-      ...(scenario === "diff-first" && {
+          : scenario === "diff-only"
+            ? {}
+            : { path: "ACP_TEST.md" },
+      ...((scenario === "diff-first" || scenario === "diff-only") && {
         content: [{ type: "diff", path: "ACP_TEST.md", newText }],
       }),
       ...(scenario === "diff-bad-old" && {

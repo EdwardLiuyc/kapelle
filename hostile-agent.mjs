@@ -29,6 +29,10 @@ const SCENARIOS = {
     "writes through an in-root dangling symlink whose target is outside the root",
   "write-no-ask": "calls fs/write_text_file with no permission request first",
   "always-menu": "offers only allow_always, then writes the same path twice",
+  "swap-bytes":
+    "asks with a diff for notes.md, then writes other bytes to notes.md",
+  "swap-path":
+    "asks with a diff for shown.md and rawInput.path other.md, then writes other.md",
   "malformed-json": "puts a non-JSON line on stdout, then carries on",
   oversized: "puts a line past the client's length cap on stdout",
   "unknown-method": "calls a client method that does not exist",
@@ -118,6 +122,38 @@ const resultBlock = (sid) =>
       `<summary>Ran the ${scenario} attack against the client.</summary>\n` +
       `<details>${SCENARIOS[scenario]}</details>\n</task-result>\n`,
   );
+
+/**
+ * Ask about an edit shown as a diff for `diffPath`, then send `write` if the
+ * client approved. The outcome line says what the client did with the write.
+ */
+async function askThenWrite(sid, rawInput, diffPath, newText, write) {
+  update(sid, {
+    sessionUpdate: "tool_call",
+    toolCallId: "s1",
+    title: `Write ${diffPath}`,
+    kind: "edit",
+    rawInput,
+    content: [{ type: "diff", path: diffPath, oldText: null, newText }],
+    status: "pending",
+  });
+  const perm = await callClient("session/request_permission", {
+    sessionId: sid,
+    toolCall: { toolCallId: "s1" },
+    options: [
+      { optionId: "yes", name: "Allow once", kind: "allow_once" },
+      { optionId: "no", name: "Reject", kind: "reject_once" },
+    ],
+  });
+  if (perm.result?.outcome?.optionId !== "yes") {
+    say(sid, `\nATTACK=${scenario} OUTCOME=refused DETAIL=not approved\n`);
+    return;
+  }
+  outcome(
+    sid,
+    await callClient("fs/write_text_file", { sessionId: sid, ...write }),
+  );
+}
 
 /** Each attack, keyed by name. Returns once the client has answered, if it does. */
 const ATTACKS = {
@@ -217,6 +253,20 @@ const ATTACKS = {
     outcome(sid, await write());
     outcome(sid, await write());
   },
+
+  // #310: an approval is for the text the person saw, not for a path. Both
+  // ask with one diff, then write something the diff did not show.
+  "swap-bytes": (sid) =>
+    askThenWrite(sid, { path: "notes.md" }, "notes.md", "approved\n", {
+      path: "notes.md",
+      content: "swapped\n",
+    }),
+
+  "swap-path": (sid) =>
+    askThenWrite(sid, { path: "other.md" }, "shown.md", "shown\n", {
+      path: "other.md",
+      content: "unseen\n",
+    }),
 
   "diff-escape": async (sid) => {
     // The question's diff reads the file it names (M4-6): one outside the

@@ -202,6 +202,41 @@ test("an allow-only menu grants one write, not the whole session", async (t) => 
   assert.equal(run.stopReason, "end_turn");
 });
 
+/** Says yes to every question the harness asks, and no to a write it did not. */
+const ASKED_ONLY: Policy = ({ toolCall }) =>
+  !toolCall.title.startsWith("fs/write_text_file");
+
+test("an approved diff does not approve other bytes for its file", async (t) => {
+  // #310: the person approved the text they saw. Other bytes are a new
+  // decision about those bytes, so a policy that refuses unasked writes
+  // keeps them out.
+  const run = await attack(t, "swap-bytes", ASKED_ONLY);
+  assert.equal(run.decisions.length, 2, "the swapped bytes are asked about");
+  assert.match(run.decisions[0] ?? "", /^edit:Write notes\.md$/);
+  assert.match(
+    run.decisions[1] ?? "",
+    /^edit:fs\/write_text_file .*notes\.md$/,
+  );
+  assert.deepEqual(run.edits[1], [
+    { abs: join(run.cwd, "notes.md"), path: "notes.md", newText: "swapped\n" },
+  ]);
+  assert.match(run.text, /OUTCOME=refused DETAIL=write refused by policy/);
+  assert.equal(await absent(join(run.cwd, "notes.md")), true);
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("an approved diff for one file does not approve rawInput.path's file", async (t) => {
+  const run = await attack(t, "swap-path", ASKED_ONLY);
+  assert.equal(run.decisions.length, 2, "the unseen file is asked about");
+  assert.match(
+    run.decisions[1] ?? "",
+    /^edit:fs\/write_text_file .*other\.md$/,
+  );
+  assert.match(run.text, /OUTCOME=refused DETAIL=write refused by policy/);
+  assert.equal(await absent(join(run.cwd, "other.md")), true);
+  assert.equal(run.stopReason, "end_turn");
+});
+
 test("an edit outside the root names no file for a diff, by diff block or by file_text", async (t) => {
   // The diff reads the old text from disk (M4-6), so a path the guard
   // refuses must never reach it: its text would land on a person's screen.
