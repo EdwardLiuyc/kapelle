@@ -64,9 +64,6 @@ Each bot's section names its facts, not its commands: `dev` writes the `gh` call
 
 ### Common loop
 
-The aim is that every round counts. Each fix is checked before it is pushed. Each round
-also reads the previous round's fixes.
-
 - **The reviewed commit:** just before each trigger, `dev` records the PR's head commit.
   The bot reviews up to that commit. `dev` pushes nothing while it waits, and puts the
   commit in its report.

@@ -57,6 +57,16 @@ gh api repos/{owner}/{repo}/pulls/<N>/reviews \
   --jq '.[] | "=== \(.user.login) \(.state)\n\(.body)\n"'
 ```
 
+Some reviewers post the review as a PR conversation comment instead, such as the Claude
+bot. Neither query above returns it, so read the conversation too:
+
+```bash
+gh pr view <N> --json comments \
+  --jq '.comments[] | "=== \(.author.login) \(.createdAt) \(.url)\n\(.body)\n"'
+```
+
+Such a review has no thread. It is open when no later conversation comment answers it.
+
 ### 2. Judge each comment against the code, not against its confidence
 
 Open the lines it names and decide for yourself. A reviewer — human or bot — states
@@ -145,6 +155,13 @@ One reply per thread, posted **into the thread** rather than as a new top-level 
 ```bash
 gh api -X POST repos/{owner}/{repo}/pulls/<N>/comments/<comment-id>/replies \
   -F body=@reply.md
+```
+
+A review posted as a conversation comment gets one reply in the conversation instead,
+with one entry for each of its findings:
+
+```bash
+gh pr comment <N> --body-file reply.md
 ```
 
 Every reply carries three things: the **verdict**, the **commit** that acts on it, and the
