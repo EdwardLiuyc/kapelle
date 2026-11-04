@@ -53,7 +53,11 @@
  * each path is the proof that Git does not see the link: a visible link is
  * removed and refused. The paths are planned again for every checkout,
  * because a room can live for days and a folder installed later must reach
- * the next participant.
+ * the next participant. A top-level symlink entry out of the main checkout, or
+ * a dangling one, is refused at both points (#311). Entries below that level
+ * are not walked. The links are path-valued: a link is checked when it is
+ * planned and when it is made, not after. A swap in the main checkout after a
+ * mirror was made is outside this check (#447).
  */
 
 import { execFile } from "node:child_process";
@@ -559,6 +563,9 @@ export interface WorktreeSetupOptions {
   /** Project `linkPaths`, already through `core/config.ts`'s shape rules.
    *  Absent means no links. */
   linkPaths?: readonly string[];
+  /** Test seam: awaited between the plan and the mirror, so a test can plant
+   *  an entry the preflight could not see (#311). */
+  onLinkPlan?: () => void | Promise<void>;
 }
 
 export interface WorktreeSetup {
@@ -589,14 +596,35 @@ interface LinkSource {
   path: string;
   /** The absolute path in the main checkout. */
   source: string;
-  /** A directory is mirrored entry by entry; a file is one symlink. */
-  kind: "dir" | "file";
   /** `<repo>/.kapelle/config.json: "linkPaths[i]"`, for error messages. */
   where: string;
+  /** Realpath of the main checkout, for entry containment (#311). */
+  realRoot: string;
 }
 
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
+
+/** Resolve `path` and refuse it unless the result is the main checkout or
+ *  inside it. `where` names the configured path or one of its entries. */
+async function realPathInRoot(
+  path: string,
+  realRoot: string,
+  where: string,
+): Promise<string> {
+  let realPath: string;
+  try {
+    realPath = await realpath(path);
+  } catch (err) {
+    throw new LinkPathError(`${where} cannot be resolved: ${messageOf(err)}.`);
+  }
+  if (realPath !== realRoot && !realPath.startsWith(`${realRoot}${sep}`)) {
+    throw new LinkPathError(
+      `${where} resolves outside ${realRoot}, to ${realPath}.`,
+    );
+  }
+  return realPath;
+}
 
 /** Separators and harmless `.` parts removed, so `folder_a/` and `folder_a`
  *  are one entry for overlap checks. */
@@ -610,8 +638,8 @@ function canonicalLinkPath(path: string): string {
 /**
  * Plan the configured links against the main checkout. `core/config.ts`
  * checks the list's shape; the answers that need git or the filesystem are
- * here: tracked, real-target containment, and overlap. A path that does not
- * exist is skipped.
+ * here: tracked, real-target containment, entry containment, and overlap. A
+ * path that does not exist is skipped.
  */
 async function planLinkSources(
   root: string,
@@ -668,6 +696,57 @@ function checkLinkPath(
   seen.set(key, path);
 }
 
+/**
+ * Read the top-level entries of a linked directory and refuse any symlink
+ * that leaves the main checkout or does not resolve (#311). Called when the
+ * links are planned and again just before they are made: a room lives for
+ * days, and a link planted in between must not reach a new checkout.
+ */
+async function linkEntries(
+  source: string,
+  realRoot: string,
+  where: string,
+): Promise<string[]> {
+  // The directory itself can be swapped for an outside symlink after the
+  // plan. Recheck it here, then check each entry below.
+  await realPathInRoot(source, realRoot, where);
+  let names: string[];
+  try {
+    names = await readdir(source);
+  } catch (err) {
+    throw new LinkPathError(`${where} cannot be read: ${messageOf(err)}.`);
+  }
+  for (const name of names) {
+    const entry = join(source, name);
+    let entryStat: Stats;
+    try {
+      entryStat = await lstat(entry);
+    } catch (err) {
+      throw new LinkPathError(
+        `${where} entry ${JSON.stringify(name)} cannot be read: ` +
+          `${messageOf(err)}.`,
+      );
+    }
+    if (!entryStat.isSymbolicLink()) continue;
+    let realEntry: string;
+    try {
+      realEntry = await realpath(entry);
+    } catch (err) {
+      throw new LinkPathError(
+        `${where} entry ${JSON.stringify(name)} cannot be resolved: ` +
+          `${messageOf(err)}. Reinstall or remove the link, then try again.`,
+      );
+    }
+    if (realEntry !== realRoot && !realEntry.startsWith(`${realRoot}${sep}`)) {
+      throw new LinkPathError(
+        `${where} entry ${JSON.stringify(name)} resolves outside ` +
+          `${realRoot}, to ${realEntry}.`,
+      );
+    }
+  }
+  return names;
+}
+
 /** One path's git and filesystem checks, or `undefined` when it is missing. */
 async function planLinkSource(
   root: string,
@@ -695,25 +774,12 @@ async function planLinkSource(
   if (sourceStat === undefined) return undefined;
 
   // `realpath` follows a symlink, so a listed path that points outside the
-  // checkout is refused no matter how it is spelled.
-  let realSource: string;
-  try {
-    realSource = await realpath(source);
-  } catch (err) {
-    throw new LinkPathError(`${where} cannot be resolved: ${messageOf(err)}.`);
-  }
-  if (realSource !== realRoot && !realSource.startsWith(`${realRoot}${sep}`)) {
-    throw new LinkPathError(
-      `${where} resolves outside ${root}, to ${realSource}.`,
-    );
-  }
+  // checkout is refused no matter how it is spelled. `linkEntries` starts
+  // with that same check for a directory, so only a file needs it here.
+  if (sourceStat.isDirectory()) await linkEntries(source, realRoot, where);
+  else await realPathInRoot(source, realRoot, where);
 
-  return {
-    path,
-    source,
-    kind: sourceStat.isDirectory() ? "dir" : "file",
-    where,
-  };
+  return { path, source, where, realRoot };
 }
 
 /** `stat`, with a missing path as the `undefined` the caller skips. */
@@ -797,10 +863,18 @@ async function applyLinkSources(
         );
       }
 
-      if (plan.kind === "file") {
-        await makeLink(plan.source, target, plan.where);
-        created.push(target);
-      } else {
+      // Read the kind again, not from the plan: a file can become a directory
+      // between planning and mirroring. A stale "file" would then link the
+      // whole directory and skip its entries' containment checks.
+      const sourceStat = await statOrMissing(plan.source, plan.where);
+      if (sourceStat === undefined) {
+        throw new LinkPathError(
+          `${plan.where} cannot be read after it was planned: it is missing ` +
+            `or is a dangling symlink.`,
+        );
+      }
+      if (sourceStat.isDirectory()) {
+        const names = await linkEntries(plan.source, plan.realRoot, plan.where);
         try {
           await mkdir(target);
         } catch (err) {
@@ -809,14 +883,6 @@ async function applyLinkSources(
           );
         }
         created.push(target);
-        let names: string[];
-        try {
-          names = await readdir(plan.source);
-        } catch (err) {
-          throw new LinkPathError(
-            `${plan.where} cannot be read: ${messageOf(err)}.`,
-          );
-        }
         for (const name of names) {
           await makeLink(
             join(plan.source, name),
@@ -824,6 +890,13 @@ async function applyLinkSources(
             plan.where,
           );
         }
+      } else {
+        // The file itself can be replaced after the plan. Resolve it again
+        // immediately before making the link, so a late symlink cannot walk
+        // the new checkout outside.
+        await realPathInRoot(plan.source, plan.realRoot, plan.where);
+        await makeLink(plan.source, target, plan.where);
+        created.push(target);
       }
 
       const dirty = await git(checkout, [
@@ -1066,7 +1139,9 @@ export async function openWorktrees(
               "start from a commit that has it.",
           );
         }
-        await applyLinkSources(path, await planLinkSources(root, linkPaths));
+        const plans = await planLinkSources(root, linkPaths);
+        await options.onLinkPlan?.();
+        await applyLinkSources(path, plans);
         return inside;
       },
 

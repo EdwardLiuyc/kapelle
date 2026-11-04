@@ -27,6 +27,7 @@ import {
   readdir,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -2284,6 +2285,42 @@ test("a participant's checkout gets the project's configured links (#274)", asyn
     existsSync(join(repo, "node_modules", "pkg", "index.js")),
     "dismiss keeps the main folder",
   );
+});
+
+test("an entry planted after the room opened refuses the next member (#311)", async (t) => {
+  const repo = await gitRepo(t, { ignore: "node_modules/\n" });
+  await mkdir(join(repo, "node_modules", "pkg"), { recursive: true });
+  await writeFile(join(repo, "node_modules", "pkg", "index.js"), "module\n");
+  await mkdir(join(repo, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(repo, ".kapelle", "config.json"),
+    `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`,
+    { mode: 0o644 },
+  );
+
+  const roomId = newRoomId();
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [mock("alice")],
+    setup: await openWorktrees(repo, roomId, {
+      linkPaths: readProjectLinkPaths(repo),
+    }),
+    bus: createEventBus(),
+    permissions: queue,
+  });
+  t.after(() => room.dismiss());
+
+  const outside = await tempDir(t);
+  await symlink(outside, join(repo, "node_modules", "ssh"));
+  await assert.rejects(
+    room.add(mock("bob")),
+    (err: unknown) =>
+      err instanceof RoomRefusal &&
+      err.code === "invalid_config" &&
+      /entry "ssh" resolves outside/.test(err.message),
+  );
+  assert.equal(room.participants.length, 1);
 });
 
 // --- M8-2: a reply to the sender, a copy to the orchestrator --------------
