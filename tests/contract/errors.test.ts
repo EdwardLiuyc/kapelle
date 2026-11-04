@@ -127,36 +127,50 @@ test("after a 413, the rest of an upload with no length is still read", async (t
   // and discard the rest. Destroying the request instead left the rest
   // unread: the upload stalled after 8 MiB (measured 2026-09-23), and a
   // client that reads the reply only after its upload would hang.
+  //
+  // The socket is closed in `finally`, not in `t.after`: the daemon's stop
+  // hook was registered first, so it runs first. A daemon that exits with
+  // upload bytes still unread resets the socket, and a socket still open
+  // then fails the test with ECONNRESET (#439). The test ends with bytes in
+  // flight on purpose, so a wrong order fails every run, not only under load.
   const d = await boot(t);
   const { port } = new URL(d.url);
   const socket = connect(Number(port), "127.0.0.1");
-  t.after(() => socket.destroy());
-  await new Promise((ok) => socket.once("connect", ok));
-  let reply = "";
-  socket.on("data", (c) => {
-    reply += c;
-  });
-  socket.write(
-    "POST /repos HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
-      `Authorization: Bearer ${d.token}\r\n` +
-      "Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
-  );
-  const mib = Buffer.alloc(1024 * 1024, 97);
-  const total = 64;
-  let sent = 0;
-  for (; sent < total; sent++) {
-    socket.write("100000\r\n");
-    socket.write(mib);
-    if (socket.write("\r\n")) continue;
-    const drained = await Promise.race([
-      new Promise((ok) => socket.once("drain", () => ok(true))),
-      new Promise((ok) => setTimeout(() => ok(false), 2000)),
-    ]);
-    if (!drained) break;
+  try {
+    await new Promise((ok) => socket.once("connect", ok));
+    let reply = "";
+    socket.on("data", (c) => {
+      reply += c;
+    });
+    socket.write(
+      "POST /repos HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+        `Authorization: Bearer ${d.token}\r\n` +
+        "Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+    );
+    const mib = Buffer.alloc(1024 * 1024, 97);
+    const chunk = () => {
+      socket.write("100000\r\n");
+      socket.write(mib);
+      return socket.write("\r\n");
+    };
+    const total = 64;
+    let sent = 0;
+    for (; sent < total; sent++) {
+      if (chunk()) continue;
+      const drained = await Promise.race([
+        new Promise((ok) => socket.once("drain", () => ok(true))),
+        new Promise((ok) => setTimeout(() => ok(false), 2000)),
+      ]);
+      if (!drained) break;
+    }
+    assert.equal(sent, total, `the upload stalled after ${sent} MiB`);
+    assert.match(reply, /^HTTP\/1\.1 413 /);
+    assert.match(reply, /"body_too_large"/);
+    // Still uploading when the test ends: see above.
+    for (let i = 0; i < 16; i++) chunk();
+  } finally {
+    socket.destroy();
   }
-  assert.equal(sent, total, `the upload stalled after ${sent} MiB`);
-  assert.match(reply, /^HTTP\/1\.1 413 /);
-  assert.match(reply, /"body_too_large"/);
 });
 
 test("every write refuses a field its route does not take", async (t) => {
