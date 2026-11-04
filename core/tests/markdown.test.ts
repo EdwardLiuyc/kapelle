@@ -5,6 +5,8 @@
  * as a pure function and the drawing is not. The renderer's own tests assert
  * the three constructs the story names — nested list, table, fence with a
  * blank line in it — plus the fallback that makes the dependency affordable.
+ * #431 adds the blockquote, rule, HTML/fallback and inline renderers the
+ * scope names, with their exact colour codes.
  */
 
 import assert from "node:assert/strict";
@@ -12,9 +14,10 @@ import test from "node:test";
 import { marked } from "marked";
 import { blockEnd, displayWidth, toAnsi } from "../markdown.ts";
 
-/** Colour is not the subject of any assertion here. */
+/** For the tests whose subject is not colour. */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping SGR codes.
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+const dim = (s: string) => `\x1b[2m${s}\x1b[22m`;
 
 test("blockEnd: where one block ends and the next begins", () => {
   const cases: [string, number, string][] = [
@@ -99,6 +102,57 @@ test("a renderer failure costs the screen, not the run", () => {
   } finally {
     marked.lexer = real;
   }
+});
+
+test("a blockquote, a rule and an HTML block keep their text", () => {
+  // Every line of a quote gets the mark, the blank one between blocks too.
+  assert.equal(
+    toAnsi("> a\n>\n> b\n"),
+    `${dim("│ ")}a\n${dim("│ ")}\n${dim("│ ")}b\n`,
+  );
+  // A quote takes two columns from what it holds.
+  assert.equal(
+    toAnsi("> ---\n", { width: 10 }),
+    `${dim("│ ")}${dim("─".repeat(8))}\n`,
+  );
+  // Narrower than its mark, a rule still draws one column: `repeat` would
+  // throw on a negative count, and the fallback would hide it as raw text.
+  assert.equal(toAnsi("> ---\n", { width: 1 }), `${dim("│ ")}${dim("─")}\n`);
+  assert.equal(toAnsi("---\n", { width: 10 }), `${dim("─".repeat(10))}\n`);
+  assert.equal(
+    toAnsi("---\n", { width: 200 }),
+    `${dim("─".repeat(80))}\n`,
+    "a rule stops at 80 columns",
+  );
+  assert.equal(toAnsi("<div>\nhi\n</div>\n"), "<div>\nhi\n</div>\n");
+});
+
+test("a block token the renderer does not know prints its source", () => {
+  // The stock lexer never makes one; an extension could.
+  const real = marked.lexer;
+  marked.lexer = () =>
+    [{ type: "custom", raw: "raw text\n" }] as ReturnType<typeof real>;
+  try {
+    assert.equal(toAnsi("ignored"), "raw text\n");
+  } finally {
+    marked.lexer = real;
+  }
+});
+
+test("inline emphasis, deletion, code, links, images and breaks", () => {
+  assert.equal(
+    toAnsi("*a* ~~b~~ `c`\n"),
+    "\x1b[3ma\x1b[23m \x1b[9mb\x1b[29m \x1b[36mc\x1b[39m\n",
+  );
+  assert.equal(
+    toAnsi("[t](http://u) <http://u>\n"),
+    `\x1b[4mt\x1b[24m${dim(" (http://u)")} \x1b[4mhttp://u\x1b[24m\n`,
+    "a link shows its href only when the text differs",
+  );
+  assert.equal(toAnsi("![alt](p.png)\n"), `${dim("[image: alt]")}\n`);
+  assert.equal(toAnsi("a  \nb\n"), "a\nb\n", "a hard break is a new line");
+  // An escape and inline HTML have no case of their own: their text prints.
+  assert.equal(toAnsi("x \\* <b>y</b>\n"), "x * <b>y</b>\n");
 });
 
 test("displayWidth counts terminal columns, not code points", () => {

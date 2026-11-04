@@ -1,8 +1,9 @@
 /**
  * `chat.ts` with no terminal: one room as plain lines (`chat/piped.ts`),
- * `kapelle chat` handing over to `chat.ts`, and the rule that the chat reaches
- * the daemon over HTTP only. Most tests drive a real `daemon.ts`; a few stand
- * up a fake one to send a reply the real one never sends.
+ * the `list` and `dismiss` verbs, `kapelle chat` handing over to `chat.ts`,
+ * and the rule that the chat reaches the daemon over HTTP only. Most tests
+ * drive a real `daemon.ts`; a few stand up a fake one to send a reply the
+ * real one never sends.
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
@@ -29,6 +30,7 @@ import test from "node:test";
 import {
   API_VERSION,
   type HarnessesReply,
+  type RoomDto,
   type RoomListEntry,
 } from "../client/contract.ts";
 import {
@@ -209,6 +211,110 @@ test("chat.ts new opens its agent as a developer (#333)", async (t) => {
     room?.participants.map((p) => [p.name, p.role]),
     [["mock-agent", "developer"]],
   );
+});
+
+test("chat.ts list prints each room's id, status, names and cwd (#431)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const otherCwd = await added(d, await gitRepo(t));
+  const empty = await api<RoomDto>(d, "POST", "/rooms", { cwd });
+  assert.equal(empty.status, 201, JSON.stringify(empty.body));
+  const pair = await api<RoomDto>(d, "POST", "/rooms", {
+    cwd: otherCwd,
+    agents: [
+      { cmd: REMEMBER, name: "alice" },
+      { cmd: REMEMBER, name: "bob" },
+    ],
+  });
+  assert.equal(pair.status, 201, JSON.stringify(pair.body));
+  const dismissed = await api<RoomDto>(
+    d,
+    "POST",
+    `/rooms/${empty.body.id}/dismiss`,
+  );
+  assert.equal(dismissed.status, 200, JSON.stringify(dismissed.body));
+
+  const r = await spawnCli(t, ["list"], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  }).done;
+  assert.equal(r.code, 0, r.stderr);
+  // A room with no participant prints "-" in the names column. Both sides
+  // are sorted because `docs/CLIENT-API.md` promises no order for `GET /rooms`.
+  assert.deepEqual(
+    r.stdout.trimEnd().split("\n").sort(),
+    [
+      `${empty.body.id}  dismissed  -  ${empty.body.cwd}`,
+      `${pair.body.id}  active  alice,bob  ${pair.body.cwd}`,
+    ].sort(),
+  );
+});
+
+test("chat.ts list prints the daemon's refusal and exits non-zero (#431)", async (t) => {
+  // The real daemon does not refuse `GET /rooms`, so a fake one does.
+  const fake = createServer((req, res) => {
+    res.writeHead(req.url === "/version" ? 200 : 503, {
+      "content-type": "application/json",
+    });
+    res.end(
+      JSON.stringify(
+        req.url === "/version"
+          ? { apiVersion: API_VERSION }
+          : { error: { code: "shutting_down", message: "going away" } },
+      ),
+    );
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+
+  const r = await spawnCli(t, ["list"], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  }).done;
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, "");
+  assert.equal(r.stderr.trim(), "error: going away");
+});
+
+test("chat.ts dismiss stops a room, and prints the daemon's refusal or the usage (#431)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const room = await api<RoomDto>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: REMEMBER }],
+  });
+  assert.equal(room.status, 201, JSON.stringify(room.body));
+  const id = room.body.id;
+  const chat = (...args: string[]) =>
+    spawnCli(t, args, "chat.ts", { XDG_RUNTIME_DIR: runtime }).done;
+
+  const ok = await chat("dismiss", id);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(ok.stdout, `dismissed ${id}\n`);
+  const gone = await api<RoomDto>(d, "GET", `/rooms/${id}`);
+  assert.equal(gone.body.status, "dismissed");
+
+  const again = await chat("dismiss", id);
+  assert.equal(again.code, 1);
+  assert.equal(again.stderr.trim(), `error: room ${id} is already dismissed`);
+
+  const unknown = await chat("dismiss", "room-x");
+  assert.equal(unknown.code, 1);
+  assert.equal(unknown.stderr.trim(), "error: no room room-x");
+
+  const bare = await chat("dismiss");
+  assert.equal(bare.code, 1);
+  assert.equal(bare.stdout, "");
+  assert.match(bare.stderr, /^usage:\n/);
+  assert.match(bare.stderr, /node chat\.ts dismiss <roomId>/);
 });
 
 test("chat.ts talks to a room end to end: messages in, answers out, /dismiss stops it", async (t) => {
