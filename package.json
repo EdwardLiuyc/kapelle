@@ -2,14 +2,14 @@
   "name": "kapelle",
   "version": "0.1.0",
   "type": "module",
-  "description": "A minimal Agent Client Protocol client — supervise coding agents from Node",
+  "description": "A terminal chatting workspace for a team of coding agents: each in its own git worktree, all in one chat",
   "license": "MIT",
   "author": "Yongchuan Liu",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/EdwardLiuyc/kapelle.git"
   },
-  "homepage": "https://github.com/EdwardLiuyc/kapelle#readme",
+  "homepage": "https://kapelle.dev",
   "bugs": {
     "url": "https://github.com/EdwardLiuyc/kapelle/issues"
   },
