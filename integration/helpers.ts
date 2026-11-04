@@ -786,8 +786,8 @@ export const askRun = (cwd: string) => ({
 });
 
 /** Polls `GET /permissions` until one decision is pending, and returns it. */
-export async function pendingOne(d: Daemon): Promise<Pending> {
-  for (const end = Date.now() + 20_000; Date.now() < end; ) {
+export async function pendingOne(d: Daemon, ms = 20_000): Promise<Pending> {
+  for (const end = Date.now() + ms; Date.now() < end; ) {
     const r = await api<Pending[]>(d, "GET", "/permissions");
     assert.equal(r.status, 200);
     const [found] = r.body;

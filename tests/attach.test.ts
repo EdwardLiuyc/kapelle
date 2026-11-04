@@ -598,8 +598,13 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
   const d = await boot(t, runtime, ["--permission-timeout", "10"]);
   const cwd = await added(d, await tempDir(t));
   const id = await detach(t, env, cwd, askRun(cwd).run);
-  const permission = await pendingOne(d);
+  // The waits (3 + 12 + 2 + 3 + 2 + 3 s) stay under `npm test`'s 30 s cap,
+  // so a failure prints its own message and the transcript (#442).
+  const permission = await pendingOne(d, 3000);
   assert.equal(permission.kind, "edit");
+  // The 10 s timer started at the ask, so the edit prompt and its timeout
+  // share one window.
+  const window = Date.now() + 12_000;
 
   const child = spawn(
     "script",
@@ -613,35 +618,55 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
     out += text;
   });
 
-  await until("the edit prompt", () => out.includes("wants to run [edit]"));
+  await until(
+    "the edit prompt",
+    () => out.includes("wants to run [edit]"),
+    window - Date.now(),
+  );
   // A slow daemon can settle its timer after a fixed-delay answer. Wait for
   // the recorded timeout so the late answer must get the daemon's 409.
-  await until("the edit permission to time out", async () => {
-    const r = await api<{ reason?: string }>(
-      d,
-      "GET",
-      `/permissions/${permission.id}`,
-    );
-    return r.body.reason === "timeout";
-  });
+  await until(
+    "the edit permission to time out",
+    async () => {
+      const r = await api<{ reason?: string }>(
+        d,
+        "GET",
+        `/permissions/${permission.id}`,
+      );
+      return r.body.reason === "timeout";
+    },
+    window - Date.now(),
+  );
   child.stdin.write("y\n");
-  const next = await pendingOne(d);
+  const next = await pendingOne(d, 2000);
   assert.equal(next.kind, "delete");
-  await until("the delete prompt", () => out.includes("wants to run [delete]"));
+  await until(
+    "the delete prompt",
+    () => out.includes("wants to run [delete]"),
+    3000,
+  );
   child.stdin.write("n\n");
-  await until("the delete permission to be answered", async () => {
-    const decision = await api<{ allow?: boolean; reason?: string }>(
-      d,
-      "GET",
-      `/permissions/${next.id}`,
-    );
-    if (decision.body.reason === undefined) return false;
-    assert.equal(decision.body.allow, false);
-    assert.equal(decision.body.reason, "client");
-    return true;
-  });
+  await until(
+    "the delete permission to be answered",
+    async () => {
+      const decision = await api<{ allow?: boolean; reason?: string }>(
+        d,
+        "GET",
+        `/permissions/${next.id}`,
+      );
+      if (decision.body.reason === undefined) return false;
+      assert.equal(decision.body.allow, false);
+      assert.equal(decision.body.reason, "client");
+      return true;
+    },
+    2000,
+  );
 
-  assert.equal(await closed, 0, out);
+  const code = await Promise.race([
+    closed,
+    new Promise<string>((ok) => setTimeout(() => ok("hung"), 3000).unref()),
+  ]);
+  assert.equal(code, 0, out);
   assert.match(out, /error: permission \S+ was already decided/);
   assert.match(out, /done — 1 task/);
   // The timeout's deny stands: the late "y" wrote nothing.
