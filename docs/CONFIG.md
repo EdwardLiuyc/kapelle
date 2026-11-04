@@ -83,7 +83,7 @@ skipped. The daemon keeps booting and serving the rest.
 | ❌ | wrong-layer key | `{"port": 5000}` | `<path>: "port" is daemon-wide; put it in <user-config-path>.` |
 | ❌ | wrong type | `{"ttlMs": "soon"}`, `{"maxConcurrency": 1.5}`, `{"linkPaths": "node_modules"}` | whole-number rule naming the key, or the `linkPaths` array rule |
 | ❌ | bad link path | `{"linkPaths": ["/x"]}`, `["../x"]`, `["a", "a/b"]`, `[".git"]`, `["sub/.git"]`, `42` | entry-specific rule naming the file and `linkPaths[i]` |
-| ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path or a directory entry whose real target leaves the checkout | refused when the repository is added, a run starts, or a room opens, as `invalid_config`; entries are checked again when a checkout is made |
+| ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path or a directory entry whose real target leaves the checkout | refused when the repository is added, a run starts, or a room opens, as `invalid_config`; the path and its entries are checked again when a checkout is made |
 | ❌ | link git would see | an untracked path no ignore rule matches | refused when a checkout is made: the task fails, or the room's add is a 400 `invalid_config`; the links are removed again |
 | ❌ | out of range | negatives; `{"maxConcurrency": 0}`, `{"orchestratorTurnCap": 0}` | `0 or greater` (watchdog/retention) or `1 or greater` (concurrency/cap) |
 | ❌ | invalid JSON / non-object / unreadable | — | the same three structural refusals as the user file |
@@ -100,8 +100,9 @@ old path.
 A symlink that is a top-level entry of a linked directory must resolve inside
 the main checkout. One that leaves it, or is dangling, is refused with
 `invalid_config` naming `linkPaths[i]` and the entry; it is not skipped. The
-entries are checked again when each checkout is made, because a link can be
-planted after the config was validated.
+listed path and its entries are resolved again when each checkout is made,
+because either can be swapped for an outside symlink after the config was
+validated.
 
 ## Environment — `KAPELLE_*`
 
