@@ -8,8 +8,9 @@
  * Covered so far: the per-request timeout (#62 B1), the in-flight prompt guard
  * (#62 R5), the whole `PromptResponse` (#62 B3), the cancel-intent event
  * (#62 R4), stderr capture on death, `#guardPath` containment, `#guardWrite`'s
- * no-ask refusal and its reuse of an approved edit decision, the
- * toolCall-id lookup's parity with the pre-port client, a finished call
+ * no-ask refusal and its reuse of an approved edit decision bound to that
+ * decision's shown text (#310), the toolCall-id lookup's parity with the
+ * pre-port client, a finished call
  * that keeps its title and kind but not its input (#163), the handshake's
  * version/auth handling, and exact read ranges.
  */
@@ -927,39 +928,43 @@ test("a load that missed its deadline still drops the replay that comes late", a
 
 // --- #guardWrite · mutation without asking -----------------------------------
 
-test("an allowed permission is not re-decided when the same write crosses the wire", async (t) => {
-  // A well-behaved harness announces an edit, asks permission, and only then
-  // performs the write through `fs/write_text_file`. M1b-6 made the file
-  // service consult the policy; that must apply to a write that skipped the
-  // permission request, not turn one approved edit into two decisions (and two
-  // `ask` prompts).
-  const root = await tempDir(t, "acp-write-once-");
-  const decisions: string[] = [];
-  const agent = new AcpAgent({
-    name: "mock-write",
-    command: process.execPath,
-    args: [MOCK_AGENT],
-    cwd: root,
-    requestTimeoutMs: 10_000,
-    policy: ({ toolCall }) => {
-      decisions.push(`${toolCall.kind}:${toolCall.title}`);
-      return true;
-    },
+// The default path names only a path, so its grant holds any bytes (#310, D1).
+// The others carry the text, and the write sends those same bytes.
+for (const scenario of [undefined, "diff-first", "diff-only", "file-text"]) {
+  test(`an allowed permission is not re-decided when the same write crosses the wire: ${scenario ?? "path only"}`, async (t) => {
+    // A well-behaved harness announces an edit, asks permission, and only then
+    // performs the write through `fs/write_text_file`. M1b-6 made the file
+    // service consult the policy; that must apply to a write that skipped the
+    // permission request, not turn one approved edit into two decisions (and two
+    // `ask` prompts). A diff with no `rawInput.path` names its file too (#310).
+    const root = await tempDir(t, "acp-write-once-");
+    const decisions: string[] = [];
+    const agent = new AcpAgent({
+      name: "mock-write",
+      command: process.execPath,
+      args: scenario ? [MOCK_AGENT, "--scenario", scenario] : [MOCK_AGENT],
+      cwd: root,
+      requestTimeoutMs: 10_000,
+      policy: ({ toolCall }) => {
+        decisions.push(`${toolCall.kind}:${toolCall.title}`);
+        return true;
+      },
+    });
+    t.after(() => agent.stop());
+
+    await agent.start();
+    await agent.newSession();
+    await agent.prompt("self test");
+
+    const editDecisions = decisions.filter((d) => d.startsWith("edit:"));
+    assert.equal(
+      editDecisions.length,
+      1,
+      "the follow-up fs write is the same approved edit, not a second decision",
+    );
+    assert.match(editDecisions[0] ?? "", /Write ACP_TEST\.md/);
   });
-  t.after(() => agent.stop());
-
-  await agent.start();
-  await agent.newSession();
-  await agent.prompt("self test");
-
-  const editDecisions = decisions.filter((d) => d.startsWith("edit:"));
-  assert.equal(
-    editDecisions.length,
-    1,
-    "the follow-up fs write is the same approved edit, not a second decision",
-  );
-  assert.match(editDecisions[0] ?? "", /Write ACP_TEST\.md/);
-});
+}
 
 for (const [scenario, edit] of [
   [undefined, undefined],

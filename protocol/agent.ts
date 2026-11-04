@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
@@ -324,7 +325,18 @@ export class AcpAgent {
   // -long grant for a path nobody chose to grant that way. A denial is the one
   // sticky entry, so a harness that writes after being refused is refused
   // again without re-asking.
-  #writeDecisions = new Map<string, "denied" | "once">();
+  //
+  // An approval is bound to the text the person saw (#310). A request with
+  // edits approves only the files its edits name, each with a sha256 of its
+  // `newText`; a write with other bytes is a new decision and goes through
+  // `#guardWrite`, so the person is asked about the bytes that will land.
+  // That write uses up the approval, so a later write of the approved bytes
+  // asks again. `rawInput.path` grants only when the request carries no diff and no
+  // `file_text`. A diff the path guard dropped still counts, so it gives no
+  // grant at all. The path grant has no hash: the person was shown no text, so
+  // the one write may hold any bytes (decided 2026-11-04, one question per
+  // edit). A denial covers every path the request names.
+  #writeDecisions = new Map<string, "denied" | { sha256?: string }>();
   #closed = false;
   /** True while `session/load` is in flight: its updates are the replay. */
   #replaying = false;
@@ -1037,7 +1049,8 @@ export class AcpAgent {
    * jurisdiction and is inferred afterwards by `policyNeverFired`.
    *
    * A write that follows an approved `session/request_permission` for the same
-   * path is not a new decision and is handled by `#writeDecisions` instead.
+   * path is not a new decision and is handled by `#writeDecisions` instead,
+   * unless its bytes differ from the approved text (#310).
    *
    * `kind: "edit"` is the honest label, and it is what makes `safePolicy`
    * refuse: `READ_ONLY_KINDS` does not contain it. `options` is empty because
@@ -1077,14 +1090,17 @@ export class AcpAgent {
   }: WriteTextFileParams): Promise<WriteTextFileResponse> {
     const abs = await this.#guardPath(path, { write: true });
     const decision = this.#writeDecisions.get(abs);
+    if (decision === "denied") {
+      throw new Error(`write refused by policy: ${abs}`);
+    }
     if (decision === undefined) {
       await this.#guardWrite(abs, content);
-    } else if (decision === "denied") {
-      throw new Error(`write refused by policy: ${abs}`);
-    } else if (decision === "once") {
+    } else {
       // One approved write, not a standing grant. Consume it before attempting
       // the write so a later retry must ask again.
       this.#writeDecisions.delete(abs);
+      if (decision.sha256 !== undefined && decision.sha256 !== sha256(content))
+        await this.#guardWrite(abs, content);
     }
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, content, "utf8");
@@ -1101,20 +1117,26 @@ export class AcpAgent {
    * The files a tool call would write (M4-6): its `diff` blocks, when the
    * harness sent them before the ask; else copilot's `rawInput` with `path`
    * and `file_text`. A path the guard refuses is left out, so a question
-   * about a file outside the root shows no diff.
+   * about a file outside the root shows no diff. `hasEditContent` says the
+   * call carried a diff or `file_text` at all, even one left out (#310).
    */
   async #editsOf(
     content: ToolCallContent[] | undefined | null,
     // As in PolicyToolCall: arbitrary agent-supplied JSON.
     // pi-lens-ignore: no-unsafe-dictionary-unknown
     rawInput: Record<string, unknown> | undefined,
-  ): Promise<PolicyEdit[]> {
+  ): Promise<{ edits: PolicyEdit[]; hasEditContent: boolean }> {
     const wanted: { path: string; oldText?: string | null; newText: string }[] =
       [];
+    let hasEditContent = false;
     for (const c of content ?? []) {
+      if (c?.type !== "diff") continue;
+      // A diff that the guard later drops still counts as edit content. Falling
+      // back to a rawInput path grant would approve bytes the person never saw.
+      hasEditContent = true;
       // Off the wire, unchecked: a block may lack its strings.
       // pi-lens-ignore: no-runtime-typeof
-      if (c?.type !== "diff" || typeof c.path !== "string") continue;
+      if (typeof c.path !== "string") continue;
       // pi-lens-ignore: no-runtime-typeof
       if (typeof c.newText !== "string") continue;
       // No `oldText` is a new file (ACP). One that is not text is read from
@@ -1129,6 +1151,7 @@ export class AcpAgent {
     }
     const path = rawInput?.path;
     const text = rawInput?.file_text;
+    if (text !== undefined) hasEditContent = true;
     // pi-lens-ignore: no-runtime-typeof
     if (
       !wanted.length &&
@@ -1146,7 +1169,7 @@ export class AcpAgent {
         // Outside the root: no diff. The write itself is refused later.
       }
     }
-    return edits;
+    return { edits, hasEditContent };
   }
 
   async #requestPermission({
@@ -1160,7 +1183,7 @@ export class AcpAgent {
       kind: toolCall?.kind ?? known.kind ?? "other",
       rawInput: toolCall?.rawInput ?? known.rawInput,
     };
-    const edits = await this.#editsOf(
+    const { edits, hasEditContent } = await this.#editsOf(
       toolCall?.content ?? known.content,
       detail.rawInput,
     );
@@ -1177,20 +1200,23 @@ export class AcpAgent {
     // Remember what this edit decision covers. The follow-up `fs/write_text_file`
     // that a well-behaved harness sends after an approved permission request is
     // not a second, unasked mutation: it is the same logical write, so it should
-    // not re-enter the policy. Only paths named in the permission request are
-    // remembered; a direct write to a different path still goes through
-    // `#guardWrite`.
+    // not re-enter the policy. What each entry covers is on `#writeDecisions`;
+    // a direct write to a path not named here still goes through `#guardWrite`.
     if (detail.kind === "edit") {
       // `rawInput` is arbitrary agent-supplied JSON, so the only safe way to
       // learn whether it names a file is a runtime check at this decode point.
       const rawPath = detail.rawInput?.path;
-      // pi-lens-ignore: no-runtime-typeof
-      if (typeof rawPath === "string") {
-        const denied = optionId === null || !allow;
-        this.#writeDecisions.set(
-          resolve(this.cwd, rawPath),
-          denied ? "denied" : "once",
-        );
+      const rawAbs =
+        // pi-lens-ignore: no-runtime-typeof
+        typeof rawPath === "string" ? resolve(this.cwd, rawPath) : null;
+      if (optionId === null || !allow) {
+        for (const e of edits) this.#writeDecisions.set(e.abs, "denied");
+        if (rawAbs !== null) this.#writeDecisions.set(rawAbs, "denied");
+      } else if (edits.length > 0) {
+        for (const e of edits)
+          this.#writeDecisions.set(e.abs, { sha256: sha256(e.newText) });
+      } else if (rawAbs !== null && !hasEditContent) {
+        this.#writeDecisions.set(rawAbs, {});
       }
     }
 
@@ -1272,6 +1298,11 @@ async function realPathOrNearest(p: string): Promise<string> {
     if (isSymlink) throw new Error(`unresolved symlink refused: ${p}`);
     return join(await realPathOrNearest(parent), basename(p));
   }
+}
+
+/** The hash an approved write's text is kept as (#310): small, unlike the text. */
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 /**
