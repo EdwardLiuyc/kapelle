@@ -1268,6 +1268,13 @@ one sticky entry, so a harness that writes after being refused is refused again 
 re-asking. Approval for one path never covers another: measured, a harness approved for
 `ALLOWED.md` that then wrote `OTHER.md` was put back through the policy under the real
 target's name.
+**#310, 2026-11-04.** An approval now binds to what the request shows, not only to its
+path. Every in-root `edits[].abs` gets a sha256 of its `newText`; a follow-up write with
+other bytes re-enters `#guardWrite` and must be approved for the bytes that will land. A
+request with no diff or `file_text` keeps the one-write path grant (D1), including when
+the path guard dropped its edit content. `rawInput.path` never grants when edit content
+exists, so a diff for A cannot approve a write to B. A denial stays sticky for every
+path the request named.
 **(3) Oversized payload** — there was no cap at all; `MAX_LINE_LENGTH` is 32 MiB, and the
 line is dropped with a stderr notice while the turn carries on. The ceiling is recorded at
 the constant: `readline` has already buffered the line by the time the check runs, so this

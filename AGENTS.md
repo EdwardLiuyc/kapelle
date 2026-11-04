@@ -198,8 +198,11 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   request can carry only a `toolCallId`. Without the map, every decision goes blind.
   A finished call, or one outside a turn, keeps only its title, kind and status (#163).
   Do not bring back the whole-object merge: a room would keep every call's input.
-- **An approval covers one write.** A denial is sticky. `pickOption` returns `null`
-  rather than guess; never fall back to `options[0]` (#13).
+- **An approval covers one write and binds to what the person saw.** If the request
+  carries a diff or `file_text`, the grant covers only those edited paths and their
+  `newText`; other bytes or another path re-enter `#guardWrite`. A request with no edit
+  text keeps a one-write path grant. A denial is sticky. `pickOption` returns `null`
+  rather than guess; never fall back to `options[0]` (#13, #310).
 - **We send a harness two mode ids at most.** `harnessModeId` picks
   `measured.modeMap.safe` for `safe` and `measured.modeMap.ask` for `ask` and `auto`.
   **Never send `modeMap.auto`**: claude's is `bypassPermissions`, where it stops asking

@@ -330,10 +330,11 @@ export class AcpAgent {
   // edits approves only the files its edits name, each with a sha256 of its
   // `newText`; a write with other bytes is a new decision and goes through
   // `#guardWrite`, so the person is asked about the bytes that will land.
-  // `rawInput.path` grants only when the request has no edits. That grant
-  // has no hash: the person was shown no text, so the one write may hold any
-  // bytes (decided 2026-11-04, one question per edit). A denial covers every
-  // path the request names.
+  // `rawInput.path` grants only when the request carries no diff or file_text,
+  // even when the path guard dropped every edit. That grant has no hash: the
+  // person was shown no text, so the one write may hold any bytes (decided
+  // 2026-11-04, one question per edit). A denial covers every path the request
+  // names.
   #writeDecisions = new Map<string, "denied" | { sha256?: string }>();
   #closed = false;
   /** True while `session/load` is in flight: its updates are the replay. */
@@ -1122,13 +1123,18 @@ export class AcpAgent {
     // As in PolicyToolCall: arbitrary agent-supplied JSON.
     // pi-lens-ignore: no-unsafe-dictionary-unknown
     rawInput: Record<string, unknown> | undefined,
-  ): Promise<PolicyEdit[]> {
+  ): Promise<{ edits: PolicyEdit[]; hasEditContent: boolean }> {
     const wanted: { path: string; oldText?: string | null; newText: string }[] =
       [];
+    let hasEditContent = false;
     for (const c of content ?? []) {
+      if (c?.type !== "diff") continue;
+      // A diff that the guard later drops still counts as edit content. Falling
+      // back to a rawInput path grant would approve bytes the person never saw.
+      hasEditContent = true;
       // Off the wire, unchecked: a block may lack its strings.
       // pi-lens-ignore: no-runtime-typeof
-      if (c?.type !== "diff" || typeof c.path !== "string") continue;
+      if (typeof c.path !== "string") continue;
       // pi-lens-ignore: no-runtime-typeof
       if (typeof c.newText !== "string") continue;
       // No `oldText` is a new file (ACP). One that is not text is read from
@@ -1143,6 +1149,7 @@ export class AcpAgent {
     }
     const path = rawInput?.path;
     const text = rawInput?.file_text;
+    if (text !== undefined) hasEditContent = true;
     // pi-lens-ignore: no-runtime-typeof
     if (
       !wanted.length &&
@@ -1160,7 +1167,7 @@ export class AcpAgent {
         // Outside the root: no diff. The write itself is refused later.
       }
     }
-    return edits;
+    return { edits, hasEditContent };
   }
 
   async #requestPermission({
@@ -1174,7 +1181,7 @@ export class AcpAgent {
       kind: toolCall?.kind ?? known.kind ?? "other",
       rawInput: toolCall?.rawInput ?? known.rawInput,
     };
-    const edits = await this.#editsOf(
+    const { edits, hasEditContent } = await this.#editsOf(
       toolCall?.content ?? known.content,
       detail.rawInput,
     );
@@ -1206,7 +1213,7 @@ export class AcpAgent {
       } else if (edits.length > 0) {
         for (const e of edits)
           this.#writeDecisions.set(e.abs, { sha256: sha256(e.newText) });
-      } else if (rawAbs !== null) {
+      } else if (rawAbs !== null && !hasEditContent) {
         this.#writeDecisions.set(rawAbs, {});
       }
     }

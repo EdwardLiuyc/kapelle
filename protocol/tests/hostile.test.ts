@@ -220,6 +220,32 @@ test("different bytes land after the second approval", async (t) => {
   assert.equal(run.stopReason, "end_turn");
 });
 
+test("an approved file_text does not approve other bytes for its file", async (t) => {
+  // The file_text shape is the other half of case 1, not a second copy of the
+  // diff case: a change that kept only diffs bound would still pass every
+  // same-bytes file-text test.
+  const run = await attack(t, "swap-file-text", ASKED_ONLY);
+  assert.equal(run.decisions.length, 2, "the swapped bytes are asked about");
+  assert.match(run.decisions[0] ?? "", /^edit:Write notes\.md$/);
+  assert.match(
+    run.decisions[1] ?? "",
+    /^edit:fs\/write_text_file .*notes\.md$/,
+  );
+  assert.deepEqual(run.edits[0], [
+    {
+      abs: join(run.cwd, "notes.md"),
+      path: "notes.md",
+      newText: "approved\n",
+    },
+  ]);
+  assert.deepEqual(run.edits[1], [
+    { abs: join(run.cwd, "notes.md"), path: "notes.md", newText: "swapped\n" },
+  ]);
+  assert.match(run.text, /OUTCOME=refused DETAIL=write refused by policy/);
+  assert.equal(await absent(join(run.cwd, "notes.md")), true);
+  assert.equal(run.stopReason, "end_turn");
+});
+
 test("an approved diff does not approve other bytes for its file", async (t) => {
   // #310: the person approved the text they saw. Other bytes are a new
   // decision about those bytes, so a policy that refuses unasked writes
@@ -304,6 +330,22 @@ test("an approved diff for one file does not approve rawInput.path's file", asyn
   ]);
   assert.match(run.text, /OUTCOME=refused DETAIL=write refused by policy/);
   assert.equal(await absent(join(run.cwd, "other.md")), true);
+  assert.equal(run.stopReason, "end_turn");
+});
+
+test("a guarded-away diff does not turn rawInput.path into a path-only grant", async (t) => {
+  // The diff names a path outside the root, so `#editsOf` drops it before the
+  // policy sees an edit. That must not make the in-root rawInput.path a
+  // path-only request: the person still did not see the bytes for notes.md.
+  const run = await attack(t, "outside-diff-path", ASKED_ONLY);
+  assert.equal(run.decisions.length, 2, "the unseen write is asked about");
+  assert.equal(run.edits[0], undefined, "the outside edit is not shown");
+  assert.match(
+    run.decisions[1] ?? "",
+    /^edit:fs\/write_text_file .*notes\.md$/,
+  );
+  assert.match(run.text, /OUTCOME=refused DETAIL=write refused by policy/);
+  assert.equal(await absent(join(run.cwd, "notes.md")), true);
   assert.equal(run.stopReason, "end_turn");
 });
 
