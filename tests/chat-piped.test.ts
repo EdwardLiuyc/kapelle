@@ -1,8 +1,9 @@
 /**
  * `chat.ts` with no terminal: one room as plain lines (`chat/piped.ts`),
  * the `list` and `dismiss` verbs, `kapelle chat` handing over to `chat.ts`,
- * and the rule that the chat reaches the daemon over HTTP only. Most tests drive a real `daemon.ts`; a few stand
- * up a fake one to send a reply the real one never sends.
+ * and the rule that the chat reaches the daemon over HTTP only. Most tests
+ * drive a real `daemon.ts`; a few stand up a fake one to send a reply the
+ * real one never sends.
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
