@@ -1197,8 +1197,8 @@ export class AcpAgent {
       // `rawInput` is arbitrary agent-supplied JSON, so the only safe way to
       // learn whether it names a file is a runtime check at this decode point.
       const rawPath = detail.rawInput?.path;
-      // pi-lens-ignore: no-runtime-typeof
       const rawAbs =
+        // pi-lens-ignore: no-runtime-typeof
         typeof rawPath === "string" ? resolve(this.cwd, rawPath) : null;
       if (optionId === null || !allow) {
         for (const e of edits) this.#writeDecisions.set(e.abs, "denied");
