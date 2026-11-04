@@ -53,8 +53,11 @@
  * each path is the proof that Git does not see the link: a visible link is
  * removed and refused. The paths are planned again for every checkout,
  * because a room can live for days and a folder installed later must reach
- * the next participant. A symlink entry out of the main checkout, or a dangling
- * one, is refused at both points (#311).
+ * the next participant. A top-level symlink entry out of the main checkout, or
+ * a dangling one, is refused at both points (#311). Entries below that level
+ * are not walked. The links are path-valued: a link is checked when it is
+ * planned and when it is made, not after. A swap in the main checkout after a
+ * mirror was made is outside this check (#447).
  */
 
 import { execFile } from "node:child_process";
@@ -731,7 +734,7 @@ async function linkEntries(
     } catch (err) {
       throw new LinkPathError(
         `${where} entry ${JSON.stringify(name)} cannot be resolved: ` +
-          `${messageOf(err)}.`,
+          `${messageOf(err)}. Reinstall or remove the link, then try again.`,
       );
     }
     if (realEntry !== realRoot && !realEntry.startsWith(`${realRoot}${sep}`)) {
@@ -771,10 +774,10 @@ async function planLinkSource(
   if (sourceStat === undefined) return undefined;
 
   // `realpath` follows a symlink, so a listed path that points outside the
-  // checkout is refused no matter how it is spelled.
-  await realPathInRoot(source, realRoot, where);
-
+  // checkout is refused no matter how it is spelled. `linkEntries` starts
+  // with that same check for a directory, so only a file needs it here.
   if (sourceStat.isDirectory()) await linkEntries(source, realRoot, where);
+  else await realPathInRoot(source, realRoot, where);
 
   return { path, source, where, realRoot };
 }
@@ -866,10 +869,12 @@ async function applyLinkSources(
       const sourceStat = await statOrMissing(plan.source, plan.where);
       if (sourceStat === undefined) {
         throw new LinkPathError(
-          `${plan.where} disappeared after it was planned.`,
+          `${plan.where} cannot be read after it was planned: it is missing ` +
+            `or is a dangling symlink.`,
         );
       }
       if (sourceStat.isDirectory()) {
+        const names = await linkEntries(plan.source, plan.realRoot, plan.where);
         try {
           await mkdir(target);
         } catch (err) {
@@ -878,7 +883,6 @@ async function applyLinkSources(
           );
         }
         created.push(target);
-        const names = await linkEntries(plan.source, plan.realRoot, plan.where);
         for (const name of names) {
           await makeLink(
             join(plan.source, name),

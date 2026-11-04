@@ -1337,6 +1337,30 @@ test("a linked file replaced by a directory after the plan is checked at mirror 
   await worktrees.release("plan", "keep");
 });
 
+test("the entry check is one level deep, as documented (#311)", async (t) => {
+  const root = await repoWithLinks(t);
+  const outside = await tempDir(t);
+  await writeFile(join(outside, "secret.txt"), "outside\n");
+  await symlink(outside, join(root, "node_modules", "pkg", "escape"));
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["node_modules"],
+  });
+  assert.ok(worktrees);
+
+  const wt = await worktrees.acquire("plan");
+  // A nested link sits under a mirrored directory, not at the top level, so
+  // the one-level check does not see it and `pkg` mirrors as one link.
+  assert.equal(
+    await readFile(
+      join(wt, "node_modules", "pkg", "escape", "secret.txt"),
+      "utf8",
+    ),
+    "outside\n",
+  );
+  assert.deepEqual(await changedPaths(wt), []);
+  await worktrees.release("plan", "keep");
+});
+
 test("a run gets the project's configured links (#274)", async (t) => {
   const root = await repoWithLinks(t);
   await mkdir(join(root, ".kapelle"), { recursive: true });
