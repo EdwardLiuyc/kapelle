@@ -48,7 +48,7 @@ The record:
 | Field | Value |
 | --- | --- |
 | Date | 2026-11-04 |
-| Tool | gitleaks 8.30.1, `gitleaks_8.30.1_linux_x64.tar.gz`, SHA-256 `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb`, matched against the release's checksums file |
+| Tool | gitleaks 8.30.1, `gitleaks_8.30.1_linux_x64.tar.gz`, SHA-256 `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb`, pinned as `sum` in the command above; the digest was first taken from the release's checksums file |
 | Range | a mirror of `origin` taken after this record was pushed: 21 branches, 230 `refs/pull/*` refs and no tags; from the root commit `6186a5f` to every ref's tip; 1,109 commits scanned |
 | Covers | every ref in that mirror: `master` at `5f90323`, and PR #448's head, which is the commit that adds this record. A later commit is not covered |
 | Result | 2 hits, both false positives; with `.gitleaksignore`, no leaks (exit 0) |

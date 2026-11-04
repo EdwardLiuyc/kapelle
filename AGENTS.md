@@ -185,7 +185,8 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   through its own shell is outside its reach. pi never asks, and opencode asks only
   for a write outside the root (§M9-1 re-measure).
   `core/policy.ts` is the one policy file, and `policyFor(mode)` is the only map from a
-  mode to a decider.
+  mode to a decider. `SECURITY.md`'s "Scope" states this reach to outside reporters, so
+  a change to the reach changes that section too.
 - **The daemon's one install is npm, with a command from the registry only** (M9-3b).
   `POST /harnesses/install` takes agent ids, never a command. `installArgs` builds
   `npm i -g <setup.npm>@<measuredOn.version>`, and `runNpm` starts it with no shell. It

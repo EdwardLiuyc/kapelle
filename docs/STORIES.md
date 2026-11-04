@@ -4002,8 +4002,9 @@ The first release. The person does steps 1 and 2 by hand.
    which repository and job built the package) only for a public repository. This one
    is private today (2026-10-15).
 3. Choose the first version and tag it. `package.json` is already `0.1.0`, so tag that
-   version rather than bumping it by habit. When the version changes, `npm version
-   <version>` makes the commit and the tag.
+   version rather than bumping it by habit. **Amended 2026-11-04 (M9-8a, #414):** how a
+   version changes and how the tag is made is owned by `docs/RELEASING.md`, "Version
+   and tag".
 4. A GitHub Actions job publishes when a tag is pushed, with npm trusted publishing: no
    npm token is stored. The job runs `npm ci` first, because `prepack` needs `tsc`, then
    the full gate from `AGENTS.md`, then `npm publish`. It needs `id-token: write`. If npm
