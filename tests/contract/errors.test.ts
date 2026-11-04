@@ -157,10 +157,17 @@ test("after a 413, the rest of an upload with no length is still read", async (t
     let sent = 0;
     for (; sent < total; sent++) {
       if (chunk()) continue;
-      const drained = await Promise.race([
-        new Promise((ok) => socket.once("drain", () => ok(true))),
-        new Promise((ok) => setTimeout(() => ok(false), 2000)),
-      ]);
+      const drained = await new Promise<boolean>((ok) => {
+        const onDrain = () => {
+          clearTimeout(timer);
+          ok(true);
+        };
+        const timer = setTimeout(() => {
+          socket.off("drain", onDrain);
+          ok(false);
+        }, 2000);
+        socket.once("drain", onDrain);
+      });
       if (!drained) break;
     }
     assert.equal(sent, total, `the upload stalled after ${sent} MiB`);
