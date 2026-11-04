@@ -9,6 +9,19 @@
     "type": "git",
     "url": "git+https://github.com/EdwardLiuyc/kapelle.git"
   },
+  "homepage": "https://github.com/EdwardLiuyc/kapelle#readme",
+  "bugs": {
+    "url": "https://github.com/EdwardLiuyc/kapelle/issues"
+  },
+  "keywords": [
+    "agent-client-protocol",
+    "acp",
+    "coding-agents",
+    "ai-agents",
+    "cli",
+    "typescript",
+    "nodejs"
+  ],
   "bin": {
     "kapelle": "./dist/cli.js"
   },

@@ -38,3 +38,20 @@ jobs:
             - run: npm run ${{ vars.RUNNER && 'test' || 'test:adaptive' }}
             - run: npm run selftest
             - run: npm run knip
+
+    package-macos:
+        # package.json claims macOS, so pack and run the package there too.
+        # Pinned to GitHub's runner, not RUNNER, which can point at our own
+        # Linux machine. The test's pty part is Linux-only and skips here.
+        runs-on: macos-latest
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+              with:
+                  node-version: 24
+                  cache: npm
+            - run: npm ci
+            - run: node --test tests/package.test.ts
