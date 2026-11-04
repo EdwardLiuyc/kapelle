@@ -132,7 +132,10 @@ test("after a 413, the rest of an upload with no length is still read", async (t
   // hook was registered first, so it runs first. A daemon that exits with
   // upload bytes still unread resets the socket, and a socket still open
   // then fails the test with ECONNRESET (#439). The test ends with bytes in
-  // flight on purpose, so a wrong order fails every run, not only under load.
+  // flight on purpose, so a wrong order fails every run, not only under load
+  // (measured 2026-11-04: 5 runs in 5 with the old `t.after` close). The
+  // socket has no `error` listener on purpose: one would catch that reset
+  // after the test ends, and a wrong order would then pass.
   const d = await boot(t);
   const { port } = new URL(d.url);
   const socket = connect(Number(port), "127.0.0.1");
