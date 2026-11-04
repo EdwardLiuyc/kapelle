@@ -84,10 +84,12 @@ not bump it by habit. For a later version, update `package.json` on a branch wit
 `npm version <version> --no-git-tag-version`, commit it, and land that commit on
 `master` through the normal review.
 
-Create the tag on the final `master` commit that will be published, and push it:
+Create the tag on the final `master` commit that will be published, and push it. Tag
+`origin/master`, not a local `master` that may be behind it:
 
 ```bash
-git tag v<version>
+git fetch origin
+git tag -a v<version> -m v<version> origin/master
 git push origin v<version>
 ```
 
