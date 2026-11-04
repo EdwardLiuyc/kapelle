@@ -1251,7 +1251,11 @@ test("an entry planted after setup leaves no outside link (#311)", async (t) => 
       (err: unknown) =>
         err instanceof LinkPathError && err.message.includes(`entry "${name}"`),
     );
-    assert.equal(existsSync(wtOf(root, "plan", "node_modules", name)), false);
+    // `lstat`, not `existsSync`: the latter follows the link and is false for
+    // a dangling one, which is exactly the link this test says is absent.
+    await assert.rejects(lstat(wtOf(root, "plan", "node_modules", name)), {
+      code: "ENOENT",
+    });
     await worktrees.release("plan", "keep");
   }
 });
@@ -1304,6 +1308,31 @@ test("a linked path swapped for an outside symlink after the plan is refused at 
     assert.equal(existsSync(linked), false);
     await worktrees.release("plan", "keep");
   }
+});
+
+test("a linked file replaced by a directory after the plan is checked at mirror time (#311)", async (t) => {
+  const root = await repoWithLinks(t);
+  const outside = await tempDir(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["vendor.txt"],
+    onLinkPlan: async () => {
+      await rm(join(root, "vendor.txt"), { force: true });
+      await mkdir(join(root, "vendor.txt"));
+      await symlink(outside, join(root, "vendor.txt", "ssh"));
+    },
+  });
+  assert.ok(worktrees);
+
+  await assert.rejects(
+    worktrees.acquire("plan"),
+    (err: unknown) =>
+      err instanceof LinkPathError &&
+      /entry "ssh" resolves outside/.test(err.message),
+  );
+  await assert.rejects(lstat(wtOf(root, "plan", "vendor.txt", "ssh")), {
+    code: "ENOENT",
+  });
+  await worktrees.release("plan", "keep");
 });
 
 test("a run gets the project's configured links (#274)", async (t) => {

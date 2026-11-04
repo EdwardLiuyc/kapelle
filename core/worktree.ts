@@ -593,8 +593,6 @@ interface LinkSource {
   path: string;
   /** The absolute path in the main checkout. */
   source: string;
-  /** A directory is mirrored entry by entry; a file is one symlink. */
-  kind: "dir" | "file";
   /** `<repo>/.kapelle/config.json: "linkPaths[i]"`, for error messages. */
   where: string;
   /** Realpath of the main checkout, for entry containment (#311). */
@@ -778,13 +776,7 @@ async function planLinkSource(
 
   if (sourceStat.isDirectory()) await linkEntries(source, realRoot, where);
 
-  return {
-    path,
-    source,
-    kind: sourceStat.isDirectory() ? "dir" : "file",
-    where,
-    realRoot,
-  };
+  return { path, source, where, realRoot };
 }
 
 /** `stat`, with a missing path as the `undefined` the caller skips. */
@@ -868,14 +860,16 @@ async function applyLinkSources(
         );
       }
 
-      if (plan.kind === "file") {
-        // The file itself can be replaced after the plan. Resolve it again
-        // immediately before making the link, so a late symlink cannot walk
-        // the new checkout outside.
-        await realPathInRoot(plan.source, plan.realRoot, plan.where);
-        await makeLink(plan.source, target, plan.where);
-        created.push(target);
-      } else {
+      // Read the kind again, not from the plan: a file can become a directory
+      // between planning and mirroring. A stale "file" would then link the
+      // whole directory and skip its entries' containment checks.
+      const sourceStat = await statOrMissing(plan.source, plan.where);
+      if (sourceStat === undefined) {
+        throw new LinkPathError(
+          `${plan.where} disappeared after it was planned.`,
+        );
+      }
+      if (sourceStat.isDirectory()) {
         try {
           await mkdir(target);
         } catch (err) {
@@ -892,6 +886,13 @@ async function applyLinkSources(
             plan.where,
           );
         }
+      } else {
+        // The file itself can be replaced after the plan. Resolve it again
+        // immediately before making the link, so a late symlink cannot walk
+        // the new checkout outside.
+        await realPathInRoot(plan.source, plan.realRoot, plan.where);
+        await makeLink(plan.source, target, plan.where);
+        created.push(target);
       }
 
       const dirty = await git(checkout, [
