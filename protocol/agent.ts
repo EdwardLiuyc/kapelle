@@ -330,11 +330,11 @@ export class AcpAgent {
   // edits approves only the files its edits name, each with a sha256 of its
   // `newText`; a write with other bytes is a new decision and goes through
   // `#guardWrite`, so the person is asked about the bytes that will land.
-  // `rawInput.path` grants only when the request carries no diff or file_text,
-  // even when the path guard dropped every edit. That grant has no hash: the
-  // person was shown no text, so the one write may hold any bytes (decided
-  // 2026-11-04, one question per edit). A denial covers every path the request
-  // names.
+  // `rawInput.path` grants only when the request carries no diff and no
+  // `file_text`. A diff the path guard dropped still counts, so it gives no
+  // grant at all. The path grant has no hash: the person was shown no text, so
+  // the one write may hold any bytes (decided 2026-11-04, one question per
+  // edit). A denial covers every path the request names.
   #writeDecisions = new Map<string, "denied" | { sha256?: string }>();
   #closed = false;
   /** True while `session/load` is in flight: its updates are the replay. */
@@ -1116,7 +1116,8 @@ export class AcpAgent {
    * The files a tool call would write (M4-6): its `diff` blocks, when the
    * harness sent them before the ask; else copilot's `rawInput` with `path`
    * and `file_text`. A path the guard refuses is left out, so a question
-   * about a file outside the root shows no diff.
+   * about a file outside the root shows no diff. `hasEditContent` says the
+   * call carried a diff or `file_text` at all, even one left out (#310).
    */
   async #editsOf(
     content: ToolCallContent[] | undefined | null,

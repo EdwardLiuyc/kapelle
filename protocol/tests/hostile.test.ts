@@ -246,6 +246,17 @@ test("an approved file_text does not approve other bytes for its file", async (t
   assert.equal(run.stopReason, "end_turn");
 });
 
+test("a file_text that is not text does not turn rawInput.path into a path-only grant", async (t) => {
+  // No diff is built from it, but the person can see it as the call's input.
+  // A path-only grant would let any bytes land after that question.
+  const run = await attack(t, "file-text-not-text", ASKED_ONLY);
+  assert.equal(run.decisions.length, 2, "the unseen bytes are asked about");
+  assert.equal(run.edits[0], undefined, "no diff is built from it");
+  assert.match(run.text, /OUTCOME=refused DETAIL=write refused by policy/);
+  assert.equal(await absent(join(run.cwd, "notes.md")), true);
+  assert.equal(run.stopReason, "end_turn");
+});
+
 test("an approved diff does not approve other bytes for its file", async (t) => {
   // #310: the person approved the text they saw. Other bytes are a new
   // decision about those bytes, so a policy that refuses unasked writes

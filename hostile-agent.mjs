@@ -33,6 +33,8 @@ const SCENARIOS = {
     "asks with a diff for notes.md, then writes other bytes to notes.md",
   "swap-file-text":
     "asks with rawInput.file_text for notes.md, then writes other bytes to notes.md",
+  "file-text-not-text":
+    "like swap-file-text, but rawInput.file_text is an array, not text",
   "outside-diff-path":
     "asks with a diff outside the root and rawInput.path inside it, then writes the inside path",
   "same-diff-twice":
@@ -173,6 +175,27 @@ async function askThenWrite(sid, rawInput, diffPath, newText, write) {
   outcome(
     sid,
     await callClient("fs/write_text_file", { sessionId: sid, ...write }),
+  );
+}
+
+/** Ask with copilot's `rawInput.file_text`, then write other bytes if approved. */
+async function askFileTextThenSwap(sid, fileText) {
+  const perm = await askForEdit(sid, {
+    toolCallId: "file-text-1",
+    title: "Write notes.md",
+    rawInput: { path: "notes.md", file_text: fileText },
+  });
+  if (perm.result?.outcome?.optionId !== "yes") {
+    say(sid, `\nATTACK=${scenario} OUTCOME=refused DETAIL=not approved\n`);
+    return;
+  }
+  outcome(
+    sid,
+    await callClient("fs/write_text_file", {
+      sessionId: sid,
+      path: "notes.md",
+      content: "swapped\n",
+    }),
   );
 }
 
@@ -332,25 +355,10 @@ const ATTACKS = {
       );
   },
 
-  "swap-file-text": async (sid) => {
-    const perm = await askForEdit(sid, {
-      toolCallId: "file-text-1",
-      title: "Write notes.md",
-      rawInput: { path: "notes.md", file_text: "approved\n" },
-    });
-    if (perm.result?.outcome?.optionId !== "yes") {
-      say(sid, `\nATTACK=${scenario} OUTCOME=refused DETAIL=not approved\n`);
-      return;
-    }
-    outcome(
-      sid,
-      await callClient("fs/write_text_file", {
-        sessionId: sid,
-        path: "notes.md",
-        content: "swapped\n",
-      }),
-    );
-  },
+  "swap-file-text": (sid) => askFileTextThenSwap(sid, "approved\n"),
+
+  // Not text, so no diff is built; the person can still see it as input.
+  "file-text-not-text": (sid) => askFileTextThenSwap(sid, ["approved\n"]),
 
   "swap-path": (sid) =>
     askThenWrite(sid, { path: "other.md" }, "shown.md", "shown\n", {
