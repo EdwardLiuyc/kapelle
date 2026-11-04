@@ -1273,7 +1273,9 @@ test("an entry planted after the plan is refused at mirror time (#311)", async (
     worktrees.acquire("plan"),
     /"linkPaths\[0\]" entry "ssh" resolves outside/,
   );
-  assert.equal(existsSync(wtOf(root, "plan", "node_modules", "ssh")), false);
+  await assert.rejects(lstat(wtOf(root, "plan", "node_modules", "ssh")), {
+    code: "ENOENT",
+  });
   await worktrees.release("plan", "keep");
 });
 
@@ -1305,7 +1307,7 @@ test("a linked path swapped for an outside symlink after the plan is refused at 
       name === "node_modules"
         ? wtOf(root, "plan", name, "secret.txt")
         : wtOf(root, "plan", name);
-    assert.equal(existsSync(linked), false);
+    await assert.rejects(lstat(linked), { code: "ENOENT" });
     await worktrees.release("plan", "keep");
   }
 });
