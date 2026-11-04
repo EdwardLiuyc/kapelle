@@ -604,6 +604,27 @@ interface LinkSource {
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
 
+/** Resolve `path` and refuse it unless the result is the main checkout or
+ *  inside it. `where` names the configured path or one of its entries. */
+async function realPathInRoot(
+  path: string,
+  realRoot: string,
+  where: string,
+): Promise<string> {
+  let realPath: string;
+  try {
+    realPath = await realpath(path);
+  } catch (err) {
+    throw new LinkPathError(`${where} cannot be resolved: ${messageOf(err)}.`);
+  }
+  if (realPath !== realRoot && !realPath.startsWith(`${realRoot}${sep}`)) {
+    throw new LinkPathError(
+      `${where} resolves outside ${realRoot}, to ${realPath}.`,
+    );
+  }
+  return realPath;
+}
+
 /** Separators and harmless `.` parts removed, so `folder_a/` and `folder_a`
  *  are one entry for overlap checks. */
 function canonicalLinkPath(path: string): string {
@@ -685,6 +706,9 @@ async function linkEntries(
   realRoot: string,
   where: string,
 ): Promise<string[]> {
+  // The directory itself can be swapped for an outside symlink after the
+  // plan. Recheck it here, then check each entry below.
+  await realPathInRoot(source, realRoot, where);
   let names: string[];
   try {
     names = await readdir(source);
@@ -750,17 +774,7 @@ async function planLinkSource(
 
   // `realpath` follows a symlink, so a listed path that points outside the
   // checkout is refused no matter how it is spelled.
-  let realSource: string;
-  try {
-    realSource = await realpath(source);
-  } catch (err) {
-    throw new LinkPathError(`${where} cannot be resolved: ${messageOf(err)}.`);
-  }
-  if (realSource !== realRoot && !realSource.startsWith(`${realRoot}${sep}`)) {
-    throw new LinkPathError(
-      `${where} resolves outside ${root}, to ${realSource}.`,
-    );
-  }
+  await realPathInRoot(source, realRoot, where);
 
   if (sourceStat.isDirectory()) await linkEntries(source, realRoot, where);
 
@@ -855,6 +869,10 @@ async function applyLinkSources(
       }
 
       if (plan.kind === "file") {
+        // The file itself can be replaced after the plan. Resolve it again
+        // immediately before making the link, so a late symlink cannot walk
+        // the new checkout outside.
+        await realPathInRoot(plan.source, plan.realRoot, plan.where);
         await makeLink(plan.source, target, plan.where);
         created.push(target);
       } else {

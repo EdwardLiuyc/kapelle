@@ -1225,6 +1225,10 @@ test("an in-root symlink entry still mirrors, and git status stays clean (#311)"
     (await lstat(join(wt, "node_modules", "alias"))).isSymbolicLink(),
     true,
   );
+  assert.equal(
+    await readFile(join(wt, "node_modules", "alias", "index.js"), "utf8"),
+    "module\n",
+  );
   assert.deepEqual(await changedPaths(wt), []);
   await worktrees.release("plan", "keep");
 });
@@ -1267,6 +1271,39 @@ test("an entry planted after the plan is refused at mirror time (#311)", async (
   );
   assert.equal(existsSync(wtOf(root, "plan", "node_modules", "ssh")), false);
   await worktrees.release("plan", "keep");
+});
+
+test("a linked path swapped for an outside symlink after the plan is refused at mirror time (#311)", async (t) => {
+  for (const name of ["node_modules", "vendor.txt"] as const) {
+    const root = await repoWithLinks(t);
+    const outside = await tempDir(t);
+    await writeFile(join(outside, "secret.txt"), "outside\n");
+    const { worktrees } = await openWorktrees(root, RUN_ID, {
+      linkPaths: [name],
+      onLinkPlan: async () => {
+        await rm(join(root, name), { recursive: true, force: true });
+        await symlink(
+          name === "node_modules" ? outside : join(outside, "secret.txt"),
+          join(root, name),
+        );
+      },
+    });
+    assert.ok(worktrees);
+
+    await assert.rejects(
+      worktrees.acquire("plan"),
+      (err: unknown) =>
+        err instanceof LinkPathError &&
+        err.message.includes('"linkPaths[0]"') &&
+        /resolves outside/.test(err.message),
+    );
+    const linked =
+      name === "node_modules"
+        ? wtOf(root, "plan", name, "secret.txt")
+        : wtOf(root, "plan", name);
+    assert.equal(existsSync(linked), false);
+    await worktrees.release("plan", "keep");
+  }
 });
 
 test("a run gets the project's configured links (#274)", async (t) => {
