@@ -117,7 +117,7 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   assert.equal(pkg.private, undefined);
   assert.equal(pkg.bin.kapelle, "./dist/cli.js");
   assert.deepEqual(pkg.files, ["dist"]);
-  assert.equal(pkg.homepage, "https://github.com/EdwardLiuyc/kapelle#readme");
+  assert.equal(pkg.homepage, "https://kapelle.dev");
   assert.deepEqual(pkg.bugs, {
     url: "https://github.com/EdwardLiuyc/kapelle/issues",
   });
