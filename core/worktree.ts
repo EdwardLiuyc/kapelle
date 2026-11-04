@@ -53,7 +53,8 @@
  * each path is the proof that Git does not see the link: a visible link is
  * removed and refused. The paths are planned again for every checkout,
  * because a room can live for days and a folder installed later must reach
- * the next participant.
+ * the next participant. A symlink entry out of the main checkout, or a dangling
+ * one, is refused at both points (#311).
  */
 
 import { execFile } from "node:child_process";
@@ -559,6 +560,9 @@ export interface WorktreeSetupOptions {
   /** Project `linkPaths`, already through `core/config.ts`'s shape rules.
    *  Absent means no links. */
   linkPaths?: readonly string[];
+  /** Test seam: awaited between the plan and the mirror, so a test can plant
+   *  an entry the preflight could not see (#311). */
+  onLinkPlan?: () => void | Promise<void>;
 }
 
 export interface WorktreeSetup {
@@ -593,6 +597,8 @@ interface LinkSource {
   kind: "dir" | "file";
   /** `<repo>/.kapelle/config.json: "linkPaths[i]"`, for error messages. */
   where: string;
+  /** Realpath of the main checkout, for entry containment (#311). */
+  realRoot: string;
 }
 
 const messageOf = (err: unknown) =>
@@ -610,8 +616,8 @@ function canonicalLinkPath(path: string): string {
 /**
  * Plan the configured links against the main checkout. `core/config.ts`
  * checks the list's shape; the answers that need git or the filesystem are
- * here: tracked, real-target containment, and overlap. A path that does not
- * exist is skipped.
+ * here: tracked, real-target containment, entry containment, and overlap. A
+ * path that does not exist is skipped.
  */
 async function planLinkSources(
   root: string,
@@ -668,6 +674,54 @@ function checkLinkPath(
   seen.set(key, path);
 }
 
+/**
+ * Read the top-level entries of a linked directory and refuse any symlink
+ * that leaves the main checkout or does not resolve (#311). Called when the
+ * links are planned and again just before they are made: a room lives for
+ * days, and a link planted in between must not reach a new checkout.
+ */
+async function linkEntries(
+  source: string,
+  realRoot: string,
+  where: string,
+): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await readdir(source);
+  } catch (err) {
+    throw new LinkPathError(`${where} cannot be read: ${messageOf(err)}.`);
+  }
+  for (const name of names) {
+    const entry = join(source, name);
+    let entryStat: Stats;
+    try {
+      entryStat = await lstat(entry);
+    } catch (err) {
+      throw new LinkPathError(
+        `${where} entry ${JSON.stringify(name)} cannot be read: ` +
+          `${messageOf(err)}.`,
+      );
+    }
+    if (!entryStat.isSymbolicLink()) continue;
+    let realEntry: string;
+    try {
+      realEntry = await realpath(entry);
+    } catch (err) {
+      throw new LinkPathError(
+        `${where} entry ${JSON.stringify(name)} cannot be resolved: ` +
+          `${messageOf(err)}.`,
+      );
+    }
+    if (realEntry !== realRoot && !realEntry.startsWith(`${realRoot}${sep}`)) {
+      throw new LinkPathError(
+        `${where} entry ${JSON.stringify(name)} resolves outside ` +
+          `${realRoot}, to ${realEntry}.`,
+      );
+    }
+  }
+  return names;
+}
+
 /** One path's git and filesystem checks, or `undefined` when it is missing. */
 async function planLinkSource(
   root: string,
@@ -708,11 +762,14 @@ async function planLinkSource(
     );
   }
 
+  if (sourceStat.isDirectory()) await linkEntries(source, realRoot, where);
+
   return {
     path,
     source,
     kind: sourceStat.isDirectory() ? "dir" : "file",
     where,
+    realRoot,
   };
 }
 
@@ -809,14 +866,7 @@ async function applyLinkSources(
           );
         }
         created.push(target);
-        let names: string[];
-        try {
-          names = await readdir(plan.source);
-        } catch (err) {
-          throw new LinkPathError(
-            `${plan.where} cannot be read: ${messageOf(err)}.`,
-          );
-        }
+        const names = await linkEntries(plan.source, plan.realRoot, plan.where);
         for (const name of names) {
           await makeLink(
             join(plan.source, name),
@@ -1066,7 +1116,9 @@ export async function openWorktrees(
               "start from a commit that has it.",
           );
         }
-        await applyLinkSources(path, await planLinkSources(root, linkPaths));
+        const plans = await planLinkSources(root, linkPaths);
+        await options.onLinkPlan?.();
+        await applyLinkSources(path, plans);
         return inside;
       },
 

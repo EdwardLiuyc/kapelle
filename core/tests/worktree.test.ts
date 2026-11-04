@@ -40,9 +40,11 @@ import { stateDirFor } from "../runtime.ts";
 import {
   changedPaths,
   checkoutIdentity,
+  LinkPathError,
   moveWorkspace,
   openWorktrees,
   serializeWorktreeMutation,
+  validateWorktreeLinks,
   type Worktrees,
 } from "../worktree.ts";
 
@@ -1191,6 +1193,80 @@ test("tracked, escaping, and .git link paths are refused (#274)", async (t) => {
     openWorktrees(root, RUN_ID, { linkPaths: ["escape"] }),
     /resolves outside/,
   );
+});
+
+test("an escaping or dangling link entry refuses the config (#311)", async (t) => {
+  const outside = await tempDir(t);
+  for (const [name, target, reason] of [
+    ["ssh", outside, "resolves outside"],
+    ["next", "nowhere", "cannot be resolved"],
+  ] as const) {
+    const root = await repoWithLinks(t);
+    await symlink(target, join(root, "node_modules", name));
+    await assert.rejects(
+      validateWorktreeLinks(root, ["node_modules"]),
+      (err: unknown) =>
+        err instanceof LinkPathError &&
+        err.message.includes(`"linkPaths[0]" entry "${name}" ${reason}`),
+    );
+  }
+});
+
+test("an in-root symlink entry still mirrors, and git status stays clean (#311)", async (t) => {
+  const root = await repoWithLinks(t);
+  await symlink("pkg", join(root, "node_modules", "alias"));
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["node_modules"],
+  });
+  assert.ok(worktrees);
+
+  const wt = await worktrees.acquire("plan");
+  assert.equal(
+    (await lstat(join(wt, "node_modules", "alias"))).isSymbolicLink(),
+    true,
+  );
+  assert.deepEqual(await changedPaths(wt), []);
+  await worktrees.release("plan", "keep");
+});
+
+test("an entry planted after setup leaves no outside link (#311)", async (t) => {
+  const outside = await tempDir(t);
+  for (const [name, target] of [
+    ["ssh", outside],
+    ["next", "nowhere"],
+  ] as const) {
+    const root = await repoWithLinks(t);
+    const { worktrees } = await openWorktrees(root, RUN_ID, {
+      linkPaths: ["node_modules"],
+    });
+    assert.ok(worktrees);
+
+    await symlink(target, join(root, "node_modules", name));
+    await assert.rejects(
+      worktrees.acquire("plan"),
+      (err: unknown) =>
+        err instanceof LinkPathError && err.message.includes(`entry "${name}"`),
+    );
+    assert.equal(existsSync(wtOf(root, "plan", "node_modules", name)), false);
+    await worktrees.release("plan", "keep");
+  }
+});
+
+test("an entry planted after the plan is refused at mirror time (#311)", async (t) => {
+  const root = await repoWithLinks(t);
+  const outside = await tempDir(t);
+  const { worktrees } = await openWorktrees(root, RUN_ID, {
+    linkPaths: ["node_modules"],
+    onLinkPlan: () => symlink(outside, join(root, "node_modules", "ssh")),
+  });
+  assert.ok(worktrees);
+
+  await assert.rejects(
+    worktrees.acquire("plan"),
+    /"linkPaths\[0\]" entry "ssh" resolves outside/,
+  );
+  assert.equal(existsSync(wtOf(root, "plan", "node_modules", "ssh")), false);
+  await worktrees.release("plan", "keep");
 });
 
 test("a run gets the project's configured links (#274)", async (t) => {

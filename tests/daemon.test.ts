@@ -31,6 +31,7 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { createServer, request } from "node:http";
@@ -1259,6 +1260,48 @@ test("a linkPaths entry tracked after add refuses a room's open", async (t) => {
   assert.equal(refused.status, 400);
   assert.equal(refused.body.error.code, "invalid_config");
   assert.match(refused.body.error.message, /tracked by git/);
+});
+
+test("an escaping link entry refuses add, run and room as invalid_config (#311)", async (t) => {
+  const d = await boot(t);
+  const outside = await tempDir(t);
+  const config = `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`;
+  const withLinks = async () => {
+    const root = await gitRepo(t, {
+      ignore: "node_modules/\n",
+      files: { ".kapelle/config.json": config },
+    });
+    await mkdir(join(root, "node_modules"), { recursive: true });
+    return root;
+  };
+
+  // Bad before the repository is added.
+  const bad = await withLinks();
+  await symlink(outside, join(bad, "node_modules", "ssh"));
+  const add = await api(d, "POST", "/repos", { path: bad });
+  assert.equal(add.status, 400);
+  assert.equal(add.body.error.code, "invalid_config");
+  assert.match(
+    add.body.error.message,
+    /"linkPaths\[0\]" entry "ssh" resolves outside/,
+  );
+
+  // Added clean, then a link is planted: a run and a room refuse before either starts.
+  const root = await added(d, await withLinks());
+  await symlink(outside, join(root, "node_modules", "ssh"));
+
+  const run = await api(d, "POST", "/runs", {
+    cwd: root,
+    run: mockRun([{ id: "one", prompt: "hi" }]),
+  });
+  assert.equal(run.status, 400);
+  assert.equal(run.body.error.code, "invalid_config");
+  assert.match(run.body.error.message, /entry "ssh" resolves outside/);
+
+  const room = await api(d, "POST", "/rooms", { cwd: root });
+  assert.equal(room.status, 400);
+  assert.equal(room.body.error.code, "invalid_config");
+  assert.match(room.body.error.message, /entry "ssh" resolves outside/);
 });
 
 test("a room opened over HTTP gets the configured links", async (t) => {
