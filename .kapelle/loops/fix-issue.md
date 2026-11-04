@@ -51,36 +51,81 @@ A skill starts with `/<name>` in claude and with `/skill:<name>` in pi. For exam
 
 ## The outside review
 
+The task note selects the bot. The default is Claude.
+
+- `bot: claude` selects Claude.
+- `bot: copilot; effort: balanced` selects Copilot.
+- Copilot effort defaults to `BALANCED`; lower-case `lite`, `balanced`, `max` and
+  `auto` map to the GraphQL enum. An unknown bot or effort stops the run.
+
+The orchestrator states the selected bot and effort in the plan.
+
+### Common loop
+
 The aim is that every round counts. Each fix is checked before it is pushed. Each round
 also reads the previous round's fixes.
 
-- **Trigger:** `dev` comments `@claude review` on the PR. From the second round on:
-  `@claude review the update. Verify each earlier finding. Check only the new commits for regressions. Mark each point blocker or not blocker.`
 - **The reviewed commit:** just before each trigger, `dev` records the PR's head:
   `gh pr view <pr> --json headRefOid --jq .headRefOid`. The bot reviews up to that
   commit. `dev` pushes nothing while it waits, and puts the commit in its report.
-- **Waiting:** `dev` waits inside its own turn. Before it comments, it counts the bot's
-  comments:
-  `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | length'`.
-  Call that N. After it comments, it checks every 60 seconds until comment N + 1 exists
-  and its body starts with `**Claude finished`. It gives up after 20 minutes and says
-  so.
-- **Reading it:** `dev` reads the bot's last comment and its link, for the report:
-  `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | last | .url, .body'`.
-- **Sorting:** each finding is a blocker or not, as `AGENTS.md`, "Review triage", says.
-  From round 2, the bot marks each point; `dev` takes the mark as a first guess and
-  checks it against the code. A nit is "not a blocker". In the orchestrator skill's
-  words, `real` is a blocker and `nit` is a nit; a `choice` stops the loop whatever its
-  level.
-- **Answer:** `dev` runs the `address-comment` skill for the PR, on the latest comment,
-  with its self-checks before each push. When the order says the next round is the final
-  one, `dev` first reads the findings of every round together and looks for a shared
-  cause. It proves each fix: a test that fails before the fix and passes after it, or a
-  reason from the code. No fix is a guess.
+- **Waiting:** `dev` waits inside its own turn, in the foreground, checking once and then
+  every 60 seconds for up to 20 minutes. A timeout must say "timed out"; the turn must
+  not end before the wait ends.
+- **Reading:** `dev` reads the new bot review and its link. It reports only whether the
+  review finished or timed out, the link, and one line per finding with its verdict and
+  the bot's own label. It never pastes the review text.
+- **Sorting:** each finding is `real` (blocker), `nit` or `choice` as the orchestrator
+  skill says. The bot's severity or approval label is a first guess; `dev` checks it
+  against the code. "Approval recommended" does not mean there are no inline comments.
+- **Answer:** `dev` runs the `address-comment` skill on the latest bot item named by the
+  selected adapter, replies to every thread, and proves each fix with a test that fails
+  before and passes after, or a reason from the code. No fix is a guess. When the order
+  says the next round is final, it first reads every round's findings together and looks
+  for a shared cause.
 - **No next round** when no point is a blocker, or when `AGENTS.md`, "Review triage",
-  says the round's fixes need none. `dev` still fixes the small points and pushes them;
-  the final check reads them.
+  says the round's fixes need none. `dev` still fixes the nits and pushes them; the final
+  check reads them.
 - **Rounds:** at most 3.
+
+### Claude
+
+This is the default when the note names no bot.
+
+- **Trigger:** `dev` comments `@claude review` on the PR. From the second round:
+  `@claude review the update. Verify each earlier finding. Check only the new commits for regressions. Mark each point blocker or not blocker.`
+- **Waiting:** before the trigger, count Claude's comments:
+  `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | length'`.
+  Call that N. After the trigger, poll until comment N + 1 exists and its body starts
+  with `**Claude finished`.
+- **Reading:** read the latest Claude comment:
+  `gh pr view <pr> --json comments --jq '[.comments[] | select(.author.login == "claude")] | last | .url, .body'`.
+- **Answer target:** the latest Claude comment.
+
+### Copilot
+
+Selected by `bot: copilot` in the note.
+
+- **Trigger:** get the PR node id:
+  `gh pr view <pr> --json id --jq .id`. Then call:
+
+  ```bash
+  gh api graphql -f query='mutation($id: ID!) { requestCopilotCodeReview(input: {pullRequestId: $id, reviewEffort: <EFFORT>}) { success failureReason } }' -f id="<PR_NODE_ID>"
+  ```
+
+  `<EFFORT>` is the selected value converted to uppercase (`LITE`, `BALANCED`, `MAX`
+  or `AUTO`), with `BALANCED` as the default.
+  `REQUEST_CONFLICT` means a request is already pending; keep waiting. Any other
+  `failureReason` is a permissions or eligibility stop. Copilot accepts no custom
+  prompt. On later rounds, `dev` independently verifies the previous round's findings;
+  it cannot ask the bot to do that.
+- **Waiting:** before the trigger, count completed Copilot reviews, matching the author
+  case-insensitively as `copilot` or `copilot-pull-request-reviewer`, and call that N.
+  After the trigger, poll until review N + 1 exists with a submission time at or after
+  the trigger. Do not use issue comments or an exact `Copilot` login.
+- **Reading:** read the latest review body and its inline comments:
+  `gh api repos/<owner>/<repo>/pulls/<pr>/reviews` and
+  `gh api repos/<owner>/<repo>/pulls/<pr>/comments`. Use the review's `html_url`.
+- **Answer target:** the latest Copilot review and its inline discussion threads.
 
 ## The final check
 
