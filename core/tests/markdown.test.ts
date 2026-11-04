@@ -5,7 +5,8 @@
  * as a pure function and the drawing is not. The renderer's own tests assert
  * the three constructs the story names — nested list, table, fence with a
  * blank line in it — plus the fallback that makes the dependency affordable.
- * #431 adds every other block and inline renderer, with its colour codes.
+ * #431 adds the blockquote, rule, HTML/fallback and inline renderers the
+ * scope names, with their exact colour codes.
  */
 
 import assert from "node:assert/strict";

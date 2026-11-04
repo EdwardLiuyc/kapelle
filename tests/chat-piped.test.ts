@@ -29,6 +29,7 @@ import test from "node:test";
 import {
   API_VERSION,
   type HarnessesReply,
+  type RoomDto,
   type RoomListEntry,
 } from "../client/contract.ts";
 import {
@@ -215,15 +216,23 @@ test("chat.ts list prints each room's id, status, names and cwd (#431)", async (
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
+  const otherCwd = await added(d, await gitRepo(t));
   const empty = await api<RoomListEntry>(d, "POST", "/rooms", { cwd });
+  assert.equal(empty.status, 201, JSON.stringify(empty.body));
   const pair = await api<RoomListEntry>(d, "POST", "/rooms", {
-    cwd,
+    cwd: otherCwd,
     agents: [
       { cmd: REMEMBER, name: "alice" },
       { cmd: REMEMBER, name: "bob" },
     ],
   });
   assert.equal(pair.status, 201, JSON.stringify(pair.body));
+  const dismissed = await api<RoomDto>(
+    d,
+    "POST",
+    `/rooms/${empty.body.id}/dismiss`,
+  );
+  assert.equal(dismissed.status, 200, JSON.stringify(dismissed.body));
 
   const r = await spawnCli(t, ["list"], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
@@ -233,7 +242,7 @@ test("chat.ts list prints each room's id, status, names and cwd (#431)", async (
   assert.deepEqual(
     r.stdout.trimEnd().split("\n").sort(),
     [
-      `${empty.body.id}  active  -  ${empty.body.cwd}`,
+      `${empty.body.id}  dismissed  -  ${empty.body.cwd}`,
       `${pair.body.id}  active  alice,bob  ${pair.body.cwd}`,
     ].sort(),
   );
