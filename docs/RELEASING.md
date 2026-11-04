@@ -15,18 +15,23 @@ gitleaks scans every ref that goes public: each branch, each tag and each `refs/
 ref. Scan a mirror clone, not a working checkout, because a checkout has no `refs/pull/*`.
 
 ```bash
-T=$(mktemp -d)
-v=8.30.1
-base=https://github.com/gitleaks/gitleaks/releases/download/v$v
-( cd "$T" &&
-  curl -fsSLO "$base/gitleaks_${v}_checksums.txt" &&
-  curl -fsSLO "$base/gitleaks_${v}_linux_x64.tar.gz" &&
-  grep linux_x64.tar.gz "gitleaks_${v}_checksums.txt" | sha256sum -c - &&
-  tar -xzf "gitleaks_${v}_linux_x64.tar.gz" gitleaks )
-git clone -q --mirror "$(git remote get-url origin)" "$T/mirror"
-"$T/gitleaks" git --log-opts=--all --redact --no-banner \
-  --gitleaks-ignore-path .gitleaksignore "$T/mirror"
-rm -rf "$T"
+(
+  set -euo pipefail
+  T=$(mktemp -d)
+  trap 'rm -rf "$T"' EXIT
+  v=8.30.1
+  base=https://github.com/gitleaks/gitleaks/releases/download/v$v
+  (
+    cd "$T"
+    curl -fsSLO "$base/gitleaks_${v}_checksums.txt"
+    curl -fsSLO "$base/gitleaks_${v}_linux_x64.tar.gz"
+    grep linux_x64.tar.gz "gitleaks_${v}_checksums.txt" | sha256sum -c -
+    tar -xzf "gitleaks_${v}_linux_x64.tar.gz" gitleaks
+  )
+  git clone -q --mirror "$(git remote get-url origin)" "$T/mirror"
+  "$T/gitleaks" git --log-opts=--all --redact --no-banner \
+    --gitleaks-ignore-path .gitleaksignore "$T/mirror"
+)
 ```
 
 Exit code 0 means no leak. A real hit is a credential that was exposed: rotate it at
