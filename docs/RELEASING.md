@@ -20,12 +20,12 @@ ref. Scan a mirror clone, not a working checkout, because a checkout has no `ref
   T=$(mktemp -d)
   trap 'rm -rf "$T"' EXIT
   v=8.30.1
+  sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
   base=https://github.com/gitleaks/gitleaks/releases/download/v$v
   (
     cd "$T"
-    curl -fsSLO "$base/gitleaks_${v}_checksums.txt"
     curl -fsSLO "$base/gitleaks_${v}_linux_x64.tar.gz"
-    grep linux_x64.tar.gz "gitleaks_${v}_checksums.txt" | sha256sum -c -
+    echo "$sum  gitleaks_${v}_linux_x64.tar.gz" | sha256sum -c -
     tar -xzf "gitleaks_${v}_linux_x64.tar.gz" gitleaks
   )
   git clone -q --mirror "$(git remote get-url origin)" "$T/mirror"
@@ -33,6 +33,10 @@ ref. Scan a mirror clone, not a working checkout, because a checkout has no `ref
     --gitleaks-ignore-path .gitleaksignore "$T/mirror"
 )
 ```
+
+`sum` pins the binary the record names, so a re-run proves it runs the same one. To move
+to a new gitleaks version, take its digest from that release's
+`gitleaks_<version>_checksums.txt`, and update `v`, `sum` and the record together.
 
 Exit code 0 means no leak. A real hit is a credential that was exposed: rotate it at
 its issuer. Rewriting history is not a substitute, because a clone or a fork may
@@ -46,6 +50,7 @@ The record:
 | Date | 2026-11-04 |
 | Tool | gitleaks 8.30.1, `gitleaks_8.30.1_linux_x64.tar.gz`, SHA-256 `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb`, matched against the release's checksums file |
 | Range | a mirror of `origin`: 21 branches, 229 `refs/pull/*` refs and no tags; from the root commit `6186a5f` to every ref's tip, `master` at `7672a47`; 1,102 commits scanned |
+| Covers | only what `origin` held on that date. It does not cover a later commit, such as those of #448 itself; a new scan of the final state replaces this record |
 | Result | 2 hits, both false positives; with `.gitleaksignore`, no leaks (exit 0) |
 
 The false positives:
@@ -77,6 +82,11 @@ gh api repos/EdwardLiuyc/kapelle --jq .security_and_analysis
 `SECURITY.md` links to private vulnerability reporting, so the link works only from
 this step on.
 
+Branch protection also needs a public repository on this plan: today its API answers
+`403` ("Upgrade to GitHub Pro or make this repository public"). Once it is available,
+protect `master` and require both jobs of `code_checks.yml`, `check` and
+`package-macos`. A job that is not required can fail without blocking a merge.
+
 ## Version and tag
 
 The version is the one in `package.json`. The first release tags `0.1.0` as it is; do
@@ -85,10 +95,13 @@ not bump it by habit. For a later version, update `package.json` on a branch wit
 `master` through the normal review.
 
 Create the tag on the final `master` commit that will be published, and push it. Tag
-`origin/master`, not a local `master` that may be behind it:
+`origin/master`, not a local `master` that may be behind it. Check first that its
+`package.json` has the version the tag names: nothing checks it later, and npm never
+takes a published version back.
 
 ```bash
 git fetch origin
+git show origin/master:package.json | grep '"version"'   # must be "<version>"
 git tag -a v<version> -m v<version> origin/master
 git push origin v<version>
 ```
