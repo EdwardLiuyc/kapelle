@@ -80,9 +80,18 @@ this step on.
 ## Version and tag
 
 The version is the one in `package.json`. The first release tags `0.1.0` as it is; do
-not bump it by habit. For a later version, `npm version <version>` makes the commit and
-the `v<version>` tag. Push the tag with `git push origin v<version>`. The tag starts the
-publish job.
+not bump it by habit. For a later version, update `package.json` on a branch with
+`npm version <version> --no-git-tag-version`, commit it, and land that commit on
+`master` through the normal review.
+
+Create the tag on the final `master` commit that will be published, and push it:
+
+```bash
+git tag v<version>
+git push origin v<version>
+```
+
+The first release uses `v0.1.0`. The tag starts the publish job.
 
 ## The first publish and the trusted publisher
 
