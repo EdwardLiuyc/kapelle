@@ -21,6 +21,7 @@ do not restate it. A restated fact goes stale in one place and stays right in th
 | what each harness was measured to do | `docs/FINDINGS.md`. A section such as `§M0-4` or `§Multi-turn`, named in this file or a source comment, is a section there. |
 | the work breakdown, and the reason for each decision | `docs/STORIES.md` |
 | what three runs of an orchestrator agent showed, the evidence for M8 | `docs/ORCHESTRATOR-SPIKES.md` |
+| how a release is made, and the credential scan's record | `docs/RELEASING.md` |
 | why, what in what order, and the decision register for M4–M6 | `docs/PROJECT-BRIEF.md`, `docs/PROJECT-PLAN.md`, `docs/CONTRACT-PLAN.md` |
 | how a loop, a skill or the orchestrator works | its own file: `.kapelle/loops/<name>.md`, `.agent/skills/<name>/SKILL.md`, `assets/orchestrator.md` |
 | the workflow, the rules that cross files, and this map | `AGENTS.md` |
@@ -184,7 +185,8 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   through its own shell is outside its reach. pi never asks, and opencode asks only
   for a write outside the root (§M9-1 re-measure).
   `core/policy.ts` is the one policy file, and `policyFor(mode)` is the only map from a
-  mode to a decider.
+  mode to a decider. `SECURITY.md`'s "Scope" states this reach to outside reporters, so
+  a change to the reach changes that section too.
 - **The daemon's one install is npm, with a command from the registry only** (M9-3b).
   `POST /harnesses/install` takes agent ids, never a command. `installArgs` builds
   `npm i -g <setup.npm>@<measuredOn.version>`, and `runNpm` starts it with no shell. It

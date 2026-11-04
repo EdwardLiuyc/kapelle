@@ -117,6 +117,19 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   assert.equal(pkg.private, undefined);
   assert.equal(pkg.bin.kapelle, "./dist/cli.js");
   assert.deepEqual(pkg.files, ["dist"]);
+  assert.equal(pkg.homepage, "https://github.com/EdwardLiuyc/kapelle#readme");
+  assert.deepEqual(pkg.bugs, {
+    url: "https://github.com/EdwardLiuyc/kapelle/issues",
+  });
+  assert.deepEqual(pkg.keywords, [
+    "agent-client-protocol",
+    "acp",
+    "coding-agents",
+    "ai-agents",
+    "cli",
+    "typescript",
+    "nodejs",
+  ]);
   assert.match(pkg.scripts.prepack, /tsc -p tsconfig\.build\.json/);
   // A real extraction keeps type: module and the other fields. The different
   // version proves --version reads this package.json, not a baked-in value.
