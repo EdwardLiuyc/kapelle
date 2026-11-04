@@ -32,6 +32,7 @@
     "knip": "knip --no-config-hints && knip --production --include files --no-config-hints",
     "test": "node --test --test-timeout=30000 --test-concurrency=4",
     "test:adaptive": "node --test --test-timeout=30000",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='**/*.ts' --test-coverage-exclude='**/tests/**' --test-coverage-exclude='integration/**' --test-coverage-exclude='dist/**' --test-coverage-exclude='node_modules/**' --test-timeout=30000 --test-concurrency=2",
     "test:harness": "node --test --test-timeout=180000 'integration/*.itest.ts'"
   },
   "devDependencies": {

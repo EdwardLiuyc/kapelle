@@ -219,13 +219,45 @@ export function childEnv(env?: Record<string, string>): NodeJS.ProcessEnv {
   return env ? { ...base, ...env } : base;
 }
 
+const STOP_GRACE_MS = 5_000;
+const STDIO_DRAIN_MS = 250;
+
+/**
+ * Stop a subprocess by pid: SIGTERM, a bounded wait, then SIGKILL. A clean
+ * exit lets Node flush V8 coverage, and the fallback still reaps a child that
+ * ignores SIGTERM.
+ */
+export async function stopProcess(pid: number): Promise<void> {
+  if (!alive(pid)) return;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ESRCH") return;
+    throw err;
+  }
+
+  const until = Date.now() + STOP_GRACE_MS;
+  while (alive(pid) && Date.now() < until) {
+    await new Promise((ok) => setTimeout(ok, 25));
+  }
+  if (alive(pid)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
+    }
+  }
+  if (!(await gone(pid))) {
+    throw new Error(`process ${pid} survived SIGTERM and SIGKILL`);
+  }
+}
+
 /**
  * Run `cli.ts` as a real subprocess and collect everything it printed.
  *
  * No TTY is attached, so `--mode ask` resolves to `safe` here exactly as it
- * does in CI or a pipe. The kill in `t.after` matters: when the test runner's
- * timeout fires it does not reap our children, and a stranded harness holds a
- * session open.
+ * does in CI or a pipe. Cleanup uses `stopProcess`, so a clean exit lets Node
+ * flush V8 coverage, and the fallback still reaps a stranded child.
  */
 export function spawnCli(
   t: TestContext,
@@ -238,7 +270,6 @@ export function spawnCli(
     cwd: REPO,
     env: childEnv(env),
   });
-  t.after(() => void child.kill("SIGKILL"));
 
   let stdout = "";
   let stderr = "";
@@ -249,9 +280,31 @@ export function spawnCli(
     stderr += d;
   });
 
+  let drainTimer: NodeJS.Timeout | undefined;
+  // A descendant can inherit stdio and keep `close` pending after the child
+  // exits. Drain briefly, then close our ends so teardown cannot wait forever.
+  child.once("exit", () => {
+    drainTimer = setTimeout(() => {
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }, STDIO_DRAIN_MS);
+  });
   const done = new Promise<CliResult>((resolve, reject) => {
     child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("close", (code) => {
+      clearTimeout(drainTimer);
+      resolve({ code, stdout, stderr });
+    });
+  });
+  t.after(async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    if (child.pid === undefined) {
+      await done;
+      return;
+    }
+    await stopProcess(child.pid);
+    await done;
   });
 
   /** Resolves once `stdout` contains `text`. For tests that signal mid-turn. */
