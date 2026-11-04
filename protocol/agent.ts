@@ -330,7 +330,8 @@ export class AcpAgent {
   // edits approves only the files its edits name, each with a sha256 of its
   // `newText`; a write with other bytes is a new decision and goes through
   // `#guardWrite`, so the person is asked about the bytes that will land.
-  // `rawInput.path` grants only when the request carries no diff and no
+  // That write uses up the approval, so a later write of the approved bytes
+  // asks again. `rawInput.path` grants only when the request carries no diff and no
   // `file_text`. A diff the path guard dropped still counts, so it gives no
   // grant at all. The path grant has no hash: the person was shown no text, so
   // the one write may hold any bytes (decided 2026-11-04, one question per

@@ -893,7 +893,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       await callClient("fs/write_text_file", {
         sessionId: sid,
         path: "ACP_TEST.md",
-        content: "written by the mock agent through the client\n",
+        content: newText,
       });
       update(sid, {
         sessionUpdate: "agent_message_chunk",
@@ -918,7 +918,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
               {
                 type: "diff",
                 path: "ACP_TEST.md",
-                newText: "written by the mock agent through the client\n",
+                newText,
               },
             ],
           }
