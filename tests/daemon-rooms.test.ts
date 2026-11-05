@@ -2578,8 +2578,8 @@ test("a dismissed room comes back dismissed after a restart, and a message is re
 
 // The test drives the whole lazy-build flow end to end: its call count is the test.
 // pi-lens-ignore: high-fan-out
-test("a dismissed room the boot did not build lists, answers, replays and deletes as before (#451)", async (t) => {
-  const { first, cwd, id, again } = await roomToRestart(t, REMEMBER);
+test("a dismissed room the boot did not build lists and answers as before (#451)", async (t) => {
+  const { first, id, again } = await roomToRestart(t, REMEMBER);
   await api(first, "POST", `/rooms/${id}/messages`, { text: "alpha" });
   await roomIdle(first, id);
   assert.equal((await api(first, "POST", `/rooms/${id}/dismiss`)).status, 200);
@@ -2600,20 +2600,7 @@ test("a dismissed room the boot did not build lists, answers, replays and delete
     assert.equal(got.status, 200, got.body.error?.message);
     assert.deepEqual(got.body, shown.body);
   }
-
-  // The stream replays the log, then ends, as a dismissed room's does.
-  const res = await fetch(`${second.url}/rooms/${id}/events`, {
-    headers: { authorization: `Bearer ${second.token}` },
-  });
-  assert.equal(res.status, 200);
-  const replayed = ((await res.text()).match(/^data: /gm) ?? []).length;
-  assert.equal(replayed, (await roomLog(cwd, id)).length);
-
-  const deleted = await api(second, "DELETE", `/rooms/${id}`);
-  assert.equal(deleted.status, 204);
-  assert.equal(existsSync(join(stateDirFor(cwd), "rooms", id)), false);
-  const after = await api<RoomListEntry[]>(second, "GET", "/rooms");
-  assert.deepEqual(after.body, []);
+  // `/events` and `DELETE` as first lookups: the next test.
 });
 
 // Each first-use route needs its own room and the restart between them, so one
