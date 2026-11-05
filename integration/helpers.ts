@@ -763,8 +763,10 @@ export async function until(
   check: () => boolean | Promise<boolean>,
   ms = 20_000,
 ): Promise<void> {
-  for (const end = Date.now() + ms; Date.now() < end; ) {
+  // Check before the clock, so a spent budget still checks once (#442).
+  for (const end = Date.now() + ms; ; ) {
     if (await check()) return;
+    if (Date.now() >= end) break;
     await new Promise((ok) => setTimeout(ok, 20));
   }
   throw new Error(`timed out waiting for ${what}`);
@@ -786,15 +788,19 @@ export const askRun = (cwd: string) => ({
 });
 
 /** Polls `GET /permissions` until one decision is pending, and returns it. */
-export async function pendingOne(d: Daemon): Promise<Pending> {
-  for (const end = Date.now() + 20_000; Date.now() < end; ) {
-    const r = await api<Pending[]>(d, "GET", "/permissions");
-    assert.equal(r.status, 200);
-    const [found] = r.body;
-    if (found) return found;
-    await new Promise((ok) => setTimeout(ok, 20));
-  }
-  throw new Error("no permission ever became pending");
+export async function pendingOne(d: Daemon, ms = 20_000): Promise<Pending> {
+  let found: Pending | undefined;
+  await until(
+    "a permission to become pending",
+    async () => {
+      const r = await api<Pending[]>(d, "GET", "/permissions");
+      assert.equal(r.status, 200);
+      [found] = r.body;
+      return found !== undefined;
+    },
+    ms,
+  );
+  return found as Pending;
 }
 
 export const REMEMBER = `node ${MOCK_AGENT} --scenario remember`;
