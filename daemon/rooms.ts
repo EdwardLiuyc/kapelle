@@ -8,7 +8,16 @@
  * and keeps the result. Two lookups at the same time share one build. A build
  * that fails drops the room, so it answers as a room the boot skipped did:
  * `GET /rooms` leaves it out, and every route is a 404. The caller's `build`
- * prints why.
+ * prints why. A `build` that throws leaves the room unbuilt, so the next
+ * lookup tries again.
+ *
+ * Only a dismissed room may wait. Its list entry reads `dismissed` for the
+ * room and every participant, and its pause is a no-op, so a shutdown that
+ * meets a build still running loses nothing. A paused room deferred here
+ * would list wrong and could miss its pause, so `defer` refuses one.
+ *
+ * `DELETE` and its preview build the room too, on purpose: every route takes
+ * the one lookup, so none can meet a half-known room (#451, decision 3A).
  *
  * One map for both kinds, so `GET /rooms` keeps the boot's order: `set` on a
  * key already there keeps its place.
@@ -46,9 +55,16 @@ export function createRooms(
   return {
     set: (id: string, entry: RoomEntry) => void slots.set(id, entry),
     /** Keep a dismissed room's record; nothing is built until `get`. */
-    defer: (id: string, unbuilt: Unbuilt) => void slots.set(id, unbuilt),
+    defer(id: string, unbuilt: Unbuilt) {
+      const { status } = unbuilt.record;
+      if (status !== "dismissed") {
+        throw new Error(`room ${id} is ${status}; only a dismissed one waits`);
+      }
+      slots.set(id, unbuilt);
+    },
     delete: (id: string) => void slots.delete(id),
-    /** Only the built rooms: an unbuilt one has nothing to pause. */
+    /** Only the built rooms: an unbuilt one, or one still building, is
+     *  dismissed and has nothing to pause. */
     built: () => [...slots.values()].filter(isBuilt),
     list: (): RoomListEntry[] =>
       [...slots.values()].map((slot) =>

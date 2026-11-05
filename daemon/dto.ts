@@ -244,38 +244,35 @@ export function toRoomDto(state: RoomState, room: Room): RoomDto {
 
 /** One `GET /rooms` entry: the room and a short roster (R9, R44). */
 export function toRoomListEntry(state: RoomState, room: Room): RoomListEntry {
-  const entry: RoomListEntry = {
-    id: state.id,
-    cwd: state.cwd,
-    status: room.status(),
-    updatedAt: state.updatedAt,
-    participants: room.participants.map((p) => ({
-      id: p.id,
-      name: p.name,
-      ...(p.role && { role: p.role }),
-      status: p.status(),
-    })),
-  };
-  if (state.title !== undefined) entry.title = state.title;
-  return entry;
+  return listEntry(state, room.status(), room.participants, (p) => p.status());
 }
 
 /** The same entry for a dismissed room the boot did not build (#451), from
  *  its `room.json`. A built dismissed room reads `dismissed` for every
  *  participant, so the record's own statuses are not used. */
 export function toRecordListEntry(record: RoomRecord): RoomListEntry {
+  return listEntry(record, "dismissed", record.participants, () => "dismissed");
+}
+
+/** The one builder both entries share, so a field reaches both or neither. */
+function listEntry<P extends Pick<Participant, "id" | "name" | "role">>(
+  state: Pick<RoomState, "id" | "cwd" | "title" | "updatedAt">,
+  status: RoomListEntry["status"],
+  roster: readonly P[],
+  statusOf: (p: P) => RoomListEntry["participants"][number]["status"],
+): RoomListEntry {
   const entry: RoomListEntry = {
-    id: record.id,
-    cwd: record.cwd,
-    status: "dismissed",
-    updatedAt: record.updatedAt,
-    participants: record.participants.map((p) => ({
+    id: state.id,
+    cwd: state.cwd,
+    status,
+    updatedAt: state.updatedAt,
+    participants: roster.map((p) => ({
       id: p.id,
       name: p.name,
       ...(p.role && { role: p.role }),
-      status: "dismissed",
+      status: statusOf(p),
     })),
   };
-  if (record.title !== undefined) entry.title = record.title;
+  if (state.title !== undefined) entry.title = state.title;
   return entry;
 }

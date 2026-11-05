@@ -123,3 +123,33 @@ test("an unknown id is undefined, and a built room keeps its place in the list",
     ["b"],
   );
 });
+
+test("defer refuses a room that is not dismissed, so a paused one never lists as dismissed", () => {
+  const { rooms } = counted(entry);
+  assert.throws(
+    () =>
+      rooms.defer("a", {
+        record: { ...record("a"), status: "paused" },
+        root: "/repo",
+      }),
+    /room a is paused; only a dismissed one waits/,
+  );
+  assert.deepEqual(rooms.list(), []);
+});
+
+test("a build that throws leaves the room unbuilt, and the next lookup tries again", async () => {
+  let calls = 0;
+  const rooms = createRooms(async (_id, unbuilt) => {
+    calls += 1;
+    if (calls === 1) throw new Error("boom");
+    return entry(unbuilt);
+  });
+  rooms.defer("a", { record: record("a"), root: "/repo" });
+  await assert.rejects(rooms.get("a"), /boom/);
+  assert.deepEqual(
+    rooms.list().map((r) => r.id),
+    ["a"],
+  );
+  assert.ok(await rooms.get("a"));
+  assert.equal(calls, 2);
+});

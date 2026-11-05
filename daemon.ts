@@ -1160,7 +1160,8 @@ function roomLimits(
  *
  * **A dismissed room is only read** (#451): its record is kept, and the room
  * is built on first use (`daemon/rooms.ts`). Dismissed rooms stay for the
- * whole retention window, and building each one cost the boot about 48 ms (measured 2026-11-05).
+ * whole retention window, so building each one at boot made the boot grow
+ * with every room closed; #451 has the measurement.
  */
 async function restoreRooms(): Promise<void> {
   for (const root of repos) {
@@ -2349,8 +2350,9 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 // list. A signal during it pauses the rooms restored so far; the others are
 // already `paused` on disk, which is what the sweep left. ponytail: one
 // record read and one log scan per paused or active room, on the boot path;
-// a dismissed room is only read (#451). Build the paused ones lazily too if a
-// repository keeps hundreds of them.
+// a dismissed room is only read (#451). Building the paused ones lazily too
+// needs `daemon/rooms.ts` to list their own statuses and a shutdown to wait
+// for a build in flight; do that if a repository keeps hundreds of them.
 await restoreRooms();
 
 server.on("error", (err) => {
