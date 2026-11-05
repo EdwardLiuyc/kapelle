@@ -147,3 +147,14 @@ test("spawnCli cleanup SIGKILLs a child that ignores SIGTERM", async (t) => {
   assert.ok(spawned.child.pid);
   assert.equal(alive(spawned.child.pid), false);
 });
+
+test("until checks once even when its budget is already spent (#442)", async () => {
+  let checks = 0;
+  await until("a true check", () => ++checks > 0, 0);
+  assert.equal(checks, 1);
+  await assert.rejects(
+    until("a false check", () => ++checks < 0, -1),
+    /timed out waiting for a false check/,
+  );
+  assert.equal(checks, 2);
+});
