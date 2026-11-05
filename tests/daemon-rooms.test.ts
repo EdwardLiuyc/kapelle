@@ -2616,6 +2616,61 @@ test("a dismissed room the boot did not build lists, answers, replays and delete
   assert.deepEqual(after.body, []);
 });
 
+// Each first-use route needs its own room and the restart between them, so one
+// test drives both.
+// pi-lens-ignore: high-fan-out
+test("a dismissed room's events and DELETE each build it on first use (#451)", async (t) => {
+  const { first, cwd, id: replayId, again } = await roomToRestart(t, REMEMBER);
+  const opened = await api<RoomReply>(
+    first,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(opened.status, 201, opened.body.error?.message);
+  const deleteId = opened.body.id;
+  for (const id of [replayId, deleteId]) {
+    assert.equal(
+      (await api(first, "POST", `/rooms/${id}/dismiss`)).status,
+      200,
+    );
+  }
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const second = await again();
+  const before = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(
+    before.body.map((r) => r.id).sort(),
+    [replayId, deleteId].sort(),
+    "both rooms are listed from their records before any build",
+  );
+
+  // Each call is its room's first lookup after the restart.
+  const [stream, deleted] = await Promise.all([
+    fetch(`${second.url}/rooms/${replayId}/events`, {
+      headers: { authorization: `Bearer ${second.token}` },
+    }),
+    api(second, "DELETE", `/rooms/${deleteId}`),
+  ]);
+  assert.equal(
+    `${stream.status}/${deleted.status}`,
+    "200/204",
+    "the events stream and DELETE each built their room",
+  );
+  const replay = await stream.text();
+  const lines = await roomLog(cwd, replayId);
+  assert.ok(lines.length > 0);
+  assert.equal((replay.match(/^data: /gm) ?? []).length, lines.length);
+  assert.equal(existsSync(join(stateDirFor(cwd), "rooms", deleteId)), false);
+  const after = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(
+    after.body.map((r) => r.id),
+    [replayId],
+    "the deleted room is gone; the replayed one is still listed",
+  );
+});
+
 test("a dismissed room that cannot be built is listed until its first use, then a 404 (#451)", async (t) => {
   const { first, cwd, id, again } = await roomToRestart(t, REMEMBER);
   assert.equal((await api(first, "POST", `/rooms/${id}/dismiss`)).status, 200);
@@ -2643,7 +2698,15 @@ test("a dismissed room that cannot be built is listed until its first use, then 
   assert.deepEqual(after.body, []);
   process.kill(second.pid, "SIGTERM");
   const { stderr } = await second.done;
-  assert.match(stderr, new RegExp(`skipping room .*${id}.*no longer inside`));
+  const skipped = stderr
+    .split("\n")
+    .find(
+      (line) =>
+        line.startsWith("skipping room ") &&
+        line.includes(id) &&
+        line.includes("no longer inside"),
+    );
+  assert.ok(skipped, stderr);
 });
 
 // The test drives the whole room-lifecycle flow: its call count is the test.
