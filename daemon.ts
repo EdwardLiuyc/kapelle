@@ -2208,12 +2208,11 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   } else if (req.method === "POST" && roomSub?.[2] === "agents") {
     await postAgent(roomSub[1] as string, req, res);
   } else if (req.method === "GET" && roomSub?.[2] === "agents") {
+    const entry = await roomEntry(roomSub[1] as string);
     send(
       res,
       200,
-      (await roomEntry(roomSub[1] as string)).room.participants.map(
-        toParticipantDto,
-      ) satisfies ParticipantDto[],
+      entry.room.participants.map(toParticipantDto) satisfies ParticipantDto[],
     );
   } else if (req.method === "GET" && agentOne) {
     const p = await participantEntry(
