@@ -17,7 +17,7 @@ import type {
   RunStatus,
   TaskDto,
 } from "../client/contract.ts";
-import type { Participant, Room, RoomMeta } from "../core/room.ts";
+import type { Participant, Room, RoomMeta, RoomRecord } from "../core/room.ts";
 import type { RunReport, TaskRun } from "../core/run.ts";
 
 const USAGE_SEMANTICS = new Set(["per-turn", "cumulative", "unknown"]);
@@ -257,5 +257,25 @@ export function toRoomListEntry(state: RoomState, room: Room): RoomListEntry {
     })),
   };
   if (state.title !== undefined) entry.title = state.title;
+  return entry;
+}
+
+/** The same entry for a dismissed room the boot did not build (#451), from
+ *  its `room.json`. A built dismissed room reads `dismissed` for every
+ *  participant, so the record's own statuses are not used. */
+export function toRecordListEntry(record: RoomRecord): RoomListEntry {
+  const entry: RoomListEntry = {
+    id: record.id,
+    cwd: record.cwd,
+    status: "dismissed",
+    updatedAt: record.updatedAt,
+    participants: record.participants.map((p) => ({
+      id: p.id,
+      name: p.name,
+      ...(p.role && { role: p.role }),
+      status: "dismissed",
+    })),
+  };
+  if (record.title !== undefined) entry.title = record.title;
   return entry;
 }

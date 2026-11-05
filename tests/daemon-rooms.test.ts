@@ -2576,6 +2576,76 @@ test("a dismissed room comes back dismissed after a restart, and a message is re
   assert.equal(twice.body.error.code, "room_dismissed");
 });
 
+// The test drives the whole lazy-build flow end to end: its call count is the test.
+// pi-lens-ignore: high-fan-out
+test("a dismissed room the boot did not build lists, answers, replays and deletes as before (#451)", async (t) => {
+  const { first, cwd, id, again } = await roomToRestart(t, REMEMBER);
+  await api(first, "POST", `/rooms/${id}/messages`, { text: "alpha" });
+  await roomIdle(first, id);
+  assert.equal((await api(first, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const listed = (await api<RoomListEntry[]>(first, "GET", "/rooms")).body;
+  const shown = await api<RoomReply>(first, "GET", `/rooms/${id}`);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const second = await again();
+  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(list.body, listed, "the same entry, from the record");
+  // Two lookups at once share the build (`daemon/tests/rooms.test.ts`).
+  const both = await Promise.all([
+    api<RoomReply>(second, "GET", `/rooms/${id}`),
+    api<RoomReply>(second, "GET", `/rooms/${id}`),
+  ]);
+  for (const got of both) {
+    assert.equal(got.status, 200, got.body.error?.message);
+    assert.deepEqual(got.body, shown.body);
+  }
+
+  // The stream replays the log, then ends, as a dismissed room's does.
+  const res = await fetch(`${second.url}/rooms/${id}/events`, {
+    headers: { authorization: `Bearer ${second.token}` },
+  });
+  assert.equal(res.status, 200);
+  const replayed = ((await res.text()).match(/^data: /gm) ?? []).length;
+  assert.equal(replayed, (await roomLog(cwd, id)).length);
+
+  const deleted = await api(second, "DELETE", `/rooms/${id}`);
+  assert.equal(deleted.status, 204);
+  assert.equal(existsSync(join(stateDirFor(cwd), "rooms", id)), false);
+  const after = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(after.body, []);
+});
+
+test("a dismissed room that cannot be built is listed until its first use, then a 404 (#451)", async (t) => {
+  const { first, cwd, id, again } = await roomToRestart(t, REMEMBER);
+  assert.equal((await api(first, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  // A cwd in another repository: the build refuses it, as a boot did.
+  const path = join(stateDirFor(cwd), "rooms", id, "room.json");
+  const record = JSON.parse(await readFile(path, "utf8"));
+  await writeFile(
+    path,
+    JSON.stringify({ ...record, cwd: await realpath(await gitRepo(t)) }),
+  );
+
+  const second = await again();
+  const before = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(
+    before.body.map((r) => r.id),
+    [id],
+    "the boot did not build it, so it did not fail",
+  );
+  const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  assert.equal(got.status, 404);
+  assert.equal(got.body.error.code, "room_not_found");
+  const after = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(after.body, []);
+  process.kill(second.pid, "SIGTERM");
+  const { stderr } = await second.done;
+  assert.match(stderr, new RegExp(`skipping room .*${id}.*no longer inside`));
+});
+
 // The test drives the whole room-lifecycle flow: its call count is the test.
 // pi-lens-ignore: high-fan-out
 test("the delete preview lists every owned branch and the commits no outside ref reaches (#352)", async (t) => {
