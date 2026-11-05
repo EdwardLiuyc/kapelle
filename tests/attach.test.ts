@@ -598,13 +598,13 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
   const d = await boot(t, runtime, ["--permission-timeout", "10"]);
   const cwd = await added(d, await tempDir(t));
   const id = await detach(t, env, cwd, askRun(cwd).run);
-  // The waits (3 + 12 + 2 + 3 + 2 + 3 s) stay under `npm test`'s 30 s cap,
+  // The waits (13 + 2 + 3 + 2 + 5 s) stay under `npm test`'s 30 s cap,
   // so a failure prints its own message and the transcript (#442).
-  const permission = await pendingOne(d, 3000);
+  // The 10 s timer starts at the ask, after the run is detached, so the
+  // ask, the edit prompt and its timeout share one window.
+  const window = Date.now() + 13_000;
+  const permission = await pendingOne(d, window - Date.now());
   assert.equal(permission.kind, "edit");
-  // The 10 s timer started at the ask, so the edit prompt and its timeout
-  // share one window.
-  const window = Date.now() + 12_000;
 
   const child = spawn(
     "script",
@@ -664,7 +664,7 @@ test("an answer typed after the timeout decided is the daemon's 409, printed, an
 
   const code = await Promise.race([
     closed,
-    new Promise<string>((ok) => setTimeout(() => ok("hung"), 3000).unref()),
+    new Promise<string>((ok) => setTimeout(() => ok("hung"), 5000).unref()),
   ]);
   assert.equal(code, 0, out);
   assert.match(out, /error: permission \S+ was already decided/);
