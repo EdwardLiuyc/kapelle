@@ -1,6 +1,7 @@
 /**
  * Shared subprocess cleanup (#428): graceful exits flush V8 coverage, and a
- * stuck process still meets the bounded SIGKILL fallback.
+ * stuck process still meets the bounded SIGKILL fallback. Also the wait
+ * helpers' budgets (#442): a spent budget still checks once.
  */
 
 import assert from "node:assert/strict";
