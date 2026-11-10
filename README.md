@@ -13,7 +13,13 @@ kapelle runs different coding agents side by side on one repository: pi, Claude 
 
 One background daemon holds all the work. Close the terminal and come back later: your agents and their history are still there. Each agent logs in by itself. kapelle never touches a key.
 
-[Install](#install) · [Quick start](#quick-start) · [Rooms](#rooms) · [Runs](#runs) · [Agents](#agents) · [Safety](#what-the-modes-do-and-do-not-do) · [Docs](#docs)
+[Demo](#demo) · [Install](#install) · [Quick start](#quick-start) · [Rooms](#rooms) · [Runs](#runs) · [Agents](#agents) · [Safety](#what-the-modes-do-and-do-not-do) · [Docs](#docs)
+
+## Demo
+
+[![A kapelle loop: you decide D1 A, D2 A](assets/kapelle-loop-demo.jpg)](assets/kapelle-loop-demo.mp4)
+
+One `fix-issue` loop, from the issue to the merged PR, in 3 minutes. The real run took 1 h 42 min. The orchestrator plans the steps and adds a developer and two reviewers. You type three things: `go`, your two choices, and `merge close`. Click the picture to play the video.
 
 ## Install
 
