@@ -18,7 +18,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 </head>
 <body>
 
-<div class="strip"><span class="lvl">[info]</span>kapelle is in private preview. The npm release is <span class="soon">coming soon</span>.</div>
+<div class="strip"><span class="lvl">[info]</span>kapelle 0.1.0 is out. <a href="https://www.npmjs.com/package/kapelle">npm install -g kapelle</a></div>
 
 <header class="site-header">
 <div class="wrap" style="max-width: 1240px;">
@@ -32,7 +32,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <a href="/#agents"><i>3</i>agents</a>
 <a href="#safety"><i>4</i>safety</a>
 </nav>
-<span class="nav-end">GitHub · npm <span class="soon">soon</span></span>
+<span class="nav-end"><a href="https://github.com/EdwardLiuyc/kapelle">GitHub</a> · <a href="https://www.npmjs.com/package/kapelle">npm</a></span>
 </div>
 </header>
 
@@ -73,46 +73,41 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <h1>Guide</h1>
 <p class="lede">Everything a new kapellmeister needs: install, your first room, your first loop, and every command. Read it top to bottom once, then come back to the part you need.</p>
 
-<div class="note">
-<span class="kicker">PRIVATE PREVIEW</span>
-<p>The npm package is not out yet. It is coming soon. Until then, people with access to the repository install from source.</p>
-</div>
-
 <section id="install">
 <h2><span class="step">1</span>Install</h2>
 <p>You need Node 24 or newer, git, and macOS or Linux. WSL counts as Linux. Windows is not supported.</p>
 <div class="install">
 <div class="tabs" role="tablist" aria-label="Install with">
-<button role="tab" id="g-tab-npm" aria-controls="g-panel-npm" aria-selected="true">npm · soon</button>
-<button role="tab" id="g-tab-pnpm" aria-controls="g-panel-pnpm" aria-selected="false" tabindex="-1">pnpm · soon</button>
-<button role="tab" id="g-tab-bun" aria-controls="g-panel-bun" aria-selected="false" tabindex="-1">bun · soon</button>
+<button role="tab" id="g-tab-npm" aria-controls="g-panel-npm" aria-selected="true">npm</button>
+<button role="tab" id="g-tab-pnpm" aria-controls="g-panel-pnpm" aria-selected="false" tabindex="-1">pnpm</button>
+<button role="tab" id="g-tab-bun" aria-controls="g-panel-bun" aria-selected="false" tabindex="-1">bun</button>
 <button role="tab" id="g-tab-src" aria-controls="g-panel-src" aria-selected="false" tabindex="-1">from source</button>
 </div>
 <div class="panel" role="tabpanel" id="g-panel-npm" aria-labelledby="g-tab-npm">
-<pre><span class="label">npm · coming soon</span><span class="p">$ </span>npm install -g kapelle
+<pre><span class="label">npm</span><span class="p">$ </span>npm install -g kapelle
 <span class="p">$ </span>kapelle --help</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 <div class="panel" role="tabpanel" id="g-panel-pnpm" aria-labelledby="g-tab-pnpm">
-<pre><span class="label">pnpm · coming soon</span><span class="p">$ </span>pnpm add -g kapelle
+<pre><span class="label">pnpm</span><span class="p">$ </span>pnpm add -g kapelle
 <span class="p">$ </span>kapelle --help</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 <div class="panel" role="tabpanel" id="g-panel-bun" aria-labelledby="g-tab-bun">
-<pre><span class="label">bun · coming soon</span><span class="p">$ </span>bun add -g kapelle
+<pre><span class="label">bun</span><span class="p">$ </span>bun add -g kapelle
 <span class="p">$ </span>kapelle --help</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 <div class="panel" role="tabpanel" id="g-panel-src" aria-labelledby="g-tab-src">
-<pre><span class="label">from source · needs repository access</span><span class="p">$ </span>git clone https://github.com/EdwardLiuyc/kapelle.git
+<pre><span class="label">from source · no build step</span><span class="p">$ </span>git clone https://github.com/EdwardLiuyc/kapelle.git
 <span class="p">$ </span>cd kapelle
 <span class="p">$ </span>npm install
-<span class="p">$ </span>npm link           # puts kapelle on your PATH
-<span class="p">$ </span>kapelle --help</pre>
+<span class="p">$ </span>node cli.ts --help
+<span class="p">$ </span>alias kapelle='node /path/to/kapelle/cli.ts'</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 </div>
-<p>From source, <code>npm unlink -g kapelle</code> undoes the link. If <code>npm link</code> fails with <code>EACCES</code>, npm's global folder belongs to root. Use a folder you own instead of <code>sudo</code>:</p>
+<p>The package is for macOS and Linux only, so npm refuses a global install on Windows with <code>EBADPLATFORM</code>. If <code>npm install -g</code> fails with <code>EACCES</code>, npm's global folder belongs to root. Use a folder you own instead of <code>sudo</code>:</p>
 <pre><span class="p">$ </span>npm config set prefix ~/.local    # then add ~/.local/bin to PATH</pre>
 <p>From source, you can check kapelle with no agent and no account. A fake agent ships with the repository:</p>
 <pre><span class="p">$ </span>npm run selftest</pre>
@@ -152,7 +147,7 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 <ul>
 <li><strong>Install an adapter.</strong> When an agent is there but its ACP adapter is not, check it in the list and choose <strong>setup</strong>. The daemon runs <code>npm i -g</code> with the version kapelle was tested on. If npm fails, for example because it needs <code>sudo</code>, the list shows the command for you to run.</li>
 <li><strong>The login check.</strong> kapelle opens a session with each ready agent, with no prompt, so it spends no tokens. It saves the agent's models and whether it is logged in. A logged-out agent shows its own login command. kapelle never logs in for you.</li>
-<li><strong>Pick a model.</strong> <code>/new</code> and <code>/add</code> take <code>--model &lt;id&gt;</code>, and their form lists the saved models. If the agent refuses the model, it keeps its own, and a notice says so.</li>
+<li><strong>Pick a model.</strong> <code>/new</code> and <code>/add</code> take <code>--model &lt;id&gt;</code>, and their form lists the saved models. <code>@name /model</code> changes it during a chat. If the agent refuses the model, it keeps its own, and a notice says so.</li>
 </ul>
 </section>
 
@@ -212,8 +207,10 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 <tr><td><code>/add &lt;agent&gt;</code></td><td>Add an agent to the room. Options: <code>--cmd</code>, <code>--name</code>, <code>--role</code>, <code>--mode</code>, <code>--model</code>, <code>--base @name|ref</code>.</td></tr>
 <tr><td><code>/loop &lt;recipe&gt; &lt;task&gt; ["note"]</code></td><td>Start a <a href="#loop">loop</a> in a new room. Options: <code>--agent</code>, <code>--cmd</code>, <code>--cwd</code>.</td></tr>
 <tr><td><code>/title &lt;new title&gt;</code></td><td>Rename the room.</td></tr>
+<tr><td><code>/cap &lt;n&gt;</code></td><td>Raise the orchestrator's <a href="#lead">turn cap</a> for this room.</td></tr>
 <tr><td><code>@name /mode &lt;m&gt;</code></td><td>Set the agent's mode: <code>ask</code>, <code>safe</code> or <code>auto</code>.</td></tr>
 <tr><td><code>@name /role &lt;r&gt;</code></td><td>Set the agent's role, or <code>none</code>.</td></tr>
+<tr><td><code>@name /model [id]</code></td><td>Change the agent's model. With no id, it shows the model in use and the agent's list.</td></tr>
 <tr><td><code>@name /rename &lt;new&gt;</code></td><td>Rename the agent.</td></tr>
 <tr><td><code>@name /cancel</code></td><td>Cancel the agent's turn.</td></tr>
 <tr><td><code>@name /remove</code></td><td>Remove the agent from the room.</td></tr>
@@ -240,6 +237,7 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 </tbody>
 </table>
 </div>
+<p>Beside the transcript, a rail has one <code>●</code> per message. Click a mark to jump to that message, or hover on it to read its first lines. <code>▲</code> and <code>▼</code> move one message.</p>
 <p>A mark next to each agent says what it is doing. A room takes the mark of its most urgent agent.</p>
 <div class="table-box">
 <table>
@@ -337,11 +335,12 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 <div><dt>The step board</dt><dd>The main developer ends every report with the plan's steps, each marked done, running or not started. <code>po</code> reads where the loop is from the board, and never guesses.</dd></div>
 <div><dt>Reviews in a line</dt><dd>A reviewer starts from the developer's branch and commits its fixes. <code>po</code> moves them in with a fast-forward, removes the reviewer, and tells the developer which commits came in. The developer judges each fix.</dd></div>
 <div><dt>Every choice is yours</dt><dd><code>po</code> stops for every choice, a protected path, a step that fails twice, an agent that exited, an outside review that times out, a refusal it cannot fix, and the hand-over.</dd></div>
+<div><dt>A cap on turns</dt><dd><code>po</code> may send 40 messages to workers in one room. At the cap, the daemon refuses the next one and the chat rings the bell. <code>/cap &lt;n&gt;</code> raises it for the room. Set the default with <code>orchestratorTurnCap</code> in <a href="#config">your repository's file</a>. Your own messages never count.</dd></div>
 <div><dt>A hard limit on rounds</dt><dd>An outside review, such as a bot on the PR, gets 3 rounds unless the recipe says other. A round with only nits ends the review. At the limit, <code>po</code> offers: hand over as it is, fix without another review, or split the task.</dd></div>
 </dl>
 <div class="note warn">
 <span class="kicker">THE SKILL IS A PROMISE, NOT A WALL</span>
-<p><code>po</code> runs in <code>auto</code>. The skill tells it to edit, build, commit and push nothing, but no mode can hold it to that. Its workers run as your user, with your forge login. A stop button, a cap on the turns <code>po</code> gives out, a bell when it waits for you, and a decision log are <span class="soon">coming soon</span>.</p>
+<p><code>po</code> runs in <code>auto</code>. The skill tells it to edit, build, commit and push nothing, but no mode can hold it to that. Its workers run as your user, with your forge login. A stop button, a bell when it waits for you, and a decision log are <span class="soon">coming soon</span>.</p>
 </div>
 </section>
 
@@ -478,7 +477,8 @@ kapelle chat [new | attach | list | dismiss]</pre>
 <tr><td><code>ttlMs</code></td><td>Cancel a run's task after this long. <code>0</code> turns it off.</td></tr>
 <tr><td><code>maxConcurrency</code></td><td>How many tasks of a run work at once.</td></tr>
 <tr><td><code>retentionMs</code></td><td>How long finished runs and dismissed rooms are kept.</td></tr>
-<tr><td><code>linkPaths</code></td><td>Paths, such as <code>["node_modules"]</code>, that each new checkout links from your own. Git must ignore each one.</td></tr>
+<tr><td><code>orchestratorTurnCap</code></td><td>How many messages a new room's orchestrator may send to workers. 40 by default.</td></tr>
+<tr><td><code>linkPaths</code></td><td>Paths, such as <code>["node_modules"]</code>, that each new checkout links from your own. Git must ignore each one, and it must stay inside the repository.</td></tr>
 </tbody>
 </table>
 </div>
