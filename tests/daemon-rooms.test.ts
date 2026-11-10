@@ -15,7 +15,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { request } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
@@ -42,6 +49,7 @@ import {
   api,
   bootDaemon as boot,
   commitAt,
+  countedGit,
   type Daemon,
   gatedGit,
   gitRepo,
@@ -3352,6 +3360,61 @@ test("a restart opens a room without links when its linkPaths went bad (#274)", 
     .map((n) => n.text)
     .join("\n");
   assert.match(notices, /the room opened without its links/);
+});
+
+test("a restart checks each repository's links once, runs no git status for its rooms, and keeps their links (#322)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const cwd = await realpath(
+    await added(
+      first,
+      await gitRepo(t, {
+        ignore: "node_modules/\n",
+        files: {
+          ".kapelle/config.json": `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`,
+        },
+      }),
+    ),
+  );
+  await mkdir(join(cwd, "node_modules", "pkg"), { recursive: true });
+  const ids: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    const open = await api<RoomReply>(first, "POST", "/rooms", { cwd });
+    assert.equal(open.status, 201, open.body.error?.message);
+    ids.push(open.body.id);
+  }
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const git = await countedGit(t);
+  const second = await boot(t, runtime, [], state, { PATH: git.path });
+  const calls = (await git.calls()).map((c) => c.split(" "));
+  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(
+    list.body.filter((r) => ids.includes(r.id)).map((r) => r.status),
+    ["paused", "paused", "paused"],
+  );
+  assert.equal(
+    calls.filter((c) => c.includes("status")).length,
+    0,
+    "a room never reads the dirty-tree advisory",
+  );
+  assert.equal(
+    calls.filter((c) => c.includes("ls-files")).length,
+    1,
+    "one link plan for the repository, not two per room",
+  );
+
+  // A restored room still mirrors the links into a new checkout.
+  const bob = await addAgent(second, ids[0] as string, {
+    cmd: REMEMBER,
+    name: "bob",
+  });
+  assert.equal(
+    (await lstat(join(bob.worktree, "node_modules", "pkg"))).isSymbolicLink(),
+    true,
+  );
 });
 
 test("a linkPaths entry git would see refuses a room's open as a 400", async (t) => {

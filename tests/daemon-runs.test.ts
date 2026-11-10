@@ -903,16 +903,21 @@ test("a restored run whose event log is gone answers no_event_log", async (t) =>
 
 test("a non-refusal error is a 500 internal, never a leaked code", async (t) => {
   const d = await boot(t);
-  const root = await gitRepo(t);
+  const root = await gitRepo(t, {
+    files: {
+      ".kapelle/config.json": `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`,
+    },
+  });
+  const cwd = await added(d, root);
   const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], {
     cwd: root,
     encoding: "utf8",
   }).stdout.trim();
   await writeFile(join(root, gitDir, "index"), "not an index\n");
-  const cwd = await added(d, root);
 
-  // `openWorktrees` runs `git status`, which now throws an execFile error
-  // whose own numeric `code` must not reach the envelope (M5-3, #135).
+  // The link check runs `git ls-files`, which now throws an execFile error
+  // whose own numeric `code` must not reach the envelope (M5-3, #135). A
+  // room runs no `git status` since #322, so the index is read here.
   const r = await api(d, "POST", "/rooms", {
     cwd,
     agents: [{ cmd: `node ${MOCK_AGENT}` }],
