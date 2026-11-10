@@ -162,8 +162,11 @@ test("the workflow gates a v* tag and publishes with OIDC and no npm token", asy
 
   assert.match(workflow, /^ {8}tags: \["v\*"\]$/m);
   assert.match(publish, /^ {8}needs: gate$/m);
+  // A job with no `permissions:` takes the top-level block, so pin that block
+  // too: `id-token: write` there would reach `gate`, which runs third-party code.
+  assert.match(workflow, /^permissions:\n {4}contents: read\n\njobs:$/m);
+  assert.equal(workflow.match(/id-token: write/g)?.length, 1);
   assert.match(publish, /^ {12}id-token: write$/m);
-  assert.doesNotMatch(gate, /^ {12}id-token: write$/m);
   assert.match(publish, /^ {12}contents: read$/m);
   assert.doesNotMatch(workflow, /\b(NPM_TOKEN|NODE_AUTH_TOKEN)\b/);
   assert.doesNotMatch(workflow, /secrets\./);
