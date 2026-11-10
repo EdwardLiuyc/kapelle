@@ -17,7 +17,7 @@ import type {
   RunStatus,
   TaskDto,
 } from "../client/contract.ts";
-import type { Participant, Room, RoomMeta } from "../core/room.ts";
+import type { Participant, Room, RoomMeta, RoomRecord } from "../core/room.ts";
 import type { RunReport, TaskRun } from "../core/run.ts";
 
 const USAGE_SEMANTICS = new Set(["per-turn", "cumulative", "unknown"]);
@@ -244,16 +244,33 @@ export function toRoomDto(state: RoomState, room: Room): RoomDto {
 
 /** One `GET /rooms` entry: the room and a short roster (R9, R44). */
 export function toRoomListEntry(state: RoomState, room: Room): RoomListEntry {
+  return listEntry(state, room.status(), room.participants, (p) => p.status());
+}
+
+/** The same entry for a dismissed room the boot did not build (#451), from
+ *  its `room.json`. A built dismissed room reads `dismissed` for every
+ *  participant, so the record's own statuses are not used. */
+export function toRecordListEntry(record: RoomRecord): RoomListEntry {
+  return listEntry(record, "dismissed", record.participants, () => "dismissed");
+}
+
+/** The one builder both entries share, so a field reaches both or neither. */
+function listEntry<P extends Pick<Participant, "id" | "name" | "role">>(
+  state: Pick<RoomState, "id" | "cwd" | "title" | "updatedAt">,
+  status: RoomListEntry["status"],
+  roster: readonly P[],
+  statusOf: (p: P) => RoomListEntry["participants"][number]["status"],
+): RoomListEntry {
   const entry: RoomListEntry = {
     id: state.id,
     cwd: state.cwd,
-    status: room.status(),
+    status,
     updatedAt: state.updatedAt,
-    participants: room.participants.map((p) => ({
+    participants: roster.map((p) => ({
       id: p.id,
       name: p.name,
       ...(p.role && { role: p.role }),
-      status: p.status(),
+      status: statusOf(p),
     })),
   };
   if (state.title !== undefined) entry.title = state.title;

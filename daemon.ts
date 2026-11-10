@@ -118,6 +118,7 @@ import {
   openRoom,
   participantChanges,
   type Room,
+  type RoomRecord,
   RoomRefusal,
   readRoomRecord,
   restoreRoom,
@@ -148,11 +149,9 @@ import {
   validateWorktreeLinks,
 } from "./core/worktree.ts";
 import {
-  type RoomState,
   type RunState,
   toParticipantDto,
   toRoomDto,
-  toRoomListEntry,
   toRunDto,
   toRunListEntry,
   toTaskDto,
@@ -167,6 +166,7 @@ import {
   refusal,
   send,
 } from "./daemon/http.ts";
+import { createRooms, type RoomEntry } from "./daemon/rooms.ts";
 import { cancelRun } from "./daemon/run.ts";
 import { streamLog } from "./daemon/sse.ts";
 import { AGENTS } from "./protocol/registry.ts";
@@ -1126,13 +1126,16 @@ async function getEvents(
   await streamLog(log, req, res, gone.signal);
 }
 
-const rooms = new Map<
-  string,
-  /** `dismissed` is set only once a dismiss has *finished* tearing the room
-   *  down, so it tells a settled dismiss from one still in flight. `root`
-   *  keys the room's state directory, for a delete. */
-  { room: Room; state: RoomState; root: string; dismissed?: boolean }
->();
+/** A dismissed room is built on first use (#451), and one that cannot be
+ *  built is skipped then, with the notice the boot prints. */
+const rooms = createRooms(async (id, { record, root }) => {
+  try {
+    return await buildRestored(root, id, record);
+  } catch (err) {
+    console.error(`skipping room ${roomFile(root, id)}: ${messageOf(err)}`);
+    return undefined;
+  }
+});
 
 /** The watchdog's warn limits for a room, from the same layers as a run's
  *  (R38). Throws for a config that does not load. */
@@ -1154,6 +1157,11 @@ function roomLimits(
  * cannot be read, or a room that cannot be built, is skipped with a notice
  * naming it, as for runs: a daemon that refused to boot over one could not
  * be reached by the request that fixes it. Its checkouts stay on disk.
+ *
+ * **A dismissed room is only read** (#451): its record is kept, and the room
+ * is built on first use (`daemon/rooms.ts`). Dismissed rooms stay for the
+ * whole retention window, so building each one at boot made the boot grow
+ * with every room closed; #451 has the measurement.
  */
 async function restoreRooms(): Promise<void> {
   for (const root of repos) {
@@ -1174,63 +1182,77 @@ async function restoreRooms(): Promise<void> {
       try {
         const record = readRoomRecord(path);
         if (record.id !== id) throw new Error(`its id is not ${id}`);
-        // A bad link list is treated like the other config errors a restore
-        // tolerates: the room still opens, without links, and says so.
-        let linkPaths: string[] = [];
-        let roomNotice: string | undefined;
-        try {
-          const listed = readProjectLinkPaths(root);
-          await validateWorktreeLinks(root, listed);
-          linkPaths = listed;
-          // The room still opens without links; this is the restore fallback.
-          // pi-lens-ignore: missing-error-propagation
-        } catch (err) {
-          roomNotice = `${messageOf(err)}; the room opened without its links`;
-          console.error(
-            `room ${id}: ${messageOf(err)}; opening without linked paths`,
-          );
+        if (record.status === "dismissed") {
+          rooms.defer(id, { record, root });
+        } else {
+          rooms.set(id, await buildRestored(root, id, record));
         }
-        const setup = await openWorktrees(
-          existsSync(record.cwd) ? record.cwd : root,
-          id,
-          { linkPaths },
-        );
-        if (setup.root !== root) {
-          throw new Error(`${record.cwd} is no longer inside ${root}`);
-        }
-        let limits: ReturnType<typeof roomLimits> | undefined;
-        let turnCap: number | undefined;
-        try {
-          limits = roomLimits(root);
-          turnCap = resolveOrchestratorTurnCap(root);
-        } catch (err) {
-          console.error(
-            `room ${id}: ${messageOf(err)}; using the default room limits`,
-          );
-        }
-        const bus = createEventBus();
-        trackChildren(bus, "room", id);
-        const room = await restoreRoom({
-          record,
-          setup,
-          bus,
-          permissions,
-          noteSession,
-          ...(limits && { limits }),
-          ...(turnCap !== undefined && { turnCap }),
-          ...(roomNotice && { roomNotice }),
-        });
-        rooms.set(id, {
-          room,
-          state: room.meta,
-          root,
-          ...(room.status() === "dismissed" && { dismissed: true }),
-        });
       } catch (err) {
         console.error(`skipping room ${path}: ${messageOf(err)}`);
       }
     }
   }
+}
+
+/** One room back from its record, at boot or, for a dismissed one, on first
+ *  use. Throws for a room that cannot be built. */
+async function buildRestored(
+  root: string,
+  id: string,
+  record: RoomRecord,
+): Promise<RoomEntry> {
+  // A bad link list is treated like the other config errors a restore
+  // tolerates: the room still opens, without links, and says so.
+  let linkPaths: string[] = [];
+  let roomNotice: string | undefined;
+  try {
+    const listed = readProjectLinkPaths(root);
+    await validateWorktreeLinks(root, listed);
+    linkPaths = listed;
+    // The room still opens without links; this is the restore fallback.
+    // pi-lens-ignore: missing-error-propagation
+  } catch (err) {
+    roomNotice = `${messageOf(err)}; the room opened without its links`;
+    console.error(
+      `room ${id}: ${messageOf(err)}; opening without linked paths`,
+    );
+  }
+  const setup = await openWorktrees(
+    existsSync(record.cwd) ? record.cwd : root,
+    id,
+    { linkPaths },
+  );
+  if (setup.root !== root) {
+    throw new Error(`${record.cwd} is no longer inside ${root}`);
+  }
+  let limits: ReturnType<typeof roomLimits> | undefined;
+  let turnCap: number | undefined;
+  try {
+    limits = roomLimits(root);
+    turnCap = resolveOrchestratorTurnCap(root);
+  } catch (err) {
+    console.error(
+      `room ${id}: ${messageOf(err)}; using the default room limits`,
+    );
+  }
+  const bus = createEventBus();
+  trackChildren(bus, "room", id);
+  const room = await restoreRoom({
+    record,
+    setup,
+    bus,
+    permissions,
+    noteSession,
+    ...(limits && { limits }),
+    ...(turnCap !== undefined && { turnCap }),
+    ...(roomNotice && { roomNotice }),
+  });
+  return {
+    room,
+    state: room.meta,
+    root,
+    ...(room.status() === "dismissed" && { dismissed: true }),
+  };
 }
 
 /** A room's own refusal as the daemon answers it, or undefined when `err`
@@ -1349,9 +1371,9 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   send(res, 201, toRoomDto(room.meta, room) satisfies RoomDto);
 }
 
-/** The room `id` names, or a 404. */
-function roomEntry(id: string) {
-  const entry = rooms.get(id);
+/** The room `id` names, built if it was not, or a 404. */
+async function roomEntry(id: string) {
+  const entry = await rooms.get(id);
   if (!entry) throw refusal(404, "room_not_found", `no room ${id}`);
   return entry;
 }
@@ -1366,7 +1388,7 @@ async function postAgent(
   req: IncomingMessage,
   res: ServerResponse,
 ) {
-  const entry = roomEntry(id);
+  const entry = await roomEntry(id);
   const body = await readBody(req, AGENT_FIELDS);
   let request: ReturnType<typeof roomAgent>;
   try {
@@ -1411,7 +1433,7 @@ async function patchAgent(
   req: IncomingMessage,
   res: ServerResponse,
 ) {
-  const entry = roomEntry(id);
+  const entry = await roomEntry(id);
   const body = await readBody(req, ["name", "mode", "role", "model"]);
   let changes: ReturnType<typeof participantChanges>;
   try {
@@ -1444,7 +1466,7 @@ async function patchRoom(
   req: IncomingMessage,
   res: ServerResponse,
 ) {
-  const entry = roomEntry(id);
+  const entry = await roomEntry(id);
   const body = await readBody(req, ["title", "turnCap"]);
   const { title, turnCap } = body;
   if (title === undefined && turnCap === undefined) {
@@ -1484,7 +1506,7 @@ async function patchRoom(
  *  stops its harness and keeps its work, as a dismiss does (R37). Answers
  *  the room, without it. */
 async function deleteAgent(id: string, agentId: string, res: ServerResponse) {
-  const entry = roomEntry(id);
+  const entry = await roomEntry(id);
   try {
     await entry.room.remove(agentId);
   } catch (err) {
@@ -1495,8 +1517,13 @@ async function deleteAgent(id: string, agentId: string, res: ServerResponse) {
 }
 
 /** The participant `agentId` names in room `id`, or a 404. */
-function participantEntry(id: string, agentId: string) {
-  const found = roomEntry(id).room.participants.find((p) => p.id === agentId);
+async function participantEntry(id: string, agentId: string) {
+  return participantOf(await roomEntry(id), agentId);
+}
+
+/** The participant `agentId` names in a room already looked up, or a 404. */
+function participantOf({ room }: RoomEntry, agentId: string) {
+  const found = room.participants.find((p) => p.id === agentId);
   if (!found) {
     throw refusal(404, "participant_not_found", `no participant ${agentId}`);
   }
@@ -1528,7 +1555,7 @@ async function postMessage(
   req: IncomingMessage,
   res: ServerResponse,
 ) {
-  const entry = roomEntry(id);
+  const entry = await roomEntry(id);
   const { text, from } = await readBody(
     req,
     agentId === undefined ? ["text"] : ["text", "from"],
@@ -1545,7 +1572,7 @@ async function postMessage(
   const target =
     agentId === undefined
       ? entry.room.participants.find((p) => p.role === "orchestrator")
-      : participantEntry(id, agentId);
+      : participantOf(entry, agentId);
   if (!target) {
     throw refusal(
       409,
@@ -1594,12 +1621,12 @@ async function postMessage(
  * turn ends on the stream with `_client_turn_ended`. Once the prompt has
  * settled, there is no live turn: 409 `no_turn`, nothing dropped or sent.
  */
-function cancelTurn(id: string, agentId: string, res: ServerResponse) {
-  const entry = roomEntry(id);
+async function cancelTurn(id: string, agentId: string, res: ServerResponse) {
+  const entry = await roomEntry(id);
   if (entry.room.status() === "dismissed") {
     throw refusal(409, "room_dismissed", `room ${id} is dismissed`);
   }
-  const p = participantEntry(id, agentId);
+  const p = participantOf(entry, agentId);
   if (!p.cancel()) {
     throw refusal(409, "no_turn", `${p.name} has no live prompt to cancel`);
   }
@@ -1619,7 +1646,7 @@ async function agentDiff(
   against: string | null,
   res: ServerResponse,
 ) {
-  const p = participantEntry(id, agentId);
+  const p = await participantEntry(id, agentId);
   if (against !== null && against !== "head" && against !== "base") {
     throw refusal(
       400,
@@ -1677,8 +1704,9 @@ async function fastForwardPreview(
       'add "?from=<participantId>" for the source participant',
     );
   }
-  const target = participantEntry(id, agentId);
-  const source = participantEntry(id, from);
+  const entry = await roomEntry(id);
+  const target = participantOf(entry, agentId);
+  const source = participantOf(entry, from);
   if (!target.branch || !source.branch) {
     const who = target.branch ? source : target;
     throw refusal(409, "no_branch", `${who.name} has no branch to compare`);
@@ -1709,7 +1737,7 @@ async function fastForwardAgent(
   req: IncomingMessage,
   res: ServerResponse,
 ) {
-  const entry = roomEntry(id);
+  const entry = await roomEntry(id);
   const body = await readBody(req, ["from"]);
   if (typeof body.from !== "string" || !body.from) {
     throw refusal(
@@ -1737,8 +1765,9 @@ async function roomEvents(
   req: IncomingMessage,
   res: ServerResponse,
 ) {
-  const log = roomEntry(id).room.eventLog;
-  if (agentId !== undefined) participantEntry(id, agentId);
+  const entry = await roomEntry(id);
+  const log = entry.room.eventLog;
+  if (agentId !== undefined) participantOf(entry, agentId);
   if (!log) {
     throw refusal(404, "no_event_log", `room ${id} has no event log`);
   }
@@ -1766,7 +1795,7 @@ async function roomEvents(
  * released — kept, never committed (R37) — which `stop()` bounds at 5 s.
  */
 async function dismissRoom(id: string, res: ServerResponse) {
-  const entry = roomEntry(id);
+  const entry = await roomEntry(id);
   // A shutdown pauses every room; a dismiss now would be told it worked
   // while the room stays paused.
   if (stopping) {
@@ -1797,7 +1826,7 @@ async function dismissRoom(id: string, res: ServerResponse) {
  * the room can reach. Read-only, so it works on an active room too.
  */
 async function previewDeleteRoom(id: string, res: ServerResponse) {
-  const entry = roomEntry(id);
+  const entry = await roomEntry(id);
   const preview = await roomDeletePreview(entry.root, id);
   send(res, 200, preview satisfies DeletePreview);
 }
@@ -1811,7 +1840,7 @@ async function previewDeleteRoom(id: string, res: ServerResponse) {
  * named, and nothing changes on either refusal, but for the race below.
  */
 async function deleteRoom(id: string, res: ServerResponse) {
-  const entry = roomEntry(id);
+  const entry = await roomEntry(id);
   if (stopping) {
     throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
@@ -2135,19 +2164,13 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   } else if (req.method === "POST" && pathname === "/rooms") {
     await holdShutdown(res, postRoom(req, res));
   } else if (req.method === "GET" && pathname === "/rooms") {
-    send(
-      res,
-      200,
-      [...rooms.values()].map(({ state, room }) =>
-        toRoomListEntry(state, room),
-      ) satisfies RoomListEntry[],
-    );
+    send(res, 200, rooms.list() satisfies RoomListEntry[]);
   } else if (req.method === "GET" && roomSub?.[2] === "delete-preview") {
     await previewDeleteRoom(roomSub[1] as string, res);
   } else if (req.method === "DELETE" && room) {
     await holdShutdown(res, deleteRoom(room[1] as string, res));
   } else if (req.method === "GET" && room) {
-    const { state, room: live } = roomEntry(room[1] as string);
+    const { state, room: live } = await roomEntry(room[1] as string);
     send(res, 200, toRoomDto(state, live) satisfies RoomDto);
   } else if (req.method === "PATCH" && room) {
     await patchRoom(room[1] as string, req, res);
@@ -2182,19 +2205,21 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     req.method === "POST" &&
     agentSub?.[3] === "turns/current/cancel"
   ) {
-    cancelTurn(agentSub[1] as string, agentSub[2] as string, res);
+    await cancelTurn(agentSub[1] as string, agentSub[2] as string, res);
   } else if (req.method === "POST" && roomSub?.[2] === "agents") {
     await postAgent(roomSub[1] as string, req, res);
   } else if (req.method === "GET" && roomSub?.[2] === "agents") {
+    const entry = await roomEntry(roomSub[1] as string);
     send(
       res,
       200,
-      roomEntry(roomSub[1] as string).room.participants.map(
-        toParticipantDto,
-      ) satisfies ParticipantDto[],
+      entry.room.participants.map(toParticipantDto) satisfies ParticipantDto[],
     );
   } else if (req.method === "GET" && agentOne) {
-    const p = participantEntry(agentOne[1] as string, agentOne[2] as string);
+    const p = await participantEntry(
+      agentOne[1] as string,
+      agentOne[2] as string,
+    );
     send(res, 200, toParticipantDto(p) satisfies ParticipantDto);
   } else if (req.method === "PATCH" && agentOne) {
     await patchAgent(agentOne[1] as string, agentOne[2] as string, req, res);
@@ -2312,7 +2337,7 @@ async function shutdown(signal: string): Promise<void> {
   await Promise.all([
     ...inFlight,
     ...roomChanges,
-    ...[...rooms.values()].map(({ room }) => room.pause()),
+    ...rooms.built().map(({ room }) => room.pause()),
     checksStopped,
   ]);
   removeDaemonFilesIfMine(file, published);
@@ -2324,8 +2349,10 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 // Before the port opens, as `restoreRuns`: no request meets a half-restored
 // list. A signal during it pauses the rooms restored so far; the others are
 // already `paused` on disk, which is what the sweep left. ponytail: one
-// record read and one log scan per room, on the boot path; read them lazily
-// if a repository keeps hundreds of rooms.
+// record read and one log scan per paused or active room, on the boot path;
+// a dismissed room is only read (#451). Building the paused ones lazily too
+// needs `daemon/rooms.ts` to list their own statuses and a shutdown to wait
+// for a build in flight; do that if a repository keeps hundreds of them.
 await restoreRooms();
 
 server.on("error", (err) => {
