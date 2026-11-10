@@ -21,7 +21,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 </head>
 <body>
 
-<div class="strip"><span class="lvl">[info]</span>kapelle is in private preview. The npm release is <span class="soon">coming soon</span>.</div>
+<div class="strip"><span class="lvl">[info]</span>kapelle 0.1.0 is out. <a href="https://www.npmjs.com/package/kapelle">npm install -g kapelle</a></div>
 
 <header class="site-header">
 <div class="wrap">
@@ -35,7 +35,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <a href="#agents"><i>3</i>agents</a>
 <a href="/guide/#safety"><i>4</i>safety</a>
 </nav>
-<span class="nav-end">GitHub · npm <span class="soon">soon</span></span>
+<span class="nav-end"><a href="https://github.com/EdwardLiuyc/kapelle">GitHub</a> · <a href="https://www.npmjs.com/package/kapelle">npm</a></span>
 </div>
 </header>
 
@@ -56,23 +56,22 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <button role="tab" id="tab-pnpm" aria-controls="panel-pnpm" aria-selected="false" tabindex="-1">pnpm</button>
 <button role="tab" id="tab-bun" aria-controls="panel-bun" aria-selected="false" tabindex="-1">bun</button>
 <button role="tab" id="tab-src" aria-controls="panel-src" aria-selected="false" tabindex="-1">from source</button>
-<span class="soon">coming soon</span>
 </div>
 <div class="panel" role="tabpanel" id="panel-npm" aria-labelledby="tab-npm">
-<pre><span class="label">npm · coming soon</span><span class="p">$ </span>npm install -g kapelle</pre>
+<pre><span class="label">npm</span><span class="p">$ </span>npm install -g kapelle</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 <div class="panel" role="tabpanel" id="panel-pnpm" aria-labelledby="tab-pnpm">
-<pre><span class="label">pnpm · coming soon</span><span class="p">$ </span>pnpm add -g kapelle</pre>
+<pre><span class="label">pnpm</span><span class="p">$ </span>pnpm add -g kapelle</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 <div class="panel" role="tabpanel" id="panel-bun" aria-labelledby="tab-bun">
-<pre><span class="label">bun · coming soon</span><span class="p">$ </span>bun add -g kapelle</pre>
+<pre><span class="label">bun</span><span class="p">$ </span>bun add -g kapelle</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 <div class="panel" role="tabpanel" id="panel-src" aria-labelledby="tab-src">
-<pre><span class="label">from source · needs repository access</span><span class="p">$ </span>git clone https://github.com/EdwardLiuyc/kapelle.git
-<span class="p">$ </span>cd kapelle &amp;&amp; npm install &amp;&amp; npm link</pre>
+<pre><span class="label">from source · no build step</span><span class="p">$ </span>git clone https://github.com/EdwardLiuyc/kapelle.git
+<span class="p">$ </span>cd kapelle &amp;&amp; npm install &amp;&amp; node cli.ts --help</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 </div>
@@ -80,6 +79,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <div class="actions">
 <a class="btn" href="/guide/">[ Read the guide ]</a>
 <a class="btn quiet" href="#loop">[ See the loop ]</a>
+<a class="btn quiet" href="https://github.com/EdwardLiuyc/kapelle#demo">[ Watch the 3-min demo ]</a>
 </div>
 </div>
 
@@ -202,7 +202,8 @@ Say "go" to start.</div></div></div>
 <div><dt>A reply to the sender</dt><dd>When a worker's turn ends, its answer goes back to the lead. When you talk to a worker yourself, the lead gets a copy, and goes on from there.</dd></div>
 <div><dt>A stop for every choice</dt><dd>The lead decides no choice alone. It ends its turn with the options and a recommendation, and waits for your answer.</dd></div>
 <div><dt>A hard limit on bot rounds</dt><dd>The recipe names the outside review and its most rounds, 3 if it does not say. At the limit, the lead hands over the open findings.</dd></div>
-<div><dt>Next <span class="soon">soon</span></dt><dd>A stop button, a cap on the turns it gives out, a bell when it waits for you, and a log of every decision.</dd></div>
+<div><dt>A cap on its turns</dt><dd>The lead may send 40 messages to workers in a room. At the cap, kapelle refuses the next one and rings the bell. <span class="mono">/cap &lt;n&gt;</span> raises it.</dd></div>
+<div><dt>Next <span class="soon">soon</span></dt><dd>A stop button, a bell when it waits for you, and a log of every decision.</dd></div>
 </dl>
 </div>
 </section>
@@ -381,8 +382,8 @@ codex   codex 0.51.0; needs codex-acp:
 <h2 id="involved" style="margin-bottom: 32px;"><em>Get involved.</em></h2>
 <div class="cards">
 <a class="card" href="/guide/"><span class="title">./guide</span><span class="text">Install, first room, first loop, and every command.</span></a>
-<div class="card"><span class="title">./github <span class="soon">soon</span></span><span class="text">Source, issues and the plan, when the repository opens.</span></div>
-<div class="card"><span class="title">./changelog <span class="soon">soon</span></span><span class="text">What changed in each release.</span></div>
+<a class="card" href="https://github.com/EdwardLiuyc/kapelle"><span class="title">./github</span><span class="text">Source, issues and the plan. Open a pull request.</span></a>
+<a class="card" href="https://github.com/EdwardLiuyc/kapelle/releases"><span class="title">./changelog</span><span class="text">What changed in each release.</span></a>
 </div>
 </section>
 
