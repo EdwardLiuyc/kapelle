@@ -26,12 +26,7 @@ jobs:
                   node-version: 24
             # Nothing else checks that the tag names the version npm will get.
             - name: The tag names the package version
-              run: |
-                  v=$(node -p 'require("./package.json").version')
-                  if [ "$GITHUB_REF_NAME" != "v$v" ]; then
-                    echo "::error::tag $GITHUB_REF_NAME, but package.json is $v"
-                    exit 1
-                  fi
+              run: bash .github/scripts/check-tag.sh
             - run: npm ci
             - run: npm run fmt:check
             - run: npm run check
@@ -63,13 +58,5 @@ jobs:
             # The first version is published by hand, before its tag: npm adds
             # a trusted publisher only to a package that exists. So a version
             # on npm already is skipped, not an error.
-            - name: Is this version on npm already?
-              id: seen
-              run: |
-                  v=$(node -p 'require("./package.json").version')
-                  if [ "$(npm view "kapelle@$v" version 2>/dev/null)" = "$v" ]; then
-                    echo "::notice::kapelle@$v is on npm already; not published again"
-                    echo "published=true" >> "$GITHUB_OUTPUT"
-                  fi
-            - if: steps.seen.outputs.published != 'true'
-              run: npm publish
+            - name: Publish this version unless npm already has it
+              run: bash .github/scripts/publish-if-new.sh
