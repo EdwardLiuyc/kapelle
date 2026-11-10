@@ -21,7 +21,11 @@ async function packageDir(
   pkg: { name: string; version: string },
 ): Promise<string> {
   const dir = await tempDir(t);
-  await writeFile(join(dir, "package.json"), `${JSON.stringify(pkg)}\n`);
+  // Shaped like the real one: the scripts must read it as an ES module package.
+  await writeFile(
+    join(dir, "package.json"),
+    `${JSON.stringify({ ...pkg, type: "module" })}\n`,
+  );
   return dir;
 }
 

@@ -132,7 +132,8 @@ one.
 
 **Planned, not built yet:** cancel one task (M5-8).
 
-No version is frozen yet. A freeze waits until a second client needs one. Until then, a change to a stable part still bumps the version.
+No version is frozen yet. A freeze waits until a second client needs one. Until then, a
+change to a stable part still bumps the version.
 
 ### Types for TypeScript clients
 

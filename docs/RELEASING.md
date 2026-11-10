@@ -94,6 +94,9 @@ protect `master` and require both jobs of `code_checks.yml`, `check` and
 
 ## Version and tag
 
+For the first release, do "The first publish and the trusted publisher" below before
+the tag.
+
 The version is the one in `package.json`. The first release tags `0.1.0` as it is; do
 not bump it by habit. For a later version, update `package.json` on a branch with
 `npm version <version> --no-git-tag-version`, commit it, and land that commit on
@@ -112,7 +115,8 @@ git push origin v<version>
 ```
 
 The first release uses `v0.1.0`, made after the first publish below. The tag starts the
-publish job.
+publish job. The job skips a version that is on npm already, with a notice and a green
+run. So a tag moved to another commit publishes nothing: give the change a new version.
 
 ## The first publish and the trusted publisher
 
