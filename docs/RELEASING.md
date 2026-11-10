@@ -123,7 +123,8 @@ to a publish from a job of a public repository, so the first version has none.
 
 1. Make an npm account and turn on 2FA.
 2. From a clean checkout of `origin/master` at the commit that will be tagged, run
-   `npm ci`, the gate, then `npm publish`.
+   `npm ci`, the full gate from `AGENTS.md`, then `npm publish`. The tag check does not
+   apply: there is no tag yet.
 3. On npmjs.com, open the package's settings and add a trusted publisher: GitHub Actions,
    owner `EdwardLiuyc`, repository `kapelle`, workflow `publish.yml`.
 4. Tag that commit and push the tag, as above. The job runs the gate, finds the version
@@ -141,7 +142,8 @@ lint, §Format and lint). `publish` runs only after `gate` passes, and it is the
 that can get the OIDC token for npm. It runs `npm ci`, because `prepack` needs `tsc`,
 then `npm publish`, unless that version is on npm already. There is no `prepublishOnly`
 guard (M9-8 step 4, option B), so the `gate` job is the only check before a publish. A
-publish by hand runs the same gate first.
+publish by hand runs the full gate from `AGENTS.md` first. It skips the tag check, because
+it comes before the tag.
 
 ## The clean-machine check
 
