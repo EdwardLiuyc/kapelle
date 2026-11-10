@@ -1,8 +1,8 @@
 # Releasing kapelle
 
 How a version of kapelle gets to npm. M9-8 (`docs/STORIES.md`) owns the publish
-workflow: the GitHub Actions job that publishes on a tag. Until that job exists, the
-steps below that name it are the plan, not the state.
+workflow, `.github/workflows/publish.yml`: the GitHub Actions job that publishes on a
+tag.
 
 ## Release readiness
 
@@ -42,6 +42,11 @@ Exit code 0 means no leak. A real hit is a credential that was exposed: rotate i
 its issuer. Rewriting history is not a substitute, because a clone or a fork may
 already hold it. A false positive gets its fingerprint added to `.gitleaksignore`, and
 a row in the record below that says why it is not a credential.
+
+The record before the first publish is the last commit of the M9-8 PR (#307), made after
+every review commit of that PR. It covers that PR's head, so nothing else lands on
+`master` between that merge and the `v0.1.0` tag. Until that commit, the record below is
+M9-8a's.
 
 The record:
 
@@ -96,8 +101,8 @@ not bump it by habit. For a later version, update `package.json` on a branch wit
 
 Create the tag on the final `master` commit that will be published, and push it. Tag
 `origin/master`, not a local `master` that may be behind it. Check first that its
-`package.json` has the version the tag names: nothing checks it later, and npm never
-takes a published version back.
+`package.json` has the version the tag names. The publish job stops when they differ,
+but a wrong tag is then on GitHub, and npm never takes a published version back.
 
 ```bash
 git fetch origin
@@ -106,28 +111,35 @@ git tag -a v<version> -m v<version> origin/master
 git push origin v<version>
 ```
 
-The first release uses `v0.1.0`. The tag starts the publish job.
+The first release uses `v0.1.0`, made after the first publish below. The tag starts the
+publish job.
 
 ## The first publish and the trusted publisher
 
 npm trusted publishing lets the publish job publish with no npm token stored. npm adds
-provenance (a proof of which repository and job built the package) only for a public
-repository.
+a trusted publisher only to a package that exists, so the first version is published by
+hand. npm adds provenance (a proof of which repository and job built the package) only
+to a publish from a job of a public repository, so the first version has none.
 
 1. Make an npm account and turn on 2FA.
-2. If npm needs the package to exist before a trusted publisher can be added, publish
-   the first version by hand from a clean checkout of its tag: `npm ci`, the gate, then
-   `npm publish`.
+2. From a clean checkout of `origin/master` at the commit that will be tagged, run
+   `npm ci`, the gate, then `npm publish`.
 3. On npmjs.com, open the package's settings and add a trusted publisher: GitHub Actions,
-   owner `EdwardLiuyc`, repository `kapelle`, and the workflow file M9-8 adds.
-4. The job needs `permissions: id-token: write`.
+   owner `EdwardLiuyc`, repository `kapelle`, workflow `publish.yml`.
+4. Tag that commit and push the tag, as above. The job runs the gate, finds the version
+   on npm already, and skips the publish with a notice.
+
+The next version is the first one the job publishes.
 
 ## The gate
 
-The publish job runs `npm ci` first, because `prepack` needs `tsc`. Then it runs the
-full gate from `AGENTS.md` (§Commands, §Markdown lint, §Format and lint), then
-`npm publish`. There is no `prepublishOnly` guard (M9-8 step 4, option B), so this job's
-gate is the only check before a publish. A publish by hand runs the same gate first.
+The publish workflow has two jobs. `gate` checks that the tag names `package.json`'s
+version, then runs `npm ci` and the full gate from `AGENTS.md` (§Commands, §Markdown
+lint, §Format and lint). `publish` runs only after `gate` passes, and it is the only job
+that can get the OIDC token for npm. It runs `npm ci`, because `prepack` needs `tsc`,
+then `npm publish`, unless that version is on npm already. There is no `prepublishOnly`
+guard (M9-8 step 4, option B), so the `gate` job is the only check before a publish. A
+publish by hand runs the same gate first.
 
 ## The clean-machine check
 
@@ -146,7 +158,8 @@ kapelle             # on a terminal: opens the chat
   on a branch, merge it, and tag again.
 - **`npm publish` failed.** Read the job's log. npm publishes a version whole or not at
   all, so check with `npm view kapelle versions`. If the version is not there, fix the
-  cause and run the job again.
+  cause and run the job again. A re-run skips a version that is on npm already. npm
+  older than 11.5.1 cannot use trusted publishing; the job prints its version first.
 - **The published package is wrong.** npm never accepts the same version twice, even
   after an unpublish. Publish a new patch version with the fix, then mark the bad one:
   `npm deprecate kapelle@<version> "<why>"`.

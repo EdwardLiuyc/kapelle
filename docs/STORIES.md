@@ -4019,6 +4019,14 @@ The first release. The person does steps 1 and 2 by hand.
 7. **Added 2026-11-01 (#306):** remove the "not published yet" note from `README.md`,
    so the npm page starts with the real install block.
 
+**Decided 2026-11-10 (#307).** The repository goes public, so the logo link stays
+relative and the job passes no `--provenance` flag. npm adds a trusted publisher only to a
+package that exists, so 0.1.0 is published by hand before its tag, and the job skips a
+version that is on npm already; it also stops when the tag does not name
+`package.json`'s version. The final gitleaks record is the PR's last commit, after every
+review. The PR refers to this issue and does not close it: the person closes it after the
+clean-machine check. `docs/RELEASING.md` owns the steps.
+
 The npm page shows `README.md`. Its logo (`src="assets/icon.svg"`) is a relative link,
 and npm points relative links at the repository. So the logo shows only once the
 repository is public (step 2), or if the link becomes a full URL.

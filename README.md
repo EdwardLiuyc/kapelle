@@ -28,8 +28,6 @@ You need Node 24 or newer, git, and macOS or Linux. WSL counts as Linux. Windows
 
 ### Install from npm
 
-The package is not published yet. Until it is, use [Run from a source checkout](#run-from-a-source-checkout) below. Once published, install it with:
-
 ```bash
 npm install -g kapelle
 kapelle --help
