@@ -1203,7 +1203,8 @@ async function restoreRooms(): Promise<void> {
 
 /** What a restored room reads from its repository's config. Never throws. */
 interface RoomPreflight {
-  linkPaths: string[];
+  /** Shared by every room of the repository at boot, so never changed. */
+  linkPaths: readonly string[];
   roomNotice?: string;
   limits?: ReturnType<typeof roomLimits>;
   turnCap?: number;
@@ -1338,20 +1339,13 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   const id = newRoomId();
   // No 409 wrapper (#129): since the state directory moved out of the
   // repository, `openWorktrees` throws for nothing a repository can be in.
-  let setup: Awaited<ReturnType<typeof openWorktrees>>;
-  try {
-    // Checked above; a room never shows the advisory (#322).
-    setup = await openWorktrees(cwd, id, {
-      linkPaths,
-      linksChecked: true,
-      advisory: false,
-    });
-  } catch (err) {
-    if (err instanceof LinkPathError) {
-      throw refusal(400, "invalid_config", messageOf(err));
-    }
-    throw err;
-  }
+  // The links were checked above, so it plans none and throws no
+  // `LinkPathError`; a room never shows the advisory (#322).
+  const setup = await openWorktrees(cwd, id, {
+    linkPaths,
+    linksChecked: true,
+    advisory: false,
+  });
   let limits: ReturnType<typeof roomLimits>;
   let turnCap: number | undefined;
   try {

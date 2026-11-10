@@ -123,7 +123,8 @@ export async function gatedGit(t: TestContext) {
 
 /** A `git` wrapper that writes each call's arguments as one line, then runs
  *  the real git. Callers put `path` first on PATH; `calls()` reads the lines
- *  so far (#322). */
+ *  so far (#322). The arguments are joined with spaces, so a line is for
+ *  finding a subcommand, not for reading an argument back. */
 export async function countedGit(t: TestContext) {
   const dir = await tempDir(t);
   const found = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" });
@@ -131,7 +132,8 @@ export async function countedGit(t: TestContext) {
   const log = join(dir, "calls");
   await writeFile(
     join(dir, "git"),
-    `#!/bin/sh\necho "$*" >> "${log}"\nexec "${found.stdout.trim()}" "$@"\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\n` +
+      `exec ${JSON.stringify(found.stdout.trim())} "$@"\n`,
     { mode: 0o755 },
   );
   return {
