@@ -21,8 +21,8 @@ jobs:
             - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
               with:
                   persist-credentials: false
-            # No `cache: npm` in either job: a release installs from the lockfile
-            # alone, never from a cache that another run could have filled.
+            # No `cache: npm` here or in `publish`: a release installs from the
+            # lockfile alone, never from a cache that another run could have filled.
             - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
               with:
                   node-version: 24

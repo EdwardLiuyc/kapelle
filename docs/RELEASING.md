@@ -147,7 +147,7 @@ that can get the OIDC token for npm. It runs `npm ci`, because `prepack` needs `
 then `npm publish`, unless that version is on npm already. There is no `prepublishOnly`
 guard (M9-8 step 4, option B), so the `gate` job is the only check before a publish. A
 publish by hand runs the full gate from `AGENTS.md` first. It skips the tag check, because
-it comes before the tag.
+the hand publish comes before the tag.
 
 ## The clean-machine check
 
