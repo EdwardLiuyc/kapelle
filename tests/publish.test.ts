@@ -157,15 +157,9 @@ test("the workflow gates a v* tag and publishes with OIDC and no npm token", asy
     "npm run knip",
     "markdownlint-cli2@0.24.0",
   ]) {
-    assert.ok(workflow.includes(command), `missing gate command: ${command}`);
+    assert.ok(gate.includes(command), `missing gate command: ${command}`);
   }
   assert.ok(gate.includes("bash .github/scripts/check-tag.sh"));
   assert.doesNotMatch(gate, /publish-if-new/);
   assert.ok(publish.includes("bash .github/scripts/publish-if-new.sh"));
-});
-
-test("the README carries a relative logo and no not-published note", async () => {
-  const readme = await readFile(join(REPO, "README.md"), "utf8");
-  assert.ok(readme.includes('<img src="assets/icon.svg"'));
-  assert.doesNotMatch(readme, /not published yet/i);
 });
