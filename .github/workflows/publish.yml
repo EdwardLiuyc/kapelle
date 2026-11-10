@@ -1,0 +1,64 @@
+name: Publish
+
+# A pushed `v<version>` tag publishes that version to npm (M9-8). How to
+# tag, the first publish by hand and what to do when this fails are in
+# docs/RELEASING.md. There is no prepublishOnly guard, so the gate job is
+# the only check before a publish.
+on:
+    push:
+        tags: ["v*"]
+
+permissions:
+    contents: read
+
+jobs:
+    gate:
+        # GitHub's runner, not RUNNER: trusted publishing needs a GitHub-hosted
+        # runner, and the gate must run where the publish runs.
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+              with:
+                  persist-credentials: false
+            # No `cache: npm` here or in `publish`: a release installs from the
+            # lockfile alone, never from a cache that another run could have filled.
+            - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+              with:
+                  node-version: 24
+            # Nothing else checks that the tag names the version npm will get.
+            - name: The tag names the package version
+              run: bash .github/scripts/check-tag.sh
+            - run: npm ci
+            - run: npm run fmt:check
+            - run: npm run check
+            - run: npm run test:adaptive
+            - run: npm run selftest
+            - run: npm run knip
+            - run: npx -y markdownlint-cli2@0.24.0 --config .markdownlint.json $(git ls-files '*.md')
+
+    publish:
+        needs: gate
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        # Only this job can get an OIDC token, so only it can publish. npm
+        # trusted publishing trades the token for a one-time publish right:
+        # no npm token is stored. npm needs 11.5.1 or later for it.
+        permissions:
+            contents: read
+            id-token: write
+        steps:
+            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+              with:
+                  node-version: 24
+            - run: npm --version
+            # `prepack` needs `tsc`.
+            - run: npm ci
+            # The first version is published by hand, before its tag: npm adds
+            # a trusted publisher only to a package that exists. So a version
+            # on npm already is skipped, not an error.
+            - name: Publish this version unless npm already has it
+              run: bash .github/scripts/publish-if-new.sh

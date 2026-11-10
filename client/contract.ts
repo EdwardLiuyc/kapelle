@@ -46,7 +46,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 20 } as const;
+export const API_VERSION = { major: 1, minor: 21 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -61,8 +61,7 @@ export const CAPABILITIES = [
 ] as const;
 
 /** One entry of `GET /harnesses` (M4-5): a harness the daemon can launch by
- *  name, and whether its behaviour was measured (`protocol/registry.ts`).
- *  Experimental. */
+ *  name, and whether its behaviour was measured (`protocol/registry.ts`). */
 export interface HarnessEntry {
   id: string;
   measured: boolean;
@@ -99,7 +98,7 @@ export interface HarnessEntry {
 }
 
 /** `GET /harnesses` (M9-3): the last find, and whether the person said
- *  "done" to it. Experimental. */
+ *  "done" to it. */
 export interface HarnessesReply {
   checkedAt: string;
   done: boolean;
@@ -108,7 +107,7 @@ export interface HarnessesReply {
 
 /** One line of `POST /harnesses/install` (M9-3b), sent as NDJSON as it
  *  happens: an install starts (`command`), npm writes (`output`), and last
- *  the result, with the new find. Experimental. */
+ *  the result, with the new find. */
 export type InstallLine =
   | { id: string; command: string }
   | { id: string; output: string }

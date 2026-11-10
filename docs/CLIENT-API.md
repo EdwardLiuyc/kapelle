@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.20** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.21** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -17,7 +17,7 @@ the delete preview, M9-5, #300, which added an agent's `model`, M9-6, #301, whic
 changes the model during a chat and added an agent's `models`, #354, which
 added `_client_repeat_resolved`, #318, which settled the cancel boundary, and
 M8-7, #271, which added the orchestrator's turn cap; #371, which tightened the
-`daemon.json` lifecycle).
+`daemon.json` lifecycle; and M9-8, #307, which made the `/harnesses` routes stable).
 
 ## Contents
 
@@ -121,19 +121,19 @@ Not every part of this API is final yet. Each part has one of three labels:
 | Error replies (`{error: {code, message}}`) and the error codes | Codes are only added (M5-3). |
 | Request limits: `Content-Type`, body size, unknown fields, read timeout | M5-3. |
 | Everything under `/rooms`, and the room events | Since 1.8 (M6-7a). Rooms survive a daemon restart. |
+| `GET /harnesses`, `POST /harnesses`, `POST /harnesses/done`, `POST /harnesses/install` | Since 1.21 (M9-8). M4-5 added the list; M9-3 the find; M9-3b the install; M9-4 the login check. |
 
-**Provisional and experimental.** These will change. The last column names the story that
-changes each one.
+**Provisional.** These will change. The last column names the story that changes each
+one.
 
 | Part | Label | Changed by |
 | --- | --- | --- |
 | `GET /runs` list | Provisional | M5-9 (filters, order, pages; shared run fields since M5-2) |
-| `GET /harnesses`, `POST /harnesses`, `POST /harnesses/done`, `POST /harnesses/install` | Experimental | M4-5 added the list for `chat.ts`; M9-3 the find; M9-3b the install; M9-4 the login check; M9-8 makes them stable |
 
 **Planned, not built yet:** cancel one task (M5-8).
 
-No version is frozen yet. The project is private, so a freeze waits until a second client
-needs one. Until then, a change to a stable part still bumps the version.
+No version is frozen yet. A freeze waits until a second client needs one. Until then, a
+change to a stable part still bumps the version.
 
 ### Types for TypeScript clients
 
@@ -335,10 +335,10 @@ the `GET` routes take none.
 | `GET /version` | The contract version and the capabilities. |
 | `POST /repos` | Add a repository. |
 | `GET /repos` | List the added repositories. |
-| `GET /harnesses` | List the harnesses the daemon can start by name, and which are installed. Experimental. |
-| `POST /harnesses` | Find the installed harnesses again. Experimental. |
-| `POST /harnesses/done` | The person has seen the setup list. Experimental. |
-| `POST /harnesses/install` | Install the ACP programs of the harnesses the person checked. Experimental. |
+| `GET /harnesses` | List the harnesses the daemon can start by name, and which are installed. |
+| `POST /harnesses` | Find the installed harnesses again. |
+| `POST /harnesses/done` | The person has seen the setup list. |
+| `POST /harnesses/install` | Install the ACP programs of the harnesses the person checked. |
 | `POST /runs` | Start a run. |
 | `GET /runs` | List all runs. |
 | `GET /runs/:id` | One run in full. |
@@ -374,7 +374,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 19 },
+  "apiVersion": { "major": 1, "minor": 21 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms"]
 }
 ```
@@ -419,7 +419,7 @@ repository. The daemon finds the repository root for you.
 
 ### `GET /harnesses`
 
-**Experimental.** The harnesses the daemon can start by name, as `agent` in a run, a room
+The harnesses the daemon can start by name, as `agent` in a run, a room
 or a participant, and which of them are installed (M9-3). `measured` is `true` when
 kapelle measured how the harness behaves. `false` means nobody checked it. Since M9-1,
 every harness on this list is measured, so `measured` is always `true`; a client should
@@ -528,19 +528,19 @@ take a name typed by the person.
 
 ### `POST /harnesses`
 
-**Experimental.** Finds the installed harnesses again, saves the find, checks the login
+Finds the installed harnesses again, saves the find, checks the login
 of every `ready` one (M9-4), and replies as `GET /harnesses` does. It keeps `done`.
 `kapelle setup` and the chat's `/setup` call it. No body.
 
 ### `POST /harnesses/done`
 
-**Experimental.** The person said "done" to the setup list: `done` becomes `true`, and the
+The person said "done" to the setup list: `done` becomes `true`, and the
 chat stops opening the list at start. The reply is the same as `GET /harnesses`. No
 body.
 
 ### `POST /harnesses/install`
 
-**Experimental** (M9-3b). Installs the ACP program of each harness in `ids`. The body
+Installs the ACP program of each harness in `ids` (M9-3b). The body
 takes ids only, never a command: the daemon builds each command from its registry. It
 runs `npm i -g <package>@<measured version>` on the daemon's `PATH`, with no shell, one
 harness after the other, each with a 3-minute limit. kapelle never installs a harness's
