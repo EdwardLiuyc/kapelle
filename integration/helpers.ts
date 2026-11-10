@@ -137,7 +137,9 @@ export async function countedGit(t: TestContext) {
   return {
     path: `${dir}:${process.env.PATH ?? ""}`,
     calls: async () =>
-      existsSync(log) ? (await readFile(log, "utf8")).split("\n") : [],
+      existsSync(log)
+        ? (await readFile(log, "utf8")).split("\n").filter(Boolean)
+        : [],
   };
 }
 
