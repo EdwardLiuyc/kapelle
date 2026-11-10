@@ -563,6 +563,12 @@ export interface WorktreeSetupOptions {
   /** Project `linkPaths`, already through `core/config.ts`'s shape rules.
    *  Absent means no links. */
   linkPaths?: readonly string[];
+  /** The caller already ran `validateWorktreeLinks` on `linkPaths`, so the
+   *  preflight does not plan them again (#322). `acquire` still does. */
+  linksChecked?: boolean;
+  /** `false` skips the dirty-tree advisory and its `git status` (#322). A
+   *  room never shows it; a run does. */
+  advisory?: boolean;
   /** Test seam: awaited between the plan and the mirror, so a test can plant
    *  an entry the preflight could not see (#311). */
   onLinkPlan?: () => void | Promise<void>;
@@ -985,7 +991,9 @@ async function discardLink(target: string): Promise<void> {
  * goes through the per-repository queue below — this file's `add` and
  * `remove`, `core/sweep.ts`'s admin commands, and `moveWorkspace`'s `repair`
  * — so tasks, rooms and the sweep cannot race each other (#203). `options`
- * carries the test seam for that queue and the project's `linkPaths`.
+ * carries the test seam for that queue, the project's `linkPaths`, and the
+ * two checks a room skips: the link plan it already ran and the advisory it
+ * never shows (#322).
  */
 // One preflight: the ordered refusals are its contract, and the tests pin them.
 // pi-lens-ignore: high-complexity, high-fan-out
@@ -1024,7 +1032,7 @@ export async function openWorktrees(
   // because a room lives for days and a path installed later must reach the
   // next participant.
   const linkPaths = options.linkPaths ?? [];
-  await planLinkSources(root, linkPaths);
+  if (!options.linksChecked) await planLinkSources(root, linkPaths);
 
   // A notice, never a refusal (#129). A supervisor whose whole point is to
   // work while the operator works cannot demand a clean tree first: that
@@ -1035,7 +1043,8 @@ export async function openWorktrees(
   //
   // `core/merge.ts` keeps the refusal that matters, per file, at the one
   // moment a dirty tree can actually cost work.
-  const dirty = (await changedPaths(root)).length;
+  const dirty =
+    options.advisory === false ? 0 : (await changedPaths(root)).length;
   const advisory =
     dirty === 0
       ? undefined

@@ -1162,9 +1162,15 @@ function roomLimits(
  * is built on first use (`daemon/rooms.ts`). Dismissed rooms stay for the
  * whole retention window, so building each one at boot made the boot grow
  * with every room closed; #451 has the measurement.
+ *
+ * **The repository's checks run once per boot, not per room** (#322): the
+ * links and the limits are read for its first room to build and shared by
+ * the rest. A dismissed room built later checks again: the config may have
+ * changed since the boot.
  */
 async function restoreRooms(): Promise<void> {
   for (const root of repos) {
+    let shared: Promise<RoomPreflight> | undefined;
     const dir = join(stateDirFor(root), "rooms");
     let ids: string[];
     try {
@@ -1185,7 +1191,8 @@ async function restoreRooms(): Promise<void> {
         if (record.status === "dismissed") {
           rooms.defer(id, { record, root });
         } else {
-          rooms.set(id, await buildRestored(root, id, record));
+          shared ??= roomPreflight(root, `rooms in ${root}`);
+          rooms.set(id, await buildRestored(root, id, record, await shared));
         }
       } catch (err) {
         console.error(`skipping room ${path}: ${messageOf(err)}`);
@@ -1194,46 +1201,62 @@ async function restoreRooms(): Promise<void> {
   }
 }
 
+/** What a restored room reads from its repository's config. Never throws. */
+interface RoomPreflight {
+  /** Shared by every room of the repository at boot, so never changed. */
+  linkPaths: readonly string[];
+  roomNotice?: string;
+  limits?: ReturnType<typeof roomLimits>;
+  turnCap?: number;
+}
+
+/** The checks a restored room needs from `root`. A config error is
+ *  tolerated, as the other restore errors are: the room still opens, without
+ *  links or with the default limits, and `label` names it on stderr. */
+async function roomPreflight(
+  root: string,
+  label: string,
+): Promise<RoomPreflight> {
+  const preflight: RoomPreflight = { linkPaths: [] };
+  try {
+    const listed = readProjectLinkPaths(root);
+    await validateWorktreeLinks(root, listed);
+    preflight.linkPaths = listed;
+    // The room still opens without links; this is the restore fallback.
+    // pi-lens-ignore: missing-error-propagation
+  } catch (err) {
+    preflight.roomNotice = `${messageOf(err)}; the room opened without its links`;
+    console.error(`${label}: ${messageOf(err)}; opening without linked paths`);
+  }
+  try {
+    preflight.limits = roomLimits(root);
+    preflight.turnCap = resolveOrchestratorTurnCap(root);
+  } catch (err) {
+    console.error(`${label}: ${messageOf(err)}; using the default room limits`);
+  }
+  return preflight;
+}
+
 /** One room back from its record, at boot or, for a dismissed one, on first
- *  use. Throws for a room that cannot be built. */
+ *  use. `preflight` is the boot's shared one; a first-use build reads its
+ *  own. Throws for a room that cannot be built. */
 async function buildRestored(
   root: string,
   id: string,
   record: RoomRecord,
+  preflight?: RoomPreflight,
 ): Promise<RoomEntry> {
-  // A bad link list is treated like the other config errors a restore
-  // tolerates: the room still opens, without links, and says so.
-  let linkPaths: string[] = [];
-  let roomNotice: string | undefined;
-  try {
-    const listed = readProjectLinkPaths(root);
-    await validateWorktreeLinks(root, listed);
-    linkPaths = listed;
-    // The room still opens without links; this is the restore fallback.
-    // pi-lens-ignore: missing-error-propagation
-  } catch (err) {
-    roomNotice = `${messageOf(err)}; the room opened without its links`;
-    console.error(
-      `room ${id}: ${messageOf(err)}; opening without linked paths`,
-    );
-  }
+  const { linkPaths, roomNotice, limits, turnCap } =
+    preflight ?? (await roomPreflight(root, `room ${id}`));
+  // The preflight checked the links, and a room never shows the dirty-tree
+  // advisory, so its `git status` is skipped (#322).
   const setup = await openWorktrees(
     existsSync(record.cwd) ? record.cwd : root,
     id,
-    { linkPaths },
+    { linkPaths, linksChecked: true, advisory: false },
   );
   if (setup.root !== root) {
     throw new Error(`${record.cwd} is no longer inside ${root}`);
-  }
-  let limits: ReturnType<typeof roomLimits> | undefined;
-  let turnCap: number | undefined;
-  try {
-    limits = roomLimits(root);
-    turnCap = resolveOrchestratorTurnCap(root);
-  } catch (err) {
-    console.error(
-      `room ${id}: ${messageOf(err)}; using the default room limits`,
-    );
   }
   const bus = createEventBus();
   trackChildren(bus, "room", id);
@@ -1316,15 +1339,13 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   const id = newRoomId();
   // No 409 wrapper (#129): since the state directory moved out of the
   // repository, `openWorktrees` throws for nothing a repository can be in.
-  let setup: Awaited<ReturnType<typeof openWorktrees>>;
-  try {
-    setup = await openWorktrees(cwd, id, { linkPaths });
-  } catch (err) {
-    if (err instanceof LinkPathError) {
-      throw refusal(400, "invalid_config", messageOf(err));
-    }
-    throw err;
-  }
+  // The links were checked above, so it plans none and throws no
+  // `LinkPathError`; a room never shows the advisory (#322).
+  const setup = await openWorktrees(cwd, id, {
+    linkPaths,
+    linksChecked: true,
+    advisory: false,
+  });
   let limits: ReturnType<typeof roomLimits>;
   let turnCap: number | undefined;
   try {
@@ -2349,10 +2370,11 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 // Before the port opens, as `restoreRuns`: no request meets a half-restored
 // list. A signal during it pauses the rooms restored so far; the others are
 // already `paused` on disk, which is what the sweep left. ponytail: one
-// record read and one log scan per paused or active room, on the boot path;
-// a dismissed room is only read (#451). Building the paused ones lazily too
-// needs `daemon/rooms.ts` to list their own statuses and a shutdown to wait
-// for a build in flight; do that if a repository keeps hundreds of them.
+// record read and one log scan per paused or active room, on the boot path,
+// in order; the repository's checks run once (#322), and a dismissed room is
+// only read (#451). Building the paused ones lazily too needs
+// `daemon/rooms.ts` to list their own statuses and a shutdown to wait for a
+// build in flight; do that if a repository keeps hundreds of them.
 await restoreRooms();
 
 server.on("error", (err) => {

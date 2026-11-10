@@ -15,7 +15,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { request } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
@@ -42,6 +49,7 @@ import {
   api,
   bootDaemon as boot,
   commitAt,
+  countedGit,
   type Daemon,
   gatedGit,
   gitRepo,
@@ -3352,6 +3360,288 @@ test("a restart opens a room without links when its linkPaths went bad (#274)", 
     .map((n) => n.text)
     .join("\n");
   assert.match(notices, /the room opened without its links/);
+});
+
+test("a restart checks each repository's links once, runs no git status for its rooms, and keeps their links (#322)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const cwd = await realpath(
+    await added(
+      first,
+      await gitRepo(t, {
+        ignore: "node_modules/\n",
+        files: {
+          ".kapelle/config.json": `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`,
+        },
+      }),
+    ),
+  );
+  await mkdir(join(cwd, "node_modules", "pkg"), { recursive: true });
+  const ids: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    const open = await api<RoomReply>(first, "POST", "/rooms", { cwd });
+    assert.equal(open.status, 201, open.body.error?.message);
+    ids.push(open.body.id);
+  }
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const git = await countedGit(t);
+  const second = await boot(t, runtime, [], state, { PATH: git.path });
+  const calls = (await git.calls()).map((c) => c.split(" "));
+  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(
+    list.body.filter((r) => ids.includes(r.id)).map((r) => r.status),
+    ["paused", "paused", "paused"],
+  );
+  assert.equal(
+    calls.filter((c) => c.includes("status")).length,
+    0,
+    "a room never reads the dirty-tree advisory",
+  );
+  assert.equal(
+    calls.filter((c) => c.includes("ls-files")).length,
+    1,
+    "one link plan for the repository, not two per room",
+  );
+
+  // A restored room still mirrors the links into a new checkout.
+  const bob = await addAgent(second, ids[0] as string, {
+    cmd: REMEMBER,
+    name: "bob",
+  });
+  assert.equal(
+    (await lstat(join(bob.worktree, "node_modules", "pkg"))).isSymbolicLink(),
+    true,
+  );
+});
+
+test("a restart gives every room the bad-links notice and logs once per repository (#322)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const roots = [
+    await realpath(await added(first, await gitRepo(t))),
+    await realpath(await added(first, await gitRepo(t))),
+  ] as const;
+  const ids: string[] = [];
+  for (const cwd of [roots[0], roots[0], roots[1]]) {
+    const open = await api<RoomReply>(
+      first,
+      "POST",
+      "/rooms",
+      withAgent(cwd, REMEMBER),
+    );
+    assert.equal(open.status, 201, open.body.error?.message);
+    ids.push(open.body.id);
+  }
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  for (const cwd of roots) {
+    await mkdir(join(cwd, ".kapelle"), { recursive: true });
+    await writeFile(
+      join(cwd, ".kapelle", "config.json"),
+      JSON.stringify({ linkPaths: ["README.md"] }),
+      { mode: 0o644 },
+    );
+  }
+  const second = await boot(t, runtime, [], state);
+  for (const id of ids) {
+    const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+    assert.equal(got.status, 200, got.body.error?.message);
+    assert.equal(only(got.body).status, "paused");
+    assert.ok(
+      only(got.body).notices.some((n) =>
+        /the room opened without its links/.test(n.text),
+      ),
+      JSON.stringify(only(got.body).notices),
+    );
+  }
+
+  process.kill(second.pid, "SIGTERM");
+  const { stderr } = await second.done;
+  assert.equal(
+    stderr
+      .split("\n")
+      .filter((line) =>
+        /opening without linked paths|the room opened without its links/.test(
+          line,
+        ),
+      ).length,
+    2,
+    stderr,
+  );
+});
+
+test("POST /rooms checks links once and reads no dirty advisory (#322)", async (t) => {
+  const git = await countedGit(t);
+  const d = await boot(t, undefined, [], undefined, { PATH: git.path });
+  const cwd = await added(d, await gitRepo(t));
+  await mkdir(join(cwd, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(cwd, ".kapelle", "config.json"),
+    JSON.stringify({ linkPaths: ["not-installed"] }),
+    { mode: 0o644 },
+  );
+  const before = (await git.calls()).length;
+  const open = await api<RoomReply>(d, "POST", "/rooms", { cwd });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const calls = (await git.calls()).slice(before).map((c) => c.split(" "));
+  assert.equal(
+    calls.filter((c) => c.includes("status")).length,
+    0,
+    "a room never reads the dirty-tree advisory",
+  );
+  assert.equal(
+    calls.filter((c) => c.includes("ls-files")).length,
+    1,
+    "the caller checks the links and the preflight does not plan them again",
+  );
+  assert.equal(
+    (await api(d, "POST", `/rooms/${open.body.id}/dismiss`)).status,
+    200,
+  );
+});
+
+test("a boot reads each repository's limits once and shares them with its rooms (#322)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const cwd = await realpath(await added(first, await gitRepo(t)));
+  const ids: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const open = await api<RoomReply>(first, "POST", "/rooms", { cwd });
+    assert.equal(open.status, 201, open.body.error?.message);
+    ids.push(open.body.id);
+  }
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  // Old records without a cap take this boot's configured one. Remove the
+  // cap openRoom saved, so the restored rooms show which preflight they used.
+  for (const id of ids) {
+    const file = join(stateDirFor(cwd), "rooms", id, "room.json");
+    const record = JSON.parse(await readFile(file, "utf8"));
+    delete record.turnCap;
+    await writeFile(file, `${JSON.stringify(record, null, 2)}\n`);
+  }
+  const config = join(cwd, ".kapelle", "config.json");
+  await mkdir(join(cwd, ".kapelle"), { recursive: true });
+  await writeFile(
+    config,
+    JSON.stringify({ orchestratorTurnCap: 11, linkPaths: ["not-installed"] }),
+    { mode: 0o644 },
+  );
+
+  // Hold the first room's checkout preflight after its config was read. The
+  // next room must reuse that preflight: reading the changed config would
+  // reject stallIdleMs -1 and lose the shared turn cap 11 for the default.
+  const bin = await tempDir(t);
+  const linked = join(bin, "links-checked");
+  const entered = join(bin, "entered");
+  const release = join(bin, "release");
+  const found = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" });
+  assert.equal(found.status, 0, found.stderr);
+  await writeFile(
+    join(bin, "git"),
+    `#!/bin/sh\n` +
+      `if [ "$1" = "--literal-pathspecs" ] && [ "$2" = "ls-files" ]; then\n` +
+      `  : > ${JSON.stringify(linked)}\n` +
+      `fi\n` +
+      `if [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ] && ` +
+      `[ -e ${JSON.stringify(linked)} ] && [ ! -e ${JSON.stringify(release)} ]; then\n` +
+      `  : > ${JSON.stringify(entered)}\n` +
+      `  while [ ! -e ${JSON.stringify(release)} ]; do sleep 0.05; done\n` +
+      `fi\n` +
+      `exec ${JSON.stringify(found.stdout.trim())} "$@"\n`,
+    { mode: 0o755 },
+  );
+  const booting = boot(t, runtime, [], state, {
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+  });
+  // Registered after the daemon's own cleanup, so a failed wait frees the
+  // wrapper before spawnCli's teardown has to kill anything.
+  t.after(async () => {
+    try {
+      await writeFile(release, "");
+    } catch {
+      // The wrapper folder is still ours; this only releases a failed test.
+    }
+  });
+  await until("the first room's config read", () => existsSync(entered));
+  await writeFile(
+    config,
+    JSON.stringify({
+      orchestratorTurnCap: 12,
+      stallIdleMs: -1,
+      linkPaths: ["not-installed"],
+    }),
+    { mode: 0o644 },
+  );
+  await writeFile(release, "");
+  const second = await booting;
+
+  const caps = [];
+  for (const id of ids) {
+    const file = join(stateDirFor(cwd), "rooms", id, "room.json");
+    caps.push(JSON.parse(await readFile(file, "utf8")).turnCap);
+  }
+  assert.deepEqual(caps, [11, 11], "both rooms used the boot's one preflight");
+  process.kill(second.pid, "SIGTERM");
+  const { code, stderr } = await second.done;
+  assert.equal(code, 0);
+  assert.doesNotMatch(
+    stderr,
+    /using the default room limits/,
+    "the second room read the changed config instead of the boot's limits",
+  );
+});
+
+test("a dismissed room built after a restart checks links then, not at boot (#322)", async (t) => {
+  const { first, cwd, id, again } = await roomToRestart(t, REMEMBER);
+  assert.equal((await api(first, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const second = await again();
+  // Written after boot: a dismissed room was only read, so this check must
+  // happen when its first use builds it.
+  await mkdir(join(cwd, ".kapelle"), { recursive: true });
+  await writeFile(
+    join(cwd, ".kapelle", "config.json"),
+    JSON.stringify({ linkPaths: ["README.md"] }),
+    { mode: 0o644 },
+  );
+  const before = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(
+    before.body.map((r) => r.id),
+    [id],
+    "the list reads the record without building the room",
+  );
+  const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  assert.equal(got.status, 200, got.body.error?.message);
+  assert.ok(
+    only(got.body).notices.some((n) =>
+      /the room opened without its links/.test(n.text),
+    ),
+    JSON.stringify(only(got.body).notices),
+  );
+
+  process.kill(second.pid, "SIGTERM");
+  const { stderr } = await second.done;
+  assert.equal(
+    stderr
+      .split("\n")
+      .filter((line) =>
+        /opening without linked paths|the room opened without its links/.test(
+          line,
+        ),
+      ).length,
+    1,
+    stderr,
+  );
 });
 
 test("a linkPaths entry git would see refuses a room's open as a 400", async (t) => {

@@ -1,10 +1,12 @@
 /**
  * Shared subprocess cleanup (#428): graceful exits flush V8 coverage, and a
  * stuck process still meets the bounded SIGKILL fallback. Also the wait
- * helpers' budgets (#442): a spent budget still checks once.
+ * helpers' budgets (#442): a spent budget still checks once. And
+ * `countedGit`'s log (#322): a slice after a snapshot keeps every new call.
  */
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,6 +14,7 @@ import {
   addRepo,
   alive,
   bootDaemon,
+  countedGit,
   daemonApi,
   gitRepo,
   gone,
@@ -158,4 +161,14 @@ test("until checks once even when its budget is already spent (#442)", async () 
     /timed out waiting for a false check/,
   );
   assert.equal(checks, 2);
+});
+
+test("countedGit keeps the first call after a snapshot (#322)", async (t) => {
+  const git = await countedGit(t);
+  const cwd = await gitRepo(t);
+  const env = { ...process.env, PATH: git.path };
+  execFileSync("git", ["rev-parse", "HEAD"], { cwd, env });
+  const before = (await git.calls()).length;
+  execFileSync("git", ["status", "--porcelain"], { cwd, env });
+  assert.deepEqual((await git.calls()).slice(before), ["status --porcelain"]);
 });
