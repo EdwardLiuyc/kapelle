@@ -128,6 +128,8 @@ to a publish from a job of a public repository, so the first version has none.
    owner `EdwardLiuyc`, repository `kapelle`, workflow `publish.yml`.
 4. Tag that commit and push the tag, as above. The job runs the gate, finds the version
    on npm already, and skips the publish with a notice.
+5. Write the GitHub release notes for the tag. Say the package supports Linux and macOS
+   only.
 
 The next version is the first one the job publishes.
 

@@ -52,7 +52,7 @@ if [ "$1" = view ]; then
   exit "$FAKE_VIEW_STATUS"
 fi
 if [ "$1" = publish ]; then
-  exit 0
+  exit "$FAKE_PUBLISH_STATUS"
 fi
 exit 2
 `,
@@ -66,13 +66,23 @@ function npmEnv(
   calls: string,
   view: string,
   status: number,
+  publishStatus = 0,
 ): Record<string, string> {
   return {
     NPM_CALLS: calls,
     FAKE_VIEW: view,
     FAKE_VIEW_STATUS: String(status),
+    FAKE_PUBLISH_STATUS: String(publishStatus),
     PATH: `${join(dir, "bin")}${delimiter}${process.env.PATH ?? ""}`,
   };
+}
+
+/** The run commands in one job, ignoring comments and every other field. */
+function runCommands(job: string): string[] {
+  return job.split("\n").flatMap((line) => {
+    const match = /^\s+(?:-\s+)?run:\s+(.+)$/.exec(line);
+    return match ? [match[1]] : [];
+  });
 }
 
 async function npmCalls(path: string): Promise<string[]> {
@@ -130,20 +140,33 @@ test("the publish check publishes when npm does not have that exact version", as
   }
 });
 
+test("the publish check fails when npm publish fails", async (t) => {
+  const dir = await packageDir(t, { name: "kapelle", version: "0.1.0" });
+  const calls = await fakeNpm(dir);
+  const result = runScript(PUBLISH_IF_NEW, dir, npmEnv(dir, calls, "", 1, 17));
+  assert.equal(result.status, 17, result.stderr);
+  assert.deepEqual(await npmCalls(calls), [
+    "view kapelle@0.1.0 version",
+    "publish",
+  ]);
+});
+
 test("the workflow gates a v* tag and publishes with OIDC and no npm token", async () => {
   const workflow = await readFile(WORKFLOW, "utf8");
-  const gateAt = workflow.indexOf("    gate:");
-  const publishAt = workflow.indexOf("    publish:");
+  const gateAt = workflow.search(/^ {4}gate:$/m);
+  const publishAt = workflow.search(/^ {4}publish:$/m);
   assert.notEqual(gateAt, -1);
   assert.notEqual(publishAt, -1);
   const gate = workflow.slice(gateAt, publishAt);
   const publish = workflow.slice(publishAt);
+  const gateRuns = runCommands(gate);
+  const publishRuns = runCommands(publish);
 
-  assert.match(workflow, /tags: \["v\*"\]/);
-  assert.match(publish, /needs: gate/);
-  assert.match(publish, /id-token: write/);
-  assert.doesNotMatch(gate, /id-token: write/);
-  assert.match(publish, /contents: read/);
+  assert.match(workflow, /^ {8}tags: \["v\*"\]$/m);
+  assert.match(publish, /^ {8}needs: gate$/m);
+  assert.match(publish, /^ {12}id-token: write$/m);
+  assert.doesNotMatch(gate, /^ {12}id-token: write$/m);
+  assert.match(publish, /^ {12}contents: read$/m);
   assert.doesNotMatch(workflow, /\b(NPM_TOKEN|NODE_AUTH_TOKEN)\b/);
   assert.doesNotMatch(workflow, /secrets\./);
   assert.doesNotMatch(workflow, /--provenance/);
@@ -157,9 +180,22 @@ test("the workflow gates a v* tag and publishes with OIDC and no npm token", asy
     "npm run knip",
     "markdownlint-cli2@0.24.0",
   ]) {
-    assert.ok(gate.includes(command), `missing gate command: ${command}`);
+    assert.ok(
+      gateRuns.some((run) => run.includes(command)),
+      `missing gate command: ${command}`,
+    );
   }
-  assert.ok(gate.includes("bash .github/scripts/check-tag.sh"));
-  assert.doesNotMatch(gate, /publish-if-new/);
-  assert.ok(publish.includes("bash .github/scripts/publish-if-new.sh"));
+  assert.ok(gateRuns.includes("bash .github/scripts/check-tag.sh"));
+  assert.ok(!gateRuns.some((command) => command.includes("publish-if-new")));
+  const publishCi = publishRuns.indexOf("npm ci");
+  const publishScript = publishRuns.indexOf(
+    "bash .github/scripts/publish-if-new.sh",
+  );
+  assert.notEqual(publishCi, -1, "publish job does not install dependencies");
+  assert.notEqual(
+    publishScript,
+    -1,
+    "publish job does not run the publish check",
+  );
+  assert.ok(publishCi < publishScript, "publish runs before npm ci");
 });
