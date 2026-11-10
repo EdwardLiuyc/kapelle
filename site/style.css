@@ -306,6 +306,12 @@ pre .p {
   color: var(--muted);
   white-space: nowrap;
 }
+.nav-end a {
+  color: inherit;
+}
+.nav-end a:hover {
+  color: var(--text);
+}
 
 /* Empty lines past the end of a vim buffer, just above the footer. */
 .tildes {
