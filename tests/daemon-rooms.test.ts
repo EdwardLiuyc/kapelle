@@ -3536,7 +3536,8 @@ test("a boot reads each repository's limits once and shares them with its rooms 
   );
 
   // Hold the first room's checkout preflight after its config was read. The
-  // next room must reuse that preflight, not read the changed cap 12.
+  // next room must reuse that preflight: reading the changed config would
+  // reject stallIdleMs -1 and lose the shared turn cap 11 for the default.
   const bin = await tempDir(t);
   const linked = join(bin, "links-checked");
   const entered = join(bin, "entered");
@@ -3572,7 +3573,11 @@ test("a boot reads each repository's limits once and shares them with its rooms 
   await until("the first room's config read", () => existsSync(entered));
   await writeFile(
     config,
-    JSON.stringify({ orchestratorTurnCap: 12, linkPaths: ["not-installed"] }),
+    JSON.stringify({
+      orchestratorTurnCap: 12,
+      stallIdleMs: -1,
+      linkPaths: ["not-installed"],
+    }),
     { mode: 0o644 },
   );
   await writeFile(release, "");
@@ -3585,7 +3590,13 @@ test("a boot reads each repository's limits once and shares them with its rooms 
   }
   assert.deepEqual(caps, [11, 11], "both rooms used the boot's one preflight");
   process.kill(second.pid, "SIGTERM");
-  assert.equal((await second.done).code, 0);
+  const { code, stderr } = await second.done;
+  assert.equal(code, 0);
+  assert.doesNotMatch(
+    stderr,
+    /using the default room limits/,
+    "the second room read the changed config instead of the boot's limits",
+  );
 });
 
 test("a dismissed room built after a restart checks links then, not at boot (#322)", async (t) => {
