@@ -159,8 +159,6 @@ test("the workflow gates a v* tag and publishes with OIDC and no npm token", asy
   assert.notEqual(publishAt, -1);
   const gate = workflow.slice(gateAt, publishAt);
   const publish = workflow.slice(publishAt);
-  const gateRuns = runCommands(gate);
-  const publishRuns = runCommands(publish);
 
   assert.match(workflow, /^ {8}tags: \["v\*"\]$/m);
   assert.match(publish, /^ {8}needs: gate$/m);
@@ -171,31 +169,21 @@ test("the workflow gates a v* tag and publishes with OIDC and no npm token", asy
   assert.doesNotMatch(workflow, /secrets\./);
   assert.doesNotMatch(workflow, /--provenance/);
 
-  for (const command of [
+  // The whole list, in order: a step that is dropped, commented out or
+  // moved fails here. A change to either job updates this list on purpose.
+  assert.deepEqual(runCommands(gate), [
+    "bash .github/scripts/check-tag.sh",
     "npm ci",
     "npm run fmt:check",
     "npm run check",
     "npm run test:adaptive",
     "npm run selftest",
     "npm run knip",
-    "markdownlint-cli2@0.24.0",
-  ]) {
-    assert.ok(
-      gateRuns.some((run) => run.includes(command)),
-      `missing gate command: ${command}`,
-    );
-  }
-  assert.ok(gateRuns.includes("bash .github/scripts/check-tag.sh"));
-  assert.ok(!gateRuns.some((command) => command.includes("publish-if-new")));
-  const publishCi = publishRuns.indexOf("npm ci");
-  const publishScript = publishRuns.indexOf(
+    "npx -y markdownlint-cli2@0.24.0 --config .markdownlint.json $(git ls-files '*.md')",
+  ]);
+  assert.deepEqual(runCommands(publish), [
+    "npm --version",
+    "npm ci",
     "bash .github/scripts/publish-if-new.sh",
-  );
-  assert.notEqual(publishCi, -1, "publish job does not install dependencies");
-  assert.notEqual(
-    publishScript,
-    -1,
-    "publish job does not run the publish check",
-  );
-  assert.ok(publishCi < publishScript, "publish runs before npm ci");
+  ]);
 });
