@@ -17,9 +17,10 @@ One background daemon holds all the work. Close the terminal and come back later
 
 ## Demo
 
-[![A kapelle loop: you decide D1 A, D2 A](assets/kapelle-loop-demo.jpg)](assets/kapelle-loop-demo.mp4)
+<!-- markdownlint-disable-next-line MD034 -- GitHub turns a bare video link on its own line into a player; a link in <> or [] stays a plain link. -->
+https://github.com/user-attachments/assets/563d9e80-cc4f-4ef0-9e36-3d024c4265da
 
-One `fix-issue` loop, from the issue to the merged PR, in 3 minutes. The real run took 1 h 42 min. The orchestrator plans the steps and adds a developer and two reviewers. You type three things: `go`, your two choices, and `merge close`. Click the picture to play the video.
+One `fix-issue` loop, from the issue to the merged PR, in 3 minutes. The real run took 1 h 42 min. The orchestrator plans the steps and adds a developer and two reviewers. You type three things: `go`, your two choices, and `merge close`.
 
 ## Install
 
