@@ -45,18 +45,17 @@ a row in the record below that says why it is not a credential.
 
 The record before the first publish is the last commit of the M9-8 PR (#307), made after
 every review commit of that PR. It covers that PR's head, so nothing else lands on
-`master` between that merge and the `v0.1.0` tag. Until that commit, the record below is
-M9-8a's.
+`master` between that merge and the `v0.1.0` tag.
 
 The record:
 
 | Field | Value |
 | --- | --- |
-| Date | 2026-11-04 |
+| Date | 2026-11-10 |
 | Tool | gitleaks 8.30.1, `gitleaks_8.30.1_linux_x64.tar.gz`, SHA-256 `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb`, pinned as `sum` in the command above; the digest was first taken from the release's checksums file |
-| Range | a mirror of `origin` taken after this record was pushed: 21 branches, 230 `refs/pull/*` refs and no tags; from the root commit `6186a5f` to every ref's tip |
-| Covers | every ref in that mirror: `master` at `5f90323`, and PR #448's head, which is the commit that adds this record, whose parent is `653ea56`. A later commit is not covered |
-| Result | 2 hits, both false positives; with `.gitleaksignore`, no leaks (exit 0) |
+| Range | a mirror of `origin` taken at 18:30 UTC, before this record was pushed: 21 branches, 236 `refs/pull/*` refs and no tags; from the root commit `6186a5f` to every ref's tip. Then this record's own commit, scanned in the PR's checkout as `1fcbd27..HEAD` before its push |
+| Covers | every ref in that mirror: `master` at `28e8149`, and PR #455's head `1fcbd27`; and the commit that adds this record, whose parent is `1fcbd27`. A later commit is not covered |
+| Result | 2 hits, both false positives; with `.gitleaksignore`, no leaks (exit 0) in both scans |
 
 The false positives:
 
