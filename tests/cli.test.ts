@@ -99,6 +99,7 @@ test("bare kapelle hands off to the chat; --help is the help", async (t) => {
   assert.equal(help.code, 0);
   assert.match(help.stdout, /minimal Agent Client Protocol client/);
   assert.match(help.stdout, /kapelle loop <recipe> <task>/);
+  assert.match(help.stdout, /\[--model <id>\] \[--cwd dir\]/);
   assert.match(help.stdout, /kapelle daemon stop/);
   assert.match(
     help.stdout,
@@ -365,6 +366,8 @@ test("--file runs every task and reports each one", async (t) => {
 
   assert.equal(r.code, 0);
   for (const id of ["one", "two", "three"]) {
+    // The ids are this test's static fixtures, not operator input.
+    // pi-lens-ignore: unsafe-regex
     assert.match(r.stdout, new RegExp(`▸ ${id} \\(mock-agent\\) done`));
   }
   assert.match(r.stdout, /done — 3 tasks, 3 turns/);
@@ -462,6 +465,8 @@ test("a run file's own agent and mode cannot be overridden from argv", async (t)
   ]) {
     const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, ...flag]);
     assert.equal(r.code, 1, flag[0]);
+    // The flag names are this test's static list, not operator input.
+    // pi-lens-ignore: unsafe-regex
     assert.match(r.stderr, new RegExp(`${flag[0]} does not apply with --file`));
   }
 });
@@ -614,6 +619,8 @@ test("a daemon with a different API major is refused, one with a different minor
   assert.equal(same.stderr, "");
 });
 
+// The callback hands its write's promise to the daemon thread on purpose.
+// pi-lens-ignore: mixed-async-styles
 test("attach checks the version again after a restart, and stops on a new major", async (t) => {
   const runtime = await tempDir(t);
   const { major, minor } = API_VERSION;
@@ -1131,6 +1138,8 @@ test("an unknown --scenario is a loud exit in both fixtures", async (t) => {
       const r = await runCli(t, ["--scenario", name], script);
 
       assert.equal(r.code, 2, where);
+      // The scenario names are this test's static fixtures.
+      // pi-lens-ignore: unsafe-regex
       assert.match(r.stderr, new RegExp(`Known: ${known}`), where);
     }
   }

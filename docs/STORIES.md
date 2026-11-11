@@ -4005,7 +4005,7 @@ every hit is rotated, `SECURITY.md` and the repository and package metadata are 
 `docs/RELEASING.md` and its `AGENTS.md` entry are present, and the macOS package test
 passes.
 
-**M9-8 · Publish to npm · S · needs M9-1..M9-7, M9-3b, M9-5b and M9-8a**
+**M9-8 · Publish to npm · S · needs M9-1..M9-7, M9-3b, M9-5b, M9-5c and M9-8a**
 The first release. The person does steps 1 and 2 by hand.
 
 1. Make an npm account and turn on 2FA.
@@ -4118,7 +4118,7 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b ─ M9-5c
 M9-2 ─┘        └─ M9-3b        └─ M9-6
 M9-7 ─ M9-8a
-M9-1..M9-7, M9-3b, M9-5b, M9-8a ─ M9-8   (the first publish)
+M9-1..M9-7, M9-3b, M9-5b, M9-5c, M9-8a ─ M9-8   (the first publish)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:

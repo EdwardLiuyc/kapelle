@@ -24,6 +24,7 @@ import {
   roomLog,
   spawnCli,
   tempDir,
+  until,
 } from "../integration/helpers.ts";
 
 /** A daemon, a repository with the `fix` recipe, and an empty config home. */
@@ -171,8 +172,14 @@ test("kapelle loop --model sends the start only when po is on that model, and ke
   assert.equal(ok.code, 0, ok.stderr);
   assert.match(ok.stdout, /opened room fix-1; po has the start/);
   const okId = /kapelle chat attach (\S+)/.exec(ok.stdout)?.[1];
+  assert.ok(okId, ok.stdout);
   const okRoom = (await api<RoomDto>(d, "GET", `/rooms/${okId}`)).body;
   assert.equal(okRoom.participants[0]?.model, "mock/smart");
+  await until("the accepted model's start message", async () =>
+    (await roomLog(repo, okId)).some(
+      (line) => line.update.sessionUpdate === "_client_user_message",
+    ),
+  );
 
   // Refused, never answered, swapped, and no model option at all.
   for (const [task, cmd, asked, runs] of [
@@ -197,7 +204,7 @@ test("kapelle loop --model sends the start only when po is on that model, and ke
     );
     const room = (await api<RoomDto>(d, "GET", `/rooms/${id}`)).body;
     assert.equal(room.title, `fix-${task}`, "the room stays");
-    const log = await roomLog(repo, id).catch(() => []);
+    const log = await roomLog(repo, id);
     assert.ok(
       !log.some((l) => l.update.sessionUpdate === "_client_user_message"),
       `${task}: no start message`,

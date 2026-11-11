@@ -374,6 +374,11 @@ test("/loop opens <recipe>-<task> with po in auto, on claude unless --agent or -
 
 test("/loop --model puts the model on the orchestrator's entry; an empty one is a usage error (M9-5c)", () => {
   const po = { name: "po", role: "orchestrator", mode: "auto" };
+  const plain = parse("/loop fix 432 --model mock/smart");
+  assert.ok(plain && "body" in plain);
+  assert.deepEqual(plain.body.agents, [
+    { agent: "claude", model: "mock/smart", ...po },
+  ]);
   const m = parse("/loop fix 432 --agent pi --model mock/smart");
   assert.ok(m && "body" in m);
   assert.deepEqual(m.body.agents, [
