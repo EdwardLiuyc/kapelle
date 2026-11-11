@@ -906,6 +906,8 @@ function panelParts({
       empty?: string;
       /** Tab completes a folder path. */
       folder?: true;
+      /** Every value is literal: `–` and the `other…` names are not sentinels. */
+      verbatim?: true;
     }[],
     go: string,
     command: (v: Record<string, string>) => RouteCommand | { error: string },
@@ -914,11 +916,16 @@ function panelParts({
     const values: Record<string, string> = Object.fromEntries(
       fields.map((f) => [f.id, f.value]),
     );
+    const verbatim = new Set(fields.flatMap((f) => (f.verbatim ? [f.id] : [])));
     const show = (v: string) => v || "–";
     /** A text box that hands its value to `done`, or nothing on Esc. */
-    const field = (value: string, done: (v?: string) => void): Input => {
+    const field = (
+      value: string,
+      done: (v?: string) => void,
+      asIs = false,
+    ): Input => {
       const input = textBox(value);
-      input.onSubmit = (v) => done(show(v.trim()));
+      input.onSubmit = (v) => done(asIs ? v.trim() : show(v.trim()));
       input.onEscape = () => done();
       return input;
     };
@@ -927,8 +934,9 @@ function panelParts({
     const folderField = (
       value: string,
       done: (v?: string) => void,
+      asIs = false,
     ): Component => {
-      const input = field(value, done);
+      const input = field(value, done, asIs);
       let options: string[] = [];
       return {
         render(w) {
@@ -973,7 +981,9 @@ function panelParts({
         };
         const loaded = (options: string[] | undefined) => {
           if (!options) {
-            now = f.folder ? folderField(value, finish) : field(value, finish);
+            now = f.folder
+              ? folderField(value, finish, f.verbatim)
+              : field(value, finish, f.verbatim);
             return;
           }
           if (!options.length && f.empty) {
@@ -994,7 +1004,7 @@ function panelParts({
             words(options),
             value,
             (v) => {
-              if (!TYPE_IT.has(v)) return finish(v);
+              if (f.verbatim || !TYPE_IT.has(v)) return finish(v);
               now = field("", finish);
               tui.requestRender();
             },
@@ -1033,8 +1043,12 @@ function panelParts({
       panelRoom(),
       SETTINGS_THEME,
       (id, v) => {
-        if (id) values[id] = v === "–" ? "" : v;
-        else {
+        if (id) {
+          const next = verbatim.has(id) || v !== "–" ? v : "";
+          values[id] = next;
+          const item = items.find((i) => i.id === id);
+          if (item) item.currentValue = show(next);
+        } else {
           const c = command(values);
           if (!("error" in c)) void run(c);
           else if (panel) {
@@ -1230,12 +1244,14 @@ function panelParts({
           label: "folder",
           value: absoluteFolder() ?? "",
           folder: true,
+          verbatim: true,
         },
         {
           id: "recipe",
           label: "recipe",
           value: "",
           empty: "no recipes",
+          verbatim: true,
           pick: async (v) => {
             const cwd = absoluteFolder(v.cwd || ".");
             if (!cwd) return [];
@@ -1250,10 +1266,10 @@ function panelParts({
             return names;
           },
         },
-        { id: "task", label: "task", value: "" },
-        { id: "note", label: "note", value: "" },
+        { id: "task", label: "task", value: "", verbatim: true },
+        { id: "note", label: "note", value: "", verbatim: true },
         harnessField(),
-        { id: "cmd", label: "command", value: "" },
+        { id: "cmd", label: "command", value: "", verbatim: true },
         modelField(),
       ],
       "start",

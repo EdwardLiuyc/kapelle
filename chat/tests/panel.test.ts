@@ -1080,3 +1080,59 @@ test("the loop recipe row follows its folder, and no recipes refuses start with 
   }
   assert.match(shownOf(box), /task\s+a task/, "the entered values stay");
 });
+
+test("the loop form's folder row completes with Tab (M9-5d, #458)", async (t) => {
+  const parent = await tempDir(t);
+  await mkdir(join(parent, "alpha-1"));
+  await mkdir(join(parent, "alpha-2"));
+  const box = makeBox(NO_DAEMON_YET);
+  box.loopForm();
+
+  pressKey(box, "\r");
+  type(box, `\x15${parent}/al\t`);
+  assert.match(shownOf(box), /alpha-1\/ {2}alpha-2\//);
+});
+
+test("the loop form keeps recipe, task, note and command values that look like form sentinels (#458)", async (t) => {
+  await isolatedRecipeConfig(t);
+  for (const recipe of ["–", "other…"]) {
+    const cwd = await recipeRepo(t, recipe === "–" ? "dash" : "other", [
+      recipe,
+    ]);
+    const ran: RouteCommand[] = [];
+    const box = makeBox(NO_DAEMON_YET, {
+      run: async (c) => {
+        ran.push(c);
+        return true;
+      },
+    });
+    box.loopForm();
+
+    pressKey(box, "\r");
+    type(box, `\x15${cwd}\r`);
+    down(box, 1);
+    pressKey(box, "\r");
+    await until("the literal recipe", () => shownOf(box).includes(recipe));
+    pressKey(box, "\r");
+    assert.ok(shownOf(box).includes(recipe), `${recipe} stays selected`);
+
+    down(box, 1);
+    pressKey(box, "\r");
+    type(box, "\x15–\r");
+    down(box, 1);
+    pressKey(box, "\r");
+    type(box, "\x15–\r");
+    down(box, 2);
+    pressKey(box, "\r");
+    type(box, "\x15–\r");
+    down(box, 2);
+    pressKey(box, "\r");
+
+    const typed = parseCommand(
+      `/loop "${recipe}" "–" "–" --cmd "–" --cwd ${cwd}`,
+      [],
+    );
+    assert.ok(typed && "verb" in typed);
+    assert.deepEqual(ran, [typed]);
+  }
+});
