@@ -1592,11 +1592,12 @@ for (const operation of ["merge", "fast-forward", "reset"] as const) {
     assert.equal(p.baseSha, before);
     // The record the turn saved, not the one room.json held at open: a turn's
     // save carries its count and the idle status it ended in.
+    let saved: RoomRecord["participants"][number] | undefined;
     await until(() => {
-      const saved = readRoomRecord(file).participants[0];
+      saved = readRoomRecord(file).participants[0];
       return saved?.turns === 1 && saved.status === "idle";
     }, "room.json holds the record the turn saved");
-    assert.equal(readRoomRecord(file).participants[0]?.baseSha, before);
+    assert.equal(saved?.baseSha, before);
   });
 }
 
