@@ -33,8 +33,9 @@
  * **A saved harness that no longer resolves is tombstoned** (#312). Its full
  * record stays in `room.json` under `tombstones`, outside the active roster,
  * so its checkout and branch remain known to delete. The rest of the room
- * restores normally, the daemon logs the room, agent and record path, and the
- * log gets a participant-removed line so a replay drops it from the roster.
+ * restores normally, the daemon logs the room, agent and record path, and a
+ * writable restored log gets a participant-removed line so a replay drops it
+ * from the roster. A dismissed room's log stays read-only.
  *
  * **A stopped participant revives on its next message.** `paused`, `killed`
  * and `exited` all take the same path: a new harness in the same checkout.

@@ -1794,11 +1794,12 @@ reads every record back:
 - When the daemon reads a saved room, a participant whose saved `agent` is no longer in
   the registry does not fail the whole room. The daemon logs a notice naming the room, the
   agent and the full `room.json` path, moves that participant's full record to
-  `tombstones`, and restores the remaining roster. The log gets
+  `tombstones`, and restores the remaining roster. For a paused room, the log gets
   `_client_participant_removed` for each newly tombstoned participant, so a replay drops
-  it from the roster. The room stays listable and can be deleted, and the tombstone keeps
-  its branch and checkout ownership. An unreadable record or another restore failure is
-  still skipped with the existing notice and `404`.
+  it from the roster. A dismissed room's log stays read-only and gets no line. The room
+  stays listable and can be deleted, and the tombstone keeps its branch and checkout
+  ownership. An unreadable record or another restore failure is still skipped with the
+  existing notice and `404`.
 - A `killed` participant whose checkout has a git `index.lock` left by the cut turn gets
   one notice naming the file, at the next boot. A crash and a shutdown's grace both cut a
   turn. Git refuses to commit there until the file is removed. The daemon does not remove
