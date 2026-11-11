@@ -990,7 +990,7 @@ function panelParts({
           if (!options.length && f.empty) {
             const empty = f.empty;
             now = {
-              render: () => [dim(empty), dim("Esc back")],
+              render: () => [dim(empty), dim("Enter/Esc back")],
               handleInput: (key) => {
                 if (matchesKey(key, Key.enter) || matchesKey(key, Key.escape)) {
                   finish();

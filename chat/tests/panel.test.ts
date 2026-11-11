@@ -1142,7 +1142,7 @@ test("the loop recipe row follows its folder, and no recipes refuses start with 
   down(box, 1);
   pressKey(box, "\r");
   await until("the empty recipe state", () => /no recipes/.test(shownOf(box)));
-  assert.match(shownOf(box), /Esc back/);
+  assert.match(shownOf(box), /Enter\/Esc back/);
   pressKey(box, "\r");
   down(box, 1);
   pressKey(box, "\r");

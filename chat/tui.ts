@@ -1324,6 +1324,10 @@ function chatTui(
             return addForm();
           case "loop":
             return loopForm();
+          default: {
+            const unknown: never = c.form;
+            return unknown;
+          }
         }
       }
       if (c.verb === "delete") {

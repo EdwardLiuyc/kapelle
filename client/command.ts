@@ -136,7 +136,7 @@ export const HELP = [
 export const USAGE: Record<string, string> = {
   new: HELP[0] as string,
   add: HELP[1] as string,
-  loop: `usage: ${HELP[2]}`,
+  loop: HELP[2] as string,
   title: "usage: /title <new title>",
   cap: "usage: /cap <n>",
   rename: "usage: @name /rename <new name>",
@@ -302,11 +302,11 @@ export function parseCommand(
   if (verb === "loop") {
     if (!args.length) return { verb: "form", form: "loop" };
     const o = options(args, ["agent", "cmd", "model", "cwd"]);
-    if ("error" in o) return { error: `${o.error}; ${USAGE.loop}` };
+    if ("error" in o) return { error: `${o.error}; usage: ${USAGE.loop}` };
     const [recipe, task, note, ...extra] = o.positionals;
     // An empty model is a usage error, as in `kapelle loop` (M9-5c).
     if (!recipe || !task?.trim() || extra.length || o.values.model === "")
-      return { error: USAGE.loop as string };
+      return { error: `usage: ${USAGE.loop}` };
     const cwd = absoluteFolder(o.values.cwd);
     if (!cwd) return { error: FOLDER_GONE };
     return loopCommand({ ...o.values, recipe, task, note, cwd });
