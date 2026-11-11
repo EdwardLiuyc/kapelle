@@ -115,6 +115,8 @@ test("kapelle loop refuses an empty task and opens no room", async (t) => {
   const r = await loop(["fix", "   ", "--cmd", REMEMBER]);
   assert.equal(r.code, 1);
   assert.match(r.stderr, /usage: kapelle loop/);
+  // The usage line names every option this command takes (M9-5c).
+  assert.match(r.stderr, /\[--model <id>\]/);
   const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
   assert.deepEqual(rooms.body, [], "no room");
 });
