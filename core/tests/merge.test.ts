@@ -2,7 +2,8 @@
  * Merge tests — story M1c-3, issue #27.
  *
  * Against real git, like `core/tests/worktree.test.ts`: merge's claims are
- * about what git does with refs, the index and the working tree.
+ * about what git does with refs, the index and the working tree. The malformed
+ * run-record matrix is #429: every refusal must happen before Git mutates.
  */
 
 import assert from "node:assert/strict";
@@ -62,6 +63,102 @@ const perTaskWriter: TaskExecutor = async (task, ctx) => {
   await writeFile(join(ctx.cwd, `${task.id}.txt`), "work\n");
   return { stopReason: "end_turn" };
 };
+
+type MutableRecord = Record<string, unknown>;
+
+interface RecordRefusal {
+  name: string;
+  rewrite: (record: MutableRecord) => string;
+  expected: RegExp;
+}
+
+const asJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+
+function firstTask(record: MutableRecord): MutableRecord {
+  const task = (record.tasks as MutableRecord[])[0];
+  if (!task) throw new Error("run-record refusal fixture has no task");
+  return task;
+}
+
+const RECORD_REFUSALS: RecordRefusal[] = [
+  {
+    name: "invalid JSON",
+    rewrite: () => "{\n",
+    expected: /not valid JSON/,
+  },
+  {
+    name: "wrong run id",
+    rewrite: (record) => asJson({ ...record, runId: "20260909-120000-ffff" }),
+    expected: /is for 20260909-120000-ffff, not 20260909-120000-abcd/,
+  },
+  {
+    name: "wrong repository root",
+    rewrite: (record) => asJson({ ...record, root: "/somewhere/else" }),
+    expected: /created in \/somewhere\/else, not/,
+  },
+  {
+    name: "null record",
+    rewrite: () => asJson(null),
+    expected: /run record must be a JSON object/,
+  },
+  {
+    name: "array record",
+    rewrite: () => asJson([]),
+    expected: /run record must be a JSON object/,
+  },
+  {
+    name: "scalar record",
+    rewrite: () => asJson("not an object"),
+    expected: /run record must be a JSON object/,
+  },
+  {
+    name: "empty task list",
+    rewrite: (record) => asJson({ ...record, tasks: [] }),
+    expected: /"tasks" must be a non-empty array/,
+  },
+  {
+    name: "non-array task list",
+    rewrite: (record) => asJson({ ...record, tasks: {} }),
+    expected: /"tasks" must be a non-empty array/,
+  },
+  {
+    name: "non-object task",
+    rewrite: (record) => asJson({ ...record, tasks: [null] }),
+    expected: /tasks\[0\] must be a JSON object/,
+  },
+  {
+    name: "malformed task id",
+    rewrite: (record) =>
+      asJson({ ...record, tasks: [{ ...firstTask(record), id: "" }] }),
+    expected: /tasks\[0\]\.id must be a non-empty string/,
+  },
+  {
+    name: "malformed task status",
+    rewrite: (record) =>
+      asJson({ ...record, tasks: [{ ...firstTask(record), status: 0 }] }),
+    expected: /tasks\[0\]\.status must be a non-empty string/,
+  },
+  {
+    name: "malformed task branch",
+    rewrite: (record) =>
+      asJson({ ...record, tasks: [{ ...firstTask(record), branch: 42 }] }),
+    expected: /tasks\[0\]\.branch must be a non-empty string/,
+  },
+  {
+    name: "malformed task baseSha",
+    rewrite: (record) =>
+      asJson({ ...record, tasks: [{ ...firstTask(record), baseSha: false }] }),
+    expected: /tasks\[0\]\.baseSha must be a non-empty string/,
+  },
+];
+
+async function repoState(root: string): Promise<[string, string, string]> {
+  return Promise.all([
+    git(root, "rev-parse", "HEAD"),
+    git(root, "for-each-ref", "--format=%(refname) %(objectname)"),
+    git(root, "status", "--porcelain", "--untracked-files=all"),
+  ]);
+}
 
 test("a two-task run writes run.json, then merge lands both changes unstaged", async (t) => {
   const root = await repo(t);
@@ -361,23 +458,29 @@ test("rollback removes a stale SQUASH_MSG", async (t) => {
   assert.match(status, /^A {2}unrelated\.txt$/m);
 });
 
-test("a run record copied from another repo is refused", async (t) => {
-  const root = await repo(t);
-  await runRun(
-    runOf(["a"]),
-    { cwd: root, runId: RUN_ID, bus: createEventBus() },
-    perTaskWriter,
-  );
+for (const refusal of RECORD_REFUSALS) {
+  test(`merge refuses a run record with ${refusal.name}`, async (t) => {
+    const root = await repo(t);
+    const report = await runRun(
+      runOf(["a"]),
+      { cwd: root, runId: RUN_ID, bus: createEventBus() },
+      writer("a.txt"),
+    );
+    assert.equal(report.status, "done");
 
-  const recordPath = join(stateDirFor(root), "runs", RUN_ID, "run.json");
-  const record = JSON.parse(await readFile(recordPath, "utf8")) as {
-    root: string;
-  };
-  record.root = "/somewhere/else";
-  await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+    const recordPath = join(stateDirFor(root), "runs", RUN_ID, "run.json");
+    const record = JSON.parse(
+      await readFile(recordPath, "utf8"),
+    ) as MutableRecord;
+    await writeFile(recordPath, refusal.rewrite(record));
 
-  await assert.rejects(mergeRun(RUN_ID, root), /created in/);
-});
+    const before = await repoState(root);
+    assert.match(before[1], /refs\/heads\/kapelle\/.*\/a /);
+    assert.equal(before[2], "");
+    await assert.rejects(mergeRun(RUN_ID, root), refusal.expected);
+    assert.deepEqual(await repoState(root), before);
+  });
+}
 
 test("a missing run record is a clear error", async (t) => {
   const root = await repo(t);
