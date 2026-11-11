@@ -1317,9 +1317,14 @@ function chatTui(
         return term();
       }
       if (c.verb === "form") {
-        if (c.form === "new") return newForm();
-        if (c.form === "add") return addForm();
-        return loopForm();
+        switch (c.form) {
+          case "new":
+            return newForm();
+          case "add":
+            return addForm();
+          case "loop":
+            return loopForm();
+        }
       }
       if (c.verb === "delete") {
         editor.addToHistory(text);

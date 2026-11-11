@@ -375,7 +375,8 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       continue;
     }
     if (c.verb === "form") {
-      console.error(`! a form needs a terminal: ${COMMAND_USAGE[c.form]}`);
+      const usage = c.form === "loop" ? HELP[2] : COMMAND_USAGE[c.form];
+      console.error(`! a form needs a terminal: ${usage}`);
       continue;
     }
     // A pipe has no pick list: the live models are printed (M9-6).

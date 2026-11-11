@@ -967,13 +967,14 @@ function panelParts({
       submenu: (_, done) => {
         const value = values[f.id] ?? "";
         const pick = typeof f.pick === "function" ? f.pick(values) : f.pick;
+        const owner = panel;
         let open = true;
         const finish = (v?: string) => {
           open = false;
           done(v);
         };
         let now: Component = {
-          render: () => [dim("loading…")],
+          render: () => [dim("loading…"), dim("Esc back")],
           handleInput: (key) => {
             if (matchesKey(key, Key.escape)) finish();
           },
@@ -989,7 +990,7 @@ function panelParts({
           if (!options.length && f.empty) {
             const empty = f.empty;
             now = {
-              render: () => [dim(empty)],
+              render: () => [dim(empty), dim("Esc back")],
               handleInput: (key) => {
                 if (matchesKey(key, Key.enter) || matchesKey(key, Key.escape)) {
                   finish();
@@ -1014,14 +1015,14 @@ function panelParts({
         if (pick instanceof Promise) {
           void pick.then(
             (options) => {
-              if (!open) return;
+              if (!open || panel !== owner) return;
               loaded(options);
               tui.requestRender();
             },
             (err) => {
-              if (!open) return;
-              if (panel) {
-                panel.error = `cannot load ${f.label}: ${printable((err as Error).message)}`;
+              if (!open || panel !== owner) return;
+              if (owner) {
+                owner.error = `cannot load ${f.label}: ${printable((err as Error).message)}`;
               }
               finish();
               tui.requestRender();
@@ -1064,8 +1065,8 @@ function panelParts({
 
   /** The harness row: a pick list of the ready harnesses (#367), then
    *  `other…` to type a name. A text box while `ready` is unset: the daemon
-   *  has no `GET /harnesses`, or it has not answered. `–` is no harness: an
-   *  empty room, or `command` instead. */
+   *  has no `GET /harnesses`, or it has not answered. `–` is no harness for
+   *  an empty room or a command; a loop's empty harness is its default, claude. */
   const harnessField = () => ({
     id: "agent",
     label: "harness",
@@ -1254,7 +1255,7 @@ function panelParts({
           verbatim: true,
           pick: async (v) => {
             const cwd = absoluteFolder(v.cwd || ".");
-            if (!cwd) return [];
+            if (!cwd) throw new Error(FOLDER_GONE);
             const found = (await listRecipes(cwd)).filter((r) => r.wins);
             const names = found.map((r) => r.name);
             // A late read for a folder the person already left must not

@@ -19,6 +19,7 @@ import type {
   RoomDto,
 } from "../../client/contract.ts";
 import type { DaemonAddress } from "../../client/daemon.ts";
+import { FOLDER_GONE } from "../../client/folder.ts";
 import { loopFolders } from "../../client/loop.ts";
 import { newRoomState, type RoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
@@ -1026,6 +1027,18 @@ test("the loop form has the decided rows, refuses a blank task, and matches type
   );
   assert.ok(typed && "verb" in typed);
   assert.deepEqual(ran, [typed]);
+
+  // Clearing a verbatim note stores empty and restores the display marker.
+  for (let i = 0; i < 4; i++) pressKey(box, "\x1b[A");
+  pressKey(box, "\r");
+  type(box, "\x15\r");
+  assert.match(shownOf(box), /note\s+–/);
+  down(box, 4);
+  pressKey(box, "\r");
+  const cleared = ran[1] as Extract<RouteCommand, { verb: "loop" }> | undefined;
+  assert.ok(cleared);
+  assert.equal(cleared.verb, "loop");
+  assert.equal(cleared.note, undefined, "a cleared note is not sent");
 });
 
 test("the loop form's harness and model rows use the ready agents' saved lists (#458)", async (t) => {
@@ -1129,6 +1142,7 @@ test("the loop recipe row follows its folder, and no recipes refuses start with 
   down(box, 1);
   pressKey(box, "\r");
   await until("the empty recipe state", () => /no recipes/.test(shownOf(box)));
+  assert.match(shownOf(box), /Esc back/);
   pressKey(box, "\r");
   down(box, 1);
   pressKey(box, "\r");
@@ -1143,6 +1157,47 @@ test("the loop recipe row follows its folder, and no recipes refuses start with 
     assert.ok(box.panel?.error?.includes(folder), folder);
   }
   assert.match(shownOf(box), /task\s+a task/, "the entered values stay");
+});
+
+test("the loop recipe row reports a removed current folder, and accepts a full path (#458)", async (t) => {
+  await isolatedRecipeConfig(t);
+  const cwd = await recipeRepo(t, "still-there", ["fix"]);
+  t.mock.method(process, "cwd", () => {
+    throw new Error("gone");
+  });
+  const box = makeBox(NO_DAEMON_YET);
+  box.loopForm();
+  down(box, 1);
+  pressKey(box, "\r");
+  await new Promise((ok) => setImmediate(ok));
+  assert.equal(box.panel?.error, `cannot load recipe: ${FOLDER_GONE}`);
+  assert.doesNotMatch(shownOf(box), /no recipes/);
+
+  // A full path needs no current folder, so it recovers after the refusal.
+  pressKey(box, "\x1b[A");
+  pressKey(box, "\r");
+  type(box, `\x15${cwd}\r`);
+  down(box, 1);
+  pressKey(box, "\r");
+  await until("recipes through a full path", () => /fix/.test(shownOf(box)));
+});
+
+test("a recipe load failure does not write into a replacement pop-up (#468)", async (t) => {
+  await isolatedRecipeConfig(t);
+  t.mock.method(process, "cwd", () => {
+    throw new Error("gone");
+  });
+  const box = makeBox(NO_DAEMON_YET);
+  box.loopForm();
+  down(box, 1);
+  pressKey(box, "\r");
+  box.showPanel("replacement", {
+    render: () => ["replacement"],
+    invalidate() {},
+  });
+  await new Promise((ok) => setImmediate(ok));
+  assert.equal(box.panel?.title, "replacement");
+  assert.equal(box.panel?.error, undefined);
 });
 
 test("the loop recipe row reads the same folder again when it opens again (#458)", async (t) => {

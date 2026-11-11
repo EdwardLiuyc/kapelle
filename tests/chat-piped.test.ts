@@ -699,7 +699,8 @@ test("piped chat.ts refuses a bare /new, /add or /loop, and /term: each needs a 
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stderr, /! a form needs a terminal: \/new/);
   assert.match(r.stderr, /! a form needs a terminal: \/add </);
-  assert.match(r.stderr, /! a form needs a terminal: usage: \/loop/);
+  assert.match(r.stderr, /! a form needs a terminal: \/loop </);
+  assert.doesNotMatch(r.stderr, /form needs a terminal: usage: \/loop/);
   assert.match(r.stderr, /! a shell needs the full-screen chat/);
 });
 
