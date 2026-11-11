@@ -477,6 +477,14 @@ export const modelConfirmed = (
  *  line says so at once. It claims neither why nor what runs: a set that
  *  timed out may still apply, and a harness may rename the id. The room's
  *  notice says both, the one place that saw them. */
+/** Why a model did not land, the same words for `kapelle room add` and
+ *  `/loop` (M9-5b, M9-5c): the model asked for, then the one in use or none. */
+export const notConfirmedOn = (
+  asked: string | undefined,
+  p: ParticipantDto | undefined,
+) =>
+  `is not confirmed on the model "${asked}"; ${p?.model ? `it runs on "${p.model}"` : "it has no model"}`;
+
 const notOn = (asked: string | undefined, p: ParticipantDto | undefined) =>
   modelConfirmed(asked, p) ? "" : `; ! not confirmed on the model "${asked}"`;
 
@@ -573,11 +581,10 @@ export async function runCommand(
     const asked = c.body.agents?.[0]?.model;
     const po = r.body.participants[0];
     if (!modelConfirmed(asked, po)) {
-      const runs = po?.model ? `it runs on "${po.model}"` : "it has no model";
       return refused(
-        `${opened}, but ${ORCHESTRATOR} is not confirmed on the model ` +
+        `${opened}, but ${ORCHESTRATOR} ` +
           printable(
-            `"${asked}"; ${runs}. It has no start. To drop the room: kapelle chat dismiss ${r.body.id}`,
+            `${notConfirmedOn(asked, po)}. The room has no start. To drop the room: kapelle chat dismiss ${r.body.id}`,
           ),
         "model_not_confirmed",
         r.body,

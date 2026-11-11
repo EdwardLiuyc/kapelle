@@ -1,9 +1,10 @@
 /**
  * `kapelle loop` (M8-5, #269), driven as a real subprocess on a pipe against
  * a daemon with mock agents: the room, its orchestrator and its first
- * message, `--agent`, `--model` (M9-5c), a missing recipe and `list`. The lookup order and the
- * message's exact text are in `client/tests/loop.test.ts`; `/loop` in the
- * screens is in `tests/chat-piped.test.ts` and `tests/chat-tui-forms.test.ts`.
+ * message, `--agent`, `--model` (M9-5c), a missing recipe and `list`. The
+ * lookup order and the message's exact text are in
+ * `client/tests/loop.test.ts`; `/loop` in the screens is in
+ * `tests/chat-piped.test.ts` and `tests/chat-tui-forms.test.ts`.
  *
  * Each test gets its own `XDG_CONFIG_HOME`, so the developer's own recipes
  * never show.
@@ -202,7 +203,7 @@ test("kapelle loop --model sends the start only when po is on that model, and ke
     assert.ok(id, r.stderr);
     assert.equal(
       r.stderr,
-      `error: opened room fix-${task}, but po is not confirmed on the model "${asked}"; ${runs}. It has no start. To drop the room: kapelle chat dismiss ${id} (model_not_confirmed)\n`,
+      `error: opened room fix-${task}, but po is not confirmed on the model "${asked}"; ${runs}. The room has no start. To drop the room: kapelle chat dismiss ${id} (model_not_confirmed)\n`,
     );
     const room = (await api<RoomDto>(d, "GET", `/rooms/${id}`)).body;
     assert.equal(room.title, `fix-${task}`, "the room stays");

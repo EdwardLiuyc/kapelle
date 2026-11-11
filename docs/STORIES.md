@@ -3840,7 +3840,7 @@ refused one, a set with no answer, a swapped one, an agent with no model option,
 missing or empty value; and a unit test covers `/loop … --model`.
 **Decided 2026-11-11 (#432):** the room stays when the model does not land, as M9-5b
 keeps the agent, so the person can read its notice. The CLI does not check the saved model
-list before `POST /rooms` (D3): only the harness can confirm a model.
+list before `POST /rooms`, as M9's D3 says: only the harness can confirm a model.
 
 **M9-6 · Change the model during a chat · S · needs M9-5**
 `PATCH /rooms/:id/agents/:agentId` takes `model`, as it takes `mode` today. `@name /model`

@@ -38,6 +38,7 @@ import { text } from "node:stream/consumers";
 import {
   loopCommand,
   modelConfirmed,
+  notConfirmedOn,
   type RouteCommand,
   runCommand,
 } from "./client/command.ts";
@@ -1414,8 +1415,7 @@ function notOnModel(
   p: ParticipantDto | undefined,
 ): string | undefined {
   if (!p || modelConfirmed(asked, p)) return undefined;
-  const runs = p.model ? `it runs on "${p.model}"` : "it has no model";
-  return `${p.name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${p.name}`;
+  return `${p.name} joined, but ${notConfirmedOn(asked, p)}. Give it no work. To drop it: kapelle room remove ${p.name}`;
 }
 
 /**
@@ -1527,8 +1527,9 @@ async function runLoopCommand(): Promise<number> {
     "       kapelle loop list [--cwd dir]",
     "A recipe is <repo>/.kapelle/loops/<recipe>.md, or else",
     "$XDG_CONFIG_HOME/kapelle/loops/<recipe>.md. The orchestrator runs on claude",
-    "unless --agent or --cmd names another harness. With --model, a model it is",
-    "not confirmed on keeps the room but sends no start, and exits 1.",
+    "unless --agent or --cmd names another harness. With --model, it gets the",
+    "start only when it is confirmed on that model. If not, the room stays with",
+    "no start, and this exits 1.",
   ].join("\n");
   const [, first, ...args] = positional as string[];
   // `list` with a task after it is a recipe named list.
