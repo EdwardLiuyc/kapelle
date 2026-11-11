@@ -967,7 +967,9 @@ function panelParts({
       submenu: (_, done) => {
         const value = values[f.id] ?? "";
         const pick = typeof f.pick === "function" ? f.pick(values) : f.pick;
-        const owner = panel;
+        // askToAdd can put the same form body back under a new Panel, so
+        // identify the owner by the body rather than the Panel object.
+        const owner = panel?.body;
         let open = true;
         const finish = (v?: string) => {
           open = false;
@@ -1015,14 +1017,14 @@ function panelParts({
         if (pick instanceof Promise) {
           void pick.then(
             (options) => {
-              if (!open || panel !== owner) return;
+              if (!open || !owner || panel?.body !== owner) return;
               loaded(options);
               tui.requestRender();
             },
             (err) => {
-              if (!open || panel !== owner) return;
-              if (owner) {
-                owner.error = `cannot load ${f.label}: ${printable((err as Error).message)}`;
+              if (!open || !owner || panel?.body !== owner) return;
+              if (panel) {
+                panel.error = `cannot load ${f.label}: ${printable((err as Error).message)}`;
               }
               finish();
               tui.requestRender();

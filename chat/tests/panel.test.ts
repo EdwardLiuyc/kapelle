@@ -1200,6 +1200,36 @@ test("a recipe load failure does not write into a replacement pop-up (#468)", as
   assert.equal(box.panel?.error, undefined);
 });
 
+test("a recipe load lands when askToAdd puts the same form back (#468 review)", async (t) => {
+  await isolatedRecipeConfig(t);
+  const cwd = await recipeRepo(t, "restored", ["fix"]);
+  const box = makeBox(NO_DAEMON_YET);
+  box.loopForm();
+
+  pressKey(box, "\r");
+  type(box, `\x15${cwd}\r`);
+  down(box, 1);
+  pressKey(box, "\r");
+  assert.match(shownOf(box), /loading/);
+
+  // An earlier command's repo_not_added reply lands while this row loads.
+  box.askToAdd({
+    verb: "loop",
+    recipe: "fix",
+    task: "task",
+    body: { cwd: "/not-added", title: "fix-task", agents: [] },
+  });
+  assert.equal(box.panel?.title, "folder not added");
+  down(box, 1);
+  pressKey(box, "\r");
+  assert.equal(box.panel?.title, "loop", "back returns to the form");
+
+  await until("the recipe load in the restored form", () =>
+    /fix/.test(shownOf(box)),
+  );
+  assert.doesNotMatch(shownOf(box), /loading/);
+});
+
 test("the loop recipe row reads the same folder again when it opens again (#458)", async (t) => {
   await isolatedRecipeConfig(t);
   const cwd = await recipeRepo(t, "same-folder", ["one"]);
