@@ -3,8 +3,9 @@
  *
  * The box at the centre of the timeline (M4-5) and what it shows: the
  * ctrl+o menu, a pick list, a text box, the help, the setup list (M9-3),
- * and the two forms, new room and add agent. It owns the open pop-up. Esc
- * goes back one level, and a first-level menu closes it. A command it sends goes through the
+ * and the forms for a new room, an added agent and a loop (M9-5d).
+ * It owns the open pop-up. Esc goes back one level, and a first-level menu
+ * closes it. A command it sends goes through the
  * screen's `run`; the question box is `chat/tui/question.ts`.
  *
  * Typed letters filter a pick list (M7-5). Each menu row shows its slash
@@ -40,6 +41,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   HELP,
+  loopCommand,
   participantNow,
   type RouteCommand,
 } from "../../client/command.ts";
@@ -50,6 +52,7 @@ import {
   completeFolder,
   FOLDER_GONE,
 } from "../../client/folder.ts";
+import { listRecipes, loopFolders } from "../../client/loop.ts";
 import { nameOf, printable, roster } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import {
@@ -731,6 +734,7 @@ function panelParts({
     if (r) items.push(row("add", "add agent …", "/add"));
     if (r) items.push(row("title", "rename room …", "/title"));
     items.push(row("new", "new room …", "/new"));
+    items.push(row("loop", "loop …", "/loop"));
     if (r) items.push(row("dismiss", "dismiss room", "/dismiss"));
     if (r) items.push(row("delete", "delete room …", "/delete"));
     // A row for each room and agent, as the sidebar has, because the
@@ -783,6 +787,7 @@ function panelParts({
     if (value === "leave") return end(0, left());
     if (value === "help") return showHelp(self);
     if (value === "new") return newForm(self);
+    if (value === "loop") return loopForm(self);
     if (value === "add") return addForm(self);
     if (value === "dismiss") return void run({ verb: "dismiss" });
     if (value === "delete") {
@@ -882,7 +887,8 @@ function panelParts({
    * Esc goes; by default the pop-up closes.
    */
   // The fifth parameter is the optional Esc fallback, not a required input.
-  // pi-lens-ignore: long-parameter-list
+  // The shared row coordinator keeps text, folder, pick and async states together.
+  // pi-lens-ignore: long-parameter-list, high-fan-out, high-complexity
   const form = (
     title: string,
     fields: {
@@ -890,10 +896,18 @@ function panelParts({
       label: string;
       value: string;
       /** A pick list, or one worked out from the form's values when the row
-       *  opens; none there makes the row a text box. */
-      pick?: string[] | ((v: Record<string, string>) => string[] | undefined);
+       *  opens; none there makes the row a text box. A promise shows loading. */
+      pick?:
+        | string[]
+        | ((
+            v: Record<string, string>,
+          ) => string[] | undefined | Promise<string[] | undefined>);
+      /** What an empty asynchronous pick list says. */
+      empty?: string;
       /** Tab completes a folder path. */
       folder?: true;
+      /** Every value is literal: `–` and the `other…` names are not sentinels. */
+      verbatim?: true;
     }[],
     go: string,
     command: (v: Record<string, string>) => RouteCommand | { error: string },
@@ -902,11 +916,16 @@ function panelParts({
     const values: Record<string, string> = Object.fromEntries(
       fields.map((f) => [f.id, f.value]),
     );
+    const verbatim = new Set(fields.flatMap((f) => (f.verbatim ? [f.id] : [])));
     const show = (v: string) => v || "–";
     /** A text box that hands its value to `done`, or nothing on Esc. */
-    const field = (value: string, done: (v?: string) => void): Input => {
+    const field = (
+      value: string,
+      done: (v?: string) => void,
+      asIs = false,
+    ): Input => {
       const input = textBox(value);
-      input.onSubmit = (v) => done(show(v.trim()));
+      input.onSubmit = (v) => done(asIs ? v.trim() : show(v.trim()));
       input.onEscape = () => done();
       return input;
     };
@@ -915,8 +934,9 @@ function panelParts({
     const folderField = (
       value: string,
       done: (v?: string) => void,
+      asIs = false,
     ): Component => {
-      const input = field(value, done);
+      const input = field(value, done, asIs);
       let options: string[] = [];
       return {
         render(w) {
@@ -942,23 +962,77 @@ function panelParts({
       id: f.id,
       label: f.label,
       currentValue: show(f.value),
+      // One submenu owns the loading, picking, typing and closing states.
+      // pi-lens-ignore: high-complexity
       submenu: (_, done) => {
         const value = values[f.id] ?? "";
         const pick = typeof f.pick === "function" ? f.pick(values) : f.pick;
-        if (!pick)
-          return f.folder ? folderField(value, done) : field(value, done);
-        // The last pick can turn the list into a text box: a git ref.
-        let now: Component;
-        now = picker(
-          words(pick),
-          value,
-          (v) => {
-            if (!TYPE_IT.has(v)) return done(v);
-            now = field("", done);
-            tui.requestRender();
+        // askToAdd can put the same form body back under a new Panel, so
+        // identify the owner by the body rather than the Panel object.
+        const owner = panel?.body;
+        let open = true;
+        const finish = (v?: string) => {
+          open = false;
+          done(v);
+        };
+        let now: Component = {
+          render: () => [dim("loading…"), dim("Esc back")],
+          handleInput: (key) => {
+            if (matchesKey(key, Key.escape)) finish();
           },
-          () => done(),
-        );
+          invalidate() {},
+        };
+        const loaded = (options: string[] | undefined) => {
+          if (!options) {
+            now = f.folder
+              ? folderField(value, finish, f.verbatim)
+              : field(value, finish, f.verbatim);
+            return;
+          }
+          if (!options.length && f.empty) {
+            const empty = f.empty;
+            now = {
+              render: () => [dim(empty), dim("Enter/Esc back")],
+              handleInput: (key) => {
+                if (matchesKey(key, Key.enter) || matchesKey(key, Key.escape)) {
+                  finish();
+                }
+              },
+              invalidate() {},
+            };
+            return;
+          }
+          // The last pick can turn the list into a text box: a git ref.
+          now = picker(
+            words(options),
+            value,
+            (v) => {
+              if (f.verbatim || !TYPE_IT.has(v)) return finish(v);
+              now = field("", finish);
+              tui.requestRender();
+            },
+            () => finish(),
+          );
+        };
+        if (pick instanceof Promise) {
+          void pick.then(
+            (options) => {
+              if (!open || !owner || panel?.body !== owner) return;
+              loaded(options);
+              tui.requestRender();
+            },
+            (err) => {
+              if (!open || !owner || panel?.body !== owner) return;
+              if (panel) {
+                panel.error = `cannot load ${f.label}: ${printable((err as Error).message)}`;
+              }
+              finish();
+              tui.requestRender();
+            },
+          );
+        } else {
+          loaded(pick);
+        }
         return {
           render: (w) => now.render(w),
           handleInput: (k) => now.handleInput?.(k),
@@ -972,8 +1046,12 @@ function panelParts({
       panelRoom(),
       SETTINGS_THEME,
       (id, v) => {
-        if (id) values[id] = v === "–" ? "" : v;
-        else {
+        if (id) {
+          const next = verbatim.has(id) || v !== "–" ? v : "";
+          values[id] = next;
+          const item = items.find((i) => i.id === id);
+          if (item) item.currentValue = show(next);
+        } else {
           const c = command(values);
           if (!("error" in c)) void run(c);
           else if (panel) {
@@ -989,8 +1067,8 @@ function panelParts({
 
   /** The harness row: a pick list of the ready harnesses (#367), then
    *  `other…` to type a name. A text box while `ready` is unset: the daemon
-   *  has no `GET /harnesses`, or it has not answered. `–` is no harness: an
-   *  empty room, or `command` instead. */
+   *  has no `GET /harnesses`, or it has not answered. `–` is no harness for
+   *  an empty room or a command; a loop's empty harness is its default, claude. */
   const harnessField = () => ({
     id: "agent",
     label: "harness",
@@ -1156,6 +1234,79 @@ function panelParts({
       back,
     );
 
+  /** `/loop` as a form (M9-5d). The recipe list and its empty state belong
+   *  to the folder at the moment the row opens, not to the form's first cwd. */
+  const loopForm = (back: () => void = hidePanel) => {
+    let listedFolder: string | undefined;
+    let recipeNames: string[] = [];
+    form(
+      "loop",
+      [
+        {
+          id: "cwd",
+          label: "folder",
+          value: absoluteFolder() ?? "",
+          folder: true,
+          verbatim: true,
+        },
+        {
+          id: "recipe",
+          label: "recipe",
+          value: "",
+          empty: "no recipes",
+          verbatim: true,
+          pick: async (v) => {
+            const cwd = absoluteFolder(v.cwd || ".");
+            if (!cwd) throw new Error(FOLDER_GONE);
+            const found = (await listRecipes(cwd)).filter((r) => r.wins);
+            const names = found.map((r) => r.name);
+            // A late read for a folder the person already left must not
+            // validate a submission for the folder now in the form.
+            if (absoluteFolder(v.cwd || ".") === cwd) {
+              listedFolder = cwd;
+              recipeNames = names;
+            }
+            return names;
+          },
+        },
+        { id: "task", label: "task", value: "", verbatim: true },
+        { id: "note", label: "note", value: "", verbatim: true },
+        harnessField(),
+        { id: "cmd", label: "command", value: "", verbatim: true },
+        modelField(),
+      ],
+      "start",
+      (v) => {
+        const cwd = absoluteFolder(v.cwd || ".");
+        if (!cwd) return { error: FOLDER_GONE };
+        if (!v.task.trim()) return { error: "a task is required" };
+        if (listedFolder !== cwd) {
+          return {
+            error: "open the recipe row and choose one for this folder",
+          };
+        }
+        if (!recipeNames.length) {
+          return {
+            error: `no recipes: looked in ${loopFolders(cwd).join(" and ")}`,
+          };
+        }
+        if (!recipeNames.includes(v.recipe)) {
+          return { error: "choose a recipe from the list" };
+        }
+        return loopCommand({
+          recipe: v.recipe,
+          task: v.task,
+          note: v.note,
+          agent: v.agent,
+          cmd: v.cmd,
+          model: v.model,
+          cwd,
+        });
+      },
+      back,
+    );
+  };
+
   return {
     get panel() {
       return panel;
@@ -1172,6 +1323,7 @@ function panelParts({
     atStart,
     newForm,
     addForm,
+    loopForm,
     askToAdd,
   };
 }

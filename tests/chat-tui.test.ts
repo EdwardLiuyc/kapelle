@@ -507,14 +507,14 @@ test("a pop-up keeps a tool call's block in one gray background (#407)", {
   // pi-tui opens the right side again with the codes joined: `2;48;5;235`.
   const gray = /[[;]48;5;235m/;
   const [left = "", box = "", right = ""] = split(
-    rowOf(screen.out(), /┃ +add agent/),
+    rowOf(screen.out(), /┃ +rename room/),
   );
   assert.ok(
     gray.test(left) && gray.test(right),
     `the gray shows on both sides of the box: ${JSON.stringify([left, right])}`,
   );
   assert.ok(
-    box.includes("add agent") && !gray.test(box),
+    box.includes("rename room") && !gray.test(box),
     `no gray inside the box: ${JSON.stringify(box)}`,
   );
   await writeFile(join(ann.worktree, "runs.go"), "");

@@ -656,7 +656,8 @@ function chatTui(
     end: (code, ...last) => end(code, ...last),
     left,
   });
-  const { hidePanel, menu, showHelp, newForm, addForm, askToAdd } = box;
+  const { hidePanel, menu, showHelp, newForm, addForm, loopForm, askToAdd } =
+    box;
   const { question, offer, syncBox } = questionParts({
     d,
     fresh: set.fresh,
@@ -1315,7 +1316,20 @@ function chatTui(
         editor.addToHistory(text);
         return term();
       }
-      if (c.verb === "form") return c.form === "new" ? newForm() : addForm();
+      if (c.verb === "form") {
+        switch (c.form) {
+          case "new":
+            return newForm();
+          case "add":
+            return addForm();
+          case "loop":
+            return loopForm();
+          default: {
+            const unknown: never = c.form;
+            return unknown;
+          }
+        }
+      }
       if (c.verb === "delete") {
         editor.addToHistory(text);
         if (!(await previewDelete().catch(gone))) giveBack();

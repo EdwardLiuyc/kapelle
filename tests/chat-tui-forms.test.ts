@@ -138,7 +138,7 @@ test("the ctrl+o menu previews /delete and Enter confirms it", {
 
   await seen("○ mock-agent");
   await press("\x0f", "delete room …");
-  await press(`${DOWN.repeat(5)}\r`, "delete · 1 branch");
+  await press(`${DOWN.repeat(6)}\r`, "delete · 1 branch");
   await seen("dev.txt");
   await press("\r", "deleted room-");
   await seen("ctrl+o → new room");
@@ -505,6 +505,70 @@ test("/loop on the full screen opens <recipe>-<task>, and kapelle loop on a term
   assert.equal(await cli.exited, 0, cli.out());
   const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
   assert.deepEqual(rooms.body.map((r) => r.title).sort(), ["fix-10", "fix-9"]);
+});
+
+test("bare /loop opens its form from the composer (M9-5d, #458)", {
+  skip: noPty,
+}, async (t) => {
+  const { press, exited, out } = await chatOnPty(t);
+  await press("/loop\r", "recipe");
+  await press("\x1b", "enter to send");
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("the ctrl+o loop form posts po's model, and a model refusal keeps its values (M9-5d, #458)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(
+    d,
+    await gitRepo(t, { files: { ".kapelle/loops/fix.md": "steps\n" } }),
+  );
+  const screen = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts chat",
+    {
+      XDG_RUNTIME_DIR: runtime,
+      XDG_CONFIG_HOME: join(runtime, "config-home"),
+    },
+    "ctrl+o → new room",
+  );
+  await screen.press("\x0f", "loop …");
+  await screen.press("loop\r", "folder");
+  await screen.press("\r", "> ");
+  await screen.press(`\x15${cwd}\r`, "recipe");
+  await screen.press(`${DOWN}\r`, "fix");
+  await screen.press("\r", "task");
+  await screen.press(`${DOWN}\r`, "> ");
+  await screen.press("form refusal\r", "form refusal");
+  // From task: note, harness, command. A command leaves the model as text.
+  await screen.press(`${DOWN.repeat(3)}\r`, "> ");
+  await screen.press(`node ${MOCK_AGENT} --scenario models\r`, "model");
+  await screen.press(`${DOWN}\r`, "> ");
+  await screen.press("mock/bogus\r", "mock/bogus");
+  await screen.press(`${DOWN}\r`, "The room has no start");
+
+  const drawn = [...screenRows(screen.out()).values()].join("\n");
+  assert.match(drawn, /task\s+form refusal/);
+  assert.match(drawn, /model\s+mock\/bogus/);
+  assert.match(drawn, /not confirmed on the model/);
+  assert.match(drawn, /"mock\/bogus"; it runs on "mock\/fast"/);
+  const listed = await api<RoomReply[]>(d, "GET", "/rooms");
+  assert.equal(listed.body.length, 1, JSON.stringify(listed.body));
+  const room = listed.body[0];
+  assert.ok(room);
+  assert.equal(room.title, "fix-form refusal");
+  const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
+  assert.equal(full.status, 200, JSON.stringify(full.body));
+  assert.equal(full.body.participants.length, 1);
+  assert.equal(full.body.participants[0]?.model, "mock/fast");
+
+  await screen.press("\x1b", "new room …");
+  await screen.press("\x1b", "enter to send");
+  await screen.press(LEAVE, "left the chat");
+  assert.equal(await screen.exited, 0, screen.out());
 });
 
 test("the menu opens over the timeline with the sidebar hidden; a typed agent command with no @name is refused on the status line", {
@@ -1337,9 +1401,9 @@ test("the menu's help row shows the commands", {
     { XDG_RUNTIME_DIR: runtime },
     "ctrl+o → new room",
   );
-  // With no room, the menu is: new room …, help, leave.
+  // With no room, the menu is: new room …, loop …, help, leave.
   await press("\x0f", "new room …");
-  await press(`${DOWN}\r`, "@name /mode <ask|safe|auto>");
+  await press(`${DOWN.repeat(2)}\r`, "@name /mode <ask|safe|auto>");
   // Help is a second-level pop-up: Esc returns to the menu.
   await press("\x1b", "new room …");
   await press("\x1b", "enter to send");

@@ -687,18 +687,20 @@ test("piped chat.ts says how to add a folder that /new is refused for", async (t
   );
 });
 
-test("piped chat.ts refuses a bare /new or /add, and /term: each needs a terminal", async (t) => {
+test("piped chat.ts refuses a bare /new, /add or /loop, and /term: each needs a terminal", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
   const cwd = await added(d, await gitRepo(t));
   const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
   });
-  c.child.stdin.end("/new\n/add\n/term\n/leave\n");
+  c.child.stdin.end("/new\n/add\n/loop\n/term\n/leave\n");
   const r = await c.done;
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stderr, /! a form needs a terminal: \/new/);
   assert.match(r.stderr, /! a form needs a terminal: \/add </);
+  assert.match(r.stderr, /! a form needs a terminal: \/loop </);
+  assert.doesNotMatch(r.stderr, /form needs a terminal: usage: \/loop/);
   assert.match(r.stderr, /! a shell needs the full-screen chat/);
 });
 

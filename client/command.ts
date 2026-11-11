@@ -95,8 +95,8 @@ export type RouteCommand =
       };
     };
 
-/** What a typed line is: a command, a form to open (a bare `/new` or
- *  `/add`), what an agent changed (`/diff`, M4-6), the person's shell
+/** What a typed line is: a command, a form to open (a bare `/new`, `/add`
+ *  or `/loop`), what an agent changed (`/diff`, M4-6), the person's shell
  *  (`/term`, M4-13), the installed agents (`/setup`, M9-3), or a line that
  *  is refused before any request. */
 export type Command =
@@ -105,7 +105,7 @@ export type Command =
   | { verb: "help" }
   | { verb: "term" }
   | { verb: "setup"; done: boolean }
-  | { verb: "form"; form: "new" | "add" }
+  | { verb: "form"; form: "new" | "add" | "loop" }
   | { verb: "diff"; id: string; name: string; against: "head" | "base" }
   | { verb: "models"; id: string; name: string }
   | {
@@ -130,13 +130,13 @@ export const HELP = [
   "@name /diff [base]",
   "@name /ff --from @name",
   "/setup [done]   /term   /dismiss   /delete   /leave   /help",
-  "/new and /add alone open a form; ctrl+o opens the menu",
+  "/new, /add and /loop alone open forms; ctrl+o opens the menu",
 ];
 
 export const USAGE: Record<string, string> = {
   new: HELP[0] as string,
   add: HELP[1] as string,
-  loop: `usage: ${HELP[2]}`,
+  loop: HELP[2] as string,
   title: "usage: /title <new title>",
   cap: "usage: /cap <n>",
   rename: "usage: @name /rename <new name>",
@@ -300,12 +300,13 @@ export function parseCommand(
       : { error: USAGE.cap as string };
   }
   if (verb === "loop") {
+    if (!args.length) return { verb: "form", form: "loop" };
     const o = options(args, ["agent", "cmd", "model", "cwd"]);
-    if ("error" in o) return { error: `${o.error}; ${USAGE.loop}` };
+    if ("error" in o) return { error: `${o.error}; usage: ${USAGE.loop}` };
     const [recipe, task, note, ...extra] = o.positionals;
     // An empty model is a usage error, as in `kapelle loop` (M9-5c).
     if (!recipe || !task?.trim() || extra.length || o.values.model === "")
-      return { error: USAGE.loop as string };
+      return { error: `usage: ${USAGE.loop}` };
     const cwd = absoluteFolder(o.values.cwd);
     if (!cwd) return { error: FOLDER_GONE };
     return loopCommand({ ...o.values, recipe, task, note, cwd });

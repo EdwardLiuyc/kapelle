@@ -3853,6 +3853,22 @@ missing or empty value; and a unit test covers `/loop … --model`.
 keeps the agent, so the person can read its notice. The CLI does not check the saved model
 list before `POST /rooms`, as M9's D3 says: only the harness can confirm a model.
 
+**M9-5d · Add a pop-up form for `/loop` · S · needs M9-5c**
+Added 2026-11-11 (#458). The ctrl+o menu gets "loop …", and bare `/loop` opens the
+same form as bare `/new` and `/add`. Its form reuses the new-room folder, harness,
+command and model rows. The recipe row reads `listRecipes` for the
+folder in the form each time it opens. Submission builds `loopCommand`, so the form, typed
+`/loop` and `kapelle loop` send the same command. A refusal keeps the form and its values,
+including the model refusal from M9-5c.
+*Done when* bare `/loop` opens the form; the recipe list follows a changed folder; a
+blank task is refused without a request; a folder with no recipes shows "no recipes" and
+cannot start; a unit test compares
+the filled form with typed `/loop`; and the model reaches the orchestrator's entry.
+**Decided at pickup 2026-11-11 (#458):** the rows are folder, recipe, task, note, harness,
+command, model, start. With no recipes, the refusal names the searched recipe folders as
+plain text; there are no folder links. Bare `/loop` opens the form, as bare `/new` and
+`/add` do. Writing or editing a recipe and choosing workers' models stay out of scope.
+
 **M9-6 · Change the model during a chat · S · needs M9-5**
 `PATCH /rooms/:id/agents/:agentId` takes `model`, as it takes `mode` today. `@name /model`
 shows the running agent's live list and `@name /model <id>` picks one, in both screens.
@@ -4016,7 +4032,8 @@ every hit is rotated, `SECURITY.md` and the repository and package metadata are 
 `docs/RELEASING.md` and its `AGENTS.md` entry are present, and the macOS package test
 passes.
 
-**M9-8 · Publish to npm · S · needs M9-1..M9-7, M9-3b, M9-5b, M9-5c and M9-8a**
+**M9-8 · Publish to npm · S · needs M9-1..M9-7, M9-3b, M9-5b, M9-5c, M9-5d
+and M9-8a**
 The first release. The person does steps 1 and 2 by hand.
 
 1. Make an npm account and turn on 2FA.
@@ -4126,10 +4143,10 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 **M9 (added 2026-10-15)** needs nothing that is open. More stories will join it.
 
 ```text
-M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b ─ M9-5c
+M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b ─ M9-5c ─ M9-5d
 M9-2 ─┘        └─ M9-3b        └─ M9-6
 M9-7 ─ M9-8a
-M9-1..M9-7, M9-3b, M9-5b, M9-5c, M9-8a ─ M9-8   (the first publish)
+M9-1..M9-7, M9-3b, M9-5b, M9-5c, M9-5d, M9-8a ─ M9-8   (the first publish)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
