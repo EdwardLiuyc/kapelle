@@ -1200,8 +1200,10 @@ An agent takes:
 - `base`: optional. The git ref the participant's branch starts from. It can be another
   participant's `branch`, so a reviewer starts from the developer's commits. The default
   is the repository's `HEAD`. Only committed work is on a branch. The participant's
-  `baseSha` records the resolved commit; if the harness later rebases the branch, the
-  daemon moves `baseSha` to the commit the rebase moved it onto.
+  `baseSha` records the resolved commit as provenance. Only a detected rebase moves it,
+  to the commit the rebase moved the work onto; a merge, a fast-forward or a reset leaves
+  it unchanged. The [`?against=base` diff route](#get-roomsidagentsagentiddiff) owns how
+  its comparison is chosen.
 - `settings`: optional. `{ "allowReadOutsideRoot": false }` is the only setting today, and
   that is its default. `true` lets the harness read files outside its checkout through
   the daemon. The daemon never writes there for it. This is not isolation: it covers only
@@ -1280,12 +1282,13 @@ The participant `id` is opaque. `title`, `role`, `branch` and `baseSha` are miss
 there is no value. `branch` and `baseSha` are missing when `cwd` cannot carry a git
 checkout; then `worktree` is `cwd` itself.
 
-`branch` and `baseSha` are read again at the end of every turn: a harness may run
-`git branch -m` or rebase its branch, so both can change while the room is open. The
-daemon updates its record before it sends `_client_turn_ended`, and writes `room.json` a
-moment later. A client that shows the branch should read `GET /rooms/:id` again when a
-turn ends. A client that shows the whole-branch diff needs no extra step: each diff
-request derives its base from the current refs, independently of the saved `baseSha`.
+`branch` is read again at the end of every turn: a harness may run `git branch -m`, so
+it can change while the room is open. `baseSha` is read too, but only the detected rebase
+movement described for `base` changes it. The daemon updates its record before it sends
+`_client_turn_ended`, and writes `room.json` a moment later. A client that shows the
+branch should read `GET /rooms/:id` again when a turn ends. A client that shows the
+whole-branch diff needs no extra step: each diff request derives its comparison base from
+the current topology, independently of the saved `baseSha`.
 
 **Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
@@ -1647,15 +1650,16 @@ this is how a person sees its work before they ask it to commit.
 
 - `?against=head` (the default): what is not committed yet.
 - `?against=base`: the whole branch, from the current merge base of the participant's
-  `HEAD` and the base ref configured when it was added. The branch's own commits are in
-  it too, but commits that came only from the base are not. A movable base ref follows
-  its current target, including after a rebase, merge, fast-forward, reset or branch
-  switch. If that ref rewinds while the saved `baseSha` remains on the participant's
-  `HEAD`, the saved SHA stays the comparison base; a participant reset behind that SHA
-  still uses the current merge base. A pinned SHA does not follow a branch, but its merge
-  base with `HEAD` can be older when `HEAD` leaves its history. The default repository
-  `HEAD` keeps its branch ref, or its SHA when detached. If the configured ref was deleted,
-  or an old room record has no ref, the saved `baseSha` is the fallback.
+  `HEAD` and the base ref configured when it was added. The saved `baseSha` is only the
+  fallback described below. The branch's own commits are in it too, but commits that came
+  only from the base are not. A movable base ref follows its current target, including
+  after a rebase, merge, fast-forward, reset or branch switch. If that ref rewinds while
+  the saved `baseSha` remains on the participant's `HEAD`, the saved SHA stays the
+  comparison base; a participant reset behind that SHA still uses the current merge base.
+  A pinned SHA does not follow a branch, but its merge base with `HEAD` can be older when
+  `HEAD` leaves its history. The default repository `HEAD` keeps its branch ref, or its
+  SHA when detached. If the configured ref was deleted, or an old room record has no ref,
+  the saved `baseSha` is the fallback.
 
 New files that git does not track are in both, as new files. Ignored files are not. The
 daemon reads the checkout and changes nothing in it, not even git's index. Each request is

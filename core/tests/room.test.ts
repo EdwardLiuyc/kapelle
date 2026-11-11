@@ -1556,6 +1556,52 @@ test("a harness that rebases moves the base its whole-branch diff starts at", as
   assert.doesNotMatch(diff.text, /base\.txt/);
 });
 
+for (const operation of ["merge", "fast-forward", "reset"] as const) {
+  test(`a plain ${operation} leaves the room's saved base as provenance`, async (t) => {
+    const { room, p } = await roomOn(t, "read-only");
+    const repo = room.meta.cwd;
+    const file = roomFile(repo, room.meta.id);
+    const before = p.baseSha;
+    assert.ok(before);
+
+    if (operation !== "fast-forward") await commitIn(p, "agent.txt");
+    await writeFile(join(repo, "base.txt"), "new base\n");
+    await git(repo, "add", "base.txt");
+    await git(repo, "commit", "-m", "base moves");
+    const newer = await git(repo, "rev-parse", "HEAD");
+    assert.notEqual(newer, before);
+
+    if (operation === "merge") {
+      await git(p.worktree, "merge", "--no-edit", "main");
+      const parents = await git(
+        p.worktree,
+        "show",
+        "-s",
+        "--format=%P",
+        "HEAD",
+      );
+      assert.equal(parents.split(" ").length, 2);
+    } else if (operation === "fast-forward") {
+      await git(p.worktree, "merge", "--ff-only", "main");
+      assert.equal(await git(p.worktree, "rev-parse", "HEAD"), newer);
+    } else {
+      await git(p.worktree, "reset", "--hard", "main");
+      assert.equal(await git(p.worktree, "rev-parse", "HEAD"), newer);
+    }
+
+    await p.send("go");
+    assert.equal(p.baseSha, before);
+    // The record the turn saved, not the one room.json held at open: a turn's
+    // save carries its count and the idle status it ended in.
+    let saved: RoomRecord["participants"][number] | undefined;
+    await until(() => {
+      saved = readRoomRecord(file).participants[0];
+      return saved?.turns === 1 && saved.status === "idle";
+    }, "room.json holds the record the turn saved");
+    assert.equal(saved?.baseSha, before);
+  });
+}
+
 // --- pause, restore and revive (M6-7a) -------------------------------------
 
 /** A room of one `scenario` participant, as `roomOn` makes it, with the
