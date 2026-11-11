@@ -507,6 +507,16 @@ test("/loop on the full screen opens <recipe>-<task>, and kapelle loop on a term
   assert.deepEqual(rooms.body.map((r) => r.title).sort(), ["fix-10", "fix-9"]);
 });
 
+test("bare /loop opens its form from the composer (M9-5d, #458)", {
+  skip: noPty,
+}, async (t) => {
+  const { press, exited, out } = await chatOnPty(t);
+  await press("/loop\r", "recipe");
+  await press("\x1b", "enter to send");
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
 test("the ctrl+o loop form posts po's model, and a model refusal keeps its values (M9-5d, #458)", {
   skip: noPty,
 }, async (t) => {

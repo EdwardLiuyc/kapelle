@@ -46,6 +46,7 @@ test("room commands ignore a leading mention", () => {
   assert.deepEqual(parse("@bob /term"), { verb: "term" });
   assert.deepEqual(parse("@bob /add"), { verb: "form", form: "add" });
   assert.deepEqual(parse("/new"), { verb: "form", form: "new" });
+  assert.deepEqual(parse("/loop"), { verb: "form", form: "loop" });
 });
 
 test("/add takes a harness or --cmd, and quotes keep spaces", () => {
@@ -360,12 +361,7 @@ test("/loop opens <recipe>-<task> with po in auto, on claude unless --agent or -
     error:
       'usage: /loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--model id] [--cwd dir]',
   };
-  for (const s of [
-    "/loop",
-    "/loop fix",
-    '/loop fix "   "',
-    "/loop fix 1 note more",
-  ]) {
+  for (const s of ["/loop fix", '/loop fix "   "', "/loop fix 1 note more"]) {
     assert.deepEqual(parse(s), usage, s);
   }
   const bad = parse("/loop fix 1 --mode ask");

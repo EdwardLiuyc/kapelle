@@ -3854,18 +3854,20 @@ keeps the agent, so the person can read its notice. The CLI does not check the s
 list before `POST /rooms`, as M9's D3 says: only the harness can confirm a model.
 
 **M9-5d · Add a pop-up form for `/loop` · S · needs M9-5c**
-Added 2026-11-11 (#458). The ctrl+o menu gets "loop …". Its form reuses the new-room
-folder, harness, command and model rows. The recipe row reads `listRecipes` for the
+Added 2026-11-11 (#458). The ctrl+o menu gets "loop …", and bare `/loop` opens the
+same form as bare `/new` and `/add`. Its form reuses the new-room folder, harness,
+command and model rows. The recipe row reads `listRecipes` for the
 folder in the form each time it opens. Submission builds `loopCommand`, so the form, typed
 `/loop` and `kapelle loop` send the same command. A refusal keeps the form and its values,
 including the model refusal from M9-5c.
-*Done when* the recipe list follows a changed folder; a blank task is refused without a
-request; a folder with no recipes shows "no recipes" and cannot start; a unit test compares
+*Done when* bare `/loop` opens the form; the recipe list follows a changed folder; a
+blank task is refused without a request; a folder with no recipes shows "no recipes" and
+cannot start; a unit test compares
 the filled form with typed `/loop`; and the model reaches the orchestrator's entry.
 **Decided at pickup 2026-11-11 (#458):** the rows are folder, recipe, task, note, harness,
 command, model, start. With no recipes, the refusal names the searched recipe folders as
-plain text; there are no folder links. Writing or editing a recipe and choosing workers'
-models stay out of scope.
+plain text; there are no folder links. Bare `/loop` opens the form, as bare `/new` and
+`/add` do. Writing or editing a recipe and choosing workers' models stay out of scope.
 
 **M9-6 · Change the model during a chat · S · needs M9-5**
 `PATCH /rooms/:id/agents/:agentId` takes `model`, as it takes `mode` today. `@name /model`
