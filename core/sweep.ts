@@ -464,7 +464,10 @@ async function roomBranches(
     `refs/heads/${prefix.slice(0, -1)}`,
   ]);
   const branches = new Set(refs.split("\n").filter(Boolean));
-  for (const p of record?.participants ?? []) {
+  for (const p of [
+    ...(record?.participants ?? []),
+    ...(record?.tombstones ?? []),
+  ]) {
     const branch = p.branch;
     if (!branch || branches.has(branch)) continue;
     let original: string;
@@ -531,7 +534,10 @@ export async function roomDeletePreview(
     outside.push("HEAD");
   }
   const names = new Map<string, string>();
-  for (const p of record?.participants ?? []) {
+  for (const p of [
+    ...(record?.participants ?? []),
+    ...(record?.tombstones ?? []),
+  ]) {
     if (p.branch) names.set(p.branch, p.name);
   }
 
@@ -995,7 +1001,8 @@ async function sweepRooms(pass: RepoPass): Promise<Set<string>> {
     let changed = fixed !== record;
     // A crash or a shutdown's grace can kill a turn. Once per lock: the
     // notice stays in the record while the file does, and goes at the boot
-    // after it is deleted, revived or not.
+    // after it is deleted, revived or not. Tombstones have no live harness and
+    // their notices are frozen; nothing displays a tombstone notice today.
     for (const p of fixed.participants) {
       const noted = p.notices.filter(isLockNotice);
       if (p.status !== "killed" && noted.length === 0) continue;

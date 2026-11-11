@@ -1488,6 +1488,16 @@ test("a room left active is paused, its busy participant killed, and its log unt
     record.participants.map((p) => p.status),
     ["killed", "paused", "exited"],
   );
+  // SAFETY: room.json is written from a RoomRecord; this reads one field.
+  const raw = JSON.parse(await readFile(file, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(
+    Object.hasOwn(raw, "tombstones"),
+    false,
+    "the sweep does not write an empty tombstones field",
+  );
   assert.equal(await readFile(log, "utf8"), '{"seq":1}\n', "no line added");
   for (const worktree of worktrees) {
     assert.equal(existsSync(worktree), true, "a room's checkout is no orphan");

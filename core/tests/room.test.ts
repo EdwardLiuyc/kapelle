@@ -37,6 +37,7 @@ import {
   gatedGit,
   gitRepo,
   HOSTILE_AGENT,
+  hasBranch,
   isolateStateHome,
   MOCK_AGENT,
   tempDir,
@@ -1637,6 +1638,182 @@ test("room.json holds the room and its participant from the start", async (t) =>
   assert.equal(saved?.branch, p.branch);
   assert.match(saved?.cmd ?? "", /--scenario remember$/);
   assert.equal(saved?.status, "idle");
+  // SAFETY: room.json is written from a RoomRecord; this reads one field.
+  const raw = JSON.parse(await readFile(file, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(
+    Object.hasOwn(raw, "tombstones"),
+    false,
+    "a room with no tombstone keeps the optional field out of room.json",
+  );
+});
+
+test("a saved unknown agent is tombstoned and the rest of the room restores (#312)", async (t) => {
+  const { repo, room, file, roomId } = await pausable(t, "remember");
+  await room.pause();
+  const saved = readRoomRecord(file);
+  const valid = saved.participants[0] as RoomRecord["participants"][number];
+  const unknown = {
+    ...valid,
+    id: "p-missing1",
+    name: "gone",
+    worktree: join(stateDirFor(repo), "wt", roomId, "p-missing1"),
+    agent: "missing-harness",
+  };
+  delete unknown.cmd;
+  const record: RoomRecord = {
+    ...saved,
+    participants: [valid, unknown],
+  };
+  const notices: string[] = [];
+  const history = room.eventLog?.size ?? 0;
+  const backBus = createEventBus();
+  const backEvents: AgentEventEnvelope[] = [];
+  backBus.addListener((event) => backEvents.push(event));
+  const back = await restoreRoom({
+    record,
+    setup: await openWorktrees(repo, roomId),
+    bus: backBus,
+    permissions: queue,
+    log: (line) => notices.push(line),
+  });
+  t.after(() => back.dismiss());
+
+  assert.deepEqual(
+    back.participants.map((p) => p.id),
+    [valid.id],
+    "only the resolvable participant is active",
+  );
+  assert.equal(back.participants[0]?.harness, valid.harness);
+  assert.deepEqual(
+    backEvents
+      .filter(
+        (event) =>
+          event.agent === unknown.id &&
+          event.update.sessionUpdate === "_client_participant_removed",
+      )
+      .map((event) => event.agent),
+    [unknown.id],
+    "the stream gets the roster removal a replay needs",
+  );
+  const stored = readRoomRecord(file);
+  assert.deepEqual(stored.tombstones, [unknown], "the full record is kept");
+  assert.equal(stored.tombstones?.[0]?.sessionId, unknown.sessionId);
+  assert.equal(stored.tombstones?.[0]?.branch, unknown.branch);
+  const notice = notices.join("\n");
+  for (const part of [roomId, "missing-harness", roomFile(repo, roomId)]) {
+    assert.ok(notice.includes(part), notice);
+  }
+
+  // Close the first restore's log so its removal line is committed, then
+  // restore the same record again. The existing tombstone is not a new
+  // roster change, so it must not append the removal twice.
+  await back.pause();
+  assert.equal(
+    back.eventLog?.size,
+    history + 1,
+    "history survives and one removal is recorded",
+  );
+  const secondBus = createEventBus();
+  const secondEvents: AgentEventEnvelope[] = [];
+  secondBus.addListener((event) => secondEvents.push(event));
+  const secondNotices: string[] = [];
+  const second = await restoreRoom({
+    record: readRoomRecord(file),
+    setup: await openWorktrees(repo, roomId),
+    bus: secondBus,
+    permissions: queue,
+    log: (line) => secondNotices.push(line),
+  });
+  t.after(() => second.dismiss());
+  assert.equal(second.eventLog?.size, history + 1, "no removal is repeated");
+  assert.deepEqual(secondNotices, [], "an old tombstone is not re-announced");
+  assert.equal(
+    secondEvents.filter(
+      (event) => event.update.sessionUpdate === "_client_participant_removed",
+    ).length,
+    0,
+  );
+
+  await second.participants[0]?.send("go");
+  assert.equal(second.participants[0]?.status(), "idle");
+  assert.equal(
+    second.participants[0]?.resumed,
+    "fresh",
+    "custom cmd still works",
+  );
+});
+
+test("dismissing a room with only tombstones releases their clean checkouts (#312)", async (t) => {
+  const { repo, room, file, roomId } = await pausable(t, "remember");
+  await room.pause();
+  const record = readRoomRecord(file);
+  const saved = record.participants[0];
+  assert.ok(saved?.branch);
+  saved.agent = "missing-harness";
+  delete saved.cmd;
+
+  const back = await restoreRoom({
+    record,
+    setup: await openWorktrees(repo, roomId),
+    bus: createEventBus(),
+    permissions: queue,
+    log: () => {},
+  });
+  t.after(() => back.dismiss());
+  assert.deepEqual(back.participants, []);
+
+  await back.dismiss();
+  assert.equal(existsSync(saved.worktree), false);
+  assert.equal(hasBranch(repo, saved.branch), false);
+});
+
+test("buildRoom closes its log and clears its watchdog after a failure (#312)", async (t) => {
+  const { repo, room, file, roomId } = await pausable(t, "remember");
+  await room.pause();
+  const record = readRoomRecord(file);
+  await rm(join(stateDirFor(repo), "rooms", roomId), {
+    recursive: true,
+    force: true,
+  });
+
+  const bus = createEventBus();
+  const setup = await openWorktrees(repo, roomId);
+  assert.ok(setup.worktrees);
+  setup.worktrees = {
+    ...setup.worktrees,
+    adopt(id) {
+      bus.emit({
+        agent: id,
+        update: {
+          sessionUpdate: "_client_stall_warning",
+          kind: "idle",
+          text: "before failure",
+        },
+      });
+      throw new Error("test build failure");
+    },
+  };
+  const set = t.mock.method(globalThis, "setInterval");
+  const clear = t.mock.method(globalThis, "clearInterval");
+
+  await assert.rejects(
+    restoreRoom({ record, setup, bus, permissions: queue, log: () => {} }),
+    /test build failure/,
+  );
+  const timer = set.mock.calls[0]?.result;
+  assert.ok(timer, "the room started its watchdog interval");
+  assert.deepEqual(
+    clear.mock.calls.at(-1)?.arguments,
+    [timer],
+    "the watchdog interval is cleared",
+  );
+  assert.ok(
+    existsSync(join(stateDirFor(repo), "rooms", roomId, "events.idx")),
+    "closing the log writes its index",
+  );
 });
 
 test("room.json shows a participant busy during its turn", async (t) => {
@@ -1930,7 +2107,7 @@ test("forget removes the room's folder, and a save queued before it writes nothi
   );
 });
 
-test("a record with a role outside the set, or a title that is not text, is refused", async (t) => {
+test("a record with a bad role, title or tombstone field is refused", async (t) => {
   const { room, file } = await pausable(t, "remember");
   await room.pause();
   const record = readRoomRecord(file);
@@ -1942,6 +2119,19 @@ test("a record with a role outside the set, or a title that is not text, is refu
   assert.throws(() => readRoomRecord(file), /has role "boss"/);
   writeRoomRecord(file, { ...record, title: 7 as unknown as string });
   assert.throws(() => readRoomRecord(file), /"title" is not a string/);
+  writeRoomRecord(file, {
+    ...record,
+    tombstones: "not a list" as unknown as RoomRecord["tombstones"],
+  });
+  assert.throws(() => readRoomRecord(file), /"tombstones" is not a list/);
+  writeRoomRecord(file, {
+    ...record,
+    tombstones: [{ ...saved, name: 7 as unknown as string }],
+  });
+  assert.throws(
+    () => readRoomRecord(file),
+    /the tombstones list: a participant's "name" is not a string/,
+  );
 });
 
 // --- session/load on revive (M6-7b) -----------------------------------------

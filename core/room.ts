@@ -30,6 +30,16 @@
  * into `paused` and `killed` (`crashed`, below), and `restoreRoom` builds the
  * room again from the file, without starting a harness.
  *
+ * **A saved harness that no longer resolves is tombstoned** (#312). Its full
+ * record stays in `room.json` under `tombstones`, outside the active roster,
+ * so its checkout and branch remain known to delete. The rest of the room
+ * restores normally, the daemon logs the room, agent and record path when the
+ * participant is first tombstoned, and a writable restored log gets a
+ * participant-removed line so a replay drops it from the roster. A dismissed
+ * room's log stays read-only. A tombstone is permanent: later restores do not
+ * retry the agent, even if the harness is installed again. Deleting the room
+ * is the supported way to remove it.
+ *
  * **A stopped participant revives on its next message.** `paused`, `killed`
  * and `exited` all take the same path: a new harness in the same checkout.
  * It loads the old session when the harness advertises `loadSession` and
@@ -234,6 +244,7 @@ import {
   LinkPathError,
   NotFastForward,
   type WorktreeSetup,
+  type Worktrees,
 } from "./worktree.ts";
 
 /** How many messages may wait behind a participant's live turn (R41). */
@@ -498,6 +509,9 @@ export interface RoomRecord extends Omit<RoomMeta, "turnCap" | "turnCount"> {
   status: RoomStatus;
   notices: RoomNotice[];
   participants: ParticipantRecord[];
+  /** Participants whose saved harness no longer resolves. They are not in
+   *  the active roster, but their branch and worktree stay known to delete. */
+  tombstones?: ParticipantRecord[];
 }
 
 export interface Room {
@@ -836,12 +850,16 @@ export const roomFile = (root: string, roomId: string) =>
  * Writes `room.json` with a temp file and `rename`, as `run.json` is, so a
  * reader sees the old record or the new one and never half of either. The
  * temp name carries the pid, because the boot sweep writes the same file.
+ * An empty `tombstones` is omitted here, the one writer both paths use, so the
+ * optional field does not grow back during a sweep.
  */
 export function writeRoomRecord(path: string, record: RoomRecord): void {
   const tmp = `${path}.${process.pid}.tmp`;
+  const { tombstones, ...rest } = record;
+  const written = tombstones?.length ? { ...rest, tombstones } : rest;
   // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
   // pi-lens-ignore: no-raw-json-store-write
-  writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  writeFileSync(tmp, `${JSON.stringify(written, null, 2)}\n`, "utf8");
   renameSync(tmp, path);
 }
 
@@ -878,26 +896,70 @@ export function readRoomRecord(path: string): RoomRecord {
     throw bad('"title" is not a string');
   }
   if (!Array.isArray(r.participants)) throw bad('"participants" is not a list');
-  for (const p of r.participants as Record<string, unknown>[]) {
-    for (const key of ["id", "name", "harness", "worktree", "sessionId"]) {
-      if (typeof p?.[key] !== "string") {
-        throw bad(`a participant's "${key}" is not a string`);
+  if (r.tombstones !== undefined && !Array.isArray(r.tombstones)) {
+    throw bad('"tombstones" is not a list');
+  }
+  const participants = r.participants as Record<string, unknown>[];
+  const tombstones = (r.tombstones ?? []) as Record<string, unknown>[];
+  for (const [where, records] of [
+    ["participants", participants],
+    ["tombstones", tombstones],
+  ] as const) {
+    for (const p of records) {
+      for (const key of ["id", "name", "harness", "worktree", "sessionId"]) {
+        if (typeof p?.[key] !== "string") {
+          throw bad(
+            `the ${where} list: a participant's "${key}" is not a string`,
+          );
+        }
+      }
+      if (typeof p.agent !== "string" && typeof p.cmd !== "string") {
+        throw bad(
+          `the ${where} list: participant ${p.id} names no "agent" or "cmd"`,
+        );
+      }
+      if (!MODES.includes(p.mode as ClientMode)) {
+        throw bad(
+          `the ${where} list: participant ${p.id} has mode ${JSON.stringify(p.mode)}`,
+        );
+      }
+      if (!PARTICIPANT_STATUSES.includes(p.status as ParticipantStatus)) {
+        throw bad(
+          `the ${where} list: participant ${p.id} has status ${JSON.stringify(p.status)}`,
+        );
+      }
+      // The contract's set is closed (R44): a client may trust it.
+      if (p.role !== undefined && !ROLES.includes(p.role as Role)) {
+        throw bad(
+          `the ${where} list: participant ${p.id} has role ${JSON.stringify(p.role)}`,
+        );
       }
     }
-    if (typeof p.agent !== "string" && typeof p.cmd !== "string") {
-      throw bad(`participant ${p.id} names no "agent" or "cmd"`);
-    }
-    if (!MODES.includes(p.mode as ClientMode)) {
-      throw bad(`participant ${p.id} has mode ${JSON.stringify(p.mode)}`);
-    }
-    if (!PARTICIPANT_STATUSES.includes(p.status as ParticipantStatus)) {
-      throw bad(`participant ${p.id} has status ${JSON.stringify(p.status)}`);
-    }
-    // The contract's set is closed (R44): a client may trust it.
-    if (p.role !== undefined && !ROLES.includes(p.role as Role)) {
-      throw bad(`participant ${p.id} has role ${JSON.stringify(p.role)}`);
-    }
   }
+  const normalise = (p: Record<string, unknown>): ParticipantRecord => {
+    // SAFETY: the checks above cover every required ParticipantRecord field.
+    const saved = p as unknown as ParticipantRecord;
+    return {
+      ...saved,
+      settings: {
+        allowReadOutsideRoot: saved.settings?.allowReadOutsideRoot === true,
+      },
+      notices: Array.isArray(saved.notices) ? saved.notices : [],
+      // A `turns` that is not a whole number, or an `orderedBy` that is not a
+      // string, is dropped, so it is never saved again.
+      turns: Number.isInteger(saved.turns) ? saved.turns : undefined,
+      orderedBy:
+        typeof saved.orderedBy === "string" ? saved.orderedBy : undefined,
+      model:
+        typeof saved.model === "string" && saved.model
+          ? saved.model
+          : undefined,
+      pendingModel:
+        typeof saved.pendingModel === "string" && saved.pendingModel
+          ? saved.pendingModel
+          : undefined,
+    };
+  };
   return {
     ...(raw as RoomRecord),
     turnCap:
@@ -909,22 +971,8 @@ export function readRoomRecord(path: string): RoomRecord {
         ? (r.turnCount as number)
         : undefined,
     notices: Array.isArray(r.notices) ? (r.notices as RoomNotice[]) : [],
-    participants: (r.participants as ParticipantRecord[]).map((p) => ({
-      ...p,
-      settings: {
-        allowReadOutsideRoot: p.settings?.allowReadOutsideRoot === true,
-      },
-      notices: Array.isArray(p.notices) ? p.notices : [],
-      // A `turns` that is not a whole number, or an `orderedBy` that is not a
-      // string, is dropped, so it is never saved again.
-      turns: Number.isInteger(p.turns) ? p.turns : undefined,
-      orderedBy: typeof p.orderedBy === "string" ? p.orderedBy : undefined,
-      model: typeof p.model === "string" && p.model ? p.model : undefined,
-      pendingModel:
-        typeof p.pendingModel === "string" && p.pendingModel
-          ? p.pendingModel
-          : undefined,
-    })),
+    participants: participants.map(normalise),
+    tombstones: tombstones.map(normalise),
   };
 }
 
@@ -951,6 +999,116 @@ export function crashed(record: RoomRecord): RoomRecord {
         ? { ...p, status: crashedStatus(p) }
         : p,
     ),
+  };
+}
+
+/** Read the checkout once when a participant is first tombstoned, so its
+ *  record names the branch the harness left it on. Later restores do not retry
+ *  it. A read that fails keeps the saved identity. */
+async function syncTombstoneCheckout(
+  saved: ParticipantRecord,
+): Promise<ParticipantRecord> {
+  if (!saved.branch || !saved.baseSha) return saved;
+  let found: Awaited<ReturnType<typeof checkoutIdentity>>;
+  try {
+    found = await checkoutIdentity(saved.worktree, saved.branch);
+  } catch {
+    return saved;
+  }
+  if (!found) return saved;
+  let next = saved;
+  if (found.branch !== saved.branch) {
+    const { branchRenamed: _oldRename, ...rest } = saved;
+    next = {
+      ...rest,
+      branch: found.branch,
+      ...(found.renamedFrom === saved.branch && {
+        branchRenamed: true as const,
+      }),
+    };
+  }
+  if (found.rebaseBase !== undefined && found.rebaseBase !== saved.baseSha) {
+    next = { ...next, baseSha: found.rebaseBase };
+  }
+  return next;
+}
+
+/** Add an unresolved participant once, without duplicating a tombstone. */
+function rememberTombstone(
+  tombstones: ParticipantRecord[],
+  known: Set<string>,
+  saved: ParticipantRecord,
+): boolean {
+  if (known.has(saved.id)) return false;
+  tombstones.push(saved);
+  known.add(saved.id);
+  return true;
+}
+
+/** Hold a tombstone's checkout, so a dismiss can release it like a member. */
+function adoptTombstone(
+  worktrees: Worktrees | null,
+  saved: ParticipantRecord,
+): void {
+  if (
+    !worktrees ||
+    !saved.branch ||
+    !saved.baseSha ||
+    !existsSync(saved.worktree)
+  ) {
+    return;
+  }
+  worktrees.adopt(saved.id, {
+    branch: saved.branch,
+    baseSha: saved.baseSha,
+    ...(saved.baseRef && { baseRef: saved.baseRef }),
+    ...(saved.branchRenamed === true && { renamed: true }),
+  });
+}
+
+/** Move saved participants whose harness no longer resolves out of the active
+ *  roster. Their full record stays as a tombstone, so delete can still find
+ *  the checkout and a branch the participant renamed. */
+async function tombstoneUnknownAgents(
+  record: RoomRecord,
+  root: string,
+  log: (line: string) => void,
+  worktrees: Worktrees | null,
+): Promise<{ record: RoomRecord; tombstoned: ParticipantRecord[] }> {
+  const tombstones = [...(record.tombstones ?? [])];
+  const known = new Set(tombstones.map((p) => p.id));
+  const participants: ParticipantRecord[] = [];
+  const tombstoned: ParticipantRecord[] = [];
+  for (const saved of record.participants) {
+    try {
+      resolveAgent(saved.agent ?? "", saved.cmd);
+      participants.push(saved);
+    } catch {
+      if (rememberTombstone(tombstones, known, saved)) tombstoned.push(saved);
+    }
+  }
+  let changed =
+    participants.length !== record.participants.length ||
+    tombstones.length !== (record.tombstones?.length ?? 0);
+  const fresh = new Set(tombstoned.map((p) => p.id));
+  for (const [i, saved] of tombstones.entries()) {
+    const isNew = fresh.has(saved.id);
+    const next = isNew ? await syncTombstoneCheckout(saved) : saved;
+    if (next !== saved) changed = true;
+    tombstones[i] = next;
+    adoptTombstone(worktrees, next);
+    if (isNew) {
+      log(
+        `room ${record.id} at ${roomFile(root, record.id)}: participant ` +
+          `${next.name} (${next.id}) cannot resolve saved agent ` +
+          `${JSON.stringify(next.agent ?? next.cmd ?? "")}; kept out of the ` +
+          "active roster as a tombstone",
+      );
+    }
+  }
+  return {
+    record: changed ? { ...record, participants, tombstones } : record,
+    tombstoned,
   };
 }
 
@@ -993,14 +1151,20 @@ export async function openRoom({
  * harness starts: each participant waits, `paused`, `killed` or `exited`,
  * for its next message. Each checkout is held again, never created. The log
  * is reopened for appending, with `seq` carried on, or read only for a
- * dismissed room. Throws when a participant's harness no longer resolves.
+ * dismissed room. A participant whose harness no longer resolves becomes a
+ * tombstone; another failure throws.
  */
 export async function restoreRoom({
   record,
   turnCap,
   ...deps
 }: RoomDeps & { record: RoomRecord }): Promise<Room> {
-  const from = crashed(record);
+  const { record: from, tombstoned } = await tombstoneUnknownAgents(
+    crashed(record),
+    deps.setup.root,
+    deps.log ?? ((line) => console.error(line)),
+    deps.setup.worktrees,
+  );
   const meta: RoomMeta = {
     id: from.id,
     cwd: from.cwd,
@@ -1010,7 +1174,7 @@ export async function restoreRoom({
     turnCount: from.turnCount ?? 0,
   };
   if (from.title !== undefined) meta.title = from.title;
-  const built = await buildRoom(deps, meta, from);
+  const built = await buildRoom(deps, meta, from, tombstoned);
   built.keepSaved();
   return built.room;
 }
@@ -1030,6 +1194,7 @@ async function buildRoom(
   }: RoomDeps,
   meta: RoomMeta,
   from?: RoomRecord,
+  tombstoned: readonly ParticipantRecord[] = [],
 ): Promise<{ room: Room; keepSaved: () => void }> {
   const { worktrees, notice, root } = setup;
   const roomId = meta.id;
@@ -1155,6 +1320,7 @@ async function buildRoom(
         status: status(),
         notices: [...roomNotices],
         participants: members.map(recordOf),
+        tombstones: [...(from?.tombstones ?? [])],
       });
     } catch (err) {
       // Once: a full disk would add the same line on every turn.
@@ -1270,6 +1436,9 @@ async function buildRoom(
         await Promise.all(members.map((m) => m.stop()));
         for (const { participant: p, onNotice } of members) {
           await release(p.id, p.worktree, onNotice);
+        }
+        for (const saved of from?.tombstones ?? []) {
+          await release(saved.id, saved.worktree, onRoomNotice);
         }
       } finally {
         clearInterval(sweep);
@@ -1627,122 +1796,147 @@ async function buildRoom(
     return target;
   };
 
-  // A restored roster: each participant as it was saved, its checkout held
-  // again so a dismiss can release it.
-  for (const saved of from?.participants ?? []) {
-    const spec = resolveAgent(saved.agent ?? "", saved.cmd);
-    const request: AgentRequest = {
-      spec,
-      source:
-        saved.cmd !== undefined
-          ? { cmd: saved.cmd }
-          : { agent: saved.agent as string },
-      name: saved.name,
-      mode: saved.mode,
-      settings: saved.settings,
-      ...(saved.role && { role: saved.role }),
-      ...(saved.model && { model: saved.model }),
-    };
-    const info =
-      saved.branch && saved.baseSha
-        ? {
-            branch: saved.branch,
-            baseSha: saved.baseSha,
-            ...(saved.baseRef && { baseRef: saved.baseRef }),
-          }
-        : undefined;
-    if (info) {
-      worktrees?.adopt(saved.id, {
-        ...info,
-        ...(saved.branchRenamed === true && { renamed: true }),
-      });
-    }
-    const m = makeMember(
-      request,
-      saved.id,
-      saved.worktree,
-      info,
-      [...saved.notices],
-      saved,
-    );
-    // A crash can leave `room.json` older than the checkout: a rename or a
-    // rebase in a turn that never ended. Read the truth before the record is
-    // kept.
-    await m.syncCheckout();
-    members.push(m);
-    participants.push(m.participant);
-  }
-
-  const room: Room = {
-    meta,
-    participants,
-    eventLog,
-    status,
-    add: (request) => track(start(request)),
-    update,
-    setModel: (id, model) => track(setModel(id, model)),
-    retitle(title) {
-      if (ended()) throw dismissed();
-      meta.title = title;
-    },
-    send(id, text, from) {
-      if (ended()) throw dismissed();
-      const target = participants.find((p) => p.id === id);
-      if (!target) {
-        throw new RoomRefusal("participant_not_found", `no participant ${id}`);
-      }
-      if (meta.turnCount >= meta.turnCap) {
-        bus.emit({
-          agent: id,
-          update: { sessionUpdate: "_client_turn_cap_reached" },
+  try {
+    // A restored roster: each participant as it was saved, its checkout held
+    // again so a dismiss can release it.
+    for (const saved of from?.participants ?? []) {
+      const spec = resolveAgent(saved.agent ?? "", saved.cmd);
+      const request: AgentRequest = {
+        spec,
+        source:
+          saved.cmd !== undefined
+            ? { cmd: saved.cmd }
+            : { agent: saved.agent as string },
+        name: saved.name,
+        mode: saved.mode,
+        settings: saved.settings,
+        ...(saved.role && { role: saved.role }),
+        ...(saved.model && { model: saved.model }),
+      };
+      const info =
+        saved.branch && saved.baseSha
+          ? {
+              branch: saved.branch,
+              baseSha: saved.baseSha,
+              ...(saved.baseRef && { baseRef: saved.baseRef }),
+            }
+          : undefined;
+      if (info) {
+        worktrees?.adopt(saved.id, {
+          ...info,
+          ...(saved.branchRenamed === true && { renamed: true }),
         });
-        throw new RoomRefusal(
-          "turn_cap",
-          `the orchestrator reached this room's ${meta.turnCap}-turn cap; ` +
-            "raise it with /cap <n>",
-        );
       }
-      const turn = target.send(text, from);
-      meta.turnCount += 1;
-      return turn;
-    },
-    raiseTurnCap(turnCap) {
-      if (ended()) throw dismissed();
-      if (!Number.isInteger(turnCap) || turnCap < 1) {
-        throw new RoomRefusal(
-          "invalid_request",
-          '"turnCap" must be a whole number 1 or greater',
-        );
-      }
-      if (turnCap <= meta.turnCap) {
-        throw new RoomRefusal(
-          "invalid_request",
-          `"turnCap" must be greater than the room's current cap (${meta.turnCap})`,
-        );
-      }
-      meta.turnCap = turnCap;
-    },
-    remove: (id) => track(remove(id)),
-    fastForward: (targetId, fromId) => track(forward(targetId, fromId)),
-    dismiss: teardown,
-    pause,
-    touch() {
-      meta.updatedAt = new Date().toISOString();
-      save();
-    },
-    forget() {
-      // A queued save reads `saving` when it runs, so this stops it too.
-      saving = false;
-      rmSync(logDir, { recursive: true, force: true });
-    },
-  };
-  return {
-    room,
-    keepSaved() {
-      saving = true;
-      save();
-    },
-  };
+      const m = makeMember(
+        request,
+        saved.id,
+        saved.worktree,
+        info,
+        [...saved.notices],
+        saved,
+      );
+      // A crash can leave `room.json` older than the checkout: a rename or a
+      // rebase in a turn that never ended. Read the truth before the record is
+      // kept.
+      await m.syncCheckout();
+      members.push(m);
+      participants.push(m.participant);
+    }
+
+    const room: Room = {
+      meta,
+      participants,
+      eventLog,
+      status,
+      add: (request) => track(start(request)),
+      update,
+      setModel: (id, model) => track(setModel(id, model)),
+      retitle(title) {
+        if (ended()) throw dismissed();
+        meta.title = title;
+      },
+      send(id, text, from) {
+        if (ended()) throw dismissed();
+        const target = participants.find((p) => p.id === id);
+        if (!target) {
+          throw new RoomRefusal(
+            "participant_not_found",
+            `no participant ${id}`,
+          );
+        }
+        if (meta.turnCount >= meta.turnCap) {
+          bus.emit({
+            agent: id,
+            update: { sessionUpdate: "_client_turn_cap_reached" },
+          });
+          throw new RoomRefusal(
+            "turn_cap",
+            `the orchestrator reached this room's ${meta.turnCap}-turn cap; ` +
+              "raise it with /cap <n>",
+          );
+        }
+        const turn = target.send(text, from);
+        meta.turnCount += 1;
+        return turn;
+      },
+      raiseTurnCap(turnCap) {
+        if (ended()) throw dismissed();
+        if (!Number.isInteger(turnCap) || turnCap < 1) {
+          throw new RoomRefusal(
+            "invalid_request",
+            '"turnCap" must be a whole number 1 or greater',
+          );
+        }
+        if (turnCap <= meta.turnCap) {
+          throw new RoomRefusal(
+            "invalid_request",
+            `"turnCap" must be greater than the room's current cap (${meta.turnCap})`,
+          );
+        }
+        meta.turnCap = turnCap;
+      },
+      remove: (id) => track(remove(id)),
+      fastForward: (targetId, fromId) => track(forward(targetId, fromId)),
+      dismiss: teardown,
+      pause,
+      touch() {
+        meta.updatedAt = new Date().toISOString();
+        save();
+      },
+      forget() {
+        // A queued save reads `saving` when it runs, so this stops it too.
+        saving = false;
+        rmSync(logDir, { recursive: true, force: true });
+      },
+    };
+    return {
+      room,
+      keepSaved() {
+        // A tombstone is a roster change even though no harness produced it.
+        // Without this line a replay keeps the participant from its earlier
+        // `_client_participant_added` event. A dismissed room has no writable
+        // log and is hidden from the chat, so it needs no line.
+        if (from?.status !== "dismissed") {
+          for (const saved of tombstoned) {
+            bus.emit({
+              agent: saved.id,
+              update: { sessionUpdate: "_client_participant_removed" },
+            });
+          }
+        }
+        saving = true;
+        save();
+      },
+    };
+  } catch (err) {
+    clearInterval(sweep);
+    try {
+      await eventLog?.close();
+    } catch {
+      // Keep the cause that stopped the room from opening.
+    }
+    throw err;
+  }
 }
 
 /**
