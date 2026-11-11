@@ -2853,6 +2853,13 @@ dismissed room is not revived by the same path.
 **Added 2026-09-29 (#180):** after a restart, the room reducer (`client/room.ts`) shows the
 `paused` or `killed` state that `GET /rooms/:id` reports, and a turn the crash cut reads
 as cut, tested from a recorded stream. M6-10 moved this case here.
+**Recovered from an unresolvable saved agent (#312, 2026-11-11):** decisions 1A, 2A and
+3A. When `readRoomRecord` succeeds but `resolveAgent` rejects a saved agent, the room
+removes that participant from its active roster and keeps its full record in
+`room.json`'s `tombstones`. The rest of the room restores, remains listable and can be
+deleted; the daemon logs the room, agent and record path. Other restore failures still
+skip the room with a `404`, and every `buildRoom` failure closes its log and watchdog.
+A custom `cmd` participant is unaffected.
 Decisions: R17, R33, R42, R46, S3, S4.
 
 **M6-7c · Room delete and retention · S · needs M6-7a**

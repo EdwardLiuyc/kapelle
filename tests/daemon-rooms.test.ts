@@ -42,6 +42,7 @@ import type {
   RoomListEntry,
 } from "../client/contract.ts";
 import type { Named } from "../client/mention.ts";
+import { readRoomRecord, writeRoomRecord } from "../core/room.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import {
   addRepo as added,
@@ -2702,6 +2703,80 @@ test("a dismissed room that cannot be built is listed until its first use, then 
         line.includes("no longer inside"),
     );
   assert.ok(skipped, stderr);
+});
+
+// The test drives the restart, tombstone write, dirty refusal and delete: one flow.
+// pi-lens-ignore: high-fan-out
+test("a room with unknown saved agents restores, lists and deletes (#312)", async (t) => {
+  const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
+  const lost = await addAgent(first, id, { cmd: REMEMBER, name: "lost" });
+  assert.ok(alice.branch);
+  assert.ok(lost.branch);
+  const renamed = `kapelle-renamed-${lost.id}`;
+  execFileSync("git", ["branch", "-m", renamed], { cwd: lost.worktree });
+  const dirty = join(lost.worktree, "tombstone-dirty.txt");
+  await writeFile(dirty, "keep me\n");
+
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const path = join(stateDirFor(cwd), "rooms", id, "room.json");
+  const record = readRoomRecord(path);
+  const savedAlice = record.participants.find((p) => p.id === alice.id);
+  const savedLost = record.participants.find((p) => p.id === lost.id);
+  assert.ok(savedAlice);
+  assert.ok(savedLost);
+  delete savedAlice.cmd;
+  savedAlice.agent = "missing-harness";
+  delete savedLost.cmd;
+  savedLost.agent = "missing-harness";
+  savedLost.branch = renamed;
+  savedLost.branchRenamed = true;
+  writeRoomRecord(path, record);
+
+  const second = await again();
+  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const entry = list.body.find((r) => r.id === id);
+  assert.equal(entry?.status, "paused");
+  assert.deepEqual(
+    entry?.participants,
+    [],
+    "an empty room is still listed after both participants are tombstoned",
+  );
+  const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  assert.equal(got.status, 200);
+  assert.deepEqual(got.body.participants, []);
+  const stored = readRoomRecord(path);
+  assert.deepEqual(
+    stored.tombstones?.map((p) => p.id),
+    [alice.id, lost.id],
+    "both full participant records are kept as tombstones",
+  );
+  assert.equal(stored.tombstones?.[1]?.branch, renamed);
+  assert.equal(stored.tombstones?.[1]?.branchRenamed, true);
+
+  const refused = await api(second, "DELETE", `/rooms/${id}`);
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error.code, "uncommitted_work");
+  assert.match(refused.body.error.message, /tombstone-dirty\.txt/);
+  await rm(dirty);
+  const deleted = await api(second, "DELETE", `/rooms/${id}`);
+  assert.equal(deleted.status, 204);
+  assert.equal(existsSync(lost.worktree), false, "the tombstone checkout goes");
+  assert.equal(existsSync(alice.worktree), false, "the other checkout goes");
+  assert.equal(hasBranch(cwd, renamed), false, "the renamed branch goes");
+  assert.equal(hasBranch(cwd, alice.branch), false, "the room branch goes");
+
+  process.kill(second.pid, "SIGTERM");
+  const { stderr } = await second.done;
+  const notices = stderr
+    .split("\n")
+    .filter(
+      (line) =>
+        line.includes(id) &&
+        line.includes("missing-harness") &&
+        line.includes(path),
+    );
+  assert.equal(notices.length, 2, stderr);
 });
 
 // The test drives the whole room-lifecycle flow: its call count is the test.

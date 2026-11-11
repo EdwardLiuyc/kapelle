@@ -1639,6 +1639,97 @@ test("room.json holds the room and its participant from the start", async (t) =>
   assert.equal(saved?.status, "idle");
 });
 
+test("a saved unknown agent is tombstoned and the rest of the room restores (#312)", async (t) => {
+  const { repo, room, file, roomId } = await pausable(t, "remember");
+  await room.pause();
+  const saved = readRoomRecord(file);
+  const valid = saved.participants[0] as RoomRecord["participants"][number];
+  const unknown = {
+    ...valid,
+    id: "p-missing1",
+    name: "gone",
+    worktree: join(stateDirFor(repo), "wt", roomId, "p-missing1"),
+    agent: "missing-harness",
+  };
+  delete unknown.cmd;
+  const record: RoomRecord = {
+    ...saved,
+    participants: [valid, unknown],
+  };
+  const notices: string[] = [];
+  const back = await restoreRoom({
+    record,
+    setup: await openWorktrees(repo, roomId),
+    bus: createEventBus(),
+    permissions: queue,
+    log: (line) => notices.push(line),
+  });
+  t.after(() => back.dismiss());
+
+  assert.deepEqual(
+    back.participants.map((p) => p.id),
+    [valid.id],
+    "only the resolvable participant is active",
+  );
+  assert.equal(back.participants[0]?.harness, valid.harness);
+  assert.equal(back.eventLog?.size, room.eventLog?.size, "history survives");
+  const stored = readRoomRecord(file);
+  assert.deepEqual(stored.tombstones, [unknown], "the full record is kept");
+  assert.equal(stored.tombstones?.[0]?.sessionId, unknown.sessionId);
+  assert.equal(stored.tombstones?.[0]?.branch, unknown.branch);
+  const notice = notices.join("\n");
+  for (const part of [roomId, "missing-harness", roomFile(repo, roomId)]) {
+    assert.ok(notice.includes(part), notice);
+  }
+
+  await back.participants[0]?.send("go");
+  assert.equal(back.participants[0]?.status(), "idle");
+  assert.equal(
+    back.participants[0]?.resumed,
+    "fresh",
+    "custom cmd still works",
+  );
+});
+
+test("buildRoom closes its log and clears its watchdog after a failure (#312)", async (t) => {
+  const { repo, room, file, roomId } = await pausable(t, "remember");
+  await room.pause();
+  const record = readRoomRecord(file);
+  await rm(join(stateDirFor(repo), "rooms", roomId), {
+    recursive: true,
+    force: true,
+  });
+
+  const bus = createEventBus();
+  const setup = await openWorktrees(repo, roomId);
+  assert.ok(setup.worktrees);
+  setup.worktrees = {
+    ...setup.worktrees,
+    adopt(id) {
+      bus.emit({
+        agent: id,
+        update: {
+          sessionUpdate: "_client_stall_warning",
+          kind: "idle",
+          text: "before failure",
+        },
+      });
+      throw new Error("test build failure");
+    },
+  };
+  const clear = t.mock.method(globalThis, "clearInterval");
+
+  await assert.rejects(
+    restoreRoom({ record, setup, bus, permissions: queue, log: () => {} }),
+    /test build failure/,
+  );
+  assert.ok(clear.mock.callCount() >= 1, "the watchdog interval is cleared");
+  assert.ok(
+    existsSync(join(stateDirFor(repo), "rooms", roomId, "events.idx")),
+    "closing the log writes its index",
+  );
+});
+
 test("room.json shows a participant busy during its turn", async (t) => {
   const { p, file } = await pausable(t, "stall");
   const turn = p.send("hi");

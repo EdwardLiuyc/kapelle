@@ -1791,6 +1791,12 @@ reads every record back:
   replay does not carry it, so the daemon cannot filter it out.
 - A dismissed room comes back dismissed. Its stream ends once it has replayed. It never
   revives.
+- When the daemon reads a saved room, a participant whose saved `agent` is no longer in
+  the registry does not fail the whole room. The daemon logs a notice naming the room, the
+  agent and the full `room.json` path, moves that participant's full record to
+  `tombstones`, and restores the remaining roster. The room stays listable and can be
+  deleted, and the tombstone keeps its branch and checkout ownership. An unreadable record
+  or another restore failure is still skipped with the existing notice and `404`.
 - A `killed` participant whose checkout has a git `index.lock` left by the cut turn gets
   one notice naming the file, at the next boot. A crash and a shutdown's grace both cut a
   turn. Git refuses to commit there until the file is removed. The daemon does not remove
@@ -1809,6 +1815,9 @@ participant       id, name, role?, harness, mode, settings,
                   sessionId, resumed?: "loaded" | "fresh",
                   status: idle | busy | exited | paused | killed | dismissed,
                   turnFrom?
+tombstones        full participant records moved out of the active roster because
+                  their saved agent no longer resolves; used to keep branch and
+                  checkout ownership for delete
 room list         [{id, cwd, title, status, updatedAt,
                     participants: [{id, name, role?, status}]}]
 room detail       the room fields above, plus every participant in full

@@ -464,7 +464,10 @@ async function roomBranches(
     `refs/heads/${prefix.slice(0, -1)}`,
   ]);
   const branches = new Set(refs.split("\n").filter(Boolean));
-  for (const p of record?.participants ?? []) {
+  for (const p of [
+    ...(record?.participants ?? []),
+    ...(record?.tombstones ?? []),
+  ]) {
     const branch = p.branch;
     if (!branch || branches.has(branch)) continue;
     let original: string;
@@ -531,7 +534,10 @@ export async function roomDeletePreview(
     outside.push("HEAD");
   }
   const names = new Map<string, string>();
-  for (const p of record?.participants ?? []) {
+  for (const p of [
+    ...(record?.participants ?? []),
+    ...(record?.tombstones ?? []),
+  ]) {
     if (p.branch) names.set(p.branch, p.name);
   }
 
