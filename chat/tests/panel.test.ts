@@ -1028,6 +1028,70 @@ test("the loop form has the decided rows, refuses a blank task, and matches type
   assert.deepEqual(ran, [typed]);
 });
 
+test("the loop form's harness and model rows use the ready agents' saved lists (#458)", async (t) => {
+  await isolatedRecipeConfig(t);
+  const cwd = await recipeRepo(t, "saved-models", ["fix"]);
+  const fake = await fakeDaemon(t, {
+    got: {
+      checkedAt: "now",
+      done: true,
+      harnesses: [
+        {
+          id: "pi",
+          measured: true,
+          state: "ready",
+          models: [{ id: "m-start", name: "Start" }],
+        },
+      ],
+    },
+  });
+  const ran: RouteCommand[] = [];
+  const box = makeBox(fake.d, {
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  await box.atStart();
+  box.loopForm();
+
+  // Folder, recipe and task.
+  pressKey(box, "\r");
+  type(box, `\x15${cwd}\r`);
+  down(box, 1);
+  pressKey(box, "\r");
+  await until("the recipe", () => /fix/.test(shownOf(box)));
+  pressKey(box, "\r");
+  down(box, 1);
+  pressKey(box, "\r");
+  type(box, "use the saved model\r");
+
+  // The harness row is the ready-agent picker, not a text box.
+  down(box, 2);
+  pressKey(box, "\r");
+  assert.match(shownOf(box), /–[\s\S]*pi[\s\S]*other…/);
+  type(box, "pi\r");
+
+  // With no command, the model row is pi's saved-model picker.
+  down(box, 2);
+  pressKey(box, "\r");
+  assert.match(shownOf(box), /–[\s\S]*m-start[\s\S]*other model…/);
+  type(box, "m-start\r");
+
+  down(box, 1);
+  pressKey(box, "\r");
+  assert.equal(ran.length, 1);
+  const c = ran[0];
+  assert.ok(c && c.verb === "loop");
+  assert.deepEqual(c.body.agents?.[0], {
+    agent: "pi",
+    model: "m-start",
+    name: "po",
+    role: "orchestrator",
+    mode: "auto",
+  });
+});
+
 test("the loop recipe row follows its folder, and no recipes refuses start with plain folder names (M9-5d, #458)", async (t) => {
   await isolatedRecipeConfig(t);
   const first = await recipeRepo(t, "first", ["one"]);
@@ -1079,6 +1143,71 @@ test("the loop recipe row follows its folder, and no recipes refuses start with 
     assert.ok(box.panel?.error?.includes(folder), folder);
   }
   assert.match(shownOf(box), /task\s+a task/, "the entered values stay");
+});
+
+test("the loop recipe row reads the same folder again when it opens again (#458)", async (t) => {
+  await isolatedRecipeConfig(t);
+  const cwd = await recipeRepo(t, "same-folder", ["one"]);
+  const box = makeBox(NO_DAEMON_YET);
+  box.loopForm();
+
+  pressKey(box, "\r");
+  type(box, `\x15${cwd}\r`);
+  down(box, 1);
+  pressKey(box, "\r");
+  await until("the first recipe", () => /one/.test(shownOf(box)));
+  pressKey(box, "\x1b");
+
+  await writeFile(join(cwd, ".kapelle", "loops", "later.md"), "later");
+  pressKey(box, "\r");
+  await until("a new recipe in the same folder", () =>
+    /later/.test(shownOf(box)),
+  );
+});
+
+test("the loop form refuses a recipe from a previous folder until the row is opened again (#458)", async (t) => {
+  await isolatedRecipeConfig(t);
+  const first = await recipeRepo(t, "first-folder", ["fix"]);
+  const second = await recipeRepo(t, "second-folder", ["fix"]);
+  const ran: RouteCommand[] = [];
+  const box = makeBox(NO_DAEMON_YET, {
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  box.loopForm();
+
+  // Choose fix in the first folder.
+  pressKey(box, "\r");
+  type(box, `\x15${first}\r`);
+  down(box, 1);
+  pressKey(box, "\r");
+  await until("the first folder's recipe", () => /fix/.test(shownOf(box)));
+  pressKey(box, "\r");
+
+  // Enter a task, then change the folder without opening the recipe row.
+  down(box, 1);
+  pressKey(box, "\r");
+  type(box, "same recipe name\r");
+  pressKey(box, "\x1b[A");
+  pressKey(box, "\x1b[A");
+  pressKey(box, "\r");
+  type(box, `\x15${second}\r`);
+
+  // The old recipe name exists in the new folder too. It still needs a new
+  // look at the list before the form may start.
+  pressKey(box, "\x1b[A");
+  pressKey(box, "\r");
+
+  assert.deepEqual(ran, [], "no room request is sent");
+  assert.equal(box.panel?.title, "loop");
+  assert.equal(
+    box.panel?.error,
+    "open the recipe row and choose one for this folder",
+  );
+  assert.match(shownOf(box), /recipe\s+fix/, "the old recipe stays shown");
+  assert.match(shownOf(box), /task\s+same recipe name/);
 });
 
 test("the loop form's folder row completes with Tab (M9-5d, #458)", async (t) => {
