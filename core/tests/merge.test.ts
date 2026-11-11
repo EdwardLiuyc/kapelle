@@ -152,11 +152,15 @@ const RECORD_REFUSALS: RecordRefusal[] = [
   },
 ];
 
-async function repoState(root: string): Promise<[string, string, string]> {
+async function repoState(
+  root: string,
+): Promise<[string, string, string, string]> {
   return Promise.all([
     git(root, "rev-parse", "HEAD"),
     git(root, "for-each-ref", "--format=%(refname) %(objectname)"),
     git(root, "status", "--porcelain", "--untracked-files=all"),
+    // `rev-parse HEAD` gives the commit either way; name the ref HEAD is on.
+    git(root, "rev-parse", "--abbrev-ref", "HEAD"),
   ]);
 }
 
