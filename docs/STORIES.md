@@ -2856,7 +2856,8 @@ as cut, tested from a recorded stream. M6-10 moved this case here.
 **Recovered from an unresolvable saved agent (#312, 2026-11-11):** decisions 1A, 2A and
 3A. When `readRoomRecord` succeeds but `resolveAgent` rejects a saved agent, the room
 removes that participant from its active roster and keeps its full record in
-`room.json`'s `tombstones`. The rest of the room restores, remains listable and can be
+`room.json`'s `tombstones`. The log gets `_client_participant_removed` so a replay drops
+it from the active roster. The rest of the room restores, remains listable and can be
 deleted; the daemon logs the room, agent and record path. Other restore failures still
 skip the room with a `404`, and every `buildRoom` failure closes its log and watchdog.
 A custom `cmd` participant is unaffected.

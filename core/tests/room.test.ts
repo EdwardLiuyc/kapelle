@@ -1658,10 +1658,14 @@ test("a saved unknown agent is tombstoned and the rest of the room restores (#31
     participants: [valid, unknown],
   };
   const notices: string[] = [];
+  const history = room.eventLog?.size ?? 0;
+  const backBus = createEventBus();
+  const backEvents: AgentEventEnvelope[] = [];
+  backBus.addListener((event) => backEvents.push(event));
   const back = await restoreRoom({
     record,
     setup: await openWorktrees(repo, roomId),
-    bus: createEventBus(),
+    bus: backBus,
     permissions: queue,
     log: (line) => notices.push(line),
   });
@@ -1673,7 +1677,17 @@ test("a saved unknown agent is tombstoned and the rest of the room restores (#31
     "only the resolvable participant is active",
   );
   assert.equal(back.participants[0]?.harness, valid.harness);
-  assert.equal(back.eventLog?.size, room.eventLog?.size, "history survives");
+  assert.deepEqual(
+    backEvents
+      .filter(
+        (event) =>
+          event.agent === unknown.id &&
+          event.update.sessionUpdate === "_client_participant_removed",
+      )
+      .map((event) => event.agent),
+    [unknown.id],
+    "the stream gets the roster removal a replay needs",
+  );
   const stored = readRoomRecord(file);
   assert.deepEqual(stored.tombstones, [unknown], "the full record is kept");
   assert.equal(stored.tombstones?.[0]?.sessionId, unknown.sessionId);
@@ -1683,10 +1697,38 @@ test("a saved unknown agent is tombstoned and the rest of the room restores (#31
     assert.ok(notice.includes(part), notice);
   }
 
-  await back.participants[0]?.send("go");
-  assert.equal(back.participants[0]?.status(), "idle");
+  // Close the first restore's log so its removal line is committed, then
+  // restore the same record again. The existing tombstone is not a new
+  // roster change, so it must not append the removal twice.
+  await back.pause();
   assert.equal(
-    back.participants[0]?.resumed,
+    back.eventLog?.size,
+    history + 1,
+    "history survives and one removal is recorded",
+  );
+  const secondBus = createEventBus();
+  const secondEvents: AgentEventEnvelope[] = [];
+  secondBus.addListener((event) => secondEvents.push(event));
+  const second = await restoreRoom({
+    record: readRoomRecord(file),
+    setup: await openWorktrees(repo, roomId),
+    bus: secondBus,
+    permissions: queue,
+    log: () => {},
+  });
+  t.after(() => second.dismiss());
+  assert.equal(second.eventLog?.size, history + 1, "no removal is repeated");
+  assert.equal(
+    secondEvents.filter(
+      (event) => event.update.sessionUpdate === "_client_participant_removed",
+    ).length,
+    0,
+  );
+
+  await second.participants[0]?.send("go");
+  assert.equal(second.participants[0]?.status(), "idle");
+  assert.equal(
+    second.participants[0]?.resumed,
     "fresh",
     "custom cmd still works",
   );

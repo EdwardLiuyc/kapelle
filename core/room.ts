@@ -33,7 +33,8 @@
  * **A saved harness that no longer resolves is tombstoned** (#312). Its full
  * record stays in `room.json` under `tombstones`, outside the active roster,
  * so its checkout and branch remain known to delete. The rest of the room
- * restores normally, and the daemon logs the room, agent and record path.
+ * restores normally, the daemon logs the room, agent and record path, and the
+ * log gets a participant-removed line so a replay drops it from the roster.
  *
  * **A stopped participant revives on its next message.** `paused`, `killed`
  * and `exited` all take the same path: a new harness in the same checkout.
@@ -1013,10 +1014,11 @@ function rememberTombstone(
   tombstones: ParticipantRecord[],
   known: Set<string>,
   saved: ParticipantRecord,
-): void {
-  if (known.has(saved.id)) return;
+): boolean {
+  if (known.has(saved.id)) return false;
   tombstones.push(saved);
   known.add(saved.id);
+  return true;
 }
 
 /** Hold a tombstone's checkout, so a dismiss can release it like a member. */
@@ -1048,16 +1050,17 @@ async function tombstoneUnknownAgents(
   root: string,
   log: (line: string) => void,
   worktrees: Worktrees | null,
-): Promise<RoomRecord> {
+): Promise<{ record: RoomRecord; tombstoned: ParticipantRecord[] }> {
   const tombstones = [...(record.tombstones ?? [])];
   const known = new Set(tombstones.map((p) => p.id));
   const participants: ParticipantRecord[] = [];
+  const tombstoned: ParticipantRecord[] = [];
   for (const saved of record.participants) {
     try {
       resolveAgent(saved.agent ?? "", saved.cmd);
       participants.push(saved);
     } catch {
-      rememberTombstone(tombstones, known, saved);
+      if (rememberTombstone(tombstones, known, saved)) tombstoned.push(saved);
     }
   }
   let changed =
@@ -1075,8 +1078,10 @@ async function tombstoneUnknownAgents(
         "active roster as a tombstone",
     );
   }
-  if (!changed) return record;
-  return { ...record, participants, tombstones };
+  return {
+    record: changed ? { ...record, participants, tombstones } : record,
+    tombstoned,
+  };
 }
 
 /** Opens a room and resolves once every participant's harness has a
@@ -1126,7 +1131,7 @@ export async function restoreRoom({
   turnCap,
   ...deps
 }: RoomDeps & { record: RoomRecord }): Promise<Room> {
-  const from = await tombstoneUnknownAgents(
+  const { record: from, tombstoned } = await tombstoneUnknownAgents(
     crashed(record),
     deps.setup.root,
     deps.log ?? ((line) => console.error(line)),
@@ -1141,7 +1146,7 @@ export async function restoreRoom({
     turnCount: from.turnCount ?? 0,
   };
   if (from.title !== undefined) meta.title = from.title;
-  const built = await buildRoom(deps, meta, from);
+  const built = await buildRoom(deps, meta, from, tombstoned);
   built.keepSaved();
   return built.room;
 }
@@ -1161,6 +1166,7 @@ async function buildRoom(
   }: RoomDeps,
   meta: RoomMeta,
   from?: RoomRecord,
+  tombstoned: readonly ParticipantRecord[] = [],
 ): Promise<{ room: Room; keepSaved: () => void }> {
   const { worktrees, notice, root } = setup;
   const roomId = meta.id;
@@ -1878,6 +1884,18 @@ async function buildRoom(
     return {
       room,
       keepSaved() {
+        // A tombstone is a roster change even though no harness produced it.
+        // Without this line a replay keeps the participant from its earlier
+        // `_client_participant_added` event. A dismissed room has no writable
+        // log and is hidden from the chat, so it needs no line.
+        if (from?.status !== "dismissed") {
+          for (const saved of tombstoned) {
+            bus.emit({
+              agent: saved.id,
+              update: { sessionUpdate: "_client_participant_removed" },
+            });
+          }
+        }
         saving = true;
         save();
       },
