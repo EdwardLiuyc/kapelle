@@ -1001,7 +1001,8 @@ async function sweepRooms(pass: RepoPass): Promise<Set<string>> {
     let changed = fixed !== record;
     // A crash or a shutdown's grace can kill a turn. Once per lock: the
     // notice stays in the record while the file does, and goes at the boot
-    // after it is deleted, revived or not.
+    // after it is deleted, revived or not. Tombstones have no live harness and
+    // their notices are frozen; nothing displays a tombstone notice today.
     for (const p of fixed.participants) {
       const noted = p.notices.filter(isLockNotice);
       if (p.status !== "killed" && noted.length === 0) continue;

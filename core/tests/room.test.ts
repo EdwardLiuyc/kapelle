@@ -1638,6 +1638,16 @@ test("room.json holds the room and its participant from the start", async (t) =>
   assert.equal(saved?.branch, p.branch);
   assert.match(saved?.cmd ?? "", /--scenario remember$/);
   assert.equal(saved?.status, "idle");
+  // SAFETY: room.json is written from a RoomRecord; this reads one field.
+  const raw = JSON.parse(await readFile(file, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(
+    Object.hasOwn(raw, "tombstones"),
+    false,
+    "a room with no tombstone keeps the optional field out of room.json",
+  );
 });
 
 test("a saved unknown agent is tombstoned and the rest of the room restores (#312)", async (t) => {
@@ -1709,15 +1719,17 @@ test("a saved unknown agent is tombstoned and the rest of the room restores (#31
   const secondBus = createEventBus();
   const secondEvents: AgentEventEnvelope[] = [];
   secondBus.addListener((event) => secondEvents.push(event));
+  const secondNotices: string[] = [];
   const second = await restoreRoom({
     record: readRoomRecord(file),
     setup: await openWorktrees(repo, roomId),
     bus: secondBus,
     permissions: queue,
-    log: () => {},
+    log: (line) => secondNotices.push(line),
   });
   t.after(() => second.dismiss());
   assert.equal(second.eventLog?.size, history + 1, "no removal is repeated");
+  assert.deepEqual(secondNotices, [], "an old tombstone is not re-announced");
   assert.equal(
     secondEvents.filter(
       (event) => event.update.sessionUpdate === "_client_participant_removed",
@@ -1784,13 +1796,20 @@ test("buildRoom closes its log and clears its watchdog after a failure (#312)", 
       throw new Error("test build failure");
     },
   };
+  const set = t.mock.method(globalThis, "setInterval");
   const clear = t.mock.method(globalThis, "clearInterval");
 
   await assert.rejects(
     restoreRoom({ record, setup, bus, permissions: queue, log: () => {} }),
     /test build failure/,
   );
-  assert.ok(clear.mock.callCount() >= 1, "the watchdog interval is cleared");
+  const timer = set.mock.calls[0]?.result;
+  assert.ok(timer, "the room started its watchdog interval");
+  assert.deepEqual(
+    clear.mock.calls.at(-1)?.arguments,
+    [timer],
+    "the watchdog interval is cleared",
+  );
   assert.ok(
     existsSync(join(stateDirFor(repo), "rooms", roomId, "events.idx")),
     "closing the log writes its index",
@@ -2088,7 +2107,7 @@ test("forget removes the room's folder, and a save queued before it writes nothi
   );
 });
 
-test("a record with a role outside the set, or a title that is not text, is refused", async (t) => {
+test("a record with a bad role, title or tombstone field is refused", async (t) => {
   const { room, file } = await pausable(t, "remember");
   await room.pause();
   const record = readRoomRecord(file);
@@ -2111,7 +2130,7 @@ test("a record with a role outside the set, or a title that is not text, is refu
   });
   assert.throws(
     () => readRoomRecord(file),
-    /a participant's "name" is not a string/,
+    /the tombstones list: a participant's "name" is not a string/,
   );
 });
 

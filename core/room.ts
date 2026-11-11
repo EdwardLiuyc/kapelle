@@ -33,9 +33,12 @@
  * **A saved harness that no longer resolves is tombstoned** (#312). Its full
  * record stays in `room.json` under `tombstones`, outside the active roster,
  * so its checkout and branch remain known to delete. The rest of the room
- * restores normally, the daemon logs the room, agent and record path, and a
- * writable restored log gets a participant-removed line so a replay drops it
- * from the roster. A dismissed room's log stays read-only.
+ * restores normally, the daemon logs the room, agent and record path when the
+ * participant is first tombstoned, and a writable restored log gets a
+ * participant-removed line so a replay drops it from the roster. A dismissed
+ * room's log stays read-only. A tombstone is permanent: later restores do not
+ * retry the agent, even if the harness is installed again. Deleting the room
+ * is the supported way to remove it.
  *
  * **A stopped participant revives on its next message.** `paused`, `killed`
  * and `exited` all take the same path: a new harness in the same checkout.
@@ -894,24 +897,39 @@ export function readRoomRecord(path: string): RoomRecord {
   }
   const participants = r.participants as Record<string, unknown>[];
   const tombstones = (r.tombstones ?? []) as Record<string, unknown>[];
-  for (const p of [...participants, ...tombstones]) {
-    for (const key of ["id", "name", "harness", "worktree", "sessionId"]) {
-      if (typeof p?.[key] !== "string") {
-        throw bad(`a participant's "${key}" is not a string`);
+  for (const [where, records] of [
+    ["participants", participants],
+    ["tombstones", tombstones],
+  ] as const) {
+    for (const p of records) {
+      for (const key of ["id", "name", "harness", "worktree", "sessionId"]) {
+        if (typeof p?.[key] !== "string") {
+          throw bad(
+            `the ${where} list: a participant's "${key}" is not a string`,
+          );
+        }
       }
-    }
-    if (typeof p.agent !== "string" && typeof p.cmd !== "string") {
-      throw bad(`participant ${p.id} names no "agent" or "cmd"`);
-    }
-    if (!MODES.includes(p.mode as ClientMode)) {
-      throw bad(`participant ${p.id} has mode ${JSON.stringify(p.mode)}`);
-    }
-    if (!PARTICIPANT_STATUSES.includes(p.status as ParticipantStatus)) {
-      throw bad(`participant ${p.id} has status ${JSON.stringify(p.status)}`);
-    }
-    // The contract's set is closed (R44): a client may trust it.
-    if (p.role !== undefined && !ROLES.includes(p.role as Role)) {
-      throw bad(`participant ${p.id} has role ${JSON.stringify(p.role)}`);
+      if (typeof p.agent !== "string" && typeof p.cmd !== "string") {
+        throw bad(
+          `the ${where} list: participant ${p.id} names no "agent" or "cmd"`,
+        );
+      }
+      if (!MODES.includes(p.mode as ClientMode)) {
+        throw bad(
+          `the ${where} list: participant ${p.id} has mode ${JSON.stringify(p.mode)}`,
+        );
+      }
+      if (!PARTICIPANT_STATUSES.includes(p.status as ParticipantStatus)) {
+        throw bad(
+          `the ${where} list: participant ${p.id} has status ${JSON.stringify(p.status)}`,
+        );
+      }
+      // The contract's set is closed (R44): a client may trust it.
+      if (p.role !== undefined && !ROLES.includes(p.role as Role)) {
+        throw bad(
+          `the ${where} list: participant ${p.id} has role ${JSON.stringify(p.role)}`,
+        );
+      }
     }
   }
   const normalise = (p: Record<string, unknown>): ParticipantRecord => {
@@ -1067,17 +1085,21 @@ async function tombstoneUnknownAgents(
   let changed =
     participants.length !== record.participants.length ||
     tombstones.length !== (record.tombstones?.length ?? 0);
+  const fresh = new Set(tombstoned.map((p) => p.id));
   for (const [i, saved] of tombstones.entries()) {
-    const next = await syncTombstoneCheckout(saved);
+    const isNew = fresh.has(saved.id);
+    const next = isNew ? await syncTombstoneCheckout(saved) : saved;
     if (next !== saved) changed = true;
     tombstones[i] = next;
     adoptTombstone(worktrees, next);
-    log(
-      `room ${record.id} at ${roomFile(root, record.id)}: participant ` +
-        `${next.name} (${next.id}) cannot resolve saved agent ` +
-        `${JSON.stringify(next.agent ?? next.cmd ?? "")}; kept out of the ` +
-        "active roster as a tombstone",
-    );
+    if (isNew) {
+      log(
+        `room ${record.id} at ${roomFile(root, record.id)}: participant ` +
+          `${next.name} (${next.id}) cannot resolve saved agent ` +
+          `${JSON.stringify(next.agent ?? next.cmd ?? "")}; kept out of the ` +
+          "active roster as a tombstone",
+      );
+    }
   }
   return {
     record: changed ? { ...record, participants, tombstones } : record,
@@ -1293,7 +1315,9 @@ async function buildRoom(
         status: status(),
         notices: [...roomNotices],
         participants: members.map(recordOf),
-        tombstones: [...(from?.tombstones ?? [])],
+        ...(from?.tombstones?.length
+          ? { tombstones: [...from.tombstones] }
+          : {}),
       });
     } catch (err) {
       // Once: a full disk would add the same line on every turn.
