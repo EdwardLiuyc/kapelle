@@ -1,7 +1,7 @@
 /**
  * `kapelle loop` (M8-5, #269), driven as a real subprocess on a pipe against
  * a daemon with mock agents: the room, its orchestrator and its first
- * message, `--agent`, a missing recipe and `list`. The lookup order and the
+ * message, `--agent`, `--model` (M9-5c), a missing recipe and `list`. The lookup order and the
  * message's exact text are in `client/tests/loop.test.ts`; `/loop` in the
  * screens is in `tests/chat-piped.test.ts` and `tests/chat-tui-forms.test.ts`.
  *
@@ -19,6 +19,7 @@ import {
   daemonApi as api,
   bootDaemon,
   gitRepo,
+  MOCK_AGENT,
   REMEMBER,
   roomLog,
   spawnCli,
@@ -160,4 +161,56 @@ test("kapelle loop starts a recipe named list when a task follows", async (t) =>
     rooms.body.some((room) => room.title === "list-7"),
     JSON.stringify(rooms.body),
   );
+});
+
+test("kapelle loop --model sends the start only when po is on that model, and keeps the room when not (M9-5c)", async (t) => {
+  const { d, repo, loop } = await fixture(t);
+  const MODELS = `node ${MOCK_AGENT} --scenario models`;
+
+  const ok = await loop(["fix", "1", "--cmd", MODELS, "--model", "mock/smart"]);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stdout, /opened room fix-1; po has the start/);
+  const okId = /kapelle chat attach (\S+)/.exec(ok.stdout)?.[1];
+  const okRoom = (await api<RoomDto>(d, "GET", `/rooms/${okId}`)).body;
+  assert.equal(okRoom.participants[0]?.model, "mock/smart");
+
+  // Refused, never answered, swapped, and no model option at all.
+  for (const [task, cmd, asked, runs] of [
+    ["2", MODELS, "mock/bogus", 'it runs on "mock/fast"'],
+    ["3", `${MODELS} --model-exit`, "mock/smart", 'it runs on "mock/fast"'],
+    [
+      "4",
+      `${MODELS} --model-current mock/other`,
+      "mock/smart",
+      'it runs on "mock/other"',
+    ],
+    ["5", `node ${MOCK_AGENT}`, "mock/smart", "it has no model"],
+  ] as const) {
+    const r = await loop(["fix", task, "--cmd", cmd, "--model", asked]);
+    assert.equal(r.code, 1, `${task}: ${r.stdout}`);
+    assert.equal(r.stdout, "", task);
+    const id = /kapelle chat dismiss (\S+) \(/.exec(r.stderr)?.[1];
+    assert.ok(id, r.stderr);
+    assert.equal(
+      r.stderr,
+      `error: opened room fix-${task}, but po is not confirmed on the model "${asked}"; ${runs}. It has no start. To drop the room: kapelle chat dismiss ${id} (model_not_confirmed)\n`,
+    );
+    const room = (await api<RoomDto>(d, "GET", `/rooms/${id}`)).body;
+    assert.equal(room.title, `fix-${task}`, "the room stays");
+    const log = await roomLog(repo, id).catch(() => []);
+    assert.ok(
+      !log.some((l) => l.update.sessionUpdate === "_client_user_message"),
+      `${task}: no start message`,
+    );
+  }
+
+  // A missing or empty value is a usage error, and opens no room.
+  const before = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body.length;
+  for (const model of [["--model"], ["--model", ""]]) {
+    const r = await loop(["fix", "6", "--cmd", MODELS, ...model]);
+    assert.equal(r.code, 1, model.join(" "));
+    assert.equal(r.stderr, "--model needs a value\n");
+  }
+  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  assert.equal(rooms.body.length, before, "no new room");
 });

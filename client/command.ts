@@ -17,7 +17,9 @@
  * **`/loop` is `/new` with a start** (M8-5): a room titled
  * `<recipe>-<task>`, the orchestrator `po` in `auto`, and its first message
  * from `client/loop.ts`. `kapelle loop` builds the same command with
- * `loopCommand`, so the CLI and both screens cannot differ.
+ * `loopCommand`, so the CLI and both screens cannot differ. A `--model` the
+ * orchestrator is not confirmed on sends no start (M9-5c): it would work at
+ * once on another model. The room stays, as for `kapelle room add`.
  *
  * **The screen never guesses** (M4-5). A value the daemon checks (a role, a
  * mode, a harness) is sent as typed, and a refusal is the daemon's own
@@ -116,7 +118,7 @@ export type Command =
 export const HELP = [
   "/new [harness] [--cmd c] [--name n] [--model id] [--title t] [--cwd dir]",
   "/add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--model id] [--base @name|ref]",
-  '/loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--cwd dir]',
+  '/loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--model id] [--cwd dir]',
   "/title <new title>",
   "/cap <n>",
   "@name /rename <new name>",
@@ -178,7 +180,8 @@ const ORCHESTRATOR = "po";
 /**
  * A loop's start (M8-5) as a command: the room titled `<recipe>-<task>`, and
  * the orchestrator in `auto`, on claude unless `agent` or `cmd` names
- * another harness. The recipe is read when the command runs, not here.
+ * another harness, and on `model` when one is given. The recipe is read when
+ * the command runs, not here.
  * The task and the note are trimmed here, once, so `kapelle loop` and
  * `/loop` send the same; a blank note is none.
  */
@@ -188,13 +191,17 @@ export function loopCommand(o: {
   note?: string | undefined;
   agent?: string | undefined;
   cmd?: string | undefined;
+  model?: string | undefined;
   cwd: string;
 }): Extract<RouteCommand, { verb: "loop" }> {
   const task = o.task.trim();
   const note = o.note?.trim();
-  const harness = o.cmd
-    ? { ...(o.agent && { agent: o.agent }), cmd: o.cmd }
-    : { agent: o.agent || "claude" };
+  const harness = {
+    ...(o.cmd
+      ? { ...(o.agent && { agent: o.agent }), cmd: o.cmd }
+      : { agent: o.agent || "claude" }),
+    ...(o.model && { model: o.model }),
+  };
   return {
     verb: "loop",
     recipe: o.recipe,
@@ -293,10 +300,11 @@ export function parseCommand(
       : { error: USAGE.cap as string };
   }
   if (verb === "loop") {
-    const o = options(args, ["agent", "cmd", "cwd"]);
+    const o = options(args, ["agent", "cmd", "model", "cwd"]);
     if ("error" in o) return { error: `${o.error}; ${USAGE.loop}` };
     const [recipe, task, note, ...extra] = o.positionals;
-    if (!recipe || !task?.trim() || extra.length)
+    // An empty model is a usage error, as in `kapelle loop` (M9-5c).
+    if (!recipe || !task?.trim() || extra.length || o.values.model === "")
       return { error: USAGE.loop as string };
     const cwd = absoluteFolder(o.values.cwd);
     if (!cwd) return { error: FOLDER_GONE };
@@ -562,6 +570,19 @@ export async function runCommand(
     });
     if (!r.ok) return refused(r.error.message, r.error.code);
     const opened = `opened room ${printable(r.body.title ?? r.body.id)}`;
+    const asked = c.body.agents?.[0]?.model;
+    const po = r.body.participants[0];
+    if (!modelConfirmed(asked, po)) {
+      const runs = po?.model ? `it runs on "${po.model}"` : "it has no model";
+      return refused(
+        `${opened}, but ${ORCHESTRATOR} is not confirmed on the model ` +
+          printable(
+            `"${asked}"; ${runs}. It has no start. To drop the room: kapelle chat dismiss ${r.body.id}`,
+          ),
+        "model_not_confirmed",
+        r.body,
+      );
+    }
     const sent = await call<MessageAccepted>(
       d,
       `/rooms/${r.body.id}/messages`,

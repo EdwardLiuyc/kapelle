@@ -15,6 +15,7 @@ import {
   loopCommand,
   modelLines,
   parseCommand,
+  USAGE,
 } from "../command.ts";
 import type { ParticipantDto } from "../contract.ts";
 import { FOLDER_GONE } from "../folder.ts";
@@ -357,7 +358,7 @@ test("/loop opens <recipe>-<task> with po in auto, on claude unless --agent or -
   assert.deepEqual(cmd.body.agents, [{ cmd: "node x.mjs", ...po }]);
   const usage = {
     error:
-      'usage: /loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--cwd dir]',
+      'usage: /loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--model id] [--cwd dir]',
   };
   for (const s of [
     "/loop",
@@ -369,6 +370,25 @@ test("/loop opens <recipe>-<task> with po in auto, on claude unless --agent or -
   }
   const bad = parse("/loop fix 1 --mode ask");
   assert.ok(bad && "error" in bad && /--mode/.test(bad.error));
+});
+
+test("/loop --model puts the model on the orchestrator's entry; an empty one is a usage error (M9-5c)", () => {
+  const po = { name: "po", role: "orchestrator", mode: "auto" };
+  const m = parse("/loop fix 432 --agent pi --model mock/smart");
+  assert.ok(m && "body" in m);
+  assert.deepEqual(m.body.agents, [
+    { agent: "pi", model: "mock/smart", ...po },
+  ]);
+  const cmd = parse(`/loop fix 432 --cmd "node x.mjs" --model mock/smart`);
+  assert.ok(cmd && "body" in cmd);
+  assert.deepEqual(cmd.body.agents, [
+    { cmd: "node x.mjs", model: "mock/smart", ...po },
+  ]);
+  assert.deepEqual(parse('/loop fix 432 --model ""'), {
+    error: USAGE.loop,
+  });
+  const none = parse("/loop fix 432 --model");
+  assert.ok(none && "error" in none && /--model/.test(none.error));
 });
 
 test("/loop and loopCommand trim the task and the note, so the CLI and the screens agree (#368 review)", () => {
