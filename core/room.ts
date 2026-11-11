@@ -239,6 +239,7 @@ import {
   LinkPathError,
   NotFastForward,
   type WorktreeSetup,
+  type Worktrees,
 } from "./worktree.ts";
 
 /** How many messages may wait behind a participant's live turn (R41). */
@@ -977,14 +978,77 @@ export function crashed(record: RoomRecord): RoomRecord {
   };
 }
 
+/** Read the checkout of a tombstoned participant, so its record names the
+ *  branch the harness left it on. A read that fails keeps the saved identity. */
+async function syncTombstoneCheckout(
+  saved: ParticipantRecord,
+): Promise<ParticipantRecord> {
+  if (!saved.branch || !saved.baseSha) return saved;
+  let found: Awaited<ReturnType<typeof checkoutIdentity>>;
+  try {
+    found = await checkoutIdentity(saved.worktree, saved.branch);
+  } catch {
+    return saved;
+  }
+  if (!found) return saved;
+  let next = saved;
+  if (found.branch !== saved.branch) {
+    const { branchRenamed: _oldRename, ...rest } = saved;
+    next = {
+      ...rest,
+      branch: found.branch,
+      ...(found.renamedFrom === saved.branch && {
+        branchRenamed: true as const,
+      }),
+    };
+  }
+  if (found.rebaseBase !== undefined && found.rebaseBase !== saved.baseSha) {
+    next = { ...next, baseSha: found.rebaseBase };
+  }
+  return next;
+}
+
+/** Add an unresolved participant once, without duplicating a tombstone. */
+function rememberTombstone(
+  tombstones: ParticipantRecord[],
+  known: Set<string>,
+  saved: ParticipantRecord,
+): void {
+  if (known.has(saved.id)) return;
+  tombstones.push(saved);
+  known.add(saved.id);
+}
+
+/** Hold a tombstone's checkout, so a dismiss can release it like a member. */
+function adoptTombstone(
+  worktrees: Worktrees | null,
+  saved: ParticipantRecord,
+): void {
+  if (
+    !worktrees ||
+    !saved.branch ||
+    !saved.baseSha ||
+    !existsSync(saved.worktree)
+  ) {
+    return;
+  }
+  worktrees.adopt(saved.id, {
+    branch: saved.branch,
+    baseSha: saved.baseSha,
+    ...(saved.baseRef && { baseRef: saved.baseRef }),
+    ...(saved.branchRenamed === true && { renamed: true }),
+  });
+}
+
 /** Move saved participants whose harness no longer resolves out of the active
  *  roster. Their full record stays as a tombstone, so delete can still find
  *  the checkout and a branch the participant renamed. */
-function tombstoneUnknownAgents(
+async function tombstoneUnknownAgents(
   record: RoomRecord,
   root: string,
   log: (line: string) => void,
-): RoomRecord {
+  worktrees: Worktrees | null,
+): Promise<RoomRecord> {
   const tombstones = [...(record.tombstones ?? [])];
   const known = new Set(tombstones.map((p) => p.id));
   const participants: ParticipantRecord[] = [];
@@ -993,26 +1057,25 @@ function tombstoneUnknownAgents(
       resolveAgent(saved.agent ?? "", saved.cmd);
       participants.push(saved);
     } catch {
-      if (!known.has(saved.id)) {
-        tombstones.push(saved);
-        known.add(saved.id);
-      }
+      rememberTombstone(tombstones, known, saved);
     }
   }
-  for (const saved of tombstones) {
+  let changed =
+    participants.length !== record.participants.length ||
+    tombstones.length !== (record.tombstones?.length ?? 0);
+  for (const [i, saved] of tombstones.entries()) {
+    const next = await syncTombstoneCheckout(saved);
+    if (next !== saved) changed = true;
+    tombstones[i] = next;
+    adoptTombstone(worktrees, next);
     log(
       `room ${record.id} at ${roomFile(root, record.id)}: participant ` +
-        `${saved.name} (${saved.id}) cannot resolve saved agent ` +
-        `${JSON.stringify(saved.agent ?? saved.cmd ?? "")}; kept out of the ` +
+        `${next.name} (${next.id}) cannot resolve saved agent ` +
+        `${JSON.stringify(next.agent ?? next.cmd ?? "")}; kept out of the ` +
         "active roster as a tombstone",
     );
   }
-  if (
-    participants.length === record.participants.length &&
-    tombstones.length === (record.tombstones?.length ?? 0)
-  ) {
-    return record;
-  }
+  if (!changed) return record;
   return { ...record, participants, tombstones };
 }
 
@@ -1055,17 +1118,19 @@ export async function openRoom({
  * harness starts: each participant waits, `paused`, `killed` or `exited`,
  * for its next message. Each checkout is held again, never created. The log
  * is reopened for appending, with `seq` carried on, or read only for a
- * dismissed room. Throws when a participant's harness no longer resolves.
+ * dismissed room. A participant whose harness no longer resolves becomes a
+ * tombstone; another failure throws.
  */
 export async function restoreRoom({
   record,
   turnCap,
   ...deps
 }: RoomDeps & { record: RoomRecord }): Promise<Room> {
-  const from = tombstoneUnknownAgents(
+  const from = await tombstoneUnknownAgents(
     crashed(record),
     deps.setup.root,
     deps.log ?? ((line) => console.error(line)),
+    deps.setup.worktrees,
   );
   const meta: RoomMeta = {
     id: from.id,
@@ -1337,6 +1402,9 @@ async function buildRoom(
         await Promise.all(members.map((m) => m.stop()));
         for (const { participant: p, onNotice } of members) {
           await release(p.id, p.worktree, onNotice);
+        }
+        for (const saved of from?.tombstones ?? []) {
+          await release(saved.id, saved.worktree, onRoomNotice);
         }
       } finally {
         clearInterval(sweep);

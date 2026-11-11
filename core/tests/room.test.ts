@@ -37,6 +37,7 @@ import {
   gatedGit,
   gitRepo,
   HOSTILE_AGENT,
+  hasBranch,
   isolateStateHome,
   MOCK_AGENT,
   tempDir,
@@ -1691,6 +1692,30 @@ test("a saved unknown agent is tombstoned and the rest of the room restores (#31
   );
 });
 
+test("dismissing a room with only tombstones releases their clean checkouts (#312)", async (t) => {
+  const { repo, room, file, roomId } = await pausable(t, "remember");
+  await room.pause();
+  const record = readRoomRecord(file);
+  const saved = record.participants[0];
+  assert.ok(saved?.branch);
+  saved.agent = "missing-harness";
+  delete saved.cmd;
+
+  const back = await restoreRoom({
+    record,
+    setup: await openWorktrees(repo, roomId),
+    bus: createEventBus(),
+    permissions: queue,
+    log: () => {},
+  });
+  t.after(() => back.dismiss());
+  assert.deepEqual(back.participants, []);
+
+  await back.dismiss();
+  assert.equal(existsSync(saved.worktree), false);
+  assert.equal(hasBranch(repo, saved.branch), false);
+});
+
 test("buildRoom closes its log and clears its watchdog after a failure (#312)", async (t) => {
   const { repo, room, file, roomId } = await pausable(t, "remember");
   await room.pause();
@@ -2033,6 +2058,19 @@ test("a record with a role outside the set, or a title that is not text, is refu
   assert.throws(() => readRoomRecord(file), /has role "boss"/);
   writeRoomRecord(file, { ...record, title: 7 as unknown as string });
   assert.throws(() => readRoomRecord(file), /"title" is not a string/);
+  writeRoomRecord(file, {
+    ...record,
+    tombstones: "not a list" as unknown as RoomRecord["tombstones"],
+  });
+  assert.throws(() => readRoomRecord(file), /"tombstones" is not a list/);
+  writeRoomRecord(file, {
+    ...record,
+    tombstones: [{ ...saved, name: 7 as unknown as string }],
+  });
+  assert.throws(
+    () => readRoomRecord(file),
+    /a participant's "name" is not a string/,
+  );
 });
 
 // --- session/load on revive (M6-7b) -----------------------------------------

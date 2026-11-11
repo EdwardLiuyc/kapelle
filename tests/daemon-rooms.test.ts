@@ -2707,7 +2707,7 @@ test("a dismissed room that cannot be built is listed until its first use, then 
 
 // The test drives the restart, tombstone write, dirty refusal and delete: one flow.
 // pi-lens-ignore: high-fan-out
-test("a room with unknown saved agents restores, lists and deletes (#312)", async (t) => {
+test("a room with unknown saved agents restores, lists, previews and deletes (#312)", async (t) => {
   const { first, cwd, id, alice, again } = await roomToRestart(t, REMEMBER);
   const lost = await addAgent(first, id, { cmd: REMEMBER, name: "lost" });
   assert.ok(alice.branch);
@@ -2729,8 +2729,6 @@ test("a room with unknown saved agents restores, lists and deletes (#312)", asyn
   savedAlice.agent = "missing-harness";
   delete savedLost.cmd;
   savedLost.agent = "missing-harness";
-  savedLost.branch = renamed;
-  savedLost.branchRenamed = true;
   writeRoomRecord(path, record);
 
   const second = await again();
@@ -2753,6 +2751,18 @@ test("a room with unknown saved agents restores, lists and deletes (#312)", asyn
   );
   assert.equal(stored.tombstones?.[1]?.branch, renamed);
   assert.equal(stored.tombstones?.[1]?.branchRenamed, true);
+
+  const preview = await api<DeletePreview>(
+    second,
+    "GET",
+    `/rooms/${id}/delete-preview`,
+  );
+  assert.equal(preview.status, 200);
+  const previewBranches = new Map(
+    preview.body.branches.map((branch) => [branch.branch, branch.participant]),
+  );
+  assert.equal(previewBranches.get(renamed), lost.name);
+  assert.equal(previewBranches.get(alice.branch), alice.name);
 
   const refused = await api(second, "DELETE", `/rooms/${id}`);
   assert.equal(refused.status, 409);
