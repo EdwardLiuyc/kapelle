@@ -1559,6 +1559,7 @@ for (const operation of ["merge", "fast-forward", "reset"] as const) {
   test(`a plain ${operation} leaves the room's saved base as provenance`, async (t) => {
     const { room, p } = await roomOn(t, "read-only");
     const repo = room.meta.cwd;
+    const file = roomFile(repo, room.meta.id);
     const before = p.baseSha;
     assert.ok(before);
 
@@ -1589,10 +1590,13 @@ for (const operation of ["merge", "fast-forward", "reset"] as const) {
 
     await p.send("go");
     assert.equal(p.baseSha, before);
-    assert.equal(
-      readRoomRecord(roomFile(repo, room.meta.id)).participants[0]?.baseSha,
-      before,
-    );
+    // The record the turn saved, not the one room.json held at open: a turn's
+    // save carries its count and the idle status it ended in.
+    await until(() => {
+      const saved = readRoomRecord(file).participants[0];
+      return saved?.turns === 1 && saved.status === "idle";
+    }, "room.json holds the record the turn saved");
+    assert.equal(readRoomRecord(file).participants[0]?.baseSha, before);
   });
 }
 
