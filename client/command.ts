@@ -473,10 +473,6 @@ export const modelConfirmed = (
   p: ParticipantDto | undefined,
 ): boolean => !asked || asked === p?.model;
 
-/** A model the reply does not confirm still adds the agent (M9-5): the
- *  line says so at once. It claims neither why nor what runs: a set that
- *  timed out may still apply, and a harness may rename the id. The room's
- *  notice says both, the one place that saw them. */
 /** Why a model did not land, the same words for `kapelle room add` and
  *  `/loop` (M9-5b, M9-5c): the model asked for, then the one in use or none. */
 export const notConfirmedOn = (
@@ -485,6 +481,10 @@ export const notConfirmedOn = (
 ) =>
   `is not confirmed on the model "${asked}"; ${p?.model ? `it runs on "${p.model}"` : "it has no model"}`;
 
+/** A model the reply does not confirm still adds the agent (M9-5): the
+ *  line says so at once. It claims neither why nor what runs: a set that
+ *  timed out may still apply, and a harness may rename the id. The room's
+ *  notice says both, the one place that saw them. */
 const notOn = (asked: string | undefined, p: ParticipantDto | undefined) =>
   modelConfirmed(asked, p) ? "" : `; ! not confirmed on the model "${asked}"`;
 
