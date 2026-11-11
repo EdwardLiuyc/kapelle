@@ -61,7 +61,7 @@ alias kapelle='node /path/to/kapelle/cli.ts'
    pi                     # type /login, then quit
    ```
 
-3. In your repository, run `kapelle`. It starts its daemon in the background. Then the setup list shows each agent it finds, and whether it is ready. When an agent's ACP adapter is missing, the list can install it. Press Enter when you are done. `/setup` shows the list again.
+3. In your repository, run `kapelle`. It starts its daemon in the background. Then the setup list shows each agent it finds, and whether it is ready. When an agent's ACP adapter is missing, the list can install it: press Space to tick the agent, then Enter. When you are done, press Enter with nothing ticked. Then the list stops opening at each start, once an agent is ready. Esc only closes it for now. `/setup` shows the list again.
 
    ```bash
    cd your-repo
@@ -82,7 +82,7 @@ npm run selftest
 
 You should see `✓ allowed Write ACP_TEST.md`. Delete `ACP_TEST.md` when you are done.
 
-Give one agent one task, with no room and no daemon:
+Give one agent one task. This needs no room and no daemon:
 
 ```bash
 kapelle "summarise this repo in three sentences"
@@ -105,6 +105,8 @@ kapelle chat list                   # every room, as text
 kapelle chat attach <roomId>        # rejoin a room; its history replays
 kapelle chat dismiss <roomId>       # stop the room's agents
 ```
+
+`kapelle chat new` does not add a repository for you. Add it first: `/new` in the chat, or `kapelle daemon add .`.
 
 In a room, type a message and press Enter. It goes to the room's orchestrator, or to the only agent when the room has no orchestrator. Start it with `@name` to send it to that agent instead. In an agent's thread, the box always starts with its `@name`. `/leave` exits and keeps the agents alive. `/dismiss` stops the room's agents. `/delete` shows every branch and its unmerged commits, then asks again before removing the room. They work in any view, after an agent's `@name` too, and never reach an agent. In a room, kapelle never commits for an agent: uncommitted work stays in the agent's checkout.
 
@@ -178,8 +180,6 @@ kapelle daemon start     # runs in this terminal until Ctrl-C
 kapelle daemon add .     # in another terminal, in your repository
 kapelle daemon stop      # stop the daemon, also one that kapelle started
 ```
-
-`kapelle chat new` does not add a repository for you. Run `kapelle daemon add .` first.
 
 ## Agents
 
