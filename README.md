@@ -96,7 +96,7 @@ Other options: `--agent <id>` picks another agent. `--cwd <dir>` works in anothe
 
 A room is a chat with a team of agents. Each agent keeps its memory across messages, and works on its own branch, `kapelle/<roomId>/<participantId>`. You decide who does what by choosing who to message.
 
-Rooms live in the daemon. `kapelle` starts it, and `/new` adds your repository (see [Quick start](#quick-start)). With the daemon running, these commands work from the shell too:
+Rooms live in the daemon. `kapelle` starts it, and `/new` adds your repository (see [Quick start](#quick-start)). To run, add, or stop the daemon yourself, see [Run the daemon by hand](#run-the-daemon-by-hand). With the daemon running, these commands work from the shell too:
 
 ```bash
 kapelle chat new --agent pi         # open a room and chat in it
