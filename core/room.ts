@@ -850,12 +850,16 @@ export const roomFile = (root: string, roomId: string) =>
  * Writes `room.json` with a temp file and `rename`, as `run.json` is, so a
  * reader sees the old record or the new one and never half of either. The
  * temp name carries the pid, because the boot sweep writes the same file.
+ * An empty `tombstones` is omitted here, the one writer both paths use, so the
+ * optional field does not grow back during a sweep.
  */
 export function writeRoomRecord(path: string, record: RoomRecord): void {
   const tmp = `${path}.${process.pid}.tmp`;
+  const { tombstones, ...rest } = record;
+  const written = tombstones?.length ? { ...rest, tombstones } : rest;
   // The tmp+rename below is the atomic write; the repo has no JSON-store seam.
   // pi-lens-ignore: no-raw-json-store-write
-  writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  writeFileSync(tmp, `${JSON.stringify(written, null, 2)}\n`, "utf8");
   renameSync(tmp, path);
 }
 
@@ -998,8 +1002,9 @@ export function crashed(record: RoomRecord): RoomRecord {
   };
 }
 
-/** Read the checkout of a tombstoned participant, so its record names the
- *  branch the harness left it on. A read that fails keeps the saved identity. */
+/** Read the checkout once when a participant is first tombstoned, so its
+ *  record names the branch the harness left it on. Later restores do not retry
+ *  it. A read that fails keeps the saved identity. */
 async function syncTombstoneCheckout(
   saved: ParticipantRecord,
 ): Promise<ParticipantRecord> {
@@ -1315,9 +1320,7 @@ async function buildRoom(
         status: status(),
         notices: [...roomNotices],
         participants: members.map(recordOf),
-        ...(from?.tombstones?.length
-          ? { tombstones: [...from.tombstones] }
-          : {}),
+        tombstones: [...(from?.tombstones ?? [])],
       });
     } catch (err) {
       // Once: a full disk would add the same line on every turn.
