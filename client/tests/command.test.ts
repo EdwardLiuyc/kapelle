@@ -118,6 +118,11 @@ test("/new makes its harness a developer, and resolves --cwd", () => {
   assert.ok(named && "error" in named && /--name needs/.test(named.error));
 });
 
+test("/new and /add reject an empty --model before any request (#466)", () => {
+  assert.deepEqual(parse('/new pi --model ""'), { error: USAGE.new });
+  assert.deepEqual(parse('/add pi --model ""'), { error: USAGE.add });
+});
+
 test("an agent command needs @name, and never falls back to the orchestrator", () => {
   assert.deepEqual(parse("/remove"), {
     error: "name the agent: @name /remove",
