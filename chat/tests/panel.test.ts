@@ -6,20 +6,23 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import type { RouteCommand } from "../../client/command.ts";
+import { parseCommand, type RouteCommand } from "../../client/command.ts";
 import type {
   HarnessesReply,
   ParticipantDto,
   RoomDto,
 } from "../../client/contract.ts";
 import type { DaemonAddress } from "../../client/daemon.ts";
+import { loopFolders } from "../../client/loop.ts";
 import { newRoomState, type RoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { until } from "../../integration/helpers.ts";
+import { tempDir, until } from "../../integration/helpers.ts";
 import { yellow } from "../common.ts";
 import { border, panelParts } from "../tui/panel.ts";
 
@@ -411,6 +414,11 @@ const shownOf = (box: ReturnType<typeof makeBox>) =>
 const type = (box: ReturnType<typeof makeBox>, keys: string) => {
   for (const k of keys) box.panel?.body.handleInput?.(k);
 };
+const pressKey = (box: ReturnType<typeof makeBox>, key: string) =>
+  box.panel?.body.handleInput?.(key);
+const down = (box: ReturnType<typeof makeBox>, count: number) => {
+  for (let i = 0; i < count; i++) pressKey(box, "\x1b[B");
+};
 /** Assert that `command` is on `label`'s row, after a gap of spaces. */
 const assertCommandRight = (rows: string, label: string, command: string) => {
   const labelAt = rows.indexOf(label);
@@ -431,13 +439,19 @@ test("each menu row shows its slash command on the right (M7-5)", () => {
     ["add agent …", "/add"],
     ["rename room …", "/title"],
     ["new room …", "/new"],
+    ["loop …", "/loop"],
     ["dismiss room", "/dismiss"],
     ["delete room …", "/delete"],
     ["help", "/help"],
-    ["leave", "/leave"],
   ]) {
     assertCommandRight(roomRows, label, command);
   }
+
+  // The loop row makes the room menu one row taller than its viewport.
+  type(room, "leave");
+  assert.match(shownOf(room), /→ leave +\/leave/);
+  type(room, "\x15loop\r");
+  assert.equal(room.panel?.title, "loop", "the menu opens the loop form");
 
   const thread = makeBox(NO_DAEMON_YET, {
     rooms: twoRooms(),
@@ -934,4 +948,135 @@ test("a form opened before the harness reply shows its pick list when it lands (
   box.panel?.body.handleInput?.("\r");
   assert.match(shownOf(box), /pi[\s\S]*other…/);
   box.hidePanel();
+});
+
+/** Keep a developer's own recipes out of a panel test. Top-level tests in
+ *  one node:test file run sequentially, so the environment is restored before
+ *  another test or fixture reads it. */
+const isolatedRecipeConfig = async (t: TestContext) => {
+  const config = join(await tempDir(t), "config");
+  await mkdir(config);
+  const before = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = config;
+  t.after(() => {
+    if (before === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = before;
+  });
+  return config;
+};
+
+const recipeRepo = async (t: TestContext, name: string, recipes: string[]) => {
+  const repo = join(await tempDir(t), name);
+  await mkdir(join(repo, ".git"), { recursive: true });
+  await mkdir(join(repo, ".kapelle", "loops"), { recursive: true });
+  for (const recipe of recipes) {
+    await writeFile(join(repo, ".kapelle", "loops", `${recipe}.md`), recipe);
+  }
+  return repo;
+};
+
+test("the loop form has the decided rows, refuses a blank task, and matches typed /loop (M9-5d, #458)", async (t) => {
+  await isolatedRecipeConfig(t);
+  const cwd = await recipeRepo(t, "command", ["fix"]);
+  const ran: RouteCommand[] = [];
+  const box = makeBox(NO_DAEMON_YET, {
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  box.loopForm();
+  assert.match(
+    shownOf(box),
+    /folder[\s\S]*recipe[\s\S]*task[\s\S]*note[\s\S]*harness[\s\S]*command[\s\S]*model[\s\S]*start/,
+  );
+
+  // Up from folder wraps to start. The blank task is refused before `run`.
+  pressKey(box, "\x1b[A");
+  pressKey(box, "\r");
+  assert.equal(box.panel?.error, "a task is required");
+  assert.deepEqual(ran, []);
+  pressKey(box, "\x1b[B");
+
+  pressKey(box, "\r");
+  type(box, `\x15${cwd}\r`);
+  down(box, 1);
+  pressKey(box, "\r");
+  await until("the loop's recipes", () => /fix/.test(shownOf(box)));
+  pressKey(box, "\r");
+  down(box, 1);
+  pressKey(box, "\r");
+  type(box, "  build issue 458  \r");
+  down(box, 1);
+  pressKey(box, "\r");
+  type(box, "  a note  \r");
+  down(box, 1);
+  pressKey(box, "\r");
+  type(box, "pi\r");
+  // Leave command blank; model is a text box until a harness list arrives.
+  down(box, 2);
+  pressKey(box, "\r");
+  type(box, "mock/smart\r");
+  down(box, 1);
+  pressKey(box, "\r");
+
+  const typed = parseCommand(
+    `/loop fix "build issue 458" "a note" --agent pi --model mock/smart --cwd ${cwd}`,
+    [],
+  );
+  assert.ok(typed && "verb" in typed);
+  assert.deepEqual(ran, [typed]);
+});
+
+test("the loop recipe row follows its folder, and no recipes refuses start with plain folder names (M9-5d, #458)", async (t) => {
+  await isolatedRecipeConfig(t);
+  const first = await recipeRepo(t, "first", ["one"]);
+  const second = await recipeRepo(t, "second", ["two"]);
+  const empty = await recipeRepo(t, "empty", []);
+  const ran: RouteCommand[] = [];
+  const box = makeBox(NO_DAEMON_YET, {
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  box.loopForm();
+
+  pressKey(box, "\r");
+  type(box, `\x15${first}\r`);
+  down(box, 1);
+  pressKey(box, "\r");
+  await until("the first folder's recipe", () => /one/.test(shownOf(box)));
+  assert.doesNotMatch(shownOf(box), /two/);
+  pressKey(box, "\x1b");
+
+  pressKey(box, "\x1b[A");
+  pressKey(box, "\r");
+  type(box, `\x15${second}\r`);
+  down(box, 1);
+  pressKey(box, "\r");
+  await until("the changed folder's recipe", () => /two/.test(shownOf(box)));
+  assert.doesNotMatch(shownOf(box), /one/);
+  pressKey(box, "\x1b");
+
+  pressKey(box, "\x1b[A");
+  pressKey(box, "\r");
+  type(box, `\x15${empty}\r`);
+  down(box, 1);
+  pressKey(box, "\r");
+  await until("the empty recipe state", () => /no recipes/.test(shownOf(box)));
+  pressKey(box, "\r");
+  down(box, 1);
+  pressKey(box, "\r");
+  type(box, "a task\r");
+  down(box, 5);
+  pressKey(box, "\r");
+
+  assert.deepEqual(ran, [], "no room request is sent");
+  assert.equal(box.panel?.title, "loop", "the refusal keeps the form open");
+  assert.match(box.panel?.error ?? "", /^no recipes: looked in /);
+  for (const folder of loopFolders(empty)) {
+    assert.ok(box.panel?.error?.includes(folder), folder);
+  }
+  assert.match(shownOf(box), /task\s+a task/, "the entered values stay");
 });
