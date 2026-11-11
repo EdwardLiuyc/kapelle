@@ -318,6 +318,7 @@ export function parseCommand(
         : ["cmd", "name", "role", "mode", "model", "base"];
     const o = options(args, names);
     if ("error" in o) return { error: `${o.error}; ${USAGE[verb]}` };
+    if (o.values.model === "") return { error: USAGE[verb] as string };
     const [agent, ...extra] = o.positionals;
     if (extra.length) return { error: `one harness only; ${USAGE[verb]}` };
     const { cmd, name, title, cwd, role, mode, base, model } = o.values;
