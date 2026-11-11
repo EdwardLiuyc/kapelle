@@ -38,6 +38,7 @@ import { text } from "node:stream/consumers";
 import {
   loopCommand,
   modelConfirmed,
+  notConfirmedOn,
   type RouteCommand,
   runCommand,
 } from "./client/command.ts";
@@ -255,7 +256,8 @@ kapelle — a minimal Agent Client Protocol client
   kapelle ps                         every run the daemon knows, and each
                                      task's id and status under it
   kapelle merge <runId> [--squash] [--cwd dir]
-  kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"] [--cwd dir]
+  kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"]
+               [--model <id>] [--cwd dir]
                                      a room whose orchestrator drives the
                                      recipe for the task; claude by default
   kapelle loop list [--cwd dir]      every recipe, its folder, and which wins
@@ -1413,8 +1415,7 @@ function notOnModel(
   p: ParticipantDto | undefined,
 ): string | undefined {
   if (!p || modelConfirmed(asked, p)) return undefined;
-  const runs = p.model ? `it runs on "${p.model}"` : "it has no model";
-  return `${p.name} joined, but is not confirmed on the model "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${p.name}`;
+  return `${p.name} joined, but ${notConfirmedOn(asked, p)}. Give it no work. To drop it: kapelle room remove ${p.name}`;
 }
 
 /**
@@ -1522,11 +1523,13 @@ function byName(room: RoomDto, name: string): ParticipantDto | undefined {
  */
 async function runLoopCommand(): Promise<number> {
   const usage = [
-    'usage: kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"] [--cwd dir]',
+    'usage: kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"] [--model <id>] [--cwd dir]',
     "       kapelle loop list [--cwd dir]",
     "A recipe is <repo>/.kapelle/loops/<recipe>.md, or else",
     "$XDG_CONFIG_HOME/kapelle/loops/<recipe>.md. The orchestrator runs on claude",
-    "unless --agent or --cmd names another harness.",
+    "unless --agent or --cmd names another harness. With --model, it gets the",
+    "start only when it is confirmed on that model. If not, the room stays with",
+    "no start, and this exits 1.",
   ].join("\n");
   const [, first, ...args] = positional as string[];
   // `list` with a task after it is a recipe named list.
@@ -1537,7 +1540,7 @@ async function runLoopCommand(): Promise<number> {
     return 1;
   }
   const options = new Set(["cwd", "quiet", "verbose"]);
-  if (!list) for (const o of ["agent", "cmd"]) options.add(o);
+  if (!list) for (const o of ["agent", "cmd", "model"]) options.add(o);
   const unknown = argv.find(
     (a) => a.startsWith("--") && !options.has(a.slice(2)),
   );
@@ -1550,6 +1553,8 @@ async function runLoopCommand(): Promise<number> {
     console.error(`error: ${FOLDER_GONE}`);
     return 1;
   }
+  // A missing or empty model is a usage error, before any room (M9-5c).
+  const model = list ? undefined : flag("model");
 
   if (list) {
     const recipes = await listRecipes(cwd);
@@ -1569,6 +1574,7 @@ async function runLoopCommand(): Promise<number> {
     note,
     agent: flag("agent"),
     cmd: flag("cmd"),
+    model,
     cwd,
   });
   const d = await findDaemon();

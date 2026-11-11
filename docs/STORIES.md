@@ -3838,6 +3838,21 @@ missing or empty value.
 next step names only `kapelle room remove`. M9-6 adds no CLI verb to change a model
 (decided 2026-10-30, #301), so that stays the next step.
 
+**M9-5c · `kapelle loop --model` and `/loop --model` · S · needs M9-5b**
+`kapelle loop` and `/loop` take `--model <id>` for the orchestrator, and `loopCommand`
+puts it on its entry in `POST /rooms`. A loop sends its start at once, so after
+`POST /rooms`, `runCommand` checks the model with `modelConfirmed`. When the orchestrator
+is not on that model, for any reason, it sends no start and refuses: the error names the
+room, the model asked for, the model in use or none, and `kapelle chat dismiss <roomId>`.
+`kapelle loop` exits 1. A `--model` with no value, or an empty one, is a usage error, and
+no room opens.
+*Done when* tests through the real CLI against `mock-agent.mjs` cover an accepted model, a
+refused one, a set with no answer, a swapped one, an agent with no model option, and a
+missing or empty value; and a unit test covers `/loop … --model`.
+**Decided 2026-11-11 (#432):** the room stays when the model does not land, as M9-5b
+keeps the agent, so the person can read its notice. The CLI does not check the saved model
+list before `POST /rooms`, as M9's D3 says: only the harness can confirm a model.
+
 **M9-6 · Change the model during a chat · S · needs M9-5**
 `PATCH /rooms/:id/agents/:agentId` takes `model`, as it takes `mode` today. `@name /model`
 shows the running agent's live list and `@name /model <id>` picks one, in both screens.
@@ -4001,7 +4016,7 @@ every hit is rotated, `SECURITY.md` and the repository and package metadata are 
 `docs/RELEASING.md` and its `AGENTS.md` entry are present, and the macOS package test
 passes.
 
-**M9-8 · Publish to npm · S · needs M9-1..M9-7, M9-3b, M9-5b and M9-8a**
+**M9-8 · Publish to npm · S · needs M9-1..M9-7, M9-3b, M9-5b, M9-5c and M9-8a**
 The first release. The person does steps 1 and 2 by hand.
 
 1. Make an npm account and turn on 2FA.
@@ -4111,10 +4126,10 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 **M9 (added 2026-10-15)** needs nothing that is open. More stories will join it.
 
 ```text
-M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b
+M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b ─ M9-5c
 M9-2 ─┘        └─ M9-3b        └─ M9-6
 M9-7 ─ M9-8a
-M9-1..M9-7, M9-3b, M9-5b, M9-8a ─ M9-8   (the first publish)
+M9-1..M9-7, M9-3b, M9-5b, M9-5c, M9-8a ─ M9-8   (the first publish)
 ```
 
 Three things are worth pulling forward, because everything queues behind them:
