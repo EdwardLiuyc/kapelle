@@ -1547,6 +1547,10 @@ function byName(room: RoomDto, name: string): ParticipantDto | undefined {
  * person's checkout. A new folder each time would leave one more
  * `repos/<name>-<hash>` behind on each run. So each run deletes the old demo
  * room, builds the folder again from nothing, and opens a new room there.
+ *
+ * On a pipe it opens the piped chat, as `kapelle chat new` does, not the
+ * `attach with:` line `kapelle loop` prints: the demo is a chat to try, and
+ * its tests drive it there.
  */
 async function runDemoCommand(): Promise<number> {
   const command = argv.filter((a) => a !== "--quiet" && a !== "--verbose");
@@ -1558,7 +1562,7 @@ async function runDemoCommand(): Promise<number> {
   // A room's `cmd` splits at whitespace (`resolveAgent`).
   if (/\s/.test(agent)) {
     console.error(
-      `error: kapelle demo cannot start an agent from a path with a space: ${agent}`,
+      `error: kapelle demo cannot start its agent: a room's agent command splits at spaces, and this path has one: ${agent}. Install kapelle under a path with no space.`,
     );
     return 1;
   }
@@ -1615,6 +1619,7 @@ async function runDemoCommand(): Promise<number> {
       printRefusal(out);
       return 1;
     }
+    console.log(`removed the previous demo room ${old.id}`);
   }
 
   await rm(folder, { recursive: true, force: true });
@@ -1657,9 +1662,14 @@ async function runDemoCommand(): Promise<number> {
   }
   const room = out.room as RoomDto;
   const id = room.id;
+  const demo = room.participants[0];
+  if (!demo) {
+    console.error(`error: the demo room ${id} has no agent`);
+    return 1;
+  }
   const sent = await call<MessageAccepted>(
     d,
-    `/rooms/${id}/agents/${room.participants[0]?.id}/messages`,
+    `/rooms/${id}/agents/${demo.id}/messages`,
     { method: "POST", body: { text: "Hello! Show me around." } },
   );
   if (!sent.ok) {

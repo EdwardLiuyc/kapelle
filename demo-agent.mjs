@@ -154,7 +154,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       reply(msg.id, {});
       return;
     case "session/prompt":
-      turn(msg);
+      // A throw ends the turn with an error, not the agent.
+      turn(msg).catch((err) =>
+        send({
+          jsonrpc: "2.0",
+          id: msg.id,
+          error: { code: -32603, message: String(err?.message ?? err) },
+        }),
+      );
       return;
     case "session/cancel":
       return;

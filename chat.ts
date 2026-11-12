@@ -51,7 +51,7 @@ const USAGE = `usage:
   node chat.ts                                              every room, on a terminal
   node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
   node chat.ts new --cmd "<command>" [--name n] [--cwd dir]
-  node chat.ts attach <roomId> [--no-setup]                rejoin a room; its history replays
+  node chat.ts attach <roomId> [--no-setup]                 rejoin a room; its history replays
   node chat.ts list                                         every room the daemon holds
   node chat.ts dismiss <roomId>                             stop a room's harness
 

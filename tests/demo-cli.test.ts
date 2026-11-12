@@ -9,8 +9,10 @@
  */
 
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { access, readdir, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import test from "node:test";
 import type { RoomDto, RoomListEntry } from "../client/contract.ts";
 import {
@@ -88,6 +90,11 @@ test("kapelle demo: a reply, one question, the write and its diff; a second run 
   again.child.stdin.write("/leave\n");
   const r2 = await again.done;
   assert.equal(r2.code, 0, r2.stderr);
+  // The run says what it removed, at the moment it acts.
+  assert.match(
+    r2.stdout,
+    new RegExp(`removed the previous demo room ${first[0]?.id}`),
+  );
   const second = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
   assert.equal(second.length, 1, JSON.stringify(second));
   assert.notEqual(second[0]?.id, first[0]?.id);
@@ -250,4 +257,30 @@ test("kapelle demo keeps the notes made before a revive: the write after it read
     await readFile(join(p.worktree, "notes.md"), "utf8"),
     "- one\n- two\n",
   );
+});
+
+test("the demo agent answers a turn that throws with an error, and stays up", async (t) => {
+  const agent = spawn(process.execPath, [join(REPO, "demo-agent.mjs")]);
+  t.after(() => agent.kill());
+  const lines = createInterface({ input: agent.stdout });
+  const next = () =>
+    new Promise<Record<string, unknown>>((ok) =>
+      lines.once("line", (l) => ok(JSON.parse(l))),
+    );
+  const ask = (id: number, method: string, params: unknown) => {
+    agent.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`,
+    );
+    return next();
+  };
+  // No session/new: the turn throws on the missing session.
+  const failed = await ask(1, "session/prompt", {
+    sessionId: "nope",
+    prompt: [{ type: "text", text: "hi" }],
+  });
+  assert.equal(failed.id, 1);
+  assert.ok(failed.error, JSON.stringify(failed));
+  const alive = await ask(2, "initialize", { protocolVersion: 1 });
+  assert.equal(alive.id, 2);
+  assert.ok(alive.result, JSON.stringify(alive));
 });

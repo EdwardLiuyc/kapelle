@@ -239,6 +239,8 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   `protocol/agent.ts` against it before a real harness.** When you add a client
   capability, add a path to it. Scenarios are picked with `--scenario <name>` on argv,
   never with a keyword in the prompt.
+- `demo-agent.mjs` is the other offline agent, for people: `kapelle demo` runs it,
+  and it ships in the package. It is not a test fixture, so add no scenario to it.
 - `hostile-agent.mjs` has one attack per `--scenario` and no default. Each attack must
   end its turn normally, so a test proves "refused, and the run continues".
 - `tests/cli.test.ts` and the daemon suites (`tests/daemon*.test.ts`,
