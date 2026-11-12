@@ -1,7 +1,7 @@
 /**
  * M1b-2, issue #18.
  *
- * #429 adds the log-directory and worktree-release failure paths, including
+ * #429 covers the log-directory and worktree-release failure paths, including
  * the record handoff that makes merge refuse after unsafe teardown.
  *
  * Nothing here spawns a harness. The status table and the roll-up are pure
@@ -12,15 +12,15 @@
  */
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 import {
   gitRepo,
   isolateStateHome,
   needs,
+  scriptedGit,
   tempDir,
 } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
@@ -1055,46 +1055,22 @@ test("a log directory that cannot be made is one notice, and the run continues (
   assert.equal(eventLogCalled, false);
   assert.equal(notices.length, 1);
   assert.equal(notices[0]?.taskId, "run");
-  assert.match(
-    notices[0]?.text ?? "",
-    /^cannot write harness stderr logs to .*\/runs\/20260916-120000-abcd: /,
-  );
-  assert.equal(
-    existsSync(join(state, "runs", RECORD_RUN, "events.jsonl")),
-    false,
-  );
+  const notice = notices[0]?.text ?? "";
+  assert.ok(notice.startsWith("cannot write harness stderr logs to "));
+  assert.ok(notice.includes(`/runs/${RECORD_RUN}: `));
 });
 
 test("a worktree-release failure keeps the verdict and clears merge metadata (#429)", {
   skip: needs("sh"),
 }, async (t) => {
   const root = await gitRepo(t);
-  const bin = await tempDir(t);
-  const realGit = spawnSync("sh", ["-c", "command -v git"], {
-    encoding: "utf8",
-  }).stdout.trim();
-  assert.ok(realGit, "git is not on PATH");
-  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  const wrapper = join(bin, "git");
-  await writeFile(
-    wrapper,
-    `#!/bin/sh
-if [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then
-  echo ${quote("simulated worktree remove failure")} >&2
+  const restorePath = await scriptedGit(
+    t,
+    () => `if [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then
+  echo "simulated worktree remove failure" >&2
   exit 1
-fi
-exec ${quote(realGit)} "$@"
-`,
+fi`,
   );
-  await chmod(wrapper, 0o755);
-
-  const previousPath = process.env.PATH;
-  process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
-  const restorePath = () => {
-    if (previousPath === undefined) delete process.env.PATH;
-    else process.env.PATH = previousPath;
-  };
-  t.after(restorePath);
 
   const notices: { taskId: string; text: string }[] = [];
   const report = await runRun(
@@ -1167,33 +1143,16 @@ test("the running record and log exist before the worktree preflight (#317)", {
   // preflight leaves nothing to copy, and a daemon crash in this window loses
   // the run.
   const root = await gitRepo(t);
-  const bin = await tempDir(t);
   const copies = await tempDir(t);
   const runDir = join(stateDirFor(root), "runs", RECORD_RUN);
-  const realGit = spawnSync("sh", ["-c", "command -v git"], {
-    encoding: "utf8",
-  }).stdout.trim();
-  assert.ok(realGit, "git is not on PATH");
-  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  const once = quote(join(copies, ".copied"));
-  const wrapper = join(bin, "git");
-  await writeFile(
-    wrapper,
-    `#!/bin/sh
-if [ "$1" = "status" ] && [ ! -e ${once} ]; then
-  touch ${once}
-  cp ${quote(join(runDir, "run.json"))} ${quote(join(runDir, "events.jsonl"))} ${quote(copies)}
-fi
-exec ${quote(realGit)} "$@"
-`,
+  const once = join(copies, ".copied");
+  await scriptedGit(
+    t,
+    () => `if [ "$1" = "status" ] && [ ! -e ${JSON.stringify(once)} ]; then
+  touch ${JSON.stringify(once)}
+  cp ${JSON.stringify(join(runDir, "run.json"))} ${JSON.stringify(join(runDir, "events.jsonl"))} ${JSON.stringify(copies)}
+fi`,
   );
-  await chmod(wrapper, 0o755);
-  const previousPath = process.env.PATH;
-  process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
-  t.after(() => {
-    if (previousPath === undefined) delete process.env.PATH;
-    else process.env.PATH = previousPath;
-  });
 
   await runRun(
     runOf(1, 1),

@@ -35,7 +35,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
@@ -119,6 +119,32 @@ export async function gatedGit(t: TestContext) {
     arm: () => writeFile(armed, ""),
     release: () => writeFile(release, ""),
   };
+}
+
+/** A `git` wrapper that runs the callback's shell lines, then the real git.
+ *  The helper owns the PATH swap and its restoration; callers that need the
+ *  old PATH before the test ends get the restore function. */
+export async function scriptedGit(
+  t: TestContext,
+  script: () => string,
+): Promise<() => void> {
+  const dir = await tempDir(t);
+  const found = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" });
+  assert.equal(found.status, 0, found.stderr);
+  const real = found.stdout.trim();
+  await writeFile(
+    join(dir, "git"),
+    `#!/bin/sh\n${script()}\nexec ${JSON.stringify(real)} "$@"\n`,
+    { mode: 0o755 },
+  );
+  const previous = process.env.PATH;
+  process.env.PATH = `${dir}${delimiter}${previous ?? ""}`;
+  const restore = () => {
+    if (previous === undefined) delete process.env.PATH;
+    else process.env.PATH = previous;
+  };
+  t.after(restore);
+  return restore;
 }
 
 /** A `git` wrapper that writes each call's arguments as one line, then runs

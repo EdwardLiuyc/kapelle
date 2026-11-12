@@ -3,7 +3,8 @@
  *
  * Against real git, like `core/tests/worktree.test.ts`: merge's claims are
  * about what git does with refs, the index and the working tree. The malformed
- * run-record matrix is #429: every refusal must happen before Git mutates.
+ * run-record matrix is #429: every refusal must leave HEAD, every ref and the
+ * working tree unchanged.
  */
 
 import assert from "node:assert/strict";
@@ -92,9 +93,19 @@ const RECORD_REFUSALS: RecordRefusal[] = [
     expected: /is for 20260909-120000-ffff, not 20260909-120000-abcd/,
   },
   {
+    name: "non-string run id",
+    rewrite: (record) => asJson({ ...record, runId: 42 }),
+    expected: /runId must be a non-empty string/,
+  },
+  {
     name: "wrong repository root",
     rewrite: (record) => asJson({ ...record, root: "/somewhere/else" }),
     expected: /created in \/somewhere\/else, not/,
+  },
+  {
+    name: "non-string repository root",
+    rewrite: (record) => asJson({ ...record, root: 42 }),
+    expected: /root must be a non-empty string/,
   },
   {
     name: "null record",
