@@ -36,7 +36,14 @@
  * a person with no agent yet. `runDemoCommand` says where it works and why.
  */
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { text } from "node:stream/consumers";
 import {
@@ -1534,11 +1541,6 @@ function byName(room: RoomDto, name: string): ParticipantDto | undefined {
 }
 
 /**
- * `kapelle loop` (M8-5): a recipe's start, or `list`. A start opens the room
- * and sends the orchestrator its first message (`client/command.ts`), then
- * opens the chat on that room on a terminal; a pipe gets the room's id.
- */
-/**
  * `kapelle demo` (#463): a room whose one agent is `demo-agent.mjs`, so a
  * new person can try the chat with no harness and no account.
  *
@@ -1553,10 +1555,8 @@ function byName(room: RoomDto, name: string): ParticipantDto | undefined {
  * room, builds the folder again from nothing, and opens a new room there.
  */
 async function runDemoCommand(): Promise<number> {
-  const unknown = argv.find(
-    (a) => a !== "demo" && a !== "--quiet" && a !== "--verbose",
-  );
-  if (unknown !== undefined) {
+  const command = argv.filter((a) => a !== "--quiet" && a !== "--verbose");
+  if (command.length !== 1 || command[0] !== "demo") {
     console.error("usage: kapelle demo");
     return 1;
   }
@@ -1595,8 +1595,10 @@ async function runDemoCommand(): Promise<number> {
     );
   // The daemon deletes no room with uncommitted work, and the demo agent
   // leaves `notes.md`. So the old checkouts are cleaned after the dismiss,
-  // but only the ones in the demo's own state folder.
-  const checkouts = stateDirFor(folder) + sep;
+  // but only the ones in the demo's own state folder. Read them from disk:
+  // a removed participant's checkout is no longer in the roster, and still
+  // blocks the delete.
+  const checkouts = join(stateDirFor(folder), "wt");
   for (const old of rooms.body.filter((r) => r.cwd === folder)) {
     const stop = await call<RoomDto>(d, `/rooms/${old.id}/dismiss`, {
       method: "POST",
@@ -1605,12 +1607,12 @@ async function runDemoCommand(): Promise<number> {
       printRefusal(stop.error);
       return 1;
     }
-    const got = await call<RoomDto>(d, `/rooms/${old.id}`);
-    for (const p of got.ok ? got.body.participants : []) {
-      if (!p.worktree.startsWith(checkouts)) continue;
+    const roomCheckouts = join(checkouts, old.id);
+    for (const name of await readdir(roomCheckouts).catch(() => [])) {
+      const worktree = join(roomCheckouts, name);
       try {
-        git(p.worktree, "reset", "-q", "--hard");
-        git(p.worktree, "clean", "-q", "-fd");
+        git(worktree, "reset", "-q", "--hard");
+        git(worktree, "clean", "-q", "-fd");
       } catch {
         // A checkout that is gone has nothing to clean.
       }
@@ -1678,6 +1680,11 @@ async function runDemoCommand(): Promise<number> {
   return 0;
 }
 
+/**
+ * `kapelle loop` (M8-5): a recipe's start, or `list`. A start opens the room
+ * and sends the orchestrator its first message (`client/command.ts`), then
+ * opens the chat on that room on a terminal; a pipe gets the room's id.
+ */
 async function runLoopCommand(): Promise<number> {
   const usage = [
     'usage: kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"] [--model <id>] [--cwd dir]',
