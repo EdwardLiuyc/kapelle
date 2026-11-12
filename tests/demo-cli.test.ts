@@ -11,7 +11,15 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, mkdir, readdir, readFile, realpath } from "node:fs/promises";
+import {
+  access,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  symlink,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
@@ -286,30 +294,42 @@ test("the demo agent answers a turn that throws with an error, and stays up", as
   assert.ok(alive.result, JSON.stringify(alive));
 });
 
-test("kapelle demo writes nothing, and asks nothing, when notes.md is there and cannot be read", {
-  timeout: 90_000,
-}, async (t) => {
-  const runtime = await realpath(await tempDir(t));
-  const d = await bootDaemon(t, runtime);
-  const c = spawnCli(t, ["demo"], "cli.ts", {
-    XDG_RUNTIME_DIR: runtime,
-    XDG_STATE_HOME: runtime,
-    XDG_CONFIG_HOME: join(runtime, "config-home"),
+const unreadableNotes: [string, (path: string) => Promise<unknown>][] = [
+  // A folder fails a read even when the tests run as root.
+  ["a folder", (path) => mkdir(path)],
+  // existsSync follows the link, so this entry reads as missing unless it is lstat'ed.
+  ["a dangling symlink", (path) => symlink("missing-target", path)],
+];
+
+for (const [what, make] of unreadableNotes) {
+  test(`kapelle demo writes nothing, and asks nothing, when notes.md is ${what}`, {
+    timeout: 90_000,
+  }, async (t) => {
+    const runtime = await realpath(await tempDir(t));
+    const d = await bootDaemon(t, runtime);
+    const c = spawnCli(t, ["demo"], "cli.ts", {
+      XDG_RUNTIME_DIR: runtime,
+      XDG_STATE_HOME: runtime,
+      XDG_CONFIG_HOME: join(runtime, "config-home"),
+    });
+    await openDemo(c);
+    const [listed] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+    assert.ok(listed, "the demo room is listed");
+    const room = (await api<RoomDto>(d, "GET", `/rooms/${listed.id}`)).body;
+    const worktree = room.participants[0]?.worktree;
+    assert.ok(worktree, JSON.stringify(room));
+    const notes = join(worktree, "notes.md");
+    await make(notes);
+    c.child.stdin.write("hello\n");
+    await c.waitFor("could not read notes.md");
+    await roomIdle(d, room.id);
+    const kept = await lstat(notes);
+    assert.equal(kept.isDirectory(), what === "a folder");
+    assert.equal(kept.isSymbolicLink(), what === "a dangling symlink");
+    assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
+    c.child.stdin.write("/leave\n");
+    const r = await c.done;
+    assert.equal(r.code, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /asks: Write notes\.md/);
   });
-  await openDemo(c);
-  const [listed] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
-  assert.ok(listed, "the demo room is listed");
-  const room = (await api<RoomDto>(d, "GET", `/rooms/${listed.id}`)).body;
-  const worktree = room.participants[0]?.worktree;
-  assert.ok(worktree, JSON.stringify(room));
-  // A folder: it exists, and reading it fails, as root too.
-  await mkdir(join(worktree, "notes.md"));
-  c.child.stdin.write("hello\n");
-  await c.waitFor("could not read notes.md");
-  await roomIdle(d, room.id);
-  assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
-  c.child.stdin.write("/leave\n");
-  const r = await c.done;
-  assert.equal(r.code, 0, r.stderr);
-  assert.doesNotMatch(r.stdout, /asks: Write notes\.md/);
-});
+}

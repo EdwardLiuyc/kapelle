@@ -14,7 +14,7 @@
  *
  * `mock-agent.mjs` is the test fixture. Keep test scenarios out of this file.
  */
-import { existsSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -41,6 +41,16 @@ const callClient = (method, params) =>
     pending.set(id, resolve);
     send({ jsonrpc: "2.0", id, method, params });
   });
+
+/** Whether an entry exists, including a dangling symlink. */
+function entryExists(path) {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+  } catch {
+    // A path we cannot inspect is not a missing file.
+    return true;
+  }
+}
 
 /** Each session: its checkout and its turn count. */
 const sessions = new Map();
@@ -81,7 +91,7 @@ async function turn(msg) {
   // Only a file that is not there yet reads as "". Any other failed read
   // writes nothing: the diff's old side would not be what is on disk.
   const read = await callClient("fs/read_text_file", { sessionId: sid, path });
-  if (read === null && existsSync(path)) {
+  if (read === null && entryExists(path)) {
     say(
       sid,
       "I could not read notes.md, so I will not write it. Nothing changed.",
