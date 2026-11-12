@@ -1,6 +1,9 @@
 /**
  * M1b-2, issue #18.
  *
+ * #429 covers the log-directory and worktree-release failure paths, including
+ * the record handoff that makes merge refuse after unsafe teardown.
+ *
  * Nothing here spawns a harness. The status table and the roll-up are pure
  * functions, and the pool is exercised through `runRun`'s injected executor —
  * which is the only way to *observe* "never more than N live", since counting
@@ -9,15 +12,15 @@
  */
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { chmod, readFile, writeFile } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 import {
   gitRepo,
   isolateStateHome,
   needs,
+  scriptedGit,
   tempDir,
 } from "../../integration/helpers.ts";
 import type { AgentEventEnvelope } from "../../protocol/agent.ts";
@@ -28,6 +31,7 @@ import type {
   Usage,
 } from "../../protocol/types.ts";
 import { createEventBus } from "../events.ts";
+import { mergeRun } from "../merge.ts";
 import {
   runRun,
   runStatus,
@@ -1017,6 +1021,93 @@ test("a run with no worktrees still writes a record", async (t) => {
   assert.equal(typeof record.tasks[0].durationMs, "number");
 });
 
+test("a log directory that cannot be made is one notice, and the run continues (#429)", async (t) => {
+  const root = await gitRepo(t);
+  const state = stateDirFor(root);
+  await mkdir(state, { recursive: true });
+  await writeFile(join(state, "runs"), "not a directory\n");
+
+  const notices: { taskId: string; text: string }[] = [];
+  let eventLogCalled = false;
+  let stderrLog: string | undefined;
+  let ran = false;
+  const report = await runRun(
+    runOf(1, 1),
+    {
+      cwd: root,
+      runId: RECORD_RUN,
+      bus: createEventBus(),
+      onNotice: (taskId, text) => notices.push({ taskId, text }),
+      onEventLog: () => {
+        eventLogCalled = true;
+      },
+    },
+    async (_task, ctx) => {
+      ran = true;
+      stderrLog = ctx.stderrLog;
+      return { stopReason: "end_turn" };
+    },
+  );
+
+  assert.equal(ran, true);
+  assert.equal(report.status, "done");
+  assert.equal(stderrLog, undefined);
+  assert.equal(eventLogCalled, false);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]?.taskId, "run");
+  const notice = notices[0]?.text ?? "";
+  assert.ok(notice.startsWith("cannot write harness stderr logs to "));
+  assert.ok(notice.includes(`/runs/${RECORD_RUN}: `));
+});
+
+test("a worktree-release failure keeps the verdict and clears merge metadata (#429)", {
+  skip: needs("sh"),
+}, async (t) => {
+  const root = await gitRepo(t);
+  const restorePath = await scriptedGit(
+    t,
+    () => `if [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then
+  echo "simulated worktree remove failure" >&2
+  exit 1
+fi`,
+  );
+
+  const notices: { taskId: string; text: string }[] = [];
+  const report = await runRun(
+    runOf(1, 1),
+    {
+      cwd: root,
+      runId: RECORD_RUN,
+      bus: createEventBus(),
+      onNotice: (taskId, text) => notices.push({ taskId, text }),
+    },
+    async (_task, ctx) => {
+      await writeFile(join(ctx.cwd, "work.txt"), "work\n");
+      return { stopReason: "end_turn" };
+    },
+  );
+  restorePath();
+
+  const task = report.tasks[0];
+  assert.equal(report.status, "done");
+  assert.equal(task?.status, "done");
+  assert.equal(task?.branch, undefined);
+  assert.equal(task?.baseSha, undefined);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]?.taskId, "t0");
+  assert.match(
+    notices[0]?.text ?? "",
+    /^worktree cleanup failed, so it is still on disk:/,
+  );
+  assert.match(notices[0]?.text ?? "", /simulated worktree remove failure\s*$/);
+
+  const record = await recordIn(root, RECORD_RUN);
+  assert.equal(record.tasks[0].status, "done");
+  assert.equal(record.tasks[0].branch, undefined);
+  assert.equal(record.tasks[0].baseSha, undefined);
+  await assert.rejects(mergeRun(RECORD_RUN, root), /missing branch\/base/);
+});
+
 test("a preflight that throws leaves a failed record with its error, and an empty log (#317)", async (t) => {
   // A corrupt index: `git rev-parse` still finds the root, and the preflight's
   // `git status` throws. The record and the log came first, so both survive.
@@ -1052,33 +1143,16 @@ test("the running record and log exist before the worktree preflight (#317)", {
   // preflight leaves nothing to copy, and a daemon crash in this window loses
   // the run.
   const root = await gitRepo(t);
-  const bin = await tempDir(t);
   const copies = await tempDir(t);
   const runDir = join(stateDirFor(root), "runs", RECORD_RUN);
-  const realGit = spawnSync("sh", ["-c", "command -v git"], {
-    encoding: "utf8",
-  }).stdout.trim();
-  assert.ok(realGit, "git is not on PATH");
-  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  const once = quote(join(copies, ".copied"));
-  const wrapper = join(bin, "git");
-  await writeFile(
-    wrapper,
-    `#!/bin/sh
-if [ "$1" = "status" ] && [ ! -e ${once} ]; then
-  touch ${once}
-  cp ${quote(join(runDir, "run.json"))} ${quote(join(runDir, "events.jsonl"))} ${quote(copies)}
-fi
-exec ${quote(realGit)} "$@"
-`,
+  const once = join(copies, ".copied");
+  await scriptedGit(
+    t,
+    () => `if [ "$1" = "status" ] && [ ! -e ${JSON.stringify(once)} ]; then
+  touch ${JSON.stringify(once)}
+  cp ${JSON.stringify(join(runDir, "run.json"))} ${JSON.stringify(join(runDir, "events.jsonl"))} ${JSON.stringify(copies)}
+fi`,
   );
-  await chmod(wrapper, 0o755);
-  const previousPath = process.env.PATH;
-  process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
-  t.after(() => {
-    if (previousPath === undefined) delete process.env.PATH;
-    else process.env.PATH = previousPath;
-  });
 
   await runRun(
     runOf(1, 1),
