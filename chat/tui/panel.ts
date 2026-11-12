@@ -282,8 +282,9 @@ function panelParts({
   /** Asks `GET /harnesses` once, when the screen is up, and does not wait.
    *  Its answer fills `ready`, and opens the setup list when the person
    *  has not said "done" or no agent is ready (M9-3), unless a pop-up, a
-   *  question or `busy` (the side view) came first. */
-  const atStart = async (busy: () => boolean = () => false) => {
+   *  question or `busy` (the side view) came first. With `open` false it
+   *  only fills `ready` (#463). */
+  const atStart = async (busy: () => boolean = () => false, open = true) => {
     const order = ++harnessAsked;
     const res = await readHarnesses(d).catch(() => undefined);
     if (!res?.ok) return;
@@ -293,6 +294,7 @@ function panelParts({
     // The side view too: a list over the shell the person just opened
     // would take the keys they are typing.
     if (
+      open &&
       needsSetup(res.body) &&
       !setupTouched &&
       !panel &&

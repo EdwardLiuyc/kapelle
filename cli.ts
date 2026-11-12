@@ -1672,7 +1672,8 @@ async function runDemoCommand(): Promise<number> {
     return 1;
   }
   // As for `chat`: `chat.ts` parses `process.argv` itself.
-  process.argv.splice(2, Infinity, "attach", id);
+  // The room first: the setup list would cover it (#463).
+  process.argv.splice(2, Infinity, "attach", id, "--no-setup");
   await import("./chat.ts");
   return 0;
 }

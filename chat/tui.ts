@@ -304,11 +304,15 @@ export function screenLayout(p: {
  * `client/submit.ts`, as the piped screen reads it. The sidebar only picks
  * what is drawn. The rows, the `@name ` pre-fill and what is seen are
  * `chat/view.ts` (M4-10); this file sets the text and draws.
+ *
+ * With `setup: false`, the setup list does not open at start: `kapelle
+ * demo` (#463) opens its room first. `/setup` still shows it.
  */
 function chatTui(
   d: DaemonAddress,
   list: RoomListEntry[],
   selected?: string,
+  setup = true,
 ): Promise<number> {
   /** The screen's end, set where the screen's own end lives. */
   let quit = (_why: End) => {};
@@ -1625,7 +1629,7 @@ function chatTui(
     set.start(list);
     open(view);
     // The shell or a diff in the side view keeps the keys (M9-3).
-    void box.atStart(() => side.shown).catch(gone);
+    void box.atStart(() => side.shown, setup).catch(gone);
   });
 }
 

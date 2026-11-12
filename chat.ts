@@ -51,9 +51,11 @@ const USAGE = `usage:
   node chat.ts                                              every room, on a terminal
   node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
   node chat.ts new --cmd "<command>" [--name n] [--cwd dir]
-  node chat.ts attach <roomId>                              rejoin a room; its history replays
+  node chat.ts attach <roomId> [--no-setup]                rejoin a room; its history replays
   node chat.ts list                                         every room the daemon holds
   node chat.ts dismiss <roomId>                             stop a room's harness
+
+--no-setup keeps the setup list closed at start; kapelle demo uses it.
 
 --name is the agent's name; the harness name by default. Give one when that
 is not a valid name, as for --cmd "/opt/bin/my-agent".
@@ -84,7 +86,11 @@ const isTty = () => Boolean(process.stdin.isTTY && process.stdout.isTTY);
 /** A terminal gets every room, with `room` selected; a pipe gets `room`
  *  alone. A dismissed room is listed only when it is the one asked for, so
  *  `attach` still replays it. */
-async function chat(d: DaemonAddress, room?: RoomDto): Promise<number> {
+async function chat(
+  d: DaemonAddress,
+  room?: RoomDto,
+  setup = true,
+): Promise<number> {
   // `main` prints the usage for a pipe with no verb, so a pipe has a room.
   if (!isTty() && room) return chatPiped(d, room);
   const r = await call<RoomListEntry[]>(d, "/rooms");
@@ -96,7 +102,7 @@ async function chat(d: DaemonAddress, room?: RoomDto): Promise<number> {
     (x) => x.status !== "dismissed" || x.id === room?.id,
   );
   // With no room, the screen still opens: ctrl+o or /new opens one (M4-5).
-  return chatTui(d, list, room?.id);
+  return chatTui(d, list, room?.id, setup);
 }
 
 async function main(): Promise<number> {
@@ -107,6 +113,7 @@ async function main(): Promise<number> {
       cmd: { type: "string" },
       name: { type: "string" },
       cwd: { type: "string" },
+      "no-setup": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -164,7 +171,7 @@ async function main(): Promise<number> {
       console.error(`error: ${r.error.message}`);
       return 1;
     }
-    return chat(d, r.body);
+    return chat(d, r.body, !values["no-setup"]);
   }
 
   if (verb === "list") {
