@@ -19,7 +19,10 @@
   // from nowhere and calls all four unused. knip has no notion of a second,
   // opt-in test suite, so they are ignored rather than misdeclared as
   // production roots. `npm run check` still type-checks them.
-  "ignore": ["protocol/types.ts", "integration/**"],
+  //
+  // site/ is the project website: static files a browser loads, never a
+  // module that code imports, so nothing in the graph reaches site/site.js.
+  "ignore": ["protocol/types.ts", "integration/**", "site/**"],
   // script(1) is util-linux's, spawned by tests/attach.test.ts and
   // tests/chat-tui*.test.ts to give `attach` (M2-9) and chat.ts a real
   // pseudo-terminal. A system binary, not an npm one, so nothing lists it.
