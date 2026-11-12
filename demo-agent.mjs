@@ -7,8 +7,10 @@
  * Its first turn greets the person and names the keys. Each later turn
  * answers the message, then asks to add it to `notes.md` in its checkout:
  * one permission question, and a diff to look at once it is allowed. It
- * writes only through the client's `fs/write_text_file`, so the policy and
- * the path guard see every write.
+ * reads and writes the file only through the client (`fs/read_text_file`,
+ * `fs/write_text_file`), so the policy and the path guard see every write.
+ * It reads the file before each write and keeps no copy: a revive starts a
+ * fresh session, and the diff's old side must be what is on disk.
  *
  * `mock-agent.mjs` is the test fixture. Keep test scenarios out of this file.
  */
@@ -39,7 +41,7 @@ const callClient = (method, params) =>
     send({ jsonrpc: "2.0", id, method, params });
   });
 
-/** Each session: its checkout, its turn count, and the notes so far. */
+/** Each session: its checkout and its turn count. */
 const sessions = new Map();
 
 const WELCOME = `Hello! I am the demo agent. I run on this computer, with no account and no network.
@@ -75,7 +77,9 @@ async function turn(msg) {
   say(sid, `You said: "${text}". I will add it to notes.md.\n`);
 
   const path = join(s.cwd, "notes.md");
-  const oldText = s.notes;
+  // No file yet reads as "".
+  const read = await callClient("fs/read_text_file", { sessionId: sid, path });
+  const oldText = typeof read?.content === "string" ? read.content : "";
   const newText = `${oldText}- ${text}\n`;
   const diff = { type: "diff", path, oldText, newText };
   const toolCallId = `write-${s.turns}`;
@@ -104,7 +108,6 @@ async function turn(msg) {
       path,
       content: newText,
     })) !== null;
-  if (allowed) s.notes = newText;
   update(sid, {
     sessionUpdate: "tool_call_update",
     toolCallId,
@@ -143,7 +146,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       return;
     case "session/new": {
       const sessionId = `demo-${sessions.size + 1}`;
-      sessions.set(sessionId, { cwd: msg.params.cwd, turns: 0, notes: "" });
+      sessions.set(sessionId, { cwd: msg.params.cwd, turns: 0 });
       reply(msg.id, { sessionId });
       return;
     }

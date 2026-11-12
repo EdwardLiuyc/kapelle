@@ -3,12 +3,13 @@
  * daemon: the demo agent answers, asks one question, writes once it is
  * allowed, and the diff shows the write. Later runs clean the old checkouts,
  * whether their participant is still on the roster or was removed. A rejected
- * question writes nothing. That the packed package ships the agent is in
+ * question writes nothing. A write after a revive keeps the notes made
+ * before it. That the packed package ships the agent is in
  * `tests/package.test.ts`.
  */
 
 import assert from "node:assert/strict";
-import { access, readdir, realpath } from "node:fs/promises";
+import { access, readdir, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import type { RoomDto, RoomListEntry } from "../client/contract.ts";
@@ -17,6 +18,7 @@ import {
   bootDaemon,
   pendingOne,
   REPO,
+  roomIdle,
   spawnCli,
   tempDir,
 } from "../integration/helpers.ts";
@@ -206,4 +208,46 @@ test("kapelle demo refuses an extra command word before it starts a daemon", asy
   assert.equal(r.stdout, "");
   assert.match(r.stderr, /^usage: kapelle demo$/m);
   assert.doesNotMatch(r.stderr, /XDG_RUNTIME_DIR/);
+});
+
+test("kapelle demo keeps the notes made before a revive: the write after it reads notes.md first", {
+  timeout: 90_000,
+}, async (t) => {
+  const runtime = await realpath(await tempDir(t));
+  const first = await bootDaemon(t, runtime);
+  const c = spawnCli(t, ["demo"], "cli.ts", {
+    XDG_RUNTIME_DIR: runtime,
+    XDG_STATE_HOME: runtime,
+    XDG_CONFIG_HOME: join(runtime, "config-home"),
+  });
+  await openDemo(c);
+  c.child.stdin.write("one\n");
+  const asked = await pendingOne(first);
+  await api(first, "POST", `/permissions/${asked.id}`, { allow: true });
+  await c.waitFor("Wrote notes.md");
+  c.child.stdin.write("/leave\n");
+  assert.equal((await c.done).code, 0);
+  const [listed] = (await api<RoomListEntry[]>(first, "GET", "/rooms")).body;
+  assert.ok(listed, "the demo room is listed");
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  // A new daemon revives the agent with a fresh session: it has no memory
+  // of the first note, and the file on disk still has it.
+  const d = await bootDaemon(t, runtime);
+  const room = (await api<RoomDto>(d, "GET", `/rooms/${listed.id}`)).body;
+  const p = room.participants[0];
+  assert.ok(p, JSON.stringify(room));
+  const send = (text: string) =>
+    api(d, "POST", `/rooms/${room.id}/agents/${p.id}/messages`, { text });
+  await send("back again"); // the fresh session's first turn is the welcome
+  await roomIdle(d, room.id);
+  await send("two");
+  const next = await pendingOne(d);
+  await api(d, "POST", `/permissions/${next.id}`, { allow: true });
+  await roomIdle(d, room.id);
+  assert.equal(
+    await readFile(join(p.worktree, "notes.md"), "utf8"),
+    "- one\n- two\n",
+  );
 });
