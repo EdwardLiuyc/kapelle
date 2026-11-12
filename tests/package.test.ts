@@ -31,6 +31,7 @@ import {
   ptyScreen,
   REPO,
   savedSetup,
+  spawnCli,
   stopProcess,
   tempDir,
 } from "../integration/helpers.ts";
@@ -80,6 +81,7 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   assert.ok(emitted.includes("cli.js"));
   assert.ok(emitted.includes("daemon.js"));
   assert.ok(emitted.includes(join("assets", "orchestrator.md")));
+  assert.ok(emitted.includes("demo-agent.mjs"));
   assert.deepEqual(
     emitted.filter((file) => file.endsWith(".test.js")),
     [],
@@ -228,6 +230,7 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     assert.ok(files.includes(file), `missing package file: ${file}`);
   }
   assert.ok(files.includes("dist/assets/orchestrator.md"));
+  assert.ok(files.includes("dist/demo-agent.mjs"));
   assert.ok(!files.some((file) => file.endsWith(".test.js")));
   assert.ok(!files.some((file) => file.endsWith(".ts")));
 
@@ -247,6 +250,30 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     { cwd: biomeRoot, encoding: "utf8" },
   );
   assert.equal(biome.status, 0, `${biome.stdout}${biome.stderr}`);
+
+  // `kapelle demo` from the package (#463): it starts the packaged daemon
+  // and the packaged demo agent, with no harness installed.
+  const demoRuntime = await tempDir(t);
+  const demoState = await tempDir(t);
+  savedSetup(demoState);
+  const demo = spawnCli(t, ["demo"], cli, {
+    XDG_RUNTIME_DIR: demoRuntime,
+    XDG_STATE_HOME: demoState,
+    XDG_CONFIG_HOME: join(demoState, "config-home"),
+    KAPELLE_PORT: "0",
+  });
+  t.after(async () => {
+    const record = await readFile(
+      join(demoRuntime, "kapelle", "daemon.json"),
+      "utf8",
+    ).catch(() => undefined);
+    if (record) await stopProcess((JSON.parse(record) as { pid: number }).pid);
+  });
+  await demo.waitFor("Now type a message");
+  demo.child.stdin.write("/leave\n");
+  const left = await demo.done;
+  assert.equal(left.code, 0, left.stderr);
+  assert.match(left.stdout, /demo-agent: no measured labels/);
 
   if (noPty) {
     t.diagnostic(noPty);

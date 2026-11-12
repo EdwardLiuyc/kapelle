@@ -101,6 +101,7 @@ node cli.ts run --file <run.json> [--detach]   # N tasks (tasks.json is the exam
 node cli.ts attach <runId> [--task <id>]       # replay then follow a detached run
 node cli.ts ps                                 # every run the daemon knows, with its tasks
 node cli.ts setup                              # the agents the daemon finds on its PATH, and what to install
+node cli.ts demo                               # a room with the offline demo-agent.mjs, in <stateDir>/demo, made again each run
 node cli.ts merge <runId> [--squash] [--cwd dir]
 node cli.ts room info | send | add | ff | diff | remove [--room id] [--as name]   # from a participant's checkout; add takes --model id
 node cli.ts loop <recipe> <task> ["<note>"] [--agent id] [--cmd "<cmd>"] [--model id] [--cwd dir]   # a room whose orchestrator drives the recipe

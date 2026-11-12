@@ -31,8 +31,12 @@
  * **`kapelle loop`** (M8-5) is the screens' `/loop` from a shell: the same
  * command (`client/command.ts`), then the chat on that room on a terminal,
  * as `kapelle chat new` does.
+ *
+ * **`kapelle demo`** (#463) is a room with the offline `demo-agent.mjs`, for
+ * a person with no agent yet. `runDemoCommand` says where it works and why.
  */
-import { readFile, realpath } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { text } from "node:stream/consumers";
 import {
@@ -48,6 +52,7 @@ import type {
   PendingDecision,
   RepoAdded,
   RoomDto,
+  RoomListEntry,
   RunAccepted,
   RunListEntry,
   RunStatus,
@@ -245,6 +250,8 @@ kapelle — a minimal Agent Client Protocol client
   kapelle                            the chat on a terminal, starting the daemon
                                      if none runs; a pipe prints chat usage and exits 1
   kapelle --version                  print the version
+  kapelle demo                       try the chat with an offline demo agent:
+                                     no agent to install, no account
   kapelle "<prompt>" [options]
   kapelle run --file <run.json> [--cwd dir] [--verbose] [--quiet]
   kapelle run --file <run.json> --detach   hands the run to the daemon
@@ -347,16 +354,7 @@ if (chatVerb) {
   // screen, and `chat.ts` prints its usage without touching the daemon.
   if (process.stdin.isTTY && process.stdout.isTTY) {
     try {
-      await ensureDaemon({
-        file: daemonFile(),
-        log: join(stateDir(), "daemon.log"),
-        // A plain path, so tsc cannot rewrite it with the imports.
-        script: join(
-          import.meta.dirname,
-          import.meta.filename.endsWith(".js") ? "daemon.js" : "daemon.ts",
-        ),
-        cwd: import.meta.dirname,
-      });
+      await startDaemon();
     } catch (err) {
       console.error(`error: ${messageOf(err)}`);
       process.exit(1);
@@ -382,6 +380,11 @@ if (chatVerb) {
   });
 } else if (positional[0] === "loop") {
   process.exitCode = await runLoopCommand().catch((err) => {
+    console.error(`error: ${messageOf(err)}`);
+    return 1;
+  });
+} else if (positional[0] === "demo") {
+  process.exitCode = await runDemoCommand().catch((err) => {
     console.error(`error: ${messageOf(err)}`);
     return 1;
   });
@@ -941,6 +944,20 @@ function printTask(task: Card): void {
 // before a `const` down here is set.
 function daemonFile(): string {
   return join(runtimeDir(), "daemon.json");
+}
+
+/** Start the daemon detached when none answers (M9-2). */
+function startDaemon(): Promise<void> {
+  return ensureDaemon({
+    file: daemonFile(),
+    log: join(stateDir(), "daemon.log"),
+    // A plain path, so tsc cannot rewrite it with the imports.
+    script: join(
+      import.meta.dirname,
+      import.meta.filename.endsWith(".js") ? "daemon.js" : "daemon.ts",
+    ),
+    cwd: import.meta.dirname,
+  });
 }
 
 /**
@@ -1521,6 +1538,145 @@ function byName(room: RoomDto, name: string): ParticipantDto | undefined {
  * and sends the orchestrator its first message (`client/command.ts`), then
  * opens the chat on that room on a terminal; a pipe gets the room's id.
  */
+/**
+ * `kapelle demo` (#463): a room whose one agent is `demo-agent.mjs`, so a
+ * new person can try the chat with no harness and no account.
+ *
+ * The agent starts through `--cmd`, never the registry: it is not measured,
+ * so the setup list and `--agent` do not name it, and the room shows the
+ * usual "unverified" notice. It runs in `ask`, so the person meets one
+ * permission question.
+ *
+ * The room's folder is one fixed git repository, `<stateDir>/demo`, never the
+ * person's checkout. A new folder each time would leave one more
+ * `repos/<name>-<hash>` behind on each run. So each run deletes the old demo
+ * room, builds the folder again from nothing, and opens a new room there.
+ */
+async function runDemoCommand(): Promise<number> {
+  const unknown = argv.find(
+    (a) => a !== "demo" && a !== "--quiet" && a !== "--verbose",
+  );
+  if (unknown !== undefined) {
+    console.error("usage: kapelle demo");
+    return 1;
+  }
+  const agent = join(import.meta.dirname, "demo-agent.mjs");
+  // A room's `cmd` splits at whitespace (`resolveAgent`).
+  if (/\s/.test(agent)) {
+    console.error(
+      `error: kapelle demo cannot start an agent from a path with a space: ${agent}`,
+    );
+    return 1;
+  }
+  await startDaemon();
+  const d = await findDaemon();
+  if (!d) return 1;
+
+  const folder = join(stateDir(), "demo");
+  const rooms = await call<RoomListEntry[]>(d, "/rooms");
+  if (!rooms.ok) {
+    printRefusal(rooms.error);
+    return 1;
+  }
+  // Its own identity: the person may have no git name set.
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=kapelle demo",
+        "-c",
+        "user.email=demo@kapelle.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        ...args,
+      ],
+      { cwd, stdio: "ignore" },
+    );
+  // The daemon deletes no room with uncommitted work, and the demo agent
+  // leaves `notes.md`. So the old checkouts are cleaned after the dismiss,
+  // but only the ones in the demo's own state folder.
+  const checkouts = stateDirFor(folder) + sep;
+  for (const old of rooms.body.filter((r) => r.cwd === folder)) {
+    const stop = await call<RoomDto>(d, `/rooms/${old.id}/dismiss`, {
+      method: "POST",
+    });
+    if (!stop.ok && stop.error.code !== "room_dismissed") {
+      printRefusal(stop.error);
+      return 1;
+    }
+    const got = await call<RoomDto>(d, `/rooms/${old.id}`);
+    for (const p of got.ok ? got.body.participants : []) {
+      if (!p.worktree.startsWith(checkouts)) continue;
+      try {
+        git(p.worktree, "reset", "-q", "--hard");
+        git(p.worktree, "clean", "-q", "-fd");
+      } catch {
+        // A checkout that is gone has nothing to clean.
+      }
+    }
+    const out = await runCommand(d, old.id, { verb: "delete" });
+    if (!out.ok) {
+      printRefusal(out);
+      return 1;
+    }
+  }
+
+  await rm(folder, { recursive: true, force: true });
+  await mkdir(folder);
+  await writeFile(
+    join(folder, "README.md"),
+    "# The kapelle demo\n\nA folder for the demo agent. `kapelle demo` makes it again each time.\n",
+  );
+  git(folder, "init", "-q");
+  git(folder, "add", "README.md");
+  git(folder, "commit", "-q", "-m", "The demo folder");
+
+  const added = await call<RepoAdded>(d, "/repos", {
+    method: "POST",
+    body: { path: folder },
+  });
+  if (!added.ok) {
+    printRefusal(added.error);
+    return 1;
+  }
+  const out = await runCommand(d, undefined, {
+    verb: "new",
+    body: {
+      cwd: folder,
+      title: "demo",
+      agents: [
+        {
+          // `node`, as the bin's shebang needs, so the label is `demo-agent`.
+          cmd: `node ${agent}`,
+          name: "demo",
+          role: "developer",
+          mode: "ask",
+        },
+      ],
+    },
+  });
+  if (!out.ok) {
+    printRefusal(out);
+    return 1;
+  }
+  const room = out.room as RoomDto;
+  const id = room.id;
+  const sent = await call<MessageAccepted>(
+    d,
+    `/rooms/${id}/agents/${room.participants[0]?.id}/messages`,
+    { method: "POST", body: { text: "Hello! Show me around." } },
+  );
+  if (!sent.ok) {
+    printRefusal(sent.error);
+    return 1;
+  }
+  // As for `chat`: `chat.ts` parses `process.argv` itself.
+  process.argv.splice(2, Infinity, "attach", id);
+  await import("./chat.ts");
+  return 0;
+}
+
 async function runLoopCommand(): Promise<number> {
   const usage = [
     'usage: kapelle loop <recipe> <task> ["<note>"] [--agent <id>] [--cmd "<cmd>"] [--model <id>] [--cwd dir]',

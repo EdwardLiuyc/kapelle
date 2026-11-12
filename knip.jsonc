@@ -43,10 +43,13 @@
   // and nothing imports it — the daemon suites spawn it as a subprocess.
   // chat.ts (chat MVP) is the third, for the same reason: `node chat.ts`, spawned
   // by tests/chat-*.test.ts, imported by nothing.
+  // demo-agent.mjs (#463) ships in the package: `kapelle demo` spawns it as the
+  // room's agent, and nothing imports it.
   "entry": [
     "cli.ts!",
     "daemon.ts!",
     "chat.ts!",
+    "demo-agent.mjs!",
     "mock-agent.mjs",
     "hostile-agent.mjs"
   ]
