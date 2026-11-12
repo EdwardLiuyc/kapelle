@@ -55,6 +55,7 @@ test("kapelle demo: a reply, one question, the write and its diff; a second run 
   const c = spawnCli(t, ["demo"], "cli.ts", env);
   await openDemo(c);
   c.child.stdin.write("hello\n");
+  await c.waitFor('You said: "hello"');
   const asked = await pendingOne(d);
   assert.equal(asked.title, "Write notes.md");
   assert.equal(

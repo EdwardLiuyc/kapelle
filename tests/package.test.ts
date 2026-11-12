@@ -252,15 +252,27 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   assert.equal(biome.status, 0, `${biome.stdout}${biome.stderr}`);
 
   // `kapelle demo` from the package (#463): it starts the packaged daemon
-  // and the packaged demo agent, with no harness installed.
+  // and the packaged demo agent, with no harness installed. A PATH with only
+  // the programs the demo itself uses makes that condition real: a saved
+  // find that says every harness is ready would hide a regression to a
+  // registry agent on a machine where one is installed.
   const demoRuntime = await tempDir(t);
   const demoState = await tempDir(t);
-  savedSetup(demoState);
+  const demoBin = await tempDir(t);
+  await symlink(process.execPath, join(demoBin, "node"));
+  for (const program of ["git", "ps", "sh"]) {
+    const found = spawnSync("sh", ["-c", `command -v ${program}`], {
+      encoding: "utf8",
+    });
+    assert.equal(found.status, 0, found.stderr);
+    await symlink(found.stdout.trim(), join(demoBin, program));
+  }
   const demo = spawnCli(t, ["demo"], cli, {
     XDG_RUNTIME_DIR: demoRuntime,
     XDG_STATE_HOME: demoState,
     XDG_CONFIG_HOME: join(demoState, "config-home"),
     KAPELLE_PORT: "0",
+    PATH: demoBin,
   });
   t.after(async () => {
     const record = await readFile(
