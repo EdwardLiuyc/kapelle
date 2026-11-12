@@ -36,14 +36,7 @@
  * a person with no agent yet. `runDemoCommand` says where it works and why.
  */
 import { execFileSync } from "node:child_process";
-import {
-  mkdir,
-  readdir,
-  readFile,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { text } from "node:stream/consumers";
 import {
@@ -104,6 +97,7 @@ import {
 } from "./core/run.ts";
 import { type Task, validateRun } from "./core/runfile.ts";
 import { runtimeDir, stateDir, stateDirFor } from "./core/runtime.ts";
+import { roomCheckouts } from "./core/sweep.ts";
 import { clean, oneLine } from "./core/text.ts";
 import { moveWorkspace, stateDirRoot } from "./core/worktree.ts";
 import { AcpAgent } from "./protocol/agent.ts";
@@ -1595,10 +1589,9 @@ async function runDemoCommand(): Promise<number> {
     );
   // The daemon deletes no room with uncommitted work, and the demo agent
   // leaves `notes.md`. So the old checkouts are cleaned after the dismiss,
-  // but only the ones in the demo's own state folder. Read them from disk:
-  // a removed participant's checkout is no longer in the roster, and still
-  // blocks the delete.
-  const checkouts = join(stateDirFor(folder), "wt");
+  // the same checkouts the daemon checks: git's own worktrees under the
+  // room's folder, so a removed participant's checkout is cleaned too, and
+  // git never runs in a folder that is not one.
   for (const old of rooms.body.filter((r) => r.cwd === folder)) {
     const stop = await call<RoomDto>(d, `/rooms/${old.id}/dismiss`, {
       method: "POST",
@@ -1607,9 +1600,9 @@ async function runDemoCommand(): Promise<number> {
       printRefusal(stop.error);
       return 1;
     }
-    const roomCheckouts = join(checkouts, old.id);
-    for (const name of await readdir(roomCheckouts).catch(() => [])) {
-      const worktree = join(roomCheckouts, name);
+    // When git cannot answer, the delete below says why.
+    const worktrees = await roomCheckouts(folder, old.id).catch(() => []);
+    for (const worktree of worktrees) {
       try {
         git(worktree, "reset", "-q", "--hard");
         git(worktree, "clean", "-q", "-fd");

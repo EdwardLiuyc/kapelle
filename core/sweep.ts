@@ -406,7 +406,10 @@ async function listWorktrees(root: string): Promise<ManagedWorktree[]> {
  * checkout keeps it, and no participant owns it. Throws when git cannot
  * answer.
  */
-async function roomCheckouts(root: string, roomId: string): Promise<string[]> {
+export async function roomCheckouts(
+  root: string,
+  roomId: string,
+): Promise<string[]> {
   if (!existsSync(join(stateDirFor(root), "wt", roomId))) return [];
   const all = await listWorktrees(root);
   return all.filter((w) => w.runId === roomId).map((w) => w.path);
