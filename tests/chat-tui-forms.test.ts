@@ -11,12 +11,14 @@
  */
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   access,
   mkdir,
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -707,6 +709,30 @@ test("the chat opens the setup list at every start while no agent is ready, done
   child.stdin.write("\x1b");
   await new Promise((ok) => setTimeout(ok, 300));
   await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("kapelle demo opens its room with no setup list, even with no agent ready, and /setup still opens it (#463)", {
+  skip: noPty,
+}, async (t) => {
+  // A PATH with no agent: only the node and git the demo room needs.
+  const bin = await tempDir(t);
+  await symlink(process.execPath, join(bin, "node"));
+  const git = execFileSync("sh", ["-c", "command -v git"], {
+    encoding: "utf8",
+  }).trim();
+  await symlink(git, join(bin, "git"));
+  const { runtime } = await bootFinding(t, bin);
+  const { press, exited, out } = await ptyScreen(
+    t,
+    "stty cols 120 rows 40; node cli.ts demo",
+    { XDG_RUNTIME_DIR: runtime, XDG_STATE_HOME: runtime },
+    "Now type a message",
+  );
+  assert.doesNotMatch(out(), /No agent is ready/);
+  await press("/setup\r", "No agent is ready");
+  await press("\x1b", "Now type a message");
+  await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
 });
 

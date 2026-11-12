@@ -74,7 +74,15 @@ alias kapelle='node /path/to/kapelle/cli.ts'
 
 ### Other ways to start
 
-In a source checkout, check that kapelle works with no agent and no account. This uses a fake agent that ships with the repository:
+Try the chat before you install an agent:
+
+```bash
+kapelle demo
+```
+
+It opens a room with an offline demo agent. It needs no account, no tokens and no network. The agent answers, asks one permission question, and writes a file you can see with `@demo /diff`. The room works in its own folder, never in your checkout. Each `kapelle demo` deletes the last demo room and starts again.
+
+For developers: in a source checkout, check that kapelle works with no agent and no account. This uses a test agent that ships with the repository, not with the package:
 
 ```bash
 npm run selftest
