@@ -14,6 +14,7 @@
  *
  * `mock-agent.mjs` is the test fixture. Keep test scenarios out of this file.
  */
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -77,8 +78,17 @@ async function turn(msg) {
   say(sid, `You said: "${text}". I will add it to notes.md.\n`);
 
   const path = join(s.cwd, "notes.md");
-  // No file yet reads as "".
+  // Only a file that is not there yet reads as "". Any other failed read
+  // writes nothing: the diff's old side would not be what is on disk.
   const read = await callClient("fs/read_text_file", { sessionId: sid, path });
+  if (read === null && existsSync(path)) {
+    say(
+      sid,
+      "I could not read notes.md, so I will not write it. Nothing changed.",
+    );
+    reply(msg.id, { stopReason: "end_turn" });
+    return;
+  }
   const oldText = typeof read?.content === "string" ? read.content : "";
   const newText = `${oldText}- ${text}\n`;
   const diff = { type: "diff", path, oldText, newText };

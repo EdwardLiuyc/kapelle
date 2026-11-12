@@ -4,13 +4,14 @@
  * allowed, and the diff shows the write. Later runs clean the old checkouts,
  * whether their participant is still on the roster or was removed. A rejected
  * question writes nothing. A write after a revive keeps the notes made
- * before it. That the packed package ships the agent is in
+ * before it, and a notes.md that is there but cannot be read gets no write.
+ * That the packed package ships the agent is in
  * `tests/package.test.ts`.
  */
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, readdir, readFile, realpath } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
@@ -90,10 +91,10 @@ test("kapelle demo: a reply, one question, the write and its diff; a second run 
   again.child.stdin.write("/leave\n");
   const r2 = await again.done;
   assert.equal(r2.code, 0, r2.stderr);
-  // The run says what it removed, at the moment it acts.
+  // The run says what it removes, before it acts.
   assert.match(
     r2.stdout,
-    new RegExp(`removed the previous demo room ${first[0]?.id}`),
+    new RegExp(`removing the previous demo room ${first[0]?.id}`),
   );
   const second = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
   assert.equal(second.length, 1, JSON.stringify(second));
@@ -283,4 +284,32 @@ test("the demo agent answers a turn that throws with an error, and stays up", as
   const alive = await ask(2, "initialize", { protocolVersion: 1 });
   assert.equal(alive.id, 2);
   assert.ok(alive.result, JSON.stringify(alive));
+});
+
+test("kapelle demo writes nothing, and asks nothing, when notes.md is there and cannot be read", {
+  timeout: 90_000,
+}, async (t) => {
+  const runtime = await realpath(await tempDir(t));
+  const d = await bootDaemon(t, runtime);
+  const c = spawnCli(t, ["demo"], "cli.ts", {
+    XDG_RUNTIME_DIR: runtime,
+    XDG_STATE_HOME: runtime,
+    XDG_CONFIG_HOME: join(runtime, "config-home"),
+  });
+  await openDemo(c);
+  const [listed] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  assert.ok(listed, "the demo room is listed");
+  const room = (await api<RoomDto>(d, "GET", `/rooms/${listed.id}`)).body;
+  const worktree = room.participants[0]?.worktree;
+  assert.ok(worktree, JSON.stringify(room));
+  // A folder: it exists, and reading it fails, as root too.
+  await mkdir(join(worktree, "notes.md"));
+  c.child.stdin.write("hello\n");
+  await c.waitFor("could not read notes.md");
+  await roomIdle(d, room.id);
+  assert.deepEqual((await api(d, "GET", "/permissions")).body, []);
+  c.child.stdin.write("/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /asks: Write notes\.md/);
 });

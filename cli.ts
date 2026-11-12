@@ -1597,6 +1597,7 @@ async function runDemoCommand(): Promise<number> {
   // room's folder, so a removed participant's checkout is cleaned too, and
   // git never runs in a folder that is not one.
   for (const old of rooms.body.filter((r) => r.cwd === folder)) {
+    console.log(`removing the previous demo room ${old.id}`);
     const stop = await call<RoomDto>(d, `/rooms/${old.id}/dismiss`, {
       method: "POST",
     });
@@ -1619,7 +1620,6 @@ async function runDemoCommand(): Promise<number> {
       printRefusal(out);
       return 1;
     }
-    console.log(`removed the previous demo room ${old.id}`);
   }
 
   await rm(folder, { recursive: true, force: true });
