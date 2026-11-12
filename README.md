@@ -53,24 +53,42 @@ alias kapelle='node /path/to/kapelle/cli.ts'
 
 ## Quick start
 
-First, check that kapelle works. In a source checkout, this needs no agent and no account. It uses a fake agent that ships with the repository:
+1. Install kapelle: `npm install -g kapelle`. See [Install](#install).
+2. Install one agent and log in to it once. pi is the default. For another agent, see [Agents](#agents).
+
+   ```bash
+   npm i -g @earendil-works/pi-coding-agent pi-acp
+   pi                     # type /login, then quit
+   ```
+
+3. In your repository, run `kapelle`. It starts its daemon in the background. Then the setup list shows each agent it finds, and whether it is ready. When an agent's ACP adapter is missing, the list can install it: press Space to tick the agent, then Enter. When you are done, press Enter with nothing ticked. Then the list stops opening at each start, once an agent is ready. Esc only closes it for now. `/setup` shows the list again.
+
+   ```bash
+   cd your-repo
+   kapelle
+   ```
+
+4. Type `/new pi` and press Enter. The first time, kapelle asks to add your repository: pick `add and open`. The room opens, and you can type a message to pi. `/new` alone opens a form. Press Ctrl+C twice to leave. The room and its agent keep running.
+
+   pi never asks for permission, so no mode can stop its changes. In a room, it works in its own git worktree, not in your checkout. Read [Safety](#what-the-modes-do-and-do-not-do) before you give it real work.
+
+### Other ways to start
+
+In a source checkout, check that kapelle works with no agent and no account. This uses a fake agent that ships with the repository:
 
 ```bash
 npm run selftest
 ```
 
-You should see `✓ allowed Write ACP_TEST.md`. Delete `ACP_TEST.md` when you are done. An npm install needs no further check: `kapelle --help` above already proved it starts.
+You should see `✓ allowed Write ACP_TEST.md`. Delete `ACP_TEST.md` when you are done.
 
-Next, use a real agent. pi is the default. Install pi and its ACP adapter, then log in to pi once:
+Give one agent one task. This needs no room and no daemon:
 
 ```bash
-npm i -g @earendil-works/pi-coding-agent pi-acp
-pi                     # type /login, then quit
-
 kapelle "summarise this repo in three sentences"
 ```
 
-pi works in your own checkout here, and it never asks for permission, so no mode can stop its changes. Read [Safety](#what-the-modes-do-and-do-not-do) before you give it real work.
+The agent works in your own checkout here.
 
 Other options: `--agent <id>` picks another agent. `--cwd <dir>` works in another folder. `--mode` sets what the agent may do (see [Safety](#what-the-modes-do-and-do-not-do)). `--verbose` shows the agent's own error output. `--quiet` hides normal output, but never the safety notices.
 
@@ -78,14 +96,7 @@ Other options: `--agent <id>` picks another agent. `--cwd <dir>` works in anothe
 
 A room is a chat with a team of agents. Each agent keeps its memory across messages, and works on its own branch, `kapelle/<roomId>/<participantId>`. You decide who does what by choosing who to message.
 
-Rooms live in the daemon. Start it once, and add each repository once:
-
-```bash
-kapelle daemon start     # terminal 1: runs until Ctrl-C
-kapelle daemon add .     # terminal 2: in your repository
-```
-
-Then open a room:
+Rooms live in the daemon. `kapelle` starts it, and `/new` adds your repository (see [Quick start](#quick-start)). To run, add, or stop the daemon yourself, see [Run the daemon by hand](#run-the-daemon-by-hand). With the daemon running, these commands work from the shell too:
 
 ```bash
 kapelle chat new --agent pi         # open a room and chat in it
@@ -94,6 +105,8 @@ kapelle chat list                   # every room, as text
 kapelle chat attach <roomId>        # rejoin a room; its history replays
 kapelle chat dismiss <roomId>       # stop the room's agents
 ```
+
+`kapelle chat new` does not add a repository for you. Add it first: `/new` in the chat, or `kapelle daemon add .`.
 
 In a room, type a message and press Enter. It goes to the room's orchestrator, or to the only agent when the room has no orchestrator. Start it with `@name` to send it to that agent instead. In an agent's thread, the box always starts with its `@name`. `/leave` exits and keeps the agents alive. `/dismiss` stops the room's agents. `/delete` shows every branch and its unmerged commits, then asks again before removing the room. They work in any view, after an agent's `@name` too, and never reach an agent. In a room, kapelle never commits for an agent: uncommitted work stays in the agent's checkout.
 
@@ -128,7 +141,7 @@ See `schema/run.schema.json` for every field. Task ids name git branches, so kap
 
 ### Run in the background
 
-With the daemon running, hand the run over and follow it from any terminal:
+With the daemon running (run `kapelle` once, or see [Run the daemon by hand](#run-the-daemon-by-hand)), hand the run over and follow it from any terminal:
 
 ```bash
 kapelle run --file tasks.json --detach   # prints the run id
@@ -157,6 +170,16 @@ kapelle workspace move <old> <new>     # after you move or rename the repository
 ```
 
 Use `workspace move`, not a plain `mv`. A plain `mv` breaks git's link to each worktree.
+
+## Run the daemon by hand
+
+`kapelle` starts the daemon in the background when none runs. To run it yourself, for example to see its output:
+
+```bash
+kapelle daemon start     # runs in this terminal until Ctrl-C
+kapelle daemon add .     # in another terminal, in your repository
+kapelle daemon stop      # stop the daemon, also one that kapelle started
+```
 
 ## Agents
 
