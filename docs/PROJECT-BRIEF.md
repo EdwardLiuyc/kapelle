@@ -61,7 +61,7 @@ and the shape they should take will be clearer after P0 runs for a while.
   (M11):** a few people the operator trusts may share one daemon, each under their own
   name and keys, and a screen may reach it from another machine through an SSH tunnel.
   It is still not hosted, and it does not keep those people apart: every agent runs as
-  the daemon's one Linux user (`docs/STORIES.md`, M11, "The safety note").
+  the daemon's one system user (`docs/STORIES.md`, M11, "The safety note").
 
 ## Prior art to check before building each piece
 

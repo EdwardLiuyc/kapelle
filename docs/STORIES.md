@@ -4189,10 +4189,10 @@ daemon, each under their own name.
 - **D7. `/term` stays on the person's own machine.** A shell on the server, through the
   daemon, needs its own design.
 - **D8. Who it is for.** The operator and a few teammates the operator trusts. People
-  who must not see each other's work need a sandbox, or one Linux account per person.
+  who must not see each other's work need a sandbox, or one system user per person.
   That is out of scope.
 
-**The safety note.** Every agent runs as the daemon's one Linux user. An agent's own
+**The safety note.** Every agent runs as the daemon's one system user. An agent's own
 shell can read any file that user can read: another room's checkout, and the key file
 too, so an agent can act as any person. The daemon never sees those reads, so it cannot
 refuse them. Owners and members keep the house in order; they do not keep people apart.
