@@ -4081,6 +4081,243 @@ clean machine.
 
 ---
 
+## M10 — First steps
+
+**Added 2026-11-13.** M10 makes the first steps easy for a person who is new to kapelle.
+Its stories come from a review of the first steps for beginners on 2026-11-11. The `M10`
+label tracks them on GitHub.
+
+**M10-1 · The README quick start leads with bare `kapelle` · S · needs nothing**
+(#461) The Quick start and Rooms sections still sent a beginner to `kapelle daemon start`
+and `kapelle daemon add .`. Since M9-2, bare `kapelle` starts the daemon, and since M9-3
+the chat opens the setup list. The Quick start leads with the short path: install
+kapelle, run `kapelle` in a repository, then `/new`. The pi safety note stays beside
+`/new`. `kapelle "<prompt>"` and `npm run selftest` come after the short path.
+**Decided at pickup 2026-11-11 (#461):** the setup list installs only an agent's ACP
+program, never the agent itself, and never logs in (`core/harnesses.ts`). So the Quick
+start has one step before `kapelle`: install one agent and log in, with pi's lines and a
+link to the Agents table. `daemon start | stop | add` move to a new section, "Run the
+daemon by hand", linked from Rooms and "Run in the background".
+*Done when* a person followed the new Quick start with a fresh `XDG_STATE_HOME` and
+`XDG_RUNTIME_DIR`, each step did what the text says, and markdownlint is clean.
+**Done 2026-11-12 (#469).**
+
+**M10-2 · Name the login step and the log when an agent fails to start · M · needs
+nothing**
+(#462) When an agent fails to start, the one-shot CLI prints only the agent's own error,
+and a beginner cannot tell what to do next. A logged-out agent prints
+`Authentication required (code -32000)` and names no login step. An agent that exits
+names no log, and the name is taken from the wrong argument of `--cmd`. The registry
+already knows each agent's login signal and login hint (M9-4, `core/check.ts`), and the
+setup list uses them. The CLI does not.
+After this story, a failure that matches the agent's login signal is followed by its
+login hint. An exit or any other error names where the agent's stderr went: the log path
+when there is one, else `--verbose`.
+**Gap:** which paths are in scope. The one-shot CLI and `run` are; whether a room shows
+the same failure and needs the same line is checked at pickup. So is whether the wrong
+name from `--cmd` is fixed here or in its own issue.
+*Done when* tests drive the real CLI against `mock-agent.mjs`: a logged-out start prints
+the login hint, and an exited start names the log or `--verbose`. They assert only on
+our own lines.
+
+**M10-3 · `kapelle demo`: a room with no agent and no account · M · needs nothing**
+(#463) A new person could not try the chat screen without an agent, an account and
+tokens. `kapelle demo` opens a room whose one participant is a small offline agent, so
+the person can type, see a reply, answer a permission question and see the diff.
+**Decided at pickup 2026-11-12 (#463):** a new agent made for people,
+`demo-agent.mjs`, not `mock-agent.mjs`, which is a test tool. It starts through the
+custom-command path, with no registry entry, so the setup list and `--agent` never name
+it and the room shows the usual "unverified" notice. The demo repo is one fixed folder
+under the state directory; each `kapelle demo` dismisses the old demo room and makes the
+repo again, so no state folder piles up. The participant starts in `ask`. There is no
+`/demo` in the chat. On a pipe, `kapelle demo` does what `kapelle chat new` does there.
+*Done when* `kapelle demo` from a packed tarball in a clean prefix opens a room with no
+agent installed and no network use, a message gets a reply and one permission question,
+the approved write shows in the diff, a second run leaves one demo room and one state
+folder, and a subprocess test covers the command on a pipe.
+**Done 2026-11-12 (#472).**
+
+**M10-4 · A "Your first loop" section in the README · S · needs nothing**
+(#464) The README opens with a video of a `fix-issue` loop, but no section says how to
+run one; `kapelle loop` is only in `--help`. A short section says what a loop is (a room
+whose orchestrator follows a recipe), shows `kapelle loop list`,
+`kapelle loop fix-issue <task>` and `/loop`, what the person does during the loop, which
+agents it needs, and that a loop spends tokens. How a recipe works stays in the recipe's
+own file and `assets/orchestrator.md`; the README links to them and does not restate
+them.
+*Done when* the section's commands were run by hand and match what they print, and
+markdownlint is clean.
+
+---
+
+## M11 — The house
+
+**Added 2026-11-13.** Today one person uses the daemon, on the machine it runs on, and
+every agent lives in a room. M11 changes three things. A screen can reach a daemon on
+another machine. An agent can live outside every room. A few people can share one
+daemon, each under their own name.
+
+**Decided 2026-11-13** (with the person):
+
+- **D1. The house.** The daemon is a house with rooms and one hall. The hall is a
+  special room: it always exists, it has no orchestrator, and a message in it goes to the
+  agent its `@name` picks. An agent outside every room lives in the hall. A hall is a
+  room, so it reuses the roster, `@name`, the timeline, questions and revive.
+- **D2. An agent in the hall works in a repository, or in none.** In a repository it
+  works in its own worktree, as a room participant does today. With no repository, the
+  daemon makes an empty scratch folder for it: a chat agent for general questions. Each
+  agent picks its own repository, so two agents in the hall can work in two
+  repositories. Today the repository belongs to the room (`core/room.ts`,
+  `RoomOptions.cwd`). D3 needs this too: an agent that walks into a room keeps its
+  repository.
+- **D3. An agent can walk into a room and out again.** It keeps its harness, its memory,
+  its worktree (or scratch folder) and its branch, as a person who changes rooms.
+- **D4. A person shares rooms with other people, and nothing else.** A room has one
+  owner, the person who made it, and members, the other people of this daemon the owner
+  added. The owner and the members see the room, talk in it and answer its agents'
+  questions. Nobody else sees it. To share one agent with another person, move the agent
+  into a small room and add that person as a member. There is no permission for each
+  agent.
+- **D5. A person is a name, with many keys.** Each key has a label the person picks,
+  such as "laptop" or "my bot". A key is not tied to a device. Each key can be cancelled
+  alone, and a key stays the same after a restart.
+- **D6. The remote screen goes through an SSH tunnel first.** The client still talks
+  HTTP; the tunnel adds encryption and a login, and the daemon stays on loopback. A
+  setting for the listen address and the allowed host names, for a VPN or a proxy, can
+  come later. HTTPS stays outside the daemon: a proxy does it better. Plain HTTP on the
+  network is never an option: the key would cross the wire as clear text.
+- **D7. `/term` stays on the person's own machine.** A shell on the server, through the
+  daemon, needs its own design.
+- **D8. Who it is for.** The operator and a few teammates the operator trusts. People
+  who must not see each other's work need a sandbox, or one Linux account per person.
+  That is out of scope.
+
+**The safety note.** Every agent runs as the daemon's one Linux user. An agent's own
+shell can read any file that user can read: another room's checkout, and the key file
+too, so an agent can act as any person. The daemon never sees those reads, so it cannot
+refuse them. Owners and members keep the house in order; they do not keep people apart.
+M11 meets the backlog's trigger "the daemon takes a caller who is not the operator" with
+D8, not with a sandbox. `SECURITY.md`'s "Scope" says so when M11-8 lands.
+
+**The build order** is not the story numbers: part 1 (M11-1..M11-3), then M11-4..M11-6,
+then M11-8, then M11-7, then M11-9, then part 4 (M11-10, M11-11). M11-7 needs keys that
+stay the same after a restart, and M11-8 makes them.
+
+### Part 1 — The hall
+
+**M11-1 · The hall: a room that always exists · M · needs nothing**
+The daemon makes the hall when it starts, and keeps it across restarts. It has no
+orchestrator, and it cannot be dismissed or deleted. A message in the hall with no
+`@name` is refused, with a hint that names the hall's agents. Both screens show the hall
+at the top of the room list. The contract gets a minor version.
+*Done when* tests cover: the hall after a first start and after a restart; a refused
+dismiss and delete; a message with no `@name` refused; a message to `@name` delivered;
+and the hall first in both screens.
+
+**M11-2 · Each agent picks its own repository, or none · M · needs M11-1**
+`/new` in the hall, and `/add` in any room, take `--cwd` for that agent alone, or no
+`--cwd` at all. In a repository, the agent gets its own worktree, as a room participant
+does today. In a folder with no git, it works in that folder, as today. With no
+`--cwd`, the daemon makes an empty scratch folder for that agent under the state
+directory, and removes it when the agent is removed.
+**Gap:** what a room's own `cwd` means once each agent has one. Today it is the default
+for every participant; the pickup decides if it stays as that default.
+*Done when* tests cover an agent in a repository, in a folder with no git, and with no
+`--cwd`; the scratch folder removed with its agent; and two agents in one room in two
+different repositories.
+
+**M11-3 · Move an agent into a room and out again · L · needs M11-2**
+`/move <name> <room>` moves an agent, from the hall or from a room. It keeps the same
+harness process, so it keeps its memory, its folder and its branch. Its old messages
+stay in the old room's log. Both rooms show a line: the agent left, the agent came in.
+A move is refused while the agent is in a turn, as a second prompt is (§M0-4), and when
+the target room already has an agent of that name. An orchestrator cannot be moved.
+**Gap:** a branch name holds the room id (`kapelle/<room>/<participant>`), so after a
+move the name goes stale. The pickup decides whether it is renamed or kept.
+*Done when* tests cover a move from the hall into a room and back, the agent's memory
+kept (one turn before the move and one after, against `mock-agent.mjs`), the two lines,
+a refused move during a turn, a refused name clash, and a refused move of an
+orchestrator; and a restart after a move restores the agent in its new room.
+
+### Part 2 — The remote screen
+
+**M11-4 · A daemon address setting in the client · S · needs nothing**
+Today the client reads the port and the key from `daemon.json` and always calls
+`http://127.0.0.1:<port>` (`client/daemon.ts`). A client setting gives a daemon address
+and a key instead; `docs/CONFIG.md` names it. With the setting, the client skips
+`daemon.json` and never starts a daemon (`client/lifecycle.ts`). When the daemon does
+not answer, the client says so, with the address it tried.
+*Done when* tests cover the setting used over `daemon.json`, no daemon started, and the
+message when nothing answers.
+
+**M11-5 · Folders come from the daemon · M · needs M11-4**
+Tab completion and the `--cwd` check read the person's own disk today
+(`client/folder.ts`). A new read route lists the folders under a path on the daemon's
+machine, and the client sends a typed path as it is. The client reads no folder from
+its own disk. The header of `client/folder.ts` says the daemon's disk is the one that
+counts.
+*Done when* tests cover completion and the folder check against a daemon whose folders
+the client's disk does not have.
+
+**M11-6 · Recipes and the loop's first message come from the daemon · M · needs M11-4**
+`client/loop.ts` reads the recipe folders and `assets/orchestrator.md` from the
+person's own disk. Both recipe folders, the repository's and the person's own, are read
+on the daemon's machine. The daemon builds the orchestrator's whole first message, so a
+client and a daemon of different versions cannot paste different skills. `kapelle
+loop`, typed `/loop`, the loop form and `kapelle loop list` all ask the daemon.
+*Done when* tests cover a loop started from a client with no repository on its disk,
+`kapelle loop list` through the daemon, and the first message the same as today's for
+the same recipe.
+
+**M11-7 · Tested over an SSH tunnel, with a how-to · S · needs M11-4..M11-6, M11-8**
+A real server runs the daemon on a fixed port. A laptop reaches it through
+`ssh -L <port>:127.0.0.1:<port>`, with `-o ServerAliveInterval=30`. The how-to goes in
+the README. The lag is measured and written in `docs/FINDINGS.md`: a sent message, a
+folder completion, and opening a long room.
+*Done when* a person ran a full room from a laptop over the tunnel, the how-to's
+commands match what they did, and the measurement is recorded.
+
+### Part 3 — People and keys
+
+**M11-8 · People and keys in a file · M · needs nothing**
+On the daemon's machine, verbs add a person, add a key with a label, list them, and
+cancel one key. A new key is shown once; the daemon keeps only its hash. Keys are
+read at start and again after a change, so a cancel needs no restart. This story takes
+over #255 (K5 option b): a bridge gets its own key.
+**Gap:** what `daemon.json`'s key is once people exist. It is the operator's today; the
+pickup decides if it stays the operator's local key.
+*Done when* tests cover a key added, used, listed and cancelled with no restart; a
+cancelled key refused with `401`; a key that works after a restart; and no key in clear
+text on disk.
+
+**M11-9 · Each message and action has the person's name · M · needs M11-8**
+Today the daemon trusts the `from` in a request body, because there is one operator
+(K6). After this story, the daemon takes the name from the key, and a body's `from` is
+ignored or refused. Both screens show who sent each message. This re-opens K6
+(`docs/CONTRACT-PLAN.md`). The contract gets a minor version.
+*Done when* tests cover two keys of two people sending to one room, each line with the
+right name, and a forged `from` that changes nothing.
+
+### Part 4 — Sharing
+
+**M11-10 · Room owner and members · L · needs M11-9**
+A room has one owner, the person who made it, and a list of members. A person sees only
+the rooms they own or are a member of; another room answers `404`, as a missing one
+does. Only the owner deletes a room or changes its members. Members talk in it and
+answer its agents' questions.
+**Gap:** runs have no owner. The pickup decides who sees a detached run.
+*Done when* tests cover a room hidden from a non-member, shown once they are added and
+hidden again once removed; a refused delete and member change by a member; and a
+question answered by a member.
+
+**M11-11 · One hall for each person · S · needs M11-10, M11-1**
+Each person has their own hall, made the first time they connect. The hall of M11-1
+becomes the operator's. A person can add members to their hall, as to any room.
+*Done when* tests cover two people with two halls, a hall hidden from another person,
+and a hall shared by adding a member.
+
+---
+
 ## Critical path
 
 ```text
@@ -4149,6 +4386,20 @@ M9-7 ─ M9-8a
 M9-1..M9-7, M9-3b, M9-5b, M9-5c, M9-5d, M9-8a ─ M9-8   (the first publish)
 ```
 
+**M10 (added 2026-11-13)** needs nothing that is open, and none of its stories needs
+another. M10-1 and M10-3 are done.
+
+**M11 (added 2026-11-13)** needs nothing that is open. Its build order is in its own
+section.
+
+```text
+M11-1 ─ M11-2 ─ M11-3
+M11-4 ─┬─ M11-5 ─┬─ M11-7
+       └─ M11-6 ─┤
+M11-8 ───────────┘
+M11-8 ─ M11-9 ─ M11-10 ─ M11-11   (M11-11 also needs M11-1)
+```
+
 Three things are worth pulling forward, because everything queues behind them:
 
 1. ~~**M0-3.**~~ **Done 2026-08-21.** It did delete one story and rescue the other: M3-5 is
@@ -4198,6 +4449,7 @@ Each carries its trigger, so none of these is waiting to become a blocker by acc
   person's user and can read `daemon.json`. It goes with #255 (per-bridge tokens).
   *Trigger:* an orchestrator acts on another room or a run by mistake, or the daemon
   takes a caller who is not the operator (the sandboxing trigger).
+  **Amended 2026-11-13:** M11-8 takes over #255, and M11 meets this trigger with its D8.
 - **A cost cap per worker.** Named by M8 (D7). Only for a harness that reports a cost:
   claude does, pi does not, and `AGENTS.md` forbids adding up usage across harnesses.
   *Trigger:* a loop costs more than the person expected.
