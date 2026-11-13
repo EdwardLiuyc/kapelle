@@ -4098,8 +4098,10 @@ program, never the agent itself, and never logs in (`core/harnesses.ts`). So the
 start has one step before `kapelle`: install one agent and log in, with pi's lines and a
 link to the Agents table. `daemon start | stop | add` move to a new section, "Run the
 daemon by hand", linked from Rooms and "Run in the background".
-*Done when* a person followed the new Quick start with a fresh `XDG_STATE_HOME` and
-`XDG_RUNTIME_DIR`, each step did what the text says, and markdownlint is clean.
+*Done when* a worker followed the new Quick start with an already-installed agent,
+installed nothing and sent no prompt; the person repeated it with fresh
+`XDG_STATE_HOME` and `XDG_RUNTIME_DIR`; each step did what the text says; and
+markdownlint is clean.
 **Done 2026-11-12 (#469).**
 
 **M10-2 · Name the login step and the log when an agent fails to start · M · needs
@@ -4127,15 +4129,18 @@ the person can type, see a reply, answer a permission question and see the diff.
 **Decided at pickup 2026-11-12 (#463):** a new agent made for people,
 `demo-agent.mjs`, not `mock-agent.mjs`, which is a test tool. It starts through the
 custom-command path, with no registry entry, so the setup list and `--agent` never name
-it and the room shows the usual "unverified" notice. The demo repo is one fixed folder
-under the state directory; each `kapelle demo` dismisses and deletes the old demo room,
-then makes the repo again, so no state folder piles up. The participant starts in `ask`.
-There is no `/demo` in the chat. On a pipe, `kapelle demo` does what `kapelle chat new`
-does there.
-*Done when* `kapelle demo` from a packed tarball in a clean prefix opens a room with no
-agent installed and no network use, a message gets a reply and one permission question,
-the approved write shows in the diff, a second run leaves one demo room and one state
-folder, and a subprocess test covers the command on a pipe.
+it and the room shows the usual "unverified" notice; its first reply says what that
+notice means. The demo repo is one fixed folder under the state directory; each
+`kapelle demo` dismisses and deletes the old demo room, then makes the repo again, so no
+state folder piles up. The participant starts in `ask`. There is no `/demo` in the chat.
+On a pipe, `kapelle demo` does what `kapelle chat new` does there.
+*Done when* `prepack` copies `demo-agent.mjs` into `dist/` and `tests/package.test.ts`
+checks it is in the pack; `kapelle demo` from a packed tarball in a clean prefix opens a
+room with no agent installed and no network use; a message gets a reply and one
+permission question; the approved write shows in the diff; the first reply explains the
+unverified notice; the demo repo is never the person's checkout; the setup list and
+`--agent` do not name the demo agent; a second run leaves one demo room and one state
+folder; and a subprocess test covers the command on a pipe.
 **Done 2026-11-12 (#472).**
 
 **M10-4 · A "Your first loop" section in the README · S · needs nothing**
@@ -4165,8 +4170,9 @@ daemon, each under their own name.
   `@name` picks. An agent outside every room lives in a hall. A hall is a room, so it
   reuses the roster, `@name`, the timeline, questions and revive. M11-1 makes the
   operator's hall; M11-11 gives each other person one.
-- **D2. An agent in the hall works in a repository, or in none.** In a repository it
-  works in its own worktree, as a room participant does today. With no repository, the
+- **D2. An agent in the hall works in a repository, or in none.** In a repository with a
+  commit it gets its own worktree, as a room participant does today; a folder with no
+  git, or a repository with no commit, runs in the folder, as today. With no `--cwd`, the
   daemon makes an empty scratch folder for it: a chat agent for general questions. Each
   agent picks its own repository, so two agents in the hall can work in two
   repositories. Today the repository belongs to the room (`core/room.ts`,
@@ -4221,22 +4227,26 @@ and the hall first in the TUI's room list and in `kapelle chat list`.
 
 **M11-2 · Each agent picks its own repository, or none · M · needs M11-1**
 `/new` in the hall, and `/add` in any room, take `--cwd` for that agent alone, or no
-`--cwd` at all. In a repository, the agent gets its own worktree, as a room participant
-does today. In a folder with no git, it works in that folder, as today. With no
-`--cwd`, the daemon makes an empty scratch folder for that agent under the state
-directory, and removes it when the agent is removed.
+`--cwd` at all. In a repository with a commit, the agent gets its own worktree, as a room
+participant does today. In a folder with no git, or a repository with no commit, it works
+in that folder, as today. With no `--cwd`, the daemon makes an empty scratch folder for
+that agent under the state directory, and removes it when the agent is removed if the
+agent left it untouched; a used scratch folder is kept, as a used checkout is. The
+contract gets a minor version.
 **Gap:** what a room's own `cwd` means once each agent has one. Today it is the default
 for every participant; the pickup decides if it stays as that default.
-*Done when* tests cover an agent in a repository, in a folder with no git, and with no
-`--cwd`; the scratch folder removed with its agent; and two agents in one room in two
-different repositories.
+*Done when* tests cover an agent in a repository with a commit, in a folder with no git,
+in a repository with no commit, and with no `--cwd`; an untouched scratch folder removed
+with its agent and a used one kept; and two agents in one room in two different
+repositories.
 
 **M11-3 · Move an agent into a room and out again · L · needs M11-2**
 `/move <name> <room>` moves an agent, from the hall or from a room. It keeps the same
 harness process, so it keeps its memory, its folder and its branch. Its old messages
 stay in the old room's log. Both rooms show a line: the agent left, the agent came in.
-A move is refused while the agent is in a turn, as a second prompt is (§M0-4), and when
-the target room already has an agent of that name. An orchestrator cannot be moved.
+A move is refused while the agent is in a turn, where a second message would queue
+(M6-4), and when the target room already has an agent of that name. An orchestrator
+cannot be moved. The contract gets a minor version.
 **Gap:** a branch name holds the room id (`kapelle/<room>/<participant>`), so after a
 move the name goes stale. The pickup decides whether it is renamed or kept.
 *Done when* tests cover a move from the hall into a room and back, the agent's memory
@@ -4261,7 +4271,7 @@ relative `--cwd` against the client's home and current folder (`client/folder.ts
 read route lists the folders under a path on the daemon's machine, and the client sends a
 typed path as it is. The client reads no folder from its own disk and resolves no `~` or
 relative path against its own home or current folder. The header of `client/folder.ts`
-says the daemon's disk is the one that counts.
+says the daemon's disk is the one that counts. The contract gets a minor version.
 *Done when* tests cover completion and the folder check against a daemon whose folders
 the client's disk does not have, and a `~` or relative path resolved on the daemon's
 machine.
@@ -4271,7 +4281,8 @@ machine.
 person's own disk. Both recipe folders, the repository's and the person's own, are read
 on the daemon's machine. The daemon builds the orchestrator's whole first message, so a
 client and a daemon of different versions cannot paste different skills. `kapelle
-loop`, typed `/loop`, the loop form and `kapelle loop list` all ask the daemon.
+loop`, typed `/loop`, the loop form and `kapelle loop list` all ask the daemon. The
+contract gets a minor version.
 *Done when* tests cover a loop started from a client with no repository on its disk,
 `kapelle loop list` through the daemon, and the first message the same as today's for
 the same recipe.
@@ -4299,10 +4310,10 @@ cancelled key refused with `401`; a key that works after a restart; and no key a
 this story in clear text on disk.
 
 **M11-9 · Each message and action has the person's name · M · needs M11-8**
-Today the daemon has one token, so it cannot name the person behind a request. The `from`
-in a request body names the participant that sent a message, not the person (M8-1); the
-daemon trusts it because there is one operator (K6). After this story, the daemon takes
-the person's name from the key and records it beside the participant sender. A body
+After M11-8 a key names a person, but a request records only the participant sender. The
+`from` in a request body names the participant that sent a message, not the person
+(M8-1); the daemon trusts it as before (K6). After this story, the daemon takes the
+person's name from the key and records it beside the participant sender. A body
 cannot claim a person's name, and `from` keeps its M8-1 meaning and checks. Both screens
 show who sent each message. This re-opens K6 (`docs/CONTRACT-PLAN.md`). The contract gets
 a minor version.
@@ -4317,10 +4328,12 @@ A room has one owner, the person who made it, and a list of members. A person se
 the rooms they own or are a member of; another room answers `404`, as a missing one
 does. Only the owner deletes a room or changes its members. Members talk in it and
 answer its agents' questions.
+A room saved before this story has no owner; it belongs to the operator. The contract
+gets a minor version.
 **Gap:** runs have no owner. The pickup decides who sees a detached run.
-*Done when* tests cover a room hidden from a non-member, shown once they are added and
-hidden again once removed; a refused delete and member change by a member; and a
-question answered by a member.
+*Done when* tests cover an old room restoring as the operator's, a room hidden from a
+non-member, shown once they are added and hidden again once removed; a refused delete and
+member change by a member; and a question answered by a member.
 
 **M11-11 · One hall for each person · S · needs M11-10, M11-1**
 Each person has their own hall, made the first time they connect. M11-1's hall is the
