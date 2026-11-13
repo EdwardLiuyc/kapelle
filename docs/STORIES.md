@@ -4128,9 +4128,10 @@ the person can type, see a reply, answer a permission question and see the diff.
 `demo-agent.mjs`, not `mock-agent.mjs`, which is a test tool. It starts through the
 custom-command path, with no registry entry, so the setup list and `--agent` never name
 it and the room shows the usual "unverified" notice. The demo repo is one fixed folder
-under the state directory; each `kapelle demo` dismisses the old demo room and makes the
-repo again, so no state folder piles up. The participant starts in `ask`. There is no
-`/demo` in the chat. On a pipe, `kapelle demo` does what `kapelle chat new` does there.
+under the state directory; each `kapelle demo` dismisses and deletes the old demo room,
+then makes the repo again, so no state folder piles up. The participant starts in `ask`.
+There is no `/demo` in the chat. On a pipe, `kapelle demo` does what `kapelle chat new`
+does there.
 *Done when* `kapelle demo` from a packed tarball in a clean prefix opens a room with no
 agent installed and no network use, a message gets a reply and one permission question,
 the approved write shows in the diff, a second run leaves one demo room and one state
@@ -4159,10 +4160,11 @@ daemon, each under their own name.
 
 **Decided 2026-11-13** (with the person):
 
-- **D1. The house.** The daemon is a house with rooms and one hall. The hall is a
-  special room: it always exists, it has no orchestrator, and a message in it goes to the
-  agent its `@name` picks. An agent outside every room lives in the hall. A hall is a
-  room, so it reuses the roster, `@name`, the timeline, questions and revive.
+- **D1. The house.** The daemon is a house with rooms and a hall for each person. A hall
+  is a special room: it has no orchestrator, and a message in it goes to the agent its
+  `@name` picks. An agent outside every room lives in a hall. A hall is a room, so it
+  reuses the roster, `@name`, the timeline, questions and revive. M11-1 makes the
+  operator's hall; M11-11 gives each other person one.
 - **D2. An agent in the hall works in a repository, or in none.** In a repository it
   works in its own worktree, as a room participant does today. With no repository, the
   daemon makes an empty scratch folder for it: a chat agent for general questions. Each
@@ -4193,11 +4195,13 @@ daemon, each under their own name.
   That is out of scope.
 
 **The safety note.** Every agent runs as the daemon's one system user. An agent's own
-shell can read any file that user can read: another room's checkout, and the key file
-too, so an agent can act as any person. The daemon never sees those reads, so it cannot
-refuse them. Owners and members keep the house in order; they do not keep people apart.
-M11 meets the backlog's trigger "the daemon takes a caller who is not the operator" with
-D8, not with a sandbox. `SECURITY.md`'s "Scope" says so when M11-8 lands.
+shell can read and write any file that user can: another room's checkout, and the key
+file too. It can replace a stored key hash with one it knows, and so act as any person.
+The daemon never sees those reads or who changed a file, so it cannot refuse them.
+Owners and members keep the house in order, and room membership keeps rooms out of sight,
+but neither keeps files or agents apart. M11 meets the backlog's trigger "the daemon
+takes a caller who is not the operator" with D8, not with a sandbox. `SECURITY.md`'s
+"Scope" says so when M11-8 lands.
 
 **The build order** is not the story numbers: part 1 (M11-1..M11-3), then M11-4..M11-6,
 then M11-8, then M11-7, then M11-9, then part 4 (M11-10, M11-11). M11-7 needs keys that
@@ -4206,13 +4210,14 @@ stay the same after a restart, and M11-8 makes them.
 ### Part 1 — The hall
 
 **M11-1 · The hall: a room that always exists · M · needs nothing**
-The daemon makes the hall when it starts, and keeps it across restarts. It has no
-orchestrator, and it cannot be dismissed or deleted. A message in the hall with no
-`@name` is refused, with a hint that names the hall's agents. Both screens show the hall
-at the top of the room list. The contract gets a minor version.
+The daemon makes the operator's hall when it starts, and keeps it across restarts. It has
+no orchestrator, and it cannot be dismissed or deleted. A message in the hall with no
+`@name` is refused, with a hint that names the hall's agents. The TUI shows the hall at
+the top of its room list, and `kapelle chat list` prints it first. The contract gets a
+minor version.
 *Done when* tests cover: the hall after a first start and after a restart; a refused
 dismiss and delete; a message with no `@name` refused; a message to `@name` delivered;
-and the hall first in both screens.
+and the hall first in the TUI's room list and in `kapelle chat list`.
 
 **M11-2 · Each agent picks its own repository, or none · M · needs M11-1**
 `/new` in the hall, and `/add` in any room, take `--cwd` for that agent alone, or no
@@ -4242,22 +4247,24 @@ orchestrator; and a restart after a move restores the agent in its new room.
 ### Part 2 — The remote screen
 
 **M11-4 · A daemon address setting in the client · S · needs nothing**
-Today the client reads the port and the key from `daemon.json` and always calls
+Today the client reads the port and the bearer token from `daemon.json` and always calls
 `http://127.0.0.1:<port>` (`client/daemon.ts`). A client setting gives a daemon address
-and a key instead; `docs/CONFIG.md` names it. With the setting, the client skips
+and an access key instead; `docs/CONFIG.md` names it. With the setting, the client skips
 `daemon.json` and never starts a daemon (`client/lifecycle.ts`). When the daemon does
 not answer, the client says so, with the address it tried.
 *Done when* tests cover the setting used over `daemon.json`, no daemon started, and the
 message when nothing answers.
 
 **M11-5 · Folders come from the daemon · M · needs M11-4**
-Tab completion and the `--cwd` check read the person's own disk today
-(`client/folder.ts`). A new read route lists the folders under a path on the daemon's
-machine, and the client sends a typed path as it is. The client reads no folder from
-its own disk. The header of `client/folder.ts` says the daemon's disk is the one that
-counts.
+Tab completion reads the person's own disk today, and `absoluteFolder` resolves `~` and a
+relative `--cwd` against the client's home and current folder (`client/folder.ts`). A new
+read route lists the folders under a path on the daemon's machine, and the client sends a
+typed path as it is. The client reads no folder from its own disk and resolves no `~` or
+relative path against its own home or current folder. The header of `client/folder.ts`
+says the daemon's disk is the one that counts.
 *Done when* tests cover completion and the folder check against a daemon whose folders
-the client's disk does not have.
+the client's disk does not have, and a `~` or relative path resolved on the daemon's
+machine.
 
 **M11-6 · Recipes and the loop's first message come from the daemon · M · needs M11-4**
 `client/loop.ts` reads the recipe folders and `assets/orchestrator.md` from the
@@ -4284,19 +4291,24 @@ On the daemon's machine, verbs add a person, add a key with a label, list them, 
 cancel one key. A new key is shown once; the daemon keeps only its hash. Keys are
 read at start and again after a change, so a cancel needs no restart. This story takes
 over #255 (K5 option b): a bridge gets its own key.
-**Gap:** what `daemon.json`'s key is once people exist. It is the operator's today; the
-pickup decides if it stays the operator's local key.
+**Gap:** what `daemon.json`'s token is once people exist. It authenticates the operator
+today; the pickup decides whether it stays the operator's local token or becomes a person
+key.
 *Done when* tests cover a key added, used, listed and cancelled with no restart; a
-cancelled key refused with `401`; a key that works after a restart; and no key in clear
-text on disk.
+cancelled key refused with `401`; a key that works after a restart; and no key added by
+this story in clear text on disk.
 
 **M11-9 · Each message and action has the person's name · M · needs M11-8**
-Today the daemon trusts the `from` in a request body, because there is one operator
-(K6). After this story, the daemon takes the name from the key, and a body's `from` is
-ignored or refused. Both screens show who sent each message. This re-opens K6
-(`docs/CONTRACT-PLAN.md`). The contract gets a minor version.
+Today the daemon has one token, so it cannot name the person behind a request. The `from`
+in a request body names the participant that sent a message, not the person (M8-1); the
+daemon trusts it because there is one operator (K6). After this story, the daemon takes
+the person's name from the key and records it beside the participant sender. A body
+cannot claim a person's name, and `from` keeps its M8-1 meaning and checks. Both screens
+show who sent each message. This re-opens K6 (`docs/CONTRACT-PLAN.md`). The contract gets
+a minor version.
 *Done when* tests cover two keys of two people sending to one room, each line with the
-right name, and a forged `from` that changes nothing.
+right person and participant sender, a forged person name that changes nothing, and
+M8-1's `from` checks unchanged.
 
 ### Part 4 — Sharing
 
@@ -4311,8 +4323,8 @@ hidden again once removed; a refused delete and member change by a member; and a
 question answered by a member.
 
 **M11-11 · One hall for each person · S · needs M11-10, M11-1**
-Each person has their own hall, made the first time they connect. The hall of M11-1
-becomes the operator's. A person can add members to their hall, as to any room.
+Each person has their own hall, made the first time they connect. M11-1's hall is the
+operator's. A person can add members to their hall, as to any room.
 *Done when* tests cover two people with two halls, a hall hidden from another person,
 and a hall shared by adding a member.
 
