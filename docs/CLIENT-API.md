@@ -292,7 +292,7 @@ request that is not valid HTTP gets `400`.
 | `orchestrator_exists` | `409` | The room already has an orchestrator. | Change the other participant's role first. |
 | `name_taken` | `409` | Another participant in the room has this name. Names are compared without ASCII case, so `Alice` takes `alice`. | Choose another name. |
 | `shutting_down` | `503` | The daemon is shutting down. | Try again after it restarts. |
-| `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. When the harness did not start, the last line of the message is the next step: its login command, or its stderr log. | Show the message, every line. |
+| `room_open_failed` | `500` | A room's harness or checkout could not start. For example, the harness is not installed. When the harness did not start and there is a next step, the last line of the message names it: its login command, or its stderr log. | Show the message, every line. |
 | `install_running` | `409` | An install already runs (`POST /harnesses/install`). | Wait for its last line, then send again. |
 | `no_diff` | `409` | The participant's changes cannot be shown: its checkout is not a git checkout, it has no branch to compare with, or git failed for another reason. The message says which. | Show the message. |
 | `internal` | `500` | An error the daemon did not expect. For example, a bug, or a git command that failed in a broken repository. | Show the message. Report it if the repository is fine. |
@@ -748,8 +748,9 @@ Each task has `id` and `status`, and when known `agent`, `durationMs`, `error`,
 counts and may carry a `_meta` object, passed through unchanged (C11). `cwd`,
 `stopReason`, `transcript` and the structured `result` are not part of the contract:
 the event stream carries the prose, and a restored run never had them.
-A task whose harness did not start has the next step as the last line of `error`:
-its login command, its stderr log, or `--verbose` when there is no log.
+A task whose harness did not start has the next step as the last line of `error`
+when there is one: its login command, its stderr log, or `--verbose` when there is
+no log. A failed spawn has no next-step line.
 
 A live run's `startedAt`/`endedAt` are the daemon's clock; a restored run's are the
 record's own stamps, so the same run can report them a moment apart after a restart.

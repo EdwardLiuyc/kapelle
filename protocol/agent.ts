@@ -260,6 +260,9 @@ export class RpcError extends Error {
   }
 }
 
+/** The harness process never started, so it has no stderr to show. */
+export class SpawnError extends Error {}
+
 /**
  * A single ACP agent subprocess.
  *
@@ -406,7 +409,7 @@ export class AcpAgent {
       const message = `failed to spawn "${this.command}": ${err.message}`;
       this.#stderr.push(message);
       this.#stderrFile?.write(`${message}\n`);
-      this.#failAll(new Error(message));
+      this.#failAll(new SpawnError(message));
     });
 
     // A harness that dies at spawn leaves its stdin a broken pipe, and the

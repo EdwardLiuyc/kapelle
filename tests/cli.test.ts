@@ -808,7 +808,7 @@ test("a logged-out run names its login step in the task error", async (t) => {
   assert.equal(r.code, 1);
   assert.match(
     r.stderr,
-    /error: \[auth\] Authentication required \(code -32000\)\nlog in first: pi, then \/login$/m,
+    /^error: \[auth\] .*\nlog in first: pi, then \/login$/m,
   );
   assert.doesNotMatch(r.stderr, /the agent's stderr is in/);
 });
@@ -882,6 +882,11 @@ test("with no --agent and no --cmd, one prompt starts pi", async (t) => {
   }).done;
 
   assert.match(r.stderr, /failed to spawn "pi-acp"/);
+  assert.doesNotMatch(
+    r.stderr,
+    /run again with --verbose/,
+    "a spawn failure has no stderr for --verbose to show",
+  );
 });
 
 test("a logged-out agent's start names its login step", async (t) => {
@@ -903,10 +908,7 @@ test("a logged-out agent's start names its login step", async (t) => {
   ).done;
 
   assert.equal(r.code, 1);
-  assert.match(
-    r.stderr,
-    /error: Authentication required \(code -32000\)\nlog in first: pi, then \/login$/m,
-  );
+  assert.match(r.stderr, /^error: .*\nlog in first: pi, then \/login$/m);
 });
 
 test("a --cmd agent's logged-out start gets a generic login step", async (t) => {
@@ -972,9 +974,28 @@ test("a missing --cwd is not created by the stderr log directory", async (t) => 
     r.stderr,
     /cannot write harness stderr logs to .*does not exist/,
   );
-  // With no log, --verbose is the only remaining way to see its stderr.
-  assert.match(r.stderr, /^run again with --verbose to see its stderr$/m);
+  // A spawn failure has no stderr for --verbose to show; the error already
+  // names the spawn.
+  assert.doesNotMatch(r.stderr, /run again with --verbose/);
   await assert.rejects(readdir(missing), /ENOENT/);
+});
+
+test("a run with no stderr log tells an exited agent to use --verbose", async (t) => {
+  const cwd = await tempDir(t);
+  // Block the runs folder so runRun cannot make a log, while leaving the
+  // task's own cwd usable: this harness starts and then exits.
+  await mkdir(stateDirFor(cwd), { recursive: true });
+  await writeFile(join(stateDirFor(cwd), "runs"), "not a directory\n");
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [{ id: "exit", prompt: "hi", cmd: "node -e process.exit(3)" }],
+  });
+
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^run again with --verbose to see its stderr$/m);
+  assert.doesNotMatch(r.stderr, /the agent's stderr is in/);
 });
 
 test("--cwd in a subdirectory logs at the repository root", async (t) => {

@@ -562,11 +562,15 @@ if (chatVerb) {
     flushStream();
     console.error(`\nerror: ${clean(messageOf(err))}`);
     // A start that failed gets its next step (M10-2). This path keeps no
-    // stderr log, so the fallback is `--verbose`.
+    // stderr log, so the fallback is `--verbose`; a failed spawn has no
+    // stderr for that flag to show.
     if (!agent.sessionId) {
-      const help =
-        startHelp(err, spec.setup, null) ??
-        (verbose ? undefined : "run again with --verbose to see its stderr");
+      const help = startHelp(
+        err,
+        spec.setup,
+        null,
+        verbose ? undefined : "run again with --verbose to see its stderr",
+      );
       if (help) console.error(help);
     }
     process.exitCode = 1;

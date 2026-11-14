@@ -40,7 +40,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AcpAgent, RpcError } from "../protocol/agent.ts";
+import { AcpAgent, RpcError, SpawnError } from "../protocol/agent.ts";
 import {
   AGENTS,
   type AgentEntry,
@@ -97,18 +97,21 @@ const authRequired = (err: unknown) =>
   err instanceof RpcError && err.code === AUTH_REQUIRED;
 
 /** The next step for an agent that failed to start (M10-2, #462): its login
- *  command when it is logged out, else where its stderr went. Nothing when
- *  there is no log: the caller knows its own fallback. A `--cmd` agent has
- *  no `setup`, so no login command of its own. */
+ *  command when it is logged out, else where its stderr went. When neither
+ *  applies, the caller may pass a no-log fallback. A failed spawn has no stderr
+ *  to ask for, so it never gets that fallback. A `--cmd` agent has no `setup`,
+ *  so no login command of its own. */
 export function startHelp(
   err: unknown,
   setup: SetupSpec | undefined,
   log: string | null,
+  noLog?: string,
 ): string | undefined {
   if (authRequired(err)) {
     return `log in first: ${setup?.login ?? "with the agent's own login command"}`;
   }
-  return log ? `the agent's stderr is in ${log}` : undefined;
+  if (log) return `the agent's stderr is in ${log}`;
+  return err instanceof SpawnError ? undefined : noLog;
 }
 
 /** The model list and the current model, from `session/new`'s options. A
