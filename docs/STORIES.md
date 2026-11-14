@@ -4262,17 +4262,31 @@ Today the client reads the port and the bearer token from `daemon.json` and alwa
 and an access key instead; `docs/CONFIG.md` names it. With the setting, the client skips
 `daemon.json` and never starts a daemon (`client/lifecycle.ts`). When the daemon does
 not answer, the client says so, with the address it tried.
+**Gap:** which file holds the setting, and how `client/` reads it. `docs/CONFIG.md`
+says the user config file holds daemon-wide knobs only, and that the CLI in its own
+process does not read it. `client/` cannot import `core/config.ts`, so it copies the
+XDG rule, as `client/loop.ts` does, with a test that the two agree.
 *Done when* tests cover the setting used over `daemon.json`, no daemon started, and the
-message when nothing answers.
+message when nothing answers; and `docs/CONFIG.md` names the setting, its file, and who
+reads it.
 
 **M11-5 · Folders come from the daemon · M · needs M11-4**
 Tab completion reads the person's own disk today, and `absoluteFolder` resolves `~` and a
-relative `--cwd` against the client's home and current folder (`client/folder.ts`). A new
-read route lists the folders under a path on the daemon's machine, and the client sends a
-typed path as it is. The client reads no folder from its own disk and resolves no `~` or
-relative path against its own home or current folder. The header of `client/folder.ts`
-says the daemon's disk is the one that counts. The contract gets a minor version.
-*Done when* tests cover completion and the folder check against a daemon whose folders
+relative `--cwd` against the client's home and current folder (`client/folder.ts`). The
+default `--cwd` is `.`, so `kapelle` typed in a repository picks that repository
+(`cli.ts`, `chat/tui/panel.ts`). With no daemon address set (M11-4), nothing changes: the
+client still sends its own absolute folder. A daemon cannot resolve `.` for it, because
+the daemon's own current folder is not the person's, even on one machine. With an
+address set, a new read route lists the folders under a path on the daemon's machine,
+and the client sends a typed path as it is. Then the client reads no folder from its own
+disk and resolves no `~` or relative path against its own home or current folder. The
+header of `client/folder.ts` says which disk counts when. The contract gets a minor
+version.
+**Gap:** the default folder when an address is set and no `--cwd` is typed. The client's
+own folder may not exist on the daemon's machine; the pickup decides between the daemon
+user's home and a required `--cwd`.
+*Done when* tests cover a local `kapelle` that still picks the folder it was typed in;
+and, with an address set, completion and the folder check against a daemon whose folders
 the client's disk does not have, and a `~` or relative path resolved on the daemon's
 machine.
 
