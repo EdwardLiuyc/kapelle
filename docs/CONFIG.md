@@ -104,6 +104,15 @@ listed path and its entries are resolved again when each checkout is made,
 because either can be swapped for an outside symlink after the config was
 validated.
 
+The links name paths, not real targets. The checks above run when a mirror
+is planned and when it is made, not after. A path in the main checkout that
+is later swapped for an outside symlink takes the checkout's link out with
+it. The client's own file requests cannot follow it: the path guard compares
+realpaths against the checkout, so a write through a mirror link is always
+refused, and a read is refused unless `allowReadOutsideRoot` is on. Only a
+harness's own shell can follow it, and that shell is outside the policy
+(#447).
+
 ## Environment — `KAPELLE_*`
 
 `linkPaths` has no `KAPELLE_*` twin: it is a list of paths relative to one
