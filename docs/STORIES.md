@@ -4223,9 +4223,9 @@ stay the same after a restart, and M11-8 makes them.
 The daemon makes the operator's hall when it starts, and keeps it across restarts. It has
 no orchestrator, and it cannot be dismissed or deleted. A message in the hall with no
 `@name` gets the refusal a room with no orchestrator already gives, `409`
-`no_orchestrator`; its message gains a hint that names the hall's agents. The TUI shows the hall at
-the top of its room list, and `kapelle chat list` prints it first. The contract gets a
-minor version.
+`no_orchestrator`; its message gains a hint that names the hall's agents. The TUI shows
+the hall at the top of its room list, and `kapelle chat list` prints it first. The
+contract gets a minor version.
 *Done when* tests cover: the hall after a first start and after a restart; a refused
 dismiss and delete; a message with no `@name` refused; a message to `@name` delivered;
 and the hall first in the TUI's room list and in `kapelle chat list`.
@@ -4290,13 +4290,14 @@ and the client sends a typed path as it is. Then the client reads no folder from
 disk and resolves no `~` or relative path against its own home or current folder. The
 header of `client/folder.ts` says which disk counts when. The contract gets a minor
 version.
-**Gap:** the default folder when an address is set and no `--cwd` is typed. The client's
-own folder may not exist on the daemon's machine; the pickup decides between the daemon
-user's home and a required `--cwd`.
+**Gap:** with an address set, the base for a relative path, and the default folder when
+no `--cwd` is typed. The client's own folder may not exist on the daemon's machine, and
+the daemon's own current folder means nothing to the person; the pickup decides between
+the daemon user's home and a required absolute `--cwd`.
 *Done when* tests cover a local `kapelle` that still picks the folder it was typed in;
 and, with an address set, completion and the folder check against a daemon whose folders
-the client's disk does not have, and a `~` or relative path resolved on the daemon's
-machine.
+the client's disk does not have, a `~` path resolved on the daemon's machine, and a
+relative path and no `--cwd` handled as the pickup decided.
 
 **M11-6 · Recipes and the loop's first message come from the daemon · M · needs M11-4**
 `client/loop.ts` reads the recipe folders and `assets/orchestrator.md` from the
@@ -4343,7 +4344,8 @@ show who sent each message. This re-opens K6 (`docs/CONTRACT-PLAN.md`), and chan
 operator and one token. The contract gets a minor version.
 *Done when* tests cover two keys of two people sending to one room, each line with the
 right person and participant sender, a forged person name that changes nothing, M8-1's
-`from` checks unchanged, and both screens' labels.
+`from` checks unchanged, and both screens' labels; and `docs/CLIENT-API.md` no longer says
+the daemon trusts `from` because there is one operator and one token.
 
 ### Part 4 — Sharing
 
