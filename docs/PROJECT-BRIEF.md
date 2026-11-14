@@ -57,7 +57,11 @@ and the shape they should take will be clearer after P0 runs for a while.
   a room, an orchestrator agent may give work to other agents, but only through the
   daemon, in the room's timeline the person sees. Agents never talk to each other
   directly, and the person decides every choice.
-- Not a hosted/multi-user product. Local-first, single operator.
+- Not a hosted/multi-user product. Local-first, single operator. **Amended 2026-11-13
+  (M11):** a few people the operator trusts may share one daemon, each under their own
+  name and keys, and a screen may reach it from another machine through an SSH tunnel.
+  It is still not hosted, and it does not keep those people apart: every agent runs as
+  the daemon's one system user (`docs/STORIES.md`, M11, "The safety note").
 
 ## Prior art to check before building each piece
 
