@@ -4195,7 +4195,9 @@ daemon, each under their own name.
   come later. HTTPS stays outside the daemon: a proxy does it better. Plain HTTP on the
   network is never an option: the key would cross the wire as clear text.
 - **D7. `/term` stays on the person's own machine.** A shell on the server, through the
-  daemon, needs its own design.
+  daemon, needs its own design. The verbs that read a repository or a checkout on disk
+  (`kapelle merge`, `kapelle workspace`, `kapelle room …`) stay on the daemon's machine
+  too: they do not work from a remote client.
 - **D8. Who it is for.** The operator and a few teammates the operator trusts. People
   who must not see each other's work need a sandbox, or one system user per person.
   That is out of scope.
@@ -4218,7 +4220,8 @@ stay the same after a restart, and M11-8 makes them.
 **M11-1 · The hall: a room that always exists · M · needs nothing**
 The daemon makes the operator's hall when it starts, and keeps it across restarts. It has
 no orchestrator, and it cannot be dismissed or deleted. A message in the hall with no
-`@name` is refused, with a hint that names the hall's agents. The TUI shows the hall at
+`@name` gets the refusal a room with no orchestrator already gives, `409`
+`no_orchestrator`; its message gains a hint that names the hall's agents. The TUI shows the hall at
 the top of its room list, and `kapelle chat list` prints it first. The contract gets a
 minor version.
 *Done when* tests cover: the hall after a first start and after a restart; a refused
@@ -4261,7 +4264,10 @@ Today the client reads the port and the bearer token from `daemon.json` and alwa
 `http://127.0.0.1:<port>` (`client/daemon.ts`). A client setting gives a daemon address
 and an access key instead; `docs/CONFIG.md` names it. With the setting, the client skips
 `daemon.json` and never starts a daemon (`client/lifecycle.ts`). When the daemon does
-not answer, the client says so, with the address it tried.
+not answer, the client says so, with the address it tried. Until M11-8, the key in the
+setting is `daemon.json`'s token, copied by hand. The daemon still refuses a `Host` that
+is not loopback (`403` `host_not_allowed`), so the address must reach it as
+`127.0.0.1`, as D6's tunnel does, until D6's later host setting.
 **Gap:** which file holds the setting, and how `client/` reads it. `docs/CONFIG.md`
 says the user config file holds daemon-wide knobs only, and that the CLI in its own
 process does not read it. `client/` cannot import `core/config.ts`, so it copies the
@@ -4296,7 +4302,8 @@ person's own disk. Both recipe folders, the repository's and the person's own, a
 on the daemon's machine. The daemon builds the orchestrator's whole first message, so a
 client and a daemon of different versions cannot paste different skills. `kapelle
 loop`, typed `/loop`, the loop form and `kapelle loop list` all ask the daemon. The
-contract gets a minor version.
+header of `client/loop.ts` stops saying it reads the local disk. The contract gets a
+minor version.
 *Done when* tests cover a loop started from a client with no repository on its disk,
 `kapelle loop list` through the daemon, and the first message the same as today's for
 the same recipe.
@@ -4321,7 +4328,7 @@ today; the pickup decides whether it stays the operator's local token or becomes
 key.
 *Done when* tests cover a key added, used, listed and cancelled with no restart; a
 cancelled key refused with `401`; a key that works after a restart; and no key added by
-this story in clear text on disk.
+this story in clear text on disk; and `SECURITY.md`'s "Scope" states the safety note.
 
 **M11-9 · Each message and action has the person's name · M · needs M11-8**
 After M11-8 a key names a person, but a request records only the participant sender. The
@@ -4329,11 +4336,12 @@ After M11-8 a key names a person, but a request records only the participant sen
 (M8-1); the daemon trusts it as before (K6). After this story, the daemon takes the
 person's name from the key and records it beside the participant sender. A body
 cannot claim a person's name, and `from` keeps its M8-1 meaning and checks. Both screens
-show who sent each message. This re-opens K6 (`docs/CONTRACT-PLAN.md`). The contract gets
-a minor version.
+show who sent each message. This re-opens K6 (`docs/CONTRACT-PLAN.md`), and changes
+`docs/CLIENT-API.md`'s sentence that the daemon trusts `from` because there is one
+operator and one token. The contract gets a minor version.
 *Done when* tests cover two keys of two people sending to one room, each line with the
-right person and participant sender, a forged person name that changes nothing, and
-M8-1's `from` checks unchanged.
+right person and participant sender, a forged person name that changes nothing, M8-1's
+`from` checks unchanged, and both screens' labels.
 
 ### Part 4 — Sharing
 
