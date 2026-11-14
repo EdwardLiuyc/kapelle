@@ -259,8 +259,8 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 
 - A harness that fails to start shows as an opaque JSON-RPC error, often
   `Internal error (code -32603)` on `session/new`. The line after it names the next
-  step (`startHelp`, `core/check.ts`): the login command, or the stderr log, or
-  `--verbose` on the one-shot path, which keeps no log.
+  step (`startHelp`, `core/check.ts`): the login command, the stderr log, or
+  `--verbose` for a one-shot prompt or a run with no log.
 - The `claude` registry entry removes the parent Claude Code session's variables
   (`CLAUDECODE`, …). You do not need `env -u`.
 

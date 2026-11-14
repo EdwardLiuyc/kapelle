@@ -1138,7 +1138,11 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     // A start that failed carries its next step on `error` (M10-2), so a
     // detached run and `attach` show it too.
     if (sessionId === undefined && err instanceof Error) {
-      const help = startHelp(err, spec.setup, agent.stderrLog);
+      const help =
+        startHelp(err, spec.setup, agent.stderrLog) ??
+        (ctx.verbose
+          ? undefined
+          : "run again with --verbose to see its stderr");
       if (help) err.message += `\n${help}`;
     }
     throw err;

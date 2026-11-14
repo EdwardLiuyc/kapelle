@@ -749,7 +749,7 @@ counts and may carry a `_meta` object, passed through unchanged (C11). `cwd`,
 `stopReason`, `transcript` and the structured `result` are not part of the contract:
 the event stream carries the prose, and a restored run never had them.
 A task whose harness did not start has the next step as the last line of `error`:
-its login command, or its stderr log.
+its login command, its stderr log, or `--verbose` when there is no log.
 
 A live run's `startedAt`/`endedAt` are the daemon's clock; a restored run's are the
 record's own stamps, so the same run can report them a moment apart after a restart.

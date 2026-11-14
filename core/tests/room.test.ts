@@ -188,7 +188,18 @@ test("a failed add leaves no checkout or branch, and the room keeps working", as
     /no-such-ref/,
   );
   const dead = roomAgents([{ cmd: "false", name: "carol" }])[0];
-  await assert.rejects(room.add(dead as ReturnType<typeof mock>));
+  await assert.rejects(
+    room.add(dead as ReturnType<typeof mock>),
+    (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      assert.match(
+        message,
+        /\nthe agent's stderr is in .*\.stderr\.log$/,
+        "a failed add names where the harness's stderr went",
+      );
+      return true;
+    },
+  );
 
   assert.equal(room.participants.length, 1);
   assert.deepEqual(await roomBranches(repo, roomId), [alice.branch]);
@@ -2136,6 +2147,11 @@ test("a revive whose harness cannot start ends the turn with the error, and stay
   const error = (ended?.update as { error?: unknown } | undefined)?.error;
   assert.equal(typeof error, "string");
   assert.ok(error, "the turn ends with the harness's error");
+  assert.match(
+    String(error),
+    /\nthe agent's stderr is in .*\.stderr\.log$/,
+    "a failed revive names where the harness's stderr went",
+  );
 });
 
 test("forget removes the room's folder, and a save queued before it writes nothing", async (t) => {

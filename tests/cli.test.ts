@@ -783,6 +783,36 @@ test("a task whose harness cannot start fails alone, and fails the run", async (
   assert.match(r.stdout, /failed — 2 tasks, 1 turn/);
 });
 
+test("a logged-out run names its login step in the task error", async (t) => {
+  // M10-2: the run path must pass the registry setup, not just the helper.
+  const bin = await tempDir(t);
+  await writeFile(
+    join(bin, "pi-acp"),
+    `#!/bin/sh\nexec "${process.execPath}" "${MOCK_AGENT}" --scenario auth-required\n`,
+    { mode: 0o755 },
+  );
+  const cwd = await tempDir(t);
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [{ id: "auth", prompt: "hi", agent: "pi" }],
+  });
+  const r = await spawnCli(
+    t,
+    ["run", "--file", file, "--cwd", cwd, "--quiet"],
+    "cli.ts",
+    {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    },
+  ).done;
+
+  assert.equal(r.code, 1);
+  assert.match(
+    r.stderr,
+    /error: \[auth\] Authentication required \(code -32000\)\nlog in first: pi, then \/login$/m,
+  );
+  assert.doesNotMatch(r.stderr, /the agent's stderr is in/);
+});
+
 test("a harness that dies leaves its own error in a per-task log", async (t) => {
   // The story's whole point (M1b-7): the terminal already gets this under
   // `--verbose`, and the rejection message carries it while the process
@@ -873,7 +903,28 @@ test("a logged-out agent's start names its login step", async (t) => {
   ).done;
 
   assert.equal(r.code, 1);
-  assert.match(r.stderr, /^log in first: pi, then \/login$/m);
+  assert.match(
+    r.stderr,
+    /error: Authentication required \(code -32000\)\nlog in first: pi, then \/login$/m,
+  );
+});
+
+test("a --cmd agent's logged-out start gets a generic login step", async (t) => {
+  // M10-2: a custom command has no registry setup, so the hint is generic.
+  const cwd = await tempDir(t);
+  const r = await runCli(t, [
+    "hi",
+    "--cmd",
+    `node ${MOCK_AGENT} --scenario auth-required`,
+    "--cwd",
+    cwd,
+    "--mode",
+    "auto",
+  ]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^log in first: with the agent's own login command$/m);
+  assert.doesNotMatch(r.stderr, /the agent's stderr is in/);
 });
 
 test("an agent that exits at start names --verbose, and is named for its runtime", async (t) => {
@@ -890,8 +941,10 @@ test("an agent that exits at start names --verbose, and is named for its runtime
   ]);
 
   assert.equal(r.code, 1);
-  assert.match(r.stderr, /error: agent "node" exited with code 3/);
-  assert.match(r.stderr, /^run again with --verbose to see its stderr$/m);
+  assert.match(
+    r.stderr,
+    /error: agent "node" exited with code 3\nrun again with --verbose to see its stderr$/m,
+  );
 });
 
 test("a missing --cwd is not created by the stderr log directory", async (t) => {
@@ -919,6 +972,8 @@ test("a missing --cwd is not created by the stderr log directory", async (t) => 
     r.stderr,
     /cannot write harness stderr logs to .*does not exist/,
   );
+  // With no log, --verbose is the only remaining way to see its stderr.
+  assert.match(r.stderr, /^run again with --verbose to see its stderr$/m);
   await assert.rejects(readdir(missing), /ENOENT/);
 });
 
