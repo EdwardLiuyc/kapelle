@@ -1924,6 +1924,11 @@ test("a real room session updates the saved models and login (M9-4)", async (t) 
     agents: [{ agent: "kimi", name: "bob" }],
   });
   assert.notEqual(refused.status, 201);
+  // M10-2: the room's error names the login step.
+  assert.match(
+    refused.body.error?.message ?? "",
+    /\nlog in first: kimi login$/,
+  );
   const out = await api<HarnessesReply>(d, "GET", "/harnesses");
   assert.equal(entryOf(out.body, "kimi")?.login, "logged_out");
   assert.equal(entryOf(out.body, "kimi")?.loginHint, "kimi login");

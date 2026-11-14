@@ -40,7 +40,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AcpAgent, RpcError } from "../protocol/agent.ts";
+import { AcpAgent, RpcError, SpawnError } from "../protocol/agent.ts";
 import {
   AGENTS,
   type AgentEntry,
@@ -95,6 +95,28 @@ const AUTH_REQUIRED = -32000;
 
 const authRequired = (err: unknown) =>
   err instanceof RpcError && err.code === AUTH_REQUIRED;
+
+/** The next step for an agent that failed to start (M10-2, #462): its login
+ *  command when it is logged out, else where its stderr went. With no log,
+ *  `askVerbose` asks for `--verbose`, which a caller sets only when it is off
+ *  and can be turned on. "In the foreground", because a detached run ignores
+ *  the flag. A failed spawn has no stderr to ask for, so it never gets that
+ *  line. A `--cmd` agent has no `setup`, so no login command of its own. */
+export function startHelp(
+  err: unknown,
+  setup: SetupSpec | undefined,
+  log: string | null,
+  askVerbose = false,
+): string | undefined {
+  if (authRequired(err)) {
+    return `log in first: ${setup?.login ?? "with the agent's own login command"}`;
+  }
+  if (log) return `the agent's stderr is in ${log}`;
+  if (askVerbose && !(err instanceof SpawnError)) {
+    return "run it again in the foreground with --verbose to see its stderr";
+  }
+  return undefined;
+}
 
 /** The model list and the current model, from `session/new`'s options. A
  *  grouped list is made flat. Nothing when there is no model option. A room

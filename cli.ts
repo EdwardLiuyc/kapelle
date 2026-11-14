@@ -72,6 +72,7 @@ import { listRecipes, loopFolders } from "./client/loop.ts";
 import { fold } from "./client/mention.ts";
 import { findAgain, setupLines } from "./client/setup.ts";
 import { type Connect, followEvents } from "./client/stream.ts";
+import { startHelp } from "./core/check.ts";
 import {
   readProjectLinkPaths,
   resolveRunDefaults,
@@ -560,6 +561,13 @@ if (chatVerb) {
   } catch (err) {
     flushStream();
     console.error(`\nerror: ${clean(messageOf(err))}`);
+    // A start that failed gets its next step (M10-2). This path keeps no
+    // stderr log, so the fallback is `--verbose`; a failed spawn has no
+    // stderr for that flag to show.
+    if (!agent.sessionId) {
+      const help = startHelp(err, spec.setup, null, !verbose);
+      if (help) console.error(help);
+    }
     process.exitCode = 1;
   } finally {
     closeAsk();

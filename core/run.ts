@@ -37,6 +37,7 @@ import {
   warningsFor,
 } from "../protocol/registry.ts";
 import type { StopReason, Usage } from "../protocol/types.ts";
+import { startHelp } from "./check.ts";
 import { createEventLog, type EventLog } from "./eventlog.ts";
 import { createEventBus, type EventBus } from "./events.ts";
 import { newRunId } from "./ids.ts";
@@ -1133,6 +1134,13 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     // (M2-6, #36); nothing else sets or reads it.
     if (sessionId !== undefined && err !== null && typeof err === "object") {
       (err as { sessionId?: string }).sessionId ??= sessionId;
+    }
+    // A start that failed carries its next step on `error` (M10-2), so a
+    // detached run and `attach` show it too. A failed spawn has no stderr for
+    // the no-log fallback to name.
+    if (sessionId === undefined && err instanceof Error) {
+      const help = startHelp(err, spec.setup, agent.stderrLog, !ctx.verbose);
+      if (help) err.message += `\n${help}`;
     }
     throw err;
   } finally {

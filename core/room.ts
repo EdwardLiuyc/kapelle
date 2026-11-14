@@ -217,6 +217,7 @@ import {
   noticeSeen,
   type Seen,
   sessionSeen,
+  startHelp,
 } from "./check.ts";
 import {
   createEventLog,
@@ -2313,6 +2314,12 @@ function createParticipant({
       }
     } catch (err) {
       await next.stop();
+      // A start that failed carries its next step (M10-2): the room's open,
+      // add or revive error shows it.
+      if (session === undefined && err instanceof Error) {
+        const help = startHelp(err, spec.setup, next.stderrLog);
+        if (help) err.message += `\n${help}`;
+      }
       throw err;
     }
     // A stop that came while this harness was starting did not see it.

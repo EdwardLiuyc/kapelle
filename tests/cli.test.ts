@@ -768,13 +768,49 @@ test("a task whose harness cannot start fails alone, and fails the run", async (
 
   assert.equal(r.code, 1, "one failed task fails the run");
   assert.match(r.stdout, /▸ good \(mock-agent\) done/);
-  // The label comes from `resolveAgent`'s `--cmd` parsing, which reads
-  // "node <first arg>" — a quirk of that function, not of this run.
-  assert.match(r.stdout, /▸ doomed \(.*\) failed/);
+  // A flag is no script, so the label is the runtime (#462).
+  assert.match(r.stdout, /▸ doomed \(node\) failed/);
   assert.match(r.stdout, /error: agent "doomed" exited/);
+  // M10-2: the error names the task's own log.
+  const [runId] = await readdir(join(stateDirFor(cwd), "runs"));
+  const log = join(stateDirFor(cwd), "runs", runId, "doomed.stderr.log");
+  assert.ok(
+    r.stdout.includes(`the agent's stderr is in ${log}`),
+    "the log path follows the error",
+  );
   // The doomed harness died before it ever sent a prompt, so only the good
   // task counts as a turn.
   assert.match(r.stdout, /failed — 2 tasks, 1 turn/);
+});
+
+test("a logged-out run names its login step in the task error", async (t) => {
+  // M10-2: the run path must pass the registry setup, not just the helper.
+  const bin = await tempDir(t);
+  await writeFile(
+    join(bin, "pi-acp"),
+    `#!/bin/sh\nexec "${process.execPath}" "${MOCK_AGENT}" --scenario auth-required\n`,
+    { mode: 0o755 },
+  );
+  const cwd = await tempDir(t);
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [{ id: "auth", prompt: "hi", agent: "pi" }],
+  });
+  const r = await spawnCli(
+    t,
+    ["run", "--file", file, "--cwd", cwd, "--quiet"],
+    "cli.ts",
+    {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    },
+  ).done;
+
+  assert.equal(r.code, 1);
+  assert.match(
+    r.stderr,
+    /^error: \[auth\] .*\nlog in first: pi, then \/login$/m,
+  );
+  assert.doesNotMatch(r.stderr, /the agent's stderr is in/);
 });
 
 test("a harness that dies leaves its own error in a per-task log", async (t) => {
@@ -846,6 +882,71 @@ test("with no --agent and no --cmd, one prompt starts pi", async (t) => {
   }).done;
 
   assert.match(r.stderr, /failed to spawn "pi-acp"/);
+  assert.doesNotMatch(
+    r.stderr,
+    /with --verbose/,
+    "a spawn failure has no stderr for --verbose to show",
+  );
+});
+
+test("a logged-out agent's start names its login step", async (t) => {
+  // M10-2: a fake pi-acp, so the hint is pi's own from the registry.
+  const bin = await tempDir(t);
+  await writeFile(
+    join(bin, "pi-acp"),
+    `#!/bin/sh\nexec "${process.execPath}" "${MOCK_AGENT}" --scenario auth-required\n`,
+    { mode: 0o755 },
+  );
+  const cwd = await tempDir(t);
+  const r = await spawnCli(
+    t,
+    ["hi", "--cwd", cwd, "--mode", "auto"],
+    "cli.ts",
+    {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    },
+  ).done;
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^error: .*\nlog in first: pi, then \/login$/m);
+});
+
+test("a --cmd agent's logged-out start gets a generic login step", async (t) => {
+  // M10-2: a custom command has no registry setup, so the hint is generic.
+  const cwd = await tempDir(t);
+  const r = await runCli(t, [
+    "hi",
+    "--cmd",
+    `node ${MOCK_AGENT} --scenario auth-required`,
+    "--cwd",
+    cwd,
+    "--mode",
+    "auto",
+  ]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^log in first: with the agent's own login command$/m);
+  assert.doesNotMatch(r.stderr, /the agent's stderr is in/);
+});
+
+test("an agent that exits at start names --verbose, and is named for its runtime", async (t) => {
+  // M10-2: the one-shot path keeps no stderr log. #462: not named "-e".
+  const cwd = await tempDir(t);
+  const r = await runCli(t, [
+    "hi",
+    "--cmd",
+    "node -e process.exit(3)",
+    "--cwd",
+    cwd,
+    "--mode",
+    "auto",
+  ]);
+
+  assert.equal(r.code, 1);
+  assert.match(
+    r.stderr,
+    /error: agent "node" exited with code 3\nrun it again in the foreground with --verbose to see its stderr$/m,
+  );
 });
 
 test("a missing --cwd is not created by the stderr log directory", async (t) => {
@@ -873,7 +974,31 @@ test("a missing --cwd is not created by the stderr log directory", async (t) => 
     r.stderr,
     /cannot write harness stderr logs to .*does not exist/,
   );
+  // A spawn failure has no stderr for --verbose to show; the error already
+  // names the spawn.
+  assert.doesNotMatch(r.stderr, /with --verbose/);
   await assert.rejects(readdir(missing), /ENOENT/);
+});
+
+test("a run with no stderr log tells an exited agent to use --verbose", async (t) => {
+  const cwd = await tempDir(t);
+  // Block the runs folder so runRun cannot make a log, while leaving the
+  // task's own cwd usable: this harness starts and then exits.
+  await mkdir(stateDirFor(cwd), { recursive: true });
+  await writeFile(join(stateDirFor(cwd), "runs"), "not a directory\n");
+  const file = await runFile(t, {
+    mode: "auto",
+    tasks: [{ id: "exit", prompt: "hi", cmd: "node -e process.exit(3)" }],
+  });
+
+  const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
+
+  assert.equal(r.code, 1);
+  assert.match(
+    r.stderr,
+    /^run it again in the foreground with --verbose to see its stderr$/m,
+  );
+  assert.doesNotMatch(r.stderr, /the agent's stderr is in/);
 });
 
 test("--cwd in a subdirectory logs at the repository root", async (t) => {
