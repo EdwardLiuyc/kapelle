@@ -750,7 +750,7 @@ counts and may carry a `_meta` object, passed through unchanged (C11). `cwd`,
 the event stream carries the prose, and a restored run never had them.
 A task whose harness did not start has the next step as the last line of `error`
 when there is one: its login command, its stderr log, or `--verbose` when there is
-no log. A failed spawn has no next-step line.
+no log. A failed spawn with no log has no next-step line: it has no stderr.
 
 A live run's `startedAt`/`endedAt` are the daemon's clock; a restored run's are the
 record's own stamps, so the same run can report them a moment apart after a restart.
