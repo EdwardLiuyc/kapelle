@@ -4195,9 +4195,11 @@ daemon, each under their own name.
   come later. HTTPS stays outside the daemon: a proxy does it better. Plain HTTP on the
   network is never an option: the key would cross the wire as clear text.
 - **D7. `/term` stays on the person's own machine.** A shell on the server, through the
-  daemon, needs its own design. The verbs that read a repository or a checkout on disk
-  (`kapelle merge`, `kapelle workspace`, `kapelle room …`) stay on the daemon's machine
-  too: they do not work from a remote client.
+  daemon, needs its own design. The other way round, `kapelle merge` and
+  `kapelle workspace` read the repository on disk, so they run only on the daemon's
+  machine. `kapelle room …` is HTTP only; from a remote client it needs `--room`,
+  because without it the sender is read from the local checkout (`cli.ts`,
+  `roomAndSender`).
 - **D8. Who it is for.** The operator and a few teammates the operator trusts. People
   who must not see each other's work need a sandbox, or one system user per person.
   That is out of scope.
