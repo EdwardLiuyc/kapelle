@@ -104,14 +104,16 @@ listed path and its entries are resolved again when each checkout is made,
 because either can be swapped for an outside symlink after the config was
 validated.
 
-The links name paths, not real targets. The checks above run when a mirror
-is planned and when it is made, not after. A path in the main checkout that
-is later swapped for an outside symlink takes the checkout's link out with
-it. The client's own file requests cannot follow it: the path guard compares
-realpaths against the checkout, so a write through a mirror link is always
-refused, and a read is refused unless `allowReadOutsideRoot` is on. Only a
-harness's own shell can follow it, and that shell is outside the policy
-(#447).
+A mirror link names a path, not a real target (#447). If that path in the
+main checkout is later swapped for a symlink to an outside folder, the
+checkout's link then points outside too. The path guard covers only the
+client's own file requests (`fs/*`). Every mirror link resolves into the main
+checkout, outside the agent's own checkout, so the guard refuses a write
+through any mirror link, swapped or not, in every mode. It refuses a read in
+`safe` mode, and in the other modes unless `allowReadOutsideRoot` is on. A
+harness that reads or writes through its own process, with its shell or its
+own file tools, is outside the guard; most harnesses send no `fs/*` at all
+(`docs/FINDINGS.md` §M0-1, §M9-1 re-measure).
 
 ## Environment — `KAPELLE_*`
 
