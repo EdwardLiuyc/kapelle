@@ -97,21 +97,25 @@ const authRequired = (err: unknown) =>
   err instanceof RpcError && err.code === AUTH_REQUIRED;
 
 /** The next step for an agent that failed to start (M10-2, #462): its login
- *  command when it is logged out, else where its stderr went. When neither
- *  applies, the caller may pass a no-log fallback. A failed spawn has no stderr
- *  to ask for, so it never gets that fallback. A `--cmd` agent has no `setup`,
- *  so no login command of its own. */
+ *  command when it is logged out, else where its stderr went. With no log,
+ *  `askVerbose` asks for `--verbose`, which a caller sets only when it is off
+ *  and can be turned on. "In the foreground", because a detached run ignores
+ *  the flag. A failed spawn has no stderr to ask for, so it never gets that
+ *  line. A `--cmd` agent has no `setup`, so no login command of its own. */
 export function startHelp(
   err: unknown,
   setup: SetupSpec | undefined,
   log: string | null,
-  noLog?: string,
+  askVerbose = false,
 ): string | undefined {
   if (authRequired(err)) {
     return `log in first: ${setup?.login ?? "with the agent's own login command"}`;
   }
   if (log) return `the agent's stderr is in ${log}`;
-  return err instanceof SpawnError ? undefined : noLog;
+  if (askVerbose && !(err instanceof SpawnError)) {
+    return "run it again in the foreground with --verbose to see its stderr";
+  }
+  return undefined;
 }
 
 /** The model list and the current model, from `session/new`'s options. A

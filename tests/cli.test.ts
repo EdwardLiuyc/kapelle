@@ -884,7 +884,7 @@ test("with no --agent and no --cmd, one prompt starts pi", async (t) => {
   assert.match(r.stderr, /failed to spawn "pi-acp"/);
   assert.doesNotMatch(
     r.stderr,
-    /run again with --verbose/,
+    /with --verbose/,
     "a spawn failure has no stderr for --verbose to show",
   );
 });
@@ -945,7 +945,7 @@ test("an agent that exits at start names --verbose, and is named for its runtime
   assert.equal(r.code, 1);
   assert.match(
     r.stderr,
-    /error: agent "node" exited with code 3\nrun again with --verbose to see its stderr$/m,
+    /error: agent "node" exited with code 3\nrun it again in the foreground with --verbose to see its stderr$/m,
   );
 });
 
@@ -976,7 +976,7 @@ test("a missing --cwd is not created by the stderr log directory", async (t) => 
   );
   // A spawn failure has no stderr for --verbose to show; the error already
   // names the spawn.
-  assert.doesNotMatch(r.stderr, /run again with --verbose/);
+  assert.doesNotMatch(r.stderr, /with --verbose/);
   await assert.rejects(readdir(missing), /ENOENT/);
 });
 
@@ -994,7 +994,10 @@ test("a run with no stderr log tells an exited agent to use --verbose", async (t
   const r = await runCli(t, ["run", "--file", file, "--cwd", cwd, "--quiet"]);
 
   assert.equal(r.code, 1);
-  assert.match(r.stderr, /^run again with --verbose to see its stderr$/m);
+  assert.match(
+    r.stderr,
+    /^run it again in the foreground with --verbose to see its stderr$/m,
+  );
   assert.doesNotMatch(r.stderr, /the agent's stderr is in/);
 });
 

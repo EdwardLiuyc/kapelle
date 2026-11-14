@@ -565,12 +565,7 @@ if (chatVerb) {
     // stderr log, so the fallback is `--verbose`; a failed spawn has no
     // stderr for that flag to show.
     if (!agent.sessionId) {
-      const help = startHelp(
-        err,
-        spec.setup,
-        null,
-        verbose ? undefined : "run again with --verbose to see its stderr",
-      );
+      const help = startHelp(err, spec.setup, null, !verbose);
       if (help) console.error(help);
     }
     process.exitCode = 1;

@@ -1139,12 +1139,7 @@ async function runTask(task: Task, ctx: TaskContext): Promise<TaskOutcome> {
     // detached run and `attach` show it too. A failed spawn has no stderr for
     // the no-log fallback to name.
     if (sessionId === undefined && err instanceof Error) {
-      const help = startHelp(
-        err,
-        spec.setup,
-        agent.stderrLog,
-        ctx.verbose ? undefined : "run again with --verbose to see its stderr",
-      );
+      const help = startHelp(err, spec.setup, agent.stderrLog, !ctx.verbose);
       if (help) err.message += `\n${help}`;
     }
     throw err;
