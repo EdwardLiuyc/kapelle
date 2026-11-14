@@ -768,10 +768,16 @@ test("a task whose harness cannot start fails alone, and fails the run", async (
 
   assert.equal(r.code, 1, "one failed task fails the run");
   assert.match(r.stdout, /▸ good \(mock-agent\) done/);
-  // The label comes from `resolveAgent`'s `--cmd` parsing, which reads
-  // "node <first arg>" — a quirk of that function, not of this run.
-  assert.match(r.stdout, /▸ doomed \(.*\) failed/);
+  // A flag is no script, so the label is the runtime (#462).
+  assert.match(r.stdout, /▸ doomed \(node\) failed/);
   assert.match(r.stdout, /error: agent "doomed" exited/);
+  // M10-2: the error names the task's own log.
+  const [runId] = await readdir(join(stateDirFor(cwd), "runs"));
+  const log = join(stateDirFor(cwd), "runs", runId, "doomed.stderr.log");
+  assert.ok(
+    r.stdout.includes(`the agent's stderr is in ${log}`),
+    "the log path follows the error",
+  );
   // The doomed harness died before it ever sent a prompt, so only the good
   // task counts as a turn.
   assert.match(r.stdout, /failed — 2 tasks, 1 turn/);
@@ -846,6 +852,46 @@ test("with no --agent and no --cmd, one prompt starts pi", async (t) => {
   }).done;
 
   assert.match(r.stderr, /failed to spawn "pi-acp"/);
+});
+
+test("a logged-out agent's start names its login step", async (t) => {
+  // M10-2: a fake pi-acp, so the hint is pi's own from the registry.
+  const bin = await tempDir(t);
+  await writeFile(
+    join(bin, "pi-acp"),
+    `#!/bin/sh\nexec "${process.execPath}" "${MOCK_AGENT}" --scenario auth-required\n`,
+    { mode: 0o755 },
+  );
+  const cwd = await tempDir(t);
+  const r = await spawnCli(
+    t,
+    ["hi", "--cwd", cwd, "--mode", "auto"],
+    "cli.ts",
+    {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    },
+  ).done;
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^log in first: pi, then \/login$/m);
+});
+
+test("an agent that exits at start names --verbose, and is named for its runtime", async (t) => {
+  // M10-2: the one-shot path keeps no stderr log. #462: not named "-e".
+  const cwd = await tempDir(t);
+  const r = await runCli(t, [
+    "hi",
+    "--cmd",
+    "node -e process.exit(3)",
+    "--cwd",
+    cwd,
+    "--mode",
+    "auto",
+  ]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /error: agent "node" exited with code 3/);
+  assert.match(r.stderr, /^run again with --verbose to see its stderr$/m);
 });
 
 test("a missing --cwd is not created by the stderr log directory", async (t) => {

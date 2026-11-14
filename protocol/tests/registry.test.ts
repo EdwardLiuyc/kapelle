@@ -142,6 +142,11 @@ test("a --cmd spec reads past the runtime for its label", () => {
   assert.deepEqual(spec.launch.args, ["mock-agent.mjs"]);
 });
 
+test("a --cmd spec whose runtime takes a flag first is named for the runtime", () => {
+  // #462: "node -e …" was named "-e".
+  assert.equal(resolveAgent("", "node -e process.exit(3)").name, "node");
+});
+
 test("a padded --cmd resolves the same as an unpadded one", () => {
   // A shell strips this; a cmd read out of a JSON run file does not, and the
   // leading empty split element used to become the spawned command.

@@ -360,9 +360,10 @@ export function resolveAgent(id: string, customCmd?: string): ResolvedAgent {
   const trimmed = customCmd?.trim();
   if (trimmed) {
     const [command, ...args] = trimmed.split(/\s+/);
-    // "node mock-agent.mjs" should read as "mock-agent", not "node".
+    // "node mock-agent.mjs" should read as "mock-agent", not "node". A flag
+    // is no script: "node -e …" reads as "node", not "-e" (#462).
     const label =
-      RUNTIMES.has(command) && args[0]
+      RUNTIMES.has(command) && args[0] && !args[0].startsWith("-")
         ? (args[0].split("/").pop() ?? args[0]).replace(/\.(mjs|js|ts|py)$/, "")
         : command;
     // No measured half: a custom command is an unverified harness by

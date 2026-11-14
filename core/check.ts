@@ -96,6 +96,21 @@ const AUTH_REQUIRED = -32000;
 const authRequired = (err: unknown) =>
   err instanceof RpcError && err.code === AUTH_REQUIRED;
 
+/** The next step for an agent that failed to start (M10-2, #462): its login
+ *  command when it is logged out, else where its stderr went. Nothing when
+ *  there is no log: the caller knows its own fallback. A `--cmd` agent has
+ *  no `setup`, so no login command of its own. */
+export function startHelp(
+  err: unknown,
+  setup: SetupSpec | undefined,
+  log: string | null,
+): string | undefined {
+  if (authRequired(err)) {
+    return `log in first: ${setup?.login ?? "with the agent's own login command"}`;
+  }
+  return log ? `the agent's stderr is in ${log}` : undefined;
+}
+
 /** The model list and the current model, from `session/new`'s options. A
  *  grouped list is made flat. Nothing when there is no model option. A room
  *  reads a participant's live list with it too (M9-6). */
