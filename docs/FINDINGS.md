@@ -1753,7 +1753,12 @@ load, or a logged-out start?
 listed model: set a level that is not the current one, set the model, read the level
 back. Logged out is the empty `HOME` of §Models and login. `thought-level-pair.mjs` then
 set chosen level and model pairs, to check the cases the loop left unclear. All six ran
-at the same time.
+at the same time. `thought-level-grouped.mjs` read the list's shape (flat or grouped)
+from `session/new` in a second run. A model's "own list" below is the list in the reply to a model change,
+less the level carried over from the model before.
+
+**Versions.** Five columns match their registry pin (`measuredOn`). kimi is newer: 2.4.1
+here, against a pin of 2.3.0. The kimi column was not measured on 2.3.0.
 
 | | opencode 2.0.18 | pi-acp 0.0.34 | claude-agent-acp 0.89.1 | copilot 1.0.91 | codex-acp 2.2.2 | kimi 2.4.1 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -1763,7 +1768,8 @@ at the same time.
 | set each listed level | works | works | works | works | works | works |
 | set a bad value | `-32602` | **accepted; the level became `off`** | `-32603` `Internal error` | **accepted; the level became `medium`** | `-32602` | `-32602` |
 | `config_option_update` after a set | no | yes, and `current_mode_update` | no | yes | no | yes |
-| level lists over the models | 1 for 2 models | 31 for 395 models; 68 models offer only `off` | 2 for 12 models; 1 model has no option | 5 for 14 models; 2 models have no option. The model option lists its 16 models 33 times | 1 for 2 models | differs per model |
+| level lists over the models | 1 for 2 models | 31 for 395 models; 68 models offer only `off` | 2 for 12 models; `claude-haiku-4-5-20251001` has no option | 5 for 14 models; `auto` and `claude-haiku-4.5` have no option. The model option lists its 16 models 33 times | 1 for 2 models | differs per model |
+| list shape at start | flat | flat | flat | flat | flat | flat |
 | a model change, level allowed | **back to `default`** | kept | kept | kept | kept | kept |
 | a model change, level not allowed | — | moves to another level, not always the nearest | `default` | `medium` | — | **kept, and added to the new list** |
 | after `session/load` | kept | not measured | not measured | not measured | not measured | kept |
@@ -1773,6 +1779,14 @@ Notes:
 
 - **pi's ACP modes and its level are one setting.** A level set sends
   `current_mode_update` with the same id (see §pi-acp measured).
+- **pi's rows do not contradict §pi-acp measured.** That section saw six ids on 0.0.33;
+  here the start model (`deepseek/deepseek-flash`) offers four, and pi's list is per
+  model. That section sent a bad id with `session/set_mode`, which refused it with
+  `-32602`; here `session/set_config_option` took it.
+- **An option absent from a reply means the model has none.** In every reply to a model
+  change, the level option was absent only on the models named in the table. On
+  copilot, a set on such a model is refused. claude's reply also drops `fast` on some
+  models. The reply to a level set always held the option.
 - **claude's `default` is not a level of its own on `opus`.** Set `default`, then the
   model `opus` or `default`, and the level reads `high`. On `sonnet` and `haiku` it stays
   `default`.
@@ -1783,9 +1797,10 @@ Notes:
   In one pair run it also refused `xhigh` on its start model. That run started on
   `claude-sonnet-5.5`, not the `claude-sonnet-5` of the first run. The cause was not
   checked.
-- **kimi lists a level the model does not offer** after a model change: `on` `low` for
-  `kimi-for-coding-highspeed`, whose own list is `on` `max`. A set to a level outside the
-  model's own list is then refused with `-32602`.
+- **kimi lists a level the model does not offer** after a model change. For
+  `kimi-for-coding-highspeed`, the reply listed `on` `max` after `max`, and `on` `low`
+  after `low`: its own list is `on`. A set to a level outside the model's own list is
+  then refused with `-32602`.
 - codex's older `models` object joins each model with an effort (`deepseek-flash[high]`).
   Its `configOptions` give the same choice as two options.
 
@@ -1794,8 +1809,12 @@ Notes:
 - A client must send only a level from the option's current list. pi and copilot take any
   other value and change the level to one nobody chose.
 - The list belongs to the model. Read it again from the reply to each model change, and
-  do not keep the old list.
+  do not keep the old list. A reply with no level option means the new model has none.
+  This differs from the model list, which a client keeps from `session/new` (M9-6).
 - A level may not survive a model change, so read it from the reply rather than assume it.
+  opencode drops it on every change.
+- On pi, a level set is also a mode change on the wire. pi has no `modeMap` on purpose
+  (§pi-acp measured), so a client must not read it as a safety mode.
 - The load was measured only where it needs no prompt. pi, claude, copilot and codex need
   a prompt before a load (§Models and login). A room that sends the level again after
   every load, as it does the model (M9-5), does not depend on this.
@@ -1803,6 +1822,10 @@ Notes:
 **Not measured:** whether a level changes what the agent does. kapelle only passes the
 level on, and a level is not a safety control. The model was trusted the same way, by the
 reply to `session/set_config_option` (§All three name the model they ran).
+
+**Coverage.** One machine, one run each, on 2026-11-15. The model lists move: copilot
+listed 39 models on 2026-10-15 and 16 here, and pi went from 19 to 395. copilot started
+on a different model in the pair run. A later run may see other lists.
 
 ## What this note does not cover
 
