@@ -131,7 +131,7 @@ and the person's shell (`chat/tui/term.ts`).
 
 | Path | What it is |
 | --- | --- |
-| `protocol/agent.ts` | `AcpAgent`: one harness subprocess, JSON-RPC over stdio, the path guard. |
+| `protocol/agent.ts` | `AcpAgent`: one harness subprocess, JSON-RPC over stdio. |
 | `protocol/registry.ts` | The whole adapter layer: one entry per harness, `launch` plus `measured`. |
 | `protocol/types.ts` | Hand-written wire types, and the `_client_*` synthetic events. |
 | `core/policy.ts` | `safe` / `ask` / `auto`, mode negotiation, `resolvePolicy`. |
@@ -200,8 +200,10 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   the registry's pin are what contain it, so never widen either without the person.
 - **Never let a mode turn off the path guard.** See the top of `protocol/agent.ts`.
 - **Never move the `toolCallId` map out of `AcpAgent`.** See the top of `protocol/agent.ts`.
-- **Never let an approval cover more than one write of the bytes the person saw, and
-  never fall back to `options[0]`.** See the top of `protocol/agent.ts`.
+- **Never let an approval cover more than one write of the bytes the person saw.** See
+  the top of `protocol/agent.ts`.
+- **Never fall back to `options[0]` when `pickOption` finds no match**, on any permission
+  request. See the top of `protocol/agent.ts`.
 - **Never send `modeMap.auto`, and send the mode again after a `session/load`.** See
   `harnessModeId` in `core/policy.ts`, and the top of `core/room.ts` for when a room
   sends it.
