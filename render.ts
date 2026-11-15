@@ -5,7 +5,7 @@
  * no protocol decision, which is why it sits outside `protocol/` and why the
  * dependency arrow only ever points at it.
  *
- * **The switch deliberately has no `default`** (AGENTS.md). A variant nobody
+ * **The switch deliberately has no `default`.** A variant nobody
  * renders is dropped in silence rather than drawn wrong — M0-1 observed two
  * that arrive today and have no branch here: `available_commands_update` from
  * all three harnesses, and `config_option_update` from copilot. `assertNever`

@@ -72,10 +72,11 @@ fallback: `chat/tui/question.ts` reads pi-tui's `dist/keys.js`, a file outside i
 exports. If a new pi-tui moves it, `chat.ts` fails at start, so check it at each bump.
 `chat/tui.ts` also replaces the root layout's `handleMouse` with an untaken-event hook;
 a bump must keep routing events through child parts first, then the root.
-**Amended 2026-10-13 (M4-13):** one subprocess is allowed, the shell the person starts
-with `/term` and types into. The screen package may send it bytes; it still never
-reaches a harness, the daemon, the policy or the path guard. No native code: a native
-crash cannot be caught.
+**Amended 2026-10-13 (M4-13):** the screen package may drive one subprocess, the shell
+the person starts with `/term` and types into. It may send it bytes; it still never
+reaches a harness, the daemon, the policy or the path guard. This limits the package,
+not the chat: the chat's own subprocesses are listed under "Where things are". No native
+code: a native crash cannot be caught.
 
 **This code is the client. The coding harness is the agent.** We spawn the harness as a
 subprocess, own the workspace, serve its filesystem requests and decide its permissions.
@@ -124,11 +125,14 @@ Dependencies point one way: `cli.ts` and `daemon.ts` → `core/` → `protocol/`
 `AcpAgent`'s default policy refuses everything instead of being `safePolicy`.
 `client/` imports only `protocol/types.ts`, and nothing in `core/` or `protocol/` imports
 `client/`. `chat.ts` → `chat/` → `client/`. `render.ts` → `core/markdown.ts` is the one
-arrow that points back.
+arrow that points back. `chat.ts` and `chat/` talk HTTP only. They import only `client/`,
+pi-tui, `core/runtime.ts` and each other; `chat/tui/term.ts` also imports
+`@xterm/headless`. Their subprocesses are the clipboard tool (`chat/tui/clipboard.ts`)
+and the person's shell (`chat/tui/term.ts`).
 
 | Path | What it is |
 | --- | --- |
-| `protocol/agent.ts` | `AcpAgent`: one harness subprocess, JSON-RPC over stdio, the path guard. |
+| `protocol/agent.ts` | `AcpAgent`: one harness subprocess, JSON-RPC over stdio. |
 | `protocol/registry.ts` | The whole adapter layer: one entry per harness, `launch` plus `measured`. |
 | `protocol/types.ts` | Hand-written wire types, and the `_client_*` synthetic events. |
 | `core/policy.ts` | `safe` / `ask` / `auto`, mode negotiation, `resolvePolicy`. |
@@ -141,38 +145,38 @@ arrow that points back.
 | `core/watchdog.ts` | Stall detection: idle, repeat, TTL. |
 | `core/notify.ts` | Bell and desktop notification for the two attention events. |
 | `core/permissions.ts` | The daemon's queue of pending `ask` decisions. |
-| `core/diff.ts` | `git diff` text for a person (M4-6): a question's edit and an agent's checkout, and the shared ancestry check used by worktree fast-forward and rebase detection. |
+| `core/diff.ts` | `git diff` text for a person (M4-6), and the shared ancestry check. |
 | `core/eventlog.ts` | `events.jsonl` and its `events.idx` cache: write, replay and follow. |
 | `core/sweep.ts` | The daemon's boot sweep. |
 | `core/config.ts` | The config files and `KAPELLE_*` variables. |
 | `core/runtime.ts` | The user-level directories, `stateDir()` and `stateDirFor(root)`. |
-| `core/harnesses.ts` | Which agents are installed (M9-3): the agent's program, then its ACP program, on the daemon's `PATH`, each version by `--version` (pi-acp's from its `package.json`), and `harnesses.json`. The install (M9-3b): the pinned npm command, and `npm` run with no shell. |
-| `core/check.ts` | The login check and the saved models (M9-4): a check session per ready agent, with no prompt, each agent's login signal, `checks.json`, and the update from a real room session. |
+| `core/harnesses.ts` | Which agents are installed, in `harnesses.json` (M9-3), and their npm install (M9-3b). |
+| `core/check.ts` | The login check and the saved models, in `checks.json` (M9-4). |
 | `core/room.ts` | A chat room: a roster of participants, each one harness kept alive across turns. |
 | `core/ids.ts`, `core/markdown.ts` | Ids and branch names; the only file that knows `marked`. |
-| `core/text.ts` | A harness's text made safe for a terminal (#229): `render.ts`, `cli.ts` and the `ask` prompt use it. `client/room.ts` has a copy, and `tests/text.test.ts` checks that they agree. |
+| `core/text.ts` | A harness's text made safe for a terminal (#229). |
 | `render.ts` | Terminal drawing of `session/update` events. |
 | `cli.ts` | The CLI and the `kapelle` bin. |
 | `daemon.ts` | The HTTP daemon: one for all of the operator's repositories. |
 | `daemon/` | The parts of `daemon.ts` that tests can import (`daemon.ts` starts a daemon when imported). |
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
 | `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
-| `client/lifecycle.ts` | The daemon's life from a client (M9-2): start it detached with its log when none answers, wait for `daemon.json`, and stop it on SIGTERM. Its subprocesses are `node daemon.ts` (detached) and `ps` for the start-time identity. Bare `kapelle` uses it. |
+| `client/lifecycle.ts` | The daemon's life from a client (M9-2): start it when none answers, and stop it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
-| `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. Both `chat/` screens draw from it. |
-| `client/roomset.ts` | The rooms a screen follows (M4-11): one stream and one reducer per room, the poll that adds rooms made elsewhere, and when the screen must end. `readRoom` and `reconcile` too. |
-| `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). Both `chat/` screens send through it. |
+| `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. |
+| `client/roomset.ts` | The rooms a screen follows (M4-11): one stream and one reducer per room. |
+| `client/mention.ts` | The composer's target: `@name` or the orchestrator (R43). |
 | `client/questions.ts` | The queue of open questions over every room (M4-9): which one opens next, and its `n of m`. No I/O. |
-| `client/folder.ts` | Tab completion for a folder path, folders only (M4-5), and a typed folder as a full path, with no throw when the current folder was removed. |
-| `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. Both screens and the pop-up forms use it. |
-| `client/diff.ts` | A diff text read for a screen (M4-6): where each file starts, the question box's `±` line, and the changed-files block's per-file letters and counts (M7-3). |
-| `client/loop.ts` | Loop recipes (M8-5): the two folders a recipe is looked for in, the list, and the orchestrator's first message. `kapelle loop` and typed `/loop` build a start through `client/command.ts`; the loop form and `kapelle loop list` import its list helpers directly. |
-| `client/setup.ts` | The setup list (M9-3): the agents the daemon found, as lines, and when the chat opens it. Both screens and `kapelle setup` print it. The install request and its streamed lines (M9-3b). |
-| `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. Both `chat/` screens read a line through it. |
+| `client/folder.ts` | Tab completion for a folder path (M4-5). |
+| `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. |
+| `client/diff.ts` | A diff text read for a screen (M4-6). |
+| `client/loop.ts` | Loop recipes (M8-5): where one is found, the list, and the orchestrator's first message. The loop form and `kapelle loop list` import its list helpers directly. |
+| `client/setup.ts` | The setup list (M9-3): the agents the daemon found, as lines, when the chat opens it, and the install request (M9-3b). |
+| `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. |
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
-| `chat/` | The chat screens (M4-7): `tui.ts`, a pi-tui screen over every room on a TTY; `piped.ts`, one room as plain lines; `common.ts`, what both use. With `chat.ts`, they talk HTTP only, and import only `client/`, pi-tui, `core/runtime.ts` and each other; `chat/tui/term.ts` also imports `@xterm/headless`. Their subprocesses are the clipboard tool (`chat/tui/clipboard.ts`) and the person's shell (`chat/tui/term.ts`). |
-| `chat/view.ts` | What the TUI shows (M4-10): the rows and the row keys, the `@name` pre-fill, where a thread goes when its participant left or its room was dismissed, and what is seen; each agent's colour, the activity rows and the status line's fit (M7-1); which tool calls fold into one line, and when (M7-2); where a key moves the question box's cursor (M7-4); which messages the history lists and how a row reads (#362); the history rail's active mark, window, hit rows and two-line preview (M7-7). Pure. |
-| `chat/tui/` | The TUI's parts (M4-12): `panel.ts`, the pop-up, its menu and forms; `question.ts`, the question box and its answer; `sidebar.ts`, the sidebar, the strip, the marks and the changed-files block (M7-3); `transcript.ts`, drawing the transcript and its virtual height model; `rail.ts`, the history rail and its hover card (M7-7); `pane.ts`, the side view beside the timeline, with a diff (M4-6) or the history list (M4-4); `banner.ts`, the activity rows under the timeline: a participant that waits (M4-4), or a busy one in the open room (M7-1); `backdrop.ts`, the screen behind an open pop-up: dim, colourless, every background one gray (#407); `clipboard.ts`, a selection copied with the system's own tool, OSC 52 last; `term.ts`, the person's shell (M4-13): `script(1)` for the pty and `@xterm/headless` for its screen. `chat/tui.ts` puts them on the screen and keeps the keys, the bell, the send flow and the end. |
+| `chat/` | The chat screens (M4-7): `tui.ts` on a TTY, `piped.ts` on a pipe, `common.ts` for both. |
+| `chat/view.ts` | What the TUI shows (M4-10). Pure. |
+| `chat/tui/` | The TUI's parts (M4-12), one file each. `chat/tui.ts` puts them on the screen and keeps the keys, the bell, the send flow and the end. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 
 Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`
@@ -195,36 +199,25 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
   logs in (D6, as amended). npm runs the package's own install scripts as the daemon's
   user: the one place kapelle runs third-party code outside a harness. The check box and
   the registry's pin are what contain it, so never widen either without the person.
-- **Keep the path guard separate from the policy.** `#guardPath` compares realpaths and
-  applies in every mode, `auto` included.
-- **Keep the `toolCallId → {title, kind, rawInput}` map in `AcpAgent`.** A permission
-  request can carry only a `toolCallId`. Without the map, every decision goes blind.
-  A finished call, or one outside a turn, keeps only its title, kind and status (#163).
-  Do not bring back the whole-object merge: a room would keep every call's input.
-- **An approval covers one write per file it named, of the bytes the person saw.**
-  The rule is at `#writeDecisions` (#310). A denial is sticky. `pickOption` returns `null`
-  rather than guess; never fall back to `options[0]` (#13).
-- **We send a harness two mode ids at most.** `harnessModeId` picks
-  `measured.modeMap.safe` for `safe` and `measured.modeMap.ask` for `ask` and `auto`.
-  **Never send `modeMap.auto`**: claude's is `bypassPermissions`, where it stops asking
-  us. A room sends one at session start and before the first turn after a change; a run
-  sends only `safe`'s (#193). A harness does not keep its mode across `session/load`
-  (§Mode after load), so send it again after a load.
+- **Never let a mode turn off the path guard.** See the top of `protocol/agent.ts`.
+- **Never move the `toolCallId` map out of `AcpAgent`.** See the top of `protocol/agent.ts`.
+- **Never let an approval cover more than one write of the bytes the person saw.** See
+  the top of `protocol/agent.ts`.
+- **Never fall back to `options[0]` when `pickOption` finds no match**, on any permission
+  request. See the top of `protocol/agent.ts`.
+- **Never send `modeMap.auto`, and send the mode again after a `session/load`.** See
+  `harnessModeId` in `core/policy.ts`, and the top of `core/room.ts` for when a room
+  sends it.
 - **`--quiet` never hides the containment notice** or the "not negotiated" line (#13).
-- **Status comes from our own record** (did we cancel, did the watchdog fire), not from
-  `stopReason`. copilot answers `end_turn` for a turn it cancelled (§M0-4).
-- **Never add up `usage` across tasks or harnesses.** copilot counts cumulatively;
-  the others count per turn.
+- **Never take a status from `stopReason`.** See the top of `core/run.ts`.
+- **Never add up `usage` across tasks or harnesses.** See the top of `core/run.ts`.
 - **No second prompt during a turn, and no re-ask after it** (§M0-4).
-- **No `HStack` below another in the chat screen, and no `auto` size in one.** pi-tui
-  sizes an `HStack`'s parts by drawing each in full. A stack there that holds another
-  `HStack` joins every line of the whole transcript on every frame, so the screen lags
-  more as a room grows: 145 ms a frame at 1,160 rows, against 6 ms flat (#242). Keep
-  the timeline and the side view as direct parts of `row` in `screenLayout`
-  (`chat/tui.ts`). `chat/tests/layout.test.ts` checks it.
-- **A new synthetic event starts with `_client_`.** The `render.ts` switch has no
-  `default`, so an unknown event is dropped rather than drawn wrong.
-- **A missing `measured` half means "not verified".** Do not add a second flag for it.
+- **No `HStack` below another in the chat screen, and no `auto` size in one.** See
+  `screenLayout` in `chat/tui.ts`.
+- **A new synthetic event starts with `_client_`.** See the top of `render.ts` for why an
+  unknown event is dropped.
+- **A missing `measured` half means "not verified". Never add a second flag for it.**
+  See the top of `protocol/registry.ts`.
 - **Do not rename the package to `agent-team`.** That npm name and `bin` belong to an
   unrelated live package.
 
