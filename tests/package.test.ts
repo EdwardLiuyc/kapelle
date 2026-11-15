@@ -207,6 +207,28 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   );
   assert.ok("text" in starter, JSON.stringify(starter));
   assert.match(starter.text, /\n\[the recipe: starter\]\n# starter\n/);
+  // And `kapelle loop list` names it from the extracted package.
+  const listed = spawnSync(
+    process.execPath,
+    [cli, "loop", "list", "--cwd", loopRoot],
+    {
+      cwd: packageDir,
+      env: { ...env, XDG_CONFIG_HOME: join(loopRoot, "config") },
+      encoding: "utf8",
+    },
+  );
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.ok(
+    listed.stdout
+      .trim()
+      .split("\n")
+      .some(
+        (line) =>
+          line.startsWith("starter  ") &&
+          line.endsWith(join("dist", "assets", "loops", "starter.md")),
+      ),
+    listed.stdout,
+  );
 
   // A valid package.json without a version reaches the refusal, rather than
   // printing the parent package's version or exiting 0.
