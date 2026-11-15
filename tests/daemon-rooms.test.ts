@@ -73,6 +73,8 @@ import {
   withAgent,
 } from "../integration/helpers.ts";
 
+const runGit = promisify(execFile);
+
 // --- chat rooms (chat MVP) ------------------------------------------------------
 
 /** Every event of a room, read from its SSE stream, or of one participant
@@ -2872,10 +2874,10 @@ test("the delete preview caps a long branch and reports its total", async (t) =>
   );
   assert.equal(open.status, 201, open.body.error?.message);
   const p = only(open.body);
-  // Async so the event loop can service the daemon's idle-socket close (#495).
-  const git = promisify(execFile);
+  // Await each commit so the client can observe the FIN and evict the dead
+  // keep-alive socket before the next fetch (#495).
   for (let i = 0; i < 201; i++) {
-    await git(
+    await runGit(
       "git",
       ["commit", "--allow-empty", "-qm", `preview commit ${i}`],
       { cwd: p.worktree, encoding: "utf8" },
