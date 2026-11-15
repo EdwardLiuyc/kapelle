@@ -1058,7 +1058,9 @@ Other wire notes that matter for downstream consumers:
 
 - `session/new` returns `modes.currentModeId: "medium"` and `configOptions` for `model` and
   `thought_level`. `session/set_mode` accepts the six thinking ids and rejects a bogus id
-  with `-32602`, confirming the ids in `modes` are the only ids.
+  with `-32602`, confirming the ids in `modes` are the only ids. §Thinking level
+  (2026-11-15, pi-acp 0.0.34) found the list differs per model, four ids on its start
+  model, and a bad value taken by `session/set_config_option`.
 - Shell `tool_call`s carry `content: [{ type: "terminal", terminalId }]` and
   `_meta.terminal_info`, even though the client never advertises `terminal/*`. Output and
   exit status arrive on `tool_call_update` as `_meta.terminal_output` and
@@ -1768,7 +1770,7 @@ here, against a pin of 2.3.0. The kimi column was not measured on 2.3.0.
 | set each listed level | works | works | works | works | works | works |
 | set a bad value | `-32602` | **accepted; the level became `off`** | `-32603` `Internal error` | **accepted; the level became `medium`** | `-32602` | `-32602` |
 | `config_option_update` after a set | no | yes, and `current_mode_update` | no | yes | no | yes |
-| level lists over the models | 1 for 2 models | 31 for 395 models; 68 models offer only `off` | 2 for 12 models; `claude-haiku-4-5-20251001` has no option | 5 for 14 models; `auto` and `claude-haiku-4.5` have no option. The model option lists its 16 models 33 times | 1 for 2 models | differs per model |
+| level lists over the models | 1 for 2 models | 31 for 395 models; 68 models offer only `off` | 2 for 12 models; `claude-haiku-4-5-20251001` has no option | 5 for 14 models; `auto` and `claude-haiku-4.5` have no option. The model option lists its 16 models 33 times | 1 for 2 models | differs over 8 models; `kimi-for-coding-highspeed` offers only `on`. Not counted: each reply adds the carried level, so a list's own levels are not always known |
 | list shape at start | flat | flat | flat | flat | flat | flat |
 | a model change, level allowed | **back to `default`** | kept | kept | kept | kept | kept |
 | a model change, level not allowed | — | moves to another level, not always the nearest | `default` | `medium` | — | **kept, and added to the new list** |
@@ -1807,12 +1809,17 @@ Notes:
 **Consequences.**
 
 - A client must send only a level from the option's current list. pi and copilot take any
-  other value and change the level to one nobody chose.
+  other value and change the level to one nobody chose. A listed level can still be
+  refused: copilot refused `xhigh` on its start model once, and kimi refuses a level its
+  own reply listed.
+- Read the level from the reply to the set. `config_option_update` adds nothing: opencode,
+  the agent that drops a level on a model change, sends none. Nothing in kapelle reads it.
 - The list belongs to the model. Read it again from the reply to each model change, and
   do not keep the old list. A reply with no level option means the new model has none.
   This differs from the model list, which a client keeps from `session/new` (M9-6).
 - A level may not survive a model change, so read it from the reply rather than assume it.
-  opencode drops it on every change.
+  opencode drops it on every change, so a client that sets both sends the level after the
+  model.
 - On pi, a level set is also a mode change on the wire. pi has no `modeMap` on purpose
   (§pi-acp measured), so a client must not read it as a safety mode.
 - The load was measured only where it needs no prompt. pi, claude, copilot and codex need
