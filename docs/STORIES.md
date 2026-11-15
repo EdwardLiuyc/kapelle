@@ -4314,12 +4314,12 @@ relative path and no `--cwd` handled as the pickup decided.
 
 **M11-6 · Recipes and the loop's first message come from the daemon · M · needs M11-4**
 `client/loop.ts` reads the recipe folders and `assets/orchestrator.md` from the
-person's own disk. Both recipe folders, the repository's and the person's own, are read
-on the daemon's machine. The daemon builds the orchestrator's whole first message, so a
-client and a daemon of different versions cannot paste different skills. `kapelle
-loop`, typed `/loop`, the loop form and `kapelle loop list` all ask the daemon. The
-header of `client/loop.ts` stops saying it reads the local disk. The contract gets a
-minor version.
+person's own disk. The recipe folders, the repository's, the person's own and the
+package's, are read on the daemon's machine. The daemon builds the orchestrator's whole
+first message, so a client and a daemon of different versions cannot paste different
+skills. `kapelle loop`, typed `/loop`, the loop form and `kapelle loop list` all ask
+the daemon. The header of `client/loop.ts` stops saying it reads the local disk. The
+contract gets a minor version.
 *Done when* tests cover a loop started from a client with no repository on its disk,
 `kapelle loop list` through the daemon, and the first message the same as today's for
 the same recipe.

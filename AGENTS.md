@@ -23,7 +23,7 @@ do not restate it. A restated fact goes stale in one place and stays right in th
 | what three runs of an orchestrator agent showed, the evidence for M8 | `docs/ORCHESTRATOR-SPIKES.md` |
 | how a release is made, and the credential scan's record | `docs/RELEASING.md` |
 | why, what in what order, and the decision register for M4–M6 | `docs/PROJECT-BRIEF.md`, `docs/PROJECT-PLAN.md`, `docs/CONTRACT-PLAN.md` |
-| how a loop, a skill or the orchestrator works | its own file: `.kapelle/loops/<name>.md` or `assets/loops/<name>.md`, `.agent/skills/<name>/SKILL.md`, `assets/orchestrator.md` |
+| how a loop, a skill or the orchestrator works | its own file: `.kapelle/loops/<name>.md`, `$XDG_CONFIG_HOME/kapelle/loops/<name>.md` or `assets/loops/<name>.md`, `.agent/skills/<name>/SKILL.md`, `assets/orchestrator.md` |
 | the workflow, the rules that cross files, and this map | `AGENTS.md` |
 
 When a behaviour changes, its owner changes in the same commit. Not every code change
