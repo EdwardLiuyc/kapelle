@@ -1702,10 +1702,10 @@ async function runLoopCommand(): Promise<number> {
     "       kapelle loop list [--cwd dir]",
     "A recipe is <repo>/.kapelle/loops/<recipe>.md, or else",
     "$XDG_CONFIG_HOME/kapelle/loops/<recipe>.md, or else one kapelle ships,",
-    "such as starter. The orchestrator runs on claude",
-    "unless --agent or --cmd names another harness. With --model, it gets the",
-    "start only when it is confirmed on that model. If not, the room stays with",
-    "no start, and this exits 1.",
+    "such as starter. The orchestrator runs on claude unless --agent or --cmd",
+    "names another harness. With --model, it gets the start only when it is",
+    "confirmed on that model. If not, the room stays with no start, and this",
+    "exits 1.",
   ].join("\n");
   const [, first, ...args] = positional as string[];
   // `list` with a task after it is a recipe named list.

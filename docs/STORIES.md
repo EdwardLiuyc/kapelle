@@ -4322,8 +4322,9 @@ person's own disk. The recipe folders, the repository's, the person's own and th
 package's, are read on the daemon's machine. The daemon builds the orchestrator's whole
 first message, so a client and a daemon of different versions cannot paste different
 skills. `kapelle loop`, typed `/loop`, the loop form and `kapelle loop list` all ask
-the daemon. The header of `client/loop.ts` stops saying it reads the local disk. The
-contract gets a minor version.
+the daemon. The header of `client/loop.ts` stops saying it reads the local disk, and
+the `kapelle loop` usage text and the README's "Your first loop" say that the person's
+own folder is on the daemon's machine. The contract gets a minor version.
 *Done when* tests cover a loop started from a client with no repository on its disk,
 `kapelle loop list` through the daemon, and the first message the same as today's for
 the same recipe.

@@ -1150,6 +1150,7 @@ test("the loop recipe row follows its folder, and a folder with no recipe of its
   pressKey(box, "\r");
 
   assert.equal(ran.length, 1, box.panel?.error);
+  assert.equal(ran[0]?.verb, "loop");
   assert.equal(ran[0]?.verb === "loop" && ran[0].recipe, "starter");
 });
 
@@ -1321,8 +1322,8 @@ test("the loop form keeps recipe, task, note and command values that look like f
     down(box, 1);
     pressKey(box, "\r");
     await until("the literal recipe", () => shownOf(box).includes(recipe));
-    // The package's starter (M10-4) sorts before "–", after "other…".
-    if (recipe === "–") down(box, 1);
+    // Pick it by name: the list also holds the package's recipes (M10-4).
+    type(box, recipe);
     pressKey(box, "\r");
     assert.ok(shownOf(box).includes(recipe), `${recipe} stays selected`);
 

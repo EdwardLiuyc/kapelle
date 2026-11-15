@@ -146,7 +146,7 @@ What you do during the loop:
 
 1. The orchestrator shows its plan. Type `go`.
 2. When it stops with a choice, type your answer.
-3. At the end, read the work with `@dev /diff base`. Merge its branch with git if you want it.
+3. At the end, read the work with `@dev /diff base`. If you want it, merge `dev`'s branch with git. Its name is `kapelle/<roomId>/<participantId>` (see [Rooms](#rooms)), and `git branch --list 'kapelle/*'` lists it.
 
 A loop spends tokens: every agent turn is a real prompt. A room limits how many orders the orchestrator sends its workers (`orchestratorTurnCap` in [`docs/CONFIG.md`](docs/CONFIG.md)). `/cap <n>` raises the limit for one room.
 

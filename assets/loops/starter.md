@@ -11,8 +11,8 @@ and the person decides what to keep. The task is plain words, such as
 | `dev` | yours | `developer`, the main developer | at the start |
 | `rev` | yours | `reviewer` | after `dev` commits, from `dev`'s branch |
 
-**Yours** means the harness you run on. Read it in your own line of
-`kapelle room info`. If it is not an agent id that `kapelle room add` takes, such as a
+**Yours** means the harness you run on. Read it in `kapelle room info`, on the line
+whose role is `orchestrator`. If it is not an agent id that `kapelle room add` takes, such as a
 custom command, stop and ask the person which agent to use.
 
 ## The steps
