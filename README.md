@@ -140,7 +140,7 @@ kapelle loop starter "add a --version flag" --agent pi
 
 The orchestrator runs on the agent you name, and `starter` gives every worker the same one. With no `--agent`, it is `claude`. On a terminal, the chat opens on the new room. In the chat, `/loop starter "add a --version flag" --agent pi` does the same, and `/loop` alone opens a form. There, `/loop` asks to add the repository the first time.
 
-Both `starter` workers run in `auto` mode, each in its own git worktree. So they change files without asking you. Read [Safety](#what-the-modes-do-and-do-not-do) before you give a loop real work.
+Both `starter` workers run in `auto` mode, so they change files without asking you. In a repository with a commit, each gets its own git worktree. A folder with no git commit has nothing to branch from, so they share the folder. Read [Safety](#what-the-modes-do-and-do-not-do) before you give a loop real work.
 
 What you do during the loop:
 

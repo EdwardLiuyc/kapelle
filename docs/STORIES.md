@@ -3872,7 +3872,7 @@ command, model, start. With no recipes, the refusal names the searched recipe fo
 plain text; there are no folder links. Bare `/loop` opens the form, as bare `/new` and
 `/add` do. Writing or editing a recipe and choosing workers' models stay out of scope.
 **Amended 2026-11-15 (M10-4, #464):** the package now ships `starter` in the last recipe
-folder (D10, as amended), so every folder lists at least one recipe. The "no recipes"
+folder (D10, as amended), so every repository lists at least one recipe. The "no recipes"
 state and its refusal stay as a guard, for an install that lost `assets/loops/`; no
 test reaches them now.
 
