@@ -1,3 +1,23 @@
+/**
+ * `AcpAgent`: one harness subprocess, JSON-RPC over stdio, and the path guard.
+ *
+ * Four rules keep each decision honest. They are easy to break:
+ *
+ * - **The path guard is not the policy.** `#guardPath` compares realpaths
+ *   and applies in every mode, `auto` included.
+ * - **The `toolCallId → {title, kind, rawInput}` map stays here.** A
+ *   permission request can carry only a `toolCallId`, so without the map
+ *   every decision goes blind. A finished call, or one outside a turn, keeps
+ *   only its title, kind and status (`settled`, #163). Do not bring back the
+ *   whole-object merge: a room would keep every call's input.
+ * - **An approval covers one write per file it named, of the bytes the
+ *   person saw** (#310). A denial is sticky. The detail is at
+ *   `#writeDecisions`.
+ * - **`pickOption` returns `null` rather than guess.** Never fall back to
+ *   `options[0]` (#13): claude lists `allow_always` first, so a denial
+ *   could become a lasting grant.
+ */
+
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
