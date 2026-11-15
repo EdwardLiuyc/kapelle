@@ -21,6 +21,7 @@ client commit and spike branch — they differ, and by enough to matter:
 | Models and login | 2026-10-15 | none: no client code ran | `spike/m9-models-probe` (`models-probe.mjs`) |
 | Models and login: `session/load` logged out | 2026-10-30 | none: no client code ran | `spike/m9-4b-load-probe` (`load-logged-out-probe.mjs`) |
 | M9-1: Codex, Kimi Code, and the four again | 2026-10-21 | `80cac13` + launch-only `codex` and `kimi` entries | `spike/m9-1-measure` (`turn-probe.mjs`, with `load-probe-simple.mjs` and `models-probe.mjs` from the branches above) |
+| Thinking level | 2026-11-15 | none: no client code ran | `spike/thought-level-probe` (`thought-level-probe.mjs`, `thought-level-pair.mjs`) |
 
 Method throughout: each harness spawned behind a transparent stdio proxy that logged every
 JSON-RPC line in both directions, so "did not happen" below means *absent from the wire*,
@@ -1738,6 +1739,70 @@ run: opencode v2.0.18, a temporary git folder, mode `auto`, 3 shell calls and 1 
 (`{command, cwd}`, or `{path}`), then one last update with only `status: completed`: no
 title, input or location. All 4 calls ended with `completed`, and each call's identity
 was whole before it completed. `failed` was not measured: no call failed.
+
+## Thinking level — measured 2026-11-15 (#487)
+
+**Question.** Can kapelle set how hard an agent thinks? Which levels does each agent
+offer, does the list depend on the model, and does a level survive a model change, a
+load, or a logged-out start?
+
+**Method.** `thought-level-probe.mjs` on `spike/thought-level-probe`, based on
+`models-probe.mjs`. No `session/prompt`, so no tokens. For each agent: `initialize`,
+`session/new` in a new temporary folder, every `configOptions` entry read, then
+`session/set_config_option` to each listed level and to one bad value. Then, for each
+listed model: set a level that is not the current one, set the model, read the level
+back. Logged out is the empty `HOME` of §Models and login. `thought-level-pair.mjs` then
+set chosen level and model pairs, to check the cases the loop left unclear. All six ran
+at the same time.
+
+| | opencode 2.0.18 | pi-acp 0.0.34 | claude-agent-acp 0.89.1 | copilot 1.0.91 | codex-acp 2.2.2 | kimi 2.4.1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| option id, `category: "thought_level"` | `effort` | `thought_level` | `effort` | `reasoning_effort` | `reasoning_effort` | `thinking` |
+| levels at start | `none` `low` `high` `max` `default` | `off` `low` `high` `max` | `default` `low` `medium` `high` `xhigh` `max` | `low` `medium` `high` `xhigh` `max` | `low` `high` `max` | `low` `high` `max` |
+| start level | `default` | `max` | `high` | `medium` | `high` | `high` |
+| set each listed level | works | works | works | works | works | works |
+| set a bad value | `-32602` | **accepted; the level became `off`** | `-32603` `Internal error` | **accepted; the level became `medium`** | `-32602` | `-32602` |
+| `config_option_update` after a set | no | yes, and `current_mode_update` | no | yes | no | yes |
+| level lists over the models | 1 for 2 models | 31 for 395 models; 68 models offer only `off` | 2 for 12 models; 1 model has no option | 5 for 14 models; 2 models have no option. The model option lists its 16 models 33 times | 1 for 2 models | differs per model |
+| a model change, level allowed | **back to `default`** | kept | kept | kept | kept | kept |
+| a model change, level not allowed | — | moves to another level, not always the nearest | `default` | `medium` | — | **kept, and added to the new list** |
+| after `session/load` | kept | not measured | not measured | not measured | not measured | kept |
+| logged out | no option: the free model has none | `session/new` `-32000` | offered | offered | `session/new` `-32000` | `session/new` `-32000` |
+
+Notes:
+
+- **pi's ACP modes and its level are one setting.** A level set sends
+  `current_mode_update` with the same id (see §pi-acp measured).
+- **claude's `default` is not a level of its own on `opus`.** Set `default`, then the
+  model `opus` or `default`, and the level reads `high`. On `sonnet` and `haiku` it stays
+  `default`.
+- **opencode resets the level on every change to a different model**, allowed or not. The
+  same model set again keeps it.
+- **copilot refuses a level on a model with no option** (`auto`, `claude-haiku-4.5`):
+  `-32603` or `-32602`, "This model does not support reasoning_effort configuration".
+  In one pair run it also refused `xhigh` on its start model. That run started on
+  `claude-sonnet-5.5`, not the `claude-sonnet-5` of the first run. The cause was not
+  checked.
+- **kimi lists a level the model does not offer** after a model change: `on` `low` for
+  `kimi-for-coding-highspeed`, whose own list is `on` `max`. A set to a level outside the
+  model's own list is then refused with `-32602`.
+- codex's older `models` object joins each model with an effort (`deepseek-flash[high]`).
+  Its `configOptions` give the same choice as two options.
+
+**Consequences.**
+
+- A client must send only a level from the option's current list. pi and copilot take any
+  other value and change the level to one nobody chose.
+- The list belongs to the model. Read it again from the reply to each model change, and
+  do not keep the old list.
+- A level may not survive a model change, so read it from the reply rather than assume it.
+- The load was measured only where it needs no prompt. pi, claude, copilot and codex need
+  a prompt before a load (§Models and login). A room that sends the level again after
+  every load, as it does the model (M9-5), does not depend on this.
+
+**Not measured:** whether a level changes what the agent does. kapelle only passes the
+level on, and a level is not a safety control. The model was trusted the same way, by the
+reply to `session/set_config_option` (§All three name the model they ran).
 
 ## What this note does not cover
 

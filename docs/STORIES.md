@@ -3897,6 +3897,35 @@ Only a model the harness took is sent again at a revive. `room.json` keeps a cha
 yet sent, so a pause or a restart does not drop it (#398 review). The live list is the
 participant's `models`. No `kapelle room` verb changes a model.
 
+**M9-9 · Pick the thinking level · M · needs M9-6**
+(#487) Added 2026-11-15. All six agents offer a thinking level: a `configOptions` entry
+with `category: "thought_level"` (`FINDINGS.md` §Thinking level). The person picks it as
+they pick the model. `POST /rooms`, `POST /rooms/:id/agents` and
+`PATCH /rooms/:id/agents/:agentId` take an optional `thoughtLevel`. `@name /level` shows
+the running agent's live list, and `@name /level <id>` picks one, in both screens. The
+room sends it with `session/set_config_option`, before the participant's next turn, never
+during a turn, as M9-6 does for the model. The contract gets a minor version.
+Four rules come from the measurement:
+
+- **Send only a level from the participant's current list.** kapelle refuses any other
+  value itself: pi and copilot take a bad value with no error and change the level.
+- **The list belongs to the model.** After a model change, take the level and its list
+  from the reply, and keep neither old one. A level the new model does not allow moves
+  to another level, or is kept by kimi though the model does not offer it.
+- **Send the level again after every load**, as the model and the mode. The load was not
+  measured on four agents, so the answer must not matter.
+- **An agent or a model with no level option** (`claude-haiku-4-5`, copilot's `auto`)
+  never fails a join or a revive. A notice says so, as M9-5 does for the model.
+
+**Gap:** the join form. The saved list from `checks.json` is the list of the start model
+only, so a form cannot show the list of another model before the session starts. Decide
+at pickup: a join takes the level only when no model is picked, or the form shows a text
+field, or the level is picked only during a chat.
+*Done when* tests cover the field on the three routes, `/level` in both screens, a change
+while the agent is busy, a value not in the list refused by kapelle with no request, the
+list and level read again after a model change, the level sent again after a revive, an
+agent with no level option, and the new field in `docs/CLIENT-API.md`.
+
 **M9-7 · kapelle runs after an npm install · M · needs nothing**
 A person installs kapelle with `npm install -g kapelle` and types `kapelle`. The name is
 free on npm today (`npm view kapelle` answers 404, 2026-10-15). This story makes the
@@ -4482,7 +4511,7 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 
 ```text
 M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b ─ M9-5c ─ M9-5d
-M9-2 ─┘        └─ M9-3b        └─ M9-6
+M9-2 ─┘        └─ M9-3b        └─ M9-6 ─ M9-9
 M9-7 ─ M9-8a
 M9-1..M9-7, M9-3b, M9-5b, M9-5c, M9-5d, M9-8a ─ M9-8   (the first publish)
 ```
