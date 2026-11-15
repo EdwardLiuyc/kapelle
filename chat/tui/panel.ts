@@ -1287,6 +1287,8 @@ function panelParts({
             error: "open the recipe row and choose one for this folder",
           };
         }
+        // A guard only: the package ships `starter` (M10-4), so the list and
+        // this refusal are empty only when an install lost `assets/loops/`.
         if (!recipeNames.length) {
           return {
             error: `no recipes: looked in ${loopFolders(cwd).join(" and ")}`,

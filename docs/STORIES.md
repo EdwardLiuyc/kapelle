@@ -3413,6 +3413,9 @@ throwaway skill and two scripts over the room API, and changed nothing in kapell
   `docs/CONFIG.md`), the person's own for every repository. With the
   same name in both, the repository's wins. A **note** in the start command changes one
   run, and the note wins over the recipe; the file does not change.
+  **Amended 2026-11-15 (M10-4, #464):** a third and last folder, the package's own
+  `assets/loops/`, ships `starter`, so a repository with no recipe still has one. A
+  recipe of the same name in either other folder wins.
 - **D11. The plan, then "go".** The orchestrator's first turn joins the recipe and the
   note into one plan: the team, the steps, the review and the protected paths. It shows
   the plan and waits for the person's "go", so a wrong recipe or note costs no work.
@@ -3868,6 +3871,10 @@ the filled form with typed `/loop`; and the model reaches the orchestrator's ent
 command, model, start. With no recipes, the refusal names the searched recipe folders as
 plain text; there are no folder links. Bare `/loop` opens the form, as bare `/new` and
 `/add` do. Writing or editing a recipe and choosing workers' models stay out of scope.
+**Amended 2026-11-15 (M10-4, #464):** the package now ships `starter` in the last recipe
+folder (D10, as amended), so the recipe list is never empty. The "no recipes"
+state and its refusal stay as a guard, for an install that lost `assets/loops/`; no
+test reaches them now.
 
 **M9-6 · Change the model during a chat · S · needs M9-5**
 `PATCH /rooms/:id/agents/:agentId` takes `model`, as it takes `mode` today. `@name /model`
@@ -4144,7 +4151,7 @@ unverified notice; the demo repo is never the person's checkout; the setup list 
 folder; and a subprocess test covers the command on a pipe.
 **Done 2026-11-12 (#472).**
 
-**M10-4 · A "Your first loop" section in the README · S · needs nothing**
+**M10-4 · A "Your first loop" section in the README · M · needs nothing**
 (#464) The README opens with a video of a `fix-issue` loop, but no section says how to
 run one; `kapelle loop` is only in `--help`. A short section says what a loop is (a room
 whose orchestrator follows a recipe), shows `kapelle loop list`,
@@ -4152,8 +4159,18 @@ whose orchestrator follows a recipe), shows `kapelle loop list`,
 agents it needs, and that a loop spends tokens. How a recipe works stays in the recipe's
 own file and `assets/orchestrator.md`; the README links to them and does not restate
 them.
-*Done when* the section's commands were run by hand and match what they print, and
-markdownlint is clean.
+**Decided at pickup 2026-11-15 (#464):** the only recipe was this repository's
+`fix-issue`, which the package does not ship and which needs this repository's skills,
+`gh`, claude and pi. So this story also ships a recipe, `starter`, in `assets/loops/`,
+the last lookup folder (D10, as amended). It is small: one worker builds the task, a
+second reviews it, and the person keeps what they want; no skill, no `gh`, no push.
+Every worker runs on the orchestrator's own harness, read from `kapelle room info`, so a
+person needs one agent. The commands are checked offline with `mock-agent.mjs`; the
+person runs one real start.
+*Done when* `kapelle loop list` in a repository with no recipe lists `starter`, from a
+checkout and from the packed package; tests cover the lookup order and the same-name
+rule; the section's commands were run by hand and match what they print; the person ran
+one real `starter` loop; and markdownlint is clean.
 
 **M10-5 · A config form in the chat · M · needs nothing**
 Today a person has to write `.kapelle/config.json` by hand and read `docs/CONFIG.md` to
@@ -4333,12 +4350,13 @@ relative path and no `--cwd` handled as the pickup decided.
 
 **M11-6 · Recipes and the loop's first message come from the daemon · M · needs M11-4**
 `client/loop.ts` reads the recipe folders and `assets/orchestrator.md` from the
-person's own disk. Both recipe folders, the repository's and the person's own, are read
-on the daemon's machine. The daemon builds the orchestrator's whole first message, so a
-client and a daemon of different versions cannot paste different skills. `kapelle
-loop`, typed `/loop`, the loop form and `kapelle loop list` all ask the daemon. The
-header of `client/loop.ts` stops saying it reads the local disk. The contract gets a
-minor version.
+person's own disk. The recipe folders, the repository's, the person's own and the
+package's, are read on the daemon's machine. The daemon builds the orchestrator's whole
+first message, so a client and a daemon of different versions cannot paste different
+skills. `kapelle loop`, typed `/loop`, the loop form and `kapelle loop list` all ask
+the daemon. The header of `client/loop.ts` stops saying it reads the local disk, and
+the `kapelle loop` usage text and the README's "Your first loop" say that the person's
+own folder is on the daemon's machine. The contract gets a minor version.
 *Done when* tests cover a loop started from a client with no repository on its disk,
 `kapelle loop list` through the daemon, and the first message the same as today's for
 the same recipe.

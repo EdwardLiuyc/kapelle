@@ -20,7 +20,6 @@ import type {
 } from "../../client/contract.ts";
 import type { DaemonAddress } from "../../client/daemon.ts";
 import { FOLDER_GONE } from "../../client/folder.ts";
-import { loopFolders } from "../../client/loop.ts";
 import { newRoomState, type RoomState } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
 import { tempDir, until } from "../../integration/helpers.ts";
@@ -1105,7 +1104,7 @@ test("the loop form's harness and model rows use the ready agents' saved lists (
   });
 });
 
-test("the loop recipe row follows its folder, and no recipes refuses start with plain folder names (M9-5d, #458)", async (t) => {
+test("the loop recipe row follows its folder, and a folder with no recipe of its own lists the package's starter (M9-5d, #458, M10-4)", async (t) => {
   await isolatedRecipeConfig(t);
   const first = await recipeRepo(t, "first", ["one"]);
   const second = await recipeRepo(t, "second", ["two"]);
@@ -1141,8 +1140,8 @@ test("the loop recipe row follows its folder, and no recipes refuses start with 
   type(box, `\x15${empty}\r`);
   down(box, 1);
   pressKey(box, "\r");
-  await until("the empty recipe state", () => /no recipes/.test(shownOf(box)));
-  assert.match(shownOf(box), /Enter\/Esc back/);
+  await until("the package's starter", () => /starter/.test(shownOf(box)));
+  assert.doesNotMatch(shownOf(box), /no recipes|\btwo\b/);
   pressKey(box, "\r");
   down(box, 1);
   pressKey(box, "\r");
@@ -1150,13 +1149,9 @@ test("the loop recipe row follows its folder, and no recipes refuses start with 
   down(box, 5);
   pressKey(box, "\r");
 
-  assert.deepEqual(ran, [], "no room request is sent");
-  assert.equal(box.panel?.title, "loop", "the refusal keeps the form open");
-  assert.match(box.panel?.error ?? "", /^no recipes: looked in /);
-  for (const folder of loopFolders(empty)) {
-    assert.ok(box.panel?.error?.includes(folder), folder);
-  }
-  assert.match(shownOf(box), /task\s+a task/, "the entered values stay");
+  assert.equal(ran.length, 1, box.panel?.error);
+  assert.equal(ran[0]?.verb, "loop");
+  assert.equal(ran[0]?.verb === "loop" && ran[0].recipe, "starter");
 });
 
 test("the loop recipe row reports a removed current folder, and accepts a full path (#458)", async (t) => {
@@ -1327,6 +1322,8 @@ test("the loop form keeps recipe, task, note and command values that look like f
     down(box, 1);
     pressKey(box, "\r");
     await until("the literal recipe", () => shownOf(box).includes(recipe));
+    // Pick it by name: the list also holds the package's recipes (M10-4).
+    type(box, recipe);
     pressKey(box, "\r");
     assert.ok(shownOf(box).includes(recipe), `${recipe} stays selected`);
 

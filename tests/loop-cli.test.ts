@@ -1,7 +1,8 @@
 /**
  * `kapelle loop` (M8-5, #269), driven as a real subprocess on a pipe against
  * a daemon with mock agents: the room, its orchestrator and its first
- * message, `--agent`, `--model` (M9-5c), a missing recipe and `list`. The
+ * message, `--agent`, `--model` (M9-5c), a missing recipe, `list`, and the
+ * package's `starter` (M10-4). The
  * lookup order and the message's exact text are in
  * `client/tests/loop.test.ts`; `/loop` in the screens is in
  * `tests/chat-piped.test.ts` and `tests/chat-tui-forms.test.ts`.
@@ -27,6 +28,9 @@ import {
   tempDir,
   until,
 } from "../integration/helpers.ts";
+
+/** The package's own recipe folder, last in every lookup (M10-4). */
+const SHIPPED = join(import.meta.dirname, "..", "assets", "loops");
 
 /** A daemon, a repository with the `fix` recipe, and an empty config home. */
 async function fixture(t: TestContext) {
@@ -122,13 +126,13 @@ test("kapelle loop refuses an empty task and opens no room", async (t) => {
   assert.deepEqual(rooms.body, [], "no room");
 });
 
-test("a missing recipe exits 1, names both folders, and opens no room", async (t) => {
+test("a missing recipe exits 1, names every folder, and opens no room", async (t) => {
   const { d, repo, config, loop } = await fixture(t);
   const r = await loop(["nope", "7", "--cmd", REMEMBER]);
   assert.equal(r.code, 1);
   assert.equal(
     r.stderr.trim(),
-    `error: no recipe named nope: looked in ${join(repo, ".kapelle", "loops")} and ${join(config, "kapelle", "loops")} (no_recipe)`,
+    `error: no recipe named nope: looked in ${join(repo, ".kapelle", "loops")} and ${join(config, "kapelle", "loops")} and ${SHIPPED} (no_recipe)`,
   );
   const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
   assert.deepEqual(rooms.body, [], "no room");
@@ -146,10 +150,23 @@ test("kapelle loop list names each recipe, its folder, and which one wins", asyn
     `fix  ${join(repo, ".kapelle", "loops", "fix.md")}`,
     `fix  ${join(user, "fix.md")}  (hidden: the one above wins)`,
     `solo  ${join(user, "solo.md")}`,
+    `starter  ${join(SHIPPED, "starter.md")}`,
   ]);
   const usage = await loop(["list", "one", "two", "three"]);
   assert.equal(usage.code, 1);
   assert.match(usage.stderr, /usage: kapelle loop/);
+});
+
+test("kapelle loop starter starts the package's recipe in a repository with none of that name (M10-4)", async (t) => {
+  const { d, loop } = await fixture(t);
+  const r = await loop(["starter", "add a --version flag", "--cmd", REMEMBER]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /opened room starter-add a --version flag; po has/);
+  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  assert.ok(
+    rooms.body.some((room) => room.title === "starter-add a --version flag"),
+    JSON.stringify(rooms.body),
+  );
 });
 
 test("kapelle loop starts a recipe named list when a task follows", async (t) => {

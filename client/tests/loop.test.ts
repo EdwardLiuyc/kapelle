@@ -19,6 +19,14 @@ import test, { type TestContext } from "node:test";
 import { userConfigPath } from "../../core/config.ts";
 import { listRecipes, loopFolders, loopMessage } from "../loop.ts";
 
+/** The package's own folder, last in every lookup (M10-4). */
+const SHIPPED = join(import.meta.dirname, "..", "..", "assets", "loops");
+const STARTER = {
+  name: "starter",
+  path: join(SHIPPED, "starter.md"),
+  wins: true,
+};
+
 /** A repository folder (a `.git` is enough) with a subfolder, and a config
  *  home, each with the recipes given. */
 async function folders(
@@ -52,7 +60,7 @@ test("the user folder follows core/config.ts's XDG_CONFIG_HOME rule", () => {
     { XDG_CONFIG_HOME: "relative" },
     {},
   ]) {
-    const user = loopFolders("/", env).at(-1);
+    const user = loopFolders("/", env).at(-2);
     assert.equal(
       user,
       join(dirname(userConfigPath(env)), "loops"),
@@ -61,14 +69,15 @@ test("the user folder follows core/config.ts's XDG_CONFIG_HOME rule", () => {
   }
 });
 
-test("the repository's folder comes first, found from a subfolder or a link to one, by the real path; outside a repository only the user's", async (t) => {
+test("the repository's folder comes first, found from a subfolder or a link to one, by the real path; outside one, only the user's and the package's", async (t) => {
   const f = await folders(t, { "fix.md": "repo fix" }, {});
   const user = join(f.env.XDG_CONFIG_HOME, "kapelle", "loops");
   assert.deepEqual(loopFolders(f.sub, f.env), [
     join(f.top, ".kapelle", "loops"),
     user,
+    SHIPPED,
   ]);
-  assert.deepEqual(loopFolders(f.root, f.env), [user]);
+  assert.deepEqual(loopFolders(f.root, f.env), [user, SHIPPED]);
 
   // A --cwd through a symlink to a subfolder is still inside the repository.
   const link = join(f.root, "src-link");
@@ -76,6 +85,7 @@ test("the repository's folder comes first, found from a subfolder or a link to o
   assert.deepEqual(loopFolders(link, f.env), [
     join(f.top, ".kapelle", "loops"),
     user,
+    SHIPPED,
   ]);
   const start = await loopMessage({ recipe: "fix", task: "7" }, link, f.env);
   assert.ok("text" in start && start.text.includes("repo fix"));
@@ -87,6 +97,7 @@ test("the repository's folder comes first, found from a subfolder or a link to o
   assert.deepEqual(loopFolders(join(other, "in"), f.env), [
     join(f.top, ".kapelle", "loops"),
     user,
+    SHIPPED,
   ]);
 });
 
@@ -103,6 +114,7 @@ test("the list names each recipe and its folder; for one name the repository's w
     { name: "fix", path: join(repo, "fix.md"), wins: true },
     { name: "fix", path: join(user, "fix.md"), wins: false },
     { name: "mine", path: join(user, "mine.md"), wins: true },
+    STARTER,
   ]);
   // The start reads the one that wins.
   const start = await loopMessage({ recipe: "fix", task: "7" }, f.sub, f.env);
@@ -120,6 +132,7 @@ test("a directory named like a recipe neither wins nor hides the user's file", a
 
   assert.deepEqual(await listRecipes(f.sub, f.env), [
     { name: "fix", path: join(user, "fix.md"), wins: true },
+    STARTER,
   ]);
   const start = await loopMessage({ recipe: "fix", task: "7" }, f.sub, f.env);
   assert.ok("text" in start && start.text.includes("user fix"));
@@ -135,6 +148,7 @@ test("a link to a recipe file counts by what it points to, and a broken one is s
   assert.deepEqual(await listRecipes(f.sub, f.env), [
     { name: "fix", path: join(repo, "fix.md"), wins: true },
     { name: "fix", path: join(user, "fix.md"), wins: false },
+    STARTER,
   ]);
   const start = await loopMessage({ recipe: "fix", task: "7" }, f.sub, f.env);
   assert.ok("text" in start && start.text.includes("linked fix"));
@@ -142,6 +156,7 @@ test("a link to a recipe file counts by what it points to, and a broken one is s
   await rm(target);
   assert.deepEqual(await listRecipes(f.sub, f.env), [
     { name: "fix", path: join(user, "fix.md"), wins: true },
+    STARTER,
   ]);
   const fallback = await loopMessage(
     { recipe: "fix", task: "7" },
@@ -151,11 +166,37 @@ test("a link to a recipe file counts by what it points to, and a broken one is s
   assert.ok("text" in fallback && fallback.text.includes("user fix"));
 });
 
+test("the package's starter is found in an empty repository, and a person's recipe of the same name wins (M10-4)", async (t) => {
+  const empty = await folders(t, {}, {});
+  assert.deepEqual(await listRecipes(empty.sub, empty.env), [STARTER]);
+  const start = await loopMessage(
+    { recipe: "starter", task: "add a --version flag" },
+    empty.sub,
+    empty.env,
+  );
+  assert.ok("text" in start, JSON.stringify(start));
+  assert.match(start.text, /\n\[the recipe: starter\]\n# starter\n/);
+
+  const f = await folders(t, { "starter.md": "repo starter" }, {});
+  const repo = join(f.top, ".kapelle", "loops");
+  assert.deepEqual(await listRecipes(f.sub, f.env), [
+    { name: "starter", path: join(repo, "starter.md"), wins: true },
+    { ...STARTER, wins: false },
+  ]);
+  const mine = await loopMessage(
+    { recipe: "starter", task: "7" },
+    f.sub,
+    f.env,
+  );
+  assert.ok("text" in mine && mine.text.includes("repo starter"));
+  assert.ok(!mine.text.includes("# starter\n"));
+});
+
 test("a missing recipe is refused by name, with every folder it looked in", async (t) => {
   const f = await folders(t, {}, {});
   const r = await loopMessage({ recipe: "nope", task: "7" }, f.sub, f.env);
   assert.deepEqual(r, {
-    error: `no recipe named nope: looked in ${join(f.top, ".kapelle", "loops")} and ${join(f.env.XDG_CONFIG_HOME, "kapelle", "loops")}`,
+    error: `no recipe named nope: looked in ${join(f.top, ".kapelle", "loops")} and ${join(f.env.XDG_CONFIG_HOME, "kapelle", "loops")} and ${SHIPPED}`,
   });
   // A name is a file name: no path out of the folder.
   const out = await loopMessage({ recipe: "../x", task: "7" }, f.sub, f.env);
