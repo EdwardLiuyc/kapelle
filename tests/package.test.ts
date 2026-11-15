@@ -16,6 +16,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -218,15 +219,17 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     },
   );
   assert.equal(listed.status, 0, listed.stderr);
+  // The extracted package's own copy, not the checkout's `dist/`. The real
+  // path: a module's folder is one (macOS links /var to /private/var).
+  const shipped = join(
+    await realpath(packageDir),
+    "dist",
+    "assets",
+    "loops",
+    "starter.md",
+  );
   assert.ok(
-    listed.stdout
-      .trim()
-      .split("\n")
-      .some(
-        (line) =>
-          line.startsWith("starter  ") &&
-          line.endsWith(join("dist", "assets", "loops", "starter.md")),
-      ),
+    listed.stdout.split("\n").includes(`starter  ${shipped}`),
     listed.stdout,
   );
 

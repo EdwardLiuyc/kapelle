@@ -69,7 +69,7 @@ test("the user folder follows core/config.ts's XDG_CONFIG_HOME rule", () => {
   }
 });
 
-test("the repository's folder comes first, found from a subfolder or a link to one, by the real path; outside one, the user's and package's folders follow", async (t) => {
+test("the repository's folder comes first, found from a subfolder or a link to one, by the real path; outside one, only the user's and the package's", async (t) => {
   const f = await folders(t, { "fix.md": "repo fix" }, {});
   const user = join(f.env.XDG_CONFIG_HOME, "kapelle", "loops");
   assert.deepEqual(loopFolders(f.sub, f.env), [

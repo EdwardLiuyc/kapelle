@@ -132,13 +132,13 @@ kapelle ships one recipe, `starter`: one agent builds a task, and a second agent
 kapelle loop list
 ```
 
-Start a loop with the daemon running and your repository added. If needed, run `kapelle` once to start the daemon, then add the repository with `kapelle daemon add .` or `/new` in the chat (see [Quick start](#quick-start)). Then:
+`kapelle loop` needs the daemon running and your repository added. Run `kapelle` once to start the daemon (see [Quick start](#quick-start)), and `kapelle daemon add .` to add the repository. Then:
 
 ```bash
 kapelle loop starter "add a --version flag" --agent pi
 ```
 
-The orchestrator runs on the agent you name, and `starter` gives every worker the same one. With no `--agent`, it is `claude`. On a terminal, the chat opens on the new room. In the chat, `/loop starter "add a --version flag" --agent pi` does the same, and `/loop` alone opens a form.
+The orchestrator runs on the agent you name, and `starter` gives every worker the same one. With no `--agent`, it is `claude`. On a terminal, the chat opens on the new room. In the chat, `/loop starter "add a --version flag" --agent pi` does the same, and `/loop` alone opens a form. There, `/loop` asks to add the repository the first time.
 
 What you do during the loop:
 
