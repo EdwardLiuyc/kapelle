@@ -13,7 +13,7 @@
  */
 
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import {
   lstat,
@@ -26,6 +26,7 @@ import {
 import { request } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import {
   type Outcome,
   parseCommand,
@@ -2871,13 +2872,14 @@ test("the delete preview caps a long branch and reports its total", async (t) =>
   );
   assert.equal(open.status, 201, open.body.error?.message);
   const p = only(open.body);
+  // Async so the event loop can service the daemon's idle-socket close (#495).
+  const git = promisify(execFile);
   for (let i = 0; i < 201; i++) {
-    const made = spawnSync(
+    await git(
       "git",
       ["commit", "--allow-empty", "-qm", `preview commit ${i}`],
       { cwd: p.worktree, encoding: "utf8" },
     );
-    assert.equal(made.status, 0, made.stderr);
   }
 
   const preview = await api<DeletePreview>(
