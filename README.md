@@ -132,7 +132,7 @@ kapelle ships one recipe, `starter`: one agent builds a task, and a second agent
 kapelle loop list
 ```
 
-`kapelle loop list` needs no daemon: it reads the folders on your disk. Starting a loop needs the daemon running and your repository added. Run `kapelle` once to start the daemon (see [Quick start](#quick-start)), and `kapelle daemon add .` to add the repository. Then:
+Starting a loop needs the daemon running and your repository added. Run `kapelle` once to start the daemon (see [Quick start](#quick-start)), and `kapelle daemon add .` to add the repository. Then:
 
 ```bash
 kapelle loop starter "add a --version flag" --agent pi
