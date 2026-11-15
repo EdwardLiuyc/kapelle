@@ -1734,6 +1734,8 @@ async function runLoopCommand(): Promise<number> {
 
   if (list) {
     const recipes = await listRecipes(cwd);
+    // A guard only: the package ships `starter` (M10-4), so this fires only
+    // when an install lost its `assets/loops/`.
     if (!recipes.length) {
       console.log(`no recipes: looked in ${loopFolders(cwd).join(" and ")}`);
     }

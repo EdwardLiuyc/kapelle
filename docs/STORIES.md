@@ -3871,6 +3871,10 @@ the filled form with typed `/loop`; and the model reaches the orchestrator's ent
 command, model, start. With no recipes, the refusal names the searched recipe folders as
 plain text; there are no folder links. Bare `/loop` opens the form, as bare `/new` and
 `/add` do. Writing or editing a recipe and choosing workers' models stay out of scope.
+**Amended 2026-11-15 (M10-4, #464):** the package now ships `starter` in the last recipe
+folder (D10, as amended), so every folder lists at least one recipe. The "no recipes"
+state and its refusal stay as a guard, for an install that lost `assets/loops/`; no
+test reaches them now.
 
 **M9-6 · Change the model during a chat · S · needs M9-5**
 `PATCH /rooms/:id/agents/:agentId` takes `model`, as it takes `mode` today. `@name /model`
