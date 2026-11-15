@@ -4084,8 +4084,9 @@ clean machine.
 ## M10 — First steps
 
 **Added 2026-11-13.** M10 makes the first steps easy for a person who is new to kapelle.
-Its stories come from a review of the first steps for beginners on 2026-11-11. The `M10`
-label tracks them on GitHub.
+Its stories come from a review of the first steps for beginners on 2026-11-11. M10-5
+was added on 2026-11-15 from a review of config discoverability. The `M10` label tracks
+them on GitHub.
 
 **M10-1 · The README quick start leads with bare `kapelle` · S · needs nothing**
 (#461) The Quick start and Rooms sections still sent a beginner to `kapelle daemon start`
@@ -4153,6 +4154,37 @@ own file and `assets/orchestrator.md`; the README links to them and does not res
 them.
 *Done when* the section's commands were run by hand and match what they print, and
 markdownlint is clean.
+
+**M10-5 · A config form in the chat · M · needs nothing**
+Today a person has to write `.kapelle/config.json` by hand and read `docs/CONFIG.md` to
+know which keys exist, what a missing key means, and which layer wins. `/config` in the
+chat opens a form for the repository of the room on screen, or for the folder `kapelle`
+started in when no room is open. It lists every project key, not only the ones in the
+file, with the effective value and its source: `default`, `config` or `env`. Enter edits
+a value. A blank value removes that key, so its built-in default applies again; it never
+writes the default into the file. `linkPaths` is edited as a JSON array, not a
+comma-separated string. One save row sends only the keys that changed. When a
+`KAPELLE_*` value wins, its row says so, and the form still lets the person set the file
+value.
+The form edits the project file only. The user-level `port` and `permissionTimeoutMs`
+are daemon-wide and read at start; a later `/config daemon` can cover them. The chat
+does not read or write the file itself: `client/` cannot import `core/config.ts`, and
+the screens talk HTTP. The contract adds the `config` capability,
+`GET /config?cwd=…` for the view, and `PATCH /config?cwd=…` for changed keys, where
+`null` removes an override; both return the view. Only a repository the daemon has
+added is accepted, and the route writes only that repository's `.kapelle/config.json`.
+The view comes from one table in `core/config.ts`; the built-in defaults are imported
+from the modules that own them, not copied into the form. An existing invalid file is
+shown as the daemon's refusal and is not overwritten. A pipe prints the same rows from
+`/config`; only the editor needs a terminal. The form says that saved values apply to
+later runs, new rooms, the next sweep and new checkouts, not to work already underway.
+*Done when* tests cover a missing file, a project override and a `KAPELLE_*` override
+shown with the right source; a scalar and `linkPaths` saved, a key reset, and only
+changed keys written; an invalid or symlinked file left untouched; an unadded
+repository refused with `repo_not_added`; and `/config` in both screens.
+`docs/CONFIG.md` no longer says nothing creates the file, `README.md` no longer says the
+person writes it by hand, and `docs/CLIENT-API.md` documents the route and the
+contract's minor version.
 
 ---
 
