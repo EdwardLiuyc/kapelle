@@ -72,10 +72,11 @@ fallback: `chat/tui/question.ts` reads pi-tui's `dist/keys.js`, a file outside i
 exports. If a new pi-tui moves it, `chat.ts` fails at start, so check it at each bump.
 `chat/tui.ts` also replaces the root layout's `handleMouse` with an untaken-event hook;
 a bump must keep routing events through child parts first, then the root.
-**Amended 2026-10-13 (M4-13):** one subprocess is allowed, the shell the person starts
-with `/term` and types into. The screen package may send it bytes; it still never
-reaches a harness, the daemon, the policy or the path guard. No native code: a native
-crash cannot be caught.
+**Amended 2026-10-13 (M4-13):** the screen package may drive one subprocess, the shell
+the person starts with `/term` and types into. It may send it bytes; it still never
+reaches a harness, the daemon, the policy or the path guard. This limits the package,
+not the chat: the chat's own subprocesses are listed under "Where things are". No native
+code: a native crash cannot be caught.
 
 **This code is the client. The coding harness is the agent.** We spawn the harness as a
 subprocess, own the workspace, serve its filesystem requests and decide its permissions.
@@ -213,8 +214,8 @@ Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<h
 - **No second prompt during a turn, and no re-ask after it** (§M0-4).
 - **No `HStack` below another in the chat screen, and no `auto` size in one.** See
   `screenLayout` in `chat/tui.ts`.
-- **A new synthetic event starts with `_client_`.** The `render.ts` switch has no
-  `default`, so an unknown event is dropped rather than drawn wrong.
+- **A new synthetic event starts with `_client_`.** See the top of `render.ts` for why an
+  unknown event is dropped.
 - **A missing `measured` half means "not verified". Never add a second flag for it.**
   See the top of `protocol/registry.ts`.
 - **Do not rename the package to `agent-team`.** That npm name and `bin` belong to an
