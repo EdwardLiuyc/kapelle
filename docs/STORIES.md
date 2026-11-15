@@ -3413,6 +3413,9 @@ throwaway skill and two scripts over the room API, and changed nothing in kapell
   `docs/CONFIG.md`), the person's own for every repository. With the
   same name in both, the repository's wins. A **note** in the start command changes one
   run, and the note wins over the recipe; the file does not change.
+  **Amended 2026-11-15 (M10-4, #464):** a third and last folder, the package's own
+  `assets/loops/`, ships `starter`, so a repository with no recipe still has one. A
+  recipe of the same name in either other folder wins.
 - **D11. The plan, then "go".** The orchestrator's first turn joins the recipe and the
   note into one plan: the team, the steps, the review and the protected paths. It shows
   the plan and waits for the person's "go", so a wrong recipe or note costs no work.
@@ -4143,7 +4146,7 @@ unverified notice; the demo repo is never the person's checkout; the setup list 
 folder; and a subprocess test covers the command on a pipe.
 **Done 2026-11-12 (#472).**
 
-**M10-4 · A "Your first loop" section in the README · S · needs nothing**
+**M10-4 · A "Your first loop" section in the README · M · needs nothing**
 (#464) The README opens with a video of a `fix-issue` loop, but no section says how to
 run one; `kapelle loop` is only in `--help`. A short section says what a loop is (a room
 whose orchestrator follows a recipe), shows `kapelle loop list`,
@@ -4151,8 +4154,18 @@ whose orchestrator follows a recipe), shows `kapelle loop list`,
 agents it needs, and that a loop spends tokens. How a recipe works stays in the recipe's
 own file and `assets/orchestrator.md`; the README links to them and does not restate
 them.
-*Done when* the section's commands were run by hand and match what they print, and
-markdownlint is clean.
+**Decided at pickup 2026-11-15 (#464):** the only recipe was this repository's
+`fix-issue`, which the package does not ship and which needs this repository's skills,
+`gh`, claude and pi. So this story also ships a recipe, `starter`, in `assets/loops/`,
+the last lookup folder (D10, as amended). It is small: one worker builds the task, a
+second reviews it, and the person keeps what they want; no skill, no `gh`, no push.
+Every worker runs on the orchestrator's own harness, read from `kapelle room info`, so a
+person needs one agent. The commands are checked offline with `mock-agent.mjs`; the
+person runs one real start.
+*Done when* `kapelle loop list` in a repository with no recipe lists `starter`, from a
+checkout and from the packed package; tests cover the lookup order and the same-name
+rule; the section's commands were run by hand and match what they print; the person ran
+one real `starter` loop; and markdownlint is clean.
 
 ---
 

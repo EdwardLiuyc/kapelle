@@ -9,10 +9,16 @@
  * path into another checkout led the orchestrator to `cd` there
  * (`docs/ORCHESTRATOR-SPIKES.md`).
  *
- * Two folders, and for one name the first wins: `<repo>/.kapelle/loops/`,
- * then `$XDG_CONFIG_HOME/kapelle/loops/`. The repository is the nearest
- * folder at or above the given one's real path that holds a `.git`: a folder
- * in a main checkout, a file in a worktree. The real path, as git and the
+ * Three folders, and for one name the first wins: `<repo>/.kapelle/loops/`,
+ * then `$XDG_CONFIG_HOME/kapelle/loops/`, then the package's own
+ * `assets/loops/` (M10-4). The package's folder is last, so a person's recipe
+ * of the same name always wins, and every repository has at least
+ * `starter`. It is found beside this file, as the skill is, so a checkout
+ * and `dist/` both work; `prepack` copies it.
+ *
+ * The repository is the nearest folder at or above the given one's real path
+ * that holds a `.git`: a folder in a main checkout, a file in a worktree.
+ * The real path, as git and the
  * daemon see it: a link from one repository into another names the other
  * one. It is found on disk, with no git subprocess. A recipe is a file: a
  * folder named `<name>.md` is skipped, and a link counts by what it points
@@ -30,6 +36,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
 const SKILL = join(import.meta.dirname, "..", "assets", "orchestrator.md");
+const SHIPPED = join(import.meta.dirname, "..", "assets", "loops");
 
 /** The nearest folder at or above `cwd`'s real path with a `.git`, or
  *  none. A folder that does not exist is walked as typed. */
@@ -50,7 +57,7 @@ const isFile = (path: string) =>
   );
 
 /** The folders a recipe is looked for in, the one that wins first. Outside
- *  a repository, only the person's own. */
+ *  a repository, only the person's own and the package's. */
 export function loopFolders(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -65,6 +72,7 @@ export function loopFolders(
   return [
     ...(top ? [join(top, ".kapelle", "loops")] : []),
     join(base, "kapelle", "loops"),
+    SHIPPED,
   ];
 }
 

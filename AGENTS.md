@@ -23,7 +23,7 @@ do not restate it. A restated fact goes stale in one place and stays right in th
 | what three runs of an orchestrator agent showed, the evidence for M8 | `docs/ORCHESTRATOR-SPIKES.md` |
 | how a release is made, and the credential scan's record | `docs/RELEASING.md` |
 | why, what in what order, and the decision register for M4–M6 | `docs/PROJECT-BRIEF.md`, `docs/PROJECT-PLAN.md`, `docs/CONTRACT-PLAN.md` |
-| how a loop, a skill or the orchestrator works | its own file: `.kapelle/loops/<name>.md`, `.agent/skills/<name>/SKILL.md`, `assets/orchestrator.md` |
+| how a loop, a skill or the orchestrator works | its own file: `.kapelle/loops/<name>.md` or `assets/loops/<name>.md`, `.agent/skills/<name>/SKILL.md`, `assets/orchestrator.md` |
 | the workflow, the rules that cross files, and this map | `AGENTS.md` |
 
 When a behaviour changes, its owner changes in the same commit. Not every code change
@@ -311,9 +311,10 @@ npx -y markdownlint-cli2 --config .markdownlint.json $(git ls-files '*.md')
 Fix findings before finishing. An inline `<!-- markdownlint-disable MD0xx -->` is allowed
 only with a comment saying why.
 
-If every changed file is a `.md` file, this is the only check to run, with one
-exception: `assets/orchestrator.md`. It ships in the package, and `kapelle loop` pastes
-it, so `tests/package.test.ts` and `tests/loop-cli.test.ts` read it. A change to it runs
+If every changed file is a `.md` file, this is the only check to run, with two
+exceptions: `assets/orchestrator.md` and the recipes in `assets/loops/`. They ship in the
+package, and `kapelle loop` pastes them, so `tests/package.test.ts`,
+`tests/loop-cli.test.ts` and `client/tests/loop.test.ts` read them. A change to them runs
 the full gate. No test reads any other tracked `.md` file.
 
 ## Format and lint (TS/JS)

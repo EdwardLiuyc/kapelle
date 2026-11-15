@@ -13,7 +13,7 @@ kapelle runs different coding agents side by side on one repository: pi, Claude 
 
 One background daemon holds all the work. Close the terminal and come back later: your agents and their history are still there. Each agent logs in by itself. kapelle never touches a key.
 
-[Demo](#demo) · [Install](#install) · [Quick start](#quick-start) · [Rooms](#rooms) · [Runs](#runs) · [Agents](#agents) · [Safety](#what-the-modes-do-and-do-not-do) · [Docs](#docs)
+[Demo](#demo) · [Install](#install) · [Quick start](#quick-start) · [Rooms](#rooms) · [Loops](#your-first-loop) · [Runs](#runs) · [Agents](#agents) · [Safety](#what-the-modes-do-and-do-not-do) · [Docs](#docs)
 
 ## Demo
 
@@ -121,6 +121,34 @@ In a room, type a message and press Enter. It goes to the room's orchestrator, o
 On a terminal, a sidebar lists every room and its agents. Click a row, or press `alt+↑`/`alt+↓` (or `ctrl+p`/`ctrl+n`), to see a room's timeline or one agent's thread. A `●` means something waits for you: magenta is a question, yellow is an agent that looks stuck. `ctrl+t`, or a click on `«`, hides the sidebar.
 
 The room API is new, and it can still change.
+
+## Your first loop
+
+A loop is a room whose orchestrator follows a recipe. A recipe is a Markdown file with the team and the steps. The orchestrator adds the agents, gives them the work and reads their reports. You make the choices.
+
+kapelle ships one recipe, `starter`: one agent builds a task, and a second agent reviews it. It needs no skill, no `gh` and no remote. To see every recipe and the folder it comes from:
+
+```bash
+kapelle loop list
+```
+
+Start a loop with the daemon running and your repository added. Run `kapelle` once if it is not (see [Quick start](#quick-start)). Then:
+
+```bash
+kapelle loop starter "add a --version flag" --agent pi
+```
+
+The orchestrator runs on the agent you name, and `starter` gives every worker the same one. With no `--agent`, it is `claude`. On a terminal, the chat opens on the new room. In the chat, `/loop starter "add a --version flag" --agent pi` does the same, and `/loop` alone opens a form.
+
+What you do during the loop:
+
+1. The orchestrator shows its plan. Type `go`.
+2. When it stops with a choice, type your answer.
+3. At the end, read the work with `@dev /diff base`. Merge its branch with git if you want it.
+
+A loop spends tokens: every agent turn is a real prompt. A room limits how many orders the orchestrator sends its workers (`orchestratorTurnCap` in [`docs/CONFIG.md`](docs/CONFIG.md)). `/cap <n>` raises the limit for one room.
+
+To write your own recipe, put `<name>.md` in your repository's `.kapelle/loops/`, or in `~/.config/kapelle/loops/` for every repository. A recipe there wins over a shipped one of the same name. Start from [`assets/loops/starter.md`](assets/loops/starter.md). The orchestrator's own rules are in [`assets/orchestrator.md`](assets/orchestrator.md). The video at the top runs `fix-issue`, this repository's own recipe. It uses this repository's skills, so it works only here.
 
 ## Runs
 

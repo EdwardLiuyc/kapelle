@@ -81,6 +81,7 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   assert.ok(emitted.includes("cli.js"));
   assert.ok(emitted.includes("daemon.js"));
   assert.ok(emitted.includes(join("assets", "orchestrator.md")));
+  assert.ok(emitted.includes(join("assets", "loops", "starter.md")));
   assert.ok(emitted.includes("demo-agent.mjs"));
   assert.deepEqual(
     emitted.filter((file) => file.endsWith(".test.js")),
@@ -196,6 +197,16 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
   });
   assert.ok("text" in loop, JSON.stringify(loop));
   assert.match(loop.text, /^\[the orchestrator skill\]\n# The orchestrator\n/);
+  // So is the package's starter recipe (M10-4), in a repository with none.
+  const starter = await loopMessage(
+    { recipe: "starter", task: "7" },
+    loopRoot,
+    {
+      XDG_CONFIG_HOME: join(loopRoot, "config"),
+    },
+  );
+  assert.ok("text" in starter, JSON.stringify(starter));
+  assert.match(starter.text, /\n\[the recipe: starter\]\n# starter\n/);
 
   // A valid package.json without a version reaches the refusal, rather than
   // printing the parent package's version or exiting 0.
@@ -230,6 +241,7 @@ test("the packed package runs from dist", { timeout: 120_000 }, async (t) => {
     assert.ok(files.includes(file), `missing package file: ${file}`);
   }
   assert.ok(files.includes("dist/assets/orchestrator.md"));
+  assert.ok(files.includes("dist/assets/loops/starter.md"));
   assert.ok(files.includes("dist/demo-agent.mjs"));
   assert.ok(!files.some((file) => file.endsWith(".test.js")));
   assert.ok(!files.some((file) => file.endsWith(".ts")));
