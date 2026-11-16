@@ -85,7 +85,7 @@ function commandsOf(pre) {
   for (const label of copy.querySelectorAll(".label")) label.remove();
   return copy.textContent
     .split("\n")
-    .map((line) => line.replace(/^\$ /, "").replace(/\s+#.*$/, ""))
+    .map((line) => line.replace(/^\$ /, "").replace(/(^|\s+)#.*$/, ""))
     .filter((line) => line.trim() !== "")
     .join("\n");
 }

@@ -18,7 +18,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 </head>
 <body>
 
-<div class="strip"><span class="lvl">[info]</span>kapelle 0.1.0 is out. <a href="https://www.npmjs.com/package/kapelle">npm install -g kapelle</a></div>
+<div class="strip"><span class="lvl">[info]</span>kapelle 0.2.0 is out: <code>kapelle demo</code>, a starter loop, and <code>--model</code> for loops. <a href="https://github.com/EdwardLiuyc/kapelle/releases/tag/v0.2.0">Release notes</a></div>
 
 <header class="site-header">
 <div class="wrap" style="max-width: 1240px;">
@@ -116,6 +116,9 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 
 <section id="quick-start">
 <h2><span class="step">2</span>Quick start</h2>
+<p>Try the chat before you install an agent:</p>
+<pre><span class="p">$ </span>kapelle demo</pre>
+<p>It opens a room with an offline demo agent. It needs no account, no tokens and no network. The agent answers, asks one permission question, and writes a file you can see with <code>@demo /diff</code>. The room works in its own folder, never in your checkout. Each <code>kapelle demo</code> deletes the last demo room and starts again.</p>
 <p>kapelle is the client. The agent is a separate program, and it logs in by itself. pi is the default. Install pi and its ACP adapter, then log in to pi once:</p>
 <pre><span class="p">$ </span>npm i -g @earendil-works/pi-coding-agent pi-acp
 <span class="p">$ </span>pi                   # type /login, then quit</pre>
@@ -205,7 +208,7 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 <tr><td><code>/setup</code></td><td>Open the <a href="#setup">setup list</a>.</td></tr>
 <tr><td><code>/new [agent]</code></td><td>Open a new room. Options: <code>--cmd</code>, <code>--name</code>, <code>--model</code>, <code>--title</code>, <code>--cwd</code>.</td></tr>
 <tr><td><code>/add &lt;agent&gt;</code></td><td>Add an agent to the room. Options: <code>--cmd</code>, <code>--name</code>, <code>--role</code>, <code>--mode</code>, <code>--model</code>, <code>--base @name|ref</code>.</td></tr>
-<tr><td><code>/loop &lt;recipe&gt; &lt;task&gt; ["note"]</code></td><td>Start a <a href="#loop">loop</a> in a new room. Options: <code>--agent</code>, <code>--cmd</code>, <code>--cwd</code>.</td></tr>
+<tr><td><code>/loop &lt;recipe&gt; &lt;task&gt; ["note"]</code></td><td>Start a <a href="#loop">loop</a> in a new room. Options: <code>--agent</code>, <code>--cmd</code>, <code>--model</code>, <code>--cwd</code>.</td></tr>
 <tr><td><code>/title &lt;new title&gt;</code></td><td>Rename the room.</td></tr>
 <tr><td><code>/cap &lt;n&gt;</code></td><td>Raise the orchestrator's <a href="#lead">turn cap</a> for this room.</td></tr>
 <tr><td><code>@name /mode &lt;m&gt;</code></td><td>Set the agent's mode: <code>ask</code>, <code>safe</code> or <code>auto</code>.</td></tr>
@@ -217,7 +220,7 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 </tbody>
 </table>
 </div>
-<p><code>/new</code> or <code>/add</code> alone opens a form.</p>
+<p><code>/new</code>, <code>/add</code> or <code>/loop</code> alone opens a form.</p>
 </section>
 
 <section id="keys">
@@ -314,10 +317,14 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 <p>Most issues run the same loop: pick up, build, review, open the PR, answer the bot reviews, hand over. A loop gives it to one agent, the orchestrator. It adds the other agents when their step comes, gives them the work, reads their reports, and decides the next step. It does none of the work itself, and you decide every choice.</p>
 <p>The daemon must run, and the repository must be added. Then start a loop with a recipe and a task:</p>
 <pre><span class="p">$ </span>kapelle loop list                              # every recipe, and which one wins a name
+<span class="p">$ </span>kapelle loop starter "add a --version flag"   # recipe starter, and the task
 <span class="p">$ </span>kapelle loop fix-issue 312                     # recipe fix-issue, task 312
 <span class="p">$ </span>kapelle loop fix-issue 312 "skip rev2"          # a note for this run only
-<span class="p">$ </span>kapelle loop fix-issue 312 --agent pi          # a pi lead; claude by default</pre>
-<p>In the chat, <code>/loop fix-issue 312</code> does the same. kapelle opens a room titled <code>fix-issue-312</code> and adds the lead, <code>po</code>, in <code>auto</code> mode. Its first message holds kapelle's orchestrator skill, your recipe, the task and the note, so you see all it was told.</p>
+<span class="p">$ </span>kapelle loop fix-issue 312 --agent pi          # a pi lead; claude by default
+<span class="p">$ </span>kapelle loop fix-issue 312 --model &lt;id&gt;       # the lead's model</pre>
+<p>kapelle ships one recipe, <code>starter</code>: one agent builds the task, and a second agent reviews it. It needs no skill, no <code>gh</code> and no remote, but it needs a git repository with at least one commit. Both workers run in <code>auto</code>. <code>fix-issue</code> is kapelle's own recipe, and it works only in kapelle's repository.</p>
+<p>With <code>--model</code>, the loop does not start when the lead is not confirmed on that model.</p>
+<p>In the chat, <code>/loop fix-issue 312</code> does the same, and <code>/loop</code> alone opens a form. kapelle opens a room titled <code>fix-issue-312</code> and adds the lead, <code>po</code>, in <code>auto</code> mode. Its first message holds kapelle's orchestrator skill, your recipe, the task and the note, so you see all it was told.</p>
 <ol>
 <li><strong>The plan.</strong> <code>po</code> joins the recipe, the task and the note into one plan: the team, the steps, the outside review and the protected paths. It does no work before you say <code>go</code>. A plan you correct costs nothing.</li>
 <li><strong>The work.</strong> <code>po</code> sends one order at a time and ends its turn. Its status line says which step runs.</li>
@@ -346,11 +353,13 @@ kimi    not installed: no kimi on the daemon's PATH</pre>
 
 <section id="recipes">
 <h2>Write a recipe</h2>
-<p>A recipe is a Markdown file in your own words. kapelle never reads it: it pastes it into <code>po</code>'s first message. So there is no format and no validator. kapelle looks in two folders, and for one name the first wins:</p>
+<p>A recipe is a Markdown file in your own words. kapelle never reads it: it pastes it into <code>po</code>'s first message. So there is no format and no validator. kapelle looks in three places, and for one name the first wins:</p>
 <ul>
 <li><code>.kapelle/loops/&lt;name&gt;.md</code> in your repository, to share with your team;</li>
-<li><code>~/.config/kapelle/loops/&lt;name&gt;.md</code>, your own, for every repository.</li>
+<li><code>~/.config/kapelle/loops/&lt;name&gt;.md</code>, your own, for every repository;</li>
+<li>the recipes that ship in the package, such as <code>starter</code>.</li>
 </ul>
+<p>To write your own, start from <a href="https://github.com/EdwardLiuyc/kapelle/blob/master/assets/loops/starter.md"><code>assets/loops/starter.md</code></a>.</p>
 <p>Give it these parts:</p>
 <dl class="points" style="margin-top: 18px;">
 <div><dt>The team</dt><dd>Each worker's name, agent and role, and when it joins. Say which one is the main developer.</dd></div>
@@ -443,7 +452,8 @@ inside its own turn, 20 minutes at most. 3 rounds at most.
 <pre>kapelle                     the chat; starts the daemon if none runs
 kapelle "&lt;prompt&gt;" [--agent id] [--cmd "cmd"] [--cwd dir] [--mode m] [--verbose] [--quiet]
 kapelle setup
-kapelle loop &lt;recipe&gt; &lt;task&gt; ["&lt;note&gt;"] [--agent id] [--cmd "cmd"] [--cwd dir]
+kapelle demo                the chat with an offline demo agent
+kapelle loop &lt;recipe&gt; &lt;task&gt; ["&lt;note&gt;"] [--agent id] [--cmd "cmd"] [--model id] [--cwd dir]
 kapelle loop list [--cwd dir]
 kapelle room info | send | add | ff | diff | remove [--room id] [--as name]
 kapelle run --file &lt;run.json&gt; [--detach] [--cwd dir]
@@ -489,7 +499,7 @@ kapelle chat [new | attach | list | dismiss]</pre>
 <section id="troubleshooting">
 <h2>Troubleshooting</h2>
 <h3>An agent fails to start</h3>
-<p>It often shows as <code>Internal error (code -32603)</code>. Run again with <code>--verbose</code> to see the agent's own error output. In a run, read the task's <code>.stderr.log</code> file in the run's record folder. <code>kapelle workspace</code> tells you where that is.</p>
+<p>It often shows as <code>Internal error (code -32603)</code>. The line after it names the next step when there is one: the login command, the agent's stderr log, or <code>--verbose</code>. Run again with <code>--verbose</code> to see the agent's own error output. In a run, read the task's <code>.stderr.log</code> file in the run's record folder. <code>kapelle workspace</code> tells you where that is.</p>
 <h3><code>spawn claude-agent-acp ENOENT</code></h3>
 <p>The Claude Code adapter is not on your <code>PATH</code>. Install it, then check with <code>command -v claude-agent-acp</code>.</p>
 <h3><code>--mode ask</code> became <code>safe</code></h3>
