@@ -86,10 +86,13 @@ gh api repos/EdwardLiuyc/kapelle --jq .security_and_analysis
 `SECURITY.md` links to private vulnerability reporting, so the link works only from
 this step on.
 
-Branch protection also needs a public repository on this plan: today its API answers
-`403` ("Upgrade to GitHub Pro or make this repository public"). Once it is available,
-protect `master` and require both jobs of `code_checks.yml`, `check` and
-`package-macos`. A job that is not required can fail without blocking a merge.
+Branch protection also needs a public repository on this plan. Protect `master` and
+require both jobs of `code_checks.yml`, `check` and `package-macos`. A job that is not
+required can fail without blocking a merge. `package-macos` runs only on a release pull
+request: from a branch named `release-<version>`, into `master`. On any other pull
+request it is skipped, and GitHub counts a skipped required check as passed. So a change
+that breaks the macOS package shows at the next release, and is fixed in that release's
+pull request.
 
 ## Version and tag
 
@@ -97,8 +100,13 @@ For the first release, do "The first publish and the trusted publisher" below be
 the tag.
 
 The version is the one in `package.json`. The first release tags `0.1.0` as it is; do
-not bump it by habit. For a later version, update `package.json` on a branch with
-`npm version <version> --no-git-tag-version`, commit it, and land that commit on
+not bump it by habit. For a later version, update `package.json` on a branch named
+`release-<version>` with `npm version <version> --no-git-tag-version`. Only that name
+runs `package-macos` on the pull request. On the same branch, add a `## <version>`
+section at the top of `CHANGELOG.md`, from `git log v<previous>..origin/master`. Group it
+under `Added`, `Changed` and `Fixed`, and give each line its PR number. List only what a
+user can see: leave out a pull request that changes only docs or tests. The release
+writes this section; a pull request does not. Commit both, and land that commit on
 `master` through the normal review.
 
 Create the tag on the final `master` commit that will be published, and push it. Tag
