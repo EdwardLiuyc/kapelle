@@ -43,19 +43,19 @@ its issuer. Rewriting history is not a substitute, because a clone or a fork may
 already hold it. A false positive gets its fingerprint added to `.gitleaksignore`, and
 a row in the record below that says why it is not a credential.
 
-The record before the first publish is the last commit of the M9-8 PR (#307), made after
-every review commit of that PR. It covers that PR's head, so nothing else lands on
-`master` between that merge and the `v0.1.0` tag.
+The record is the last commit of the release pull request, made after every review
+commit of that PR. It covers that PR's head, so nothing else lands on `master` between
+that merge and the tag. The first one was in the M9-8 PR (#307), before `v0.1.0`.
 
 The record:
 
 | Field | Value |
 | --- | --- |
-| Date | 2026-11-10 |
+| Date | 2026-11-16, before `v0.2.0` |
 | Tool | gitleaks 8.30.1, `gitleaks_8.30.1_linux_x64.tar.gz`, SHA-256 `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb`, pinned as `sum` in the command above; the digest was first taken from the release's checksums file |
-| Range | a mirror of `origin` taken at 18:30 UTC, before this record was pushed: 21 branches, 236 `refs/pull/*` refs and no tags; from the root commit `6186a5f` to every ref's tip. Then this record's own commit, scanned in the PR's checkout as `1fcbd27..HEAD` before its push |
-| Covers | every ref in that mirror: `master` at `28e8149`, and PR #455's head `1fcbd27`; and the commit that adds this record, whose parent is `1fcbd27`. A later commit is not covered |
-| Result | 2 hits, both false positives; with `.gitleaksignore`, no leaks (exit 0) in both scans |
+| Range | a mirror of `origin` taken at 17:37 UTC, before this record was pushed: 23 branches, 255 `refs/pull/*` refs and the tag `v0.1.0`; from the root commit `6186a5f` to every ref's tip, 1242 commits. Then this record's own commit, scanned in the PR's checkout as `d108de1..HEAD` before its push |
+| Covers | every ref in that mirror: `master` at `a7eae4b`, and PR #498's head `d108de1`; and the commit that adds this record, whose parent is `d108de1`. A later commit is not covered |
+| Result | with `.gitleaksignore` and its 2 false positives below, no leaks (exit 0) in both scans |
 
 The false positives:
 
