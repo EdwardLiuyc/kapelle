@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Not found — kapelle</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script>
+document.documentElement.classList.add("js");
+try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body>
+<main class="lost wrap">
+<p class="err">E404: Not in the score: <span id="path">this page</span></p>
+<h1>This bar is <em>not in the score.</em></h1>
+<p class="muted">The page you asked for does not exist.</p>
+<div class="actions">
+<a class="btn" href="/">[ cd ~ ]</a>
+<a class="btn quiet" href="/guide/">[ Guide ]</a>
+</div>
+</main>
+<script>
+document.getElementById("path").textContent = location.pathname;
+</script>
+</body>
+</html>
