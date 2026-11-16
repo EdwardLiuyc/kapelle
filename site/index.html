@@ -21,7 +21,7 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 </head>
 <body>
 
-<div class="strip"><span class="lvl">[info]</span>kapelle 0.1.0 is out. <a href="https://www.npmjs.com/package/kapelle">npm install -g kapelle</a></div>
+<div class="strip"><span class="lvl">[info]</span>kapelle 0.2.0 is out: <code>kapelle demo</code>, a starter loop, and <code>--model</code> for loops. <a href="https://github.com/EdwardLiuyc/kapelle/releases/tag/v0.2.0">Release notes</a></div>
 
 <header class="site-header">
 <div class="wrap">
@@ -72,6 +72,14 @@ try { var t = localStorage.getItem("kapelle:theme"); if (t === "light" || t === 
 <div class="panel" role="tabpanel" id="panel-src" aria-labelledby="tab-src">
 <pre><span class="label">from source · no build step</span><span class="p">$ </span>git clone https://github.com/EdwardLiuyc/kapelle.git
 <span class="p">$ </span>cd kapelle &amp;&amp; npm install &amp;&amp; node cli.ts --help</pre>
+<button class="copy" type="button">[ Copy ]</button>
+</div>
+</div>
+
+<div class="install" style="margin-top: 12px;">
+<div class="panel">
+<pre><span class="label">try it · no agent, no account</span><span class="c"># a room with an offline demo agent</span>
+<span class="p">$ </span>kapelle demo</pre>
 <button class="copy" type="button">[ Copy ]</button>
 </div>
 </div>
@@ -212,13 +220,14 @@ Say "go" to start.</div></div></div>
 <div>
 <p class="kicker"><b>03</b> recipes</p>
 <h2 id="recipes">Write the loop<br><em>in your own words.</em></h2>
-<p>A recipe is a Markdown file: the team and each one's agent, the steps, the outside review, the paths that need your yes, and rules for every worker. kapelle never reads it. Only the lead does. Keep it in <code>.kapelle/loops/</code> to share it with your team, or in <code>~/.config/kapelle/loops/</code> for every repository. A note changes one run and leaves the file alone.</p>
+<p>A recipe is a Markdown file: the team and each one's agent, the steps, the outside review, the paths that need your yes, and rules for every worker. kapelle never reads it. Only the lead does. kapelle ships one, <code>starter</code>: one agent builds, a second reviews. Keep your own in <code>.kapelle/loops/</code> to share it with your team, or in <code>~/.config/kapelle/loops/</code> for every repository. A note changes one run and leaves the file alone.</p>
 </div>
 <figure>
 <div class="shell">
 <div class="shell-bar"><span>~/src/kapelle</span><span>zsh</span></div>
 <pre><span class="p">$ </span>kapelle loop list
 fix-issue  .kapelle/loops/fix-issue.md
+starter  …/kapelle/assets/loops/starter.md
 <span class="p">$ </span>kapelle loop fix-issue 312
 <span class="c"># or with a note for this run, and a pi lead</span>
 <span class="p">$ </span>kapelle loop fix-issue 312 "skip rev2" --agent pi</pre>
