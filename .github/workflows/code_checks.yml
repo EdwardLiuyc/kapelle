@@ -43,6 +43,10 @@ jobs:
         # package.json claims macOS, so pack and run the package there too.
         # Pinned to GitHub's runner, not RUNNER, which can point at our own
         # Linux machine. The test's pty part is Linux-only and skips here.
+        # It runs only on a release PR, from a `release-*` branch into master,
+        # and a failure is fixed there (docs/RELEASING.md). On any other PR it
+        # is skipped, and a required check that is skipped counts as passed.
+        if: github.event_name == 'pull_request' && github.base_ref == 'master' && startsWith(github.head_ref, 'release-')
         runs-on: macos-latest
         timeout-minutes: 10
         steps:
