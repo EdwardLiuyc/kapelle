@@ -76,17 +76,20 @@ function typedValue(text: string): ConfigPatchValue {
   }
 }
 
-/** The keys whose typed text differs from the file's value, as a
- *  `PATCH /config` body. A key not in `typed` is unchanged. */
+/** The keys whose typed value differs from the file's, as a
+ *  `PATCH /config` body. Values are compared, not text, so `60000.0` or
+ *  other spacing in a list is no change. A key not in `typed` is unchanged. */
 export function configPatch(
   rows: readonly ConfigRow[],
   typed: Readonly<Record<string, string>>,
 ): ConfigPatch {
   const patch = new Map<string, ConfigPatchValue>();
   for (const r of rows) {
-    const was = valueText(r.file);
-    const text = (typed[r.key] ?? was).trim();
-    if (text !== was) patch.set(r.key, text === "" ? null : typedValue(text));
+    const text = (typed[r.key] ?? valueText(r.file)).trim();
+    const value = text === "" ? null : typedValue(text);
+    if (JSON.stringify(value) !== JSON.stringify(r.file ?? null)) {
+      patch.set(r.key, value);
+    }
   }
   return Object.fromEntries(patch);
 }

@@ -53,6 +53,11 @@ test("the patch has only the changed keys; blank is null, JSON is parsed, the re
   );
   // Unchanged text, and blank where the file has nothing, send nothing.
   assert.deepEqual(configPatch(rows, { stallIdleMs: "", ttlMs: "60000" }), {});
+  // The same value typed another way is no change either.
+  assert.deepEqual(
+    configPatch(rows, { ttlMs: "60000.0", linkPaths: '[ "node_modules" ]' }),
+    {},
+  );
   // The screen never guesses: the daemon refuses a value that is not JSON.
   assert.deepEqual(configPatch(rows, { linkPaths: "node_modules" }), {
     linkPaths: "node_modules",
