@@ -185,10 +185,11 @@ export const AGENTS: Record<string, AgentEntry> = {
       // Zero `session/request_permission` requests in any mode; under `safe` it
       // wrote the file anyway, so the policy has no jurisdiction.
       asksPermission: false,
-      // No modeMap: pi-acp exposes ACP session modes as thinking-effort levels
-      // (`off`…`xhigh`), not as plan/build/bypass style safety modes. Sending
-      // `session/set_mode` under `safe` would only change thinking effort and
-      // would not make `safe` any more binding.
+      // No modeMap: pi-acp exposes ACP session modes as thinking-effort levels,
+      // whose list differs per model (docs/FINDINGS.md §Thinking level), not as
+      // plan/build/bypass style safety modes. Sending `session/set_mode` under
+      // `safe` would only change thinking effort and would not make `safe` any
+      // more binding.
       // No `usage` on the prompt reply. It sends `usage_update` on 0.0.34.
       usage: "absent",
       // §M0-9, on 0.0.34, 2026-09-27, and again on 2026-10-21.
