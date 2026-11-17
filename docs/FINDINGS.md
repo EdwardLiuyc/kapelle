@@ -1770,7 +1770,7 @@ here, against a pin of 2.3.0. The kimi column was not measured on 2.3.0.
 | set each listed level | works | works | works | works | works | works |
 | set a bad value | `-32602` | **accepted; the level became `off`** | `-32603` `Internal error` | **accepted; the level became `medium`** | `-32602` | `-32602` |
 | `config_option_update` after a set | no | yes, and `current_mode_update` | no | yes | no | yes |
-| level lists over the models | 1 for 2 models | 31 for 395 models; 68 models offer only `off` | 2 for 12 models; `claude-haiku-4-5-20251001` has no option | 5 for 14 models; `auto` and `claude-haiku-4.5` have no option. The model option lists its 16 models 33 times | 1 for 2 models | differs over 8 models; `kimi-for-coding-highspeed` offers only `on`. Not counted: each reply adds the carried level, so a list's own levels are not always known |
+| level lists over the models | 1 for 2 models | 31 for 395 models; 68 models offer only `off` | 2 for 12 models; `claude-haiku-4-5-20251001` has no option | 5 for 14 models; `auto` and `claude-haiku-4.5` have no option. The model option lists its 16 models 33 times | 1 for 2 models | differs over 8 models; `kimi-for-coding-highspeed` offers only `on`. Not counted (see Notes) |
 | list shape at start | flat | flat | flat | flat | flat | flat |
 | a model change, level allowed | **back to `default`** | kept | kept | kept | kept | kept |
 | a model change, level not allowed | — | moves to another level, not always the nearest | `default` | `medium` | — | **kept, and added to the new list** |
@@ -1802,7 +1802,8 @@ Notes:
 - **kimi lists a level the model does not offer** after a model change. For
   `kimi-for-coding-highspeed`, the reply listed `on` `max` after `max`, and `on` `low`
   after `low`: its own list is `on`. A set to a level outside the model's own list is
-  then refused with `-32602`.
+  then refused with `-32602`. Each reply adds the carried level, so a list's own levels
+  are not always known, and the table gives kimi no count.
 - codex's older `models` object joins each model with an effort (`deepseek-flash[high]`).
   Its `configOptions` give the same choice as two options.
 

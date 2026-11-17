@@ -3903,7 +3903,9 @@ participant's `models`. No `kapelle room` verb changes a model.
 The person picks it as they pick the model. An agent takes an optional `thoughtLevel`,
 in `POST /rooms/:id/agents` and in each entry of `POST /rooms`'s `agents`, and
 `PATCH /rooms/:id/agents/:agentId` takes it too. `@name /level` shows the running agent's
-live list, and `@name /level <id>` picks one, in both screens. The room sends it with
+live list, and `@name /level <id>` picks one, in both screens. Their lines copy the shape
+of `/model`: `modelLines` for the list, `modelChanged` for a change's outcome
+(`client/command.ts`). The room sends it with
 `session/set_config_option`, before the participant's next turn, never during a turn, as
 M9-6 does for the model. The contract gets a minor version.
 
@@ -3918,23 +3920,33 @@ The screens read the level as they read the model, so these change too:
 
 Seven rules come from the measurement:
 
-1. **Send only a level from the participant's current list.** kapelle refuses any other
-   value itself: pi and copilot take a bad value with no error and change the level. The
-   list was flat on all six; a grouped one is made flat, as `modelsOf` does for models.
+1. **Send only a level from the participant's current list.** The daemon checks it, not
+   only the screens, so every client of the contract is covered: pi and copilot take a bad
+   value with no error and change the level. This is the opposite of `model`, which "the
+   harness checks, not the daemon" (`docs/CLIENT-API.md`). With a live session, `PATCH`
+   refuses an unlisted level with `400` `invalid_request` and sends nothing. With no
+   session yet (a join, or a participant with no harness), the daemon checks once the
+   session is up and the model is set: an unlisted level is then not sent, and a notice
+   says so, as rule 4. A join never fails for it. The list was flat on all six; a grouped
+   one is made flat, as `modelsOf` does for models.
 2. **The list belongs to the model.** After a model change, take the level and its list
    from the reply, and keep neither old one. A reply with no level option means the new
    model has none, and rule 7 applies. This differs from M9-6, where the model list stays
    as `session/new` sent it, because a reply can leave an option out: here the measured
    replies left the level out only on a model with none. A level the new model does not
    allow moves to another level, or is kept by kimi though the model does not offer it.
-3. **Send the level after the model**, at every start and every load. opencode resets the
-   level on every change to a different model, so a level sent first is lost.
+3. **Send the level after the model**, at every start, every load, and in a `PATCH` that
+   carries both. opencode resets the level on every change to a different model, so a
+   level sent first is lost. The "model goes last" sentence of `PATCH` (`daemon.ts`,
+   `docs/CLIENT-API.md`) becomes "the model, then the level, go last".
 4. **A refused level is a notice, not a failure**, as M9-6 does for a refused model. The
    harness stays on the level it had. A listed level can still be refused: copilot refused
    `xhigh` on its start model once, and kimi refuses a level its own reply listed.
-5. **Send the level again after every load**, as the model and the mode. The load was not
-   measured on four agents, so the answer must not matter. Only a level the harness took
-   is sent again: a refused one is not, as for the model (`core/room.ts`).
+5. **Send the level again after every load**, in the order of rule 3, as the model and the
+   mode. The load was not measured on four agents, so the answer must not matter. Two
+   cases, as for the model (`core/room.ts`): the level asked at the join is sent again at
+   every revive, also after a refusal, since another model may allow it. A change during
+   a chat replaces it only when the harness took it; a refused change is not sent again.
 6. **On pi, a level is not a mode.** A level set also sends `current_mode_update`, but pi
    has no `modeMap` on purpose. The level leaves the saved mode and the status line's mode
    alone, and does not quiet the no-safety-mode or never-asks notices.
@@ -3953,12 +3965,14 @@ the room sends the person's level again when the new list holds it, or a notice 
 level moved.
 *Done when* tests cover the field on both routes and in `PATCH`, `/level` in both screens,
 the DTO's level and list, the level on `_client_participant_changed`, a change while the
-agent is busy that survives a restart, a value not in the list refused by kapelle with no
-request, a listed level the harness refuses, the list and level read again after a model
-change, a reply with no level option, the level sent after the model at a start and a
-load, the decision on a level lost on a model change, the level sent again after a revive
-and a refused one not sent again, a pi level that changes no mode, an agent with no level
-option, and the new fields in `docs/CLIENT-API.md`.
+agent is busy that survives a restart, an unlisted level refused by `PATCH` with `400`
+`invalid_request` and no request to the harness, an unlisted level at a join that is not
+sent and leaves a notice, a listed level the harness refuses, the list and level read
+again after a model change, a reply with no level option, the level sent after the model
+at a start, a load and a `PATCH` with both, the decision on a level lost on a model
+change, a join level sent again at a revive after a refusal, a refused change during a
+chat not sent again, a pi level that changes no mode, an agent with no level option, and
+the new fields and the refusal in `docs/CLIENT-API.md`.
 
 **M9-7 · kapelle runs after an npm install · M · needs nothing**
 A person installs kapelle with `npm install -g kapelle` and types `kapelle`. The name is
