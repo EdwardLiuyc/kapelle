@@ -1796,6 +1796,76 @@ test("a typed or patched model change answers with the model in use, keeps a ref
   );
 });
 
+test("a thinking level reaches both routes and PATCH, and an unlisted one is refused with nothing sent (M9-9)", async (t) => {
+  const d = await boot(t);
+  const cwd = await added(d, await gitRepo(t));
+  const record = join(await tempDir(t), "requests.jsonl");
+  const LEVELS = `node ${MOCK_AGENT} --scenario levels`;
+  const opened = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [
+      {
+        cmd: `${LEVELS} --record ${record}`,
+        name: "alice",
+        thoughtLevel: "low",
+      },
+    ],
+  });
+  assert.equal(opened.status, 201, JSON.stringify(opened.body));
+  const roomId = opened.body.id;
+  const alice = only(opened.body);
+  assert.equal(alice.thoughtLevel, "low");
+  assert.deepEqual(alice.thoughtLevels, [
+    { id: "low", name: "LOW" },
+    { id: "high", name: "HIGH" },
+  ]);
+  const bob = await api<ParticipantDto>(d, "POST", `/rooms/${roomId}/agents`, {
+    cmd: LEVELS,
+    name: "bob",
+    model: "mock/smart",
+    thoughtLevel: "max",
+  });
+  assert.equal(bob.status, 201);
+  assert.equal(bob.body.thoughtLevel, "max");
+
+  const roster = [{ id: alice.id, name: "alice" }];
+  const changed = await typed(d, roomId, "@alice /level high", roster);
+  assert.ok(changed.ok, JSON.stringify(changed));
+  assert.equal(changed.line, 'alice now thinks at the level "high"');
+
+  const base = `/rooms/${roomId}/agents/${alice.id}`;
+  const sets = async () =>
+    (await readFile(record, "utf8"))
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { configId?: string; value?: string })
+      .flatMap((s) => (s.configId ? [s.value] : []));
+  const before = await sets();
+  const unlisted = await api<RoomReply>(d, "PATCH", base, {
+    thoughtLevel: "max",
+  });
+  assert.equal(unlisted.status, 400, JSON.stringify(unlisted.body));
+  assert.equal(unlisted.body.error?.code, "invalid_request");
+  assert.match(unlisted.body.error?.message ?? "", /it lists low, high/);
+  assert.deepEqual(await sets(), before, "nothing reached the harness");
+
+  // The model, then the level: max is on mock/smart's list.
+  const both = await api<ParticipantDto>(d, "PATCH", base, {
+    model: "mock/smart",
+    thoughtLevel: "max",
+  });
+  assert.equal(both.status, 200, JSON.stringify(both.body));
+  assert.equal(both.body.model, "mock/smart");
+  assert.equal(both.body.thoughtLevel, "max");
+  assert.deepEqual((await sets()).slice(-2), ["mock/smart", "max"]);
+
+  for (const thoughtLevel of ["", 7, null]) {
+    const bad = await api<RoomReply>(d, "PATCH", base, { thoughtLevel });
+    assert.equal(bad.status, 400, JSON.stringify(bad.body));
+    assert.match(bad.body.error?.message ?? "", /"thoughtLevel" must be/);
+  }
+});
+
 test("each room command shows the daemon's own message for each refusal its route documents", async (t) => {
   const d = await boot(t);
   const repo = await gitRepo(t);

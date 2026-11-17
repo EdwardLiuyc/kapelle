@@ -3973,6 +3973,17 @@ at a start, a load and a `PATCH` with both, the decision on a level lost on a mo
 change, a join level sent again at a revive after a refusal, a refused change during a
 chat not sent again, a pi level that changes no mode, an agent with no level option, and
 the new fields and the refusal in `docs/CLIENT-API.md`.
+**Decided at pickup 2026-11-17 (#501):** the join form has no level row, and `/new` and
+`/add` take no `--level`. The API still takes `thoughtLevel` at a join; on screen, the
+person uses `@name /level`, which shows the true list. A model change during a chat
+sends no level: when it moved the level, a notice says so, and the level asked for
+becomes the one in use, so a revive does not bring the old one back. A `PATCH` with
+both still sends the level after the model. A model change that waits for a start is
+part of that start. Rule 5 is narrowed: after a start or a load, and after the model,
+the room sends the level asked for only when the harness reports another. A load can
+lose it: pi's level is its mode, and §Mode after load saw that change. The load was not
+measured again. No `kapelle room` verb takes a level; `kapelle room add --level` may
+follow, as M9-5b did for the model.
 
 **M9-7 · kapelle runs after an npm install · M · needs nothing**
 A person installs kapelle with `npm install -g kapelle` and types `kapelle`. The name is

@@ -6,7 +6,7 @@
  *   node cli.ts "hello" --cmd "node mock-agent.mjs" --mode safe
  *
  * It answers initialize / session/new / session/set_mode / session/prompt
- * (and `session/set_config_option` under `--scenario models`),
+ * (and `session/set_config_option` under `--scenario models` or `levels`),
  * streams a message, calls back into the client's fs/read_text_file, and asks
  * permission for a write — enough to prove every path in the client works.
  *
@@ -84,6 +84,8 @@ const SCENARIOS = {
   "prompt-error": "a note, then answers the prompt with a JSON-RPC error",
   models:
     "session/new and session/load list two models in a group, both starting on mock/fast; session/set_config_option takes a listed model and refuses any other with -32603, as pi and claude do; --model-current makes its reply name another model, --model-few makes its reply list only the model it took, as copilot's reply left an option out, --model-empty makes its model option list no models, and --model-exit makes the harness exit instead of answering; the handshake offers session/delete, which drops the session's --store file",
+  levels:
+    "session/new and session/load list three models, flat, starting on mock/fast at the thinking level high; mock/fast offers low and high, mock/smart low, high and max, and mock/plain no level option. A model change keeps a level the new model offers and moves any other to its first; a level set takes a listed level, sends current_mode_update with it as pi does, and refuses any other with -32602; --level-refuse <id> refuses that listed level with -32603, as copilot once did",
   "auth-required":
     "session/new fails with -32000 Authentication required, as pi does logged out",
   "auth-none":
@@ -114,6 +116,9 @@ const modelCurrent =
 const modelExit = process.argv.includes("--model-exit");
 const modelFew = process.argv.includes("--model-few");
 const modelEmpty = process.argv.includes("--model-empty");
+const levelRefuseAt = process.argv.indexOf("--level-refuse");
+const levelRefuse =
+  levelRefuseAt === -1 ? null : process.argv[levelRefuseAt + 1];
 const authHoldAt = process.argv.indexOf("--auth-hold");
 const authHoldFile = authHoldAt === -1 ? null : process.argv[authHoldAt + 1];
 const lockCwd = process.argv.includes("--lock-cwd");
@@ -351,6 +356,55 @@ const modelOptions = (currentValue = MODELS[0]) =>
       }
     : {};
 
+/** `levels`' models, each with the thinking levels it offers (§Thinking
+ *  level): the list belongs to the model. */
+const LEVELS = {
+  "mock/fast": ["low", "high"],
+  "mock/smart": ["low", "high", "max"],
+  "mock/plain": [],
+};
+const LEVEL_OPTION_ID = "effort-choice";
+/** The one session's model and level. A load starts on the first again. */
+let levelModel = "mock/fast";
+let level = "high";
+
+/** `levels`' options: the model, then the level when the model has one. */
+const levelOptions = () => ({
+  configOptions: [
+    {
+      id: MODEL_OPTION_ID,
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: levelModel,
+      options: Object.keys(LEVELS).map((value) => ({ value, name: value })),
+    },
+    ...(LEVELS[levelModel].length
+      ? [
+          {
+            id: LEVEL_OPTION_ID,
+            name: "Thinking",
+            category: "thought_level",
+            type: "select",
+            currentValue: level,
+            options: LEVELS[levelModel].map((value) => ({
+              value,
+              name: value.toUpperCase(),
+            })),
+          },
+        ]
+      : []),
+  ],
+});
+
+/** A start's options: `levels` on its first model and level again. */
+const startOptions = () => {
+  if (scenario !== "levels") return modelOptions();
+  levelModel = "mock/fast";
+  level = "high";
+  return levelOptions();
+};
+
 const update = (sessionId, u) =>
   notify("session/update", { sessionId, update: u });
 
@@ -366,9 +420,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   }
 
   if (recordFile && msg.method) {
+    const { configId, value } = msg.params ?? {};
     appendFileSync(
       recordFile,
-      `${JSON.stringify({ method: msg.method, cwd: process.cwd(), at: Date.now() })}\n`,
+      `${JSON.stringify({ method: msg.method, cwd: process.cwd(), at: Date.now(), ...(configId && { configId, value }) })}\n`,
     );
   }
 
@@ -454,7 +509,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       chmodSync("locked", 0o500);
       chmodSync(".", 0o500);
     }
-    reply(msg.id, { sessionId: sid, ...modelOptions() });
+    reply(msg.id, { sessionId: sid, ...startOptions() });
   }
 
   if (msg.method === "session/delete") {
@@ -496,7 +551,33 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     });
     sessions.add(sid);
     if (prompts.length > 0) lastPrompt.set(sid, prompts.at(-1));
-    reply(msg.id, modelOptions());
+    reply(msg.id, startOptions());
+    return;
+  }
+
+  if (msg.method === "session/set_config_option" && scenario === "levels") {
+    const { sessionId: sid, configId, value } = msg.params;
+    const refuse = (code, message) =>
+      send({ jsonrpc: "2.0", id: msg.id, error: { code, message } });
+    if (configId === MODEL_OPTION_ID) {
+      if (!Object.hasOwn(LEVELS, value))
+        return refuse(-32603, "Internal error");
+      levelModel = value;
+      // A level the new model does not offer moves to its first.
+      if (!LEVELS[value].includes(level)) level = LEVELS[value][0];
+      reply(msg.id, levelOptions());
+      return;
+    }
+    if (configId !== LEVEL_OPTION_ID || !LEVELS[levelModel].length) {
+      return refuse(-32602, `no option "${configId}" on ${levelModel}`);
+    }
+    if (!LEVELS[levelModel].includes(value)) {
+      return refuse(-32602, `no level "${value}"`);
+    }
+    if (value === levelRefuse) return refuse(-32603, "Internal error");
+    level = value;
+    update(sid, { sessionUpdate: "current_mode_update", currentModeId: value });
+    reply(msg.id, levelOptions());
     return;
   }
 

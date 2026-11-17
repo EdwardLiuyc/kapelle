@@ -42,6 +42,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   HELP,
+  levelLines,
   loopCommand,
   participantNow,
   type RouteCommand,
@@ -495,6 +496,40 @@ function panelParts({
       ],
       model,
       (v) => (v === OTHER_MODEL ? type() : set(v)),
+      back,
+    );
+  };
+
+  /** `@name /level` (M9-9): the model's levels to pick from. No `other…`
+   *  row: the daemon refuses a level its list does not hold. */
+  const pickLevel = async (
+    who: { id: string; name: string },
+    back: () => void = hidePanel,
+  ) => {
+    const roomId = view().roomId;
+    await fresh();
+    const r = await participantNow(d, roomId, who.id).catch(() => undefined);
+    if (!r?.ok) {
+      say(`! ${r ? r.message : NO_DAEMON}`);
+      setStatus();
+      return;
+    }
+    const { thoughtLevels, thoughtLevel } = r.p;
+    if (!thoughtLevels?.length) {
+      say(levelLines(r.p).join(" "));
+      setStatus();
+      return;
+    }
+    const { id, name } = who;
+    pickList(
+      `${who.name} · thinking level`,
+      thoughtLevels.map((l) => ({
+        value: l.id,
+        label: printable(l.id),
+        ...(l.name && l.name !== l.id && { description: printable(l.name) }),
+      })),
+      thoughtLevel,
+      (v) => void run({ verb: "patch", id, name, change: { thoughtLevel: v } }),
       back,
     );
   };
@@ -1436,6 +1471,7 @@ function panelParts({
     words,
     menu,
     pickModel,
+    pickLevel,
     showHelp,
     showSetup,
     setupDone,

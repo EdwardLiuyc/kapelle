@@ -353,10 +353,12 @@ export function roomSet(
     // set the model, so read the room again when either ends. A change of
     // model (M9-6) can also add a refusal notice, so that read redraws the
     // transcript; the others only need the header. Its `model` is `null`
-    // when the harness names none, and that one has a notice too.
+    // when the harness names none, and that one has a notice too. A change
+    // of thinking level (M9-9) is read the same way.
     if (
       update === "_client_participant_changed" &&
-      line.update.model !== undefined
+      (line.update.model !== undefined ||
+        line.update.thoughtLevel !== undefined)
     ) {
       loadDto(r, "loaded");
     } else if (

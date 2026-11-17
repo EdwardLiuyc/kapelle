@@ -47,7 +47,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 22 } as const;
+export const API_VERSION = { major: 1, minor: 23 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -427,6 +427,14 @@ export interface ParticipantDto {
    *  of model never changes this list. Absent with no harness running, and
    *  when it lists none. Since 1.17 (M9-6). */
   models?: { id: string; name: string }[];
+  /** The thinking level the harness is on, as it last said. Absent when
+   *  its model has no level option, and before a restored participant's
+   *  first revive. Since 1.23 (M9-9). */
+  thoughtLevel?: string;
+  /** The levels of the model in use. Unlike `models`, it changes with
+   *  every change of model. Absent with no harness running, and when the
+   *  model has no level option. Since 1.23 (M9-9). */
+  thoughtLevels?: { id: string; name: string }[];
   notices: Notice[];
 }
 

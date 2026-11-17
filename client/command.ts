@@ -99,6 +99,7 @@ export type RouteCommand =
         role?: string | null;
         mode?: string;
         model?: string;
+        thoughtLevel?: string;
       };
     };
 
@@ -115,6 +116,7 @@ export type Command =
   | { verb: "form"; form: "new" | "add" | "loop" | "config" }
   | { verb: "diff"; id: string; name: string; against: "head" | "base" }
   | { verb: "models"; id: string; name: string }
+  | { verb: "levels"; id: string; name: string }
   | {
       verb: "ff";
       id: string;
@@ -132,6 +134,7 @@ export const HELP = [
   "@name /role <role|none>",
   "@name /mode <ask|safe|auto>",
   "@name /model [id]",
+  "@name /level [id]",
   "@name /cancel",
   "@name /remove",
   "@name /diff [base]",
@@ -150,6 +153,7 @@ export const USAGE: Record<string, string> = {
   role: "usage: @name /role <role|none>",
   mode: "usage: @name /mode <ask|safe|auto>",
   model: "usage: @name /model [id]",
+  level: "usage: @name /level [id]",
   cancel: "usage: @name /cancel",
   remove: "usage: @name /remove",
   diff: "usage: @name /diff [base]",
@@ -177,6 +181,7 @@ const AGENT_VERBS = new Set([
   "role",
   "mode",
   "model",
+  "level",
   "cancel",
   "remove",
   "diff",
@@ -402,8 +407,9 @@ export function parseCommand(
   if (verb === "cancel" || verb === "remove") {
     return args.length ? { error: USAGE[verb] as string } : { verb, id, name };
   }
-  // The live list with no id (M9-6).
+  // The live list with no id (M9-6, M9-9).
   if (verb === "model" && !args.length) return { verb: "models", id, name };
+  if (verb === "level" && !args.length) return { verb: "levels", id, name };
   if (args.length !== 1) return { error: USAGE[verb] as string };
   const value = args[0] as string;
   const change =
@@ -413,7 +419,9 @@ export function parseCommand(
         ? { role: value === "none" ? null : value }
         : verb === "model"
           ? { model: value }
-          : { mode: value };
+          : verb === "level"
+            ? { thoughtLevel: value }
+            : { mode: value };
   return { verb: "patch", id, name, change };
 }
 
@@ -520,6 +528,22 @@ function modelChanged(name: string, asked: string, p: ParticipantDto) {
   return `! ${name} is not confirmed on the model "${asked}"`;
 }
 
+/** What `@name /level <id>` did (M9-9), as `modelChanged`. The daemon
+ *  refused an unlisted level already, so a level not in use here waits, or
+ *  was refused by the harness, which the room's notice says. */
+function levelChanged(name: string, asked: string, p: ParticipantDto) {
+  if (asked === p.thoughtLevel) {
+    return `${name} now thinks at the level "${asked}"`;
+  }
+  if (p.status === "busy") {
+    return `${name} gets the thinking level "${asked}" before its next turn`;
+  }
+  if (p.status !== "idle") {
+    return `${name} gets the thinking level "${asked}" when it starts again`;
+  }
+  return `! ${name} is not confirmed on the thinking level "${asked}"`;
+}
+
 /** One participant as the daemon has it now: its live models for
  *  `@name /model` (M9-6). A refusal is the daemon's own message. */
 export async function participantNow(
@@ -556,6 +580,33 @@ export function modelLines(p: ParticipantDto): string[] {
       ),
     ),
     `@${printable(p.name)} /model <id> picks one`,
+  ];
+}
+
+/** `@name /level` as lines (M9-9), as `modelLines`: the level in use,
+ *  then the model's levels, the one in use marked. */
+export function levelLines(p: ParticipantDto): string[] {
+  if (!p.thoughtLevels?.length) {
+    return [
+      printable(
+        p.status === "idle" || p.status === "busy"
+          ? `${p.name} has no thinking level${p.model ? ` on the model "${p.model}"` : ""}`
+          : `${p.name} has no harness running; its levels show after its next start`,
+      ),
+    ];
+  }
+  return [
+    printable(
+      p.thoughtLevel
+        ? `${p.name} thinks at "${p.thoughtLevel}"`
+        : `${p.name}'s thinking levels`,
+    ),
+    ...p.thoughtLevels.map((l) =>
+      printable(
+        `${l.id === p.thoughtLevel ? "*" : " "} ${l.id}${l.name && l.name !== l.id ? `  ${l.name}` : ""}`,
+      ),
+    ),
+    `@${printable(p.name)} /level <id> picks one`,
   ];
 }
 
@@ -750,7 +801,7 @@ export async function runCommand(
         body: c.change,
       });
       if (!r.ok) return refused(r.error.message, r.error.code);
-      const { name, role, mode, model } = c.change;
+      const { name, role, mode, model, thoughtLevel } = c.change;
       const line =
         name !== undefined
           ? `renamed ${c.name} to ${r.body.name}`
@@ -760,7 +811,9 @@ export async function runCommand(
               ? `${c.name} is now ${r.body.role}`
               : model !== undefined
                 ? modelChanged(c.name, model, r.body)
-                : `${c.name} is now in ${mode} mode`;
+                : thoughtLevel !== undefined
+                  ? levelChanged(c.name, thoughtLevel, r.body)
+                  : `${c.name} is now in ${mode} mode`;
       return { ok: true, line: printable(line), participant: r.body };
     }
   }
