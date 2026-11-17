@@ -618,6 +618,30 @@ test("a revive reads the room again, for the model it set after the load (M9-5)"
   assert.equal(daemon.reads.filter((id) => id === "r1").length, 2);
 });
 
+test("a change of thinking level reads the room again, for its list and notice (M9-9)", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => set.rooms.get("r1")?.dto !== undefined);
+  const stream = daemon.streams.get("r1");
+  assert.ok(stream);
+  stream.write(
+    `id: 1\ndata: ${JSON.stringify({
+      seq: 1,
+      at: "",
+      roomId: "r1",
+      participantId: "p1",
+      update: {
+        sessionUpdate: "_client_participant_changed",
+        thoughtLevel: "low",
+      },
+    })}\n\n`,
+  );
+  await until(() => said.loaded.length === 2);
+  assert.deepEqual(daemon.reads, ["r1", "r1"]);
+});
+
 // --- across a daemon restart (M6-7d, #236) ---------------------------------
 
 const added = (seq: number, id: string, name: string): RoomEventLine => ({

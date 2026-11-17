@@ -1432,3 +1432,34 @@ test("the loop form keeps recipe, task, note and command values that look like f
     assert.deepEqual(ran, [typed]);
   }
 });
+
+test("the join forms have no level row and the agent menu has no level command (#501)", async (t) => {
+  const fake = await fakeDaemon(t);
+  const box = makeBox(fake.d, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+  });
+  const allFormRows = (open: () => void) => {
+    box.hidePanel();
+    open();
+    let rows = "";
+    for (let i = 0; i < 12; i++) {
+      rows += `\n${shownOf(box)}`;
+      down(box, 1);
+    }
+    return rows;
+  };
+  const levelRow =
+    /^(?:▸ |→ | {2})(?:(?:thinking|thought) )?level(?:\s+.*)?$/im;
+  for (const rows of [
+    allFormRows(() => box.newForm()),
+    allFormRows(() => box.addForm()),
+  ]) {
+    assert.doesNotMatch(rows, levelRow);
+  }
+
+  box.hidePanel();
+  box.menu();
+  type(box, "level");
+  assert.doesNotMatch(shownOf(box), levelRow);
+});

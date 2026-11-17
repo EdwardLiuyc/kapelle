@@ -2298,7 +2298,7 @@ function createParticipant({
             ? `${spec.name} has no thinking level${on}; it was on "${before}"`
             : `${spec.name}'s thinking level moved ${before === undefined ? "" : `from "${before}" `}to "${after}"${on}`,
       };
-      if (askedLevel !== undefined) askedLevel = after;
+      askedLevel = after;
     }
     announceModel(moved);
   };

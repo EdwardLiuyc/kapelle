@@ -1439,9 +1439,9 @@ async function roomEntry(id: string) {
 }
 
 /**
- * `POST /rooms/:id/agents {agent | cmd, name?, role?, mode?, model?, base?,
- * settings?}` — one more participant (M6-3). 201 once its harness has a
- * session, as for `POST /rooms` (S13).
+ * `POST /rooms/:id/agents {agent | cmd, name?, role?, mode?, model?,
+ * thoughtLevel?, base?, settings?}` — one more participant (M6-3). 201 once
+ * its harness has a session, as for `POST /rooms` (S13).
  */
 async function postAgent(
   id: string,

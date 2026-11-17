@@ -232,8 +232,10 @@ test("@name /level <id> is a PATCH, and @name /level alone asks for the list (M9
   const r = parse("@bob /level a b");
   assert.ok(r && "error" in r && r.error === "usage: @name /level [id]");
   // No --level on /new or /add: the level is picked in the chat (#501).
-  const add = parse("/add mock --level max");
-  assert.ok(add && "error" in add, JSON.stringify(add));
+  for (const line of ["/new mock --level max", "/add mock --level max"]) {
+    const typed = parse(line);
+    assert.ok(typed && "error" in typed, JSON.stringify(typed));
+  }
 });
 
 test("the level list marks the one in use, and says why there is none (M9-9)", () => {

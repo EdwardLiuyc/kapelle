@@ -3807,6 +3807,25 @@ test("a level a model change moved stays moved after a revive (M9-9)", async (t)
   assert.equal(back.p.thoughtLevel, "low");
 });
 
+test("a level first reported after a model change is saved for a revive (M9-9)", async (t) => {
+  const record = join(await tempDir(t), "requests.jsonl");
+  const { repo, room, p, file } = await loading(t, "levels", {
+    model: "mock/plain",
+    args: ["--record", record],
+  });
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.thoughtLevel, "low");
+  assert.match(
+    levelNotices(p).join("\n"),
+    /thinking level moved to "low" with the model "mock\/smart"/,
+  );
+  await room.pause();
+  assert.equal(readRoomRecord(file).participants[0]?.thoughtLevel, "low");
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  assert.equal(back.p.thoughtLevel, "low");
+});
+
 test("a request takes a thinking level as a non-empty string, at add and in a PATCH (M9-9)", () => {
   assert.equal(mock("a", { thoughtLevel: "max" }).thoughtLevel, "max");
   assert.deepEqual(participantChanges({ thoughtLevel: "max" }), {
