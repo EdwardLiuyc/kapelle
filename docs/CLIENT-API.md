@@ -459,7 +459,8 @@ already underway keeps what it read.
 
 **Refusals:** `400` `invalid_request` when `cwd` is not absolute or does not exist.
 `403` `repo_not_added` when `cwd` is not in an added repository. `400`
-`invalid_config` when the file is not valid; the reply names the file and the key.
+`invalid_config` when the file is not valid; the reply names the file, and the key
+when one is at fault.
 
 ### `PATCH /config`
 
