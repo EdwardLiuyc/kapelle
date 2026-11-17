@@ -540,9 +540,10 @@ function strict<T>(fn: () => T): T {
  * again; a default is never written. A key the patch does not name keeps its
  * value and its place. Refused with nothing written: an unknown key, a bad
  * value, a file the strict reader refuses (invalid, or a symlink), and a
- * `.kapelle` that is not a real folder. A new `linkPaths` is also checked
- * against git, as `POST /repos` checks it, so the next room cannot refuse
- * what was saved; that refusal is `validateWorktreeLinks`'s `LinkPathError`.
+ * `.kapelle` that is not a real folder. The `linkPaths` the file will hold
+ * are also checked against git, as `POST /repos` does, so the next room
+ * cannot refuse what was saved; that refusal is `validateWorktreeLinks`'s
+ * `LinkPathError`.
  */
 export async function saveProjectConfig(
   root: string,
@@ -559,19 +560,32 @@ export async function saveProjectConfig(
   const set = Object.fromEntries(
     Object.entries(patch).filter(([, value]) => value !== null),
   );
-  const checked = strict(() => projectValues(set, path));
-  if (checked.linkPaths) await validateWorktreeLinks(root, checked.linkPaths);
+  // A bad value in the patch is refused before the file is read.
+  strict(() => projectValues(set, path));
 
-  // Nothing waits from here to the rename, so two saves cannot interleave.
-  const raw = strict(() => readProjectRaw(root));
-  strict(() => projectValues(raw, path));
-  const next = { ...raw };
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === null) delete next[key];
-    else next[key] = value;
+  for (;;) {
+    const raw = strict(() => readProjectRaw(root));
+    // Never replace a file the strict reader refuses, even when the patch
+    // would remove the bad key.
+    strict(() => projectValues(raw, path));
+    const next = { ...raw };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) delete next[key];
+      else next[key] = value;
+    }
+    if (JSON.stringify(next) === JSON.stringify(raw)) return;
+
+    // Check the list the file will hold, not only a list this patch names.
+    const checked = strict(() => projectValues(next, path));
+    if (checked.linkPaths) await validateWorktreeLinks(root, checked.linkPaths);
+
+    // The git check waits. If another save landed meanwhile, merge into its
+    // result and check again; then nothing waits between this read and write.
+    const current = strict(() => readProjectRaw(root));
+    if (JSON.stringify(current) !== JSON.stringify(raw)) continue;
+    writeProjectFile(root, next);
+    return;
   }
-  if (JSON.stringify(next) === JSON.stringify(raw)) return;
-  writeProjectFile(root, next);
 }
 
 /**

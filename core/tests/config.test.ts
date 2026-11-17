@@ -567,6 +567,19 @@ test("a refused save leaves the file as it was", async (t) => {
   assert.equal(await fileText(root), was);
 });
 
+test("a save checks the linkPaths the file will hold, even when the patch names another key", async (t) => {
+  const root = await repo(t);
+  await writeProject(root, { ttlMs: 60000, linkPaths: ["README.md"] });
+  const was = await fileText(root);
+
+  await assert.rejects(
+    saveProjectConfig(root, { ttlMs: 120000 }),
+    (err: Error) =>
+      err instanceof LinkPathError && /is tracked by git/.test(err.message),
+  );
+  assert.equal(await fileText(root), was);
+});
+
 test("an invalid or symlinked file, or a linked .kapelle, is never written", async (t) => {
   const root = await tempDir(t);
   await writeProject(root, { stallIdle: 1 });

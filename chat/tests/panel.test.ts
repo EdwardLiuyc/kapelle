@@ -14,6 +14,7 @@ import test, { type TestContext } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { parseCommand, type RouteCommand } from "../../client/command.ts";
 import type {
+  ConfigView,
   HarnessesReply,
   ParticipantDto,
   RoomDto,
@@ -97,6 +98,20 @@ const installedReply = (): HarnessesReply => ({
   ],
 });
 
+const configReply: ConfigView = {
+  root: "/repo",
+  path: "/repo/.kapelle/config.json",
+  rows: [
+    {
+      key: "ttlMs",
+      value: 60000,
+      default: 3600000,
+      file: 60000,
+      source: "config",
+    },
+  ],
+};
+
 async function fakeDaemon(
   t: TestContext,
   {
@@ -104,20 +119,25 @@ async function fakeDaemon(
     holdDone = false,
     holdPost = false,
     holdInstall = false,
+    holdConfig = false,
     got = reply(),
     found = reply(),
     installed = installedReply(),
+    config = configReply,
     room,
   }: {
     holdGet?: boolean;
     holdDone?: boolean;
     holdPost?: boolean;
     holdInstall?: boolean;
+    holdConfig?: boolean;
     /** What `GET /harnesses` and `POST /harnesses` (a new find) answer. */
     got?: HarnessesReply;
     found?: HarnessesReply;
     /** The find at the end of `POST /harnesses/install`. */
     installed?: HarnessesReply;
+    /** What `GET /config` answers. */
+    config?: ConfigView;
     /** Whose `GET /rooms/r/agents/:id` answers, for `@name /model`
      *  (M9-6). */
     room?: RoomDto;
@@ -130,6 +150,8 @@ async function fakeDaemon(
   const postRelease = deferred();
   const installSeen = deferred();
   const installRelease = deferred();
+  const configSeen = deferred();
+  const configRelease = deferred();
   let installBody: unknown;
   let posts = 0;
   const server = createServer((req, res) => {
@@ -140,6 +162,13 @@ async function fakeDaemon(
       if (agent && req.method === "GET") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(agent));
+        return;
+      }
+      if (req.method === "GET" && req.url?.startsWith("/config?cwd=")) {
+        configSeen.resolve();
+        if (holdConfig) await configRelease.promise;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(config));
         return;
       }
       if (req.method === "GET" && req.url === "/harnesses") {
@@ -201,6 +230,8 @@ async function fakeDaemon(
     postRelease,
     installSeen,
     installRelease,
+    configSeen,
+    configRelease,
     installBody: () => installBody,
     posts: () => posts,
   };
@@ -254,6 +285,22 @@ function makeBox(
     left: () => "",
   } as unknown as Parameters<typeof panelParts>[0]);
 }
+
+test("a late config read does not replace a newer pop-up (M10-5)", async (t) => {
+  const fake = await fakeDaemon(t, { holdConfig: true });
+  const box = makeBox(fake.d);
+  const opening = box.configForm();
+  await fake.configSeen.promise;
+
+  box.showPanel("replacement", {
+    render: () => ["replacement"],
+    invalidate() {},
+  });
+  fake.configRelease.resolve();
+  await opening;
+
+  assert.equal(box.panel?.title, "replacement");
+});
 
 test("startup still opens setup when the person has not touched it", async (t) => {
   const fake = await fakeDaemon(t);

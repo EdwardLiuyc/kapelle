@@ -212,9 +212,12 @@ function panelParts({
   end: (code: number, ...last: string[]) => void;
   left: () => string;
 }) {
-  /** The pop-up, while one is open (M4-5), and pi-tui's handle on it. */
+  /** The open pop-up, while one is open (M4-5), and pi-tui's handle on it. */
   let panel: Panel | undefined;
   let overlay: OverlayHandle | undefined;
+  /** Incremented whenever the pop-up opens, closes or is replaced. An async
+   *  panel load captures it, so a late answer cannot replace a newer box. */
+  let panelGeneration = 0;
   /** Each opening of the setup list, and whether the person has opened or
    *  dismissed it. The startup response must not reopen it after a close. */
   let setupGeneration = 0;
@@ -250,6 +253,7 @@ function panelParts({
    *  the next question waits too; any other box makes way for one. An
    *  answer, or a close from elsewhere, opens the next itself. */
   const hidePanel = () => {
+    panelGeneration += 1;
     const away = queue.away();
     panel = undefined;
     overlay?.hide();
@@ -320,6 +324,7 @@ function panelParts({
   /** Shows `body` in the pop-up. A new body replaces the last one in
    *  the same box, as the menu gives way to a pick list. */
   const showPanel = (title: string, body: Component, setup?: number) => {
+    panelGeneration += 1;
     panel = { title, body, ...(setup !== undefined && { setup }) };
     queue.show(undefined);
     if (!overlay) {
@@ -1376,6 +1381,7 @@ function panelParts({
    */
   const configForm = async (back: () => void = hidePanel): Promise<void> => {
     const cwd = rooms.get(view().roomId)?.entry.cwd ?? absoluteFolder();
+    const opening = panelGeneration;
     const fail = (text: string) => {
       if (panel) {
         panel.error = text;
@@ -1387,8 +1393,15 @@ function panelParts({
     };
     if (!cwd) return fail(FOLDER_GONE);
     await fresh();
-    const r = await readConfig(d, cwd).catch(() => undefined);
-    if (!r) return fail(NO_DAEMON);
+    if (panelGeneration !== opening) return;
+    let r: Awaited<ReturnType<typeof readConfig>>;
+    try {
+      r = await readConfig(d, cwd);
+    } catch {
+      if (panelGeneration !== opening) return;
+      return fail(NO_DAEMON);
+    }
+    if (panelGeneration !== opening) return;
     if (!r.ok) {
       if (r.error.code === "repo_not_added") {
         return askToAdd(cwd, () => configForm(back));

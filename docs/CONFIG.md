@@ -84,7 +84,7 @@ skipped. The daemon keeps booting and serving the rest.
 | ❌ | wrong-layer key | `{"port": 5000}` | `<path>: "port" is daemon-wide; put it in <user-config-path>.` |
 | ❌ | wrong type | `{"ttlMs": "soon"}`, `{"maxConcurrency": 1.5}`, `{"linkPaths": "node_modules"}` | whole-number rule naming the key, or the `linkPaths` array rule |
 | ❌ | bad link path | `{"linkPaths": ["/x"]}`, `["../x"]`, `["a", "a/b"]`, `[".git"]`, `["sub/.git"]`, `42` | entry-specific rule naming the file and `linkPaths[i]` |
-| ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path or a directory entry whose real target leaves the checkout | refused when the repository is added, a run starts, or a room opens, as `invalid_config`; the path and its entries are checked again when a checkout is made |
+| ❌ | tracked / escaping link | `{"linkPaths": ["README.md"]}`, a path or a directory entry whose real target leaves the checkout | refused when the repository is added, a run starts, a room opens, or `PATCH /config` writes, as `invalid_config`; the path and its entries are checked again when a checkout is made |
 | ❌ | link git would see | an untracked path no ignore rule matches | refused when a checkout is made: the task fails, or the room's add is a 400 `invalid_config`; the links are removed again |
 | ❌ | out of range | negatives; `{"maxConcurrency": 0}`, `{"orchestratorTurnCap": 0}` | `0 or greater` (watchdog/retention) or `1 or greater` (concurrency/cap) |
 | ❌ | invalid JSON / non-object / unreadable | — | the same three structural refusals as the user file |
@@ -126,12 +126,12 @@ or `env`. Enter edits a value; a blank value removes the key, so its default app
 again. `linkPaths` is a JSON array, such as `["node_modules"]`. The save row sends
 only the changed keys. On a pipe, `/config` prints the same rows and edits nothing.
 
-The daemon checks each value with the rules above before it writes, and a new
-`linkPaths` also against git, as `POST /repos` does. It never writes a default, and it
-never writes over a file the reader refuses: an invalid file is shown as the refusal
-and stays as it is. A new file is `0644` whatever the umask; an existing file keeps
-its mode. A saved value applies to later runs, new rooms, the next sweep and new
-checkouts, not to work already underway.
+The daemon checks each value with the rules above before it writes, and the
+`linkPaths` the file will hold are also checked against git, as `POST /repos` does.
+It never writes a default, and it never writes over a file the reader refuses: an
+invalid file is shown as the refusal and stays as it is. A new file is `0644`
+whatever the umask; an existing file keeps its mode. A saved value applies to later
+runs, new rooms, the next sweep and new checkouts, not to work already underway.
 
 ## Environment — `KAPELLE_*`
 

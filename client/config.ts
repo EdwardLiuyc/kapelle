@@ -53,11 +53,24 @@ export function configLines(v: ConfigView): string[] {
   ];
 }
 
+/** Any JSON value a person can type. The daemon owns the rules for a
+ *  particular key; this side only keeps the value as JSON. */
+type ConfigPatchValue =
+  | string
+  | number
+  | boolean
+  | null
+  | ConfigPatchValue[]
+  | { [key: string]: ConfigPatchValue };
+
+/** A `PATCH /config` body: the keys that changed, with their JSON values. */
+export type ConfigPatch = Record<string, ConfigPatchValue>;
+
 /** Text as JSON when it parses, else the text itself for the daemon to
  *  refuse. */
-function typedValue(text: string): unknown {
+function typedValue(text: string): ConfigPatchValue {
   try {
-    return JSON.parse(text);
+    return JSON.parse(text) as ConfigPatchValue;
   } catch {
     return text;
   }
@@ -68,12 +81,12 @@ function typedValue(text: string): unknown {
 export function configPatch(
   rows: readonly ConfigRow[],
   typed: Readonly<Record<string, string>>,
-): Record<string, unknown> {
-  const patch: Record<string, unknown> = {};
+): ConfigPatch {
+  const patch = new Map<string, ConfigPatchValue>();
   for (const r of rows) {
     const was = valueText(r.file);
     const text = (typed[r.key] ?? was).trim();
-    if (text !== was) patch[r.key] = text === "" ? null : typedValue(text);
+    if (text !== was) patch.set(r.key, text === "" ? null : typedValue(text));
   }
-  return patch;
+  return Object.fromEntries(patch);
 }

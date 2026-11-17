@@ -38,7 +38,7 @@
 
 import { parseArgs } from "node:util";
 
-import { CONFIG_APPLIES } from "./config.ts";
+import { CONFIG_APPLIES, type ConfigPatch } from "./config.ts";
 import type {
   ConfigView,
   DeletePreview,
@@ -81,7 +81,7 @@ export type RouteCommand =
   | { verb: "delete" }
   | { verb: "title"; title: string }
   | { verb: "cap"; turnCap: number }
-  | { verb: "config"; cwd: string; patch: Record<string, unknown> }
+  | { verb: "config"; cwd: string; patch: ConfigPatch }
   | { verb: "remove" | "cancel"; id: string; name: string }
   | {
       verb: "forward";
