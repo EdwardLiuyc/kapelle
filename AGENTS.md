@@ -87,6 +87,7 @@ touches a key.
 
 ```bash
 npm run check          # tsc --noEmit
+npm run check:changelog # the first CHANGELOG section names package.json's version
 npm run fmt            # biome format + lint, with fixes
 npm run fmt:check      # biome format + lint, check only
 npm run test           # node:test: pure functions and wire behaviour; no harness needed
@@ -311,11 +312,13 @@ npx -y markdownlint-cli2 --config .markdownlint.json $(git ls-files '*.md')
 Fix findings before finishing. An inline `<!-- markdownlint-disable MD0xx -->` is allowed
 only with a comment saying why.
 
-If every changed file is a `.md` file, this is the only check to run, with two
-exceptions: `assets/orchestrator.md` and the recipes in `assets/loops/`. They ship in the
-package, and `kapelle loop` pastes them, so `tests/package.test.ts`,
-`tests/loop-cli.test.ts` and `client/tests/loop.test.ts` read them. A change to them runs
-the full gate. No test reads any other tracked `.md` file.
+If every changed file is a `.md` file, this is the only check to run, with three
+exceptions: `assets/orchestrator.md`, the recipes in `assets/loops/`, and `CHANGELOG.md`.
+The first two ship in the package, and `kapelle loop` pastes them, so
+`tests/package.test.ts`, `tests/loop-cli.test.ts` and `client/tests/loop.test.ts` read
+them. A change to them runs the full gate. `CHANGELOG.md` must also run
+`npm run check:changelog`, so a changelog-only edit cannot skip the version guard. No test
+reads any other tracked `.md` file.
 
 ## Format and lint (TS/JS)
 

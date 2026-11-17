@@ -42,6 +42,7 @@
     "fmt:check": "biome check .",
     "selftest": "node cli.ts \"self test\" --cmd \"node mock-agent.mjs\" --mode auto",
     "check": "if find . -path ./node_modules -prune -o \\( -name '*.ts' -o -name '*.mts' -o -name '*.cts' \\) -print | grep -q .; then tsc --noEmit; else echo 'check: no TypeScript files yet; tsc skipped'; fi",
+    "check:changelog": "node .github/scripts/check-changelog.mjs",
     "knip": "knip --no-config-hints && knip --production --include files --no-config-hints",
     "test": "node --test --test-timeout=30000 --test-concurrency=4",
     "test:adaptive": "node --test --test-timeout=30000",

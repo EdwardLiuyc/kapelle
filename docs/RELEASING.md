@@ -4,6 +4,12 @@ How a version of kapelle gets to npm. M9-8 (`docs/STORIES.md`) owns the publish
 workflow, `.github/workflows/publish.yml`: the GitHub Actions job that publishes on a
 tag.
 
+## Run a release
+
+Open the release issue from `.github/ISSUE_TEMPLATE/release.md`, then start
+`kapelle loop release <issue>`. The recipe is `.kapelle/loops/release.md`; it has one
+release manager, no reviewer panel, and stops for the person at each gate.
+
 ## Release readiness
 
 Do this before the repository is made public, and again before each publish if `master`
@@ -103,11 +109,14 @@ The version is the one in `package.json`. The first release tags `0.1.0` as it i
 not bump it by habit. For a later version, update `package.json` on a branch named
 `release-<version>` with `npm version <version> --no-git-tag-version`. Only that name
 runs `package-macos` on the pull request. On the same branch, add a `## <version>`
-section at the top of `CHANGELOG.md`, from `git log v<previous>..origin/master`. Group it
+section at the top of `CHANGELOG.md`; the heading is the version and nothing else. Take
+the entries from `git log v<previous>..origin/master`. Group it
 under `Added`, `Changed` and `Fixed`, and give each line its PR number. List only what a
 user can see: leave out a pull request that changes only docs or tests. The release
 writes this section; a pull request does not. Commit both, and land that commit on
-`master` through the normal review.
+`master` through the normal review. The release PR uses `Refs #<issue>`, not
+`Closes #<issue>`: the release issue stays open until the publish and clean-machine
+check are recorded.
 
 Create the tag on the final `master` commit that will be published, and push it. Tag
 `origin/master`, not a local `master` that may be behind it. Check first that its
@@ -143,7 +152,7 @@ to a publish from a job of a public repository, so the first version has none.
 5. Write the GitHub release notes for the tag. Say the package supports Linux and macOS
    only.
 
-The next version is the first one the job publishes.
+`v0.2.0` was the first version the publish job published.
 
 ## The gate
 
