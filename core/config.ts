@@ -591,9 +591,14 @@ export async function saveProjectConfig(
 /**
  * The project file, written so the strict reader accepts it: a plain file
  * that keeps its mode, or 0644 for a new one whatever the umask, written to
- * a temporary file and renamed, so no reader sees half of it. The rename
- * replaces a link rather than following it, and a `.kapelle` that is a link
- * is refused, so the write stays in the repository.
+ * a temporary file and renamed, so no reader sees half of it. The temporary
+ * file is made with that mode, so it is never open to the group or others,
+ * even before the chmod that undoes the umask; an fd opened in that moment
+ * could write the config after the rename. The rename replaces a link rather
+ * than following it, and a `.kapelle` that is a link is refused, so the
+ * write stays in the repository. A crash between the write and the rename
+ * leaves `config.json.<hex>.tmp` beside the file; nothing reads it, and it
+ * can be deleted.
  */
 function writeProjectFile(root: string, values: Record<string, unknown>) {
   const dir = join(root, STATE_DIR);
@@ -607,7 +612,10 @@ function writeProjectFile(root: string, values: Record<string, unknown>) {
   const mode = was ? was.mode & 0o777 : 0o644;
   const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    writeFileSync(tmp, `${JSON.stringify(values, null, 2)}\n`, { flag: "wx" });
+    writeFileSync(tmp, `${JSON.stringify(values, null, 2)}\n`, {
+      flag: "wx",
+      mode,
+    });
     chmodSync(tmp, mode);
     renameSync(tmp, path);
   } catch (err) {

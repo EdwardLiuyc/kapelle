@@ -8,6 +8,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import {
   chmod,
   mkdir,
@@ -18,6 +19,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -543,6 +545,32 @@ test("a new file is 0644 whatever the umask, and an existing file keeps its mode
   await chmod(projectFile(root), 0o600);
   await saveProjectConfig(root, { maxConcurrency: 3 });
   assert.equal((await stat(projectFile(root))).mode & 0o777, 0o600);
+});
+
+test("the temporary file is never group-writable, even for a moment, under umask 0002", async (t) => {
+  // Seen at the chmod: until then a file made with 0666 & ~umask is open to
+  // the group, and an fd opened then could write the config after the rename.
+  const seen: number[] = [];
+  const realChmod = fs.chmodSync;
+  t.mock.method(fs, "chmodSync", (path: fs.PathLike, mode: fs.Mode) => {
+    seen.push(fs.statSync(path).mode & 0o777);
+    realChmod(path, mode);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const root = await tempDir(t);
+  const before = process.umask(0o002);
+  try {
+    await saveProjectConfig(root, { maxConcurrency: 2 });
+    realChmod(projectFile(root), 0o600);
+    await saveProjectConfig(root, { maxConcurrency: 3 });
+  } finally {
+    process.umask(before);
+  }
+  assert.deepEqual(seen, [0o644, 0o600]);
 });
 
 test("a refused save leaves the file as it was", async (t) => {
