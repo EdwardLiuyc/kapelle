@@ -85,7 +85,7 @@ const SCENARIOS = {
   models:
     "session/new and session/load list two models in a group, both starting on mock/fast; session/set_config_option takes a listed model and refuses any other with -32603, as pi and claude do; --model-current makes its reply name another model, --model-few makes its reply list only the model it took, as copilot's reply left an option out, --model-empty makes its model option list no models, and --model-exit makes the harness exit instead of answering; the handshake offers session/delete, which drops the session's --store file",
   levels:
-    "session/new and session/load list three models, flat, starting on mock/fast at the thinking level high; mock/fast offers low and high, mock/smart low, high and max, and mock/plain no level option. A model change keeps a level the new model offers and moves any other to its first; a level set takes a listed level, sends current_mode_update with it as pi does, and refuses any other with -32602; --level-refuse <id> refuses that listed level with -32603, as copilot once did",
+    "session/new and session/load list three models, flat, starting on mock/fast at the thinking level high; mock/fast offers low and high, mock/smart low, high and max, and mock/plain no level option. A model change keeps a level the new model offers and moves any other to its first; a level set takes a listed level, sends current_mode_update with it as pi does, and refuses any other with -32602; --level-refuse <id> refuses that listed level with -32603, as copilot once did; --level-grouped groups the levels, --level-no-options sends the option without a list, and --level-empty-reply answers a model change without configOptions",
   "auth-required":
     "session/new fails with -32000 Authentication required, as pi does logged out",
   "auth-none":
@@ -119,6 +119,9 @@ const modelEmpty = process.argv.includes("--model-empty");
 const levelRefuseAt = process.argv.indexOf("--level-refuse");
 const levelRefuse =
   levelRefuseAt === -1 ? null : process.argv[levelRefuseAt + 1];
+const levelGrouped = process.argv.includes("--level-grouped");
+const levelNoOptions = process.argv.includes("--level-no-options");
+const levelEmptyReply = process.argv.includes("--level-empty-reply");
 const authHoldAt = process.argv.indexOf("--auth-hold");
 const authHoldFile = authHoldAt === -1 ? null : process.argv[authHoldAt + 1];
 const lockCwd = process.argv.includes("--lock-cwd");
@@ -368,6 +371,13 @@ const LEVEL_OPTION_ID = "effort-choice";
 let levelModel = "mock/fast";
 let level = "high";
 
+/** The levels of the model in use, before any grouping. */
+const levelValues = () =>
+  LEVELS[levelModel].map((value) => ({
+    value,
+    name: value.toUpperCase(),
+  }));
+
 /** `levels`' options: the model, then the level when the model has one. */
 const levelOptions = () => ({
   configOptions: [
@@ -387,10 +397,11 @@ const levelOptions = () => ({
             category: "thought_level",
             type: "select",
             currentValue: level,
-            options: LEVELS[levelModel].map((value) => ({
-              value,
-              name: value.toUpperCase(),
-            })),
+            options: levelNoOptions
+              ? undefined
+              : levelGrouped
+                ? [{ group: "mock", name: "Mock", options: levelValues() }]
+                : levelValues(),
           },
         ]
       : []),
@@ -565,7 +576,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       levelModel = value;
       // A level the new model does not offer moves to its first.
       if (!LEVELS[value].includes(level)) level = LEVELS[value][0];
-      reply(msg.id, levelOptions());
+      reply(msg.id, levelEmptyReply ? {} : levelOptions());
       return;
     }
     if (configId !== LEVEL_OPTION_ID || !LEVELS[levelModel].length) {

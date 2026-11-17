@@ -779,7 +779,7 @@ function levelOptionOf(
   options: SessionConfigOption[] | undefined,
 ): LevelOption | undefined {
   const o = options?.find((x) => x.category === "thought_level");
-  return o?.type === "select" ? o : undefined;
+  return o?.type === "select" && Array.isArray(o.options) ? o : undefined;
 }
 
 /** Its levels, made flat, as `modelsOf` makes the models. */
@@ -2221,10 +2221,8 @@ function createParticipant({
       model = now?.type === "select" ? now.currentValue : target;
       asked = target;
       // The level list belongs to the model: take the reply's, or none
-      // (M9-9). A reply with no options at all says nothing of it.
-      if (Array.isArray(res?.configOptions)) {
-        levelOption = levelOptionOf(res.configOptions);
-      }
+      // (M9-9). A reply without an option means the new model has none.
+      levelOption = levelOptionOf(res?.configOptions);
       // It took the set, yet names another model.
       modelLine =
         model === target

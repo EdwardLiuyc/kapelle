@@ -3584,6 +3584,78 @@ test("an agent or a model with no level option takes the join, with a notice (M9
   );
 });
 
+test("a level option with no list is treated as no level option, not a failed join (M9-9)", async (t) => {
+  const { p, sent } = await levelRoom(
+    t,
+    { thoughtLevel: "low" },
+    " --level-no-options",
+  );
+  assert.equal(p.status(), "idle");
+  assert.equal(p.thoughtLevel, undefined);
+  assert.equal(p.thoughtLevels, undefined);
+  assert.deepEqual(levelNotices(p), [
+    'mock-agent has no thinking level on the model "mock/fast", so the level "low" was not set',
+  ]);
+  assert.deepEqual(levelSets(await sent()), []);
+});
+
+test("a grouped level list is made flat (M9-9)", async (t) => {
+  const { p } = await levelRoom(
+    t,
+    { model: "mock/smart", thoughtLevel: "max" },
+    " --level-grouped",
+  );
+  assert.equal(p.thoughtLevel, "max");
+  assert.deepEqual(p.thoughtLevels, [
+    { id: "low", name: "LOW" },
+    { id: "high", name: "HIGH" },
+    { id: "max", name: "MAX" },
+  ]);
+});
+
+test("a model set reply without configOptions clears the old level and list (M9-9)", async (t) => {
+  const { room, p } = await levelRoom(t, {}, " --level-empty-reply");
+  assert.equal(p.thoughtLevel, "high");
+  assert.deepEqual(
+    p.thoughtLevels?.map((l) => l.id),
+    ["low", "high"],
+    "the start model's list",
+  );
+
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.model, "mock/smart");
+  assert.equal(p.thoughtLevel, undefined);
+  assert.equal(p.thoughtLevels, undefined);
+  assert.deepEqual(levelNotices(p), [
+    'mock-agent has no thinking level with the model "mock/smart"; it was on "high"',
+  ]);
+});
+
+test("a pi level set changes neither the mode nor its two mode notices (M9-9)", async (t) => {
+  const { room, p, of } = await modeRoom(
+    t,
+    { thoughtLevel: "low" },
+    {
+      scenario: "levels",
+      spec: { measured: { ...MEASURED, modeMap: undefined } },
+    },
+  );
+  const modeNotices = () =>
+    p.notices
+      .map((n) => n.text)
+      .filter((text) =>
+        /never asks permission|mode was not negotiated/.test(text),
+      );
+  const before = modeNotices();
+  assert.equal(before.length, 2);
+  assert.equal(of("current_mode_update").length, 1, "the join's level set");
+
+  await room.setLevel(p.id, "high");
+  assert.equal(p.mode, "auto");
+  assert.equal(of("current_mode_update").length, 2);
+  assert.deepEqual(modeNotices(), before);
+});
+
 test("a level change: idle at once, and an unlisted one refused before any send (M9-9)", async (t) => {
   const { room, p, sent, changed, file } = await levelRoom(t);
   const after = await room.setLevel(p.id, "low");
