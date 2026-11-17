@@ -122,6 +122,13 @@ roles can run code without touching the main checkout.
   git -C "$dir" diff --cached
   ```
 
+  A proof runs code that you wrote or broke on purpose, and such code can fail to exit.
+  A test fails, its cleanup does not run, and a child process or a timer keeps the process
+  alive. A per-test timeout does not stop this. So before each proof run, decide how long
+  it should take, and give it a hard limit a little above that. A run that hits the limit
+  is a result: stop it and record a hang, not a pass or a fail. Do not wait longer, and do
+  not run it again the same way.
+
 - **W4. Reset** after each proof. `-x` also removes ignored files that the gate or a proof
   made, so they cannot change the next proof. `-e node_modules` keeps the link, which git
   sees as an untracked file:
