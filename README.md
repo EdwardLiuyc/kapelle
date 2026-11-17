@@ -255,7 +255,7 @@ What each agent was measured to do is in [`docs/FINDINGS.md`](docs/FINDINGS.md).
 Two optional JSON files and `KAPELLE_*` environment variables:
 
 - `~/.config/kapelle/config.json`: the daemon's `port` and permission timeout.
-- `.kapelle/config.json` in your repository: stall limits, time limits, how many tasks run at once, and how long records are kept. This is the only file kapelle reads from your repository. You write it yourself.
+- `.kapelle/config.json` in your repository: stall limits, time limits, how many tasks run at once, and how long records are kept. This is the only file kapelle reads from your repository. Type `/config` in the chat to see every value and change it, or write the file by hand.
 
 Every key, its range and its order of precedence: [`docs/CONFIG.md`](docs/CONFIG.md).
 

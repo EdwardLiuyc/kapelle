@@ -59,6 +59,7 @@ import { parseArgs, promisify } from "node:util";
 import {
   API_VERSION,
   CAPABILITIES,
+  type ConfigView,
   type DeletePreview,
   type Diff,
   type ErrorReply,
@@ -88,12 +89,16 @@ import {
   stopChecks,
 } from "./core/check.ts";
 import {
+  InvalidConfig,
+  PROJECT_KEYS,
+  projectConfigView,
   readEnvConfig,
   readProjectConfig,
   readProjectLinkPaths,
   readUserConfig,
   resolveOrchestratorTurnCap,
   resolveRunDefaults,
+  saveProjectConfig,
   warnUnknownConfigEnv,
 } from "./core/config.ts";
 import { checkoutDiff, isAncestor, mergeBase, rangeDiff } from "./core/diff.ts";
@@ -895,6 +900,40 @@ async function refuseUnadded(cwd: string): Promise<string> {
     );
   }
   return root;
+}
+
+/** The config view of an added repository (M10-5): every project key, its
+ *  value in use and its source. A file the strict reader refuses is the
+ *  400 the other config reads give. */
+function sendConfig(res: ServerResponse, root: string) {
+  let view: ReturnType<typeof projectConfigView>;
+  try {
+    view = projectConfigView(root);
+  } catch (err) {
+    throw refusal(400, "invalid_config", messageOf(err));
+  }
+  send(res, 200, { root, ...view } satisfies ConfigView);
+}
+
+/** `PATCH /config?cwd=…` (M10-5): save the changed project keys of an added
+ *  repository, `null` to remove one, then answer the view. Only that
+ *  repository's `.kapelle/config.json` is written (`saveProjectConfig`). */
+async function patchConfig(
+  cwd: string | null,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  const body = await readBody(req, PROJECT_KEYS);
+  const root = await refuseUnadded(existingDir(cwd, "cwd"));
+  try {
+    await saveProjectConfig(root, body);
+  } catch (err) {
+    if (err instanceof InvalidConfig || err instanceof LinkPathError) {
+      throw refusal(400, "invalid_config", messageOf(err));
+    }
+    throw err;
+  }
+  sendConfig(res, root);
 }
 
 /** The `Idempotency-Key` header, `undefined` when absent, or a 400. Visible
@@ -2174,6 +2213,11 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     await postRepo(req, res);
   } else if (req.method === "GET" && pathname === "/repos") {
     send(res, 200, [...repos] satisfies RepoRoots);
+  } else if (req.method === "GET" && pathname === "/config") {
+    const cwd = existingDir(searchParams.get("cwd"), "cwd");
+    sendConfig(res, await refuseUnadded(cwd));
+  } else if (req.method === "PATCH" && pathname === "/config") {
+    await patchConfig(searchParams.get("cwd"), req, res);
   } else if (req.method === "POST" && pathname === "/runs") {
     await postRun(req, res);
   } else if (req.method === "GET" && pathname === "/runs") {

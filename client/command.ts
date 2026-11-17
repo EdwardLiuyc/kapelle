@@ -11,8 +11,12 @@
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
  * the orchestrator, so a bare `/remove` cannot drop it. Room commands
  * (`/new`, `/add`, `/loop`, `/title`, `/cap`, `/dismiss`, `/delete`,
- * `/leave`, `/help`, `/term`, `/setup`) ignore a mention, so they work after a thread's
- * pre-filled `@name`.
+ * `/leave`, `/help`, `/term`, `/setup`, `/config`) ignore a mention, so they
+ * work after a thread's pre-filled `@name`.
+ *
+ * **`/config` is always a form** (M10-5): the project config of the room on
+ * screen, or of the folder the chat started in. Its save is the `config`
+ * route command, the changed keys only (`client/config.ts`).
  *
  * **`/loop` is `/new` with a start** (M8-5): a room titled
  * `<recipe>-<task>`, the orchestrator `po` in `auto`, and its first message
@@ -34,7 +38,9 @@
 
 import { parseArgs } from "node:util";
 
+import { CONFIG_APPLIES, type ConfigPatch } from "./config.ts";
 import type {
+  ConfigView,
   DeletePreview,
   MessageAccepted,
   ParticipantDto,
@@ -75,6 +81,7 @@ export type RouteCommand =
   | { verb: "delete" }
   | { verb: "title"; title: string }
   | { verb: "cap"; turnCap: number }
+  | { verb: "config"; cwd: string; patch: ConfigPatch }
   | { verb: "remove" | "cancel"; id: string; name: string }
   | {
       verb: "forward";
@@ -96,7 +103,7 @@ export type RouteCommand =
     };
 
 /** What a typed line is: a command, a form to open (a bare `/new`, `/add`
- *  or `/loop`), what an agent changed (`/diff`, M4-6), the person's shell
+ *  or `/loop`, or `/config`), what an agent changed (`/diff`, M4-6), the person's shell
  *  (`/term`, M4-13), the installed agents (`/setup`, M9-3), or a line that
  *  is refused before any request. */
 export type Command =
@@ -105,7 +112,7 @@ export type Command =
   | { verb: "help" }
   | { verb: "term" }
   | { verb: "setup"; done: boolean }
-  | { verb: "form"; form: "new" | "add" | "loop" }
+  | { verb: "form"; form: "new" | "add" | "loop" | "config" }
   | { verb: "diff"; id: string; name: string; against: "head" | "base" }
   | { verb: "models"; id: string; name: string }
   | {
@@ -129,8 +136,8 @@ export const HELP = [
   "@name /remove",
   "@name /diff [base]",
   "@name /ff --from @name",
-  "/setup [done]   /term   /dismiss   /delete   /leave   /help",
-  "/new, /add and /loop alone open forms; ctrl+o opens the menu",
+  "/setup [done]   /config   /term   /dismiss   /delete   /leave   /help",
+  "/new, /add and /loop alone open forms, as /config does; ctrl+o opens the menu",
 ];
 
 export const USAGE: Record<string, string> = {
@@ -148,6 +155,7 @@ export const USAGE: Record<string, string> = {
   diff: "usage: @name /diff [base]",
   ff: "usage: @name /ff --from @name",
   setup: "usage: /setup [done]",
+  config: "usage: /config",
 };
 
 const ROOM_VERBS = new Set([
@@ -162,6 +170,7 @@ const ROOM_VERBS = new Set([
   "help",
   "term",
   "setup",
+  "config",
 ]);
 const AGENT_VERBS = new Set([
   "rename",
@@ -283,6 +292,11 @@ export function parseCommand(
       return { error: USAGE.setup as string };
     }
     return { verb, done: args[0] === "done" };
+  }
+  if (verb === "config") {
+    return args.length
+      ? { error: USAGE.config as string }
+      : { verb: "form", form: "config" };
   }
   if (verb === "title") {
     // The rest of the line: spaces inside a title stay. One pair of quotes
@@ -612,6 +626,22 @@ export async function runCommand(
       ok: true,
       line: `${opened}; ${ORCHESTRATOR} has the start`,
       room: r.body,
+    };
+  }
+  if (c.verb === "config") {
+    const keys = Object.keys(c.patch);
+    if (!keys.length) return { ok: true, line: "config: nothing changed" };
+    const r = await call<ConfigView>(
+      d,
+      `/config?cwd=${encodeURIComponent(c.cwd)}`,
+      { method: "PATCH", body: c.patch },
+    );
+    if (!r.ok) return refused(r.error.message, r.error.code);
+    return {
+      ok: true,
+      line: printable(
+        `saved ${keys.join(", ")} to ${r.body.path}; ${CONFIG_APPLIES}`,
+      ),
     };
   }
   if (!roomId) return refused("no room: open one first");

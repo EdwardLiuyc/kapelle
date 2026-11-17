@@ -20,6 +20,7 @@ import {
   participantNow,
   runCommand,
 } from "../client/command.ts";
+import { configLines, readConfig } from "../client/config.ts";
 import type { MessageAccepted, RoomDto } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
 import { agentDiff } from "../client/diff.ts";
@@ -372,6 +373,18 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       else if (c.done)
         console.log("setup done: the list no longer opens at start");
       else for (const l of setupLines(r.body)) console.log(l.text);
+      continue;
+    }
+    // A pipe prints the rows; only the editor needs a terminal (M10-5).
+    if (c.verb === "form" && c.form === "config") {
+      const r = await readConfig(d, room.cwd).catch(() => undefined);
+      if (!r) console.error(`! ${NO_DAEMON}`);
+      else if (!r.ok) {
+        console.error(`! ${r.error.message}`);
+        if (r.error.code === "repo_not_added") {
+          console.error(`add it first: kapelle daemon add ${room.cwd}`);
+        }
+      } else for (const l of configLines(r.body)) console.log(l);
       continue;
     }
     if (c.verb === "form") {

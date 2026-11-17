@@ -4272,6 +4272,10 @@ from the modules that own them, not copied into the form. An existing invalid fi
 shown as the daemon's refusal and is not overwritten. A pipe prints the same rows from
 `/config`; only the editor needs a terminal. The form says that saved values apply to
 later runs, new rooms, the next sweep and new checkouts, not to work already underway.
+**Decided at pickup 2026-11-17 (#494):** saving `linkPaths` runs both the shape check
+and the git check `POST /repos` runs, so a bad list is refused at once, not saved for the
+next room to refuse. With no room open and an unadded start folder, `/config` asks to
+add it, as `/new` does, then opens the form.
 *Done when* tests cover a missing file, a project override and a `KAPELLE_*` override
 shown with the right source; a scalar and `linkPaths` saved, a key reset, and only
 changed keys written; an invalid or symlinked file left untouched; an unadded
