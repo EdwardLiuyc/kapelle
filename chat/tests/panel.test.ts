@@ -450,6 +450,8 @@ test("each menu row shows its slash command on the right (M7-5)", () => {
   // The loop row makes the room menu one row taller than its viewport.
   type(room, "leave");
   assert.match(shownOf(room), /→ leave +\/leave/);
+  type(room, "\x15config");
+  assert.match(shownOf(room), /→ config … +\/config/);
   type(room, "\x15loop\r");
   assert.equal(room.panel?.title, "loop", "the menu opens the loop form");
 
@@ -1208,12 +1210,7 @@ test("a recipe load lands when askToAdd puts the same form back (#468 review)", 
   assert.match(shownOf(box), /loading/);
 
   // An earlier command's repo_not_added reply lands while this row loads.
-  box.askToAdd({
-    verb: "loop",
-    recipe: "fix",
-    task: "task",
-    body: { cwd: "/not-added", title: "fix-task", agents: [] },
-  });
+  box.askToAdd("/not-added", async () => {});
   assert.equal(box.panel?.title, "folder not added");
   down(box, 1);
   pressKey(box, "\r");

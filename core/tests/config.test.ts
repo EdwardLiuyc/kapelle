@@ -1,16 +1,20 @@
 /**
- * The M2-7 config — issue #37.
+ * The M2-7 config — issue #37 — and its view and writer (M10-5, #494).
  *
  * The claims here are about the two files and the `KAPELLE_*` namespace:
- * strict validation, the layer order, and retention resolving per repository.
+ * strict validation, the layer order, retention resolving per repository,
+ * and a save that writes only what changed and never a refused file.
  */
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -18,6 +22,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import {
+  InvalidConfig,
+  projectConfigView,
   readEnvConfig,
   readProjectConfig,
   readProjectLinkPaths,
@@ -25,12 +31,14 @@ import {
   resolveOrchestratorTurnCap,
   resolveRetentionMs,
   resolveRunDefaults,
+  saveProjectConfig,
   userConfigPath,
   warnUnknownConfigEnv,
 } from "../config.ts";
 import { validateRun } from "../runfile.ts";
 import { sweepBoot } from "../sweep.ts";
 import { WATCHDOG_DEFAULTS } from "../watchdog.ts";
+import { LinkPathError } from "../worktree.ts";
 
 async function tempDir(t: TestContext): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "kapelle-config-"));
@@ -407,4 +415,184 @@ test("a bad project config skips that repo's sweep with a notice", async (t) => 
     notices.some((text) => text.includes(root) && text.includes('"ttlMs"')),
     notices.join("\n"),
   );
+});
+
+// --- the view and the writer (M10-5) ----------------------------------------
+
+/** A git repository with one tracked file, for the `linkPaths` git check. */
+async function repo(t: TestContext): Promise<string> {
+  const root = await tempDir(t);
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, stdio: "ignore" });
+  git("init", "-q", "-b", "main");
+  await writeFile(join(root, "README.md"), "hi\n");
+  git("add", "README.md");
+  git(
+    "-c",
+    "user.email=t@example.invalid",
+    "-c",
+    "user.name=T",
+    "commit",
+    "-qm",
+    "first",
+  );
+  return root;
+}
+
+const projectFile = (root: string) => join(root, ".kapelle", "config.json");
+const fileText = (root: string) => readFile(projectFile(root), "utf8");
+
+test("the view lists every project key with its value in use and source", async (t) => {
+  const root = await tempDir(t);
+  const empty = projectConfigView(root, {});
+  assert.deepEqual(
+    empty.rows.map((r) => [r.key, r.source]),
+    [
+      ["stallIdleMs", "default"],
+      ["stallRepeatCount", "default"],
+      ["ttlMs", "default"],
+      ["maxConcurrency", "default"],
+      ["retentionMs", "default"],
+      ["orchestratorTurnCap", "default"],
+      ["linkPaths", "default"],
+    ],
+  );
+  assert.equal(empty.path, projectFile(root));
+  const ttl = empty.rows.find((r) => r.key === "ttlMs");
+  assert.deepEqual(ttl, {
+    key: "ttlMs",
+    default: WATCHDOG_DEFAULTS.ttlMs,
+    value: WATCHDOG_DEFAULTS.ttlMs,
+    source: "default",
+  });
+
+  await writeProject(root, { ttlMs: 60000, linkPaths: ["node_modules"] });
+  const env = { KAPELLE_TTL_MS: "5000" };
+  const rows = projectConfigView(root, env).rows;
+  assert.deepEqual(
+    rows.find((r) => r.key === "ttlMs"),
+    {
+      key: "ttlMs",
+      default: WATCHDOG_DEFAULTS.ttlMs,
+      file: 60000,
+      value: 5000,
+      source: "env",
+      env: "KAPELLE_TTL_MS",
+    },
+    "the env wins, and the row keeps the file's value",
+  );
+  assert.deepEqual(
+    rows.find((r) => r.key === "linkPaths"),
+    {
+      key: "linkPaths",
+      default: [],
+      file: ["node_modules"],
+      value: ["node_modules"],
+      source: "config",
+    },
+  );
+});
+
+test("a save writes the changed keys only, keeps the rest in place, and resets with null", async (t) => {
+  const root = await repo(t);
+  await writeProject(root, { ttlMs: 60000, stallIdleMs: 1000, retentionMs: 5 });
+
+  await saveProjectConfig(root, {
+    stallIdleMs: 2000,
+    retentionMs: null,
+    linkPaths: ["node_modules"],
+  });
+  assert.equal(
+    await fileText(root),
+    `${JSON.stringify(
+      { ttlMs: 60000, stallIdleMs: 2000, linkPaths: ["node_modules"] },
+      null,
+      2,
+    )}\n`,
+    "the untouched key keeps its value and its place; no default is written",
+  );
+
+  // Removing every key leaves an empty object, not a deleted file.
+  await saveProjectConfig(root, {
+    ttlMs: null,
+    stallIdleMs: null,
+    linkPaths: null,
+  });
+  assert.equal(await fileText(root), "{}\n");
+});
+
+test("a save writes nothing when nothing changes", async (t) => {
+  const root = await tempDir(t);
+  await saveProjectConfig(root, {});
+  await saveProjectConfig(root, { ttlMs: null });
+  await assert.rejects(stat(join(root, ".kapelle")), { code: "ENOENT" });
+});
+
+test("a new file is 0644 whatever the umask, and an existing file keeps its mode", async (t) => {
+  const root = await tempDir(t);
+  const before = process.umask(0o002);
+  try {
+    await saveProjectConfig(root, { maxConcurrency: 2 });
+  } finally {
+    process.umask(before);
+  }
+  assert.equal((await stat(projectFile(root))).mode & 0o777, 0o644);
+  // The strict reader accepts what the writer wrote.
+  assert.deepEqual(readProjectConfig(root), { maxConcurrency: 2 });
+
+  await chmod(projectFile(root), 0o600);
+  await saveProjectConfig(root, { maxConcurrency: 3 });
+  assert.equal((await stat(projectFile(root))).mode & 0o777, 0o600);
+});
+
+test("a refused save leaves the file as it was", async (t) => {
+  const root = await repo(t);
+  await writeProject(root, { ttlMs: 60000 });
+  const was = await fileText(root);
+
+  await assert.rejects(saveProjectConfig(root, { port: 1 }), InvalidConfig);
+  await assert.rejects(
+    saveProjectConfig(root, { ttlMs: -1 }),
+    (err: Error) => err instanceof InvalidConfig && /"ttlMs"/.test(err.message),
+  );
+  await assert.rejects(
+    saveProjectConfig(root, { linkPaths: "node_modules" }),
+    InvalidConfig,
+  );
+  // D1: the git check too, as `POST /repos` runs it.
+  await assert.rejects(
+    saveProjectConfig(root, { linkPaths: ["README.md"] }),
+    LinkPathError,
+  );
+  assert.equal(await fileText(root), was);
+});
+
+test("an invalid or symlinked file, or a linked .kapelle, is never written", async (t) => {
+  const root = await tempDir(t);
+  await writeProject(root, { stallIdle: 1 });
+  await assert.rejects(
+    saveProjectConfig(root, { ttlMs: 1 }),
+    (err: Error) =>
+      err instanceof InvalidConfig && /unknown key/.test(err.message),
+  );
+  assert.equal(await fileText(root), JSON.stringify({ stallIdle: 1 }));
+
+  const elsewhere = await tempDir(t);
+  const planted = join(elsewhere, "planted.json");
+  await writeFile(planted, "{}", { mode: 0o644 });
+  await rm(projectFile(root));
+  await symlink(planted, projectFile(root));
+  await assert.rejects(
+    saveProjectConfig(root, { ttlMs: 1 }),
+    /must be a plain file/,
+  );
+  assert.equal(await readFile(planted, "utf8"), "{}");
+
+  const linked = await tempDir(t);
+  await symlink(elsewhere, join(linked, ".kapelle"));
+  await rm(projectFile(root));
+  await assert.rejects(saveProjectConfig(linked, { ttlMs: 1 }), InvalidConfig);
+  await assert.rejects(stat(join(elsewhere, "config.json")), {
+    code: "ENOENT",
+  });
 });

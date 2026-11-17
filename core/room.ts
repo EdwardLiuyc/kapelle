@@ -252,7 +252,7 @@ import {
 export const QUEUE_BOUND = 16;
 
 /** How many worker messages a room's orchestrator may send by default (M8-7). */
-const DEFAULT_ORCHESTRATOR_TURN_CAP = 40;
+export const DEFAULT_ORCHESTRATOR_TURN_CAP = 40;
 
 /** A refusal the daemon answers with its own error code. Any other throw
  *  from `add`, `update` or `remove` is a failure, not a refusal. */

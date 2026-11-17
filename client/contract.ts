@@ -11,10 +11,11 @@
  * `daemon.ts` declares its runs and rooms with these types and checks every
  * other reply with `satisfies`, so a removed or renamed field fails
  * `npm run check`, and so does a field added where the daemon builds the
- * reply itself. Three parts come from `core/`, which may not import this
+ * reply itself. Four parts come from `core/`, which may not import this
  * file, and are checked for assignability only — an added field there is not
  * caught: a finished run's `report` (`core/run.ts`), `GET /permissions` and
- * `GET /permissions/:id` (`core/permissions.ts`). Which shapes are stable and
+ * `GET /permissions/:id` (`core/permissions.ts`), and the rows of
+ * `GET /config` (`core/config.ts`). Which shapes are stable and
  * which will change is the stability table in the doc, not this file.
  *
  * Types only, plus two constants (decided 2026-09-22, B7): a JSON Schema can
@@ -46,7 +47,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 21 } as const;
+export const API_VERSION = { major: 1, minor: 22 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -58,6 +59,7 @@ export const CAPABILITIES = [
   "events",
   "permissions",
   "rooms",
+  "config",
 ] as const;
 
 /** One entry of `GET /harnesses` (M4-5): a harness the daemon can launch by
@@ -190,6 +192,33 @@ export interface RepoAdded {
 
 /** `GET /repos` answers every added repository root. */
 export type RepoRoots = string[];
+
+/** A project config value: a number, or the `linkPaths` list. */
+type ConfigValue = number | string[];
+
+/** One row of the config view (M10-5, since 1.22): a project key, the value
+ *  in use and where it comes from. `env` wins over the file, and the file
+ *  over the default. */
+export interface ConfigRow {
+  key: string;
+  value: ConfigValue;
+  source: "default" | "config" | "env";
+  default: ConfigValue;
+  /** The file's value, when the file names one. Under `env` it is not in
+   *  use until the variable is unset. */
+  file?: ConfigValue;
+  /** The `KAPELLE_*` name, when `source` is `env`. */
+  env?: string;
+}
+
+/** `GET /config` and `PATCH /config` (M10-5, since 1.22): a repository's
+ *  project config, every key in the order the daemon lists them. */
+export interface ConfigView {
+  root: string;
+  /** The project file, `<root>/.kapelle/config.json`; it may not exist. */
+  path: string;
+  rows: ConfigRow[];
+}
 
 /** A finished task's verdict, mildest first. A run's status is the worst of
  *  its tasks. @public */

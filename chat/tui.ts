@@ -1328,6 +1328,8 @@ function chatTui(
             return addForm();
           case "loop":
             return loopForm();
+          case "config":
+            return void box.configForm().catch(gone);
           default: {
             const unknown: never = c.form;
             return unknown;
@@ -1472,7 +1474,7 @@ function chatTui(
           out.code === "repo_not_added" &&
           (c.verb === "new" || c.verb === "loop")
         ) {
-          askToAdd(c);
+          askToAdd(c.body.cwd, () => run(c));
           return true;
         }
         if (c.verb === "delete") {

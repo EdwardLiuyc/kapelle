@@ -14,8 +14,14 @@
  *
  * **Both files are strict.** An unknown key or a wrong type is refused naming
  * the file and the key: a silently-ignored `stallIdleMs` typo is a watchdog
- * that never fires. A missing file means "no opinion", not an error, and
- * nothing here creates one.
+ * that never fires. A missing file means "no opinion", not an error.
+ *
+ * **The project file has one writer, `saveProjectConfig`** (M10-5), behind
+ * the daemon's `PATCH /config`. It writes only the keys a person changed,
+ * never a default, and it refuses to touch a file the strict reader refuses.
+ * `projectConfigView` is the one table of every project key, its value in
+ * use and where that comes from; the defaults come from the modules that own
+ * them. Nothing creates the user file.
  *
  * **Unknown `KAPELLE_*` names warn and are ignored** rather than refused: the
  * prefix is also the secret namespace (`protocol/registry.ts`'s
@@ -24,12 +30,24 @@
  * is still a refusal.
  */
 
-import { lstatSync, readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { SECRET_PREFIX } from "../protocol/registry.ts";
-import type { RunDefaults } from "./runfile.ts";
-import { STATE_DIR } from "./worktree.ts";
+import { DEFAULT_ORCHESTRATOR_TURN_CAP } from "./room.ts";
+import { DEFAULT_MAX_CONCURRENCY, type RunDefaults } from "./runfile.ts";
+import { DEFAULT_RETENTION_MS } from "./sweep.ts";
+import { WATCHDOG_DEFAULTS } from "./watchdog.ts";
+import { STATE_DIR, validateWorktreeLinks } from "./worktree.ts";
 
 const messageOf = (err: unknown) =>
   err instanceof Error ? err.message : String(err);
@@ -59,7 +77,8 @@ const RUN_DEFAULT_KEYS = [
 ] as const satisfies readonly (keyof RunDefaults)[];
 
 const USER_KEYS = ["port", "permissionTimeoutMs"] as const;
-const PROJECT_KEYS = [
+/** Every project key, in the order the view lists them. */
+export const PROJECT_KEYS = [
   ...RUN_DEFAULT_KEYS,
   "retentionMs",
   "orchestratorTurnCap",
@@ -305,15 +324,25 @@ export function readUserConfig(env: NodeJS.ProcessEnv = process.env) {
   return config;
 }
 
-/** The per-repository knobs, including the retention window. */
-export function readProjectConfig(root: string): ConfigValues {
-  const path = projectConfigPath(root);
-  const raw = readConfigFile(path, PROJECT_KEYS, (key) =>
+/** The project file as it is, with its keys checked but not its values. */
+function readProjectRaw(root: string): Record<string, unknown> {
+  return readConfigFile(projectConfigPath(root), PROJECT_KEYS, (key) =>
     (USER_KEYS as readonly string[]).includes(key)
       ? `"${key}" is daemon-wide; put it in ${userConfigPath()}.`
       : undefined,
   );
+}
 
+/** The per-repository knobs, including the retention window. */
+export function readProjectConfig(root: string): ConfigValues {
+  return projectValues(readProjectRaw(root), projectConfigPath(root));
+}
+
+/** Each project value in `raw` checked by its rule; `path` names the file. */
+function projectValues(
+  raw: Record<string, unknown>,
+  path: string,
+): ConfigValues {
   const config: ConfigValues = {};
   for (const key of PROJECT_KEYS) {
     const value = raw[key];
@@ -426,4 +455,149 @@ export function resolveOrchestratorTurnCap(
 ): number | undefined {
   const project = readProjectConfig(root);
   return readEnvConfig(env).orchestratorTurnCap ?? project.orchestratorTurnCap;
+}
+
+// --- the project config view and its writer (M10-5) --------------------------
+
+type ProjectKey = (typeof PROJECT_KEYS)[number];
+type ProjectValue = number | string[];
+
+/** One project key as `GET /config` shows it. */
+interface ProjectConfigRow {
+  key: ProjectKey;
+  /** The value in use: the `KAPELLE_*` one, else the file's, else the default. */
+  value: ProjectValue;
+  source: "default" | "config" | "env";
+  default: ProjectValue;
+  /** The file's value, when the file names one. */
+  file?: ProjectValue;
+  /** The `KAPELLE_*` name, when it wins. */
+  env?: string;
+}
+
+/** A save refused before anything was written: the file, a value or the
+ *  `.kapelle` folder. The daemon answers it as `invalid_config`. */
+export class InvalidConfig extends Error {}
+
+/** Each project key's built-in value, from the module that owns it. A
+ *  function, not a constant: `core/sweep.ts` imports this file, so its value
+ *  is read only after both have loaded. */
+function projectDefaults(): Record<ProjectKey, ProjectValue> {
+  return {
+    ...WATCHDOG_DEFAULTS,
+    maxConcurrency: DEFAULT_MAX_CONCURRENCY,
+    retentionMs: DEFAULT_RETENTION_MS,
+    orchestratorTurnCap: DEFAULT_ORCHESTRATOR_TURN_CAP,
+    linkPaths: [],
+  };
+}
+
+/**
+ * Every project key, not only the ones in the file: its value in use and
+ * where that comes from. The same order as the run-default resolution:
+ * `env > project config > built-in`. Throws, as `readProjectConfig` does,
+ * for a file the strict reader refuses.
+ */
+export function projectConfigView(
+  root: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { path: string; rows: ProjectConfigRow[] } {
+  const file = readProjectConfig(root);
+  const fromEnv = readEnvConfig(env);
+  const defaults = projectDefaults();
+  const rows = PROJECT_KEYS.map((key): ProjectConfigRow => {
+    const inFile = file[key];
+    const row = {
+      key,
+      default: defaults[key],
+      ...(inFile !== undefined && { file: inFile }),
+    };
+    const name = Object.keys(ENV_KEYS).find(
+      (n) => ENV_KEYS[n as keyof typeof ENV_KEYS] === key,
+    );
+    const set = fromEnv[key];
+    if (name && set !== undefined) {
+      return { ...row, value: set, source: "env", env: name };
+    }
+    if (inFile !== undefined)
+      return { ...row, value: inFile, source: "config" };
+    return { ...row, value: defaults[key], source: "default" };
+  });
+  return { path: projectConfigPath(root), rows };
+}
+
+/** `fn`, with a refusal it throws turned into an `InvalidConfig`. */
+function strict<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    throw new InvalidConfig(messageOf(err));
+  }
+}
+
+/**
+ * Save the changed project keys. `null` removes a key, so its default applies
+ * again; a default is never written. A key the patch does not name keeps its
+ * value and its place. Refused with nothing written: an unknown key, a bad
+ * value, a file the strict reader refuses (invalid, or a symlink), and a
+ * `.kapelle` that is not a real folder. A new `linkPaths` is also checked
+ * against git, as `POST /repos` checks it, so the next room cannot refuse
+ * what was saved; that refusal is `validateWorktreeLinks`'s `LinkPathError`.
+ */
+export async function saveProjectConfig(
+  root: string,
+  patch: Readonly<Record<string, unknown>>,
+): Promise<void> {
+  const path = projectConfigPath(root);
+  const known = PROJECT_KEYS as readonly string[];
+  const unknown = Object.keys(patch).find((key) => !known.includes(key));
+  if (unknown !== undefined) {
+    throw new InvalidConfig(
+      `unknown key ${JSON.stringify(unknown)}. Known: ${known.join(", ")}.`,
+    );
+  }
+  const set = Object.fromEntries(
+    Object.entries(patch).filter(([, value]) => value !== null),
+  );
+  const checked = strict(() => projectValues(set, path));
+  if (checked.linkPaths) await validateWorktreeLinks(root, checked.linkPaths);
+
+  // Nothing waits from here to the rename, so two saves cannot interleave.
+  const raw = strict(() => readProjectRaw(root));
+  strict(() => projectValues(raw, path));
+  const next = { ...raw };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete next[key];
+    else next[key] = value;
+  }
+  if (JSON.stringify(next) === JSON.stringify(raw)) return;
+  writeProjectFile(root, next);
+}
+
+/**
+ * The project file, written so the strict reader accepts it: a plain file
+ * that keeps its mode, or 0644 for a new one whatever the umask, written to
+ * a temporary file and renamed, so no reader sees half of it. The rename
+ * replaces a link rather than following it, and a `.kapelle` that is a link
+ * is refused, so the write stays in the repository.
+ */
+function writeProjectFile(root: string, values: Record<string, unknown>) {
+  const dir = join(root, STATE_DIR);
+  const st = lstatSync(dir, { throwIfNoEntry: false });
+  if (st && !st.isDirectory()) {
+    throw new InvalidConfig(`${dir} must be a folder, not a link or a file.`);
+  }
+  if (!st) mkdirSync(dir);
+  const path = projectConfigPath(root);
+  const was = lstatSync(path, { throwIfNoEntry: false });
+  const mode = was ? was.mode & 0o777 : 0o644;
+  const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(values, null, 2)}\n`, { flag: "wx" });
+    chmodSync(tmp, mode);
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }

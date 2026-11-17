@@ -342,6 +342,12 @@ test("/setup opens the agent list, and /setup done says done (M9-3)", () => {
   });
 });
 
+test("/config is always the config form (M10-5)", () => {
+  assert.deepEqual(parse("/config"), { verb: "form", form: "config" });
+  assert.deepEqual(parse("@bob /config"), { verb: "form", form: "config" });
+  assert.deepEqual(parse("/config daemon"), { error: "usage: /config" });
+});
+
 test("/loop opens <recipe>-<task> with po in auto, on claude unless --agent or --cmd names another (M8-5)", () => {
   const po = { name: "po", role: "orchestrator", mode: "auto" };
   assert.deepEqual(parse(`@bob /loop fix 269 "only the CLI" --cwd sub`), {

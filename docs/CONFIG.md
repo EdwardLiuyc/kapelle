@@ -15,15 +15,16 @@ Three sources set the knobs that do not belong in a run file (M2-7, #37):
   uncommittable, because `.kapelle/` also held worktrees and run records and
   `checkStateDir` refused a repository that tracked it; that state now lives
   in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`, so this file is the only
-  thing kapelle reads from inside your repository, and it is one you write on
-  purpose. Nothing creates it for you, and no preflight looks at it.
+  thing kapelle reads from inside your repository. You write it by hand, or with
+  `/config` in the chat (M10-5), which saves through the daemon's `PATCH /config`.
+  Nothing else creates it, and no preflight looks at it.
 - **Environment** — `KAPELLE_*`. Overrides both files; for the run knobs an
   explicit run-file value still wins.
 
 Both files are strict: an unknown key or a wrong type is refused naming the
 file and the key, because a silently-ignored `stallIdleMs` typo is a watchdog
-that never fires. A missing file is no opinion, never an error, and nothing
-creates one. Unknown `KAPELLE_*` names are the one warning path: the prefix is
+that never fires. A missing file is no opinion, never an error. Only `/config`
+creates the project file, and nothing creates the user file. Unknown `KAPELLE_*` names are the one warning path: the prefix is
 also the secret namespace (`SECRET_PREFIX`, stripped from every harness), so an
 unknown name may be a secret rather than a typo.
 
@@ -34,7 +35,7 @@ Legend: **✅ happy** · **⚠ warning** · **❌ bad**.
 | Config | Read by | Not read by |
 | --- | --- | --- |
 | User file | the daemon's start, however it is reached: `kapelle daemon start` or bare `kapelle` starting one (M9-2) | in-process CLI, merge, sweep |
-| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository | plain `kapelle "prompt"`, `merge` |
+| Project file | `POST /repos`, `POST /runs` (each request), `POST /rooms` and each room the daemon restores at start (its stall limits and turn cap), `kapelle run --file`, `sweepBoot` per repository, `GET /config` and `PATCH /config` | plain `kapelle "prompt"`, `merge` |
 | `KAPELLE_*` env | the daemon's start (including bare `kapelle`), every run-default and room-cap resolution, `kapelle run --file` | plain prompt, merge |
 
 ## User file — `$XDG_CONFIG_HOME/kapelle/config.json`
@@ -115,6 +116,23 @@ harness that reads or writes through its own process, with its shell or its
 own file tools, is outside the guard; most harnesses send no `fs/*` at all
 (`docs/FINDINGS.md` §M0-1, §M9-1 re-measure).
 
+### Editing it in the chat — `/config`
+
+`/config` opens a form for the repository of the room on screen, or for the folder
+the chat started in when no room is open. When that folder's repository is not
+added, the chat asks to add it first, as `/new` does. The form lists every project
+key with the file's value, and the value in use with its source: `default`, `config`
+or `env`. Enter edits a value; a blank value removes the key, so its default applies
+again. `linkPaths` is a JSON array, such as `["node_modules"]`. The save row sends
+only the changed keys. On a pipe, `/config` prints the same rows and edits nothing.
+
+The daemon checks each value with the rules above before it writes, and a new
+`linkPaths` also against git, as `POST /repos` does. It never writes a default, and it
+never writes over a file the reader refuses: an invalid file is shown as the refusal
+and stays as it is. A new file is `0644` whatever the umask; an existing file keeps
+its mode. A saved value applies to later runs, new rooms, the next sweep and new
+checkouts, not to work already underway.
+
 ## Environment — `KAPELLE_*`
 
 `linkPaths` has no `KAPELLE_*` twin: it is a list of paths relative to one
@@ -175,12 +193,15 @@ Notes:
 
 - `core/config.ts` — key sets, value rules, both file readers, the `KAPELLE_*`
   reader, `warnUnknownConfigEnv`, `resolveRunDefaults`, `resolveRetentionMs`,
-  `resolveOrchestratorTurnCap`, `readProjectLinkPaths`.
+  `resolveOrchestratorTurnCap`, `readProjectLinkPaths`, and for `/config`
+  `projectConfigView` and `saveProjectConfig`.
+- `client/config.ts` — the `/config` rows as lines, and the form's values as a
+  `PATCH /config` body.
 - `core/worktree.ts` — `openWorktrees` plans and makes the `linkPaths` mirrors,
   and refuses a tracked, escaping, or still-visible link, or an escaping or
   dangling entry of a linked directory.
 - `daemon.ts` — `DEFAULT_PORT` / `DEFAULT_PERMISSION_TIMEOUT_S` and flag
-  resolution, `postRepo`, `postRun`.
+  resolution, `postRepo`, `postRun`, `GET /config`, `PATCH /config`.
 - `cli.ts` — `runFromFile`, the project-config defaults for `--file`.
 - `core/runfile.ts` — `RunDefaults` and the task > run > config > built-in chain.
 - `core/sweep.ts` — `DEFAULT_RETENTION_MS` and the per-repository retention read.

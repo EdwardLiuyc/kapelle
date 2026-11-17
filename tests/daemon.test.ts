@@ -39,6 +39,7 @@ import { userInfo } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type {
+  ConfigView,
   ErrorReply,
   HarnessesReply,
   InstallLine,
@@ -938,6 +939,87 @@ test("POST /repos accepts a repository with a tracked .kapelle/config.json", asy
   assert.deepEqual((await api(d, "GET", "/repos")).body, [
     await realpath(root),
   ]);
+});
+
+test("GET and PATCH /config show and save an added repository's project config (M10-5)", async (t) => {
+  const d = await boot(t, undefined, [], undefined, {
+    KAPELLE_TTL_MS: "5000",
+  });
+  const root = await realpath(
+    await gitRepo(t, {
+      files: {
+        ".kapelle/config.json": '{"ttlMs": 60000, "stallIdleMs": 1000}',
+      },
+    }),
+  );
+  const q = `/config?cwd=${encodeURIComponent(root)}`;
+
+  const unadded = await api(d, "GET", q);
+  assert.equal(unadded.status, 403);
+  assert.equal(unadded.body.error.code, "repo_not_added");
+  const unaddedSave = await api(d, "PATCH", q, { maxConcurrency: 2 });
+  assert.equal(unaddedSave.body.error.code, "repo_not_added");
+
+  await added(d, root);
+  const view = await api<ConfigView>(d, "GET", q);
+  assert.equal(view.status, 200);
+  assert.equal(view.body.root, root);
+  assert.equal(view.body.path, join(root, ".kapelle", "config.json"));
+  const source = (v: ConfigView) =>
+    Object.fromEntries(v.rows.map((r) => [r.key, r.source]));
+  assert.deepEqual(source(view.body), {
+    stallIdleMs: "config",
+    stallRepeatCount: "default",
+    ttlMs: "env",
+    maxConcurrency: "default",
+    retentionMs: "default",
+    orchestratorTurnCap: "default",
+    linkPaths: "default",
+  });
+
+  const saved = await api<ConfigView>(d, "PATCH", q, {
+    maxConcurrency: 2,
+    stallIdleMs: null,
+    linkPaths: ["node_modules"],
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(source(saved.body).maxConcurrency, "config");
+  assert.equal(source(saved.body).stallIdleMs, "default");
+  assert.deepEqual(
+    JSON.parse(await readFile(join(root, ".kapelle", "config.json"), "utf8")),
+    { ttlMs: 60000, maxConcurrency: 2, linkPaths: ["node_modules"] },
+  );
+
+  // D1: a tracked path is refused at once, as POST /repos refuses it.
+  const before = await readFile(join(root, ".kapelle", "config.json"), "utf8");
+  const tracked = await api(d, "PATCH", q, { linkPaths: ["README.md"] });
+  assert.equal(tracked.status, 400);
+  assert.equal(tracked.body.error.code, "invalid_config");
+  const daemonWide = await api(d, "PATCH", q, { port: 1 });
+  assert.equal(daemonWide.body.error.code, "invalid_request");
+  assert.equal(
+    await readFile(join(root, ".kapelle", "config.json"), "utf8"),
+    before,
+  );
+});
+
+test("an invalid project file is the 400 of GET and PATCH /config, and stays as it was", async (t) => {
+  const d = await boot(t);
+  const root = await realpath(await gitRepo(t));
+  await added(d, root);
+  await mkdir(join(root, ".kapelle"));
+  const path = join(root, ".kapelle", "config.json");
+  await writeFile(path, '{"ttlMs": "soon"}', { mode: 0o644 });
+  const q = `/config?cwd=${encodeURIComponent(root)}`;
+
+  const view = await api(d, "GET", q);
+  assert.equal(view.status, 400);
+  assert.equal(view.body.error.code, "invalid_config");
+  assert.match(view.body.error.message, /"ttlMs"/);
+  const save = await api(d, "PATCH", q, { maxConcurrency: 2 });
+  assert.equal(save.status, 400);
+  assert.equal(save.body.error.code, "invalid_config");
+  assert.equal(await readFile(path, "utf8"), '{"ttlMs": "soon"}');
 });
 
 test("POST /runs in a folder never added is 403, and starts nothing", async (t) => {

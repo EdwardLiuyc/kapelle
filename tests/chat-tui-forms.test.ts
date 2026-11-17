@@ -932,6 +932,42 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
   assert.equal(await exited, 0, out());
 });
 
+test("/config asks to add the start folder, then edits, resets and saves only the changed keys (M10-5)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const repo = await gitRepo(t, {
+    files: { ".kapelle/config.json": '{"ttlMs": 60000, "stallIdleMs": 1000}' },
+  }); // never added
+  const { press, exited, out } = await ptyScreen(
+    t,
+    `stty cols 120 rows 40; cd ${repo} && node ${join(REPO, "cli.ts")} chat`,
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+  // D2: no room is open and the folder is not added, so the chat asks first.
+  await press("/config\r", "is not added to the daemon. Add its repository?");
+  await press("\r", "60000 (config)");
+  assert.match(out(), /– \(default 8\)/);
+  // maxConcurrency (the fourth row): set 2.
+  await press(`${DOWN.repeat(3)}\r2\r`, "2 (unsaved)");
+  // ttlMs, one up: blank resets it to the default.
+  await press("\x1b[A\r\x15\r", "– (unsaved: default 3600000)");
+  // The save row says what a saved value reaches, then saves.
+  await press(DOWN.repeat(5), "Saves only the changed keys");
+  await press("\r", "saved ttlMs, maxConcurrency");
+  assert.deepEqual(
+    JSON.parse(await readFile(join(repo, ".kapelle", "config.json"), "utf8")),
+    { stallIdleMs: 1000, maxConcurrency: 2 },
+  );
+  assert.deepEqual((await api<string[]>(d, "GET", "/repos")).body, [
+    await realpath(repo),
+  ]);
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
 test("the new-room form lists only the measured harnesses the daemon found ready (#367)", {
   skip: noPty,
 }, async (t) => {

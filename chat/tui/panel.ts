@@ -3,7 +3,8 @@
  *
  * The box at the centre of the timeline (M4-5) and what it shows: the
  * ctrl+o menu, a pick list, a text box, the help, the setup list (M9-3),
- * and the forms for a new room, an added agent and a loop (M9-5d).
+ * and the forms for a new room, an added agent, a loop (M9-5d) and the
+ * project config (M10-5).
  * It owns the open pop-up. Esc goes back one level, and a first-level menu
  * closes it. A command it sends goes through the
  * screen's `run`; the question box is `chat/tui/question.ts`.
@@ -45,7 +46,18 @@ import {
   participantNow,
   type RouteCommand,
 } from "../../client/command.ts";
-import type { HarnessesReply, RepoAdded } from "../../client/contract.ts";
+import {
+  CONFIG_APPLIES,
+  configPatch,
+  readConfig,
+  sourceText,
+  valueText,
+} from "../../client/config.ts";
+import type {
+  ConfigRow,
+  HarnessesReply,
+  RepoAdded,
+} from "../../client/contract.ts";
 import { call, type DaemonAddress } from "../../client/daemon.ts";
 import {
   absoluteFolder,
@@ -757,6 +769,8 @@ function panelParts({
       );
     });
     items.push(row("help", "help", "/help"));
+    // After help, so the rows above keep their place (M10-5).
+    items.push(row("config", "config …", "/config"));
     items.push(row("leave", "leave", "/leave"));
     let title = "menu";
     if (p) title = `${p.name} · ${p.harness}${p.role ? ` · ${p.role}` : ""}`;
@@ -791,6 +805,7 @@ function panelParts({
     if (value === "new") return newForm(self);
     if (value === "loop") return loopForm(self);
     if (value === "add") return addForm(self);
+    if (value === "config") return void configForm(self);
     if (value === "dismiss") return void run({ verb: "dismiss" });
     if (value === "delete") {
       hidePanel();
@@ -910,10 +925,15 @@ function panelParts({
       folder?: true;
       /** Every value is literal: `–` and the `other…` names are not sentinels. */
       verbatim?: true;
+      /** How the row shows a value; `–` for none by default. */
+      shown?: (v: string) => string;
+      /** A line under the list while the row is selected. */
+      description?: string;
     }[],
     go: string,
     command: (v: Record<string, string>) => RouteCommand | { error: string },
     back: () => void = hidePanel,
+    goDescription?: string,
   ) => {
     const values: Record<string, string> = Object.fromEntries(
       fields.map((f) => [f.id, f.value]),
@@ -960,10 +980,12 @@ function panelParts({
         invalidate: () => input.invalidate(),
       };
     };
+    const shown = new Map(fields.map((f) => [f.id, f.shown ?? show]));
     const items: SettingItem[] = fields.map((f) => ({
       id: f.id,
       label: f.label,
-      currentValue: show(f.value),
+      currentValue: (f.shown ?? show)(f.value),
+      ...(f.description && { description: f.description }),
       // One submenu owns the loading, picking, typing and closing states.
       // pi-lens-ignore: high-complexity
       submenu: (_, done) => {
@@ -1042,7 +1064,13 @@ function panelParts({
         };
       },
     }));
-    items.push({ id: "", label: go, currentValue: "", values: [""] });
+    items.push({
+      id: "",
+      label: go,
+      currentValue: "",
+      values: [""],
+      ...(goDescription && { description: goDescription }),
+    });
     const list = new SettingsList(
       items,
       panelRoom(),
@@ -1052,7 +1080,7 @@ function panelParts({
           const next = verbatim.has(id) || v !== "–" ? v : "";
           values[id] = next;
           const item = items.find((i) => i.id === id);
-          if (item) item.currentValue = show(next);
+          if (item) item.currentValue = (shown.get(id) ?? show)(next);
         } else {
           const c = command(values);
           if (!("error" in c)) void run(c);
@@ -1094,11 +1122,12 @@ function panelParts({
   });
 
   /**
-   * `/new` or `/loop` in a folder the daemon has not added: ask, in the pop-up, and
-   * on yes add its repository and open the room in one step. The question
-   * is ours, from the code: the daemon's message is advice for a program.
+   * `/new`, `/loop` or `/config` in a folder the daemon has not added: ask,
+   * in the pop-up, and on yes add its repository and go on in one step
+   * (`then`: open the room, or the config form). The question is ours, from
+   * the code: the daemon's message is advice for a program.
    */
-  const askToAdd = (c: Extract<RouteCommand, { verb: "new" | "loop" }>) => {
+  const askToAdd = (cwd: string, then: () => Promise<unknown>) => {
     const back = panel;
     const toForm = () => {
       if (back) showPanel(back.title, back.body);
@@ -1119,7 +1148,7 @@ function panelParts({
         try {
           added = await call<RepoAdded>(d, "/repos", {
             method: "POST",
-            body: { path: c.body.cwd },
+            body: { path: cwd },
           });
         } catch {
           // A restart: the screen waits for the daemon (M6-7d).
@@ -1133,13 +1162,13 @@ function panelParts({
           tui.requestRender();
           return;
         }
-        await run(c);
+        await then();
       },
       toForm,
     );
     if (panel)
       // The daemon adds the whole repository the folder is in.
-      panel.error = `${c.body.cwd} is not added to the daemon. Add its repository?`;
+      panel.error = `${cwd} is not added to the daemon. Add its repository?`;
     tui.requestRender();
   };
 
@@ -1311,6 +1340,79 @@ function panelParts({
     );
   };
 
+  /** A config row's value as the form shows it: the file's, then what is
+   *  in use and why; after an edit, that it is not saved yet. */
+  const configShown = (row: ConfigRow) => (v: string) => {
+    const was = valueText(row.file);
+    if (v.trim() !== was) {
+      return `${v || "–"} (unsaved${v ? "" : `: default ${valueText(row.default)}`})`;
+    }
+    if (row.source === "default")
+      return `– (default ${valueText(row.default)})`;
+    if (row.source === "config") return `${v} (config)`;
+    return `${v || "–"} (env ${valueText(row.value)} wins)`;
+  };
+
+  /** What a config row says while it is selected. */
+  const configNote = (row: ConfigRow) =>
+    [
+      `in use: ${valueText(row.value)}, ${sourceText(row)}.`,
+      row.source === "env"
+        ? "The file value applies once the variable is unset."
+        : "",
+      row.key === "linkPaths"
+        ? 'A JSON array of relative paths, such as ["node_modules"].'
+        : "",
+      `Blank removes it from the file; the default is ${valueText(row.default)}.`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+  /**
+   * `/config` (M10-5): the project config of the room on screen, or of the
+   * folder the chat started in. Each row is the file's value, and Enter edits
+   * it; the save row sends only the changed keys. An invalid file is the
+   * daemon's refusal on the status line, and the form does not open.
+   */
+  const configForm = async (back: () => void = hidePanel): Promise<void> => {
+    const cwd = rooms.get(view().roomId)?.entry.cwd ?? absoluteFolder();
+    const fail = (text: string) => {
+      if (panel) {
+        panel.error = text;
+        tui.requestRender();
+      } else {
+        say(`! ${text}`);
+        setStatus();
+      }
+    };
+    if (!cwd) return fail(FOLDER_GONE);
+    await fresh();
+    const r = await readConfig(d, cwd).catch(() => undefined);
+    if (!r) return fail(NO_DAEMON);
+    if (!r.ok) {
+      if (r.error.code === "repo_not_added") {
+        return askToAdd(cwd, () => configForm(back));
+      }
+      return fail(r.error.message);
+    }
+    const { rows, root } = r.body;
+    form(
+      `config · ${printable(root)}`,
+      rows.map((row) => ({
+        id: row.key,
+        label: row.key,
+        value: valueText(row.file),
+        verbatim: true as const,
+        shown: configShown(row),
+        description: printable(configNote(row)),
+      })),
+      "save",
+      (v) => ({ verb: "config", cwd, patch: configPatch(rows, v) }),
+      back,
+      `Saves only the changed keys to ${printable(r.body.path)}; ${CONFIG_APPLIES}.`,
+    );
+  };
+
   return {
     get panel() {
       return panel;
@@ -1328,6 +1430,7 @@ function panelParts({
     newForm,
     addForm,
     loopForm,
+    configForm,
     askToAdd,
   };
 }

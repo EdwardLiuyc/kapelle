@@ -869,6 +869,25 @@ test("piped chat.ts takes the room commands, and names the room /new or /loop op
   );
 });
 
+test("piped chat.ts prints the room's project config on /config (M10-5)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(
+    d,
+    await gitRepo(t, { files: { ".kapelle/config.json": '{"ttlMs": 60000}' } }),
+  );
+  const c = spawnCli(t, ["new", "--cmd", REMEMBER, "--cwd", cwd], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("/config\n/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^config for .+\.kapelle\/config\.json\)$/m);
+  assert.match(r.stdout, /^ttlMs = 60000 \(config\)$/m);
+  assert.match(r.stdout, /^stallIdleMs = 300000 \(default\)$/m);
+  assert.match(r.stdout, /^linkPaths = \[\] \(default\)$/m);
+});
+
 test("piped chat.ts lists an agent's live models, and changes its model (M9-6)", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);

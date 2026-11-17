@@ -35,7 +35,7 @@ import { WATCHDOG_DEFAULTS, type WatchdogLimits } from "./watchdog.ts";
 /** Suggested by the ratified decision (`docs/STORIES.md`, M1b-1 Gap 2). M2-7
  *  config overrides it: `core/config.ts` resolves `KAPELLE_*` and the project
  *  file into `RunDefaults`, and nothing in this module reads either. */
-const DEFAULT_MAX_CONCURRENCY = 4;
+export const DEFAULT_MAX_CONCURRENCY = 4;
 
 /** The config layer below the run file (M2-7): a task value or a run-level
  *  value wins over it, and the built-in defaults floor it. */
