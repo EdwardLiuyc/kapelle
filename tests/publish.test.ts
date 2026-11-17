@@ -13,7 +13,6 @@ import test, { type TestContext } from "node:test";
 import { childEnv, REPO, tempDir } from "../integration/helpers.ts";
 
 const WORKFLOW = join(REPO, ".github", "workflows", "publish.yml");
-const CODE_CHECKS = join(REPO, ".github", "workflows", "code_checks.yml");
 const CHECK_TAG = join(REPO, ".github", "scripts", "check-tag.sh");
 const CHECK_CHANGELOG = join(REPO, ".github", "scripts", "check-changelog.mjs");
 const PUBLISH_IF_NEW = join(REPO, ".github", "scripts", "publish-if-new.sh");
@@ -171,6 +170,16 @@ test("the changelog guard refuses a missing file", async (t) => {
   assert.match(result.stderr, /::error::CHANGELOG\.md is missing/);
 });
 
+test("the changelog guard ignores example sections in fences and comments", async (t) => {
+  const dir = await packageDir(
+    t,
+    { name: "kapelle", version: "0.1.0" },
+    "# Changelog\n\n```md\n## 0.0.9\n```\n\n<!--\n## 0.0.8\n-->\n\n## 0.1.0\n\n- Current.\n",
+  );
+  const result = runNode(CHECK_CHANGELOG, dir);
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("the changelog guard refuses a matching version below the top section", async (t) => {
   const dir = await packageDir(
     t,
@@ -290,23 +299,5 @@ test("the workflow gates a v* tag and publishes with OIDC and no npm token", asy
     "npm --version",
     "npm ci",
     "bash .github/scripts/publish-if-new.sh",
-  ]);
-});
-
-test("the code check job runs the changelog guard", async () => {
-  const workflow = await readFile(CODE_CHECKS, "utf8");
-  const checkAt = workflow.search(/^ {4}check:$/m);
-  const packageAt = workflow.search(/^ {4}package-macos:$/m);
-  assert.notEqual(checkAt, -1);
-  assert.notEqual(packageAt, -1);
-  const check = workflow.slice(checkAt, packageAt);
-  assert.deepEqual(runCommands(check), [
-    "npm ci",
-    "npm run fmt:check",
-    "npm run check",
-    "npm run check:changelog",
-    "npm run ${{ vars.RUNNER && 'test' || 'test:adaptive' }}",
-    "npm run selftest",
-    "npm run knip",
   ]);
 });

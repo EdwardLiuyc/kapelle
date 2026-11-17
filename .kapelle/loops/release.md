@@ -10,11 +10,9 @@ drives one worker through it.
 
 | Name | Harness | Role | Joins |
 | --- | --- | --- | --- |
-| `rel` | yours | `developer`, the release manager | at the start |
+| `rel` | claude | `developer`, the release manager | at the start |
 
-**Yours** means the harness you run on. Read it in `kapelle room info`, on the line
-whose role is `orchestrator`. If it is not an agent id that `kapelle room add` takes,
-such as a custom command, stop and ask the person which agent to use.
+The release manager is `claude`. The orchestrator may run on any harness.
 
 There is no reviewer panel. The person reviews and approves the release PR.
 

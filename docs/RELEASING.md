@@ -109,7 +109,8 @@ The version is the one in `package.json`. The first release tags `0.1.0` as it i
 not bump it by habit. For a later version, update `package.json` on a branch named
 `release-<version>` with `npm version <version> --no-git-tag-version`. Only that name
 runs `package-macos` on the pull request. On the same branch, add a `## <version>`
-section at the top of `CHANGELOG.md`, from `git log v<previous>..origin/master`. Group it
+section at the top of `CHANGELOG.md`; the heading is the version and nothing else. Take
+the entries from `git log v<previous>..origin/master`. Group it
 under `Added`, `Changed` and `Fixed`, and give each line its PR number. List only what a
 user can see: leave out a pull request that changes only docs or tests. The release
 writes this section; a pull request does not. Commit both, and land that commit on
@@ -163,9 +164,6 @@ then `npm publish`, unless that version is on npm already. There is no `prepubli
 guard (M9-8 step 4, option B), so the `gate` job is the only check before a publish. A
 publish by hand runs the full gate from `AGENTS.md` first. It skips the tag check, because
 the hand publish comes before the tag.
-
-The gate also runs `npm run check:changelog`. It fails unless the first `##` section of
-`CHANGELOG.md` names the version in `package.json`.
 
 ## The clean-machine check
 

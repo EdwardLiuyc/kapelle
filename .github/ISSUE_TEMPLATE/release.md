@@ -38,7 +38,7 @@ after filling in the version.
   `<version>`.
 - [ ] The clean-machine check passed on Node 24 without a checkout.
 - [ ] The GitHub release notes link the changelog and say Linux and macOS only.
-- [ ] This issue is closed.
+- [ ] Everything above is checked; this issue can be closed.
 
 ## Evidence
 
