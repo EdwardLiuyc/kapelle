@@ -1,8 +1,8 @@
 /**
- * The publish workflow (M9-8, #307): a pushed tag must name the version in
- * `package.json`, and a version already on npm is skipped. Both decisions are
- * small shell scripts the workflow calls; these tests run them with a fake npm
- * so a release tag is not the first execution.
+ * The release guards: a pushed tag must name the version in `package.json`, the
+ * top changelog section must name that version too, and a version already on npm
+ * is skipped. The workflows call small scripts, which these tests run with fake
+ * inputs so a release tag is not the first execution.
  */
 
 import assert from "node:assert/strict";
@@ -13,12 +13,15 @@ import test, { type TestContext } from "node:test";
 import { childEnv, REPO, tempDir } from "../integration/helpers.ts";
 
 const WORKFLOW = join(REPO, ".github", "workflows", "publish.yml");
+const CODE_CHECKS = join(REPO, ".github", "workflows", "code_checks.yml");
 const CHECK_TAG = join(REPO, ".github", "scripts", "check-tag.sh");
+const CHECK_CHANGELOG = join(REPO, ".github", "scripts", "check-changelog.mjs");
 const PUBLISH_IF_NEW = join(REPO, ".github", "scripts", "publish-if-new.sh");
 
 async function packageDir(
   t: TestContext,
   pkg: { name: string; version: string },
+  changelog?: string,
 ): Promise<string> {
   const dir = await tempDir(t);
   // Shaped like the real one: the scripts must read it as an ES module package.
@@ -26,6 +29,9 @@ async function packageDir(
     join(dir, "package.json"),
     `${JSON.stringify({ ...pkg, type: "module" })}\n`,
   );
+  if (changelog !== undefined) {
+    await writeFile(join(dir, "CHANGELOG.md"), changelog);
+  }
   return dir;
 }
 
@@ -33,6 +39,17 @@ function runScript(script: string, cwd: string, env: Record<string, string>) {
   const result = spawnSync("bash", [script], {
     cwd,
     env: childEnv(env),
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(result.error, undefined, String(result.error));
+  return result;
+}
+
+function runNode(script: string, cwd: string) {
+  const result = spawnSync(process.execPath, [script], {
+    cwd,
+    env: childEnv(),
     encoding: "utf8",
     timeout: 10_000,
   });
@@ -109,6 +126,51 @@ test("the tag gate refuses a tag that names another version", async (t) => {
   );
 });
 
+test("the changelog guard accepts the top section that matches package.json", async (t) => {
+  const dir = await packageDir(
+    t,
+    { name: "kapelle", version: "0.1.0" },
+    "# Changelog\n\n## 0.1.0\n\n- First release.\n\n## 0.0.9\n\n- Old.\n",
+  );
+  const result = runNode(CHECK_CHANGELOG, dir);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("the changelog guard refuses a different top section", async (t) => {
+  const dir = await packageDir(
+    t,
+    { name: "kapelle", version: "0.1.0" },
+    "# Changelog\n\n## 0.0.9\n\n- Old.\n",
+  );
+  const result = runNode(CHECK_CHANGELOG, dir);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(
+    result.stderr,
+    /::error::CHANGELOG\.md top section 0\.0\.9, but package\.json is 0\.1\.0/,
+  );
+});
+
+test("the changelog guard refuses a missing section", async (t) => {
+  const dir = await packageDir(
+    t,
+    { name: "kapelle", version: "0.1.0" },
+    "# Changelog\n",
+  );
+  const result = runNode(CHECK_CHANGELOG, dir);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(
+    result.stderr,
+    /::error::CHANGELOG\.md top section missing, but package\.json is 0\.1\.0/,
+  );
+});
+
+test("the changelog guard refuses a missing file", async (t) => {
+  const dir = await packageDir(t, { name: "kapelle", version: "0.1.0" });
+  const result = runNode(CHECK_CHANGELOG, dir);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /::error::CHANGELOG\.md is missing/);
+});
+
 test("the publish check skips the exact version npm already has", async (t) => {
   const dir = await packageDir(t, { name: "kapelle", version: "0.1.0" });
   const calls = await fakeNpm(dir);
@@ -183,6 +245,7 @@ test("the workflow gates a v* tag and publishes with OIDC and no npm token", asy
     "npm ci",
     "npm run fmt:check",
     "npm run check",
+    "npm run check:changelog",
     "npm run test:adaptive",
     "npm run selftest",
     "npm run knip",
@@ -193,4 +256,9 @@ test("the workflow gates a v* tag and publishes with OIDC and no npm token", asy
     "npm ci",
     "bash .github/scripts/publish-if-new.sh",
   ]);
+});
+
+test("code checks run the changelog guard", async () => {
+  const workflow = await readFile(CODE_CHECKS, "utf8");
+  assert.match(workflow, /^\s+- run: npm run check:changelog$/m);
 });

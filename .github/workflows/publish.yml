@@ -32,6 +32,7 @@ jobs:
             - run: npm ci
             - run: npm run fmt:check
             - run: npm run check
+            - run: npm run check:changelog
             - run: npm run test:adaptive
             - run: npm run selftest
             - run: npm run knip
