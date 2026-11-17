@@ -171,6 +171,41 @@ test("the changelog guard refuses a missing file", async (t) => {
   assert.match(result.stderr, /::error::CHANGELOG\.md is missing/);
 });
 
+test("the changelog guard refuses a matching version below the top section", async (t) => {
+  const dir = await packageDir(
+    t,
+    { name: "kapelle", version: "0.1.0" },
+    "# Changelog\n\n## 0.0.9\n\n- Old.\n\n## 0.1.0\n\n- Current.\n",
+  );
+  const result = runNode(CHECK_CHANGELOG, dir);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(
+    result.stderr,
+    /::error::CHANGELOG\.md top section 0\.0\.9, but package\.json is 0\.1\.0/,
+  );
+});
+
+test("the changelog guard refuses an invalid package.json", async (t) => {
+  const dir = await tempDir(t);
+  await writeFile(join(dir, "package.json"), "{ not json\n");
+  await writeFile(join(dir, "CHANGELOG.md"), "# Changelog\n\n## 0.1.0\n");
+  const result = runNode(CHECK_CHANGELOG, dir);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /::error::package\.json is missing or invalid/);
+});
+
+test("the changelog guard refuses package.json without a version", async (t) => {
+  const dir = await tempDir(t);
+  await writeFile(
+    join(dir, "package.json"),
+    `${JSON.stringify({ name: "kapelle", type: "module" })}\n`,
+  );
+  await writeFile(join(dir, "CHANGELOG.md"), "# Changelog\n");
+  const result = runNode(CHECK_CHANGELOG, dir);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /::error::package\.json has no version/);
+});
+
 test("the publish check skips the exact version npm already has", async (t) => {
   const dir = await packageDir(t, { name: "kapelle", version: "0.1.0" });
   const calls = await fakeNpm(dir);
@@ -258,7 +293,20 @@ test("the workflow gates a v* tag and publishes with OIDC and no npm token", asy
   ]);
 });
 
-test("code checks run the changelog guard", async () => {
+test("the code check job runs the changelog guard", async () => {
   const workflow = await readFile(CODE_CHECKS, "utf8");
-  assert.match(workflow, /^\s+- run: npm run check:changelog$/m);
+  const checkAt = workflow.search(/^ {4}check:$/m);
+  const packageAt = workflow.search(/^ {4}package-macos:$/m);
+  assert.notEqual(checkAt, -1);
+  assert.notEqual(packageAt, -1);
+  const check = workflow.slice(checkAt, packageAt);
+  assert.deepEqual(runCommands(check), [
+    "npm ci",
+    "npm run fmt:check",
+    "npm run check",
+    "npm run check:changelog",
+    "npm run ${{ vars.RUNNER && 'test' || 'test:adaptive' }}",
+    "npm run selftest",
+    "npm run knip",
+  ]);
 });
