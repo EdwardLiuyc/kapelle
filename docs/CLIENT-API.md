@@ -273,7 +273,7 @@ request that is not valid HTTP gets `400`.
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
 | `run_not_found` | `404` | No run has this id. | |
 | `room_not_found` | `404` | No room has this id. | |
-| `room_deleted` | `410` | A successful `DELETE /rooms/:id` removed this room since the daemon started. | Stop following it. A restarted daemon knows no deleted id. |
+| `room_deleted` | `410` | The room was deleted, or a delete is still running, since the daemon started. A refused delete restores it. | Stop following it for now. A later room-list poll may show it again if the delete refused. A restarted daemon knows no deleted id. |
 | `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
 | `invalid_sender` | `400` | A message's `from` is not the room's orchestrator, or the orchestrator sent a message to itself. Since 1.11. | Only the orchestrator sends with `from`. Send without it for the person. |
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
@@ -1543,6 +1543,9 @@ nobody committed, new files included, refuses the delete.
 **Reply `204`**, with no body. The room is gone: `GET /rooms/:id` and
 `GET /rooms/:id/events` answer `410` `room_deleted` until the daemon restarts. A restarted
 daemon knows no deleted id, so they answer `404` `room_not_found`.
+
+A `410` can also be the window while a delete is still running. If that delete refuses,
+the room is restored, so a later `GET` or room-list poll can show it again.
 
 **Refusals:** `404` `room_not_found`; `409` `room_active`; `409` `uncommitted_work`,
 naming the files; `503` `shutting_down`. Nothing changes on a refusal, with one
