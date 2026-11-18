@@ -1658,7 +1658,9 @@ test("every typed room command reaches its route", async (t) => {
   const deleted = await typed(d, roomId, "/delete");
   assert.ok(deleted.ok, JSON.stringify(deleted));
   assert.equal(deleted.line, `deleted ${roomId}`);
-  assert.equal((await api(d, "GET", `/rooms/${roomId}`)).status, 404);
+  const afterDelete = await api(d, "GET", `/rooms/${roomId}`);
+  assert.equal(afterDelete.status, 410);
+  assert.equal(afterDelete.body.error.code, "room_deleted");
 });
 
 test("a model reaches both routes, typed or posted, and a refused one still adds the agent (M9-5)", async (t) => {
@@ -3048,7 +3050,11 @@ test("DELETE refuses an active room and uncommitted work, then removes a dismiss
     },
   );
   assert.notEqual(ref.status, 0, "the branch is gone");
-  assert.equal((await api(d, "GET", `/rooms/${id}`)).status, 404);
+  for (const path of [`/rooms/${id}`, `/rooms/${id}/events`]) {
+    const gone = await api(d, "GET", path);
+    assert.equal(gone.status, 410, path);
+    assert.equal(gone.body.error.code, "room_deleted", path);
+  }
   const list = await api<RoomListEntry[]>(d, "GET", "/rooms");
   assert.equal(
     list.body.some((r) => r.id === id),
@@ -3222,7 +3228,9 @@ test("a paused room is deleted without a revive, and its open stream ends (#235)
   await drained;
   assert.equal(existsSync(alice.worktree), false);
   assert.equal(existsSync(join(stateDirFor(cwd), "rooms", id)), false);
-  assert.equal((await api(second, "GET", `/rooms/${id}`)).status, 404);
+  const gone = await api(second, "GET", `/rooms/${id}`);
+  assert.equal(gone.status, 410);
+  assert.equal(gone.body.error.code, "room_deleted");
 });
 
 // The test drives the shutdown flow: its call count is the test.
@@ -3411,6 +3419,7 @@ test("a shutdown waits for a room delete in flight, which answers 204 (#316)", a
   assert.equal(hasBranch(cwd, alice.branch as string), false);
 
   const second = await boot(t, runtime, [], state);
+  // The deleted-room set is in memory, so a new daemon knows nothing.
   assert.equal((await api(second, "GET", `/rooms/${id}`)).status, 404);
 });
 

@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.23** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.24** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -18,8 +18,8 @@ changes the model during a chat and added an agent's `models`, #354, which
 added `_client_repeat_resolved`, #318, which settled the cancel boundary, and
 M8-7, #271, which added the orchestrator's turn cap; #371, which tightened the
 `daemon.json` lifecycle; M9-8, #307, which made the `/harnesses` routes stable; and
-M10-5, #494, which added `GET /config` and `PATCH /config`; and M9-9, #501, which added
-an agent's thinking level).
+M10-5, #494, which added `GET /config` and `PATCH /config`; M9-9, #501, which added
+an agent's thinking level; and #511, which distinguishes a deleted room).
 
 ## Contents
 
@@ -273,6 +273,7 @@ request that is not valid HTTP gets `400`.
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
 | `run_not_found` | `404` | No run has this id. | |
 | `room_not_found` | `404` | No room has this id. | |
+| `room_deleted` | `410` | A successful `DELETE /rooms/:id` removed this room since the daemon started. | Stop following it. A restarted daemon knows no deleted id. |
 | `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
 | `invalid_sender` | `400` | A message's `from` is not the room's orchestrator, or the orchestrator sent a message to itself. Since 1.11. | Only the orchestrator sends with `from`. Send without it for the person. |
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
@@ -380,7 +381,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 23 },
+  "apiVersion": { "major": 1, "minor": 24 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config"]
 }
 ```
@@ -1419,7 +1420,7 @@ is one call.
 
 **Reply `200`:** the room, in the same shape as `POST /rooms` answers: every participant
 in full, with its `role` when it has one, and the log's size as `seq`. `404` `room_not_found` for an
-unknown id.
+unknown id, and `410` `room_deleted` for one deleted since the daemon started.
 
 ### `PATCH /rooms/:id`
 
@@ -1463,8 +1464,9 @@ The room's event stream: one log and one `seq` for the whole room. Same format a
 but each line names `roomId` and `participantId` in place of `agent`. See
 [Format](#format).
 
-**Refusals:** `404` `room_not_found` for an unknown room, `404` `no_event_log` for one
-with no event log; `400` `invalid_request` for a bad `Last-Event-ID`.
+**Refusals:** `404` `room_not_found` for an unknown room, `410` `room_deleted` for one
+deleted since the daemon started, `404` `no_event_log` for one with no event log; `400`
+`invalid_request` for a bad `Last-Event-ID`.
 
 ### `POST /rooms/:id/dismiss`
 
@@ -1537,7 +1539,9 @@ The daemon reads each checkout under the room's folder before it removes anythin
 including a checkout no participant owns, such as one a failed add kept. A file that
 nobody committed, new files included, refuses the delete.
 
-**Reply `204`**, with no body. The room is gone: `GET /rooms/:id` answers `404`.
+**Reply `204`**, with no body. The room is gone: `GET /rooms/:id` and
+`GET /rooms/:id/events` answer `410` `room_deleted` until the daemon restarts. A restarted
+daemon knows no deleted id, so they answer `404` `room_not_found`.
 
 **Refusals:** `404` `room_not_found`; `409` `room_active`; `409` `uncommitted_work`,
 naming the files; `503` `shutting_down`. Nothing changes on a refusal, with one
@@ -1729,8 +1733,9 @@ gaps. The stream ends when the room's log closes.
 A removed participant has no stream: this route answers `404` for it. Its lines stay in
 [`GET /rooms/:id/events`](#get-roomsidevents); filter them there by `participantId`.
 
-**Refusals:** as for [`GET /rooms/:id/events`](#get-roomsidevents), and `404`
-`participant_not_found`.
+**Refusals:** `404` `room_not_found` for an unknown room or one this daemon deleted,
+`404` `participant_not_found` for a removed participant; `400` `invalid_request` for a
+bad `Last-Event-ID`.
 
 ### `POST /rooms/:id/agents/:agentId/turns/current/cancel`
 

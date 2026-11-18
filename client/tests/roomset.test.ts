@@ -139,7 +139,10 @@ async function fake(t: TestContext, token = "tok") {
     const dto = () => {
       const s = daemon.status.get(id);
       if (s === undefined) return answer(404, { error: "no such room" });
-      if (typeof s === "number") return answer(s, { error: "refused" });
+      if (typeof s === "number") {
+        const code = s === 410 ? "room_deleted" : "";
+        return answer(s, { error: { code, message: "refused" } });
+      }
       answer(200, {
         ...entry(id),
         createdAt: "",
@@ -461,6 +464,20 @@ test("a dismissed room leaves the set, and the set goes on", async (t) => {
   assert.deepEqual(said.ends, []);
 });
 
+test("a deleted room leaves the set, and the set goes on", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => daemon.streams.has("r1"));
+  daemon.status.set("r1", 410);
+  daemon.release("r1");
+  await until(() => said.closed.length === 1);
+  assert.deepEqual(said.closed, [["r1", { kind: "deleted" }]]);
+  assert.equal(set.rooms.has("r1"), false);
+  assert.deepEqual(said.ends, []);
+});
+
 test("a retained dismissed room stays until the screen drops it", async (t) => {
   const daemon = await fake(t);
   daemon.status.set("r1", "dismissed");
@@ -571,6 +588,8 @@ test("reconcile says what happened, not a line", async (t) => {
     kind: "alive",
     status: "paused",
   });
+  daemon.status.set("deleted", 410);
+  assert.deepEqual(await reconcile(address, "deleted"), { kind: "deleted" });
   assert.deepEqual(await reconcile(address, "missing"), { kind: "unknown" });
   assert.deepEqual(await reconcile(address, "broken"), {
     kind: "refused",

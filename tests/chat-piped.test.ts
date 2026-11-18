@@ -753,7 +753,7 @@ test("piped /delete waits for the next line, then keeps a dismissed room open af
   assert.match(r.stdout, /dev\.txt/);
   assert.match(r.stdout, /the room is dismissed; \/delete to remove it/);
   assert.match(r.stdout, /deleted room-/);
-  assert.equal((await api(d, "GET", `/rooms/${room.id}`)).status, 404);
+  assert.equal((await api(d, "GET", `/rooms/${room.id}`)).status, 410);
 });
 
 test("piped attach of a dismissed room waits in read-only mode", async (t) => {

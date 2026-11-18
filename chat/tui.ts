@@ -1110,13 +1110,16 @@ function chatTui(
   /** A room's stream ended and the screen goes on. With no room left it
    *  stays, so the person can open one (M4-5). */
   const onClosed = (id: string, ended: Ended, r?: Followed) => {
-    const wasDismissed = ended.kind === "dismissed";
-    if (wasDismissed) syncBox();
+    const gone = ended.kind === "dismissed" || ended.kind === "deleted";
+    if (gone) syncBox();
     const label = r?.entry.title ?? id;
-    const next = wasDismissed ? dismissed(rooms, view, id) : undefined;
+    const next = gone ? dismissed(rooms, view, id) : undefined;
     if (next) open(next);
-    if (wasDismissed) drafts.delete(id);
-    flash = wasDismissed ? `${label} was dismissed` : endedLine(ended, id);
+    if (gone) drafts.delete(id);
+    flash =
+      ended.kind === "dismissed"
+        ? `${label} was dismissed`
+        : endedLine(ended, id);
     setStatus();
   };
 

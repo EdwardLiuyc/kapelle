@@ -260,10 +260,12 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       const ended = stream.ended ?? (await reconcile(current, room.id));
       stream = undefined;
       // While a delete reads a dirty room it is briefly out of `GET /rooms`,
-      // so a 404 is part of the dismissal already being handled.
+      // so a 404 or 410 is part of the dismissal already being handled.
       if (
         holdDismissed &&
-        (ended.kind === "dismissed" || ended.kind === "unknown")
+        (ended.kind === "dismissed" ||
+          ended.kind === "deleted" ||
+          ended.kind === "unknown")
       ) {
         readOnly = true;
         pendingDelete = false;

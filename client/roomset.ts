@@ -2,10 +2,10 @@
  * The rooms a screen follows (M4-11): one stream and one reducer per room.
  *
  * - A room made elsewhere joins on the next `GET /rooms`, every 5 s.
- * - A dismissed room leaves the set, unless the screen retains it for
- *   `/delete` (#352).
- * - A room whose stream ended and that was not dismissed stays, marked
- *   lost.
+ * - A dismissed or deleted room leaves the set, unless the screen retains
+ *   it for `/delete` (#352).
+ * - A room whose stream ended and that was not dismissed or deleted stays,
+ *   marked lost.
  * - The set ends when every room in it lost its stream. With no room left
  *   it stays (M4-5), until the daemon is gone for `waitMs` or answers `401`.
  *
@@ -59,9 +59,11 @@ export type ReadAddress = () => Promise<DaemonAddress>;
 export type Ended =
   /** Someone dismissed it. */
   | { kind: "dismissed" }
+  /** A successful delete removed it. */
+  | { kind: "deleted" }
   /** The stream died and the room did not. */
   | { kind: "alive"; status: RoomStatus }
-  /** The daemon answered `404`: it may have restarted. */
+  /** The daemon answered `404`: it does not know this room. */
   | { kind: "unknown" }
   /** The daemon answered with another status. */
   | { kind: "refused"; status: number }
@@ -69,7 +71,8 @@ export type Ended =
   | { kind: "gone"; message: string };
 
 /** The exit code for a room that ended so. */
-export const codeOf = (e: Ended) => (e.kind === "dismissed" ? 0 : 1);
+export const codeOf = (e: Ended) =>
+  e.kind === "dismissed" || e.kind === "deleted" ? 0 : 1;
 
 /** How long a screen waits for a daemon that went away (M6-7d). */
 const WAIT_MS = 30_000;
@@ -184,6 +187,9 @@ export async function reconcile(
         ? { kind: "dismissed" }
         : { kind: "alive", status: r.body.status };
     }
+    if (r.status === 410 && r.error.code === "room_deleted") {
+      return { kind: "deleted" };
+    }
     if (r.status === 404) return { kind: "unknown" };
     return { kind: "refused", status: r.status };
   } catch (err) {
@@ -237,7 +243,7 @@ export interface RoomSetEvents {
   /** The poll found no daemon, once per outage: the set waits `waitMs`. */
   away(waitMs: number): void;
   /** A room's stream ended and the set goes on. `r` is the room, already
-   *  out of the set when it was dismissed. */
+   *  out of the set when it was dismissed or deleted. */
   closed(roomId: string, ended: Ended, r: Followed | undefined): void;
   /** The set ends: called once, and the poll stops with it. A stream that
    *  ends later still calls `closed`. */
@@ -386,11 +392,10 @@ export function roomSet(
     const r = rooms.get(id);
     if (!r && dropped.has(id)) return;
     // A delete still reading a dirty room is briefly out of `GET /rooms`:
-    // while held, its stream's 404 is not the room's end (#352).
-    const held =
-      r?.held === true &&
-      (ended.kind === "dismissed" || ended.kind === "unknown");
-    if (ended.kind === "dismissed" && !held) rooms.delete(id);
+    // while held, its stream's 404 or 410 is not the room's end (#352).
+    const gone = ended.kind === "dismissed" || ended.kind === "deleted";
+    const held = r?.held === true && (gone || ended.kind === "unknown");
+    if (gone && !held) rooms.delete(id);
     else if (r) {
       if (held) r.lost = undefined;
       else r.lost = ended;

@@ -1,7 +1,8 @@
 /**
  * The full-screen chat's pop-ups on a real terminal through `script(1)`: the
  * menu, the forms, the typed room commands (M4-5), a fast-forward's preview,
- * and the setup list (M9-3) with its install (M9-3b).
+ * a delete seen by a second screen (#511), and the setup list (M9-3) with its
+ * install (M9-3b).
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
@@ -144,7 +145,7 @@ test("the ctrl+o menu previews /delete and Enter confirms it", {
   await seen("dev.txt");
   await press("\r", "deleted room-");
   await seen("ctrl+o → new room");
-  assert.equal((await api(d, "GET", `/rooms/${room.id}`)).status, 404);
+  assert.equal((await api(d, "GET", `/rooms/${room.id}`)).status, 410);
   child.stdin.write(LEAVE);
   assert.equal(await exited, 0, out());
 });
@@ -215,6 +216,84 @@ test("a refused TUI delete shows the dirty file and allows a retry", {
   assert.equal(await exited, 0, out());
 });
 
+test("a delete on one screen drops the room from another screen (#511)", {
+  skip: noPty,
+  timeout: 90_000,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    title: "doomed",
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const command = `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`;
+  const first = await ptyScreen(t, command, { XDG_RUNTIME_DIR: runtime });
+  await first.seen("no agents");
+  const second = await ptyScreen(t, command, { XDG_RUNTIME_DIR: runtime });
+  await second.seen("no agents");
+
+  first.child.stdin.write("/delete\r");
+  await first.seen("delete · 0 branches");
+  first.child.stdin.write("\r");
+  await first.seen("deleted room-");
+
+  // The delete starts with a dismiss. A screen can therefore reconcile the
+  // settled dismissal before the DELETE lands; either terminal answer drops
+  // it, and neither marks it lost.
+  await until("the second screen drops the room", () =>
+    /the room was deleted| was dismissed/.test(plainText(second.out())),
+  );
+  const rows = [...screenRows(second.out()).values()].join("\n");
+  assert.match(rows, /no rooms/);
+  assert.doesNotMatch(rows, / lost/);
+
+  first.child.stdin.write(LEAVE);
+  second.child.stdin.write(LEAVE);
+  assert.equal(await first.exited, 0, first.out());
+  assert.equal(await second.exited, 0, second.out());
+});
+
+test("a paused room deleted on one screen says deleted on another (#511)", {
+  skip: noPty,
+  timeout: 90_000,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const cwd = await added(first, await gitRepo(t));
+  const open = await api<RoomReply>(first, "POST", "/rooms", {
+    cwd,
+    title: "kept",
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const id = open.body.id;
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const d = await boot(t, runtime, [], state);
+  const command = `stty cols 100 rows 30; node chat.ts attach ${id}`;
+  const one = await ptyScreen(t, command, { XDG_RUNTIME_DIR: runtime });
+  await one.seen("kept");
+  const two = await ptyScreen(t, command, { XDG_RUNTIME_DIR: runtime });
+  await two.seen("kept");
+
+  one.child.stdin.write("/delete\r");
+  await one.seen("delete · 0 branches");
+  one.child.stdin.write("\r");
+  await one.seen("deleted room-");
+
+  await two.seen("the room was deleted");
+  const rows = [...screenRows(two.out()).values()].join("\n");
+  assert.doesNotMatch(rows, / lost/);
+  assert.equal((await api(d, "GET", `/rooms/${id}`)).status, 410);
+
+  one.child.stdin.write(LEAVE);
+  two.child.stdin.write(LEAVE);
+  assert.equal(await one.exited, 0, one.out());
+  assert.equal(await two.exited, 0, two.out());
+});
+
 test("a delete drops the room it started on after the view moves", {
   skip: noPty,
 }, async (t) => {
@@ -242,7 +321,7 @@ test("a delete drops the room it started on after the view moves", {
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
-  assert.equal((await api(d, "GET", `/rooms/${doomed.id}`)).status, 404);
+  assert.equal((await api(d, "GET", `/rooms/${doomed.id}`)).status, 410);
   assert.equal((await api(d, "GET", `/rooms/${kept.id}`)).status, 200);
 });
 
@@ -259,7 +338,7 @@ test("a delete confirms the room its preview showed, not the current view", {
   await screen.press("\x1d", "ctrl+] type");
   await screen.press("\r", "deleted room-");
 
-  assert.equal((await api(d, "GET", `/rooms/${doomed.id}`)).status, 404);
+  assert.equal((await api(d, "GET", `/rooms/${doomed.id}`)).status, 410);
   assert.equal((await api(d, "GET", `/rooms/${kept.id}`)).status, 200);
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");

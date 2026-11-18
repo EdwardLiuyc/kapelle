@@ -1176,6 +1176,10 @@ const rooms = createRooms(async (id, { record, root }) => {
   }
 });
 
+/** Rooms deleted since this daemon started. Memory-only by design: after a
+ *  restart the id is unknown again. */
+const deletedRooms = new Set<string>();
+
 /** The watchdog's warn limits for a room, from the same layers as a run's
  *  (R38). Throws for a config that does not load. */
 function roomLimits(
@@ -1429,6 +1433,13 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   }
   rooms.set(id, { room, state: room.meta, root: setup.root });
   send(res, 201, toRoomDto(room.meta, room) satisfies RoomDto);
+}
+
+/** A deleted room answers 410 on the two reads a follower reconciles with. */
+function refuseDeleted(id: string) {
+  if (deletedRooms.has(id)) {
+    throw refusal(410, "room_deleted", `room ${id} was deleted`);
+  }
 }
 
 /** The room `id` names, built if it was not, or a 404. */
@@ -1835,6 +1846,7 @@ async function roomEvents(
   req: IncomingMessage,
   res: ServerResponse,
 ) {
+  if (agentId === undefined) refuseDeleted(id);
   const entry = await roomEntry(id);
   const log = entry.room.eventLog;
   if (agentId !== undefined) participantOf(entry, agentId);
@@ -1928,8 +1940,9 @@ async function deleteRoom(id: string, res: ServerResponse) {
       `room ${id} is active; dismiss it first (POST /rooms/${id}/dismiss)`,
     );
   }
-  // Out of the list before the first await, so no new request reaches the
-  // room while its checkouts are read and removed.
+  // Tombstone before the first await, so a follower that reconciles while
+  // the delete runs gets 410, not 404. Refusal puts both back.
+  deletedRooms.add(id);
   rooms.delete(id);
   const refuseWork = async () => {
     const work = await roomWork(root, id);
@@ -1963,6 +1976,7 @@ async function deleteRoom(id: string, res: ServerResponse) {
       console.error(`room ${id}: ${line}`);
     }
   } catch (err) {
+    deletedRooms.delete(id);
     rooms.set(id, entry);
     throw err;
   }
@@ -2245,7 +2259,9 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   } else if (req.method === "DELETE" && room) {
     await holdShutdown(res, deleteRoom(room[1] as string, res));
   } else if (req.method === "GET" && room) {
-    const { state, room: live } = await roomEntry(room[1] as string);
+    const id = room[1] as string;
+    refuseDeleted(id);
+    const { state, room: live } = await roomEntry(id);
     send(res, 200, toRoomDto(state, live) satisfies RoomDto);
   } else if (req.method === "PATCH" && room) {
     await patchRoom(room[1] as string, req, res);
