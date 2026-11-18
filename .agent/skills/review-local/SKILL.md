@@ -126,8 +126,10 @@ roles can run code without touching the main checkout.
   A test fails, its cleanup does not run, and a child process or a timer keeps the process
   alive. A per-test timeout does not stop this. So before each proof run, decide how long
   it should take, and give it a hard limit a little above that. A run that hits the limit
-  is a result: stop it and record a hang, not a pass or a fail. Do not wait longer, and do
-  not run it again the same way.
+  is a hang, not a pass or a fail. Stop it, and do not wait longer. A hang proves nothing
+  but the hang: unless the defect is the hang itself, the finding is `confirmed` or
+  `plausible`, never `proven`, and its report line says `proof hung`. Step 8 applies no
+  fix that only a hung run checked. Do not run it again the same way.
 
 - **W4. Reset** after each proof. `-x` also removes ignored files that the gate or a proof
   made, so they cannot change the next proof. `-e node_modules` keeps the link, which git
