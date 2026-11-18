@@ -2285,9 +2285,12 @@ function createParticipant({
     wanted = undefined;
     if (!agent || !target) return;
     const before = levelOption?.currentValue;
+    const was = model;
     await applyModel(agent, target);
     const after = levelOption?.currentValue;
     const moved = after !== before;
+    // A line about the old model's level is no longer true (#508 review).
+    if (!moved && model !== was) levelLine = undefined;
     if (moved) {
       const on = model ? ` with the model "${model}"` : "";
       levelLine = {

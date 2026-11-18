@@ -3777,6 +3777,22 @@ test("a model change reads the level and its list again, and sends no level back
   });
 });
 
+test("a model change that keeps the level drops the old model's level notice; a refused one keeps it (#508 review)", async (t) => {
+  const { room, p } = await levelRoom(t, { thoughtLevel: "max" });
+  const stale =
+    'mock-agent does not list the thinking level "max" on the model "mock/fast", ' +
+    'so it was not sent; it stays on the thinking level "high"';
+  assert.deepEqual(levelNotices(p), [stale]);
+  // A refused model: still on mock/fast, so the line is still true.
+  await room.setModel(p.id, "mock/bogus");
+  assert.equal(p.model, "mock/fast");
+  assert.deepEqual(levelNotices(p), [stale]);
+  // mock/smart keeps high, and the line about mock/fast goes.
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.thoughtLevel, "high");
+  assert.deepEqual(levelNotices(p), []);
+});
+
 test("a PATCH-like model and level together: the level goes after the model, on its list (M9-9)", async (t) => {
   const { room, p, sent } = await levelRoom(t);
   const turn = p.send("one");
