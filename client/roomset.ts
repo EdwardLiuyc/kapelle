@@ -286,9 +286,10 @@ export function roomSet(
 ): RoomSet {
   const rooms = new Map<string, Followed>();
   const retained = new Set<string>();
-  /** Rooms a successful delete removed. A poll answer from before it must
-   *  not bring one back. */
-  const dropped = new Set<string>();
+  /** A room whose stream ended deleted, and the poll generation that saw it.
+   *  An answer asked at or before that generation is stale. A later poll may
+   *  bring the room back if a refused delete restored it. */
+  const droppedAfter = new Map<string, number>();
   // A restart writes no line: read each room again for what it left.
   const current = followDaemon(d, address, (warning) => {
     on.restarted(warning);
@@ -390,16 +391,18 @@ export function roomSet(
   const closed = async (id: string, known?: Ended, err?: unknown) => {
     const ended = known ?? (await reconcile(current, id));
     const r = rooms.get(id);
-    if (!r && dropped.has(id)) return;
+    if (!r && droppedAfter.has(id)) return;
     // A delete still reading a dirty room is briefly out of `GET /rooms`:
     // while held, its stream's 404 or 410 is not the room's end (#352).
     const gone = ended.kind === "dismissed" || ended.kind === "deleted";
     const held = r?.held === true && (gone || ended.kind === "unknown");
     if (gone && !held) {
       rooms.delete(id);
-      // A deleted room is gone for good: a poll answer asked before it
-      // closed must not bring it back.
-      if (ended.kind === "deleted") dropped.add(id);
+      // A poll asked before this close must not bring the room back. A
+      // refused delete can restore it, so a later poll may.
+      if (ended.kind === "deleted") {
+        droppedAfter.set(id, Math.max(asked, droppedAfter.get(id) ?? 0));
+      }
     } else if (r) {
       if (held) r.lost = undefined;
       else r.lost = ended;
@@ -463,8 +466,17 @@ export function roomSet(
               r.entry = shownEntry(
                 stale ? { ...entry, title: r.entry.title } : entry,
               );
-            } else if (entry.status !== "dismissed" && !dropped.has(entry.id))
+            } else {
+              const droppedAt = droppedAfter.get(entry.id);
+              if (droppedAt !== undefined && ask <= droppedAt) continue;
+              if (entry.status === "dismissed") {
+                if (droppedAt === undefined) continue;
+                // A refused post-dismiss delete puts the room back dismissed.
+                // Retain its replay until the person deletes it again.
+                retained.add(entry.id);
+              }
               add(entry);
+            }
           }
           on.polled();
         },
@@ -501,7 +513,7 @@ export function roomSet(
     },
     drop(id) {
       retained.delete(id);
-      dropped.add(id);
+      droppedAfter.set(id, Math.max(asked, droppedAfter.get(id) ?? 0));
       rooms.delete(id);
     },
     retitle(id, title) {
