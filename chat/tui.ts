@@ -1110,13 +1110,15 @@ function chatTui(
   /** A room's stream ended and the screen goes on. With no room left it
    *  stays, so the person can open one (M4-5). */
   const onClosed = (id: string, ended: Ended, r?: Followed) => {
-    const wasDismissed = ended.kind === "dismissed";
-    if (wasDismissed) syncBox();
+    const gone = ended.kind === "dismissed" || ended.kind === "deleted";
+    if (gone) syncBox();
     const label = r?.entry.title ?? id;
-    const next = wasDismissed ? dismissed(rooms, view, id) : undefined;
+    const next = gone ? dismissed(rooms, view, id) : undefined;
     if (next) open(next);
-    if (wasDismissed) drafts.delete(id);
-    flash = wasDismissed ? `${label} was dismissed` : endedLine(ended, id);
+    if (gone) drafts.delete(id);
+    if (ended.kind === "dismissed") flash = `${label} was dismissed`;
+    else if (ended.kind === "deleted") flash = `${label} was deleted`;
+    else flash = endedLine(ended, id);
     setStatus();
   };
 
@@ -1432,6 +1434,18 @@ function chatTui(
      * transcript is never written. Answers whether it went through. One
      * at a time: a second Enter on a form would send it again.
      */
+    /** A delete route that no longer knows the room has already finished it. */
+    const dropMissingRoom = (id: string, code: string | undefined) => {
+      if (code !== "room_not_found") return false;
+      if (box.panel) hidePanel();
+      set.drop(id);
+      const next = dismissed(rooms, view, id);
+      if (next) open(next);
+      drafts.delete(id);
+      flash = "the room was deleted";
+      setStatus();
+      return true;
+    };
     let busy = false;
     run = async (c: RouteCommand, roomId?: string): Promise<boolean> => {
       if (busy) {
@@ -1481,7 +1495,8 @@ function chatTui(
           askToAdd(c.body.cwd, () => run(c));
           return true;
         }
-        if (c.verb === "delete") {
+        if (c.verb === "delete" && roomId) {
+          if (dropMissingRoom(roomId, out.code)) return true;
           const status = out.room?.status ?? rooms.get(roomId)?.entry.status;
           set.retain(roomId, status === "dismissed");
         }
@@ -1537,7 +1552,8 @@ function chatTui(
     };
 
     /** Shows what `/delete` would remove in the side pane, and confirms on
-     *  Enter (#352). Answers whether the pane was filled. */
+     *  Enter (#352). Answers whether the request was handled: the pane was
+     *  filled, or the room was already gone. */
     previewDelete = async () => {
       const id = view.roomId;
       if (!id) {
@@ -1548,6 +1564,7 @@ function chatTui(
       await set.fresh();
       const res = await deletePreview(d, id);
       if (!res.ok) {
+        if (dropMissingRoom(id, res.error.code)) return true;
         flash = `! ${res.error.message}`;
         setStatus();
         return false;

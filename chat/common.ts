@@ -37,11 +37,13 @@ const stoppedLine = (name: string, status: string) =>
   `${status === "killed" ? "!" : "·"} ${name} is ${status}; a message revives it`;
 
 /** The line for a room whose stream ended, from what `reconcile` found.
- *  It starts with `!` unless the room was dismissed. */
+ *  It starts with `!` unless the room was dismissed or deleted. */
 function endedLine(e: Ended, id: string): string {
   switch (e.kind) {
     case "dismissed":
       return "the room was dismissed";
+    case "deleted":
+      return "the room was deleted";
     // The stream died, the room did not. Name the state the daemon reports
     // rather than the status of the GET that reported it, and say how to
     // get back in.
@@ -51,7 +53,7 @@ function endedLine(e: Ended, id: string): string {
         `rejoin with: kapelle chat attach ${id}`
       );
     case "unknown":
-      return `! the daemon no longer knows room ${id}; it may have restarted`;
+      return `! the daemon does not know room ${id}`;
     case "refused":
       return `! lost the room stream (HTTP ${e.status}); the room may still be alive`;
     case "gone":
