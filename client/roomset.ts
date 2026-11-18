@@ -221,7 +221,8 @@ export interface Followed {
    *  offer `/delete` (#352). */
   held?: boolean;
   /** Held because a fresh poll brought back a room that had ended deleted.
-   *  A later deleted close still ends it; a screen retain takes over. */
+   *  Never set with `held`; a screen retain takes over. A later deleted
+   *  close still ends it. */
   pollHeld?: boolean;
 }
 
@@ -437,11 +438,12 @@ export function roomSet(
 
   const add = (entry: RoomListEntry, pollHeld = false) => {
     if (rooms.has(entry.id)) return;
+    const screenHeld = retained.has(entry.id);
     const r: Followed = {
       entry: shownEntry(entry),
       state: newRoomState(),
-      ...(retained.has(entry.id) && { held: true }),
-      ...(pollHeld && { pollHeld: true }),
+      ...(screenHeld && { held: true }),
+      ...(pollHeld && !screenHeld && { pollHeld: true }),
     };
     rooms.set(entry.id, r);
     loadDto(r);

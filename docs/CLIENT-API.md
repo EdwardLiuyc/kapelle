@@ -273,7 +273,7 @@ request that is not valid HTTP gets `400`.
 | `repo_not_added` | `403` | `cwd` is not inside an added repository. | `POST /repos` first. |
 | `run_not_found` | `404` | No run has this id. | |
 | `room_not_found` | `404` | No room has this id. | |
-| `room_deleted` | `410` | The room was deleted, or a delete is still running, since the daemon started. A refused delete restores it. | Stop following it for now. A later room-list poll may show it again if the delete refused. A restarted daemon knows no deleted id. |
+| `room_deleted` | `410` | A delete removed this room, or a delete is still running, in this daemon. A refused delete restores it. | Stop following it for now. A later room-list poll may show it again if the delete refused; after a restart this daemon knows no deleted id. |
 | `participant_not_found` | `404` | The room has no participant with this id. It may have been removed. | Read `GET /rooms/:id/agents`. |
 | `invalid_sender` | `400` | A message's `from` is not the room's orchestrator, or the orchestrator sent a message to itself. Since 1.11. | Only the orchestrator sends with `from`. Send without it for the person. |
 | `permission_not_found` | `404` | The daemon never gave out this permission id, or it forgot a closed one at a restart. | |
@@ -1400,7 +1400,8 @@ is sent, because the default is `HEAD`: a folder that is not committed yet gives
 ### `GET /rooms`
 
 **Reply `200`:** a list. Each room carries its participants in short, so a list of rooms
-is one call.
+is one call. While a delete runs, the room is omitted from this list; a refused delete
+puts it back.
 
 ```json
 [
