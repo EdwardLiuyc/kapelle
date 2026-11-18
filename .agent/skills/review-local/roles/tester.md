@@ -44,6 +44,9 @@ If this change broke, would the tests catch it?
   the snapshot.
 - **An unstable test.** Run it 20 times:
   `for i in $(seq 20); do node --test <file> || break; done`. One failure is `proven`.
+- **Each run above has a hard limit**, as W3 in `SKILL.md` says. In the 20-run loop, the
+  limit is for one run, not for the whole loop. A run that hits it is a hang, not "nothing
+  fails".
 
 ## Not this role
 
