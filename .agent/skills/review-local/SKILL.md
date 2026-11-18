@@ -114,8 +114,19 @@ roles can run code without touching the main checkout.
     tool that is not in `node_modules`. Ask first, or report the step as "not run".
 - **W3. Prove** only in `$dir`. No commit, no branch, no push. A proof is a test or a small
   script that fails on the snapshot. A suggested fix is optional; if you give one, the proof
-  must pass with it. Capture the change like this, because a new file does not show in a
-  plain `git diff`:
+  must pass with it.
+
+  A proof runs code that you wrote or broke on purpose, and such code can fail to exit.
+  A test fails, its cleanup does not run, and a child process or a timer keeps the process
+  alive. A per-test timeout does not stop this. So before each proof run, decide how long
+  it should take, and give it a hard limit a little above that. A run that hits the limit
+  is a hang, not a pass or a fail. Stop it, and do not wait longer. A hang proves nothing
+  but the hang: unless the defect is the hang itself, the finding is `confirmed` or
+  `plausible`, never `proven`, and its report line says `proof hung`. Step 8 applies no
+  fix that only a hung run checked. Do not run the same command again. A narrower run,
+  such as one test instead of the file, is allowed.
+
+  Capture the change like this, because a new file does not show in a plain `git diff`:
 
   ```bash
   git -C "$dir" add -A -- . ':!node_modules'
