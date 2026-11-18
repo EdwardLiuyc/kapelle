@@ -48,6 +48,7 @@ import {
   runText,
   seenIn,
   shows,
+  statusTarget,
   step,
   ticks,
   touched,
@@ -731,6 +732,24 @@ test("the footer at 160, 100 and 60 columns: the hints drop from the right, the 
     footer(40, "", hints, "", (x) => x.length),
     "enter to send · ctrl+o menu",
     "no room: no leading ·",
+  );
+});
+
+test("the target status shows mode, model and level only when known (#510)", () => {
+  assert.equal(
+    statusTarget("auto", "mock/fast", "high"),
+    "auto · mock/fast · high",
+  );
+  assert.equal(statusTarget("auto", "mock/plain"), "auto · mock/plain");
+  assert.equal(statusTarget("auto", undefined, "high"), "auto · high");
+  assert.equal(statusTarget("auto"), "auto");
+  assert.equal(
+    statusTarget("auto", "mock\u0007fast", "high"),
+    "auto · mock fast · high",
+  );
+  assert.equal(
+    statusTarget("auto", "mock/fast", "hi\u001bgh"),
+    "auto · mock/fast · hi gh",
   );
 });
 
