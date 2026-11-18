@@ -1592,10 +1592,10 @@ Changes one participant. Send one or more of:
   request: the harness keeps the model it had, and a notice says so. A pending change
   refused at a start leaves the last model the harness took. Only a model the harness took
   is sent again at a revive. The saved models of `GET /harnesses` do not change.
-  A model change never sends a thinking level. When the new model moved the level, or has
-  no level option, a notice says so, and the level the daemon sends again at a revive
-  becomes the one the harness is on. Pick the level again after the change, or send both
-  in one request.
+  A model change never sends a thinking level. Once the harness took the model, the level
+  the daemon sends again at a revive becomes the one the harness is on, moved or not, so
+  a revive changes nothing. When the new model moved the level, or has no level option, a
+  notice says so. Pick the level again after the change, or send both in one request.
 - `thoughtLevel` (since 1.23): a thinking level id from the participant's
   `thoughtLevels`. The daemon checks it, not only the harness: pi and copilot take any
   value and change the level. When the harness runs and no model change waits, a level

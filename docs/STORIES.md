@@ -3976,8 +3976,9 @@ the new fields and the refusal in `docs/CLIENT-API.md`.
 **Decided at pickup 2026-11-17 (#501):** the join form has no level row, and `/new` and
 `/add` take no `--level`. The API still takes `thoughtLevel` at a join; on screen, the
 person uses `@name /level`, which shows the true list. A model change during a chat
-sends no level: when it moved the level, a notice says so, and the level asked for
-becomes the one in use, so a revive does not bring the old one back. A `PATCH` with
+sends no level: once the harness took the model, the level asked for becomes the one in
+use, moved or not, so a revive does not bring an old one back, and when it moved the
+level, a notice says so (#508 review 2: first only a moved level was saved). A `PATCH` with
 both still sends the level after the model. A model change that waits for a start is
 part of that start. Rule 5 is narrowed: after a start or a load, and after the model,
 the room sends the level asked for only when the harness reports another. A load can

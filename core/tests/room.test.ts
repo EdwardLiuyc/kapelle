@@ -3778,7 +3778,7 @@ test("a model change reads the level and its list again, and sends no level back
 });
 
 test("a model change that keeps the level drops the old model's level notice; a refused one keeps it (#508 review)", async (t) => {
-  const { room, p } = await levelRoom(t, { thoughtLevel: "max" });
+  const { room, p, file } = await levelRoom(t, { thoughtLevel: "max" });
   const stale =
     'mock-agent does not list the thinking level "max" on the model "mock/fast", ' +
     'so it was not sent; it stays on the thinking level "high"';
@@ -3787,10 +3787,35 @@ test("a model change that keeps the level drops the old model's level notice; a 
   await room.setModel(p.id, "mock/bogus");
   assert.equal(p.model, "mock/fast");
   assert.deepEqual(levelNotices(p), [stale]);
+  await saved();
+  assert.equal(
+    readRoomRecord(file).participants[0]?.thoughtLevel,
+    "max",
+    "a refused model leaves the saved level",
+  );
   // mock/smart keeps high, and the line about mock/fast goes.
   await room.setModel(p.id, "mock/smart");
   assert.equal(p.thoughtLevel, "high");
   assert.deepEqual(levelNotices(p), []);
+  await saved();
+  assert.equal(readRoomRecord(file).participants[0]?.thoughtLevel, "high");
+});
+
+test("a model change that keeps the level saves the level in use, so a revive changes nothing (#508 review 2)", async (t) => {
+  // max is not on mock/fast's list, so the join leaves alice on high.
+  const { repo, room, p, file } = await loading(t, "levels", {
+    thoughtLevel: "max",
+  });
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.thoughtLevel, "high");
+  await p.send("one");
+  await room.pause();
+  assert.equal(readRoomRecord(file).participants[0]?.thoughtLevel, "high");
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  // mock/smart lists max, yet nobody asked for it after the change.
+  assert.equal(back.p.model, "mock/smart");
+  assert.equal(back.p.thoughtLevel, "high");
 });
 
 test("a PATCH-like model and level together: the level goes after the model, on its list (M9-9)", async (t) => {

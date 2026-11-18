@@ -194,9 +194,11 @@
  * - After a start, a load too, the level asked for is sent only when the
  *   harness reports another one. A load can lose it: pi's level is its mode
  *   (§Mode after load).
- * - A model change during a chat never sends a level. When it moved the
- *   level, a notice says so, and the level asked for becomes the one in use,
- *   so a revive does not bring the old one back. A model change that waits
+ * - A model change during a chat never sends a level. Once the harness took
+ *   the model, the level asked for becomes the one in use, moved or not, so
+ *   a revive does not bring an old one back. When the level moved, a notice
+ *   says so; when it did not, an earlier level notice goes, as it named the
+ *   old model. A refused model changes neither. A model change that waits
  *   for a start is part of that start.
  * - On pi a level set also sends `current_mode_update`. Nothing here reads
  *   that, so a level never changes the mode or its notices.
@@ -2205,15 +2207,19 @@ function createParticipant({
    *  had: pi and claude say only `Internal error`, so the line is ours, with
    *  theirs after it. A time-out or an exit is no refusal, and the harness
    *  may still apply it, so its line says less. Only a set the harness took
-   *  becomes `asked`. A failed set is not tried again in this process. */
-  const applyModel = async (next: AcpAgent, target: string) => {
+   *  becomes `asked`. A failed set is not tried again in this process.
+   *  True when the harness took it. */
+  const applyModel = async (
+    next: AcpAgent,
+    target: string,
+  ): Promise<boolean> => {
     const option = next.configOptions.find((o) => o.category === "model");
     const on = model ? `the model "${model}"` : "its own model";
     if (!option) {
       modelLine = {
         text: `${spec.name} lists no models, so the model "${target}" was not set; it runs on ${on}`,
       };
-      return;
+      return false;
     }
     try {
       const res = await next.setConfigOption(option.id, target);
@@ -2233,6 +2239,7 @@ function createParticipant({
           : {
               text: `${spec.name} took the model "${target}" but runs on "${model}"`,
             };
+      return true;
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       modelLine = {
@@ -2242,6 +2249,7 @@ function createParticipant({
             : `${spec.name} did not confirm the model "${target}" (${why}); ` +
               `it may still run on ${on}`,
       };
+      return false;
     }
   };
   /** Tells every client the result of a change: the model in use, or
@@ -2280,29 +2288,31 @@ function createParticipant({
     // the same line as one made against a live harness (M9-6).
     if (pending !== undefined) announceModel();
   };
-  /** The change the live harness has not heard of, then its result. A
-   *  level it moved is not sent back (decided 2026-11-17, #501): a notice
-   *  says so, and the level asked for follows it. */
+  /** The change the live harness has not heard of, then its result. No
+   *  level is sent (decided 2026-11-17, #501). Once the harness took the
+   *  model, the level it reports is the level asked for, moved or not, so
+   *  a revive changes nothing; the level line is the move, or none, since
+   *  a line about the old model is no longer true (#508 review). A refused
+   *  model changes neither. */
   const sendWanted = async () => {
     const target = wanted;
     wanted = undefined;
     if (!agent || !target) return;
     const before = levelOption?.currentValue;
-    const was = model;
-    await applyModel(agent, target);
+    const took = await applyModel(agent, target);
     const after = levelOption?.currentValue;
     const moved = after !== before;
-    // A line about the old model's level is no longer true (#508 review).
-    if (!moved && model !== was) levelLine = undefined;
-    if (moved) {
+    if (took) {
       const on = model ? ` with the model "${model}"` : "";
-      levelLine = {
-        text:
-          after === undefined
-            ? `${spec.name} has no thinking level${on}; it was on "${before}"`
-            : `${spec.name}'s thinking level moved ${before === undefined ? "" : `from "${before}" `}to "${after}"${on}`,
-      };
       askedLevel = after;
+      levelLine = !moved
+        ? undefined
+        : {
+            text:
+              after === undefined
+                ? `${spec.name} has no thinking level${on}; it was on "${before}"`
+                : `${spec.name}'s thinking level moved ${before === undefined ? "" : `from "${before}" `}to "${after}"${on}`,
+          };
     }
     announceModel(moved);
   };
