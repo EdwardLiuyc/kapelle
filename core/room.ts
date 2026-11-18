@@ -195,11 +195,12 @@
  *   harness reports another one. A load can lose it: pi's level is its mode
  *   (§Mode after load).
  * - A model change during a chat never sends a level. Once the harness took
- *   the model, the level asked for becomes the one in use, moved or not, so
- *   a revive does not bring an old one back. When the level moved, a notice
- *   says so; when it did not, an earlier level notice goes, as it named the
- *   old model. A refused model changes neither. A model change that waits
- *   for a start is part of that start.
+ *   the model, the same model again included, the level asked for becomes
+ *   the one in use, moved or not, so a revive does not bring an old one
+ *   back. The level line changes with it: a notice when the level moved, and
+ *   none when it did not, since no open request is left for a notice to
+ *   describe. A refused model changes neither. A model change that waits for
+ *   a start is part of that start.
  * - On pi a level set also sends `current_mode_update`. Nothing here reads
  *   that, so a level never changes the mode or its notices.
  *
@@ -2290,10 +2291,10 @@ function createParticipant({
   };
   /** The change the live harness has not heard of, then its result. No
    *  level is sent (decided 2026-11-17, #501). Once the harness took the
-   *  model, the level it reports is the level asked for, moved or not, so
-   *  a revive changes nothing; the level line is the move, or none, since
-   *  a line about the old model is no longer true (#508 review). A refused
-   *  model changes neither. */
+   *  model, the same one again included, the level it reports is the level
+   *  asked for, moved or not, so a revive changes nothing. The level line is
+   *  the move, or none: no open request is left for a line to describe
+   *  (#508 review). A refused model changes neither. */
   const sendWanted = async () => {
     const target = wanted;
     wanted = undefined;
