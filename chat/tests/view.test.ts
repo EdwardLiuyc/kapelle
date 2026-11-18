@@ -743,6 +743,14 @@ test("the target status shows mode, model and level only when known (#510)", () 
   assert.equal(statusTarget("auto", "mock/plain"), "auto · mock/plain");
   assert.equal(statusTarget("auto", undefined, "high"), "auto · high");
   assert.equal(statusTarget("auto"), "auto");
+  assert.equal(
+    statusTarget("auto", "mock\u0007fast", "high"),
+    "auto · mock fast · high",
+  );
+  assert.equal(
+    statusTarget("auto", "mock/fast", "hi\u001bgh"),
+    "auto · mock/fast · hi gh",
+  );
 });
 
 test("a thought chunk asks for a frame only when it set the flag", () => {

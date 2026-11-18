@@ -1,7 +1,7 @@
 /**
- * The full-screen chat's pop-ups on a real terminal through `script(1)`: the
- * menu, the forms, the typed room commands (M4-5), a fast-forward's preview,
- * and the setup list (M9-3) with its install (M9-3b).
+ * The full-screen chat's pop-ups on a real terminal through `script(1)`:
+ * the menu, the forms, the typed room commands (M4-5), status-line refreshes,
+ * a fast-forward's preview, and the setup list (M9-3) with its install (M9-3b).
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
@@ -1415,6 +1415,8 @@ test("the status line shows the level after a revive (#510)", {
     return now.body.participants[0]?.status === "exited";
   });
 
+  // Queue high while stopped. The mock starts high on load, but without this
+  // the room would send the earlier low again; high must survive the revive.
   const changed = await api<ParticipantDto>(
     d,
     "PATCH",
@@ -1422,6 +1424,7 @@ test("the status line shows the level after a revive (#510)", {
     { thoughtLevel: "high" },
   );
   assert.equal(changed.status, 200);
+  // "revive" is ordinary message text; sending it restarts the harness.
   await press("@mock-agent revive\r", "auto · mock/fast · high");
   await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
@@ -1446,6 +1449,7 @@ test("the status line shows a revived level before the first turn ends (#510)", 
     createdAt: "",
     updatedAt: "",
     status: "active",
+    // The stream's revive is seq 2; the re-read reports the same mark.
     seq: level === "high" ? 2 : 1,
     participants: [
       {

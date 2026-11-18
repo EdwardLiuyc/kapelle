@@ -805,13 +805,11 @@ function chatTui(
       if ("id" in t) {
         const p = r.state.participants.get(t.id);
         // The model and level in use (M9-5, M9-9) are in the room's reply,
-        // read again after each join and turn, as the branch is.
+        // read again after a join, a turn or a revive, and after either
+        // changes.
         const dto = r.dto?.participants.find((q) => q.id === t.id);
-        const detail = p
-          ? statusTarget(p.mode, dto?.model, dto?.thoughtLevel)
-          : "";
         parts.push(
-          `${bold(`→ ${nameOf(r.state, t.id)}`)}${detail ? ` ${dim(detail)}` : ""}`,
+          `${bold(`→ ${nameOf(r.state, t.id)}`)}${p ? ` ${dim(statusTarget(p.mode, dto?.model, dto?.thoughtLevel))}` : ""}`,
         );
         right = usageText(p?.usage);
       } else parts.push(yellow(`! ${t.error}`));
