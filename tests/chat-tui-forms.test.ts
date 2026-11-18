@@ -51,6 +51,7 @@ import {
   REMEMBER,
   REPO,
   type RoomReply,
+  roomLog,
   screenRows,
   scrollback,
   tempDir,
@@ -1359,14 +1360,69 @@ test("@name /level lists and takes a pick, and a model change that moves the lev
 }, async (t) => {
   const LEVELS = `node ${MOCK_AGENT} --scenario levels`;
   const { press, seen, exited, out } = await chatOnPty(t, LEVELS);
-  await seen("auto · mock/fast");
+  await seen("auto · mock/fast · high");
   await press("@mock-agent /level\r", "mock-agent · thinking level");
   await press("low\r", 'mock-agent now thinks at the level "low"');
+  await seen("auto · mock/fast · low");
   await press(
     "@mock-agent /model mock/plain\r",
     'mock-agent now runs on the model "mock/plain"',
   );
   await seen('mock-agent has no thinking level with the model "mock/plain"');
+  await seen("auto · mock/plain");
+  const status = [...screenRows(out()).values()].find((row) =>
+    row.includes("auto · mock/plain"),
+  );
+  assert.ok(status);
+  assert.doesNotMatch(status, /\b(?:high|low)\b/, "no stale level");
+  assert.doesNotMatch(status, /mock\/plain ·\s+·/, "no doubled separator");
+  assert.doesNotMatch(status, /mock\/plain ·\s*$/, "no trailing separator");
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
+test("the status line shows the level after a revive (#510)", {
+  skip: noPty,
+}, async (t) => {
+  const LEVELS = `node ${MOCK_AGENT} --scenario levels`;
+  const { press, seen, exited, out, d, cwd } = await chatOnPty(t, LEVELS);
+  await seen("auto · mock/fast · high");
+  await press(
+    "@mock-agent /level low\r",
+    'mock-agent now thinks at the level "low"',
+  );
+  await seen("auto · mock/fast · low");
+
+  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  const [room] = rooms.body;
+  assert.ok(room);
+  const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
+  const participant = only(full.body);
+  let pid: number | undefined;
+  await until("the harness pid on the room log", async () => {
+    const lines = await roomLog(cwd, room.id).catch(() => []);
+    const spawned = lines.find(
+      (line) => line.update.sessionUpdate === "_client_harness_spawned",
+    );
+    if (typeof spawned?.update.pid === "number") pid = spawned.update.pid;
+    return pid !== undefined;
+  });
+  assert.ok(pid);
+  process.kill(pid, "SIGKILL");
+  await seen("mock-agent's harness exited");
+  await until("the exited participant", async () => {
+    const now = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
+    return now.body.participants[0]?.status === "exited";
+  });
+
+  const changed = await api<ParticipantDto>(
+    d,
+    "PATCH",
+    `/rooms/${room.id}/agents/${participant.id}`,
+    { thoughtLevel: "high" },
+  );
+  assert.equal(changed.status, 200);
+  await press("@mock-agent revive\r", "auto · mock/fast · high");
   await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
 });

@@ -22,9 +22,9 @@
  * row too, and while one shows, the screen redraws once a second (M7-1); the
  * sidebar's busy timers need the same tick, in any room (M7-3).
  *
- * **The status line** (M7-1): the target and its mode on the left, its
- * `ctx` and cost on the right, and the key hints between, which drop from
- * the right as the screen narrows.
+ * **The status line** (M7-1): the target with its mode, model and thinking
+ * level on the left, its `ctx` and cost on the right, and the key hints
+ * between, which drop from the right as the screen narrows.
  *
  * **The layout is flat** (#242): no `HStack` below another. Read
  * `screenLayout` before you move a part.
@@ -81,7 +81,6 @@ import {
   type Entry,
   inThread,
   nameOf,
-  printable,
   seen,
   thread,
   touchesFiles,
@@ -138,6 +137,7 @@ import {
   renamed,
   seenIn,
   shows,
+  statusTarget,
   step,
   ticks,
   usageText,
@@ -804,13 +804,15 @@ function chatTui(
           : { error: NO_AGENTS };
       if ("id" in t) {
         const p = r.state.participants.get(t.id);
-        // The model in use (M9-5) is in the room's reply, read again after
-        // each join and turn, as the branch is.
-        const model = r.dto?.participants.find((q) => q.id === t.id)?.model;
-        const mode = p
-          ? ` ${dim(model ? `${p.mode} · ${printable(model)}` : p.mode)}`
+        // The model and level in use (M9-5, M9-9) are in the room's reply,
+        // read again after each join and turn, as the branch is.
+        const dto = r.dto?.participants.find((q) => q.id === t.id);
+        const detail = p
+          ? statusTarget(p.mode, dto?.model, dto?.thoughtLevel)
           : "";
-        parts.push(`${bold(`→ ${nameOf(r.state, t.id)}`)}${mode}`);
+        parts.push(
+          `${bold(`→ ${nameOf(r.state, t.id)}`)}${detail ? ` ${dim(detail)}` : ""}`,
+        );
         right = usageText(p?.usage);
       } else parts.push(yellow(`! ${t.error}`));
     }
