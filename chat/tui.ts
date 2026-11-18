@@ -1434,6 +1434,18 @@ function chatTui(
      * transcript is never written. Answers whether it went through. One
      * at a time: a second Enter on a form would send it again.
      */
+    /** A delete route that no longer knows the room has already finished it. */
+    const dropMissingRoom = (id: string, code: string | undefined) => {
+      if (code !== "room_not_found") return false;
+      if (box.panel) hidePanel();
+      set.drop(id);
+      const next = dismissed(rooms, view, id);
+      if (next) open(next);
+      drafts.delete(id);
+      flash = "the room was deleted";
+      setStatus();
+      return true;
+    };
     let busy = false;
     run = async (c: RouteCommand, roomId?: string): Promise<boolean> => {
       if (busy) {
@@ -1483,7 +1495,8 @@ function chatTui(
           askToAdd(c.body.cwd, () => run(c));
           return true;
         }
-        if (c.verb === "delete") {
+        if (c.verb === "delete" && roomId) {
+          if (dropMissingRoom(roomId, out.code)) return true;
           const status = out.room?.status ?? rooms.get(roomId)?.entry.status;
           set.retain(roomId, status === "dismissed");
         }
@@ -1550,6 +1563,7 @@ function chatTui(
       await set.fresh();
       const res = await deletePreview(d, id);
       if (!res.ok) {
+        if (dropMissingRoom(id, res.error.code)) return false;
         flash = `! ${res.error.message}`;
         setStatus();
         return false;

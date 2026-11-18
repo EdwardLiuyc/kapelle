@@ -185,6 +185,36 @@ test("an attached dismissed room stays open for /delete", {
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+test("a dismissed room deleted elsewhere drops when /delete finds room_not_found", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    title: "gone",
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  assert.equal(
+    (await api(d, "POST", `/rooms/${open.body.id}/dismiss`)).status,
+    200,
+  );
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${open.body.id}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen(open.body.id);
+  assert.equal((await api(d, "DELETE", `/rooms/${open.body.id}`)).status, 204);
+
+  await screen.press("/delete\r", "the room was deleted");
+  const rows = [...screenRows(screen.out()).values()].join("\n");
+  assert.match(rows, /no rooms/);
+  screen.child.stdin.write(LEAVE);
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 test("a refused TUI delete shows the dirty file and allows a retry", {
   skip: noPty,
 }, async (t) => {
