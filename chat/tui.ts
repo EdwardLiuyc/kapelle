@@ -1552,7 +1552,8 @@ function chatTui(
     };
 
     /** Shows what `/delete` would remove in the side pane, and confirms on
-     *  Enter (#352). Answers whether the pane was filled. */
+     *  Enter (#352). Answers whether the request was handled: the pane was
+     *  filled, or the room was already gone. */
     previewDelete = async () => {
       const id = view.roomId;
       if (!id) {
@@ -1563,7 +1564,7 @@ function chatTui(
       await set.fresh();
       const res = await deletePreview(d, id);
       if (!res.ok) {
-        if (dropMissingRoom(id, res.error.code)) return false;
+        if (dropMissingRoom(id, res.error.code)) return true;
         flash = `! ${res.error.message}`;
         setStatus();
         return false;
