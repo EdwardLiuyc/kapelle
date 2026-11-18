@@ -492,7 +492,9 @@ test("a poll answer from before a deleted room closed does not bring it back", a
   await until(() => said.closed.length === 1);
   assert.equal(set.rooms.has("r1"), false);
   daemon.releaseLists();
-  await new Promise((ok) => setTimeout(ok, 50));
+  // Wait for the held answer itself, not a clock: it has applied the entry by
+  // the time `polled` runs.
+  await until(() => said.polls >= 1);
   assert.equal(set.rooms.has("r1"), false);
   assert.deepEqual(said.closed, [["r1", { kind: "deleted" }]]);
 });
