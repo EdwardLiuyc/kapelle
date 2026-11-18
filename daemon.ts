@@ -1435,7 +1435,8 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   send(res, 201, toRoomDto(room.meta, room) satisfies RoomDto);
 }
 
-/** A deleted room answers 410 on the two reads a follower reconciles with. */
+/** A deleted room answers 410 on the two reads a follower reconciles with.
+ *  Participant-scoped streams keep the ordinary unknown-room 404. */
 function refuseDeleted(id: string) {
   if (deletedRooms.has(id)) {
     throw refusal(410, "room_deleted", `room ${id} was deleted`);

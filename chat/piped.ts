@@ -249,7 +249,8 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
 
   /** A dismissed room stays in read-only mode so `/delete` can retry after
    *  409. An active room enters it as soon as a delete dismisses it. */
-  let readOnly = room.status === "dismissed";
+  const attachedDismissed = room.status === "dismissed";
+  let readOnly = attachedDismissed;
   let holdDismissed = readOnly;
   let pendingDelete = false;
   let toldDismissed = false;
@@ -259,13 +260,13 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     if (stream) {
       const ended = stream.ended ?? (await reconcile(current, room.id));
       stream = undefined;
-      // While a delete reads a dirty room it is briefly out of `GET /rooms`,
-      // so a 404 or 410 is part of the dismissal already being handled.
+      // While a delete is in flight, 404/410 can be its transient absence or
+      // a dismissal. An attached dismissed room that gets 410 is really gone.
       if (
         holdDismissed &&
         (ended.kind === "dismissed" ||
-          ended.kind === "deleted" ||
-          ended.kind === "unknown")
+          ended.kind === "unknown" ||
+          (ended.kind === "deleted" && !attachedDismissed))
       ) {
         readOnly = true;
         pendingDelete = false;

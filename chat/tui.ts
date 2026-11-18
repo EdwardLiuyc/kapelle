@@ -1116,10 +1116,9 @@ function chatTui(
     const next = gone ? dismissed(rooms, view, id) : undefined;
     if (next) open(next);
     if (gone) drafts.delete(id);
-    flash =
-      ended.kind === "dismissed"
-        ? `${label} was dismissed`
-        : endedLine(ended, id);
+    if (ended.kind === "dismissed") flash = `${label} was dismissed`;
+    else if (ended.kind === "deleted") flash = `${label} was deleted`;
+    else flash = endedLine(ended, id);
     setStatus();
   };
 

@@ -3055,6 +3055,13 @@ test("DELETE refuses an active room and uncommitted work, then removes a dismiss
     assert.equal(gone.status, 410, path);
     assert.equal(gone.body.error.code, "room_deleted", path);
   }
+  const participantEvents = await api(
+    d,
+    "GET",
+    `/rooms/${id}/agents/p-x/events`,
+  );
+  assert.equal(participantEvents.status, 404);
+  assert.equal(participantEvents.body.error.code, "room_not_found");
   const list = await api<RoomListEntry[]>(d, "GET", "/rooms");
   assert.equal(
     list.body.some((r) => r.id === id),

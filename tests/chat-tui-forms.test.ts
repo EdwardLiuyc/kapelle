@@ -216,7 +216,7 @@ test("a refused TUI delete shows the dirty file and allows a retry", {
   assert.equal(await exited, 0, out());
 });
 
-test("a delete on one screen drops the room from another screen (#511)", {
+test("a delete on one screen does not leave the room lost on another (#511)", {
   skip: noPty,
   timeout: 90_000,
 }, async (t) => {
@@ -239,11 +239,11 @@ test("a delete on one screen drops the room from another screen (#511)", {
   first.child.stdin.write("\r");
   await first.seen("deleted room-");
 
-  // The delete starts with a dismiss. A screen can therefore reconcile the
-  // settled dismissal before the DELETE lands; either terminal answer drops
-  // it, and neither marks it lost.
+  // This active path proves "not lost": the delete starts with a dismiss,
+  // so the other screen can reconcile that before the DELETE lands. The
+  // paused test below pins the deleted wording.
   await until("the second screen drops the room", () =>
-    /the room was deleted| was dismissed/.test(plainText(second.out())),
+    /doomed was (?:deleted|dismissed)/.test(plainText(second.out())),
   );
   const rows = [...screenRows(second.out()).values()].join("\n");
   assert.match(rows, /no rooms/);
@@ -283,7 +283,7 @@ test("a paused room deleted on one screen says deleted on another (#511)", {
   one.child.stdin.write("\r");
   await one.seen("deleted room-");
 
-  await two.seen("the room was deleted");
+  await two.seen("kept was deleted");
   const rows = [...screenRows(two.out()).values()].join("\n");
   assert.doesNotMatch(rows, / lost/);
   assert.equal((await api(d, "GET", `/rooms/${id}`)).status, 410);

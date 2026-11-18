@@ -23,7 +23,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join, relative, sep } from "node:path";
 import test from "node:test";
@@ -771,6 +771,74 @@ test("piped attach exits 0 when another client deletes its paused room", async (
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /the room was deleted/);
   assert.doesNotMatch(r.stdout, /lost|may have restarted/);
+});
+
+test("piped attach exits when a held dismissed room is deleted", async (t) => {
+  let deleted = false;
+  let stream: ServerResponse | undefined;
+  const room: RoomDto = {
+    id: "room-x",
+    cwd: "/tmp/room-x",
+    status: "dismissed",
+    createdAt: "",
+    updatedAt: "",
+    seq: 0,
+    participants: [],
+  };
+  const fake = createServer((req, res) => {
+    const type = { "content-type": "application/json" };
+    if (req.url === "/version") {
+      res.writeHead(200, type);
+      res.end(JSON.stringify({ apiVersion: API_VERSION, capabilities: [] }));
+      return;
+    }
+    if (req.url === "/rooms/room-x/events") {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      stream = res;
+      return;
+    }
+    if (req.url === "/rooms/room-x" && !deleted) {
+      res.writeHead(200, type);
+      res.end(JSON.stringify(room));
+      return;
+    }
+    res.writeHead(410, type);
+    res.end(
+      JSON.stringify({
+        error: { code: "room_deleted", message: "room room-x was deleted" },
+      }),
+    );
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+
+  const c = spawnCli(t, ["attach", "room-x"], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  let out = "";
+  c.child.stdout.setEncoding("utf8").on("data", (text: string) => {
+    out += text;
+  });
+  await c.waitFor("type a message");
+  await until("the room event stream", () => stream !== undefined);
+  deleted = true;
+  stream?.end();
+  await until("the room to settle", () =>
+    /the room is dismissed; \/delete|the room was deleted/.test(out),
+  );
+  if (c.child.exitCode === null) c.child.stdin.end("/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /the room was deleted/);
+  assert.doesNotMatch(r.stdout, /the room is dismissed; \/delete/);
 });
 
 test("piped attach of a dismissed room waits in read-only mode", async (t) => {
