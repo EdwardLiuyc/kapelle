@@ -478,6 +478,25 @@ test("a deleted room leaves the set, and the set goes on", async (t) => {
   assert.deepEqual(said.ends, []);
 });
 
+test("a poll answer from before a deleted room closed does not bring it back", async (t) => {
+  const daemon = await fake(t);
+  daemon.status.set("r1", "active");
+  daemon.list = [entry("r1")];
+  daemon.holdLists = true;
+  const { set, said } = follow(t, daemon.d);
+  set.start([entry("r1")]);
+  await until(() => daemon.streams.has("r1"));
+  await until(() => daemon.polls >= 1);
+  daemon.status.set("r1", 410);
+  daemon.release("r1");
+  await until(() => said.closed.length === 1);
+  assert.equal(set.rooms.has("r1"), false);
+  daemon.releaseLists();
+  await new Promise((ok) => setTimeout(ok, 50));
+  assert.equal(set.rooms.has("r1"), false);
+  assert.deepEqual(said.closed, [["r1", { kind: "deleted" }]]);
+});
+
 test("a retained dismissed room stays until the screen drops it", async (t) => {
   const daemon = await fake(t);
   daemon.status.set("r1", "dismissed");

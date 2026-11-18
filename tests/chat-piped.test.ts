@@ -756,6 +756,23 @@ test("piped /delete waits for the next line, then keeps a dismissed room open af
   assert.equal((await api(d, "GET", `/rooms/${room.id}`)).status, 410);
 });
 
+test("piped attach exits 0 when another client deletes its paused room", async (t) => {
+  const { first, id, again, runtime } = await roomToRestart(t, REMEMBER);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+  const d = await again();
+  const c = spawnCli(t, ["attach", id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await c.waitFor("type a message");
+  const deleted = await api(d, "DELETE", `/rooms/${id}`);
+  assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /the room was deleted/);
+  assert.doesNotMatch(r.stdout, /lost|may have restarted/);
+});
+
 test("piped attach of a dismissed room waits in read-only mode", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);

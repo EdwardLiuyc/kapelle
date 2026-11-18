@@ -395,8 +395,12 @@ export function roomSet(
     // while held, its stream's 404 or 410 is not the room's end (#352).
     const gone = ended.kind === "dismissed" || ended.kind === "deleted";
     const held = r?.held === true && (gone || ended.kind === "unknown");
-    if (gone && !held) rooms.delete(id);
-    else if (r) {
+    if (gone && !held) {
+      rooms.delete(id);
+      // A deleted room is gone for good: a poll answer asked before it
+      // closed must not bring it back.
+      if (ended.kind === "deleted") dropped.add(id);
+    } else if (r) {
       if (held) r.lost = undefined;
       else r.lost = ended;
     }

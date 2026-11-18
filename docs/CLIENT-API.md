@@ -315,6 +315,7 @@ request that is not valid HTTP gets `400`.
 | `404` | No such route, run, room or permission. |
 | `408` | The request was not fully sent within 30 seconds. Empty body. |
 | `409` | The request is fine, but the thing is not in a state to accept it. |
+| `410` | The room was deleted since the daemon started. |
 | `413` | The body is larger than 4 MiB. |
 | `415` | The body is not sent as `application/json`. |
 | `500` | An error the daemon did not expect, or a room could not start. |
@@ -1734,8 +1735,8 @@ A removed participant has no stream: this route answers `404` for it. Its lines 
 [`GET /rooms/:id/events`](#get-roomsidevents); filter them there by `participantId`.
 
 **Refusals:** `404` `room_not_found` for an unknown room or one this daemon deleted,
-`404` `participant_not_found` for a removed participant; `400` `invalid_request` for a
-bad `Last-Event-ID`.
+`404` `participant_not_found` for a removed participant, `404` `no_event_log` for one
+with no event log; `400` `invalid_request` for a bad `Last-Event-ID`.
 
 ### `POST /rooms/:id/agents/:agentId/turns/current/cancel`
 
