@@ -572,6 +572,21 @@ export function usageText(u?: {
 }
 
 /**
+ * The status line's target part (M7-1): its mode, model and thinking level,
+ * each after the one before it and only when it is known (#510).
+ */
+export function statusTarget(
+  mode: string,
+  model?: string,
+  thoughtLevel?: string,
+): string {
+  const parts = [mode, model, thoughtLevel].filter(
+    (part): part is string => part !== undefined && part !== "",
+  );
+  return printable(parts.join(" · "));
+}
+
+/**
  * The status line at `width` columns (M7-1): `left`, then the key hints,
  * then `right` at the right edge. The hints drop from the right until it
  * fits; `paint` paints the ones kept, as one piece. When `left` and `right`
