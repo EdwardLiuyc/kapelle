@@ -21,7 +21,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -1425,6 +1425,132 @@ test("the status line shows the level after a revive (#510)", {
   await press("@mock-agent revive\r", "auto · mock/fast · high");
   await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
+});
+
+test("the status line shows a revived level before the first turn ends (#510)", {
+  skip: noPty,
+  // This end-to-end test owns the fake daemon and the pty; node:test reports
+  // any rejected promise, and its call count is the test itself.
+  // pi-lens-ignore: unsafe-boundary, high-fan-out
+}, async (t) => {
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const roomId = "room-revive-status";
+  const cwd = process.cwd();
+  let level = "low";
+  let events: ServerResponse | undefined;
+  const room = () => ({
+    id: roomId,
+    cwd,
+    title: "revive",
+    createdAt: "",
+    updatedAt: "",
+    status: "active",
+    seq: level === "high" ? 2 : 1,
+    participants: [
+      {
+        id: "p1",
+        name: "mock-agent",
+        harness: "mock",
+        mode: "auto",
+        settings: { allowReadOutsideRoot: false },
+        worktree: cwd,
+        sessionId: "s1",
+        status: "idle",
+        model: "mock/fast",
+        thoughtLevel: level,
+        notices: [],
+      },
+    ],
+  });
+  const fake = createServer((req, res) => {
+    const json = (body: unknown) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (req.url === "/version") return json({ apiVersion: API_VERSION });
+    if (req.url === "/rooms") {
+      return json([
+        {
+          id: roomId,
+          cwd,
+          title: "revive",
+          status: "active",
+          updatedAt: "",
+          participants: [{ id: "p1", name: "mock-agent", status: "idle" }],
+        },
+      ]);
+    }
+    if (req.url === `/rooms/${roomId}`) return json(room());
+    if (req.url === `/rooms/${roomId}/events`) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      res.flushHeaders();
+      events = res;
+      const line = {
+        seq: 1,
+        at: "",
+        roomId,
+        participantId: "p1",
+        update: {
+          sessionUpdate: "_client_participant_added",
+          name: "mock-agent",
+          harness: "mock",
+          mode: "auto",
+        },
+      };
+      res.write(`id: 1\ndata: ${JSON.stringify(line)}\n\n`);
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { code: "no_route" } }));
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => {
+    events?.end();
+    fake.close();
+  });
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+  const screen = await ptyScreen(
+    t,
+    `stty cols 100 rows 30; node chat.ts attach ${roomId}`,
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen("auto · mock/fast · low");
+  assert.ok(events);
+  level = "high";
+  events.write(
+    `id: 2\ndata: ${JSON.stringify({
+      seq: 2,
+      at: "",
+      roomId,
+      participantId: "p1",
+      update: {
+        sessionUpdate: "_client_participant_revived",
+        resumed: "loaded",
+        sessionId: "s2",
+      },
+    })}\n\n`,
+  );
+  // No turn event follows: only the revived line and its room read can update
+  // the status.
+  await screen.seen("auto · mock/fast · high");
+  const status = [...screenRows(screen.out()).values()].find((row) =>
+    row.includes("auto · mock/fast"),
+  );
+  assert.ok(status);
+  assert.match(status, /auto · mock\/fast · high/);
+  assert.doesNotMatch(status, /\blow\b/);
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("rejoin with");
+  assert.equal(await screen.exited, 0, screen.out());
 });
 
 test("chat in a removed folder: bare stops, attach opens and its /new form survives", {
