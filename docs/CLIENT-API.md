@@ -1384,11 +1384,11 @@ the current topology, independently of the saved `baseSha`.
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
 bad `title`, a bad or missing harness, a bad `name`, `role`, `mode`, `model`,
 `thoughtLevel` or `settings`, or an unknown agent field; `409` `name_taken` or
-`orchestrator_exists` when two agents in the list clash; `400` `invalid_config` when the repository's
-`.kapelle/config.json` is not valid, because the room reads its watchdog limits,
-turn cap and `linkPaths` from it; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when
-the daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example
-its binary is not installed).
+`orchestrator_exists` when two agents in the list clash; `400` `invalid_config` when the
+repository's `.kapelle/config.json` is not valid, because the room reads its watchdog
+limits, turn cap and `linkPaths` from it; `400` `invalid_request` for a bad `base`; `503`
+`shutting_down` when the daemon shuts down; `500` `room_open_failed` when a harness
+cannot start (for example its binary is not installed).
 
 A `base` is bad when it is not a commit, or when its commit has no copy of the folder
 `cwd` names inside the repository. That folder must be in the commit even when no `base`
