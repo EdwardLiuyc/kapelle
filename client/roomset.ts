@@ -4,6 +4,8 @@
  * - A room made elsewhere joins on the next `GET /rooms`, every 5 s.
  * - A dismissed or deleted room leaves the set, unless the screen retains
  *   it for `/delete` (#352).
+ * - A room a fresh poll brings back after a refused delete is held only
+ *   until it ends deleted or the screen retains it.
  * - A room whose stream ended and that was not dismissed or deleted stays,
  *   marked lost.
  * - The set ends when every room in it lost its stream. With no room left
@@ -218,6 +220,9 @@ export interface Followed {
   /** Kept in the set after its stream ended `dismissed`, so its screen can
    *  offer `/delete` (#352). */
   held?: boolean;
+  /** Held because a fresh poll brought back a room that had ended deleted.
+   *  A later deleted close still ends it; a screen retain takes over. */
+  pollHeld?: boolean;
 }
 
 /** Why the set ends: every room lost its stream (the last one to go is
@@ -395,8 +400,12 @@ export function roomSet(
     // A delete still reading a dirty room is briefly out of `GET /rooms`:
     // while held, its stream's 404 or 410 is not the room's end (#352).
     const gone = ended.kind === "dismissed" || ended.kind === "deleted";
-    const held = r?.held === true && (gone || ended.kind === "unknown");
-    if (gone && !held) {
+    const held =
+      (r?.held === true || r?.pollHeld === true) &&
+      (gone || ended.kind === "unknown");
+    const pollDeleted =
+      ended.kind === "deleted" && r?.pollHeld === true && r.held !== true;
+    if ((gone && !held) || pollDeleted) {
       rooms.delete(id);
       // A poll asked before this close must not bring the room back. A
       // refused delete can restore it, so a later poll may.
@@ -408,11 +417,14 @@ export function roomSet(
       else r.lost = ended;
     }
     const all = [...rooms.values()];
-    if (all.length > 0 && !all.some((x) => !x.lost || x.held)) {
+    if (
+      all.length > 0 &&
+      !all.some((x) => !x.lost || x.held === true || x.pollHeld === true)
+    ) {
       finish({ kind: "lost", roomId: id, ended, err });
       return;
     }
-    if (held) return;
+    if (held && !pollDeleted) return;
     on.closed(id, ended, r);
   };
 
@@ -423,12 +435,13 @@ export function roomSet(
       ? entry
       : { ...entry, title: printable(entry.title) };
 
-  const add = (entry: RoomListEntry) => {
+  const add = (entry: RoomListEntry, pollHeld = false) => {
     if (rooms.has(entry.id)) return;
     const r: Followed = {
       entry: shownEntry(entry),
       state: newRoomState(),
       ...(retained.has(entry.id) && { held: true }),
+      ...(pollHeld && { pollHeld: true }),
     };
     rooms.set(entry.id, r);
     loadDto(r);
@@ -445,7 +458,10 @@ export function roomSet(
   let away: number | undefined;
   /** A held dismissed room has no live stream but must keep the screen open
    *  while the daemon answers, so `/delete` can still be used (#352). */
-  const noLive = () => ![...rooms.values()].some((r) => !r.lost && !r.held);
+  const noLive = () =>
+    ![...rooms.values()].some(
+      (r) => !r.lost && r.held !== true && r.pollHeld !== true,
+    );
   const tick = () => {
     const ask = ++asked;
     current()
@@ -472,10 +488,9 @@ export function roomSet(
               if (entry.status === "dismissed") {
                 if (droppedAt === undefined) continue;
                 // A refused post-dismiss delete puts the room back dismissed.
-                // Retain its replay until the person deletes it again.
-                retained.add(entry.id);
-              }
-              add(entry);
+                // Hold its replay; a later deleted close still ends it.
+                add(entry, true);
+              } else add(entry);
             }
           }
           on.polled();
@@ -509,7 +524,10 @@ export function roomSet(
       if (keep) retained.add(id);
       else retained.delete(id);
       const r = rooms.get(id);
-      if (r) r.held = keep;
+      if (r) {
+        r.held = keep;
+        r.pollHeld = undefined;
+      }
     },
     drop(id) {
       retained.delete(id);

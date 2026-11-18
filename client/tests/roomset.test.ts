@@ -500,7 +500,7 @@ test("a poll answer from before a deleted room closed does not bring it back", a
   assert.deepEqual(said.closed, [["r1", { kind: "deleted" }]]);
 });
 
-test("a fresh poll after a reverted delete brings the room back", async (t) => {
+test("a fresh poll after a reverted delete can rejoin, and a later delete ends it", async (t) => {
   const daemon = await fake(t);
   daemon.status.set("r1", "active");
   daemon.list = [entry("r1")];
@@ -518,11 +518,22 @@ test("a fresh poll after a reverted delete brings the room back", async (t) => {
   assert.equal(set.rooms.has("r1"), false, "the old poll is stale");
 
   // A delete refused after its dismiss leaves the room dismissed and listed.
+  const oldStream = daemon.streams.get("r1");
   daemon.holdLists = false;
   daemon.status.set("r1", "dismissed");
   daemon.list = [{ ...entry("r1"), status: "dismissed" }];
   await until(() => set.rooms.has("r1"));
-  assert.equal(set.rooms.get("r1")?.held, true);
+  const polled = set.rooms.get("r1");
+  assert.equal(polled?.held, undefined);
+  assert.equal(polled?.pollHeld, true);
+
+  // A later delete elsewhere ends the poll-held room for good.
+  await until(() => daemon.streams.get("r1") !== oldStream);
+  daemon.status.set("r1", 410);
+  daemon.release("r1");
+  await until(() => said.closed.length === 2);
+  assert.deepEqual(said.closed[1], ["r1", { kind: "deleted" }]);
+  assert.equal(set.rooms.has("r1"), false);
 });
 
 test("a retained dismissed room stays until the screen drops it", async (t) => {
