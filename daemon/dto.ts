@@ -222,6 +222,9 @@ export function toParticipantDto(p: Participant): ParticipantDto {
   if (p.model !== undefined) dto.model = p.model;
   if (p.models !== undefined)
     dto.models = p.models.map(({ id, name }) => ({ id, name }));
+  if (p.thoughtLevel !== undefined) dto.thoughtLevel = p.thoughtLevel;
+  if (p.thoughtLevels !== undefined)
+    dto.thoughtLevels = p.thoughtLevels.map(({ id, name }) => ({ id, name }));
   return dto;
 }
 

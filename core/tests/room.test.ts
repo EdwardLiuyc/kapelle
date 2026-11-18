@@ -2205,14 +2205,14 @@ test("a record with a bad role, title or tombstone field is refused", async (t) 
 async function loadingMock(
   t: TestContext,
   scenario: string,
-  { loads = true }: { loads?: boolean } = {},
+  { loads = true, args = [] }: { loads?: boolean; args?: string[] } = {},
 ) {
   const store = await tempDir(t);
   const id = `mock-load-${newRoomId()}`;
   AGENTS[id] = {
     launch: {
       command: process.execPath,
-      args: [MOCK_AGENT, "--scenario", scenario, "--store", store],
+      args: [MOCK_AGENT, "--scenario", scenario, "--store", store, ...args],
     },
     maxMode: "auto",
     measured: { ...MEASURED, ...(loads && { loads: true as const }) },
@@ -2231,9 +2231,20 @@ async function loading(
     loads = true,
     pauseGraceMs = 2_000,
     model,
-  }: { loads?: boolean; pauseGraceMs?: number; model?: string } = {},
+    thoughtLevel,
+    args,
+  }: {
+    loads?: boolean;
+    pauseGraceMs?: number;
+    model?: string;
+    thoughtLevel?: string;
+    args?: string[];
+  } = {},
 ) {
-  const agent = await loadingMock(t, scenario, { loads });
+  const agent = await loadingMock(t, scenario, {
+    loads,
+    ...(args && { args }),
+  });
   const repo = await gitRepo(t);
   const roomId = newRoomId();
   const bus = createEventBus();
@@ -2242,7 +2253,14 @@ async function loading(
   const room = await openRoom({
     roomId,
     cwd: repo,
-    agents: [roomAgent({ agent, name: "alice", ...(model && { model }) })],
+    agents: [
+      roomAgent({
+        agent,
+        name: "alice",
+        ...(model && { model }),
+        ...(thoughtLevel && { thoughtLevel }),
+      }),
+    ],
     setup: await openWorktrees(repo, roomId),
     bus,
     permissions: queue,
@@ -3424,6 +3442,516 @@ test("a PATCH body takes a model as a non-empty string, alone or with the rest (
     assert.throws(
       () => participantChanges({ model }),
       /"model" must be a non-empty string/,
+    );
+  }
+});
+
+// --- M9-9: the thinking level ------------------------------------------------
+
+/** One request the mock got: its method, and the option a set named. */
+interface Sent {
+  method: string;
+  configId?: string;
+  value?: string;
+}
+
+/** The requests in a mock's `--record` file, in order. */
+const sentIn = async (record: string): Promise<Sent[]> =>
+  (await readFile(record, "utf8"))
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l) as Sent);
+
+/** The level sets among them, as their values. */
+const levelSets = (sent: Sent[]) =>
+  sent.flatMap((s) => (s.configId === "effort-choice" ? [s.value] : []));
+
+/** A room whose `alice` runs the mock's `levels` scenario, asking for
+ *  `fields` (a model, a level). */
+async function levelRoom(
+  t: TestContext,
+  fields: Record<string, string> = {},
+  flags = "",
+) {
+  const repo = await gitRepo(t);
+  const record = join(await tempDir(t), "requests.jsonl");
+  const roomId = newRoomId();
+  const bus = createEventBus();
+  const changed: AgentEventEnvelope[] = [];
+  bus.addListener((e) => {
+    if (e.update.sessionUpdate === "_client_participant_changed") {
+      changed.push(e);
+    }
+  });
+  const room = await openRoom({
+    roomId,
+    cwd: repo,
+    agents: [
+      roomAgent({
+        cmd: `node ${MOCK_AGENT} --scenario levels --record ${record}${flags}`,
+        name: "alice",
+        ...fields,
+      }),
+    ],
+    setup: await openWorktrees(repo, roomId),
+    bus,
+    permissions: queue,
+  });
+  t.after(() => room.dismiss());
+  const p = room.participants[0] as Participant;
+  return {
+    room,
+    p,
+    sent: () => sentIn(record),
+    changed: () => changed.map((e) => e.update),
+    file: roomFile(repo, roomId),
+  };
+}
+
+const levelNotices = (p: Participant) =>
+  p.notices.filter((n) => n.text.includes("thinking level")).map((n) => n.text);
+
+test("a join's level is set after its model, before the first turn, and shows with its list (M9-9)", async (t) => {
+  const { p, sent, file } = await levelRoom(t, {
+    model: "mock/smart",
+    thoughtLevel: "max",
+  });
+  assert.equal(p.thoughtLevel, "max");
+  assert.deepEqual(p.thoughtLevels, [
+    { id: "low", name: "LOW" },
+    { id: "high", name: "HIGH" },
+    { id: "max", name: "MAX" },
+  ]);
+  assert.deepEqual(levelNotices(p), []);
+  await p.send("one");
+  const all = await sent();
+  const at = (f: (s: Sent) => boolean) => all.findIndex(f);
+  const model = at((s) => s.configId === "model-choice");
+  const level = at((s) => s.configId === "effort-choice");
+  assert.ok(model > at((s) => s.method === "session/new"));
+  assert.ok(level > model, "the level after the model");
+  assert.ok(level < at((s) => s.method === "session/prompt"));
+  await saved();
+  assert.equal(readRoomRecord(file).participants[0]?.thoughtLevel, "max");
+  // pi's level set is also a mode change on the wire: it changes no mode.
+  assert.equal(p.mode, "auto");
+});
+
+test("a join's level the model does not list is not sent, and the join stands (M9-9)", async (t) => {
+  const { p, sent } = await levelRoom(t, { thoughtLevel: "max" });
+  assert.equal(p.status(), "idle");
+  assert.equal(p.thoughtLevel, "high");
+  assert.deepEqual(levelNotices(p), [
+    'mock-agent does not list the thinking level "max" on the model "mock/fast", ' +
+      'so it was not sent; it stays on the thinking level "high"',
+  ]);
+  assert.deepEqual(levelSets(await sent()), []);
+});
+
+test("a listed level the harness refuses is a notice, on the level it had (M9-9)", async (t) => {
+  const { p } = await levelRoom(
+    t,
+    { thoughtLevel: "low" },
+    " --level-refuse low",
+  );
+  assert.equal(p.thoughtLevel, "high");
+  assert.deepEqual(levelNotices(p), [
+    'mock-agent refused the thinking level "low" (Internal error (code -32603)); ' +
+      'it stays on the thinking level "high"',
+  ]);
+});
+
+test("an agent or a model with no level option takes the join, with a notice (M9-9)", async (t) => {
+  const plain = await levelRoom(t, {
+    model: "mock/plain",
+    thoughtLevel: "high",
+  });
+  assert.equal(plain.p.status(), "idle");
+  assert.equal(plain.p.thoughtLevel, undefined);
+  assert.equal(plain.p.thoughtLevels, undefined);
+  assert.deepEqual(levelNotices(plain.p), [
+    'mock-agent has no thinking level on the model "mock/plain", so the level "high" was not set',
+  ]);
+  assert.deepEqual(levelSets(await plain.sent()), []);
+
+  const none = await modelRoom(t, undefined, "models");
+  await assert.rejects(
+    none.room.setLevel(none.p.id, "high"),
+    (err: unknown) =>
+      err instanceof RoomRefusal &&
+      err.code === "invalid_request" &&
+      err.message === "mock-agent has no thinking level on its model",
+  );
+});
+
+test("a level option with no list is treated as no level option, not a failed join (M9-9)", async (t) => {
+  const { p, sent } = await levelRoom(
+    t,
+    { thoughtLevel: "low" },
+    " --level-no-options",
+  );
+  assert.equal(p.status(), "idle");
+  assert.equal(p.thoughtLevel, undefined);
+  assert.equal(p.thoughtLevels, undefined);
+  assert.deepEqual(levelNotices(p), [
+    'mock-agent has no thinking level on the model "mock/fast", so the level "low" was not set',
+  ]);
+  assert.deepEqual(levelSets(await sent()), []);
+});
+
+test("a grouped level list is made flat (M9-9)", async (t) => {
+  const { p } = await levelRoom(
+    t,
+    { model: "mock/smart", thoughtLevel: "max" },
+    " --level-grouped",
+  );
+  assert.equal(p.thoughtLevel, "max");
+  assert.deepEqual(p.thoughtLevels, [
+    { id: "low", name: "LOW" },
+    { id: "high", name: "HIGH" },
+    { id: "max", name: "MAX" },
+  ]);
+});
+
+test("a model set reply without configOptions clears the old level and list (M9-9)", async (t) => {
+  const { room, p } = await levelRoom(t, {}, " --level-empty-reply");
+  assert.equal(p.thoughtLevel, "high");
+  assert.deepEqual(
+    p.thoughtLevels?.map((l) => l.id),
+    ["low", "high"],
+    "the start model's list",
+  );
+
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.model, "mock/smart");
+  assert.equal(p.thoughtLevel, undefined);
+  assert.equal(p.thoughtLevels, undefined);
+  assert.deepEqual(levelNotices(p), [
+    'mock-agent has no thinking level with the model "mock/smart"; it was on "high"',
+  ]);
+});
+
+test("a pi level set changes neither the mode nor its two mode notices (M9-9)", async (t) => {
+  const { room, p, of } = await modeRoom(
+    t,
+    { thoughtLevel: "low" },
+    {
+      scenario: "levels",
+      spec: { measured: { ...MEASURED, modeMap: undefined } },
+    },
+  );
+  const modeNotices = () =>
+    p.notices
+      .map((n) => n.text)
+      .filter((text) =>
+        /never asks permission|mode was not negotiated/.test(text),
+      );
+  const before = modeNotices();
+  assert.equal(before.length, 2);
+  assert.equal(of("current_mode_update").length, 1, "the join's level set");
+
+  await room.setLevel(p.id, "high");
+  assert.equal(p.mode, "auto");
+  assert.equal(of("current_mode_update").length, 2);
+  assert.deepEqual(modeNotices(), before);
+});
+
+test("a level change: idle at once, and an unlisted one refused before any send (M9-9)", async (t) => {
+  const { room, p, sent, changed, file } = await levelRoom(t);
+  const after = await room.setLevel(p.id, "low");
+  assert.equal(after.thoughtLevel, "low");
+  assert.deepEqual(changed(), [
+    { sessionUpdate: "_client_participant_changed", thoughtLevel: "low" },
+  ]);
+  await saved();
+  assert.equal(readRoomRecord(file).participants[0]?.thoughtLevel, "low");
+  await assert.rejects(
+    room.setLevel(p.id, "max"),
+    (err: unknown) =>
+      err instanceof RoomRefusal &&
+      err.code === "invalid_request" &&
+      /"max" is not a thinking level of mock-agent on its model; it lists low, high/.test(
+        err.message,
+      ),
+  );
+  assert.deepEqual(levelSets(await sent()), ["low"], "max was never sent");
+});
+
+test("a level change while busy is sent before the next turn, and outlives a restart (M9-9)", async (t) => {
+  const busy = await levelRoom(t);
+  const turn = busy.p.send("one");
+  assert.equal(
+    (await busy.room.setLevel(busy.p.id, "low")).thoughtLevel,
+    "high",
+  );
+  await turn;
+  assert.deepEqual(levelSets(await busy.sent()), [], "not during the turn");
+  await busy.p.send("two");
+  const all = await busy.sent();
+  const set = all.findIndex((s) => s.configId === "effort-choice");
+  const prompts = all.flatMap((s, i) =>
+    s.method === "session/prompt" ? [i] : [],
+  );
+  assert.ok(set > (prompts[0] ?? -1) && set < (prompts[1] ?? -1));
+  assert.equal(busy.p.thoughtLevel, "low");
+
+  const { repo, room, p, file } = await loading(t, "levels");
+  await p.send("one");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.room.setLevel(back.p.id, "low");
+  await back.room.pause();
+  const kept = readRoomRecord(file);
+  assert.equal(kept.participants[0]?.pendingThoughtLevel, "low");
+  // A hand edit that is not a level id is dropped.
+  const [only] = kept.participants as [RoomRecord["participants"][number]];
+  writeRoomRecord(file, {
+    ...kept,
+    participants: [{ ...only, pendingThoughtLevel: 7 as unknown as string }],
+  });
+  assert.equal(
+    readRoomRecord(file).participants[0]?.pendingThoughtLevel,
+    undefined,
+  );
+  writeRoomRecord(file, kept);
+  const again = await restored(t, repo, readRoomRecord(file));
+  await again.p.send("two");
+  assert.equal(again.p.thoughtLevel, "low");
+  assert.deepEqual(
+    again.of("_client_participant_changed").map((e) => e.update),
+    [{ sessionUpdate: "_client_participant_changed", thoughtLevel: "low" }],
+  );
+  await again.room.pause();
+  const record = readRoomRecord(file).participants[0];
+  assert.equal(record?.thoughtLevel, "low");
+  assert.equal(record?.pendingThoughtLevel, undefined);
+});
+
+test("a model change reads the level and its list again, and sends no level back (M9-9)", async (t) => {
+  const { room, p, sent, changed, file } = await levelRoom(t, {
+    model: "mock/smart",
+    thoughtLevel: "max",
+  });
+  await room.setModel(p.id, "mock/fast");
+  // mock/fast has no max: the harness moved it, and the room keeps the move.
+  assert.equal(p.thoughtLevel, "low");
+  assert.deepEqual(
+    p.thoughtLevels?.map((l) => l.id),
+    ["low", "high"],
+  );
+  assert.deepEqual(levelNotices(p), [
+    'mock-agent\'s thinking level moved from "max" to "low" with the model "mock/fast"',
+  ]);
+  assert.deepEqual(changed(), [
+    {
+      sessionUpdate: "_client_participant_changed",
+      model: "mock/fast",
+      thoughtLevel: "low",
+    },
+  ]);
+  assert.deepEqual(levelSets(await sent()), ["max"], "only the join's");
+  await saved();
+  assert.equal(readRoomRecord(file).participants[0]?.thoughtLevel, "low");
+
+  // A model the level fits keeps it, with no line.
+  await room.setLevel(p.id, "high");
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.thoughtLevel, "high");
+  assert.deepEqual(levelNotices(p), []);
+  assert.deepEqual(changed().at(-1), {
+    sessionUpdate: "_client_participant_changed",
+    model: "mock/smart",
+  });
+
+  // A model with no level option: none, and no list.
+  await room.setModel(p.id, "mock/plain");
+  assert.equal(p.thoughtLevel, undefined);
+  assert.equal(p.thoughtLevels, undefined);
+  assert.deepEqual(levelNotices(p), [
+    'mock-agent has no thinking level with the model "mock/plain"; it was on "high"',
+  ]);
+  assert.deepEqual(changed().at(-1), {
+    sessionUpdate: "_client_participant_changed",
+    model: "mock/plain",
+    thoughtLevel: null,
+  });
+});
+
+test("a model change that keeps the level drops the old model's level notice; a refused one keeps it (#508 review)", async (t) => {
+  const { room, p, file } = await levelRoom(t, { thoughtLevel: "max" });
+  const stale =
+    'mock-agent does not list the thinking level "max" on the model "mock/fast", ' +
+    'so it was not sent; it stays on the thinking level "high"';
+  assert.deepEqual(levelNotices(p), [stale]);
+  // A refused model: still on mock/fast, so the line is still true.
+  await room.setModel(p.id, "mock/bogus");
+  assert.equal(p.model, "mock/fast");
+  assert.deepEqual(levelNotices(p), [stale]);
+  await saved();
+  assert.equal(
+    readRoomRecord(file).participants[0]?.thoughtLevel,
+    "max",
+    "a refused model leaves the saved level",
+  );
+  // mock/smart keeps high, and the line about mock/fast goes.
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.thoughtLevel, "high");
+  assert.deepEqual(levelNotices(p), []);
+  await saved();
+  assert.equal(readRoomRecord(file).participants[0]?.thoughtLevel, "high");
+});
+
+test("a model change that keeps the level saves the level in use, so a revive changes nothing (#508 review 2)", async (t) => {
+  // max is not on mock/fast's list, so the join leaves alice on high.
+  const { repo, room, p, file } = await loading(t, "levels", {
+    thoughtLevel: "max",
+  });
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.thoughtLevel, "high");
+  await p.send("one");
+  await room.pause();
+  assert.equal(readRoomRecord(file).participants[0]?.thoughtLevel, "high");
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  // mock/smart lists max, yet nobody asked for it after the change.
+  assert.equal(back.p.model, "mock/smart");
+  assert.equal(back.p.thoughtLevel, "high");
+});
+
+test("a PATCH-like model and level together: the level goes after the model, on its list (M9-9)", async (t) => {
+  const { room, p, sent } = await levelRoom(t);
+  const turn = p.send("one");
+  await room.setModel(p.id, "mock/smart");
+  // The list is not known while the model waits, so max is not refused yet.
+  await room.setLevel(p.id, "max");
+  await turn;
+  await p.send("two");
+  assert.equal(p.model, "mock/smart");
+  assert.equal(p.thoughtLevel, "max");
+  const sets = (await sent()).filter((s) => s.configId);
+  assert.deepEqual(
+    sets.map((s) => s.value),
+    ["mock/smart", "max"],
+  );
+  assert.deepEqual(levelNotices(p), []);
+});
+
+test("a revive sends the saved level only when the harness reports another (M9-9)", async (t) => {
+  const store = join(await tempDir(t), "requests.jsonl");
+  const same = await loading(t, "levels", {
+    thoughtLevel: "high",
+    args: ["--record", store],
+  });
+  await same.p.send("one");
+  await same.room.pause();
+  const back = await restored(t, same.repo, readRoomRecord(same.file));
+  await back.p.send("two");
+  assert.equal(back.p.resumed, "loaded");
+  assert.equal(back.p.thoughtLevel, "high");
+  assert.deepEqual(
+    levelSets(await sentIn(store)),
+    [],
+    "high is the start level",
+  );
+
+  const other = join(await tempDir(t), "requests.jsonl");
+  const moved = await loading(t, "levels", {
+    model: "mock/smart",
+    thoughtLevel: "max",
+    args: ["--record", other],
+  });
+  await moved.p.send("one");
+  await moved.room.pause();
+  const again = await restored(t, moved.repo, readRoomRecord(moved.file));
+  await again.p.send("two");
+  // The load starts on mock/fast at high again: the model, then the level.
+  assert.equal(again.p.model, "mock/smart");
+  assert.equal(again.p.thoughtLevel, "max");
+  const sets = (await sentIn(other)).filter((s) => s.configId);
+  assert.deepEqual(
+    sets.map((s) => s.value),
+    ["mock/smart", "max", "mock/smart", "max"],
+  );
+});
+
+test("a join's refused level is sent again at a revive; a refused change is not (M9-9)", async (t) => {
+  const join1 = join(await tempDir(t), "requests.jsonl");
+  const refused = await loading(t, "levels", {
+    thoughtLevel: "low",
+    args: ["--record", join1, "--level-refuse", "low"],
+  });
+  assert.equal(refused.p.thoughtLevel, "high");
+  await refused.p.send("one");
+  await refused.room.pause();
+  const back = await restored(t, refused.repo, readRoomRecord(refused.file));
+  await back.p.send("two");
+  assert.deepEqual(levelSets(await sentIn(join1)), ["low", "low"]);
+
+  const change = join(await tempDir(t), "requests.jsonl");
+  const live = await loading(t, "levels", {
+    args: ["--record", change, "--level-refuse", "low"],
+  });
+  await live.room.setLevel(live.p.id, "low");
+  assert.equal(live.p.thoughtLevel, "high");
+  await live.p.send("one");
+  await live.room.pause();
+  assert.equal(
+    readRoomRecord(live.file).participants[0]?.thoughtLevel,
+    undefined,
+  );
+  const again = await restored(t, live.repo, readRoomRecord(live.file));
+  await again.p.send("two");
+  assert.deepEqual(levelSets(await sentIn(change)), ["low"], "not sent again");
+});
+
+test("a level a model change moved stays moved after a revive (M9-9)", async (t) => {
+  const { repo, room, p, file } = await loading(t, "levels", {
+    model: "mock/smart",
+    thoughtLevel: "max",
+  });
+  await room.setModel(p.id, "mock/fast");
+  assert.equal(p.thoughtLevel, "low");
+  await p.send("one");
+  await room.pause();
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  // The load starts at high; the saved level is now the moved one.
+  assert.equal(back.p.model, "mock/fast");
+  assert.equal(back.p.thoughtLevel, "low");
+});
+
+test("a level first reported after a model change is saved for a revive (M9-9)", async (t) => {
+  const record = join(await tempDir(t), "requests.jsonl");
+  const { repo, room, p, file } = await loading(t, "levels", {
+    model: "mock/plain",
+    args: ["--record", record],
+  });
+  await room.setModel(p.id, "mock/smart");
+  assert.equal(p.thoughtLevel, "low");
+  assert.match(
+    levelNotices(p).join("\n"),
+    /thinking level moved to "low" with the model "mock\/smart"/,
+  );
+  await room.pause();
+  assert.equal(readRoomRecord(file).participants[0]?.thoughtLevel, "low");
+  const back = await restored(t, repo, readRoomRecord(file));
+  await back.p.send("two");
+  assert.equal(back.p.thoughtLevel, "low");
+});
+
+test("a request takes a thinking level as a non-empty string, at add and in a PATCH (M9-9)", () => {
+  assert.equal(mock("a", { thoughtLevel: "max" }).thoughtLevel, "max");
+  assert.deepEqual(participantChanges({ thoughtLevel: "max" }), {
+    thoughtLevel: "max",
+  });
+  for (const thoughtLevel of [7, "", "  ", null]) {
+    assert.throws(
+      () => mock("a", { thoughtLevel }),
+      /"thoughtLevel" must be a non-empty string/,
+    );
+    assert.throws(
+      () => participantChanges({ thoughtLevel }),
+      /"thoughtLevel" must be a non-empty string/,
     );
   }
 });

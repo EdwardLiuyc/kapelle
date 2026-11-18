@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import {
   deletePreviewLines,
+  levelLines,
   loopCommand,
   modelLines,
   parseCommand,
@@ -213,6 +214,65 @@ test("the model list marks the one in use, and says why there is none (M9-6)", (
   assert.deepEqual(modelLines(p({})), ["bob lists no models"]);
   assert.deepEqual(modelLines(p({ status: "paused", model: "m" })), [
     "bob has no harness running; its list shows after its next start",
+  ]);
+});
+
+test("@name /level <id> is a PATCH, and @name /level alone asks for the list (M9-9)", () => {
+  assert.deepEqual(parse("@bob /level max"), {
+    verb: "patch",
+    id: "p-b",
+    name: "Bob",
+    change: { thoughtLevel: "max" },
+  });
+  assert.deepEqual(parse("@bob /level"), {
+    verb: "levels",
+    id: "p-b",
+    name: "Bob",
+  });
+  const r = parse("@bob /level a b");
+  assert.ok(r && "error" in r && r.error === "usage: @name /level [id]");
+  // No --level on /new or /add: the level is picked in the chat (#501).
+  for (const line of ["/new mock --level max", "/add mock --level max"]) {
+    const typed = parse(line);
+    assert.ok(typed && "error" in typed, JSON.stringify(typed));
+  }
+});
+
+test("the level list marks the one in use, and says why there is none (M9-9)", () => {
+  const p = (over: Partial<ParticipantDto>): ParticipantDto => ({
+    id: "p-b",
+    name: "bob",
+    harness: "mock-agent",
+    mode: "auto",
+    settings: { allowReadOutsideRoot: false },
+    worktree: "/w",
+    sessionId: "s",
+    status: "idle",
+    notices: [],
+    ...over,
+  });
+  assert.deepEqual(
+    levelLines(
+      p({
+        thoughtLevel: "high",
+        thoughtLevels: [
+          { id: "low", name: "Low" },
+          { id: "high", name: "high" },
+        ],
+      }),
+    ),
+    [
+      'bob thinks at "high"',
+      "  low  Low",
+      "* high",
+      "@bob /level <id> picks one",
+    ],
+  );
+  assert.deepEqual(levelLines(p({ model: "m" })), [
+    'bob has no thinking level on the model "m"',
+  ]);
+  assert.deepEqual(levelLines(p({ status: "paused" })), [
+    "bob has no harness running; its levels show after its next start",
   ]);
 });
 

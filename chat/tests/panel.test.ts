@@ -796,6 +796,47 @@ test("Enter on an empty model id goes back like Esc, and posts nothing (M9-6, #3
   assert.equal(box.panel, undefined, "closed, as Esc closes it");
 });
 
+test("@name /level lists the model's levels on the one in use, and a pick sends it; none says why (M9-9)", async (t) => {
+  const room = annRoom(undefined, "mock/fast");
+  const ann = room.participants[0] as ParticipantDto;
+  ann.thoughtLevel = "high";
+  ann.thoughtLevels = [
+    { id: "low", name: "Low" },
+    { id: "high", name: "High" },
+  ];
+  const fake = await fakeDaemon(t, { room });
+  const ran: RouteCommand[] = [];
+  const box = makeBox(fake.d, {
+    run: async (c) => {
+      ran.push(c);
+      return true;
+    },
+  });
+  await box.pickLevel({ id: "p-ann", name: "ann" });
+  assert.equal(box.panel?.title, "ann · thinking level");
+  const shown = shownOf(box);
+  assert.match(shown, /→ high/, "the cursor on the level in use");
+  assert.match(shown, /low/);
+  // No other… row: the daemon refuses a level the list does not hold.
+  assert.doesNotMatch(shown, /other/);
+  type(box, "low\r");
+  assert.deepEqual(ran, [
+    {
+      verb: "patch",
+      id: "p-ann",
+      name: "ann",
+      change: { thoughtLevel: "low" },
+    },
+  ]);
+
+  const plain = await fakeDaemon(t, { room: annRoom(undefined, "m/plain") });
+  const said: string[] = [];
+  const none = makeBox(plain.d, { onSay: (text) => said.push(text) });
+  await none.pickLevel({ id: "p-ann", name: "ann" });
+  assert.equal(none.panel, undefined);
+  assert.deepEqual(said, ['ann has no thinking level on the model "m/plain"']);
+});
+
 /** The harness row's pick list in `form` (the add or new form), one name
  *  per row, after `down` presses to reach it. Closes the form. */
 const harnessPicks = (
@@ -1390,4 +1431,35 @@ test("the loop form keeps recipe, task, note and command values that look like f
     assert.ok(typed && "verb" in typed);
     assert.deepEqual(ran, [typed]);
   }
+});
+
+test("no level row on the join forms or the agent menu: @name /level shows the model's true list (#501, decided 2026-11-18)", async (t) => {
+  const fake = await fakeDaemon(t);
+  const box = makeBox(fake.d, {
+    rooms: twoRooms(),
+    view: { roomId: "r1" },
+  });
+  const allFormRows = (open: () => void) => {
+    box.hidePanel();
+    open();
+    let rows = "";
+    for (let i = 0; i < 12; i++) {
+      rows += `\n${shownOf(box)}`;
+      down(box, 1);
+    }
+    return rows;
+  };
+  const levelRow =
+    /^(?:▸ |→ | {2})(?:(?:thinking|thought) )?level(?:\s+.*)?$/im;
+  for (const rows of [
+    allFormRows(() => box.newForm()),
+    allFormRows(() => box.addForm()),
+  ]) {
+    assert.doesNotMatch(rows, levelRow);
+  }
+
+  box.hidePanel();
+  box.menu();
+  type(box, "level");
+  assert.doesNotMatch(shownOf(box), levelRow);
 });

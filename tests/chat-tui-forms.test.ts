@@ -1354,6 +1354,23 @@ test("a refused model change draws the room's notice (M9-6)", {
   assert.match(scrollback(out()), /mock-agent refused the model "mock\/bogus"/);
 });
 
+test("@name /level lists and takes a pick, and a model change that moves the level draws its notice (M9-9)", {
+  skip: noPty,
+}, async (t) => {
+  const LEVELS = `node ${MOCK_AGENT} --scenario levels`;
+  const { press, seen, exited, out } = await chatOnPty(t, LEVELS);
+  await seen("auto · mock/fast");
+  await press("@mock-agent /level\r", "mock-agent · thinking level");
+  await press("low\r", 'mock-agent now thinks at the level "low"');
+  await press(
+    "@mock-agent /model mock/plain\r",
+    'mock-agent now runs on the model "mock/plain"',
+  );
+  await seen('mock-agent has no thinking level with the model "mock/plain"');
+  await press(LEAVE, "rejoin with");
+  assert.equal(await exited, 0, out());
+});
+
 test("chat in a removed folder: bare stops, attach opens and its /new form survives", {
   skip: noPty,
 }, async (t) => {

@@ -16,6 +16,7 @@ import {
   deletePreview,
   deletePreviewLines,
   HELP,
+  levelLines,
   modelLines,
   participantNow,
   runCommand,
@@ -391,12 +392,14 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       console.error(`! a form needs a terminal: ${COMMAND_USAGE[c.form]}`);
       continue;
     }
-    // A pipe has no pick list: the live models are printed (M9-6).
-    if (c.verb === "models") {
+    // A pipe has no pick list: the live models or levels are printed
+    // (M9-6, M9-9).
+    if (c.verb === "models" || c.verb === "levels") {
       const r = await participantNow(d, room.id, c.id).catch(() => undefined);
+      const lines = c.verb === "models" ? modelLines : levelLines;
       if (!r) console.error(`! ${NO_DAEMON}`);
       else if (!r.ok) console.error(`! ${r.message}`);
-      else for (const l of modelLines(r.p)) console.log(l);
+      else for (const l of lines(r.p)) console.log(l);
       continue;
     }
     // A pipe has no pane: the diff is printed as it is (M4-6).

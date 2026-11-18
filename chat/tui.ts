@@ -1355,6 +1355,10 @@ function chatTui(
         editor.addToHistory(text);
         return box.pickModel({ id: c.id, name: c.name });
       }
+      if (c.verb === "levels") {
+        editor.addToHistory(text);
+        return box.pickLevel({ id: c.id, name: c.name });
+      }
       if (c.verb !== "message") {
         editor.addToHistory(text);
         if (!(await run(c))) giveBack();

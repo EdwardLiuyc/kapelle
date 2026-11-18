@@ -1439,9 +1439,9 @@ async function roomEntry(id: string) {
 }
 
 /**
- * `POST /rooms/:id/agents {agent | cmd, name?, role?, mode?, model?, base?,
- * settings?}` — one more participant (M6-3). 201 once its harness has a
- * session, as for `POST /rooms` (S13).
+ * `POST /rooms/:id/agents {agent | cmd, name?, role?, mode?, model?,
+ * thoughtLevel?, base?, settings?}` — one more participant (M6-3). 201 once
+ * its harness has a session, as for `POST /rooms` (S13).
  */
 async function postAgent(
   id: string,
@@ -1482,11 +1482,11 @@ function changeRefused(err: unknown) {
   return roomRefused(err) ?? err;
 }
 
-/** `PATCH /rooms/:id/agents/:agentId {name?, mode?, role?, model?}` — the
- *  one route that changes a participant (R10, R44). `role: null` clears the
- *  role. `model` goes last, after every other change is checked and made:
- *  an idle harness answers before the reply, a busy one hears of it before
- *  its next turn (M9-6). */
+/** `PATCH /rooms/:id/agents/:agentId {name?, mode?, role?, model?,
+ *  thoughtLevel?}` — the one route that changes a participant (R10, R44).
+ *  `role: null` clears the role. The model, then the level, go last, after
+ *  every other change is checked and made: an idle harness answers before
+ *  the reply, a busy one hears of it before its next turn (M9-6, M9-9). */
 async function patchAgent(
   id: string,
   agentId: string,
@@ -1494,20 +1494,30 @@ async function patchAgent(
   res: ServerResponse,
 ) {
   const entry = await roomEntry(id);
-  const body = await readBody(req, ["name", "mode", "role", "model"]);
+  const body = await readBody(req, [
+    "name",
+    "mode",
+    "role",
+    "model",
+    "thoughtLevel",
+  ]);
   let changes: ReturnType<typeof participantChanges>;
   try {
     changes = participantChanges(body);
   } catch (err) {
     throw refusal(400, "invalid_request", messageOf(err));
   }
-  const { model, ...rest } = changes;
+  const { model, thoughtLevel, ...rest } = changes;
   let participant: ReturnType<Room["update"]> | undefined;
   try {
     if (Object.keys(rest).length)
       participant = entry.room.update(agentId, rest);
     if (model !== undefined) {
       participant = await entry.room.setModel(agentId, model);
+    }
+    // After the model: the level list belongs to it (M9-9).
+    if (thoughtLevel !== undefined) {
+      participant = await entry.room.setLevel(agentId, thoughtLevel);
     }
   } catch (err) {
     throw changeRefused(err);

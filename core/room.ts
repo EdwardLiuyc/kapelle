@@ -177,6 +177,33 @@
  * pending change refused at a start leaves the last model the harness took,
  * not the session's own: that one is set again first.
  *
+ * **A participant may ask for a thinking level** (M9-9), at its add or
+ * during a chat, as for the model. It is the option with `category:
+ * "thought_level"`, and its list belongs to the model (§Thinking level). The
+ * room keeps that option as the harness last sent it: the session's, then
+ * the reply to each set of the model or of the level. A reply with no level
+ * option means the model has none. Five rules come from the measurement and
+ * the pickup (decided 2026-11-17, #501):
+ *
+ * - Only a listed level is sent: pi and copilot take any value and change
+ *   the level. With a live list and no model change waiting, `setLevel`
+ *   refuses an unlisted level before any send. Otherwise the check waits for
+ *   the send, which then skips it and leaves a notice.
+ * - The level goes after the model, at a start and before a turn: opencode
+ *   resets the level on every change to another model.
+ * - After a start, a load too, the level asked for is sent only when the
+ *   harness reports another one. A load can lose it: pi's level is its mode
+ *   (§Mode after load).
+ * - A model change during a chat never sends a level. Once the harness took
+ *   the model, the same model again included, the level asked for becomes
+ *   the one in use, moved or not, so a revive does not bring an old one
+ *   back. The level line changes with it: a notice when the level moved, and
+ *   none when it did not, since no open request is left for a notice to
+ *   describe. A refused model changes neither. A model change that waits for
+ *   a start is part of that start.
+ * - On pi a level set also sends `current_mode_update`. Nothing here reads
+ *   that, so a level never changes the mode or its notices.
+ *
  * **MVP scope, deliberately.** The watchdog only warns, and only during a turn (R38):
  * a chat turn is never cut by a clock. No result preamble, no cross-check: a
  * chat turn is conversation, not a deliverable (R39). What stays is what makes a room
@@ -210,7 +237,11 @@ import {
   type Warning,
   warningsFor,
 } from "../protocol/registry.ts";
-import type { AgentEvent, MessageKind } from "../protocol/types.ts";
+import type {
+  AgentEvent,
+  MessageKind,
+  SessionConfigOption,
+} from "../protocol/types.ts";
 import {
   failureSeen,
   modelsOf,
@@ -335,15 +366,19 @@ export interface AgentRequest {
   settings: Settings;
   /** The model to set after each start; the harness's own when absent. */
   model?: string;
+  /** The thinking level to set after the model (M9-9). */
+  thoughtLevel?: string;
 }
 
 /** What `PATCH` may change. A `null` role clears it. `model` goes to
- *  `Room.setModel`, the rest to `Room.update`. */
+ *  `Room.setModel`, `thoughtLevel` to `Room.setLevel`, the rest to
+ *  `Room.update`. */
 export interface ParticipantChanges {
   name?: string;
   role?: Role | null;
   mode?: ClientMode;
   model?: string;
+  thoughtLevel?: string;
 }
 
 /** Who sent a message, when a participant did (M8-1). */
@@ -405,6 +440,11 @@ export interface Participant {
   /** The live session's models (M9-6); absent with no harness, or when it
    *  lists none. A set's reply never changes them. */
   readonly models?: readonly { id: string; name: string }[];
+  /** The thinking level in use and the model's levels (M9-9), as the
+   *  harness last said. Absent when the model has no level option, and
+   *  before the first start; the list is also absent with no harness. */
+  readonly thoughtLevel?: string;
+  readonly thoughtLevels?: readonly { id: string; name: string }[];
   /** The room's notices, then this participant's containment and worktree
    *  notices. #13's lines are never dropped, and a room has no terminal of
    *  its own, so the caller publishes them. */
@@ -474,6 +514,10 @@ interface ParticipantRecord {
   /** A change the harness has not heard of yet (M9-6): the next start
    *  sends it, also after a pause or a daemon restart. */
   pendingModel?: string;
+  /** The thinking level asked for, and a change not yet sent (M9-9), as
+   *  `model` and `pendingModel`. */
+  thoughtLevel?: string;
+  pendingThoughtLevel?: string;
   worktree: string;
   /** The branch and base the checkout had at the last save. A restore
    *  reconciles both with the checkout again, in case a crash caught a
@@ -529,11 +573,15 @@ export interface Room {
   add(request: AgentRequest): Promise<Participant>;
   /** Renames a participant, or changes its role or mode. Checks every
    *  change before it applies any. */
-  update(id: string, changes: Omit<ParticipantChanges, "model">): Participant;
+  update(id: string, changes: Omit<ParticipantChanges, Later>): Participant;
   /** Asks the participant's harness for another model (M9-6): now when it
    *  is idle, and before its next turn when it is busy. Resolves once an
    *  idle harness answered; a refusal is a notice, not a throw. */
   setModel(id: string, model: string): Promise<Participant>;
+  /** Asks for another thinking level (M9-9), when and as `setModel` does.
+   *  An unlisted level is refused with `invalid_request` when the list is
+   *  known, before anything is sent. */
+  setLevel(id: string, level: string): Promise<Participant>;
   /** Gives the room a new title. `touch` saves it. The stream gets no
    *  line: a client reads the title from `GET /rooms`. */
   retitle(title: string): void;
@@ -566,6 +614,9 @@ export interface Room {
    *  one too, and removes the room's folder, its record and log included. */
   forget(): void;
 }
+
+/** The changes a `PATCH` sends to the harness, after the rest. */
+type Later = "model" | "thoughtLevel";
 
 /** The harness `agent` or `cmd` names, or a throw naming what is wrong. */
 function roomHarness(agent: unknown, cmd: unknown): ResolvedAgent {
@@ -604,6 +655,7 @@ export const AGENT_FIELDS: readonly string[] = [
   "base",
   "settings",
   "model",
+  "thoughtLevel",
 ];
 
 /** A name, or a throw naming what is wrong. `fallback` is the harness name
@@ -693,7 +745,7 @@ export function roomAgent(entry: unknown): AgentRequest {
       `unknown agent field "${extra}"; an agent takes ${AGENT_FIELDS.join(", ")}`,
     );
   }
-  const { agent, cmd, name, role, mode, base, settings, model } =
+  const { agent, cmd, name, role, mode, base, settings, model, thoughtLevel } =
     entry as Record<string, unknown>;
   const spec = roomHarness(agent, cmd);
   const request: AgentRequest = {
@@ -714,13 +766,38 @@ export function roomAgent(entry: unknown): AgentRequest {
     request.base = base;
   }
   // Any id: the harness checks it, not a list of ours (D3).
-  if (model !== undefined) {
-    if (typeof model !== "string" || !model.trim()) {
-      throw new Error('"model" must be a non-empty string');
-    }
-    request.model = model;
+  if (model !== undefined) request.model = idField("model", model);
+  // Checked against the list once the session is up (M9-9).
+  if (thoughtLevel !== undefined) {
+    request.thoughtLevel = idField("thoughtLevel", thoughtLevel);
   }
   return request;
+}
+
+/** A thinking level option that is a list (M9-9). */
+type LevelOption = Extract<SessionConfigOption, { type: "select" }>;
+
+/** The thinking level option of `options`, when it is a list. */
+function levelOptionOf(
+  options: SessionConfigOption[] | undefined,
+): LevelOption | undefined {
+  const o = options?.find((x) => x.category === "thought_level");
+  return o?.type === "select" && Array.isArray(o.options) ? o : undefined;
+}
+
+/** Its levels, made flat, as `modelsOf` makes the models. */
+function levelsOf(o: LevelOption): { id: string; name: string }[] {
+  return o.options
+    .flatMap((x) => ("options" in x ? x.options : [x]))
+    .map(({ value, name }) => ({ id: value, name }));
+}
+
+/** A model or level id: a non-empty string, or a throw. */
+function idField(field: string, v: unknown): string {
+  if (typeof v !== "string" || !v.trim()) {
+    throw new Error(`"${field}" must be a non-empty string`);
+  }
+  return v;
 }
 
 /**
@@ -746,25 +823,27 @@ export function roomAgents(raw: unknown): AgentRequest[] {
 export function participantChanges(
   body: Record<string, unknown>,
 ): ParticipantChanges {
-  const { name, mode, role, model } = body;
+  const { name, mode, role, model, thoughtLevel } = body;
   if (
     name === undefined &&
     mode === undefined &&
     role === undefined &&
-    model === undefined
+    model === undefined &&
+    thoughtLevel === undefined
   ) {
-    throw new Error('send at least one of "name", "mode", "role" or "model"');
+    throw new Error(
+      'send at least one of "name", "mode", "role", "model" or "thoughtLevel"',
+    );
   }
   const changes: ParticipantChanges = {};
   if (mode !== undefined) changes.mode = checkMode(mode);
   if (name !== undefined) changes.name = checkName(name);
   if (role !== undefined) changes.role = role === null ? null : checkRole(role);
   // As at add: any id, which the harness checks (D3).
-  if (model !== undefined) {
-    if (typeof model !== "string" || !model.trim()) {
-      throw new Error('"model" must be a non-empty string');
-    }
-    changes.model = model;
+  if (model !== undefined) changes.model = idField("model", model);
+  // The room checks it against the live list (M9-9).
+  if (thoughtLevel !== undefined) {
+    changes.thoughtLevel = idField("thoughtLevel", thoughtLevel);
   }
   return changes;
 }
@@ -819,6 +898,9 @@ interface Member {
   asked: () => string | undefined;
   /** A change not yet sent, which `room.json` keeps too. */
   pending: () => string | undefined;
+  /** The same two for the thinking level (M9-9). */
+  askedLevel: () => string | undefined;
+  pendingLevel: () => string | undefined;
   /** Its own notices, which `room.json` keeps. */
   own: RoomNotice[];
   stop: () => Promise<void>;
@@ -828,6 +910,7 @@ interface Member {
   turnCancelled: () => boolean;
   setMode: (mode: ClientMode) => void;
   setModel: (model: string) => Promise<void>;
+  setLevel: (level: string) => Promise<void>;
   hold: <T>(work: Promise<T>) => Promise<T>;
   onNotice: Notify;
   /** True when `branch` is a name the harness renamed into, proven by the
@@ -958,6 +1041,15 @@ export function readRoomRecord(path: string): RoomRecord {
       pendingModel:
         typeof saved.pendingModel === "string" && saved.pendingModel
           ? saved.pendingModel
+          : undefined,
+      thoughtLevel:
+        typeof saved.thoughtLevel === "string" && saved.thoughtLevel
+          ? saved.thoughtLevel
+          : undefined,
+      pendingThoughtLevel:
+        typeof saved.pendingThoughtLevel === "string" &&
+        saved.pendingThoughtLevel
+          ? saved.pendingThoughtLevel
           : undefined,
     };
   };
@@ -1284,6 +1376,8 @@ async function buildRoom(
     const p = m.participant;
     const asked = m.asked();
     const pending = m.pending();
+    const askedLevel = m.askedLevel();
+    const pendingLevel = m.pendingLevel();
     return {
       id: p.id,
       name: p.name,
@@ -1294,6 +1388,8 @@ async function buildRoom(
       settings: { allowReadOutsideRoot: p.settings.allowReadOutsideRoot },
       ...(asked && { model: asked }),
       ...(pending && { pendingModel: pending }),
+      ...(askedLevel && { thoughtLevel: askedLevel }),
+      ...(pendingLevel && { pendingThoughtLevel: pendingLevel }),
       worktree: p.worktree,
       ...(p.branch && { branch: p.branch }),
       ...(p.baseSha && { baseSha: p.baseSha }),
@@ -1678,7 +1774,15 @@ async function buildRoom(
     return found.participant;
   };
 
-  const update = (id: string, changes: Omit<ParticipantChanges, "model">) => {
+  const setLevel = async (id: string, level: string) => {
+    if (ended()) throw dismissed();
+    const found = member(id);
+    await found.setLevel(level);
+    saveSoon();
+    return found.participant;
+  };
+
+  const update = (id: string, changes: Omit<ParticipantChanges, Later>) => {
     if (ended()) throw dismissed();
     const found = member(id);
     const p = found.participant;
@@ -1813,6 +1917,7 @@ async function buildRoom(
         settings: saved.settings,
         ...(saved.role && { role: saved.role }),
         ...(saved.model && { model: saved.model }),
+        ...(saved.thoughtLevel && { thoughtLevel: saved.thoughtLevel }),
       };
       const info =
         saved.branch && saved.baseSha
@@ -1852,6 +1957,7 @@ async function buildRoom(
       add: (request) => track(start(request)),
       update,
       setModel: (id, model) => track(setModel(id, model)),
+      setLevel: (id, level) => track(setLevel(id, level)),
       retitle(title) {
         if (ended()) throw dismissed();
         meta.title = title;
@@ -1957,6 +2063,7 @@ function createParticipant({
     settings,
     mode: initialMode,
     model: initialModel,
+    thoughtLevel: initialLevel,
   },
   worktree,
   info,
@@ -2101,21 +2208,31 @@ function createParticipant({
    *  had: pi and claude say only `Internal error`, so the line is ours, with
    *  theirs after it. A time-out or an exit is no refusal, and the harness
    *  may still apply it, so its line says less. Only a set the harness took
-   *  becomes `asked`. A failed set is not tried again in this process. */
-  const applyModel = async (next: AcpAgent, target: string) => {
+   *  becomes `asked`. A failed set is not tried again in this process.
+   *  True when the harness took it. */
+  const applyModel = async (
+    next: AcpAgent,
+    target: string,
+  ): Promise<boolean> => {
     const option = next.configOptions.find((o) => o.category === "model");
     const on = model ? `the model "${model}"` : "its own model";
     if (!option) {
       modelLine = {
         text: `${spec.name} lists no models, so the model "${target}" was not set; it runs on ${on}`,
       };
-      return;
+      return false;
     }
     try {
       const res = await next.setConfigOption(option.id, target);
       const now = res?.configOptions?.find((o) => o.category === "model");
       model = now?.type === "select" ? now.currentValue : target;
       asked = target;
+      // The level list belongs to the model: take the reply's, or none
+      // (M9-9). A reply without an option means the new model has none. A
+      // reply with no `configOptions` at all reads the same, unlike
+      // `applyLevel`, which keeps its list: here the old model's list could
+      // let through a level the new model does not list (#508 review).
+      levelOption = levelOptionOf(res?.configOptions);
       // It took the set, yet names another model.
       modelLine =
         model === target
@@ -2123,6 +2240,7 @@ function createParticipant({
           : {
               text: `${spec.name} took the model "${target}" but runs on "${model}"`,
             };
+      return true;
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       modelLine = {
@@ -2132,17 +2250,19 @@ function createParticipant({
             : `${spec.name} did not confirm the model "${target}" (${why}); ` +
               `it may still run on ${on}`,
       };
+      return false;
     }
   };
   /** Tells every client the result of a change: the model in use, or
    *  `null` when the harness names none, so each one reads the notice too.
    *  It also makes the room save `asked` and drop `pendingModel`. */
-  const announceModel = () => {
+  const announceModel = (levelMoved = false) => {
     bus.emit({
       agent: id,
       update: {
         sessionUpdate: "_client_participant_changed",
         model: model ?? null,
+        ...(levelMoved && { thoughtLevel: levelOption?.currentValue ?? null }),
       },
     });
   };
@@ -2169,13 +2289,128 @@ function createParticipant({
     // the same line as one made against a live harness (M9-6).
     if (pending !== undefined) announceModel();
   };
-  /** The change the live harness has not heard of, then its result. */
+  /** The change the live harness has not heard of, then its result. No
+   *  level is sent (decided 2026-11-17, #501). Once the harness took the
+   *  model, the same one again included, the level it reports is the level
+   *  asked for, moved or not, so a revive changes nothing. The level line is
+   *  the move, or none: no open request is left for a line to describe
+   *  (#508 review). A refused model changes neither. */
   const sendWanted = async () => {
     const target = wanted;
     wanted = undefined;
     if (!agent || !target) return;
-    await applyModel(agent, target);
-    announceModel();
+    const before = levelOption?.currentValue;
+    const took = await applyModel(agent, target);
+    const after = levelOption?.currentValue;
+    const moved = after !== before;
+    if (took) {
+      const on = model ? ` with the model "${model}"` : "";
+      askedLevel = after;
+      levelLine = !moved
+        ? undefined
+        : {
+            text:
+              after === undefined
+                ? `${spec.name} has no thinking level${on}; it was on "${before}"`
+                : `${spec.name}'s thinking level moved ${before === undefined ? "" : `from "${before}" `}to "${after}"${on}`,
+          };
+    }
+    announceModel(moved);
+  };
+
+  // The thinking level (M9-9): its option as the harness last sent it, the
+  // line a refusal or a move left, the level a start asks for, and a change
+  // the harness has not heard of yet, which `room.json` keeps.
+  let levelOption: LevelOption | undefined;
+  let levelLine: RoomNotice | undefined;
+  let askedLevel = initialLevel;
+  let wantedLevel = saved?.pendingThoughtLevel;
+  /** Sets `target` on the live harness, only when the model lists it: pi
+   *  and copilot take any value. A refusal, or a level it does not list,
+   *  leaves the level it had and a line. Only a set the harness took
+   *  becomes `askedLevel`. */
+  const applyLevel = async (next: AcpAgent, target: string) => {
+    const option = levelOption;
+    const onModel = model ? ` on the model "${model}"` : "";
+    if (!option) {
+      levelLine = {
+        text: `${spec.name} has no thinking level${onModel}, so the level "${target}" was not set`,
+      };
+      return;
+    }
+    const on = `the thinking level "${option.currentValue}"`;
+    if (!levelsOf(option).some((l) => l.id === target)) {
+      levelLine = {
+        text: `${spec.name} does not list the thinking level "${target}"${onModel}, so it was not sent; it stays on ${on}`,
+      };
+      return;
+    }
+    try {
+      const res = await next.setConfigOption(option.id, target);
+      // The reply to a level set always held the option (§Thinking level);
+      // one that does not leaves the list as it was.
+      levelOption = levelOptionOf(res?.configOptions) ?? {
+        ...option,
+        currentValue: target,
+      };
+      askedLevel = target;
+      const now = levelOption.currentValue;
+      levelLine =
+        now === target
+          ? undefined
+          : {
+              text: `${spec.name} took the thinking level "${target}" but is on "${now}"`,
+            };
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      levelLine = {
+        text:
+          err instanceof RpcError
+            ? `${spec.name} refused the thinking level "${target}" (${why}); it stays on ${on}`
+            : `${spec.name} did not confirm the thinking level "${target}" (${why}); ` +
+              `it may still be on ${on}`,
+      };
+    }
+  };
+  const announceLevel = () => {
+    bus.emit({
+      agent: id,
+      update: {
+        sessionUpdate: "_client_participant_changed",
+        thoughtLevel: levelOption?.currentValue ?? null,
+      },
+    });
+  };
+  /** After a start's model: the level asked for, sent only when the harness
+   *  reports another (decided 2026-11-17, #501). A pending change refused
+   *  here leaves the level asked for before it, as for the model. */
+  const syncLevel = async (next: AcpAgent) => {
+    levelLine = undefined;
+    const pending = wantedLevel;
+    wantedLevel = undefined;
+    const send = async (target: string) => {
+      if (levelOption?.currentValue === target) askedLevel = target;
+      else await applyLevel(next, target);
+    };
+    if (pending !== undefined && askedLevel !== undefined) {
+      if (askedLevel !== pending) await send(askedLevel);
+    }
+    const target = pending ?? askedLevel;
+    if (target !== undefined) await send(target);
+    if (pending !== undefined) announceLevel();
+  };
+  /** The level change the live harness has not heard of, then its result. */
+  const sendWantedLevel = async () => {
+    const target = wantedLevel;
+    wantedLevel = undefined;
+    if (!agent || target === undefined) return;
+    await applyLevel(agent, target);
+    announceLevel();
+  };
+  /** What waits for the live harness: the model, then the level. */
+  const sendPending = async () => {
+    await sendWanted();
+    await sendWantedLevel();
   };
 
   let turn: Promise<void> | undefined;
@@ -2334,7 +2569,10 @@ function createParticipant({
     failure = undefined;
     await syncMode();
     // Nor, maybe, its model: not measured, so it is sent again (M9-5).
+    levelOption = levelOptionOf(next.configOptions);
     await syncModel(next);
+    // Then the level, after the model (M9-9).
+    await syncLevel(next);
     return loaded;
   };
 
@@ -2444,8 +2682,8 @@ function createParticipant({
     };
     let ready: Promise<void> | undefined;
     if (!agent) ready = revive();
-    else if (unsent()) ready = syncMode().then(sendWanted);
-    else if (wanted) ready = sendWanted();
+    else if (unsent()) ready = syncMode().then(sendPending);
+    else if (wanted || wantedLevel !== undefined) ready = sendPending();
     // **Before the turn's own end line**, so a client that reloads the diff
     // on `_client_turn_ended` already has the rebased `baseSha`, and one that
     // re-reads the room then sees the new branch.
@@ -2596,6 +2834,25 @@ function createParticipant({
     await hold(sendWanted());
   };
 
+  // As `setModel`. With a live list and no model change waiting, an
+  // unlisted level is refused here, before anything is sent (M9-9).
+  const setLevel = async (next: string) => {
+    if (agent && wanted === undefined) {
+      const levels = levelOption ? levelsOf(levelOption) : [];
+      if (!levels.some((l) => l.id === next)) {
+        throw new RoomRefusal(
+          "invalid_request",
+          levels.length
+            ? `"${next}" is not a thinking level of ${spec.name} on its model; it lists ${levels.map((l) => l.id).join(", ")}`
+            : `${spec.name} has no thinking level on its model`,
+        );
+      }
+    }
+    wantedLevel = next;
+    if (!agent || turn || held || stopping) return;
+    await hold(sendWantedLevel());
+  };
+
   /** What the harness did to its own checkout: renamed the branch, or moved
    *  the commit its work starts from with a rebase. A git read that fails
    *  leaves the identity already recorded; a bad base would be worse than a
@@ -2666,12 +2923,20 @@ function createParticipant({
       const list = agent && modelsOf(agent.configOptions).models;
       return list?.length ? list : undefined;
     },
+    get thoughtLevel() {
+      return levelOption?.currentValue;
+    },
+    get thoughtLevels() {
+      const list = agent && levelOption && levelsOf(levelOption);
+      return list?.length ? list : undefined;
+    },
     get notices() {
       return [
         ...notices(),
         ...modeLines,
         ...modeSend(),
         ...(modelLine ? [modelLine] : []),
+        ...(levelLine ? [levelLine] : []),
       ];
     },
     status: () => {
@@ -2743,8 +3008,11 @@ function createParticipant({
     launch,
     setMode,
     setModel,
+    setLevel,
     asked: () => asked,
     pending: () => wanted,
+    askedLevel: () => askedLevel,
+    pendingLevel: () => wantedLevel,
     hold,
     renamed: () => branchRenamed,
     syncCheckout,

@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.22** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.23** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -18,7 +18,8 @@ changes the model during a chat and added an agent's `models`, #354, which
 added `_client_repeat_resolved`, #318, which settled the cancel boundary, and
 M8-7, #271, which added the orchestrator's turn cap; #371, which tightened the
 `daemon.json` lifecycle; M9-8, #307, which made the `/harnesses` routes stable; and
-M10-5, #494, which added `GET /config` and `PATCH /config`).
+M10-5, #494, which added `GET /config` and `PATCH /config`; and M9-9, #501, which added
+an agent's thinking level).
 
 ## Contents
 
@@ -364,7 +365,7 @@ the `GET` routes take none.
 | `POST /rooms/:id/agents` | Add a participant. |
 | `GET /rooms/:id/agents` | List a room's participants. |
 | `GET /rooms/:id/agents/:agentId` | One participant. |
-| `PATCH /rooms/:id/agents/:agentId` | Rename a participant, or change its mode, role or model. |
+| `PATCH /rooms/:id/agents/:agentId` | Rename a participant, or change its mode, role, model or thinking level. |
 | `DELETE /rooms/:id/agents/:agentId` | Remove a participant. |
 | `POST /rooms/:id/agents/:agentId/messages` | Send a message to one participant. |
 | `GET /rooms/:id/agents/:agentId/events` | One participant's lines of the room's stream. |
@@ -379,7 +380,7 @@ the `GET` routes take none.
 
 ```json
 {
-  "apiVersion": { "major": 1, "minor": 22 },
+  "apiVersion": { "major": 1, "minor": 23 },
   "capabilities": ["repos", "runs", "events", "permissions", "rooms", "config"]
 }
 ```
@@ -988,7 +989,7 @@ fills them in its own way.
 | `tool_call_update` | A tool changed: status, output. Same `toolCallId`. |
 | `plan` | The agent's plan, as `entries`. |
 | `available_commands_update` | Commands the harness offers. |
-| `current_mode_update` | The session mode changed. |
+| `current_mode_update` | The session mode changed. On pi, a change of thinking level also sends it, with the level's id: it is not a safety mode, and a participant's `mode` does not change. |
 | `config_option_update` | Session settings, for example the model. |
 | `session_info_update` | Session title or time. |
 | `usage_update` | Tokens used so far, and maybe cost. |
@@ -1055,7 +1056,7 @@ with ACP names.
 | `_client_queue_cleared` | `count` | `count` queued messages were dropped and never sent: the turn was cancelled, the participant was removed, its harness exited, or the room was dismissed. |
 | `_client_turn_cap_reached` | none | The orchestrator's next worker message was refused at the room's cap (since 1.19). The line's `participantId` names its target; the message gets no queued or turn-start line. The TUI rings its bell. |
 | `_client_participant_added` | `name`, `role?`, `harness`, `mode` | The participant joined: a starter when the room opened, or an add. It comes after its `_client_harness_spawned`, and after `_client_worktree_created` when it has its own checkout. An add that fails never logs this, though it may have logged either of the other two. |
-| `_client_participant_changed` | `name?`, `role?`, `mode?`, `model?` | A rename, or a new role, mode or model. Only the changed fields are present. `role: null` means the role was cleared. `model` (since 1.17) is the model the harness runs on after a change of model, also after a refused one, or `null` when the harness names none. |
+| `_client_participant_changed` | `name?`, `role?`, `mode?`, `model?`, `thoughtLevel?` | A rename, or a new role, mode, model or thinking level. Only the changed fields are present. `role: null` means the role was cleared. `model` (since 1.17) is the model the harness runs on after a change of model, also after a refused one, or `null` when the harness names none. `thoughtLevel` (since 1.23) is the thinking level after a change of level, also after a refused one, or after a change of model that moved it; `null` when the model has no level option. |
 | `_client_participant_fast_forwarded` | `from`, `branch`, `sha` | A fast-forward moved the target participant's branch and checkout to `from`'s commit. `from` is the source participant id, `branch` the target's branch, and `sha` the commit it now points at. A no-op move writes none. |
 | `_client_participant_removed` | none | The participant left the roster. It is the participant's last line. A dismiss has no such line: the stream ends instead. |
 | `_client_participant_revived` | `resumed`, `sessionId`, `memoryMayBeBehind?` | A `paused`, `killed` or `exited` participant has a new harness in its own checkout. `resumed` is `loaded` (since 1.9): it loaded its old session and remembers the turns before. Or it is `fresh`: a new session, so it does not. `memoryMayBeBehind` is `true` only with `loaded`, when the participant stopped while its prompt was live: what it remembers may be behind its files. It comes after the `_client_user_message` that revived it, and after the new `_client_harness_spawned`. |
@@ -1269,6 +1270,14 @@ An agent takes:
   model, or lists no models, the agent still joins, on the model the harness chose, and a
   notice says so. A failed set is tried again at the next revive, not before. Without
   `model`, the harness chooses.
+- `thoughtLevel`: optional, since 1.23. A thinking level id, such as `high`. The daemon
+  sets it after the model, at each start of the harness, a revive too, before the first
+  turn, and only when the harness reports another level. The list belongs to the model,
+  and the daemon sends only a level from it: pi and copilot take any value and change the
+  level. When the model does not list the level, has no level option, or the harness
+  refuses it, the agent still joins, on the level the harness chose, and a notice says
+  so. The level asked for is tried again at the next revive. Without `thoughtLevel`, the
+  harness chooses.
 - `base`: optional. The git ref the participant's branch starts from. It can be another
   participant's `branch`, so a reviewer starts from the developer's commits. The default
   is the repository's `HEAD`. Only committed work is on a branch. The participant's
@@ -1315,6 +1324,8 @@ The reply comes when every harness is ready. This can take some seconds.
       "sessionId": "ses_…",
       "model": "deepseek/deepseek-chat",
       "models": [{ "id": "deepseek/deepseek-chat", "name": "DeepSeek Chat" }],
+      "thoughtLevel": "high",
+      "thoughtLevels": [{ "id": "low", "name": "Low" }, { "id": "high", "name": "High" }],
       "status": "idle",
       "notices": [{ "text": "…", "kind": "containment" }]
     }
@@ -1347,6 +1358,13 @@ refusal. The asked one is kept, and sent again at the next revive.
 change leaves an option out. It is missing when no harness runs, such as a restored
 participant before its first revive, and when the harness lists no models.
 
+`thoughtLevel` (since 1.23) is the thinking level the harness is on, as it last said:
+the `currentValue` of the option with `category: "thought_level"`. It is missing when the
+model has no level option, and for a restored participant until its first revive.
+`thoughtLevels` (since 1.23) is that option's list, as `id` and `name`, made flat. Unlike
+`models`, it changes with every change of model, because each model has its own levels. It
+is missing when no harness runs, and when the model has no level option.
+
 `seq` is the size of the room's log when the daemon answered. The reply counts every line
 up to that `seq`, and a line above it is newer than the reply.
 
@@ -1364,13 +1382,13 @@ the current topology, independently of the saved `baseSha`.
 
 **Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
-bad `title`, a bad or missing harness, a bad `name`, `role`, `mode`, `model` or
-`settings`, or an unknown agent field; `409` `name_taken` or `orchestrator_exists` when
-two agents in the list clash; `400` `invalid_config` when the repository's
-`.kapelle/config.json` is not valid, because the room reads its watchdog limits,
-turn cap and `linkPaths` from it; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when
-the daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example
-its binary is not installed).
+bad `title`, a bad or missing harness, a bad `name`, `role`, `mode`, `model`,
+`thoughtLevel` or `settings`, or an unknown agent field; `409` `name_taken` or
+`orchestrator_exists` when two agents in the list clash; `400` `invalid_config` when the
+repository's `.kapelle/config.json` is not valid, because the room reads its watchdog
+limits, turn cap and `linkPaths` from it; `400` `invalid_request` for a bad `base`; `503`
+`shutting_down` when the daemon shuts down; `500` `room_open_failed` when a harness
+cannot start (for example its binary is not installed).
 
 A `base` is bad when it is not a commit, or when its commit has no copy of the folder
 `cwd` names inside the repository. That folder must be in the commit even when no `base`
@@ -1574,21 +1592,41 @@ Changes one participant. Send one or more of:
   request: the harness keeps the model it had, and a notice says so. A pending change
   refused at a start leaves the last model the harness took. Only a model the harness took
   is sent again at a revive. The saved models of `GET /harnesses` do not change.
+  A model change never sends a thinking level. Once the harness took the model, the level
+  the daemon sends again at a revive becomes the one the harness is on, moved or not, so
+  a revive changes nothing. When the new model moved the level, or has no level option, a
+  notice says so. Pick the level again after the change, or send both in one request.
+- `thoughtLevel` (since 1.23): a thinking level id from the participant's
+  `thoughtLevels`. The daemon checks it, not only the harness: pi and copilot take any
+  value and change the level. When the harness runs and no model change waits, a level
+  that is not in `thoughtLevels`, or any level when the model has no level option, is
+  refused with `400` `invalid_request`, and nothing reaches the harness. When no harness
+  runs, or a model change waits, the daemon checks it before it sends it: an unlisted
+  level is then not sent, and a notice says so. An idle harness gets it at once, a busy
+  one before its next turn, and one with no harness when it starts again, as for the
+  model. A harness that refuses a listed level does not refuse the request: it keeps the
+  level it had, and a notice says so. Only a level the harness took is sent again at a
+  revive, and only when the harness then reports another level.
 
-The daemon checks every field before it changes any. The model is applied last, and
-apart from the other fields: the daemon changes `name`, `mode` and `role` first, then
-sends the model. So a refusal at the model step, such as `409` `room_dismissed` when the
-room was dismissed between the two, leaves the earlier fields changed. No field restarts
-the harness or opens a new session. A model change updates the model option of the
-session that runs. The room's stream gets `_client_participant_changed`, with only the
-fields that changed, so every client sees the change. A change of model gets its own
-line once the harness answered, with `model`: the model in use, or `null` when the
-harness names none, such as one with no model option. Read the participant again for
-its notice.
+The daemon checks every field before it changes any. The model, then the level, go last,
+and apart from the other fields: the daemon changes `name`, `mode` and `role` first, then
+sends the model, then the level. The level goes after the model because its list belongs
+to the model, and opencode resets the level on a change of model. So a refusal at the
+model or level step, such as `409` `room_dismissed` when the room was dismissed between
+them, or `400` for an unlisted level, leaves the earlier fields changed, the model
+included. No field restarts the harness or opens a new session. A model change updates
+the model option of the session that runs. The room's stream gets
+`_client_participant_changed`, with only the fields that changed, so every client sees
+the change. A change of model gets its own line once the harness answered, with `model`:
+the model in use, or `null` when the harness names none, such as one with no model
+option. When the change moved the level, the same line has `thoughtLevel`. A change of
+level gets its own line, with `thoughtLevel`: the level in use, or `null` when the model
+has no level option. Read the participant again for its notice.
 
 **Reply `200`:** the participant. **Refusals:** `404` `room_not_found` or
-`participant_not_found`; `400` `invalid_request` for a bad field or an empty body; `409`
-`name_taken`; `409` `orchestrator_exists`; `409` `room_dismissed`.
+`participant_not_found`; `400` `invalid_request` for a bad field, an empty body or a
+level the participant's model does not list; `409` `name_taken`; `409`
+`orchestrator_exists`; `409` `room_dismissed`.
 
 ### `DELETE /rooms/:id/agents/:agentId`
 
@@ -1915,9 +1953,9 @@ message, and when no turn runs. A reply's turn names the worker that replied.
 
 `role` is one of `orchestrator`, `developer`, `tester`, `architect` or `reviewer` (since
 1.14), or missing. It is a
-label. It sends no text to the agent. A client changes `name`, `mode`, `role` or
-`model` with one route, `PATCH /rooms/:id/agents/:agentId`. A room has at most one
-`orchestrator`: adding or changing a participant to that role is refused with `409`
+label. It sends no text to the agent. A client changes `name`, `mode`, `role`, `model`
+or `thoughtLevel` with one route, `PATCH /rooms/:id/agents/:agentId`. A room has at most
+one `orchestrator`: adding or changing a participant to that role is refused with `409`
 `orchestrator_exists` while another one exists. More roles may come later, so a client
 shows a role it does not know as plain text.
 

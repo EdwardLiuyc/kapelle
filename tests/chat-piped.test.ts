@@ -919,6 +919,39 @@ test("piped chat.ts lists an agent's live models, and changes its model (M9-6)",
   at("* mock/smart  Smart", again);
 });
 
+test("piped chat.ts lists an agent's thinking levels, and changes its level (M9-9)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    agents: [{ cmd: `node ${MOCK_AGENT} --scenario levels`, name: "alice" }],
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end(
+    "@alice /level\n@alice /level max\n@alice /level low\n@alice /level\n/leave\n",
+  );
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  const out = r.stdout;
+  const at = (line: string, from = 0) => {
+    const i = out.indexOf(line, from);
+    assert.notEqual(i, -1, `${line} not after ${from} in:\n${out}`);
+    return i;
+  };
+  const first = at('alice thinks at "high"');
+  at("  low  LOW", first);
+  at("* high  HIGH", first);
+  // The daemon's refusal: mock/fast does not list max.
+  assert.match(r.stderr, /"max" is not a thinking level of mock-agent/);
+  const set = at('alice now thinks at the level "low"', first);
+  const again = at('alice thinks at "low"', set);
+  at("* low  LOW", again);
+});
+
 // --- a room across a restart (M6-7a, #151) ----------------------------------
 
 test("chat.ts on a pipe rides out a restart: the participant reads paused, and a message is answered", async (t) => {
