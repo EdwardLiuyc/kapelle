@@ -1383,8 +1383,8 @@ the current topology, independently of the saved `baseSha`.
 **Refusals, in this order:** `400` `invalid_request` for a bad `cwd`; `403`
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
 bad `title`, a bad or missing harness, a bad `name`, `role`, `mode`, `model`,
-`thoughtLevel` or `settings`, or an unknown agent field; `409` `name_taken` or `orchestrator_exists` when
-two agents in the list clash; `400` `invalid_config` when the repository's
+`thoughtLevel` or `settings`, or an unknown agent field; `409` `name_taken` or
+`orchestrator_exists` when two agents in the list clash; `400` `invalid_config` when the repository's
 `.kapelle/config.json` is not valid, because the room reads its watchdog limits,
 turn cap and `linkPaths` from it; `400` `invalid_request` for a bad `base`; `503` `shutting_down` when
 the daemon shuts down; `500` `room_open_failed` when a harness cannot start (for example
@@ -1954,8 +1954,8 @@ message, and when no turn runs. A reply's turn names the worker that replied.
 `role` is one of `orchestrator`, `developer`, `tester`, `architect` or `reviewer` (since
 1.14), or missing. It is a
 label. It sends no text to the agent. A client changes `name`, `mode`, `role`, `model`
-or `thoughtLevel` with one route, `PATCH /rooms/:id/agents/:agentId`. A room has at most one
-`orchestrator`: adding or changing a participant to that role is refused with `409`
+or `thoughtLevel` with one route, `PATCH /rooms/:id/agents/:agentId`. A room has at most
+one `orchestrator`: adding or changing a participant to that role is refused with `409`
 `orchestrator_exists` while another one exists. More roles may come later, so a client
 shows a role it does not know as plain text.
 

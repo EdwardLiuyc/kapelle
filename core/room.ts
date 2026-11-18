@@ -2221,7 +2221,10 @@ function createParticipant({
       model = now?.type === "select" ? now.currentValue : target;
       asked = target;
       // The level list belongs to the model: take the reply's, or none
-      // (M9-9). A reply without an option means the new model has none.
+      // (M9-9). A reply without an option means the new model has none. A
+      // reply with no `configOptions` at all reads the same, unlike
+      // `applyLevel`, which keeps its list: here the old model's list could
+      // let through a level the new model does not list (#508 review).
       levelOption = levelOptionOf(res?.configOptions);
       // It took the set, yet names another model.
       modelLine =

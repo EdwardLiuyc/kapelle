@@ -501,11 +501,10 @@ function panelParts({
   };
 
   /** `@name /level` (M9-9): the model's levels to pick from. No `other…`
-   *  row: the daemon refuses a level its list does not hold. */
-  const pickLevel = async (
-    who: { id: string; name: string },
-    back: () => void = hidePanel,
-  ) => {
+   *  row: the daemon refuses a level its list does not hold. Only the
+   *  typed command opens it, never the menu (decided 2026-11-18, #508), so
+   *  no panel is open before it and Esc closes it. */
+  const pickLevel = async (who: { id: string; name: string }) => {
     const roomId = view().roomId;
     await fresh();
     const r = await participantNow(d, roomId, who.id).catch(() => undefined);
@@ -530,7 +529,7 @@ function panelParts({
       })),
       thoughtLevel,
       (v) => void run({ verb: "patch", id, name, change: { thoughtLevel: v } }),
-      back,
+      hidePanel,
     );
   };
 

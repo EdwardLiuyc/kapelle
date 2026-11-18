@@ -1433,7 +1433,7 @@ test("the loop form keeps recipe, task, note and command values that look like f
   }
 });
 
-test("the join forms have no level row and the agent menu has no level command (#501)", async (t) => {
+test("no level row on the join forms or the agent menu: @name /level shows the model's true list (#501, decided 2026-11-18)", async (t) => {
   const fake = await fakeDaemon(t);
   const box = makeBox(fake.d, {
     rooms: twoRooms(),
