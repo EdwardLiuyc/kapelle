@@ -4381,8 +4381,8 @@ message with no `@name` in the hall, even with one agent: a bare message means t
 orchestrator, and the hall has none.
 *Done when* tests cover: the hall after a first start and after a restart; a refused
 dismiss and delete; a message with no `@name` refused; a message to `@name` delivered;
-and the TUI's rooms then chats with no hall row, `/chat` and the `/add` refusal, and the
-chat lines in `kapelle chat list`.
+and the TUI's rooms then chats with no hall row, `/chat`, the `/add`, `/title` and
+`/cap` refusals, and the chat lines in `kapelle chat list`.
 
 **M11-2 · Each agent picks its own repository, or none · M · needs M11-1**
 `/new` in the hall, and `/add` in any room, take `--cwd` for that agent alone, or no

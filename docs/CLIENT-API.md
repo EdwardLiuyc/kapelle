@@ -1465,9 +1465,10 @@ turn cap. Send one or both:
 ```
 
 `turnCap` is a whole number 1 or greater, and must be greater than the room's
-current cap. This route only raises the cap; `/cap <n>` in a chat screen sends
-the same change. The cap and the count of accepted orchestrator messages are
-saved with the room, so a restart keeps both.
+current cap. This route only raises the cap; `/cap <n>` in a room's view sends
+the same change, and `/title <t>` sends a new title. A chat view refuses both
+because a chat is no room (M11-1). The cap and the count of accepted
+orchestrator messages are saved with the room, so a restart keeps both.
 
 The `id` does not change, and `updatedAt` moves. The room's stream gets no line
 for either change. A client that wants the new title reads it from `GET /rooms`
