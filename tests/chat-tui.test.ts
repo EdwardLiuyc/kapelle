@@ -507,14 +507,14 @@ test("a pop-up keeps a tool call's block in one gray background (#407)", {
   // pi-tui opens the right side again with the codes joined: `2;48;5;235`.
   const gray = /[[;]48;5;235m/;
   const [left = "", box = "", right = ""] = split(
-    rowOf(screen.out(), /┃ +rename room/),
+    rowOf(screen.out(), /┃ +new room/),
   );
   assert.ok(
     gray.test(left) && gray.test(right),
     `the gray shows on both sides of the box: ${JSON.stringify([left, right])}`,
   );
   assert.ok(
-    box.includes("rename room") && !gray.test(box),
+    box.includes("new room") && !gray.test(box),
     `no gray inside the box: ${JSON.stringify(box)}`,
   );
   await writeFile(join(ann.worktree, "runs.go"), "");
@@ -540,6 +540,7 @@ test("with no room open, the screen exits when the daemon is gone, and says how 
     { XDG_RUNTIME_DIR: runtime },
     "ctrl+o → new room",
   );
+  assert.match(plainText(screen.out()), /no rooms or chats/);
   process.kill(d.pid, "SIGKILL");
   // The room list is read every 5 s; one that fails 30 s after the first
   // failure ends it (M6-7d). `seen` gives up after 20 s, so wait for the exit.

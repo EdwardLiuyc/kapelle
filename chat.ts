@@ -25,17 +25,19 @@
  *
  * **The composer names the target** (R43): a leading `@name` goes to that
  * participant, and no mention goes to the orchestrator, or to the only agent
- * when the room has none. Both screens resolve it with `client/mention.ts`,
- * so they cannot differ. Room commands
- * (`/add`, `@name /mode ask`, …) go through `client/command.ts` the same way
- * (M4-5), and never reach an agent.
+ * when the room has none. In a hall chat a bare message is refused, so the
+ * person always names the agent. Both screens resolve it with
+ * `client/mention.ts`, so they cannot differ. Room commands (`/add`,
+ * `@name /mode ask`, …) go through `client/command.ts` the same way (M4-5),
+ * and never reach an agent.
  *
  * A room keeps its harnesses alive between messages, until `/dismiss` or
  * `/delete`. Leaving (`/leave`, end of input, ^C) keeps every room, and `attach`
  * replays a room's whole conversation from its event log.
  *
  * **Two screens.** On a TTY it is a full-screen `pi-tui` app over every
- * room the daemon holds (M4-2). Piped, it is one room as plain lines.
+ * room the daemon holds, and the hall's agents as chats (M4-2, M11-1).
+ * Piped, it is one room as plain lines.
  */
 
 import { parseArgs } from "node:util";
@@ -48,11 +50,11 @@ import { call, checkVersion, type DaemonAddress } from "./client/daemon.ts";
 import { absoluteFolder, FOLDER_GONE } from "./client/folder.ts";
 
 const USAGE = `usage:
-  node chat.ts                                              every room, on a terminal
+  node chat.ts                                              every room and chat, on a terminal
   node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
   node chat.ts new --cmd "<command>" [--name n] [--cwd dir]
   node chat.ts attach <roomId> [--no-setup]                 rejoin a room; its history replays
-  node chat.ts list                                         every room the daemon holds
+  node chat.ts list                                         every room, then every chat
   node chat.ts dismiss <roomId>                             stop a room's harness
 
 --no-setup keeps the setup list closed at start; kapelle demo uses it.
@@ -64,7 +66,7 @@ kapelle chat takes the same verbs.
 
 in a room, type a message and press enter. It goes to the orchestrator, or to
 the only agent when the room has none; start it with @name to send it to that
-agent instead.
+agent instead. In a hall chat, every message starts with @name.
   /leave     exit; the rooms and their harnesses stay alive
   /dismiss   stop the room's harnesses; uncommitted work stays in each
              checkout, because the supervisor never commits for it (R37)
@@ -77,9 +79,10 @@ agent instead.
 a command never reaches an agent. Room commands work after a thread's
 @name too; an agent's command needs its @name.
 
-on a terminal: alt+up/down or ctrl+p/n (or a click) picks a room's timeline
-or one agent's thread; ctrl+t (or a click on « ») hides the rooms; ctrl+o
-opens the menu over the conversation, and /new or /add alone opens its form`;
+on a terminal: alt+up/down or ctrl+p/n (or a click) picks a room's timeline,
+one agent's thread or a chat; ctrl+t (or a click on « ») hides the sidebar;
+ctrl+o opens the menu over the conversation, and /new, /add or /chat alone
+opens its form`;
 
 const isTty = () => Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
@@ -180,9 +183,15 @@ async function main(): Promise<number> {
       console.error(`error: ${r.error.message}`);
       return 1;
     }
-    for (const room of r.body) {
+    // The rooms, then the hall's agents as chats (M11-1).
+    for (const room of r.body.filter((x) => !x.hall)) {
       const names = room.participants.map((p) => p.name).join(",") || "-";
       console.log(`${room.id}  ${room.status}  ${names}  ${room.cwd}`);
+    }
+    for (const hall of r.body.filter((x) => x.hall)) {
+      for (const p of hall.participants) {
+        console.log(`@${p.name} (hall)  ${p.status}  ${hall.cwd}`);
+      }
     }
     return 0;
   }

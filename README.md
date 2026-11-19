@@ -109,7 +109,7 @@ Rooms live in the daemon. `kapelle` starts it, and `/new` adds your repository (
 ```bash
 kapelle chat new --agent pi         # open a room and chat in it
 kapelle chat                        # every room, on a terminal
-kapelle chat list                   # every room, as text
+kapelle chat list                   # every room, then every chat, as text
 kapelle chat attach <roomId>        # rejoin a room; its history replays
 kapelle chat dismiss <roomId>       # stop the room's agents
 ```
@@ -118,7 +118,9 @@ kapelle chat dismiss <roomId>       # stop the room's agents
 
 In a room, type a message and press Enter. It goes to the room's orchestrator, or to the only agent when the room has no orchestrator. Start it with `@name` to send it to that agent instead. In an agent's thread, the box always starts with its `@name`. `/leave` exits and keeps the agents alive. `/dismiss` stops the room's agents. `/delete` shows every branch and its unmerged commits, then asks again before removing the room. They work in any view, after an agent's `@name` too, and never reach an agent. In a room, kapelle never commits for an agent: uncommitted work stays in the agent's checkout.
 
-On a terminal, a sidebar lists every room and its agents. Click a row, or press `alt+↑`/`alt+↓` (or `ctrl+p`/`ctrl+n`), to see a room's timeline or one agent's thread. A `●` means something waits for you: magenta is a question, yellow is an agent that looks stuck. `ctrl+t`, or a click on `«`, hides the sidebar.
+A chat is one agent of its own, outside every room, like a person you message. `/chat <harness>`, or "new chat …" in the `ctrl+o` menu, starts one from any view. Its agents share one folder in kapelle's state directory, with no git. In a chat, the box always starts with the agent's `@name`.
+
+On a terminal, a sidebar lists every room and its agents, then every chat. Click a row, or press `alt+↑`/`alt+↓` (or `ctrl+p`/`ctrl+n`), to see a room's timeline or one agent's thread. A `●` means something waits for you: magenta is a question, yellow is an agent that looks stuck. `ctrl+t`, or a click on `«`, hides the sidebar.
 
 The room API is new, and it can still change.
 

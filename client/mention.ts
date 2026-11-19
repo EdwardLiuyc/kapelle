@@ -1,7 +1,9 @@
 /**
  * The composer's target (R43): a leading `@name` names the participant, and
  * no mention names the orchestrator, or the only participant when there is
- * no orchestrator (#333). The rules are `docs/CLIENT-API.md`
+ * no orchestrator (#333). The hall has no orchestrator and no such shortcut
+ * (M11-1, D2): a bare message there means the orchestrator, as everywhere,
+ * so it is refused, even with one agent. The rules are `docs/CLIENT-API.md`
  * § Addressing; this file is the one place a client applies them, so the
  * TUI and piped `chat.ts` cannot differ (S8).
  *
@@ -33,9 +35,19 @@ export const fold = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
  * thread opened with `@name ` pre-filled shows its target, not an error.
  * `resolveTarget` adds that check at submit.
  */
-export function targetOf(input: string, roster: readonly Named[]): Target {
+export function targetOf(
+  input: string,
+  roster: readonly Named[],
+  hall = false,
+): Target {
   const text = input.trimStart();
   const m = MENTION.exec(text);
+  if (!m && hall) {
+    const names = roster.map((p) => `@${p.name}`).join(", ");
+    return {
+      error: `the hall has no orchestrator: start with @name${names ? ` (${names})` : ""}`,
+    };
+  }
   if (!m) {
     // The only agent needs no name (#333).
     const lead =
@@ -76,8 +88,12 @@ export function mentionsFor(
 
 /** The target at submit: `targetOf`, and nothing left to send is an error.
  *  The daemon would refuse empty text with `400`. */
-export function resolveTarget(input: string, roster: readonly Named[]): Target {
-  const t = targetOf(input, roster);
+export function resolveTarget(
+  input: string,
+  roster: readonly Named[],
+  hall = false,
+): Target {
+  const t = targetOf(input, roster, hall);
   if ("id" in t && !t.text.trim()) return { error: "nothing to send" };
   return t;
 }

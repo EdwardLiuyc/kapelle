@@ -17,6 +17,7 @@ import type {
   RunStatus,
   TaskDto,
 } from "../client/contract.ts";
+import { HALL_ID } from "../core/ids.ts";
 import type { Participant, Room, RoomMeta, RoomRecord } from "../core/room.ts";
 import type { RunReport, TaskRun } from "../core/run.ts";
 
@@ -242,6 +243,7 @@ export function toRoomDto(state: RoomState, room: Room): RoomDto {
     participants: room.participants.map(toParticipantDto),
   };
   if (state.title !== undefined) dto.title = state.title;
+  if (state.id === HALL_ID) dto.hall = true;
   return dto;
 }
 
@@ -277,5 +279,6 @@ function listEntry<P extends Pick<Participant, "id" | "name" | "role">>(
     })),
   };
   if (state.title !== undefined) entry.title = state.title;
+  if (state.id === HALL_ID) entry.hall = true;
   return entry;
 }

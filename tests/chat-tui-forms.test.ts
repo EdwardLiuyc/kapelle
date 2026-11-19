@@ -44,6 +44,7 @@ import {
   gitRepo,
   headAt,
   LEAVE,
+  listRooms,
   MOCK_AGENT,
   noPty,
   only,
@@ -102,7 +103,7 @@ test("chat.ts on a real terminal previews a fast-forward and moves on Enter", {
   skip: noPty,
 }, async (t) => {
   const { child, seen, press, exited, out, d } = await chatOnPty(t);
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   assert.ok(room);
   const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
   assert.equal(full.status, 200, JSON.stringify(full.body));
@@ -134,7 +135,7 @@ test("the ctrl+o menu previews /delete and Enter confirms it", {
   skip: noPty,
 }, async (t) => {
   const { child, seen, press, exited, out, d } = await chatOnPty(t);
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   assert.ok(room);
   const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
   const dev = only(full.body);
@@ -142,7 +143,7 @@ test("the ctrl+o menu previews /delete and Enter confirms it", {
 
   await seen("○ mock-agent");
   await press("\x0f", "delete room …");
-  await press(`${DOWN.repeat(6)}\r`, "delete · 1 branch");
+  await press(`${DOWN.repeat(7)}\r`, "delete · 1 branch");
   await seen("dev.txt");
   await press("\r", "deleted room-");
   await seen("ctrl+o → new room");
@@ -252,7 +253,7 @@ test("a refused TUI delete shows the dirty file and allows a retry", {
   skip: noPty,
 }, async (t) => {
   const { child, press, exited, out, d } = await chatOnPty(t);
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   assert.ok(room);
   const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
   const dev = only(full.body);
@@ -412,7 +413,7 @@ test("the target's ctrl+o menu previews a fast-forward from another participant"
   skip: noPty,
 }, async (t) => {
   const { child, seen, press, exited, out, d } = await chatOnPty(t);
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   assert.ok(room);
   const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
   assert.equal(full.status, 200, JSON.stringify(full.body));
@@ -479,6 +480,106 @@ test("kapelle chat with no rooms refuses /add on the status line, and leave in t
   assert.equal(await screen.exited, 0, screen.out());
 });
 
+// --- chats: the hidden hall (M11-1) -----------------------------------------
+
+test("the sidebar shows rooms, then chats, with no hall row; a chat refuses a bare message, /add and /config (M11-1)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const work = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    title: "work",
+  });
+  assert.equal(work.status, 201, work.body.error?.message);
+  const ann = await api(d, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "ann",
+  });
+  assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node cli.ts chat",
+    { XDG_RUNTIME_DIR: runtime },
+    "○ ann",
+  );
+  // The first room is the landing view, as before the hall.
+  await screen.seen(`room ${work.body.id}`);
+  const side = [...screenRows(screen.out()).values()].map((row) =>
+    row.slice(0, 32),
+  );
+  const at = (label: RegExp) => side.findIndex((row) => label.test(row));
+  const order = [/── rooms/, / work /, /── chats/, /○ ann/].map(at);
+  assert.ok(
+    order.every((i) => i >= 0),
+    side.join("\n"),
+  );
+  assert.deepEqual(
+    order,
+    [...order].sort((a, b) => a - b),
+    side.join("\n"),
+  );
+  assert.equal(at(/ hall /), -1, side.join("\n"));
+
+  // alt+down opens ann's chat, with @ann filled in, and the shared folder's
+  // notice at the top.
+  await screen.press("\x1b[1;3B", "@ann");
+  await screen.seen("agents all work in");
+  // Remove the prefill but leave a space, so the editor does not put it
+  // back on empty: a bare message is refused before the request.
+  await screen.press(
+    "\x01\x1b[3~\x1b[3~\x1b[3~\x1b[3~hi\r",
+    "the hall has no orchestrator: start with @name (@ann)",
+  );
+  await screen.press(
+    "\x15/add\r",
+    "a chat is no room: use /chat for a new agent",
+  );
+  await screen.press(
+    "\x15/config\r",
+    "the hall has no project config: attach a room",
+  );
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left the chat");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("/chat in a room's view starts a chat and opens it; the menu has new chat, and a chat's menu no room rows (M11-1)", {
+  skip: noPty,
+}, async (t) => {
+  const { press, seen, exited, out, d } = await chatOnPty(t);
+  await seen("○ mock-agent");
+  await press(
+    `/chat --cmd "${REMEMBER}" --name bob\r`,
+    "started a chat with bob",
+  );
+  // The new chat is open: its @name is in the composer.
+  await seen("@bob");
+  const hall = await api<RoomReply>(d, "GET", "/rooms/hall");
+  assert.deepEqual(
+    hall.body.participants.map((p) => p.name),
+    ["bob"],
+  );
+  await press("\x0f", "new chat …");
+  const menu = [...screenRows(out()).values()].join("\n");
+  assert.doesNotMatch(menu, /add agent|rename room|dismiss room|delete room/);
+  // The menu form starts another hall chat, and opens it.
+  await press("new chat\r", "start");
+  await press(`${DOWN}\r`, "> ");
+  await press(`${REMEMBER}\r`, "Enter/Space");
+  await press(`${DOWN}\rcarol\r`, "carol");
+  await press(`${DOWN.repeat(3)}\r`, "started a chat with carol");
+  await seen("@carol");
+  const both = await api<RoomReply>(d, "GET", "/rooms/hall");
+  assert.deepEqual(
+    both.body.participants.map((p) => p.name),
+    ["bob", "carol"],
+  );
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
 // --- room commands (M4-5) -----------------------------------------------------
 
 const DOWN = "\x1b[B";
@@ -493,7 +594,7 @@ test("ctrl+o in a thread opens that agent's menu over the timeline, and a mode p
   // cancel turn, mode: Enter opens the pick list, on the current mode.
   await press(`${DOWN}\r`, "mock-agent · mode");
   await press(`${DOWN}\r`, "mock-agent is now in ask mode");
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   const full = await api<RoomReply>(d, "GET", `/rooms/${room?.id}`);
   assert.equal(only(full.body).mode, "ask");
   // The menu names the new mode, and Esc closes it.
@@ -558,7 +659,7 @@ test("/add alone opens its form; a refusal stays in the form, and a fix adds the
   await press(`${"\x1b[A".repeat(5)}\r\x15bob\r`, "bob");
   await press(`${DOWN.repeat(5)}\r`, "added bob (mock-agent, auto)");
   await seen("○ bob");
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   assert.deepEqual(
     room?.participants.map((p) => p.name),
     ["mock-agent", "bob"],
@@ -586,7 +687,7 @@ test("a double Enter on the new-room form opens one room", {
   await press(`${DOWN.repeat(6)}\r\r`, "opened room");
   // No event says a second request was not sent: give it time to land.
   await new Promise((ok) => setTimeout(ok, 1500));
-  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomReply>(d);
   assert.equal(rooms.body.length, 1, JSON.stringify(rooms.body));
   await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
@@ -641,13 +742,13 @@ test("/loop on the full screen opens <recipe>-<task>, and kapelle loop on a term
     { XDG_RUNTIME_DIR: runtime },
   );
   await cli.seen("fix-10");
-  const listed = await api<RoomReply[]>(d, "GET", "/rooms");
+  const listed = await listRooms<RoomReply>(d);
   const fix10 = listed.body.find((room) => room.title === "fix-10");
   assert.ok(fix10, JSON.stringify(listed.body));
   await cli.seen(`room ${fix10.id} ·`);
   await cli.press(LEAVE, "rejoin with");
   assert.equal(await cli.exited, 0, cli.out());
-  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomReply>(d);
   assert.deepEqual(rooms.body.map((r) => r.title).sort(), ["fix-10", "fix-9"]);
 });
 
@@ -699,7 +800,7 @@ test("the ctrl+o loop form posts po's model, and a model refusal keeps its value
   assert.match(drawn, /model\s+mock\/bogus/);
   assert.match(drawn, /not confirmed on the model/);
   assert.match(drawn, /"mock\/bogus"; it runs on "mock\/fast"/);
-  const listed = await api<RoomReply[]>(d, "GET", "/rooms");
+  const listed = await listRooms<RoomReply>(d);
   assert.equal(listed.body.length, 1, JSON.stringify(listed.body));
   const room = listed.body[0];
   assert.ok(room);
@@ -795,7 +896,7 @@ test("after the last agent is removed, the status line names no one and a messag
   const from = out().length;
   await press("hi\r", "! no agents: ctrl+o → add agent");
   assert.doesNotMatch(out().slice(from), /→ mock-agent|you → /);
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   assert.deepEqual(room?.participants, []);
   await press(LEAVE, "rejoin with");
   assert.equal(await exited, 0, out());
@@ -1063,7 +1164,7 @@ test("the new-room form completes a folder with Tab, lists the measured harnesse
     "is not added to the daemon. Add its repository?",
   );
   await press("\r", "opened room");
-  const [room] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  const [room] = (await listRooms<RoomListEntry>(d)).body;
   assert.deepEqual(
     room?.participants.map((p) => [p.name, p.role]),
     [["mock-agent", "developer"]],
@@ -1534,7 +1635,7 @@ test("the status line shows the level after a revive (#510)", {
   );
   await seen("auto · mock/fast · low");
 
-  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomReply>(d);
   const [room] = rooms.body;
   assert.ok(room);
   const full = await api<RoomReply>(d, "GET", `/rooms/${room.id}`);
@@ -1753,7 +1854,7 @@ test("the room view's menu picks an agent, and a rename reaches its route", {
   await press(`${DOWN.repeat(4)}\r`, "rename mock-agent");
   await press("\x15bob\r", "renamed mock-agent to bob");
   await seen("○ bob");
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   assert.deepEqual(
     room?.participants.map((p) => p.name),
     ["bob"],
@@ -1807,9 +1908,9 @@ test("the menu's help row shows the commands", {
     { XDG_RUNTIME_DIR: runtime },
     "ctrl+o → new room",
   );
-  // With no room, the menu is: new room …, loop …, help, leave.
+  // With no room, the menu is: new room …, new chat …, loop …, help, leave.
   await press("\x0f", "new room …");
-  await press(`${DOWN.repeat(2)}\r`, "@name /mode <ask|safe|auto>");
+  await press(`${DOWN.repeat(3)}\r`, "@name /mode <ask|safe|auto>");
   // Help is a second-level pop-up: Esc returns to the menu.
   await press("\x1b", "new room …");
   await press("\x1b", "enter to send");

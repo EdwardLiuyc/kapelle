@@ -10,11 +10,13 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { HALL_ID as CLIENT_HALL_ID } from "../../client/command.ts";
 import type {
   ParticipantDto,
   RoomDto,
   RoomListEntry,
 } from "../../client/contract.ts";
+import { HALL_ID } from "../../core/ids.ts";
 import {
   daemonApi as api,
   bootDaemon as boot,
@@ -34,6 +36,7 @@ const ROOM_KEYS = new Set(
     updatedAt: 0,
     status: 0,
     seq: 0,
+    hall: 0,
     participants: 0,
   } satisfies Record<keyof RoomDto, 0>),
 );
@@ -66,6 +69,7 @@ const LIST_KEYS = new Set(
     title: 0,
     status: 0,
     updatedAt: 0,
+    hall: 0,
     participants: 0,
   } satisfies Record<keyof RoomListEntry, 0>),
 );
@@ -106,6 +110,8 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
   });
   assert.equal(starter.status, 201, JSON.stringify(starter.body));
   assert.equal(starter.body.title, undefined, "no title, no key");
+  assert.equal(empty.body.hall, undefined, "no hall key on another room");
+  assert.equal(starter.body.hall, undefined, "no hall key on another room");
   const [alice] = starter.body.participants;
   assert.ok(alice);
   assert.match(alice.id, /^p-[0-9a-z]{8}$/);
@@ -138,10 +144,14 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
   // The list carries each roster inline, and short.
   const list = await api<RoomListEntry[]>(d, "GET", "/rooms");
   assert.equal(list.status, 200);
-  for (const entry of list.body) assertKeys(entry, LIST_KEYS, "list entry");
+  for (const entry of list.body) {
+    assertKeys(entry, LIST_KEYS, "list entry");
+    if (entry.id !== "hall") assert.equal(entry.hall, undefined);
+  }
   assert.deepEqual(
     list.body.map((r) => [r.id, r.participants]),
     [
+      ["hall", []],
       [empty.body.id, []],
       [
         starter.body.id,
@@ -160,4 +170,11 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
   assert.equal(gone.body.status, "dismissed");
   assert.equal(gone.body.participants[0]?.status, "dismissed");
   await api(d, "POST", `/rooms/${empty.body.id}/dismiss`);
+});
+
+test("the client's hall id is the daemon's, as docs/CLIENT-API.md names it (M11-1)", () => {
+  // `client/` cannot import `core/`, so each keeps its own copy; this keeps
+  // them the same, as `version.test.ts` does for `API_VERSION`.
+  assert.equal(CLIENT_HALL_ID, HALL_ID);
+  assert.equal(HALL_ID, "hall");
 });

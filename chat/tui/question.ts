@@ -37,6 +37,17 @@ type Question = Extract<Entry, { type: "permission" }>;
 /** The open questions over every room, oldest first. */
 type Queue = QuestionQueue<{ r: Followed; q: Question }>;
 
+/** The question box's first line: the room and the turn. A hall agent's
+ *  question names its chat, as the screen hides the hall (M11-1). */
+const whereAsked = (
+  entry: { id: string; title?: string; hall?: true },
+  name: string,
+  turn: string,
+) =>
+  entry.hall
+    ? `chat   ${name}${turn}`
+    : `room   ${entry.title ?? entry.id}${turn}`;
+
 /** The question box, in the pop-up `box`, and its diff in the pane `side`
  *  (M4-6). `say` sets the status line's message; `done` and `prefill` are
  *  read when a question may open. */
@@ -100,8 +111,8 @@ function questionParts({
     };
     list.onCancel = hidePanel;
     const turn = q.turn === undefined ? "" : ` · turn ${q.turn}`;
-    const who = [`room   ${r.entry.title ?? r.entry.id}${turn}`];
     const name = nameOf(r.state, q.participantId);
+    const who = [whereAsked(r.entry, name, turn)];
     const { kind } = q;
     const title =
       kind === "other"
@@ -223,4 +234,4 @@ function questionParts({
 }
 
 export type { Question, Queue };
-export { questionParts };
+export { questionParts, whereAsked };

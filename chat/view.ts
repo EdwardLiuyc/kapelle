@@ -3,14 +3,17 @@
  * pre-fills (M4-10).
  *
  * - The rows: each room, then its roster, in the sidebar's order. The row
- *   keys step one row down or up.
+ *   keys step one row down or up. The hall is hidden (M11-1, decided
+ *   2026-11-19): it has no row and no timeline. Its agents come after the
+ *   rooms, one row each, as chats; a view of the hall opens a chat.
  * - The pre-fill: in a thread, the composer holds `@name ` until the person
  *   types (R43, decided 2026-09-30). A pre-fill the person did not touch
  *   follows the view and a rename, and clears when no room is left.
- * - The draft (#355): one per room. Typed text stays across the views of
- *   its room, where a `@name` finds the same agent. A room change keeps it
- *   as that room's draft and puts back the next room's: text never moves
- *   rooms, where the same `@name`, or no name, can reach another agent.
+ * - The draft (#355): one per room, and one per hall chat. Typed text stays
+ *   across the views of its room, where a `@name` finds the same agent. A
+ *   move to another room or hall chat keeps it as that view's draft and
+ *   puts back the next one's: text never moves, where the same `@name`, or
+ *   no name, can reach another agent.
  * - A thread whose participant left goes back to its room's timeline. A
  *   view in a dismissed room goes to the first row.
  * - What is on screen is seen: the timeline marks its whole room, and a
@@ -73,8 +76,9 @@ export function where(
   return `${p.worktree} · ${p.branch ?? "(no branch)"}`;
 }
 
-/** The rooms by id, in sidebar order. */
-type Rooms = ReadonlyMap<string, { state: RoomState }>;
+/** The followed rooms by id. `rows` gives their sidebar order; `entry`
+ *  says which is the hall. */
+type Rooms = ReadonlyMap<string, { state: RoomState; entry?: { hall?: true } }>;
 
 /** The composer after a change: the pre-fill, and the text to set, if the
  *  text changes. */
@@ -86,12 +90,31 @@ export interface Composer {
 export const same = (a: View, b: View) =>
   a.roomId === b.roomId && a.participantId === b.participantId;
 
-/** Every row, in sidebar order: a room, then its roster. */
-export const rows = (rooms: Rooms): View[] =>
-  [...rooms].flatMap(([roomId, { state }]) => [
-    { roomId },
-    ...roster(state).map((p) => ({ roomId, participantId: p.id })),
-  ]);
+/** Every row, in sidebar order: each room, then its roster; then the
+ *  hall's agents, the chats, with no row for the hall itself. */
+export const rows = (rooms: Rooms): View[] => {
+  const all = [...rooms];
+  const agents = (roomId: string, state: RoomState) =>
+    roster(state).map((p) => ({ roomId, participantId: p.id }));
+  return [
+    ...all
+      .filter(([, r]) => !r.entry?.hall)
+      .flatMap(([roomId, { state }]) => [{ roomId }, ...agents(roomId, state)]),
+    ...all
+      .filter(([, r]) => r.entry?.hall)
+      .flatMap(([roomId, { state }]) => agents(roomId, state)),
+  ];
+};
+
+/** The view to show for `view`: the hall's timeline is hidden, so a view
+ *  of it opens the hall's first chat, else the first row, else no room. */
+export function viewable(rooms: Rooms, view: View): View {
+  if (view.participantId || !rooms.get(view.roomId)?.entry?.hall) return view;
+  const all = rows(rooms);
+  return (
+    all.find((row) => row.roomId === view.roomId) ?? all[0] ?? { roomId: "" }
+  );
+}
 
 /** The row below `view`, or above it; `undefined` past the end. A view
  *  that is not a row, as `{ roomId: "" }` after the last room went, steps
@@ -339,17 +362,19 @@ export interface Wait {
  *  before its stall. */
 export function waiting(rooms: Rooms): Wait[] {
   const out: Wait[] = [];
-  for (const [roomId, { state }] of rooms) {
-    for (const p of roster(state)) {
-      const at = { roomId, participantId: p.id };
-      const q = questionOf(state, p.id);
-      const turn = p.turns.at(-1);
-      if (q) {
-        out.push({ ...at, why: "question", text: q.title, question: q.id });
-      }
-      if (turn?.state === "open" && p.stall) {
-        out.push({ ...at, why: "stall", text: p.stall.text, seq: p.stall.seq });
-      }
+  for (const { roomId, participantId } of rows(rooms)) {
+    if (!participantId) continue;
+    const state = rooms.get(roomId)?.state;
+    const p = state?.participants.get(participantId);
+    if (!state || !p) continue;
+    const at = { roomId, participantId };
+    const q = questionOf(state, participantId);
+    const turn = p.turns.at(-1);
+    if (q) {
+      out.push({ ...at, why: "question", text: q.title, question: q.id });
+    }
+    if (turn?.state === "open" && p.stall) {
+      out.push({ ...at, why: "stall", text: p.stall.text, seq: p.stall.seq });
     }
   }
   return out;

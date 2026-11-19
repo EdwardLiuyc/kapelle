@@ -1172,11 +1172,13 @@ function transcriptParts({
       // A notice can quote the harness: its version, or its own error (#229).
       for (const p of dto)
         for (const { text } of p.notices) addExtra(`! ${printable(text)}`);
-      if (r.lost) addExtra(endedLine(r.lost, r.entry.id));
+      if (r.lost) addExtra(endedLine(r.lost, r.entry.id, r.entry.hall));
       const entries = id ? thread(r.state, id) : r.state.timeline;
       for (const e of entries) addEntry(r.state, e, false);
     } else {
-      addExtra("no rooms. ctrl+o → new room, or type /new <harness>.");
+      addExtra(
+        "no rooms or chats. ctrl+o → new room or new chat, or type /new or /chat <harness>.",
+      );
       addExtra("ctrl+c twice leaves.");
     }
     setStatus();

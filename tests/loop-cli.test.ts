@@ -21,6 +21,7 @@ import {
   daemonApi as api,
   bootDaemon,
   gitRepo,
+  listRooms,
   MOCK_AGENT,
   REMEMBER,
   roomLog,
@@ -111,7 +112,7 @@ test("kapelle loop --agent names the orchestrator's harness", async (t) => {
   assert.equal(r.code, 1);
   // The daemon's refusal: the value reached it as typed.
   assert.match(r.stderr, /unknown agent "nosuch".*\(invalid_request\)/);
-  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomListEntry>(d);
   assert.deepEqual(rooms.body, [], "no room");
 });
 
@@ -122,7 +123,7 @@ test("kapelle loop refuses an empty task and opens no room", async (t) => {
   assert.match(r.stderr, /usage: kapelle loop/);
   // The usage line names every option this command takes (M9-5c).
   assert.match(r.stderr, /\[--model <id>\]/);
-  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomListEntry>(d);
   assert.deepEqual(rooms.body, [], "no room");
 });
 
@@ -134,7 +135,7 @@ test("a missing recipe exits 1, names every folder, and opens no room", async (t
     r.stderr.trim(),
     `error: no recipe named nope: looked in ${join(repo, ".kapelle", "loops")} and ${join(config, "kapelle", "loops")} and ${SHIPPED} (no_recipe)`,
   );
-  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomListEntry>(d);
   assert.deepEqual(rooms.body, [], "no room");
 });
 
@@ -162,7 +163,7 @@ test("kapelle loop starter starts the package's recipe in a repository with none
   const r = await loop(["starter", "add a --version flag", "--cmd", REMEMBER]);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /opened room starter-add a --version flag; po has/);
-  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomListEntry>(d);
   assert.ok(
     rooms.body.some((room) => room.title === "starter-add a --version flag"),
     JSON.stringify(rooms.body),
@@ -177,7 +178,7 @@ test("kapelle loop starts a recipe named list when a task follows", async (t) =>
   );
   const r = await loop(["list", "7", "--cmd", REMEMBER]);
   assert.equal(r.code, 0, r.stderr);
-  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomListEntry>(d);
   assert.ok(
     rooms.body.some((room) => room.title === "list-7"),
     JSON.stringify(rooms.body),
@@ -232,12 +233,12 @@ test("kapelle loop --model sends the start only when po is on that model, and ke
   }
 
   // A missing or empty value is a usage error, and opens no room.
-  const before = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body.length;
+  const before = (await listRooms<RoomListEntry>(d)).body.length;
   for (const model of [["--model"], ["--model", ""]]) {
     const r = await loop(["fix", "6", "--cmd", MODELS, ...model]);
     assert.equal(r.code, 1, model.join(" "));
     assert.equal(r.stderr, "--model needs a value\n");
   }
-  const rooms = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomListEntry>(d);
   assert.equal(rooms.body.length, before, "no new room");
 });

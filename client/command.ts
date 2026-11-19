@@ -10,13 +10,18 @@
  * **A participant command starts with `@name`**, as a message does (R43):
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
  * the orchestrator, so a bare `/remove` cannot drop it. Room commands
- * (`/new`, `/add`, `/loop`, `/title`, `/cap`, `/dismiss`, `/delete`,
- * `/leave`, `/help`, `/term`, `/setup`, `/config`) ignore a mention, so they
- * work after a thread's pre-filled `@name`.
+ * (`/new`, `/add`, `/chat`, `/loop`, `/title`, `/cap`, `/dismiss`,
+ * `/delete`, `/leave`, `/help`, `/term`, `/setup`, `/config`) ignore a
+ * mention, so they work after a thread's pre-filled `@name`.
+ *
+ * **`/chat` starts a chat** (M11-1, decided 2026-11-19): an agent added to
+ * the hall, from any view. The hall is hidden, so its agents show as
+ * chats, and `/add` in one refuses and names `/chat`.
  *
  * **`/config` is always a form** (M10-5): the project config of the room on
- * screen, or of the folder the chat started in. Its save is the `config`
- * route command, the changed keys only (`client/config.ts`).
+ * screen, or of the folder the chat started in. A hall chat has no project,
+ * so `/config` refuses there (M11-1). Its save is the `config` route command,
+ * the changed keys only (`client/config.ts`).
  *
  * **`/loop` is `/new` with a start** (M8-5): a room titled
  * `<recipe>-<task>`, the orchestrator `po` in `auto`, and its first message
@@ -72,9 +77,13 @@ interface NewRoom {
   agents?: AgentSpec[];
 }
 
+/** The hall's id: `docs/CLIENT-API.md` § The hall. */
+export const HALL_ID = "hall";
+
 /** A command that calls a route. */
 export type RouteCommand =
   | { verb: "new"; body: NewRoom }
+  | { verb: "chat"; agent: AgentSpec }
   | { verb: "loop"; body: NewRoom; recipe: string; task: string; note?: string }
   | { verb: "add"; agent: AgentSpec }
   | { verb: "dismiss" }
@@ -103,17 +112,17 @@ export type RouteCommand =
       };
     };
 
-/** What a typed line is: a command, a form to open (a bare `/new`, `/add`
- *  or `/loop`, or `/config`), what an agent changed (`/diff`, M4-6), the person's shell
- *  (`/term`, M4-13), the installed agents (`/setup`, M9-3), or a line that
- *  is refused before any request. */
+/** What a typed line is: a command, a form to open (a bare `/new`, `/add`,
+ *  `/chat`, `/loop`, or `/config`), what an agent changed (`/diff`, M4-6),
+ *  the person's shell (`/term`, M4-13), the installed agents (`/setup`,
+ *  M9-3), or a line that is refused before any request. */
 export type Command =
   | RouteCommand
   | { verb: "leave" }
   | { verb: "help" }
   | { verb: "term" }
   | { verb: "setup"; done: boolean }
-  | { verb: "form"; form: "new" | "add" | "loop" | "config" }
+  | { verb: "form"; form: "new" | "add" | "chat" | "loop" | "config" }
   | { verb: "diff"; id: string; name: string; against: "head" | "base" }
   | { verb: "models"; id: string; name: string }
   | { verb: "levels"; id: string; name: string }
@@ -127,6 +136,7 @@ export type Command =
 export const HELP = [
   "/new [harness] [--cmd c] [--name n] [--model id] [--title t] [--cwd dir]",
   "/add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--model id] [--base @name|ref]",
+  "/chat <harness> [--cmd c] [--name n] [--mode m] [--model id]",
   '/loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--model id] [--cwd dir]',
   "/title <new title>",
   "/cap <n>",
@@ -140,13 +150,14 @@ export const HELP = [
   "@name /diff [base]",
   "@name /ff --from @name",
   "/setup [done]   /config   /term   /dismiss   /delete   /leave   /help",
-  "/new, /add and /loop alone open forms, as /config does; ctrl+o opens the menu",
+  "/new, /add, /chat and /loop alone open forms, as /config does; ctrl+o opens the menu",
 ];
 
 export const USAGE: Record<string, string> = {
   new: HELP[0] as string,
   add: HELP[1] as string,
-  loop: HELP[2] as string,
+  chat: HELP[2] as string,
+  loop: HELP[3] as string,
   title: "usage: /title <new title>",
   cap: "usage: /cap <n>",
   rename: "usage: @name /rename <new name>",
@@ -165,6 +176,7 @@ export const USAGE: Record<string, string> = {
 const ROOM_VERBS = new Set([
   "new",
   "add",
+  "chat",
   "loop",
   "title",
   "cap",
@@ -264,14 +276,25 @@ function options(
   }
 }
 
+/** `/add` in a chat: the hall is no room to add to (M11-1). */
+export const ADD_IN_CHAT = "a chat is no room: use /chat for a new agent";
+
+/** A chat route that finds no hall (M11-1, #518). The daemon's log says why
+ *  it is missing: its record may be unreadable, fail a check, or not open. */
+export const NO_HALL = "the daemon has no hall; check the daemon's log for why";
+
+/** `/config` in a chat: the hall folder is no project (M11-1). */
+export const HALL_NO_CONFIG = "the hall has no project config: attach a room";
+
 /**
  * The command a typed line is, or `undefined` for a message. `{ error }` is
  * a command refused before any request; the screen shows it and gives the
- * text back.
+ * text back. `hall` is the `hall` flag of the room on screen.
  */
 export function parseCommand(
   input: string,
   roster: readonly Named[],
+  hall = false,
 ): Command | { error: string } | undefined {
   const text = input.trim();
   const m = MENTION.exec(text);
@@ -330,12 +353,15 @@ export function parseCommand(
     if (!cwd) return { error: FOLDER_GONE };
     return loopCommand({ ...o.values, recipe, task, note, cwd });
   }
-  if (verb === "new" || verb === "add") {
+  if (verb === "add" && hall) return { error: ADD_IN_CHAT };
+  if (verb === "new" || verb === "add" || verb === "chat") {
     if (!args.length) return { verb: "form", form: verb };
     const names =
       verb === "new"
         ? ["cmd", "name", "model", "title", "cwd"]
-        : ["cmd", "name", "role", "mode", "model", "base"];
+        : verb === "chat"
+          ? ["cmd", "name", "mode", "model"]
+          : ["cmd", "name", "role", "mode", "model", "base"];
     const o = options(args, names);
     if ("error" in o) return { error: `${o.error}; ${USAGE[verb]}` };
     // Typed empty models are usage errors; forms keep empty as no model (#466).
@@ -343,6 +369,9 @@ export function parseCommand(
     const [agent, ...extra] = o.positionals;
     if (extra.length) return { error: `one harness only; ${USAGE[verb]}` };
     const { cmd, name, title, cwd, role, mode, base, model } = o.values;
+    if (verb === "chat") {
+      return { verb, agent: { agent, cmd, name, mode, model } };
+    }
     if (verb === "add") {
       // `none` is no role, as in `@name /role none` and the form.
       const spec: AgentSpec = {
@@ -610,6 +639,37 @@ export function levelLines(p: ParticipantDto): string[] {
   ];
 }
 
+/** `POST /rooms/:id/agents`, for `/add` and `/chat`. `did` starts the
+ *  line: `added`, or `started a chat with`. */
+async function addAgent(
+  d: DaemonAddress,
+  roomId: string,
+  agent: AgentSpec,
+  did: string,
+): Promise<Outcome> {
+  const spec = await agentBody(d, roomId, agent);
+  if (!("body" in spec)) return spec;
+  const r = await call<ParticipantDto>(d, `/rooms/${roomId}/agents`, {
+    method: "POST",
+    body: spec.body,
+  });
+  if (!r.ok) {
+    const noHall = roomId === HALL_ID && r.error.code === "room_not_found";
+    return refused(noHall ? NO_HALL : r.error.message, r.error.code);
+  }
+  const p = r.body;
+  const role = p.role ? `, ${p.role}` : "";
+  const model = p.model ? `, ${p.model}` : "";
+  const off = notOn(spec.body.model, p);
+  return {
+    ok: true,
+    line: printable(
+      `${did} ${p.name} (${p.harness}${role}, ${p.mode}${model})${off}`,
+    ),
+    participant: p,
+  };
+}
+
 /**
  * Sends one command to its route. `roomId` is the room on screen; `/new`
  * needs none. Never throws for a refusal; a daemon that cannot be reached
@@ -695,6 +755,10 @@ export async function runCommand(
       ),
     };
   }
+  // The hall, from any view (M11-1).
+  if (c.verb === "chat") {
+    return addAgent(d, HALL_ID, c.agent, "started a chat with");
+  }
   if (!roomId) return refused("no room: open one first");
   const room = `/rooms/${roomId}`;
   switch (c.verb) {
@@ -747,26 +811,8 @@ export async function runCommand(
         room: r.body,
       };
     }
-    case "add": {
-      const spec = await agentBody(d, roomId, c.agent);
-      if (!("body" in spec)) return spec;
-      const r = await call<ParticipantDto>(d, `${room}/agents`, {
-        method: "POST",
-        body: spec.body,
-      });
-      if (!r.ok) return refused(r.error.message, r.error.code);
-      const p = r.body;
-      const role = p.role ? `, ${p.role}` : "";
-      const model = p.model ? `, ${p.model}` : "";
-      const off = notOn(spec.body.model, p);
-      return {
-        ok: true,
-        line: printable(
-          `added ${p.name} (${p.harness}${role}, ${p.mode}${model})${off}`,
-        ),
-        participant: p,
-      };
-    }
+    case "add":
+      return addAgent(d, roomId, c.agent, "added");
     case "remove": {
       const r = await call<RoomDto>(d, `${room}/agents/${c.id}`, {
         method: "DELETE",

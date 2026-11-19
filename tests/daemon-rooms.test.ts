@@ -43,7 +43,7 @@ import type {
   RoomListEntry,
 } from "../client/contract.ts";
 import type { Named } from "../client/mention.ts";
-import { readRoomRecord, writeRoomRecord } from "../core/room.ts";
+import { readRoomRecord, roomFile, writeRoomRecord } from "../core/room.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import {
   addRepo as added,
@@ -58,6 +58,7 @@ import {
   HOSTILE_AGENT,
   hasBranch,
   headAt,
+  listRooms,
   MOCK_AGENT,
   only,
   type Pending,
@@ -983,7 +984,7 @@ test("participants are added, listed, changed and removed through the routes", a
     gone.body.participants.map((p) => p.id),
     [alice.id],
   );
-  const listed = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const listed = await listRooms<RoomListEntry>(d);
   assert.deepEqual(
     listed.body[0]?.participants.map((p) => p.name),
     ["alice"],
@@ -1014,7 +1015,7 @@ test("PATCH /rooms/:id renames and raises the cap atomically, with validation", 
   assert.equal(renamed.body.id, id, "a rename never moves the id");
   assert.equal(renamed.body.title, "login bug");
   assert.equal(renamed.body.seq, open.body.seq, "a rename writes no line");
-  const listed = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const listed = await listRooms<RoomListEntry>(d);
   assert.equal(listed.body[0]?.title, "login bug");
   const record = join(stateDirFor(cwd), "rooms", id, "room.json");
   const saved = async () => JSON.parse(await readFile(record, "utf8"));
@@ -2520,7 +2521,7 @@ test("a restart lists the room paused, replays it, and a message revives the par
   assert.equal((await first.done).code, 0);
 
   const second = await again();
-  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const list = await listRooms<RoomListEntry>(second);
   const entry = list.body.find((r) => r.id === id);
   assert.equal(entry?.status, "paused");
   assert.deepEqual(
@@ -2667,13 +2668,13 @@ test("a dismissed room the boot did not build lists and answers as before (#451)
   await api(first, "POST", `/rooms/${id}/messages`, { text: "alpha" });
   await roomIdle(first, id);
   assert.equal((await api(first, "POST", `/rooms/${id}/dismiss`)).status, 200);
-  const listed = (await api<RoomListEntry[]>(first, "GET", "/rooms")).body;
+  const listed = (await listRooms<RoomListEntry>(first)).body;
   const shown = await api<RoomReply>(first, "GET", `/rooms/${id}`);
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
 
   const second = await again();
-  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const list = await listRooms<RoomListEntry>(second);
   assert.deepEqual(list.body, listed, "the same entry, from the record");
   // Two lookups at once share the build (`daemon/tests/rooms.test.ts`).
   const both = await Promise.all([
@@ -2710,7 +2711,7 @@ test("a dismissed room's events and DELETE each build it on first use (#451)", a
   assert.equal((await first.done).code, 0);
 
   const second = await again();
-  const before = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const before = await listRooms<RoomListEntry>(second);
   assert.deepEqual(
     before.body.map((r) => r.id).sort(),
     [replayId, deleteId].sort(),
@@ -2734,7 +2735,7 @@ test("a dismissed room's events and DELETE each build it on first use (#451)", a
   assert.ok(lines.length > 0);
   assert.equal((replay.match(/^data: /gm) ?? []).length, lines.length);
   assert.equal(existsSync(join(stateDirFor(cwd), "rooms", deleteId)), false);
-  const after = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const after = await listRooms<RoomListEntry>(second);
   assert.deepEqual(
     after.body.map((r) => r.id),
     [replayId],
@@ -2756,7 +2757,7 @@ test("a dismissed room that cannot be built is listed until its first use, then 
   );
 
   const second = await again();
-  const before = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const before = await listRooms<RoomListEntry>(second);
   assert.deepEqual(
     before.body.map((r) => r.id),
     [id],
@@ -2765,7 +2766,7 @@ test("a dismissed room that cannot be built is listed until its first use, then 
   const got = await api<RoomReply>(second, "GET", `/rooms/${id}`);
   assert.equal(got.status, 404);
   assert.equal(got.body.error.code, "room_not_found");
-  const after = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const after = await listRooms<RoomListEntry>(second);
   assert.deepEqual(after.body, []);
   process.kill(second.pid, "SIGTERM");
   const { stderr } = await second.done;
@@ -2807,7 +2808,7 @@ test("a room with unknown saved agents restores, lists, previews and deletes (#3
   writeRoomRecord(path, record);
 
   const second = await again();
-  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const list = await listRooms<RoomListEntry>(second);
   const entry = list.body.find((r) => r.id === id);
   assert.equal(entry?.status, "paused");
   assert.deepEqual(
@@ -3062,7 +3063,7 @@ test("DELETE refuses an active room and uncommitted work, then removes a dismiss
   );
   assert.equal(participantEvents.status, 404);
   assert.equal(participantEvents.body.error.code, "room_not_found");
-  const list = await api<RoomListEntry[]>(d, "GET", "/rooms");
+  const list = await listRooms<RoomListEntry>(d);
   assert.equal(
     list.body.some((r) => r.id === id),
     false,
@@ -3299,7 +3300,7 @@ test("a room opened while the daemon shuts down does not come back (#316)", asyn
   );
 
   const second = await boot(t, runtime, [], state);
-  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const list = await listRooms<RoomListEntry>(second);
   assert.deepEqual(
     list.body,
     [],
@@ -3565,7 +3566,7 @@ test("a restart checks each repository's links once, runs no git status for its 
   const git = await countedGit(t);
   const second = await boot(t, runtime, [], state, { PATH: git.path });
   const calls = (await git.calls()).map((c) => c.split(" "));
-  const list = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const list = await listRooms<RoomListEntry>(second);
   assert.deepEqual(
     list.body.filter((r) => ids.includes(r.id)).map((r) => r.status),
     ["paused", "paused", "paused"],
@@ -3789,7 +3790,7 @@ test("a dismissed room built after a restart checks links then, not at boot (#32
     JSON.stringify({ linkPaths: ["README.md"] }),
     { mode: 0o644 },
   );
-  const before = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  const before = await listRooms<RoomListEntry>(second);
   assert.deepEqual(
     before.body.map((r) => r.id),
     [id],
@@ -3839,4 +3840,255 @@ test("a linkPaths entry git would see refuses a room's open as a 400", async (t)
   assert.equal(refused.status, 400, refused.body.error?.message);
   assert.equal(refused.body.error.code, "invalid_config");
   assert.match(refused.body.error.message, /is not ignored in a new checkout/);
+});
+
+// --- the hall (M11-1) ---------------------------------------------------------
+
+test("the hall is there after a first start with no repository, and after a restart (M11-1)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const hallCwd = join(await realpath(state), "kapelle", "hall");
+  const listed = await api<RoomListEntry[]>(first, "GET", "/rooms");
+  assert.deepEqual(listed.body, [
+    {
+      id: "hall",
+      cwd: hallCwd,
+      title: "hall",
+      status: "active",
+      updatedAt: listed.body[0]?.updatedAt,
+      hall: true,
+      participants: [],
+    },
+  ]);
+  const opened = await api<RoomReply>(first, "GET", "/rooms/hall");
+  assert.equal(opened.body.hall, true);
+
+  const ann = await api<ParticipantDto>(first, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "ann",
+  });
+  assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  assert.equal(ann.body.worktree, hallCwd, "no git: the hall's own folder");
+  assert.equal(ann.body.branch, undefined);
+  const sent = await api(
+    first,
+    "POST",
+    `/rooms/hall/agents/${ann.body.id}/messages`,
+    { text: "one" },
+  );
+  assert.equal(sent.status, 202);
+  await participantIdle(first, "hall", ann.body.id);
+  assert.ok(
+    answersIn(await roomLog(hallCwd, "hall")).some((a) =>
+      a.includes("previous: (none)"),
+    ),
+  );
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  // A repository added after the first start puts its rooms after the hall.
+  const second = await boot(t, runtime, [], state);
+  const cwd = await added(second, await gitRepo(t));
+  const work = await api<RoomReply>(second, "POST", "/rooms", { cwd });
+  assert.equal(work.status, 201, JSON.stringify(work.body));
+  const again = await api<RoomListEntry[]>(second, "GET", "/rooms");
+  assert.deepEqual(
+    again.body.map((r) => r.id),
+    ["hall", work.body.id],
+  );
+  const back = await api<RoomReply>(second, "GET", "/rooms/hall");
+  assert.equal(back.body.createdAt, opened.body.createdAt, "the same hall");
+  assert.deepEqual(
+    back.body.participants.map((p) => [p.id, p.status]),
+    [[ann.body.id, "paused"]],
+  );
+  const revived = await api(
+    second,
+    "POST",
+    `/rooms/hall/agents/${ann.body.id}/messages`,
+    { text: "two" },
+  );
+  assert.equal(revived.status, 202);
+  await participantIdle(second, "hall", ann.body.id);
+  assert.ok(
+    (await roomLog(hallCwd, "hall")).some(
+      (line) =>
+        line.update.sessionUpdate === "_client_user_message" &&
+        line.update.text === "one",
+    ),
+    "the restarted hall kept its log",
+  );
+});
+
+test("the hall refuses a dismiss, a delete, a bare message and an orchestrator; @name is delivered (M11-1)", async (t) => {
+  const d = await boot(t);
+  const refused = async (method: string, path: string, body?: unknown) => {
+    const r = await api<RoomReply>(d, method, path, body);
+    return [r.status, r.body.error?.code, r.body.error?.message];
+  };
+  for (const [method, path] of [
+    ["POST", "/rooms/hall/dismiss"],
+    ["DELETE", "/rooms/hall"],
+    ["GET", "/rooms/hall/delete-preview"],
+  ] as const) {
+    assert.deepEqual(await refused(method, path), [
+      409,
+      "hall_permanent",
+      "the hall cannot be dismissed or deleted",
+    ]);
+  }
+  assert.equal(
+    (await api<RoomReply>(d, "GET", "/rooms/hall")).body.status,
+    "active",
+  );
+
+  // Empty: no orchestrator and no name to give.
+  assert.deepEqual(
+    (await refused("POST", "/rooms/hall/messages", { text: "hi" })).slice(0, 2),
+    [409, "no_orchestrator"],
+  );
+  assert.deepEqual(
+    await refused("POST", "/rooms/hall/agents", {
+      cmd: REMEMBER,
+      name: "boss",
+      role: "orchestrator",
+    }),
+    [400, "invalid_request", "the hall has no orchestrator"],
+  );
+  const ann = await api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "ann",
+  });
+  assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  const bob = await api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "bob",
+  });
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  assert.deepEqual(
+    await refused("PATCH", `/rooms/hall/agents/${ann.body.id}`, {
+      role: "orchestrator",
+    }),
+    [400, "invalid_request", "the hall has no orchestrator"],
+  );
+  // The hint names every hall agent.
+  assert.deepEqual(
+    await refused("POST", "/rooms/hall/messages", { text: "hi" }),
+    [
+      409,
+      "no_orchestrator",
+      "room hall has no participant with the orchestrator role; name one: @ann, @bob",
+    ],
+  );
+  const sent = await api<MessageAccepted>(
+    d,
+    "POST",
+    `/rooms/hall/agents/${ann.body.id}/messages`,
+    { text: "hello" },
+  );
+  assert.equal(sent.status, 202);
+  await participantIdle(d, "hall", ann.body.id);
+  const hallCwd = (await api<RoomReply>(d, "GET", "/rooms/hall")).body.cwd;
+  assert.ok(
+    answersIn(await roomLog(hallCwd, "hall")).some((a) =>
+      a.includes("previous: (none)"),
+    ),
+  );
+});
+
+test("a corrupt or unreadable hall record is skipped with a log, and no hall is listed (M11-1)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const hallCwd = join(await realpath(state), "kapelle", "hall");
+  const ann = await api(first, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "ann",
+  });
+  assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const path = roomFile(hallCwd, "hall");
+  const record = readRoomRecord(path);
+  const raw = JSON.parse(JSON.stringify(record)) as typeof record;
+  const outside = join(state, "outside");
+  const cases = [
+    {
+      name: "unreadable JSON",
+      text: "{",
+      log: /skipping the hall .*(JSON|Unexpected end)/,
+    },
+    {
+      name: "another id",
+      text: JSON.stringify({ ...raw, id: "not-the-hall" }),
+      log: /skipping the hall .*its id is not hall/,
+    },
+    {
+      name: "another cwd",
+      text: JSON.stringify({ ...raw, cwd: outside }),
+      log: /skipping the hall .*its cwd is not/,
+    },
+    {
+      name: "dismissed",
+      text: JSON.stringify({ ...raw, status: "dismissed" }),
+      log: /skipping the hall .*it is dismissed/,
+    },
+    {
+      name: "an orchestrator",
+      text: JSON.stringify({
+        ...raw,
+        participants: raw.participants.map((p) => ({
+          ...p,
+          role: "orchestrator",
+        })),
+      }),
+      log: /skipping the hall .*it has an orchestrator/,
+    },
+    {
+      name: "another worktree",
+      text: JSON.stringify({
+        ...raw,
+        participants: raw.participants.map((p) => ({
+          ...p,
+          worktree: outside,
+        })),
+      }),
+      log: /skipping the hall .*ann's worktree is not/,
+    },
+    {
+      name: "a branch",
+      text: JSON.stringify({
+        ...raw,
+        participants: raw.participants.map((p) => ({
+          ...p,
+          branch: "kapelle/hall/p-ann",
+          baseSha: "0".repeat(40),
+        })),
+      }),
+      log: /skipping the hall .*a participant has a branch/,
+    },
+  ];
+
+  for (const one of cases) {
+    await writeFile(path, one.text);
+    const second = await boot(t, runtime, [], state);
+    const listed = await api<RoomListEntry[]>(second, "GET", "/rooms");
+    // `/chat` says the hall is missing, not "no room hall". The words are
+    // pinned here rather than read back from the production constant.
+    const chat = await typed(second, undefined, `/chat --cmd "${REMEMBER}"`);
+    assert.deepEqual(
+      chat.ok ? chat : [chat.code, chat.message],
+      [
+        "room_not_found",
+        "the daemon has no hall; check the daemon's log for why",
+      ],
+      one.name,
+    );
+    process.kill(second.pid, "SIGTERM");
+    const { stderr } = await second.done;
+    assert.deepEqual(listed.body, [], one.name);
+    assert.match(stderr, one.log, one.name);
+  }
 });

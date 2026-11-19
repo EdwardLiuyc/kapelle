@@ -2,9 +2,9 @@
  * `chat/tui.ts` — the full-screen chat, for a terminal (M4-7).
  *
  * On a TTY, `chat.ts` is a full-screen `pi-tui` app over every room the
- * daemon holds (M4-2): a sidebar of rooms and their participants, a
- * transcript with each answer rendered as markdown while it streams, and an
- * editor below it.
+ * daemon holds (M4-2): a sidebar of rooms and their participants, then the
+ * hall's agents as chats (M11-1), a transcript with each answer rendered as
+ * markdown while it streams, and an editor below it.
  *
  * **A question opens its own box** (M4-3): when an `ask` participant waits
  * on a permission, the TUI shows the room, the agent, the turn and the tool's
@@ -63,6 +63,7 @@ import {
 import {
   deletePreview,
   deletePreviewLines,
+  HALL_ID,
   type RouteCommand,
   runCommand,
 } from "../client/command.ts";
@@ -112,8 +113,8 @@ import { EDITOR_THEME, panelParts } from "./tui/panel.ts";
 import { type Question, questionParts } from "./tui/question.ts";
 import { railParts } from "./tui/rail.ts";
 import {
+  attentionCounts,
   NARROW,
-  roomMark,
   SIDEBAR_WIDTH,
   sidebarParts,
 } from "./tui/sidebar.ts";
@@ -142,6 +143,7 @@ import {
   ticks,
   usageText,
   type View,
+  viewable,
   waiting,
   where,
 } from "./view.ts";
@@ -263,6 +265,27 @@ export function screenLayout(p: {
     { component: p.whereBar, basis: "auto", shrink: 0 },
   ]);
   return { root, placeSide };
+}
+
+/** How the screen ends when every room's stream is gone. A refused version
+ *  always keeps its own words; a hidden hall that ends last with no daemon
+ *  gets the start command instead of a room name. */
+export function lostRoomEnd(
+  roomId: string,
+  ended: Ended,
+  err: unknown,
+  hall: boolean,
+  stopped: string,
+): { code: number; lines: string[] } {
+  if (err instanceof VersionRefused) {
+    return { code: codeOf(ended), lines: [`! ${err.message}`] };
+  }
+  if (hall && ended.kind === "gone") return { code: 1, lines: [stopped] };
+  const msg = err ? [`! ${(err as Error).message}`] : [];
+  return {
+    code: codeOf(ended),
+    lines: [...msg, endedLine(ended, roomId, hall)],
+  };
 }
 
 /**
@@ -511,7 +534,20 @@ function chatTui(
     invalidate: () => {},
   };
   const editor = new Editor(tui, EDITOR_THEME, { paddingX: 1 });
-  let view: View = { roomId: selected ?? list[0]?.id ?? "" };
+  // The first room, else the hall's first chat (M11-1): the hall has no
+  // timeline on this screen. Read from the list, as no stream has a roster
+  // yet.
+  const land =
+    list.find((r) => r.id === selected) ?? list.find((r) => !r.hall) ?? list[0];
+  const chat = land?.hall ? land.participants[0] : undefined;
+  // An empty hall is still asked for by id: `open`, after the rooms join,
+  // falls back to the first room or chat. With no entries there is none.
+  let view: View =
+    land && !land.hall
+      ? { roomId: land.id }
+      : chat && land
+        ? { roomId: land.id, participantId: chat.id }
+        : { roomId: land?.id ?? "" };
   let shown = (process.stdout.columns || 80) >= NARROW;
   /** One line about a room that ended, until the next view change. */
   let flash = "";
@@ -519,8 +555,13 @@ function chatTui(
   let leaving: ReturnType<typeof setTimeout> | undefined;
   /** The `@name ` this screen put in the composer, while it is untouched. */
   let prefill = "";
-  /** Each room's draft, by room id, while another room is open (#355). */
+  /** Typed drafts while another view is open (#355). A room has one; each
+   *  hall chat has its own, since the hall's agents are separate chats. */
   const drafts = new Map<string, string>();
+  const draftKey = (v: View) =>
+    v.participantId && rooms.get(v.roomId)?.entry.hall
+      ? `${v.roomId} ${v.participantId}`
+      : v.roomId;
   /** The open questions over every room, oldest first (M4-3). The reducers
    *  hold them; the queue keeps their order and the ones put aside. */
   const queue = questionQueue<{ r: Followed; q: Question }>((roomId, id) => {
@@ -551,8 +592,9 @@ function chatTui(
     setStatus();
     return false;
   };
+  // A chat is not a room to rejoin (M11-1): `kapelle chat` opens it again.
   const left = () =>
-    view.roomId
+    view.roomId && !rooms.get(view.roomId)?.entry.hall
       ? `left room ${view.roomId}; rejoin with: kapelle chat attach ${view.roomId}`
       : "left the chat";
   const say = (text: string) => {
@@ -660,8 +702,16 @@ function chatTui(
     end: (code, ...last) => end(code, ...last),
     left,
   });
-  const { hidePanel, menu, showHelp, newForm, addForm, loopForm, askToAdd } =
-    box;
+  const {
+    hidePanel,
+    menu,
+    showHelp,
+    newForm,
+    addForm,
+    chatForm,
+    loopForm,
+    askToAdd,
+  } = box;
   const { question, offer, syncBox } = questionParts({
     d,
     fresh: set.fresh,
@@ -800,7 +850,7 @@ function chatTui(
       const roster = rosterOf(r.state, r.entry.participants);
       const t =
         roster.length > 0
-          ? targetOf(editor.getText(), roster)
+          ? targetOf(editor.getText(), roster, r.entry.hall)
           : { error: NO_AGENTS };
       if ("id" in t) {
         const p = r.state.participants.get(t.id);
@@ -823,10 +873,13 @@ function chatTui(
     }
     if (flash) parts.push(flash.startsWith("!") ? yellow(flash) : flash);
     if (!shown) {
-      const marked = [...rooms.values()].filter(
-        ({ state }) => roomMark(state).waits,
-      ).length;
-      if (marked) parts.push(`● ${marked} room${marked > 1 ? "s" : ""}`);
+      const marked = attentionCounts(rooms);
+      if (marked.rooms) {
+        parts.push(`● ${marked.rooms} room${marked.rooms > 1 ? "s" : ""}`);
+      }
+      if (marked.chats) {
+        parts.push(`● ${marked.chats} chat${marked.chats > 1 ? "s" : ""}`);
+      }
     }
     // A pop-up takes the row keys and turns ctrl+o into close: name the
     // keys that work there instead.
@@ -962,34 +1015,32 @@ function chatTui(
     ).undoStack?.clear?.();
   };
 
-  const open = (next: View) => {
+  const open = (asked: View) => {
+    const next = viewable(rooms, asked);
     closeRail();
     cancelRefresh();
     // A pop-up belongs to the view it opened on.
     if (box.panel) hidePanel();
-    const from = view.roomId;
+    const from = view;
+    const fromKey = draftKey(from);
+    const nextKey = draftKey(next);
     view = next;
     flash = "";
     // A thread shows the files its agent changed (M7-3).
     if (next.participantId) void loadChanges(next.roomId, next.participantId);
     const r = rooms.get(next.roomId);
-    const changingRoom = next.roomId !== from;
+    const changingView = nextKey !== fromKey;
     // A large paste is a marker in `getText`, and its content lives in the
     // editor. A draft leaves the editor, so save the content it stands for.
-    const text = changingRoom ? editor.getExpandedText() : editor.getText();
-    if (!changingRoom) compose(opened(r?.state, next, text, prefill));
+    const text = changingView ? editor.getExpandedText() : editor.getText();
+    if (!changingView) compose(opened(r?.state, next, text, prefill));
     else {
-      // A draft stays in its room (#355).
-      const c = moved(
-        r?.state,
-        next,
-        { text, prefill },
-        drafts.get(next.roomId),
-      );
-      // With no room open, `from` is "": not a room, so not a draft key.
-      if (from) {
-        if (c.left) drafts.set(from, c.left);
-        else drafts.delete(from);
+      // A draft stays in its room, or in its hall chat (#355).
+      const c = moved(r?.state, next, { text, prefill }, drafts.get(nextKey));
+      // With no view open, `fromKey` is "": not a draft slot.
+      if (fromKey) {
+        if (c.left) drafts.set(fromKey, c.left);
+        else drafts.delete(fromKey);
       }
       compose(c);
       clearComposerUndo();
@@ -1044,18 +1095,28 @@ function chatTui(
     syncBox();
     // The open thread's participant left the roster: back to the room's
     // timeline.
-    const back =
-      kind === "_client_participant_removed"
-        ? participantLeft(view, roomId, line.participantId)
-        : undefined;
+    const removed = kind === "_client_participant_removed";
+    const back = removed
+      ? participantLeft(view, roomId, line.participantId)
+      : undefined;
+    // A removed chat's draft has no view to come back to, as a deleted
+    // room's (M11-1). After `open`, which saves the draft of the view it
+    // leaves.
+    const forgetChat = () => {
+      if (removed && r.entry.hall) {
+        drafts.delete(draftKey({ roomId, participantId: line.participantId }));
+      }
+    };
     if (back) {
       // Our own remove may have set the status line already.
       const keep = flash;
       open(back);
+      forgetChat();
       flash = keep;
       setStatus();
       return;
     }
+    forgetChat();
     const openThread =
       roomId === view.roomId && line.participantId === view.participantId;
     if (openThread) {
@@ -1118,7 +1179,7 @@ function chatTui(
     if (gone) drafts.delete(id);
     if (ended.kind === "dismissed") flash = `${label} was dismissed`;
     else if (ended.kind === "deleted") flash = `${label} was deleted`;
-    else flash = endedLine(ended, id);
+    else flash = endedLine(ended, id, r?.entry.hall === true);
     setStatus();
   };
 
@@ -1157,24 +1218,21 @@ function chatTui(
     };
 
     quit = (why) => {
+      const stopped =
+        "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat";
       if (why.kind === "gone") {
-        end(
-          1,
-          why.message
-            ? `! ${why.message}`
-            : "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat",
-        );
+        end(1, why.message ? `! ${why.message}` : stopped);
         return;
       }
       const { roomId, ended, err } = why;
-      // A refused version is the whole story; the reconcile after it only
-      // says the same words again.
-      if (err instanceof VersionRefused) {
-        end(codeOf(ended), `! ${err.message}`);
-        return;
-      }
-      const msg = err ? [`! ${(err as Error).message}`] : [];
-      end(codeOf(ended), ...msg, endedLine(ended, roomId));
+      const settled = lostRoomEnd(
+        roomId,
+        ended,
+        err,
+        rooms.get(roomId)?.entry.hall === true,
+        stopped,
+      );
+      end(settled.code, ...settled.lines);
     };
 
     tui.addInputListener((data) => {
@@ -1301,11 +1359,11 @@ function chatTui(
        *  the next letter would join the name (`@bobx`). In a thread the
        *  pre-fill put back on the clear is already this. */
       const giveBack = () => {
-        const bare = "id" in targetOf(text, roster);
+        const bare = "id" in targetOf(text, roster, r?.entry.hall);
         const back = bare ? `${text} ` : text;
         if (editor.getText() !== back) editor.setText(back);
       };
-      const c = parseLine(text, roster);
+      const c = parseLine(text, roster, r?.entry.hall);
       if ("error" in c) {
         flash = `! ${c.error}`;
         setStatus();
@@ -1328,6 +1386,8 @@ function chatTui(
             return newForm();
           case "add":
             return addForm();
+          case "chat":
+            return chatForm();
           case "loop":
             return loopForm();
           case "config":
@@ -1469,8 +1529,8 @@ function chatTui(
     const send = async (c: RouteCommand, target?: string): Promise<boolean> => {
       // A sidebar click or arrow key can move the view while a dismiss or
       // delete waits. Every step of this command stays on the room it began
-      // in (#352 review).
-      const roomId = target ?? view.roomId;
+      // in (#352 review). A new chat goes to the hall, from any view.
+      const roomId = c.verb === "chat" ? HALL_ID : (target ?? view.roomId);
       if (c.verb === "dismiss") {
         const r = rooms.get(roomId);
         flash = `dismissing ${r?.entry.title ?? roomId}: stopping its harnesses…`;
@@ -1544,6 +1604,9 @@ function chatTui(
           })),
         });
         open({ roomId: id });
+      }
+      if (c.verb === "chat" && out.participant) {
+        open({ roomId, participantId: out.participant.id });
       }
       // A dismiss ends the room's stream, and `closed` says so.
       if (c.verb !== "dismiss") flash = out.line;

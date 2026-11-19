@@ -19,6 +19,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -42,6 +43,7 @@ import {
   commitAt,
   fakePath,
   gitRepo,
+  listRooms,
   MOCK_AGENT,
   only,
   REMEMBER,
@@ -206,7 +208,7 @@ test("chat.ts new opens its agent as a developer (#333)", async (t) => {
   c.child.stdin.end("/leave\n");
   const r = await c.done;
   assert.equal(r.code, 0, r.stderr);
-  const [room] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  const [room] = (await listRooms<RoomListEntry>(d)).body;
   assert.deepEqual(
     room?.participants.map((p) => [p.name, p.role]),
     [["mock-agent", "developer"]],
@@ -234,15 +236,29 @@ test("chat.ts list prints each room's id, status, names and cwd (#431)", async (
     `/rooms/${empty.body.id}/dismiss`,
   );
   assert.equal(dismissed.status, 200, JSON.stringify(dismissed.body));
+  for (const name of ["ann", "bob"]) {
+    const added = await api(d, "POST", "/rooms/hall/agents", {
+      cmd: REMEMBER,
+      name,
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+  }
 
   const r = await spawnCli(t, ["list"], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
   }).done;
   assert.equal(r.code, 0, r.stderr);
-  // A room with no participant prints "-" in the names column. Both sides
-  // are sorted because `docs/CLIENT-API.md` promises no order for `GET /rooms`.
+  // A room with no participant prints "-" in the names column. The rooms
+  // are sorted because `docs/CLIENT-API.md` promises no order for them; the
+  // hall's agents come last, as chats, and the hall has no line (M11-1).
+  const lines = r.stdout.trimEnd().split("\n");
+  const state = await realpath(join(runtime, "kapelle"));
+  assert.deepEqual(lines.slice(-2), [
+    `@ann (hall)  idle  ${join(state, "hall")}`,
+    `@bob (hall)  idle  ${join(state, "hall")}`,
+  ]);
   assert.deepEqual(
-    r.stdout.trimEnd().split("\n").sort(),
+    lines.slice(0, -2).sort(),
     [
       `${empty.body.id}  dismissed  -  ${empty.body.cwd}`,
       `${pair.body.id}  active  alice,bob  ${pair.body.cwd}`,
@@ -338,7 +354,7 @@ test("chat.ts talks to a room end to end: messages in, answers out, /dismiss sto
     /you → mock-agent: beta\nmock-agent: previous: alpha\n/,
   );
   assert.match(r.stdout, /the room was dismissed/);
-  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomReply>(d);
   assert.deepEqual(
     rooms.body.map((room) => room.status),
     ["dismissed"],
@@ -499,7 +515,7 @@ test("chat.ts /leave keeps the room alive, and attach replays the conversation b
   first.child.stdin.end("alpha\n/leave\n");
   assert.equal((await first.done).code, 0);
 
-  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomReply>(d);
   assert.deepEqual(
     rooms.body.map((room) => room.status),
     ["active"],
@@ -566,6 +582,35 @@ test("piped chat.ts with no orchestrator: no mention reaches the only agent, is 
   );
   assert.match(two.stderr, /no orchestrator: start with @name/);
   assert.match(two.stdout, /you → bob: hi\nbob: previous: \(none\)/);
+});
+
+test("piped chat.ts in the hall refuses no mention with one agent, sends @name, and keeps the hall (M11-1)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const bob = await api(d, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "bob",
+  });
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  const c = spawnCli(t, ["attach", "hall"], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("hi\n@bob hi\n/add mock\n/config\n/dismiss\n");
+  const r = await c.done;
+  // A refused dismiss ends a pipe with 1, as for any room.
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(
+    r.stderr,
+    /the hall has no orchestrator: start with @name \(@bob\)/,
+  );
+  assert.match(r.stdout, /you → bob: hi\nbob: previous: \(none\)/);
+  // Only the named message reached bob.
+  assert.equal(r.stdout.split("you → bob:").length, 2, r.stdout);
+  assert.match(r.stderr, /a chat is no room: use \/chat for a new agent/);
+  assert.match(r.stderr, /the hall has no project config/);
+  assert.match(r.stderr, /the hall cannot be dismissed or deleted/);
+  const hall = await api<RoomDto>(d, "GET", "/rooms/hall");
+  assert.equal(hall.body.status, "active");
 });
 
 test("piped chat.ts sends a message with no mention to the orchestrator, and @name to that participant", async (t) => {
@@ -939,7 +984,7 @@ test("piped chat.ts takes the room commands, and names the room /new or /loop op
     );
   }
   // The pipe stays in the room it read; the new room is reached by attach.
-  const rooms = await api<RoomReply[]>(d, "GET", "/rooms");
+  const rooms = await listRooms<RoomReply>(d);
   const second = rooms.body.find((room) => room.title === "second");
   assert.ok(second, JSON.stringify(rooms.body));
   assert.ok(

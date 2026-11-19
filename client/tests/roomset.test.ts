@@ -527,8 +527,11 @@ test("a fresh poll after a reverted delete can rejoin, and a later delete ends i
   assert.equal(polled?.held, undefined);
   assert.equal(polled?.pollHeld, true);
 
-  // A later delete elsewhere ends the poll-held room for good.
+  // A later delete elsewhere ends the poll-held room for good. A deleted
+  // room leaves `GET /rooms` too, as at the first delete: a poll that still
+  // listed it would bring it back, and that race failed this test in CI.
   await until(() => daemon.streams.get("r1") !== oldStream);
+  daemon.list = [];
   daemon.status.set("r1", 410);
   daemon.release("r1");
   await until(() => said.closed.length === 2);
