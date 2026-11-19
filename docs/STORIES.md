@@ -3986,6 +3986,22 @@ lose it: pi's level is its mode, and §Mode after load saw that change. The load
 measured again. No `kapelle room` verb takes a level; `kapelle room add --level` may
 follow, as M9-5b did for the model.
 
+**M9-9b · `kapelle room add --level` fails loudly · S · needs M9-9**
+(#509) Added 2026-11-19. `kapelle room add` takes `--level <id>` and sends it as
+`thoughtLevel`. The CLI checks no list: the daemon checks it against the model's list.
+After the add, the CLI compares the requested level with the participant's
+`thoughtLevel`; with `--model` too, the model check comes first. A mismatch prints an
+error and exits 1, but the agent stays in the room. The error names the agent, the level
+asked for, the level in use or none, and `kapelle room remove <name>`. Without `--level`,
+nothing changes. A missing or empty value is a usage error, and no request is sent.
+*Done when* tests through the real CLI against `mock-agent.mjs --scenario levels` cover
+`thoughtLevel` alone and with `model`; the recorded model-then-level order before the
+first turn; an unlisted level, a listed level the harness refuses, and a model with no
+level option; model-error precedence; and missing or empty values that add nobody. The
+`room` usage, `AGENTS.md`, and `assets/orchestrator.md` name the flag and the stop rule.
+**Decided at pickup 2026-11-19 (#509):** no `kapelle room` verb changes a level during a
+chat; the person uses `@name /level`, as M9-6 decided for the model.
+
 **M9-7 · kapelle runs after an npm install · M · needs nothing**
 A person installs kapelle with `npm install -g kapelle` and types `kapelle`. The name is
 free on npm today (`npm view kapelle` answers 404, 2026-10-15). This story makes the
@@ -4586,7 +4602,7 @@ M8-1 ─┬─ M8-2 ─┬─ M8-4 ─┬─ M8-5
 
 ```text
 M9-1 ─┬─ M9-3 ─┬─ M9-4 ─ M9-5 ─┬─ M9-5b ─ M9-5c ─ M9-5d
-M9-2 ─┘        └─ M9-3b        └─ M9-6 ─ M9-9
+M9-2 ─┘        └─ M9-3b        └─ M9-6 ─ M9-9 ─ M9-9b
 M9-7 ─ M9-8a
 M9-1..M9-7, M9-3b, M9-5b, M9-5c, M9-5d, M9-8a ─ M9-8   (the first publish)
 ```

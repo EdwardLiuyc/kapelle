@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
@@ -349,6 +349,127 @@ test("add --model exits 1 when the agent is not on the model, and keeps it (M9-5
   );
 });
 
+test("add --level sends thoughtLevel, fails loudly, and keeps the agent (M9-9b)", async (t) => {
+  const f = await fixture(t);
+  const po = f.p("po").worktree;
+  const LEVELS = `node ${MOCK_AGENT} --scenario levels`;
+  const add = (name: string, level: string[], cmd = LEVELS) =>
+    room(t, f.runtime, po, ["add", "--cmd", cmd, "--name", name, ...level]);
+
+  const record = join(await tempDir(t), "requests.jsonl");
+  const ok = await add(
+    "ok",
+    ["--model", "mock/smart", "--level", "max"],
+    `${LEVELS} --record ${record}`,
+  );
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(ok.stdout.trim(), "added ok (mock-agent, auto, mock/smart)");
+
+  // With no model, the level still reaches the join. The default is high.
+  const alone = await add("alone", ["--level", "low"]);
+  assert.equal(alone.code, 0, alone.stderr);
+
+  const requests = (await readFile(record, "utf8"))
+    .trim()
+    .split("\n")
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          method: string;
+          configId?: string;
+          value?: string;
+        },
+    );
+  assert.deepEqual(
+    requests
+      .filter((r) => r.method === "session/set_config_option")
+      .map((r) => [r.configId, r.value]),
+    [
+      ["model-choice", "mock/smart"],
+      ["effort-choice", "max"],
+    ],
+  );
+  assert.equal(
+    requests.some((r) => r.method === "session/prompt"),
+    false,
+    "the model and level go before the first turn",
+  );
+
+  const fails = async (
+    name: string,
+    args: string[],
+    asked: string,
+    runs: string,
+    cmd = LEVELS,
+  ) => {
+    const r = await add(name, args, cmd);
+    assert.equal(r.code, 1, `${name}: ${r.stdout}`);
+    assert.equal(r.stdout, "", name);
+    assert.equal(
+      r.stderr,
+      `error: ${name} joined, but is not confirmed on the thinking level "${asked}"; ${runs}. Give it no work. To drop it: kapelle room remove ${name}\n`,
+    );
+  };
+  await fails("unlisted", ["--level", "max"], "max", 'it thinks at "high"');
+  await fails(
+    "refused",
+    ["--model", "mock/smart", "--level", "max"],
+    "max",
+    'it thinks at "high"',
+    `${LEVELS} --level-refuse max`,
+  );
+  await fails(
+    "plain",
+    ["--model", "mock/plain", "--level", "high"],
+    "high",
+    "it has no thinking level",
+  );
+
+  // A model mismatch is the error when both settings did not land.
+  const modelFirst = await add("model-first", [
+    "--model",
+    "mock/bogus",
+    "--level",
+    "max",
+  ]);
+  assert.equal(modelFirst.code, 1, modelFirst.stdout);
+  assert.equal(
+    modelFirst.stderr,
+    'error: model-first joined, but is not confirmed on the model "mock/bogus"; it runs on "mock/fast". Give it no work. To drop it: kapelle room remove model-first\n',
+  );
+
+  for (const level of [["--level"], ["--level", ""]] as const) {
+    const r = await add("usage", [...level]);
+    assert.equal(r.code, 1);
+    assert.equal(r.stdout, "");
+    assert.equal(r.stderr, "--level needs a value\n");
+  }
+
+  const roster = (await api<RoomDto>(f.d, "GET", `/rooms/${f.room.id}`)).body;
+  assert.deepEqual(
+    roster.participants.map((p) => p.name),
+    [
+      "po",
+      "dev",
+      "rev",
+      "ok",
+      "alone",
+      "unlisted",
+      "refused",
+      "plain",
+      "model-first",
+    ],
+  );
+  assert.equal(
+    roster.participants.find((p) => p.name === "ok")?.thoughtLevel,
+    "max",
+  );
+  assert.equal(
+    roster.participants.find((p) => p.name === "alone")?.thoughtLevel,
+    "low",
+  );
+});
+
 test("a folder that is no checkout, or not the participant's own, is refused", async (t) => {
   const f = await fixture(t);
   const po = f.p("po");
@@ -517,18 +638,20 @@ test("the orchestrator adds a reviewer, moves a branch, reads a diff and removes
   );
 });
 
-test("room add checks --model before it looks for a daemon (M9-5b)", async (t) => {
+test("room add checks --model and --level before it looks for a daemon", async (t) => {
   const dir = await tempDir(t);
-  for (const model of [["--model"], ["--model", ""]] as const) {
-    const r = await room(t, await tempDir(t), dir, [
-      "add",
-      "--cmd",
-      "true",
-      ...model,
-    ]);
-    assert.equal(r.code, 1);
-    assert.equal(r.stdout, "");
-    assert.equal(r.stderr, "--model needs a value\n");
+  for (const option of ["model", "level"] as const) {
+    for (const args of [[`--${option}`], [`--${option}`, ""]] as const) {
+      const r = await room(t, await tempDir(t), dir, [
+        "add",
+        "--cmd",
+        "true",
+        ...args,
+      ]);
+      assert.equal(r.code, 1);
+      assert.equal(r.stdout, "");
+      assert.equal(r.stderr, `--${option} needs a value\n`);
+    }
   }
 });
 
@@ -550,6 +673,7 @@ test("a verb it does not know, or a wrong shape, prints the usage", async (t) =>
     // `info` says it shows each agent's branch (#358).
     assert.match(r.stderr, /^ {2}info .*branch/m, args.join(" "));
     assert.match(r.stderr, /add <harness>.*\[--model id\]/, args.join(" "));
+    assert.match(r.stderr, /\[--level id\]/, args.join(" "));
   }
 
   // An option the verb does not take is refused, not dropped from the text.

@@ -1444,6 +1444,18 @@ function notOnModel(
   return `${p.name} joined, but ${notConfirmedOn(asked, p)}. Give it no work. To drop it: kapelle room remove ${p.name}`;
 }
 
+/** The same fail-loud rule for `room add --level` (M9-9b). */
+function notOnLevel(
+  asked: string | undefined,
+  p: ParticipantDto | undefined,
+): string | undefined {
+  if (!p || !asked || asked === p.thoughtLevel) return undefined;
+  const on = p.thoughtLevel
+    ? `it thinks at "${p.thoughtLevel}"`
+    : "it has no thinking level";
+  return `${p.name} joined, but is not confirmed on the thinking level "${asked}"; ${on}. Give it no work. To drop it: kapelle room remove ${p.name}`;
+}
+
 /**
  * The room and the sender for `kapelle room` (M8-3), or why there are none.
  *
@@ -1796,7 +1808,8 @@ async function runRoomCommand(): Promise<number> {
     "                             each busy agent's work",
     "  send <name> [text]         a message; the text from stdin when none",
     "  add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--model id]",
-    "      [--base @name|ref]     exits 1 when the agent is not on the model",
+    "      [--level id] [--base @name|ref]",
+    "                             exits 1 when the model or level is not confirmed",
     "  ff <name> --from <name>    move <name>'s branch up to the other's commit",
     "  diff <name> [base]         what is not committed, or with base the branch;",
     "                             made safe for a terminal, so not a patch to apply",
@@ -1830,7 +1843,7 @@ async function runRoomCommand(): Promise<number> {
   // `use --force now` would lose `--force now` from the message unseen.
   const options = new Set(["room", "as", "cwd", "quiet", "verbose"]);
   if (verb === "add") {
-    for (const o of ["cmd", "name", "role", "mode", "model", "base"]) {
+    for (const o of ["cmd", "name", "role", "mode", "model", "level", "base"]) {
       options.add(o);
     }
   }
@@ -1851,8 +1864,9 @@ async function runRoomCommand(): Promise<number> {
     return 1;
   }
   // A usage error is the caller's, not the daemon's: catch a missing or empty
-  // model before any request (M9-5b, #392).
+  // model or level before any request (M9-5b, #392; M9-9b, #509).
   const model = verb === "add" ? flag("model") : undefined;
+  const level = verb === "add" ? flag("level") : undefined;
   const d = await findDaemon();
   if (!d) return 1;
   const found = await roomAndSender(d);
@@ -1949,6 +1963,7 @@ async function runRoomCommand(): Promise<number> {
         role: role === "none" ? undefined : role,
         mode: flag("mode"),
         model,
+        thoughtLevel: level,
         base: flag("base"),
       },
     };
@@ -1976,7 +1991,8 @@ async function runRoomCommand(): Promise<number> {
   }
   const off =
     command.verb === "add"
-      ? notOnModel(command.agent.model, outcome.participant)
+      ? (notOnModel(command.agent.model, outcome.participant) ??
+        notOnLevel(command.agent.thoughtLevel, outcome.participant))
       : undefined;
   if (off) {
     printRefusal({ code: "", message: off });
