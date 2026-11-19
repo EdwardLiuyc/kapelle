@@ -24,7 +24,8 @@
  *
  * **The status line** (M7-1): the target with its mode, model and thinking
  * level on the left, its `ctx` and cost on the right, and the key hints
- * between, which drop from the right as the screen narrows.
+ * between, which drop from the right as the screen narrows. While the sidebar
+ * is hidden, the left also counts waiting rooms and chats apart (M11-1).
  *
  * **The layout is flat** (#242): no `HStack` below another. Read
  * `screenLayout` before you move a part.
@@ -1164,7 +1165,7 @@ function chatTui(
     const c = renamed(r.state, roomId, view, editor.getText(), prefill);
     if (c) compose(c);
     // A roster line can rename the target, and any line can change the
-    // count of rooms that wait while the sidebar is hidden.
+    // hidden-sidebar count of waiting rooms and chats.
     setStatus();
   };
 

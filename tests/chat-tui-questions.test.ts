@@ -1,8 +1,9 @@
 /**
- * What an agent asks and changes, on the full-screen chat on a real terminal
- * through `script(1)`: the question box and its answer (M4-9), a question's
- * diff (M4-6), stalls, and the changed-files block (M7-3). Some tests stand up
- * a fake daemon to control exactly when a diff arrives.
+ * The full-screen chat on a real terminal through `script(1)`: the question
+ * box and its answer (M4-9), a question's diff (M4-6), stalls, the
+ * changed-files block (M7-3), and the hidden sidebar's waiting room and chat
+ * counts (M11-1). Some tests stand up a fake daemon to control exactly when a
+ * diff arrives.
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
@@ -17,7 +18,11 @@ import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { API_VERSION, type PermissionDecision } from "../client/contract.ts";
+import {
+  API_VERSION,
+  type ParticipantDto,
+  type PermissionDecision,
+} from "../client/contract.ts";
 import {
   addRepo as added,
   api,
@@ -37,6 +42,7 @@ import {
   screenRows,
   spawnCli,
   tempDir,
+  until,
   withAgent,
 } from "../integration/helpers.ts";
 
@@ -136,6 +142,56 @@ test("chat.ts on a real terminal colours an off-screen stall and question", {
   assert.match(screen.out(), / {6}\x1b\[2mmock-agent\x1b\[22m/);
   // Hidden, the sidebar leaves a count of the rooms that need the person.
   await screen.press("\x14", "● 2 rooms");
+  screen.child.stdin.write(LEAVE);
+  await screen.seen("left room");
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("chat.ts on a real terminal counts a waiting chat apart from rooms when the sidebar is hidden (M11-1)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(d, "POST", "/rooms", {
+    ...withAgent(cwd, REMEMBER),
+    title: "open",
+  });
+  assert.equal(open.status, 201, open.body.error?.message);
+  const waiting = await api<RoomReply>(d, "POST", "/rooms", {
+    ...withAgent(cwd, REMEMBER),
+    title: "waiting",
+  });
+  assert.equal(waiting.status, 201, waiting.body.error?.message);
+  const chat = await api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "chat",
+  });
+  assert.equal(chat.status, 201, JSON.stringify(chat.body));
+  const screen = await ptyScreen(t, "stty cols 100 rows 30; node cli.ts chat", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  await screen.seen(`room ${open.body.id}`);
+  // The open room is the landing view. The other room's answer and the
+  // chat's answer both arrive off screen, so each leaves an unread mark.
+  for (const [path, id] of [
+    [`/rooms/${waiting.body.id}/messages`, only(waiting.body).id],
+    [`/rooms/hall/agents/${chat.body.id}/messages`, chat.body.id],
+  ] as const) {
+    const sent = await api(d, "POST", path, { text: `wait ${id}` });
+    assert.equal(sent.status, 202, sent.body.error?.message);
+  }
+  await participantIdle(d, waiting.body.id, only(waiting.body).id);
+  await participantIdle(d, "hall", chat.body.id);
+  // Poll plain text for the joined counts: a PTY chunk boundary must not
+  // leave the snapshot with only half the status line.
+  await screen.press("\x14", "● 1 chat");
+  await until("both hidden-sidebar counts", () =>
+    plainText(screen.out()).includes("● 1 room · ● 1 chat"),
+  );
+  const shown = plainText(screen.out());
+  assert.match(shown, /● 1 room · ● 1 chat/);
+  assert.doesNotMatch(shown, /● 2 rooms/);
   screen.child.stdin.write(LEAVE);
   await screen.seen("left room");
   assert.equal(await screen.exited, 0, screen.out());
