@@ -431,9 +431,11 @@ type SavedParticipant = RoomRecord["participants"][number];
 
 /**
  * A room's record, or why it cannot be read, and the repositories its
- * checkouts are in (M11-2): its own root first, then each repository a
- * participant picked, each with the participants that work there. A
- * participant whose folder is no repository has no checkout to name.
+ * checkouts are in (M11-2): its own root first, then every repository the
+ * record remembers, and each participant's current repository. The remembered
+ * list keeps a removed participant's checkout or a failed add's checkout in
+ * the delete even after no participant names it. A participant whose folder
+ * is no repository has no checkout to name.
  */
 async function roomRepos(root: string, roomId: string) {
   let record: RoomRecord | undefined;
@@ -447,6 +449,9 @@ async function roomRepos(root: string, roomId: string) {
     }
   }
   const repos = new Map<string, SavedParticipant[]>([[root, []]]);
+  for (const at of record?.repositories ?? []) {
+    if (!repos.has(at)) repos.set(at, []);
+  }
   for (const p of [
     ...(record?.participants ?? []),
     ...(record?.tombstones ?? []),

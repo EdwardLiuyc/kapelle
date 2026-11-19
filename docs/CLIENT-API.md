@@ -1587,9 +1587,10 @@ Only a stopped room can be deleted: a dismissed one, or a paused one that no mes
 revived. A paused room is deleted as it is; no harness starts first. Dismiss an active room
 first.
 
-The daemon reads each checkout under the room's folder before it removes anything,
-including a checkout no participant owns, such as one a failed add kept. A file that
-nobody committed, new files included, refuses the delete.
+The daemon reads every checkout the room owns before it removes anything: those in the
+room's own folder and those in each repository a participant has used. That includes a
+checkout no current participant owns, such as one a removed participant or a failed add
+kept. A file that nobody committed, new files included, refuses the delete.
 
 **Reply `204`**, with no body. The room is gone: `GET /rooms/:id` and
 `GET /rooms/:id/events` answer `410` `room_deleted` until the daemon restarts. A restarted

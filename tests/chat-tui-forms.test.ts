@@ -32,6 +32,7 @@ import {
   type ParticipantDto,
   type RoomListEntry,
 } from "../client/contract.ts";
+import { stateDirFor } from "../core/runtime.ts";
 import {
   addRepo as added,
   api,
@@ -562,6 +563,7 @@ test("/chat in a room's view starts a chat and opens it; the menu has new chat, 
 }, async (t) => {
   const { press, seen, exited, out, d } = await chatOnPty(t);
   await seen("○ mock-agent");
+  const ownRepo = await added(d, await gitRepo(t));
   await press(
     `/chat --cmd "${REMEMBER}" --name bob\r`,
     "started a chat with bob",
@@ -582,12 +584,21 @@ test("/chat in a room's view starts a chat and opens it; the menu has new chat, 
   await press(`${REMEMBER}\r`, "Enter/Space");
   await press(`${DOWN}\rcarol\r`, "carol");
   // Mode, model and folder (M11-2), then `start`.
-  await press(`${DOWN.repeat(4)}\r`, "started a chat with carol");
+  await press(`${DOWN.repeat(3)}\r`, "> ");
+  await press(`\x15${ownRepo}\r`, ownRepo);
+  await press(`${DOWN}\r`, "started a chat with carol");
   await seen("@carol");
   const both = await api<RoomReply>(d, "GET", "/rooms/hall");
   assert.deepEqual(
     both.body.participants.map((p) => p.name),
     ["bob", "carol"],
+  );
+  const carol = both.body.participants.find((p) => p.name === "carol");
+  assert.ok(carol);
+  assert.equal(
+    carol.worktree,
+    join(stateDirFor(ownRepo), "wt", "hall", carol.id),
+    "the chat form sent its own folder",
   );
   await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
@@ -1404,7 +1415,8 @@ test("the add-agent form lists the harness's models, or uses a text box when it 
       },
     ],
   };
-  const posted: { agent?: string; model?: string }[] = [];
+  const posted: { agent?: string; model?: string; cwd?: string }[] = [];
+  const ownRepo = "/tmp";
   const fake = createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => {
@@ -1527,9 +1539,16 @@ test("the add-agent form lists the harness's models, or uses a text box when it 
   await press(`${DOWN.repeat(5)}\r`, "other model…");
   assert.deepEqual(pickList(out()), ["–", "m-1", "m-2"]);
   await press(`${DOWN}${DOWN}\r`, "m-2");
-  // Base and folder (M11-2), then `add`.
-  await press(`${DOWN.repeat(3)}\r`, "no 1");
-  assert.deepEqual(posted[0], { agent: "lab-ok", mode: "auto", model: "m-2" });
+  // Base, then the agent's own folder (M11-2), then `add`.
+  await press(`${DOWN.repeat(2)}\r`, "> ");
+  await press(`\x15${ownRepo}\r`, ownRepo);
+  await press(`${DOWN}\r`, "no 1");
+  assert.deepEqual(posted[0], {
+    agent: "lab-ok",
+    mode: "auto",
+    model: "m-2",
+    cwd: ownRepo,
+  });
   // Back to the harness row; lab-bare has no models, so its model row is text.
   await press(`${UP.repeat(8)}\r`, "other…");
   await press(`${UP}\r`, "lab-bare");
@@ -1540,6 +1559,7 @@ test("the add-agent form lists the harness's models, or uses a text box when it 
     agent: "lab-bare",
     mode: "auto",
     model: "typed/x",
+    cwd: ownRepo,
   });
   await press(`\x1b\x1b${LEAVE}`, "left room");
   assert.equal(await exited, 0, out());

@@ -77,9 +77,12 @@
  * the room's own folder, as before, except in a room with `scratchDir` (the
  * hall): there it gets an empty folder of its own, which its release removes
  * while it is still empty. `room.json` keeps the participant's `cwd`, or
- * `scratch`, so a restore opens the same place. The room's record and log
- * stay under the room's own root; the boot sweep reads every room's record
- * before it calls a checkout an orphan (`core/sweep.ts`).
+ * `scratch`, so a restore opens the same place. It also keeps every
+ * repository a participant has used, even after that participant leaves or
+ * an add fails, so delete can find a kept checkout and its branch. The
+ * room's record and log stay under the room's own root; the boot sweep reads
+ * every room's record before it calls a checkout an orphan
+ * (`core/sweep.ts`).
  *
  * **A kept checkout lasts while its room has a record.** The boot sweep
  * (`core/sweep.ts`) keeps every checkout under a room that has a
@@ -577,6 +580,10 @@ export interface RoomRecord extends Omit<RoomMeta, "turnCap" | "turnCount"> {
   /** Participants whose saved harness no longer resolves. They are not in
    *  the active roster, but their branch and worktree stay known to delete. */
   tombstones?: ParticipantRecord[];
+  /** Repositories a participant used besides the room's own (M11-2). Kept
+   *  after the participant leaves, and after a failed add, so delete still
+   *  finds checkouts and branches in every repository the room touched. */
+  repositories?: string[];
 }
 
 export interface Room {
@@ -926,9 +933,11 @@ function roomPlaces(
   cwd: string,
   setup: WorktreeSetup,
   openPlace: RoomDeps["openPlace"],
+  remembered: readonly string[] = [],
 ) {
   const home: Place = { ...setup, dir: cwd };
   const opened = new Map<string, Promise<Place>>();
+  const roots = new Set([setup.root, ...remembered]);
   const open = (dir: string, restoring: boolean): Promise<Place> => {
     if (dir === cwd) return Promise.resolve(home);
     let found = opened.get(dir);
@@ -937,7 +946,10 @@ function roomPlaces(
         openPlace
           ? openPlace(dir, restoring)
           : openWorktrees(dir, roomId, { advisory: false })
-      ).then((s) => ({ ...s, dir }));
+      ).then((s) => {
+        roots.add(s.root);
+        return { ...s, dir };
+      });
       // A failed open is tried again by the next add.
       found.catch(() => opened.delete(dir));
       opened.set(dir, found);
@@ -947,6 +959,8 @@ function roomPlaces(
   return {
     home,
     open,
+    /** The room's own repository is already in the record's `cwd`. */
+    repositories: () => [...roots].filter((root) => root !== setup.root),
     /** The place a saved participant had. */
     saved: (p: ParticipantRecord): Promise<Place> => {
       if (p.scratch) {
@@ -1077,6 +1091,13 @@ export function readRoomRecord(path: string): RoomRecord {
   if (r.tombstones !== undefined && !Array.isArray(r.tombstones)) {
     throw bad('"tombstones" is not a list');
   }
+  if (r.repositories !== undefined && !Array.isArray(r.repositories)) {
+    throw bad('"repositories" is not a list');
+  }
+  const repositories = r.repositories as unknown[] | undefined;
+  if (repositories?.some((path) => typeof path !== "string")) {
+    throw bad('"repositories" must name strings');
+  }
   const participants = r.participants as Record<string, unknown>[];
   const tombstones = (r.tombstones ?? []) as Record<string, unknown>[];
   for (const [where, records] of [
@@ -1160,6 +1181,7 @@ export function readRoomRecord(path: string): RoomRecord {
     notices: Array.isArray(r.notices) ? (r.notices as RoomNotice[]) : [],
     participants: participants.map(normalise),
     tombstones: tombstones.map(normalise),
+    ...(repositories?.length && { repositories: repositories as string[] }),
   };
 }
 
@@ -1347,7 +1369,13 @@ export async function restoreRoom({
   turnCap,
   ...deps
 }: RoomDeps & { record: RoomRecord }): Promise<Room> {
-  const places = roomPlaces(record.id, record.cwd, deps.setup, deps.openPlace);
+  const places = roomPlaces(
+    record.id,
+    record.cwd,
+    deps.setup,
+    deps.openPlace,
+    record.repositories,
+  );
   const { record: from, tombstoned } = await tombstoneUnknownAgents(
     crashed(record),
     deps.setup.root,
@@ -1511,12 +1539,14 @@ async function buildRoom(
   const save = () => {
     if (!saving) return;
     try {
+      const repositories = places.repositories();
       writeRoomRecord(join(logDir, "room.json"), {
         ...meta,
         status: status(),
         notices: [...roomNotices],
         participants: members.map(recordOf),
         tombstones: [...(from?.tombstones ?? [])],
+        ...(repositories.length > 0 && { repositories }),
       });
     } catch (err) {
       // Once: a full disk would add the same line on every turn.
@@ -1847,6 +1877,9 @@ async function buildRoom(
       await made.launch();
     } catch (err) {
       await rollback(id, worktree, place);
+      // The record keeps a repository even when its add failed and left a
+      // written checkout. A later room delete must still find that work.
+      saveSoon();
       if (err instanceof BadBase) {
         throw new RoomRefusal("invalid_request", err.message);
       }

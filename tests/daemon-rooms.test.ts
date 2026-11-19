@@ -3891,6 +3891,17 @@ test("the hall is there after a first start with no repository, and after a rest
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
 
+  // An agent added before M11-2 has no `scratch`, so it keeps the hall's
+  // shared folder rather than migrating to a new one.
+  const hallRecord = roomFile(hallCwd, "hall");
+  const saved = readRoomRecord(hallRecord);
+  const savedAnn = saved.participants[0];
+  assert.ok(savedAnn);
+  delete savedAnn.scratch;
+  savedAnn.worktree = hallCwd;
+  writeRoomRecord(hallRecord, saved);
+  await rm(ann.body.worktree, { recursive: true, force: true });
+
   // A repository added after the first start puts its rooms after the hall.
   const second = await boot(t, runtime, [], state);
   const cwd = await added(second, await gitRepo(t));
@@ -3904,8 +3915,9 @@ test("the hall is there after a first start with no repository, and after a rest
   const back = await api<RoomReply>(second, "GET", "/rooms/hall");
   assert.equal(back.body.createdAt, opened.body.createdAt, "the same hall");
   assert.deepEqual(
-    back.body.participants.map((p) => [p.id, p.status]),
-    [[ann.body.id, "paused"]],
+    back.body.participants.map((p) => [p.id, p.status, p.worktree]),
+    [[ann.body.id, "paused", hallCwd]],
+    "an older hall agent stays in the hall folder",
   );
   const revived = await api(
     second,
@@ -4223,6 +4235,130 @@ test("a checkout in another repository than its room's survives a restart, and g
   assert.equal((await api(second, "DELETE", `/rooms/${id}`)).status, 204);
   assert.equal(existsSync(worktree), false, "the checkout is gone");
   assert.equal(hasBranch(b, branch), false, "the branch is gone");
+});
+
+test("an agent's own repository supplies its linkPaths (M11-2)", async (t) => {
+  const d = await boot(t);
+  const roomRepo = await gitRepo(t, {
+    ignore: "room-link/\n",
+    files: {
+      ".kapelle/config.json": `${JSON.stringify({ linkPaths: ["room-link"] })}\n`,
+    },
+  });
+  const ownRepo = await gitRepo(t, {
+    ignore: "node_modules/\n",
+    files: {
+      ".kapelle/config.json": `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`,
+    },
+  });
+  await mkdir(join(roomRepo, "room-link", "pkg"), { recursive: true });
+  await mkdir(join(ownRepo, "node_modules", "pkg"), { recursive: true });
+  const room = await added(d, roomRepo);
+  const own = await added(d, ownRepo);
+  const opened = await api<RoomReply>(d, "POST", "/rooms", { cwd: room });
+  assert.equal(opened.status, 201, opened.body.error?.message);
+  const bob = await api<ParticipantDto>(
+    d,
+    "POST",
+    `/rooms/${opened.body.id}/agents`,
+    { cmd: REMEMBER, name: "bob", cwd: own },
+  );
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  assert.equal(
+    (
+      await lstat(join(bob.body.worktree, "node_modules", "pkg"))
+    ).isSymbolicLink(),
+    true,
+    "the checkout gets the new repository's link",
+  );
+  assert.equal(
+    existsSync(join(bob.body.worktree, "room-link")),
+    false,
+    "the room's linkPaths did not leak into the new repository",
+  );
+});
+
+test("a room keeps checkouts in repositories its current roster no longer names (M11-2)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  let d = await boot(t, runtime, [], state);
+  const roots = await Promise.all(
+    [await gitRepo(t), await gitRepo(t), await gitRepo(t)].map(
+      async (path) =>
+        (await api<{ root: string }>(d, "POST", "/repos", { path })).body.root,
+    ),
+  );
+  const [a, b, c] = roots as [string, string, string];
+  const opened = await api<RoomReply>(d, "POST", "/rooms", { cwd: a });
+  assert.equal(opened.status, 201, opened.body.error?.message);
+  const id = opened.body.id;
+
+  const bob = await api<ParticipantDto>(d, "POST", `/rooms/${id}/agents`, {
+    cmd: REMEMBER,
+    name: "bob",
+    cwd: b,
+  });
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  const bobBranch = bob.body.branch as string;
+  await writeFile(join(bob.body.worktree, "bob.txt"), "keep me\n");
+  // Removing an agent keeps a checkout with work, as in the room's repo.
+  assert.equal(
+    (await api(d, "DELETE", `/rooms/${id}/agents/${bob.body.id}`)).status,
+    200,
+  );
+  assert.ok(existsSync(bob.body.worktree), "bob's checkout is kept");
+  assert.ok(hasBranch(b, bobBranch), "bob's branch is kept");
+
+  // A failed add has no roster record at all. Its script writes, then exits
+  // before a session, so the rollback keeps the checkout and branch.
+  const bin = join(await tempDir(t), "scribble.sh");
+  await writeFile(bin, "#!/bin/sh\necho x > scribble.txt\nexit 1\n", {
+    mode: 0o755,
+  });
+  const failed = await api<RoomReply>(d, "POST", `/rooms/${id}/agents`, {
+    cmd: bin,
+    name: "dead",
+    cwd: c,
+  });
+  assert.equal(failed.status, 500);
+  assert.equal(failed.body.error.code, "room_open_failed");
+  const failedId = readdirSync(join(stateDirFor(c), "wt", id))[0] as string;
+  const failedWorktree = join(stateDirFor(c), "wt", id, failedId);
+  const failedBranch = `kapelle/${id}/${failedId}`;
+  assert.ok(existsSync(join(failedWorktree, "scribble.txt")));
+  assert.ok(hasBranch(c, failedBranch));
+
+  // Neither repository is named by a saved participant. The record's
+  // repository list is what carries both checkouts across the restart.
+  process.kill(d.pid, "SIGTERM");
+  assert.equal((await d.done).code, 0);
+  d = await boot(t, runtime, [], state);
+  assert.ok(existsSync(bob.body.worktree), "the sweep kept bob's checkout");
+  assert.ok(existsSync(failedWorktree), "the sweep kept the failed checkout");
+
+  const preview = await api<DeletePreview>(
+    d,
+    "GET",
+    `/rooms/${id}/delete-preview`,
+  );
+  const previewed = new Set(preview.body.branches.map((row) => row.branch));
+  assert.ok(previewed.has(bobBranch), "the preview sees bob's kept branch");
+  assert.ok(previewed.has(failedBranch), "the preview sees the failed add");
+
+  assert.equal((await api(d, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  const refused = await api<RoomReply>(d, "DELETE", `/rooms/${id}`);
+  assert.equal(refused.status, 409, "work in either repository blocks");
+  assert.equal(refused.body.error.code, "uncommitted_work");
+
+  for (const worktree of [bob.body.worktree, failedWorktree]) {
+    await runGit("git", ["add", "-A"], { cwd: worktree });
+    await runGit("git", ["commit", "-m", "keep work"], { cwd: worktree });
+  }
+  assert.equal((await api(d, "DELETE", `/rooms/${id}`)).status, 204);
+  assert.equal(existsSync(bob.body.worktree), false, "bob's checkout goes");
+  assert.equal(hasBranch(b, bobBranch), false, "bob's branch goes");
+  assert.equal(existsSync(failedWorktree), false, "the failed checkout goes");
+  assert.equal(hasBranch(c, failedBranch), false, "the failed branch goes");
 });
 
 test("a hall agent gets a scratch folder, removed when untouched and kept when used; one in a repository survives a restart (M11-2)", async (t) => {
