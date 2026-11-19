@@ -68,6 +68,8 @@ interface AgentSpec {
   base?: string;
   /** The harness checks the id (M9-5); the screen sends it as typed. */
   model?: string;
+  /** The daemon sends it only when the model lists it; a join still succeeds (M9-9). */
+  thoughtLevel?: string;
 }
 
 /** A `POST /rooms` body. */

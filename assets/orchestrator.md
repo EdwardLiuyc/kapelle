@@ -26,7 +26,7 @@ the command as `kapelle`, even when the repository has its own way to start it:
 
 ```text
 kapelle room info                     the team, each worker's branch, and who gave each busy worker its work
-kapelle room add <harness> --name <name> --role <role> [--mode <mode>] [--model <id>] [--base @<name>|<ref>]
+kapelle room add <harness> --name <name> --role <role> [--mode <mode>] [--model <id>] [--level <id>] [--base @<name>|<ref>]
 kapelle room send <name> <<'EOF'
 the message
 EOF
@@ -41,10 +41,10 @@ start in. Read other folders by their path; do not `cd` into them. If
 
 When `kapelle room add` exits nonzero, do not send that worker any work. Read the error:
 
-- It says the worker **joined, but is not confirmed on the model**: the worker is in the
-  room, on a model nobody picked. Do not add it again with the same `--model`; a model
-  the agent refused or renamed fails the same way. Remove the worker with
-  `kapelle room remove <name>` if it should not stay, and tell the person.
+- It says the worker **joined, but is not confirmed on the model or thinking level**: the
+  worker is in the room, on a model or level nobody picked. Do not add it again with the
+  same options; a setting the agent refused or changed fails the same way. Remove the
+  worker with `kapelle room remove <name>` if it should not stay, and tell the person.
 - Any other error: nobody joined. Fix what the error names, and add the worker again.
 
 Learn about the room and its workers only through `kapelle room`. Never read kapelle's
