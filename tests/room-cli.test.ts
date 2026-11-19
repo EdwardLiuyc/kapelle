@@ -8,10 +8,16 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
-import type { ParticipantDto, RoomDto } from "../client/contract.ts";
+import {
+  API_VERSION,
+  type ParticipantDto,
+  type RoomDto,
+} from "../client/contract.ts";
 import {
   addRepo,
   daemonApi as api,
@@ -479,6 +485,84 @@ test("add --level sends thoughtLevel, fails loudly, and keeps the agent (M9-9b)"
     roster.participants.find((p) => p.name === "alone")?.thoughtLevel,
     "low",
   );
+});
+
+// This end-to-end test owns the fake daemon and the request check; node:test
+// reports any rejected promise.
+// pi-lens-ignore: unsafe-boundary, high-fan-out
+test("add without --level sends no thoughtLevel", async (t) => {
+  const f = await fixture(t);
+  const po = f.p("po");
+  const posted: Record<string, unknown>[] = [];
+  const added: ParticipantDto = {
+    id: "p-plain",
+    name: "plain",
+    harness: "mock-agent",
+    mode: "auto",
+    settings: { allowReadOutsideRoot: false },
+    worktree: po.worktree,
+    sessionId: "s-plain",
+    status: "idle",
+    model: "mock/fast",
+    models: [{ id: "mock/fast", name: "Fast" }],
+    thoughtLevel: "high",
+    thoughtLevels: [
+      { id: "low", name: "Low" },
+      { id: "high", name: "High" },
+    ],
+    notices: [],
+  };
+  const fake = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      res.setHeader("content-type", "application/json");
+      if (req.method === "GET" && req.url === "/version") {
+        res.writeHead(200).end(JSON.stringify({ apiVersion: API_VERSION }));
+        return;
+      }
+      if (req.method === "GET" && req.url === `/rooms/${f.room.id}`) {
+        res.writeHead(200).end(JSON.stringify(f.room));
+        return;
+      }
+      if (req.method === "POST" && req.url === `/rooms/${f.room.id}/agents`) {
+        posted.push(JSON.parse(raw) as Record<string, unknown>);
+        res.writeHead(201).end(JSON.stringify(added));
+        return;
+      }
+      res.writeHead(404).end(
+        JSON.stringify({
+          error: { code: "not_found", message: "no such route" },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => {
+    fake.closeAllConnections();
+    fake.close();
+  });
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { recursive: true, mode: 0o700 });
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "tok" }),
+    { mode: 0o600 },
+  );
+
+  const r = await room(t, runtime, po.worktree, [
+    "add",
+    "--cmd",
+    "true",
+    "--name",
+    "plain",
+  ]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout.trim(), "added plain (mock-agent, auto, mock/fast)");
+  assert.deepEqual(posted, [{ cmd: "true", name: "plain" }]);
 });
 
 test("a folder that is no checkout, or not the participant's own, is refused", async (t) => {
