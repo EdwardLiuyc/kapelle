@@ -369,10 +369,9 @@ test("add --level sends thoughtLevel, fails loudly, and keeps the agent (M9-9b)"
   const alone = await add("alone", ["--level", "low"]);
   assert.equal(alone.code, 0, alone.stderr);
 
-  const requests = (await readFile(record, "utf8"))
-    .trim()
-    .split("\n")
-    .map(
+  const requestsAt = async (file: string) => {
+    const rows = (await readFile(file, "utf8")).trim().split("\n");
+    return rows.map(
       (line) =>
         JSON.parse(line) as {
           method: string;
@@ -380,20 +379,31 @@ test("add --level sends thoughtLevel, fails loudly, and keeps the agent (M9-9b)"
           value?: string;
         },
     );
-  assert.deepEqual(
-    requests
+  };
+  const requests = await requestsAt(record);
+  const configRequests = (rows: typeof requests) =>
+    rows
       .filter((r) => r.method === "session/set_config_option")
-      .map((r) => [r.configId, r.value]),
-    [
-      ["model-choice", "mock/smart"],
-      ["effort-choice", "max"],
-    ],
-  );
+      .map((r) => [r.configId, r.value]);
+  assert.deepEqual(configRequests(requests), [
+    ["model-choice", "mock/smart"],
+    ["effort-choice", "max"],
+  ]);
   assert.equal(
     requests.some((r) => r.method === "session/prompt"),
     false,
     "the model and level go before the first turn",
   );
+
+  // Without --level nothing is sent, and the add line is unchanged.
+  const plainRecord = join(await tempDir(t), "plain.jsonl");
+  const plain = await add("no-level", [], `${LEVELS} --record ${plainRecord}`);
+  assert.equal(plain.code, 0, plain.stderr);
+  assert.equal(
+    plain.stdout.trim(),
+    "added no-level (mock-agent, auto, mock/fast)",
+  );
+  assert.deepEqual(configRequests(await requestsAt(plainRecord)), []);
 
   const fails = async (
     name: string,
@@ -454,6 +464,7 @@ test("add --level sends thoughtLevel, fails loudly, and keeps the agent (M9-9b)"
       "rev",
       "ok",
       "alone",
+      "no-level",
       "unlisted",
       "refused",
       "plain",
