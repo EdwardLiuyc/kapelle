@@ -1229,9 +1229,11 @@ restart. `409` `already_decided` when the question is already closed, for any re
 
 Rooms are stable since contract 1.8. `chat.ts` uses them.
 
-A room is a container on one repository. It holds a list of participants. Each
-participant is one harness with one session that stays alive between messages. Each
-participant has its own git branch and checkout. Today:
+A room is anchored to one added folder: its own `cwd` names a place in it, and its record
+is kept under that folder's state directory. A participant works there unless it names
+another added folder with its own `cwd` (since 1.26); in a git repository with a commit
+that participant gets its own checkout there. A room holds a list of participants. Each
+participant is one harness with one session that stays alive between messages. Today:
 
 - A participant has its own mode, `auto` by default. An `ask` participant asks through
   [Permissions](#permissions), and a question nobody answers is denied at the time limit.
@@ -1317,11 +1319,12 @@ An agent takes:
   harness chooses.
 - `base`: optional. The git ref the participant's branch starts from. It can be another
   participant's `branch`, so a reviewer starts from the developer's commits. The default
-  is the repository's `HEAD`. Only committed work is on a branch. The participant's
-  `baseSha` records the resolved commit as provenance. Only a detected rebase moves it,
-  to the commit the rebase moved the work onto; a merge, a fast-forward or a reset leaves
-  it unchanged. The [`?against=base` diff route](#get-roomsidagentsagentiddiff) owns how
-  its comparison is chosen.
+  is the agent's own repository's `HEAD`. Only committed work is on a branch. The
+  participant's `baseSha` records the resolved commit as provenance. Only a detected
+  rebase moves it, to the commit the rebase moved the work onto; a merge, a fast-forward
+  or a reset leaves it unchanged. The
+  [`?against=base` diff route](#get-roomsidagentsagentiddiff) owns how its comparison is
+  chosen.
 - `cwd`: optional, since 1.26. An absolute path to the agent's own folder. It must be
   inside an added repository, as the room's `cwd` must. In a git repository with a
   commit, the agent gets its own checkout and branch in that repository, as described
