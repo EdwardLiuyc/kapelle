@@ -267,6 +267,27 @@ export function screenLayout(p: {
   return { root, placeSide };
 }
 
+/** How the screen ends when every room's stream is gone. A refused version
+ *  always keeps its own words; a hidden hall that ends last with no daemon
+ *  gets the start command instead of a room name. */
+export function lostRoomEnd(
+  roomId: string,
+  ended: Ended,
+  err: unknown,
+  hall: boolean,
+  stopped: string,
+): { code: number; lines: string[] } {
+  if (err instanceof VersionRefused) {
+    return { code: codeOf(ended), lines: [`! ${err.message}`] };
+  }
+  if (hall && ended.kind === "gone") return { code: 1, lines: [stopped] };
+  const msg = err ? [`! ${(err as Error).message}`] : [];
+  return {
+    code: codeOf(ended),
+    lines: [...msg, endedLine(ended, roomId)],
+  };
+}
+
 /**
  * The full-screen chat over every room the daemon holds. Resolves with the
  * exit code.
@@ -1191,20 +1212,14 @@ function chatTui(
         return;
       }
       const { roomId, ended, err } = why;
-      // A refused version is the whole story; the reconcile after it only
-      // says the same words again, including when the hall is the last room.
-      if (err instanceof VersionRefused) {
-        end(codeOf(ended), `! ${err.message}`);
-        return;
-      }
-      // The hall is hidden (M11-1): when its stream is the last one and no
-      // daemon is left, the person needs the start command, not a room name.
-      if (rooms.get(roomId)?.entry.hall && ended.kind === "gone") {
-        end(1, stopped);
-        return;
-      }
-      const msg = err ? [`! ${(err as Error).message}`] : [];
-      end(codeOf(ended), ...msg, endedLine(ended, roomId));
+      const settled = lostRoomEnd(
+        roomId,
+        ended,
+        err,
+        rooms.get(roomId)?.entry.hall === true,
+        stopped,
+      );
+      end(settled.code, ...settled.lines);
     };
 
     tui.addInputListener((data) => {
