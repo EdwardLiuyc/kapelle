@@ -42,6 +42,7 @@ import {
   screenRows,
   spawnCli,
   tempDir,
+  until,
   withAgent,
 } from "../integration/helpers.ts";
 
@@ -182,10 +183,12 @@ test("chat.ts on a real terminal counts a waiting chat apart from rooms when the
   }
   await participantIdle(d, waiting.body.id, only(waiting.body).id);
   await participantIdle(d, "hall", chat.body.id);
-  // The hidden count keeps the room and chat counts apart. Wait for each
-  // stream's marker: the separator between them is dimmed.
+  // Poll plain text for the joined counts: a PTY chunk boundary must not
+  // leave the snapshot with only half the status line.
   await screen.press("\x14", "● 1 chat");
-  await screen.seen("● 1 room");
+  await until("both hidden-sidebar counts", () =>
+    plainText(screen.out()).includes("● 1 room · ● 1 chat"),
+  );
   const shown = plainText(screen.out());
   assert.match(shown, /● 1 room · ● 1 chat/);
   assert.doesNotMatch(shown, /● 2 rooms/);
