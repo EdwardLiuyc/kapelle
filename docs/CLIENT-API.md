@@ -1229,11 +1229,13 @@ restart. `409` `already_decided` when the question is already closed, for any re
 
 Rooms are stable since contract 1.8. `chat.ts` uses them.
 
-A room is anchored to one added folder: its own `cwd` names a place in it, and its record
-is kept under that folder's state directory. A participant works there unless it names
-another added folder with its own `cwd` (since 1.26); in a git repository with a commit
-that participant gets its own checkout there. A room holds a list of participants. Each
-participant is one harness with one session that stays alive between messages. Today:
+A room is anchored to one folder, its `cwd`. The room's record is kept in that folder's
+state directory. A room holds a list of participants. Each participant is one harness
+with one session that stays alive between messages. A participant works in the room's
+folder, or in another added folder it names with its own `cwd` (since 1.26). In a git
+repository with a commit, it gets its own branch and checkout there. The
+[hall](#the-hall) differs: its folder needs no added repository, and an agent with no
+`cwd` gets a scratch folder. Today:
 
 - A participant has its own mode, `auto` by default. An `ask` participant asks through
   [Permissions](#permissions), and a question nobody answers is denied at the time limit.
