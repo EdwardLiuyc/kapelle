@@ -17,7 +17,7 @@
  * **`/chat` starts a chat** (M11-1, decided 2026-11-19): an agent added to
  * the hall, from any view. The hall is hidden, so its agents show as
  * chats. `/add` in one refuses and names `/chat`; `/title` and `/cap` refuse
- * because a chat has no room title or orchestrator cap to change.
+ * because a chat has no visible room title and no orchestrator cap.
  *
  * **`/config` is always a form** (M10-5): the project config of the room on
  * screen, or of the folder the chat started in. A hall chat has no project,

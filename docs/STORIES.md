@@ -4371,14 +4371,14 @@ no orchestrator, and it cannot be dismissed or deleted. A message in the hall wi
 `no_orchestrator`; its message gains a hint that names the hall's agents. The TUI shows
 the hall at the top of its room list, and `kapelle chat list` prints it first. The
 contract gets a minor version.
-**Amended 2026-11-19 (#475), after the person tried it:** the TUI hides the hall. Its
-sidebar shows `── rooms ──`, then `── chats ──` with one row per hall agent, and no hall
-row or hall timeline. "new chat …" in the menu and `/chat <harness>` add an agent to the
-hall from any view; `/add` in a chat refuses and names `/chat`, and `/title` and
-`/cap` refuse because they need a room. `kapelle chat list` prints each hall agent
-as `@name (hall)` after the rooms. The client still refuses a
-message with no `@name` in the hall, even with one agent: a bare message means the
-orchestrator, and the hall has none.
+**Amended 2026-11-19 (#475, #517), after the person tried it:** the TUI hides the
+hall. Its sidebar shows `── rooms ──`, then `── chats ──` with one row per hall
+agent, and no hall row or hall timeline. "new chat …" in the menu and
+`/chat <harness>` add an agent to the hall from any view; `/add` in a chat refuses
+and names `/chat`, and `/title` and `/cap` refuse because they need a room.
+`kapelle chat list` prints each hall agent as `@name (hall)` after the rooms. The
+client still refuses a message with no `@name` in the hall, even with one agent: a
+bare message means the orchestrator, and the hall has none.
 *Done when* tests cover: the hall after a first start and after a restart; a refused
 dismiss and delete; a message with no `@name` refused; a message to `@name` delivered;
 and the TUI's rooms then chats with no hall row, `/chat`, the `/add`, `/title` and

@@ -1268,7 +1268,8 @@ repair by hand is #518.
 - Everything else works as in any room: the roster, messages to `@name`, the timeline,
   questions, a rename, and a revive after a restart.
 - kapelle's own screens hide the hall: its agents show as chats, one row each, after
-  the rooms. A client may show it as a room.
+  the rooms. A chat refuses `/title` and `/cap`; see [PATCH /rooms/:id](#patch-roomsid).
+  A client may show the hall as a room.
 
 ### `POST /rooms`
 
