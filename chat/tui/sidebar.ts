@@ -60,7 +60,7 @@ type Participant = NonNullable<ReturnType<RoomState["participants"]["get"]>>;
 interface Mark {
   glyph: "?" | "!" | "◐" | "‖" | "✕" | "◌" | "●" | "○";
   paint: (s: string) => string;
-  /** The hidden-sidebar room count in `chat/tui.ts` uses this. */
+  /** Whether this row adds to the hidden-sidebar count in `chat/tui.ts`. */
   waits: boolean;
 }
 
