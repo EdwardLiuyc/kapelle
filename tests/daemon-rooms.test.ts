@@ -4246,13 +4246,15 @@ test("an agent's own repository supplies its linkPaths (M11-2)", async (t) => {
     },
   });
   const ownRepo = await gitRepo(t, {
-    ignore: "node_modules/\n",
+    ignore: "node_modules/\nroom-link/\n",
     files: {
       ".kapelle/config.json": `${JSON.stringify({ linkPaths: ["node_modules"] })}\n`,
     },
   });
   await mkdir(join(roomRepo, "room-link", "pkg"), { recursive: true });
   await mkdir(join(ownRepo, "node_modules", "pkg"), { recursive: true });
+  // Present in the agent's repository too, so a leaked room link would land.
+  await mkdir(join(ownRepo, "room-link", "pkg"), { recursive: true });
   const room = await added(d, roomRepo);
   const own = await added(d, ownRepo);
   const opened = await api<RoomReply>(d, "POST", "/rooms", { cwd: room });
