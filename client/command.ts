@@ -279,6 +279,11 @@ function options(
 /** `/add` in a chat: the hall is no room to add to (M11-1). */
 export const ADD_IN_CHAT = "a chat is no room: use /chat for a new agent";
 
+/** A chat route that finds no hall: the daemon skipped it at boot, as its
+ *  record could not be read, and its log says why (M11-1, #518). */
+export const NO_HALL =
+  "the daemon has no hall: its record could not be read, and the daemon's log says why";
+
 /** `/config` in a chat: the hall folder is no project (M11-1). */
 export const HALL_NO_CONFIG = "the hall has no project config: attach a room";
 
@@ -649,7 +654,10 @@ async function addAgent(
     method: "POST",
     body: spec.body,
   });
-  if (!r.ok) return refused(r.error.message, r.error.code);
+  if (!r.ok) {
+    const noHall = roomId === HALL_ID && r.error.code === "room_not_found";
+    return refused(noHall ? NO_HALL : r.error.message, r.error.code);
+  }
   const p = r.body;
   const role = p.role ? `, ${p.role}` : "";
   const model = p.model ? `, ${p.model}` : "";

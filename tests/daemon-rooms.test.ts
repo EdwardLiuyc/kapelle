@@ -28,6 +28,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import {
+  NO_HALL,
   type Outcome,
   parseCommand,
   type RouteCommand,
@@ -4075,6 +4076,13 @@ test("a corrupt or unreadable hall record is skipped with a log, and no hall is 
     await writeFile(path, one.text);
     const second = await boot(t, runtime, [], state);
     const listed = await api<RoomListEntry[]>(second, "GET", "/rooms");
+    // `/chat` says the hall is missing, not "no room hall".
+    const chat = await typed(second, undefined, `/chat --cmd "${REMEMBER}"`);
+    assert.deepEqual(
+      chat.ok ? chat : [chat.code, chat.message],
+      ["room_not_found", NO_HALL],
+      one.name,
+    );
     process.kill(second.pid, "SIGTERM");
     const { stderr } = await second.done;
     assert.deepEqual(listed.body, [], one.name);

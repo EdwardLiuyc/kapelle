@@ -31,3 +31,13 @@ test("a hidden hall with no daemon names the command that starts one (M11-1)", (
     lines: [STOPPED],
   });
 });
+
+test("a hidden hall whose stream ends with the daemon up names no hall id (M11-1)", () => {
+  const alive = { kind: "alive", status: "active" } as const;
+  assert.deepEqual(lostRoomEnd("hall", alive, undefined, true, STOPPED), {
+    code: 1,
+    lines: [
+      "! lost the chats' stream; they are still active — rejoin with: kapelle chat",
+    ],
+  });
+});

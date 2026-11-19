@@ -284,7 +284,7 @@ export function lostRoomEnd(
   const msg = err ? [`! ${(err as Error).message}`] : [];
   return {
     code: codeOf(ended),
-    lines: [...msg, endedLine(ended, roomId)],
+    lines: [...msg, endedLine(ended, roomId, hall)],
   };
 }
 
@@ -1095,18 +1095,28 @@ function chatTui(
     syncBox();
     // The open thread's participant left the roster: back to the room's
     // timeline.
-    const back =
-      kind === "_client_participant_removed"
-        ? participantLeft(view, roomId, line.participantId)
-        : undefined;
+    const removed = kind === "_client_participant_removed";
+    const back = removed
+      ? participantLeft(view, roomId, line.participantId)
+      : undefined;
+    // A removed chat's draft has no view to come back to, as a deleted
+    // room's (M11-1). After `open`, which saves the draft of the view it
+    // leaves.
+    const forgetChat = () => {
+      if (removed && r.entry.hall) {
+        drafts.delete(draftKey({ roomId, participantId: line.participantId }));
+      }
+    };
     if (back) {
       // Our own remove may have set the status line already.
       const keep = flash;
       open(back);
+      forgetChat();
       flash = keep;
       setStatus();
       return;
     }
+    forgetChat();
     const openThread =
       roomId === view.roomId && line.participantId === view.participantId;
     if (openThread) {
@@ -1169,7 +1179,7 @@ function chatTui(
     if (gone) drafts.delete(id);
     if (ended.kind === "dismissed") flash = `${label} was dismissed`;
     else if (ended.kind === "deleted") flash = `${label} was deleted`;
-    else flash = endedLine(ended, id);
+    else flash = endedLine(ended, id, r?.entry.hall === true);
     setStatus();
   };
 

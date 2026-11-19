@@ -8,6 +8,7 @@
 
 import { join } from "node:path";
 
+import { NO_HALL } from "../client/command.ts";
 import { type DaemonAddress, readDaemonFile } from "../client/daemon.ts";
 import type { Named } from "../client/mention.ts";
 import { type Entry, type RoomState, roster } from "../client/room.ts";
@@ -37,8 +38,22 @@ const stoppedLine = (name: string, status: string) =>
   `${status === "killed" ? "!" : "·"} ${name} is ${status}; a message revives it`;
 
 /** The line for a room whose stream ended, from what `reconcile` found.
- *  It starts with `!` unless the room was dismissed or deleted. */
-function endedLine(e: Ended, id: string): string {
+ *  It starts with `!` unless the room was dismissed or deleted. The hall is
+ *  hidden on the screen (M11-1): with `hall`, the line names the chats and
+ *  never the hall's id. */
+function endedLine(e: Ended, id: string, hall = false): string {
+  if (hall) {
+    switch (e.kind) {
+      case "alive":
+        return `! lost the chats' stream; they are still ${e.status} — rejoin with: kapelle chat`;
+      case "unknown":
+        return `! ${NO_HALL}`;
+      case "refused":
+        return `! lost the chats' stream (HTTP ${e.status}); they may still be alive`;
+      default:
+        break;
+    }
+  }
   switch (e.kind) {
     case "dismissed":
       return "the room was dismissed";

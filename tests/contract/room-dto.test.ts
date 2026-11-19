@@ -10,11 +10,13 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { HALL_ID as CLIENT_HALL_ID } from "../../client/command.ts";
 import type {
   ParticipantDto,
   RoomDto,
   RoomListEntry,
 } from "../../client/contract.ts";
+import { HALL_ID } from "../../core/ids.ts";
 import {
   daemonApi as api,
   bootDaemon as boot,
@@ -168,4 +170,11 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
   assert.equal(gone.body.status, "dismissed");
   assert.equal(gone.body.participants[0]?.status, "dismissed");
   await api(d, "POST", `/rooms/${empty.body.id}/dismiss`);
+});
+
+test("the client's hall id is the daemon's, as docs/CLIENT-API.md names it (M11-1)", () => {
+  // `client/` cannot import `core/`, so each keeps its own copy; this keeps
+  // them the same, as `version.test.ts` does for `API_VERSION`.
+  assert.equal(CLIENT_HALL_ID, HALL_ID);
+  assert.equal(HALL_ID, "hall");
 });
