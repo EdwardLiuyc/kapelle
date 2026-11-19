@@ -1245,14 +1245,15 @@ participant has its own git branch and checkout. Today:
 ### The hall
 
 Since 1.25. The daemon makes one room by itself, the **hall**, when it first starts,
-and keeps it across restarts. Its `id` is `hall`, its `title` is `hall`, and the room
-and its list entry carry `"hall": true`. Every other room has no `hall` key.
+and keeps it across restarts. Its `id` is `hall`, its `title` starts as `hall`, and
+the room and its list entry carry `"hall": true`. Every other room has no `hall` key.
 
-The hall can be absent. When its record cannot be read, or fails the daemon's checks,
-the daemon starts without it and its log names the failure: `GET /rooms` then has no
-entry with `"hall": true`, and every `/rooms/hall` route answers `404`
-`room_not_found`. A restart tries again: a missing record starts an empty hall; a record
-that can be read and passes those checks brings the hall back. Recovery that needs no
+The hall can be absent. At start, the daemon skips it when its folder cannot be made,
+its record cannot be read or fails the daemon's checks, or the room fails to open. The
+daemon's log names the failure: `GET /rooms` then has no entry with `"hall": true`, and
+every `/rooms/hall` route answers `404` `room_not_found`. A restart tries again: a
+missing record starts an empty hall, and a record that can be read and passes those
+checks brings the hall back, once its folder and the room open. Recovery that needs no
 repair by hand is #518.
 
 - The hall's `cwd` is the folder `hall` in the daemon's state folder. It is not a git
