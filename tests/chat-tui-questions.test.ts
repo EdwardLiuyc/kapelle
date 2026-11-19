@@ -166,9 +166,11 @@ test("chat.ts on a real terminal counts a waiting chat apart from rooms when the
     cmd: REMEMBER,
     name: "chat",
   });
+  assert.equal(chat.status, 201, JSON.stringify(chat.body));
   const screen = await ptyScreen(t, "stty cols 100 rows 30; node cli.ts chat", {
     XDG_RUNTIME_DIR: runtime,
   });
+  await screen.seen(`room ${open.body.id}`);
   // The open room is the landing view. The other room's answer and the
   // chat's answer both arrive off screen, so each leaves an unread mark.
   for (const [path, id] of [
@@ -180,8 +182,10 @@ test("chat.ts on a real terminal counts a waiting chat apart from rooms when the
   }
   await participantIdle(d, waiting.body.id, only(waiting.body).id);
   await participantIdle(d, "hall", chat.body.id);
-  // The hidden count keeps the room and chat counts apart.
+  // The hidden count keeps the room and chat counts apart. Wait for each
+  // stream's marker: the separator between them is dimmed.
   await screen.press("\x14", "● 1 chat");
+  await screen.seen("● 1 room");
   const shown = plainText(screen.out());
   assert.match(shown, /● 1 room · ● 1 chat/);
   assert.doesNotMatch(shown, /● 2 rooms/);
