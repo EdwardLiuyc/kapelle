@@ -68,7 +68,7 @@ interface AgentSpec {
   base?: string;
   /** The harness checks the id (M9-5); the screen sends it as typed. */
   model?: string;
-  /** The daemon checks this against the model's level list (M9-9). */
+  /** The daemon sends it only when the model lists it; a join still succeeds (M9-9). */
   thoughtLevel?: string;
 }
 
