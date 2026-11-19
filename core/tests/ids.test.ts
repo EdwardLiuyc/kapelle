@@ -17,6 +17,7 @@ import {
   assertRunId,
   assertTaskId,
   branchName,
+  HALL_ID,
   newParticipantId,
   newRoomId,
   newRunId,
@@ -74,6 +75,9 @@ test("branchName validates both halves it is given", () => {
     () => branchName("not-a-run-id", "plan"),
     /invalid run or room id/,
   );
+  // The hall owns a namespace too (M11-2), but only under its own id.
+  assert.equal(branchName(HALL_ID, "p-a"), "kapelle/hall/p-a");
+  assert.throws(() => branchName("hall2", "p-a"), /invalid run or room id/);
 });
 
 test("a room id is its own namespace: branchName takes it, assertRunId does not", () => {

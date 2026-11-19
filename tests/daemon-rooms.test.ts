@@ -3869,7 +3869,11 @@ test("the hall is there after a first start with no repository, and after a rest
     name: "ann",
   });
   assert.equal(ann.status, 201, JSON.stringify(ann.body));
-  assert.equal(ann.body.worktree, hallCwd, "no git: the hall's own folder");
+  // M11-2: no `cwd`, so a scratch folder of its own, with no git.
+  assert.equal(
+    ann.body.worktree,
+    join(await realpath(state), "kapelle", "scratch", "hall", ann.body.id),
+  );
   assert.equal(ann.body.branch, undefined);
   const sent = await api(
     first,
@@ -4090,5 +4094,197 @@ test("a corrupt or unreadable hall record is skipped with a log, and no hall is 
     const { stderr } = await second.done;
     assert.deepEqual(listed.body, [], one.name);
     assert.match(stderr, one.log, one.name);
+  }
+});
+
+// --- each agent's own folder (M11-2) --------------------------------------------
+
+/** `git init` with no commit, so there is nothing to branch from. */
+async function unbornRepo(t: test.TestContext): Promise<string> {
+  const dir = await tempDir(t);
+  await runGit("git", ["init", "-q"], { cwd: dir });
+  return dir;
+}
+
+test("an agent picks its own folder: a repository with a commit, one with none, or no git (M11-2)", async (t) => {
+  const d = await boot(t);
+  const a = await realpath(await added(d, await gitRepo(t)));
+  const b = await realpath(await added(d, await gitRepo(t)));
+  const plain = await realpath(await added(d, await tempDir(t)));
+  const unborn = await realpath(await added(d, await unbornRepo(t)));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(a, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const alice = only(open.body);
+  assert.ok(alice.worktree.startsWith(join(stateDirFor(a), "wt", id)));
+
+  const add = (name: string, cwd: string) =>
+    api<ParticipantDto & RoomReply>(d, "POST", `/rooms/${id}/agents`, {
+      cmd: REMEMBER,
+      name,
+      cwd,
+    });
+  // A second repository: its own checkout and branch there.
+  const bob = await add("bob", b);
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  assert.equal(bob.body.worktree, join(stateDirFor(b), "wt", id, bob.body.id));
+  assert.ok(bob.body.branch && hasBranch(b, bob.body.branch));
+  assert.equal(hasBranch(a, bob.body.branch), false);
+  // No git, and no commit: the folder itself, with no branch.
+  for (const [name, cwd] of [
+    ["cy", plain],
+    ["dee", unborn],
+  ] as const) {
+    const p = await add(name, cwd);
+    assert.equal(p.status, 201, JSON.stringify(p.body));
+    assert.equal(p.body.worktree, cwd, name);
+    assert.equal(p.body.branch, undefined, name);
+  }
+  // Both repositories' agents answer.
+  for (const p of [alice, bob.body]) {
+    const sent = await api(d, "POST", `/rooms/${id}/agents/${p.id}/messages`, {
+      text: "hi",
+    });
+    assert.equal(sent.status, 202);
+    await participantIdle(d, id, p.id);
+  }
+
+  const outside = await add("eve", await tempDir(t));
+  assert.equal(outside.status, 403);
+  assert.equal(outside.body.error.code, "repo_not_added");
+  // A branch lives in one repository only.
+  const ff = await api(
+    d,
+    "POST",
+    `/rooms/${id}/agents/${alice.id}/fast-forward`,
+    {
+      from: bob.body.id,
+    },
+  );
+  assert.equal(ff.status, 409);
+  assert.equal(ff.body.error.code, "no_branch");
+  assert.match(ff.body.error.message, /different repositories/);
+});
+
+test("a checkout in another repository than its room's survives a restart, and goes with the room's delete (M11-2)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const a = await realpath(await added(first, await gitRepo(t)));
+  const b = await realpath(await added(first, await gitRepo(t)));
+  const open = await api<RoomReply>(
+    first,
+    "POST",
+    "/rooms",
+    withAgent(a, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  const { id } = open.body;
+  const bob = await api<ParticipantDto>(first, "POST", `/rooms/${id}/agents`, {
+    cmd: REMEMBER,
+    name: "bob",
+    cwd: b,
+  });
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  const { worktree, branch } = bob.body;
+  assert.ok(branch);
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  // The boot sweep of `b` finds no record of the room there, and keeps the
+  // clean checkout all the same.
+  const second = await boot(t, runtime, [], state);
+  assert.ok(existsSync(worktree), "the sweep kept the checkout");
+  const back = await api<RoomReply>(second, "GET", `/rooms/${id}`);
+  const saved = back.body.participants.find((p) => p.id === bob.body.id);
+  assert.equal(saved?.worktree, worktree);
+  assert.equal(saved?.status, "paused");
+  const sent = await api(
+    second,
+    "POST",
+    `/rooms/${id}/agents/${bob.body.id}/messages`,
+    { text: "back" },
+  );
+  assert.equal(sent.status, 202);
+  await participantIdle(second, id, bob.body.id);
+
+  const preview = await api<DeletePreview>(
+    second,
+    "GET",
+    `/rooms/${id}/delete-preview`,
+  );
+  assert.ok(preview.body.branches.some((x) => x.branch === branch));
+  assert.equal((await api(second, "POST", `/rooms/${id}/dismiss`)).status, 200);
+  assert.equal((await api(second, "DELETE", `/rooms/${id}`)).status, 204);
+  assert.equal(existsSync(worktree), false, "the checkout is gone");
+  assert.equal(hasBranch(b, branch), false, "the branch is gone");
+});
+
+test("a hall agent gets a scratch folder, removed when untouched and kept when used; one in a repository survives a restart (M11-2)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const scratch = join(await realpath(state), "kapelle", "scratch", "hall");
+  const chat = (name: string, cwd?: string) =>
+    api<ParticipantDto>(first, "POST", "/rooms/hall/agents", {
+      cmd: REMEMBER,
+      name,
+      ...(cwd && { cwd }),
+    });
+  const ann = await chat("ann");
+  const bob = await chat("bob");
+  for (const p of [ann, bob]) {
+    assert.equal(p.status, 201, JSON.stringify(p.body));
+    assert.equal(p.body.worktree, join(scratch, p.body.id));
+    assert.deepEqual(readdirSync(p.body.worktree), [], "empty");
+  }
+  assert.notEqual(ann.body.worktree, bob.body.worktree);
+  await writeFile(join(bob.body.worktree, "notes.md"), "kept\n");
+  for (const p of [ann, bob]) {
+    const gone = await api(first, "DELETE", `/rooms/hall/agents/${p.body.id}`);
+    assert.equal(gone.status, 200);
+  }
+  assert.equal(existsSync(ann.body.worktree), false, "untouched: removed");
+  assert.ok(existsSync(join(bob.body.worktree, "notes.md")), "used: kept");
+
+  const repo = await realpath(await added(first, await gitRepo(t)));
+  const cy = await chat("cy", repo);
+  assert.equal(cy.status, 201, JSON.stringify(cy.body));
+  assert.equal(
+    cy.body.worktree,
+    join(stateDirFor(repo), "wt", "hall", cy.body.id),
+  );
+  assert.ok(cy.body.branch && hasBranch(repo, cy.body.branch));
+  const dee = await chat("dee");
+  assert.equal(dee.status, 201, JSON.stringify(dee.body));
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  // The hall's record is in no repository; the sweep reads it all the same.
+  const second = await boot(t, runtime, [], state);
+  assert.ok(existsSync(cy.body.worktree), "the sweep kept the checkout");
+  const hall = await api<RoomReply>(second, "GET", "/rooms/hall");
+  assert.equal(hall.status, 200, "the hall restores");
+  assert.deepEqual(
+    hall.body.participants.map((p) => [p.name, p.worktree]),
+    [
+      ["cy", cy.body.worktree],
+      ["dee", dee.body.worktree],
+    ],
+  );
+  for (const p of [cy.body, dee.body]) {
+    const sent = await api(
+      second,
+      "POST",
+      `/rooms/hall/agents/${p.id}/messages`,
+      { text: "back" },
+    );
+    assert.equal(sent.status, 202);
+    await participantIdle(second, "hall", p.id);
   }
 });

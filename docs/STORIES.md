@@ -4408,8 +4408,12 @@ in that folder, as today. With no `--cwd`, the daemon makes an empty scratch fol
 that agent under the state directory, and removes it when the agent is removed if the
 agent left it untouched; a used scratch folder is kept, as a used checkout is. The
 contract gets a minor version.
-**Gap:** what a room's own `cwd` means once each agent has one. Today it is the default
-for every participant; the pickup decides if it stays as that default.
+**Decided at pickup 2026-11-19 (#476), with the person:** in the hall the verb is
+`/chat`, not `/new` (#517). A room's own `cwd` stays the default for every participant
+added without one; only a hall agent with no `--cwd` gets a scratch folder. A
+participant's checkout sits in its own repository, so the boot sweep reads every room's
+record, the hall's too, before it calls a checkout an orphan, and a room's delete
+removes the checkouts and branches in each repository its participants work in.
 *Done when* tests cover an agent in a repository with a commit, in a folder with no git,
 in a repository with no commit, and with no `--cwd`; an untouched scratch folder removed
 with its agent and a used one kept; and two agents in one room in two different

@@ -119,8 +119,25 @@ test("/chat adds an agent to the hall; alone it opens its form; /add in a chat r
   });
   assert.equal(
     USAGE.chat,
-    "/chat <harness> [--cmd c] [--name n] [--mode m] [--model id]",
+    "/chat <harness> [--cmd c] [--name n] [--mode m] [--model id] [--cwd dir]",
   );
+});
+
+test("/chat and /add take an agent's own --cwd, made absolute; without it none is sent (M11-2)", () => {
+  const agentOf = (line: string) => {
+    const c = parse(line);
+    assert.ok(c && "agent" in c, line);
+    return c.agent;
+  };
+  assert.equal(agentOf("/chat pi --cwd /srv/app").cwd, "/srv/app");
+  assert.equal(
+    agentOf("/chat pi --cwd app").cwd,
+    resolve(process.cwd(), "app"),
+  );
+  assert.equal(agentOf("/add pi --name ann --cwd /srv/app").cwd, "/srv/app");
+  // No `cwd` key at all: the room's folder, or a chat's scratch folder.
+  assert.equal("cwd" in agentOf("/chat pi"), false);
+  assert.equal("cwd" in agentOf("/add pi"), false);
 });
 
 test("/title and /cap need a room in a chat; both still work in a room (#517)", () => {

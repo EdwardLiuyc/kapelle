@@ -62,6 +62,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
+  commandFolder,
   deletePreview,
   deletePreviewLines,
   HALL_ID,
@@ -1549,11 +1550,9 @@ function chatTui(
         return false;
       }
       if (!out.ok) {
-        if (
-          out.code === "repo_not_added" &&
-          (c.verb === "new" || c.verb === "loop")
-        ) {
-          askToAdd(c.body.cwd, () => run(c));
+        const folder = commandFolder(c);
+        if (out.code === "repo_not_added" && folder) {
+          askToAdd(folder, () => run(c));
           return true;
         }
         if (c.verb === "delete" && roomId) {

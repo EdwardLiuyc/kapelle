@@ -1171,7 +1171,8 @@ function panelParts({
   });
 
   /**
-   * `/new`, `/loop` or `/config` in a folder the daemon has not added: ask,
+   * `/new`, `/loop`, `/config`, or `/chat` or `/add` with an agent's own
+   * folder (M11-2), in a folder the daemon has not added: ask,
    * in the pop-up, and on yes add its repository and go on in one step
    * (`then`: open the room, or the config form). The question is ours, from
    * the code: the daemon's message is advice for a program.
@@ -1248,23 +1249,42 @@ function panelParts({
           value: "HEAD",
           pick: ["HEAD", ...others, OTHER_REF],
         },
+        ownFolderField(),
       ],
       "add",
-      (v) => ({
-        verb: "add",
-        agent: {
-          agent: v.agent,
-          cmd: v.cmd,
-          name: v.name,
-          role: v.role === "none" ? undefined : v.role,
-          mode: v.mode,
-          model: v.model || undefined,
-          base: v.base === "HEAD" ? undefined : v.base,
-        },
-      }),
+      (v) => {
+        const cwd = ownFolder(v.cwd);
+        if (cwd === null) return { error: FOLDER_GONE };
+        return {
+          verb: "add",
+          agent: {
+            agent: v.agent,
+            cmd: v.cmd,
+            name: v.name,
+            role: v.role === "none" ? undefined : v.role,
+            mode: v.mode,
+            model: v.model || undefined,
+            base: v.base === "HEAD" ? undefined : v.base,
+            cwd,
+          },
+        };
+      },
       back,
     );
   };
+
+  /** An agent's own folder (M11-2): empty is the room's, or for a chat a
+   *  scratch folder. */
+  const ownFolderField = () => ({
+    id: "cwd",
+    label: "folder",
+    value: "",
+    folder: true as const,
+  });
+  /** The field's value as `cwd`: undefined when empty, `null` when it
+   *  cannot be read. */
+  const ownFolder = (typed: string | undefined) =>
+    typed ? (absoluteFolder(typed) ?? null) : undefined;
 
   /** A new chat (M11-1): an agent in the hidden hall, from any view. */
   const chatForm = (back: () => void = hidePanel) =>
@@ -1276,18 +1296,24 @@ function panelParts({
         { id: "name", label: "name", value: "" },
         { id: "mode", label: "mode", value: "auto", pick: MODES },
         modelField(),
+        ownFolderField(),
       ],
       "start",
-      (v) => ({
-        verb: "chat",
-        agent: {
-          agent: v.agent,
-          cmd: v.cmd,
-          name: v.name,
-          mode: v.mode,
-          model: v.model || undefined,
-        },
-      }),
+      (v) => {
+        const cwd = ownFolder(v.cwd);
+        if (cwd === null) return { error: FOLDER_GONE };
+        return {
+          verb: "chat",
+          agent: {
+            agent: v.agent,
+            cmd: v.cmd,
+            name: v.name,
+            mode: v.mode,
+            model: v.model || undefined,
+            cwd,
+          },
+        };
+      },
       back,
     );
 

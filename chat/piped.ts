@@ -13,6 +13,7 @@ import { createInterface } from "node:readline";
 
 import {
   USAGE as COMMAND_USAGE,
+  commandFolder,
   deletePreview,
   deletePreviewLines,
   HALL_NO_CONFIG,
@@ -430,11 +431,9 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
       if (!r.ok) {
         console.error(`! ${r.message}`);
         // A pipe cannot ask, as the screen does: say how to add it.
-        if (
-          r.code === "repo_not_added" &&
-          (c.verb === "new" || c.verb === "loop")
-        ) {
-          console.error(`add it first: kapelle daemon add ${c.body.cwd}`);
+        const folder = commandFolder(c);
+        if (r.code === "repo_not_added" && folder) {
+          console.error(`add it first: kapelle daemon add ${folder}`);
         }
         if (c.verb === "dismiss") {
           code = 1;

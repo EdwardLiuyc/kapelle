@@ -523,10 +523,9 @@ test("the sidebar shows rooms, then chats, with no hall row; a chat refuses a ba
   );
   assert.equal(at(/ hall /), -1, side.join("\n"));
 
-  // alt+down opens ann's chat, with @ann filled in, and the shared folder's
-  // notice at the top.
+  // alt+down opens ann's chat, with @ann filled in. Since M11-2 ann works in
+  // a scratch folder of its own, so no shared-folder notice.
   await screen.press("\x1b[1;3B", "@ann");
-  await screen.seen("agents all work in");
   // Remove the prefill but leave a space, so the editor does not put it
   // back on empty: a bare message is refused before the request.
   await screen.press(
@@ -582,7 +581,8 @@ test("/chat in a room's view starts a chat and opens it; the menu has new chat, 
   await press(`${DOWN}\r`, "> ");
   await press(`${REMEMBER}\r`, "Enter/Space");
   await press(`${DOWN}\rcarol\r`, "carol");
-  await press(`${DOWN.repeat(3)}\r`, "started a chat with carol");
+  // Mode, model and folder (M11-2), then `start`.
+  await press(`${DOWN.repeat(4)}\r`, "started a chat with carol");
   await seen("@carol");
   const both = await api<RoomReply>(d, "GET", "/rooms/hall");
   assert.deepEqual(
@@ -666,11 +666,11 @@ test("/add alone opens its form; a refusal stays in the form, and a fix adds the
   await press(`${DOWN}\r`, "> ");
   await press(`${REMEMBER}\r`, "Enter/Space");
   await press(`${DOWN}\rmock-agent\r`, "mock-agent");
-  // Down to the last row, `add`: the name is taken.
-  await press(`${DOWN.repeat(5)}\r`, "is taken");
+  // Down to the last row, `add`, past the folder (M11-2): the name is taken.
+  await press(`${DOWN.repeat(6)}\r`, "is taken");
   // Up to the name, clear it, and send again.
-  await press(`${"\x1b[A".repeat(5)}\r\x15bob\r`, "bob");
-  await press(`${DOWN.repeat(5)}\r`, "added bob (mock-agent, auto)");
+  await press(`${"\x1b[A".repeat(6)}\r\x15bob\r`, "bob");
+  await press(`${DOWN.repeat(6)}\r`, "added bob (mock-agent, auto)");
   await seen("○ bob");
   const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   assert.deepEqual(
@@ -1527,14 +1527,15 @@ test("the add-agent form lists the harness's models, or uses a text box when it 
   await press(`${DOWN.repeat(5)}\r`, "other model…");
   assert.deepEqual(pickList(out()), ["–", "m-1", "m-2"]);
   await press(`${DOWN}${DOWN}\r`, "m-2");
-  await press(`${DOWN.repeat(2)}\r`, "no 1");
+  // Base and folder (M11-2), then `add`.
+  await press(`${DOWN.repeat(3)}\r`, "no 1");
   assert.deepEqual(posted[0], { agent: "lab-ok", mode: "auto", model: "m-2" });
   // Back to the harness row; lab-bare has no models, so its model row is text.
-  await press(`${UP.repeat(7)}\r`, "other…");
+  await press(`${UP.repeat(8)}\r`, "other…");
   await press(`${UP}\r`, "lab-bare");
   await press(`${DOWN.repeat(5)}\r`, "> ");
   await press("\x15typed/x\r", "typed/x");
-  await press(`${DOWN.repeat(2)}\r`, "no 2");
+  await press(`${DOWN.repeat(3)}\r`, "no 2");
   assert.deepEqual(posted[1], {
     agent: "lab-bare",
     mode: "auto",

@@ -70,6 +70,17 @@
  * branch (R35c). A branch holds only what its participant committed, so a
  * participant started from it never sees the other's uncommitted files (R37).
  *
+ * **A participant may pick its own folder** (M11-2, decided 2026-11-19,
+ * #476). An add with `cwd` gets its checkout in that folder's repository,
+ * `stateDirFor(<that root>)/wt/<roomId>/<participantId>`, or runs in the
+ * folder itself when it has no git or no commit. An add without `cwd` uses
+ * the room's own folder, as before, except in a room with `scratchDir` (the
+ * hall): there it gets an empty folder of its own, which its release removes
+ * while it is still empty. `room.json` keeps the participant's `cwd`, or
+ * `scratch`, so a restore opens the same place. The room's record and log
+ * stay under the room's own root; the boot sweep reads every room's record
+ * before it calls a checkout an orphan (`core/sweep.ts`).
+ *
  * **A kept checkout lasts while its room has a record.** The boot sweep
  * (`core/sweep.ts`) keeps every checkout under a room that has a
  * `room.json`, dismissed rooms too, until `DELETE /rooms/:id` or the
@@ -223,6 +234,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -275,6 +287,7 @@ import {
   fastForwardCheckout,
   LinkPathError,
   NotFastForward,
+  openWorktrees,
   type WorktreeSetup,
   type Worktrees,
 } from "./worktree.ts";
@@ -362,6 +375,9 @@ export interface AgentRequest {
   /** The ref to fork from, such as another participant's `branch`; the
    *  repository's HEAD when absent. */
   base?: string;
+  /** Its own folder (M11-2); the room's when absent. The daemon checks it
+   *  is an added folder, and passes it real and absolute. */
+  cwd?: string;
   mode: ClientMode;
   settings: Settings;
   /** The model to set after each start; the harness's own when absent. */
@@ -519,6 +535,10 @@ interface ParticipantRecord {
   thoughtLevel?: string;
   pendingThoughtLevel?: string;
   worktree: string;
+  /** The folder the participant asked for, when not the room's (M11-2). */
+  cwd?: string;
+  /** Its folder is a scratch folder the room made, `worktree` (M11-2). */
+  scratch?: true;
   /** The branch and base the checkout had at the last save. A restore
    *  reconciles both with the checkout again, in case a crash caught a
    *  rename or a rebase mid-turn. */
@@ -656,6 +676,7 @@ export const AGENT_FIELDS: readonly string[] = [
   "settings",
   "model",
   "thoughtLevel",
+  "cwd",
 ];
 
 /** A name, or a throw naming what is wrong. `fallback` is the harness name
@@ -745,8 +766,18 @@ export function roomAgent(entry: unknown): AgentRequest {
       `unknown agent field "${extra}"; an agent takes ${AGENT_FIELDS.join(", ")}`,
     );
   }
-  const { agent, cmd, name, role, mode, base, settings, model, thoughtLevel } =
-    entry as Record<string, unknown>;
+  const {
+    agent,
+    cmd,
+    name,
+    role,
+    mode,
+    base,
+    settings,
+    model,
+    thoughtLevel,
+    cwd,
+  } = entry as Record<string, unknown>;
   const spec = roomHarness(agent, cmd);
   const request: AgentRequest = {
     spec,
@@ -764,6 +795,12 @@ export function roomAgent(entry: unknown): AgentRequest {
       throw new Error('"base" must be a non-empty string');
     }
     request.base = base;
+  }
+  if (cwd !== undefined) {
+    if (typeof cwd !== "string" || !cwd) {
+      throw new Error('"cwd" must be a non-empty string');
+    }
+    request.cwd = cwd;
   }
   // Any id: the harness checks it, not a list of ours (D3).
   if (model !== undefined) request.model = idField("model", model);
@@ -870,7 +907,61 @@ interface RoomDeps {
   /** Gets what each real session of a registry agent said: its models and
    *  its login state (M9-4, `core/check.ts`). The daemon saves it. */
   noteSession?: (agent: string, seen: Seen) => void;
+  /** Where an add with no `cwd` gets an empty folder of its own (M11-2),
+   *  instead of the room's folder. The hall sets it. */
+  scratchDir?: string;
+  /** Opens a participant's own folder for this room (M11-2): the project's
+   *  links, then `openWorktrees`. `restoring` opens without links rather
+   *  than throwing. Without it, a folder opens with no links. */
+  openPlace?: (cwd: string, restoring: boolean) => Promise<WorktreeSetup>;
 }
+
+/** Where one participant works: the room's own setup, one for the folder
+ *  it picked, or a scratch folder. `dir` is where it runs with no worktrees. */
+type Place = WorktreeSetup & { dir: string; scratch?: true };
+
+/** The places of one room's participants, each folder opened once. */
+function roomPlaces(
+  roomId: string,
+  cwd: string,
+  setup: WorktreeSetup,
+  openPlace: RoomDeps["openPlace"],
+) {
+  const home: Place = { ...setup, dir: cwd };
+  const opened = new Map<string, Promise<Place>>();
+  const open = (dir: string, restoring: boolean): Promise<Place> => {
+    if (dir === cwd) return Promise.resolve(home);
+    let found = opened.get(dir);
+    if (!found) {
+      found = (
+        openPlace
+          ? openPlace(dir, restoring)
+          : openWorktrees(dir, roomId, { advisory: false })
+      ).then((s) => ({ ...s, dir }));
+      // A failed open is tried again by the next add.
+      found.catch(() => opened.delete(dir));
+      opened.set(dir, found);
+    }
+    return found;
+  };
+  return {
+    home,
+    open,
+    /** The place a saved participant had. */
+    saved: (p: ParticipantRecord): Promise<Place> => {
+      if (p.scratch) {
+        return Promise.resolve({
+          worktrees: null,
+          root: p.worktree,
+          dir: p.worktree,
+          scratch: true,
+        });
+      }
+      return p.cwd ? open(p.cwd, true) : Promise.resolve(home);
+    },
+  };
+}
+type Places = ReturnType<typeof roomPlaces>;
 
 export interface RoomOptions extends RoomDeps {
   roomId: string;
@@ -893,6 +984,9 @@ interface Member {
   participant: Participant;
   spec: ResolvedAgent;
   source: AgentRequest["source"];
+  /** Where it works, and the folder it asked for (M11-2). */
+  place: Place;
+  cwd?: string;
   /** The model a revive asks for, which `room.json` keeps: the request's,
    *  or the last one the person changed to that the harness took. */
   asked: () => string | undefined;
@@ -1166,7 +1260,7 @@ async function tombstoneUnknownAgents(
   record: RoomRecord,
   root: string,
   log: (line: string) => void,
-  worktrees: Worktrees | null,
+  places: Places,
 ): Promise<{ record: RoomRecord; tombstoned: ParticipantRecord[] }> {
   const tombstones = [...(record.tombstones ?? [])];
   const known = new Set(tombstones.map((p) => p.id));
@@ -1189,7 +1283,7 @@ async function tombstoneUnknownAgents(
     const next = isNew ? await syncTombstoneCheckout(saved) : saved;
     if (next !== saved) changed = true;
     tombstones[i] = next;
-    adoptTombstone(worktrees, next);
+    adoptTombstone((await places.saved(next)).worktrees, next);
     if (isNew) {
       log(
         `room ${record.id} at ${roomFile(root, record.id)}: participant ` +
@@ -1226,7 +1320,8 @@ export async function openRoom({
     turnCount: 0,
   };
   if (title !== undefined) meta.title = title;
-  const built = await buildRoom(deps, meta);
+  const places = roomPlaces(roomId, cwd, deps.setup, deps.openPlace);
+  const built = await buildRoom(deps, meta, places);
   for (const request of agents) {
     try {
       await built.room.add(request);
@@ -1252,11 +1347,12 @@ export async function restoreRoom({
   turnCap,
   ...deps
 }: RoomDeps & { record: RoomRecord }): Promise<Room> {
+  const places = roomPlaces(record.id, record.cwd, deps.setup, deps.openPlace);
   const { record: from, tombstoned } = await tombstoneUnknownAgents(
     crashed(record),
     deps.setup.root,
     deps.log ?? ((line) => console.error(line)),
-    deps.setup.worktrees,
+    places,
   );
   const meta: RoomMeta = {
     id: from.id,
@@ -1267,7 +1363,7 @@ export async function restoreRoom({
     turnCount: from.turnCount ?? 0,
   };
   if (from.title !== undefined) meta.title = from.title;
-  const built = await buildRoom(deps, meta, from, tombstoned);
+  const built = await buildRoom(deps, meta, places, from, tombstoned);
   built.keepSaved();
   return built.room;
 }
@@ -1284,14 +1380,15 @@ async function buildRoom(
     roomNotice,
     log = (line) => console.error(line),
     noteSession,
+    scratchDir,
   }: RoomDeps,
   meta: RoomMeta,
+  places: Places,
   from?: RoomRecord,
   tombstoned: readonly ParticipantRecord[] = [],
 ): Promise<{ room: Room; keepSaved: () => void }> {
-  const { worktrees, notice, root } = setup;
+  const { root } = setup;
   const roomId = meta.id;
-  const { cwd } = meta;
   // The room's own lines: only the event log's today. With no participant
   // nothing publishes them, and a log failure shows only as `no_event_log`
   // on `GET /rooms/:id/events`. A room has no notices on the wire, so every
@@ -1391,6 +1488,8 @@ async function buildRoom(
       ...(askedLevel && { thoughtLevel: askedLevel }),
       ...(pendingLevel && { pendingThoughtLevel: pendingLevel }),
       worktree: p.worktree,
+      ...(m.cwd && { cwd: m.cwd }),
+      ...(m.place.scratch && { scratch: true }),
       ...(p.branch && { branch: p.branch }),
       ...(p.baseSha && { baseSha: p.baseSha }),
       ...(p.baseRef && { baseRef: p.baseRef }),
@@ -1474,11 +1573,27 @@ async function buildRoom(
     id: string,
     worktree: string | undefined,
     onNotice: Notify,
+    place: Place,
   ): Promise<boolean> => {
     try {
-      const kept = await worktrees?.release(id, "keep");
+      const kept = await place.worktrees?.release(id, "keep");
       if (kept) onNotice(kept);
-      return Boolean(kept);
+      if (kept || !place.scratch || !worktree) return Boolean(kept);
+      // M11-2: `rmdir` removes only an empty folder, which is what
+      // untouched means; one the harness wrote into is kept.
+      try {
+        rmdirSync(worktree);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+        onNotice(
+          `the scratch folder ${worktree} is kept: ` +
+            ((err as NodeJS.ErrnoException).code === "ENOTEMPTY"
+              ? "the agent wrote into it"
+              : (err as Error).message),
+        );
+        return true;
+      }
+      return false;
     } catch (err) {
       onNotice(
         `could not release the participant's checkout` +
@@ -1495,9 +1610,13 @@ async function buildRoom(
   // was. One the harness already wrote into is kept, as at dismiss. A
   // participant that never joined has no notices of its own, so both lines
   // go to the room's, which every participant shows.
-  const rollback = async (id: string, worktree: string | undefined) => {
-    const named = await release(id, worktree, onRoomNotice);
-    if (!named && worktrees && worktree && existsSync(worktree)) {
+  const rollback = async (
+    id: string,
+    worktree: string | undefined,
+    place: Place,
+  ) => {
+    const named = await release(id, worktree, onRoomNotice, place);
+    if (!named && place.worktrees && worktree && existsSync(worktree)) {
       onRoomNotice(
         `a participant that did not join left its worktree at ${worktree}: ` +
           "its harness wrote into it, so the worktree and its branch are kept",
@@ -1531,11 +1650,16 @@ async function buildRoom(
       try {
         await Promise.allSettled(inflight);
         await Promise.all(members.map((m) => m.stop()));
-        for (const { participant: p, onNotice } of members) {
-          await release(p.id, p.worktree, onNotice);
+        for (const { participant: p, onNotice, place } of members) {
+          await release(p.id, p.worktree, onNotice, place);
         }
         for (const saved of from?.tombstones ?? []) {
-          await release(saved.id, saved.worktree, onRoomNotice);
+          await release(
+            saved.id,
+            saved.worktree,
+            onRoomNotice,
+            await places.saved(saved),
+          );
         }
       } finally {
         clearInterval(sweep);
@@ -1630,6 +1754,7 @@ async function buildRoom(
   const makeMember = (
     request: AgentRequest,
     id: string,
+    place: Place,
     worktree: string,
     info: { branch: string; baseSha: string; baseRef?: string } | undefined,
     own: RoomNotice[],
@@ -1659,7 +1784,7 @@ async function buildRoom(
       },
       onAnswer: answer,
       onCheckout: (next) => {
-        worktrees?.update(id, next);
+        place.worktrees?.update(id, next);
         // No stream line carries this: the room record and the next reply do.
         saveSoon();
       },
@@ -1668,6 +1793,8 @@ async function buildRoom(
       ...made,
       spec: request.spec,
       source: request.source,
+      place,
+      ...(request.cwd !== undefined && { cwd: request.cwd }),
       own,
       onNotice,
     };
@@ -1676,14 +1803,32 @@ async function buildRoom(
   const spawn = async (request: AgentRequest, base: string | undefined) => {
     const id = newParticipantId();
     const own: RoomNotice[] = [];
-    if (notice) own.push({ text: notice });
 
     // Taken here rather than in the participant, so a rollback knows which
     // path to look at.
     let worktree: string | undefined;
+    let place = places.home;
     let made: Member;
     try {
-      worktree = worktrees ? await worktrees.acquire(id, base) : cwd;
+      if (request.cwd !== undefined) {
+        place = await places.open(request.cwd, false);
+      } else if (scratchDir !== undefined) {
+        const dir = join(scratchDir, id);
+        place = { worktrees: null, root: dir, dir, scratch: true };
+      }
+      const { worktrees, notice } = place;
+      // Refused, not ignored: the caller asked to start from someone's
+      // work, and a folder with no worktrees has no branch to start from.
+      if (base !== undefined && !worktrees) {
+        throw new RoomRefusal(
+          "invalid_request",
+          `cannot start from ${JSON.stringify(base)}: ${place.dir} is not a ` +
+            "git repository with a commit, so no participant has a branch",
+        );
+      }
+      if (notice) own.push({ text: notice });
+      if (place.scratch) mkdirSync(place.dir, { recursive: true, mode: 0o700 });
+      worktree = worktrees ? await worktrees.acquire(id, base) : place.dir;
       const info = worktrees?.info(id);
       if (info) {
         bus.emit({
@@ -1698,10 +1843,10 @@ async function buildRoom(
           },
         });
       }
-      made = makeMember(request, id, worktree, info, own);
+      made = makeMember(request, id, place, worktree, info, own);
       await made.launch();
     } catch (err) {
-      await rollback(id, worktree);
+      await rollback(id, worktree, place);
       if (err instanceof BadBase) {
         throw new RoomRefusal("invalid_request", err.message);
       }
@@ -1713,7 +1858,7 @@ async function buildRoom(
     // see it.
     if (ended()) {
       await made.stop();
-      await rollback(id, worktree);
+      await rollback(id, worktree, place);
       throw dismissed();
     }
     members.push(made);
@@ -1739,19 +1884,9 @@ async function buildRoom(
     if (ended()) throw dismissed();
     const refused = clash([...participants, ...pending], request);
     if (refused) throw refused;
-    const { base } = request;
-    // Refused, not ignored: the caller asked to start from someone's work,
-    // and a shared cwd has no branch to start from.
-    if (base !== undefined && !worktrees) {
-      throw new RoomRefusal(
-        "invalid_request",
-        `cannot start from ${JSON.stringify(base)}: ${cwd} is not a git ` +
-          "repository with a commit, so no participant has a branch",
-      );
-    }
     pending.add(request);
     try {
-      return await spawn(request, base);
+      return await spawn(request, request.base);
     } finally {
       pending.delete(request);
     }
@@ -1830,7 +1965,7 @@ async function buildRoom(
       update: { sessionUpdate: "_client_participant_removed" },
     });
     // The participant is gone, so a kept checkout is the room's to report.
-    await release(id, found.participant.worktree, onRoomNotice);
+    await release(id, found.participant.worktree, onRoomNotice, found.place);
   };
 
   const forward = async (targetId: string, fromId: string) => {
@@ -1843,7 +1978,15 @@ async function buildRoom(
     }
     const found = member(targetId);
     const target = found.participant;
-    const source = member(fromId).participant;
+    const from = member(fromId);
+    const source = from.participant;
+    // M11-2: a branch lives in one repository only.
+    if (found.place.root !== from.place.root) {
+      throw new RoomRefusal(
+        "no_branch",
+        `${target.name} and ${source.name} work in different repositories`,
+      );
+    }
     if (target.status() === "busy") {
       throw new RoomRefusal(
         "agent_busy",
@@ -1919,6 +2062,8 @@ async function buildRoom(
         ...(saved.model && { model: saved.model }),
         ...(saved.thoughtLevel && { thoughtLevel: saved.thoughtLevel }),
       };
+      if (saved.cwd !== undefined) request.cwd = saved.cwd;
+      const place = await places.saved(saved);
       const info =
         saved.branch && saved.baseSha
           ? {
@@ -1928,7 +2073,7 @@ async function buildRoom(
             }
           : undefined;
       if (info) {
-        worktrees?.adopt(saved.id, {
+        place.worktrees?.adopt(saved.id, {
           ...info,
           ...(saved.branchRenamed === true && { renamed: true }),
         });
@@ -1936,6 +2081,7 @@ async function buildRoom(
       const m = makeMember(
         request,
         saved.id,
+        place,
         saved.worktree,
         info,
         [...saved.notices],
@@ -2111,7 +2257,7 @@ function createParticipant({
   }) => void;
   /** Where what a session said goes (M9-4). */
   report?: (seen: Seen) => void;
-}): Omit<Member, "spec" | "source" | "own" | "onNotice"> {
+}): Omit<Member, "spec" | "source" | "place" | "cwd" | "own" | "onNotice"> {
   /** The live harness; undefined before `launch` and once it has stopped. */
   let agent: AcpAgent | undefined;
   /** Why there is no harness, once there was one (R46). */
