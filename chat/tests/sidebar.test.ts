@@ -73,6 +73,44 @@ const rowsOf = (
   return sidebar.render(32).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
 };
 
+test("chats follow the rooms under their own title, with no hall row (M11-1)", () => {
+  const { state, add } = mk();
+  add("p-ann", "ann", "claude");
+  const hall = newRoomState();
+  applyLine(hall, {
+    seq: 1,
+    at: "2026-10-11T09:00:00Z",
+    roomId: "hall",
+    participantId: "p-bob",
+    update: {
+      sessionUpdate: "_client_participant_added",
+      name: "bob",
+      harness: "pi",
+      mode: "auto",
+    } as RoomEventLine["update"],
+  });
+  const both = new Map([
+    ...roomsOf(state),
+    [
+      "hall",
+      {
+        entry: { id: "hall", cwd: "/state/hall", status: "active", hall: true },
+        state: hall,
+      } as unknown as Followed,
+    ],
+  ]);
+  const text = rowsOf(both).slice(0, 7).join("\n");
+  assert.match(text, /^── rooms ─+ « │\n/);
+  assert.match(text, /○ kapelle app/);
+  assert.match(text, /○ ann +│\n {6}claude +│\n── chats ─+ │\n/);
+  // A chat is a top-level row: its name starts where a room's does.
+  assert.match(text, /\n {2}○ bob +│\n {4}pi +│/);
+  assert.doesNotMatch(text, /hall/);
+  // With no room, the chats' title carries «.
+  const only = new Map([...both].filter(([id]) => id === "hall"));
+  assert.match(rowsOf(only, { roomId: "" })[0] ?? "", /^── chats ─+ « │/);
+});
+
 test("a paused room and its paused and killed participants are marked", () => {
   const { state, add } = mk();
   add("p-ana", "ana");

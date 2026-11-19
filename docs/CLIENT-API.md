@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.24** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.25** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -19,7 +19,8 @@ added `_client_repeat_resolved`, #318, which settled the cancel boundary, and
 M8-7, #271, which added the orchestrator's turn cap; #371, which tightened the
 `daemon.json` lifecycle; M9-8, #307, which made the `/harnesses` routes stable; and
 M10-5, #494, which added `GET /config` and `PATCH /config`; M9-9, #501, which added
-an agent's thinking level; and #511, which distinguishes a deleted room).
+an agent's thinking level; #511, which distinguishes a deleted room; and M11-1, #475,
+which added the hall).
 
 ## Contents
 
@@ -291,7 +292,8 @@ request that is not valid HTTP gets `400`.
 | `room_active` | `409` | You deleted a room that is still active. | Dismiss it first, then delete it. |
 | `uncommitted_work` | `409` | You deleted a room, and a checkout has changes nobody committed. New files count. The message names each file. | Nothing changed. Commit or remove the files, then delete again. |
 | `agent_exited` | `409` | The participant is stopping: it is being removed, or the daemon is shutting down. A participant whose harness died is not refused: the next message revives it. | Stop. |
-| `no_orchestrator` | `409` | The room has no participant with the `orchestrator` role, so a message has no target. | Open a room with an orchestrator. |
+| `no_orchestrator` | `409` | The room has no participant with the `orchestrator` role, so a message has no target. The message names each participant as `@name`. | Send to one participant by name, or give one the role. The hall has none. |
+| `hall_permanent` | `409` | You dismissed or deleted the hall, or asked for its delete preview. Since 1.25. | Nothing changed. The hall always stays. |
 | `idempotency_conflict` | `409` | This `Idempotency-Key` already started a run with a different body. | Use a new key for new work. |
 | `idempotency_in_progress` | `409` | A request with this `Idempotency-Key` has not answered yet. | Wait, then send the same request again. |
 | `orchestrator_exists` | `409` | The room already has an orchestrator. | Change the other participant's role first. |
@@ -1240,6 +1242,26 @@ participant has its own git branch and checkout. Today:
   cancel ends it.
 - A room survives a daemon restart. See [After a restart](#after-a-restart).
 
+### The hall
+
+Since 1.25. The daemon makes one room by itself, the **hall**, when it first starts,
+and keeps it across restarts. Its `id` is `hall`, its `title` is `hall`, and the room
+and its list entry carry `"hall": true`. Every other room has no `hall` key.
+
+- The hall's `cwd` is the folder `hall` in the daemon's state folder. It is not a git
+  repository and needs no added repository, so the hall exists with none. Every agent in
+  the hall works in that folder, with no branch, and a notice says they share it.
+- The hall has no orchestrator. An agent added to it, or changed, with
+  `role: "orchestrator"` is refused `400` `invalid_request`. A message with no `@name`
+  is refused: see [Addressing](#addressing).
+- It cannot be dismissed or deleted: [dismiss](#post-roomsiddismiss),
+  [delete](#delete-roomsid) and its [preview](#get-roomsiddelete-preview) answer `409`
+  `hall_permanent`.
+- Everything else works as in any room: the roster, messages to `@name`, the timeline,
+  questions, a rename, and a revive after a restart.
+- kapelle's own screens hide the hall: its agents show as chats, one row each, after
+  the rooms. A client may show it as a room.
+
 ### `POST /rooms`
 
 **Request:** `cwd`, plus an optional `title` and an optional `agents` list. A `title` must
@@ -1400,7 +1422,8 @@ is sent, because the default is `HEAD`: a folder that is not committed yet gives
 ### `GET /rooms`
 
 **Reply `200`:** a list. Each room carries its participants in short, so a list of rooms
-is one call. While a delete runs, the room is omitted from this list; a refused delete
+is one call. The [hall](#the-hall) is first; the list promises no order for the other
+rooms. While a delete runs, the room is omitted from this list; a refused delete
 puts it back.
 
 ```json
@@ -1458,7 +1481,8 @@ orchestrator never sends to itself, so `from` is an unknown field here.
 **Reply `202`:** `{ "seq": 41, "queued": 0 }`, as below.
 
 **Refusals:** as below, and `409` `no_orchestrator` when no participant has that role,
-which includes an empty room.
+which includes an empty room and the [hall](#the-hall). Its `message` names each
+participant as `@name`, so a client can say whom to name.
 
 ### `GET /rooms/:id/events`
 
@@ -1488,7 +1512,7 @@ names it.
 
 **Reply `200`:** the room, with `status: "dismissed"`, and each participant
 `dismissed`. `404` `room_not_found` for an unknown room. `409` `room_dismissed` when the
-room was already dismissed.
+room was already dismissed. `409` `hall_permanent` for the [hall](#the-hall).
 
 ### `GET /rooms/:id/delete-preview`
 
@@ -1522,7 +1546,8 @@ Read-only, so it works on an active room.
 when every commit is already reachable outside the room. It carries at most 200 commits
 per branch; `total` is the full count, so a client can say how many were left out.
 
-**Refusals:** `404` `room_not_found`.
+**Refusals:** `404` `room_not_found`; `409` `hall_permanent` for the
+[hall](#the-hall).
 
 ### `DELETE /rooms/:id`
 
@@ -1548,8 +1573,9 @@ daemon knows no deleted id, so they answer `404` `room_not_found`.
 A `410` can also be the window while a delete is still running. If that delete refuses,
 the room is restored, so a later `GET` or room-list poll can show it again.
 
-**Refusals:** `404` `room_not_found`; `409` `room_active`; `409` `uncommitted_work`,
-naming the files; `503` `shutting_down`. Nothing changes on a refusal, with one
+**Refusals:** `404` `room_not_found`; `409` `hall_permanent` for the
+[hall](#the-hall); `409` `room_active`; `409` `uncommitted_work`, naming the files; `503`
+`shutting_down`. Nothing changes on a refusal, with one
 exception: a message sent to a paused room during its delete can revive a participant. If
 that participant then leaves uncommitted work, the delete is refused, and the room is left
 dismissed.
@@ -1570,8 +1596,9 @@ The reply comes when the harness is ready.
 
 **Reply `201`:** the participant, in the shape `GET /rooms/:id` gives it.
 
-**Refusals:** `404` `room_not_found`; `400` `invalid_request` for a bad field, or a bad
-`base` (see [`POST /rooms`](#post-rooms)); `400` `invalid_config` when the repository's
+**Refusals:** `404` `room_not_found`; `400` `invalid_request` for a bad field, a bad
+`base` (see [`POST /rooms`](#post-rooms)), or the `orchestrator` role in the
+[hall](#the-hall); `400` `invalid_config` when the repository's
 `linkPaths` cannot be used; `409` `name_taken`; `409` `orchestrator_exists`; `409`
 `room_dismissed`; `503` `shutting_down`; `500` `room_open_failed` when the harness cannot
 start.
@@ -1633,8 +1660,9 @@ level gets its own line, with `thoughtLevel`: the level in use, or `null` when t
 has no level option. Read the participant again for its notice.
 
 **Reply `200`:** the participant. **Refusals:** `404` `room_not_found` or
-`participant_not_found`; `400` `invalid_request` for a bad field, an empty body or a
-level the participant's model does not list; `409` `name_taken`; `409`
+`participant_not_found`; `400` `invalid_request` for a bad field, an empty body, a
+level the participant's model does not list, or the `orchestrator` role in the
+[hall](#the-hall); `409` `name_taken`; `409`
 `orchestrator_exists`; `409` `room_dismissed`.
 
 ### `DELETE /rooms/:id/agents/:agentId`
@@ -1994,6 +2022,10 @@ the same rules, so the TUI and piped `chat.ts` behave the same:
   A room with no orchestrator and one participant sends it to that participant (#333).
   A room with no orchestrator and two or more participants, or none, refuses before the
   request, and says: start with `@name`, or give a participant the orchestrator role.
+- **In the [hall](#the-hall), no mention is always refused** before the request, with
+  one participant too, and the refusal names each participant as `@name`. A message
+  with no mention means "the orchestrator", and the hall has none, so it never goes to
+  an agent the person did not name.
 - After the first word that does not begin with `@`, an `@` is plain text. `@alice ask
   @bob` goes to alice. To start a message with a literal `@`, put it in backticks,
   like `` `@property` ``, or put a word before it.

@@ -63,6 +63,7 @@ import {
 import {
   deletePreview,
   deletePreviewLines,
+  HALL_ID,
   type RouteCommand,
   runCommand,
 } from "../client/command.ts";
@@ -142,6 +143,7 @@ import {
   ticks,
   usageText,
   type View,
+  viewable,
   waiting,
   where,
 } from "./view.ts";
@@ -511,7 +513,18 @@ function chatTui(
     invalidate: () => {},
   };
   const editor = new Editor(tui, EDITOR_THEME, { paddingX: 1 });
-  let view: View = { roomId: selected ?? list[0]?.id ?? "" };
+  // The first room, else the hall's first chat (M11-1): the hall has no
+  // timeline on this screen. Read from the list, as no stream has a roster
+  // yet.
+  const land =
+    list.find((r) => r.id === selected) ?? list.find((r) => !r.hall) ?? list[0];
+  const chat = land?.hall ? land.participants[0] : undefined;
+  let view: View =
+    land && !land.hall
+      ? { roomId: land.id }
+      : chat && land
+        ? { roomId: land.id, participantId: chat.id }
+        : { roomId: "" };
   let shown = (process.stdout.columns || 80) >= NARROW;
   /** One line about a room that ended, until the next view change. */
   let flash = "";
@@ -551,8 +564,9 @@ function chatTui(
     setStatus();
     return false;
   };
+  // A chat is not a room to rejoin (M11-1): `kapelle chat` opens it again.
   const left = () =>
-    view.roomId
+    view.roomId && !rooms.get(view.roomId)?.entry.hall
       ? `left room ${view.roomId}; rejoin with: kapelle chat attach ${view.roomId}`
       : "left the chat";
   const say = (text: string) => {
@@ -660,8 +674,16 @@ function chatTui(
     end: (code, ...last) => end(code, ...last),
     left,
   });
-  const { hidePanel, menu, showHelp, newForm, addForm, loopForm, askToAdd } =
-    box;
+  const {
+    hidePanel,
+    menu,
+    showHelp,
+    newForm,
+    addForm,
+    chatForm,
+    loopForm,
+    askToAdd,
+  } = box;
   const { question, offer, syncBox } = questionParts({
     d,
     fresh: set.fresh,
@@ -800,7 +822,7 @@ function chatTui(
       const roster = rosterOf(r.state, r.entry.participants);
       const t =
         roster.length > 0
-          ? targetOf(editor.getText(), roster)
+          ? targetOf(editor.getText(), roster, r.entry.hall)
           : { error: NO_AGENTS };
       if ("id" in t) {
         const p = r.state.participants.get(t.id);
@@ -962,7 +984,8 @@ function chatTui(
     ).undoStack?.clear?.();
   };
 
-  const open = (next: View) => {
+  const open = (asked: View) => {
+    const next = viewable(rooms, asked);
     closeRail();
     cancelRefresh();
     // A pop-up belongs to the view it opened on.
@@ -1157,16 +1180,19 @@ function chatTui(
     };
 
     quit = (why) => {
+      const stopped =
+        "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat";
       if (why.kind === "gone") {
-        end(
-          1,
-          why.message
-            ? `! ${why.message}`
-            : "! the daemon stopped: start it with kapelle daemon start, then run kapelle chat",
-        );
+        end(1, why.message ? `! ${why.message}` : stopped);
         return;
       }
       const { roomId, ended, err } = why;
+      // The hall is hidden (M11-1): its stream ending last is the daemon's
+      // end, not a room's.
+      if (rooms.get(roomId)?.entry.hall) {
+        end(1, stopped);
+        return;
+      }
       // A refused version is the whole story; the reconcile after it only
       // says the same words again.
       if (err instanceof VersionRefused) {
@@ -1301,11 +1327,11 @@ function chatTui(
        *  the next letter would join the name (`@bobx`). In a thread the
        *  pre-fill put back on the clear is already this. */
       const giveBack = () => {
-        const bare = "id" in targetOf(text, roster);
+        const bare = "id" in targetOf(text, roster, r?.entry.hall);
         const back = bare ? `${text} ` : text;
         if (editor.getText() !== back) editor.setText(back);
       };
-      const c = parseLine(text, roster);
+      const c = parseLine(text, roster, r?.entry.hall);
       if ("error" in c) {
         flash = `! ${c.error}`;
         setStatus();
@@ -1328,6 +1354,8 @@ function chatTui(
             return newForm();
           case "add":
             return addForm();
+          case "chat":
+            return chatForm();
           case "loop":
             return loopForm();
           case "config":
@@ -1469,8 +1497,8 @@ function chatTui(
     const send = async (c: RouteCommand, target?: string): Promise<boolean> => {
       // A sidebar click or arrow key can move the view while a dismiss or
       // delete waits. Every step of this command stays on the room it began
-      // in (#352 review).
-      const roomId = target ?? view.roomId;
+      // in (#352 review). A new chat goes to the hall, from any view.
+      const roomId = c.verb === "chat" ? HALL_ID : (target ?? view.roomId);
       if (c.verb === "dismiss") {
         const r = rooms.get(roomId);
         flash = `dismissing ${r?.entry.title ?? roomId}: stopping its harnesses…`;
@@ -1544,6 +1572,9 @@ function chatTui(
           })),
         });
         open({ roomId: id });
+      }
+      if (c.verb === "chat" && out.participant) {
+        open({ roomId, participantId: out.participant.id });
       }
       // A dismiss ends the room's stream, and `closed` says so.
       if (c.verb !== "dismiss") flash = out.line;

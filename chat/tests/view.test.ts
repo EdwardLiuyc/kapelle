@@ -54,6 +54,7 @@ import {
   touched,
   usageText,
   type View,
+  viewable,
   waiting,
   where,
 } from "../view.ts";
@@ -89,6 +90,28 @@ test("the rows: each room, then its roster, in order", () => {
     { roomId: "r1", participantId: "p-bob" },
     { roomId: "r2" },
   ]);
+});
+
+test("the hall has no row: its agents follow the rooms as chats (M11-1)", () => {
+  const all = new Map<string, { state: RoomState; entry?: { hall?: true } }>([
+    ["hall", { state: room(["ann", "bob"]), entry: { hall: true } }],
+    ["r1", { state: room(["cy"]) }],
+  ]);
+  const ann = { roomId: "hall", participantId: "p-ann" };
+  assert.deepEqual(rows(all), [
+    { roomId: "r1" },
+    { roomId: "r1", participantId: "p-cy" },
+    ann,
+    { roomId: "hall", participantId: "p-bob" },
+  ]);
+  // A view of the hall opens its first chat; with no chat, the first row.
+  assert.deepEqual(viewable(all, { roomId: "hall" }), ann);
+  assert.deepEqual(viewable(all, ann), ann);
+  assert.deepEqual(viewable(all, { roomId: "r1" }), { roomId: "r1" });
+  const empty = new Map([
+    ["hall", { state: room([]), entry: { hall: true as const } }],
+  ]);
+  assert.deepEqual(viewable(empty, { roomId: "hall" }), { roomId: "" });
 });
 
 test("the row keys step one row, and stop at either end", () => {

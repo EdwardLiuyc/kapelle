@@ -27,6 +27,7 @@ import type { RoomDto, RoomListEntry } from "../client/contract.ts";
 import {
   daemonApi as api,
   bootDaemon,
+  listRooms,
   pendingOne,
   REPO,
   roomIdle,
@@ -87,7 +88,7 @@ test("kapelle demo: a reply, one question, the write and its diff; a second run 
     /The notice that says "no measured labels" is about me/,
   );
 
-  const first = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  const first = (await listRooms<RoomListEntry>(d)).body;
   assert.deepEqual(
     first.map((room) => [room.cwd, room.participants.map((p) => p.name)]),
     [[folder, ["demo"]]],
@@ -104,7 +105,7 @@ test("kapelle demo: a reply, one question, the write and its diff; a second run 
     r2.stdout,
     new RegExp(`removing the previous demo room ${first[0]?.id}`),
   );
-  const second = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  const second = (await listRooms<RoomListEntry>(d)).body;
   assert.equal(second.length, 1, JSON.stringify(second));
   assert.notEqual(second[0]?.id, first[0]?.id);
   const repos = await readdir(join(runtime, "kapelle", "repos"));
@@ -138,7 +139,7 @@ test("kapelle demo cleans a removed participant's dirty checkout before the next
     200,
   );
   await c.waitFor("Wrote notes.md");
-  const [old] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  const [old] = (await listRooms<RoomListEntry>(d)).body;
   assert.ok(old, "the demo room is listed");
   const room = (await api<RoomDto>(d, "GET", `/rooms/${old.id}`)).body;
   const worktree = room.participants[0]?.worktree;
@@ -156,7 +157,7 @@ test("kapelle demo cleans a removed participant's dirty checkout before the next
   again.child.stdin.write("/leave\n");
   const r2 = await again.done;
   assert.equal(r2.code, 0, r2.stderr);
-  const rooms = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  const rooms = (await listRooms<RoomListEntry>(d)).body;
   assert.equal(rooms.length, 1, JSON.stringify(rooms));
   assert.notEqual(rooms[0]?.id, old.id);
   const repos = await readdir(join(runtime, "kapelle", "repos"));
@@ -201,7 +202,7 @@ test("kapelle demo writes nothing when its permission question is rejected", {
     }),
   ]);
   assert.equal(answer, "denied");
-  const [listed] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+  const [listed] = (await listRooms<RoomListEntry>(d)).body;
   assert.ok(listed, "the demo room is listed");
   const room = (await api<RoomDto>(d, "GET", `/rooms/${listed.id}`)).body;
   const worktree = room.participants[0]?.worktree;
@@ -243,7 +244,7 @@ test("kapelle demo keeps the notes made before a revive: the write after it read
   await c.waitFor("Wrote notes.md");
   c.child.stdin.write("/leave\n");
   assert.equal((await c.done).code, 0);
-  const [listed] = (await api<RoomListEntry[]>(first, "GET", "/rooms")).body;
+  const [listed] = (await listRooms<RoomListEntry>(first)).body;
   assert.ok(listed, "the demo room is listed");
   process.kill(first.pid, "SIGTERM");
   assert.equal((await first.done).code, 0);
@@ -313,7 +314,7 @@ for (const [what, make] of unreadableNotes) {
       XDG_CONFIG_HOME: join(runtime, "config-home"),
     });
     await openDemo(c);
-    const [listed] = (await api<RoomListEntry[]>(d, "GET", "/rooms")).body;
+    const [listed] = (await listRooms<RoomListEntry>(d)).body;
     assert.ok(listed, "the demo room is listed");
     const room = (await api<RoomDto>(d, "GET", `/rooms/${listed.id}`)).body;
     const worktree = room.participants[0]?.worktree;

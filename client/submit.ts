@@ -24,12 +24,16 @@ export type Line =
   | { error: string }
   | { verb: "message"; target: Target };
 
-/** What `text` is, with this roster. */
-export function parseLine(text: string, roster: readonly Named[]): Line {
+/** What `text` is, with this roster. `hall` is the room's `hall` flag. */
+export function parseLine(
+  text: string,
+  roster: readonly Named[],
+  hall = false,
+): Line {
   return (
-    parseCommand(text, roster) ?? {
+    parseCommand(text, roster, hall) ?? {
       verb: "message",
-      target: resolveTarget(text, roster),
+      target: resolveTarget(text, roster, hall),
     }
   );
 }

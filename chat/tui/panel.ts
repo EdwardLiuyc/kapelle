@@ -41,6 +41,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import {
+  ADD_IN_CHAT,
   HELP,
   levelLines,
   loopCommand,
@@ -784,12 +785,19 @@ function panelParts({
     } else if (r && roster(r.state).length > 0) {
       items.push({ value: "agent", label: "agent …" });
     }
-    if (r) items.push(row("add", "add agent …", "/add"));
-    if (r) items.push(row("title", "rename room …", "/title"));
+    // A chat is no room (M11-1): `/chat` adds an agent, from any view.
+    if (r && !r.entry.hall) {
+      items.push(row("add", "add agent …", "/add"));
+      items.push(row("title", "rename room …", "/title"));
+    }
     items.push(row("new", "new room …", "/new"));
+    items.push(row("chat", "new chat …", "/chat"));
     items.push(row("loop", "loop …", "/loop"));
-    if (r) items.push(row("dismiss", "dismiss room", "/dismiss"));
-    if (r) items.push(row("delete", "delete room …", "/delete"));
+    // The daemon keeps the hall (M11-1): it refuses both.
+    if (r && !r.entry.hall) {
+      items.push(row("dismiss", "dismiss room", "/dismiss"));
+      items.push(row("delete", "delete room …", "/delete"));
+    }
     // A row for each room and agent, as the sidebar has, because the
     // sidebar can be hidden. The view the person is on is left out.
     const opens = rows(rooms).filter((v) => !same(v, view()));
@@ -802,7 +810,7 @@ function panelParts({
           ? {
               value: `>${i}`,
               label: `open @${nameOf(f.state, v.participantId)}`,
-              description: room,
+              description: f.entry.hall ? "chat" : room,
             }
           : { value: `>${i}`, label: `open ${room}` },
       );
@@ -844,6 +852,7 @@ function panelParts({
     if (value === "new") return newForm(self);
     if (value === "loop") return loopForm(self);
     if (value === "add") return addForm(self);
+    if (value === "chat") return chatForm(self);
     if (value === "config") return void configForm(self);
     if (value === "dismiss") return void run({ verb: "dismiss" });
     if (value === "delete") {
@@ -1213,8 +1222,8 @@ function panelParts({
 
   const addForm = (back: () => void = hidePanel) => {
     const r = rooms.get(view().roomId);
-    if (!r) {
-      say("! no room: open one first");
+    if (!r || r.entry.hall) {
+      say(`! ${r ? ADD_IN_CHAT : "no room: open one first"}`);
       return setStatus();
     }
     const others = roster(r.state).map((p) => `@${p.name}`);
@@ -1255,6 +1264,31 @@ function panelParts({
       back,
     );
   };
+
+  /** A new chat (M11-1): an agent in the hidden hall, from any view. */
+  const chatForm = (back: () => void = hidePanel) =>
+    form(
+      "new chat",
+      [
+        harnessField(),
+        { id: "cmd", label: "command", value: "" },
+        { id: "name", label: "name", value: "" },
+        { id: "mode", label: "mode", value: "auto", pick: MODES },
+        modelField(),
+      ],
+      "start",
+      (v) => ({
+        verb: "chat",
+        agent: {
+          agent: v.agent,
+          cmd: v.cmd,
+          name: v.name,
+          mode: v.mode,
+          model: v.model || undefined,
+        },
+      }),
+      back,
+    );
 
   const newForm = (back: () => void = hidePanel) =>
     form(
@@ -1409,12 +1443,14 @@ function panelParts({
 
   /**
    * `/config` (M10-5): the project config of the room on screen, or of the
-   * folder the chat started in. Each row is the file's value, and Enter edits
+   * folder the chat started in. The hall's folder is no project (M11-1), so
+   * the hall counts as no room here. Each row is the file's value, and Enter edits
    * it; the save row sends only the changed keys. An invalid file is the
    * daemon's refusal on the status line, and the form does not open.
    */
   const configForm = async (back: () => void = hidePanel): Promise<void> => {
-    const cwd = rooms.get(view().roomId)?.entry.cwd ?? absoluteFolder();
+    const open = rooms.get(view().roomId)?.entry;
+    const cwd = open && !open.hall ? open.cwd : absoluteFolder();
     const opening = panelGeneration;
     const fail = (text: string) => {
       if (panel) {
@@ -1477,6 +1513,7 @@ function panelParts({
     atStart,
     newForm,
     addForm,
+    chatForm,
     loopForm,
     configForm,
     askToAdd,

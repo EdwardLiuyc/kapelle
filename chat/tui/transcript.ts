@@ -1176,7 +1176,9 @@ function transcriptParts({
       const entries = id ? thread(r.state, id) : r.state.timeline;
       for (const e of entries) addEntry(r.state, e, false);
     } else {
-      addExtra("no rooms. ctrl+o → new room, or type /new <harness>.");
+      addExtra(
+        "no rooms or chats. ctrl+o → new room or new chat, or type /new or /chat <harness>.",
+      );
       addExtra("ctrl+c twice leaves.");
     }
     setStatus();

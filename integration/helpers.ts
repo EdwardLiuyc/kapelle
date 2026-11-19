@@ -748,6 +748,15 @@ export interface Reply {
   notices: { taskId: string; text: string }[];
 }
 
+/** `GET /rooms` without the hall (M11-1). Every daemon has the hall, so a
+ *  test about the rooms it opened reads only those. */
+export async function listRooms<T extends { hall?: true }>(
+  d: Daemon,
+): Promise<{ status: number; body: T[] }> {
+  const r = await daemonApi<T[]>(d, "GET", "/rooms");
+  return { status: r.status, body: r.body.filter((room) => !room.hall) };
+}
+
 /** The suite's default reply type; `daemonApi` itself is shared. */
 export async function api<T = Reply>(
   d: Daemon,

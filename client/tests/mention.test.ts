@@ -98,6 +98,20 @@ test("refused: no mention, two agents and no orchestrator", () => {
   });
 });
 
+test("refused in the hall: no mention, even with one agent; @name still goes (M11-1)", () => {
+  const one = NO_ORCHESTRATOR.slice(0, 1);
+  assert.deepEqual(resolveTarget("hi", one, true), {
+    error: "the hall has no orchestrator: start with @name (@bob)",
+  });
+  assert.deepEqual(resolveTarget("hi", [], true), {
+    error: "the hall has no orchestrator: start with @name",
+  });
+  assert.deepEqual(resolveTarget("@bob hi", one, true), {
+    id: "p-b",
+    text: "hi",
+  });
+});
+
 test("refused at submit: nothing after the mention", () => {
   for (const input of ["@bob", "@bob, ", "@bob\n\n"]) {
     assert.deepEqual(resolveTarget(input, ROSTER), {

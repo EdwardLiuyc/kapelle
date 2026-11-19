@@ -20,6 +20,7 @@ import {
   chatOnPty,
   gitRepo,
   LEAVE,
+  listRooms,
   noPty,
   only,
   plainText,
@@ -127,7 +128,7 @@ test("chat.ts brings a pasted draft back with its text, not its marker (#355)", 
   skip: noPty,
 }, async (t) => {
   const { child, seen, press, exited, out, d, cwd } = await chatOnPty(t);
-  const [a] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [a] = await listRooms<RoomReply>(d).then((r) => r.body);
   const b = await api<RoomReply>(d, "POST", "/rooms", {
     cwd,
     agents: [{ cmd: REMEMBER, name: "bob" }],
@@ -578,7 +579,7 @@ test("chat.ts on a real terminal moves an untouched thread @name to a new name",
   const { child, press, seen, exited, out, d } = await chatOnPty(t);
   await seen("○ mock-agent");
   await press("\x1b[1;3B", "@mock-agent");
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   const agent = room?.participants[0]?.id as string;
   const renamed = await api(d, "PATCH", `/rooms/${room?.id}/agents/${agent}`, {
     name: "bob",
@@ -682,7 +683,7 @@ test("chat.ts on a real terminal falls back to the timeline when the open thread
 }, async (t) => {
   const { child, press, seen, exited, out, d } = await chatOnPty(t);
   await seen("○ mock-agent");
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   const bob = await api<ParticipantDto>(
     d,
     "POST",
@@ -721,7 +722,7 @@ test("chat.ts on a real terminal shows the checkout of a participant added after
 }, async (t) => {
   const { child, press, seen, exited, out, d } = await chatOnPty(t);
   await seen("○ mock-agent");
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   const carol = await api<ParticipantDto>(
     d,
     "POST",
@@ -764,7 +765,7 @@ test("chat.ts on a real terminal drops a removed participant's notices from the 
 }, async (t) => {
   const { child, press, seen, exited, out, d } = await chatOnPty(t);
   await seen("○ mock-agent");
-  const [room] = await api<RoomReply[]>(d, "GET", "/rooms").then((r) => r.body);
+  const [room] = await listRooms<RoomReply>(d).then((r) => r.body);
   const bob = await api<ParticipantDto>(
     d,
     "POST",

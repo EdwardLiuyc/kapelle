@@ -486,16 +486,18 @@ test("each menu row shows its slash command on the right (M7-5)", () => {
     ["add agent …", "/add"],
     ["rename room …", "/title"],
     ["new room …", "/new"],
+    ["new chat …", "/chat"],
     ["loop …", "/loop"],
     ["dismiss room", "/dismiss"],
     ["delete room …", "/delete"],
-    ["help", "/help"],
   ]) {
     assertCommandRight(roomRows, label, command);
   }
 
-  // The loop row makes the room menu one row taller than its viewport.
-  type(room, "leave");
+  // The loop and chat rows make the room menu taller than its viewport.
+  type(room, "help");
+  assert.match(shownOf(room), /→ help +\/help/);
+  type(room, "\x15leave");
   assert.match(shownOf(room), /→ leave +\/leave/);
   type(room, "\x15config");
   assert.match(shownOf(room), /→ config … +\/config/);

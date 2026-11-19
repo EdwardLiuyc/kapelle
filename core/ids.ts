@@ -57,6 +57,10 @@ export function newRoomId(now: Date = new Date()): string {
   return `room-${newRunId(now)}`;
 }
 
+/** The operator's hall (M11-1): the one room with a fixed id. It never
+ *  matches `ROOM_ID_PATTERN`, so it owns no branch and no worktree. */
+export const HALL_ID = "hall";
+
 /** A participant id: `p-` and 8 base36 characters. Opaque, so a rename
  *  never moves it (R10), and a legal task id, so M6-6a can name the
  *  participant's branch `kapelle/<roomId>/<participantId>` with

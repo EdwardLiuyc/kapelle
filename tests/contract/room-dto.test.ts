@@ -34,6 +34,7 @@ const ROOM_KEYS = new Set(
     updatedAt: 0,
     status: 0,
     seq: 0,
+    hall: 0,
     participants: 0,
   } satisfies Record<keyof RoomDto, 0>),
 );
@@ -66,6 +67,7 @@ const LIST_KEYS = new Set(
     title: 0,
     status: 0,
     updatedAt: 0,
+    hall: 0,
     participants: 0,
   } satisfies Record<keyof RoomListEntry, 0>),
 );
@@ -142,6 +144,7 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
   assert.deepEqual(
     list.body.map((r) => [r.id, r.participants]),
     [
+      ["hall", []],
       [empty.body.id, []],
       [
         starter.body.id,

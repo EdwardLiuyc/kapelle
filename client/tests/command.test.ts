@@ -91,6 +91,38 @@ test("/add takes a harness or --cmd, and quotes keep spaces", () => {
   assert.ok(two && "error" in two && /one harness/.test(two.error));
 });
 
+test("/chat adds an agent to the hall; alone it opens its form; /add in a chat refuses (M11-1)", () => {
+  assert.deepEqual(
+    parse(`/chat pi --cmd "node x.mjs" --name ann --mode ask --model m`),
+    {
+      verb: "chat",
+      agent: {
+        agent: "pi",
+        cmd: "node x.mjs",
+        name: "ann",
+        mode: "ask",
+        model: "m",
+      },
+    },
+  );
+  assert.deepEqual(parse("/chat"), { verb: "form", form: "chat" });
+  // A chat has no roles: the hall has no orchestrator.
+  assert.match(
+    (parse("/chat pi --role tester") as { error: string }).error,
+    /role/,
+  );
+  assert.deepEqual(parseCommand("/add pi", roster, true), {
+    error: "a chat is no room: use /chat for a new agent",
+  });
+  assert.deepEqual(parseCommand("/add", roster, true), {
+    error: "a chat is no room: use /chat for a new agent",
+  });
+  assert.equal(
+    USAGE.chat,
+    "/chat <harness> [--cmd c] [--name n] [--mode m] [--model id]",
+  );
+});
+
 test("/new makes its harness a developer, and resolves --cwd", () => {
   assert.deepEqual(parse("/new pi --name ann --cwd sub --title fix"), {
     verb: "new",

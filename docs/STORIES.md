@@ -4312,6 +4312,9 @@ daemon, each under their own name.
   `@name` picks. An agent outside every room lives in a hall. A hall is a room, so it
   reuses the roster, `@name`, the timeline, questions and revive. M11-1 makes the
   operator's hall; M11-11 gives each other person one.
+  **Amended 2026-11-19 (#475):** the hall is a room inside the daemon only. The
+  screens hide it: its agents show as chats, one row each, after the rooms, as people
+  beside group chats in a chat app.
 - **D2. An agent in the hall works in a repository, or in none.** In a repository with a
   commit it gets its own worktree, as a room participant does today; a folder with no
   git, or a repository with no commit, runs in the folder, as today. With no `--cwd`, the
@@ -4368,9 +4371,17 @@ no orchestrator, and it cannot be dismissed or deleted. A message in the hall wi
 `no_orchestrator`; its message gains a hint that names the hall's agents. The TUI shows
 the hall at the top of its room list, and `kapelle chat list` prints it first. The
 contract gets a minor version.
+**Amended 2026-11-19 (#475), after the person tried it:** the TUI hides the hall. Its
+sidebar shows `── rooms ──`, then `── chats ──` with one row per hall agent, and no hall
+row or hall timeline. "new chat …" in the menu and `/chat <harness>` add an agent to the
+hall from any view; `/add` in a chat refuses and names `/chat`. `kapelle chat list`
+prints each hall agent as `@name (hall)` after the rooms. The client still refuses a
+message with no `@name` in the hall, even with one agent: a bare message means the
+orchestrator, and the hall has none.
 *Done when* tests cover: the hall after a first start and after a restart; a refused
 dismiss and delete; a message with no `@name` refused; a message to `@name` delivered;
-and the hall first in the TUI's room list and in `kapelle chat list`.
+and the TUI's rooms then chats with no hall row, `/chat` and the `/add` refusal, and the
+chat lines in `kapelle chat list`.
 
 **M11-2 · Each agent picks its own repository, or none · M · needs M11-1**
 `/new` in the hall, and `/add` in any room, take `--cwd` for that agent alone, or no

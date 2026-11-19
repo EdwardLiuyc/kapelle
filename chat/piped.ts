@@ -296,7 +296,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     await current().catch(() => {});
     const confirming = pendingDelete && text === "/delete";
     pendingDelete = false;
-    const c = parseLine(text, rosterOf(state, room.participants));
+    const c = parseLine(text, rosterOf(state, room.participants), room.hall);
     if ("error" in c) {
       console.error(`! ${c.error}`);
       continue;
@@ -381,6 +381,11 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     }
     // A pipe prints the rows; only the editor needs a terminal (M10-5).
     if (c.verb === "form" && c.form === "config") {
+      // The hall's folder is no project (M11-1).
+      if (room.hall) {
+        console.error("! the hall has no project config: attach a room");
+        continue;
+      }
       const r = await readConfig(d, room.cwd).catch(() => undefined);
       if (!r) console.error(`! ${NO_DAEMON}`);
       else if (!r.ok) {

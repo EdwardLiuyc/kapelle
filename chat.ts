@@ -52,7 +52,7 @@ const USAGE = `usage:
   node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
   node chat.ts new --cmd "<command>" [--name n] [--cwd dir]
   node chat.ts attach <roomId> [--no-setup]                 rejoin a room; its history replays
-  node chat.ts list                                         every room the daemon holds
+  node chat.ts list                                         every room, then every chat
   node chat.ts dismiss <roomId>                             stop a room's harness
 
 --no-setup keeps the setup list closed at start; kapelle demo uses it.
@@ -180,9 +180,15 @@ async function main(): Promise<number> {
       console.error(`error: ${r.error.message}`);
       return 1;
     }
-    for (const room of r.body) {
+    // The rooms, then the hall's agents as chats (M11-1).
+    for (const room of r.body.filter((x) => !x.hall)) {
       const names = room.participants.map((p) => p.name).join(",") || "-";
       console.log(`${room.id}  ${room.status}  ${names}  ${room.cwd}`);
+    }
+    for (const hall of r.body.filter((x) => x.hall)) {
+      for (const p of hall.participants) {
+        console.log(`@${p.name} (hall)  ${p.status}  ${hall.cwd}`);
+      }
     }
     return 0;
   }

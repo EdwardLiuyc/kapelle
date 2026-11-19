@@ -116,7 +116,7 @@ import {
   stopNpmInstalls,
   writeSetup,
 } from "./core/harnesses.ts";
-import { newRoomId, newRunId } from "./core/ids.ts";
+import { HALL_ID, newRoomId, newRunId } from "./core/ids.ts";
 import { createPermissionQueue } from "./core/permissions.ts";
 import {
   AGENT_FIELDS,
@@ -136,6 +136,7 @@ import { type Run, validateRun } from "./core/runfile.ts";
 import {
   readRepos,
   runtimeDir,
+  stateDir,
   stateDirFor,
   writeRepos,
 } from "./core/runtime.ts";
@@ -152,6 +153,7 @@ import {
   openWorktrees,
   stateDirRoot,
   validateWorktreeLinks,
+  type WorktreeSetup,
 } from "./core/worktree.ts";
 import {
   type RunState,
@@ -1228,6 +1230,10 @@ async function restoreRooms(): Promise<void> {
       const path = roomFile(root, id);
       // A directory with no record is a room that never opened.
       if (!existsSync(path)) continue;
+      if (id === HALL_ID) {
+        console.error(`skipping room ${path}: ${HALL_ID} is the hall's id`);
+        continue;
+      }
       try {
         const record = readRoomRecord(path);
         if (record.id !== id) throw new Error(`its id is not ${id}`);
@@ -1241,6 +1247,63 @@ async function restoreRooms(): Promise<void> {
         console.error(`skipping room ${path}: ${messageOf(err)}`);
       }
     }
+  }
+}
+
+/**
+ * The operator's hall (M11-1, D1): a room in a folder the daemon owns,
+ * `<stateDir>/hall`, kept across restarts. Every agent in it works in that
+ * folder, with no git: the setup is built here, not by `openWorktrees`, so a
+ * home folder that is itself a repository cannot give the hall branches. It
+ * opens before `restoreRooms`, so `GET /rooms` lists it first. A hall that
+ * cannot open is skipped with a notice, as a room is: the daemon still boots.
+ */
+async function openHall(): Promise<void> {
+  const cwd = join(stateDir(), "hall");
+  try {
+    mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    const setup: WorktreeSetup = {
+      worktrees: null,
+      root: cwd,
+      notice:
+        `the hall's agents all work in ${cwd}, with no git, so agents ` +
+        `that touch the same files will collide.`,
+    };
+    const bus = createEventBus();
+    trackChildren(bus, "room", HALL_ID);
+    const deps = { setup, bus, permissions, noteSession };
+    const path = roomFile(cwd, HALL_ID);
+    const room = existsSync(path)
+      ? await restoreRoom({ record: readRoomRecord(path), ...deps })
+      : await openRoom({
+          roomId: HALL_ID,
+          cwd,
+          title: "hall",
+          agents: [],
+          ...deps,
+        });
+    rooms.set(HALL_ID, { room, state: room.meta, root: cwd });
+  } catch (err) {
+    console.error(`skipping the hall in ${cwd}: ${messageOf(err)}`);
+  }
+}
+
+/** The hall's one refusal for a dismiss, a delete and its preview. */
+function refuseHall(id: string) {
+  if (id === HALL_ID) {
+    throw refusal(
+      409,
+      "hall_permanent",
+      "the hall cannot be dismissed or deleted",
+    );
+  }
+}
+
+/** The hall has no orchestrator (D1), so no agent in it can take the role:
+ *  a message with no `@name` must stay refused. */
+function refuseHallOrchestrator(id: string, role: unknown) {
+  if (id === HALL_ID && role === "orchestrator") {
+    throw refusal(400, "invalid_request", "the hall has no orchestrator");
   }
 }
 
@@ -1468,6 +1531,7 @@ async function postAgent(
   } catch (err) {
     throw roomRefused(err) ?? refusal(400, "invalid_request", messageOf(err));
   }
+  refuseHallOrchestrator(id, request.role);
   const shuttingDown = () =>
     refusal(503, "shutting_down", "the daemon is shutting down");
   if (stopping) throw shuttingDown();
@@ -1519,6 +1583,7 @@ async function patchAgent(
   } catch (err) {
     throw refusal(400, "invalid_request", messageOf(err));
   }
+  refuseHallOrchestrator(id, changes.role);
   const { model, thoughtLevel, ...rest } = changes;
   let participant: ReturnType<Room["update"]> | undefined;
   try {
@@ -1656,10 +1721,13 @@ async function postMessage(
       ? entry.room.participants.find((p) => p.role === "orchestrator")
       : participantOf(entry, agentId);
   if (!target) {
+    // A hint, so a client that sent no `@name` can say whom to name.
+    const names = entry.room.participants.map((p) => `@${p.name}`);
     throw refusal(
       409,
       "no_orchestrator",
-      `room ${id} has no participant with the orchestrator role`,
+      `room ${id} has no participant with the orchestrator role` +
+        (names.length ? `; name one: ${names.join(", ")}` : ""),
     );
   }
   const sender =
@@ -1879,6 +1947,7 @@ async function roomEvents(
  */
 async function dismissRoom(id: string, res: ServerResponse) {
   const entry = await roomEntry(id);
+  refuseHall(id);
   // A shutdown pauses every room; a dismiss now would be told it worked
   // while the room stays paused.
   if (stopping) {
@@ -1910,6 +1979,7 @@ async function dismissRoom(id: string, res: ServerResponse) {
  */
 async function previewDeleteRoom(id: string, res: ServerResponse) {
   const entry = await roomEntry(id);
+  refuseHall(id);
   const preview = await roomDeletePreview(entry.root, id);
   send(res, 200, preview satisfies DeletePreview);
 }
@@ -1924,6 +1994,7 @@ async function previewDeleteRoom(id: string, res: ServerResponse) {
  */
 async function deleteRoom(id: string, res: ServerResponse) {
   const entry = await roomEntry(id);
+  refuseHall(id);
   if (stopping) {
     throw refusal(503, "shutting_down", "the daemon is shutting down");
   }
@@ -2446,6 +2517,7 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 // only read (#451). Building the paused ones lazily too needs
 // `daemon/rooms.ts` to list their own statuses and a shutdown to wait for a
 // build in flight; do that if a repository keeps hundreds of them.
+await openHall();
 await restoreRooms();
 
 server.on("error", (err) => {

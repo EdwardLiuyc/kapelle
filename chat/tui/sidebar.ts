@@ -10,8 +10,13 @@
  * `harness · role` dim, under the name. When two rows per agent would fill
  * 2/3 of the sidebar's height or more, every agent takes one row, with the
  * harness dim after the name (#332). The changed-files block sits under
- * the rooms for the open thread, after an empty row. Both titles are bold
- * cyan in a dim line: `── rooms ───── «`, `── changed files ─────`.
+ * the rooms for the open thread, after an empty row. The titles are bold
+ * cyan in a dim line: `── rooms ───── «`, `── chats ─────`,
+ * `── changed files ─────`.
+ *
+ * **The hall is hidden** (M11-1, decided 2026-11-19): its agents follow the
+ * rooms under `── chats ──`, one top-level row each, as a person in a chat
+ * app. An empty section has no title; `«` is on the first one.
  *
  * A room row takes its most urgent participant's mark, `?` > `!` > `✕` >
  * `‖` > `◌` > `●` > `◐` > `○` (decided 2026-10-11). The strip shows the
@@ -172,7 +177,7 @@ function sidebarParts({
    *  harness and role, dim, under the name; without, one row with the
    *  harness dim after the name. The mark and name are one painted piece,
    *  so a colour never splits them. */
-  // The row's parts are positional at its one call site.
+  // The row's parts are positional at its call site.
   // pi-lens-ignore: long-parameter-list
   const agentLines = (
     state: RoomState,
@@ -180,7 +185,10 @@ function sidebarParts({
     cursor: string,
     inner: number,
     two: boolean,
+    chat = false,
   ) => {
+    // A chat is a top-level row: its name starts where a room's does.
+    const indent = chat ? 4 : INDENT;
     const m = mark(state, p.id);
     const star = p.role === "orchestrator" ? " ★" : "";
     const start = Date.parse(p.turns.at(-1)?.start ?? "");
@@ -197,10 +205,11 @@ function sidebarParts({
     // the timer.
     const room = Math.max(
       0,
-      inner - INDENT - visibleWidth(star) - visibleWidth(tail),
+      inner - indent - visibleWidth(star) - visibleWidth(tail),
     );
     const name = truncateToWidth(p.name, room, "…");
-    const head = `${cursor}   ${m.paint(`${m.glyph} ${name}`)}${star}`;
+    const lead = " ".repeat(indent - 3);
+    const head = `${cursor}${lead}${m.paint(`${m.glyph} ${name}`)}${star}`;
     const fill = (line: string) =>
       line +
       " ".repeat(Math.max(0, inner - visibleWidth(line) - visibleWidth(tail))) +
@@ -209,7 +218,7 @@ function sidebarParts({
       const about = p.role ? `${p.harness} · ${p.role}` : p.harness;
       return [
         fill(head),
-        `${" ".repeat(INDENT)}${dim(truncateToWidth(about, Math.max(0, inner - INDENT), "…"))}`,
+        `${" ".repeat(indent)}${dim(truncateToWidth(about, Math.max(0, inner - indent), "…"))}`,
       ];
     }
     // One row: the harness gives way first.
@@ -241,17 +250,25 @@ function sidebarParts({
         `${dim("──")} ${bold(cyan(title))} ${dim("─".repeat(Math.max(0, rest)))}${end}`,
       );
     };
-    const lines = [titled("rooms", " «")];
+    const all = rows(rooms);
+    const isChat = (row: View) => rooms.get(row.roomId)?.entry.hall === true;
+    const chats = all.findIndex(isChat);
+    // The first section's title carries `«`; with no rooms it is chats'.
+    const lines = [titled(chats === 0 ? "chats" : "rooms", " «")];
     // An agent can take two rows, so a click finds its view here by row.
     const opens: (View | undefined)[] = [undefined];
-    const all = rows(rooms);
-    // Two rows per agent only while the header, the rooms and those rows
+    // Two rows per agent only while the titles, the rooms and those rows
     // stay under 2/3 of the height; the rest is the changed files' (#332).
     const agents = all.filter((row) => row.participantId).length;
-    const two = 3 * (1 + all.length + agents) < 2 * height();
-    for (const row of all) {
+    const titles = chats > 0 ? 2 : 1;
+    const two = 3 * (titles + all.length + agents) < 2 * height();
+    for (const [i, row] of all.entries()) {
       const r = rooms.get(row.roomId);
       if (!r) continue;
+      if (i === chats && i > 0) {
+        lines.push(titled("chats"));
+        opens.push(undefined);
+      }
       const cursor = same(row, view()) ? "▸" : " ";
       if (!row.participantId) {
         const m = roomMark(r.state);
@@ -268,7 +285,8 @@ function sidebarParts({
       }
       const p = r.state.participants.get(row.participantId);
       if (!p) continue;
-      for (const l of agentLines(r.state, p, cursor, inner, two)) {
+      const chat = isChat(row);
+      for (const l of agentLines(r.state, p, cursor, inner, two, chat)) {
         lines.push(fit(l));
         opens.push(row);
       }

@@ -47,7 +47,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 24 } as const;
+export const API_VERSION = { major: 1, minor: 25 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -167,6 +167,7 @@ export type ErrorCode =
   | "uncommitted_work"
   | "agent_exited"
   | "no_orchestrator"
+  | "hall_permanent"
   | "orchestrator_exists"
   | "name_taken"
   | "participant_not_found"
@@ -455,6 +456,8 @@ export interface RoomDto {
    *  line up to this `seq` (M6-7a). A line above it is newer than the reply.
    *  `client/room.ts` `applyStatus` reads it. */
   seq: number;
+  /** Since 1.25: the operator's hall, the room the daemon keeps (M11-1). */
+  hall?: true;
   participants: ParticipantDto[];
 }
 
@@ -480,6 +483,8 @@ export interface RoomListEntry {
   title?: string;
   status: RoomStatus;
   updatedAt: string;
+  /** Since 1.25: as `RoomDto.hall`. */
+  hall?: true;
   participants: {
     id: string;
     name: string;
