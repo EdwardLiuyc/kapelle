@@ -25,10 +25,11 @@
  *
  * **The composer names the target** (R43): a leading `@name` goes to that
  * participant, and no mention goes to the orchestrator, or to the only agent
- * when the room has none. Both screens resolve it with `client/mention.ts`,
- * so they cannot differ. Room commands
- * (`/add`, `@name /mode ask`, …) go through `client/command.ts` the same way
- * (M4-5), and never reach an agent.
+ * when the room has none. In a hall chat a bare message is refused, so the
+ * person always names the agent. Both screens resolve it with
+ * `client/mention.ts`, so they cannot differ. Room commands (`/add`,
+ * `@name /mode ask`, …) go through `client/command.ts` the same way (M4-5),
+ * and never reach an agent.
  *
  * A room keeps its harnesses alive between messages, until `/dismiss` or
  * `/delete`. Leaving (`/leave`, end of input, ^C) keeps every room, and `attach`
@@ -64,7 +65,7 @@ kapelle chat takes the same verbs.
 
 in a room, type a message and press enter. It goes to the orchestrator, or to
 the only agent when the room has none; start it with @name to send it to that
-agent instead.
+agent instead. In a hall chat, every message starts with @name.
   /leave     exit; the rooms and their harnesses stay alive
   /dismiss   stop the room's harnesses; uncommitted work stays in each
              checkout, because the supervisor never commits for it (R37)

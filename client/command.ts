@@ -10,9 +10,9 @@
  * **A participant command starts with `@name`**, as a message does (R43):
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
  * the orchestrator, so a bare `/remove` cannot drop it. Room commands
- * (`/new`, `/add`, `/loop`, `/title`, `/cap`, `/dismiss`, `/delete`,
- * `/leave`, `/help`, `/term`, `/setup`, `/config`) ignore a mention, so they
- * work after a thread's pre-filled `@name`.
+ * (`/new`, `/add`, `/chat`, `/loop`, `/title`, `/cap`, `/dismiss`,
+ * `/delete`, `/leave`, `/help`, `/term`, `/setup`, `/config`) ignore a
+ * mention, so they work after a thread's pre-filled `@name`.
  *
  * **`/chat` starts a chat** (M11-1, decided 2026-11-19): an agent added to
  * the hall, from any view. The hall is hidden, so its agents show as
@@ -111,10 +111,10 @@ export type RouteCommand =
       };
     };
 
-/** What a typed line is: a command, a form to open (a bare `/new`, `/add`
- *  or `/loop`, or `/config`), what an agent changed (`/diff`, M4-6), the person's shell
- *  (`/term`, M4-13), the installed agents (`/setup`, M9-3), or a line that
- *  is refused before any request. */
+/** What a typed line is: a command, a form to open (a bare `/new`, `/add`,
+ *  `/chat`, `/loop`, or `/config`), what an agent changed (`/diff`, M4-6),
+ *  the person's shell (`/term`, M4-13), the installed agents (`/setup`,
+ *  M9-3), or a line that is refused before any request. */
 export type Command =
   | RouteCommand
   | { verb: "leave" }
