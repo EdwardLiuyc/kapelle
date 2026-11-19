@@ -76,7 +76,8 @@ export function where(
   return `${p.worktree} · ${p.branch ?? "(no branch)"}`;
 }
 
-/** The rooms by id, in sidebar order. `entry` says which is the hall. */
+/** The followed rooms by id. `rows` gives their sidebar order; `entry`
+ *  says which is the hall. */
 type Rooms = ReadonlyMap<string, { state: RoomState; entry?: { hall?: true } }>;
 
 /** The composer after a change: the pre-fill, and the text to set, if the
@@ -361,17 +362,19 @@ export interface Wait {
  *  before its stall. */
 export function waiting(rooms: Rooms): Wait[] {
   const out: Wait[] = [];
-  for (const [roomId, { state }] of rooms) {
-    for (const p of roster(state)) {
-      const at = { roomId, participantId: p.id };
-      const q = questionOf(state, p.id);
-      const turn = p.turns.at(-1);
-      if (q) {
-        out.push({ ...at, why: "question", text: q.title, question: q.id });
-      }
-      if (turn?.state === "open" && p.stall) {
-        out.push({ ...at, why: "stall", text: p.stall.text, seq: p.stall.seq });
-      }
+  for (const { roomId, participantId } of rows(rooms)) {
+    if (!participantId) continue;
+    const state = rooms.get(roomId)?.state;
+    const p = state?.participants.get(participantId);
+    if (!state || !p) continue;
+    const at = { roomId, participantId };
+    const q = questionOf(state, participantId);
+    const turn = p.turns.at(-1);
+    if (q) {
+      out.push({ ...at, why: "question", text: q.title, question: q.id });
+    }
+    if (turn?.state === "open" && p.stall) {
+      out.push({ ...at, why: "stall", text: p.stall.text, seq: p.stall.seq });
     }
   }
   return out;

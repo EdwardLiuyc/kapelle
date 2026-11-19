@@ -103,6 +103,9 @@ test("refused in the hall: no mention, even with one agent; @name still goes (M1
   assert.deepEqual(resolveTarget("hi", one, true), {
     error: "the hall has no orchestrator: start with @name (@bob)",
   });
+  assert.deepEqual(resolveTarget("hi", NO_ORCHESTRATOR, true), {
+    error: "the hall has no orchestrator: start with @name (@bob, @carol)",
+  });
   assert.deepEqual(resolveTarget("hi", [], true), {
     error: "the hall has no orchestrator: start with @name",
   });

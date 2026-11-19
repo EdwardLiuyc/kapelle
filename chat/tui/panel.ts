@@ -42,6 +42,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   ADD_IN_CHAT,
+  HALL_NO_CONFIG,
   HELP,
   levelLines,
   loopCommand,
@@ -1443,14 +1444,14 @@ function panelParts({
 
   /**
    * `/config` (M10-5): the project config of the room on screen, or of the
-   * folder the chat started in. The hall's folder is no project (M11-1), so
-   * the hall counts as no room here. Each row is the file's value, and Enter edits
-   * it; the save row sends only the changed keys. An invalid file is the
-   * daemon's refusal on the status line, and the form does not open.
+   * folder the chat started in when no room is open. A hall chat has no
+   * project (M11-1), so it refuses as the piped screen does. Each row is the
+   * file's value, and Enter edits it; the save row sends only the changed
+   * keys. An invalid file is the daemon's refusal on the status line, and the
+   * form does not open.
    */
   const configForm = async (back: () => void = hidePanel): Promise<void> => {
     const open = rooms.get(view().roomId)?.entry;
-    const cwd = open && !open.hall ? open.cwd : absoluteFolder();
     const opening = panelGeneration;
     const fail = (text: string) => {
       if (panel) {
@@ -1461,6 +1462,8 @@ function panelParts({
         setStatus();
       }
     };
+    if (open?.hall) return fail(HALL_NO_CONFIG);
+    const cwd = open?.cwd ?? absoluteFolder();
     if (!cwd) return fail(FOLDER_GONE);
     await fresh();
     if (panelGeneration !== opening) return;

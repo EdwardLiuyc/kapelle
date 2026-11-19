@@ -108,6 +108,8 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
   });
   assert.equal(starter.status, 201, JSON.stringify(starter.body));
   assert.equal(starter.body.title, undefined, "no title, no key");
+  assert.equal(empty.body.hall, undefined, "no hall key on another room");
+  assert.equal(starter.body.hall, undefined, "no hall key on another room");
   const [alice] = starter.body.participants;
   assert.ok(alice);
   assert.match(alice.id, /^p-[0-9a-z]{8}$/);
@@ -140,7 +142,10 @@ test("an empty room and a room with one agent round-trip through GET /rooms/:id"
   // The list carries each roster inline, and short.
   const list = await api<RoomListEntry[]>(d, "GET", "/rooms");
   assert.equal(list.status, 200);
-  for (const entry of list.body) assertKeys(entry, LIST_KEYS, "list entry");
+  for (const entry of list.body) {
+    assertKeys(entry, LIST_KEYS, "list entry");
+    if (entry.id !== "hall") assert.equal(entry.hall, undefined);
+  }
   assert.deepEqual(
     list.body.map((r) => [r.id, r.participants]),
     [

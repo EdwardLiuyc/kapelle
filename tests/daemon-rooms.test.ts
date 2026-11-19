@@ -43,7 +43,7 @@ import type {
   RoomListEntry,
 } from "../client/contract.ts";
 import type { Named } from "../client/mention.ts";
-import { readRoomRecord, writeRoomRecord } from "../core/room.ts";
+import { readRoomRecord, roomFile, writeRoomRecord } from "../core/room.ts";
 import { stateDirFor } from "../core/runtime.ts";
 import {
   addRepo as added,
@@ -3961,19 +3961,24 @@ test("the hall refuses a dismiss, a delete, a bare message and an orchestrator; 
     name: "ann",
   });
   assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  const bob = await api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "bob",
+  });
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
   assert.deepEqual(
     await refused("PATCH", `/rooms/hall/agents/${ann.body.id}`, {
       role: "orchestrator",
     }),
     [400, "invalid_request", "the hall has no orchestrator"],
   );
-  // The hint names the hall's agents.
+  // The hint names every hall agent.
   assert.deepEqual(
     await refused("POST", "/rooms/hall/messages", { text: "hi" }),
     [
       409,
       "no_orchestrator",
-      "room hall has no participant with the orchestrator role; name one: @ann",
+      "room hall has no participant with the orchestrator role; name one: @ann, @bob",
     ],
   );
   const sent = await api<MessageAccepted>(
@@ -3990,4 +3995,89 @@ test("the hall refuses a dismiss, a delete, a bare message and an orchestrator; 
       a.includes("previous: (none)"),
     ),
   );
+});
+
+test("a corrupt or unreadable hall record is skipped with a log, and no hall is listed (M11-1)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const first = await boot(t, runtime, [], state);
+  const hallCwd = join(await realpath(state), "kapelle", "hall");
+  const ann = await api(first, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "ann",
+  });
+  assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  process.kill(first.pid, "SIGTERM");
+  assert.equal((await first.done).code, 0);
+
+  const path = roomFile(hallCwd, "hall");
+  const record = readRoomRecord(path);
+  const raw = JSON.parse(JSON.stringify(record)) as typeof record;
+  const outside = join(state, "outside");
+  const cases = [
+    {
+      name: "unreadable JSON",
+      text: "{",
+      log: /skipping the hall .*(JSON|Unexpected end)/,
+    },
+    {
+      name: "another id",
+      text: JSON.stringify({ ...raw, id: "not-the-hall" }),
+      log: /skipping the hall .*its id is not hall/,
+    },
+    {
+      name: "another cwd",
+      text: JSON.stringify({ ...raw, cwd: outside }),
+      log: /skipping the hall .*its cwd is not/,
+    },
+    {
+      name: "dismissed",
+      text: JSON.stringify({ ...raw, status: "dismissed" }),
+      log: /skipping the hall .*it is dismissed/,
+    },
+    {
+      name: "an orchestrator",
+      text: JSON.stringify({
+        ...raw,
+        participants: raw.participants.map((p) => ({
+          ...p,
+          role: "orchestrator",
+        })),
+      }),
+      log: /skipping the hall .*it has an orchestrator/,
+    },
+    {
+      name: "another worktree",
+      text: JSON.stringify({
+        ...raw,
+        participants: raw.participants.map((p) => ({
+          ...p,
+          worktree: outside,
+        })),
+      }),
+      log: /skipping the hall .*ann's worktree is not/,
+    },
+    {
+      name: "a branch",
+      text: JSON.stringify({
+        ...raw,
+        participants: raw.participants.map((p) => ({
+          ...p,
+          branch: "kapelle/hall/p-ann",
+          baseSha: "0".repeat(40),
+        })),
+      }),
+      log: /skipping the hall .*a participant has a branch/,
+    },
+  ];
+
+  for (const one of cases) {
+    await writeFile(path, one.text);
+    const second = await boot(t, runtime, [], state);
+    const listed = await api<RoomListEntry[]>(second, "GET", "/rooms");
+    process.kill(second.pid, "SIGTERM");
+    const { stderr } = await second.done;
+    assert.deepEqual(listed.body, [], one.name);
+    assert.match(stderr, one.log, one.name);
+  }
 });

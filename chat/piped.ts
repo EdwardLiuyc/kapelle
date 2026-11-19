@@ -15,6 +15,7 @@ import {
   USAGE as COMMAND_USAGE,
   deletePreview,
   deletePreviewLines,
+  HALL_NO_CONFIG,
   HELP,
   levelLines,
   modelLines,
@@ -383,7 +384,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     if (c.verb === "form" && c.form === "config") {
       // The hall's folder is no project (M11-1).
       if (room.hall) {
-        console.error("! the hall has no project config: attach a room");
+        console.error(`! ${HALL_NO_CONFIG}`);
         continue;
       }
       const r = await readConfig(d, room.cwd).catch(() => undefined);

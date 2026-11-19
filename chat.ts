@@ -36,7 +36,8 @@
  * replays a room's whole conversation from its event log.
  *
  * **Two screens.** On a TTY it is a full-screen `pi-tui` app over every
- * room the daemon holds (M4-2). Piped, it is one room as plain lines.
+ * room the daemon holds, and the hall's agents as chats (M4-2, M11-1).
+ * Piped, it is one room as plain lines.
  */
 
 import { parseArgs } from "node:util";
@@ -49,7 +50,7 @@ import { call, checkVersion, type DaemonAddress } from "./client/daemon.ts";
 import { absoluteFolder, FOLDER_GONE } from "./client/folder.ts";
 
 const USAGE = `usage:
-  node chat.ts                                              every room, on a terminal
+  node chat.ts                                              every room and chat, on a terminal
   node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
   node chat.ts new --cmd "<command>" [--name n] [--cwd dir]
   node chat.ts attach <roomId> [--no-setup]                 rejoin a room; its history replays
@@ -78,9 +79,10 @@ agent instead. In a hall chat, every message starts with @name.
 a command never reaches an agent. Room commands work after a thread's
 @name too; an agent's command needs its @name.
 
-on a terminal: alt+up/down or ctrl+p/n (or a click) picks a room's timeline
-or one agent's thread; ctrl+t (or a click on « ») hides the rooms; ctrl+o
-opens the menu over the conversation, and /new or /add alone opens its form`;
+on a terminal: alt+up/down or ctrl+p/n (or a click) picks a room's timeline,
+one agent's thread or a chat; ctrl+t (or a click on « ») hides the sidebar;
+ctrl+o opens the menu over the conversation, and /new, /add or /chat alone
+opens its form`;
 
 const isTty = () => Boolean(process.stdin.isTTY && process.stdout.isTTY);
 

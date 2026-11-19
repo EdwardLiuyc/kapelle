@@ -119,7 +119,8 @@ own file tools, is outside the guard; most harnesses send no `fs/*` at all
 ### Editing it in the chat — `/config`
 
 `/config` opens a form for the repository of the room on screen, or for the folder
-the chat started in when no room is open. When that folder's repository is not
+the chat started in when no room is open. A hall chat has no project, so `/config`
+refuses there and says to attach a room. When that folder's repository is not
 added, the chat asks to add it first, as `/new` does. The form lists every project
 key with the file's value, and the value in use with its source: `default`, `config`
 or `env`. Enter edits a value; a blank value removes the key, so its default applies

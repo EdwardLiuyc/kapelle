@@ -17,7 +17,7 @@ import {
   seen,
 } from "../../client/room.ts";
 import type { Followed } from "../../client/roomset.ts";
-import { roomMark, sidebarParts } from "../tui/sidebar.ts";
+import { attentionCounts, roomMark, sidebarParts } from "../tui/sidebar.ts";
 import { PALETTE } from "../view.ts";
 
 /** A room `r1` builder: `add` a participant, then send lines as them. */
@@ -109,6 +109,56 @@ test("chats follow the rooms under their own title, with no hall row (M11-1)", (
   // With no room, the chats' title carries «.
   const only = new Map([...both].filter(([id]) => id === "hall"));
   assert.match(rowsOf(only, { roomId: "" })[0] ?? "", /^── chats ─+ « │/);
+});
+
+test("an empty hall hides both empty sections (M11-1)", () => {
+  const hall = new Map([
+    [
+      "hall",
+      {
+        entry: { id: "hall", cwd: "/state/hall", status: "active", hall: true },
+        state: newRoomState(),
+      } as unknown as Followed,
+    ],
+  ]);
+  const text = rowsOf(hall, { roomId: "" }).join("\n");
+  assert.doesNotMatch(text, /rooms|chats|«/);
+});
+
+test("attention counts rooms and chats apart (M11-1)", () => {
+  const normal = mk();
+  normal.add("p-room", "room");
+  normal.line("p-room", {
+    sessionUpdate: "_client_permission_queued",
+    id: "q-room",
+    kind: "edit",
+    title: "Write x",
+  });
+  const hall = mk();
+  hall.add("p-one", "one");
+  hall.add("p-two", "two");
+  for (const [id, question] of [
+    ["p-one", "q-one"],
+    ["p-two", "q-two"],
+  ] as const) {
+    hall.line(id, {
+      sessionUpdate: "_client_permission_queued",
+      id: question,
+      kind: "edit",
+      title: "Write x",
+    });
+  }
+  const all = new Map([
+    ...roomsOf(normal.state),
+    [
+      "hall",
+      {
+        entry: { id: "hall", cwd: "/state/hall", status: "active", hall: true },
+        state: hall.state,
+      } as unknown as Followed,
+    ],
+  ]);
+  assert.deepEqual(attentionCounts(all), { rooms: 1, chats: 2 });
 });
 
 test("a paused room and its paused and killed participants are marked", () => {
@@ -304,6 +354,36 @@ test("the strip shows the open room's mark", () => {
     participants: [{ id: "p-pat", status: "paused" }],
   } as unknown as RoomDto);
   assert.equal(stripAt("r1", paused.state), "»‖");
+});
+
+test("the strip shows the open chat's mark, not another hall chat's (M11-1)", () => {
+  const { state, line, add } = mk();
+  add("p-ann", "ann");
+  add("p-bob", "bob");
+  line("p-bob", {
+    sessionUpdate: "_client_permission_queued",
+    id: "q-bob",
+    kind: "edit",
+    title: "Write x",
+  });
+  const hall = new Map([
+    [
+      "hall",
+      {
+        entry: { id: "hall", cwd: "/state/hall", status: "active", hall: true },
+        state,
+      } as unknown as Followed,
+    ],
+  ]);
+  const { strip } = sidebarParts({
+    rooms: hall,
+    view: () => ({ roomId: "hall", participantId: "p-ann" }),
+    toggle() {},
+    open() {},
+  });
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR codes
+  const shown = strip.render(2)[0]?.replace(/\x1b\[[0-9;]*m/g, "");
+  assert.equal(shown, "»○");
 });
 
 const CUT_LINES = [

@@ -2,9 +2,9 @@
  * `chat/tui.ts` — the full-screen chat, for a terminal (M4-7).
  *
  * On a TTY, `chat.ts` is a full-screen `pi-tui` app over every room the
- * daemon holds (M4-2): a sidebar of rooms and their participants, a
- * transcript with each answer rendered as markdown while it streams, and an
- * editor below it.
+ * daemon holds (M4-2): a sidebar of rooms and their participants, then the
+ * hall's agents as chats (M11-1), a transcript with each answer rendered as
+ * markdown while it streams, and an editor below it.
  *
  * **A question opens its own box** (M4-3): when an `ask` participant waits
  * on a permission, the TUI shows the room, the agent, the turn and the tool's
@@ -113,8 +113,8 @@ import { EDITOR_THEME, panelParts } from "./tui/panel.ts";
 import { type Question, questionParts } from "./tui/question.ts";
 import { railParts } from "./tui/rail.ts";
 import {
+  attentionCounts,
   NARROW,
-  roomMark,
   SIDEBAR_WIDTH,
   sidebarParts,
 } from "./tui/sidebar.ts";
@@ -873,10 +873,13 @@ function chatTui(
     }
     if (flash) parts.push(flash.startsWith("!") ? yellow(flash) : flash);
     if (!shown) {
-      const marked = [...rooms.values()].filter(
-        ({ state }) => roomMark(state).waits,
-      ).length;
-      if (marked) parts.push(`● ${marked} room${marked > 1 ? "s" : ""}`);
+      const marked = attentionCounts(rooms);
+      if (marked.rooms) {
+        parts.push(`● ${marked.rooms} room${marked.rooms > 1 ? "s" : ""}`);
+      }
+      if (marked.chats) {
+        parts.push(`● ${marked.chats} chat${marked.chats > 1 ? "s" : ""}`);
+      }
     }
     // A pop-up takes the row keys and turns ctrl+o into close: name the
     // keys that work there instead.

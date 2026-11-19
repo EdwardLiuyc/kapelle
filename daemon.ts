@@ -1273,15 +1273,34 @@ async function openHall(): Promise<void> {
     trackChildren(bus, "room", HALL_ID);
     const deps = { setup, bus, permissions, noteSession };
     const path = roomFile(cwd, HALL_ID);
-    const room = existsSync(path)
-      ? await restoreRoom({ record: readRoomRecord(path), ...deps })
-      : await openRoom({
-          roomId: HALL_ID,
-          cwd,
-          title: "hall",
-          agents: [],
-          ...deps,
-        });
+    let room: Room;
+    if (existsSync(path)) {
+      const record = readRoomRecord(path);
+      if (record.id !== HALL_ID) {
+        throw new Error(`its id is not ${HALL_ID}`);
+      }
+      if (record.cwd !== cwd) throw new Error(`its cwd is not ${cwd}`);
+      if (record.status === "dismissed") throw new Error("it is dismissed");
+      if (record.participants.some((p) => p.role === "orchestrator")) {
+        throw new Error("it has an orchestrator");
+      }
+      const outside = record.participants.find((p) => p.worktree !== cwd);
+      if (outside) {
+        throw new Error(`${outside.name}'s worktree is not ${cwd}`);
+      }
+      if (record.participants.some((p) => p.branch !== undefined)) {
+        throw new Error("a participant has a branch");
+      }
+      room = await restoreRoom({ record, ...deps });
+    } else {
+      room = await openRoom({
+        roomId: HALL_ID,
+        cwd,
+        title: "hall",
+        agents: [],
+        ...deps,
+      });
+    }
     rooms.set(HALL_ID, { room, state: room.meta, root: cwd });
   } catch (err) {
     console.error(`skipping the hall in ${cwd}: ${messageOf(err)}`);

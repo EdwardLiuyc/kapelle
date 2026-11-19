@@ -482,7 +482,7 @@ test("kapelle chat with no rooms refuses /add on the status line, and leave in t
 
 // --- chats: the hidden hall (M11-1) -----------------------------------------
 
-test("the sidebar shows rooms, then chats, with no hall row; a chat sends to its agent and refuses /add (M11-1)", {
+test("the sidebar shows rooms, then chats, with no hall row; a chat refuses a bare message, /add and /config (M11-1)", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -532,8 +532,14 @@ test("the sidebar shows rooms, then chats, with no hall row; a chat sends to its
     "\x01\x1b[3~\x1b[3~\x1b[3~\x1b[3~hi\r",
     "the hall has no orchestrator: start with @name (@ann)",
   );
-  await screen.press("\x01@ann hi\r", "previous: (none)");
-  await screen.press("/add\r", "a chat is no room: use /chat for a new agent");
+  await screen.press(
+    "\x15/add\r",
+    "a chat is no room: use /chat for a new agent",
+  );
+  await screen.press(
+    "\x15/config\r",
+    "the hall has no project config: attach a room",
+  );
   screen.child.stdin.write(LEAVE);
   await screen.seen("left the chat");
   assert.equal(await screen.exited, 0, screen.out());
@@ -558,10 +564,18 @@ test("/chat in a room's view starts a chat and opens it; the menu has new chat, 
   await press("\x0f", "new chat …");
   const menu = [...screenRows(out()).values()].join("\n");
   assert.doesNotMatch(menu, /add agent|rename room|dismiss room|delete room/);
-  // The row opens the form; Esc goes back to the menu, then closes it.
+  // The menu form starts another hall chat, and opens it.
   await press("new chat\r", "start");
-  await press("\x1b", "new chat …");
-  await press("\x1b", "enter to send");
+  await press(`${DOWN}\r`, "> ");
+  await press(`${REMEMBER}\r`, "Enter/Space");
+  await press(`${DOWN}\rcarol\r`, "carol");
+  await press(`${DOWN.repeat(3)}\r`, "started a chat with carol");
+  await seen("@carol");
+  const both = await api<RoomReply>(d, "GET", "/rooms/hall");
+  assert.deepEqual(
+    both.body.participants.map((p) => p.name),
+    ["bob", "carol"],
+  );
   await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 });

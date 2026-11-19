@@ -20,8 +20,8 @@
  *
  * A room row takes its most urgent participant's mark, `?` > `!` > `✕` >
  * `‖` > `◌` > `●` > `◐` > `○` (decided 2026-10-11). The strip shows the
- * open room's mark. Which rows there are is `chat/view.ts`; this file draws
- * them, draws the files, and reads a click.
+ * open room's mark, or the open chat's own mark. Which rows there are is
+ * `chat/view.ts`; this file draws them, draws the files, and reads a click.
  */
 
 import { basename } from "node:path";
@@ -114,6 +114,23 @@ const roomMark = (state: RoomState): Mark => {
     waits: marks.some((m) => m.waits),
   };
 };
+
+/** How many row marks wait for the person, with the hall's chats counted
+ *  apart from rooms (M11-1). */
+export function attentionCounts(rooms: ReadonlyMap<string, Followed>) {
+  let waitingRooms = 0;
+  let waitingChats = 0;
+  for (const { state, entry } of rooms.values()) {
+    if (entry.hall) {
+      waitingChats += roster(state).filter(
+        (p) => mark(state, p.id).waits,
+      ).length;
+    } else if (roomMark(state).waits) {
+      waitingRooms += 1;
+    }
+  }
+  return { rooms: waitingRooms, chats: waitingChats };
+}
 
 /** The end of `path` that fits `room`, with a leading `…` when it was cut:
  *  a long path keeps its basename. */
@@ -253,14 +270,16 @@ function sidebarParts({
     const all = rows(rooms);
     const isChat = (row: View) => rooms.get(row.roomId)?.entry.hall === true;
     const chats = all.findIndex(isChat);
-    // The first section's title carries `«`; with no rooms it is chats'.
-    const lines = [titled(chats === 0 ? "chats" : "rooms", " «")];
+    // Hide an empty section. The first one carries `«`.
+    const lines = all.length
+      ? [titled(chats === 0 ? "chats" : "rooms", " «")]
+      : [];
     // An agent can take two rows, so a click finds its view here by row.
-    const opens: (View | undefined)[] = [undefined];
+    const opens: (View | undefined)[] = lines.length ? [undefined] : [];
     // Two rows per agent only while the titles, the rooms and those rows
     // stay under 2/3 of the height; the rest is the changed files' (#332).
     const agents = all.filter((row) => row.participantId).length;
-    const titles = chats > 0 ? 2 : 1;
+    const titles = all.length === 0 ? 0 : chats > 0 ? 2 : 1;
     const two = 3 * (titles + all.length + agents) < 2 * height();
     for (const [i, row] of all.entries()) {
       const r = rooms.get(row.roomId);
@@ -359,9 +378,13 @@ function sidebarParts({
   /** What stands in for the sidebar while it is hidden. */
   const strip: Component = {
     render: () => {
-      const r = rooms.get(view().roomId);
+      const v = view();
+      const r = rooms.get(v.roomId);
       if (!r) return ["»"];
-      const m = roomMark(r.state);
+      const m =
+        v.participantId && r.entry.hall
+          ? mark(r.state, v.participantId)
+          : roomMark(r.state);
       return [`»${m.paint(m.glyph)}`];
     },
     handleMouse(e) {

@@ -19,8 +19,9 @@
  * chats, and `/add` in one refuses and names `/chat`.
  *
  * **`/config` is always a form** (M10-5): the project config of the room on
- * screen, or of the folder the chat started in. Its save is the `config`
- * route command, the changed keys only (`client/config.ts`).
+ * screen, or of the folder the chat started in. A hall chat has no project,
+ * so `/config` refuses there (M11-1). Its save is the `config` route command,
+ * the changed keys only (`client/config.ts`).
  *
  * **`/loop` is `/new` with a start** (M8-5): a room titled
  * `<recipe>-<task>`, the orchestrator `po` in `auto`, and its first message
@@ -277,6 +278,9 @@ function options(
 
 /** `/add` in a chat: the hall is no room to add to (M11-1). */
 export const ADD_IN_CHAT = "a chat is no room: use /chat for a new agent";
+
+/** `/config` in a chat: the hall folder is no project (M11-1). */
+export const HALL_NO_CONFIG = "the hall has no project config: attach a room";
 
 /**
  * The command a typed line is, or `undefined` for a message. `{ error }` is

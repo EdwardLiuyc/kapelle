@@ -346,6 +346,37 @@ test("who waits: a question, or a stall in the live turn, seen or not", () => {
   );
 });
 
+test("the waits follow the rooms, then the chats, as the sidebar does (M11-1)", () => {
+  const normal = room(["room"]);
+  normal.questions.set("q-room", {
+    seq: 1,
+    participantId: "p-room",
+    at: "2026-10-10T00:00:00Z",
+    type: "permission",
+    id: "q-room",
+    title: "Write room.ts",
+    kind: "edit",
+  });
+  const hall = room(["chat"]);
+  hall.questions.set("q-chat", {
+    seq: 2,
+    participantId: "p-chat",
+    at: "2026-10-10T00:00:01Z",
+    type: "permission",
+    id: "q-chat",
+    title: "Write chat.ts",
+    kind: "edit",
+  });
+  const all = new Map([
+    ["hall", { state: hall, entry: { hall: true as const } }],
+    ["r1", { state: normal }],
+  ]);
+  assert.deepEqual(
+    waiting(all).map((w) => w.roomId),
+    ["r1", "hall"],
+  );
+});
+
 test("the banner shows the waits off screen, and a stall only until it is seen", () => {
   const s = waits();
   const all = rooms(["r1", s], ["r2", room([])]);

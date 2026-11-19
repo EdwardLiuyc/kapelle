@@ -236,11 +236,13 @@ test("chat.ts list prints each room's id, status, names and cwd (#431)", async (
     `/rooms/${empty.body.id}/dismiss`,
   );
   assert.equal(dismissed.status, 200, JSON.stringify(dismissed.body));
-  const ann = await api(d, "POST", "/rooms/hall/agents", {
-    cmd: REMEMBER,
-    name: "ann",
-  });
-  assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  for (const name of ["ann", "bob"]) {
+    const added = await api(d, "POST", "/rooms/hall/agents", {
+      cmd: REMEMBER,
+      name,
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+  }
 
   const r = await spawnCli(t, ["list"], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
@@ -251,9 +253,12 @@ test("chat.ts list prints each room's id, status, names and cwd (#431)", async (
   // hall's agents come last, as chats, and the hall has no line (M11-1).
   const lines = r.stdout.trimEnd().split("\n");
   const state = await realpath(join(runtime, "kapelle"));
-  assert.equal(lines.at(-1), `@ann (hall)  idle  ${join(state, "hall")}`);
+  assert.deepEqual(lines.slice(-2), [
+    `@ann (hall)  idle  ${join(state, "hall")}`,
+    `@bob (hall)  idle  ${join(state, "hall")}`,
+  ]);
   assert.deepEqual(
-    lines.slice(0, -1).sort(),
+    lines.slice(0, -2).sort(),
     [
       `${empty.body.id}  dismissed  -  ${empty.body.cwd}`,
       `${pair.body.id}  active  alice,bob  ${pair.body.cwd}`,
