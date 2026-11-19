@@ -1,8 +1,9 @@
 /**
- * What an agent asks and changes, on the full-screen chat on a real terminal
- * through `script(1)`: the question box and its answer (M4-9), a question's
- * diff (M4-6), stalls, and the changed-files block (M7-3). Some tests stand up
- * a fake daemon to control exactly when a diff arrives.
+ * The full-screen chat on a real terminal through `script(1)`: the question
+ * box and its answer (M4-9), a question's diff (M4-6), stalls, the
+ * changed-files block (M7-3), and the hidden sidebar's waiting room and chat
+ * counts (M11-1). Some tests stand up a fake daemon to control exactly when a
+ * diff arrives.
  *
  * Each daemon gets its own `XDG_RUNTIME_DIR` **and `XDG_STATE_HOME`**, so no
  * test ever meets another test's `daemon.json` or `repos.json` — or the
