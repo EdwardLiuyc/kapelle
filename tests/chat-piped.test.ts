@@ -592,10 +592,13 @@ test("piped chat.ts in the hall refuses no mention with one agent, sends @name, 
     name: "bob",
   });
   assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  const before = await api<RoomDto>(d, "GET", "/rooms/hall");
   const c = spawnCli(t, ["attach", "hall"], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
   });
-  c.child.stdin.end("hi\n@bob hi\n/add mock\n/config\n/dismiss\n");
+  c.child.stdin.end(
+    "hi\n@bob hi\n/add mock\n/title changed\n/cap 41\n/config\n/dismiss\n",
+  );
   const r = await c.done;
   // A refused dismiss ends a pipe with 1, as for any room.
   assert.equal(r.code, 1, r.stderr);
@@ -607,10 +610,18 @@ test("piped chat.ts in the hall refuses no mention with one agent, sends @name, 
   // Only the named message reached bob.
   assert.equal(r.stdout.split("you → bob:").length, 2, r.stdout);
   assert.match(r.stderr, /a chat is no room: use \/chat for a new agent/);
+  assert.match(r.stderr, /a chat is no room: \/title needs a room/);
+  assert.match(r.stderr, /a chat is no room: \/cap needs a room/);
   assert.match(r.stderr, /the hall has no project config/);
   assert.match(r.stderr, /the hall cannot be dismissed or deleted/);
   const hall = await api<RoomDto>(d, "GET", "/rooms/hall");
   assert.equal(hall.body.status, "active");
+  assert.equal(hall.body.title, before.body.title);
+  // The refused /cap left the default cap below this raise.
+  const raised = await api<RoomReply>(d, "PATCH", "/rooms/hall", {
+    turnCap: 41,
+  });
+  assert.equal(raised.status, 200, JSON.stringify(raised.body));
 });
 
 test("piped chat.ts sends a message with no mention to the orchestrator, and @name to that participant", async (t) => {

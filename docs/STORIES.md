@@ -4374,8 +4374,9 @@ contract gets a minor version.
 **Amended 2026-11-19 (#475), after the person tried it:** the TUI hides the hall. Its
 sidebar shows `── rooms ──`, then `── chats ──` with one row per hall agent, and no hall
 row or hall timeline. "new chat …" in the menu and `/chat <harness>` add an agent to the
-hall from any view; `/add` in a chat refuses and names `/chat`. `kapelle chat list`
-prints each hall agent as `@name (hall)` after the rooms. The client still refuses a
+hall from any view; `/add` in a chat refuses and names `/chat`, and `/title` and
+`/cap` refuse because they need a room. `kapelle chat list` prints each hall agent
+as `@name (hall)` after the rooms. The client still refuses a
 message with no `@name` in the hall, even with one agent: a bare message means the
 orchestrator, and the hall has none.
 *Done when* tests cover: the hall after a first start and after a restart; a refused

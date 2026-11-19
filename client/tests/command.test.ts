@@ -123,6 +123,27 @@ test("/chat adds an agent to the hall; alone it opens its form; /add in a chat r
   );
 });
 
+test("/title and /cap need a room in a chat; both still work in a room (#517)", () => {
+  for (const line of ["/title login bug", "@bob /title login bug"]) {
+    assert.deepEqual(parseCommand(line, roster, true), {
+      error: "a chat is no room: /title needs a room",
+    });
+  }
+  for (const line of ["/cap 41", "@bob /cap 12"]) {
+    assert.deepEqual(parseCommand(line, roster, true), {
+      error: "a chat is no room: /cap needs a room",
+    });
+  }
+  assert.deepEqual(parseCommand("/title login bug", roster, false), {
+    verb: "title",
+    title: "login bug",
+  });
+  assert.deepEqual(parseCommand("/cap 41", roster, false), {
+    verb: "cap",
+    turnCap: 41,
+  });
+});
+
 test("/new makes its harness a developer, and resolves --cwd", () => {
   assert.deepEqual(parse("/new pi --name ann --cwd sub --title fix"), {
     verb: "new",

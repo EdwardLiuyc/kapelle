@@ -482,7 +482,7 @@ test("kapelle chat with no rooms refuses /add on the status line, and leave in t
 
 // --- chats: the hidden hall (M11-1) -----------------------------------------
 
-test("the sidebar shows rooms, then chats, with no hall row; a chat refuses a bare message, /add and /config (M11-1)", {
+test("the sidebar shows rooms, then chats, with no hall row; a chat refuses a bare message, /add, /title, /cap and /config (M11-1)", {
   skip: noPty,
 }, async (t) => {
   const runtime = await tempDir(t);
@@ -498,6 +498,7 @@ test("the sidebar shows rooms, then chats, with no hall row; a chat refuses a ba
     name: "ann",
   });
   assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  const before = await api<RoomReply>(d, "GET", "/rooms/hall");
   const screen = await ptyScreen(
     t,
     "stty cols 100 rows 30; node cli.ts chat",
@@ -537,12 +538,24 @@ test("the sidebar shows rooms, then chats, with no hall row; a chat refuses a ba
     "a chat is no room: use /chat for a new agent",
   );
   await screen.press(
+    "\x15/title changed\r",
+    "a chat is no room: /title needs a room",
+  );
+  await screen.press("\x15/cap 41\r", "a chat is no room: /cap needs a room");
+  await screen.press(
     "\x15/config\r",
     "the hall has no project config: attach a room",
   );
   screen.child.stdin.write(LEAVE);
   await screen.seen("left the chat");
   assert.equal(await screen.exited, 0, screen.out());
+  const hall = await api<RoomReply>(d, "GET", "/rooms/hall");
+  assert.equal(hall.body.title, before.body.title);
+  // The refused /cap left the default cap below this raise.
+  const raised = await api<RoomReply>(d, "PATCH", "/rooms/hall", {
+    turnCap: 41,
+  });
+  assert.equal(raised.status, 200, JSON.stringify(raised.body));
 });
 
 test("/chat in a room's view starts a chat and opens it; the menu has new chat, and a chat's menu no room rows (M11-1)", {
