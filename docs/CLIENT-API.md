@@ -1268,7 +1268,8 @@ repair by hand is #518.
 - Everything else works as in any room: the roster, messages to `@name`, the timeline,
   questions, a rename, and a revive after a restart.
 - kapelle's own screens hide the hall: its agents show as chats, one row each, after
-  the rooms. A client may show it as a room.
+  the rooms. A chat refuses `/title` and `/cap`; see [PATCH /rooms/:id](#patch-roomsid).
+  A client may show the hall as a room.
 
 ### `POST /rooms`
 
@@ -1465,9 +1466,11 @@ turn cap. Send one or both:
 ```
 
 `turnCap` is a whole number 1 or greater, and must be greater than the room's
-current cap. This route only raises the cap; `/cap <n>` in a chat screen sends
-the same change. The cap and the count of accepted orchestrator messages are
-saved with the room, so a restart keeps both.
+current cap; this field only raises it. In a room's view, `/cap <n>` sends the
+same change and `/title <t>` sends a new title. The kapelle screens refuse both
+when the view is a chat, because a chat is no room (M11-1). The cap and the
+count of accepted orchestrator messages are saved with the room, so a restart
+keeps both.
 
 The `id` does not change, and `updatedAt` moves. The room's stream gets no line
 for either change. A client that wants the new title reads it from `GET /rooms`

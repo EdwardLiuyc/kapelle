@@ -16,7 +16,8 @@
  *
  * **`/chat` starts a chat** (M11-1, decided 2026-11-19): an agent added to
  * the hall, from any view. The hall is hidden, so its agents show as
- * chats, and `/add` in one refuses and names `/chat`.
+ * chats. `/add` in one refuses and names `/chat`; `/title` and `/cap` refuse
+ * because a chat has no visible room title and no orchestrator cap.
  *
  * **`/config` is always a form** (M10-5): the project config of the room on
  * screen, or of the folder the chat started in. A hall chat has no project,
@@ -281,6 +282,10 @@ function options(
 /** `/add` in a chat: the hall is no room to add to (M11-1). */
 export const ADD_IN_CHAT = "a chat is no room: use /chat for a new agent";
 
+/** `/title` and `/cap` in a chat (M11-1, #517): the hidden hall is no room to edit. */
+const TITLE_IN_CHAT = "a chat is no room: /title needs a room";
+const CAP_IN_CHAT = "a chat is no room: /cap needs a room";
+
 /** A chat route that finds no hall (M11-1, #518). The daemon's log says why
  *  it is missing: its record may be unreadable, fail a check, or not open. */
 export const NO_HALL = "the daemon has no hall; check the daemon's log for why";
@@ -305,6 +310,10 @@ export function parseCommand(
   if (!head.startsWith("/")) return undefined;
   const verb = head.slice(1);
   if (!ROOM_VERBS.has(verb) && !AGENT_VERBS.has(verb)) return undefined;
+
+  // A chat has no visible room title and no orchestrator cap (#517).
+  if (hall && verb === "title") return { error: TITLE_IN_CHAT };
+  if (hall && verb === "cap") return { error: CAP_IN_CHAT };
 
   if (
     verb === "leave" ||
