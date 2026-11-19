@@ -124,6 +124,60 @@ test("chat.ts keeps the old room's draft out of the new room's undo history (#35
   assert.equal(await exited, 0, out());
 });
 
+test("each hall chat keeps its own draft and @name prefill (M11-1)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  for (const name of ["ann", "bob"]) {
+    const added = await api(d, "POST", "/rooms/hall/agents", {
+      cmd: REMEMBER,
+      name,
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+  }
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node chat.ts",
+    { XDG_RUNTIME_DIR: runtime },
+    "@ann",
+  );
+  screen.child.stdin.write("\x15draft-a");
+  await screen.seen("draft-a");
+
+  // A second hall chat starts from its own `@bob ` prefill, not ann's
+  // draft. Going back puts ann's draft back.
+  await screen.press("\x1b[1;3B", "@bob");
+  const bobScreen = [...screenRows(screen.out()).values()].join("\n");
+  assert.doesNotMatch(bobScreen, /draft-a/);
+  await screen.press("\x1b[1;3A", "draft-a");
+
+  screen.child.stdin.write(LEAVE);
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
+test("an empty hall attached with a room open lands on the first room (M11-1)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const work = await api<RoomReply>(d, "POST", "/rooms", {
+    cwd,
+    title: "work",
+  });
+  assert.equal(work.status, 201, work.body.error?.message);
+  const screen = await ptyScreen(
+    t,
+    "stty cols 100 rows 30; node chat.ts attach hall",
+    { XDG_RUNTIME_DIR: runtime },
+  );
+  await screen.seen(`room ${work.body.id}`);
+  assert.doesNotMatch(plainText(screen.out()), /no rooms or chats/);
+  screen.child.stdin.write(LEAVE);
+  assert.equal(await screen.exited, 0, screen.out());
+});
+
 test("chat.ts brings a pasted draft back with its text, not its marker (#355)", {
   skip: noPty,
 }, async (t) => {

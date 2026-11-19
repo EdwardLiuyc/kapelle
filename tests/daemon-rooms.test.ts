@@ -3911,6 +3911,14 @@ test("the hall is there after a first start with no repository, and after a rest
   );
   assert.equal(revived.status, 202);
   await participantIdle(second, "hall", ann.body.id);
+  assert.ok(
+    (await roomLog(hallCwd, "hall")).some(
+      (line) =>
+        line.update.sessionUpdate === "_client_user_message" &&
+        line.update.text === "one",
+    ),
+    "the restarted hall kept its log",
+  );
 });
 
 test("the hall refuses a dismiss, a delete, a bare message and an orchestrator; @name is delivered (M11-1)", async (t) => {

@@ -540,6 +540,7 @@ test("with no room open, the screen exits when the daemon is gone, and says how 
     { XDG_RUNTIME_DIR: runtime },
     "ctrl+o → new room",
   );
+  assert.match(plainText(screen.out()), /no rooms or chats/);
   process.kill(d.pid, "SIGKILL");
   // The room list is read every 5 s; one that fails 30 s after the first
   // failure ends it (M6-7d). `seen` gives up after 20 s, so wait for the exit.

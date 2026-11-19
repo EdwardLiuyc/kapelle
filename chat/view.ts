@@ -9,10 +9,11 @@
  * - The pre-fill: in a thread, the composer holds `@name ` until the person
  *   types (R43, decided 2026-09-30). A pre-fill the person did not touch
  *   follows the view and a rename, and clears when no room is left.
- * - The draft (#355): one per room. Typed text stays across the views of
- *   its room, where a `@name` finds the same agent. A room change keeps it
- *   as that room's draft and puts back the next room's: text never moves
- *   rooms, where the same `@name`, or no name, can reach another agent.
+ * - The draft (#355): one per room, and one per hall chat. Typed text stays
+ *   across the views of its room, where a `@name` finds the same agent. A
+ *   move to another room or hall chat keeps it as that view's draft and
+ *   puts back the next one's: text never moves, where the same `@name`, or
+ *   no name, can reach another agent.
  * - A thread whose participant left goes back to its room's timeline. A
  *   view in a dismissed room goes to the first row.
  * - What is on screen is seen: the timeline marks its whole room, and a

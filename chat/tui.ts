@@ -519,12 +519,14 @@ function chatTui(
   const land =
     list.find((r) => r.id === selected) ?? list.find((r) => !r.hall) ?? list[0];
   const chat = land?.hall ? land.participants[0] : undefined;
+  // An empty hall is still asked for by id: `open`, after the rooms join,
+  // falls back to the first room or chat. With no entries there is none.
   let view: View =
     land && !land.hall
       ? { roomId: land.id }
       : chat && land
         ? { roomId: land.id, participantId: chat.id }
-        : { roomId: "" };
+        : { roomId: land?.id ?? "" };
   let shown = (process.stdout.columns || 80) >= NARROW;
   /** One line about a room that ended, until the next view change. */
   let flash = "";
@@ -532,8 +534,13 @@ function chatTui(
   let leaving: ReturnType<typeof setTimeout> | undefined;
   /** The `@name ` this screen put in the composer, while it is untouched. */
   let prefill = "";
-  /** Each room's draft, by room id, while another room is open (#355). */
+  /** Typed drafts while another view is open (#355). A room has one; each
+   *  hall chat has its own, since the hall's agents are separate chats. */
   const drafts = new Map<string, string>();
+  const draftKey = (v: View) =>
+    v.participantId && rooms.get(v.roomId)?.entry.hall
+      ? `${v.roomId} ${v.participantId}`
+      : v.roomId;
   /** The open questions over every room, oldest first (M4-3). The reducers
    *  hold them; the queue keeps their order and the ones put aside. */
   const queue = questionQueue<{ r: Followed; q: Question }>((roomId, id) => {
@@ -990,29 +997,26 @@ function chatTui(
     cancelRefresh();
     // A pop-up belongs to the view it opened on.
     if (box.panel) hidePanel();
-    const from = view.roomId;
+    const from = view;
+    const fromKey = draftKey(from);
+    const nextKey = draftKey(next);
     view = next;
     flash = "";
     // A thread shows the files its agent changed (M7-3).
     if (next.participantId) void loadChanges(next.roomId, next.participantId);
     const r = rooms.get(next.roomId);
-    const changingRoom = next.roomId !== from;
+    const changingView = nextKey !== fromKey;
     // A large paste is a marker in `getText`, and its content lives in the
     // editor. A draft leaves the editor, so save the content it stands for.
-    const text = changingRoom ? editor.getExpandedText() : editor.getText();
-    if (!changingRoom) compose(opened(r?.state, next, text, prefill));
+    const text = changingView ? editor.getExpandedText() : editor.getText();
+    if (!changingView) compose(opened(r?.state, next, text, prefill));
     else {
-      // A draft stays in its room (#355).
-      const c = moved(
-        r?.state,
-        next,
-        { text, prefill },
-        drafts.get(next.roomId),
-      );
-      // With no room open, `from` is "": not a room, so not a draft key.
-      if (from) {
-        if (c.left) drafts.set(from, c.left);
-        else drafts.delete(from);
+      // A draft stays in its room, or in its hall chat (#355).
+      const c = moved(r?.state, next, { text, prefill }, drafts.get(nextKey));
+      // With no view open, `fromKey` is "": not a draft slot.
+      if (fromKey) {
+        if (c.left) drafts.set(fromKey, c.left);
+        else drafts.delete(fromKey);
       }
       compose(c);
       clearComposerUndo();
@@ -1187,16 +1191,16 @@ function chatTui(
         return;
       }
       const { roomId, ended, err } = why;
-      // The hall is hidden (M11-1): its stream ending last is the daemon's
-      // end, not a room's.
-      if (rooms.get(roomId)?.entry.hall) {
-        end(1, stopped);
-        return;
-      }
       // A refused version is the whole story; the reconcile after it only
-      // says the same words again.
+      // says the same words again, including when the hall is the last room.
       if (err instanceof VersionRefused) {
         end(codeOf(ended), `! ${err.message}`);
+        return;
+      }
+      // The hall is hidden (M11-1): when its stream is the last one and no
+      // daemon is left, the person needs the start command, not a room name.
+      if (rooms.get(roomId)?.entry.hall && ended.kind === "gone") {
+        end(1, stopped);
         return;
       }
       const msg = err ? [`! ${(err as Error).message}`] : [];

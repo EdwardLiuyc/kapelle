@@ -522,11 +522,17 @@ test("the sidebar shows rooms, then chats, with no hall row; a chat sends to its
   );
   assert.equal(at(/ hall /), -1, side.join("\n"));
 
-  // alt+down opens ann's chat, with @ann filled in.
+  // alt+down opens ann's chat, with @ann filled in, and the shared folder's
+  // notice at the top.
   await screen.press("\x1b[1;3B", "@ann");
-  // The composer keeps `@ann ` in a chat, so a bare message cannot be
-  // typed there; the pipe and `client/mention.ts` test that refusal.
-  await screen.press("hi\r", "previous: (none)");
+  await screen.seen("agents all work in");
+  // Remove the prefill but leave a space, so the editor does not put it
+  // back on empty: a bare message is refused before the request.
+  await screen.press(
+    "\x01\x1b[3~\x1b[3~\x1b[3~\x1b[3~hi\r",
+    "the hall has no orchestrator: start with @name (@ann)",
+  );
+  await screen.press("\x01@ann hi\r", "previous: (none)");
   await screen.press("/add\r", "a chat is no room: use /chat for a new agent");
   screen.child.stdin.write(LEAVE);
   await screen.seen("left the chat");
