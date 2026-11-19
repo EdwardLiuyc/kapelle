@@ -279,10 +279,9 @@ function options(
 /** `/add` in a chat: the hall is no room to add to (M11-1). */
 export const ADD_IN_CHAT = "a chat is no room: use /chat for a new agent";
 
-/** A chat route that finds no hall: the daemon skipped it at boot, as its
- *  record could not be read, and its log says why (M11-1, #518). */
-export const NO_HALL =
-  "the daemon has no hall: its record could not be read, and the daemon's log says why";
+/** A chat route that finds no hall (M11-1, #518). The daemon's log says why
+ *  it is missing: its record may be unreadable, fail a check, or not open. */
+export const NO_HALL = "the daemon has no hall; check the daemon's log for why";
 
 /** `/config` in a chat: the hall folder is no project (M11-1). */
 export const HALL_NO_CONFIG = "the hall has no project config: attach a room";

@@ -1251,8 +1251,9 @@ and its list entry carry `"hall": true`. Every other room has no `hall` key.
 The hall can be absent. When its record cannot be read, or fails the daemon's checks,
 the daemon starts without it and its log names the failure: `GET /rooms` then has no
 entry with `"hall": true`, and every `/rooms/hall` route answers `404`
-`room_not_found`. It comes back at a restart with a readable record. Recovery that
-needs no repair by hand is #518.
+`room_not_found`. A restart tries again: a missing record starts an empty hall; a record
+that can be read and passes those checks brings the hall back. Recovery that needs no
+repair by hand is #518.
 
 - The hall's `cwd` is the folder `hall` in the daemon's state folder. It is not a git
   repository and needs no added repository, so the hall exists with none. Every agent in

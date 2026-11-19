@@ -28,7 +28,6 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import {
-  NO_HALL,
   type Outcome,
   parseCommand,
   type RouteCommand,
@@ -4076,11 +4075,15 @@ test("a corrupt or unreadable hall record is skipped with a log, and no hall is 
     await writeFile(path, one.text);
     const second = await boot(t, runtime, [], state);
     const listed = await api<RoomListEntry[]>(second, "GET", "/rooms");
-    // `/chat` says the hall is missing, not "no room hall".
+    // `/chat` says the hall is missing, not "no room hall". The words are
+    // pinned here rather than read back from the production constant.
     const chat = await typed(second, undefined, `/chat --cmd "${REMEMBER}"`);
     assert.deepEqual(
       chat.ok ? chat : [chat.code, chat.message],
-      ["room_not_found", NO_HALL],
+      [
+        "room_not_found",
+        "the daemon has no hall; check the daemon's log for why",
+      ],
       one.name,
     );
     process.kill(second.pid, "SIGTERM");
