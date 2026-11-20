@@ -3,7 +3,7 @@
  * orchestrator's first message.
  *
  * The loop form and `kapelle loop list` read the recipe list here, not from a
- * daemon route, so both see the same three folders.
+ * daemon route, so both see the same folders for a given `cwd`.
  *
  * A recipe is a Markdown file the person writes (D10). **No kapelle code reads
  * it**: this file finds it and pastes it, whole, into the first message,
