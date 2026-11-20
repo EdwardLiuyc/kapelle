@@ -2041,7 +2041,10 @@ Every message has exactly one target participant. A client sends to
 event log filtered by `participantId`. The TUI opens on the room timeline and lets the
 person name the target with a leading `@name`; the client resolves the name to the opaque
 participant id itself (R43). The daemon never parses message text. Every client follows
-the same rules, so the TUI and piped `chat.ts` behave the same:
+the same rules, so the TUI and piped `chat.ts` behave the same. A client may also pin one
+participant before the message is typed; kapelle's piped `chat.ts attach @name` does. The
+pin comes from outside the message text, so the rules below read the message text the
+same way:
 
 - The client first removes whitespace at the start of the message. So a leading space
   is not a way to write a literal `@`, and piped `chat.ts`, which already trims, cannot
@@ -2059,10 +2062,12 @@ the same rules, so the TUI and piped `chat.ts` behave the same:
   A room with no orchestrator and one participant sends it to that participant (#333).
   A room with no orchestrator and two or more participants, or none, refuses before the
   request, and says: start with `@name`, or give a participant the orchestrator role.
-- **In the [hall](#the-hall), no mention is always refused** before the request, with
-  one participant too, and the refusal names each participant as `@name`. A message
-  with no mention means "the orchestrator", and the hall has none, so it never goes to
-  an agent the person did not name.
+- **In the [hall](#the-hall), no mention is refused** before the request, with one
+  participant too, and the refusal names each participant as `@name`. A message with no
+  mention means "the orchestrator", and the hall has none, so it never goes to an agent
+  the person did not name. A client may pin one hall participant before the message is
+  typed — kapelle's piped `chat.ts attach @name` does — and then a no-mention message goes
+  to that participant.
 - After the first word that does not begin with `@`, an `@` is plain text. `@alice ask
   @bob` goes to alice. To start a message with a literal `@`, put it in backticks,
   like `` `@property` ``, or put a word before it.

@@ -25,8 +25,8 @@
  *
  * **The composer names the target** (R43): a leading `@name` goes to that
  * participant, and no mention goes to the orchestrator, or to the only agent
- * when the room has none. In a hall chat a bare message is refused, so the
- * person always names the agent. Both screens resolve it with
+ * when the room has none. In a hall chat a bare message is refused unless the
+ * pipe attached one agent by name. Both screens resolve it with
  * `client/mention.ts`, so they cannot differ. Room commands (`/add`,
  * `@name /mode ask`, …) go through `client/command.ts` the same way (M4-5),
  * and never reach an agent.
@@ -37,23 +37,24 @@
  *
  * **Two screens.** On a TTY it is a full-screen `pi-tui` app over every
  * room the daemon holds, and the hall's agents as chats (M4-2, M11-1).
- * Piped, it is one room as plain lines.
+ * Piped, it is one room or one hall agent as plain lines.
  */
 
 import { parseArgs } from "node:util";
 import { address } from "./chat/common.ts";
 import { chatPiped } from "./chat/piped.ts";
 import { chatTui } from "./chat/tui.ts";
-import { HELP } from "./client/command.ts";
+import { HALL_ID, HELP, NO_HALL } from "./client/command.ts";
 import type { RoomDto, RoomListEntry } from "./client/contract.ts";
 import { call, checkVersion, type DaemonAddress } from "./client/daemon.ts";
 import { absoluteFolder, FOLDER_GONE } from "./client/folder.ts";
+import { fold } from "./client/mention.ts";
 
 const USAGE = `usage:
   node chat.ts                                              every room and chat, on a terminal
   node chat.ts new --agent <id> [--name n] [--cwd dir]      open a room and chat in it
   node chat.ts new --cmd "<command>" [--name n] [--cwd dir]
-  node chat.ts attach <roomId> [--no-setup]                 rejoin a room; its history replays
+  node chat.ts attach <roomId|@name> [--no-setup]           rejoin a room; a pipe can open a hall chat
   node chat.ts list                                         every room, then every chat
   node chat.ts dismiss <roomId>                             stop a room's harness
 
@@ -66,7 +67,8 @@ kapelle chat takes the same verbs.
 
 in a room, type a message and press enter. It goes to the orchestrator, or to
 the only agent when the room has none; start it with @name to send it to that
-agent instead. In a hall chat, every message starts with @name.
+agent instead. A pipe opens one hall agent with attach @name, and a bare
+message goes to that agent.
   /leave     exit; the rooms and their harnesses stay alive
   /dismiss   stop the room's harnesses; uncommitted work stays in each
              checkout, because the supervisor never commits for it (R37)
@@ -77,7 +79,8 @@ agent instead. In a hall chat, every message starts with @name.
              the start until "done" (/setup done), or while no agent is ready
   ${HELP.slice(0, 9).join("\n  ")}
 a command never reaches an agent. Room commands work after a thread's
-@name too; an agent's command needs its @name.
+@name too; in a piped hall chat, a participant command with no @name goes to
+the pinned agent.
 
 on a terminal: alt+up/down or ctrl+p/n (or a click) picks a room's timeline,
 one agent's thread or a chat; ctrl+t (or a click on « ») hides the sidebar;
@@ -87,15 +90,17 @@ opens its form`;
 const isTty = () => Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
 /** A terminal gets every room, with `room` selected; a pipe gets `room`
- *  alone. A dismissed room is listed only when it is the one asked for, so
- *  `attach` still replays it. */
+ *  alone, or one of its participants when `participantId` names a hall chat.
+ *  A dismissed room is listed only when it is the one asked for, so `attach`
+ *  still replays it. */
 async function chat(
   d: DaemonAddress,
   room?: RoomDto,
   setup = true,
+  participantId?: string,
 ): Promise<number> {
   // `main` prints the usage for a pipe with no verb, so a pipe has a room.
-  if (!isTty() && room) return chatPiped(d, room);
+  if (!isTty() && room) return chatPiped(d, room, participantId);
   const r = await call<RoomListEntry[]>(d, "/rooms");
   if (!r.ok) {
     console.error(`error: ${r.error.message}`);
@@ -106,6 +111,41 @@ async function chat(
   );
   // With no room, the screen still opens: ctrl+o or /new opens one (M4-5).
   return chatTui(d, list, room?.id, setup);
+}
+
+/** The room `attach` asks for, and on a pipe the hall agent it pins (M11-1). */
+async function attachTarget(
+  d: DaemonAddress,
+  arg: string,
+): Promise<{ room: RoomDto; participantId?: string } | { error: string }> {
+  let roomId = arg;
+  let participantId: string | undefined;
+  if (arg.startsWith("@")) {
+    if (isTty()) {
+      return {
+        error:
+          "attach by name works on a pipe; run kapelle chat and pick the chat",
+      };
+    }
+    const rooms = await call<RoomListEntry[]>(d, "/rooms");
+    if (!rooms.ok) return { error: rooms.error.message };
+    const hall = rooms.body.find((x) => x.hall);
+    if (!hall) return { error: NO_HALL };
+    const name = fold(arg.slice(1));
+    const participant = hall.participants.find((p) => fold(p.name) === name);
+    if (!participant) {
+      return { error: `no hall chat named ${arg}; run kapelle chat list` };
+    }
+    roomId = hall.id;
+    participantId = participant.id;
+  } else if (!isTty() && fold(arg) === fold(HALL_ID)) {
+    return {
+      error:
+        "attach a hall chat by name: kapelle chat list, then kapelle chat attach @<name>",
+    };
+  }
+  const r = await call<RoomDto>(d, `/rooms/${roomId}`);
+  return r.ok ? { room: r.body, participantId } : { error: r.error.message };
 }
 
 async function main(): Promise<number> {
@@ -169,12 +209,12 @@ async function main(): Promise<number> {
   }
 
   if (verb === "attach" && arg) {
-    const r = await call<RoomDto>(d, `/rooms/${arg}`);
-    if (!r.ok) {
-      console.error(`error: ${r.error.message}`);
+    const found = await attachTarget(d, arg);
+    if ("error" in found) {
+      console.error(`error: ${found.error}`);
       return 1;
     }
-    return chat(d, r.body, !values["no-setup"]);
+    return chat(d, found.room, !values["no-setup"], found.participantId);
   }
 
   if (verb === "list") {

@@ -58,3 +58,42 @@ test("a message with no target carries the target's refusal", () => {
     target: { error: "nothing to send" },
   });
 });
+
+test("a direct chat sends a bare message and agent command to its one agent", () => {
+  assert.deepEqual(parseLine("look at this", ROSTER, true, "p-b"), {
+    verb: "message",
+    target: { id: "p-b", text: "look at this" },
+  });
+  assert.deepEqual(parseLine("/cancel", ROSTER, true, "p-b"), {
+    verb: "cancel",
+    id: "p-b",
+    name: "Bob",
+  });
+  assert.deepEqual(parseLine("@alice hi", ROSTER, true, "p-b"), {
+    verb: "message",
+    target: {
+      error:
+        "this chat is with @Bob; to open @alice, run: kapelle chat attach @alice",
+    },
+  });
+  assert.deepEqual(parseLine("@carol hi", ROSTER, true, "p-b"), {
+    verb: "message",
+    target: { error: "no participant named @carol" },
+  });
+  // Commands still resolve an explicit mention against the whole room.
+  assert.deepEqual(parseLine("@alice /cancel", ROSTER, true, "p-b"), {
+    verb: "cancel",
+    id: "p-a",
+    name: "alice",
+  });
+});
+
+test("a direct chat whose agent is gone refuses before guessing a room", () => {
+  const withoutBob = ROSTER.filter((p) => p.id !== "p-b");
+  const gone = { error: "the chat's agent is gone; /leave to exit" };
+  assert.deepEqual(parseLine("hello", withoutBob, true, "p-b"), {
+    verb: "message",
+    target: gone,
+  });
+  assert.deepEqual(parseLine("/mode auto", withoutBob, true, "p-b"), gone);
+});
