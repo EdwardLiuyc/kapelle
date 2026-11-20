@@ -9,8 +9,9 @@
  *
  * **A participant command starts with `@name`**, as a message does (R43):
  * `@bob /mode ask`. With no mention it is refused, and never falls back to
- * the orchestrator, so a bare `/remove` cannot drop it. Room commands
- * (`/new`, `/add`, `/chat`, `/loop`, `/title`, `/cap`, `/dismiss`,
+ * the orchestrator, so a bare `/remove` cannot drop it. A piped chat that
+ * pinned one agent may send a bare participant command to that pin. Room
+ * commands (`/new`, `/add`, `/chat`, `/loop`, `/title`, `/cap`, `/dismiss`,
  * `/delete`, `/leave`, `/help`, `/term`, `/setup`, `/config`) ignore a
  * mention, so they work after a thread's pre-filled `@name`.
  *
@@ -306,15 +307,20 @@ export const NO_HALL = "the daemon has no hall; check the daemon's log for why";
 /** `/config` in a chat: the hall folder is no project (M11-1). */
 export const HALL_NO_CONFIG = "the hall has no project config: attach a room";
 
+/** A pinned chat agent left the roster. */
+export const CHAT_GONE = "the chat's agent is gone; /leave to exit";
+
 /**
  * The command a typed line is, or `undefined` for a message. `{ error }` is
  * a command refused before any request; the screen shows it and gives the
- * text back. `hall` is the `hall` flag of the room on screen.
+ * text back. `hall` is the `hall` flag of the room on screen. `direct` is a
+ * piped chat's pinned participant id, used by a command with no mention.
  */
 export function parseCommand(
   input: string,
   roster: readonly Named[],
   hall = false,
+  direct?: string,
 ): Command | { error: string } | undefined {
   const text = input.trim();
   const m = MENTION.exec(text);
@@ -433,8 +439,13 @@ export function parseCommand(
     };
   }
 
-  if (!m) return { error: `name the agent: @name /${verb}` };
-  const t = targetOf(text, roster);
+  let t: ReturnType<typeof targetOf>;
+  if (m) t = targetOf(text, roster);
+  else {
+    if (!direct) return { error: `name the agent: @name /${verb}` };
+    if (!roster.some((p) => p.id === direct)) return { error: CHAT_GONE };
+    t = { id: direct, text: rest };
+  }
   if ("error" in t) return t;
   const target = roster.find((p) => p.id === t.id);
   const name = target?.name ?? t.id;

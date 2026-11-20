@@ -79,7 +79,8 @@ message goes to that agent.
              the start until "done" (/setup done), or while no agent is ready
   ${HELP.slice(0, 9).join("\n  ")}
 a command never reaches an agent. Room commands work after a thread's
-@name too; an agent's command needs its @name.
+@name too; in a piped hall chat, a participant command with no @name goes to
+the pinned agent.
 
 on a terminal: alt+up/down or ctrl+p/n (or a click) picks a room's timeline,
 one agent's thread or a chat; ctrl+t (or a click on « ») hides the sidebar;
@@ -137,7 +138,7 @@ async function attachTarget(
     }
     roomId = hall.id;
     participantId = participant.id;
-  } else if (!isTty() && arg === HALL_ID) {
+  } else if (!isTty() && fold(arg) === fold(HALL_ID)) {
     return {
       error:
         "attach a hall chat by name: kapelle chat list, then kapelle chat attach @<name>",

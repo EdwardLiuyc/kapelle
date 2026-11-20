@@ -598,6 +598,7 @@ test("piped chat.ts opens one hall agent's chat by @name, not the hall (M11-1, #
     assert.equal(added.status, 201, JSON.stringify(added.body));
   }
   const hall = await api<RoomDto>(d, "GET", "/rooms/hall");
+  const before = hall.body;
   const ann = hall.body.participants.find((p) => p.name === "ann");
   const bob = hall.body.participants.find((p) => p.name === "bob");
   assert.ok(ann && bob, JSON.stringify(hall.body));
@@ -615,29 +616,44 @@ test("piped chat.ts opens one hall agent's chat by @name, not the hall (M11-1, #
     XDG_RUNTIME_DIR: runtime,
   });
   c.child.stdin.end(
-    "hi\n@bob hi\n/add mock\n/title changed\n/cap 41\n/config\n/leave\n",
+    "hi\n@bob hi\n/mode auto\n/add mock\n/title changed\n/cap 41\n/config\n/dismiss\n",
   );
   const r = await c.done;
-  assert.equal(r.code, 0, r.stderr);
+  // A refused /dismiss is the one command that ends a pipe with 1.
+  assert.equal(r.code, 1, r.stderr);
   assert.match(r.stdout, /ann \(mock-agent\) · /);
   assert.doesNotMatch(r.stdout, /room hall/);
   assert.doesNotMatch(r.stdout, /bob only/);
   assert.match(r.stdout, /you → ann: hi\nann: previous: \(none\)/);
-  assert.match(r.stderr, /no participant named @bob/);
+  assert.match(r.stdout, /ann is now in auto mode/);
+  assert.match(
+    r.stderr,
+    /this chat is with @ann; to open @bob, run: kapelle chat attach @bob/,
+  );
   assert.match(r.stderr, /a chat is no room: use \/chat for a new agent/);
   assert.match(r.stderr, /a chat is no room: \/title needs a room/);
   assert.match(r.stderr, /a chat is no room: \/cap needs a room/);
   assert.match(r.stderr, /the hall has no project config/);
+  assert.match(r.stderr, /the hall cannot be dismissed or deleted/);
   assert.equal(r.stdout.split("you → ann: hi").length, 2, r.stdout);
-
-  const hallAttach = spawnCli(t, ["attach", "hall"], "chat.ts", {
-    XDG_RUNTIME_DIR: runtime,
+  const after = await api<RoomDto>(d, "GET", "/rooms/hall");
+  assert.equal(after.body.status, before.status);
+  assert.equal(after.body.title, before.title);
+  const raised = await api<RoomReply>(d, "PATCH", "/rooms/hall", {
+    turnCap: 41,
   });
-  hallAttach.child.stdin.end("/leave\n");
-  const hallResult = await hallAttach.done;
-  assert.equal(hallResult.code, 1, hallResult.stderr);
-  assert.match(hallResult.stderr, /attach a hall chat by name/);
-  assert.doesNotMatch(hallResult.stdout, /room hall/);
+  assert.equal(raised.status, 200, JSON.stringify(raised.body));
+
+  for (const arg of ["hall", "HALL"]) {
+    const hallAttach = spawnCli(t, ["attach", arg], "chat.ts", {
+      XDG_RUNTIME_DIR: runtime,
+    });
+    hallAttach.child.stdin.end("/leave\n");
+    const hallResult = await hallAttach.done;
+    assert.equal(hallResult.code, 1, hallResult.stderr);
+    assert.match(hallResult.stderr, /attach a hall chat by name/);
+    assert.equal(hallResult.stdout, "");
+  }
 
   const missing = await spawnCli(t, ["attach", "@nobody"], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
@@ -692,6 +708,27 @@ test("a direct hall chat that loses its stream sends the person back to the chat
     }
     if (req.url === "/rooms/hall/events") {
       res.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (seq: number, update: Record<string, unknown>) => {
+        res.write(
+          `id: ${seq}\ndata: ${JSON.stringify({
+            seq,
+            at: "2026-11-20T00:00:00Z",
+            roomId: "hall",
+            participantId: ann.id,
+            update,
+          })}\n\n`,
+        );
+      };
+      send(1, {
+        sessionUpdate: "_client_participant_added",
+        name: "ann",
+        harness: "mock-agent",
+        mode: "auto",
+      });
+      send(2, {
+        sessionUpdate: "_client_participant_changed",
+        name: "annie",
+      });
       res.end();
       return;
     }
@@ -723,9 +760,9 @@ test("a direct hall chat that loses its stream sends the person back to the chat
   assert.equal(r.code, 1, r.stderr);
   assert.match(
     r.stderr,
-    /lost the chat's stream; ann is still active — rejoin with: kapelle chat attach @ann/,
+    /lost the chat's stream; annie is still active — rejoin with: kapelle chat attach @annie/,
   );
-  assert.doesNotMatch(r.stderr, /attach hall/);
+  assert.doesNotMatch(r.stderr, /attach hall|attach @ann\b/);
 });
 
 test("piped chat.ts sends a message with no mention to the orchestrator, and @name to that participant", async (t) => {

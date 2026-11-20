@@ -4396,9 +4396,9 @@ and names `/chat`, and `/title` and `/cap` refuse because they need a room.
 client still refuses a message with no `@name` in the hall, even with one agent: a
 bare message means the orchestrator, and the hall has none.
 **Amended 2026-11-20 (#516):** a pipe opens a hall chat by agent name with
-`kapelle chat attach @name`. It prints only that agent's thread, and a message with no
-mention goes to that agent. The hall room id is not a chat on a pipe: `attach hall`
-is refused with the command to list and attach a chat.
+`kapelle chat attach @name`. It prints only that agent's thread; a message or
+participant command with no mention goes to that agent. The hall room id is not a chat on
+a pipe: `attach hall` is refused with the command to list and attach a chat.
 *Done when* tests cover: the hall after a first start and after a restart; a refused
 dismiss and delete; a message with no `@name` refused; a message to `@name` delivered;
 the TUI's rooms then chats with no hall row, `/chat`, the `/add`, `/title` and

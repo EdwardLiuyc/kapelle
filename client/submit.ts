@@ -13,12 +13,20 @@
  * checks "no room" and "no agents" itself, on a message, before it shows the
  * target's refusal: both name `ctrl+o`, and the piped screen has neither.
  *
- * A piped hall chat pins one participant (`direct`): a bare message goes to
- * that participant, while commands still resolve against the room's roster.
+ * A piped hall chat pins one participant (`direct`): a bare message or
+ * participant command goes to that participant. An explicit `@name` on a
+ * command still resolves against the room's roster; on a message it must be
+ * the pin.
  */
 
-import { type Command, parseCommand } from "./command.ts";
-import { type Named, resolveTarget, type Target } from "./mention.ts";
+import { CHAT_GONE, type Command, parseCommand } from "./command.ts";
+import {
+  fold,
+  MENTION,
+  type Named,
+  resolveTarget,
+  type Target,
+} from "./mention.ts";
 
 /** A typed line: a command, a command refused before any request, or a
  *  message with its target (or the reason it has none). */
@@ -26,6 +34,29 @@ export type Line =
   | Command
   | { error: string }
   | { verb: "message"; target: Target };
+
+/** A message in a pinned chat. A mention of another real participant says
+ *  how to open that chat instead of claiming the name does not exist. */
+function directTarget(
+  text: string,
+  roster: readonly Named[],
+  direct: string,
+): Target {
+  const pin = roster.find((p) => p.id === direct);
+  if (!pin) return { error: CHAT_GONE };
+  const target = resolveTarget(text, [pin], false);
+  if (!("error" in target) || !target.error.startsWith("no participant named "))
+    return target;
+  const m = MENTION.exec(text.trimStart());
+  const wanted = m
+    ? roster.find((p) => fold(p.name) === fold(m[1] ?? ""))
+    : undefined;
+  return wanted && wanted.id !== pin.id
+    ? {
+        error: `this chat is with @${pin.name}; to open @${wanted.name}, run: kapelle chat attach @${wanted.name}`,
+      }
+    : target;
+}
 
 /** What `text` is, with this roster. `hall` is the room's `hall` flag;
  *  `direct` pins a piped chat to one participant. */
@@ -35,11 +66,12 @@ export function parseLine(
   hall = false,
   direct?: string,
 ): Line {
-  const targets = direct ? roster.filter((p) => p.id === direct) : roster;
-  return (
-    parseCommand(text, roster, hall) ?? {
-      verb: "message",
-      target: resolveTarget(text, targets, direct ? false : hall),
-    }
-  );
+  const command = parseCommand(text, roster, hall, direct);
+  if (command) return command;
+  return {
+    verb: "message",
+    target: direct
+      ? directTarget(text, roster, direct)
+      : resolveTarget(text, roster, hall),
+  };
 }

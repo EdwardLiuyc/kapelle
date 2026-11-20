@@ -182,7 +182,9 @@ async function chatPiped(
     ? room.participants.find((p) => p.id === participantId)
     : undefined;
   if (participantId && !direct) {
-    console.error(`error: ${room.id} has no participant ${participantId}`);
+    console.error(
+      "error: the hall chat changed while attaching; run kapelle chat list",
+    );
     return 1;
   }
   if (!direct && room.participants.length === 0)
@@ -198,7 +200,7 @@ async function chatPiped(
   }
   console.log(
     direct
-      ? "type a message; /help lists the commands; /leave to exit"
+      ? "type a message or participant command; /help lists the commands; /leave to exit"
       : "type a message; @name picks the agent; /help lists the commands; /leave to exit",
   );
 
@@ -305,7 +307,12 @@ async function chatPiped(
       }
       code = codeOf(ended);
       (code ? console.error : console.log)(
-        endedLine(ended, room.id, room.hall, direct?.name),
+        endedLine(
+          ended,
+          room.id,
+          room.hall,
+          direct && nameOf(state, direct.id),
+        ),
       );
       break;
     }
