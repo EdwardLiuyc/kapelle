@@ -1633,7 +1633,8 @@ The reply comes when the harness is ready.
 `base` (see [`POST /rooms`](#post-rooms)), or the `orchestrator` role in the
 [hall](#the-hall); `403` `repo_not_added` when the agent's `cwd` is not in an added
 repository; `400` `invalid_config` when the `linkPaths` of the agent's repository cannot
-be used; `409` `name_taken`; `409` `orchestrator_exists`; `409`
+be used, except in a repository the room opened without its links after a restart: it
+stays without links for the room's life, and the add is not refused; `409` `name_taken`; `409` `orchestrator_exists`; `409`
 `room_dismissed`; `503` `shutting_down`; `500` `room_open_failed` when the harness cannot
 start.
 

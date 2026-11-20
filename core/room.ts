@@ -77,13 +77,12 @@
  * the room's own folder, as before, except in a room with `scratchDir` (the
  * hall): there it gets an empty folder of its own, which its release removes
  * while it is still empty. `room.json` keeps the participant's `cwd`, or
- * `scratch`, so a restore opens the same place. It also keeps every
- * folder the room opened for a participant, even after that participant
- * leaves or an add fails, so delete can find a kept checkout and its branch.
- * The
- * room's record and log stay under the room's own root; the boot sweep reads
- * every room's record before it calls a checkout an orphan
- * (`core/sweep.ts`).
+ * `scratch`, so a restore opens the same place. It also keeps the
+ * repository root of every folder the room opened for a participant, even
+ * after that participant leaves or an add fails, so delete can find a kept
+ * checkout and its branch. The room's record and log stay under the room's
+ * own root; the boot sweep reads every room's record before it calls a
+ * checkout an orphan (`core/sweep.ts`).
  *
  * **A kept checkout lasts while its room has a record.** The boot sweep
  * (`core/sweep.ts`) keeps every checkout under a room that has a
@@ -581,8 +580,9 @@ export interface RoomRecord extends Omit<RoomMeta, "turnCap" | "turnCount"> {
   /** Participants whose saved harness no longer resolves. They are not in
    *  the active roster, but their branch and worktree stay known to delete. */
   tombstones?: ParticipantRecord[];
-  /** Every folder the room opened for a participant besides its own
-   *  (M11-2), whether or not a checkout was made there. Kept after the
+  /** The repository root of every folder the room opened for a participant,
+   *  besides its own (M11-2), whether or not a checkout was made there. Two
+   *  folders in one repository are one entry. Kept after the
    *  participant leaves, and after a failed add, so delete still finds
    *  checkouts and branches in every repository the room touched; one with
    *  none costs delete nothing. */
@@ -2039,10 +2039,14 @@ async function buildRoom(
       );
     }
     if (!target.branch) {
+      // M11-2: a scratch folder or a folder with no git reaches this too.
+      const { place } = found;
       throw new RoomRefusal(
         "no_branch",
-        `${target.name} has no branch; its checkout is shared with the ` +
-          "repository",
+        `${target.name} has no branch: it works in ` +
+          (place.scratch
+            ? "a scratch folder"
+            : `${place.dir}, which is not a git repository with a commit`),
       );
     }
     if (!source.branch) {

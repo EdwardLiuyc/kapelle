@@ -4156,6 +4156,20 @@ test("an agent picks its own folder: a repository with a commit, one with none, 
     assert.equal(p.status, 201, JSON.stringify(p.body));
     assert.equal(p.body.worktree, cwd, name);
     assert.equal(p.body.branch, undefined, name);
+    // No branch, and the reason names the folder, not a shared checkout.
+    const ff = await api(
+      d,
+      "POST",
+      `/rooms/${id}/agents/${p.body.id}/fast-forward`,
+      { from: alice.id },
+    );
+    assert.equal(ff.status, 409, name);
+    assert.equal(ff.body.error.code, "no_branch", name);
+    assert.equal(
+      ff.body.error.message,
+      `${name} has no branch: it works in ${cwd}, which is not a git ` +
+        "repository with a commit",
+    );
   }
   // Both repositories' agents answer.
   for (const p of [alice, bob.body]) {
@@ -4400,7 +4414,10 @@ test("a hall agent gets a scratch folder, removed when untouched and kept when u
   );
   assert.equal(ff.status, 409);
   assert.equal(ff.body.error.code, "no_branch");
-  assert.match(ff.body.error.message, /^ann has no branch/);
+  assert.equal(
+    ff.body.error.message,
+    "ann has no branch: it works in a scratch folder",
+  );
   await writeFile(join(bob.body.worktree, "notes.md"), "kept\n");
   for (const p of [ann, bob]) {
     const gone = await api(first, "DELETE", `/rooms/hall/agents/${p.body.id}`);
