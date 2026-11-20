@@ -12,6 +12,9 @@
  * on the status line and the second as a line in the transcript. The TUI
  * checks "no room" and "no agents" itself, on a message, before it shows the
  * target's refusal: both name `ctrl+o`, and the piped screen has neither.
+ *
+ * A piped hall chat pins one participant (`direct`): a bare message goes to
+ * that participant, while commands still resolve against the room's roster.
  */
 
 import { type Command, parseCommand } from "./command.ts";
@@ -24,16 +27,19 @@ export type Line =
   | { error: string }
   | { verb: "message"; target: Target };
 
-/** What `text` is, with this roster. `hall` is the room's `hall` flag. */
+/** What `text` is, with this roster. `hall` is the room's `hall` flag;
+ *  `direct` pins a piped chat to one participant. */
 export function parseLine(
   text: string,
   roster: readonly Named[],
   hall = false,
+  direct?: string,
 ): Line {
+  const targets = direct ? roster.filter((p) => p.id === direct) : roster;
   return (
     parseCommand(text, roster, hall) ?? {
       verb: "message",
-      target: resolveTarget(text, roster, hall),
+      target: resolveTarget(text, targets, direct ? false : hall),
     }
   );
 }

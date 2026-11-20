@@ -1,12 +1,13 @@
 /**
  * `chat/piped.ts` — the chat screen for a pipe (M4-7).
  *
- * Piped, `chat.ts` is one room as plain lines, which is what a script or a
- * test reads. It reads a line through `client/submit.ts`, as the TUI does.
- * A question is not answered here: the piped screen only prints the
- * question and how it closed (M4-3). `/delete` prints its preview, and the
- * next non-empty line must be `/delete` again to confirm. A dismissed room
- * stays read-only so a `409` can be fixed and retried (#352).
+ * Piped, `chat.ts` is one room, or one hall agent's thread, as plain lines,
+ * which is what a script or a test reads. It reads a line through
+ * `client/submit.ts`, as the TUI does. A question is not answered here: the
+ * piped screen only prints the question and how it closed (M4-3). `/delete`
+ * prints its preview, and the next non-empty line must be `/delete` again to
+ * confirm. A dismissed room stays read-only so a `409` can be fixed and
+ * retried (#352).
  */
 
 import { createInterface } from "node:readline";
@@ -32,6 +33,7 @@ import {
   applyStatus,
   cleanLines,
   type Entry,
+  inThread,
   nameOf,
   newRoomState,
   printable,
@@ -166,20 +168,38 @@ function makePrinter(state: RoomState) {
   };
 }
 
-/** The chat loop for one room on a pipe: what a script or a test reads.
- *  Resolves with the exit code. A refused message or command prints to
- *  stderr and the loop goes on, so the exit stays 0. A refused `/dismiss`
- *  is the one that ends it, with 1: the person asked for the end. */
-async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
-  if (room.participants.length === 0)
+/** The chat loop for one room, or one hall agent's thread, on a pipe: what
+ *  a script or a test reads. Resolves with the exit code. A refused message
+ *  or command prints to stderr and the loop goes on, so the exit stays 0. A
+ *  refused `/dismiss` is the one that ends it, with 1: the person asked for
+ *  the end. */
+async function chatPiped(
+  d: DaemonAddress,
+  room: RoomDto,
+  participantId?: string,
+): Promise<number> {
+  const direct = participantId
+    ? room.participants.find((p) => p.id === participantId)
+    : undefined;
+  if (participantId && !direct) {
+    console.error(`error: ${room.id} has no participant ${participantId}`);
+    return 1;
+  }
+  if (!direct && room.participants.length === 0)
     console.log(`room ${room.id} · no agents`);
-  for (const p of room.participants) {
-    console.log(`room ${room.id} · ${p.name} (${p.harness}) · ${p.worktree}`);
+  for (const p of direct ? [direct] : room.participants) {
+    console.log(
+      direct
+        ? `${p.name} (${p.harness}) · ${p.worktree}`
+        : `room ${room.id} · ${p.name} (${p.harness}) · ${p.worktree}`,
+    );
     // A notice can quote the harness: its version, or its own error (#229).
     for (const { text } of p.notices) console.log(`! ${printable(text)}`);
   }
   console.log(
-    "type a message; @name picks the agent; /help lists the commands; /leave to exit",
+    direct
+      ? "type a message; /help lists the commands; /leave to exit"
+      : "type a message; @name picks the agent; /help lists the commands; /leave to exit",
   );
 
   const state = newRoomState();
@@ -194,7 +214,10 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
         if (!r.ok) return;
         applyStatus(state, r.body);
         for (const p of r.body.participants) {
-          if (p.status === "paused" || p.status === "killed") {
+          if (
+            (!direct || p.id === direct.id) &&
+            (p.status === "paused" || p.status === "killed")
+          ) {
             console.log(stoppedLine(p.name, p.status));
           }
         }
@@ -214,7 +237,7 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
   let stream: { ended?: Ended; error?: string } | undefined;
   const streamDone = readRoom(current, room.id, (line) => {
     const e = applyLine(state, line);
-    if (!e) return;
+    if (!e || (direct && !inThread(e, direct.id))) return;
     printer.show(e);
     if (
       e.type === "turn_ended" &&
@@ -298,7 +321,12 @@ async function chatPiped(d: DaemonAddress, room: RoomDto): Promise<number> {
     await current().catch(() => {});
     const confirming = pendingDelete && text === "/delete";
     pendingDelete = false;
-    const c = parseLine(text, rosterOf(state, room.participants), room.hall);
+    const c = parseLine(
+      text,
+      rosterOf(state, room.participants),
+      room.hall,
+      direct?.id,
+    );
     if ("error" in c) {
       console.error(`! ${c.error}`);
       continue;

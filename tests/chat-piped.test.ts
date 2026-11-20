@@ -1,6 +1,6 @@
 /**
- * `chat.ts` with no terminal: one room as plain lines (`chat/piped.ts`),
- * the `list` and `dismiss` verbs, `kapelle chat` handing over to `chat.ts`,
+ * `chat.ts` with no terminal: one room or one hall chat as plain lines
+ * (`chat/piped.ts`), the `list` and `dismiss` verbs, `kapelle chat` handing over to `chat.ts`,
  * and the rule that the chat reaches the daemon over HTTP only. Most tests
  * drive a real `daemon.ts`; a few stand up a fake one to send a reply the
  * real one never sends.
@@ -31,6 +31,7 @@ import test from "node:test";
 import {
   API_VERSION,
   type HarnessesReply,
+  type MessageAccepted,
   type RoomDto,
   type RoomListEntry,
 } from "../client/contract.ts";
@@ -46,6 +47,7 @@ import {
   listRooms,
   MOCK_AGENT,
   only,
+  participantIdle,
   REMEMBER,
   REPO,
   type RoomReply,
@@ -584,44 +586,63 @@ test("piped chat.ts with no orchestrator: no mention reaches the only agent, is 
   assert.match(two.stdout, /you → bob: hi\nbob: previous: \(none\)/);
 });
 
-test("piped chat.ts in the hall refuses no mention with one agent, sends @name, and keeps the hall (M11-1)", async (t) => {
+test("piped chat.ts opens one hall agent's chat by @name, not the hall (M11-1, #516)", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);
-  const bob = await api(d, "POST", "/rooms/hall/agents", {
-    cmd: REMEMBER,
-    name: "bob",
-  });
-  assert.equal(bob.status, 201, JSON.stringify(bob.body));
-  const before = await api<RoomDto>(d, "GET", "/rooms/hall");
-  const c = spawnCli(t, ["attach", "hall"], "chat.ts", {
+  for (const name of ["ann", "bob"]) {
+    const added = await api<RoomReply>(d, "POST", "/rooms/hall/agents", {
+      cmd: REMEMBER,
+      name,
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+  }
+  const hall = await api<RoomDto>(d, "GET", "/rooms/hall");
+  const ann = hall.body.participants.find((p) => p.name === "ann");
+  const bob = hall.body.participants.find((p) => p.name === "bob");
+  assert.ok(ann && bob, JSON.stringify(hall.body));
+  // A line from another hall agent must not appear in ann's chat.
+  const sent = await api<MessageAccepted>(
+    d,
+    "POST",
+    `/rooms/hall/agents/${bob.id}/messages`,
+    { text: "bob only" },
+  );
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  await participantIdle(d, "hall", bob.id);
+
+  const c = spawnCli(t, ["attach", "@ann"], "chat.ts", {
     XDG_RUNTIME_DIR: runtime,
   });
   c.child.stdin.end(
-    "hi\n@bob hi\n/add mock\n/title changed\n/cap 41\n/config\n/dismiss\n",
+    "hi\n@bob hi\n/add mock\n/title changed\n/cap 41\n/config\n/leave\n",
   );
   const r = await c.done;
-  // A refused dismiss ends a pipe with 1, as for any room.
-  assert.equal(r.code, 1, r.stderr);
-  assert.match(
-    r.stderr,
-    /the hall has no orchestrator: start with @name \(@bob\)/,
-  );
-  assert.match(r.stdout, /you → bob: hi\nbob: previous: \(none\)/);
-  // Only the named message reached bob.
-  assert.equal(r.stdout.split("you → bob:").length, 2, r.stdout);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /ann \(mock-agent\) · /);
+  assert.doesNotMatch(r.stdout, /room hall/);
+  assert.doesNotMatch(r.stdout, /bob only/);
+  assert.match(r.stdout, /you → ann: hi\nann: previous: \(none\)/);
+  assert.match(r.stderr, /no participant named @bob/);
   assert.match(r.stderr, /a chat is no room: use \/chat for a new agent/);
   assert.match(r.stderr, /a chat is no room: \/title needs a room/);
   assert.match(r.stderr, /a chat is no room: \/cap needs a room/);
   assert.match(r.stderr, /the hall has no project config/);
-  assert.match(r.stderr, /the hall cannot be dismissed or deleted/);
-  const hall = await api<RoomDto>(d, "GET", "/rooms/hall");
-  assert.equal(hall.body.status, "active");
-  assert.equal(hall.body.title, before.body.title);
-  // The refused /cap left the default cap below this raise.
-  const raised = await api<RoomReply>(d, "PATCH", "/rooms/hall", {
-    turnCap: 41,
+  assert.equal(r.stdout.split("you → ann: hi").length, 2, r.stdout);
+
+  const hallAttach = spawnCli(t, ["attach", "hall"], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
   });
-  assert.equal(raised.status, 200, JSON.stringify(raised.body));
+  hallAttach.child.stdin.end("/leave\n");
+  const hallResult = await hallAttach.done;
+  assert.equal(hallResult.code, 1, hallResult.stderr);
+  assert.match(hallResult.stderr, /attach a hall chat by name/);
+  assert.doesNotMatch(hallResult.stdout, /room hall/);
+
+  const missing = await spawnCli(t, ["attach", "@nobody"], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  }).done;
+  assert.equal(missing.code, 1, missing.stderr);
+  assert.match(missing.stderr, /no hall chat named @nobody/);
 });
 
 test("piped chat.ts sends a message with no mention to the orchestrator, and @name to that participant", async (t) => {

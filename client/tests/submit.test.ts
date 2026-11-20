@@ -58,3 +58,20 @@ test("a message with no target carries the target's refusal", () => {
     target: { error: "nothing to send" },
   });
 });
+
+test("a direct chat sends a bare message to its one agent", () => {
+  assert.deepEqual(parseLine("look at this", ROSTER, true, "p-b"), {
+    verb: "message",
+    target: { id: "p-b", text: "look at this" },
+  });
+  assert.deepEqual(parseLine("@alice hi", ROSTER, true, "p-b"), {
+    verb: "message",
+    target: { error: "no participant named @alice" },
+  });
+  // Commands still resolve against the whole room.
+  assert.deepEqual(parseLine("@alice /cancel", ROSTER, true, "p-b"), {
+    verb: "cancel",
+    id: "p-a",
+    name: "alice",
+  });
+});
