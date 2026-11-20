@@ -723,6 +723,8 @@ await sweepBoot({
   // not, and a question nobody can answer would hang the boot. Without it
   // `sweepStranded` reports and keeps, which is the safe half (#129).
   ask: process.stdin.isTTY ? askBoot : undefined,
+  // A hall agent's checkout is in a repository; its record is in the hall's.
+  roomRoots: [hallDir()],
 });
 
 process.off("SIGTERM", bailOut);
@@ -1252,16 +1254,20 @@ async function restoreRooms(): Promise<void> {
 
 /**
  * The operator's hall (M11-1, D1): a room in a folder the daemon owns,
- * `<stateDir>/hall`, kept across restarts. Every agent in it works in that
- * folder, with no git: the setup is built here, not by `openWorktrees`, so a
- * home folder that is itself a repository cannot give the hall branches. It
+ * `<stateDir>/hall`, kept across restarts. Its own setup has no git: it is
+ * built here, not by `openWorktrees`, so a home folder that is itself a
+ * repository cannot give the hall branches. Since M11-2 an agent works in a
+ * scratch folder of its own, or in the folder it picked, with a branch when
+ * that is a repository; one added before works in the hall's folder. It
  * opens before `restoreRooms`, so `GET /rooms` lists it first. A hall that
  * cannot open is skipped with a notice, as a room is: the daemon still boots.
  */
 async function openHall(): Promise<void> {
-  const cwd = join(stateDir(), "hall");
+  const cwd = hallDir();
   try {
     mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    // M11-2: an agent with no `cwd` gets a scratch folder, so none of them
+    // works in the hall's folder itself. The notice is for the older ones.
     const setup: WorktreeSetup = {
       worktrees: null,
       root: cwd,
@@ -1271,7 +1277,14 @@ async function openHall(): Promise<void> {
     };
     const bus = createEventBus();
     trackChildren(bus, "room", HALL_ID);
-    const deps = { setup, bus, permissions, noteSession };
+    const deps = {
+      setup,
+      bus,
+      permissions,
+      noteSession,
+      scratchDir: join(stateDir(), "scratch", HALL_ID),
+      openPlace: placeOpener(HALL_ID),
+    };
     const path = roomFile(cwd, HALL_ID);
     let room: Room;
     if (existsSync(path)) {
@@ -1284,11 +1297,16 @@ async function openHall(): Promise<void> {
       if (record.participants.some((p) => p.role === "orchestrator")) {
         throw new Error("it has an orchestrator");
       }
-      const outside = record.participants.find((p) => p.worktree !== cwd);
+      // M11-2: an agent with its own folder works there. One without works
+      // in its scratch folder, or, added before M11-2, in the hall's.
+      const own = record.participants.filter((p) => p.cwd === undefined);
+      const where = (p: (typeof own)[number]) =>
+        p.scratch ? join(deps.scratchDir, p.id) : cwd;
+      const outside = own.find((p) => p.worktree !== where(p));
       if (outside) {
-        throw new Error(`${outside.name}'s worktree is not ${cwd}`);
+        throw new Error(`${outside.name}'s worktree is not ${where(outside)}`);
       }
-      if (record.participants.some((p) => p.branch !== undefined)) {
+      if (own.some((p) => p.branch !== undefined)) {
         throw new Error("a participant has a branch");
       }
       room = await restoreRoom({ record, ...deps });
@@ -1305,6 +1323,46 @@ async function openHall(): Promise<void> {
   } catch (err) {
     console.error(`skipping the hall in ${cwd}: ${messageOf(err)}`);
   }
+}
+
+/** The hall's own folder. A declaration: the boot sweep needs it first. */
+function hallDir(): string {
+  return join(stateDir(), "hall");
+}
+
+/**
+ * Opens a participant's own folder for room `roomId` (M11-2), as `postRoom`
+ * opens the room's: the project's links checked, then `openWorktrees`. A
+ * bad link config refuses an add, and a restore opens without links.
+ */
+function placeOpener(roomId: string) {
+  return async (cwd: string, restoring: boolean): Promise<WorktreeSetup> => {
+    const { root } = await stateDirRoot(cwd);
+    let linkPaths: string[] = [];
+    try {
+      linkPaths = readProjectLinkPaths(root);
+      await validateWorktreeLinks(root, linkPaths);
+    } catch (err) {
+      if (!restoring) throw new RoomRefusal("invalid_config", messageOf(err));
+      console.error(
+        `room ${roomId}: ${messageOf(err)}; opening ${cwd} without links`,
+      );
+      linkPaths = [];
+    }
+    return openWorktrees(cwd, roomId, {
+      linkPaths,
+      linksChecked: true,
+      advisory: false,
+    });
+  };
+}
+
+/** An agent's own folder (M11-2), real and absolute, inside an added
+ *  repository, as `POST /rooms` checks its `cwd`. */
+async function agentFolder(request: { cwd?: string }) {
+  if (request.cwd === undefined) return;
+  request.cwd = existingDir(request.cwd, "cwd");
+  await refuseUnadded(request.cwd);
 }
 
 /** The hall's one refusal for a dismiss, a delete and its preview. */
@@ -1391,6 +1449,7 @@ async function buildRestored(
     bus,
     permissions,
     noteSession,
+    openPlace: placeOpener(id),
     ...(limits && { limits }),
     ...(turnCap !== undefined && { turnCap }),
     ...(roomNotice && { roomNotice }),
@@ -1445,6 +1504,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
   } catch (err) {
     throw roomRefused(err) ?? refusal(400, "invalid_request", messageOf(err));
   }
+  for (const agent of agents) await agentFolder(agent);
 
   let linkPaths: string[];
   try {
@@ -1498,6 +1558,7 @@ async function postRoom(req: IncomingMessage, res: ServerResponse) {
       bus,
       permissions,
       noteSession,
+      openPlace: placeOpener(id),
       limits,
       turnCap,
     });
@@ -1551,6 +1612,7 @@ async function postAgent(
     throw roomRefused(err) ?? refusal(400, "invalid_request", messageOf(err));
   }
   refuseHallOrchestrator(id, request.role);
+  await agentFolder(request);
   const shuttingDown = () =>
     refusal(503, "shutting_down", "the daemon is shutting down");
   if (stopping) throw shuttingDown();
@@ -1880,6 +1942,9 @@ async function fastForwardPreview(
     const who = target.branch ? source : target;
     throw refusal(409, "no_branch", `${who.name} has no branch to compare`);
   }
+  // As the move refuses it (M11-2), not as a git failure.
+  const other = entry.room.otherRepository(target.id, source.id);
+  if (other) throw refusal(409, "no_branch", other);
   let diff: Diff;
   try {
     diff = await rangeDiff(target.worktree, "HEAD", source.branch);

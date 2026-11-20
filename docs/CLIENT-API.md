@@ -7,7 +7,7 @@ bridge to a chat app.
 You do not need to read `daemon.ts` or anything in `core/`. If this document and the code
 disagree, that is a bug. Please report it.
 
-Contract version: **1.25** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
+Contract version: **1.26** (M5-1, #133; minor bumped by M5-4, #136, M5-5, #137,
 M5-6, #138, M5-7, #139, M6-5, #149, M4-3, #49, M4-6, #204, M6-7a, #151, which made
 rooms stable, M6-7b, #179, which added `resumed: "loaded"`, M6-7c, #235, which added
 `DELETE /rooms/:id`, M8-1, #265, which added a message's `from`, M8-2, #266, which
@@ -19,8 +19,8 @@ added `_client_repeat_resolved`, #318, which settled the cancel boundary, and
 M8-7, #271, which added the orchestrator's turn cap; #371, which tightened the
 `daemon.json` lifecycle; M9-8, #307, which made the `/harnesses` routes stable; and
 M10-5, #494, which added `GET /config` and `PATCH /config`; M9-9, #501, which added
-an agent's thinking level; #511, which distinguishes a deleted room; and M11-1, #475,
-which added the hall).
+an agent's thinking level; #511, which distinguishes a deleted room; M11-1, #475,
+which added the hall; and M11-2, #476, which added an agent's own `cwd`).
 
 ## Contents
 
@@ -287,7 +287,7 @@ request that is not valid HTTP gets `400`.
 | `agent_busy` | `409` | A fast-forward target has a live turn. | Wait for its `_client_turn_ended`, then try again. |
 | `not_fast_forward` | `409` | The target branch is not an ancestor of the source branch, or the target checkout is not on its branch, so the move would be a merge or land somewhere else. | Nothing changed. Let a person merge by hand, or choose another source. |
 | `dirty_worktree` | `409` | The target checkout has tracked changes, or files the move would overwrite. | Commit or stash them first. Untracked files alone do not refuse. |
-| `no_branch` | `409` | A participant has no branch: its checkout is the shared repository folder, or the branch ref is gone. | There is nothing to move; inspect the participant's worktree. |
+| `no_branch` | `409` | A participant has no branch: its checkout is the shared repository folder, or the branch ref is gone. Or the two participants of a fast-forward work in different repositories (since 1.26). | There is nothing to move; inspect the participant's worktree. |
 | `room_dismissed` | `409` | The room was dismissed. | Stop. Open a new room. |
 | `room_active` | `409` | You deleted a room that is still active. | Dismiss it first, then delete it. |
 | `uncommitted_work` | `409` | You deleted a room, and a checkout has changes nobody committed. New files count. The message names each file. | Nothing changed. Commit or remove the files, then delete again. |
@@ -1229,9 +1229,13 @@ restart. `409` `already_decided` when the question is already closed, for any re
 
 Rooms are stable since contract 1.8. `chat.ts` uses them.
 
-A room is a container on one repository. It holds a list of participants. Each
-participant is one harness with one session that stays alive between messages. Each
-participant has its own git branch and checkout. Today:
+A room is anchored to one folder, its `cwd`. The room's record is kept in that folder's
+state directory. A room holds a list of participants. Each participant is one harness
+with one session that stays alive between messages. A participant works in the room's
+folder, or in another added folder it names with its own `cwd` (since 1.26). In a git
+repository with a commit, it gets its own branch and checkout there. The
+[hall](#the-hall) differs: its folder needs no added repository, and an agent with no
+`cwd` gets a scratch folder. Today:
 
 - A participant has its own mode, `auto` by default. An `ask` participant asks through
   [Permissions](#permissions), and a question nobody answers is denied at the time limit.
@@ -1257,8 +1261,13 @@ checks brings the hall back, once its folder and the room open. Recovery that ne
 repair by hand is #518.
 
 - The hall's `cwd` is the folder `hall` in the daemon's state folder. It is not a git
-  repository and needs no added repository, so the hall exists with none. Every agent in
-  the hall works in that folder, with no branch, and a notice says they share it.
+  repository and needs no added repository, so the hall exists with none.
+- Since 1.26, an agent added to the hall with no `cwd` gets an empty folder of its own,
+  under `scratch/hall/` in the daemon's state folder, with no branch. When the agent is
+  removed, the folder goes with it while it is still empty; a folder the agent wrote into
+  is kept, and a notice says where. The daemon never removes a kept scratch folder
+  later; delete it by hand. An agent with a `cwd` works there, as in any room.
+  An agent added before 1.26 keeps working in the hall's folder, which it shares.
 - The hall has no orchestrator. An agent added to it, or changed, with
   `role: "orchestrator"` is refused `400` `invalid_request`. A message with no `@name`
   is refused: see [Addressing](#addressing).
@@ -1313,11 +1322,21 @@ An agent takes:
   harness chooses.
 - `base`: optional. The git ref the participant's branch starts from. It can be another
   participant's `branch`, so a reviewer starts from the developer's commits. The default
-  is the repository's `HEAD`. Only committed work is on a branch. The participant's
-  `baseSha` records the resolved commit as provenance. Only a detected rebase moves it,
-  to the commit the rebase moved the work onto; a merge, a fast-forward or a reset leaves
-  it unchanged. The [`?against=base` diff route](#get-roomsidagentsagentiddiff) owns how
-  its comparison is chosen.
+  is the agent's own repository's `HEAD`. Only committed work is on a branch. The
+  participant's `baseSha` records the resolved commit as provenance. Only a detected
+  rebase moves it, to the commit the rebase moved the work onto; a merge, a fast-forward
+  or a reset leaves it unchanged. The
+  [`?against=base` diff route](#get-roomsidagentsagentiddiff) owns how its comparison is
+  chosen.
+- `cwd`: optional, since 1.26. An absolute path to the agent's own folder. It must be
+  inside an added repository, as the room's `cwd` must. In a git repository with a
+  commit, the agent gets its own checkout and branch in that repository, as described
+  above for the room's. In a folder with no git, or a repository with no commit, it works
+  in that folder, with no branch, and a notice says so. Without `cwd`, the agent uses the
+  room's `cwd`; in the [hall](#the-hall) it gets an empty folder of its own. Two agents
+  of one room can work in two repositories. A `base` must be a ref of the agent's own
+  repository. Which repository's project config applies is in
+  [`docs/CONFIG.md`](CONFIG.md).
 - `settings`: optional. `{ "allowReadOutsideRoot": false }` is the only setting today, and
   that is its default. `true` lets the harness read files outside its checkout through
   the daemon. The daemon never writes there for it. This is not isolation: it covers only
@@ -1417,7 +1436,9 @@ the current topology, independently of the saved `baseSha`.
 `repo_not_added` when `cwd` is not in an added repository; `400` `invalid_request` for a
 bad `title`, a bad or missing harness, a bad `name`, `role`, `mode`, `model`,
 `thoughtLevel` or `settings`, or an unknown agent field; `409` `name_taken` or
-`orchestrator_exists` when two agents in the list clash; `400` `invalid_config` when the
+`orchestrator_exists` when two agents in the list clash; `400` `invalid_request` for an
+agent's `cwd` that is not an absolute folder, and `403` `repo_not_added` for one outside
+every added repository; `400` `invalid_config` when the
 repository's `.kapelle/config.json` is not valid, because the room reads its watchdog
 limits, turn cap and `linkPaths` from it; `400` `invalid_request` for a bad `base`; `503`
 `shutting_down` when the daemon shuts down; `500` `room_open_failed` when a harness
@@ -1573,9 +1594,10 @@ Only a stopped room can be deleted: a dismissed one, or a paused one that no mes
 revived. A paused room is deleted as it is; no harness starts first. Dismiss an active room
 first.
 
-The daemon reads each checkout under the room's folder before it removes anything,
-including a checkout no participant owns, such as one a failed add kept. A file that
-nobody committed, new files included, refuses the delete.
+The daemon reads every checkout the room owns before it removes anything: those in the
+room's own folder and those in each repository a participant has used. That includes a
+checkout no current participant owns, such as one a removed participant or a failed add
+kept. A file that nobody committed, new files included, refuses the delete.
 
 **Reply `204`**, with no body. The room is gone: `GET /rooms/:id` and
 `GET /rooms/:id/events` answer `410` `room_deleted` until the daemon restarts. A restarted
@@ -1609,8 +1631,11 @@ The reply comes when the harness is ready.
 
 **Refusals:** `404` `room_not_found`; `400` `invalid_request` for a bad field, a bad
 `base` (see [`POST /rooms`](#post-rooms)), or the `orchestrator` role in the
-[hall](#the-hall); `400` `invalid_config` when the repository's
-`linkPaths` cannot be used; `409` `name_taken`; `409` `orchestrator_exists`; `409`
+[hall](#the-hall); `403` `repo_not_added` when the agent's `cwd` is not in an added
+repository; `400` `invalid_config` when the `linkPaths` of the agent's repository cannot
+be used, except in a folder the daemon opened for the room without its links after a
+restart: that folder stays without links until the daemon restarts, and the add is not
+refused; `409` `name_taken`; `409` `orchestrator_exists`; `409`
 `room_dismissed`; `503` `shutting_down`; `500` `room_open_failed` when the harness cannot
 start.
 
@@ -1855,7 +1880,8 @@ changed the commit.
 **Refusals:** `404` `room_not_found` or `participant_not_found`; `400` `invalid_request`
 for a missing or blank `from`, or when it names the target itself; `409` `room_dismissed`;
 `409` `agent_busy`; `409` `not_fast_forward`; `409` `dirty_worktree`; `409` `no_branch`. A
-branch ref that no longer resolves is `409` `no_branch`, never a bare git failure.
+branch ref that no longer resolves is `409` `no_branch`, never a bare git failure, and so
+is a source that works in another repository (since 1.26).
 
 ### `GET /rooms/:id/agents/:agentId/fast-forward?from=<participantId>`
 
@@ -1865,8 +1891,8 @@ not in the target's `HEAD`. Same shape and 512 KB cap as
 before the person confirms.
 
 **Refusals:** `404` `room_not_found` or `participant_not_found`; `400` `invalid_request`
-when `from` is missing; `409` `no_branch` when either participant has none; `409`
-`no_diff` when git fails.
+when `from` is missing; `409` `no_branch` when either participant has none, or, since
+1.26, when the two work in different repositories; `409` `no_diff` when git fails.
 
 ### Modes
 

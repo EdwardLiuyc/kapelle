@@ -19,6 +19,9 @@
  * chats. `/add` in one refuses and names `/chat`; `/title` and `/cap` refuse
  * because a chat has no visible room title and no orchestrator cap.
  *
+ * **`/chat` and `/add` take `--cwd`** (M11-2): that agent's own folder. With
+ * none, `/add` uses the room's folder and `/chat` gets a scratch folder.
+ *
  * **`/config` is always a form** (M10-5): the project config of the room on
  * screen, or of the folder the chat started in. A hall chat has no project,
  * so `/config` refuses there (M11-1). Its save is the `config` route command,
@@ -67,6 +70,8 @@ interface AgentSpec {
   role?: string;
   mode?: string;
   base?: string;
+  /** Its own folder, absolute (M11-2). */
+  cwd?: string;
   /** The harness checks the id (M9-5); the screen sends it as typed. */
   model?: string;
   /** The daemon sends it only when the model lists it; a join still succeeds (M9-9). */
@@ -115,6 +120,14 @@ export type RouteCommand =
       };
     };
 
+/** The folder a command asks the daemon for, which it refuses
+ *  `repo_not_added` until it is added: a room's, or an agent's own (M11-2). */
+export function commandFolder(c: RouteCommand): string | undefined {
+  if (c.verb === "new" || c.verb === "loop") return c.body.cwd;
+  if (c.verb === "chat" || c.verb === "add") return c.agent.cwd;
+  return undefined;
+}
+
 /** What a typed line is: a command, a form to open (a bare `/new`, `/add`,
  *  `/chat`, `/loop`, or `/config`), what an agent changed (`/diff`, M4-6),
  *  the person's shell (`/term`, M4-13), the installed agents (`/setup`,
@@ -138,8 +151,8 @@ export type Command =
 
 export const HELP = [
   "/new [harness] [--cmd c] [--name n] [--model id] [--title t] [--cwd dir]",
-  "/add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--model id] [--base @name|ref]",
-  "/chat <harness> [--cmd c] [--name n] [--mode m] [--model id]",
+  "/add <harness> [--cmd c] [--name n] [--role r] [--mode m] [--model id] [--base @name|ref] [--cwd dir]",
+  "/chat <harness> [--cmd c] [--name n] [--mode m] [--model id] [--cwd dir]",
   '/loop <recipe> <task> ["note"] [--agent h] [--cmd c] [--model id] [--cwd dir]',
   "/title <new title>",
   "/cap <n>",
@@ -371,8 +384,8 @@ export function parseCommand(
       verb === "new"
         ? ["cmd", "name", "model", "title", "cwd"]
         : verb === "chat"
-          ? ["cmd", "name", "mode", "model"]
-          : ["cmd", "name", "role", "mode", "model", "base"];
+          ? ["cmd", "name", "mode", "model", "cwd"]
+          : ["cmd", "name", "role", "mode", "model", "base", "cwd"];
     const o = options(args, names);
     if ("error" in o) return { error: `${o.error}; ${USAGE[verb]}` };
     // Typed empty models are usage errors; forms keep empty as no model (#466).
@@ -380,8 +393,14 @@ export function parseCommand(
     const [agent, ...extra] = o.positionals;
     if (extra.length) return { error: `one harness only; ${USAGE[verb]}` };
     const { cmd, name, title, cwd, role, mode, base, model } = o.values;
+    // `/chat` and `/add` send a folder only when one was typed (M11-2).
+    const own = cwd === undefined ? undefined : absoluteFolder(cwd);
+    if (cwd !== undefined && !own) return { error: FOLDER_GONE };
     if (verb === "chat") {
-      return { verb, agent: { agent, cmd, name, mode, model } };
+      return {
+        verb,
+        agent: { agent, cmd, name, mode, model, ...(own && { cwd: own }) },
+      };
     }
     if (verb === "add") {
       // `none` is no role, as in `@name /role none` and the form.
@@ -393,6 +412,7 @@ export function parseCommand(
         mode,
         model,
         base,
+        ...(own && { cwd: own }),
       };
       return { verb, agent: spec };
     }

@@ -37,6 +37,14 @@
  *    log. One with uncommitted work is kept and named. A paused room is
  *    never reaped.
  *
+ * **A room's checkouts can sit in other repositories** (M11-2, decided
+ * 2026-11-19, #476). A participant may work in a repository other than the
+ * one its room's record is in, and a hall agent's record is in the hall's
+ * folder, which is no added repository. So the pass first reads which rooms
+ * have a record, in every added repository and every `roomRoots` folder,
+ * and only then names an orphan. A room's removal goes to each repository
+ * its record names, for its checkouts and its branches.
+ *
  * **Whole-run reaping is ordered worktree-first.** If a checkout cannot be
  * removed, the record is kept too and the run is retried on the next boot —
  * deleting the record first would orphan the checkout, which is the one state
@@ -66,6 +74,7 @@ import {
   changedPaths,
   mutationKey,
   serializeWorktreeMutation,
+  stateDirRoot,
 } from "./worktree.ts";
 
 const run = promisify(execFile);
@@ -101,6 +110,9 @@ export interface SweepOptions {
    * and it does not guess.
    */
   ask?: (question: string) => Promise<boolean>;
+  /** Folders whose room records keep checkouts, but which are not swept
+   *  themselves: the hall's (M11-2). */
+  roomRoots?: readonly string[];
 }
 
 /**
@@ -415,6 +427,46 @@ export async function roomCheckouts(
   return all.filter((w) => w.runId === roomId).map((w) => w.path);
 }
 
+type SavedParticipant = RoomRecord["participants"][number];
+
+/**
+ * A room's record, or why it cannot be read, and the repositories its
+ * checkouts are in (M11-2): its own root first, then every repository the
+ * record remembers, and each participant's current repository. The remembered
+ * list keeps a removed participant's checkout or a failed add's checkout in
+ * the delete even after no participant names it. A participant whose folder
+ * is no repository has no checkout to name.
+ */
+async function roomRepos(root: string, roomId: string) {
+  let record: RoomRecord | undefined;
+  let error: unknown;
+  const file = roomFile(root, roomId);
+  if (existsSync(file)) {
+    try {
+      record = readRoomRecord(file);
+    } catch (err) {
+      error = err;
+    }
+  }
+  const repos = new Map<string, SavedParticipant[]>([[root, []]]);
+  for (const at of record?.repositories ?? []) {
+    if (!repos.has(at)) repos.set(at, []);
+  }
+  for (const p of [
+    ...(record?.participants ?? []),
+    ...(record?.tombstones ?? []),
+  ]) {
+    let at = root;
+    if (p.cwd !== undefined) {
+      const found = await stateDirRoot(p.cwd);
+      if (!found.isRepo) continue;
+      at = found.root;
+    }
+    repos.set(at, [...(repos.get(at) ?? []), p]);
+  }
+  return { record, error, repos };
+}
+
 /** The most commits one branch's preview carries. A branch with more shows
  *  `total` minus the returned list as a count. */
 const DELETE_PREVIEW_COMMITS = 200;
@@ -443,21 +495,24 @@ export async function roomWork(
   roomId: string,
 ): Promise<string[]> {
   const files: string[] = [];
-  for (const path of await roomCheckouts(root, roomId)) {
-    for (const file of await changedPaths(path)) files.push(join(path, file));
+  for (const at of (await roomRepos(root, roomId)).repos.keys()) {
+    for (const path of await roomCheckouts(at, roomId)) {
+      for (const file of await changedPaths(path)) files.push(join(path, file));
+    }
   }
   return files;
 }
 
 /**
- * The branches a room owns: its own namespace, plus the names its record
- * marks as a rename from the room's own. A branch the record only shows as
- * a switch to is named in `left` and left alone.
+ * The branches a room owns in one repository: its own namespace, plus the
+ * names its record marks as a rename from the room's own, for the
+ * participants `saved` that work there. A branch the record only shows as a
+ * switch to is named in `left` and left alone.
  */
 async function roomBranches(
   root: string,
   roomId: string,
-  record: RoomRecord | undefined,
+  saved: readonly SavedParticipant[],
   left: string[],
 ): Promise<Set<string>> {
   const prefix = branchPrefix(roomId);
@@ -467,10 +522,7 @@ async function roomBranches(
     `refs/heads/${prefix.slice(0, -1)}`,
   ]);
   const branches = new Set(refs.split("\n").filter(Boolean));
-  for (const p of [
-    ...(record?.participants ?? []),
-    ...(record?.tombstones ?? []),
-  ]) {
+  for (const p of saved) {
     const branch = p.branch;
     if (!branch || branches.has(branch)) continue;
     let original: string;
@@ -506,21 +558,27 @@ export async function roomDeletePreview(
   root: string,
   roomId: string,
 ): Promise<RoomDeletePreview> {
-  let record: RoomRecord | undefined;
-  const file = roomFile(root, roomId);
-  if (existsSync(file)) {
-    try {
-      record = readRoomRecord(file);
-    } catch {
-      // As `removeRoom`: only the room's own namespace can be named.
-    }
+  // An unreadable record names no participant: as `removeRoom`, only the
+  // room's own namespace can be named.
+  const { repos } = await roomRepos(root, roomId);
+  const branches: RoomDeletePreview["branches"] = [];
+  for (const [at, saved] of repos) {
+    branches.push(...(await repoDeletePreview(at, roomId, saved)));
   }
+  return { branches };
+}
+
+/** `roomDeletePreview` for one repository. */
+async function repoDeletePreview(
+  root: string,
+  roomId: string,
+  saved: readonly SavedParticipant[],
+): Promise<RoomDeletePreview["branches"]> {
   // A room whose cwd is no repository has no branches to lose, as
   // `removeRoom` says.
-  if ((await tryGit(root, ["rev-parse", "--git-dir"])) === null)
-    return { branches: [] };
-  const branches = await roomBranches(root, roomId, record, []);
-  if (branches.size === 0) return { branches: [] };
+  if ((await tryGit(root, ["rev-parse", "--git-dir"])) === null) return [];
+  const branches = await roomBranches(root, roomId, saved, []);
+  if (branches.size === 0) return [];
 
   const owned = new Set([...branches].map((branch) => `refs/heads/${branch}`));
   const refs = await gitWithInput(
@@ -537,56 +595,51 @@ export async function roomDeletePreview(
     outside.push("HEAD");
   }
   const names = new Map<string, string>();
-  for (const p of [
-    ...(record?.participants ?? []),
-    ...(record?.tombstones ?? []),
-  ]) {
+  for (const p of saved) {
     if (p.branch) names.set(p.branch, p.name);
   }
 
   // `--stdin` keeps a repository with thousands of refs off the argv.
   const negative = outside.map((ref) => `^${ref}`).join("\n");
-  return {
-    branches: await Promise.all(
-      [...branches].sort().map(async (branch) => {
-        const log = await gitWithInput(
-          root,
-          [
-            "log",
-            "--format=%H%x00%s",
-            `--max-count=${DELETE_PREVIEW_COMMITS + 1}`,
-            branch,
-            "--stdin",
-            "--",
-          ],
-          negative,
-        );
-        const commits = log
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => {
-            const [sha = "", subject = ""] = line.split("\0");
-            return { sha, subject };
-          });
-        const total =
-          commits.length > DELETE_PREVIEW_COMMITS
-            ? Number(
-                await gitWithInput(
-                  root,
-                  ["rev-list", "--count", branch, "--stdin", "--"],
-                  negative,
-                ),
-              )
-            : commits.length;
-        return {
+  return await Promise.all(
+    [...branches].sort().map(async (branch) => {
+      const log = await gitWithInput(
+        root,
+        [
+          "log",
+          "--format=%H%x00%s",
+          `--max-count=${DELETE_PREVIEW_COMMITS + 1}`,
           branch,
-          ...(names.has(branch) && { participant: names.get(branch) }),
-          commits: commits.slice(0, DELETE_PREVIEW_COMMITS),
-          total,
-        };
-      }),
-    ),
-  };
+          "--stdin",
+          "--",
+        ],
+        negative,
+      );
+      const commits = log
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [sha = "", subject = ""] = line.split("\0");
+          return { sha, subject };
+        });
+      const total =
+        commits.length > DELETE_PREVIEW_COMMITS
+          ? Number(
+              await gitWithInput(
+                root,
+                ["rev-list", "--count", branch, "--stdin", "--"],
+                negative,
+              ),
+            )
+          : commits.length;
+      return {
+        branch,
+        ...(names.has(branch) && { participant: names.get(branch) }),
+        commits: commits.slice(0, DELETE_PREVIEW_COMMITS),
+        total,
+      };
+    }),
+  );
 }
 
 /**
@@ -612,37 +665,38 @@ export async function removeRoom(
   // A harness can rename its branch out of the prefix. The record still
   // names it, and it is the room's to delete; read the record before its
   // folder goes.
-  let record: RoomRecord | undefined;
-  const file = roomFile(root, roomId);
-  if (existsSync(file)) {
-    try {
-      record = readRoomRecord(file);
-    } catch (err) {
-      left.push(
-        `cannot read the room record: ${messageOf(err)}; only branches ` +
-          `under ${prefix} are removed`,
-      );
+  const { error, repos } = await roomRepos(root, roomId);
+  if (error !== undefined) {
+    left.push(
+      `cannot read the room record: ${messageOf(error)}; only branches ` +
+        `under ${prefix} are removed`,
+    );
+  }
+  for (const [at, saved] of repos) {
+    for (const path of await roomCheckouts(at, roomId)) {
+      await worktreeGit(at, ["worktree", "remove", "--force", path]);
     }
-  }
-  for (const path of await roomCheckouts(root, roomId)) {
-    await worktreeGit(root, ["worktree", "remove", "--force", path]);
-  }
-  const state = stateDirFor(root);
-  rmSync(join(state, "wt", roomId), { recursive: true, force: true });
-  // A room whose cwd is no repository has no branches.
-  if ((await tryGit(root, ["rev-parse", "--git-dir"])) !== null) {
+    rmSync(join(stateDirFor(at), "wt", roomId), {
+      recursive: true,
+      force: true,
+    });
+    // A room whose cwd is no repository has no branches.
+    if ((await tryGit(at, ["rev-parse", "--git-dir"])) === null) continue;
     // A checkout removed by hand leaves an admin entry that still holds its
     // branch; `roomCheckouts` skipped the prune when the folder was gone.
-    await worktreeGit(root, ["worktree", "prune"]);
-    for (const branch of await roomBranches(root, roomId, record, left)) {
+    await worktreeGit(at, ["worktree", "prune"]);
+    for (const branch of await roomBranches(at, roomId, saved, left)) {
       try {
-        await worktreeGit(root, ["branch", "-D", branch]);
+        await worktreeGit(at, ["branch", "-D", branch]);
       } catch (err) {
         left.push(`cannot delete branch ${branch}: ${messageOf(err)}`);
       }
     }
   }
-  rmSync(join(state, "rooms", roomId), { recursive: true, force: true });
+  rmSync(join(stateDirFor(root), "rooms", roomId), {
+    recursive: true,
+    force: true,
+  });
   return left;
 }
 
@@ -1057,6 +1111,7 @@ async function sweepRepo(
   retentionMs: number,
   now: number,
   onNotice: (text: string) => void,
+  recorded: ReadonlySet<string> | null,
 ): Promise<void> {
   const pass: RepoPass = {
     root,
@@ -1087,12 +1142,47 @@ async function sweepRepo(
 
   await reapExpired(records, managed, pass);
 
+  // Without every room's record, a room's checkout here is not provably
+  // an orphan (M11-2).
+  if (recorded === null) {
+    onNotice(`skipping orphan cleanup in ${root} until the next boot`);
+    return;
+  }
   // Orphans last: a run reaped just above may have failed to remove a
   // checkout, in which case its record is still there and it is not an orphan.
   for (const worktree of managed) {
-    if (records.get(worktree.runId) || rooms.has(worktree.runId)) continue;
+    const id = worktree.runId;
+    if (records.get(id) || rooms.has(id) || recorded.has(id)) continue;
     await reconcileOrphan(worktree.path, pass);
   }
+}
+
+/**
+ * Every room id with a `room.json` under one of `roots`, read before any
+ * repository is swept (M11-2): a participant's checkout can be in another
+ * repository than its room's record. `null` when a rooms folder cannot be
+ * read, so no orphan is named on a guess.
+ */
+function recordedRooms(
+  roots: readonly string[],
+  onNotice: (text: string) => void,
+): Set<string> | null {
+  const ids = new Set<string>();
+  for (const root of roots) {
+    const dir = join(stateDirFor(root), "rooms");
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      onNotice(`cannot list rooms under ${dir}: ${messageOf(err)}`);
+      return null;
+    }
+    for (const id of names) {
+      if (existsSync(join(dir, id, "room.json"))) ids.add(id);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -1161,6 +1251,10 @@ export async function sweepBoot(options: SweepOptions): Promise<void> {
   } catch (err) {
     onNotice(`cannot sweep ${childrenFile}: ${messageOf(err)}`);
   }
+  const recorded = recordedRooms(
+    [...repos, ...(options.roomRoots ?? [])],
+    onNotice,
+  );
   for (const root of repos) {
     try {
       // The repository itself is gone — moved, renamed, or deleted. Its
@@ -1175,7 +1269,7 @@ export async function sweepBoot(options: SweepOptions): Promise<void> {
       // then the built-in — and a bad config skips only this repo.
       const retentionMs =
         overrideRetentionMs ?? resolveRetentionMs(root) ?? DEFAULT_RETENTION_MS;
-      await sweepRepo(root, retentionMs, now, onNotice);
+      await sweepRepo(root, retentionMs, now, onNotice, recorded);
     } catch (err) {
       onNotice(`cannot sweep ${root}: ${messageOf(err)}`);
     }

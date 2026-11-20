@@ -18,6 +18,10 @@ Three sources set the knobs that do not belong in a run file (M2-7, #37):
   thing kapelle reads from inside your repository. You write it by hand, or with
   `/config` in the chat (M10-5), which saves through the daemon's `PATCH /config`.
   Nothing else creates it, and no preflight looks at it.
+  A room reads it from the repository of its own `cwd`. One exception: a
+  participant with its own `cwd` (M11-2) gets the `linkPaths` of the
+  repository it works in. The room's watchdog limits, turn cap and retention
+  still come from the room's repository.
 - **Environment** — `KAPELLE_*`. Overrides both files; for the run knobs an
   explicit run-file value still wins.
 

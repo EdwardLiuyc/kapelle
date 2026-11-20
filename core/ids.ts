@@ -58,7 +58,8 @@ export function newRoomId(now: Date = new Date()): string {
 }
 
 /** The operator's hall (M11-1): the one room with a fixed id. It never
- *  matches `ROOM_ID_PATTERN`, so it owns no branch and no worktree. */
+ *  matches `ROOM_ID_PATTERN`, so no new room can take it. Since M11-2 a hall
+ *  agent in a repository has a worktree and a branch, `kapelle/hall/<id>`. */
 export const HALL_ID = "hall";
 
 /** A participant id: `p-` and 8 base36 characters. Opaque, so a rename
@@ -78,10 +79,12 @@ export function newParticipantId(): string {
  * rather than against either vocabulary alone.
  */
 function assertOwnerId(id: string): string {
-  if (RUN_ID_PATTERN.test(id) || ROOM_ID_PATTERN.test(id)) return id;
+  if (RUN_ID_PATTERN.test(id) || ROOM_ID_PATTERN.test(id) || id === HALL_ID) {
+    return id;
+  }
   throw new Error(
     `invalid run or room id ${JSON.stringify(id)}: must match ` +
-      `${RUN_ID_PATTERN.source} or ${ROOM_ID_PATTERN.source}`,
+      `${RUN_ID_PATTERN.source} or ${ROOM_ID_PATTERN.source}, or be ${HALL_ID}`,
   );
 }
 
