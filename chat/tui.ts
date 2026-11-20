@@ -286,7 +286,7 @@ export function lostRoomEnd(
   const msg = err ? [`! ${(err as Error).message}`] : [];
   return {
     code: codeOf(ended),
-    lines: [...msg, endedLine(ended, roomId, hall)],
+    lines: [...msg, endedLine(ended, roomId, { hall })],
   };
 }
 
@@ -1181,7 +1181,7 @@ function chatTui(
     if (gone) drafts.delete(id);
     if (ended.kind === "dismissed") flash = `${label} was dismissed`;
     else if (ended.kind === "deleted") flash = `${label} was deleted`;
-    else flash = endedLine(ended, id, r?.entry.hall === true);
+    else flash = endedLine(ended, id, { hall: r?.entry.hall === true });
     setStatus();
   };
 

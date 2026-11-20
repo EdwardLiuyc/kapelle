@@ -1172,7 +1172,8 @@ function transcriptParts({
       // A notice can quote the harness: its version, or its own error (#229).
       for (const p of dto)
         for (const { text } of p.notices) addExtra(`! ${printable(text)}`);
-      if (r.lost) addExtra(endedLine(r.lost, r.entry.id, r.entry.hall));
+      if (r.lost)
+        addExtra(endedLine(r.lost, r.entry.id, { hall: r.entry.hall }));
       const entries = id ? thread(r.state, id) : r.state.timeline;
       for (const e of entries) addEntry(r.state, e, false);
     } else {

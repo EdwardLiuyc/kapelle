@@ -37,36 +37,52 @@ const NO_DAEMON = "the daemon did not answer; it may be restarting";
 const stoppedLine = (name: string, status: string) =>
   `${status === "killed" ? "!" : "·"} ${name} is ${status}; a message revives it`;
 
+/** A pinned hall chat's current name, and whether it left the roster. */
+interface HallPin {
+  name: string;
+  removed: boolean;
+}
+
+/** A hall's end line. A removed pin replaces the lines that would name its
+ *  state; a lost daemon or a missing hall keeps its own cause. */
+function hallEndedLine(e: Ended, pin?: HallPin): string | undefined {
+  if (pin?.removed && (e.kind === "alive" || e.kind === "refused")) {
+    return `! ${CHAT_GONE}`;
+  }
+  switch (e.kind) {
+    case "alive":
+      return pin
+        ? `! lost the chat's stream; ${pin.name} is still ${e.status} — rejoin with: kapelle chat attach @${pin.name}`
+        : `! lost the chats' stream; they are still ${e.status} — rejoin with: kapelle chat`;
+    case "unknown":
+      return `! ${NO_HALL}`;
+    case "refused":
+      return pin
+        ? `! lost the chat's stream (HTTP ${e.status}); ${pin.name} may still be alive`
+        : `! lost the chats' stream (HTTP ${e.status}); they may still be alive`;
+    default:
+      return undefined;
+  }
+}
+
+/** Options for a room's end line. `hall` hides the hall's id and names its
+ *  chats. `pin` is the one hall chat a pipe attached. */
+interface EndedLineOptions {
+  hall?: boolean;
+  pin?: HallPin;
+}
+
 /** The line for a room whose stream ended, from what `reconcile` found.
- *  It starts with `!` unless the room was dismissed or deleted. The hall is
- *  hidden on the screen (M11-1): with `hall`, the line names the chats and
- *  never the hall's id. A piped chat passes its agent name as `chat`, so the
- *  rejoin command is the one that works on a pipe. `gone` says a removed pin
- *  has no chat left to rejoin. */
+ *  It starts with `!` unless the room was dismissed or deleted. */
 function endedLine(
   e: Ended,
   id: string,
-  hall = false,
-  chat?: string,
-  gone = false,
+  { hall = false, pin }: EndedLineOptions = {},
 ): string {
-  if (hall) {
-    if (gone) return `! ${CHAT_GONE}`;
-    switch (e.kind) {
-      case "alive":
-        return chat
-          ? `! lost the chat's stream; ${chat} is still ${e.status} — rejoin with: kapelle chat attach @${chat}`
-          : `! lost the chats' stream; they are still ${e.status} — rejoin with: kapelle chat`;
-      case "unknown":
-        return `! ${NO_HALL}`;
-      case "refused":
-        return chat
-          ? `! lost the chat's stream (HTTP ${e.status}); ${chat} may still be alive`
-          : `! lost the chats' stream (HTTP ${e.status}); they may still be alive`;
-      default:
-        break;
-    }
-  }
+  const hallLine = hall ? hallEndedLine(e, pin) : undefined;
+  if (hallLine) return hallLine;
+  // `Ended` is a closed union: a new kind must choose its words here.
+  // pi-lens-ignore: switch-without-default
   switch (e.kind) {
     case "dismissed":
       return "the room was dismissed";
