@@ -83,10 +83,11 @@ These apply to every role.
 - **S9.** The report goes to the terminal only. The fixes go in the working tree,
   uncommitted (step 8), so the operator reads them with `git diff` and keeps or drops them.
 - **S10.** Repo facts come from `AGENTS.md`, not from this skill. A line in `AGENTS.md` can
-  be a pointer to the fact's owner, such as "See the top of `<file>`". Read the owner, and
-  take the fact from there. If the review needs a repo fact that neither `AGENTS.md` nor the
-  owner it points to has, report it as an `AGENTS.md` gap. Do not guess it, and do not add
-  it here.
+  be a pointer to the fact's owner: "See the top of `<file>`", "See `<name>` in `<file>`",
+  or a `§` section of `docs/FINDINGS.md`. The owner can point on in turn. Follow each
+  pointer until you reach the text that states the fact. If the review needs a repo fact
+  that neither `AGENTS.md` nor an owner it points to has, report it as an `AGENTS.md` gap.
+  Do not guess it, and do not add it here.
 
 ## Worktree rules
 
