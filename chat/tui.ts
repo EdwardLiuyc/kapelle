@@ -6,6 +6,9 @@
  * hall's agents as chats (M11-1), a transcript with each answer rendered as
  * markdown while it streams, and an editor below it.
  *
+ * It puts the `chat/tui/` parts on the screen and keeps the keys, the bell,
+ * the send flow and the end.
+ *
  * **A question opens its own box** (M4-3): when an `ask` participant waits
  * on a permission, the TUI shows the room, the agent, the turn and the tool's
  * input, with `deny` first, so a stray Enter says no, as the timeout would.

@@ -1,6 +1,11 @@
 /**
  * How a client finds the daemon and talks to it — story M5-10a (#142).
  *
+ * **No client in `client/` or `chat/` speaks HTTP to the daemon except through
+ * this file.** It is the one transport, version check and `daemon.json`
+ * reader for every `cli.ts` verb that talks to the daemon, and for `chat.ts`;
+ * `kapelle daemon start` imports `daemon.ts` directly.
+ *
  * **The caller passes the `daemon.json` path.** The folder it sits in is
  * `core/runtime.ts`'s to pick and to guard (`ours()`), and this folder imports
  * nothing from `core/`, so the rule keeps one copy. The file is read again on

@@ -161,7 +161,7 @@ and the person's shell (`chat/tui/term.ts`).
 | `daemon.ts` | The HTTP daemon: one for all of the operator's repositories. |
 | `daemon/` | The parts of `daemon.ts` that tests can import (`daemon.ts` starts a daemon when imported). |
 | `client/contract.ts` | The client API as types, plus `API_VERSION`. |
-| `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. Every `cli.ts` daemon verb and `chat.ts` use it. |
+| `client/daemon.ts` | `daemon.json`, the HTTP calls and the version check. |
 | `client/lifecycle.ts` | The daemon's life from a client (M9-2): start it when none answers, and stop it. |
 | `client/stream.ts` | The SSE reader with reconnect. `attach` uses it. |
 | `client/room.ts` | The room reducer: room lines in, screen state out. No I/O. |
@@ -171,14 +171,14 @@ and the person's shell (`chat/tui/term.ts`).
 | `client/folder.ts` | Tab completion for a folder path (M4-5). |
 | `client/command.ts` | Room and roster commands (M4-5): the typed line parsed, and the one route each calls. |
 | `client/diff.ts` | A diff text read for a screen (M4-6). |
-| `client/loop.ts` | Loop recipes (M8-5): where one is found, the list, and the orchestrator's first message. The loop form and `kapelle loop list` import its list helpers directly. |
+| `client/loop.ts` | Loop recipes (M8-5): where one is found, the list, and the orchestrator's first message. |
 | `client/config.ts` | The project config (M10-5): `GET /config` as lines, and the form's values as a `PATCH /config` body. |
-| `client/setup.ts` | The setup list (M9-3): the agents the daemon found, as lines, when the chat opens it, and the install request (M9-3b). |
+| `client/setup.ts` | The setup list (M9-3), and the install request (M9-3b). |
 | `client/submit.ts` | What a typed line is: a command, or a message and its target (M4-8). No I/O. |
 | `chat.ts` | The chat entry only: the arguments, the verbs and which screen to open. |
 | `chat/` | The chat screens (M4-7): `tui.ts` on a TTY, `piped.ts` on a pipe, `common.ts` for both. |
 | `chat/view.ts` | What the TUI shows (M4-10). Pure. |
-| `chat/tui/` | The TUI's parts (M4-12), one file each. `chat/tui.ts` puts them on the screen and keeps the keys, the bell, the send flow and the end. |
+| `chat/tui/` | The TUI's parts (M4-12), one file each. |
 | `schema/run.schema.json` | An editor aid for run files. Never a second validator. |
 
 Run state is outside the repository, in `$XDG_STATE_HOME/kapelle/repos/<name>-<hash>/`
