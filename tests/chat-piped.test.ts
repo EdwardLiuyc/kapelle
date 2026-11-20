@@ -694,75 +694,84 @@ test("a direct hall chat that loses its stream sends the person back to the chat
       participants: [{ id: ann.id, name: ann.name, status: ann.status }],
     },
   ];
-  const fake = createServer((req, res) => {
-    const json = { "content-type": "application/json" };
-    if (req.url === "/version") {
-      res.writeHead(200, json);
-      res.end(JSON.stringify({ apiVersion: API_VERSION, capabilities: [] }));
-      return;
-    }
-    if (req.url === "/rooms") {
-      res.writeHead(200, json);
-      res.end(JSON.stringify(list));
-      return;
-    }
-    if (req.url === "/rooms/hall/events") {
-      res.writeHead(200, { "content-type": "text/event-stream" });
-      const send = (seq: number, update: Record<string, unknown>) => {
-        res.write(
-          `id: ${seq}\ndata: ${JSON.stringify({
-            seq,
-            at: "2026-11-20T00:00:00Z",
-            roomId: "hall",
-            participantId: ann.id,
-            update,
-          })}\n\n`,
-        );
-      };
-      send(1, {
-        sessionUpdate: "_client_participant_added",
-        name: "ann",
-        harness: "mock-agent",
-        mode: "auto",
-      });
-      send(2, {
-        sessionUpdate: "_client_participant_changed",
-        name: "annie",
-      });
-      res.end();
-      return;
-    }
-    if (req.url === "/rooms/hall") {
-      res.writeHead(200, json);
-      res.end(JSON.stringify(room));
-      return;
-    }
-    res.writeHead(404, json);
-    res.end(
-      JSON.stringify({ error: { code: "not_found", message: "missing" } }),
+  const run = async (events: Record<string, unknown>[]) => {
+    const fake = createServer((req, res) => {
+      const json = { "content-type": "application/json" };
+      if (req.url === "/version") {
+        res.writeHead(200, json);
+        res.end(JSON.stringify({ apiVersion: API_VERSION, capabilities: [] }));
+        return;
+      }
+      if (req.url === "/rooms") {
+        res.writeHead(200, json);
+        res.end(JSON.stringify(list));
+        return;
+      }
+      if (req.url === "/rooms/hall/events") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        events.forEach((update, i) => {
+          res.write(
+            `id: ${i + 1}\ndata: ${JSON.stringify({
+              seq: i + 1,
+              at: "2026-11-20T00:00:00Z",
+              roomId: "hall",
+              participantId: ann.id,
+              update,
+            })}\n\n`,
+          );
+        });
+        res.end();
+        return;
+      }
+      if (req.url === "/rooms/hall") {
+        res.writeHead(200, json);
+        res.end(JSON.stringify(room));
+        return;
+      }
+      res.writeHead(404, json);
+      res.end(
+        JSON.stringify({ error: { code: "not_found", message: "missing" } }),
+      );
+    });
+    await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+    t.after(() => fake.close());
+    const runtime = await tempDir(t);
+    await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+    const { port } = fake.address() as AddressInfo;
+    await writeFile(
+      join(runtime, "kapelle", "daemon.json"),
+      JSON.stringify({ pid: process.pid, port, token: "t" }),
+      { mode: 0o600 },
     );
-  });
-  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
-  t.after(() => fake.close());
-  const runtime = await tempDir(t);
-  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
-  const { port } = fake.address() as AddressInfo;
-  await writeFile(
-    join(runtime, "kapelle", "daemon.json"),
-    JSON.stringify({ pid: process.pid, port, token: "t" }),
-    { mode: 0o600 },
-  );
+    const c = spawnCli(t, ["attach", "@ann"], "chat.ts", {
+      XDG_RUNTIME_DIR: runtime,
+    });
+    const r = await c.done;
+    assert.equal(r.code, 1, r.stderr);
+    return r.stderr;
+  };
 
-  const c = spawnCli(t, ["attach", "@ann"], "chat.ts", {
-    XDG_RUNTIME_DIR: runtime,
-  });
-  const r = await c.done;
-  assert.equal(r.code, 1, r.stderr);
+  const renamed = await run([
+    {
+      sessionUpdate: "_client_participant_added",
+      name: "ann",
+      harness: "mock-agent",
+      mode: "auto",
+    },
+    { sessionUpdate: "_client_participant_changed", name: "annie" },
+  ]);
   assert.match(
-    r.stderr,
+    renamed,
     /lost the chat's stream; annie is still active — rejoin with: kapelle chat attach @annie/,
   );
-  assert.doesNotMatch(r.stderr, /attach hall|attach @ann\b/);
+  assert.doesNotMatch(renamed, /attach hall|attach @ann\b/);
+
+  const empty = await run([]);
+  assert.match(
+    empty,
+    /lost the chat's stream; ann is still active — rejoin with: kapelle chat attach @ann/,
+  );
+  assert.doesNotMatch(empty, /attach hall|@p-ann/);
 });
 
 test("piped chat.ts sends a message with no mention to the orchestrator, and @name to that participant", async (t) => {

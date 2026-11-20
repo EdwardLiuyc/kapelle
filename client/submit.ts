@@ -44,18 +44,16 @@ function directTarget(
 ): Target {
   const pin = roster.find((p) => p.id === direct);
   if (!pin) return { error: CHAT_GONE };
-  const target = resolveTarget(text, [pin], false);
-  if (!("error" in target) || !target.error.startsWith("no participant named "))
-    return target;
   const m = MENTION.exec(text.trimStart());
   const wanted = m
     ? roster.find((p) => fold(p.name) === fold(m[1] ?? ""))
     : undefined;
-  return wanted && wanted.id !== pin.id
-    ? {
-        error: `this chat is with @${pin.name}; to open @${wanted.name}, run: kapelle chat attach @${wanted.name}`,
-      }
-    : target;
+  if (wanted && wanted.id !== pin.id) {
+    return {
+      error: `this chat is with @${pin.name}; to open @${wanted.name}, run: kapelle chat attach @${wanted.name}`,
+    };
+  }
+  return resolveTarget(text, [pin], false);
 }
 
 /** What `text` is, with this roster. `hall` is the room's `hall` flag;

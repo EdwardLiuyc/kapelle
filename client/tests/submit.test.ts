@@ -76,6 +76,10 @@ test("a direct chat sends a bare message and agent command to its one agent", ()
         "this chat is with @Bob; to open @alice, run: kapelle chat attach @alice",
     },
   });
+  assert.deepEqual(parseLine("@carol hi", ROSTER, true, "p-b"), {
+    verb: "message",
+    target: { error: "no participant named @carol" },
+  });
   // Commands still resolve an explicit mention against the whole room.
   assert.deepEqual(parseLine("@alice /cancel", ROSTER, true, "p-b"), {
     verb: "cancel",

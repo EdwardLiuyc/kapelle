@@ -2043,7 +2043,8 @@ person name the target with a leading `@name`; the client resolves the name to t
 participant id itself (R43). The daemon never parses message text. Every client follows
 the same rules, so the TUI and piped `chat.ts` behave the same. A client may also pin one
 participant before the message is typed; kapelle's piped `chat.ts attach @name` does. The
-pin comes from outside the message text, so the rules below still apply:
+pin comes from outside the message text, so the rules below read the message text the
+same way:
 
 - The client first removes whitespace at the start of the message. So a leading space
   is not a way to write a literal `@`, and piped `chat.ts`, which already trims, cannot

@@ -311,7 +311,7 @@ async function chatPiped(
           ended,
           room.id,
           room.hall,
-          direct && nameOf(state, direct.id),
+          direct && (state.participants.get(direct.id)?.name ?? direct.name),
         ),
       );
       break;

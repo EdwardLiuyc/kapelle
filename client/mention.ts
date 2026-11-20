@@ -4,8 +4,8 @@
  * no orchestrator (#333). The hall has no orchestrator and no such shortcut
  * (M11-1, D2): a bare message there means the orchestrator, as everywhere,
  * so it is refused, even with one agent. The rules are `docs/CLIENT-API.md`
- * § Addressing; this file is the one place a written `@name` is resolved.
- * `client/submit.ts` applies a piped chat's pinned agent to a bare line.
+ * § Addressing; this file is the one place a written `@name` is resolved to a
+ * target. `client/submit.ts` applies a piped chat's pinned agent to a bare line.
  *
  * **Its own module**, never an export on `client/contract.ts`: `daemon.ts`
  * imports the contract's types, and the daemon parses no message text.
