@@ -1887,8 +1887,8 @@ not in the target's `HEAD`. Same shape and 512 KB cap as
 before the person confirms.
 
 **Refusals:** `404` `room_not_found` or `participant_not_found`; `400` `invalid_request`
-when `from` is missing; `409` `no_branch` when either participant has none; `409`
-`no_diff` when git fails.
+when `from` is missing; `409` `no_branch` when either participant has none, or, since
+1.26, when the two work in different repositories; `409` `no_diff` when git fails.
 
 ### Modes
 

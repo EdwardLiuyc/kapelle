@@ -625,6 +625,10 @@ export interface Room {
    *  target's checkout; refuses a busy target, a dirty one (2c) and a
    *  diverged one, and nothing changes on a refusal. */
   fastForward(targetId: string, fromId: string): Promise<Participant>;
+  /** Why a fast-forward between the two cannot work across repositories
+   *  (M11-2), or undefined when they share one. The move and its preview
+   *  both ask, after their own branch checks. */
+  otherRepository(targetId: string, fromId: string): string | undefined;
   /** Cancels every live turn, stops every harness, releases every checkout
    *  **without committing** (R37) and closes the log. Safe to call twice. A
    *  release that fails is reported as a notice and the checkout is left
@@ -2001,6 +2005,17 @@ async function buildRoom(
     await release(id, found.participant.worktree, onRoomNotice, found.place);
   };
 
+  // M11-2: a branch lives in one repository only.
+  const otherRepository = (targetId: string, fromId: string) => {
+    const target = member(targetId);
+    const source = member(fromId);
+    if (target.place.root === source.place.root) return undefined;
+    return (
+      `${target.participant.name} and ${source.participant.name} ` +
+      "work in different repositories"
+    );
+  };
+
   const forward = async (targetId: string, fromId: string) => {
     if (ended()) throw dismissed();
     if (targetId === fromId) {
@@ -2011,15 +2026,7 @@ async function buildRoom(
     }
     const found = member(targetId);
     const target = found.participant;
-    const from = member(fromId);
-    const source = from.participant;
-    // M11-2: a branch lives in one repository only.
-    if (found.place.root !== from.place.root) {
-      throw new RoomRefusal(
-        "no_branch",
-        `${target.name} and ${source.name} work in different repositories`,
-      );
-    }
+    const source = member(fromId).participant;
     if (target.status() === "busy") {
       throw new RoomRefusal(
         "agent_busy",
@@ -2039,6 +2046,10 @@ async function buildRoom(
         `${source.name} has no branch to move to`,
       );
     }
+    // After the branch checks: two scratch folders differ too, but the
+    // reason there is that neither has a branch.
+    const other = otherRepository(targetId, fromId);
+    if (other) throw new RoomRefusal("no_branch", other);
     const branch = target.branch;
     const sourceBranch = source.branch;
     // The event goes out inside the hold, so a message that queued during
@@ -2183,6 +2194,7 @@ async function buildRoom(
       },
       remove: (id) => track(remove(id)),
       fastForward: (targetId, fromId) => track(forward(targetId, fromId)),
+      otherRepository,
       dismiss: teardown,
       pause,
       touch() {

@@ -4181,6 +4181,15 @@ test("an agent picks its own folder: a repository with a commit, one with none, 
   assert.equal(ff.status, 409);
   assert.equal(ff.body.error.code, "no_branch");
   assert.match(ff.body.error.message, /different repositories/);
+  // The preview the TUI shows first gives the same refusal, not a git error.
+  const preview = await api(
+    d,
+    "GET",
+    `/rooms/${id}/agents/${alice.id}/fast-forward?from=${bob.body.id}`,
+  );
+  assert.equal(preview.status, 409);
+  assert.equal(preview.body.error.code, "no_branch");
+  assert.match(preview.body.error.message, /different repositories/);
 });
 
 test("a checkout in another repository than its room's survives a restart, and goes with the room's delete (M11-2)", async (t) => {
@@ -4382,6 +4391,16 @@ test("a hall agent gets a scratch folder, removed when untouched and kept when u
     assert.deepEqual(readdirSync(p.body.worktree), [], "empty");
   }
   assert.notEqual(ann.body.worktree, bob.body.worktree);
+  // Two scratch folders: neither has a branch, which is the reason given.
+  const ff = await api(
+    first,
+    "POST",
+    `/rooms/hall/agents/${ann.body.id}/fast-forward`,
+    { from: bob.body.id },
+  );
+  assert.equal(ff.status, 409);
+  assert.equal(ff.body.error.code, "no_branch");
+  assert.match(ff.body.error.message, /^ann has no branch/);
   await writeFile(join(bob.body.worktree, "notes.md"), "kept\n");
   for (const p of [ann, bob]) {
     const gone = await api(first, "DELETE", `/rooms/hall/agents/${p.body.id}`);

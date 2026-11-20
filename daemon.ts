@@ -1942,6 +1942,9 @@ async function fastForwardPreview(
     const who = target.branch ? source : target;
     throw refusal(409, "no_branch", `${who.name} has no branch to compare`);
   }
+  // As the move refuses it (M11-2), not as a git failure.
+  const other = entry.room.otherRepository(target.id, source.id);
+  if (other) throw refusal(409, "no_branch", other);
   let diff: Diff;
   try {
     diff = await rangeDiff(target.worktree, "HEAD", source.branch);
