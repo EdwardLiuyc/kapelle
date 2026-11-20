@@ -39,3 +39,14 @@ test("a hall's end line names the chats, never the hall's id (M11-1)", () => {
     "! lost the chats' stream (HTTP 500); they may still be alive",
   );
 });
+
+test("a lost hall chat names how to attach that chat on a pipe", () => {
+  assert.equal(
+    endedLine({ kind: "alive", status: "active" }, "hall", true, "ann"),
+    "! lost the chat's stream; ann is still active — rejoin with: kapelle chat attach @ann",
+  );
+  assert.equal(
+    endedLine({ kind: "refused", status: 500 }, "hall", true, "ann"),
+    "! lost the chat's stream (HTTP 500); ann may still be alive",
+  );
+});

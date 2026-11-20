@@ -32,6 +32,7 @@ import {
   API_VERSION,
   type HarnessesReply,
   type MessageAccepted,
+  type ParticipantDto,
   type RoomDto,
   type RoomListEntry,
 } from "../client/contract.ts";
@@ -643,6 +644,88 @@ test("piped chat.ts opens one hall agent's chat by @name, not the hall (M11-1, #
   }).done;
   assert.equal(missing.code, 1, missing.stderr);
   assert.match(missing.stderr, /no hall chat named @nobody/);
+});
+
+test("a direct hall chat that loses its stream sends the person back to the chats, not to attach hall", async (t) => {
+  const ann = {
+    id: "p-ann",
+    name: "ann",
+    harness: "mock-agent",
+    mode: "auto",
+    settings: { allowReadOutsideRoot: false },
+    worktree: "/tmp/ann",
+    sessionId: "s-ann",
+    status: "idle",
+    notices: [],
+  } satisfies ParticipantDto;
+  const room: RoomDto = {
+    id: "hall",
+    cwd: "/tmp/hall",
+    createdAt: "",
+    updatedAt: "",
+    status: "active",
+    seq: 0,
+    hall: true,
+    participants: [ann],
+  };
+  const list: RoomListEntry[] = [
+    {
+      id: "hall",
+      cwd: "/tmp/hall",
+      status: "active",
+      updatedAt: "",
+      hall: true,
+      participants: [{ id: ann.id, name: ann.name, status: ann.status }],
+    },
+  ];
+  const fake = createServer((req, res) => {
+    const json = { "content-type": "application/json" };
+    if (req.url === "/version") {
+      res.writeHead(200, json);
+      res.end(JSON.stringify({ apiVersion: API_VERSION, capabilities: [] }));
+      return;
+    }
+    if (req.url === "/rooms") {
+      res.writeHead(200, json);
+      res.end(JSON.stringify(list));
+      return;
+    }
+    if (req.url === "/rooms/hall/events") {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end();
+      return;
+    }
+    if (req.url === "/rooms/hall") {
+      res.writeHead(200, json);
+      res.end(JSON.stringify(room));
+      return;
+    }
+    res.writeHead(404, json);
+    res.end(
+      JSON.stringify({ error: { code: "not_found", message: "missing" } }),
+    );
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+
+  const c = spawnCli(t, ["attach", "@ann"], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  const r = await c.done;
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(
+    r.stderr,
+    /lost the chat's stream; ann is still active — rejoin with: kapelle chat attach @ann/,
+  );
+  assert.doesNotMatch(r.stderr, /attach hall/);
 });
 
 test("piped chat.ts sends a message with no mention to the orchestrator, and @name to that participant", async (t) => {

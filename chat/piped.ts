@@ -304,7 +304,9 @@ async function chatPiped(
         continue;
       }
       code = codeOf(ended);
-      (code ? console.error : console.log)(endedLine(ended, room.id));
+      (code ? console.error : console.log)(
+        endedLine(ended, room.id, room.hall, direct?.name),
+      );
       break;
     }
     if (lines.length === 0) {
