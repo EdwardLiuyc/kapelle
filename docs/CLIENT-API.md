@@ -1265,7 +1265,8 @@ repair by hand is #518.
 - Since 1.26, an agent added to the hall with no `cwd` gets an empty folder of its own,
   under `scratch/hall/` in the daemon's state folder, with no branch. When the agent is
   removed, the folder goes with it while it is still empty; a folder the agent wrote into
-  is kept, and a notice says where. An agent with a `cwd` works there, as in any room.
+  is kept, and a notice says where. The daemon never removes a kept scratch folder
+  later; delete it by hand. An agent with a `cwd` works there, as in any room.
   An agent added before 1.26 keeps working in the hall's folder, which it shares.
 - The hall has no orchestrator. An agent added to it, or changed, with
   `role: "orchestrator"` is refused `400` `invalid_request`. A message with no `@name`

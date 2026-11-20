@@ -78,8 +78,9 @@
  * hall): there it gets an empty folder of its own, which its release removes
  * while it is still empty. `room.json` keeps the participant's `cwd`, or
  * `scratch`, so a restore opens the same place. It also keeps every
- * repository a participant has used, even after that participant leaves or
- * an add fails, so delete can find a kept checkout and its branch. The
+ * folder the room opened for a participant, even after that participant
+ * leaves or an add fails, so delete can find a kept checkout and its branch.
+ * The
  * room's record and log stay under the room's own root; the boot sweep reads
  * every room's record before it calls a checkout an orphan
  * (`core/sweep.ts`).
@@ -580,9 +581,11 @@ export interface RoomRecord extends Omit<RoomMeta, "turnCap" | "turnCount"> {
   /** Participants whose saved harness no longer resolves. They are not in
    *  the active roster, but their branch and worktree stay known to delete. */
   tombstones?: ParticipantRecord[];
-  /** Repositories a participant used besides the room's own (M11-2). Kept
-   *  after the participant leaves, and after a failed add, so delete still
-   *  finds checkouts and branches in every repository the room touched. */
+  /** Every folder the room opened for a participant besides its own
+   *  (M11-2), whether or not a checkout was made there. Kept after the
+   *  participant leaves, and after a failed add, so delete still finds
+   *  checkouts and branches in every repository the room touched; one with
+   *  none costs delete nothing. */
   repositories?: string[];
 }
 
@@ -923,7 +926,9 @@ interface RoomDeps {
   scratchDir?: string;
   /** Opens a participant's own folder for this room (M11-2): the project's
    *  links, then `openWorktrees`. `restoring` opens without links rather
-   *  than throwing. Without it, a folder opens with no links. */
+   *  than throwing. Without it, a folder opens with no links. A folder is
+   *  opened once per room, so a restore that opened it without links keeps
+   *  it so for the room's life, as the room's own `linkPaths` do (#274). */
   openPlace?: (cwd: string, restoring: boolean) => Promise<WorktreeSetup>;
 }
 
