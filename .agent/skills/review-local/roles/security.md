@@ -15,7 +15,8 @@ operator did not allow?
   path. Each one is checked where it comes in, not later.
 - **SE2. Containment rules.** Check the diff against each rule in `AGENTS.md` about the
   policy, the path guard, permissions and what the operator is shown. When a rule is a
-  pointer, check the diff against its owner (S10 in `SKILL.md`). This role owns those rules. The developer role checks the others.
+  pointer, check the diff against its owner (S10 in `SKILL.md`). This role owns those
+  rules. The developer role checks the others.
 - **SE3. Check, then act, on a guard.** A path, a permission or a state is checked, and then
   used after an `await` or a second system call. Look for what can change in between: a
   symlink that is swapped, a second request, a file that is replaced.
