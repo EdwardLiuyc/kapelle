@@ -1,6 +1,8 @@
 /**
  * How a client finds the daemon and talks to it — story M5-10a (#142).
  *
+ * **Every `cli.ts` daemon verb and `chat.ts` use this file.**
+ *
  * **The caller passes the `daemon.json` path.** The folder it sits in is
  * `core/runtime.ts`'s to pick and to guard (`ours()`), and this folder imports
  * nothing from `core/`, so the rule keeps one copy. The file is read again on

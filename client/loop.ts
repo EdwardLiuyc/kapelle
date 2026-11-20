@@ -2,6 +2,9 @@
  * Loop recipes (M8-5): where `kapelle loop` and `/loop` find one, and the
  * orchestrator's first message.
  *
+ * The loop form and `kapelle loop list` import `listRecipes` and `loopFolders`
+ * directly.
+ *
  * A recipe is a Markdown file the person writes (D10). **No kapelle code reads
  * it**: this file finds it and pastes it, whole, into the first message,
  * after the orchestrator skill (`assets/orchestrator.md`) and before the task
