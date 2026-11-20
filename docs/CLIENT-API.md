@@ -1334,7 +1334,8 @@ An agent takes:
   in that folder, with no branch, and a notice says so. Without `cwd`, the agent uses the
   room's `cwd`; in the [hall](#the-hall) it gets an empty folder of its own. Two agents
   of one room can work in two repositories. A `base` must be a ref of the agent's own
-  repository.
+  repository. Which repository's project config applies is in
+  [`docs/CONFIG.md`](CONFIG.md).
 - `settings`: optional. `{ "allowReadOutsideRoot": false }` is the only setting today, and
   that is its default. `true` lets the harness read files outside its checkout through
   the daemon. The daemon never writes there for it. This is not isolation: it covers only
