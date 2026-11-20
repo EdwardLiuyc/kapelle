@@ -5,8 +5,8 @@
  * cannot differ. Each line has a `tone`, and each screen colours it its own
  * way: an agent that is not installed is grey, a warning is yellow.
  *
- * The TUI opens it at start until the person says done, and always while no
- * agent is ready.
+ * The TUI decides when the list opens. `needsSetup` is its start-time
+ * predicate; the other guards are in `chat/tui/panel.ts`.
  *
  * The daemon does the find (`core/harnesses.ts`). `findAgain` asks it for a
  * new one, and `markDone` records the person's "done". The list opens with a
