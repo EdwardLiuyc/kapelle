@@ -772,6 +772,18 @@ test("a direct hall chat that loses its stream sends the person back to the chat
     /lost the chat's stream; ann is still active — rejoin with: kapelle chat attach @ann/,
   );
   assert.doesNotMatch(empty, /attach hall|@p-ann/);
+
+  const removed = await run([
+    {
+      sessionUpdate: "_client_participant_added",
+      name: "ann",
+      harness: "mock-agent",
+      mode: "auto",
+    },
+    { sessionUpdate: "_client_participant_removed" },
+  ]);
+  assert.equal(removed, "! the chat's agent is gone; /leave to exit\n");
+  assert.doesNotMatch(removed, /attach @ann|attach hall|@p-ann/);
 });
 
 test("piped chat.ts sends a message with no mention to the orchestrator, and @name to that participant", async (t) => {

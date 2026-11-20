@@ -49,4 +49,8 @@ test("a lost hall chat names how to attach that chat on a pipe", () => {
     endedLine({ kind: "refused", status: 500 }, "hall", true, "ann"),
     "! lost the chat's stream (HTTP 500); ann may still be alive",
   );
+  assert.equal(
+    endedLine({ kind: "alive", status: "active" }, "hall", true, "ann", true),
+    "! the chat's agent is gone; /leave to exit",
+  );
 });

@@ -8,7 +8,7 @@
 
 import { join } from "node:path";
 
-import { NO_HALL } from "../client/command.ts";
+import { CHAT_GONE, NO_HALL } from "../client/command.ts";
 import { type DaemonAddress, readDaemonFile } from "../client/daemon.ts";
 import type { Named } from "../client/mention.ts";
 import { type Entry, type RoomState, roster } from "../client/room.ts";
@@ -41,9 +41,17 @@ const stoppedLine = (name: string, status: string) =>
  *  It starts with `!` unless the room was dismissed or deleted. The hall is
  *  hidden on the screen (M11-1): with `hall`, the line names the chats and
  *  never the hall's id. A piped chat passes its agent name as `chat`, so the
- *  rejoin command is the one that works on a pipe. */
-function endedLine(e: Ended, id: string, hall = false, chat?: string): string {
+ *  rejoin command is the one that works on a pipe. `gone` says a removed pin
+ *  has no chat left to rejoin. */
+function endedLine(
+  e: Ended,
+  id: string,
+  hall = false,
+  chat?: string,
+  gone = false,
+): string {
   if (hall) {
+    if (gone) return `! ${CHAT_GONE}`;
     switch (e.kind) {
       case "alive":
         return chat

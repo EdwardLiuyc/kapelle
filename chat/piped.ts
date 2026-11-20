@@ -306,12 +306,14 @@ async function chatPiped(
         continue;
       }
       code = codeOf(ended);
+      const pin = direct ? state.participants.get(direct.id) : undefined;
       (code ? console.error : console.log)(
         endedLine(
           ended,
           room.id,
           room.hall,
-          direct && (state.participants.get(direct.id)?.name ?? direct.name),
+          direct && (pin?.name ?? direct.name),
+          pin?.removed === true,
         ),
       );
       break;
