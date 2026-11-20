@@ -23,6 +23,7 @@ Does the change do what its scope asks, and does it do it well?
   - There is no simpler version that works as well.
   - A design finding must name a specific alternative. "Could be cleaner" is not a finding.
 - **D5. Repo rules.** Check the diff against each rule in the rules section of `AGENTS.md`.
+  When a rule is a pointer, check the diff against its owner (S10 in `SKILL.md`).
   The security role owns the rules about the policy, the path guard, permissions and what
   the operator is shown.
 - **D6. Obvious bugs.** Read each changed branch, loop and error path. Look at every caller
