@@ -126,6 +126,8 @@ interface Panel {
   /** Text at the right of the top border: a question's `n of m` (M7-4). */
   right?: string;
   body: Component;
+  /** A message above the body, such as an invalid config's validation error. */
+  notice?: string;
   error?: string;
   /** Which setup opening owns this panel. Generic panels never have one. */
   setup?: number;
@@ -239,6 +241,11 @@ function panelParts({
       const side = (l: string) =>
         `${edge("┃")} ${truncateToWidth(l, inner, "…", true)} ${edge("┃")}`;
       const lines = [border(panel.title, panel.right, width, edge)];
+      if (panel.notice) {
+        for (const l of wrapTextWithAnsi(yellow(`! ${panel.notice}`), inner)) {
+          lines.push(side(l));
+        }
+      }
       for (const l of panel.body.render(inner)) lines.push(side(l));
       if (panel.error) {
         for (const l of wrapTextWithAnsi(yellow(`! ${panel.error}`), inner)) {
@@ -1473,8 +1480,8 @@ function panelParts({
    * folder the chat started in when no room is open. A hall chat has no
    * project (M11-1), so it refuses as the piped screen does. Each row is the
    * file's value, and Enter edits it; the save row sends only the changed
-   * keys. An invalid file is the daemon's refusal on the status line, and the
-   * form does not open.
+   * keys. A safe invalid file opens with its refusal above the rows and
+   * saves through `PUT /config`, so the whole invalid file is replaced.
    */
   const configForm = async (back: () => void = hidePanel): Promise<void> => {
     const open = rooms.get(view().roomId)?.entry;
@@ -1507,7 +1514,7 @@ function panelParts({
       }
       return fail(r.error.message);
     }
-    const { rows, root } = r.body;
+    const { rows, root, invalid } = r.body;
     form(
       `config · ${printable(root)}`,
       rows.map((row) => ({
@@ -1519,10 +1526,21 @@ function panelParts({
         description: printable(configNote(row)),
       })),
       "save",
-      (v) => ({ verb: "config", cwd, patch: configPatch(rows, v) }),
+      (v) => ({
+        verb: "config",
+        cwd,
+        patch: configPatch(rows, v),
+        ...(invalid !== undefined && { replace: true as const }),
+      }),
       back,
-      `Saves only the changed keys to ${printable(r.body.path)}; ${CONFIG_APPLIES}.`,
+      invalid === undefined
+        ? `Saves only the changed keys to ${printable(r.body.path)}; ${CONFIG_APPLIES}.`
+        : `Replaces the invalid file at ${printable(r.body.path)} with the values you enter; ${CONFIG_APPLIES}.`,
     );
+    if (invalid !== undefined && panel) {
+      panel.notice = printable(invalid);
+      tui.requestRender();
+    }
   };
 
   return {

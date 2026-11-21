@@ -1302,6 +1302,36 @@ test("piped chat.ts prints the room's project config on /config (M10-5)", async 
   assert.match(r.stdout, /^linkPaths = \[\] \(default\)$/m);
 });
 
+test("piped /config prints an invalid file's refusal and hint, not rows (#504)", async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const cwd = await added(d, await gitRepo(t));
+  const open = await api<RoomReply>(
+    d,
+    "POST",
+    "/rooms",
+    withAgent(cwd, REMEMBER),
+  );
+  assert.equal(open.status, 201, open.body.error?.message);
+  await mkdir(join(cwd, ".kapelle"), { recursive: true });
+  await writeFile(join(cwd, ".kapelle", "config.json"), '{"ttlMs": "soon"}', {
+    mode: 0o644,
+  });
+
+  const c = spawnCli(t, ["attach", open.body.id], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  });
+  c.child.stdin.end("/config\n/leave\n");
+  const r = await c.done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stderr, /^! .*"ttlMs".*must be a whole number/m);
+  assert.match(
+    r.stderr,
+    /^fix the file by hand, or run \/config in the chat on a terminal to replace it$/m,
+  );
+  assert.doesNotMatch(r.stdout, /^config for /m);
+});
+
 test("piped chat.ts lists an agent's live models, and changes its model (M9-6)", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);

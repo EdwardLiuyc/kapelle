@@ -24,7 +24,11 @@ import {
   participantNow,
   runCommand,
 } from "../client/command.ts";
-import { configLines, readConfig } from "../client/config.ts";
+import {
+  configInvalidLines,
+  configLines,
+  readConfig,
+} from "../client/config.ts";
 import type { MessageAccepted, RoomDto } from "../client/contract.ts";
 import { call, type DaemonAddress } from "../client/daemon.ts";
 import { agentDiff } from "../client/diff.ts";
@@ -434,6 +438,10 @@ async function chatPiped(
         if (r.error.code === "repo_not_added") {
           console.error(`add it first: kapelle daemon add ${room.cwd}`);
         }
+      } else if (r.body.invalid !== undefined) {
+        const [refusal, hint] = configInvalidLines(r.body.invalid);
+        console.error(`! ${refusal}`);
+        console.error(hint);
       } else for (const l of configLines(r.body)) console.log(l);
       continue;
     }

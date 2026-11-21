@@ -4,9 +4,18 @@
  */
 
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { configLines, configPatch } from "../config.ts";
+import { runCommand } from "../command.ts";
+import {
+  CONFIG_INVALID_HINT,
+  configInvalidLines,
+  configLines,
+  configPatch,
+} from "../config.ts";
 import type { ConfigRow, ConfigView } from "../contract.ts";
+import type { DaemonAddress } from "../daemon.ts";
 
 const rows: ConfigRow[] = [
   { key: "stallIdleMs", value: 300000, default: 300000, source: "default" },
@@ -62,4 +71,47 @@ test("the patch has only the changed keys; blank is null, JSON is parsed, the re
   assert.deepEqual(configPatch(rows, { linkPaths: "node_modules" }), {
     linkPaths: "node_modules",
   });
+});
+
+test("an invalid view has a refusal and one next step for a read-only screen", () => {
+  assert.deepEqual(
+    configInvalidLines("/r/.kapelle/config.json is not valid JSON: bad"),
+    ["/r/.kapelle/config.json is not valid JSON: bad", CONFIG_INVALID_HINT],
+  );
+});
+
+test("a replacement request is PUT /config with the whole form value set (#504)", async (t) => {
+  let method = "";
+  let sent = "";
+  const server = createServer(async (req, res) => {
+    method = req.method ?? "";
+    for await (const chunk of req) sent += chunk;
+    res.writeHead(200, { "content-type": "application/json" }).end(
+      JSON.stringify({
+        root: "/r",
+        path: "/r/.kapelle/config.json",
+        rows: [],
+      } satisfies ConfigView),
+    );
+  });
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  t.after(() => server.close());
+  const d: DaemonAddress = {
+    port: (server.address() as AddressInfo).port,
+    token: "tok",
+  };
+
+  const out = await runCommand(d, undefined, {
+    verb: "config",
+    cwd: "/r",
+    patch: { maxConcurrency: 2 },
+    replace: true,
+  });
+  assert.equal(method, "PUT");
+  assert.deepEqual(JSON.parse(sent), { maxConcurrency: 2 });
+  assert.equal(out.ok, true);
+  assert.match(
+    out.line ?? "",
+    /saved maxConcurrency to \/r\/.kapelle\/config.json/,
+  );
 });

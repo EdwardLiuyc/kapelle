@@ -1003,8 +1003,10 @@ test("GET and PATCH /config show and save an added repository's project config (
   );
 });
 
-test("an invalid project file is the 400 of GET and PATCH /config, and stays as it was", async (t) => {
-  const d = await boot(t);
+test("GET /config shows a safe invalid file, and PUT replaces it (#504)", async (t) => {
+  const d = await boot(t, undefined, [], undefined, {
+    KAPELLE_TTL_MS: "5000",
+  });
   const root = await realpath(await gitRepo(t));
   await added(d, root);
   await mkdir(join(root, ".kapelle"));
@@ -1012,14 +1014,89 @@ test("an invalid project file is the 400 of GET and PATCH /config, and stays as 
   await writeFile(path, '{"ttlMs": "soon"}', { mode: 0o644 });
   const q = `/config?cwd=${encodeURIComponent(root)}`;
 
-  const view = await api(d, "GET", q);
-  assert.equal(view.status, 400);
-  assert.equal(view.body.error.code, "invalid_config");
-  assert.match(view.body.error.message, /"ttlMs"/);
-  const save = await api(d, "PATCH", q, { maxConcurrency: 2 });
-  assert.equal(save.status, 400);
-  assert.equal(save.body.error.code, "invalid_config");
+  const view = await api<ConfigView>(d, "GET", q);
+  assert.equal(view.status, 200);
+  assert.match(view.body.invalid ?? "", /"ttlMs"/);
+  assert.deepEqual(
+    view.body.rows.map((r) => [r.key, r.source]),
+    [
+      ["stallIdleMs", "default"],
+      ["stallRepeatCount", "default"],
+      ["ttlMs", "env"],
+      ["maxConcurrency", "default"],
+      ["retentionMs", "default"],
+      ["orchestratorTurnCap", "default"],
+      ["linkPaths", "default"],
+    ],
+  );
+
+  // PATCH still only merges a valid file; a replacement is explicit.
+  const merge = await api(d, "PATCH", q, { maxConcurrency: 2 });
+  assert.equal(merge.status, 400);
+  assert.equal(merge.body.error.code, "invalid_config");
   assert.equal(await readFile(path, "utf8"), '{"ttlMs": "soon"}');
+
+  const saved = await api<ConfigView>(d, "PUT", q, { maxConcurrency: 2 });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.invalid, undefined);
+  assert.equal(
+    await readFile(path, "utf8"),
+    `${JSON.stringify({ maxConcurrency: 2 }, null, 2)}\n`,
+  );
+});
+
+test("PUT /config refuses bad content, links and unsafe paths, and writes nothing (#504)", async (t) => {
+  const d = await boot(t);
+  const root = await realpath(await gitRepo(t));
+  await added(d, root);
+  await mkdir(join(root, ".kapelle"));
+  const path = join(root, ".kapelle", "config.json");
+  const q = `/config?cwd=${encodeURIComponent(root)}`;
+  const writeInvalid = () =>
+    writeFile(path, '{"ttlMs": "soon"}', { mode: 0o644 });
+
+  await writeInvalid();
+  const badValue = await api(d, "PUT", q, { maxConcurrency: 0 });
+  assert.equal(badValue.status, 400);
+  assert.equal(badValue.body.error.code, "invalid_config");
+  assert.equal(await readFile(path, "utf8"), '{"ttlMs": "soon"}');
+
+  const tracked = await api(d, "PUT", q, { linkPaths: ["README.md"] });
+  assert.equal(tracked.status, 400);
+  assert.equal(tracked.body.error.code, "invalid_config");
+  assert.equal(await readFile(path, "utf8"), '{"ttlMs": "soon"}');
+
+  const elsewhere = await tempDir(t);
+  const planted = join(elsewhere, "planted.json");
+  await writeFile(planted, '{"ttlMs": "soon"}', { mode: 0o644 });
+  await rm(path);
+  await symlink(planted, path);
+  const linkedFile = await api(d, "PUT", q, { maxConcurrency: 2 });
+  assert.equal(linkedFile.status, 400);
+  assert.equal(linkedFile.body.error.code, "invalid_config");
+  assert.equal((await lstat(path)).isSymbolicLink(), true);
+  assert.equal(await readFile(planted, "utf8"), '{"ttlMs": "soon"}');
+
+  await rm(path);
+  await writeInvalid();
+  await chmod(path, 0o666);
+  const unsafeMode = await api(d, "PUT", q, { maxConcurrency: 2 });
+  assert.equal(unsafeMode.status, 400);
+  assert.equal(unsafeMode.body.error.code, "invalid_config");
+  assert.equal(await readFile(path, "utf8"), '{"ttlMs": "soon"}');
+
+  await rm(join(root, ".kapelle"), { recursive: true });
+  const linkedConfig = await tempDir(t);
+  const linkedTarget = join(linkedConfig, "config.json");
+  await writeFile(linkedTarget, '{"ttlMs": "soon"}', { mode: 0o644 });
+  await symlink(linkedConfig, join(root, ".kapelle"));
+  const linkedFolderRead = await api(d, "GET", q);
+  assert.equal(linkedFolderRead.status, 400);
+  assert.equal(linkedFolderRead.body.error.code, "invalid_config");
+  const linkedFolder = await api(d, "PUT", q, { maxConcurrency: 2 });
+  assert.equal(linkedFolder.status, 400);
+  assert.equal(linkedFolder.body.error.code, "invalid_config");
+  assert.equal(await readFile(linkedTarget, "utf8"), '{"ttlMs": "soon"}');
 });
 
 test("POST /runs in a folder never added is 403, and starts nothing", async (t) => {

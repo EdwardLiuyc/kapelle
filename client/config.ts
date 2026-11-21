@@ -1,6 +1,6 @@
 /**
  * The project config (M10-5): `GET /config` as lines, and the form's typed
- * values as the body of a `PATCH /config`.
+ * values as the body of a `PATCH /config` or a whole-file `PUT /config`.
  *
  * **Both chat screens print and save from here**, so they cannot differ. The
  * daemon reads and writes `.kapelle/config.json`; the chat never touches the
@@ -20,6 +20,15 @@ import { printable } from "./room.ts";
 export const CONFIG_APPLIES =
   "saved values apply to later runs, new rooms, the next sweep and new " +
   "checkouts, not to work already underway";
+
+/** The pipe's one next step when `/config` meets an invalid file. */
+export const CONFIG_INVALID_HINT =
+  "fix the file by hand, or run /config in the chat on a terminal to replace it";
+
+/** The refusal and the one next step, for a read-only screen. */
+export function configInvalidLines(invalid: string): string[] {
+  return [printable(invalid), CONFIG_INVALID_HINT];
+}
 
 /** `GET /config` for the repository `cwd` is in. */
 export const readConfig = (

@@ -55,6 +55,7 @@ import {
   REPO,
   type RoomReply,
   roomLog,
+  rowOf,
   screenRows,
   scrollback,
   tempDir,
@@ -1231,6 +1232,57 @@ test("/config asks to add the start folder, then edits, resets and saves only th
   assert.deepEqual((await api<string[]>(d, "GET", "/repos")).body, [
     await realpath(repo),
   ]);
+  await press(LEAVE, "left the chat");
+  assert.equal(await exited, 0, out());
+});
+
+test("/config opens an invalid file with its error above the rows, then replaces it (#504)", {
+  skip: noPty,
+}, async (t) => {
+  const runtime = await tempDir(t);
+  const d = await boot(t, runtime);
+  const repo = await added(d, await gitRepo(t));
+  await mkdir(join(repo, ".kapelle"));
+  const path = join(repo, ".kapelle", "config.json");
+  await writeFile(path, '{"ttlMs": "soon"}', { mode: 0o644 });
+  const { press, exited, out } = await ptyScreen(
+    t,
+    `stty cols 120 rows 40; cd ${repo} && node ${join(REPO, "cli.ts")} chat`,
+    { XDG_RUNTIME_DIR: runtime },
+    "ctrl+o → new room",
+  );
+
+  await press("/config\r", '"ttlMs"');
+  const noticeRow = rowOf(out(), /! .*"ttlMs".*must be a whole number/);
+  const rowsRow = rowOf(out(), /stallIdleMs/);
+  assert.ok(noticeRow > 0 && noticeRow < rowsRow, out());
+
+  // A still-invalid save keeps the form and the file.
+  await press(`${DOWN.repeat(3)}\r0\r`, "0 (unsaved)");
+  await press(DOWN.repeat(4), "Replaces the invalid file");
+  await press("\r", '"maxConcurrency" must be a whole');
+  assert.equal(await readFile(path, "utf8"), '{"ttlMs": "soon"}');
+
+  // Reopen and save a valid replacement.
+  await press("\x1b", "ctrl+o → new room");
+  await press("/config\r", '"ttlMs"');
+  await press(`${DOWN.repeat(3)}\r2\r`, "2 (unsaved)");
+  await press(DOWN.repeat(4), "Replaces the invalid file");
+  await press("\r", "saved maxConcurrency to");
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+    maxConcurrency: 2,
+  });
+  assert.match(out(), /saved maxConcurrency to .*config\.json/);
+
+  // An unsafe path is a status-line refusal, not a replaceable form.
+  const elsewhere = await tempDir(t);
+  const planted = join(elsewhere, "planted.json");
+  await writeFile(planted, "{}", { mode: 0o644 });
+  await rm(path);
+  await symlink(planted, path);
+  await press("/config\r", "must be a plain file");
+  assert.equal(await readFile(planted, "utf8"), "{}");
+
   await press(LEAVE, "left the chat");
   assert.equal(await exited, 0, out());
 });
