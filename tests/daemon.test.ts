@@ -1099,6 +1099,27 @@ test("PUT /config refuses bad content, links and unsafe paths, and writes nothin
   assert.equal(await readFile(linkedTarget, "utf8"), '{"ttlMs": "soon"}');
 });
 
+test("PUT /config refuses a file it cannot read before writing (#504)", {
+  skip: process.getuid?.() === 0 && "root reads any mode",
+}, async (t) => {
+  const d = await boot(t);
+  const root = await realpath(await gitRepo(t));
+  await added(d, root);
+  await mkdir(join(root, ".kapelle"));
+  const path = join(root, ".kapelle", "config.json");
+  await writeFile(path, '{"ttlMs": "soon"}', { mode: 0o644 });
+  await chmod(path, 0o200);
+  const q = `/config?cwd=${encodeURIComponent(root)}`;
+
+  // GET /config cannot show it, so a replacement would be written and then
+  // refused while answering the view. PUT must refuse it before writing.
+  const res = await api(d, "PUT", q, { maxConcurrency: 2 });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error.code, "invalid_config");
+  await chmod(path, 0o644);
+  assert.equal(await readFile(path, "utf8"), '{"ttlMs": "soon"}');
+});
+
 test("POST /runs in a folder never added is 403, and starts nothing", async (t) => {
   const d = await boot(t);
   const r = await api(d, "POST", "/runs", {

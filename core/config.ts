@@ -35,7 +35,9 @@
 
 import { randomBytes } from "node:crypto";
 import {
+  accessSync,
   chmodSync,
+  constants,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -681,6 +683,18 @@ function writeProjectFile(root: string, values: Record<string, unknown>) {
       `${path} must be a plain file owned by you and not writable by ` +
         `anyone else. Fix or remove it, then try again.`,
     );
+  }
+  // A file this process cannot read cannot be shown by GET /config, so a
+  // replacement would be written and then refused while answering the view.
+  if (was) {
+    try {
+      accessSync(path, constants.R_OK);
+    } catch (err) {
+      throw new UnsafeConfigFile(
+        `${path} must be readable by you: ${messageOf(err)}. Fix or remove ` +
+          `it, then try again.`,
+      );
+    }
   }
   const mode = was ? was.mode & 0o777 : 0o644;
   const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;

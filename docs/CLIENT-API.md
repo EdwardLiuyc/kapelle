@@ -473,7 +473,7 @@ already underway keeps what it read.
 **Refusals:** `400` `invalid_request` when `cwd` is not absolute or does not exist.
 `403` `repo_not_added` when `cwd` is not in an added repository. `400`
 `invalid_config` when the config path is unsafe: a symlink, non-file, another owner, a
-group/other-writable file, or a linked `.kapelle`.
+file this process cannot read, a group/other-writable file, or a linked `.kapelle`.
 
 ### `PATCH /config`
 
@@ -518,8 +518,8 @@ removed. The daemon validates the complete result before writing, including the
 
 - `400` `invalid_request`: a key that is not a project key, such as `port`.
 - `400` `invalid_config`: a value its rule refuses; a `linkPaths` path that is tracked
-  or leaves the checkout; a symlink, non-file, other owner, group/other-writable file,
-  or a `.kapelle` that is a link or a file.
+  or leaves the checkout; a symlink, non-file, other owner, a file it cannot read,
+  group/other-writable file, or a `.kapelle` that is a link or a file.
 
 ### `GET /harnesses`
 

@@ -137,8 +137,9 @@ The daemon checks each value with the rules above before it writes, and the
 `linkPaths` the file will hold are also checked against git, as `POST /repos` does.
 It never writes a default. A safe file whose content is invalid opens with the
 validation error above the rows; saving valid values replaces the whole file through
-`PUT /config`. Unsafe paths — a symlink, a non-file, another owner, a
-group/other-writable file, or a linked `.kapelle` — are refused and left alone.
+`PUT /config`. Unsafe paths — a symlink, a non-file, another owner, a file
+you cannot read, a group/other-writable file, or a linked `.kapelle` — are
+refused and left alone.
 `PATCH /config` still only merges changed keys into a valid file. A new file is
 `0644` whatever the umask; an existing file keeps its mode. A saved value applies to
 later runs, new rooms, the next sweep and new checkouts, not to work already underway.

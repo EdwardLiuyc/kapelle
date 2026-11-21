@@ -213,8 +213,9 @@ export interface ConfigRow {
   env?: string;
 }
 
-/** `GET /config` and `PATCH /config` (M10-5, since 1.22): a repository's
- *  project config, every key in the order the daemon lists them. */
+/** `GET`, `PATCH` and `PUT /config` (M10-5, since 1.22; `PUT` since 1.28):
+ *  a repository's project config, every key in the order the daemon lists
+ *  them. */
 export interface ConfigView {
   root: string;
   /** The project file, `<root>/.kapelle/config.json`; it may not exist. */
