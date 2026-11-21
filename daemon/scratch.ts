@@ -2,11 +2,10 @@
  * The kept hall scratch folders: list what each holds, and remove only the
  * folders no live participant owns.
  *
- * The caller supplies the live roster and serializes adds and removes with
- * the clean. The daemon holds one queue for all three, so a folder an add has
- * just made is protected before its participant joins the roster.
- * `cleanScratch` checks the roster immediately before each removal, so a live
- * id is protected even after a preview.
+ * The daemon serializes every add and remove against a snapshot (list or
+ * clean) with its scratch lock. That is what protects a folder an add has
+ * just made before its participant joins the roster. `cleanScratch` checks
+ * the supplied roster for each id before removing that folder.
  *
  * Symlinks are never followed. A symlink at a folder path is listed as a
  * problem and left alone; a symlink inside a folder is an entry and is
@@ -44,10 +43,22 @@ async function scan(
   let bytes = 0;
   for (const row of rows) {
     const at = join(dir, row.name);
-    const st = await lstat(at);
+    let st: Awaited<ReturnType<typeof lstat>>;
+    try {
+      st = await lstat(at);
+    } catch (err) {
+      if (missing(err)) continue;
+      throw err;
+    }
     if (st.isDirectory()) {
+      let below: Awaited<ReturnType<typeof scan>>;
+      try {
+        below = await scan(at);
+      } catch (err) {
+        if (missing(err)) continue;
+        throw err;
+      }
       entries.push(`${row.name}/`);
-      const below = await scan(at);
       files += below.files;
       bytes += below.bytes;
     } else {
@@ -130,7 +141,7 @@ export async function cleanScratch(
       id,
       path: join(root, id),
       removed: false,
-      error: `${root} is not a folder`,
+      error: `${root} does not exist`,
     }));
   }
   const results: ScratchCleanResult[] = [];
@@ -151,6 +162,7 @@ export async function cleanScratch(
         id,
         path,
         removed: false,
+        protected: true,
         error: `the folder is in use by @${participant}`,
       });
       continue;
@@ -172,17 +184,6 @@ export async function cleanScratch(
           path,
           removed: false,
           error: "it is not a folder",
-        });
-        continue;
-      }
-      // The roster may have changed while the folder was inspected.
-      const nowLive = live.get(id);
-      if (nowLive !== undefined) {
-        results.push({
-          id,
-          path,
-          removed: false,
-          error: `the folder is in use by @${nowLive}`,
         });
         continue;
       }

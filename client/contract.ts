@@ -518,6 +518,8 @@ export interface ScratchCleanResult {
   id: string;
   path: string;
   removed: boolean;
+  /** The live roster protected the folder. Not a removal failure. */
+  protected?: true;
   error?: string;
 }
 

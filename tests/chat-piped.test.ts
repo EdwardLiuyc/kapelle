@@ -380,6 +380,73 @@ test("chat.ts scratch lists, previews, then removes only stale hall folders (#52
   assert.ok(existsSync(join(scratch, ann.body.id)), "the live folder stays");
 });
 
+test("chat.ts scratch clean treats a protected folder as success (#524)", async (t) => {
+  const fake = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/version") {
+      res.end(JSON.stringify({ apiVersion: API_VERSION }));
+      return;
+    }
+    if (req.url === "/rooms/hall/scratch" && req.method === "GET") {
+      res.end(
+        JSON.stringify([
+          {
+            id: "p-live0000",
+            path: "/tmp/p-live0000",
+            inUse: false,
+            kind: "directory",
+            files: 0,
+            bytes: 0,
+            entries: [],
+          },
+        ]),
+      );
+      return;
+    }
+    if (req.url === "/rooms/hall/scratch/clean" && req.method === "POST") {
+      req.resume();
+      res.end(
+        JSON.stringify({
+          results: [
+            {
+              id: "p-live0000",
+              path: "/tmp/p-live0000",
+              removed: false,
+              protected: true,
+              error: "the folder is in use by @ann",
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    res.statusCode = 404;
+    res.end(
+      JSON.stringify({ error: { code: "no_route", message: "no route" } }),
+    );
+  });
+  await new Promise<void>((ok) => fake.listen(0, "127.0.0.1", ok));
+  t.after(() => fake.close());
+  const runtime = await tempDir(t);
+  await mkdir(join(runtime, "kapelle"), { mode: 0o700 });
+  const { port } = fake.address() as AddressInfo;
+  await writeFile(
+    join(runtime, "kapelle", "daemon.json"),
+    JSON.stringify({ pid: process.pid, port, token: "t" }),
+    { mode: 0o600 },
+  );
+
+  const r = await spawnCli(t, ["scratch", "clean", "--yes"], "chat.ts", {
+    XDG_RUNTIME_DIR: runtime,
+  }).done;
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(
+    r.stdout,
+    /kept \/tmp\/p-live0000: the folder is in use by @ann/,
+  );
+  assert.equal(r.stderr, "");
+});
+
 test("chat.ts talks to a room end to end: messages in, answers out, /dismiss stops it", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);

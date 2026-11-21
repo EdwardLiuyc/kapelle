@@ -95,6 +95,7 @@ test("cleanScratch protects live folders and reports each folder's failure", asy
       ["../escape", false],
     ],
   );
+  assert.equal(results[0]?.protected, true);
   assert.match(results[0]?.error ?? "", /in use by @ann/);
   assert.match(results[2]?.error ?? "", /symbolic link/);
   await lstat(join(root, liveId));
@@ -113,5 +114,12 @@ test("a scratch root that is a symlink is refused, and a missing one is empty", 
   await assert.rejects(listScratch(link, new Map()), /not a real folder/);
   assert.equal(await readFile(join(real, "notes.md"), "utf8"), "notes\n");
   assert.deepEqual(await listScratch(join(base, "missing"), new Map()), []);
+  const cleaned = await cleanScratch(
+    join(base, "missing"),
+    ["p-missing0"],
+    new Map(),
+  );
+  assert.equal(cleaned[0]?.removed, false);
+  assert.match(cleaned[0]?.error ?? "", /does not exist/);
   await rm(real, { recursive: true });
 });

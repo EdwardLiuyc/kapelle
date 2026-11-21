@@ -235,6 +235,10 @@ async function runScratch(
   for (const result of cleaned.body.results) {
     if (result.removed) {
       console.log(`removed ${printable(result.path)}`);
+    } else if (result.protected) {
+      console.log(
+        `kept ${printable(result.path)}: ${printable(result.error ?? "in use")}`,
+      );
     } else {
       failed++;
       console.error(

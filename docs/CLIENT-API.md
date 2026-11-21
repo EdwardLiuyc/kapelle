@@ -1742,15 +1742,18 @@ a directory ends in `/` and a symlink in `@`. `files` and `bytes` count regular 
 below the folder without following symlinks; an unreadable folder carries `problem`.
 When `inUse` is true, `participant` names the live participant.
 
-**Refusals:** `404` `room_not_found`; `400` `invalid_request` when the id is not the hall;
-`500` `internal` when the scratch root exists but is not a real folder or cannot be read.
+A missing scratch root is an empty list, not an error. **Refusals:** `404`
+`room_not_found`; `400` `invalid_request` when the id is not the hall; `500` `internal`
+when the scratch root exists but is not a real folder or cannot be read.
 
 ### `POST /rooms/:id/scratch/clean`
 
-Removes the named stale scratch folders (since 1.27). The daemon re-reads the live roster
-and checks each id immediately before removing it. A live participant's folder is never
-removed. Symlinks and other non-folders are reported and left untouched. Results are
-per folder, so one failure does not stop the rest; repeated ids run once.
+Removes the named stale scratch folders (since 1.27). The daemon lists and removes under
+the same lock as hall adds and removes, so the live roster cannot change during the
+clean. A live participant's folder is never removed. Symlinks and other non-folders are
+reported and left untouched. Results are per folder, so one failure does not stop the
+rest; repeated ids run once. A missing scratch root answers `200` with one error result
+per id.
 
 **Request:** `{ "ids": ["p-0k3x9a2b"] }`.
 
@@ -1760,14 +1763,16 @@ per folder, so one failure does not stop the rest; repeated ids run once.
 {
   "results": [
     { "id": "p-0k3x9a2b", "path": "...", "removed": true },
-    { "id": "p-live0000", "path": "...", "removed": false, "error": "the folder is in use by @ann" }
+    { "id": "p-live0000", "path": "...", "removed": false, "protected": true, "error": "the folder is in use by @ann" }
   ]
 }
 ```
 
+`protected: true` means the live roster kept the folder. It is not a removal failure.
+
 **Refusals:** `404` `room_not_found`; `400` `invalid_request` for another room or an
 `ids` value that is not an array of non-empty strings; `500` `internal` when the scratch
-root is not a real folder.
+root exists but is not a real folder.
 
 ### `POST /rooms/:id/agents/:agentId/messages`
 

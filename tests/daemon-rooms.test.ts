@@ -40,6 +40,7 @@ import type {
   MessageAccepted,
   ParticipantDto,
   PermissionDecision,
+  RoomDto,
   RoomEventLine,
   RoomListEntry,
   ScratchCleanReply,
@@ -4471,6 +4472,9 @@ test("hall scratch routes list contents and remove only stale folders (#524)", a
   const state = await tempDir(t);
   const d = await boot(t, runtime, [], state);
   const scratch = join(await realpath(state), "kapelle", "scratch", "hall");
+  const repo = await added(d, await gitRepo(t));
+  const other = await api<RoomDto>(d, "POST", "/rooms", { cwd: repo });
+  assert.equal(other.status, 201, JSON.stringify(other.body));
   const chat = (name: string) =>
     api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
       cmd: REMEMBER,
@@ -4497,8 +4501,22 @@ test("hall scratch routes list contents and remove only stale folders (#524)", a
 
   assert.equal(
     (await api(d, "GET", "/rooms/not-the-hall/scratch")).status,
+    404,
+    "an unknown room is still a missing room",
+  );
+  assert.equal(
+    (await api(d, "GET", `/rooms/${other.body.id}/scratch`)).status,
     400,
     "only the hall has scratch folders",
+  );
+  assert.equal(
+    (
+      await api(d, "POST", `/rooms/${other.body.id}/scratch/clean`, {
+        ids: ["p-missing0"],
+      })
+    ).status,
+    400,
+    "the clean route also refuses another room",
   );
   assert.equal(
     (await api(d, "POST", "/rooms/hall/scratch/clean", { ids: [""] })).status,
@@ -4547,6 +4565,7 @@ test("hall scratch routes list contents and remove only stale folders (#524)", a
     "a repeated id runs once",
   );
   assert.equal(result.get(ann.body.id)?.removed, false);
+  assert.equal(result.get(ann.body.id)?.protected, true);
   assert.match(result.get(ann.body.id)?.error ?? "", /in use by @ann/);
   assert.equal(result.get(bob.body.id)?.removed, true);
   assert.equal(result.get(linkId)?.removed, false);
@@ -4608,4 +4627,40 @@ test("hall scratch routes wait for an add before calling its folder stale (#524)
   assert.equal(listed.body[0]?.inUse, true);
   assert.equal(listed.body[0]?.participant, "ann");
   assert.ok(existsSync(join(scratch, id)), "the new scratch folder stays");
+});
+
+test("a hall remove runs while another hall add waits at initialize (#524)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const barrier = await tempDir(t);
+  const d = await boot(t, runtime, [], state);
+
+  const bob = await api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
+    cmd: REMEMBER,
+    name: "bob",
+  });
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  const adding = api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
+    cmd: `node ${MOCK_AGENT} --barrier ${barrier} --barrier-count 2`,
+    name: "ann",
+  });
+  await until(
+    "the add to reach the barrier",
+    () => readdirSync(barrier).length >= 1,
+  );
+
+  const removing = api(d, "DELETE", `/rooms/hall/agents/${bob.body.id}`);
+  const early = await Promise.race([
+    removing.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
+  ]);
+  await writeFile(join(barrier, "release"), "");
+  const [joined, removed] = await Promise.all([adding, removing]);
+  assert.equal(early, true, "the remove does not wait for the unrelated add");
+  assert.equal(joined.status, 201, JSON.stringify(joined.body));
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.equal(existsSync(bob.body.worktree), false, "bob's empty folder goes");
 });

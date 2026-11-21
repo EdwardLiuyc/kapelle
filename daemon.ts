@@ -1627,7 +1627,7 @@ async function postAgent(
   let participant: Awaited<ReturnType<Room["add"]>>;
   try {
     const add = () => entry.room.add(request);
-    participant = id === HALL_ID ? await withScratchLock(add) : await add();
+    participant = id === HALL_ID ? await withScratchChange(add) : await add();
   } catch (err) {
     // A shutdown pauses the room under the add, which then reads as
     // dismissed; the daemon's own reason is the true one.
@@ -1744,28 +1744,72 @@ function liveScratch(room: Room): Map<string, string> {
   return new Map(room.participants.map((p) => [p.id, p.name] as const));
 }
 
-/** One queue for the hall's scratch folders. An add makes a folder before
- *  its participant joins the roster, and a remove keeps the harness alive
- *  while its folder is released. Listing and cleaning must not pass either,
- *  so both share this queue with them. */
-let scratchLock: Promise<void> = Promise.resolve();
-function withScratchLock<T>(work: () => Promise<T>): Promise<T> {
-  const run = scratchLock.then(work);
-  scratchLock = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
+/** Hall adds and removes are readers of the scratch tree; listing and
+ *  cleaning are writers. Readers may run together, but a writer waits for
+ *  every in-flight reader and keeps new readers out until it finishes. An add
+ *  makes a folder before its participant joins the roster, so a scratch
+ *  snapshot must not run beside it. */
+let scratchReaders = 0;
+let scratchWriting = false;
+let scratchWriters: Promise<void> = Promise.resolve();
+const scratchDrain: (() => void)[] = [];
+
+async function afterScratchWriter(
+  previous: Promise<void>,
+  mine: Promise<void>,
+): Promise<void> {
+  await previous;
+  await mine;
+}
+
+async function withScratchChange<T>(work: () => Promise<T>): Promise<T> {
+  while (scratchWriting) {
+    try {
+      await scratchWriters;
+    } catch {
+      // The failed snapshot already answered its caller; the next reader
+      // still gets a turn.
+    }
+  }
+  scratchReaders++;
+  try {
+    return await work();
+  } finally {
+    scratchReaders--;
+    if (scratchReaders === 0) {
+      for (const wake of scratchDrain.splice(0)) wake();
+    }
+  }
+}
+
+async function withScratchSnapshot<T>(work: () => Promise<T>): Promise<T> {
+  const previous = scratchWriters;
+  let finish!: () => void;
+  const mine = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  scratchWriters = afterScratchWriter(previous, mine);
+  await previous;
+  scratchWriting = true;
+  try {
+    if (scratchReaders > 0) {
+      await new Promise<void>((resolve) => scratchDrain.push(resolve));
+    }
+    return await work();
+  } finally {
+    scratchWriting = false;
+    finish();
+  }
 }
 
 /** `GET /rooms/:id/scratch` — every entry under the hall's scratch root,
  *  with its live owner when it has one. Only the hall has scratch folders. */
 async function getScratch(id: string, res: ServerResponse) {
+  const entry = await roomEntry(id);
   if (id !== HALL_ID) {
     throw refusal(400, "invalid_request", "only the hall has scratch folders");
   }
-  const entry = await roomEntry(id);
-  const folders = await withScratchLock(() =>
+  const folders = await withScratchSnapshot(() =>
     listScratch(hallScratchDir(), liveScratch(entry.room)),
   );
   send(res, 200, folders satisfies ScratchFolder[]);
@@ -1773,16 +1817,17 @@ async function getScratch(id: string, res: ServerResponse) {
 
 /** `POST /rooms/:id/scratch/clean {"ids": [...]}` — remove the named stale
  *  folders. Each id gets its own result, so one failure does not stop the
- *  others; the live roster is checked again before every removal. */
+ *  others. The snapshot is taken under the scratch lock, so the roster cannot
+ *  change while the clean runs. */
 async function postScratchClean(
   id: string,
   req: IncomingMessage,
   res: ServerResponse,
 ) {
+  const entry = await roomEntry(id);
   if (id !== HALL_ID) {
     throw refusal(400, "invalid_request", "only the hall has scratch folders");
   }
-  const entry = await roomEntry(id);
   const body = await readBody(req, ["ids"]);
   const ids = body.ids;
   if (
@@ -1795,7 +1840,7 @@ async function postScratchClean(
       '"ids" must be an array of non-empty strings',
     );
   }
-  const results = await withScratchLock(() =>
+  const results = await withScratchSnapshot(() =>
     cleanScratch(
       hallScratchDir(),
       [...new Set(ids as string[])],
@@ -1812,7 +1857,7 @@ async function deleteAgent(id: string, agentId: string, res: ServerResponse) {
   const entry = await roomEntry(id);
   try {
     const remove = () => entry.room.remove(agentId);
-    if (id === HALL_ID) await withScratchLock(remove);
+    if (id === HALL_ID) await withScratchChange(remove);
     else await remove();
   } catch (err) {
     throw changeRefused(err);
