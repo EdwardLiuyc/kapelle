@@ -37,6 +37,7 @@ test("listScratch shows contents and live owners, and never follows symlinks", a
   await mkdir(outside);
   await writeFile(join(outside, "secret.txt"), "secret\n");
   await symlink(outside, join(root, linkId));
+  await symlink(outside, join(root, staleId, "outside"));
 
   const folders = await listScratch(root, new Map([[liveId, "ann"]]));
   assert.deepEqual(
@@ -56,7 +57,7 @@ test("listScratch shows contents and live owners, and never follows symlinks", a
   assert.ok(stale);
   assert.equal(stale.files, 2);
   assert.equal(stale.bytes, 11);
-  assert.deepEqual(stale.entries, ["notes.md", "sub/"]);
+  assert.deepEqual(stale.entries, ["notes.md", "outside@", "sub/"]);
   const link = folders.find((f) => f.id === linkId);
   assert.ok(link);
   assert.match(link.problem ?? "", /symbolic link/);
@@ -77,6 +78,7 @@ test("cleanScratch protects live folders and reports each folder's failure", asy
   await mkdir(outside);
   await writeFile(join(outside, "secret.txt"), "secret\n");
   await symlink(outside, join(root, linkId));
+  await symlink(outside, join(root, staleId, "outside"));
 
   const results = await cleanScratch(
     root,

@@ -4535,6 +4535,11 @@ test("hall scratch routes list contents and remove only stale folders (#524)", a
     { ids: [ann.body.id, bob.body.id, bob.body.id, linkId, "p-missing0"] },
   );
   assert.equal(cleaned.status, 200, JSON.stringify(cleaned.body));
+  assert.deepEqual(
+    cleaned.body.results.map((r) => r.id),
+    [ann.body.id, bob.body.id, linkId, "p-missing0"],
+    "results keep request order, with a repeated id once",
+  );
   const result = new Map(cleaned.body.results.map((r) => [r.id, r]));
   assert.equal(
     cleaned.body.results.filter((r) => r.id === bob.body.id).length,
@@ -4553,7 +4558,7 @@ test("hall scratch routes list contents and remove only stale folders (#524)", a
   assert.equal(await readFile(secret, "utf8"), "secret\n");
 });
 
-test("hall scratch clean waits for an add before calling its folder stale (#524)", async (t) => {
+test("hall scratch routes wait for an add before calling its folder stale (#524)", async (t) => {
   const runtime = await tempDir(t);
   const state = await tempDir(t);
   const barrier = await tempDir(t);
@@ -4585,12 +4590,22 @@ test("hall scratch clean waits for an add before calling its folder stale (#524)
     "/rooms/hall/scratch/clean",
     { ids: [id] },
   );
+  const listing = api<ScratchFolder[]>(d, "GET", "/rooms/hall/scratch");
   await writeFile(join(barrier, "release"), "");
-  const [joined, cleaned] = await Promise.all([adding, cleaning]);
+  const [joined, cleaned, listed] = await Promise.all([
+    adding,
+    cleaning,
+    listing,
+  ]);
   assert.equal(joined.status, 201, JSON.stringify(joined.body));
   assert.equal(joined.body.worktree, join(scratch, id));
   assert.equal(cleaned.status, 200, JSON.stringify(cleaned.body));
   assert.equal(cleaned.body.results[0]?.removed, false);
   assert.match(cleaned.body.results[0]?.error ?? "", /in use by @ann/);
+  assert.equal(listed.status, 200, JSON.stringify(listed.body));
+  assert.equal(listed.body.length, 1);
+  assert.equal(listed.body[0]?.id, id);
+  assert.equal(listed.body[0]?.inUse, true);
+  assert.equal(listed.body[0]?.participant, "ann");
   assert.ok(existsSync(join(scratch, id)), "the new scratch folder stays");
 });

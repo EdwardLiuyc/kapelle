@@ -1746,8 +1746,8 @@ function liveScratch(room: Room): Map<string, string> {
 
 /** One queue for the hall's scratch folders. An add makes a folder before
  *  its participant joins the roster, and a remove keeps the harness alive
- *  while its folder is released. Cleaning must not pass either, so it
- *  shares this queue with them. */
+ *  while its folder is released. Listing and cleaning must not pass either,
+ *  so both share this queue with them. */
 let scratchLock: Promise<void> = Promise.resolve();
 function withScratchLock<T>(work: () => Promise<T>): Promise<T> {
   const run = scratchLock.then(work);
@@ -1765,7 +1765,9 @@ async function getScratch(id: string, res: ServerResponse) {
     throw refusal(400, "invalid_request", "only the hall has scratch folders");
   }
   const entry = await roomEntry(id);
-  const folders = await listScratch(hallScratchDir(), liveScratch(entry.room));
+  const folders = await withScratchLock(() =>
+    listScratch(hallScratchDir(), liveScratch(entry.room)),
+  );
   send(res, 200, folders satisfies ScratchFolder[]);
 }
 
