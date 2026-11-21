@@ -4495,6 +4495,17 @@ test("hall scratch routes list contents and remove only stale folders (#524)", a
   const linkId = "p-link0000";
   await symlink(outside, join(scratch, linkId));
 
+  assert.equal(
+    (await api(d, "GET", "/rooms/not-the-hall/scratch")).status,
+    400,
+    "only the hall has scratch folders",
+  );
+  assert.equal(
+    (await api(d, "POST", "/rooms/hall/scratch/clean", { ids: [""] })).status,
+    400,
+    "an empty id is refused",
+  );
+
   const listed = await api<ScratchFolder[]>(d, "GET", "/rooms/hall/scratch");
   assert.equal(listed.status, 200, JSON.stringify(listed.body));
   const byId = new Map(listed.body.map((folder) => [folder.id, folder]));
@@ -4521,10 +4532,15 @@ test("hall scratch routes list contents and remove only stale folders (#524)", a
     d,
     "POST",
     "/rooms/hall/scratch/clean",
-    { ids: [ann.body.id, bob.body.id, linkId, "p-missing0"] },
+    { ids: [ann.body.id, bob.body.id, bob.body.id, linkId, "p-missing0"] },
   );
   assert.equal(cleaned.status, 200, JSON.stringify(cleaned.body));
   const result = new Map(cleaned.body.results.map((r) => [r.id, r]));
+  assert.equal(
+    cleaned.body.results.filter((r) => r.id === bob.body.id).length,
+    1,
+    "a repeated id runs once",
+  );
   assert.equal(result.get(ann.body.id)?.removed, false);
   assert.match(result.get(ann.body.id)?.error ?? "", /in use by @ann/);
   assert.equal(result.get(bob.body.id)?.removed, true);
@@ -4535,4 +4551,46 @@ test("hall scratch routes list contents and remove only stale folders (#524)", a
   assert.equal(existsSync(bob.body.worktree), false, "the stale folder goes");
   assert.equal((await lstat(join(scratch, linkId))).isSymbolicLink(), true);
   assert.equal(await readFile(secret, "utf8"), "secret\n");
+});
+
+test("hall scratch clean waits for an add before calling its folder stale (#524)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const barrier = await tempDir(t);
+  const d = await boot(t, runtime, [], state);
+  const scratch = join(await realpath(state), "kapelle", "scratch", "hall");
+
+  // The agent waits at `initialize`, after the room made its scratch folder
+  // but before `room.add` puts it on the roster.
+  const adding = api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
+    cmd: `node ${MOCK_AGENT} --barrier ${barrier} --barrier-count 2`,
+    name: "ann",
+  });
+  await until(
+    "the add to reach the barrier",
+    () => readdirSync(barrier).length >= 1,
+  );
+  let id = "";
+  await until("the scratch folder to exist", () => {
+    if (!existsSync(scratch)) return false;
+    const names = readdirSync(scratch);
+    if (names.length === 0) return false;
+    id = names[0] as string;
+    return true;
+  });
+
+  const cleaning = api<ScratchCleanReply>(
+    d,
+    "POST",
+    "/rooms/hall/scratch/clean",
+    { ids: [id] },
+  );
+  await writeFile(join(barrier, "release"), "");
+  const [joined, cleaned] = await Promise.all([adding, cleaning]);
+  assert.equal(joined.status, 201, JSON.stringify(joined.body));
+  assert.equal(joined.body.worktree, join(scratch, id));
+  assert.equal(cleaned.status, 200, JSON.stringify(cleaned.body));
+  assert.equal(cleaned.body.results[0]?.removed, false);
+  assert.match(cleaned.body.results[0]?.error ?? "", /in use by @ann/);
+  assert.ok(existsSync(join(scratch, id)), "the new scratch folder stays");
 });

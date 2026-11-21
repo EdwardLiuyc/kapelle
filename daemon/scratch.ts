@@ -2,9 +2,11 @@
  * The kept hall scratch folders: list what each holds, and remove only the
  * folders no live participant owns.
  *
- * The caller supplies the live roster. `cleanScratch` checks it again just
- * before each removal, so a roster that changed between the preview and the
- * clean still protects the agent's folder.
+ * The caller supplies the live roster and serializes adds and removes with
+ * the clean. The daemon holds one queue for all three, so a folder an add has
+ * just made is protected before its participant joins the roster.
+ * `cleanScratch` checks the roster immediately before each removal, so a live
+ * id is protected even after a preview.
  *
  * Symlinks are never followed. A symlink at a folder path is listed as a
  * problem and left alone; a symlink inside a folder is an entry and is

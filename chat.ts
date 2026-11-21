@@ -6,8 +6,9 @@
  * This screen is not an API: its keys and lines may change. `kapelle chat`
  * runs this file (S7a).
  *
- * **The entry only** (M4-7): the arguments, the `new`, `attach`, `list` and
- * `dismiss` verbs, and which screen to open. The screens are in `chat/`:
+ * **The entry only** (M4-7): the arguments, the `new`, `attach`, `list`,
+ * `dismiss` and `scratch` verbs, and which screen to open. The screens are in
+ * `chat/`:
  * `chat/tui.ts` on a terminal, `chat/piped.ts` on a pipe, and what both use
  * in `chat/common.ts`.
  *
