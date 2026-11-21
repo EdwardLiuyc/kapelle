@@ -278,7 +278,7 @@ kapelle — a minimal Agent Client Protocol client
                                      runs in this terminal until ^C or SIGTERM
   kapelle daemon stop                stops the daemon named in daemon.json
   kapelle daemon add <path>          adds a repository to the running daemon
-  kapelle chat [new | attach | list | dismiss]
+  kapelle chat [new | attach | list | dismiss | scratch]
                                      the chat rooms; kapelle chat --help
 
 Options:

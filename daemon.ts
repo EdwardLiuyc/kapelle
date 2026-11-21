@@ -78,6 +78,8 @@ import {
   type RunDto,
   type RunListEntry,
   type RunStatus,
+  type ScratchCleanReply,
+  type ScratchFolder,
   type VersionReply,
 } from "./client/contract.ts";
 import {
@@ -175,6 +177,7 @@ import {
 } from "./daemon/http.ts";
 import { createRooms, type RoomEntry } from "./daemon/rooms.ts";
 import { cancelRun } from "./daemon/run.ts";
+import { cleanScratch, listScratch } from "./daemon/scratch.ts";
 import { streamLog } from "./daemon/sse.ts";
 import { AGENTS } from "./protocol/registry.ts";
 
@@ -1282,7 +1285,7 @@ async function openHall(): Promise<void> {
       bus,
       permissions,
       noteSession,
-      scratchDir: join(stateDir(), "scratch", HALL_ID),
+      scratchDir: hallScratchDir(),
       openPlace: placeOpener(HALL_ID),
     };
     const path = roomFile(cwd, HALL_ID);
@@ -1328,6 +1331,11 @@ async function openHall(): Promise<void> {
 /** The hall's own folder. A declaration: the boot sweep needs it first. */
 function hallDir(): string {
   return join(stateDir(), "hall");
+}
+
+/** Where the hall keeps each participant's scratch folder. */
+function hallScratchDir(): string {
+  return join(stateDir(), "scratch", HALL_ID);
 }
 
 /**
@@ -1728,6 +1736,54 @@ async function patchRoom(
   }
   entry.room.touch();
   send(res, 200, toRoomDto(entry.state, entry.room) satisfies RoomDto);
+}
+
+/** The live hall roster keyed by participant id, for the scratch routes. */
+function liveScratch(room: Room): Map<string, string> {
+  return new Map(room.participants.map((p) => [p.id, p.name] as const));
+}
+
+/** `GET /rooms/:id/scratch` — every entry under the hall's scratch root,
+ *  with its live owner when it has one. Only the hall has scratch folders. */
+async function getScratch(id: string, res: ServerResponse) {
+  if (id !== HALL_ID) {
+    throw refusal(400, "invalid_request", "only the hall has scratch folders");
+  }
+  const entry = await roomEntry(id);
+  const folders = await listScratch(hallScratchDir(), liveScratch(entry.room));
+  send(res, 200, folders satisfies ScratchFolder[]);
+}
+
+/** `POST /rooms/:id/scratch/clean {"ids": [...]}` — remove the named stale
+ *  folders. Each id gets its own result, so one failure does not stop the
+ *  others; the live roster is checked again before every removal. */
+async function postScratchClean(
+  id: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  if (id !== HALL_ID) {
+    throw refusal(400, "invalid_request", "only the hall has scratch folders");
+  }
+  const entry = await roomEntry(id);
+  const body = await readBody(req, ["ids"]);
+  const ids = body.ids;
+  if (
+    !Array.isArray(ids) ||
+    ids.some((value) => typeof value !== "string" || value === "")
+  ) {
+    throw refusal(
+      400,
+      "invalid_request",
+      '"ids" must be an array of non-empty strings',
+    );
+  }
+  const results = await cleanScratch(
+    hallScratchDir(),
+    [...new Set(ids as string[])],
+    liveScratch(entry.room),
+  );
+  send(res, 200, { results } satisfies ScratchCleanReply);
 }
 
 /** `DELETE /rooms/:id/agents/:agentId` — cancels the participant's turn,
@@ -2361,9 +2417,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   const decision = /^\/permissions\/([^/]+)$/.exec(pathname);
   const room = /^\/rooms\/([^/]+)$/.exec(pathname);
   const roomSub =
-    /^\/rooms\/([^/]+)\/(events|messages|dismiss|agents|delete-preview)$/.exec(
+    /^\/rooms\/([^/]+)\/(events|messages|dismiss|agents|delete-preview|scratch)$/.exec(
       pathname,
     );
+  const scratchClean = /^\/rooms\/([^/]+)\/scratch\/clean$/.exec(pathname);
   const agentOne = /^\/rooms\/([^/]+)\/agents\/([^/]+)$/.exec(pathname);
   const agentSub =
     /^\/rooms\/([^/]+)\/agents\/([^/]+)\/(messages|events|diff|fast-forward|turns\/current\/cancel)$/.exec(
@@ -2453,6 +2510,10 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     agentSub?.[3] === "turns/current/cancel"
   ) {
     await cancelTurn(agentSub[1] as string, agentSub[2] as string, res);
+  } else if (req.method === "GET" && roomSub?.[2] === "scratch") {
+    await getScratch(roomSub[1] as string, res);
+  } else if (req.method === "POST" && scratchClean) {
+    await postScratchClean(scratchClean[1] as string, req, res);
   } else if (req.method === "POST" && roomSub?.[2] === "agents") {
     await postAgent(roomSub[1] as string, req, res);
   } else if (req.method === "GET" && roomSub?.[2] === "agents") {

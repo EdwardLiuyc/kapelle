@@ -114,7 +114,7 @@ node cli.ts daemon start [--port n] [--permission-timeout s]   # same as: node d
 node cli.ts daemon stop                        # SIGTERM to the pid in daemon.json, then wait
 node cli.ts daemon add <path>
 node cli.ts chat [new --agent <id> [--cwd dir]]   # chat rooms: runs chat.ts
-node chat.ts attach <roomId> | list | dismiss <roomId>
+node chat.ts attach <roomId> | list | dismiss <roomId> | scratch [clean [--yes]]
 ```
 
 `ACP_TEST.md` is selftest output, not source. You can delete it.

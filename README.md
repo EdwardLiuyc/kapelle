@@ -112,6 +112,7 @@ kapelle chat                        # every room, on a terminal
 kapelle chat list                   # every room, then every chat, as text
 kapelle chat attach <roomId>        # rejoin a room; its history replays
 kapelle chat dismiss <roomId>       # stop the room's agents
+kapelle chat scratch [clean [--yes]] # list kept hall scratch folders; clean previews, --yes removes stale ones
 ```
 
 `kapelle chat new` does not add a repository for you. Add it first: `/new` in the chat, or `kapelle daemon add .`.

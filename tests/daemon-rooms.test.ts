@@ -21,6 +21,7 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { request } from "node:http";
@@ -41,6 +42,8 @@ import type {
   PermissionDecision,
   RoomEventLine,
   RoomListEntry,
+  ScratchCleanReply,
+  ScratchFolder,
 } from "../client/contract.ts";
 import type { Named } from "../client/mention.ts";
 import { readRoomRecord, roomFile, writeRoomRecord } from "../core/room.ts";
@@ -4461,4 +4464,75 @@ test("a hall agent gets a scratch folder, removed when untouched and kept when u
     assert.equal(sent.status, 202);
     await participantIdle(second, "hall", p.id);
   }
+});
+
+test("hall scratch routes list contents and remove only stale folders (#524)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const d = await boot(t, runtime, [], state);
+  const scratch = join(await realpath(state), "kapelle", "scratch", "hall");
+  const chat = (name: string) =>
+    api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
+      cmd: REMEMBER,
+      name,
+    });
+
+  const ann = await chat("ann");
+  const bob = await chat("bob");
+  assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  await writeFile(join(ann.body.worktree, "live.txt"), "live\n");
+  await writeFile(join(bob.body.worktree, "notes.md"), "notes\n");
+  assert.equal(
+    (await api(d, "DELETE", `/rooms/hall/agents/${bob.body.id}`)).status,
+    200,
+    "bob's used scratch folder is kept",
+  );
+
+  const outside = await tempDir(t);
+  const secret = join(outside, "secret.txt");
+  await writeFile(secret, "secret\n");
+  const linkId = "p-link0000";
+  await symlink(outside, join(scratch, linkId));
+
+  const listed = await api<ScratchFolder[]>(d, "GET", "/rooms/hall/scratch");
+  assert.equal(listed.status, 200, JSON.stringify(listed.body));
+  const byId = new Map(listed.body.map((folder) => [folder.id, folder]));
+  const live = byId.get(ann.body.id);
+  assert.ok(live);
+  assert.equal(live.inUse, true);
+  assert.equal(live.participant, "ann");
+  assert.equal(live.kind, "directory");
+  assert.equal(live.files, 1);
+  assert.equal(live.bytes, 5);
+  assert.deepEqual(live.entries, ["live.txt"]);
+  const kept = byId.get(bob.body.id);
+  assert.ok(kept);
+  assert.equal(kept.inUse, false);
+  assert.equal(kept.kind, "directory");
+  assert.equal(kept.files, 1);
+  assert.deepEqual(kept.entries, ["notes.md"]);
+  const link = byId.get(linkId);
+  assert.ok(link);
+  assert.equal(link.kind, "symlink");
+  assert.match(link.problem ?? "", /symbolic link/);
+
+  const cleaned = await api<ScratchCleanReply>(
+    d,
+    "POST",
+    "/rooms/hall/scratch/clean",
+    { ids: [ann.body.id, bob.body.id, linkId, "p-missing0"] },
+  );
+  assert.equal(cleaned.status, 200, JSON.stringify(cleaned.body));
+  const result = new Map(cleaned.body.results.map((r) => [r.id, r]));
+  assert.equal(result.get(ann.body.id)?.removed, false);
+  assert.match(result.get(ann.body.id)?.error ?? "", /in use by @ann/);
+  assert.equal(result.get(bob.body.id)?.removed, true);
+  assert.equal(result.get(linkId)?.removed, false);
+  assert.match(result.get(linkId)?.error ?? "", /symbolic link/);
+  assert.equal(result.get("p-missing0")?.removed, false);
+  assert.ok(existsSync(ann.body.worktree), "the live folder stays");
+  assert.equal(existsSync(bob.body.worktree), false, "the stale folder goes");
+  assert.equal((await lstat(join(scratch, linkId))).isSymbolicLink(), true);
+  assert.equal(await readFile(secret, "utf8"), "secret\n");
 });

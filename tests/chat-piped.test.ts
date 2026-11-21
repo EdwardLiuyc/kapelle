@@ -336,6 +336,50 @@ test("chat.ts dismiss stops a room, and prints the daemon's refusal or the usage
   assert.match(bare.stderr, /node chat\.ts dismiss <roomId>/);
 });
 
+test("chat.ts scratch lists, previews, then removes only stale hall folders (#524)", async (t) => {
+  const runtime = await tempDir(t);
+  const state = await tempDir(t);
+  const d = await boot(t, runtime, [], state);
+  const scratch = join(await realpath(state), "kapelle", "scratch", "hall");
+  const chat = (name: string) =>
+    api<ParticipantDto>(d, "POST", "/rooms/hall/agents", {
+      cmd: REMEMBER,
+      name,
+    });
+  const ann = await chat("ann");
+  const bob = await chat("bob");
+  assert.equal(ann.status, 201, JSON.stringify(ann.body));
+  assert.equal(bob.status, 201, JSON.stringify(bob.body));
+  await writeFile(join(ann.body.worktree, "live.txt"), "live\n");
+  await writeFile(join(bob.body.worktree, "notes.md"), "notes\n");
+  await api(d, "DELETE", `/rooms/hall/agents/${bob.body.id}`);
+  assert.ok(existsSync(join(scratch, bob.body.id)), "the used folder is kept");
+
+  const env = { XDG_RUNTIME_DIR: runtime, XDG_STATE_HOME: state };
+  const run = (...args: string[]) => spawnCli(t, args, "chat.ts", env).done;
+
+  const listed = await run("scratch");
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.ok(
+    listed.stdout.includes(`${ann.body.id}  in use by @ann (protected)`),
+    listed.stdout,
+  );
+  assert.ok(listed.stdout.includes(`${bob.body.id}  stale`), listed.stdout);
+  assert.match(listed.stdout, /live\.txt/);
+  assert.match(listed.stdout, /notes\.md/);
+
+  const preview = await run("scratch", "clean");
+  assert.equal(preview.code, 0, preview.stderr);
+  assert.match(preview.stdout, /nothing was deleted/);
+  assert.ok(existsSync(join(scratch, bob.body.id)), "preview deletes nothing");
+
+  const removed = await run("scratch", "clean", "--yes");
+  assert.equal(removed.code, 0, removed.stderr);
+  assert.match(removed.stdout, /notes\.md[\s\S]*removed /);
+  assert.equal(existsSync(join(scratch, bob.body.id)), false);
+  assert.ok(existsSync(join(scratch, ann.body.id)), "the live folder stays");
+});
+
 test("chat.ts talks to a room end to end: messages in, answers out, /dismiss stops it", async (t) => {
   const runtime = await tempDir(t);
   const d = await boot(t, runtime);

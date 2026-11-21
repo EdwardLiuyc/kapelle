@@ -4419,6 +4419,10 @@ added without one; only a hall agent with no `--cwd` gets a scratch folder. A
 participant's checkout sits in its own repository, so the boot sweep reads every room's
 record, the hall's too, before it calls a checkout an orphan, and a room's delete
 removes the checkouts and branches in each repository its participants work in.
+**Amended 2026-11-20 (#524):** a kept hall scratch folder has a command. `kapelle chat
+scratch` lists every scratch folder and its contents; `kapelle chat scratch clean`
+previews without deleting; `kapelle chat scratch clean --yes` removes only the folders
+no live hall agent owns.
 *Done when* tests cover an agent in a repository with a commit, in a folder with no git,
 in a repository with no commit, and with no `--cwd`; an untouched scratch folder removed
 with its agent and a used one kept; and two agents in one room in two different

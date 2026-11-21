@@ -47,7 +47,7 @@ export type { AgentEvent, Diff, PermissionReason, ToolCallStatus, ToolKind };
  * (M5-2 changed one). Which rows are stable is the table in
  * `docs/CLIENT-API.md`.
  */
-export const API_VERSION = { major: 1, minor: 26 } as const;
+export const API_VERSION = { major: 1, minor: 27 } as const;
 
 /**
  * What this daemon can do (B4). Names are only ever added, never removed or
@@ -491,6 +491,39 @@ export interface RoomListEntry {
     role?: ParticipantRole;
     status: ParticipantStatus;
   }[];
+}
+
+/** One kept hall scratch folder, from `GET /rooms/:id/scratch`. `kind` is
+ *  `directory` for a folder the command may remove, `symlink` or `other`
+ *  for an entry it reports but never follows or removes. `entries` holds
+ *  the immediate children; a child directory ends in `/` and a symlink in
+ *  `@`. `files` and `bytes` count regular files below the folder, without
+ *  following symlinks. Since 1.27. */
+export interface ScratchFolder {
+  id: string;
+  path: string;
+  inUse: boolean;
+  /** The live participant's name when `inUse` is true. */
+  participant?: string;
+  kind: "directory" | "symlink" | "other";
+  files: number;
+  bytes: number;
+  entries: string[];
+  problem?: string;
+}
+
+/** One folder's result from `POST /rooms/:id/scratch/clean`. A failure does
+ *  not stop the other folders. Since 1.27. */
+export interface ScratchCleanResult {
+  id: string;
+  path: string;
+  removed: boolean;
+  error?: string;
+}
+
+/** The reply of `POST /rooms/:id/scratch/clean`. Since 1.27. */
+export interface ScratchCleanReply {
+  results: ScratchCleanResult[];
 }
 
 /** `POST /rooms/:id/messages` and `POST /rooms/:id/agents/:agentId/messages`.
